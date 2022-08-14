@@ -14,5 +14,5 @@ test = false
 bench = false
 
 [dependencies]
-LR35902 = { path = "../" }
+lr35902 = { path = "../../", features = ["desktop"] }
 clap = { version = "3.1.17", features = ["derive"] }

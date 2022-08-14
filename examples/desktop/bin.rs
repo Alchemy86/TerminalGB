@@ -1,4 +1,3 @@
-#[allow(non_snake_case)]
 extern crate lr35902;
 extern crate clap;
 
