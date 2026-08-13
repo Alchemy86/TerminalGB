@@ -65,9 +65,11 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
       - name: Install ALSA development libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # Runs Blargg (serial) + dmg-acid2/Blargg-screen (frame hash) ROMs headlessly,
-      # compares against testharness/baseline.txt, and is red only on a change from it.
-      # Prints a pass count (e.g. "Blargg serial suite: 12/13 passing"). ~1.5s to run.
+      # Runs every ROM on BOTH consoles (DMG and CGB) headlessly and compares against
+      # testharness/baseline.txt; red on any change from it, in either direction.
+      # Verdicts are the ROM's own (serial string / cartridge RAM / the reference image
+      # shipped with dmg-acid2) — never a hash of our own output, which cannot fail.
+      # Two self-checks run first and abort if the comparison is vacuous. ~3s to run.
       - name: Run test-ROM harness
         run: cargo test --release --test testroms
       # On any baseline mismatch the harness dumps the actual frame(s) — keep them.

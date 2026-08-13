@@ -12,7 +12,7 @@ mod gpu;
 mod input;
 mod mbc;
 mod mmu;
-mod mode;
+pub mod mode;
 /// Runtime plugins — the *attach* half of the extension surface. See [`plugin`].
 pub mod plugin;
 pub mod savestate;

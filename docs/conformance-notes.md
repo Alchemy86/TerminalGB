@@ -17,6 +17,78 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — no DMG boot mode: every "DMG" test was run on a Game Boy Color
+
+- **Symptom** — a test ROM that prints its boot registers shows `HL: 007C` where a real
+  DMG shows `HL: 014D`, and an emulator is marked FAIL for a screenshot difference even
+  though every assertion inside the ROM passed. Nothing a *player* sees; everything a
+  *conformance run* sees.
+- **Caught by** — Mooneye `acceptance/bits/reg_f`, `ei_timing`, `halt_ime1_timing`,
+  `reti_intr_timing`, `timer/tim00_div_trigger`, `timer/tim01`, `timer/tim11_div_trigger`
+  and two more: **9 tests, FAIL→PASS with a DMG boot, zero regressions.** Blargg and acid2
+  catch none of it — a coverage gap in the suite this project had wired. Our own harness
+  now asserts the boot registers directly (`self_check_models_differ`) rather than hoping a
+  ROM notices.
+- **Hardware behaviour** — a DMG starts with `A=0x01 F=0xB0 HL=0x014D`; CGB hardware starts
+  `A=0x11 HL=0x007C`, and keeps that state even when running a DMG-only cartridge in
+  compatibility mode, where `FF72`/`FF73`/`FF75`-`FF77` also still respond (Pan Docs,
+  ["Power Up Sequence"](https://gbdev.io/pandocs/Power_Up_Sequence.html)). Compatibility
+  mode is a *third* machine, not a DMG.
+- **Carries into the tool** — a **model** axis is not optional: a conformance runner must
+  ask the emulator which console to boot and must report which one produced a result. The
+  shootout's runner already does (`startProcess(rom, model=…)`); an emulator that cannot
+  answer loses the DMG rows outright. Two checks worth shipping: *boot registers match the
+  model asked for*, and *the same ROM run under two models produces two distinguishable
+  machines* (else the model flag is cosmetic).
+
+## 2026-08-14 — a test harness that judged itself (harness defect, not an emulation bug)
+
+- **Symptom** — CI green through a regression. Four ROMs' expected result was an FNV hash
+  of *our own* framebuffer, and the documented response to a changed hash was to re-bless
+  it; `oam_bug` was recorded as an opaque number that in fact meant "3 of 8 sub-tests
+  pass"; and dmg-acid2's checked-in reference image was **never compared to** — the harness
+  printed a suggestion that a human eyeball it.
+- **Caught by** — nothing, by construction. Found by re-running the suite against the
+  [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s ROMs and references. The
+  harness now proves it can fail on every run: the reference image must compare equal to
+  itself and must report a difference when one pixel is flipped. Both mechanisms were also
+  validated by deliberately breaking the emulator — clearing the HALT-bug latch turns
+  `halt_bug` red, ignoring sprite X-flip turns dmg-acid2 red at 119/23,040 pixels.
+- **Hardware behaviour** — not a hardware question; a *methodology* one. Blargg's ROMs
+  publish their own verdict in two places, so no self-reference is ever necessary: the
+  memory-mapped result block (status at `$A000`, signature `$DE $B0 $61` at
+  `$A001..$A003`, text from `$A004`) and the screen — Blargg's print routine loads its font
+  so that a tile id **is** the glyph's ASCII code and writes characters straight into the BG
+  tilemap, so the tilemap reads back as text. `halt_bug` and `interrupt_time` are cartridge
+  type `0x02` with RAM size `0x00` (**no cartridge RAM at all**), so for those the screen is
+  the only channel.
+- **Carries into the tool** — three rules. (1) **Never accept an emulator's own prior output
+  as the expected result**; every expectation must come from the ROM or its author. (2) A
+  conformance tool should **read the verdict text off the frame** for a screen-only ROM
+  rather than compare a reference image it produced itself — the tool then works for ROMs
+  nobody has a reference for. (3) **Report sub-test detail**, not a single bit: "3 of 8
+  oam_bug sub-tests pass, 2/4/5/7/8 fail" is actionable where "FAIL" is not.
+
+## 2026-08-14 — a test machine with no APU changes what test ROMs report
+
+- **Symptom** — `interrupt_time` draws only its title and hangs forever; it was recorded
+  for months as "cannot run headless". `dmg_sound/01-registers` reports
+  `NR10-NR51 and wave RAM write/read — Failed #2`. Both are artefacts of the *harness*, not
+  the emulator: it never called `enable_audio`, so `MMU.sound` stayed `None`.
+- **Caught by** — the divergence between two of our own harnesses (`audiocapture` installed
+  an APU, `testroms` did not) reporting different verdicts for the same emulator. With an
+  APU installed, `interrupt_time` runs to completion and prints `Failed` — a real,
+  reportable result — and `dmg_sound/01` passes.
+- **Hardware behaviour** — every Game Boy has an APU whether or not anything is listening,
+  and its registers are readable: `interrupt_time`'s `sync_apu`/`get_cpu_speed` spin on
+  `NR52` (`$FF26`) waiting for a channel-status bit that never changes if the APU is absent
+  (Pan Docs, ["Audio Registers"](https://gbdev.io/pandocs/Audio_Registers.html)).
+- **Carries into the tool** — a check worth shipping: **"the machine under test must have an
+  APU even when nothing is playing"**. It is invisible in almost every test and then
+  silently converts a measurable failure into a hang, which a runner reports as a timeout —
+  the least informative verdict there is. Any adapter that offers a "headless/no-audio"
+  mode should be probed for it.
+
 ## 2026-08-13 — DMG wave-RAM access window (dmg_sound 09: "wave read while on")
 
 - **Symptom:** reading `$FF30–$FF3F` while channel 3 is playing returns wave

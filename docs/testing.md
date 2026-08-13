@@ -170,25 +170,60 @@ The section above is the design sketch. What is now checked in and runs in CI:
   is **not** wired yet (its ROMs are a separate suite, not in the submodule) — that is the
   obvious next increment.
 
-- **Two result mechanisms, both implemented:**
+- **Nothing is judged against our own previous output.** This was the harness's central
+  defect and it is worth stating as a rule: four ROMs used to be pinned as an FNV hash of
+  *our* framebuffer, and the documented response to a changed hash is to re-bless it — so CI
+  would have stayed green straight through a regression in any of them, and `oam_bug` (really
+  3 of 8 sub-tests) was an opaque number nobody could read. Every expectation now comes from
+  the ROM or from its author.
+
+- **Three result mechanisms, all implemented:**
   - *Serial* — a `Serial::set_callback` sink captures bytes; the run stops when the text
     contains `Passed`/`Failed` or a **250M-cycle budget** (~1 s wall) is exhausted (timeout
     = fail). Used for `cpu_instrs` (11), `instr_timing`, `mem_timing`.
-  - *Frame hash* — run a **fixed 600 frames**, hash the RGBA framebuffer with FNV-1a, and
-    compare against the baseline. Used for dmg-acid2 and for the Blargg ROMs that only draw
-    their result to the LCD (`mem_timing-2`, `interrupt_time`, `halt_bug`, `oam_bug`). On any
-    change the actual frame is written to `target/testrom-artifacts/<id>.png`; acid2 is
-    always dumped so its rendered face can be compared to `reference-dmg.png` by eye.
+  - *Verdict* — the Blargg ROMs that never touch the link port still **print** their result,
+    and the harness reads it. First choice is Blargg's memory-mapped result block: status
+    byte at `$A000` behind the `$DE $B0 $61` signature at `$A001..$A003`, zero-terminated
+    text from `$A004`. `halt_bug` and `interrupt_time` are cartridge type `0x02` with RAM
+    size `0x00` — **no cartridge RAM at all** — so for those the **screen** is read instead:
+    Blargg's print routine loads its font so that a tile id *is* the ASCII code of the glyph
+    it draws, and writes characters straight into the BG tilemap, so the tilemap reads back
+    as text. Used for `mem_timing-2`, `interrupt_time`, `halt_bug`, `oam_bug`.
+  - *Image* — dmg-acid2 is run a **fixed 600 frames** and compared pixel by pixel against
+    `third_party/dmg-acid2/reference-dmg.png`, the reference shipped by the ROM's author.
+    The comparison is by **luminance rank, not RGB** (`testharness/pngdec.rs`, the same rule
+    as `tools/conformance/image.py`): our shades are `000000/606060/c0c0c0/ffffff` and the
+    reference's are `000000/555555/aaaaaa/ffffff`, so a literal compare would fail every run
+    for a reason the ROM is not asserting. Result: **0 of 23,040 pixels differ**.
+    The rendered frame is always dumped to `target/testrom-artifacts/<id>__<model>.png`.
+
+- **Every machine has an APU.** The harness used to leave `MMU.sound` at `None`, which is not
+  a real Game Boy and silently changed what ROMs reported: `interrupt_time` spins on `NR52`,
+  so with no APU it stalled on its title screen and was written off as "cannot run headless"
+  — with one it runs to completion and prints `Failed`, which is a result worth having. (The
+  audio harness had always installed one, which is why the two harnesses disagreed.)
+
+- **Every ROM runs on both consoles.** Baseline keys are `<rom>@dmg` and `<rom>@cgb`; a
+  cartridge whose header says it will not run on a DMG (`0x0143 == 0xC0`, e.g.
+  `interrupt_time`) has no `@dmg` row. This also settles which *binary* we are testing: the
+  `retrio/gb-test-roms` submodule ships `cpu_instrs`, `instr_timing`, `halt_bug` and
+  `oam_bug` with the CGB flag patched to `0x80` (the shootout uses the unpatched DMG
+  originals), so detection alone would run all four as Color games. Forcing the model covers
+  both machines without mutating or vendoring a ROM.
 
 - **Reproducibility is enforced, not assumed.** Emulator state is deterministic (WRAM is
-  seeded with a fixed value, audio is never enabled, no wall-clock or RNG in the loop). The
-  harness *proves* it: it hashes acid2 twice at startup and aborts if the two hashes differ.
-  The acid2 hash `01acf78fe505f31c` was verified identical twice-in-a-run, across separate
-  processes, and across a rebuild.
+  seeded with a fixed value, no wall-clock or RNG in the loop). The harness *proves* it at
+  startup by rendering acid2 twice and requiring the two framebuffers to be byte-identical.
 
-- **No new dependencies.** The FNV-1a hash and the PNG writer (uncompressed zlib blocks +
-  CRC32) are hand-rolled in the harness — a few dozen lines each — rather than pulling in a
-  hashing or image crate.
+- **The harness proves it can fail, every run.** Before any ROM is executed it decodes the
+  reference image, requires it to be 160×144 with more than one shade, requires it to compare
+  equal to itself, and requires a **single flipped pixel** to be detected. Both mechanisms
+  were also validated by deliberately breaking the emulator: clearing the HALT-bug latch
+  turns `halt_bug` red; ignoring sprite X-flip turns dmg-acid2 red at 119/23,040 pixels.
+
+- **No new dependencies.** The FNV-1a hash, the PNG writer (uncompressed zlib blocks +
+  CRC32) and the PNG **reader** — a full RFC 1951 inflater, since the upstream reference is
+  2-bit greyscale — are hand-rolled in the harness rather than pulling in a crate.
 
 - **The audio pipeline has the same treatment:**
   [`testharness/audiocapture.rs`](../testharness/audiocapture.rs)
@@ -211,11 +246,12 @@ Most ROMs fail today, on purpose (six documented divergences below). A CI job th
 from day one gets ignored, so the harness compares every result against a checked-in
 expected-results file, [`testharness/baseline.txt`](../testharness/baseline.txt):
 
-- Serial ROMs record `PASS` / `FAIL`; frame-hash ROMs record `HASH:<fnv1a64>`.
-- CI is **green** when every result matches the baseline, and **red only when a result
-  changes** — either a **regression** (was `PASS`, now `FAIL`; or a frame hash moved) or an
-  **improvement** (was `FAIL`, now `PASS`). Both are surfaced loudly; an improvement prints
-  a `🎉` and is *not* silently swallowed — the baseline is meant to be updated deliberately:
+- Every row is `<rom>@<model> = PASS|FAIL | <the ROM's own report>`. Keeping the report in
+  the file is deliberate: the diff is human-readable, and a change in a single sub-test, a
+  register-dump row or a checksum line is caught even when the overall verdict does not move.
+- CI is **green** when every result matches the baseline, and **red on any change** — a
+  regression *or* an improvement. Both are surfaced loudly; the baseline is meant to be
+  updated deliberately:
 
   ```sh
   UPDATE_BASELINE=1 cargo test --release --test testroms
@@ -230,29 +266,38 @@ expected-results file, [`testharness/baseline.txt`](../testharness/baseline.txt)
 > compatibility & progress scoreboard** (every ROM, its status, and the documented
 > non-goals). The summary below is the same data at suite granularity.
 
-| Suite | Result | Notes |
-|---|---|---|
-| Blargg `cpu_instrs` (01–11) | **11/11 PASS** | every opcode group |
-| Blargg `instr_timing` | **PASS** | |
-| Blargg `mem_timing` | **PASS** | timer stepped per memory access (was FAIL) |
-| Blargg `mem_timing-2` | **PASS** (screen) | draws `01:ok 02:ok 03:ok Passed` (was FAIL) |
-| Blargg `interrupt_time` | incomplete (screen) — **documented non-goal** | hangs headless: `REQUIRE_CGB`, polls `NR52` with no APU. Would test 16-vs-20 T-cycle dispatch if it could run |
-| Blargg `halt_bug` | **PASS** (screen) | renders `Passed` — HALT bug now modelled (was FAIL) |
-| Blargg `oam_bug` | FAIL (screen) — **documented non-goal** | draws "Failed #2" — DMG OAM corruption deliberately not modelled |
-| dmg-acid2 | **renders correctly** | **zero** differing pixels vs `reference-dmg.png` (4-level pixel diff) |
+Rows are ROM x console, so 18 ROMs give 35 rows (`interrupt_time` is CGB-only).
 
-**Blargg serial suite: 13/13 passing** (was 12/13 — `mem_timing` fixed). The remaining
-frame-hash reds are now **deliberate, documented non-goals**, not outstanding bugs:
-`interrupt_time` cannot run headless (no APU → `sync_apu`/`get_cpu_speed` spin on `NR52`),
-and its 16-vs-20 T-cycle interrupt-dispatch gap has no other ROM in the wired suite to
-prove a fix against; `oam_bug` is a DMG-only hardware defect the CGB-booting emulator has
-~no reason to reproduce. Both are pinned in `baseline.txt` so they can't silently change.
-The mode-3-length and OAM-DMA-bus-restriction approximations need a cycle-stepped PPU/CPU
-(a structural commitment the project has not made). The whole suite runs in **~1.8 s**.
+| Suite | DMG | CGB | Notes |
+|---|---|---|---|
+| Blargg `cpu_instrs` (01–11) | **11/11 PASS** | **11/11 PASS** | every opcode group |
+| Blargg `instr_timing` | **PASS** | **PASS** | |
+| Blargg `mem_timing` | **PASS** | **PASS** | timer stepped per memory access |
+| Blargg `mem_timing-2` | **PASS** | **PASS** | prints `01:ok 02:ok 03:ok Passed` |
+| Blargg `halt_bug` | **PASS** | **PASS** | prints `Passed` — HALT bug modelled |
+| Blargg `interrupt_time` | — (CGB-only ROM) | FAIL — **documented non-goal** | prints `Failed`; 16-vs-20 T-cycle interrupt dispatch |
+| Blargg `oam_bug` | FAIL — **documented non-goal** | FAIL | prints `01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 … Failed #2`, i.e. **3 of 8 sub-tests pass** |
+| dmg-acid2 | **PASS** | **PASS** | **0 of 23,040** pixels differ from `reference-dmg.png` |
 
-acid2 rendering correctly is a genuinely good result — verified by a pixel diff, not just
-by eye — the PPU composites background, window and objects correctly enough to pass the
-face test exactly, despite the fixed mode-3 / whole-line-render approximations.
+**32 of 35 rows pass.** Both failures are deliberate, documented non-goals, and both are now
+*measured* rather than pinned as a hash: `interrupt_time` prints `Failed` (its 16-vs-20
+T-cycle interrupt-dispatch gap), and `oam_bug` reports exactly which of its eight sub-tests
+fail — the DMG OAM-corruption bug is a hardware *defect* essentially no commercial game
+relies on. The mode-3-length and OAM-DMA-bus-restriction approximations need a cycle-stepped
+PPU/CPU (a structural commitment the project has not made); they are what costs us Mealybug
+(0/71) and SameSuite DMA (0/4). The whole suite runs in **~2.7 s**.
+
+acid2 rendering correctly is a genuinely good result — the PPU composites background, window
+and objects correctly enough to match the reference exactly, despite the fixed mode-3 /
+whole-line-render approximations. It is now **asserted in CI**; before, the reference PNG was
+checked in and never actually compared.
+
+### These numbers are 18 ROMs, not a suite total
+
+Measured against the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264
+tests, with their ROMs, their reference images and their comparison method, this emulator
+scores **92/264**. Mooneye acceptance is **13/66**, Mealybug **0/71**, SameSuite APU **2/61**,
+SameSuite DMA **0/4**, MBC3 RTC **0/3**. "We pass Blargg" is true and is a narrow slice.
 
 ## A suite no public test ROM covers: battery-save durability
 
@@ -336,12 +381,12 @@ menu goes from `NEW GAME / OPTION` to `CONTINUE / NEW GAME / OPTION`.
 
 | Component | Primary suites | The approximations they will catch |
 |---|---|---|
-| [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (non-goal); Mooneye `acceptance/interrupts`, `instr`; Game Boy Doctor | 16-vs-20 T-cycle interrupt dispatch (no runnable test) |
+| [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (non-goal, **prints `Failed`**); Mooneye `acceptance/interrupts`, `instr`; Game Boy Doctor | 16-vs-20 T-cycle interrupt dispatch (`interrupt_time` runs and fails) |
 | [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu`; Mealybug Tearoom | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural non-goals) |
 | [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug` (non-goal); Mooneye `acceptance/oam_dma`, `bits` | Instant/unguarded OAM DMA, no VRAM/OAM mode-blocking, OAM bug (structural / non-goals) |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1`; **`testharness/battery.rs`** (**pass**, battery-save durability + `.sav` interop) | Banking bit maths; the MBC3-for-everything web/FFI bug |
-| [APU](components/apu.md) | Blargg `dmg_sound` (**9/12 pass**), `cgb_sound` (unwired); SameSuite | Wave-RAM access-window timing (`dmg_sound` 09/10/12) — needs a T-cycle-stepped APU, **planned next** |
-| [Timer](components/timer.md) | Mooneye `acceptance/timer`; Blargg `interrupt_time` | DIV/TAC glitches, TIMA reload delay window |
+| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**), `cgb_sound` (unwired — measured 12/12 externally, worth wiring); SameSuite APU (**2/61** — 57 need the CGB PCM12/PCM34 registers, which are unimplemented) | PCM12/PCM34 read-back; the CGB sound suite is unwired |
+| [Timer](components/timer.md) | Mooneye `acceptance/timer` (**10 of 13 fail** — this is a wired test, contrary to what the non-goal used to claim); Blargg `interrupt_time` | Separate DIV/TIMA counters, no falling-edge quirks: `div_write`, `rapid_toggle`, `tim00/10/11`, `tim01_div_trigger`, `tim10_div_trigger`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading` |
 | [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` | Instantaneous transfer; the capture hook must be wired first |
 | [Joypad](components/input.md) | Mooneye joypad (limited) | Mostly proven by games booting |
 

@@ -123,9 +123,15 @@ To become a standalone crate/repo, the following would have to be decoupled from
 A conformance tool is only trustworthy if **our own emulator passes what the tool claims to
 check.** Our scores are the proof, and they must stay honest and visible:
 
-- **13/13** Blargg serial suite,
-- **9/12** Blargg `dmg_sound` (01–08 + 11; 09/10/12 are the wave-RAM timing tests, planned next),
-- **dmg-acid2** pixel-perfect against the reference.
+- **32/35** ROM x console rows in `testharness/baseline.txt` (18 ROMs on a DMG and a CGB),
+- **12/12** Blargg `dmg_sound`,
+- **dmg-acid2** pixel-perfect — 0 of 23,040 pixels differ from the reference, **asserted in
+  CI** rather than spot-checked by a human.
+
+And the part that keeps the rest honest: **measured against the
+[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264 tests we score 92** —
+Mooneye acceptance 13/66, Mealybug 0/71, SameSuite APU 2/61. A tool that only reports the
+suites its author passes is marketing; publish the denominator that hurts.
 
 If any of those regressed and we hid it, the tool would be checking behaviour we don't ourselves
 meet — which is exactly the failure mode that makes a benchmark worthless. So the same

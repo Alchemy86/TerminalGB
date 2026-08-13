@@ -107,11 +107,16 @@ lines per fix, not a process document.
   (headless still ~60× realtime). The **HALT bug IS modelled** now (`halt_bug` flag; PC
   rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
 - Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
-  OAM-corruption bug not modelled (`oam_bug` red-by-design — DMG defect, we boot CGB); OAM
-  DMA instantaneous/unguarded and PPU mode 3 fixed-length (both need a cycle-stepped
-  PPU/CPU); timer uses separate DIV/TIMA counters (no falling-edge quirks — no wired test);
-  interrupt dispatch charges 16 T-cycles vs hardware's 20 (its only test, `interrupt_time`,
-  can't run headless — it needs an APU: `sync_apu` spins on `NR52`).
+  OAM-corruption bug not modelled (`oam_bug` red-by-design — 3 of its 8 sub-tests pass; it
+  is a DMG hardware *defect*); OAM DMA instantaneous/unguarded and PPU mode 3 fixed-length
+  (both need a cycle-stepped PPU/CPU — they cost us Mealybug 0/71 and SameSuite DMA 0/4);
+  timer uses separate DIV/TIMA counters with no falling-edge quirks — **there IS a wired
+  test for this and we fail it: Mooneye `acceptance/timer/*`, 10 of 13 red** (`div_write`,
+  `rapid_toggle`, `tim00`, `tim10`, `tim11`, `tim01_div_trigger`, `tim10_div_trigger`,
+  `tima_reload`, `tima_write_reloading`, `tma_write_reloading`); interrupt dispatch charges
+  16 T-cycles vs hardware's 20 (`interrupt_time` prints **Failed** — it needs an APU
+  installed, since `sync_apu` spins on `NR52`, and the harness now always installs one, so
+  this is a measured failure and not the "can't run headless" it used to be recorded as).
 - `get_mbc` (`src/mbc/mod.rs`) returns MBC3 for **any** cartridge when built without a
   filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled
@@ -125,24 +130,93 @@ lines per fix, not a process document.
   (`[[test]] name = "testroms"`). Run it with `cargo test --release --test testroms`. It
   lives in `testharness/` (not `tests/`) because **`tests/` is the gb-test-roms submodule** —
   Cargo cannot track `.rs` files inside a submodule path.
-- **Two mechanisms:** Blargg → serial string (`Serial::set_callback`) capped at 250M cycles;
-  dmg-acid2 + Blargg screen-only ROMs → FNV-1a hash of the RGBA framebuffer over a fixed 600
-  frames. On mismatch it dumps the actual frame to `target/testrom-artifacts/<id>.png`.
-- **Baseline:** `testharness/baseline.txt` records the expected result of every ROM. CI is
-  red only on a *change* from it (regression or improvement). Update deliberately with
+- **NEVER record a hash of our own output as the expected result.** That was the harness's
+  central defect: `mem_timing-2`, `interrupt_time`, `halt_bug` and `oam_bug` were pinned as
+  FNV hashes of *our* framebuffer, and the documented response to a changed hash is to
+  re-bless it — so CI would have stayed green straight through any regression in those four,
+  and `oam_bug` (really **3 of 8 sub-tests**) was recorded as an opaque number nobody could
+  read. Every expectation is now somebody else's: the ROM's serial string, the text the ROM
+  writes to cartridge RAM, or its author's reference image.
+- **Three mechanisms, all judged by the ROM or its author:**
+  1. *Serial* — Blargg's ROMs write "Passed"/"Failed" to the link port
+     (`Serial::set_callback`), capped at 250M cycles.
+  2. *Verdict* — the ROMs that never touch the link port still print their result. Prefer
+     cartridge RAM (`$A000` status byte behind the `$DE $B0 $61` signature, text from
+     `$A004`); **`halt_bug` and `interrupt_time` have no cartridge RAM at all** (type 0x02,
+     RAM size 0x00), so the **screen** is read instead. Blargg's font is loaded so a tile id
+     **is** the ASCII code of the glyph it draws and characters go straight into the BG
+     tilemap, so the tilemap reads back as text — the same trick the trainer harness uses on
+     Pokémon's `wTileMap`. That is how `oam_bug` reports `01:ok 02:02 …` and `interrupt_time`
+     reports `Failed` instead of a hash.
+  3. *Image* — dmg-acid2 is compared against `third_party/dmg-acid2/reference-dmg.png` by
+     **shade rank**, not RGB (`testharness/pngdec.rs`, same rule as
+     `tools/conformance/image.py`), because our shades are `000000/606060/c0c0c0/ffffff` and
+     the reference's are `000000/555555/aaaaaa/ffffff`. Result: **0 of 23,040 pixels differ**
+     — the claim is now CI-enforced instead of manually spot-checked.
+- **The harness runs with an APU installed.** It used to leave `MMU.sound` at `None`, which is
+  not a real machine and silently changed results: `interrupt_time` stalled on its title
+  screen (it spins on `NR52`) and was written off as "cannot run headless", and
+  `dmg_sound/01` reported Failed. Never build a test machine without an APU.
+- **Every ROM runs on BOTH consoles** (`<id>@dmg`, `<id>@cgb`), skipping `@dmg` for a
+  cartridge whose header says `0x0143 == 0xC0`. This is also the answer to "retrio's Blargg
+  copies are patched to `0x143 = 0x80`, so we test them as CGB games": forcing the model runs
+  both machines without mutating or vendoring a ROM.
+- **Baseline:** `testharness/baseline.txt` records the expected verdict of every ROM/model row
+  **and the ROM's own report text** — so a diff is human-readable and a change in any
+  sub-test, register dump or checksum line is caught, not just a flipped PASS/FAIL. CI is red
+  on any change in either direction. Update deliberately with
   `UPDATE_BASELINE=1 cargo test --release --test testroms`. Full explanation in
   `docs/testing.md`.
+- **The harness self-checks that it can fail**, at startup: it decodes the reference image,
+  requires it to be 160×144 with >1 shade, requires it to compare equal to itself, and
+  requires a single flipped pixel to be *detected*. Both mechanisms were also proved by
+  deliberately breaking the emulator — clearing the HALT-bug latch turns `halt_bug` red, and
+  ignoring sprite X-flip turns dmg-acid2 red at 119/23,040 pixels. Re-run those two if you
+  ever doubt the harness.
 - **Sharp edges learned:** (1) always drive test ROMs via `Cpu::new(data, Some(path))` — with
-  `None`, `get_mbc` forces MBC3 and mis-drives them. (2) The MBC writes a `.gbsave` next to
+  `None`, `get_mbc` forces MBC3 and mis-drives them. (2) The MBC writes a `.sav` next to
   the ROM path, so the harness **copies each ROM into `target/` first** to keep the submodule
-  checkout clean. (3) Emulation is deterministic (WRAM seeded with a fixed value, audio never
-  enabled), so frame hashes reproduce exactly — the harness asserts this at startup.
+  checkout clean. (3) Emulation is deterministic (WRAM seeded with a fixed value), so a frame
+  reproduces exactly — the harness asserts this at startup.
 - **Vendored ROM:** `third_party/dmg-acid2/` holds the prebuilt MIT acid2 ROM + reference PNG
   (upstream ships source only); `.gitignore`'s `**/*.gb` rule is negated for that one file.
-- No new crate dependencies: the hash and PNG writer are hand-rolled.
+- No new crate dependencies: the hash, the PNG writer and the PNG **reader** (a full RFC 1951
+  inflater — the upstream reference is 2-bit greyscale) are hand-rolled.
 - `src/cpu/z80` is a non-compiled reference file, not a module. (`src/gpu/old_gpu.rs`,
   961 lines of dead/unreferenced code, was deleted — no `mod old_gpu` ever existed.)
 - The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
+
+## Console model — DMG vs CGB (`src/mode.rs`, `Cpu::new_with_model`)
+
+- **There are three machines, not two.** `GbMode::Classic` (a DMG), `GbMode::Color` (a CGB
+  running a CGB cartridge) and `GbMode::ColorAsClassic` (**CGB hardware in DMG-compat mode**).
+  The last two are what this emulator has always booted: `Cpu::new` called
+  `MemoryManagementUnit::new_cgb` unconditionally, so a DMG-only cartridge got compat mode.
+  `MemoryManagementUnit::new` (Classic) existed but **nothing in the product ever called it**.
+- **`Model { Auto, Dmg, Cgb }`** is the user-facing choice, resolved to a `GbMode` by
+  `Model::resolve(cgb_flag)`. `Cpu::new` = `Model::Auto` = "CGB flag bit 7 set → Color, else
+  DMG", i.e. what a person with both consoles would do. `Cpu::new_with_model` forces one.
+  `$GB_MODEL=auto|dmg|cgb` overrides `Auto` only (an explicit caller choice always wins), so
+  every frontend honours it without growing a flag; a typo warns and is ignored rather than
+  silently switching console. `Model::Dmg` is honoured even for a `0x143 == 0xC0` cartridge —
+  forcing means forcing — whereas `MemoryManagementUnit::new` still refuses one.
+- **Classic and ColorAsClassic render identically** (`Gpu::new_cgb() == Gpu::new()`; the
+  Color-only branches in `renderscan` test `== GbMode::Color`). The differences are the boot
+  registers (`A=0x01 HL=0x014D` vs `A=0x11 HL=0x007C`) and the undocumented CGB registers
+  `FF72`/`FF73`/`FF75`-`FF77`, which `Classic` reads as `0xFF`. That is enough for nine
+  Mooneye acceptance tests, which print their boot registers, to change verdict — measured
+  **+9 with zero regressions**. It is also a hard prerequisite for being listed in the
+  [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/), whose runner passes a model.
+- **Cost: one branch at boot.** Nothing on any hot path; `set_mode` replaced `determine_mode`
+  and all three constructors now share `MemoryManagementUnit::raw`, so the DMG and CGB paths
+  cannot drift apart.
+- **Auto-detect changes existing behaviour for DMG-only cartridges**, which is the point but
+  is worth knowing when a baseline moves: Blargg's `dmg_sound` ROMs (`0x143 == 0x00`) now boot
+  a DMG, and the audio baseline's hashes shifted by 256 samples because the boot state differs.
+  The verdicts stayed 12/12 and every analysed property (RMS, peak, silence, dominant pitch)
+  held. **`GB_MODEL=cgb` reproduces the pre-change hashes exactly** — that is the cheap way to
+  prove a baseline move is the console and not a synthesis regression. `savestate` needed no
+  format bump (`gbmode` was already serialised).
 
 ## Audio quality & pacing
 

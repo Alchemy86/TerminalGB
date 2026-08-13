@@ -444,32 +444,62 @@ limits and the captured proof: **[`docs/video-out.md`](docs/video-out.md)**.
 | Web (WASM) | 🟡 Video + input work; **no audio yet**; non-MBC3 cartridges mis-detected |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
 
+**Console model — DMG or Game Boy Color**
+
+The emulator picks the console from the cartridge header: a cartridge whose CGB flag
+(`0x0143` bit 7) is set boots a **Game Boy Color**, anything else boots an original
+**DMG** — what a person with both consoles on the shelf would do. Override it with the
+`GB_MODEL` environment variable, which every frontend honours:
+
+```bash
+GB_MODEL=dmg cargo run --release --example desktop -- game.gbc   # force an original Game Boy
+GB_MODEL=cgb cargo run --release --example desktop -- game.gb    # force the Color's DMG-compat mode
+```
+
+This matters more than it sounds. Before this existed *everything* booted a Color, so a
+DMG-only game always ran in the Color's compatibility mode — a different machine, with
+different boot registers (`A=0x11 HL=0x007C` rather than `A=0x01 HL=0x014D`) and the
+undocumented CGB registers still responding. Nine Mooneye acceptance tests print those
+registers and can tell.
+
 **Accuracy — hardware test ROMs**
 
-A **headless Blargg/acid2 harness is now wired in** ([`testharness/`](testharness/), run
+A **headless Blargg/acid2 harness is wired in** ([`testharness/`](testharness/), run
 with `cargo test --release --test testroms`) and gated in CI against a checked-in
-baseline. Full per-ROM breakdown: **[testharness/README.md](testharness/README.md)** ·
+baseline. Every ROM runs on **both consoles** — a DMG and a Game Boy Color — and every
+verdict is the ROM's own (its serial string, the text it writes to `$A000`, or its
+author's reference image); nothing is judged against a hash of our own previous output.
+Full per-ROM breakdown: **[testharness/README.md](testharness/README.md)** ·
 rationale: **[docs/testing.md](docs/testing.md)**.
 
 | Suite | Result |
 |---|---|
-| Blargg `cpu_instrs` (11) | ✅ 11/11 pass |
-| Blargg `instr_timing` | ✅ Pass |
-| Blargg `mem_timing` / `mem_timing-2` | ✅ Pass (timer stepped per memory access) |
-| Blargg `halt_bug` | ✅ Pass (HALT bug modelled) |
-| `dmg-acid2` (PPU) | ✅ Pixel-correct vs reference |
-| Blargg `dmg_sound` (12) | 🟡 9/12 pass (01–08 + 11); 09/10/12 (wave-RAM timing) need a T-cycle-stepped APU, **planned next** |
-| Blargg `interrupt_time`, `oam_bug` | 🚫 Documented non-goals ([why](testharness/README.md#documented-non-goals-pinned-red-on-purpose)) |
+| Blargg `cpu_instrs` (11) | ✅ 11/11 pass, DMG and CGB |
+| Blargg `instr_timing` | ✅ Pass, DMG and CGB |
+| Blargg `mem_timing` / `mem_timing-2` | ✅ Pass, DMG and CGB (timer stepped per memory access) |
+| Blargg `halt_bug` | ✅ Pass, DMG and CGB (HALT bug modelled) |
+| `dmg-acid2` (PPU) | ✅ 0 of 23,040 pixels differ from the reference image, DMG and CGB |
+| Blargg `dmg_sound` (12) | ✅ 12/12 pass (measured by the audio harness) |
+| Blargg `oam_bug` | 🚫 3 of 8 sub-tests pass — DMG OAM-corruption bug is a documented non-goal |
+| Blargg `interrupt_time` | 🚫 Fails — 16- vs 20-T-cycle interrupt dispatch, a documented non-goal |
 
-**Blargg serial suite: 13/13.** APU accuracy is measured by a separate offline audio harness
-(`cargo test --release --test audiocapture`) — see [`docs/audio.md`](docs/audio.md).
+**32 of 35 ROM/console rows pass.** APU accuracy is measured by a separate offline audio
+harness (`cargo test --release --test audiocapture`) — see [`docs/audio.md`](docs/audio.md).
+
+These numbers cover **18 ROMs**. The wider community suites are a much larger denominator and
+we do far worse on them; the honest scoreboard, measured with the
+[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own ROMs and reference images,
+is Mooneye acceptance 13/66, Mealybug 0/71, SameSuite APU 2/61. Do not read "we pass Blargg" as
+"we are accurate".
 
 **Known limitations** (each is documented honestly on the relevant component page)
 - No boot ROM / logo scroll; the post-boot register state is written directly.
 - The DMG OAM-corruption bug is not modelled (deliberate non-goal); the HALT bug **is**.
 - OAM DMA is instantaneous and does not restrict the bus; PPU mode 3 is fixed-length. Making
-  these cycle-exact needs a cycle-stepped PPU/CPU — the same structural step the APU wave-RAM
-  tests (`dmg_sound` 09/10/12) are waiting on; that APU work is now **planned next**.
+  these cycle-exact needs a cycle-stepped PPU/CPU — the structural step the Mealybug PPU suite
+  (0/71) and SameSuite's DMA tests (0/4) are waiting on.
+- **The timer uses separate DIV/TIMA counters with no falling-edge quirks.** Mooneye's
+  `acceptance/timer/*` tests exactly this and we fail 10 of 13.
 - Web build has no sound and always treats cartridges as MBC3.
 - Battery saves work only on the native (filepath) path — the web and FFI builds have no
   filesystem, so in-game saves are not persisted there. **Save states are implemented** in the
@@ -557,10 +587,10 @@ account of what is *not* covered: [`docs/conformance-action.md`](docs/conformanc
 
 Near-term, in priority order:
 
-- **A T-cycle-stepped APU** — the next accuracy step, and the one the captain has asked for. It
-  is what the remaining `dmg_sound` tests (09/10/12, the wave-RAM access-window quirks) need, and
-  it shares a structure with a cycle-stepped PPU/CPU (which the PPU mode-3 and OAM-DMA non-goals
-  are also waiting on). See [`docs/components/apu.md`](docs/components/apu.md).
+- **A cycle-stepped PPU/CPU** — the largest single accuracy gap. Mealybug Tearoom (0/71),
+  SameSuite DMA (0/4) and Mooneye's PPU and OAM-DMA tests all need it. The APU already reached
+  `dmg_sound` 12/12 with per-access stepping; the same structure is what the rest is waiting on.
+  See [`docs/components/apu.md`](docs/components/apu.md).
 - **Wire Mooneye GB** into the harness — the fine-grained timing suite that will turn our current
   approximations into visible, trackable reds. See [`docs/testing.md`](docs/testing.md).
 - **Web audio** and correct **web/FFI MBC detection** (both currently forced to MBC3).

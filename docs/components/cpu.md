@@ -72,7 +72,7 @@ tree is the frame-timing note at [`src/gameboy.rs:50`](https://github.com/Alchem
 structure mirrors it closely). It is a plain decode-and-execute loop, not a JIT or a
 micro-op pipeline.
 
-**The `Cpu` struct** — [`src/cpu/core.rs:14`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L14):
+**The `Cpu` struct** — [`src/cpu/core.rs:15`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L15):
 
 ```rust
 pub struct Cpu<'a> {
@@ -87,10 +87,19 @@ pub struct Cpu<'a> {
 }
 ```
 
-**Always boots CGB.** `Cpu::new` calls `MemoryManagementUnit::new_cgb(...)`
-([`src/cpu/core.rs:34`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L34)); the classic-only `MemoryManagementUnit::new`
-path is effectively unreachable from the main entry point. Boot register values still
-branch on the detected mode in `Registers::new`
+**Boots the console the cartridge asks for.** `Cpu::new`
+([`src/cpu/core.rs:48`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L48)) resolves a
+[`Model`](../../src/mode.rs): a cartridge whose CGB flag (`0x0143` bit 7) is set boots a
+Game Boy Color, anything else boots a DMG, and `$GB_MODEL=dmg|cgb` overrides that.
+`Cpu::new_with_model` ([`src/cpu/core.rs:53`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L53)) forces one.
+
+*This is new.* Until it existed, `Cpu::new` called `MemoryManagementUnit::new_cgb`
+unconditionally and the classic path was unreachable from the main entry point — so a
+DMG-only cartridge always ran in the Color console's **compatibility mode**, which is a
+third machine and not a DMG (see the table: `ColorAsClassic` boots `A=0x11 HL=0x007C`,
+`Classic` boots `A=0x01 HL=0x014D`). Nine Mooneye acceptance tests print those registers
+and changed verdict when the DMG mode landed. Boot register values branch on the resolved
+mode in `Registers::new`
 ([`src/cpu/registers.rs:52`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/registers.rs#L52)):
 
 | Mode | A | F | BC | DE | HL | SP | PC |
@@ -139,12 +148,13 @@ reads zero, matching hardware.
 - **Interrupt dispatch costs 16 T-cycles**, not the hardware's 20 — *still divergent, but
   not test-driven-fixable in this repo yet.* `handleinterrupt` returns `4`
   ([`src/cpu/core.rs`](../../src/cpu/core.rs)), ×4 in `do_cycle` = 16 T-cycles. Real
-  dispatch is **5 M-cycles / 20 T-cycles** (Pan Docs). The one ROM that would prove a
-  red→green fix, Blargg `interrupt_time`, **cannot run headless**: it is `REQUIRE_CGB`,
-  switches to double speed, and calls `sync_apu`/`get_cpu_speed` which poll `NR52` — with
-  no APU instantiated in the headless build those polls never terminate, so the test
-  hangs on its title screen before any timing is measured. Changing 16→20 blindly (no
-  failing test to validate against) is deliberately **not** done here; see §7.
+  dispatch is **5 M-cycles / 20 T-cycles** (Pan Docs). The ROM that proves it, Blargg
+  `interrupt_time`, **runs and prints `Failed`** — that is a red test waiting for a fix.
+  It used to be recorded as "cannot run headless": it is `REQUIRE_CGB`, switches to double
+  speed, and calls `sync_apu`/`get_cpu_speed` which poll `NR52`, and the harness installed
+  **no APU**, so those polls never terminated and it hung on its title screen. The harness
+  now always installs one. Changing 16→20 still needs care (it must be right at both
+  speeds), but there is now a failing test to validate against; see §7.
 - **`STOP` is minimally handled** (the `stop` field exists; double-speed switching is
   plumbed through the MMU, not a faithful `STOP` model).
 - **~900 lines of legacy interrupt/HALT logic are commented out** below `do_cycle`
@@ -195,10 +205,10 @@ reads zero, matching hardware.
    with `IME=1`, `SP` has decreased by 2, `[SP]` holds the old `PC`, and `PC == 0x0040`;
    `IF` bit 0 is cleared and `IME` is now false. *(Not covered.)*
 7. **Interrupt dispatch timing = 20 T-cycles.** Servicing an interrupt should advance the
-   machine clock by 5 M-cycles. **This emulator charges 16 T-cycles.** *(Not covered;
-   known-divergent — **documented non-goal**: the only ROM that exercises it,
-   `interrupt_time`, hangs headless with no APU, so there is no red→green test to fix
-   against. See §4 and `testing.md`.)*
+   machine clock by 5 M-cycles. **This emulator charges 16 T-cycles.** *(Covered and
+   **red**: Blargg `interrupt_time` prints `Failed`, pinned in `testharness/baseline.txt`,
+   and several Mooneye `acceptance/*_timing` tests fail for the same reason. Still a
+   documented non-goal, but no longer an unmeasurable one. See §4 and `testing.md`.)*
 8. **Interrupt priority.** With `IF` and `IE` both `0x1F`, VBlank (vector `0x40`) is
    serviced first. *(Not covered.)*
 9. **HALT with `IME=1` and pending interrupt** wakes, services the interrupt, and returns
@@ -223,7 +233,7 @@ OpenEmu screenshots, not an automated harness.
 | **Blargg `instr_timing`** | Per-instruction M-cycle counts | Wrong cycle table entry (affects everything downstream). |
 | **Blargg `mem_timing` / `mem_timing-2`** | *When* within an instruction memory is touched | **PASS** — timer stepped per memory access (§4). |
 | **Blargg `halt_bug`** | The HALT bug | **PASS** — modelled (quirk §5). |
-| **Blargg `interrupt_time`** | Interrupt dispatch timing | **Documented non-goal** — hangs headless (no APU; polls `NR52`). Would catch the 16-vs-20 T-cycle gap (test #7) if it could run. |
+| **Blargg `interrupt_time`** | Interrupt dispatch timing | **Documented non-goal, and now measured: prints `Failed`.** Catches the 16-vs-20 T-cycle gap (test #7). Needs an APU installed or it hangs on its title screen. |
 | **Mooneye `acceptance/interrupts/`, `acceptance/instr/`, `acceptance/timer/`** | Interrupt edge timing (`ie_push`, `halt_ime*`) | The gold standard for the corners above. **Mooneye is not the declared submodule** and is not wired. |
 
 Blargg ROMs report pass/fail over the **serial port** — see [Serial](serial.md) for the

@@ -96,12 +96,15 @@ fn fill_random(slice: &mut [u8], start: u32) {
 }
 
 impl<'a> MemoryManagementUnit<'a> {
-    pub fn new(
+    /// Build the memory map with the cartridge mapped but the console not yet
+    /// chosen. Every public constructor goes through here and then decides
+    /// `gbmode`; keeping it in one place is what stops the DMG and CGB paths
+    /// drifting apart.
+    fn raw(
         data: Vec<u8>,
         file: Option<path::PathBuf>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mmu_mbc = mbc::get_mbc(data, file)?;
-
         let serial = Serial::default();
         let mut res = MemoryManagementUnit {
             wram: [0; WRAM_SIZE],
@@ -129,46 +132,47 @@ impl<'a> MemoryManagementUnit<'a> {
             bus_ticked: 0,
         };
         fill_random(&mut res.wram, 42);
+        Ok(res)
+    }
+
+    /// Boot an original Game Boy (DMG) and **refuse a CGB-only cartridge**,
+    /// which is what such a cartridge's own header asks for (`0x0143 == 0xC0`
+    /// means "will not run on a DMG"; on real hardware the cartridge's own boot
+    /// code draws an error screen). Use
+    /// [`new_with_model`](Self::new_with_model) with [`Model::Dmg`] to force it
+    /// anyway.
+    pub fn new(
+        data: Vec<u8>,
+        file: Option<path::PathBuf>,
+    ) -> StrResult<MemoryManagementUnit<'a>> {
+        let mut res = Self::raw(data, file)?;
         if res.rb(0x0143) == 0xC0 {
             return Err("This game does not work in Classic mode");
         }
+        res.set_mode(GbMode::Classic);
         res.set_initial();
         Ok(res)
     }
 
+    /// Boot a Game Boy Color. A cartridge that does not advertise CGB support
+    /// gets the console's compatibility mode ([`GbMode::ColorAsClassic`]).
     pub fn new_cgb(
         data: Vec<u8>,
         file: Option<path::PathBuf>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
-        let mmu_mbc = mbc::get_mbc(data, file)?;
-        let serial = Serial::default();
-        let mut res = MemoryManagementUnit {
-            wram: [0; WRAM_SIZE],
-            zram: [0; ZRAM_SIZE],
-            wrambank: 1,
-            hdma: [0; 4],
-            inte: 0,
-            intf: 0,
-            serial,
-            timer: Timer::default(),
-            keypad: Keypad::default(),
-            gpu: Gpu::new_cgb(),
-            #[cfg(not(target_arch = "wasm32"))]
-            sound: None,
-            mbc: mmu_mbc,
-            gbmode: GbMode::Color,
-            gbspeed: GbSpeed::Single,
-            speed_switch_req: false,
-            hdma_src: 0,
-            hdma_dst: 0,
-            hdma_status: DMAType::NoDma,
-            hdma_len: 0xFF,
-            undocumented_cgb_regs: [0; 3],
-            bus_tick_enabled: false,
-            bus_ticked: 0,
-        };
-        fill_random(&mut res.wram, 42);
-        res.determine_mode();
+        Self::new_with_model(data, file, crate::mode::Model::Cgb)
+    }
+
+    /// Boot the console named by `model`. [`Model::Auto`] picks from the
+    /// cartridge header (and honours `$GB_MODEL`) — see [`Model::resolve`].
+    pub fn new_with_model(
+        data: Vec<u8>,
+        file: Option<path::PathBuf>,
+        model: crate::mode::Model,
+    ) -> StrResult<MemoryManagementUnit<'a>> {
+        let mut res = Self::raw(data, file)?;
+        let mode = model.resolve(res.rb(0x0143));
+        res.set_mode(mode);
         res.set_initial();
         Ok(res)
     }
@@ -207,11 +211,9 @@ impl<'a> MemoryManagementUnit<'a> {
         self.wb(0xFF4B, 0);
     }
 
-    fn determine_mode(&mut self) {
-        let mode = match self.rb(0x0143) & 0x80 {
-            0x80 => GbMode::Color,
-            _ => GbMode::ColorAsClassic,
-        };
+    /// Commit the resolved hardware mode. The PPU keeps its own copy (it reads
+    /// it per scanline), so the two must be set together.
+    fn set_mode(&mut self, mode: GbMode) {
         self.gbmode = mode;
         self.gpu.gbmode = mode;
     }

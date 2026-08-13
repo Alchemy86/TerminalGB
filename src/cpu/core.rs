@@ -1,6 +1,7 @@
 use crate::cpu::registers::Registers;
 use crate::cpu::{data, ld, misc, stack};
 use crate::mmu::MemoryManagementUnit;
+use crate::mode::Model;
 
 #[allow(dead_code)]
 pub enum Interrupt {
@@ -35,8 +36,26 @@ pub struct Cpu<'a> {
 }
 
 impl Cpu<'_> {
+    /// Boot a machine for `data`, choosing the console from the cartridge
+    /// header (and honouring `$GB_MODEL`) — see [`Model::Auto`].
+    ///
+    /// Until this gained a model, every cartridge booted a Game Boy Color:
+    /// a DMG-only game ran in the Color console's compatibility mode, which is
+    /// a *different machine* (boot registers `A=0x11 HL=0x007C` instead of
+    /// `A=0x01 HL=0x014D`, and the undocumented CGB registers respond). Test
+    /// ROMs that print their boot registers can tell, which is why nine
+    /// Mooneye acceptance tests changed verdict when this was added.
     pub fn new(data: Vec<u8>, file: Option<std::path::PathBuf>) -> Self {
-        let memory = MemoryManagementUnit::new_cgb(data, file).unwrap();
+        Self::new_with_model(data, file, Model::Auto)
+    }
+
+    /// Boot a specific console. `Model::Auto` is [`Cpu::new`].
+    pub fn new_with_model(
+        data: Vec<u8>,
+        file: Option<std::path::PathBuf>,
+        model: Model,
+    ) -> Self {
+        let memory = MemoryManagementUnit::new_with_model(data, file, model).unwrap();
         let registers = Registers::new(memory.gbmode);
 
         Cpu {

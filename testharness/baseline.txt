@@ -1,30 +1,51 @@
-# Test-ROM known-failures baseline.
+# Test-ROM baseline — the EXPECTED result of every ROM on every console.
 #
-# The EXPECTED result of every ROM. CI is green when reality matches this
-# file and red only when a result changes (a regression, or an improvement
-# that should be blessed here). Regenerate deliberately with:
+# Key is `<rom>@<model>`; a cartridge whose header says it will not run on a
+# DMG (0x0143 == 0xC0) has no @dmg row. The value is PASS or FAIL followed by
+# the ROM's OWN report: the string it sent over the link port, the text it
+# wrote to cartridge RAM at $A000, or how many pixels differ from its author's
+# reference image. Nothing here is a hash of our own output, so a regression
+# cannot be silently re-blessed as a new expectation.
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction. Re-bless deliberately, after reading the diff:
 #
 #   UPDATE_BASELINE=1 cargo test --release --test testroms
 #
-# Serial ROMs record PASS / FAIL. Frame-hash ROMs record HASH:<fnv1a64>;
-# a changed hash means the rendered output changed (inspect the dumped PNG).
-# See docs/testing.md for the full explanation.
+# See docs/testing.md.
 
-blargg/cpu_instrs/01-special = PASS
-blargg/cpu_instrs/02-interrupts = PASS
-blargg/cpu_instrs/03-op-sp-hl = PASS
-blargg/cpu_instrs/04-op-r-imm = PASS
-blargg/cpu_instrs/05-op-rp = PASS
-blargg/cpu_instrs/06-ld-r-r = PASS
-blargg/cpu_instrs/07-jr-jp-etc = PASS
-blargg/cpu_instrs/08-misc = PASS
-blargg/cpu_instrs/09-op-r-r = PASS
-blargg/cpu_instrs/10-bit-ops = PASS
-blargg/cpu_instrs/11-op-a-hl = PASS
-blargg/instr_timing = PASS
-blargg/mem_timing = PASS
-blargg/mem_timing-2 = HASH:f66c658114ad0205
-blargg/interrupt_time = HASH:2f54218861112ee5
-blargg/halt_bug = HASH:0e9895cff3533aad
-blargg/oam_bug = HASH:af715310321146ad
-acid2/dmg-acid2 = HASH:01acf78fe505f31c
+blargg/cpu_instrs/01-special@dmg = PASS | 01-special Passed
+blargg/cpu_instrs/01-special@cgb = PASS | 01-special Passed
+blargg/cpu_instrs/02-interrupts@dmg = PASS | 02-interrupts Passed
+blargg/cpu_instrs/02-interrupts@cgb = PASS | 02-interrupts Passed
+blargg/cpu_instrs/03-op-sp-hl@dmg = PASS | 03-op sp,hl Passed
+blargg/cpu_instrs/03-op-sp-hl@cgb = PASS | 03-op sp,hl Passed
+blargg/cpu_instrs/04-op-r-imm@dmg = PASS | 04-op r,imm Passed
+blargg/cpu_instrs/04-op-r-imm@cgb = PASS | 04-op r,imm Passed
+blargg/cpu_instrs/05-op-rp@dmg = PASS | 05-op rp Passed
+blargg/cpu_instrs/05-op-rp@cgb = PASS | 05-op rp Passed
+blargg/cpu_instrs/06-ld-r-r@dmg = PASS | 06-ld r,r Passed
+blargg/cpu_instrs/06-ld-r-r@cgb = PASS | 06-ld r,r Passed
+blargg/cpu_instrs/07-jr-jp-etc@dmg = PASS | 07-jr,jp,call,ret,rst Passed
+blargg/cpu_instrs/07-jr-jp-etc@cgb = PASS | 07-jr,jp,call,ret,rst Passed
+blargg/cpu_instrs/08-misc@dmg = PASS | 08-misc instrs Passed
+blargg/cpu_instrs/08-misc@cgb = PASS | 08-misc instrs Passed
+blargg/cpu_instrs/09-op-r-r@dmg = PASS | 09-op r,r Passed
+blargg/cpu_instrs/09-op-r-r@cgb = PASS | 09-op r,r Passed
+blargg/cpu_instrs/10-bit-ops@dmg = PASS | 10-bit ops Passed
+blargg/cpu_instrs/10-bit-ops@cgb = PASS | 10-bit ops Passed
+blargg/cpu_instrs/11-op-a-hl@dmg = PASS | 11-op a,(hl) Passed
+blargg/cpu_instrs/11-op-a-hl@cgb = PASS | 11-op a,(hl) Passed
+blargg/instr_timing@dmg = PASS | instr_timing Passed
+blargg/instr_timing@cgb = PASS | instr_timing Passed
+blargg/mem_timing@dmg = PASS | mem_timing 01:ok 02:ok 03:ok Passed
+blargg/mem_timing@cgb = PASS | mem_timing 01:ok 02:ok 03:ok Passed
+blargg/mem_timing-2@dmg = PASS | mem_timing 01:ok 02:ok 03:ok Passed
+blargg/mem_timing-2@cgb = PASS | mem_timing 01:ok 02:ok 03:ok Passed
+blargg/interrupt_time@cgb = FAIL | interrupt time 00 00 00 00 08 0C 00 00 00 00 08 0C AEFF718D Failed
+blargg/halt_bug@dmg = PASS | halt bug IE IF IF DE 01 10 F1 0C04 01 00 E1 0C04 01 01 E1 0411 11 00 E1 0C04 11 10 F1 0411 11 11 F1 0411 E1 00 E1 0C04 E1 E0 E1 0C04 E1 E1 E1 0411 Passed
+blargg/halt_bug@cgb = PASS | halt bug IE IF IF DE 01 10 F1 0C04 01 00 E1 0C04 01 01 E1 0411 11 00 E1 0C04 11 10 F1 0411 11 11 F1 0411 E1 00 E1 0C04 E1 E0 E1 0C04 E1 E1 E1 0411 Passed
+blargg/oam_bug@dmg = FAIL | oam_bug 01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 Run failed tests individually for more details. Failed #2
+blargg/oam_bug@cgb = FAIL | oam_bug 01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 Run failed tests individually for more details. Failed #2
+acid2/dmg-acid2@dmg = PASS | 0/23040 pixels differ from third_party/dmg-acid2/reference-dmg.png
+acid2/dmg-acid2@cgb = PASS | 0/23040 pixels differ from third_party/dmg-acid2/reference-dmg.png

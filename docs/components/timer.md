@@ -89,8 +89,12 @@ stepped per-access; the PPU/APU remain batched (see [CPU §4](cpu.md)).
 
 The emulator uses **two independent accumulators** (`internaldiv`, `internalcnt`) rather
 than one shared 16-bit system counter. Several documented quirks therefore **do not
-occur** (none is exercised by a ROM in the wired suite — Mooneye's timer edge tests are
-not vendored — so each remains a documented divergence rather than a red test):
+occur**. This used to be filed as "no wired test exists"; that is wrong and worth
+correcting. **Mooneye's `acceptance/timer/*` tests exactly this and we fail 10 of 13** —
+`div_write`, `rapid_toggle`, `tim00`, `tim10`, `tim11`, `tim01_div_trigger`,
+`tim10_div_trigger`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`. The
+suite is simply not wired into our harness yet, which is a coverage gap on our side, not
+an absence of tests:
 
 - **DIV-write does not glitch `TIMA`.** On hardware, resetting `DIV` can produce a spurious
   `TIMA` increment (a falling edge on the selected bit). Here `DIV` and `TIMA` are separate
@@ -139,9 +143,10 @@ not vendored — so each remains a documented divergence rather than a red test)
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite; §4/§5 approximations are the expected reds. **Not the declared submodule; not wired.** |
+| **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite; §4/§5 approximations are the expected reds. **Measured: 3 of 13 pass** (`tim00_div_trigger`, `tim01`, `tim11_div_trigger`). Not vendored and not wired into our harness — that is the gap to close. |
 | **Blargg `instr_timing`** | Indirectly leans on timer/interrupt timing | A gross cycle-count error. |
 | **Blargg `interrupt_time`** | Timing of the timer/serial interrupts relative to instructions | Would catch dispatch-timing gaps. |
 
-The declared `retrio/gb-test-roms` submodule (Blargg) is **uninitialised**; the decisive
-timer tests are in Mooneye, which is unwired. See [testing](../testing.md).
+The `retrio/gb-test-roms` submodule (Blargg) is initialised and wired; the decisive timer
+tests are in Mooneye, which is not. Wiring Mooneye is the single largest coverage win
+available to this component. See [testing](../testing.md).

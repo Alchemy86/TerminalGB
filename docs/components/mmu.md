@@ -65,11 +65,16 @@ banks), `zram` (HRAM, note it's named `zram`), `gpu`, `timer`, `serial`, `keypad
 `Option<Sound>`, `mbc`, the interrupt bytes `inte` (IE) and `intf` (IF), the HDMA state,
 `wrambank`, and mode/speed fields.
 
-**Two constructors** — `new` ([`mod.rs:99`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L99), DMG, rejects
-CGB-only carts) and `new_cgb` ([`mod.rs:139`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L139), calls
-`determine_mode`). Both `fill_random` the WRAM and run `set_initial`
-([`mod.rs:176`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L176)) to write the post-boot I/O defaults — this is the
-**boot-ROM handoff** (see §5).
+**Three constructors over one builder.** `raw` ([`mod.rs:103`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L103))
+maps the cartridge and `fill_random`s the WRAM but does *not* choose a console; `new`
+([`mod.rs:144`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L144), DMG, rejects CGB-only carts), `new_cgb`
+([`mod.rs:159`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L159)) and `new_with_model`
+([`mod.rs:168`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L168)) then commit a mode via `set_mode`
+([`mod.rs:216`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L216)) and run `set_initial`
+([`mod.rs:180`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L180)) to write the post-boot I/O defaults — this is the
+**boot-ROM handoff** (see §5). Sharing `raw` is deliberate: the DMG and CGB paths used to be
+two copies of the same struct literal and could drift apart. `new_with_model` takes a
+[`Model`](../../src/mode.rs) (`Auto`/`Dmg`/`Cgb`) and is what `Cpu::new` calls.
 
 **The dispatch** — `rb` ([`mod.rs:391`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L391)) / `wb`
 ([`mod.rs:450`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L450)) are the address `match`. Echo RAM is folded into the
