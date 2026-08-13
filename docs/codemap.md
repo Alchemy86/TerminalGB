@@ -9,7 +9,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The one-paragraph model
 

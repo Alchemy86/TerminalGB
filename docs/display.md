@@ -28,9 +28,19 @@ asked: *"it's just pixel screens — can we enlarge, smoothly, scale like vector
 > viewport and re-fits on window resize. The integer-scale maths is unit-tested
 > (`integer_scale_viewport`, `src/screen/desktop.rs`), and both paths were
 > visually verified headlessly — desktop through a faithful replica of the GL
-> pipeline on llvmpipe, web in Chrome via computed-layout + screenshot. The
-> pixel-art upscalers (§2 option 3) and the LCD/CRT shaders remain **proposals**,
-> not implemented. Per-frontend detail is corrected inline below.
+> pipeline on llvmpipe, web in Chrome via computed-layout + screenshot.
+>
+> **The pixel-art upscalers (§2 option 3) are now IMPLEMENTED too** — a
+> dependency-free `src/upscale/` module with `nearest` / `scale2x` / `mmpx` /
+> `lcd`, runtime-switchable and wired into all three frontends (desktop `U`/`I`,
+> terminal `]`/`}`, web `]`/`\`). Full design, licensing rationale and measured
+> per-frame costs: **[docs/upscaling.md](upscaling.md)**. Only the CRT/full-shader
+> pipeline remains a proposal. Per-frontend detail is corrected inline below.
+>
+> ⚠️ The **terminal** narrative in §1/§3 predates both the `tui.rs` rewrite and
+> the upscaler, and `src/screen/tui.rs` is under active development right now — so
+> treat terminal specifics below as provisional and prefer the in-app `?` help for
+> the current keys.
 
 This page answers three things:
 
@@ -48,7 +58,7 @@ This page answers three things:
 |---|---|---|---|---|---|
 | **Desktop** | opens at **160×144** logical px | the **GPU** (textured quad) | ~~`LINEAR`~~ → **`NEAREST`** — *crisp* ✅ | **Yes** (`resizable(true)`) | **preserved** — integer scale + black letterbox; resize updates the viewport ✅ |
 | **Web** | backing store **160×144**, CSS-scaled up | **CSS integer scale** (GPU compositor) | **`pixelated`** — *crisp* ✅ | **Yes** — fills viewport, re-fits on resize ✅ | **preserved** (integer multiple, centred, letterboxed) |
-| **Terminal** | source **160×144**, ×1–4 | **nearest** at source, then protocol **fits** to a pane | nearest → protocol's fit | **Yes** (bigger terminal/pane) | **preserved** (letterboxed by `Resize::Fit`) |
+| **Terminal** | source **160×144** (optionally pixel-art upscaled) | **`Resize::Scale`** upscales to fill a centred `fit_metrics` pane | nearest / scale2x / mmpx / lcd, then protocol scale | **Yes** — auto-re-fits on resize | **preserved** (aspect-correct centred rect) |
 
 ### Desktop — GPU-scaled, but smoothed *and* the resize is broken
 
@@ -118,22 +128,19 @@ own, so it renders at **160×144 CSS pixels — a ~4 cm postage stamp** on a mod
   it by default** and blur the pixels. This is the single most common accidental-blur trap on
   the web and it is one property away from biting us.
 
-### Terminal — nearest-neighbour, and the best-behaved on aspect ratio
+### Terminal — nearest-neighbour, aspect-correct, and now uncapped
 
-`get_image` ([`tui.rs:235`](../src/screen/tui.rs)) copies the framebuffer to RGB and, when
-the scale is >1, upscales with **`FilterType::Nearest`**
-([`tui.rs:257-264`](../src/screen/tui.rs)) — crisp, no blur. The scale is toggled with the
-**`o`** key, cycling 1→2→3→4→1 (`MAX_SCALE = 4`, [`tui.rs:43`](../src/screen/tui.rs),
-[`tui.rs:126-132`](../src/screen/tui.rs)).
+> **Updated after the `tui.rs` rewrite (file under active development — line hints omitted).**
+> The old text below described a capped `o`-key pre-scale and `Resize::Fit`; both are gone.
 
-The upscaled image is then handed to `ratatui-image`, which renders it with the terminal's
-own graphics protocol (kitty/sixel) using **`Resize::Fit(None)`**
-([`tui.rs:349`](../src/screen/tui.rs)) into a pane that is 40% of the window width
-([`tui.rs:336-346`](../src/screen/tui.rs)). `Resize::Fit` **preserves aspect ratio and
-letterboxes** — so the terminal frontend is actually the one that already gets aspect ratio
-right. The `o` scale mainly raises the *source* resolution fed to the protocol (sharper
-result); the final on-screen size is bounded by the pane and the terminal's cell grid, which
-grows when you enlarge the terminal window.
+`get_image` in [`tui.rs`](../src/screen/tui.rs) maps the framebuffer through the selected
+palette and then the selected **pixel-art upscaler** (`nearest`/`scale2x`/`mmpx`/`lcd`, cycled
+with `]`/`}` — see [upscaling.md](upscaling.md)). The result is handed to `ratatui-image` with
+**`Resize::Scale`** (not `Fit`): `Fit` refuses to enlarge a source smaller than the area, which
+is why a 160×144 image used to render tiny; `Scale` upscales at pixel resolution to fill a
+centred, aspect-correct `fit_metrics` rect that **re-fits automatically on resize** — there is no
+manual scale key any more. (On scaled-Wayland HiDPI terminals the `cell_scale` config corrects a
+logical-vs-physical pixel mismatch — see the top-level README.)
 
 ### FFI — no scaling; the embedder owns it
 
@@ -205,8 +212,12 @@ is so small. That is *not* true of a full-resolution console; it's a happy accid
 Game Boy's size. As a **GPU shader** any of these is essentially free once a shader pipeline
 exists.
 
-- **Verdict: a genuine, worthwhile option** — best offered as a selectable filter, with
-  **scale2x/MMPX** as the cheap sweet-spot and **hqx/xBRZ** as the "maximum smoothing" choices.
+- **Verdict: a genuine, worthwhile option — and now IMPLEMENTED.** `src/upscale/` ships
+  **scale2x** (reimplemented from the published rule, not the GPL reference) and **MMPX** (ported
+  from the MIT reference), plus an **lcd** dot-matrix grid, as a selectable per-frame filter
+  across all frontends. hqx (LGPL tables) and xBRZ (GPLv3) were deliberately **not** vendored —
+  a licensing constraint for this MPL-2.0 repo — so the "maximum smoothing" tier is not offered.
+  Full rationale and measured costs: **[docs/upscaling.md](upscaling.md)**.
 
 ### Also worth naming — **LCD and CRT shaders**  *(different goal: authenticity, not sharpness)*
 
@@ -275,12 +286,14 @@ Only [`web/index.html`](../web/index.html) (CSS) and [`web/index.js`](../web/ind
 changed. Verified in Chrome across window sizes (3×/5×, centred, 10:9, `pixelated`) plus a
 live resize.
 
-### 🥉 Terminal: already good — leave it
+### 🥉 Terminal: rebuilt — now fills the pane and upscales
 
-The terminal already uses **nearest** ([`tui.rs:257`](../src/screen/tui.rs)) and already
-**preserves aspect ratio** via `Resize::Fit` ([`tui.rs:349`](../src/screen/tui.rs)). Low
-priority. Only nice-to-have: make the `o` scale also grow the display pane (today it mostly
-raises source resolution), and expose it in the on-screen help.
+The terminal was the "leave it" frontend, but the `tui.rs` rewrite went further: it swapped
+`Resize::Fit` for **`Resize::Scale`** (so a 160×144 source now enlarges to fill a centred,
+aspect-correct pane instead of rendering tiny), dropped the capped `o`-key pre-scale for
+automatic re-fit on resize, and gained the shared **pixel-art upscaler** (`]`/`}`) and palette
+(`[`). The remaining follow-up is the same as everywhere: CRT/LCD shaders (the `lcd` grid filter
+already exists). `src/screen/tui.rs` is still under active development.
 
 ### Optional follow-ups (all cheap once the above lands)
 
@@ -292,8 +305,10 @@ raises source resolution), and expose it in the on-screen help.
 
 ### Constraints honoured
 
-- **No new dependencies are adopted here** — crates above (`hqx`, `scalenx`, xBRZ/Omniscale
-  shaders) are **proposals**, not additions.
+- **No new dependencies were adopted** — the shipped upscalers (`src/upscale/`) are
+  dependency-free: scale2x reimplemented from the published rule and MMPX ported from the MIT
+  reference. The crates named above (`hqx`, `scalenx`, xBRZ/Omniscale shaders) were **not**
+  pulled in (licensing — see [upscaling.md](upscaling.md)).
 - Nearest/integer scaling and CSS `pixelated` are **free**; a GPU shader is cheap **because a
   GL pipeline already exists on desktop**; a *CPU* xBRZ-per-frame would normally be the
   expensive path, but is affordable here only because the source is 160×144.
@@ -316,8 +331,10 @@ Phrased like the component pages' test lists, so this slots into the same spec-f
 4. **Web canvas can be enlarged and stays crisp.** With `image-rendering: pixelated` and an
    integer CSS size, the canvas scales up without browser smoothing. ✅ **Done** — verified in
    Chrome at several window sizes and across a live resize.
-5. **Terminal remains nearest + aspect-correct.** `o` scales with `Nearest`; `Resize::Fit`
-   keeps 10:9. *(Unchanged — regression guard; not touched by this pass.)*
+5. **Terminal fills the pane, aspect-correct.** `Resize::Scale` upscales 160×144 to a centred
+   `fit_metrics` rect and re-fits on resize; nearest/scale2x/mmpx/lcd selectable via `]`/`}`.
+   ✅ **Done** (part of the `tui.rs` rewrite).
 
-**Remaining next steps:** the pixel-art upscalers and DMG/LCD/CRT shaders (§2–§3) are still
-proposals; a non-integer "fill" desktop mode is an easy opt-in if wanted.
+**Remaining next steps:** the pixel-art upscalers **have landed** (`src/upscale/`,
+[upscaling.md](upscaling.md)); what remains are the **CRT / full-shader** overlays (§2's LCD/CRT
+list — the `lcd` grid filter is done) and a non-integer "fill" desktop mode as an easy opt-in.

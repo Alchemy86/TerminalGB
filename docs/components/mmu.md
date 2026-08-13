@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -148,7 +148,10 @@ fn oamdma(&mut self, value: u8) {
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: none.**
+> **Coverage today: no dedicated Rust unit test**, but memory-access *timing* is covered
+> end-to-end by Blargg `mem_timing`/`mem_timing-2` (**pass** — the per-access timer stepping),
+> which run in the test-ROM harness. Routing/echo-RAM/register-mask items below have no direct
+> assertion yet.
 
 1. **Address routing.** `wb(0xC000, v)` then `rb(0xC000) == v`; VRAM writes land in `gpu`,
    cartridge-RAM writes route to the MBC. *(Not covered.)*
@@ -189,5 +192,6 @@ fn oamdma(&mut self, value: u8) {
 | **Mooneye `acceptance/bits/`** (`unused_hwio-GS`, `reg_f`) | Unused-bit read-back behaviour of hardware registers | Bad `\| 0b…` masks in `rb`. Blargg's `bits-unused`/`bits-bank1` are the repo's known failures here. |
 | **Mooneye `emulator-only/mbcX/`** | (routes into the MBC — see [MBC](mbc.md)) | — |
 
-The declared submodule `retrio/gb-test-roms` (Blargg) is **uninitialised**; Mooneye is a
-separate, unwired suite. See [testing](../testing.md).
+The `retrio/gb-test-roms` submodule (Blargg) is now **initialised and wired into CI** — the
+`mem_timing`/`mem_timing-2` rows above pass in the harness. Mooneye is a separate, **unwired**
+suite. See [testing](../testing.md).

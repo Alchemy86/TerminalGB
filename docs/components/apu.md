@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 > ⚠️ **`src/sound.rs` is being rewritten right now** (two audio crews). To avoid minting
 > line links that break every rebase, this page's `sound.rs` references are **file-level
@@ -114,14 +114,15 @@ output stream. The desktop frontend wires it up in `render_desktop`
   the NRx4 extra-length-clocking quirks (`apply_nrx4_length`), full sweep semantics
   (always-reloaded shadow/timer/enable on trigger, negate-used tracking, the NR10
   negate-exit disable), DAC-gated triggers, and the power-on frame-sequencer reset.
-- **The remaining three failures (09/10/12, the wave-RAM access quirks) are a documented
-  non-goal**: they sweep a CPU access across a ~2-T-cycle window around the wave
+- **The remaining three failures (09/10/12, the wave-RAM access quirks) are the next
+  planned accuracy step** (the captain has now asked for this work — it is no longer a
+  permanent non-goal): they sweep a CPU access across a ~2-T-cycle window around the wave
   channel's sample fetch (read-returns-current-byte / retrigger corruption / write
   lands only in the window) and CRC the result. That needs a **T-cycle-stepped APU**
   with a modelled wave sample-buffer/fetch pipeline plus cycle-exact CPU access
   positions inside instructions — the same class of restructure as the cycle-stepped
-  PPU the video non-goals (oam_bug, mode-3 timing) are waiting on. Half-modelling it
-  would be guesswork; stopped deliberately, like the CPU crew's non-goals.
+  PPU the video approximations (mode-3 timing, OAM-DMA bus restriction) also want.
+  Until that lands these three stay red, pinned in the baseline so the gap is visible.
 - **NRx1 length writes mask the duty bits** (`v & 0x3F`) — a duty-carrying write like
   `NR11=0x80` used to underflow (debug-mode panic).
 - **NR52 power-off now actually zeroes NR10–NR51** and the channel-status bits; the old
@@ -159,7 +160,7 @@ output stream. The desktop frontend wires it up in `render_desktop`
 - **Wave-RAM access while channel 3 is on.** Reads return the byte currently being
   played and writes are blocked — a simplification. The real DMG behaviour is a
   ~2-T-cycle access window around the channel's fetch; **not modelled** (the 09/10/12
-  non-goal above).
+  planned-next item above).
 - **Noise LFSR width** (7-bit vs 15-bit) via `NR43` bit 3 — modelled
   ([`sound.rs:371`](../../src/sound.rs)).
 
@@ -169,8 +170,8 @@ output stream. The desktop frontend wires it up in `render_desktop`
 > [`testharness/audiocapture.rs`](../../testharness/audiocapture.rs) records every
 > sample the APU produces with a device-free `AudioPlayer`, writes WAVs, analyses
 > pitch/level/continuity/rate, runs Blargg `dmg_sound` and reads its `$A000`
-> verdict (**9/12 pass** — 01–08 + 11; 09/10/12 are the cycle-stepped-APU
-> non-goal), and pins a determinism hash in `testharness/audio_baseline.txt`.
+> verdict (**9/12 pass** — 01–08 + 11; 09/10/12 need the T-cycle-stepped APU,
+> **planned next**), and pins a determinism hash in `testharness/audio_baseline.txt`.
 > Single-ROM TDD mode: `AUDIO_ROM=path/to/rom.gb cargo test --release --test
 > audiocapture` prints one ROM's verdict. `src/sound.rs` unit tests additionally
 > cover pitch, rate-honesty, and the playback queue policy.
@@ -201,7 +202,7 @@ output stream. The desktop frontend wires it up in `render_desktop`
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Blargg `dmg_sound`** (12 sub-tests, **9/12 pass**: 01–08 + 11) | Registers, trigger, length, sweep, envelope on DMG | 09/10/12 = the wave-RAM timing non-goal (§4). |
+| **Blargg `dmg_sound`** (12 sub-tests, **9/12 pass**: 01–08 + 11) | Registers, trigger, length, sweep, envelope on DMG | 09/10/12 = the wave-RAM timing tests, **planned next** (§4). |
 | **Blargg `cgb_sound`** (not wired) | The CGB APU edge cases | CGB-specific power/length rules — `Sound::dmg_mode` selects per-model behaviour, but the CGB side is untested. |
 | **Mooneye `acceptance/` (no dedicated APU dir)** | — | Mooneye focuses on timing/PPU/CPU; Blargg is the APU authority. |
 | **SameBoy APU tests** | Reference-emulator APU behaviour | Useful cross-check but require SameBoy tooling. |

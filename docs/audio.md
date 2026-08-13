@@ -395,8 +395,9 @@ TDD pass against the harness's `$A000` verdict: **Blargg `dmg_sound` passes
 clocking including the extra-clock quirks, trigger semantics, sweep details
 including the negate quirk, and NR52 power semantics. The three remaining
 failures (09/10/12) are the DMG wave-RAM access-window quirks, which need a
-T-cycle-stepped APU — a documented structural non-goal, like the video
-mode-3/OAM ones. Details in [apu.md](components/apu.md).
+T-cycle-stepped APU — the **next planned accuracy step** (the captain has asked
+for it), the same class of restructure as the video mode-3/OAM approximations.
+Details in [apu.md](components/apu.md).
 
 ---
 

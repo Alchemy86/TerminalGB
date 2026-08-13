@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -168,6 +168,6 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 | **Blargg `bits-bank1`** (repo screenshot: *failing*) | ROM-bank register bit behaviour | One of the repo's four known-failing screenshots — a real banking/bit gap. |
 | *(No dedicated MBC3-RTC ROM in the common suites)* | — | RTC accuracy would need a custom test given the wall-clock implementation. |
 
-The declared `retrio/gb-test-roms` submodule (Blargg) is **uninitialised**; Mooneye's
-`emulator-only/` MBC tests are the definitive suite here and are **not wired**. See
+The `retrio/gb-test-roms` submodule (Blargg) is now **initialised and wired into CI**; Mooneye's
+`emulator-only/` MBC tests are the definitive suite here and are still **not wired**. See
 [testing](../testing.md).

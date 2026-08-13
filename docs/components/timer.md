@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -116,7 +116,10 @@ not vendored — so each remains a documented divergence rather than a red test)
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: none.**
+> **Coverage today: no dedicated Rust unit test**, but the timer is exercised end-to-end by
+> Blargg `mem_timing`/`mem_timing-2` (**pass**), which depend on the per-memory-access timer
+> stepping (§4). The fine-grained edge cases below (DIV/TAC glitches, TIMA reload delay) still
+> have no wired test — they are Mooneye `acceptance/timer/` territory, not yet wired.
 
 1. **`DIV` rate.** `DIV` increments once per 256 T-cycles (16384 Hz). *(Not covered.)*
 2. **`DIV` write resets to 0.** Any `wb(0xFF04, x)` makes `rb(0xFF04) == 0`. *(Not
@@ -143,5 +146,6 @@ not vendored — so each remains a documented divergence rather than a red test)
 | **Blargg `instr_timing`** | Indirectly leans on timer/interrupt timing | A gross cycle-count error. |
 | **Blargg `interrupt_time`** | Timing of the timer/serial interrupts relative to instructions | Would catch dispatch-timing gaps. |
 
-The declared `retrio/gb-test-roms` submodule (Blargg) is **uninitialised**; the decisive
-timer tests are in Mooneye, which is unwired. See [testing](../testing.md).
+The `retrio/gb-test-roms` submodule (Blargg) is now **initialised and wired into CI** (it
+carries `mem_timing`/`instr_timing`, which pass); the decisive fine-grained timer tests are in
+Mooneye, which is still **unwired**. See [testing](../testing.md).

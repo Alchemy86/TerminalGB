@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -197,7 +197,8 @@ The section above is the design sketch. What is now checked in and runs in CI:
   writes listenable WAVs to `target/testrom-artifacts/audio/`, and checks objective
   properties: sample count == cycles×rate/4194304, RMS/peak, silence runs,
   discontinuities, dominant frequency (a built-in 440 Hz tone ROM must measure 440 Hz),
-  plus Blargg `dmg_sound`'s memory-mapped `$A000` verdict. Captures are byte-identical
+  plus Blargg `dmg_sound`'s memory-mapped `$A000` verdict (**9/12 pass** — 01–08 + 11;
+  09/10/12 are the wave-RAM timing tests, planned next). Captures are byte-identical
   across runs and profiles; the FNV hash of the PCM stream is pinned in
   [`testharness/audio_baseline.txt`](../testharness/audio_baseline.txt)
   (re-bless with `UPDATE_AUDIO_BASELINE=1`). A third mechanism, alongside serial and
@@ -260,7 +261,7 @@ face test exactly, despite the fixed mode-3 / whole-line-render approximations.
 | [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu`; Mealybug Tearoom | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural non-goals) |
 | [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug` (non-goal); Mooneye `acceptance/oam_dma`, `bits` | Instant/unguarded OAM DMA, no VRAM/OAM mode-blocking, OAM bug (structural / non-goals) |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1` | Banking bit maths; the MBC3-for-everything web/FFI bug |
-| [APU](components/apu.md) | Blargg `dmg_sound`, `cgb_sound`; SameSuite | Length-counter extra-clock edge case |
+| [APU](components/apu.md) | Blargg `dmg_sound` (**9/12 pass**), `cgb_sound` (unwired); SameSuite | Wave-RAM access-window timing (`dmg_sound` 09/10/12) — needs a T-cycle-stepped APU, **planned next** |
 | [Timer](components/timer.md) | Mooneye `acceptance/timer`; Blargg `interrupt_time` | DIV/TAC glitches, TIMA reload delay window |
 | [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` | Instantaneous transfer; the capture hook must be wired first |
 | [Joypad](components/input.md) | Mooneye joypad (limited) | Mostly proven by games booting |

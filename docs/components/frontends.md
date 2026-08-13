@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`303f15f`](https://github.com/Alchemy86/gameboy/tree/303f15fe64435d9724d20e2ac651d480e8a7eaca) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -99,10 +99,12 @@ These are the frontends' rough edges (from the scout report, confirmed in code):
   ([`tui.rs:969`](../../src/screen/tui.rs)). Worth reconciling.
 - **Dead code:** commented-out `render` in `desktop.rs`, WebGL helpers in `web.rs`, and the
   `docs/*.wasm` prebuilt blobs (~2.2 MB) are stale build artifacts.
-- **Display scaling is rough:** desktop upscales with bilinear `LINEAR` (blurry) and never
-  calls `gl::Viewport`, so window resize doesn't fill correctly; the web canvas is a fixed
-  1:1 160×144 with no `image-rendering: pixelated`. Full analysis and fixes:
-  **[docs/display.md](../display.md)**.
+- **Display scaling is now crisp** (this was the "rough" bullet — the fixes have landed):
+  desktop filters with `gl::NEAREST`, updates `gl::Viewport` on resize, and integer-letterboxes
+  to preserve 10:9; the web canvas carries `image-rendering: pixelated` and re-fits to the
+  largest integer multiple on resize. A runtime-selectable **pixel-art upscaler**
+  (`nearest`/`scale2x`/`mmpx`/`lcd`) now runs in the core across all frontends. Full analysis:
+  **[docs/display.md](../display.md)** and **[docs/upscaling.md](../upscaling.md)**.
 
 ## 5. Known quirks and edge cases
 
@@ -121,7 +123,9 @@ Frontends don't emulate hardware quirks, but they must respect these console rea
 
 > Frontends are I/O-bound and largely untestable without a display/audio device, so the
 > testable assertions here are about the **core surface** the frontends share. **Coverage
-> today: none.**
+> today: the frame path is exercised by the acid2 image test** (a real `frame()` → `image()`
+> → framebuffer path), the examples' ROM-path argument (#4) is implemented, and the ALSA-free
+> build (#5) is what CI runs. The remaining core-surface assertions have no direct unit test.
 
 1. **`frame()` produces a full framebuffer.** After `Gameboy::new(rom)` and one `frame()`,
    `image()` returns `160*144*4` bytes. *(Not covered.)*
@@ -130,10 +134,10 @@ Frontends don't emulate hardware quirks, but they must respect these console rea
    selected shows A pressed (see [Joypad](input.md)). *(Not covered.)*
 4. **Examples accept a ROM path argument.** `cargo run --example desktop -- game.gb` loads
    `game.gb` (now implemented — the binaries read `args().nth(1)`). *(Not covered by a test.)*
-5. **Headless build without ALSA.** With audio feature-gated off, `cargo build
-   --no-default-features` succeeds on a box with no sound headers. **Expected to FAIL
-   today — `cpal` is non-optional.** *(Not covered; known issue — prerequisite for the
-   test harness in [testing](../testing.md).)*
+5. **Headless build without ALSA.** With audio feature-gated off (the default), `cargo build`
+   succeeds on a box with no sound headers. **Now true — `cpal` is an optional dependency behind
+   the `audio` feature**, and the whole test-ROM/audio harness builds and runs without ALSA.
+   *(Effectively covered — CI builds and tests the default, ALSA-free configuration.)*
 6. **Web uses the correct MBC.** A loaded MBC1 ROM is driven as MBC1, not MBC3. **Expected
    to FAIL — see [MBC](mbc.md).** *(Not covered; known bug.)*
 

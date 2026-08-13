@@ -237,7 +237,16 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   their `config.toml` for the picture to fill.
 - Config lives at `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml`; recents at
   `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`. Missing config = defaults, never an
-  error. `rom_dir` defaults to `~/roms`.
+  error. `rom_dir` defaults to `~/roms`. Keys: `rom_dir`, `protocol`, `palette`, `upscale`,
+  `upscale_factor`, `cell_scale`, `key_a/b/start/select` — all documented in the README's
+  "Terminal config file" table.
+- **Config values may be BARE or double-quoted — both parse.** `parse_kv` (`config.rs`)
+  strips *optional* surrounding quotes (`.strip_prefix('"').and_then(strip_suffix('"'))
+  .unwrap_or(value)`), so `palette = green` and `palette = "green"` are equivalent; the
+  `parses_all_fields` unit test pins the bare form. (Historical note: a belief that "unquoted
+  values silently do nothing" does **not** reproduce against the current parser — if you must
+  document a quoting requirement, verify it against `config.rs` first. The one thing bare form
+  can't carry is a literal `#`, which starts a comment.)
 - The picker opens with the most-recently-played ROM pre-selected (recents sorted first), so
   **Enter loads the last game**; `.` resumes the last-played ROM directly even if it lives
   outside `rom_dir`.
@@ -363,4 +372,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   committed samples from the MIT dmg-acid2 ROM live in `docs/upscale-samples/` (never
   commit galleries from commercial ROMs — generate those into `target/upscale-gallery/`).
 
+- **Project goal — standalone conformance tool: [`docs/conformance.md`](docs/conformance.md).**
+  The captain wants the test harness eventually extracted into a tool anyone can point at their
+  *own* emulator (serial-capture / framebuffer-compare / audio-capture adapters, reporting *why*
+  a test fails). The key design constraint recorded there: our own machine-readable telemetry
+  stream (render crew, EMIT half of `docs/debugging.md`) should be the reference adapter, so the
+  adapter contract and the telemetry format must be designed to match. Also linked from the
+  README "Roadmap & goals" section.
 - Add durable project-specific notes here as they are discovered through real work.
