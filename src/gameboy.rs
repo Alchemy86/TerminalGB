@@ -84,8 +84,9 @@ impl Gameboy {
     pub fn render_desktop(mut self) {
         use crate::screen::desktop::*;
 
-        // Initialize audio
-        #[cfg(not(target_arch = "wasm32"))]
+        // Initialize audio (only when the `audio` feature is enabled; cpal pulls
+        // in ALSA on Linux, so it stays opt-in to keep a fresh clone buildable).
+        #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
         let _audio_stream = match crate::sound::cpal_audio::CpalPlayer::new() {
             Some((player, stream)) => {
                 self.enable_audio(Box::new(player));
@@ -99,8 +100,8 @@ impl Gameboy {
                 None
             }
         };
-        #[cfg(target_arch = "wasm32")]
-        let _audio_stream = None;
+        #[cfg(any(target_arch = "wasm32", not(feature = "audio")))]
+        let _audio_stream: Option<()> = None;
 
         let event_loop: glutin::event_loop::EventLoop<()> =
             glutin::event_loop::EventLoop::with_user_event();
@@ -190,7 +191,10 @@ impl Gameboy {
     pub fn render_terminal(self) {
         use crate::screen::tui;
 
-        let _ = tui::run(self);
+        if let Err(e) = tui::run(self) {
+            eprintln!("terminal frontend error: {e}");
+            std::process::exit(1);
+        }
     }
 
     #[inline]

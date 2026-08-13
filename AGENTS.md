@@ -4,12 +4,19 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 ## Build & test
 
-- **Native builds require ALSA dev headers.** `cpal` is a non-optional dependency
-  (`Cargo.toml`), so `cargo build`, `cargo test`, the examples, and the FFI build **all**
-  fail on a Linux box without `libasound2-dev` / `alsa-lib-devel` — not just the audio path.
-  CI installs `libasound2-dev` (`.github/workflows/ci.yml`). A fresh clone on a box without
-  it fails with `could not find system library 'alsa'`. Feature-gating audio is a known
-  roadmap item.
+- **Audio is behind the `audio` cargo feature, OFF by default.** `cpal` is an *optional*
+  dependency gated by `audio` (`Cargo.toml`), and the `cpal_audio` module
+  (`src/sound.rs`) + the audio-init blocks in **both** frontends —
+  `Gameboy::render_desktop` (`src/gameboy.rs`) and `tui::run` (`src/screen/tui.rs`, the
+  terminal frontend) — are `#[cfg(feature = "audio")]`; each holds the cpal stream in a
+  local `_audio_stream` for the whole run (drop it and sound stops). So
+  `cargo build`/`cargo test`/the examples build **with
+  no system audio library** — a fresh clone works out of the box. The APU itself
+  (`blip_buf`, still non-optional) is always emulated; only host playback is gated. To hear
+  sound, build with `--features audio`, which pulls `cpal` → on Linux needs
+  `libasound2-dev` / `alsa-lib-devel` (`could not find system library 'alsa'` otherwise).
+  CI installs `libasound2-dev` (`.github/workflows/ci.yml`). Chosen default: audio **off**,
+  because the whole point was that a fresh clone must not need ALSA; documented in README.
 - Toolchain is pinned to Rust **1.83.0** via `rust-toolchain`. `make lint` = `cargo fmt
   --check` + `cargo clippy --all-targets -D warnings`.
 - WASM build: `cargo build --release --target wasm32-unknown-unknown` (audio is compiled
@@ -73,5 +80,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **Vendored ROM:** `third_party/dmg-acid2/` holds the prebuilt MIT acid2 ROM + reference PNG
   (upstream ships source only); `.gitignore`'s `**/*.gb` rule is negated for that one file.
 - No new crate dependencies: the hash and PNG writer are hand-rolled.
+- `src/cpu/z80` is a non-compiled reference file, not a module. (`src/gpu/old_gpu.rs`,
+  961 lines of dead/unreferenced code, was deleted — no `mod old_gpu` ever existed.)
+- The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
 
 - Add durable project-specific notes here as they are discovered through real work.

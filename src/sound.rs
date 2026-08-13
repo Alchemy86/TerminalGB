@@ -900,7 +900,7 @@ impl Sound {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
 pub mod cpal_audio {
     use super::AudioPlayer;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

@@ -23,35 +23,48 @@
 Requires **Rust 1.83+** (pinned via [`rust-toolchain`](rust-toolchain)). Bring your own
 `.gb`/`.gbc` ROM.
 
-> **Linux:** all native builds currently need the ALSA development headers (the `cpal`
-> audio dependency is not yet optional):
-> `sudo apt install libasound2-dev` (Debian/Ubuntu) · `sudo dnf install alsa-lib-devel`
-> (Fedora). This is required for *every* native build today — desktop, terminal, FFI, and
-> `cargo test` — not just the audio one.
+> **Audio is opt-in.** By default the emulator builds and runs **without** any system
+> audio library — a fresh `cargo build`/`cargo test`/`cargo run` needs no extra packages.
+> The APU is still fully emulated; only speaker playback is off.
+>
+> **To hear sound, enable the `audio` feature** (this pulls in `cpal`, which on **Linux**
+> requires the ALSA development headers):
+> ```bash
+> sudo apt install libasound2-dev      # Debian/Ubuntu
+> sudo dnf install alsa-lib-devel      # Fedora
+> cargo run --features audio --example desktop -- path/to/game.gb
+> ```
+> Audio ships **off by default** so that a fresh clone builds with zero system
+> dependencies; turn it on explicitly once ALSA (or your platform's audio backend) is
+> available.
 
 ### 🖥️ Desktop (OpenGL window)
 
 ```bash
-cargo run --release --example desktop
+cargo run --release --example desktop -- path/to/game.gb
 ```
 
 Controls: **Z** = Select · **X** = Start · **A** = A · **B** = B · **Arrow keys** = D-pad.
 
-> ⚠️ **Today the example hardcodes a ROM path** at
-> [`examples/desktop/bin.rs:9`](examples/desktop/bin.rs) (`// TODO: Allow receive path by
-> arguments`). Until CLI-argument parsing lands, edit that line to point at your ROM. The
-> Go FFI example ([`examples/ffi-go`](examples/ffi-go)) already takes a path argument.
+> The ROM path is the first argument; run with no argument and it prints a usage line and
+> exits cleanly. Add `--features audio` for sound (see the ALSA note above).
 
 ### ⌨️ Terminal
 
 ```bash
-cargo run --release --example terminal
+cargo run --release --example terminal -- path/to/game.gb          # no sound
+cargo run --release --features audio --example terminal -- path/to/game.gb   # with sound
 ```
 
-> Needs a terminal that supports the **kitty keyboard protocol** (kitty, WezTerm, Rio,
-> foot); elsewhere it prints a warning and exits
-> ([`src/screen/tui.rs:46`](src/screen/tui.rs)). Same hardcoded-path caveat as desktop
-> ([`examples/terminal/bin.rs:8`](examples/terminal/bin.rs)). No audio.
+> The ROM path is the first argument; run with no argument and it prints a usage line and
+> exits cleanly. Needs a terminal that supports the **kitty keyboard protocol** for input
+> and, ideally, the **kitty graphics protocol** for a crisp picture (kitty, WezTerm,
+> Ghostty, foot). If the kitty keyboard protocol is unavailable it exits with a clear error
+> — often it's just disabled in your terminal config (e.g. WezTerm needs
+> `enable_kitty_keyboard = true`) rather than truly missing
+> ([`src/screen/tui.rs`](src/screen/tui.rs)). It opens sized to the terminal and auto-selects
+> the sharpest graphics protocol the terminal advertises; **o** cycles scale, **i** cycles
+> protocol. Audio works here too with `--features audio` (see the ALSA note above).
 
 ### 🌐 Web (WebAssembly)
 
@@ -150,8 +163,8 @@ extension surface external tools can emit from, control, and plug into).
 
 | Frontend | State |
 |---|---|
-| Desktop (glutin/GL) | ✅ Working, with audio |
-| Terminal (ratatui) | ✅ Working (kitty-protocol terminals); no audio |
+| Desktop (glutin/GL) | ✅ Working; audio with `--features audio` |
+| Terminal (ratatui) | ✅ Working (kitty-protocol terminals); audio with `--features audio` |
 | Web (WASM) | 🟡 Video + input work; **no audio yet**; non-MBC3 cartridges mis-detected |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
 

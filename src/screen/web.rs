@@ -122,8 +122,8 @@ pub async fn render(rom: Vec<u8>) -> Result<(), JsValue> {
                 Ok(d) => {
                     context.put_image_data(&d, 0.0, 0.0).ok();
                 }
-                Err(err) => {
-                    // log(format!("{:?}", err));
+                Err(_err) => {
+                    // log(format!("{:?}", _err));
                 }
             };
 

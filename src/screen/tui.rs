@@ -35,18 +35,91 @@ use ratatui::{
     Frame,
 };
 use ratatui_image::{
-    picker::Picker,
+    picker::{Picker, ProtocolType},
     protocol::{Protocol, StatefulProtocol},
     Resize, StatefulImage,
 };
 
-const MAX_SCALE: u32 = 4;
+/// Width (in terminal cells) reserved for the controls sidebar; the rest of the
+/// screen goes to the game picture.
+const SIDEBAR_WIDTH: u16 = 28;
+
+/// Build a [`Picker`], preferring the sharpest graphics protocol the terminal
+/// actually advertises.
+///
+/// `Picker::from_query_stdio()` lets an env-var guess (e.g. `TERM_PROGRAM=WezTerm`)
+/// force the fuzzy iTerm2 protocol even when the terminal advertises the much
+/// crisper Kitty graphics protocol. We first query capabilities with those env
+/// guesses suppressed, so the *advertised* protocol wins; only if the terminal
+/// advertises no real graphics protocol do we fall back to the env-based guess.
+/// Never panics on a query timeout — falls back to a sane default instead.
+fn build_picker() -> Picker {
+    let saved_term_program = env::var_os("TERM_PROGRAM");
+    let saved_lc_terminal = env::var_os("LC_TERMINAL");
+    env::remove_var("TERM_PROGRAM");
+    env::remove_var("LC_TERMINAL");
+    let advertised = Picker::from_query_stdio();
+    if let Some(v) = saved_term_program {
+        env::set_var("TERM_PROGRAM", v);
+    }
+    if let Some(v) = saved_lc_terminal {
+        env::set_var("LC_TERMINAL", v);
+    }
+
+    match advertised {
+        // The terminal advertised a real graphics protocol (Kitty/Sixel/iTerm2) — use it.
+        Ok(p) if p.protocol_type() != ProtocolType::Halfblocks => p,
+        // Otherwise fall back to the env-guess query (e.g. a genuine iTerm2), and if even
+        // that fails (timeout / no capabilities) use a default rather than panicking.
+        _ => {
+            Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20)))
+        }
+    }
+}
+
+/// Largest integer source-scale whose upscaled 160×144 frame still covers the
+/// on-screen game area, so `Resize::Fit` downsamples (crisp) instead of upsampling
+/// a tiny source (blurry). Clamped to keep per-frame resizing cheap.
+fn fit_scale(picker: &Picker, game_cols: u16, rows: u16) -> u32 {
+    let (font_w, font_h) = picker.font_size();
+    let area_w = game_cols as u32 * font_w.max(1) as u32;
+    let area_h = rows as u32 * font_h.max(1) as u32;
+    let by_w = area_w.div_ceil(160);
+    let by_h = area_h.div_ceil(144);
+    by_w.max(by_h).clamp(1, 5)
+}
 
 pub fn run(gameboy: Gameboy) -> Result<(), Box<dyn Error>> {
     if let Ok(false) = ratatui::crossterm::terminal::supports_keyboard_enhancement() {
-        println!("WARN: The terminal doesn't support use_kitty_protocol config.\r");
-        return Ok(());
+        return Err(
+            "the terminal reports no support for the kitty keyboard protocol, which the \
+             terminal frontend needs for key input. This is usually the protocol being \
+             disabled in the terminal's config rather than truly missing — e.g. in WezTerm \
+             set `enable_kitty_keyboard = true`. Terminals known to support it: Kitty, \
+             WezTerm (with that setting), Ghostty, foot. Otherwise use the desktop frontend: \
+             `cargo run --example desktop -- <path-to-rom.gb>`."
+                .into(),
+        );
     }
+
+    // Initialize audio for the terminal frontend too (the desktop path does the same in
+    // render_desktop). Requires the `audio` feature; degrades gracefully with no device.
+    // `_audio_stream` must live for the whole run — dropping it stops the sound.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
+    let mut gameboy = gameboy;
+    #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
+    let _audio_stream = match crate::sound::cpal_audio::CpalPlayer::new() {
+        Some((player, stream)) => {
+            gameboy.enable_audio(Box::new(player));
+            Some(stream)
+        }
+        None => {
+            eprintln!("audio: no output device available; continuing without sound");
+            None
+        }
+    };
+    #[cfg(any(target_arch = "wasm32", not(feature = "audio")))]
+    let _audio_stream: Option<()> = None;
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
@@ -95,7 +168,13 @@ fn run_app<B: Backend>(
 ) -> io::Result<()> {
     let mut last_tick = Instant::now();
     let cloned_gameboy = gameboy.clone();
-    let scale = Arc::new(AtomicU32::new(1));
+
+    // Open at the largest scale that fits the current terminal, not a fixed 1x, so the
+    // picture is usefully sized from the start. `o` cycles 1..=max_scale.
+    let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
+    let game_cols = cols.saturating_sub(SIDEBAR_WIDTH);
+    let max_scale = fit_scale(&app.picker, game_cols, rows);
+    let scale = Arc::new(AtomicU32::new(max_scale));
     let scale_me = scale.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let stop_me = stop.clone();
@@ -124,7 +203,7 @@ fn run_app<B: Backend>(
                                 }
                                 ('o', true) => {
                                     let s = scale.load(Ordering::Relaxed);
-                                    if s >= MAX_SCALE {
+                                    if s >= max_scale {
                                         scale.store(1, Ordering::Relaxed);
                                     } else {
                                         scale.store(s + 1, Ordering::Relaxed);
@@ -269,7 +348,7 @@ impl App {
     pub fn new<B: Backend>(_: &mut Terminal<B>, gameboy: &Gameboy) -> Self {
         let image_source = get_image(gameboy, 1);
 
-        let mut picker = Picker::from_query_stdio().unwrap();
+        let mut picker = build_picker();
         picker.set_background_color([0, 0, 0, 0]);
 
         let image_static = picker
@@ -337,9 +416,10 @@ fn ui(f: &mut Frame<'_>, app: &mut App) {
         .direction(Direction::Horizontal)
         .constraints(
             [
-                // Constraint::Percentage(app.split_percent),
-                Constraint::Percentage(40),
-                Constraint::Percentage(60),
+                // Give the game everything except a fixed-width controls sidebar, so the
+                // picture is as large as the terminal allows instead of a cramped 40%.
+                Constraint::Min(0),
+                Constraint::Length(SIDEBAR_WIDTH),
             ]
             .as_ref(),
         )
@@ -355,7 +435,7 @@ fn ui(f: &mut Frame<'_>, app: &mut App) {
             Line::from("Controls:"),
             Line::from("arrows: movement"),
             Line::from("Key a/A: A"),
-            Line::from("Key s/S: B"),
+            Line::from("Key b/B: B"),
             Line::from("Key z/Z: select"),
             Line::from("Key x/X: start"),
             // Line::from("H/L: resize splits"),
