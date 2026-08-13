@@ -325,10 +325,17 @@ impl<'m, 'a> Machine<'m, 'a> {
 /// What the user is shown about an attached plugin.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginStatus {
-    /// Stable short name, e.g. `gen1-link`.
+    /// Stable short name, e.g. `gen1-link`, with the write marker appended:
+    /// `!` for "may write your game", a sticky `!!` for "has written".
+    ///
+    /// The marker lives on the *name* rather than in `detail` deliberately —
+    /// a frontend truncates the detail to fit a panel, and the one thing that
+    /// must never be truncated away is the warning.
     pub name: String,
     /// One line of live detail, e.g. `waiting for link` / `trading MEW`.
     pub detail: String,
+    /// Whether this plugin has actually written emulated memory.
+    pub has_written: bool,
 }
 
 /// The thing a plugin implements.
@@ -413,6 +420,19 @@ impl std::fmt::Display for RegisterError {
             RegisterError::DuplicateName(n) => {
                 write!(f, "a plugin named '{n}' is already attached")
             }
+        }
+    }
+}
+
+impl Slot {
+    /// The user-visible write warning: `!` = may write your game, `!!` = has.
+    fn mark(&self) -> &'static str {
+        if self.has_written {
+            "!!"
+        } else if self.capabilities.contains(Capability::WRITE_MEMORY) {
+            "!"
+        } else {
+            ""
         }
     }
 }
@@ -536,8 +556,9 @@ impl PluginHost {
         self.slots
             .iter()
             .map(|s| PluginStatus {
-                name: s.plugin.name().to_string(),
+                name: format!("{}{}", s.plugin.name(), s.mark()),
                 detail: s.plugin.status(),
+                has_written: s.has_written,
             })
             .collect()
     }
@@ -553,13 +574,7 @@ impl PluginHost {
             .slots
             .iter()
             .map(|s| {
-                let mark = if s.has_written {
-                    "!!"
-                } else if s.capabilities.contains(Capability::WRITE_MEMORY) {
-                    "!"
-                } else {
-                    ""
-                };
+                let mark = s.mark();
                 let detail = s.plugin.status();
                 if detail.is_empty() {
                     format!("{}{}", s.plugin.name(), mark)

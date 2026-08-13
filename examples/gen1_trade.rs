@@ -100,6 +100,7 @@ fn main() {
     let mut trade_path: Option<PathBuf> = None;
     let mut save_path: Option<PathBuf> = None;
     let mut shots: Option<PathBuf> = None;
+    let mut state_out: Option<PathBuf> = None;
     let mut frames = 60 * 60 * 6;
     let mut make_save = false;
     let mut verbose = false;
@@ -111,6 +112,7 @@ fn main() {
             "--trade" => trade_path = args.next().map(PathBuf::from),
             "--save" => save_path = args.next().map(PathBuf::from),
             "--shots" => shots = args.next().map(PathBuf::from),
+            "--state" => state_out = args.next().map(PathBuf::from),
             "--frames" => {
                 frames = args.next().and_then(|s| s.parse().ok()).unwrap_or(frames)
             }
@@ -125,7 +127,7 @@ fn main() {
     let Some(rom_path) = rom_path else {
         eprintln!(
             "usage: gen1_trade --rom <path> [--make-save] [--save <file>] \
-             [--trade <file>] [--verbose]"
+             [--trade <file>] [--state <file>] [--verbose]"
         );
         std::process::exit(2);
     };
@@ -152,6 +154,7 @@ fn main() {
         &fixture,
         trade_path.as_deref(),
         shots,
+        state_out,
         frames,
         verbose,
     );
@@ -425,6 +428,7 @@ fn run_trade(
     fixture: &Path,
     trade: Option<&Path>,
     shots: Option<PathBuf>,
+    state_out: Option<PathBuf>,
     frames: u32,
     verbose: bool,
 ) {
@@ -458,6 +462,7 @@ fn run_trade(
     let mut last_shot_stage = "";
     let mut shot_delay: Option<(u32, &'static str)> = None;
     let mut shot_index = 0u32;
+    let mut state_written = false;
 
     for frame in 0..frames {
         bot.act(&mut gb, verbose);
@@ -490,6 +495,25 @@ fn run_trade(
             if report != last {
                 println!("[{frame:6}] {report}");
                 last = report;
+            }
+        }
+
+        // A save state at the console, *before* the trade starts, is what makes
+        // this reproducible in the real terminal frontend: load it there with
+        // F8, press A, and the trade runs live in front of you. It has to be
+        // before the exchange begins — plugin state is deliberately not in a
+        // save file, so a state captured mid-trade would load against a `reset`
+        // partner and desync (which is the documented hang, docs/plugins.md).
+        if let Some(path) = &state_out {
+            if !state_written && bot.stage_label() == "trade-room" {
+                state_written = true;
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                match std::fs::write(path, gb.save_state()) {
+                    Ok(()) => println!("save state at the console -> {}", path.display()),
+                    Err(e) => eprintln!("save state {}: {e}", path.display()),
+                }
             }
         }
 
@@ -1013,66 +1037,23 @@ fn indent(s: &str) -> String {
         .join("\n")
 }
 
-// --- PNG (hand-rolled, stored deflate — same approach as the test harness) --
+// --- screenshots ------------------------------------------------------------
 
+/// Write a 160x144 RGBA frame to a PNG.
+///
+/// Deliberately the **same path the `c` / `C` / `F2` screenshot keys take** in
+/// the terminal frontend (`App::screenshot`): the `image` crate, which the repo
+/// already depends on. `termimage`'s PNG writer is *stored* deflate — right for
+/// a 60 Hz wire, wrong for a file someone keeps or puts in documentation — so a
+/// screenshot must not use it, and this driver should not have a second
+/// encoder that could drift from the one users actually press a key for.
 fn write_png(path: &Path, rgba: &[u8]) {
-    let (w, h) = (160u32, 144u32);
-    let mut raw = Vec::with_capacity(((w * 4 + 1) * h) as usize);
-    for y in 0..h {
-        raw.push(0);
-        let s = (y * w * 4) as usize;
-        raw.extend_from_slice(&rgba[s..s + (w * 4) as usize]);
-    }
-    let mut z = vec![0x78, 0x01];
-    for (i, chunk) in raw.chunks(65535).enumerate() {
-        let last = (i + 1) * 65535 >= raw.len();
-        z.push(if last { 1 } else { 0 });
-        z.extend_from_slice(&(chunk.len() as u16).to_le_bytes());
-        z.extend_from_slice(&(!(chunk.len() as u16)).to_le_bytes());
-        z.extend_from_slice(chunk);
-    }
-    z.extend_from_slice(&adler32(&raw).to_be_bytes());
-
-    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&w.to_be_bytes());
-    ihdr.extend_from_slice(&h.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-    chunk(&mut png, b"IHDR", &ihdr);
-    chunk(&mut png, b"IDAT", &z);
-    chunk(&mut png, b"IEND", &[]);
-    let _ = std::fs::write(path, png);
-}
-
-fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(kind);
-    out.extend_from_slice(data);
-    let mut crc_data = kind.to_vec();
-    crc_data.extend_from_slice(data);
-    out.extend_from_slice(&crc32(&crc_data).to_be_bytes());
-}
-
-fn adler32(d: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
-    for &x in d {
-        a = (a + x as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
-}
-
-fn crc32(d: &[u8]) -> u32 {
-    let mut c = 0xFFFF_FFFFu32;
-    for &x in d {
-        c ^= x as u32;
-        for _ in 0..8 {
-            c = if c & 1 != 0 {
-                0xEDB8_8320 ^ (c >> 1)
-            } else {
-                c >> 1
-            };
+    match image::RgbaImage::from_raw(160, 144, rgba.to_vec()) {
+        Some(img) => {
+            if let Err(e) = img.save(path) {
+                eprintln!("screenshot {}: {e}", path.display());
+            }
         }
+        None => eprintln!("screenshot {}: frame buffer size mismatch", path.display()),
     }
-    !c
 }

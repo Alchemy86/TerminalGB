@@ -960,10 +960,39 @@ another branch; when those land, this belongs beside them.)
   (`engine/link/cable_club.asm`); the right tile is the other Game Boy's seat. That player also
   becomes clock master, which is the role the partner wants the game to have. A run that hangs
   at "Please wait…" is almost always the wrong seat.
-- **`--shots <dir>` captures a PNG per stage transition, and those PNGs are NOT committed.**
-  They are rendered frames of a commercial game; the licence-boundary rule above forbids
-  vendoring game assets, including as documentation. `docs/upscale-samples/` is committed only
-  because dmg-acid2 is MIT. The reproduction command is the deliverable, not the images.
+- **Screenshots of our UI are documentation; game data is not. The line, decided deliberately:**
+  `docs/link-trade/` **does** commit four screenshots of the terminal frontend mid-trade, and
+  that is not a hole in the licence-boundary rule above — it is what that rule is for. The rule
+  exists to stop us redistributing game *data*: bytes that substitute for owning the cartridge
+  or that a program could consume as input (sprite tables, tile sheets, text corpora, fixtures,
+  golden hashes of assets). A screenshot of our own chrome with a game visible inside it is
+  none of those — it cannot be decoded back into assets and is of use only to a human reading
+  docs. **The test when adding more: our interface, doing something, with the game incidental.**
+  Not a gallery of game frames, and never anything a program could read back as data.
+  `docs/upscale-samples/` stays MIT-ROM-only because those genuinely *are* asset comparisons.
+- **`--shots <dir>` captures a PNG per stage transition of the headless run**, through the same
+  `image`-crate path the `c` / `C` / `F2` keys use — `termimage`'s writer is *stored* deflate
+  (right for a 60 Hz wire, wrong for a file someone keeps), so a screenshot must never use it.
+  `--state <path>` writes a save state at the console the instant before the trade, which is how
+  the frontend screenshots are reproducible: drop it in save slot 1, press F8, press A.
+- **Driving the real TUI for screenshots is possible and worth it** (this is how the two status
+  bugs below were found). `wezterm-gui --config enable_wayland=false start -- <cmd>` on
+  XWayland, then `wezterm cli send-text --no-paste --pane-id 0` against **that instance's**
+  socket (`WEZTERM_UNIX_SOCKET=/run/user/1000/wezterm/gui-sock-<gui-pid>` — the default socket
+  belongs to the captain's session), and capture with
+  `import -window $(xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1)`.
+  Beware: `pgrep -f <pattern>` matches **your own command line**, so it reports processes that
+  are already dead — check with `ps -eo pid,args | grep` instead.
+- **Two "a plugin cannot be active and invisible" bugs, both only findable by screenshotting
+  the real frontend** — a unit test on the row's *text* passes while the user sees nothing:
+  (1) the Status box was a fixed `Constraint::Length(13)`, which fits exactly eleven content
+  rows, and the plugin row is pushed **last** — so it was clipped away; the box is now sized to
+  its contents. (2) `status_line()` joins all plugins with " | " and the row truncates to 18
+  columns, so with the always-attached trainer view first, the *link partner* vanished behind
+  the ellipsis. It is now **one row per plugin**, and the `!` / `!!` write marker lives on the
+  **name** (`PluginStatus.name`) precisely so truncation of the detail can never eat the
+  warning. Pinned by `an_attached_plugin_is_visible_in_the_rendered_status_panel`, which
+  asserts against **rendered output** at three window sizes.
 - **Plugin state is NOT machine state** and is not serialised. `Gameboy::load_state` calls
   `PluginHost::reset` — a link partner holding half a trade would otherwise desync silently.
 - **Where it hooks:** `PluginHost` lives on `Cpu`, *not* in the MMU, so dispatch can pass

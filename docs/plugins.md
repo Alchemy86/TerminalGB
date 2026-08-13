@@ -1,6 +1,7 @@
 # Plugins — the attach half of the extension surface
 
-> Source: [`src/plugin/`](../src/plugin/) · Related: [debugging](debugging.md) ·
+> Source: [`src/plugin/`](../src/plugin/) · **User guide:
+> [trading over the link cable](link-trade.md)** · Related: [debugging](debugging.md) ·
 > [telemetry](telemetry.md) · [serial](components/serial.md) · [conformance](conformance.md)
 > · [🗺️ Code map](codemap.md)
 
@@ -69,11 +70,20 @@ is one of them. A second registration fails with `RegisterError::LinkAlreadyClai
 
 - **Nothing loads implicitly.** `PluginHost` starts empty. A plugin is attached because a name
   appears in `plugins = …` in `config.toml` or in `GB_PLUGINS` — never by scanning a directory.
-- **The user can always see it.** The terminal frontend's Status panel gains a **`Plugin`** row
-  whenever anything is attached, showing the plugin's own live status line. A plugin holding
-  `WRITE_MEMORY` is marked **`!`** ("may write your game") and one that has actually written is
-  marked **`!!`** — and the `!!` is sticky. Attaching (or failing to attach) also raises a toast
-  on entering the game. **A plugin cannot be active and invisible.**
+- **The user can always see it.** The terminal frontend's Status panel gains **one `Plugin` row
+  per attached plugin**, showing that plugin's own live status. A plugin holding `WRITE_MEMORY`
+  is marked **`!`** ("may write your game") and one that has actually written is marked **`!!`**
+  — sticky, and carried on the *name* rather than the detail text, so truncating the row to fit
+  the panel can never eat the warning. Attaching (or failing to attach) also raises a toast on
+  entering the game. **A plugin cannot be active and invisible.**
+
+  This promise turned out to be false twice, in ways no unit test on the row's *content* could
+  see — the Status box was a fixed height that clipped the row off entirely, and before that the
+  row joined every plugin into one line and truncated it, hiding the *second* plugin (the link
+  partner, the one that can actually change your game) behind an ellipsis. Both were found by
+  screenshotting the real frontend. `an_attached_plugin_is_visible_in_the_rendered_status_panel`
+  now asserts against **rendered output** at three window sizes; a claim about what a user can
+  see has to be tested against pixels, not against a string.
 - **Save states do not carry plugin state.** Plugin state is not machine state; a state file
   written with a plugin attached and loaded without one would otherwise desync silently. Loading
   a state calls `Plugin::reset`, so a link partner holding half a trade starts again rather than
@@ -480,9 +490,10 @@ so it builds a save fixture first by playing the intro with real button presses 
 that save. **Nothing about the trade itself is faked** — from the receptionist onward it is only
 button presses and the emulated serial port.
 
-#### Screenshots — reproduce them, they are not committed
+#### Screenshots
 
-`--shots <dir>` writes a PNG at every stage transition, so the run leaves a picture trail:
+`--shots <dir>` writes a PNG at every stage transition, through the same `image`-crate path the
+`c` / `C` / `F2` screenshot keys use:
 
 ```bash
 cargo run --release --example gen1_trade -- --rom <rom> --shots target/trade-shots
@@ -499,20 +510,17 @@ target/trade-shots/
   06-party-after-trade.png    the Cable Club party list, now showing MEW
 ```
 
-**The PNGs are deliberately not committed.** They are rendered frames of a commercial game, and
-this repo's standing rule (`AGENTS.md`, "Licence boundary: format knowledge is ours, game assets
-are not") is that game assets are never vendored — not as fixtures, not as documentation. The
-committed samples under `docs/upscale-samples/` are from the MIT-licensed dmg-acid2 ROM for
-exactly this reason. So the command above is the deliverable: run it against your own cartridge
-and you get the same trail.
+`--state <path>` additionally writes a save state at the console the instant *before* the trade
+starts, which is what makes the whole thing reproducible in the real terminal frontend without
+playing to Viridian by hand: drop it into save slot 1, press **F8**, press **A**, and watch the
+trade run. That is how the screenshots in [docs/link-trade.md](link-trade.md) were taken — and
+it must be a state from *before* the exchange, because plugin state is deliberately not in a
+save file, so a state captured mid-trade loads against a `reset()` partner and desyncs.
 
-The two that matter are `04-at-machine.png` (`"Just a moment."` — the game has accepted the
-partner and is exchanging party blocks) and `05-done.png` (`"Trade completed!"` — the game's own
-words, which it will not print unless the full protocol ran). `06-party-after-trade.png` is the
-Cable Club's own party list with `MEW` in it. It is **not** the overworld party menu: the link
-session is still open at that point, so `B` does not leave the trade screen. The definitive
-check on what arrived is the WRAM read-out above and the experience number in §7.6.1 — a
-screenshot is for a person, the numbers are for CI.
+**Those four frontend screenshots are committed, under `docs/link-trade/`.** That is a
+deliberate call against this repo's "never vendor game assets" rule, and the reasoning — that
+the rule targets game *data* which substitutes for the cartridge, not pictures of our own UI —
+is written out in [docs/link-trade.md §5](link-trade.md#5-on-the-screenshots-and-licensing).
 
 ## 8. Interoperating: should we speak someone else's protocol?
 

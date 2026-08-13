@@ -133,49 +133,10 @@ cartridge that is not verified English Red or Blue is **refused with an explanat
 of shown wrong numbers. Full design, address table and verification:
 [docs/trainer.md](docs/trainer.md).
 
-#### 🔗 Virtual link partner — trade a Pokémon into Generation 1
+#### 🔗 Virtual link partner
 
-The emulator can **be the Game Boy on the other end of the link cable**. Plug in the
-`gen1-link` plugin, walk into any Cable Club in Pokémon Red or Blue, and complete a **real
-trade** — the Pokémon you asked for arrives through the game's own link protocol, over the
-emulated serial port.
-
-**It is not a memory poke.** Nothing writes to the game's RAM; the plugin does not even hold
-the capability to. The Pokémon arrives because the game asked for it on the wire and inserted
-it itself — which is why it comes out *flagged as traded*: foreign OT and trainer ID, obedience
-rules, and Generation 1's **boosted experience**. We put a level 5 Mew on the wire with 125
-experience; the party afterwards shows **135**, a number we never sent, because the game
-applied the trade bonus itself. That is the proof it took the genuine path.
-
-Say what you want in a small `key = value` file:
-
-```text
-trainer  = ORACLE            # who the game says you traded with
-
-species  = Mew               # a name, "#151" for a dex number, or a raw index
-level    = 5
-nickname = MEW
-ot_name  = GF
-ot_id    = 22796
-moves    = Pound
-dvs      = 15, 15, 15, 15    # attack, defense, speed, special
-```
-
-then arm it (nothing loads implicitly, so you have to name it):
-
-```bash
-GB_PLUGINS=gen1-link GB_GEN1_TRADE=~/mew.trade cargo run --release --example terminal -- <rom>
-```
-
-The Status panel gains a **`Plugin`** row — `gen1-link: offering MEW (Lv5) — waiting for
-link` — so an attached partner is never invisible. In game: talk to the Cable Club
-receptionist, choose **TRADE CENTER**, then use the **left-hand console facing right** (the
-game only starts the exchange for that seat). Everything else is an ordinary trade.
-
-A second `species` line adds a second Pokémon, up to a full party of six. Values are validated
-against your own cartridge's tables, and a misspelled key refuses to attach rather than quietly
-handing over something else. Full contract, the step-by-step journey, the trade file reference
-and what to do if it hangs: **[docs/plugins.md](docs/plugins.md)**.
+Press into a Cable Club in Pokémon Red or Blue and trade with a partner that does not exist.
+It has a section of its own below: **[Trade a Pokémon in over the link cable](#-trade-a-pokémon-in-over-the-link-cable)**.
 
 #### Terminal config file
 
@@ -233,6 +194,73 @@ fn main() {
     gb.render(RenderMode::Desktop); // or RenderMode::Terminal
 }
 ```
+
+---
+
+## 🔗 Trade a Pokémon in over the link cable
+
+**The emulator can be the Game Boy on the other end of the link cable.** Walk into any Cable
+Club in Pokémon Red or Blue, use the console, and trade with a partner that does not exist —
+and get back a Pokémon you described in a text file.
+
+<p align="center">
+  <img src="docs/link-trade/1-trade-screen.png" alt="The Cable Club trade screen: the player's party above, the virtual partner ORACLE offering MEW below" width="720" />
+</p>
+
+**It is not a memory poke.** Nothing writes to the game's RAM — the plugin does not even hold
+the capability to. The Pokémon arrives because the game asked for it on the wire, ran its real
+link protocol, and inserted it *itself*.
+
+### The proof is a number we never sent
+
+The partner puts a level 5 Mew on the wire with **125 experience** — the exact total for level 5
+on Mew's growth curve. Read the Pokémon out of the party afterwards and it has **135**.
+
+Nothing in the plugin knows that number. Generation 1 gives a **traded** Pokémon boosted
+experience, and the game applied it on the receiving side, of its own accord, because it
+believed it had just traded with a person. A memory poke would have left 125 sitting there.
+
+The game says so in its own words, too — `MEW is transferred.` and `Trade completed!` are
+printed by its link code and will not appear unless the whole exchange ran:
+
+<p align="center">
+  <img src="docs/link-trade/3-party-with-mew.png" alt="The party menu showing the newly traded MEW at level 5, with the emulator's status panel beside it" width="720" />
+</p>
+
+### Ask for what you want
+
+A small `key = value` file — say `~/mewtwo.trade`:
+
+```text
+trainer  = ORACLE            # the trainer name the game says you traded with
+
+species  = Mewtwo            # a name, "#150" for a dex number, or a raw index
+level    = 70
+nickname = MEWTWO
+ot_name  = GF                # a traded Pokémon keeps its original trainer
+ot_id    = 22796
+moves    = Psychic, Recover, Amnesia, Swift
+dvs      = 15, 15, 15, 15    # attack, defense, speed, special
+```
+
+Then arm it — nothing loads implicitly, so you have to name it:
+
+```bash
+GB_PLUGINS=gen1-link GB_GEN1_TRADE=~/mewtwo.trade \
+  cargo run --release --example terminal -- ~/roms/blue.gb
+```
+
+The Status panel gains a **`Plugin`** row (`gen1-link: offering MEWTWO (Lv70) — waiting for
+link`), so an armed partner is never invisible. In game: get the Pokédex, talk to any Cable Club
+receptionist, choose **TRADE CENTER**, then use the **left-hand console facing right** — the
+game only starts an exchange for that seat, and that player is the one it makes clock master.
+
+Only `species` is required; a second `species` line adds another Pokémon, up to six. Every value
+is validated against your own cartridge's tables, and a misspelled key refuses to attach rather
+than quietly handing over something else.
+
+📖 **[The full story, the step-by-step journey, and what to do if it hangs →
+docs/link-trade.md](docs/link-trade.md)** · the [plugin contract](docs/plugins.md) it is built on.
 
 ---
 

@@ -2683,9 +2683,32 @@ impl App {
     }
 
     fn render_sidebar(&mut self, f: &mut Frame<'_>, area: Rect) {
+        // A plugin can answer the link cable and (if it declared the
+        // capability) write memory, so the user must be able to *see* that one
+        // is attached without going looking. `!` marks a plugin that may write
+        // emulated memory, `!!` one that has — see crate::plugin.
+        // **One row per plugin**, not one joined line. Two bugs lived here, both
+        // found by screenshotting the real frontend rather than by any unit
+        // test on the row's content, and both defeating the thing
+        // docs/plugins.md §4 promises — "a plugin cannot be active and
+        // invisible":
+        //
+        //   1. The box was a fixed `Length(13)`, which fits exactly eleven
+        //      content rows, and the plugin row is pushed *last* — so it was
+        //      clipped away entirely. The box is now sized to its contents.
+        //   2. `plugin_status_line()` joins every plugin with " | " and the row
+        //      truncates to 18 columns, so with the always-attached trainer
+        //      view first, a *second* plugin — the link partner, the one that
+        //      can actually change your game — vanished behind the ellipsis.
+        let plugins: Vec<crate::plugin::PluginStatus> = self
+            .session
+            .as_ref()
+            .map(|s| s.gb.plugin_statuses())
+            .unwrap_or_default();
+        let status_h = 13 + plugins.len() as u16;
         let split = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(13), Constraint::Min(0)])
+            .constraints([Constraint::Length(status_h), Constraint::Min(0)])
             .split(area);
 
         // Status. `Sent` is the size actually transmitted to the terminal each
@@ -2718,14 +2741,6 @@ impl App {
                 0.0,
                 "-",
             ));
-        // A plugin can answer the link cable and (if it declared the
-        // capability) write memory, so the user must be able to *see* that one
-        // is attached without going looking. `!` marks a plugin that may write
-        // emulated memory, `!!` one that has — see crate::plugin.
-        let plugin_line = self
-            .session
-            .as_ref()
-            .and_then(|s| s.gb.plugin_status_line());
         let mut status = vec![
             kv("ROM", &truncate(&title, 18)),
             kv("MBC", mbc),
@@ -2756,8 +2771,15 @@ impl App {
                 },
             ),
         ];
-        if let Some(p) = &plugin_line {
-            status.push(kv("Plugin", &truncate(p, 18)));
+        // The `!` / `!!` marks travel with the name, so "this one may write my
+        // game" survives truncation of the detail text.
+        for p in &plugins {
+            let detail = if p.detail.is_empty() {
+                p.name.clone()
+            } else {
+                format!("{}: {}", p.name, p.detail)
+            };
+            status.push(kv("Plugin", &truncate(&detail, 18)));
         }
         f.render_widget(
             Paragraph::new(status)
@@ -4204,6 +4226,61 @@ mod tests {
             f.chunks_exact(4).any(|p| p[0] != p[1] || p[1] != p[2]),
             "a palette-mapped stream must not still be greyscale"
         );
+    }
+
+    /// `docs/plugins.md` §4 promises "a plugin cannot be active and invisible".
+    /// The Status box used to be a fixed 13 rows, which fits exactly eleven
+    /// content lines — and the Plugin row is pushed *last*, so it was clipped
+    /// and an attached plugin left no trace on screen. Asserting the row's text
+    /// is not enough; it has to be asserted **in rendered output**.
+    #[test]
+    fn an_attached_plugin_is_visible_in_the_rendered_status_panel() {
+        use ratatui::backend::TestBackend;
+
+        /// Minimal plugin: the point is the row, not what it says.
+        struct Marker;
+        impl crate::plugin::Plugin for Marker {
+            fn name(&self) -> &str {
+                "zzmarker"
+            }
+            fn capabilities(&self) -> crate::plugin::Capability {
+                crate::plugin::Capability::OBSERVE
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let s = app.session.as_mut().expect("session");
+        s.gb.add_plugin(Box::new(Marker)).expect("attach");
+
+        // Sizes tall enough to have a sidebar at all.
+        for (w, h) in [(120u16, 40u16), (100, 30), (160, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(
+                text.contains("zzmarker"),
+                "an attached plugin must be visible at {w}x{h}"
+            );
+            assert!(
+                text.contains("trainer"),
+                "and so must every *other* attached plugin at {w}x{h} — one \
+                 row each, never one truncated joined line"
+            );
+        }
     }
 
     /// The other half of the same bug: the stats panel must not occupy a cell
