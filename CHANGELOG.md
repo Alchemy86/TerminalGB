@@ -32,10 +32,52 @@ history. See [Credits & lineage](README.md#credits--lineage).
   above shipped). Needs the `audio` feature but no sound card; `make test-audio-perf`.
 - **`examples/audio_frame_cost.rs`** — per-frame wall time beside thread CPU time against a
   real device, so "emulation got slow" can be answered rather than guessed.
+- **Shiny-if-traded verdict for wild encounters** (terminal frontend, Pokémon Red/Blue). The
+  moment a *catchable* wild Pokémon appears, a row across the top of the terminal names it,
+  prints its DVs, and says whether it **would be shiny if traded to Gen 2** — while a Ball is
+  still unspent. A shiny verdict fills the row, raises a toast and rings the terminal bell
+  once; an ordinary encounter gets the same row quietly, with the reason it is not shiny. It
+  works with the trainer panel closed (the plugin peeks one byte at ~10 Hz), the verdict is
+  latched so it persists for the encounter, and trainer battles and the old man's catching
+  demonstration are excluded — neither Pokémon can be caught. **Gen 1 has no shiny Pokémon;**
+  every string says "would be shiny if traded", at every terminal width, and a test asserts it.
+  Rule cited to `CheckShininess` (`pokecrystal/engine/gfx/color.asm`); the DV roll and its
+  survival through capture to `LoadEnemyMonData` and `_AddPartyMon` (`pret/pokered`). New
+  config key `shiny_alert` (`on` / `quiet` / `off`). Verified against a real encounter under
+  **both** `GB_MODEL=dmg` and `GB_MODEL=cgb` — the verdict reads fixed WRAM addresses and never
+  the console model, though `BattleRandom` is seeded differently so the particular DVs a
+  scripted run rolls are not reproducible across models. See
+  [`docs/trainer.md`](docs/trainer.md#the-wild-encounter-banner).
+- Trainer panel: the opposing Pokémon's DVs are now shown in every battle, and a Safari Zone
+  or old-man-tutorial battle is labelled as such.
+- Trainer harness: a fifth check that walks a **brand-new game** out of the bedroom, through
+  Pallet Town and onto Route 1, paces the grass until a wild battle starts, and compares the
+  latched verdict against `wEnemyMonDVs` read independently with the Gen 2 rule re-implemented
+  in the harness. It **fails when it meets fewer encounters than it asked for** rather than
+  passing with a smaller number, and the walk nudges itself free (and says so) if it stalls —
+  which caught a real wedge where the post-battle clean-up pressed A one frame late, opened the
+  START menu, and spent the rest of its budget pressing a direction key into it.
 - Repository furniture: this `CHANGELOG.md`, `CONTRIBUTING.md`, and GitHub issue / pull-request
   templates.
 - README badges (CI status, licence, Rust version) and a "Credits & lineage" section naming
   the fork parent and rboy.
+
+### Fixed
+- Trainer view: `wIsInBattle == $FF` ("the player blacked out", `home/overworld.asm`
+  `.allPokemonFainted`) was read as a *trainer battle*, so blacking out put a battle panel —
+  opponent, level, HP, stats, moves, all stale — on screen while the player stood in the
+  overworld. `ram/wram.asm` documents four values above the label; the reader had a catch-all
+  arm that swallowed the `-1` sentinel. It now reads as no battle, as does every value the game
+  never writes, and the test iterates the whole byte range rather than the named cases. No test
+  ROM catches this and none can — the cartridge was correct; the defect was in a consumer of
+  emulated state. Recorded in [`docs/conformance-notes.md`](docs/conformance-notes.md).
+- Terminal Status panel: the box was sized `13 + plugins.len()` against a twelve-line list, so
+  with two plugins attached the second one's row was clipped away entirely — a plugin could be
+  active and invisible, which `docs/plugins.md` §4 promises cannot happen
+  (`an_attached_plugin_is_visible_in_the_rendered_status_panel` was failing on `main`). The box
+  is now sized from its own line list, so a newly-added row — `Audio` most recently — can never
+  silently cost a plugin its row again; the worst case (two plugins plus a live encounter) is
+  pinned by a test.
 
 ### Changed
 - `Cargo.toml` metadata: `repository` now points at this fork, authorship represents both the

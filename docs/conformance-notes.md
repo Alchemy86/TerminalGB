@@ -151,6 +151,52 @@ the LCD.
   (0.245 → 0.265 ms, against a 16.743 ms budget), so "it is too expensive for a test run" is
   not true. What *is* expensive is a real host-audio path that paces the producer against the
   audio clock — a different thing, which a conformance runner should never be inside.
+## 2026-08-14 — a documented sentinel read as "anything else" (`wIsInBattle == $FF`)
+
+**Not an emulation bug — a bug in something *reading* emulated memory**, which is
+why it belongs here: the conformance tool's reference adapter is exactly such a
+reader ([`conformance.md`](conformance.md)), and this is the failure mode that
+class of code has.
+
+- **Symptom, in user terms:** the trainer view showed a **battle panel — an
+  opponent, its level, HP, stats and moves — while the player was standing in
+  the overworld**, immediately after blacking out. Everything in the panel was
+  stale garbage from the battle that had just been lost, presented with the same
+  confidence as live data. Nothing crashed, nothing looked broken; it was simply
+  *wrong*, which is the worst way for a tracker to fail.
+- **Cause:** `wIsInBattle` (`$D057`) has **four** documented values, not three.
+  `pret/pokered`'s `ram/wram.asm` says so directly, above the label: *"lost
+  battle, this is -1 / no battle, this is 0 / wild battle, this is 1 / trainer
+  battle, this is 2"*. The reader matched `0 => none, 1 => wild, _ => trainer` —
+  a catch-all arm that swallowed the `$FF` sentinel. `$FF` is written by
+  `.allPokemonFainted` in `home/overworld.asm`, which is the *end* of a battle,
+  not one in progress.
+- **Caught by:** **nothing, and nothing in a ROM-driven suite can.** Blargg,
+  Mooneye and acid2 all compare a framebuffer or a serial string produced by the
+  cartridge; the cartridge was entirely correct here. The defect lived in a
+  *consumer* of emulated state, and it is invisible to every check that only
+  asks the game what it thinks. Same gap as the three render bugs in
+  [`rendering.md`](rendering.md): the emulator was right and the user was still
+  shown the wrong thing.
+- **Behaviour being violated:** the game's own documented WRAM contract, cited
+  above (`pret/pokered`, `ram/wram.asm` `wIsInBattle`; writers in
+  `engine/battle/core.asm` `InitWildBattle` / `InitBattleCommon` and
+  `home/overworld.asm` `.allPokemonFainted`). For a *hardware*-level analogue
+  the same rule applies to any register whose reserved encodings are documented:
+  an unlisted value is not a licence to pick the nearest listed one.
+- **New test — and it is the shape that matters:**
+  `battle_kind_maps_the_flag` now asserts the three real values **and iterates
+  every remaining byte 3..=$FF**, requiring "no battle" for all of them. Pinning
+  the enumerated cases alone is what let this through; the test that catches it
+  is the one that pins *the entire domain*.
+  **Conformance candidate: for any documented multi-valued field an adapter
+  decodes, the check must cover every input value, not the named ones.** A
+  catch-all arm over a documented enum is a defect until the values it swallows
+  are enumerated — and, concretely for a telemetry/`SERIAL_LINK`-style adapter,
+  a `battle_state` field must be able to say "unknown" rather than round to a
+  neighbour.
+
+---
 
 ## 2026-08-13 — DMG wave-RAM access window (dmg_sound 09: "wave read while on")
 

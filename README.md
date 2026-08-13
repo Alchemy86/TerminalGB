@@ -124,6 +124,16 @@ hidden, its Hidden Power, and whether it **would be shiny if traded to Gen 2**; 
 cycles the party. The focused Pokémon's sprite is decompressed straight out of your own
 cartridge, so it works in the overworld and not just in battle.
 
+**And the moment a wild Pokémon appears, a banner across the top of the terminal tells you
+whether it *would be shiny if traded to Gen 2* — before you spend a Ball.** It shows the DVs
+alongside, so a near miss is legible, and it stays up for the whole encounter. You do not need
+the panel open: an encounter is exactly when nobody is looking at a stats panel. Only
+*catchable* encounters get a verdict — a trainer's Pokémon has fixed DVs and cannot be caught,
+so a verdict there would be noise. **Gen 1 has no shiny Pokémon at all**; the claim is strictly
+about what Gold/Silver would do with the same DVs, and every string says so. `shiny_alert` in
+the config turns the bell, or the whole row, off. (Terminal frontend only — the desktop and
+web builds do not attach the plugin.)
+
 It is **strictly read-only** — it declares only the "observe" and "read memory" capabilities,
 and the host refuses a write from a plugin that did not ask for one — and it reads memory ten
 times a second rather than every frame, so it costs the
@@ -154,6 +164,7 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
+| `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
 | `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`. |
 | `video_out` | `-` / a file / a FIFO / a directory / `off` | Stream raw frames out (see [video-out.md](docs/video-out.md)). Default `off`. The TUI refuses `-` — it owns stdout. |

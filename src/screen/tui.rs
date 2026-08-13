@@ -31,7 +31,7 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
-use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath};
+use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath, ShinyAlert};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
 use crate::screen::trainer_view as tv;
@@ -502,6 +502,10 @@ enum Screen {
     Playing,
 }
 
+/// Everything about the UI that can paint over a terminal image, as one
+/// comparable value. See [`App::ui_signature`].
+type UiSignature = (u8, bool, bool, bool, bool, bool, u8);
+
 #[derive(PartialEq, Eq)]
 enum Overlay {
     None,
@@ -671,6 +675,15 @@ struct App {
     trainer_detail: bool,
     /// Selected party slot, cycled with Tab.
     trainer_sel: usize,
+    /// How loudly a wild encounter's shiny-if-traded verdict is announced.
+    shiny_alert: ShinyAlert,
+    /// The last `TrainerPlugin::encounter_seq` this app reacted to, so the
+    /// toast and the bell fire exactly once per Pokémon rather than every
+    /// frame the banner is up.
+    last_encounter_seq: u64,
+    /// A terminal bell owed to a shiny-if-traded verdict, written on the next
+    /// flush rather than from inside the emulation step.
+    pending_bell: bool,
     /// Active save-state slot (`1..=NUM_SLOTS`).
     slot: u32,
     /// Transient in-game notice (save/load/speed feedback) with its raise time.
@@ -700,7 +713,7 @@ struct App {
     /// Signature of everything about the UI that can paint over the picture.
     /// When it changes, the image is retransmitted even if the frame did not,
     /// because the terminal's copy of it may have been partly overwritten.
-    ui_sig: Option<(u8, bool, bool, bool, bool, bool)>,
+    ui_sig: Option<UiSignature>,
     /// Machine-readable run telemetry; disabled (and free) unless configured.
     telemetry: Telemetry,
     /// Raw video-out; disabled (and free) unless configured. Driven from
@@ -797,6 +810,7 @@ impl App {
             protocol_name(picker.protocol_type())
         ));
         let palette = config.palette;
+        let shiny_alert = config.shiny_alert;
         let upscaler = Upscaler::new(config.upscale, config.upscale_factor);
         let config_factor = upscaler.factor();
         let config_algo = config.upscale;
@@ -847,6 +861,9 @@ impl App {
             trainer: false,
             trainer_detail: false,
             trainer_sel: 0,
+            shiny_alert,
+            last_encounter_seq: 0,
+            pending_bell: false,
             slot: 1,
             toast: None,
             entries: Vec::new(),
@@ -1186,6 +1203,89 @@ impl App {
         // one: display frames are deliberately dropped on a large window
         // (see `crate::termimage`) and a video stream may not be.
         self.video_tick(true);
+        self.announce_new_encounter();
+    }
+
+    /// Raise the one-shot half of the shiny alert.
+    ///
+    /// The banner is *state* — it is redrawn from the latched encounter for as
+    /// long as the Pokémon is on screen. This is the *edge*: the toast and the
+    /// terminal bell that fire once, at the instant it appears, because that is
+    /// the moment the captain is looking at the game and not at a panel.
+    ///
+    /// The whole cost when nothing is happening is comparing two `u64`s.
+    fn announce_new_encounter(&mut self) {
+        let last = self.last_encounter_seq;
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(plugin) = session.gb.plugin::<TrainerPlugin>() else {
+            return;
+        };
+        let seq = plugin.encounter_seq();
+        if seq == last {
+            return;
+        }
+        self.last_encounter_seq = seq;
+        let Some(enc) = plugin.encounter() else {
+            return;
+        };
+        if !enc.would_be_shiny() || self.shiny_alert == ShinyAlert::Off {
+            return;
+        }
+        let msg = format!(
+            "\u{2605} {} L{} WOULD BE SHINY IF TRADED TO GEN 2 \u{2605} DV {}",
+            enc.name,
+            enc.level,
+            enc.dv_string()
+        );
+        if self.shiny_alert.rings() {
+            // BEL. The one moment in this program worth interrupting someone
+            // for: the verdict is only useful before a Ball is spent.
+            self.pending_bell = true;
+        }
+        self.set_toast(msg);
+    }
+
+    /// The wild encounter to draw a banner for this frame, if any. `None` in the
+    /// overworld, in a trainer battle, and when the alert is configured off.
+    fn banner_encounter(&self) -> Option<&crate::trainer::encounter::WildEncounter> {
+        if !self.shiny_alert.shows_banner() {
+            return None;
+        }
+        self.session
+            .as_ref()?
+            .gb
+            .plugin::<TrainerPlugin>()?
+            .encounter()
+    }
+
+    /// `0` no banner, `1` an ordinary encounter, `2` a shiny-if-traded one.
+    /// Part of [`App::ui_signature`] because the row changes the layout, and a
+    /// layout change means every terminal image may have been painted over.
+    fn banner_state(&self) -> u8 {
+        match self.banner_encounter() {
+            None => 0,
+            Some(e) if e.would_be_shiny() => 2,
+            Some(_) => 1,
+        }
+    }
+
+    /// Draw the encounter banner into a row of its own. Never over the picture,
+    /// for the reason given on [`App::render_stats`].
+    fn render_encounter_banner(&self, f: &mut Frame<'_>, area: Rect) {
+        let Some(enc) = self.banner_encounter() else {
+            return;
+        };
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let row = Rect::new(area.x, area.y, area.width, 1);
+        f.render_widget(Clear, row);
+        f.render_widget(
+            Paragraph::new(tv::encounter_banner(enc, area.width as usize)),
+            row,
+        );
     }
 
     /// Start or stop the raw video stream while the game runs (`v`).
@@ -1450,6 +1550,14 @@ impl App {
     /// unchanged frame cost literally nothing, and what stops an overlay from
     /// freezing the picture. See [`crate::termimage`] for both failure modes.
     fn flush_image(&mut self) -> io::Result<()> {
+        // The shiny bell rides out with the same flush: it is raised on an
+        // emulated frame but must not be written mid-`ratatui` draw.
+        if std::mem::take(&mut self.pending_bell) {
+            use std::io::Write as _;
+            let mut out = io::stdout().lock();
+            out.write_all(b"\x07")?;
+            out.flush()?;
+        }
         let Some(s) = self.session.as_mut() else {
             return Ok(());
         };
@@ -2084,6 +2192,13 @@ impl App {
                 rest.height -= 1;
                 self.render_toast(f, Rect::new(area.x, area.bottom() - 1, area.width, 1));
             }
+            // The encounter verdict takes the top row, above everything. It is
+            // the one thing here that is time-critical: a Ball is about to be
+            // spent or not spent.
+            if self.banner_state() != 0 && rest.height > 1 {
+                self.render_encounter_banner(f, Rect::new(rest.x, rest.y, rest.width, 1));
+                rest = Rect::new(rest.x, rest.y + 1, rest.width, rest.height - 1);
+            }
             let mut trainer_panel = None;
             if self.trainer && rest.width > tv::PANEL_W + 8 {
                 trainer_panel = Some(Rect::new(
@@ -2114,14 +2229,22 @@ impl App {
             return;
         }
 
+        // The encounter banner is a row of its own, directly under the title —
+        // never over the picture (a terminal image owns whole cells) and never
+        // folded into the footer, which the toast already owns.
+        let banner_h = u16::from(self.banner_state() != 0);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // header
-                Constraint::Min(0),    // body
-                Constraint::Length(1), // footer
+                Constraint::Length(1),        // header
+                Constraint::Length(banner_h), // wild-encounter verdict
+                Constraint::Min(0),           // body
+                Constraint::Length(1),        // footer
             ])
             .split(area);
+        if banner_h > 0 {
+            self.render_encounter_banner(f, rows[1]);
+        }
 
         let title = self
             .session
@@ -2147,7 +2270,7 @@ impl App {
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(side_w)])
-            .split(rows[1]);
+            .split(rows[2]);
 
         // The stats panel lives in the sidebar, above Status — never over the
         // picture.
@@ -2185,13 +2308,13 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
         };
-        f.render_widget(Paragraph::new(footer), rows[2]);
+        f.render_widget(Paragraph::new(footer), rows[3]);
     }
 
     /// Everything about the UI that can paint over a terminal image. When it
     /// changes, every image must be retransmitted even if its pixels did not,
     /// because the terminal's copy may have been partly overwritten.
-    fn ui_signature(&self) -> (u8, bool, bool, bool, bool, bool) {
+    fn ui_signature(&self) -> UiSignature {
         (
             match self.overlay {
                 Overlay::None => 0u8,
@@ -2203,6 +2326,9 @@ impl App {
             self.toast_text().is_some(),
             self.trainer,
             self.trainer_detail,
+            // The encounter banner takes a row, which moves everything below it
+            // — including the picture.
+            self.banner_state(),
         )
     }
 
@@ -2705,12 +2831,6 @@ impl App {
             .as_ref()
             .map(|s| s.gb.plugin_statuses())
             .unwrap_or_default();
-        let status_h = 13 + plugins.len() as u16;
-        let split = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(status_h), Constraint::Min(0)])
-            .split(area);
-
         // Status. `Sent` is the size actually transmitted to the terminal each
         // frame, which the terminal then stretches to `Scale`; keeping those
         // two apart is what holds the frame rate up on a large window.
@@ -2781,6 +2901,20 @@ impl App {
             };
             status.push(kv("Plugin", &truncate(&detail, 18)));
         }
+        // Sized from `status` itself, plus the two border rows. A hand-counted
+        // constant here is the bug this box has had twice: it was `13 + plugins`
+        // against a twelve-line list, so with two plugins attached the second
+        // one was clipped away and `an_attached_plugin_is_visible_in_the_
+        // rendered_status_panel` failed — a plugin *was* active and invisible,
+        // which is exactly what docs/plugins.md §4 promises cannot happen.
+        // Adding a status row must not silently cost a plugin its row again.
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(status.len() as u16 + 2),
+                Constraint::Min(0),
+            ])
+            .split(area);
         f.render_widget(
             Paragraph::new(status)
                 .block(Block::default().borders(Borders::ALL).title(" Status ")),
@@ -2845,6 +2979,22 @@ impl App {
             Line::from("  tab       next party member   shift-tab  previous"),
             Line::from(Span::styled(
                 "  read-only: it never writes to the game",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from("Wild-encounter shiny check"),
+            Line::from(Span::styled(
+                format!(
+                    "  a banner names every catchable wild Pokémon's DVs and \
+                     whether it would be shiny if traded to Gen 2 — no key \
+                     needed, the trainer panel may stay shut (shiny_alert = {})",
+                    self.shiny_alert.name()
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  Gen 1 has no shiny Pokémon at all; the claim is only what \
+                 Gold/Silver would do with the same DVs",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
@@ -4383,6 +4533,228 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The shiny banner is a terminal image's worst enemy if it lands on the
+    /// picture: a cell an image covers cannot also hold text. It gets its own
+    /// row, at every size, in both layouts, for both verdicts.
+    #[test]
+    fn the_encounter_banner_never_touches_the_picture_at_any_size() {
+        use ratatui::backend::TestBackend;
+        let sizes = [
+            (40u16, 12u16),
+            (60, 20),
+            (80, 24),
+            (120, 40),
+            (200, 60),
+            (320, 90),
+        ];
+        for shiny in [false, true] {
+            for fullscreen in [false, true] {
+                for trainer in [false, true] {
+                    for (cols, rows) in sizes {
+                        let mut app =
+                            test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+                        app.fullscreen = fullscreen;
+                        app.trainer = trainer;
+                        plant_encounter(&mut app, shiny);
+                        assert_ne!(app.banner_state(), 0, "the banner must be up");
+                        let mut terminal =
+                            Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                        terminal.draw(|f| app.render(f)).unwrap();
+                        let s = app.session.as_ref().unwrap();
+                        let picture = Rect::new(
+                            s.disp_origin.0,
+                            s.disp_origin.1,
+                            s.disp_cells.0,
+                            s.disp_cells.1,
+                        );
+                        assert!(picture.area() > 0, "{cols}x{rows}: no picture");
+                        // The banner owns row 0 in fullscreen, row 1 otherwise.
+                        let banner_y = if fullscreen { 0 } else { 1 };
+                        let banner = Rect::new(0, banner_y, cols, 1);
+                        assert_eq!(
+                            picture.intersection(banner).area(),
+                            0,
+                            "{cols}x{rows} full={fullscreen} trainer={trainer}: \
+                             banner {banner:?} overlaps picture {picture:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The verdict has to reach someone who never opens the trainer panel —
+    /// which is everyone, during an encounter.
+    #[test]
+    fn the_banner_and_the_alert_do_not_need_the_trainer_panel_open() {
+        use ratatui::backend::TestBackend;
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        assert!(!app.trainer, "the panel starts closed");
+        plant_encounter(&mut app, true);
+        assert_eq!(app.banner_state(), 2, "a shiny verdict, panel or no panel");
+
+        // The one-shot half: a toast and a bell, exactly once.
+        app.announce_new_encounter();
+        let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
+        assert!(
+            toast.contains("WOULD BE SHINY IF TRADED TO GEN 2"),
+            "{toast}"
+        );
+        assert!(toast.contains("DV "), "{toast}");
+        assert!(app.pending_bell, "a shiny rings the bell");
+        app.pending_bell = false;
+        app.toast = None;
+        app.announce_new_encounter();
+        assert!(app.toast.is_none(), "the same Pokémon must not re-toast");
+        assert!(!app.pending_bell, "nor re-ring");
+
+        // And the row really is drawn.
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let row: String = (0..120)
+            .filter_map(|x| terminal.backend().buffer().cell((x, 1)))
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(row.contains("SHINY IF TRADED TO GEN 2"), "{row:?}");
+    }
+
+    /// The Status panel is a fixed column of rows, and rows keep being added to
+    /// it (`Audio` most recently). Any of them silently clipping is the bug
+    /// `an_attached_plugin_is_visible_in_the_rendered_status_panel` exists to
+    /// catch, so this pins the *worst* case this crew can create: two plugins
+    /// attached **and** a live wild encounter, which makes the trainer plugin's
+    /// row its longest.
+    #[test]
+    fn every_status_row_survives_an_audio_row_and_a_live_encounter() {
+        use ratatui::backend::TestBackend;
+        struct Marker;
+        impl crate::plugin::Plugin for Marker {
+            fn name(&self) -> &str {
+                "zzmarker"
+            }
+            fn capabilities(&self) -> crate::plugin::Capability {
+                crate::plugin::Capability::OBSERVE
+            }
+            fn on_event(
+                &mut self,
+                _e: &crate::plugin::Event,
+                _m: &mut crate::plugin::Machine,
+            ) {
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.session
+            .as_mut()
+            .expect("session")
+            .gb
+            .add_plugin(Box::new(Marker))
+            .expect("attach");
+        plant_encounter(&mut app, true);
+
+        for (w, h) in [(120u16, 40u16), (100, 30), (160, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            // Every row of the Status block, first to last, plus both plugins.
+            for needle in [
+                "ROM", "MBC", "Scale", "Sent", "Proto", "Palette", "Upscale", "Speed",
+                "Slot", "Video", "Audio", "FPS", "trainer", "zzmarker",
+            ] {
+                assert!(
+                    text.contains(needle),
+                    "{needle:?} was pushed out of the Status panel at {w}x{h} — \
+                     the box must be sized from its own row list"
+                );
+            }
+            // And the banner is still there, in its own row.
+            assert!(text.contains("SHINY IF TRADED TO GEN 2"), "at {w}x{h}");
+        }
+    }
+
+    /// The verdict does not cost the Status panel a row: it rides in the
+    /// trainer plugin's existing `Plugin` row, which is a second place it is
+    /// visible when the panel is closed.
+    #[test]
+    fn a_live_encounter_rides_in_the_plugin_row_rather_than_adding_one() {
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let rows = |app: &App| {
+            app.session
+                .as_ref()
+                .map(|s| s.gb.plugin_statuses().len())
+                .unwrap_or(0)
+        };
+        let before = rows(&app);
+        plant_encounter(&mut app, true);
+        assert_eq!(rows(&app), before, "no extra Status row");
+        // The *wording* of that row is pinned next to the code that builds it,
+        // in `trainer::tests::the_plugin_status_line_carries_the_verdict`: the
+        // synthetic ROM here is not Red/Blue, so this plugin correctly reports
+        // "unsupported cartridge" whatever is planted on it.
+    }
+
+    /// `shiny_alert = off` removes the row entirely — and with it the extra
+    /// layout row, so the picture goes back to its old size.
+    #[test]
+    fn the_alert_can_be_switched_off() {
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        plant_encounter(&mut app, true);
+        assert_eq!(app.banner_state(), 2);
+        app.shiny_alert = ShinyAlert::Off;
+        assert_eq!(app.banner_state(), 0);
+        app.announce_new_encounter();
+        assert!(!app.pending_bell);
+        // `quiet` keeps the row and the toast but not the bell.
+        app.shiny_alert = ShinyAlert::Quiet;
+        plant_encounter(&mut app, true);
+        app.announce_new_encounter();
+        assert_eq!(app.banner_state(), 2);
+        assert!(!app.pending_bell, "quiet means quiet");
+        assert!(app.toast.is_some(), "but it still says so");
+    }
+
+    /// Plant a wild encounter on the attached plugin, so the frontend can be
+    /// tested without a Pokémon cartridge.
+    fn plant_encounter(app: &mut App, shiny: bool) {
+        use crate::trainer::encounter::WildEncounter;
+        use crate::trainer::gen1::{BattleType, Dvs};
+        let dvs = if shiny {
+            Dvs::from_bytes(0xEA, 0xAA) // ATKDEFDV_SHINY / SPDSPCDV_SHINY
+        } else {
+            Dvs::from_bytes(0x9A, 0x88)
+        };
+        app.session
+            .as_mut()
+            .unwrap()
+            .gb
+            .plugin_mut::<TrainerPlugin>()
+            .unwrap()
+            .set_encounter_for_test(Some(WildEncounter {
+                species: 0x24,
+                dex: 16,
+                name: "PIDGEY".into(),
+                level: 3,
+                dvs,
+                kind: BattleType::Normal,
+            }));
     }
 
     /// Switching the panel on must not cost the emulator anything when the

@@ -56,10 +56,15 @@ fn main() {
     let rom = std::fs::read(&staged).expect("staged ROM is readable");
     let mut failures = 0;
 
-    failures += check_sprites(&rom);
-    failures += check_against_reference(&rom);
-    failures += check_live_state(&staged, &rom);
-    failures += check_against_the_games_own_screen(&staged, &rom);
+    // `TRAINER_ONLY=5` runs only the wild-encounter check, which is the slow
+    // one to iterate on: it plays a new game from scratch every time.
+    if std::env::var("TRAINER_ONLY").as_deref() != Ok("5") {
+        failures += check_sprites(&rom);
+        failures += check_against_reference(&rom);
+        failures += check_live_state(&staged, &rom);
+        failures += check_against_the_games_own_screen(&staged, &rom);
+    }
+    failures += check_a_real_wild_encounter(&staged, &rom);
 
     if failures > 0 {
         eprintln!("\ntrainer: {failures} check(s) FAILED");
@@ -575,6 +580,475 @@ fn check_against_the_games_own_screen(rom_path: &Path, rom: &[u8]) -> usize {
     // (c) print the panel itself, so the change is visible in the log.
     print_panel(&st);
     bad
+}
+
+// ---- 5. a real wild encounter -------------------------------------------
+
+/// `ROUTE_1` (`constants/map_constants.asm`: `map_const ROUTE_1, 10, 18 ; $0C`)
+/// — the first map with a grass encounter table (`data/wild/maps/Route1.asm`,
+/// encounter rate 25/256 per step).
+const ROUTE_1: u8 = 0x0C;
+/// `PALLET_TOWN` `$00` — the map the walk leaves through, and the last of the
+/// first maps of a new game, in the order this walks them.
+const PALLET_TOWN: u8 = 0x00;
+
+/// `wEventFlags` bit 0 is `EVENT_FOLLOWED_OAK_INTO_LAB` — the very first
+/// `const` after `const_def` in `constants/event_constants.asm`, so byte 0,
+/// bit 0.
+///
+/// `PalletTownDefaultScript` (`scripts/PalletTown.asm`) opens with
+/// `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`: with the flag set, Oak
+/// never runs out to stop the player at the north exit. Setting it is what lets
+/// this harness walk a brand-new game to Route 1 without scripting the entire
+/// introduction, the starter choice and the rival battle.
+///
+/// `wEventFlags` is `$D747`, walked backwards from `wPlayTimeHours` `$DA41`
+/// (verified elsewhere in this file) through `ram/wram.asm`: `ds 7`,
+/// `wCurMapScript`, `wOpponentAfterWrongAnswer`, `ds 6`, `wTrainerHeaderPtr`
+/// (2), `wEnemyMonNicks` (6 x 11), `wEnemyMonOT` (6 x 11) and the 293-byte
+/// union — which lands exactly on `wGrassRate` `$D887`, the union's first
+/// member, so the walk checks out. `wEventFlags` is the 320-byte
+/// `flag_array NUM_EVENTS` (NUM_EVENTS = 2560, counting the `const`,
+/// `const_skip` and `const_next` directives) immediately before it:
+/// `$D887 - 320 = $D747`.
+const EVENT_FLAGS: u16 = 0xD747;
+
+/// Drive a **new** game into a real wild encounter and check the verdict the
+/// captain will act on against a DV calculation done here, from the bytes in
+/// the enemy structure.
+///
+/// This is the check the feature stands or falls on. Everything else in this
+/// file reads a save; this one lets the game itself roll `BattleRandom` twice
+/// (`LoadEnemyMonData`, `pokered/engine/battle/core.asm`) and then asks whether
+/// what the banner says matches what those two bytes mean.
+///
+/// # Why it walks instead of teleporting
+///
+/// Editing `wCurMap` in the save looks like the obvious shortcut and **does not
+/// work**: `LoadSAV` (`pokered/engine/menus/save.asm`) sets
+/// `BIT_NO_PREVIOUS_MAP` on `wCurMapTileset` right after restoring the main
+/// data, and `LoadMapHeader` (`home/overworld.asm`) sees that bit, clears it
+/// and *returns without loading the header* — the whole `wCurMapHeader` block
+/// lives in the save, so on a continue the game trusts it. Change the map
+/// without changing the header and the game reads the new map's blocks through
+/// the old map's `wCurMapDataPtr`; the observed result is a jump into `rst $38`
+/// or an illegal opcode within a second. So the save is edited only for the
+/// party and one event flag, and the player walks: every map header is then
+/// loaded by the game itself, exactly as in play.
+fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
+    println!("\n[5] a real wild encounter");
+
+    let save_path = rom_path.with_extension("sav");
+    for ext in ["sav", "srm", "gbsave"] {
+        let _ = std::fs::remove_file(rom_path.with_extension(ext));
+    }
+    if let Err(e) = make_a_real_save(rom_path, rom) {
+        println!("    could not get the game to write a save ({e}); skipping");
+        return 0;
+    }
+    let Ok(save) = std::fs::read(&save_path) else {
+        println!("    the game wrote no save; skipping");
+        return 0;
+    };
+    let expected = Party::sample();
+    let save = set_event_flag(expected.inject(save), 0);
+    if std::fs::write(&save_path, &save).is_err() {
+        println!("    could not write the edited save; skipping");
+        return 0;
+    }
+
+    let mut gb = Gameboy::new(rom.to_vec(), Some(rom_path.to_path_buf()));
+    // Deliberately **not** `set_active(true)`: the whole claim is that the
+    // verdict reaches someone whose trainer panel is shut.
+    gb.add_plugin(Box::new(TrainerPlugin::new(rom.to_vec())))
+        .expect("trainer plugin attaches");
+
+    let mut loaded = false;
+    for step in 0..300u32 {
+        let key = if step % 2 == 0 {
+            KeypadKey::Start
+        } else {
+            KeypadKey::A
+        };
+        press(&mut gb, key, 20);
+        if gb.peek(0xD163) == expected.count {
+            loaded = true;
+            break;
+        }
+    }
+    if !loaded {
+        eprintln!("    FAIL the game never loaded the edited save");
+        return 1;
+    }
+    // Past the continue screen and into the overworld.
+    for _ in 0..12 {
+        press(&mut gb, KeypadKey::A, 40);
+    }
+    if gb.peek(EVENT_FLAGS) & 1 == 0 {
+        eprintln!(
+            "    FAIL the edited event flag did not survive the load — \
+             wEventFlags is not where this harness thinks it is"
+        );
+        return 1;
+    }
+
+    // Bedroom -> stairs (`warp_event 7, 1` in `data/maps/objects/RedsHouse2F.asm`).
+    walk_toward(&mut gb, 1, 7, 60);
+    // Ground floor -> front door (`warp_event 2, 7`).
+    walk_toward(&mut gb, 7, 2, 80);
+    if gb.peek(0xD35E) != PALLET_TOWN {
+        eprintln!(
+            "    FAIL never got out of the house (map ${:02X})",
+            gb.peek(0xD35E)
+        );
+        return 1;
+    }
+    // The player is standing *on* the doorstep, which is the warp back inside
+    // (`warp_event 5, 5` in `data/maps/objects/PalletTown.asm`) — so step off it
+    // before heading anywhere, or the first northward press goes back indoors.
+    for _ in 0..2 {
+        hold(&mut gb, KeypadKey::Down, 24);
+    }
+    // Pallet Town's only northern opening is block x = 5 of row 0 in
+    // `maps/PalletTown.blk` (`0B` among fences), i.e. tiles x = 10..11. Get
+    // east along the bottom path *first*: heading north straight off the
+    // doorstep walks back through the door.
+    walk_toward(&mut gb, 7, 10, 80);
+    walk_toward(&mut gb, 1, 10, 160);
+    for _ in 0..10 {
+        if gb.peek(0xD35E) == ROUTE_1 {
+            break;
+        }
+        hold(&mut gb, KeypadKey::Up, 24);
+    }
+    if gb.peek(0xD35E) != ROUTE_1 {
+        eprintln!(
+            "    FAIL never reached ROUTE_1 (map ${:02X} at ({}, {}))",
+            gb.peek(0xD35E),
+            gb.peek(0xD361),
+            gb.peek(0xD362)
+        );
+        return 1;
+    }
+    println!(
+        "    walked a new game to ROUTE_1, arriving at ({}, {})",
+        gb.peek(0xD361),
+        gb.peek(0xD362)
+    );
+
+    // Nothing is in a battle yet, so there must be no verdict.
+    if encounter_of(&gb).is_some() {
+        eprintln!("    FAIL a verdict was latched in the overworld");
+        return 1;
+    }
+
+    let mut bad = 0;
+    let mut seen = 0usize;
+    let mut steps = 0u32;
+    let mut last: Option<gameboy::trainer::encounter::WildEncounter> = None;
+    let want: usize = std::env::var("TRAINER_ENCOUNTERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let budget: u32 = std::env::var("TRAINER_STEPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    // Pace up and down the grass at the southern end of Route 1 (blocks `0B`
+    // in rows 16-17 of `maps/Route1.blk`). 25/256 per step means a handful of
+    // steps per encounter.
+    // The grass at the southern end of Route 1 is blocks `0B` in rows 16-17 of
+    // `maps/Route1.blk` at block x = 5, i.e. tiles x = 10..11, y = 32..35 —
+    // which is where the connection from Pallet Town drops the player. Pacing
+    // one tile up and down keeps every step inside it.
+    const GRASS: (u8, u8) = (33, 10);
+    let mut at = (gb.peek(0xD361), gb.peek(0xD362));
+    let mut stalled = 0u32;
+    let mut nudges = 0u32;
+    while seen < want && steps < budget {
+        // Alternating Up/Down blindly drifts north — a press that only turns
+        // the character costs a step but moves nothing — so steer by the
+        // coordinate instead and stay inside the band.
+        let y = gb.peek(0xD361);
+        let key = if y < GRASS.0 || (y == GRASS.0 && steps % 2 == 1) {
+            KeypadKey::Down
+        } else {
+            KeypadKey::Up
+        };
+        hold(&mut gb, key, 24);
+        steps += 1;
+        // A walk that stops moving has to say so and recover, not spend the
+        // rest of its budget pressing a key into a menu. Anything on screen
+        // that eats direction keys is closed with B, then the position is
+        // re-anchored.
+        if (gb.peek(0xD361), gb.peek(0xD362)) == at && gb.peek(0xD057) == 0 {
+            stalled += 1;
+            if stalled >= 8 {
+                for _ in 0..4 {
+                    press(&mut gb, KeypadKey::B, 20);
+                }
+                walk_toward(&mut gb, GRASS.0, GRASS.1, 20);
+                stalled = 0;
+                nudges += 1;
+            }
+        } else {
+            stalled = 0;
+        }
+        at = (gb.peek(0xD361), gb.peek(0xD362));
+        if gb.peek(0xD057) != 1 {
+            continue;
+        }
+        // In a wild battle. Give the plugin its sampling interval to latch.
+        for _ in 0..90 {
+            gb.frame();
+            if encounter_of(&gb).is_some() {
+                break;
+            }
+        }
+        let Some(enc) = encounter_of(&gb) else {
+            eprintln!("    FAIL in a wild battle but no verdict was latched");
+            bad += 1;
+            break;
+        };
+        seen += 1;
+        bad += verify_encounter(&mut gb, &enc, steps);
+        last = Some(enc);
+        // Out of the battle: RUN is the bottom-right entry of the battle menu.
+        // Then check the verdict does not outlive the Pokémon it describes.
+        let mut ended = false;
+        for _ in 0..60 {
+            for key in [KeypadKey::Right, KeypadKey::Down, KeypadKey::A] {
+                press(&mut gb, key, 14);
+            }
+            if gb.peek(0xD057) == 0 {
+                ended = true;
+                break;
+            }
+        }
+        if !ended {
+            println!("      (could not end battle {seen}; stopping here)");
+            break;
+        }
+        // "Got away safely!" is still on screen after `wIsInBattle` clears, and
+        // a text box swallows every direction key — press through it or the
+        // walk that follows moves nothing. **B, not A**: both advance a text
+        // box, but B also closes a menu and can never *open* one, and an A
+        // pressed one frame too late in the overworld opens the START menu and
+        // wedges the walk for the rest of the run.
+        for _ in 0..6 {
+            press(&mut gb, KeypadKey::B, 30);
+        }
+        for _ in 0..60 {
+            gb.frame();
+        }
+        if encounter_of(&gb).is_some() {
+            eprintln!("      FAIL the verdict outlived the battle");
+            bad += 1;
+        }
+        // Fleeing can leave the player a tile or two out of the grass.
+        walk_toward(&mut gb, GRASS.0, GRASS.1, 30);
+    }
+
+    // Strict: a run that met fewer Pokémon than it asked for has checked less
+    // than it claims, and "some encounters agreed" is exactly the kind of
+    // quietly-degraded pass this suite has already been burned by. Say so.
+    if seen < want {
+        eprintln!(
+            "    FAIL only {seen} of {want} wild encounter(s) in {steps} steps \
+             on ROUTE_1 (the walk stalled and was nudged {nudges} time(s))"
+        );
+        return bad + 1;
+    }
+    println!(
+        "    {seen} wild encounter(s) in {steps} steps, every verdict agrees\
+         {}",
+        if nudges > 0 {
+            format!(" (walk nudged {nudges} time(s))")
+        } else {
+            String::new()
+        }
+    );
+
+    // A shiny-if-traded wild Pokémon is 1 in 8192, so no run of this harness
+    // will meet one. What *can* be checked here is that the same encounter,
+    // with the canonical shiny DV pair substituted, flips the verdict and
+    // produces the banner the captain is meant not to miss. The bytes-to-DVs
+    // half of the chain is proven by the live encounters above; this is the
+    // DVs-to-verdict half, on a real encounter struct rather than a mock.
+    if let Some(mut enc) = last {
+        enc.dvs = gen1::Dvs::from_bytes(0xEA, 0xAA); // ATKDEFDV/SPDSPCDV_SHINY
+        if !enc.would_be_shiny() {
+            eprintln!("      FAIL the canonical shiny DV pair was not recognised");
+            bad += 1;
+        }
+        println!(
+            "    the same encounter with the canonical shiny DVs $EA/$AA:\n      {}",
+            banner_text(&enc, 118).trim_end()
+        );
+    }
+    bad
+}
+
+/// The plugin's latched verdict, cloned so the borrow ends.
+fn encounter_of(gb: &Gameboy) -> Option<gameboy::trainer::encounter::WildEncounter> {
+    gb.plugin::<TrainerPlugin>()?.encounter().cloned()
+}
+
+/// Check one latched verdict against the machine it came from.
+///
+/// Three independent things have to agree: the bytes in `wEnemyMon`, what the
+/// plugin decoded, and the Gen 2 rule as re-implemented **here** from the
+/// pokecrystal constants rather than by calling the code under test.
+fn verify_encounter(
+    gb: &mut Gameboy,
+    enc: &gameboy::trainer::encounter::WildEncounter,
+    step: u32,
+) -> usize {
+    // `wEnemyMonSpecies` $CFE5, `wEnemyMonDVs` $CFF1, `wEnemyMonLevel` $CFF3.
+    let species = gb.peek(0xCFE5);
+    let (hi, lo) = (gb.peek(0xCFF1), gb.peek(0xCFF2));
+    let level = gb.peek(0xCFF3);
+    let (atk, def, spd, spc) = (hi >> 4, hi & 0xF, lo >> 4, lo & 0xF);
+    // `CheckShininess`, pokecrystal `engine/gfx/color.asm`: defense, speed and
+    // special must equal SHINY_DEF_DV = 10 and the attack DV must satisfy
+    // SHINY_ATK_MASK = %0010.
+    let want_shiny = def == 10 && spd == 10 && spc == 10 && (atk & 0b0010) != 0;
+
+    let mut bad = 0;
+    let mut check = |what: &str, got: String, want: String| {
+        if got != want {
+            eprintln!("      FAIL {what}: verdict says {got}, memory holds {want}");
+            bad += 1;
+        }
+    };
+    check("species", enc.species.to_string(), species.to_string());
+    check("level", enc.level.to_string(), level.to_string());
+    check(
+        "DVs",
+        format!(
+            "{}/{}/{}/{}",
+            enc.dvs.attack, enc.dvs.defense, enc.dvs.speed, enc.dvs.special
+        ),
+        format!("{atk}/{def}/{spd}/{spc}"),
+    );
+    check(
+        "shiny-if-traded",
+        enc.would_be_shiny().to_string(),
+        want_shiny.to_string(),
+    );
+    // The battle flag says wild, so the verdict is only offered where a Ball
+    // could actually be thrown; `wBattleType` 0 is an ordinary encounter.
+    check("wIsInBattle", "1".to_string(), gb.peek(0xD057).to_string());
+    check("wBattleType", "0".to_string(), gb.peek(0xD05A).to_string());
+
+    println!(
+        "      step {step:>3}: {} L{} wEnemyMonDVs ${hi:02X}{lo:02X} -> DV {} -> {}",
+        enc.name,
+        enc.level,
+        enc.dv_string(),
+        if enc.would_be_shiny() {
+            "WOULD BE SHINY IF TRADED TO GEN 2"
+        } else {
+            "would not be shiny if traded to Gen 2"
+        }
+    );
+    println!(
+        "               banner: {}",
+        banner_text(enc, 118).trim_end()
+    );
+    bad
+}
+
+/// Render the banner exactly as the terminal frontend would, so the log carries
+/// the thing the captain will actually see.
+fn banner_text(enc: &gameboy::trainer::encounter::WildEncounter, width: usize) -> String {
+    tv::encounter_banner(enc, width)
+        .spans
+        .iter()
+        .map(|s| s.content.to_string())
+        .collect()
+}
+
+/// Set one `wEventFlags` bit in a save the game itself wrote, and fix the
+/// checksum. See [`EVENT_FLAGS`].
+fn set_event_flag(mut save: Vec<u8>, bit: u16) -> Vec<u8> {
+    let off = |addr: u16| 0x2000 + (addr as usize - 0xA000);
+    const MAIN: u16 = 0xA5A3; // == WRAM $D2F7
+    let i = off(MAIN + (EVENT_FLAGS + bit / 8 - 0xD2F7));
+    if i < save.len() {
+        save[i] |= 1 << (bit % 8);
+    }
+    let sum: u8 = save[off(0xA598)..off(0xB523)]
+        .iter()
+        .fold(0u8, |a, b| a.wrapping_add(*b));
+    let at = off(0xB523);
+    save[at] = !sum;
+    save
+}
+
+/// Hold a direction long enough for the player to turn *and* take a step. A
+/// Gen 1 step is 16 frames, and a press that only turns the character moves
+/// nothing — which is why this is not `press`.
+fn hold(gb: &mut Gameboy, key: KeypadKey, frames: u32) {
+    gb.keydown(key);
+    for _ in 0..frames {
+        gb.frame();
+    }
+    gb.keyup(key);
+    for _ in 0..4 {
+        gb.frame();
+    }
+}
+
+/// Greedily walk toward tile `(y, x)` on the current map.
+///
+/// Returns when it arrives, when the map changes (a warp or a connection), when
+/// a battle starts, or when the budget runs out. Obstacles are handled by
+/// swapping the preferred axis whenever a step does not move the player, which
+/// is enough for the three small maps between a new game's bedroom and Route 1.
+fn walk_toward(gb: &mut Gameboy, ty: u8, tx: u8, budget: u32) -> u8 {
+    let map0 = gb.peek(0xD35E);
+    let mut stuck = 0u32;
+    for _ in 0..budget {
+        let map = gb.peek(0xD35E);
+        let (y, x) = (gb.peek(0xD361), gb.peek(0xD362));
+        if map != map0 || gb.peek(0xD057) != 0 || (y == ty && x == tx) {
+            // Let a warp finish: stepping onto a door tile starts a map change
+            // that takes a fade and several frames, and the caller wants to see
+            // where it ended up, not where it started.
+            for _ in 0..48 {
+                gb.frame();
+            }
+            return gb.peek(0xD35E);
+        }
+        let dy = ty as i16 - y as i16;
+        let dx = tx as i16 - x as i16;
+        let vert = if dy > 0 {
+            KeypadKey::Down
+        } else {
+            KeypadKey::Up
+        };
+        let horiz = if dx > 0 {
+            KeypadKey::Right
+        } else {
+            KeypadKey::Left
+        };
+        // Try the axis with the larger error first, then the other one, then
+        // probe sideways — a wall in a Gen 1 house is walked around, not into.
+        let order = if dy.abs() >= dx.abs() {
+            vec![vert, horiz, KeypadKey::Left, KeypadKey::Right, vert]
+        } else {
+            vec![horiz, vert, KeypadKey::Up, KeypadKey::Down, horiz]
+        };
+        let key = order[stuck as usize % order.len()];
+        hold(gb, key, 24);
+        stuck = if (gb.peek(0xD361), gb.peek(0xD362)) == (y, x) {
+            stuck + 1
+        } else {
+            0
+        };
+    }
+    gb.peek(0xD35E)
 }
 
 fn press(gb: &mut Gameboy, key: KeypadKey, gap: u32) {

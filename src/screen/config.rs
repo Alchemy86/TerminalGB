@@ -262,6 +262,53 @@ impl RenderPath {
     }
 }
 
+/// How loudly to announce a wild encounter's shiny-if-traded verdict.
+///
+/// The banner exists to be impossible to miss, so "on" is the default and
+/// includes the terminal bell — but a bell is exactly the sort of thing a person
+/// wants to be able to switch off, and someone watching a stream may want the
+/// row gone entirely. See [`crate::trainer::encounter`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShinyAlert {
+    /// Banner for every catchable wild encounter, plus a toast and the terminal
+    /// bell when one would be shiny in Gen 2 (default).
+    #[default]
+    On,
+    /// The same, without the bell.
+    Quiet,
+    /// Nothing. The verdict is still in the trainer panel's battle section.
+    Off,
+}
+
+impl ShinyAlert {
+    fn parse(s: &str) -> Option<ShinyAlert> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "on" | "true" | "yes" | "1" | "bell" => Some(ShinyAlert::On),
+            "quiet" | "silent" | "nobell" => Some(ShinyAlert::Quiet),
+            "off" | "false" | "no" | "0" => Some(ShinyAlert::Off),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ShinyAlert::On => "on",
+            ShinyAlert::Quiet => "quiet",
+            ShinyAlert::Off => "off",
+        }
+    }
+
+    /// Whether the encounter row is drawn at all.
+    pub fn shows_banner(self) -> bool {
+        self != ShinyAlert::Off
+    }
+
+    /// Whether a shiny verdict rings the terminal bell.
+    pub fn rings(self) -> bool {
+        self == ShinyAlert::On
+    }
+}
+
 /// The parsed terminal-frontend configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -283,6 +330,9 @@ pub struct Config {
     pub transmit_scale: TransmitScale,
     /// Which render path the game picture uses. See [`RenderPath`].
     pub render_path: RenderPath,
+    /// How loudly a wild Pokémon's shiny-if-traded verdict is announced. See
+    /// [`ShinyAlert`].
+    pub shiny_alert: ShinyAlert,
     /// Where to append NDJSON run telemetry, or `None` (the default) for off.
     /// See [`crate::telemetry`].
     pub telemetry: Option<String>,
@@ -322,6 +372,7 @@ impl Default for Config {
             cell_scale: CellScale::default(),
             transmit_scale: TransmitScale::default(),
             render_path: RenderPath::default(),
+            shiny_alert: ShinyAlert::default(),
             telemetry: None,
             screenshot_dir: None,
             video_dir: None,
@@ -477,6 +528,12 @@ impl Config {
             match RenderPath::parse(v) {
                 Some(p) => cfg.render_path = p,
                 None => warn.push(bad("render_path", v, "fast, legacy")),
+            }
+        }
+        if let Some(v) = get("shiny_alert") {
+            match ShinyAlert::parse(v) {
+                Some(a) => cfg.shiny_alert = a,
+                None => warn.push(bad("shiny_alert", v, "on, quiet, off")),
             }
         }
         if let Some(v) = get("telemetry") {

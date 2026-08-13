@@ -1325,3 +1325,106 @@ another branch; when those land, this belongs beside them.)
   per-fix convention at the top of this file and `docs/conformance-notes.md`. A check with no
   `behaviour`, no `explain` or no `hardware` citation **fails the runner's test suite** — the
   explanation is the product, so it is enforced.
+## Wild-encounter shiny verdict (`src/trainer/encounter.rs`)
+
+- **Full write-up: [`docs/trainer.md`](docs/trainer.md#the-wild-encounter-banner).** The claim is
+  strictly *"would be shiny if traded to Gen 2"* — **Gen 1 has no shiny Pokémon at all**, and
+  overclaiming would make the captain skip a real one or waste a Ball. Every banner string at
+  every terminal width carries the qualifier, asserted by
+  `the_banner_never_says_a_gen_1_pokemon_is_shiny` (renders widths 8..200 and greps).
+- **Why the answer is available at the encounter, and survives capture** (the three citations
+  that make the feature honest): wild DVs are two `BattleRandom` bytes written to
+  `wEnemyMonDVs` by `LoadEnemyMonData` (`pokered/engine/battle/core.asm`) before the battle is
+  drawn; `_AddPartyMon`'s `.copyEnemyMonData` branch (`engine/pokemon/add_mon.asm`) copies them
+  **verbatim** into the party entry on capture — nothing is re-rolled; and the Gen 2 rule
+  (`CheckShininess`, pokecrystal `engine/gfx/color.asm`) reads only DVs.
+- **A trainer battle gets no verdict, and that hides nothing**: `LoadEnemyMonData` gives every
+  trainer Pokémon the *fixed* pair `ATKDEFDV_TRAINER`/`SPDSPCDV_TRAINER` = `$98`/`$88`, which is
+  not the shiny pattern. The old man's tutorial (`wBattleType == BATTLE_TYPE_OLD_MAN`) is a real
+  wild battle with real rolled DVs but the Weedle is never added to the party, so it is excluded
+  too. `encounter::applies(is_in_battle, battle_type)` is one pure function, tested over all
+  65,536 flag pairs.
+- **Static/scripted encounters (Snorlax, the birds, Mewtwo, Voltorbs, tower ghosts) are covered
+  for free** — `InitOpponent` falls through to `InitWildBattle`. **Gift/starter/fossil/trade
+  Pokémon are not, and cannot be**: they never enter a battle, and `_AddPartyMon` rolls their
+  DVs (`; Not wild.` branch) at the instant they become yours. The party panel's `★` is the
+  retrospective answer; there is no earlier moment to warn at.
+- `wBattleType` is `$D05A`, derived by *walking* `ram/wram.asm` from `wIsInBattle` `$D057`
+  through `wPartyGainExpFlags` (1 byte) to `wCurOpponent` `$D059` — and `$D059` is
+  independently verified, which is the walk's own proof.
+- **`wIsInBattle == $FF` means the player blacked out** (`home/overworld.asm`,
+  `.allPokemonFainted`), not a trainer battle. `BattleKind::from_flag` now maps it (and every
+  value the game never writes) to `None`. **Symptom before the fix:** a battle panel — opponent,
+  level, HP, stats, moves, all stale garbage from the lost battle — displayed *in the
+  overworld*, with the same confidence as live data. `ram/wram.asm` documents **four** values
+  above the label ("lost battle, this is -1"); the reader had a catch-all `_ => Trainer` arm
+  that swallowed the sentinel. **No test ROM catches it and none can** — the cartridge was
+  entirely correct; the defect was in a *consumer* of emulated state, which is the same blind
+  spot as the render bugs. The test that catches it iterates **every** byte `3..=$FF`, not the
+  named cases. Full record: [`docs/conformance-notes.md`](docs/conformance-notes.md)
+  (2026-08-14). Standing lesson for any adapter: a catch-all arm over a documented enum is a
+  defect until the values it swallows are enumerated.
+- **Cost:** the encounter watch runs with the panel **closed** — that is the point, an encounter
+  is when nobody has a stats panel up — and costs **one `peek` of `wIsInBattle` at ~10 Hz** in
+  the overworld. The verdict is *latched* on the first valid read and held until the battle
+  ends, so it never re-reads and cannot flicker. `looks_populated` guards the window where
+  `InitWildBattle` has set the flag but `LoadEnemyMonData` has not run yet.
+- **Independent of the boot model** (checked on both, not assumed — and note `Model::Auto`
+  resolves Red/Blue to `GbMode::Classic`, so DMG is now the *default* for this cartridge):
+  `wEnemyMon` `$CFE5` is in the *fixed* WRAM bank; `wIsInBattle`/`wBattleType`/the party live in
+  `$D000-$DFFF`, whose `wrambank` is initialised to **1 in both `MemoryManagementUnit::new` and
+  `new_cgb`** and only moves on an `SVBK` write a DMG game never makes; `Game::detect` reads the
+  cartridge header, not the model; and Red/Blue has no CGB code path. Verified by running the
+  wild-encounter harness under **both `GB_MODEL=dmg` and `GB_MODEL=cgb`** — 3/3 verdicts agreed
+  each time. **But `BattleRandom` is seeded from `DIV` and the frame counter, so the particular
+  species and DVs a scripted run produces are NOT reproducible** — not across models, and not
+  across *emulation-timing* changes either: the Mooneye core-timing work (real timer, 5-cycle
+  interrupt dispatch, timed OAM DMA) moved every one of them again. Never pin a DV value in a
+  test; pin the agreement between the verdict and memory.
+- **The verdict costs the Status sidebar no row.** It rides in the trainer plugin's existing
+  `Plugin` row via `Plugin::status()` — a second place it is visible with the panel closed —
+  and is held to the same wording rule there (`the_plugin_status_line_carries_the_verdict`).
+  The Status box itself is now sized from its own line list rather than a hand-counted
+  constant: it was `13 + plugins.len()` against a twelve-line list, so with two plugins
+  attached the second one's row was clipped and a plugin was *active and invisible*, which
+  `docs/plugins.md` §4 promises cannot happen (its own test was failing on `main`). Rows keep
+  being added to that panel — `Audio` most recently — so
+  `every_status_row_survives_an_audio_row_and_a_live_encounter` pins the worst case: two
+  plugins **and** a live encounter, every row still present at three window sizes. **Adding a
+  Status row must never silently cost a plugin its row again.**
+- The banner gets **its own terminal row** (top row in fullscreen, under the header otherwise)
+  and is in `ui_signature`, because a row appearing moves the picture — all the
+  `docs/terminal-render.md` rules apply.
+
+### Driving a real wild encounter headlessly — two traps
+
+Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
+
+1. **You cannot teleport the player by editing `wCurMap` in the save.** `LoadSAV`
+   (`pokered/engine/menus/save.asm`) sets `BIT_NO_PREVIOUS_MAP` (bit 7) on `wCurMapTileset`
+   right after restoring the main data, and `LoadMapHeader` (`home/overworld.asm`) sees that
+   bit, clears it and **returns without loading the header** — the whole `wCurMapHeader` block
+   lives in `sMainData`, so a continue trusts it. Change the map without the header and the game
+   reads the new map's blocks through the old map's `wCurMapDataPtr`: observed as a jump to
+   `rst $38` or an illegal opcode within a second. Clearing the bit in the save does not help —
+   `LoadSAV` sets it *after* the copy. **Walk instead**; every header is then loaded by the game.
+2. **Oak stops a new game at the north exit of Pallet Town.** `PalletTownDefaultScript`
+   (`scripts/PalletTown.asm`) opens `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`, so
+   setting that one bit skips the whole introduction, starter choice and rival battle.
+   `wEventFlags` is **`$D747`**, derived by walking `ram/wram.asm` backwards from the verified
+   `wPlayTimeHours` `$DA41` — the walk lands exactly on `wGrassRate` `$D887` (the union's first
+   member, an independent check) and `wEventFlags` is the 320-byte `flag_array NUM_EVENTS`
+   before it (NUM_EVENTS = 2560, counting `const`/`const_skip`/`const_next`).
+   `EVENT_FOLLOWED_OAK_INTO_LAB` is the first `const` after `const_def`: byte 0, bit 0.
+- Route: bedroom `(1,7)` stairs → 1F `(7,2)` door → step **off** the Pallet Town doorstep
+  (standing on it, pressing Up walks back inside) → east along `y=7` → north at tile `x=10`
+  (block `0B`, the only gap in row 0 of `maps/PalletTown.blk`) → Route 1, arriving at `(34,10)`
+  in grass. Pace **by coordinate**, not by alternating Up/Down: a press that only turns the
+  character costs a step and moves nothing, so blind alternation drifts north out of the grass.
+- After fleeing a battle the "Got away safely!" box is still up and **swallows every direction
+  key** — press through it before walking, or the next hundred steps move nothing. Use **B, not
+  A**: both advance a text box, but B also closes a menu and can never open one, and an A one
+  frame after the box closes opens the START menu, which then eats every direction key for the
+  rest of the run. That failure is invisible unless the check is strict about how many
+  encounters it wanted — **it is** (`seen < want` is a FAIL), and the pacing loop nudges itself
+  free after eight motionless steps and reports how often it had to.
