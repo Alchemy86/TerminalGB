@@ -2,9 +2,29 @@ extern crate gameboy;
 
 use gameboy::gameboy::{load_rom, Gameboy, RenderMode::Desktop};
 
+/// Desktop (OpenGL window) frontend.
+///
+/// This is the frontend that can stream to **stdout**, because nothing else
+/// here writes there:
+///
+/// ```text
+/// desktop game.gb --video-out - | ffmpeg -f rawvideo -pix_fmt rgba \
+///     -s 160x144 -framerate 59.7275 -i - -pix_fmt yuv420p out.mp4
+/// ```
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("usage: desktop <path-to-rom.gb>");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let rest = match gameboy::video::apply_cli_flags(args) {
+        Ok(rest) => rest,
+        Err(e) => {
+            eprintln!("desktop: {e}");
+            std::process::exit(2);
+        }
+    };
+
+    let path = rest.first().cloned().unwrap_or_else(|| {
+        eprintln!("usage: desktop <path-to-rom.gb> [--video-out - ...]");
+        eprintln!("video-out (see docs/video-out.md):");
+        eprintln!("{}", gameboy::video::cli_usage());
         std::process::exit(2);
     });
 

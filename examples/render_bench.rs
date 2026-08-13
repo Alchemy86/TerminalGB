@@ -336,6 +336,7 @@ fn run_case(
             frames_dropped: 0,
             tx_bytes: bytes,
             audio: None::<AudioSample>,
+            video: None,
         };
         tele.frame(&ctx, &sample);
     }

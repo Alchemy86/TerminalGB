@@ -34,9 +34,10 @@ use crate::input::KeypadKey;
 use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
-use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry};
+use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
 use crate::upscale::Upscaler;
+use crate::video::{self, Source as VideoSource, VideoOut};
 
 use std::env;
 use std::error::Error;
@@ -208,6 +209,106 @@ fn state_path(title: &str, slot: u32) -> PathBuf {
     base.join(format!("{safe}.slot{slot}.gbss"))
 }
 
+/// Where recordings land when nothing is configured: the `video_dir` config
+/// key, else `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`.
+fn video_dir(config: &Config) -> PathBuf {
+    if let Some(d) = config.video_dir.as_ref() {
+        return PathBuf::from(expand_home(d));
+    }
+    env::var_os("XDG_VIDEOS_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join("Videos")))
+        .unwrap_or_else(env::temp_dir)
+        .join("gameboy")
+}
+
+/// Where screenshots land: the `screenshot_dir` config key, else
+/// `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`, else a temp dir.
+/// Somewhere a person will actually look — and the toast names the full path
+/// anyway, because a screenshot that lands somewhere unknown is useless.
+fn screenshot_dir(config: &Config) -> PathBuf {
+    if let Some(d) = config.screenshot_dir.as_ref() {
+        return PathBuf::from(expand_home(d));
+    }
+    env::var_os("XDG_PICTURES_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")))
+        .unwrap_or_else(env::temp_dir)
+        .join("gameboy")
+}
+
+/// `~/x` → `$HOME/x`. The config file is hand-written, so a tilde is expected.
+fn expand_home(s: &str) -> String {
+    match s.strip_prefix("~/") {
+        Some(rest) => match env::var_os("HOME") {
+            Some(h) => format!("{}/{rest}", h.to_string_lossy()),
+            None => s.to_string(),
+        },
+        None => s.to_string(),
+    }
+}
+
+/// Cartridge title reduced to something safe in a filename. One definition,
+/// in [`crate::video`], shared with the stream naming.
+fn safe_title(title: &str) -> String {
+    video::file_safe_title(title)
+}
+
+/// `YYYYMMDD-HHMMSS` for right now, UTC — see [`utc_stamp`].
+fn now_stamp() -> String {
+    utc_stamp(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    )
+}
+
+/// `YYYYMMDD-HHMMSS` in **UTC**, from a Unix timestamp.
+///
+/// UTC because turning it into local time needs the tz database, which means
+/// `libc::localtime_r` and a platform story; a screenshot filename only has to
+/// sort and be unique, and the suffix in [`unique_path`] guarantees the second.
+/// Civil-from-days is Howard Hinnant's algorithm (public domain).
+fn utc_stamp(unix_secs: u64) -> String {
+    let days = (unix_secs / 86_400) as i64;
+    let secs = unix_secs % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}{m:02}{d:02}-{:02}{:02}{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    )
+}
+
+/// The first free name of the form `stem.png`, `stem-2.png`, … so pressing the
+/// key twice in the same second never overwrites the first shot.
+fn unique_path(dir: &Path, stem: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.png"));
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..1000 {
+        let p = dir.join(format!("{stem}-{n}.png"));
+        if !p.exists() {
+            return p;
+        }
+    }
+    first
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -232,6 +333,12 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
 
     let (config, warnings) = Config::load_reporting();
     let recent = Recent::load();
+
+    // Video-out is opened *here*, before the terminal is touched, for two
+    // reasons: opening a FIFO blocks until a reader attaches (which inside the
+    // alternate screen looks exactly like a hang), and its notices belong in
+    // the scrollback with the config ones.
+    let (video, video_template, warnings) = open_video(&config, warnings);
 
     // Say it before the alternate screen swallows it: a config key that does
     // not apply must never fail silently. These stay in the scrollback after
@@ -262,7 +369,7 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::with_warnings(config, recent, warnings);
+    let mut app = App::with_warnings(config, recent, warnings, video, video_template);
     if let Some(path) = initial_rom {
         app.start_game(&path); // a load error surfaces as a picker message
     }
@@ -279,6 +386,103 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     res
+}
+
+/// Open the configured raw video stream, if any, returning it plus every
+/// notice worth showing the user.
+///
+/// Called from [`run`] **before** the terminal is put into the alternate
+/// screen, because two things here are visible-side-effect-shaped: opening a
+/// FIFO blocks until a reader attaches, and the `ffmpeg` command that consumes
+/// the stream is the single most useful thing to leave in the scrollback.
+///
+/// Stdout is refused for the same reason telemetry refuses it, only harder:
+/// `ratatui` writes the whole UI to stdout, so a raw frame stream there would
+/// destroy both. See `examples/video_out.rs` for the stdout-pipe producer.
+fn open_video(
+    config: &Config,
+    mut warnings: Vec<String>,
+) -> (VideoOut, Option<video::VideoSpec>, Vec<String>) {
+    let (spec, video_warnings) = video::VideoSpec::resolve(&config.video);
+    warnings.extend(video_warnings);
+    // A destination that names the game (`%t`, or a directory) cannot be
+    // opened before a ROM is loaded — it is opened when the game starts.
+    let template = spec
+        .clone()
+        .filter(|s| s.dest != video::Destination::Stdout);
+    let defer = matches!(&spec, Some(s) if needs_title(&s.dest));
+    if defer {
+        return (VideoOut::disabled(), template, warnings);
+    }
+    let video = match spec {
+        Some(s) if s.dest == video::Destination::Stdout => {
+            warnings.push(
+                "video: the terminal UI owns stdout — stream to a file or a FIFO \
+                 instead (mkfifo /tmp/gb.raw; video_out = \"/tmp/gb.raw\"), or use \
+                 `cargo run --release --example video_out` to pipe from a headless run"
+                    .to_string(),
+            );
+            VideoOut::disabled()
+        }
+        Some(mut s) => {
+            // `source = display` with no explicit size: fix the geometry from
+            // the configured upscaler now, so the size announced to the
+            // consumer is the truth from the first byte. Cycling the upscaler
+            // mid-stream is then letterboxed into it rather than breaking a
+            // running capture (see `crate::video`).
+            if s.source == VideoSource::Display && s.size.is_none() {
+                let up = Upscaler::new(config.upscale, config.upscale_factor);
+                let (w, h) = up.output_size(160, 144);
+                s.size = Some((w as u32, h as u32));
+            }
+            if let video::Destination::Path(p) = &s.dest {
+                if is_fifo(p) {
+                    eprintln!(
+                        "gameboy: video: waiting for a reader on {} — start the \
+                         consumer first, e.g.\n  {}",
+                        p.display(),
+                        s.ffmpeg_hint(None)
+                    );
+                }
+            }
+            let (v, err) = VideoOut::open(s);
+            if let Some(e) = err {
+                warnings.push(e);
+            }
+            if v.is_enabled() {
+                warnings.push(v.describe());
+            }
+            v
+        }
+        None => VideoOut::disabled(),
+    };
+    (video, template, warnings)
+}
+
+/// Does this destination need the cartridge title before it can be opened?
+fn needs_title(dest: &video::Destination) -> bool {
+    match dest {
+        video::Destination::Stdout => false,
+        video::Destination::Path(p) => {
+            let s = p.to_string_lossy();
+            s.contains("%t") || s.contains("%s") || s.ends_with('/') || p.is_dir()
+        }
+    }
+}
+
+/// Is this path a named pipe? Opening one for writing blocks until a reader
+/// attaches, which deserves a word of warning rather than a silent hang.
+#[cfg(unix)]
+fn is_fifo(p: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::metadata(p)
+        .map(|m| m.file_type().is_fifo())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_fifo(_p: &Path) -> bool {
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -448,16 +652,53 @@ struct App {
     ui_sig: Option<(u8, bool, bool, bool)>,
     /// Machine-readable run telemetry; disabled (and free) unless configured.
     telemetry: Telemetry,
+    /// Raw video-out; disabled (and free) unless configured. Driven from
+    /// [`App::step_frame`] — **emulated** frames, not displayed ones, because
+    /// display frames are deliberately dropped on a large window and a video
+    /// stream may not be.
+    video: VideoOut,
+    /// Palette/upscale stages owned by the video stream, so `video_source =
+    /// display` carries the on-screen look without disturbing the terminal's
+    /// own buffers (whose upscale factor is the *transmission* factor, which
+    /// is a different thing).
+    video_prep: FramePrep,
+    video_upscaler: Upscaler,
+    /// The configured stream, kept unopened so `v` can arm and disarm it at
+    /// any time. `None` when nothing was configured — `v` then records to a
+    /// file named after the game (see [`App::start_video`]).
+    video_template: Option<video::VideoSpec>,
+    /// Should the stream come back up when a game is (re)loaded? Starts true
+    /// when a destination was configured, and then follows the user's last
+    /// explicit `v` decision.
+    video_autostart: bool,
+    /// Is the live stream's destination named after the game? If so, loading a
+    /// different ROM re-opens it under the new name; a plain file or FIFO the
+    /// user chose keeps running across ROM switches (its consumer is attached
+    /// to *that* path).
+    video_named: bool,
     /// Complaints from config parsing, shown once so a mistyped key cannot
     /// fail silently.
     config_warnings: Vec<String>,
 }
 
 impl App {
-    fn with_warnings(config: Config, recent: Recent, warnings: Vec<String>) -> App {
+    fn with_warnings(
+        config: Config,
+        recent: Recent,
+        warnings: Vec<String>,
+        video: VideoOut,
+        video_template: Option<video::VideoSpec>,
+    ) -> App {
         // Prefer the sharpest protocol the terminal advertises (build_picker),
         // then let an explicit config `protocol` override it.
-        App::build(config, recent, warnings, build_picker())
+        App::build(
+            config,
+            recent,
+            warnings,
+            build_picker(),
+            video,
+            video_template,
+        )
     }
 
     /// The rest of construction, with the [`Picker`] already chosen. Split out
@@ -468,6 +709,8 @@ impl App {
         recent: Recent,
         warnings: Vec<String>,
         picker: Picker,
+        video: VideoOut,
+        video_template: Option<video::VideoSpec>,
     ) -> App {
         let mut picker = picker;
         // HiDPI correction: on a display scaled by S, a pixel-addressed protocol
@@ -501,6 +744,7 @@ impl App {
         let palette = config.palette;
         let upscaler = Upscaler::new(config.upscale, config.upscale_factor);
         let config_factor = upscaler.factor();
+        let config_algo = config.upscale;
 
         // Telemetry: `$GB_TELEMETRY` wins over the config key. Writing to
         // stdout from inside the alternate screen would corrupt the display, so
@@ -558,6 +802,12 @@ impl App {
             stats_rect: None,
             ui_sig: None,
             telemetry,
+            video,
+            video_prep: FramePrep::new(),
+            video_upscaler: Upscaler::new(config_algo, config_factor),
+            video_autostart: video_template.is_some(),
+            video_named: false,
+            video_template,
             config_warnings: warnings,
         };
         app.rescan();
@@ -646,6 +896,16 @@ impl App {
                 self.overlay = Overlay::None;
                 self.fullscreen = false;
                 self.message = None;
+                // A stream named after the game it carries must restart under
+                // the new name rather than appending a second game to the
+                // first one's file. A user-chosen path is left alone.
+                if self.video.is_enabled() && self.video_named {
+                    self.video.flush();
+                    self.video = VideoOut::disabled();
+                }
+                if self.video_autostart {
+                    self.start_video();
+                }
                 // Config problems follow you into the game — silently ignoring
                 // a key the user set is the bug being fixed here.
                 if let Some(w) = self.config_warnings.first().cloned() {
@@ -738,6 +998,11 @@ impl App {
                 if self.release_expired() {
                     dirty = true;
                 }
+                // 2b. Hold the video stream's wall-clock rate even when no
+                //     emulated frame was produced (paused, modal overlay): a
+                //     consumer that stops receiving bytes stalls, and a
+                //     recording across a pause would come out short.
+                self.video_tick(false);
             }
 
             // 3. Draw when something changed *and* the display is due. On a
@@ -791,6 +1056,7 @@ impl App {
             }
         }
         self.telemetry.flush();
+        self.video.flush();
         self.recent.save();
         Ok(())
     }
@@ -815,6 +1081,256 @@ impl App {
                 s.disp_count = 0;
                 s.emu_count = 0;
                 s.fps_mark = Instant::now();
+            }
+        }
+        // Feed the video stream from the **emulated** frame, not the displayed
+        // one: display frames are deliberately dropped on a large window
+        // (see `crate::termimage`) and a video stream may not be.
+        self.video_tick(true);
+    }
+
+    /// Start or stop the raw video stream while the game runs (`v`).
+    ///
+    /// The captain's rule: *never be unsure whether you are live*. So the
+    /// Status panel carries a `Video` row, the toggle raises a toast, and the
+    /// full `ffmpeg` command lands in the `?` overlay's notices.
+    ///
+    /// With a `video_out` destination configured this simply arms and disarms
+    /// it. With none, it records to a file named after the game in
+    /// [`video_dir`] — that is what "start streaming when I decide to" means
+    /// when no consumer is waiting on a FIFO.
+    fn toggle_video(&mut self) {
+        if self.video.is_enabled() {
+            let s = self.video.stats();
+            self.video.flush();
+            self.video = VideoOut::disabled();
+            self.video_autostart = false;
+            self.set_toast(format!(
+                "Video stream stopped — {} frames, {:.1} MB",
+                s.frames,
+                s.bytes as f64 / 1_048_576.0
+            ));
+            return;
+        }
+        self.start_video();
+        self.video_autostart = self.video.is_enabled();
+    }
+
+    fn start_video(&mut self) {
+        let Some(s) = self.session.as_ref() else {
+            self.set_toast("Video: load a game first".to_string());
+            return;
+        };
+        let title = s.entry.title.clone();
+        let (mut spec, named) = match self.video_template.clone() {
+            Some(t) => {
+                let named = needs_title(&t.dest);
+                (t, named)
+            }
+            // Nothing configured: record to a file named after the game.
+            None => (
+                video::VideoSpec::new(video::Destination::Path(video_dir(&self.config))),
+                true,
+            ),
+        };
+        // `source = display` fixes its geometry from the upscaler in force
+        // right now; later changes are letterboxed into it (see `crate::video`).
+        if spec.source == VideoSource::Display && spec.size.is_none() {
+            let (w, h) = Upscaler::new(self.upscaler.algorithm(), self.upscale_factor)
+                .output_size(160, 144);
+            spec.size = Some((w as u32, h as u32));
+        }
+        // `as_dir`: the fallback destination is the recordings *directory*,
+        // which may not exist yet, so it cannot be detected by `is_dir`.
+        let as_dir = self.video_template.is_none();
+        spec.dest = match self.resolve_destination(&spec, &title, as_dir) {
+            Ok(d) => d,
+            Err(e) => {
+                self.set_toast(format!("Video failed: {e}"));
+                return;
+            }
+        };
+        let short = match &spec.dest {
+            video::Destination::Stdout => "stdout".to_string(),
+            video::Destination::Path(p) => p.display().to_string(),
+        };
+        let (v, err) = VideoOut::open(spec);
+        match err {
+            Some(e) => {
+                // The V4L2 refusal is several lines of instructions; the toast
+                // gets the headline and the `?` overlay gets all of it.
+                self.set_toast(format!(
+                    "Video failed: {}",
+                    e.lines().next().unwrap_or("see ? for details")
+                ));
+                self.config_warnings.push(e);
+                return;
+            }
+            None => {
+                self.set_toast(format!("● LIVE → {short}"));
+                self.config_warnings.push(v.describe());
+                self.video = v;
+                self.video_named = named;
+            }
+        }
+        // The camera the user says they are feeding must name the game — see
+        // `video::v4l2::check_label` for why this can only be checked, not
+        // fixed.
+        if let Some(dev) = self.config.video_device.clone() {
+            if let Some(w) = video::v4l2::check_label(Path::new(&dev), &title) {
+                self.set_toast(
+                    "⚠ camera is labelled for a different game — see ?".to_string(),
+                );
+                self.config_warnings.push(w);
+            }
+        }
+    }
+
+    /// Turn a configured destination into the concrete one for *this game*:
+    /// `%t`/`%s` placeholders expanded, and a directory turned into a file
+    /// named after the cartridge. A FIFO or plain file is left exactly as the
+    /// user wrote it.
+    fn resolve_destination(
+        &self,
+        spec: &video::VideoSpec,
+        title: &str,
+        as_dir: bool,
+    ) -> Result<video::Destination, String> {
+        let video::Destination::Path(p) = &spec.dest else {
+            return Ok(video::Destination::Stdout);
+        };
+        let stamp = now_stamp();
+        let expanded = PathBuf::from(video::expand_placeholders(
+            &p.to_string_lossy(),
+            title,
+            &stamp,
+        ));
+        let ends_in_sep = p.to_string_lossy().ends_with('/');
+        if !as_dir && !ends_in_sep && !expanded.is_dir() {
+            return Ok(video::Destination::Path(expanded));
+        }
+        // A directory: name the recording after the game, and carry the two
+        // things `rawvideo` cannot (geometry, pixel format) in the filename.
+        std::fs::create_dir_all(&expanded)
+            .map_err(|e| format!("{}: {e}", expanded.display()))?;
+        let (w, h) = spec.size.unwrap_or((video::SRC_W, video::SRC_H));
+        let name = video::recording_name(title, &stamp, w, h, spec.format);
+        Ok(video::Destination::Path(expanded.join(name)))
+    }
+
+    /// The Status panel's video row: the answer to "am I live?".
+    fn video_status(&self) -> String {
+        if !self.video.is_enabled() {
+            return "off".to_string();
+        }
+        let s = self.video.stats();
+        format!("● LIVE {:.0}M", s.bytes as f64 / 1_048_576.0)
+    }
+
+    /// Write the current frame to a PNG and say where it went.
+    ///
+    /// `raw` selects the **160×144 framebuffer**; the default (`c`) is **what
+    /// the player is looking at** — palette-mapped and run through the
+    /// upscaler, because that is what "screenshot" means to a person, and
+    /// because the four upscalers and three palettes are precisely the thing
+    /// worth capturing and comparing.
+    ///
+    /// The upscale factor used is the one *selected* (`}`), not the
+    /// transmission factor: with `transmit_scale = auto` a `nearest` upscale is
+    /// left to the terminal (see [`App::transmit_factor`]), which is right for
+    /// the wire and wrong for a file.
+    ///
+    /// Same frame source as the video stream ([`App::video_tick`]) — one path
+    /// writes a file, the other streams.
+    fn screenshot(&mut self, raw: bool) {
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        let title = safe_title(&s.entry.title);
+        let (pixels, w, h) = if raw {
+            (s.gb.image().to_vec(), 160usize, 144usize)
+        } else {
+            // Fresh buffers: a screenshot is a rare, human-paced event, and
+            // borrowing the render path's would tie it to the transmission
+            // factor. Order is palette then upscale — the LCD grid must not be
+            // quantised away (see `screen::frame`).
+            let mut prep = FramePrep::new();
+            let mapped = prep.map(s.gb.image(), self.palette).to_vec();
+            let mut up = Upscaler::new(self.upscaler.algorithm(), self.upscale_factor);
+            let (w, h) = up.output_size(160, 144);
+            (up.apply(&mapped, 160, 144).to_vec(), w, h)
+        };
+        let look = if raw {
+            "raw".to_string()
+        } else {
+            format!("{} {}", self.palette.name(), self.upscale_label())
+        };
+
+        let dir = screenshot_dir(&self.config);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.set_toast(format!("Screenshot failed: {} ({e})", dir.display()));
+            return;
+        }
+        let path = unique_path(&dir, &format!("{title}-{}", now_stamp()));
+
+        // Reuse the `image` crate the upscale gallery and the legacy render
+        // path already use rather than adding an encoder. (`termimage`'s PNG
+        // writer is deliberately *uncompressed* — right for a 60 Hz wire,
+        // wrong for a file someone keeps.)
+        let ok = image::RgbaImage::from_raw(w as u32, h as u32, pixels)
+            .ok_or_else(|| "frame buffer does not match its dimensions".to_string())
+            .and_then(|img| img.save(&path).map_err(|e| e.to_string()));
+        match ok {
+            Ok(()) => {
+                self.set_toast(format!("Saved {} ({w}x{h} {look})", path.display()))
+            }
+            Err(e) => self.set_toast(format!("Screenshot failed: {e}")),
+        }
+    }
+
+    /// Feed the raw video stream. `fresh` means an emulated frame was just
+    /// produced; `false` is the idle tick that holds the stream's wall-clock
+    /// rate while the game is paused or sitting under a modal overlay.
+    ///
+    /// Costs one `Option` test when video-out is off, which is the default —
+    /// the clock is not even read.
+    fn video_tick(&mut self, fresh: bool) {
+        if !self.video.is_enabled() {
+            return;
+        }
+        let now = Instant::now();
+        if !fresh {
+            self.video.idle(now);
+            return;
+        }
+        let palette = self.palette;
+        let source = self.video.spec().source;
+        if source == VideoSource::Display {
+            // Follow the live look: `[` (palette), `]`/`}` (upscaler) change
+            // what the player sees, so they change what the stream carries.
+            // A mid-stream size change is letterboxed into the stream's fixed
+            // geometry rather than breaking the consumer — see `crate::video`.
+            let algo = self.upscaler.algorithm();
+            if self.video_upscaler.algorithm() != algo {
+                self.video_upscaler.set_algorithm(algo);
+            }
+            if self.video_upscaler.factor() != self.upscale_factor {
+                self.video_upscaler.set_factor(self.upscale_factor);
+            }
+        }
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let raw = s.gb.image();
+        match source {
+            VideoSource::Native => {
+                self.video.frame(raw, video::SRC_W, video::SRC_H, now);
+            }
+            VideoSource::Display => {
+                let mapped = self.video_prep.map(raw, palette);
+                let (w, h) = self.video_upscaler.output_size(160, 144);
+                let scaled = self.video_upscaler.apply(mapped, 160, 144);
+                self.video.frame(scaled, w as u32, h as u32, now);
             }
         }
     }
@@ -884,6 +1400,16 @@ impl App {
             frames_dropped: s.frames_dropped,
             tx_bytes: s.tx_bytes,
             audio: s.audio_sample(),
+            video: self.video.is_enabled().then(|| {
+                let v = self.video.stats();
+                VideoSample {
+                    frames: v.frames,
+                    duplicated: v.duplicated,
+                    dropped: v.dropped,
+                    bytes: v.bytes,
+                    ms: v.last_ms,
+                }
+            }),
         };
         self.telemetry.frame(&ctx, &sample);
     }
@@ -1080,6 +1606,24 @@ impl App {
                         self.upscaler.algorithm().next_factor(self.upscale_factor);
                     let label = self.upscale_label();
                     self.set_toast(format!("Upscale {label}"));
+                    return;
+                }
+                // Video stream on/off. `v` for video — free, and the one key
+                // nobody has to look up.
+                KeyCode::Char('v') => {
+                    self.toggle_video();
+                    return;
+                }
+                // Screenshot: `c` captures what you see (palette + upscaler),
+                // `C` the raw 160x144 framebuffer. F2 is the emulator-world
+                // convention and costs one arm. Chosen over `s`/`p`/`x`: those
+                // are game buttons or already bound.
+                KeyCode::Char('c') | KeyCode::F(2) => {
+                    self.screenshot(false);
+                    return;
+                }
+                KeyCode::Char('C') => {
+                    self.screenshot(true);
                     return;
                 }
                 // Stats overlay: off by default, does not pause the game.
@@ -1763,7 +2307,7 @@ impl App {
     fn render_sidebar(&mut self, f: &mut Frame<'_>, area: Rect) {
         let split = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(12), Constraint::Min(0)])
+            .constraints([Constraint::Length(13), Constraint::Min(0)])
             .split(area);
 
         // Status. `Sent` is the size actually transmitted to the terminal each
@@ -1795,6 +2339,8 @@ impl App {
             kv("Upscale", &self.upscale_label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
             kv("Slot", &self.slot.to_string()),
+            // "Am I live?" must never be a guess — see `App::toggle_video`.
+            kv("Video", &self.video_status()),
             kv(
                 "FPS",
                 &if paused {
@@ -1826,6 +2372,8 @@ impl App {
             Line::from("L load ROM  f full"),
             Line::from("[ palette   ? help"),
             Line::from("] upscale   } factor"),
+            Line::from("c shot      C raw shot"),
+            Line::from("v video out"),
         ];
         f.render_widget(
             Paragraph::new(controls)
@@ -1857,7 +2405,14 @@ impl App {
             Line::from("  R         reset       L       load ROM"),
             Line::from("  f         fullscreen  [       palette"),
             Line::from("  ]         upscaler    }       upscale factor"),
+            Line::from("  c         screenshot  C       screenshot (raw 160x144)"),
+            Line::from("  v         video stream on/off (see docs/video-out.md)"),
             Line::from("  ?         this help   q       quit"),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("screenshots -> {}", screenshot_dir(&self.config).display()),
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "press any key to close",
@@ -2578,6 +3133,20 @@ mod tests {
     /// acid2 ROM. The ROM is committed, so a missing one is a hard failure
     /// rather than a silently-skipped test.
     fn test_app(protocol: ProtocolType, path: RenderPath) -> Option<App> {
+        test_app_video(protocol, path, video_for_test())
+    }
+
+    /// Video-out is off by default, in tests as in production.
+    fn video_for_test() -> VideoOut {
+        VideoOut::disabled()
+    }
+
+    /// [`test_app`] with a raw video stream attached.
+    fn test_app_video(
+        protocol: ProtocolType,
+        path: RenderPath,
+        video: VideoOut,
+    ) -> Option<App> {
         let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb")
             .expect("vendored dmg-acid2 ROM present");
         let mut picker = Picker::from_fontsize((8, 16));
@@ -2587,7 +3156,8 @@ mod tests {
             palette: Palette::Green,
             ..Config::default()
         };
-        let mut app = App::build(config, Recent::default(), Vec::new(), picker);
+        let mut app =
+            App::build(config, Recent::default(), Vec::new(), picker, video, None);
         // A private copy per call: tests run in parallel, the MBC writes a
         // `.gbsave` next to the ROM, and a shared path means one test can be
         // reading a file another is truncating.
@@ -2719,6 +3289,220 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- screenshots ---------------------------------------------------
+
+    #[test]
+    fn utc_stamp_is_a_sortable_calendar_time() {
+        assert_eq!(utc_stamp(0), "19700101-000000");
+        // `date -u -d '2026-08-13 12:34:56' +%s`
+        assert_eq!(utc_stamp(1_786_624_496), "20260813-123456");
+        // A leap day, and the day after (the civil-from-days edge case).
+        assert_eq!(utc_stamp(1_709_164_800), "20240229-000000");
+        assert_eq!(utc_stamp(1_709_251_200), "20240301-000000");
+    }
+
+    #[test]
+    fn safe_titles_never_escape_a_filename() {
+        assert_eq!(safe_title("SUPER MARIO"), "SUPER_MARIO");
+        assert_eq!(safe_title("../../etc/passwd"), "etc_passwd");
+        assert_eq!(safe_title(""), "rom");
+        assert_eq!(safe_title("///"), "rom");
+    }
+
+    #[test]
+    fn repeated_screenshots_never_overwrite() {
+        let dir = std::env::temp_dir().join(format!(
+            "gameboy-shot-test/{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = unique_path(&dir, "GAME-20260813-123456");
+        std::fs::write(&a, b"x").unwrap();
+        let b = unique_path(&dir, "GAME-20260813-123456");
+        assert_ne!(a, b);
+        assert!(b.file_name().unwrap().to_string_lossy().ends_with("-2.png"));
+        std::fs::write(&b, b"x").unwrap();
+        let c = unique_path(&dir, "GAME-20260813-123456");
+        assert!(c.file_name().unwrap().to_string_lossy().ends_with("-3.png"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole feature, end to end: press the key, a real PNG appears, at the
+    /// size the *selected* upscaler produces, and the toast names the file.
+    #[test]
+    fn the_screenshot_key_writes_a_real_png_and_says_where() {
+        let dir = std::env::temp_dir()
+            .join(format!("gameboy-shot-test/{}-e2e", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.config.screenshot_dir = Some(dir.to_string_lossy().into_owned());
+        app.upscaler
+            .set_algorithm(crate::upscale::Algorithm::Scale2x);
+        app.upscale_factor = 2;
+        for _ in 0..10 {
+            app.step_frame();
+        }
+
+        app.screenshot(false);
+        let toast = app
+            .toast
+            .as_ref()
+            .map(|(t, _)| t.clone())
+            .unwrap_or_default();
+        assert!(toast.starts_with("Saved "), "{toast}");
+        assert!(
+            toast.contains("320x288"),
+            "displayed shot is upscaled: {toast}"
+        );
+        let shots: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        assert_eq!(shots.len(), 1, "{shots:?}");
+        assert!(toast.contains(&shots[0].to_string_lossy().into_owned()));
+        let png = std::fs::read(&shots[0]).unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "must be a real PNG");
+        // IHDR carries the dimensions: bytes 16..24 are width, height.
+        assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 320);
+        assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 288);
+
+        // `C` captures the raw framebuffer instead.
+        app.screenshot(true);
+        let toast = app
+            .toast
+            .as_ref()
+            .map(|(t, _)| t.clone())
+            .unwrap_or_default();
+        assert!(toast.contains("160x144 raw"), "{toast}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- raw video-out -------------------------------------------------
+
+    /// Video-out must cost nothing — and produce nothing — unless configured.
+    #[test]
+    fn video_out_is_off_by_default() {
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        assert!(!app.video.is_enabled());
+        for _ in 0..10 {
+            app.step_frame();
+        }
+        assert_eq!(app.video.stats().frames, 0);
+    }
+
+    /// The stream is driven by **emulated** frames, not displayed ones. This
+    /// is the whole reason it is fed from `step_frame`: the terminal drops
+    /// display frames on a large window (deliberately — see `crate::termimage`)
+    /// and a video capture must not lose those frames with it.
+    #[test]
+    fn the_video_stream_is_fed_by_emulated_frames_not_displayed_ones() {
+        let spec = video::VideoSpec {
+            pace: video::Pace::Emulated,
+            ..video::VideoSpec::new(video::Destination::Stdout)
+        };
+        let Some(mut app) = test_app_video(
+            ProtocolType::Kitty,
+            RenderPath::Fast,
+            VideoOut::in_memory(spec),
+        ) else {
+            return;
+        };
+        // 30 emulated frames, not one draw.
+        for _ in 0..30 {
+            app.step_frame();
+        }
+        assert_eq!(app.video.stats().frames, 30);
+        assert_eq!(
+            app.video.captured().len(),
+            30 * 160 * 144 * 4,
+            "native source is the raw framebuffer, RGBA"
+        );
+    }
+
+    /// The `v` key must arm and disarm the stream mid-game, name the file
+    /// after the cartridge, and leave no doubt about whether it is live.
+    #[test]
+    fn the_v_key_toggles_the_stream_and_names_it_after_the_game() {
+        let dir = std::env::temp_dir()
+            .join(format!("gameboy-vid-test/{}-toggle", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.config.video_dir = Some(dir.to_string_lossy().into_owned());
+        assert_eq!(app.video_status(), "off");
+
+        // On.
+        app.toggle_video();
+        assert!(app.video.is_enabled(), "toast: {:?}", app.toast);
+        let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
+        assert!(toast.starts_with("● LIVE → "), "{toast}");
+        assert!(app.video_status().starts_with("● LIVE"));
+
+        for _ in 0..5 {
+            app.step_frame();
+        }
+
+        // Off.
+        app.toggle_video();
+        assert!(!app.video.is_enabled());
+        assert_eq!(app.video_status(), "off");
+        let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
+        assert!(toast.contains("stopped"), "{toast}");
+
+        // The file is named after the cartridge and carries its own ffmpeg
+        // arguments; the acid2 ROM's header title is "DMG-ACID2".
+        let files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(files[0].starts_with("DMG_ACID2-"), "{files:?}");
+        assert!(files[0].ends_with("-160x144-rgba.raw"), "{files:?}");
+        let bytes = std::fs::metadata(dir.join(&files[0])).unwrap().len();
+        assert!(bytes > 0 && bytes % (160 * 144 * 4) == 0, "{bytes} bytes");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `video_source = display` carries the palette and the upscaler, i.e.
+    /// what the player is actually looking at.
+    #[test]
+    fn the_display_source_streams_the_upscaled_palette_mapped_picture() {
+        let spec = video::VideoSpec {
+            pace: video::Pace::Emulated,
+            source: video::Source::Display,
+            size: Some((320, 288)),
+            ..video::VideoSpec::new(video::Destination::Stdout)
+        };
+        let Some(mut app) = test_app_video(
+            ProtocolType::Kitty,
+            RenderPath::Fast,
+            VideoOut::in_memory(spec),
+        ) else {
+            return;
+        };
+        app.upscaler
+            .set_algorithm(crate::upscale::Algorithm::Scale2x);
+        app.upscale_factor = 2;
+        for _ in 0..2 {
+            app.step_frame();
+        }
+        assert_eq!(app.video.geometry(), Some((320, 288)));
+        assert_eq!(app.video.captured().len(), 2 * 320 * 288 * 4);
+        // Green palette: the emulator's greys are gone from the stream.
+        let f = &app.video.captured()[..320 * 288 * 4];
+        assert!(
+            f.chunks_exact(4).any(|p| p[0] != p[1] || p[1] != p[2]),
+            "a palette-mapped stream must not still be greyscale"
+        );
     }
 
     /// The other half of the same bug: the stats panel must not occupy a cell

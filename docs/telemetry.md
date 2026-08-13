@@ -115,18 +115,29 @@ what costs time, the second is what the user sees. They used to be the same numb
 | `frames_dropped` | int | cumulative emulated frames never displayed (render behind) |
 | `tx_bytes` | int | escape-sequence bytes for this frame (`0` = unchanged frame) |
 | `audio` | object or `null` | `null` when no host stream is attached |
+| `video` | object or `null` | `null` when no raw video stream is attached (the default) |
 
 `audio` object: `queue_depth`, `underruns`, `dropped`, `callbacks`, `sample_rate`. Read from
 the player's existing diagnostic handle
 ([`CpalPlayer::queue_handle`](../src/sound.rs)) with a **non-blocking** `try_lock` — telemetry
 never stalls the render loop, and a contended lock simply reports nothing that frame.
 
+`video` object: `frames`, `duplicated`, `dropped`, `bytes`, `ms` — the raw video-out stream
+(see [`docs/video-out.md`](video-out.md)). The invariants worth asserting: **`frames` tracks
+wall clock**, not `fps` — `frames ≈ elapsed_seconds × 59.7275` while `video_pace` is
+`realtime`, however many display frames were dropped; `duplicated` rises only while the
+emulator is paused or in slow motion, `dropped` only while it is fast-forwarding; and `ms` (the
+per-frame convert + write cost) stays far under the 16.74 ms budget — 0.007 ms for the default
+160×144 RGBA stream on the reference box. A field addition, so no `schema` bump: consumers
+already ignore unknown fields.
+
 ### 3.3 `type: "summary"` — one per run
 
 `frames`, then `fps_avg`, `emulated_fps_avg`, `speed_pct_avg`, `frame_ms_avg`,
 `frame_ms_worst`, `emulate_ms_avg`, `palette_ms_avg`, `upscale_ms_avg`, `encode_ms_avg`,
 `write_ms_avg`, `tx_bytes_avg`, `tx_mb_per_s` (bytes/frame × 59.7275), plus the cumulative
-`frames_identical`, `frames_dropped`, `audio_underruns` and `write_errors`.
+`frames_identical`, `frames_dropped`, `audio_underruns` and `write_errors`. (The summary does
+not aggregate `video`; the per-frame counters are already cumulative.)
 
 `tx_mb_per_s` is the number to watch when choosing `transmit_scale`: it is what the terminal's
 parser has to swallow, and it is the one cost that a faster encoder cannot remove.

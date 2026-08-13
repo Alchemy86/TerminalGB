@@ -278,6 +278,21 @@ pub struct Config {
     /// Where to append NDJSON run telemetry, or `None` (the default) for off.
     /// See [`crate::telemetry`].
     pub telemetry: Option<String>,
+    /// Where the `c` key writes PNGs. `None` (the default) means
+    /// `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`.
+    pub screenshot_dir: Option<String>,
+    /// Where the `v` key writes recordings when no `video_out` destination is
+    /// configured. `None` means `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`.
+    pub video_dir: Option<String>,
+    /// The v4l2loopback node the user is feeding through `ffmpeg`, if any.
+    /// Used *only* to check that the camera's label names the running game —
+    /// the emulator never writes to a V4L2 node itself. See
+    /// [`crate::video::v4l2`].
+    pub video_device: Option<String>,
+    /// Raw video-out settings, carried as written and parsed by
+    /// [`crate::video::VideoSpec::resolve`] so the config file and the
+    /// `GB_VIDEO_*` environment variables cannot drift apart.
+    pub video: crate::video::RawSettings,
 }
 
 impl Default for Config {
@@ -293,6 +308,10 @@ impl Default for Config {
             transmit_scale: TransmitScale::default(),
             render_path: RenderPath::default(),
             telemetry: None,
+            screenshot_dir: None,
+            video_dir: None,
+            video_device: None,
+            video: crate::video::RawSettings::default(),
         }
     }
 }
@@ -450,6 +469,48 @@ impl Config {
                 || v.eq_ignore_ascii_case("false")
                 || v == "0"
             {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
+
+        for key in ["screenshot_dir", "video_dir", "video_device"] {
+            let Some(v) = get(key) else { continue };
+            let v = v.trim();
+            let slot = match key {
+                "screenshot_dir" => &mut cfg.screenshot_dir,
+                "video_dir" => &mut cfg.video_dir,
+                _ => &mut cfg.video_device,
+            };
+            *slot = if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
+
+        // Video-out. The values are carried through as written: `video.rs`
+        // owns their parsing (and their complaints), so the config file and
+        // the `GB_VIDEO_*` environment variables cannot disagree about what
+        // `yuyv` means. `video_out = off` is the default and is not an error.
+        for key in [
+            "video_out",
+            "video_format",
+            "video_size",
+            "video_source",
+            "video_pace",
+        ] {
+            let Some(v) = get(key) else { continue };
+            let v = v.trim();
+            let slot = match key {
+                "video_out" => &mut cfg.video.out,
+                "video_format" => &mut cfg.video.format,
+                "video_size" => &mut cfg.video.size,
+                "video_source" => &mut cfg.video.source,
+                _ => &mut cfg.video.pace,
+            };
+            *slot = if v.is_empty() {
                 None
             } else {
                 Some(v.to_string())
@@ -788,6 +849,24 @@ mod tests {
         );
         assert_eq!(Config::parse("telemetry = off").telemetry, None);
         assert_eq!(Config::default().telemetry, None);
+    }
+
+    #[test]
+    fn video_out_keys_are_carried_through_for_video_rs_to_parse() {
+        assert_eq!(
+            Config::default().video,
+            crate::video::RawSettings::default()
+        );
+        let (cfg, warnings) = Config::parse_reporting(
+            "video_out = /tmp/gb.raw\nvideo_format = yuyv\nvideo_size = 640x480\n\
+             video_source = display\nvideo_pace = realtime\n",
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(cfg.video.out.as_deref(), Some("/tmp/gb.raw"));
+        assert_eq!(cfg.video.format.as_deref(), Some("yuyv"));
+        assert_eq!(cfg.video.size.as_deref(), Some("640x480"));
+        assert_eq!(cfg.video.source.as_deref(), Some("display"));
+        assert_eq!(cfg.video.pace.as_deref(), Some("realtime"));
     }
 
     #[test]

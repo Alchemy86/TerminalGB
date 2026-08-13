@@ -152,6 +152,24 @@ pub struct FrameSample {
     pub tx_bytes: usize,
     // Audio, when a host stream is attached (all zero otherwise).
     pub audio: Option<AudioSample>,
+    /// Video-out, when a raw frame stream is attached (`None` otherwise).
+    pub video: Option<VideoSample>,
+}
+
+/// Raw video-out health, read from [`crate::video::VideoOut::stats`]. Present
+/// only when a stream is configured, which it is not by default.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VideoSample {
+    /// Frames written to the stream so far (duplicates included).
+    pub frames: u64,
+    /// Frames repeated to hold the wall-clock rate (pause, slow motion).
+    pub duplicated: u64,
+    /// Emulated frames not represented in the stream (fast-forward).
+    pub dropped: u64,
+    pub bytes: u64,
+    /// Milliseconds spent converting and writing the last frame — the number
+    /// that proves the stream is not perturbing the frame rate.
+    pub ms: f32,
 }
 
 /// Host audio queue health, read from the player's shared queue handle.
@@ -407,6 +425,17 @@ pub fn write_frame_json(out: &mut String, ctx: &Context, s: &FrameSample) {
         }
         None => out.push_str(",\"audio\":null"),
     }
+    match s.video {
+        Some(v) => {
+            let _ = write!(
+                out,
+                ",\"video\":{{\"frames\":{},\"duplicated\":{},\"dropped\":{},\"bytes\":{},\"ms\":{:.3}}}",
+                v.frames, v.duplicated, v.dropped, v.bytes,
+                if v.ms.is_finite() { v.ms } else { 0.0 }
+            );
+        }
+        None => out.push_str(",\"video\":null"),
+    }
     out.push('}');
 }
 
@@ -540,6 +569,7 @@ mod tests {
                 callbacks: 900,
                 sample_rate: 48_000,
             }),
+            video: None,
         };
         t.frame(&ctx(), &s);
         let line = &t.records()[0];
@@ -581,6 +611,39 @@ mod tests {
         let mut t = Telemetry::in_memory();
         t.frame(&ctx(), &FrameSample::default());
         assert!(t.records()[0].contains("\"audio\":null"));
+    }
+
+    #[test]
+    fn video_out_is_reported_when_streaming_and_null_when_not() {
+        let mut t = Telemetry::in_memory();
+        t.frame(&ctx(), &FrameSample::default());
+        assert!(t.records()[0].contains("\"video\":null"));
+
+        let mut t = Telemetry::in_memory();
+        t.frame(
+            &ctx(),
+            &FrameSample {
+                video: Some(VideoSample {
+                    frames: 120,
+                    duplicated: 2,
+                    dropped: 5,
+                    bytes: 11_059_200,
+                    ms: 0.12,
+                }),
+                ..Default::default()
+            },
+        );
+        let line = &t.records()[0];
+        for field in [
+            "\"video\":{",
+            "\"frames\":120",
+            "\"duplicated\":2",
+            "\"dropped\":5",
+            "\"bytes\":11059200",
+            "\"ms\":0.120",
+        ] {
+            assert!(line.contains(field), "missing {field} in {line}");
+        }
     }
 
     #[test]

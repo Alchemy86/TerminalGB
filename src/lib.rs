@@ -22,6 +22,9 @@ pub mod telemetry;
 /// Capped-resolution terminal image transmission — see [`termimage`].
 pub mod termimage;
 pub mod upscale;
+/// Raw video-out: the picture as a stream other tools consume — see [`video`].
+#[cfg(not(target_arch = "wasm32"))]
+pub mod video;
 
 pub use crate::input::KeypadKey;
 

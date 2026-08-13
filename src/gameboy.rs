@@ -128,6 +128,63 @@ impl Gameboy {
         let (mut out_w, mut out_h) =
             upscaler.output_size(self.width as usize, self.height as usize);
 
+        // Raw video-out (see `crate::video`). Off unless configured. Unlike the
+        // terminal frontend this one may stream to **stdout**, because nothing
+        // else here writes there — so the documented pipe works verbatim:
+        //   desktop game.gb --video-out - | ffmpeg -f rawvideo -pix_fmt rgba \
+        //       -s 160x144 -framerate 59.7275 -i - out.mp4
+        let (video_spec, video_warnings) = crate::video::VideoSpec::resolve(&cfg.video);
+        for w in &video_warnings {
+            eprintln!("gameboy: {w}");
+        }
+        let mut video = match video_spec {
+            Some(mut s) => {
+                // Fix the geometry from the configured upscaler so the size the
+                // consumer is told is the truth from the first byte.
+                if s.source == crate::video::Source::Display && s.size.is_none() {
+                    s.size = Some((out_w as u32, out_h as u32));
+                }
+                let (v, err) = crate::video::VideoOut::open(s);
+                if let Some(e) = err {
+                    eprintln!("gameboy: {e}");
+                }
+                if v.is_enabled() {
+                    eprintln!("gameboy: {}", v.describe());
+                }
+                v
+            }
+            None => crate::video::VideoOut::disabled(),
+        };
+        let video_source = video.spec().source;
+
+        /// Offer the just-emulated frame to the video stream. Called after
+        /// **every** emulated frame (including catch-up ones) rather than per
+        /// draw, so the stream's rate is the emulator's, not the window's.
+        /// Free when video-out is off — the clock is not even read.
+        fn feed_video(
+            gb: &Gameboy,
+            upscaler: &mut crate::upscale::Upscaler,
+            video: &mut crate::video::VideoOut,
+            source: crate::video::Source,
+        ) {
+            if !video.is_enabled() {
+                return;
+            }
+            let now = std::time::Instant::now();
+            match source {
+                crate::video::Source::Native => {
+                    video.frame(gb.image(), gb.width, gb.height, now)
+                }
+                crate::video::Source::Display => {
+                    let (w, h) =
+                        upscaler.output_size(gb.width as usize, gb.height as usize);
+                    let scaled =
+                        upscaler.apply(gb.image(), gb.width as usize, gb.height as usize);
+                    video.frame(scaled, w as u32, h as u32, now);
+                }
+            }
+        }
+
         let event_loop: glutin::event_loop::EventLoop<()> =
             glutin::event_loop::EventLoop::with_user_event();
         let inner_size = glutin::dpi::LogicalSize {
@@ -231,6 +288,7 @@ impl Gameboy {
                 glutin::event::Event::RedrawRequested(_) => {
                     if focused {
                         self.frame();
+                        feed_video(&self, &mut upscaler, &mut video, video_source);
                         next_frame_time += frame_duration;
                         // Late (slow draw, OS jitter)? Run extra emulated
                         // frames — bounded — to hold the average rate; if
@@ -241,6 +299,12 @@ impl Gameboy {
                             let mut extra = 0;
                             while now > next_frame_time && extra < 3 {
                                 self.frame();
+                                feed_video(
+                                    &self,
+                                    &mut upscaler,
+                                    &mut video,
+                                    video_source,
+                                );
                                 next_frame_time += frame_duration;
                                 extra += 1;
                             }
@@ -255,6 +319,10 @@ impl Gameboy {
                         let scaled = upscaler.apply(self.image(), w, h);
                         cx.draw(out_w as u32, out_h as u32, fb.width, fb.height, scaled);
                         gl_window.swap_buffers().unwrap();
+                    } else {
+                        // Unfocused: the emulator is paused, but a video
+                        // consumer still expects frames at the wall-clock rate.
+                        video.idle(std::time::Instant::now());
                     }
 
                     // Schedule next frame

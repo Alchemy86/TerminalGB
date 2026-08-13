@@ -670,4 +670,50 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
   `cargo build --release --target wasm32-unknown-unknown` all build with **no** system audio
   library (audio is off by default). CI now also builds wasm and runs `make docs-check`.
 
+## Raw video-out + screenshots (`src/video.rs`)
+
+- **Full guide, measured costs, platform limits and the captured proof:
+  [`docs/video-out.md`](docs/video-out.md).** The pixels half of the EMIT surface —
+  `telemetry.rs` publishes a frame's *numbers*, `video.rs` publishes the frame. Off by default;
+  `video_tick` returns on one `Option` test and does not even read the clock.
+- **The stream is fed from `step_frame` (emulated frames), never from the draw.** The terminal
+  deliberately drops *display* frames on a big window (`docs/terminal-render.md`); a capture may
+  not lose those frames with it. Test:
+  `the_video_stream_is_fed_by_emulated_frames_not_displayed_ones`.
+- **`rawvideo` has no header and no timestamps**, which dictates two rules that must not be
+  broken: (1) **geometry is fixed when the stream opens** — a differently-sized frame (the user
+  cycled the upscaler) is *letterboxed* into it, never resized underneath the consumer;
+  (2) **frame number is the clock** — `realtime` pacing emits one frame per 16.743 ms of wall
+  time, so fast-forward *drops* and pause/slow-mo *duplicate*. `emulated` pacing (one frame per
+  emulated frame) is for headless capture and is deterministic.
+- **The TUI cannot stream to stdout** — `ratatui` owns it. It refuses with a pointer to a FIFO
+  or to `examples/video_out.rs`. The **desktop** frontend can (`--video-out -`), and that is the
+  headline pipe command.
+- **The emulator never writes to `/dev/videoN`.** A V4L2 output device needs `VIDIOC_S_FMT`
+  before the first write, and that cannot be tested without the kernel module (root to install)
+  — so `video_out = /dev/video*` is refused with the exact `ffmpeg -f v4l2` recipe.
+  `tools/virtual-camera.sh` is the supported route. This box has **no v4l2loopback** (only a
+  real UVC webcam on video0/1), so the camera end has never been run here; everything up to the
+  device has (YUYV 640×480 bytes decoded by ffmpeg).
+- **A v4l2loopback device cannot be renamed while it exists** (upstream `v4l2loopback-ctl` has
+  `add`/`delete`/`set-fps`/`set-caps`/`set-timeout-image` and no rename) — the label comes from
+  `card_label` at modprobe time or `v4l2loopback-ctl add -n`. So `video_device = /dev/videoN`
+  only *verifies*: sysfs label vs cartridge title, with the delete+add commands if they differ.
+- **Naming:** `clean_title` (human/device label) and `file_safe_title` (filename) live in
+  `video.rs` — cartridge titles are 16 padded bytes and can hold anything. A recording is named
+  `TITLE-stamp-WxH-fmt.raw` so the consuming `ffmpeg` arguments can be read off the filename;
+  `%t`/`%s` expand in any configured path; a directory destination gets the same treatment.
+- **`v` toggles the stream live**, `c`/`C` (and `F2`) take screenshots — displayed look and raw
+  framebuffer. Screenshots use the **selected** upscale factor, not `transmit_factor` (with
+  `transmit_scale = auto` those differ on purpose), and go through the `image` crate, not
+  `termimage::png_rgb_into` — the latter is *stored*-deflate (uncompressed), right for a 60 Hz
+  wire and wrong for a file someone keeps.
+- Costs measured over 3000 frames (emulation alone 0.216 ms/frame): rgba 160×144 **+0.007 ms**,
+  yuyv 640×480 +0.55 ms, yuyv 640×480 with the LCD upscaler +1.58 ms — all inside 16.74 ms.
+  Writes are **blocking**: a stalled consumer back-pressures the emulator, a closed pipe
+  disables the sink permanently rather than erroring every frame.
+- Telemetry gained a `"video"` object (`frames`/`duplicated`/`dropped`/`bytes`/`ms`) — an
+  addition, so no `SCHEMA_VERSION` bump. The invariant to assert: `video.frames ≈ elapsed ×
+  59.7275` under `realtime` pacing, whatever `fps` does.
+
 - Add durable project-specific notes here as they are discovered through real work.
