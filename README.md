@@ -324,6 +324,36 @@ what's genuine DMG character, and how to measure it yourself — in
 [`docs/audio.md`](docs/audio.md).** Probe your own machine's negotiated rate with
 `cargo run --features audio --example audio_probe`.
 
+### "Is the sound on?" — the emulator now tells you
+
+Silence used to be ambiguous: an audio build with no working device looked exactly like a
+quiet game. Every audio-device failure is now **published rather than discarded** —
+
+- the terminal Status panel has an **`Audio`** row beside `Video`: `off`, `● LIVE 48000Hz ×2`,
+  or `failed: no default output device`;
+- a failure raises a **toast** when you enter a game;
+- `GB_TELEMETRY` emits an **`audio_host`** object (`state`, `errors`, `error`) on every frame,
+  so it can be checked without anyone watching the screen — see
+  [`docs/telemetry.md`](docs/telemetry.md);
+- errors cpal raises on an already-open stream are counted too (`● LIVE 48000Hz ×2 (3 err)`),
+  which is otherwise entirely invisible.
+
+The frontends deliberately do **not** `eprintln!` any of this: the TUI lives in the alternate
+screen and a stray line corrupts it.
+
+### Harmless startup noise on Linux (not ours, don't chase it)
+
+The desktop frontend prints two things on some Linux desktops that are **not** emulator bugs
+and have no fix on our side:
+
+| Message | Where it comes from |
+|---|---|
+| `xkbcommon: ERROR: … dead_hamza …` (and similar keysym errors) | The **system X11 compose/keymap files** (`/usr/share/X11/locale/…`), parsed by `libxkbcommon` when the window is created. Purely a complaint about the distro's compose table. |
+| `queue … destroyed while proxies still attached` (Wayland) | **`winit`/`glutin`** tearing down their Wayland event queue at exit. Upstream cleanup ordering, inside the windowing crates. |
+
+Both are emitted before/after anything we control, and neither affects emulation, audio or
+input.
+
 <details>
 <summary><strong>Memory map</strong> (click to expand)</summary>
 

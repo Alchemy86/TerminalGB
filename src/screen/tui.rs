@@ -988,6 +988,14 @@ impl App {
                     self.set_toast(n);
                 } else if let Some(w) = self.config_warnings.first().cloned() {
                     self.set_toast(format!("⚠ {w}"));
+                } else {
+                    // Audio asked for and refused. This build *can* play sound,
+                    // so silence here is a fault, not a setting — say so once
+                    // rather than leaving the player to guess.
+                    let audio = crate::sound::host_status::snapshot();
+                    if audio.state == crate::sound::host_status::State::Failed {
+                        self.set_toast(format!("⚠ Audio {}", audio.label()));
+                    }
                 }
                 self.plugin_notes = plugin_notes;
             }
@@ -1310,6 +1318,15 @@ impl App {
     }
 
     /// The Status panel's video row: the answer to "am I live?".
+    /// One line for the Status panel's `Audio` row: `off`, `● LIVE 48000Hz ×2`,
+    /// or `failed: <the cpal error>`.
+    ///
+    /// Without the `audio` feature this is always `off`, which is the truth —
+    /// that build has no host player at all.
+    fn audio_status(&self) -> String {
+        crate::sound::host_status::snapshot().label()
+    }
+
     fn video_status(&self) -> String {
         if !self.video.is_enabled() {
             return "off".to_string();
@@ -2727,6 +2744,9 @@ impl App {
             kv("Slot", &self.slot.to_string()),
             // "Am I live?" must never be a guess — see `App::toggle_video`.
             kv("Video", &self.video_status()),
+            // Same rule for sound. A device that never opened, or one that has
+            // started erroring, used to be indistinguishable from a quiet game.
+            kv("Audio", &truncate(&self.audio_status(), 18)),
             kv(
                 "FPS",
                 &if paused {
@@ -3391,6 +3411,12 @@ type AudioStream = ();
 #[cfg(feature = "audio")]
 fn init_audio(gb: &mut Gameboy) -> AudioHold {
     use crate::sound::AudioPlayer;
+    // A fresh attempt for this session: clear any state the previous ROM left.
+    // Success/failure is published by `CpalPlayer::new` into
+    // `sound::host_status`, which the Status panel's `Audio` row, the
+    // entering-a-game toast and telemetry's `audio_host` all read — this path
+    // cannot print, it is inside the alternate screen.
+    crate::sound::host_status::reset();
     match crate::sound::cpal_audio::CpalPlayer::new() {
         Some((player, stream)) => {
             // Grab the diagnostic handles before the player is boxed away —

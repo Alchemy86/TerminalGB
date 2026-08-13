@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check
+.PHONY: web desktop docs-links docs-check lint lint-audio
 
 all: build install
 
@@ -10,6 +10,15 @@ watch:
 lint:
 	cargo fmt -- --check --color always
 	cargo clippy --all-targets -- -D warnings
+
+# Audio is OFF by default (cpal needs ALSA dev headers, and a fresh clone must
+# still build) — so `make lint` never compiles `sound.rs`'s cpal module at all.
+# That is how four unused-variable warnings, each swallowing a real audio-device
+# error, lived in the tree unnoticed. This target lints the feature; it is a
+# SEPARATE target because it requires libasound2-dev / alsa-lib-devel, which
+# `make lint` deliberately does not. CI runs both.
+lint-audio:
+	cargo clippy --all-targets --features audio -- -D warnings
 
 # Code map (docs/codemap.md + docs/components/): rewrite every `path:line`
 # reference into a fresh blob/main GitHub link and restamp the per-page

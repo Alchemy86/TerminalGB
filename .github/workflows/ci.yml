@@ -27,6 +27,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo fetch
       - run: make lint
+      # Audio is OFF by default, so `make lint` never compiles the cpal module —
+      # which is how four unused-variable warnings (each discarding a real
+      # audio-device error) survived in the tree. ALSA headers are installed
+      # above, so lint and build the feature explicitly.
+      - name: Lint with the audio feature enabled
+        run: make lint-audio
+      - name: Build with the audio feature enabled
+        run: cargo build --release --features audio
       - name: cargo test build
         run: cargo build --tests --release
       - name: cargo test

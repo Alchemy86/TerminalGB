@@ -1600,6 +1600,205 @@ pub mod sample_queue {
     }
 }
 
+/// Whether host audio is actually live, and if it is not, **why**.
+///
+/// This exists because an audio device error used to be *swallowed*: the
+/// failure paths in [`cpal_audio::CpalPlayer::new`] carried a real `cpal` error
+/// straight into a `#[cfg(debug_assertions)] eprintln!`, so a release build
+/// discarded it (and the compiler warned about the unused binding on every
+/// `--features audio` build). The visible result was an emulator with no sound
+/// and no explanation — the single worst diagnostic outcome, because "silent"
+/// and "broken" look identical.
+///
+/// `eprintln!` is not the fix here: the terminal frontend lives inside the
+/// alternate screen and a stray line corrupts it. So the reason is *published*
+/// instead — the Status panel reads [`snapshot`] for its `Audio` row (beside
+/// `Video`), telemetry emits it as `audio_host`, and a failure raises a toast
+/// on entering a game.
+///
+/// Always compiled, feature or no feature: without `audio` the state is simply
+/// [`State::Off`], which is the honest answer for a build with no host player.
+/// Any frontend that attaches its own [`AudioPlayer`] (web, FFI, a custom
+/// backend) may publish its own state here.
+pub mod host_status {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    /// What the host audio path is doing right now.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum State {
+        /// No host player was attached — this build has no audio feature, or
+        /// the frontend never asked for one. Not an error.
+        #[default]
+        Off,
+        /// A stream is open and playing.
+        Live { sample_rate: u32, channels: u16 },
+        /// A stream was asked for and could not be opened. The reason is in
+        /// [`Snapshot::last_error`].
+        Failed,
+    }
+
+    /// A consistent read of the whole status.
+    #[derive(Debug, Clone, Default)]
+    pub struct Snapshot {
+        pub state: State,
+        /// Errors reported by cpal on the stream *after* it opened. Non-zero
+        /// with `state == Live` means sound is degrading, which is otherwise
+        /// completely invisible.
+        pub stream_errors: u64,
+        /// Most recent failure text, whatever its source.
+        pub last_error: Option<String>,
+    }
+
+    impl Snapshot {
+        /// One short line for a status panel: never a guess, never empty.
+        pub fn label(&self) -> String {
+            match self.state {
+                State::Off => "off".to_string(),
+                State::Live {
+                    sample_rate,
+                    channels,
+                } => {
+                    let base = format!("● LIVE {}Hz ×{}", sample_rate, channels);
+                    if self.stream_errors > 0 {
+                        format!("{base} ({} err)", self.stream_errors)
+                    } else {
+                        base
+                    }
+                }
+                State::Failed => match &self.last_error {
+                    Some(e) => format!("failed: {e}"),
+                    None => "failed".to_string(),
+                },
+            }
+        }
+
+        /// The telemetry/JSON spelling of [`State`].
+        pub fn state_name(&self) -> &'static str {
+            match self.state {
+                State::Off => "off",
+                State::Live { .. } => "live",
+                State::Failed => "failed",
+            }
+        }
+    }
+
+    // The message is behind a `Mutex` but the counter is an atomic on purpose:
+    // `note_stream_error` runs on cpal's *audio callback* thread, where blocking
+    // on a lock is never acceptable. The counter always lands; the text is
+    // best-effort via `try_lock`.
+    static STREAM_ERRORS: AtomicU64 = AtomicU64::new(0);
+    static STATE: Mutex<(State, Option<String>)> = Mutex::new((State::Off, None));
+
+    fn with_state<R>(f: impl FnOnce(&mut (State, Option<String>)) -> R) -> Option<R> {
+        // A poisoned lock must not take the emulator down over a status string.
+        match STATE.lock() {
+            Ok(mut g) => Some(f(&mut g)),
+            Err(p) => Some(f(&mut p.into_inner())),
+        }
+    }
+
+    /// Read the current status.
+    pub fn snapshot() -> Snapshot {
+        let (state, last_error) = with_state(|s| (s.0, s.1.clone())).unwrap_or_default();
+        Snapshot {
+            state,
+            stream_errors: STREAM_ERRORS.load(Ordering::Relaxed),
+            last_error,
+        }
+    }
+
+    /// Publish "a stream is open and playing".
+    pub fn set_live(sample_rate: u32, channels: u16) {
+        STREAM_ERRORS.store(0, Ordering::Relaxed);
+        with_state(|s| {
+            *s = (
+                State::Live {
+                    sample_rate,
+                    channels,
+                },
+                None,
+            )
+        });
+    }
+
+    /// Publish "audio was asked for and could not be started", with the reason.
+    pub fn set_failed(reason: impl std::fmt::Display) {
+        let reason = reason.to_string();
+        with_state(|s| *s = (State::Failed, Some(reason)));
+    }
+
+    /// Back to [`State::Off`] — a new session before it has tried anything.
+    pub fn reset() {
+        STREAM_ERRORS.store(0, Ordering::Relaxed);
+        with_state(|s| *s = (State::Off, None));
+    }
+
+    /// Record an error cpal raised on a *running* stream.
+    ///
+    /// Called from the audio callback thread: counts unconditionally (atomic),
+    /// stores the text only if the lock is free.
+    pub fn note_stream_error(err: impl std::fmt::Display) {
+        STREAM_ERRORS.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut g) = STATE.try_lock() {
+            g.1 = Some(err.to_string());
+        }
+    }
+
+    /// Serialises the tests that mutate this global (here and in
+    /// `telemetry`), which `cargo test` otherwise runs in parallel.
+    #[cfg(test)]
+    pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static L: Mutex<()> = Mutex::new(());
+        L.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // These share one global, so they run as a single sequential test.
+        #[test]
+        fn status_reports_off_live_and_failure_reasons() {
+            let _g = test_lock();
+            reset();
+            let s = snapshot();
+            assert_eq!(s.state, State::Off);
+            assert_eq!(s.label(), "off");
+            assert_eq!(s.state_name(), "off");
+
+            set_failed("no default output device");
+            let s = snapshot();
+            assert_eq!(s.state, State::Failed);
+            // The whole point: the reason survives into what a human reads.
+            assert_eq!(s.label(), "failed: no default output device");
+            assert_eq!(s.last_error.as_deref(), Some("no default output device"));
+
+            set_live(48_000, 2);
+            let s = snapshot();
+            assert_eq!(
+                s.state,
+                State::Live {
+                    sample_rate: 48_000,
+                    channels: 2
+                }
+            );
+            assert_eq!(s.label(), "● LIVE 48000Hz ×2");
+            // set_live clears a stale reason from an earlier attempt.
+            assert!(s.last_error.is_none());
+
+            note_stream_error("device disconnected");
+            let s = snapshot();
+            assert_eq!(s.stream_errors, 1);
+            assert_eq!(s.label(), "● LIVE 48000Hz ×2 (1 err)");
+            assert_eq!(s.last_error.as_deref(), Some("device disconnected"));
+
+            reset();
+            assert_eq!(snapshot().stream_errors, 0);
+        }
+    }
+}
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
 pub mod cpal_audio {
     use super::sample_queue::{high_water, start_fill, SampleQueue};
@@ -1673,8 +1872,7 @@ pub mod cpal_audio {
             let device = match cpal::default_host().default_output_device() {
                 Some(e) => e,
                 None => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("No default output device found");
+                    super::host_status::set_failed("no default output device");
                     return None;
                 }
             };
@@ -1708,8 +1906,9 @@ pub mod cpal_audio {
                     let configs = match device.supported_output_configs() {
                         Ok(e) => e,
                         Err(err) => {
-                            #[cfg(debug_assertions)]
-                            eprintln!("Failed to get supported configs: {}", err);
+                            super::host_status::set_failed(format!(
+                                "device has no listable output configs: {err}"
+                            ));
                             return None;
                         }
                     };
@@ -1736,8 +1935,9 @@ pub mod cpal_audio {
                     let best = match best {
                         Some(b) => b,
                         None => {
-                            #[cfg(debug_assertions)]
-                            eprintln!("No supported F32 audio configuration found");
+                            super::host_status::set_failed(
+                                "device advertises no F32 output configuration",
+                            );
                             return None;
                         }
                     };
@@ -1755,10 +1955,12 @@ pub mod cpal_audio {
             let selected_buffer_size = *selected_config.buffer_size();
             let config: cpal::StreamConfig = selected_config.into();
 
-            let err_fn = |err| {
-                #[cfg(debug_assertions)]
-                eprintln!("An error occurred on the output audio stream: {}", err);
-            };
+            // Errors on a *running* stream. This closure is invoked on cpal's
+            // audio thread, so it must not block or print — it publishes to the
+            // status slot (atomic counter + best-effort message), which the
+            // Status panel and telemetry read. Previously it discarded `err`
+            // entirely, so a device that died mid-game simply went quiet.
+            let err_fn = |err| super::host_status::note_stream_error(err);
 
             let shared_queue =
                 Arc::new(Mutex::new(SampleQueue::new(start_fill(), high_water())));
@@ -1808,15 +2010,18 @@ pub mod cpal_audio {
             match stream {
                 Ok(s) => {
                     if let Err(e) = s.play() {
-                        #[cfg(debug_assertions)]
-                        eprintln!("Failed to play audio stream: {}", e);
+                        super::host_status::set_failed(format!(
+                            "stream would not start: {e}"
+                        ));
                         return None;
                     }
+                    super::host_status::set_live(config.sample_rate.0, channels);
                     Some((player, s))
                 }
                 Err(e) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("Failed to build audio stream: {}", e);
+                    super::host_status::set_failed(format!(
+                        "could not open output stream: {e}"
+                    ));
                     None
                 }
             }

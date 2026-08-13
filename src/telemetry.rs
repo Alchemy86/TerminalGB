@@ -425,6 +425,27 @@ pub fn write_frame_json(out: &mut String, ctx: &Context, s: &FrameSample) {
         }
         None => out.push_str(",\"audio\":null"),
     }
+    // Host-audio liveness, emitted ALWAYS — including (especially) when
+    // `audio` above is null, because "no queue" and "the device refused to
+    // open" are the same silence to a listener and completely different bugs.
+    // `state` is off|live|failed; `errors` counts cpal faults on a running
+    // stream. Addition only, so no SCHEMA_VERSION bump. See docs/telemetry.md.
+    {
+        let a = crate::sound::host_status::snapshot();
+        let _ = write!(
+            out,
+            ",\"audio_host\":{{\"state\":\"{}\",\"errors\":{},\"error\":",
+            a.state_name(),
+            a.stream_errors
+        );
+        match &a.last_error {
+            Some(e) => {
+                let _ = write!(out, "\"{}\"", escape(e));
+            }
+            None => out.push_str("null"),
+        }
+        out.push('}');
+    }
     match s.video {
         Some(v) => {
             let _ = write!(
@@ -611,6 +632,29 @@ mod tests {
         let mut t = Telemetry::in_memory();
         t.frame(&ctx(), &FrameSample::default());
         assert!(t.records()[0].contains("\"audio\":null"));
+    }
+
+    /// A silent run must still say *why* it is silent. `audio` being `null`
+    /// only means "no queue handle"; `audio_host` is what distinguishes a build
+    /// with no player from a device that refused to open, and it is emitted
+    /// unconditionally so a capture can be checked without a human listening.
+    #[test]
+    fn host_audio_state_is_always_reported_even_with_no_stream() {
+        use crate::sound::host_status;
+        let _g = host_status::test_lock();
+        host_status::reset();
+        let mut t = Telemetry::in_memory();
+        t.frame(&ctx(), &FrameSample::default());
+        assert!(t.records()[0].contains("\"audio\":null"));
+        assert!(t.records()[0]
+            .contains("\"audio_host\":{\"state\":\"off\",\"errors\":0,\"error\":null}"));
+
+        host_status::set_failed("no default output device");
+        let mut t = Telemetry::in_memory();
+        t.frame(&ctx(), &FrameSample::default());
+        assert!(t.records()[0]
+            .contains("\"audio_host\":{\"state\":\"failed\",\"errors\":0,\"error\":\"no default output device\"}"));
+        host_status::reset();
     }
 
     #[test]

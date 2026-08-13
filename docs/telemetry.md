@@ -115,12 +115,23 @@ what costs time, the second is what the user sees. They used to be the same numb
 | `frames_dropped` | int | cumulative emulated frames never displayed (render behind) |
 | `tx_bytes` | int | escape-sequence bytes for this frame (`0` = unchanged frame) |
 | `audio` | object or `null` | `null` when no host stream is attached |
+| `audio_host` | object | always present — whether host audio is live, and if not, why |
 | `video` | object or `null` | `null` when no raw video stream is attached (the default) |
 
 `audio` object: `queue_depth`, `underruns`, `dropped`, `callbacks`, `sample_rate`. Read from
 the player's existing diagnostic handle
 ([`CpalPlayer::queue_handle`](../src/sound.rs)) with a **non-blocking** `try_lock` — telemetry
 never stalls the render loop, and a contended lock simply reports nothing that frame.
+
+`audio_host` object: `state` (`off` | `live` | `failed`), `errors` (cpal faults raised on a
+stream that had already opened), `error` (the most recent failure text, or `null`). Read from
+[`sound::host_status`](../src/sound.rs), which is always compiled — a build without the `audio`
+feature honestly reports `off`. **This is emitted even when `audio` is `null`, and that is the
+point:** "no host player was ever attached" and "the device refused to open" produce identical
+silence for a listener but are completely different faults, and the cpal error explaining which
+one it is used to be discarded into a `debug_assertions`-only `eprintln!`. The terminal
+frontend cannot print (the alternate screen), so the reason is published here and in the Status
+panel's `Audio` row. A field addition, so no `schema` bump.
 
 `video` object: `frames`, `duplicated`, `dropped`, `bytes`, `ms` — the raw video-out stream
 (see [`docs/video-out.md`](video-out.md)). The invariants worth asserting: **`frames` tracks
