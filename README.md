@@ -1,6 +1,14 @@
 # gameboy
 
+[![CI](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml/badge.svg)](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml)
+[![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
+[![Rust 1.83+](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](rust-toolchain)
+
 **A Game Boy / Game Boy Color emulator written in Rust — runs on the desktop, in your terminal, and in the browser via WebAssembly.**
+
+> This project is a fork of **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by
+> Raphael Amorim, itself closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**.
+> It stands on their work — see **[Credits & lineage](#credits--lineage)**.
 
 <p align="center">
   <img src="resources/demo-pokemon.gif" alt="Pokémon running in the browser build" width="480" />
@@ -343,16 +351,30 @@ Bigger picture:
 
 ---
 
-## Credits & references
+## Credits & lineage
 
-Emulation logic is heavily indebted to **[mvdnes/rboy](https://github.com/mvdnes/rboy)** and
-**[alexcrichton/jba](https://github.com/alexcrichton/jba/tree/rust)**. Hardware behaviour is
-grounded in [Pan Docs](https://gbdev.io/pandocs/), [gbdev/awesome-gbdev](https://github.com/gbdev/awesome-gbdev),
-and [rylev/DMG-01](https://rylev.github.io/DMG-01/); the accuracy suites are Blargg, Gekkio's
+This repository ([**Alchemy86/gameboy**](https://github.com/Alchemy86/gameboy)) is a fork of
+**[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by Raphael Amorim, which is
+itself closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**. It is licensed
+**[MPL-2.0](LICENSE)**, the same licence as upstream — under which the original authorship
+stays credited. The lineage:
+
+> **[mvdnes/rboy](https://github.com/mvdnes/rboy)** (core emulation model)
+> → **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** (Raphael Amorim — Rust +
+> WebAssembly + FFI + terminal frontends)
+> → **this fork** (accuracy work, save states, upscaler, audio pipeline, telemetry, terminal
+> render path, test-ROM harness, and the per-component docs — see the
+> [`CHANGELOG`](CHANGELOG.md)).
+
+**References.** Hardware behaviour is grounded in [Pan Docs](https://gbdev.io/pandocs/),
+[gbdev/awesome-gbdev](https://github.com/gbdev/awesome-gbdev), and
+[rylev/DMG-01](https://rylev.github.io/DMG-01/); [alexcrichton/jba](https://github.com/alexcrichton/jba/tree/rust)
+was a further emulation reference. The accuracy suites are Blargg, Gekkio's
 [Mooneye GB](https://github.com/Gekkio/mooneye-gb), and Matt Currie's
 [dmg-acid2/cgb-acid2](https://github.com/mattcurrie/dmg-acid2). Web CSS from
-[Daniel Snow's Game Boy CSS](https://codepen.io/daniel-snows). Original project by
-[raphamorim](https://github.com/raphamorim/gameboy).
+[Daniel Snow's Game Boy CSS](https://codepen.io/daniel-snows).
+
+Want to help? See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 <details>
 <summary><strong>A bit of Game Boy history</strong> (the long version)</summary>

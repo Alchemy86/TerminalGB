@@ -640,4 +640,34 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 - When adding a config key, add it to the `get(...)` list in `Config::parse_reporting` — keys
   not read there are reported as unknown.
 
+## Repo furniture & attribution (fork of raphamorim/gameboy)
+
+- **This is a fork of [raphamorim/gameboy](https://github.com/raphamorim/gameboy)** (itself
+  modelled on [rboy](https://github.com/mvdnes/rboy)), now at **Alchemy86/gameboy**, MPL-2.0.
+  Attribution is a **standing requirement, not decoration**: keep the original author credited
+  in `Cargo.toml` `authors` (alongside "gameboy contributors") and in the README's
+  **"Credits & lineage"** section + the top-of-README fork note. `repository` points at
+  Alchemy86/gameboy. Do not strip upstream copyright or the MPL-2.0 `LICENSE` text.
+- **Versioning:** pre-1.0 SemVer, minor may break. Today's big accuracy/audio/tooling day is
+  `0.2.0` (was `0.1.5`). `CHANGELOG.md` (Keep-a-Changelog) starts at the fork divergence and
+  does **not** reconstruct upstream history; its preamble names the starting point.
+- **`.github/FUNDING.yml` was removed** — it pointed sponsorship at the upstream author from
+  this fork (misleading), and inventing the fork owner's sponsor account would be worse. If a
+  real GitHub Sponsors account exists for this fork, add it back deliberately.
+- **No `CODE_OF_CONDUCT.md` (deliberate).** A Contributor Covenant is only meaningful with a
+  real enforcement contact/process; on a personal fork with no community yet it would be
+  performative filler. Add one when there's an actual moderation commitment behind it.
+- **Third-party licence hygiene (in `CONTRIBUTING.md`): facts & formats yes, incompatible code
+  no.** Learn hardware behaviour, file/packet **formats**, protocol knowledge and header
+  constants from any source and reimplement cleanly; never copy source under an MPL-2.0-
+  incompatible licence. Concrete cases: Scale2x reimplemented from its rule (GPL-2.0 ref),
+  xBRZ/hqx excluded; GPL tooling like **FlashGBX** (GPL-3.0) — take formats/constants only,
+  never its code or bundled data (e.g. `db_DMG.json`). Same for link-tool/protocol repos being
+  studied (PokemonGB_Online_Trades, GB-Link, Poke_Transporter_GB): protocol knowledge is fair,
+  implementations are not ours to lift.
+- **Verified fresh-clone quick start (2026-08-13):** with the ALSA env shims unset,
+  `cargo build --release --example terminal`, `--example desktop`, and
+  `cargo build --release --target wasm32-unknown-unknown` all build with **no** system audio
+  library (audio is off by default). CI now also builds wasm and runs `make docs-check`.
+
 - Add durable project-specific notes here as they are discovered through real work.

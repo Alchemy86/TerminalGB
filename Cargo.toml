@@ -1,9 +1,14 @@
 [package]
 name = "gameboy"
-version = "0.1.5"
-description = "Gameboy emulator written in Rust and WebAssembly"
-authors = ["Raphael Amorim <rapha850@gmail.com>"]
-repository = "https://github.com/raphamorim/gameboy"
+version = "0.2.0"
+description = "Game Boy / Game Boy Color emulator in Rust — desktop, terminal, and WebAssembly"
+# This is a fork of raphamorim/gameboy (itself modelled on mvdnes/rboy). Under
+# MPL-2.0 the upstream authorship stays credited; see README "Credits & lineage".
+authors = [
+    "Raphael Amorim <rapha850@gmail.com>",
+    "gameboy contributors",
+]
+repository = "https://github.com/Alchemy86/gameboy"
 license = "MPL-2.0"
 edition = "2021"
 

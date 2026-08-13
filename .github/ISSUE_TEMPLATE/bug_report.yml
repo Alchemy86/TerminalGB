@@ -1,0 +1,94 @@
+name: Bug report
+description: Something misbehaves — a game, the picture, sound, input, or a build.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Most bugs here turn out to be **environment-specific**
+        (terminal protocol, HiDPI scaling, audio backend), so the details below genuinely
+        save round-trips. Please fill in what you can.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you see or hear, and what did you expect instead?
+      placeholder: "The picture froze after ~1 second while sound kept playing."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: Frontend
+      description: Which build were you running?
+      options:
+        - Desktop (OpenGL window)
+        - Terminal (TUI)
+        - Web (WebAssembly)
+        - FFI (C/Go)
+    validations:
+      required: true
+
+  - type: input
+    id: rom
+    attributes:
+      label: ROM / game
+      description: >
+        Which game or test ROM, and its MBC type if you know it. Do **not** attach
+        copyrighted ROMs — the title and cartridge type are enough.
+      placeholder: "Pokémon Red (MBC3) — or: Blargg dmg_sound/09"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audio
+    attributes:
+      label: Audio feature
+      description: Did you build with `--features audio`?
+      options:
+        - "No (default — audio off)"
+        - "Yes (--features audio)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal (terminal frontend only)
+      description: >
+        Terminal emulator + version, graphics protocol (kitty / iTerm2 / sixel), and
+        whether the display is HiDPI/scaled (and your `cell_scale` setting, if any).
+      placeholder: "kitty 0.35, Wayland, 2x HiDPI, cell_scale = auto"
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform & Rust version
+      description: OS + version, architecture, and `rustc --version`.
+      placeholder: "Fedora 44 x86_64, rustc 1.83.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact command(s) you ran and how to trigger the bug.
+      placeholder: |
+        cargo run --release --example terminal -- path/to/game.gb
+        1. ...
+        2. ...
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: >
+        Any error output, panic, or backtrace (`RUST_BACKTRACE=1`). For layout/scaling
+        issues in the terminal, `GB_DEBUG_LAYOUT=<file>` dumps the measured cell/scale
+        numbers — attach that file.
+      render: shell
