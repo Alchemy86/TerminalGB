@@ -653,13 +653,47 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
   bpp from the frame's actual colour count (cap `MAX_PALETTE`, then truecolour fallback);
   `deflate.rs` is a hand-rolled fixed-Huffman LZ77 (no new dependency, wasm-safe).
 - **Unchanged-frame dedup was always working**; the *benchmark* hard-coded
-  `frames_identical: 0` into its telemetry sample. Real figures: dmg-acid2 **299/300**
-  identical (6 B/frame avg), cpu_instrs **292/300** (26 B/frame). Use `--motion` to defeat it
-  when measuring a transport.
-- **The status panel must show small numbers.** `{:.0}K` renders 87 bytes as `0K` — i.e. it
-  hides the difference between excellent and broken. `human_bytes` prints `87B`/`2.0K`, and
-  `Proto` names the live transport (`shm`/`png`/`legacy`) because a transport negotiated at
-  runtime that nobody can see is one nobody can debug.
+  `frames_identical: 0` into its telemetry sample.
+- **NEVER quote a transport figure from a static-image ROM.** dmg-acid2 is a still picture, so
+  it dedups 299/300 and reports ~6 B/frame — that measures the deduplicator, not the
+  transport, and it is the best possible case. Always report **two numbers separately**:
+  *bytes per SENT frame* (compression; roughly constant per transport) and the *dedup hit
+  rate* (entirely scene-dependent). Real Pokémon Blue figures, kitty PNG: overworld standing
+  still 2 B/frame @ 99.8 % dedup; **walking 652 B/frame @ 53.2 %**; Oak intro 430 B @ 85 %;
+  `--motion` 1,448 B @ 0 %. The per-sent-frame column barely moves (1.3–2.9 KB), so
+  `--motion` is a fair worst case. Drive real gameplay with `rom_script`'s `state` command +
+  `render_bench --state … --walk` (states for Pokémon Blue take ~4,500 scripted frames of
+  menu navigation to reach the overworld).
+- **Do not overclaim the fix.** In *real* gameplay the old path was often already coping
+  (155 fps walking, because dedup skipped 55 % of frames); it collapses only under **sustained
+  every-frame motion**, which is what the captain's report was (his overlay showed 91 KB being
+  *sent* per frame, i.e. zero dedup). Honest claim: bytes/wire fell ~1,000× unconditionally;
+  the terminal no longer saturates; lighter scenes gain headroom, not a rescue.
+- **The status panel must show small numbers, averaged.** `{:.0}K` renders 87 bytes as `0K`;
+  and the *instantaneous* per-frame value reads `0B` on every deduplicated frame (almost
+  always on a static screen). `Sent`/`tx` are now a **one-second average over displayed
+  frames** via `human_bytes_f`, and `Proto` names the live transport (`shm`/`png`/`legacy`) —
+  a transport negotiated at runtime that nobody can see is one nobody can debug.
+- **Capability probes are fragile in three specific ways — all found only by screenshotting
+  the real frontend, all silent (they just cost you the good transport):** (1) never probe on
+  stdout/stdin, `crossterm` owns them and the reply never arrives — use `/dev/tty`;
+  (2) **drain** stale input first, or crossterm's own startup keyboard query's reply is read
+  as the answer to yours; (3) **knock first** with `CSI 6 n` until the terminal answers, since
+  a terminal launched *for* this process is not yet parsing input. With all three: 6/6 cold
+  starts negotiate. Missing any one: intermittent silent fallback to PNG.
+- **SCREENSHOTS ARE POSSIBLE — the old "screenshots are blocked" note is wrong.** It only
+  tried the X *root* window, which is empty under Wayland. Run the frontend on **XWayland**
+  (`env -u WAYLAND_DISPLAY DISPLAY=:0 wezterm-gui …`) and capture the window **by id**:
+  `WID=$(DISPLAY=:0 xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1);
+  DISPLAY=:0 import -window $WID shot.png`. `import`/`magick`/`xprop` are installed; there is
+  no `xwininfo`/`xdotool`/`grim`. This is how the probe bugs above were found.
+- **Never point the emulator at `~/roms` in a test** — the MBC writes `.sav` next to the ROM.
+  Copy ROM *and* save into `target/` first (the captain's Pokémon Blue save was destroyed
+  once already; the `.gbsave` files there are still all-zero).
+- **`timeout` breaks terminal tests.** GNU `timeout` runs the child in its own process group,
+  so any `tcsetattr` (i.e. crossterm's `enable_raw_mode`) raises SIGTTOU and **stops** the
+  process — which then ignores SIGTERM, so the harness hangs and the app never renders. Use
+  `timeout --foreground`, or no timeout.
 - **Escape hatches:** `GB_TERM_KITTY=shm|noshm|placeholder`, `GB_TERM_IMAGE=rgb` (the
   *pre-compression* payload, so one binary can measure before/after on the same terminal).
 - **Half-block rendering is NOT implemented** — scoped with arithmetic in

@@ -93,6 +93,16 @@ struct Args {
     tty: bool,
     /// Ask the terminal which transports it supports, and print the answers.
     probe: bool,
+    /// Save state to load before measuring, so a run can start from real
+    /// gameplay instead of a title screen.
+    state: Option<String>,
+    /// Hold walking directions during the run.
+    ///
+    /// The honest motion case for a Game Boy: walking scrolls the whole
+    /// background every frame, so nothing is deduplicated and the transport is
+    /// measured on the frames it actually has to send. `--motion` fakes that by
+    /// poking one pixel; this is the real thing.
+    walk: bool,
 }
 
 impl Default for Args {
@@ -113,6 +123,8 @@ impl Default for Args {
             motion: false,
             tty: false,
             probe: false,
+            state: None,
+            walk: false,
         }
     }
 }
@@ -216,6 +228,7 @@ fn run_case(
     path: &'static str,
 ) -> CaseResult {
     let mut gb = Gameboy::new(rom.to_vec(), None);
+    apply_state(&mut gb, args.state.as_deref());
     let mut prep = FramePrep::new();
     let mut changed_frames = 0u32;
     let mut upscaler = Upscaler::new(algo, factor);
@@ -279,9 +292,11 @@ fn run_case(
     };
 
     // Warm-up: get past the boot logo so frames actually change, and let every
-    // buffer reach its steady-state size.
-    for _ in 0..30 {
-        gb.frame();
+    // buffer reach its steady-state size. A loaded state is already past it.
+    if args.state.is_none() {
+        for _ in 0..30 {
+            gb.frame();
+        }
     }
     let warm = prep.map(gb.image(), args.palette).to_vec();
     let warm_up = upscaler
@@ -298,6 +313,9 @@ fn run_case(
     for n in 0..args.frames {
         let loop_start = Instant::now();
 
+        if args.walk {
+            walk_input(&mut gb, n);
+        }
         let t = Instant::now();
         gb.frame();
         let emulate = t.elapsed();
@@ -479,7 +497,7 @@ fn print_table(rows: &[CaseResult], args: &Args) {
 /// actually sustain, using a Device Status Report round-trip per frame as the
 /// barrier. See the module docs for why this exists.
 mod tty_bench {
-    use super::{fit_metrics, Args, DMG_HZ, SRC_H, SRC_W};
+    use super::{apply_state, fit_metrics, walk_input, Args, DMG_HZ, SRC_H, SRC_W};
 
     use gameboy::gameboy::Gameboy;
     use gameboy::screen::frame::FramePrep;
@@ -824,6 +842,7 @@ mod tty_bench {
         };
         let (algo, factor) = args.upscale.unwrap_or((Algorithm::Nearest, 1));
         let mut gb = Gameboy::new(rom.to_vec(), None);
+        apply_state(&mut gb, args.state.as_deref());
         let mut prep = FramePrep::new();
         let mut upscaler = Upscaler::new(algo, factor);
         let (tx_w, tx_h) = upscaler.output_size(SRC_W as usize, SRC_H as usize);
@@ -847,8 +866,10 @@ mod tty_bench {
         let _ = shm_asked;
         let at = CellRect::new(rect.x, rect.y, rect.width, rect.height);
 
-        for _ in 0..30 {
-            gb.frame();
+        if args.state.is_none() {
+            for _ in 0..30 {
+                gb.frame();
+            }
         }
 
         let mut encode_total = Duration::ZERO;
@@ -861,6 +882,9 @@ mod tty_bench {
         let mut done = 0u32;
         let start = Instant::now();
         for n in 0..args.frames {
+            if args.walk {
+                walk_input(&mut gb, n);
+            }
             gb.frame();
             let mapped = prep.map_with(gb.image(), args.palette, |rgba| {
                 if args.motion {
@@ -977,6 +1001,43 @@ fn json_number(json: &str, key: &str) -> f64 {
     rest[..end].parse().unwrap_or(0.0)
 }
 
+/// Apply a save state, if one was asked for. A state that will not load is a
+/// hard error: silently measuring the title screen instead of the gameplay the
+/// operator asked for is exactly the kind of flattering number this tool exists
+/// to stop producing.
+fn apply_state(gb: &mut Gameboy, path: Option<&str>) {
+    let Some(path) = path else { return };
+    let bytes = std::fs::read(path).unwrap_or_else(|e| {
+        eprintln!("cannot read --state {path}: {e}");
+        std::process::exit(2);
+    });
+    if let Err(e) = gb.load_state(&bytes) {
+        eprintln!("cannot load --state {path}: {e:?}");
+        std::process::exit(2);
+    }
+}
+
+/// Walking input: hold one direction for a stretch, then the opposite, so the
+/// character keeps moving instead of walking into a wall and standing still.
+/// 48 frames is about three tiles at the overworld's walking speed.
+fn walk_input(gb: &mut Gameboy, frame: u32) {
+    use gameboy::KeypadKey;
+    const LEG: u32 = 48;
+    let dirs = [
+        KeypadKey::Right,
+        KeypadKey::Down,
+        KeypadKey::Left,
+        KeypadKey::Up,
+    ];
+    let leg = (frame / LEG) as usize % dirs.len();
+    if frame % LEG == 0 {
+        for d in dirs {
+            gb.keyup(d);
+        }
+        gb.keydown(dirs[leg]);
+    }
+}
+
 fn load_rom(path: Option<&str>) -> Vec<u8> {
     let path = path.unwrap_or("third_party/dmg-acid2/dmg-acid2.gb");
     std::fs::read(path).unwrap_or_else(|e| {
@@ -1063,6 +1124,11 @@ fn parse_args() -> Args {
             "--motion" => a.motion = true,
             "--tty" => a.tty = true,
             "--probe" => a.probe = true,
+            "--walk" => a.walk = true,
+            "--state" => {
+                a.state = Some(next(i));
+                i += 1;
+            }
             "--json" => a.json = true,
             "--ndjson" => a.ndjson = true,
             "-h" | "--help" => {
@@ -1072,7 +1138,9 @@ fn parse_args() -> Args {
                                  [--protocol kitty|iterm2] [--path legacy|capped]\n\
                                  [--out FILE] [--motion] [--json] [--ndjson]\n\
                                  [--tty]   drive the real terminal and measure it\n\
-                                 [--probe] ask the terminal what it supports"
+                                 [--probe] ask the terminal what it supports\n\
+                                 [--state FILE] load a save state first\n\
+                                 [--walk]  hold walking directions (real motion)"
                 );
                 std::process::exit(0);
             }

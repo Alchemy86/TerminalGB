@@ -191,30 +191,59 @@ for the captain, whose terminal answers `OK` to both rungs above it.
 
 ---
 
-## 3. Frame differencing
+## 3. Frame differencing — and reading these numbers honestly
 
-A frame that is identical to the one before it should cost nothing, and it does.
+A frame that is identical to the one before it costs nothing.
 [`TermImage::place`](../src/termimage.rs) hashes the pixels it is given and returns
 `changed: false` when neither the frame nor the placement moved; the frontend then writes
 **zero bytes**. No encode, no transmission.
 
 This was already implemented, but the benchmark reported `frames_identical: 0` and so looked
 broken. That was a **reporting bug in the benchmark** — it hard-coded a zero into the
-telemetry sample while tracking the real count in a different variable. Fixed, and the truth
-is emphatic:
+telemetry sample while tracking the real count in a different variable.
 
-| ROM (300 frames, 213 × 55 window) | Identical frames | Bytes/frame, averaged |
-|---|---:|---:|
-| dmg-acid2 (a still test pattern) | **299 / 300** | **6** |
-| Blargg `cpu_instrs` (scrolling text) | **292 / 300** | **26** |
+### Two numbers, never one
 
-Six bytes per frame averaged over a static screen. In real play — menus, dialogue boxes,
-pause screens, anything not scrolling — differencing does most of the work, and the transport
-underneath it only matters while the picture is actually moving.
+Differencing and compression are separate wins and **must be reported separately**, or the
+figure flatters. Quoting an average over a static screen measures the deduplicator and
+almost nothing else:
 
-The `--motion` flag in `render_bench` exists to *defeat* this deliberately (it pokes one
-pixel per frame), because a transport must be measured on the frames it actually has to send.
-Every number in [§2](#2-the-transport-ladder) is a `--motion` number.
+* **bytes per *sent* frame** — what compression and the transport achieved. Roughly constant
+  for a given transport.
+* **dedup hit rate** — what fraction of frames cost nothing at all. Entirely a property of
+  what is on screen.
+
+The average a user experiences is the first multiplied by (1 − the second). A test pattern
+gets a 99 % hit rate and a flattering average; a battle animation gets none.
+
+### Measured on real content
+
+Pokémon Blue, 213 × 55 window, Kitty PNG transport, 600 frames each, driven from a save state
+of actual gameplay (`rom_script`'s `state` command; `render_bench --state … --walk`):
+
+| Scene | Bytes/frame (avg) | Bytes per *sent* frame | Dedup hit rate |
+|---|---:|---:|---:|
+| Overworld, standing still | **2** | 1,254 | **99.8 %** |
+| Overworld, walking | **652** | 1,392 | **53.2 %** |
+| Oak intro (animation + scrolling text) | **430** | 2,877 | **85.0 %** |
+| dmg-acid2 (a still test pattern) | 6 | ~1,300 | 99.7 % |
+| `--motion` (every frame forced to change) | **1,448** | 1,448 | **0 %** |
+
+Read across the "per sent frame" column: **it barely moves**. Compression delivers ~1.3–2.9 KB
+per transmitted frame whether the motion is real or synthetic — so `--motion` is a fair
+worst-case stand-in for a scene the deduplicator cannot help with, and every number in
+[§2](#2-the-transport-ladder) is a `--motion` number, i.e. **the honest worst case, not the
+flattering average**.
+
+Note what the dedup rate is *not*: a constant. Walking halves it; a full-screen battle
+animation would take it to zero. Design for the `--motion` row and treat differencing as a
+bonus.
+
+> **The static-image trap.** An earlier version of this page led with a dmg-acid2 screenshot
+> showing `Sent 0B` and `FPS 57`. dmg-acid2 is a *still image* — nothing changes between
+> frames, so that measured the deduplicator at its best and the transport not at all. Any
+> figure quoted from a static ROM is labelled as such here. If you add measurements, do the
+> same.
 
 ---
 
@@ -238,6 +267,33 @@ waited long enough.
 
 Anything that is not an explicit `OK` means "no", and the frontend uses indexed PNG. That
 default is the safe one: guessing "yes" wrongly shows the user a blank rectangle.
+
+### Asking a terminal a question is harder than it looks
+
+Three defects were found here by running the real frontend in a real terminal and looking at
+the answer, each of which silently cost the session its best transport:
+
+1. **Do not use stdout/stdin.** `crossterm` owns those — raw mode, its own startup queries, a
+   buffered event source — and the reply never reached our read. Measured as a permanently
+   empty reply against a WezTerm that answers the identical query on `/dev/tty` in
+   single-digit milliseconds. The probe now opens the controlling terminal directly.
+2. **Drain before asking.** `crossterm` queries the terminal during startup
+   (keyboard-enhancement support). A leftover reply of *its* still sitting in the buffer is
+   read as the answer to *our* question, so the probe concludes "no" while the real reply
+   arrives a moment later and is discarded. Intermittent — it cost several runs out of six
+   before the drain went in.
+3. **Knock first.** A terminal launched *for* this process is still starting up when we ask,
+   and answers nothing at all. Asking immediately came back empty in most cold-start runs. So
+   the probe sends a cursor-position request until the terminal answers one, and only then
+   asks the capability question.
+
+With all three, six cold starts out of six negotiate shared memory. Without any one of them
+the failure is invisible: the picture is still correct, just carried by a transport a
+thousand times more expensive.
+
+**The general lesson:** a capability handshake that fails *open* (falls back) and is not
+displayed anywhere will silently be wrong forever. That is why the transport is on the status
+panel.
 
 The chosen transport is **visible in the status panel** — `Proto  kitty shm` / `kitty png` /
 `iterm2 png` — because a transport picked at runtime that nobody can see is a transport
@@ -343,7 +399,11 @@ cargo run --release --example render_bench -- --tty --frames 120 --motion --json
 GB_TERM_IMAGE=rgb cargo run --release --example render_bench -- --tty --frames 120 --motion --json
 ```
 
-Measured in a real WezTerm window on this machine, 213 × 55 cells:
+Measured in a real WezTerm window on this machine, 213 × 55 cells.
+
+**Synthetic worst case** (`--motion`, every frame forced to change — the case the captain's
+6 fps report actually was, since his overlay showed 91 KB being *sent* every frame, meaning
+nothing was being deduplicated):
 
 | Transport | Bytes/frame | Achieved fps | Sync timeouts |
 |---|---:|---:|---|
@@ -351,17 +411,40 @@ Measured in a real WezTerm window on this machine, 213 × 55 cells:
 | iTerm2 indexed PNG | 2,022 | 151 | 0 |
 | *Before:* iTerm2 uncompressed | 93,113 | — | **terminal saturated from frame 4** |
 
-The last row is the bug, reproduced. With the old payload WezTerm stops answering within a
-handful of frames and then stops draining its pty altogether — the run does not merely get
-slow, it wedges. (That is also why `--tty` sets the terminal non-blocking and reports
-`terminal_saturated` rather than hanging: a blocking `write` of a 91 KB frame to a terminal
-that has stopped reading parks the process somewhere even `timeout` cannot reach.)
+That last row is the bug reproduced: WezTerm stops answering within a handful of frames and
+then stops draining its pty altogether — the run does not get slow, it *wedges*. (Hence
+`--tty` setting the terminal non-blocking and reporting `terminal_saturated` rather than
+hanging: a blocking `write` of a 91 KB frame to a terminal that has stopped reading parks the
+process somewhere even `timeout` cannot reach.)
 
-**Caveat, stated plainly:** these runs are short (tens of frames) because the WezTerm window
-was spawned unfocused on a headless-ish session, and an unfocused WezTerm throttles and
-eventually stalls regardless of what we send it. The byte counts are exact and the "before"
-saturation is unambiguous; a *sustained* frame-rate figure needs a human with a visible
-window. The captain has the stats overlay and can read it in one glance — see below.
+**Real gameplay** — Pokémon Blue, loaded from a save state of the overworld, walking
+(`--state … --walk`), 150 frames:
+
+| Transport | Bytes/frame (avg) | Per sent frame | Dedup | Achieved fps |
+|---|---:|---:|---:|---:|
+| Kitty shared memory | **39** | **87** | 55.3 % | **184** |
+| iTerm2 indexed PNG | 811 | 1,816 | 55.3 % | 160 |
+| *Before:* iTerm2 uncompressed | 41,590 | 93,112 | 55.3 % | 155 |
+| Kitty shm, standing still | 1 | 150 | 99.3 % | 267 |
+| Kitty shm, Oak intro (text + animation) | 26 | 89 | 70.7 % | 201 |
+
+**Be careful with that "before" row — it does not show a collapse.** At 150 frames of walking
+the old path still managed 155 fps, because differencing skipped 55 % of the frames and the
+burst was short. The old path collapses when the picture changes *every* frame and the run is
+*sustained*: that is the synthetic table above, and it is the captain's reported case.
+So the honest claim is not "6 fps became 184 fps everywhere" — it is:
+
+* **Bytes on the wire fell ~1,000×** (93,112 → 87 per transmitted frame). That is unambiguous
+  and scene-independent.
+* **The terminal no longer saturates** under sustained full-motion, which is what produced
+  6 fps.
+* **In lighter scenes the old path was already coping**, and the gain there is headroom
+  (155 → 184 fps) rather than a rescue.
+
+**Caveat, stated plainly:** these runs are short (tens to ~150 frames) because the WezTerm
+window is spawned unfocused from an automated session, and an unfocused WezTerm throttles
+regardless of what we send it. Byte counts are exact; the saturation is unambiguous; a
+*sustained* frame-rate figure in normal use still wants a human watching a visible window.
 
 ---
 
@@ -370,13 +453,22 @@ window. The captain has the stats overlay and can read it in one glance — see 
 In the terminal frontend, press **`t`** for the stats overlay, or read the Status panel:
 
 ```
-Sent      160x144  87B        <-- was "91K"
+Sent      160x144  28B        <-- was "91K"
 Proto     kitty shm           <-- transport chosen by handshake
-FPS       60 · emu 60         <-- was "6 · emu 60"
+FPS       58 · emu 60
 ```
 
-- `Sent` should be **tens of bytes** on Kitty with shared memory, or **~2K** on iTerm2.
-  If it still reads `91K`, the transport did not engage.
+That is a real capture of Pokémon Blue's animated intro, not a still image.
+
+`Sent` is a **one-second average over displayed frames**, not the last frame's size. It used
+to be the instantaneous value, which reads `0B` on every deduplicated frame — so on a static
+screen it was almost always `0B`, and even in motion it flickered between `0B` and the real
+figure. A number that is zero half the time cannot tell anyone whether the transport is
+working, which is the one thing this panel is for.
+
+- `Sent` should be **tens of bytes** on Kitty with shared memory, or a few hundred to ~2K on
+  iTerm2, depending on how much is moving. If it still reads `91K`, the transport did not
+  engage.
 - `Proto` names the transport: `shm`, `png`, or `legacy`.
 - `same` in the `t` overlay counts skipped identical frames; on a menu or a pause screen it
   should climb steadily.
@@ -403,7 +495,31 @@ cargo run --release --example render_bench -- --probe
 
 # What frame rate does this terminal actually achieve?
 cargo run --release --example render_bench -- --tty --frames 120 --motion --json
+
+# Real gameplay instead of a title screen: capture a save state with rom_script's
+# `state` command, then load it and hold walking directions.
+cargo run --release --example rom_script -- ROM.gb script.txt out/   # script ends: state overworld
+cargo run --release --example render_bench -- --rom ROM.gb \
+    --state out/overworld.gbss --walk --frames 600 --json
 ```
+
+### Screenshotting the terminal frontend
+
+Contrary to a long-standing note in this repo, the frontend **can** be captured on this
+GNOME/Wayland box — the earlier attempt only tried the X root window, which is empty under
+Wayland because Wayland clients do not draw there. Run the terminal on **XWayland** and
+capture its window by id:
+
+```bash
+env -u WAYLAND_DISPLAY DISPLAY=:0 wezterm-gui --config initial_cols=120 \
+    start --always-new-process --class gbshot -- ./target/release/examples/terminal ROM.gb &
+sleep 8
+WID=$(DISPLAY=:0 xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1)
+DISPLAY=:0 import -window "$WID" shot.png
+```
+
+This is how the shared-memory negotiation bugs above were found: they are invisible in every
+headless test and obvious in one screenshot of the status panel.
 
 ---
 

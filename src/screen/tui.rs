@@ -550,6 +550,16 @@ struct Session {
     tx_px: (u32, u32),
     /// Escape-sequence bytes handed to the terminal for the last drawn frame.
     tx_bytes: usize,
+    /// Bytes transmitted over the current one-second window, and the settled
+    /// average from the last one.
+    ///
+    /// The status panel used to show the *last frame's* byte count, which reads
+    /// `0B` on every deduplicated frame — on a static screen that is almost
+    /// always, and even in motion it flickers between 0 and the real figure. A
+    /// number that is zero half the time cannot tell anyone whether the
+    /// transport is working, which is the one thing this panel is for.
+    tx_window: usize,
+    tx_per_frame: f32,
     /// The image sequence to write straight to the terminal once the frame has
     /// been flushed. Empty when the picture did not change.
     pending_wire: String,
@@ -930,6 +940,8 @@ impl App {
                     disp_px: (0, 0),
                     tx_px: (160, 144),
                     tx_bytes: 0,
+                    tx_window: 0,
+                    tx_per_frame: 0.0,
                     pending_wire: String::new(),
                     fps: 0.0,
                     emu_fps: 0.0,
@@ -1145,6 +1157,16 @@ impl App {
                 let secs = elapsed.as_secs_f32();
                 s.fps = s.disp_count as f32 / secs;
                 s.emu_fps = s.emu_count as f32 / secs;
+                // Per *displayed* frame, so it is comparable with the byte
+                // figures in docs/rendering.md — deduplicated frames are
+                // displayed frames that cost nothing, and averaging over them
+                // is exactly the honest picture.
+                s.tx_per_frame = if s.disp_count > 0 {
+                    s.tx_window as f32 / s.disp_count as f32
+                } else {
+                    0.0
+                };
+                s.tx_window = 0;
                 s.disp_count = 0;
                 s.emu_count = 0;
                 s.fps_mark = Instant::now();
@@ -2350,7 +2372,7 @@ impl App {
             Line::from(format!("pal  {:.2}ms", s.t_palette)),
             Line::from(format!("up   {:.2}ms", s.t_upscale)),
             Line::from(format!("enc  {:.2}ms", s.t_encode)),
-            Line::from(format!("tx   {}", human_bytes(s.tx_bytes))),
+            Line::from(format!("tx   {}/f", human_bytes_f(s.tx_per_frame))),
             Line::from(format!("via  {}", s.transport_label())),
             Line::from(format!("drop {}", s.frames_dropped)),
             Line::from(format!("same {}", s.frames_identical)),
@@ -2583,6 +2605,7 @@ impl App {
                     s.frames_identical += 1;
                 }
                 s.tx_bytes = placement.payload_bytes;
+                s.tx_window += placement.payload_bytes;
                 // The sequence is written to the terminal *after* the frame is
                 // flushed (see the main loop), not stuffed into a cell symbol:
                 // a 92 KB symbol makes `ratatui`'s diff re-emit the whole
@@ -2661,18 +2684,28 @@ impl App {
                     s.emu_fps,
                     s.paused,
                     s.tx_px,
-                    s.tx_bytes,
+                    s.tx_per_frame,
                     s.transport_label(),
                 )
             })
-            .unwrap_or((String::new(), "", 1.0, 0.0, 0.0, false, (160, 144), 0, "-"));
+            .unwrap_or((
+                String::new(),
+                "",
+                1.0,
+                0.0,
+                0.0,
+                false,
+                (160, 144),
+                0.0,
+                "-",
+            ));
         let status = vec![
             kv("ROM", &truncate(&title, 18)),
             kv("MBC", mbc),
             kv("Scale", &format!("{scale:.1}x")),
             kv(
                 "Sent",
-                &format!("{}x{} {}", sent.0, sent.1, human_bytes(tx)),
+                &format!("{}x{} {}", sent.0, sent.1, human_bytes_f(tx)),
             ),
             kv(
                 "Proto",
@@ -2941,18 +2974,17 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Per-frame transmitted bytes, in units a human can act on.
 ///
-/// This used to be `{:.0}K`, which renders the shared-memory transport's ~87
-/// bytes as "0K" and the compressed one's 2 KB as "2K" — i.e. it hides the
-/// difference between "excellent" and "broken". The status panel is how the
-/// captain checks whether the transport is doing its job, so it must show the
-/// small numbers.
-fn human_bytes(n: usize) -> String {
-    if n < 1024 {
-        format!("{n}B")
-    } else if n < 100 * 1024 {
-        format!("{:.1}K", n as f32 / 1024.0)
+/// This used to be `{:.0}K`, which renders the shared-memory transport's ~87 bytes
+/// as `0K` and the compressed one's 2 KB as `2K` — i.e. it hid the difference
+/// between "excellent" and "broken". The status panel is how you check whether the
+/// transport is doing its job, so it has to show the small numbers.
+fn human_bytes_f(n: f32) -> String {
+    if n < 1024.0 {
+        format!("{n:.0}B")
+    } else if n < 100.0 * 1024.0 {
+        format!("{:.1}K", n / 1024.0)
     } else {
-        format!("{:.0}K", n as f32 / 1024.0)
+        format!("{:.0}K", n / 1024.0)
     }
 }
 
@@ -2993,37 +3025,131 @@ fn probe_shm_support() {
         return;
     }
     let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
+        debug_layout("[shm] no shared memory available to offer the terminal");
+        return;
+    };
+    // Talk to `/dev/tty`, not to stdout/stdin.
+    //
+    // Writing the query to `io::stdout()` and reading the answer from fd 0
+    // measurably does not work here: `crossterm` owns those handles (raw mode,
+    // its own terminal queries during startup, its buffered event source), and
+    // the reply never reaches our read — measured as an empty reply against a
+    // WezTerm that answers the same query on `/dev/tty` in single-digit
+    // milliseconds. The controlling terminal is the same device either way, so
+    // opening it directly costs nothing and shares nothing.
+    let Some(mut tty) = open_tty() else {
+        debug_layout("[shm] no /dev/tty — assuming no shared memory");
+        query.finish();
         return;
     };
     use std::io::Write as _;
-    let mut out = io::stdout();
-    let asked = out
+    // Wait for the terminal to be *demonstrably answering* before asking it
+    // anything that matters.
+    //
+    // A terminal launched for this process is still starting up when we get
+    // here, and a capability question asked too early is answered with silence
+    // — which is indistinguishable from "not supported" and costs the session
+    // its best transport for the whole run. Measured on a cold WezTerm window:
+    // asking immediately came back empty in most runs. So knock first with a
+    // cursor-position request, which every terminal answers, and only ask once
+    // it has.
+    if !terminal_is_answering(&mut tty) {
+        debug_layout("[shm] terminal never answered a cursor report — assuming no");
+        query.finish();
+        return;
+    }
+    let asked = tty
         .write_all(query.seq.as_bytes())
-        .and_then(|_| out.write_all(b"\x1b[6n"))
-        .and_then(|_| out.flush())
+        .and_then(|_| tty.write_all(b"\x1b[6n"))
+        .and_then(|_| tty.flush())
         .is_ok();
     if asked {
-        let reply = read_reply(Duration::from_millis(250));
-        SHM_OK.store(
-            crate::termimage::shm_reply_ok(&reply, SHM_QUERY_ID),
-            Ordering::Relaxed,
-        );
+        let reply = read_reply(&tty, SHM_PROBE_TIMEOUT);
+        let ok = crate::termimage::shm_reply_ok(&reply, SHM_QUERY_ID);
+        SHM_OK.store(ok, Ordering::Relaxed);
+        // The transport is negotiated once and invisibly; when it comes out
+        // "no" the only way to tell a terminal that refused from a reply we
+        // mis-read is to see the bytes. Gated, so it costs nothing normally.
+        debug_layout(&format!(
+            "[shm] asked id={SHM_QUERY_ID} ok={ok} reply={:?}",
+            reply
+        ));
+    } else {
+        debug_layout("[shm] could not write the query to /dev/tty");
     }
     query.finish();
 }
 
 const SHM_QUERY_ID: u32 = 0x0067_6209;
 
+/// Knock until the terminal answers a cursor-position request, or give up.
+///
+/// Returns as soon as one reply arrives, so on a warm terminal this costs a
+/// millisecond or two. The total budget is deliberately long because the cost
+/// of being impatient is silent and lasts the whole session, while the cost of
+/// waiting is paid once, at launch, only by a terminal that is not answering.
+fn terminal_is_answering(tty: &mut std::fs::File) -> bool {
+    use std::io::Write as _;
+    // Discard anything already queued. `crossterm` queries the terminal during
+    // startup (keyboard-enhancement support), and a reply of its that is still
+    // sitting in the buffer would be read as the answer to *our* question —
+    // which then reports "no shared memory" while the real reply arrives a
+    // moment later and is thrown away. Observed as an intermittent false
+    // negative on cold starts.
+    while !read_reply(tty, Duration::from_millis(20)).is_empty() {}
+    for _ in 0..HANDSHAKE_KNOCKS {
+        if tty.write_all(b"\x1b[6n").and_then(|_| tty.flush()).is_err() {
+            return false;
+        }
+        if read_reply(tty, HANDSHAKE_KNOCK_WAIT).contains('R') {
+            return true;
+        }
+    }
+    false
+}
+
+const HANDSHAKE_KNOCKS: usize = 10;
+const HANDSHAKE_KNOCK_WAIT: Duration = Duration::from_millis(300);
+
+/// How long to wait for the terminal's capability answer at startup.
+///
+/// Generous on purpose, and it almost never costs anything: the wait ends the
+/// moment the cursor-position **fence** arrives, which a live terminal answers
+/// in single-digit milliseconds, so this deadline is only reached by a terminal
+/// that is not answering at all.
+///
+/// It has to be generous because a terminal launched *for* this process is
+/// still starting up when we ask. Measured on a cold WezTerm window: at 500 ms
+/// the probe came back completely empty — no reply, not even the fence — in two
+/// runs out of three, and the session silently fell back to the PNG transport
+/// for its whole lifetime. Getting this wrong is invisible except in the status
+/// panel, which is exactly the kind of failure worth over-waiting to avoid.
+const SHM_PROBE_TIMEOUT: Duration = Duration::from_millis(2500);
+
 /// Read whatever the terminal says back, up to the cursor-position fence.
 ///
 /// `crossterm` cannot help here: it parses input into `Event`s and drops the
-/// application-specific `APC` reply we are waiting for. So this reads the raw
-/// descriptor, and only during startup — once the event loop owns stdin,
-/// nothing else may read it.
+/// application-specific `APC` reply we are waiting for. So this reads the
+/// controlling terminal directly, and only during startup — once the event loop
+/// owns the terminal, nothing else may read it.
 #[cfg(all(unix, feature = "libc"))]
-fn read_reply(timeout: Duration) -> String {
+fn open_tty() -> Option<std::fs::File> {
+    std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()
+}
+
+#[cfg(not(all(unix, feature = "libc")))]
+fn open_tty() -> Option<std::fs::File> {
+    None
+}
+
+#[cfg(all(unix, feature = "libc"))]
+fn read_reply(tty: &std::fs::File, timeout: Duration) -> String {
     use std::os::unix::io::AsRawFd;
-    let fd = io::stdin().as_raw_fd();
+    let fd = tty.as_raw_fd();
     let deadline = Instant::now() + timeout;
     let mut got = String::new();
     let mut buf = [0u8; 256];
@@ -3054,7 +3180,7 @@ fn read_reply(timeout: Duration) -> String {
 }
 
 #[cfg(not(all(unix, feature = "libc")))]
-fn read_reply(_timeout: Duration) -> String {
+fn read_reply(_tty: &std::fs::File, _timeout: Duration) -> String {
     String::new()
 }
 

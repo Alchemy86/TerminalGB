@@ -20,6 +20,7 @@
 //! tap  <key> [times]                press/release, 6 frames held
 //! mash <key> <times> <hold> <gap>   repeated press/release
 //! shot <name>                       write <frame>-<name>.png
+//! state <name>                      write <name>.gbss (a save state)
 //! sram                              report the save files on disk
 //! ```
 //!
@@ -142,6 +143,16 @@ fn main() {
                 for _ in 0..n {
                     d.tap(k, 6, 10);
                 }
+            }
+            "state" => {
+                // Freeze the machine here so a benchmark can start from real
+                // gameplay instead of a title screen. Reaching the overworld in
+                // Pokemon Blue takes ~4,500 scripted frames of menu navigation;
+                // replaying that inside a timed run would measure the intro.
+                let name = parts.get(1).copied().unwrap_or("state");
+                let path = d.outdir.join(format!("{name}.gbss"));
+                std::fs::write(&path, d.gb.save_state()).unwrap();
+                println!("  state {}", path.display());
             }
             "sram" => {
                 report_sram(&work.with_extension("sav"));
