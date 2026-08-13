@@ -17,6 +17,17 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   `libasound2-dev` / `alsa-lib-devel` (`could not find system library 'alsa'` otherwise).
   CI installs `libasound2-dev` (`.github/workflows/ci.yml`). Chosen default: audio **off**,
   because the whole point was that a fresh clone must not need ALSA; documented in README.
+- **Native builds require ALSA dev headers.** `cpal` is a non-optional dependency
+  (`Cargo.toml`), so `cargo build`, `cargo test`, the examples, and the FFI build **all**
+  fail on a Linux box without `libasound2-dev` / `alsa-lib-devel` — not just the audio path.
+  CI installs `libasound2-dev` (`.github/workflows/ci.yml`). A fresh clone on a box without
+  it fails with `could not find system library 'alsa'`. Feature-gating audio is a known
+  roadmap item.
+  - **Local workaround without the `-devel` package** (if only the `libasound.so.2`
+    *runtime* lib is present): make a private `alsa.pc` pointing `libdir` at a dir holding a
+    `libasound.so -> libasound.so.2` symlink, then `PKG_CONFIG_PATH=<that dir> cargo …`.
+    `alsa-sys` only needs pkg-config metadata + the lib to link (no headers). Touches
+    nothing in the repo — do not add ALSA to `Cargo.toml`.
 - Toolchain is pinned to Rust **1.83.0** via `rust-toolchain`. `make lint` = `cargo fmt
   --check` + `cargo clippy --all-targets -D warnings`.
 - WASM build: `cargo build --release --target wasm32-unknown-unknown` (audio is compiled
@@ -49,9 +60,20 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ## Sharp edges (documented in the component pages)
 
 - The core is closely modelled on [mvdnes/rboy](https://github.com/mvdnes/rboy).
-- Known-inaccurate on purpose: HALT bug and DMG OAM-corruption bug not modelled; OAM DMA is
-  instantaneous and unguarded; PPU mode 3 is fixed-length; timer uses separate DIV/TIMA
-  counters (no falling-edge quirks); interrupt dispatch charges 16 T-cycles vs hardware's 20.
+- **Timer is stepped per CPU memory access** (`MemoryManagementUnit::bus_tick`, gated by
+  `bus_tick_enabled` around `Cpu::operation`): each `rb`/`wb` advances the timer one
+  M-cycle *before* the access, and `do_cycle` applies only the instruction's remaining
+  internal cycles. This makes memory reads/writes land on the correct sub-instruction cycle
+  → **Blargg `mem_timing` + `mem_timing-2` PASS**. Only the timer is per-access; PPU/APU
+  stay batched, so frame rendering is unchanged. Costs ~15% on a pure-CPU benchmark
+  (headless still ~60× realtime). The **HALT bug IS modelled** now (`halt_bug` flag; PC
+  rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
+- Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
+  OAM-corruption bug not modelled (`oam_bug` red-by-design — DMG defect, we boot CGB); OAM
+  DMA instantaneous/unguarded and PPU mode 3 fixed-length (both need a cycle-stepped
+  PPU/CPU); timer uses separate DIV/TIMA counters (no falling-edge quirks — no wired test);
+  interrupt dispatch charges 16 T-cycles vs hardware's 20 (its only test, `interrupt_time`,
+  can't run headless — it needs an APU: `sync_apu` spins on `NR52`).
 - `get_mbc` (`src/mbc/mod.rs`) returns MBC3 for **any** cartridge when built without a
   filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled

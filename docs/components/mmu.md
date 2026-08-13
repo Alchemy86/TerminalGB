@@ -75,17 +75,26 @@ back with the top three bits set (`intf | 0b11100000`, [`mod.rs:224`](../../src/
 
 **`do_cycle`** ([`mod.rs:180`](../../src/mmu/mod.rs)) ticks the sub-components and folds
 their interrupts into `intf`: it runs VRAM DMA first, then `timer` and `sound` on
-double-speed-aware `cputicks`, and `gpu`/VRAM-DMA on `gputicks`.
+double-speed-aware `cputicks`, and `gpu`/VRAM-DMA on `gputicks`. **The timer, however, is
+advanced per memory access, not just here.** While a CPU instruction executes, every
+`rb`/`wb` first calls `bus_tick` — one M-cycle of timer — so accesses land on the correct
+sub-instruction cycle (this is why Blargg `mem_timing` passes); `do_cycle` then applies
+only the instruction's *remaining* internal cycles to the timer so the per-instruction
+total is unchanged. `bus_tick` is a no-op unless a CPU instruction is executing, so OAM
+DMA (which re-uses `rb`/`wb`) and boot-time setup do not double-count — `oamdma` toggles
+the flag off around its copy.
 
 **OAM DMA** — `oamdma` ([`mod.rs:330`](../../src/mmu/mod.rs)):
 
 ```rust
 fn oamdma(&mut self, value: u8) {
+    let prev = self.set_bus_ticking(false); // don't tick the timer per byte
     let base = (value as u16) << 8;
     for i in 0..0xA0 {
         let b = self.rb(base + i);
         self.wb(0xFE00 + i, b);
     }
+    self.set_bus_ticking(prev);
 }
 ```
 
@@ -111,11 +120,16 @@ fn oamdma(&mut self, value: u8) {
 
 ## 5. Known quirks and edge cases
 
-- **OAM corruption bug (DMG) — NOT modelled.** On DMG, certain 16-bit operations
-  (`INC`/`DEC` of a register used as an address, etc.) that touch the `0xFE00–0xFEFF`
-  range while the PPU is in mode 2 corrupt OAM in a specific pattern. Because this
-  emulator never blocks OAM by mode, the precondition can't even arise. (Blargg `oam_bug`
-  fails; Pan Docs — [OAM corruption](https://gbdev.io/pandocs/OAM_Corruption_Bug.html).)
+- **OAM corruption bug (DMG) — NOT modelled (documented non-goal).** On DMG, certain
+  16-bit operations (`INC`/`DEC` of a register used as an address, etc.) that touch the
+  `0xFE00–0xFEFF` range while the PPU is in mode 2 corrupt OAM in a specific pattern.
+  Because this emulator never blocks OAM by mode, the precondition can't even arise, and
+  reproducing it would require the mode-dependent OAM bus model below. **Deliberately not
+  fixed:** it is a DMG-only hardware *defect* that the emulator boots in CGB mode
+  (`new_cgb`) anyway, essentially no commercial game depends on, and modelling it is real
+  work (mode-2 bus tracking + the corruption pattern) for ~zero practical gain. Blargg
+  `oam_bug` therefore stays red-by-design and is pinned as such in `baseline.txt`. (Pan
+  Docs — [OAM corruption](https://gbdev.io/pandocs/OAM_Corruption_Bug.html).)
 - **OAM DMA restricted bus.** During a real OAM DMA the CPU running from ROM would read
   DMA-bus garbage unless it runs from HRAM; games copy a tiny wait loop into HRAM for
   exactly this. The emulator's instant DMA sidesteps the whole mechanism.
@@ -141,10 +155,13 @@ fn oamdma(&mut self, value: u8) {
    read as 1). *(Not covered.)*
 4. **OAM DMA copies 160 bytes.** After `wb(0xFF46, 0xC0)`, OAM `0xFE00–0xFE9F` equals
    `0xC000–0xC09F`. *(Not covered.)*
-5. **OAM DMA takes 160 M-cycles and locks the bus to HRAM.** **Expected to FAIL —
-   instantaneous, unguarded.** *(Not covered; known-divergent.)*
-6. **VRAM is unreadable during mode 3** (returns `0xFF`). **Expected to FAIL — not
-   enforced.** *(Not covered; known-divergent.)*
+5. **OAM DMA takes 160 M-cycles and locks the bus to HRAM.** **Documented non-goal —
+   instantaneous, unguarded.** Faithful DMA bus-locking needs a cycle-stepped CPU (the PPU
+   and CPU sharing the bus dot-by-dot); the project has not committed to that restructure,
+   and no wired ROM proves it. *(Not covered; structural non-goal.)*
+6. **VRAM is unreadable during mode 3** (returns `0xFF`). **Documented non-goal — not
+   enforced.** Same structural dependency as #5 (needs cycle-accurate PPU/CPU bus
+   arbitration). *(Not covered; structural non-goal.)*
 7. **CGB WRAM banking.** With `SVBK` selecting bank 3, `0xD000` accesses WRAM bank 3;
    bank 0 selection aliases to bank 1. *(Not covered.)*
 8. **CGB VRAM banking.** `VBK` (`0xFF4F`) switches the `0x8000–0x9FFF` bank. *(Not covered.)*
@@ -155,14 +172,16 @@ fn oamdma(&mut self, value: u8) {
 11. **Post-boot register defaults.** After construction, `rb(0xFF40) == 0x91` (LCDC),
     `rb(0xFF47) == 0xFC` (BGP). *(Not covered.)*
 12. **OAM corruption bug.** A qualifying mode-2 OAM access corrupts OAM per the documented
-    pattern. **Expected to FAIL — precondition not modelled.** *(Not covered.)*
+    pattern. **Documented non-goal — precondition not modelled** (DMG-only defect; we boot
+    CGB; ~no games depend on it). Blargg `oam_bug` stays red-by-design in `baseline.txt`.
+    *(Not covered; deliberate non-goal — §5.)*
 
 ## 7. Test ROMs that exercise it
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Blargg `oam_bug`** | The DMG OAM corruption bug | Fails today (bug not modelled). |
-| **Blargg `mem_timing` / `mem_timing-2`** | Cycle-exact timing of memory reads/writes | The instruction-granular bus model (see [CPU](cpu.md)) surfaces here. |
+| **Blargg `oam_bug`** | The DMG OAM corruption bug | **Documented non-goal** — bug not modelled (§5); pinned red in `baseline.txt`. |
+| **Blargg `mem_timing` / `mem_timing-2`** | Cycle-exact timing of memory reads/writes | **PASS** — timer stepped per memory access (see [CPU §4](cpu.md), [Timer §4](timer.md)). |
 | **Mooneye `acceptance/oam_dma/`** (`basic`, `reg_read`, `sources-GS`) | OAM-DMA copy + timing + which sources are legal | Expected reds against the instant-DMA approximation. |
 | **Mooneye `acceptance/bits/`** (`unused_hwio-GS`, `reg_f`) | Unused-bit read-back behaviour of hardware registers | Bad `\| 0b…` masks in `rb`. Blargg's `bits-unused`/`bits-bank1` are the repo's known failures here. |
 | **Mooneye `emulator-only/mbcX/`** | (routes into the MBC — see [MBC](mbc.md)) | — |

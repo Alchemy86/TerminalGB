@@ -71,11 +71,23 @@ if self.counter == 0 {              // timer.rs:82
 }
 ```
 
+### Sub-instruction access timing (why `mem_timing` passes)
+
+Although the timer still uses two accumulators (below), the *phase* at which an
+instruction's memory access samples the timer is now correct. `MemoryManagementUnit`
+advances the timer by one M-cycle at **each** CPU memory access, *before* the access is
+performed (`bus_tick`), and applies the instruction's remaining internal cycles
+afterward. So an instruction that reads `TIMA` reads it on its **last** M-cycle (and a
+read-modify-write reads on the next-to-last and writes on the last), matching hardware.
+**Blargg `mem_timing` and `mem_timing-2` PASS** on the strength of this. Only the timer is
+stepped per-access; the PPU/APU remain batched (see [CPU §4](cpu.md)).
+
 ### Honest approximations
 
 The emulator uses **two independent accumulators** (`internaldiv`, `internalcnt`) rather
 than one shared 16-bit system counter. Several documented quirks therefore **do not
-occur**:
+occur** (none is exercised by a ROM in the wired suite — Mooneye's timer edge tests are
+not vendored — so each remains a documented divergence rather than a red test):
 
 - **DIV-write does not glitch `TIMA`.** On hardware, resetting `DIV` can produce a spurious
   `TIMA` increment (a falling edge on the selected bit). Here `DIV` and `TIMA` are separate

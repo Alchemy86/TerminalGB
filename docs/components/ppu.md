@@ -97,10 +97,16 @@ colour-correction curve ([`mod.rs:423`](../../src/gpu/mod.rs)).
 
 ### Honest approximations
 
-- **Mode 3 is fixed at 172 dots.** Real mode 3 is **variable (172–289)** — it lengthens
-  with `SCX` fine-scroll, window activation, and sprite count, stealing time from HBlank.
-  This emulator uses a flat `80 / 172 / 204` split ([`mod.rs:149–159`](../../src/gpu/mod.rs))
-  with no penalty model. Games that time raster effects to mode-3 length will drift.
+- **Mode 3 is fixed at 172 dots (documented non-goal).** Real mode 3 is **variable
+  (172–289)** — it lengthens with `SCX` fine-scroll, window activation, and sprite count,
+  stealing time from HBlank. This emulator uses a flat `80 / 172 / 204` split
+  ([`mod.rs:149–159`](../../src/gpu/mod.rs)) with no penalty model. Games that time raster
+  effects to mode-3 length will drift. **Deliberately not fixed here:** a faithful
+  variable mode 3 (and the VRAM/OAM bus-blocking that rides on it) requires a per-dot,
+  cycle-stepped PPU sharing the bus with a cycle-stepped CPU — the structural restructure
+  `docs/debugging.md` flags as justified *only* if the project commits to full cycle
+  accuracy. No wired ROM proves it (dmg-acid2 is a static single-frame composition and
+  **already renders pixel-correct** — see §6.12), so it stays an approximation.
 - **Line stepping is coarse (≤80-tick chunks), not per-dot.** `do_cycle` consumes ticks in
   blocks ([`mod.rs:131`](../../src/gpu/mod.rs)); a mid-scanline register read may see a
   slightly stale mode/`LY`.
@@ -158,7 +164,10 @@ colour-correction curve ([`mod.rs:423`](../../src/gpu/mod.rs)).
 11. **STAT interrupt blocking.** Two STAT sources active in the same window raise the STAT
     interrupt only once (rising edge). **Expected to FAIL — not modelled.** *(Not covered.)*
 12. **dmg-acid2 / cgb-acid2 render.** The reference "face" test image renders pixel-correct
-    (see [testing](../testing.md)). *(Not covered.)*
+    (see [testing](../testing.md)). **COVERED for dmg-acid2** — the harness pins its frame
+    hash, and a pixel diff against `third_party/dmg-acid2/reference-dmg.png` shows **zero
+    differing pixels** across the four gray levels (only the exact shade constants differ,
+    a palette choice). The PPU already draws the acid2 face correctly.
 
 ## 7. Test ROMs that exercise it
 

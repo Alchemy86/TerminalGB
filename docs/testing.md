@@ -62,7 +62,8 @@ The classic battery. Sub-suites: `cpu_instrs` (11 sub-tests), `instr_timing`, `m
   on-screen too.) → depends on the [Serial](components/serial.md) capture hook.
 - **This repo:** the `retrio/gb-test-roms` submodule in [`.gitmodules`](../.gitmodules) is
   now **wired into CI** — the harness runs `cpu_instrs` (11/11 pass), `instr_timing` (pass),
-  `mem_timing`/`mem_timing-2` (fail), `halt_bug` and `oam_bug` (fail) headlessly. See
+  `mem_timing`/`mem_timing-2` (**pass**), `halt_bug` (**pass**); `oam_bug` and
+  `interrupt_time` stay red as documented non-goals. See
   [What Phase 1 actually built](#what-phase-1-actually-built--the-harness-in-this-repo).
 - Sources: [gg8 Test ROMs](https://gbdev.gg8.se/wiki/articles/Test_ROMs) ·
   [c-sp collection](https://github.com/c-sp/game-boy-test-roms).
@@ -211,31 +212,33 @@ expected-results file, [`testharness/baseline.txt`](../testharness/baseline.txt)
 |---|---|---|
 | Blargg `cpu_instrs` (01–11) | **11/11 PASS** | every opcode group |
 | Blargg `instr_timing` | **PASS** | |
-| Blargg `mem_timing` | **FAIL** | memory-access M-cycle timing |
-| Blargg `mem_timing-2` | FAIL (screen) | draws "Run failed tests…" |
-| Blargg `interrupt_time` | incomplete (screen) | renders title only in-window — 16-vs-20 T-cycle dispatch |
-| Blargg `halt_bug` | FAIL (screen) | HALT bug not modelled |
-| Blargg `oam_bug` | FAIL (screen) | draws "Failed #2" — DMG OAM corruption not modelled |
-| dmg-acid2 | **renders correctly** | face + "HELLO WORLD!" matches `reference-dmg.png` by eye |
+| Blargg `mem_timing` | **PASS** | timer stepped per memory access (was FAIL) |
+| Blargg `mem_timing-2` | **PASS** (screen) | draws `01:ok 02:ok 03:ok Passed` (was FAIL) |
+| Blargg `interrupt_time` | incomplete (screen) — **documented non-goal** | hangs headless: `REQUIRE_CGB`, polls `NR52` with no APU. Would test 16-vs-20 T-cycle dispatch if it could run |
+| Blargg `halt_bug` | **PASS** (screen) | renders `Passed` — HALT bug now modelled (was FAIL) |
+| Blargg `oam_bug` | FAIL (screen) — **documented non-goal** | draws "Failed #2" — DMG OAM corruption deliberately not modelled |
+| dmg-acid2 | **renders correctly** | **zero** differing pixels vs `reference-dmg.png` (4-level pixel diff) |
 
-**Blargg serial suite: 12/13 passing.** The one serial failure (`mem_timing`) and the four
-frame-hash failures map exactly onto the six documented divergences (see the component
-pages and [`CLAUDE.md`](../CLAUDE.md)):
-`mem_timing`/`mem_timing-2` → memory-access timing approximations; `interrupt_time` →
-16-vs-20 T-cycle interrupt dispatch; `halt_bug` → HALT bug unmodelled; `oam_bug` → DMG
-OAM-corruption unmodelled. The whole suite runs in **~1.5 s**.
+**Blargg serial suite: 13/13 passing** (was 12/13 — `mem_timing` fixed). The remaining
+frame-hash reds are now **deliberate, documented non-goals**, not outstanding bugs:
+`interrupt_time` cannot run headless (no APU → `sync_apu`/`get_cpu_speed` spin on `NR52`),
+and its 16-vs-20 T-cycle interrupt-dispatch gap has no other ROM in the wired suite to
+prove a fix against; `oam_bug` is a DMG-only hardware defect the CGB-booting emulator has
+~no reason to reproduce. Both are pinned in `baseline.txt` so they can't silently change.
+The mode-3-length and OAM-DMA-bus-restriction approximations need a cycle-stepped PPU/CPU
+(a structural commitment the project has not made). The whole suite runs in **~1.8 s**.
 
-acid2 rendering correctly is a genuinely good result — the PPU composites background,
-window and objects well enough to pass the face test visually, despite the fixed mode-3 /
-whole-line-render approximations.
+acid2 rendering correctly is a genuinely good result — verified by a pixel diff, not just
+by eye — the PPU composites background, window and objects correctly enough to pass the
+face test exactly, despite the fixed mode-3 / whole-line-render approximations.
 
 ## Mapping suites to components
 
 | Component | Primary suites | The approximations they will catch |
 |---|---|---|
-| [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `halt_bug`, `interrupt_time`; Mooneye `acceptance/interrupts`, `instr`; Game Boy Doctor | HALT bug (unmodelled), 16-vs-20 T-cycle interrupt dispatch |
-| [PPU](components/ppu.md) | dmg-acid2, cgb-acid2; Mooneye `acceptance/ppu`; Mealybug Tearoom | Fixed mode-3 length, whole-line render, STAT IRQ blocking |
-| [MMU](components/mmu.md) | Blargg `oam_bug`, `mem_timing`; Mooneye `acceptance/oam_dma`, `bits` | Instant/unguarded OAM DMA, no VRAM/OAM mode-blocking, OAM bug |
+| [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (non-goal); Mooneye `acceptance/interrupts`, `instr`; Game Boy Doctor | 16-vs-20 T-cycle interrupt dispatch (no runnable test) |
+| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu`; Mealybug Tearoom | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural non-goals) |
+| [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug` (non-goal); Mooneye `acceptance/oam_dma`, `bits` | Instant/unguarded OAM DMA, no VRAM/OAM mode-blocking, OAM bug (structural / non-goals) |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1` | Banking bit maths; the MBC3-for-everything web/FFI bug |
 | [APU](components/apu.md) | Blargg `dmg_sound`, `cgb_sound`; SameSuite | Length-counter extra-clock edge case |
 | [Timer](components/timer.md) | Mooneye `acceptance/timer`; Blargg `interrupt_time` | DIV/TAC glitches, TIMA reload delay window |

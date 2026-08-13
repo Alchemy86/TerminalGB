@@ -125,15 +125,23 @@ reads zero, matching hardware.
 
 ### Honest approximations
 
-- **Instruction-granular, not sub-instruction.** The CPU executes a whole opcode and
-  *then* ticks the MMU/PPU/APU/timer by the full instruction's cycles
-  ([`core.rs:128`](../../src/cpu/core.rs)). Real hardware interleaves memory accesses
-  within an instruction. This is invisible to most games but is exactly what
-  `mem_timing-2` and many Mooneye tests probe.
-- **Interrupt dispatch costs 16 T-cycles**, not the hardware's 20. `handleinterrupt`
-  returns `4` ([`src/cpu/core.rs:110`](../../src/cpu/core.rs)), ×4 in `do_cycle` = 16
-  T-cycles (4 M-cycles). Real dispatch is **5 M-cycles / 20 T-cycles** (Pan Docs). This
-  is a real, testable inaccuracy.
+- **Instruction-granular for the PPU/APU; per-access for the timer.** The CPU executes a
+  whole opcode and *then* ticks the MMU/PPU/APU by the full instruction's cycles
+  ([`core.rs:128`](../../src/cpu/core.rs)). The **timer**, however, is now advanced one
+  M-cycle at each CPU memory access, *before* the access is performed (see
+  `MemoryManagementUnit::bus_tick`), so a read/write of `TIMA`/`DIV` lands on the correct
+  M-cycle. This is why Blargg **`mem_timing` and `mem_timing-2` PASS** (covered). The
+  PPU is still batched — invisible to `mem_timing` (which only samples the timer) but is
+  what sub-instruction *rendering* tests (mode-3 length) would probe.
+- **Interrupt dispatch costs 16 T-cycles**, not the hardware's 20 — *still divergent, but
+  not test-driven-fixable in this repo yet.* `handleinterrupt` returns `4`
+  ([`src/cpu/core.rs`](../../src/cpu/core.rs)), ×4 in `do_cycle` = 16 T-cycles. Real
+  dispatch is **5 M-cycles / 20 T-cycles** (Pan Docs). The one ROM that would prove a
+  red→green fix, Blargg `interrupt_time`, **cannot run headless**: it is `REQUIRE_CGB`,
+  switches to double speed, and calls `sync_apu`/`get_cpu_speed` which poll `NR52` — with
+  no APU instantiated in the headless build those polls never terminate, so the test
+  hangs on its title screen before any timing is measured. Changing 16→20 blindly (no
+  failing test to validate against) is deliberately **not** done here; see §7.
 - **`STOP` is minimally handled** (the `stop` field exists; double-speed switching is
   plumbed through the MMU, not a faithful `STOP` model).
 - **~900 lines of legacy interrupt/HALT logic are commented out** below `do_cycle`
@@ -144,12 +152,13 @@ reads zero, matching hardware.
 
 ## 5. Known quirks and edge cases
 
-- **The HALT bug — NOT modelled.** On real hardware, executing `HALT` while `IME=0`
-  *and* an interrupt is already pending (`IE & IF != 0`) does **not** halt; instead the
-  CPU fails to increment `PC`, so the byte after `HALT` is read **twice**. This
-  emulator's `HALT` ([`src/cpu/core.rs:641`](../../src/cpu/core.rs)) unconditionally sets
-  `halt = 1`; there is no `haltbug` state. Blargg's `halt_bug` ROM fails today
-  (confirmed by the README screenshot). (Pan Docs — [halt](https://gbdev.io/pandocs/halt.html).)
+- **The HALT bug — MODELLED (covered).** On real hardware, executing `HALT` while
+  `IME=0` *and* an interrupt is already pending (`IE & IF & 0x1F != 0`) does **not** halt;
+  instead the CPU fails to increment `PC`, so the byte after `HALT` is read **twice**. The
+  `0x76` handler now sets a `halt_bug` flag under that condition instead of halting, and
+  `operation()` rewinds `PC` by one after the next opcode fetch so the following byte (and
+  any operands, shifted one byte early) is re-read. **Blargg's `halt_bug` ROM now renders
+  `Passed`.** (Pan Docs — [halt](https://gbdev.io/pandocs/halt.html).)
 - **EI timing.** `EI` enables interrupts *after the following instruction*, so
   `EI; DI` never services an interrupt in between. Modelled via the `setei` delay.
 - **Interrupt priority.** Lowest bit wins: `handleinterrupt` uses
@@ -183,15 +192,17 @@ reads zero, matching hardware.
    with `IME=1`, `SP` has decreased by 2, `[SP]` holds the old `PC`, and `PC == 0x0040`;
    `IF` bit 0 is cleared and `IME` is now false. *(Not covered.)*
 7. **Interrupt dispatch timing = 20 T-cycles.** Servicing an interrupt should advance the
-   machine clock by 5 M-cycles. **This emulator charges 16 T-cycles — expected to FAIL
-   until corrected.** *(Not covered; known-divergent.)*
+   machine clock by 5 M-cycles. **This emulator charges 16 T-cycles.** *(Not covered;
+   known-divergent — **documented non-goal**: the only ROM that exercises it,
+   `interrupt_time`, hangs headless with no APU, so there is no red→green test to fix
+   against. See §4 and `testing.md`.)*
 8. **Interrupt priority.** With `IF` and `IE` both `0x1F`, VBlank (vector `0x40`) is
    serviced first. *(Not covered.)*
 9. **HALT with `IME=1` and pending interrupt** wakes, services the interrupt, and returns
    after `HALT`. *(Not covered.)*
-10. **The HALT bug.** `HALT` with `IME=0` and `IE & IF != 0` must re-read the following
-    byte (no `PC` increment). **Expected to FAIL — not modelled.** *(Not covered;
-    known-divergent — Blargg `halt_bug`.)*
+10. **The HALT bug.** `HALT` with `IME=0` and `IE & IF & 0x1F != 0` must re-read the
+    following byte (no `PC` increment). **COVERED — modelled; Blargg `halt_bug` renders
+    `Passed`** (frame-hash pinned in `baseline.txt`).
 11. **`CB` bit ops.** `BIT 7,H` on `H=0x80` sets Z=0, H=1, N=0 and leaves C untouched.
     *(Not covered.)*
 12. **`LD (HL+),A` auto-increments HL** by one after the store. *(Not covered.)*
@@ -207,9 +218,9 @@ OpenEmu screenshots, not an automated harness.
 |---|---|---|
 | **Blargg `cpu_instrs`** (11 sub-tests) | Every opcode's result and flag behaviour | A decode/flag bug in `operation()`/`cbmap`. *Claimed passing today — lock it in.* |
 | **Blargg `instr_timing`** | Per-instruction M-cycle counts | Wrong cycle table entry (affects everything downstream). |
-| **Blargg `mem_timing` / `mem_timing-2`** | *When* within an instruction memory is touched | The instruction-granular approximation (§4) would surface here. |
-| **Blargg `halt_bug`** | The HALT bug | Fails today — gives a red test to fix against (quirk §5). |
-| **Blargg `interrupt_time`** | Interrupt dispatch timing | Would catch the 16-vs-20 T-cycle gap (test #7). |
+| **Blargg `mem_timing` / `mem_timing-2`** | *When* within an instruction memory is touched | **PASS** — timer stepped per memory access (§4). |
+| **Blargg `halt_bug`** | The HALT bug | **PASS** — modelled (quirk §5). |
+| **Blargg `interrupt_time`** | Interrupt dispatch timing | **Documented non-goal** — hangs headless (no APU; polls `NR52`). Would catch the 16-vs-20 T-cycle gap (test #7) if it could run. |
 | **Mooneye `acceptance/interrupts/`, `acceptance/instr/`, `acceptance/timer/`** | Interrupt edge timing (`ie_push`, `halt_ime*`) | The gold standard for the corners above. **Mooneye is not the declared submodule** and is not wired. |
 
 Blargg ROMs report pass/fail over the **serial port** — see [Serial](serial.md) for the
