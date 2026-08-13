@@ -1,0 +1,439 @@
+//! Battery-backed save durability harness.
+//!
+//! ## Why this exists
+//!
+//! Cartridge RAM used to be written to disk **only** in `impl Drop for MBCx`.
+//! No frontend can promise that runs: `winit`'s event loop calls
+//! `process::exit`, `[profile.release] panic = 'abort'` skips destructors, and
+//! closing a window or `kill`ing the process skips them too. The observable
+//! symptom is the worst one an emulator has: *you save inside the game, quit,
+//! relaunch, and the title screen offers only "NEW GAME"* — and then the next
+//! clean exit writes the fresh, empty RAM over whatever save file was there.
+//!
+//! No public test ROM covers this: Blargg, Mooneye GB and the acid2 suites all
+//! run in one process and never check what reaches the filesystem. Persistence
+//! is emulator behaviour, not hardware behaviour, so it needs its own harness —
+//! which is exactly the kind of gap worth carrying into a standalone
+//! conformance tool.
+//!
+//! ## Hardware behaviour being modelled
+//!
+//! A battery-backed cartridge holds SRAM through a coin cell; the data is safe
+//! the instant the game writes it, with no "quit cleanly" step anywhere. Pan
+//! Docs, *MBCs / Battery-buffered RAM*: <https://gbdev.io/pandocs/MBC3.html>.
+//! An emulator therefore has to persist cartridge RAM **while it runs**, not at
+//! shutdown.
+//!
+//! ## What it checks
+//!
+//! Runs a hand-assembled MBC3+RAM+BATTERY ROM that enables cartridge RAM and
+//! writes a distinct marker into each of the four 8 KiB banks, then:
+//!
+//! 1. the save file appears **while the emulator runs**, with no `Drop`;
+//! 2. it is a raw `.sav` — cartridge RAM byte-for-byte, no header — so other
+//!    emulators can read it;
+//! 3. every bank comes back through the bank register on a fresh machine
+//!    (a wrong bank order passes a size check but fails a game's checksum);
+//! 4. a legacy `.gbsave` still loads, migrates to `.sav`, and is left intact;
+//! 5. a session that never writes cartridge RAM creates no save file — the old
+//!    code's phantom all-zero write is how good saves got erased.
+//!
+//! Run with `cargo test --release --test battery`.
+
+use gameboy::gameboy::Gameboy;
+use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------------------------
+// A minimal MBC3+RAM+BATTERY test cartridge, assembled by hand.
+// ---------------------------------------------------------------------------
+
+/// Marker written at offset 0 of RAM bank `b`.
+fn bank_marker(b: u8) -> u8 {
+    0xC0 | b
+}
+/// Marker written at the last byte of RAM bank `b`.
+fn bank_tail(b: u8) -> u8 {
+    0x50 | b
+}
+
+/// Build a 32 KiB ROM whose entry point enables cartridge RAM, stamps a marker
+/// into the first and last byte of each of the four RAM banks, then spins.
+fn build_battery_rom() -> Vec<u8> {
+    let mut rom = vec![0u8; 0x8000];
+
+    // Entry point at 0x0100: NOP; JP 0x0150.
+    rom[0x0100] = 0x00;
+    rom[0x0101] = 0xC3;
+    rom[0x0102] = 0x50;
+    rom[0x0103] = 0x01;
+
+    // Header. Title, then the fields the MBC layer actually reads.
+    for (i, b) in b"BATTERYTEST".iter().enumerate() {
+        rom[0x0134 + i] = *b;
+    }
+    rom[0x0143] = 0x00; // not CGB-only
+    rom[0x0147] = 0x13; // MBC3 + RAM + BATTERY
+    rom[0x0148] = 0x00; // 32 KiB ROM (2 banks)
+    rom[0x0149] = 0x03; // 32 KiB RAM (4 banks of 8 KiB)
+
+    // Header checksum over 0x0134..=0x014C.
+    let mut sum: u8 = 0;
+    for b in rom.iter().take(0x014D).skip(0x0134) {
+        sum = sum.wrapping_sub(*b).wrapping_sub(1);
+    }
+    rom[0x014D] = sum;
+
+    let mut pc = 0x0150;
+    let mut emit = |bytes: &[u8], pc: &mut usize| {
+        rom[*pc..*pc + bytes.len()].copy_from_slice(bytes);
+        *pc += bytes.len();
+    };
+
+    // LD A,$0A ; LD ($0000),A  — the RAM-enable magic value (Pan Docs: only
+    // the low nibble 0xA unlocks cartridge RAM).
+    emit(&[0x3E, 0x0A], &mut pc);
+    emit(&[0xEA, 0x00, 0x00], &mut pc);
+
+    for b in 0u8..4 {
+        // LD A,b ; LD ($4000),A  — RAM bank select.
+        emit(&[0x3E, b], &mut pc);
+        emit(&[0xEA, 0x00, 0x40], &mut pc);
+        // LD A,marker ; LD ($A000),A
+        emit(&[0x3E, bank_marker(b)], &mut pc);
+        emit(&[0xEA, 0x00, 0xA0], &mut pc);
+        // LD A,tail ; LD ($BFFF),A
+        emit(&[0x3E, bank_tail(b)], &mut pc);
+        emit(&[0xEA, 0xFF, 0xBF], &mut pc);
+    }
+
+    // JR -2: spin forever, leaving cartridge RAM untouched so the battery
+    // settles and writes out.
+    emit(&[0x18, 0xFE], &mut pc);
+
+    rom
+}
+
+// ---------------------------------------------------------------------------
+// Harness plumbing
+// ---------------------------------------------------------------------------
+
+struct Case {
+    name: &'static str,
+    ok: bool,
+    detail: String,
+}
+
+fn workdir(tag: &str) -> PathBuf {
+    let dir = PathBuf::from("target/battery-harness").join(tag);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create work dir");
+    dir
+}
+
+/// Stage the ROM on disk and return its path (the battery writes its files
+/// next to the ROM, so each case needs its own directory).
+fn stage(dir: &Path) -> PathBuf {
+    let rom = dir.join("battery.gb");
+    std::fs::write(&rom, build_battery_rom()).expect("write test rom");
+    rom
+}
+
+fn boot(rom: &Path) -> Gameboy {
+    let data = std::fs::read(rom).expect("read test rom");
+    Gameboy::new(data, Some(rom.to_path_buf()))
+}
+
+/// Read cartridge RAM back the way a game does: through the bank register.
+/// Reading the file is not enough — a save whose banks are stored in the wrong
+/// order is the classic reason a game's own checksum rejects it and silently
+/// offers a new game.
+fn read_bank_markers(gb: &mut Gameboy) -> Vec<(u8, u8)> {
+    let mut out = Vec::new();
+    for b in 0u8..4 {
+        gb.debug_write(0x0000, 0x0A); // enable cartridge RAM
+        gb.debug_write(0x4000, b); // select bank
+        out.push((gb.debug_read(0xA000), gb.debug_read(0xBFFF)));
+    }
+    out
+}
+
+fn expected_markers() -> Vec<(u8, u8)> {
+    (0u8..4).map(|b| (bank_marker(b), bank_tail(b))).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Cases
+// ---------------------------------------------------------------------------
+
+/// The headline case: the game writes cartridge RAM, the process dies without
+/// ever running a destructor, and the save must still be on disk and complete.
+fn case_survives_an_unclean_exit() -> Case {
+    let dir = workdir("unclean-exit");
+    let rom = stage(&dir);
+    let sav = dir.join("battery.sav");
+
+    let mut gb = boot(&rom);
+    for _ in 0..180 {
+        gb.frame();
+    }
+    // No `drop(gb)`: this is a closed window / SIGKILL / winit's process::exit.
+    std::mem::forget(gb);
+
+    let bytes = match std::fs::read(&sav) {
+        Ok(b) => b,
+        Err(e) => {
+            return Case {
+                name: "in-game save survives an unclean exit",
+                ok: false,
+                detail: format!(
+                    "no {} after 180 frames ({e}).\n      \
+                     The emulator persists cartridge RAM only when it shuts down cleanly, \
+                     so a crash, a kill, or a closed window loses everything the player \
+                     saved. Hardware keeps it on a battery the instant the game writes it: \
+                     persist while running, not on exit.",
+                    sav.display()
+                ),
+            };
+        }
+    };
+
+    // A raw .sav is exactly the cartridge RAM: 4 banks x 8 KiB, no header.
+    if bytes.len() != 0x8000 {
+        return Case {
+            name: "in-game save survives an unclean exit",
+            ok: false,
+            detail: format!(
+                "{} is {} bytes, expected 32768 (4 x 8 KiB banks, no header).\n      \
+                 A `.sav` with a header cannot be read by other emulators.",
+                sav.display(),
+                bytes.len()
+            ),
+        };
+    }
+
+    let mut wrong = Vec::new();
+    for b in 0u8..4 {
+        let base = b as usize * 0x2000;
+        if bytes[base] != bank_marker(b) {
+            wrong.push(format!(
+                "bank {b} byte 0 = {:02X}, expected {:02X}",
+                bytes[base],
+                bank_marker(b)
+            ));
+        }
+        if bytes[base + 0x1FFF] != bank_tail(b) {
+            wrong.push(format!(
+                "bank {b} byte 0x1FFF = {:02X}, expected {:02X}",
+                bytes[base + 0x1FFF],
+                bank_tail(b)
+            ));
+        }
+    }
+    if !wrong.is_empty() {
+        return Case {
+            name: "in-game save survives an unclean exit",
+            ok: false,
+            detail: format!(
+                "cartridge RAM banks are not laid out in order: {}.\n      \
+                 Banks stored out of order still give the right file size, so the \
+                 file looks fine — but the game's own save checksum fails and it \
+                 offers a new game.",
+                wrong.join("; ")
+            ),
+        };
+    }
+
+    Case {
+        name: "in-game save survives an unclean exit",
+        ok: true,
+        detail: format!("{} bytes, all 4 banks in order", bytes.len()),
+    }
+}
+
+/// The save must come back through the bank register on a fresh machine — the
+/// player's actual "quit and continue" experience.
+fn case_reload_restores_every_bank() -> Case {
+    let dir = workdir("reload");
+    let rom = stage(&dir);
+
+    let mut gb = boot(&rom);
+    for _ in 0..180 {
+        gb.frame();
+    }
+    std::mem::forget(gb);
+
+    let mut fresh = boot(&rom);
+    let got = read_bank_markers(&mut fresh);
+    let want = expected_markers();
+    let ok = got == want;
+    Case {
+        name: "a relaunched machine reads back every RAM bank",
+        ok,
+        detail: if ok {
+            "all 4 banks match".to_string()
+        } else {
+            format!(
+                "read {got:02X?}, expected {want:02X?}.\n      \
+                 The save loaded but arrives wrong through the bank register, which is \
+                 indistinguishable from an empty save to the game."
+            )
+        },
+    }
+}
+
+/// A session that never touches cartridge RAM must not create a save file. The
+/// old `Drop`-based code wrote its pristine all-zero RAM unconditionally, so a
+/// single launch that failed to load a save would overwrite it with zeros.
+fn case_a_boot_that_never_saves_writes_nothing() -> Case {
+    let dir = workdir("no-phantom");
+    let rom = dir.join("battery.gb");
+    // Same cart, but with the RAM-writing program replaced by a bare spin loop.
+    let mut data = build_battery_rom();
+    data[0x0150] = 0x18;
+    data[0x0151] = 0xFE;
+    for b in data.iter_mut().take(0x0200).skip(0x0152) {
+        *b = 0x00;
+    }
+    std::fs::write(&rom, data).expect("write rom");
+
+    // Pre-existing good save the boot must not touch.
+    let sav = dir.join("battery.sav");
+    let good = vec![0x77u8; 0x8000];
+    std::fs::write(&sav, &good).expect("write save");
+
+    let mut gb = boot(&rom);
+    for _ in 0..180 {
+        gb.frame();
+    }
+    drop(gb); // even a *clean* exit must not rewrite untouched RAM
+
+    let after = std::fs::read(&sav).unwrap_or_default();
+    let ok = after == good;
+    Case {
+        name: "a session that saves nothing leaves the save file alone",
+        ok,
+        detail: if ok {
+            "existing save untouched".to_string()
+        } else {
+            format!(
+                "the save file changed ({} bytes, first difference at {:?}).\n      \
+                 A launch that did not load or did not save must never write over an \
+                 existing save — that turns one bad launch into permanent data loss.",
+                after.len(),
+                after.iter().zip(good.iter()).position(|(a, b)| a != b)
+            )
+        },
+    }
+}
+
+/// The emulator's own legacy `<rom>.gbsave` (8-byte big-endian RTC header, then
+/// RAM) must still load, migrate to `.sav`, and be left on disk as a backup.
+fn case_legacy_gbsave_migrates() -> Case {
+    let dir = workdir("legacy");
+    let rom = stage(&dir);
+
+    let mut legacy = 0u64.to_be_bytes().to_vec();
+    for b in 0u8..4 {
+        let mut bank = vec![0u8; 0x2000];
+        bank[0] = bank_marker(b);
+        bank[0x1FFF] = bank_tail(b);
+        legacy.extend_from_slice(&bank);
+    }
+    let legacy_path = dir.join("battery.gbsave");
+    std::fs::write(&legacy_path, &legacy).expect("write legacy save");
+
+    let mut gb = boot(&rom);
+    let got = read_bank_markers(&mut gb);
+    let want = expected_markers();
+    // Run long enough for the migration write, then die uncleanly.
+    for _ in 0..180 {
+        gb.frame();
+    }
+    std::mem::forget(gb);
+
+    let migrated = std::fs::read(dir.join("battery.sav")).unwrap_or_default();
+    let backup = std::fs::read(&legacy_path).unwrap_or_default();
+
+    let mut problems = Vec::new();
+    if got != want {
+        problems.push(format!(
+            "legacy save read back as {got:02X?}, expected {want:02X?}"
+        ));
+    }
+    if migrated.len() != 0x8000 {
+        problems.push(format!(
+            "no migrated .sav (got {} bytes, expected 32768)",
+            migrated.len()
+        ));
+    }
+    if backup != legacy {
+        problems
+            .push("the legacy .gbsave was modified; it must be left as a backup".into());
+    }
+    Case {
+        name: "legacy .gbsave loads, migrates to .sav, and is kept as a backup",
+        ok: problems.is_empty(),
+        detail: if problems.is_empty() {
+            "loaded, migrated, original preserved".to_string()
+        } else {
+            problems.join("; ")
+        },
+    }
+}
+
+/// A `.sav` written by another emulator (raw RAM, optionally with the 48-byte
+/// VBA-M/mGBA RTC block appended) must load here.
+fn case_foreign_sav_loads() -> Case {
+    let dir = workdir("foreign");
+    let rom = stage(&dir);
+
+    let mut foreign = Vec::new();
+    for b in 0u8..4 {
+        let mut bank = vec![0u8; 0x2000];
+        bank[0] = bank_marker(b);
+        bank[0x1FFF] = bank_tail(b);
+        foreign.extend_from_slice(&bank);
+    }
+    foreign.extend_from_slice(&[0u8; 48]); // VBA-M/mGBA trailing RTC block
+    std::fs::write(dir.join("battery.sav"), &foreign).expect("write foreign save");
+
+    let mut gb = boot(&rom);
+    let got = read_bank_markers(&mut gb);
+    std::mem::forget(gb);
+    let want = expected_markers();
+    let ok = got == want;
+    Case {
+        name: "a foreign .sav (raw RAM, optional trailing RTC) loads",
+        ok,
+        detail: if ok {
+            "all 4 banks match".to_string()
+        } else {
+            format!("read {got:02X?}, expected {want:02X?}")
+        },
+    }
+}
+
+fn main() {
+    let cases = vec![
+        case_survives_an_unclean_exit(),
+        case_reload_restores_every_bank(),
+        case_a_boot_that_never_saves_writes_nothing(),
+        case_legacy_gbsave_migrates(),
+        case_foreign_sav_loads(),
+    ];
+
+    let mut failed = 0;
+    println!("\nbattery-backed save durability\n");
+    for c in &cases {
+        if c.ok {
+            println!("  PASS  {}\n        {}", c.name, c.detail);
+        } else {
+            failed += 1;
+            println!("  FAIL  {}\n        {}", c.name, c.detail);
+        }
+    }
+    println!("\n  {}/{} passed\n", cases.len() - failed, cases.len());
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}

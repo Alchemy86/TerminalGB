@@ -117,6 +117,9 @@ pub fn process_window(
             height: _,
         }) => glutin::event_loop::ControlFlow::Poll,
         glutin::event::WindowEvent::CloseRequested => {
+            // winit's event loop calls `process::exit` on Exit, so nothing here
+            // is ever dropped — the battery save has to be written now.
+            gameboy.flush_battery();
             glutin::event_loop::ControlFlow::Exit
         }
         _ => glutin::event_loop::ControlFlow::Poll,

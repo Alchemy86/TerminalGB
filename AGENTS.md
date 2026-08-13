@@ -311,6 +311,48 @@ lines per fix, not a process document.
   LIBRARY_PATH=~/.local/lib/alsashim LD_LIBRARY_PATH=~/.local/lib/alsashim cargo build
   --features audio`.
 
+## Battery saves (in-game saves) — `src/mbc/battery.rs`
+
+- **NEVER persist anything in a `Drop` impl. `Drop` is not a shutdown hook here.** The
+  desktop frontend's `glutin`/`winit` `event_loop.run()` **never returns** — winit 0.26
+  calls `process::exit(0)` on `ControlFlow::Exit` — so the `Gameboy` moved into that closure
+  is never dropped. `[profile.release] panic = 'abort'` skips destructors too, as do a
+  closed terminal window, SIGTERM and `kill`. Cartridge RAM used to be written **only** in
+  `impl Drop for MBCx`; that is why in-game saves vanished. This applies to anything else
+  that must survive a shutdown.
+- **How it works now:** `writeram` marks the battery dirty; `Gameboy::frame` calls
+  `MemoryBankController::autosave` once per frame, which writes the save out after 60 quiet
+  frames (~1 s) or 600 dirty frames. `Gameboy::flush_battery()` forces it (called from the
+  desktop `CloseRequested` handler, since nothing there is ever dropped). `Drop` still
+  flushes as a last chance only. All four battery MBCs (1, 2, 3, 5) share `Battery`.
+- **Writes are atomic** (`<file>.tmp` → `fsync` → `rename`) — a truncated save is worse
+  than no save. And a session that never wrote cartridge RAM **writes nothing**: the old
+  code unconditionally dumped its pristine all-zero RAM on exit, so one launch that failed
+  to load permanently erased a real save. That is exactly what happened to the captain's
+  Pokémon Blue `.gbsave` (32,776 bytes, all zeros).
+- **Formats:** `<rom>.sav` = raw cartridge RAM, no header (universal, interchangeable).
+  MBC3 RTC in a `<rom>.rtc` sidecar, 48 bytes LE (5×u32 regs, 5×u32 latched, u64 unix ts —
+  the VBA-M/mGBA layout). A `.sav` of `ramsize + 48` is also accepted on load (VBA-M/mGBA
+  append that block). Legacy `<rom>.gbsave` (8-byte BE RTC anchor + RAM) is still **read**
+  when no `.sav` exists, migrated to `.sav`, and **left on disk untouched as a backup**.
+- **A save that cannot be read is never overwritten** (the battery poisons itself on a read
+  error). Loading fails loudly instead of silently starting a new game over an existing save.
+- **Loaded saves are normalised to the declared RAM size** (pad/truncate) and every MBC
+  RAM access is bounds-checked — a foreign or odd-sized `.sav` must not panic (with
+  `panic = 'abort'` a panic is an instant crash *and* loses the save).
+- **Tests:** `cargo test --release --test battery` (`testharness/battery.rs`) builds a
+  hand-assembled MBC3+RAM+BATTERY ROM in-process — no commercial ROM, no vendored binary —
+  and proves the save lands with **no destructor run** (`std::mem::forget`), reloads bank by
+  bank, migrates the legacy format, and accepts foreign `.sav`s. Validate it is not vacuous
+  by disabling the `autosave()` call in `Gameboy::frame`. For a real cartridge use
+  `examples/rom_script.rs` (scripted headless input, `EXIT=kill` aborts with no destructors);
+  the Pokémon Blue save script is in `docs/testing.md`.
+- **Conformance-tool note:** no public suite (Blargg / Mooneye / acid2) covers persistence —
+  they run in one process and never look at the filesystem. **That gap is itself a finding.**
+  Observable symptom of the bug: *save in-game, quit, relaunch → "NEW GAME" only.* Hardware
+  behaviour violated: a battery-backed cart holds SRAM from the instant the game writes it
+  (Pan Docs, [MBC3](https://gbdev.io/pandocs/MBC3.html)) — there is no "quit cleanly" step.
+
 ## Save states
 
 - **Core API, frontend-agnostic:** `Gameboy::save_state() -> Vec<u8>` /

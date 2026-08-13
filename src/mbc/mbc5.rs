@@ -1,9 +1,8 @@
+use crate::mbc::battery::Battery;
 use crate::mbc::{ram_banks, rom_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
-use std::fs::File;
-use std::io::prelude::*;
-use std::{io, path};
+use std::path;
 
 pub struct MBC5 {
     rom: Vec<u8>,
@@ -11,7 +10,7 @@ pub struct MBC5 {
     rombank: usize,
     rambank: usize,
     ram_on: bool,
-    savepath: Option<path::PathBuf>,
+    battery: Battery,
     rombanks: usize,
     rambanks: usize,
 }
@@ -19,24 +18,24 @@ pub struct MBC5 {
 impl MBC5 {
     pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC5> {
         let subtype = data[0x147];
-        let svpath = match subtype {
-            0x1B | 0x1E => Some(file.with_extension("gbsave")),
-            _ => None,
-        };
         let rambanks = match subtype {
             0x1A | 0x1B | 0x1D | 0x1E => ram_banks(data[0x149]),
             _ => 0,
         };
         let ramsize = 0x2000 * rambanks;
+        let battery = match subtype {
+            0x1B | 0x1E => Battery::new(&file, ramsize),
+            _ => Battery::none(),
+        };
         let rombanks = rom_banks(data[0x148]);
 
         let mut res = MBC5 {
             rom: data,
-            ram: ::std::iter::repeat(0u8).take(ramsize).collect(),
+            ram: vec![0u8; ramsize],
             rombank: 1,
             rambank: 0,
             ram_on: false,
-            savepath: svpath,
+            battery,
             rombanks,
             rambanks,
         };
@@ -44,31 +43,21 @@ impl MBC5 {
     }
 
     fn loadram(&mut self) -> StrResult<()> {
-        match self.savepath {
-            None => Ok(()),
-            Some(ref savepath) => {
-                let mut data = vec![];
-                match File::open(savepath).and_then(|mut f| f.read_to_end(&mut data)) {
-                    Err(ref e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                    Err(_) => Err("Could not read RAM"),
-                    Ok(..) => {
-                        self.ram = data;
-                        Ok(())
-                    }
-                }
-            }
+        if !self.battery.is_active() {
+            return Ok(());
         }
+        let loaded = self.battery.load()?;
+        self.ram = loaded.ram;
+        if !loaded.fresh {
+            self.battery.mark_dirty();
+        }
+        Ok(())
     }
 }
 
 impl Drop for MBC5 {
     fn drop(&mut self) {
-        match self.savepath {
-            None => {}
-            Some(ref path) => {
-                let _ = File::create(path).and_then(|mut f| f.write_all(&self.ram));
-            }
-        };
+        self.flush_battery();
     }
 }
 
@@ -85,7 +74,8 @@ impl MemoryBankController for MBC5 {
         if !self.ram_on {
             return 0;
         }
-        self.ram[(self.rambank * 0x2000) | ((a as usize) & 0x1FFF)]
+        let idx = (self.rambank * 0x2000) | ((a as usize) & 0x1FFF);
+        self.ram.get(idx).copied().unwrap_or(0)
     }
     fn writerom(&mut self, a: u16, v: u8) {
         match a {
@@ -106,11 +96,27 @@ impl MemoryBankController for MBC5 {
         if !self.ram_on {
             return;
         }
-        self.ram[(self.rambank * 0x2000) | ((a as usize) & 0x1FFF)] = v;
+        let idx = (self.rambank * 0x2000) | ((a as usize) & 0x1FFF);
+        if let Some(cell) = self.ram.get_mut(idx) {
+            *cell = v;
+            self.battery.touch();
+        }
     }
 
     fn rom_bank(&self) -> usize {
         self.rombank
+    }
+
+    fn autosave(&mut self) {
+        self.battery.tick(&self.ram, None);
+    }
+
+    fn flush_battery(&mut self) {
+        self.battery.flush(&self.ram, None);
+    }
+
+    fn battery_dirty(&mut self) {
+        self.battery.mark_dirty();
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {

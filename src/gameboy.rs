@@ -301,6 +301,20 @@ impl Gameboy {
 
             ticks -= waitticks;
         }
+
+        // Battery-backed cartridge RAM is written out here, once the game has
+        // left it alone for a moment — NOT in `Drop`, which the frontends
+        // cannot guarantee runs (winit's event loop calls `process::exit`, the
+        // release profile aborts on panic, and a closed window or `kill` skips
+        // destructors entirely). See `crate::mbc::battery`.
+        self.cpu.memory.mbc.autosave();
+    }
+
+    /// Write battery-backed cartridge RAM out now. Frontends should call this
+    /// on a clean shutdown or before switching ROMs; `frame` already persists
+    /// saves as they happen, so this only shortens the worst-case window.
+    pub fn flush_battery(&mut self) {
+        self.cpu.memory.mbc.flush_battery();
     }
 
     /// Serialise the complete machine state to bytes. The caller decides where
@@ -340,6 +354,19 @@ impl Gameboy {
     /// Program counter — cheap read for a debug/stats overlay.
     pub fn debug_pc(&self) -> u16 {
         self.cpu.registers.pc
+    }
+
+    /// Read one byte through the memory bus, as the CPU would. For the debug
+    /// surface and for tests that need to inspect cartridge RAM the way a game
+    /// sees it — through the MBC's bank registers, not the raw save buffer.
+    pub fn debug_read(&mut self, address: u16) -> u8 {
+        self.cpu.memory.rb(address)
+    }
+
+    /// Write one byte through the memory bus, as the CPU would (so MBC control
+    /// registers at 0x0000-0x7FFF behave exactly as for a real write).
+    pub fn debug_write(&mut self, address: u16, value: u8) {
+        self.cpu.memory.wb(address, value)
     }
 
     /// Currently-selected ROM bank — cheap read for a debug/stats overlay.

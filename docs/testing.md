@@ -254,6 +254,71 @@ acid2 rendering correctly is a genuinely good result — verified by a pixel dif
 by eye — the PPU composites background, window and objects correctly enough to pass the
 face test exactly, despite the fixed mode-3 / whole-line-render approximations.
 
+## A suite no public test ROM covers: battery-save durability
+
+Blargg, Mooneye GB and the acid2 ROMs all run inside a single process and never look at
+what reaches the filesystem. **Persistence is emulator behaviour, not hardware behaviour**,
+so no public suite catches the single worst bug a Game Boy emulator can have: the player
+saves inside the game, quits, relaunches, and is offered only "NEW GAME". That gap is
+itself a finding worth carrying into a standalone conformance tool.
+
+[`testharness/battery.rs`](../testharness/battery.rs) (`cargo test --release --test battery`) fills it, using a
+**hand-assembled MBC3+RAM+BATTERY test ROM built in the harness itself** — no commercial
+ROM, no vendored binary. The ROM enables cartridge RAM, stamps a distinct marker into the
+first and last byte of each of the four 8 KiB banks, then spins. The harness then checks:
+
+| Case | Player-visible symptom if it fails |
+|---|---|
+| The save file appears **while the emulator runs**, with no `Drop` (`std::mem::forget`) | Closing the window, a crash, or a `kill` loses everything you saved |
+| It is a raw `.sav`, exactly `ramsize` bytes, no header | Your save cannot be moved to or from any other emulator |
+| Every bank reads back through the bank register on a fresh machine | The file looks the right size but the game's own checksum rejects it — "NEW GAME" only |
+| A session that writes no cartridge RAM leaves the save file untouched | One launch that failed to load erases a real save on its next clean exit |
+| A legacy `.gbsave` loads, migrates to `.sav`, and stays on disk as a backup | Upgrading the emulator loses your old saves |
+| A foreign `.sav` loads (including a trailing 48-byte VBA-M/mGBA RTC block) | Saves from other emulators are rejected |
+
+Each failure prints *why* it matters and what hardware behaviour is being violated (a
+battery-backed cart holds SRAM from the instant the game writes it — Pan Docs,
+[MBC3](https://gbdev.io/pandocs/MBC3.html)), not just a red line. The harness was validated
+by disabling the per-frame autosave hook and confirming it goes red with those messages.
+
+For an end-to-end check against a real cartridge there is
+[`examples/rom_script.rs`](../examples/rom_script.rs): a headless scripted-input driver
+(`idle` / `tap` / `mash` / `shot`) that can play a commercial game to an in-game save, dump
+PNG frames, and — with `EXIT=kill` — abort the process without running a single destructor.
+That is how this behaviour was proven in Pokémon Blue: save, kill, relaunch, **CONTINUE**.
+The script that gets Pokémon Blue from a cold boot to an in-game save (roughly 5 800
+frames, ~1.5 s headless) is:
+
+```text
+idle 300
+mash a 20 6 12     # title screen -> NEW GAME
+tap a 1
+idle 120
+mash a 80 6 20     # Oak's intro; mashing A also accepts the default names
+mash a 60 6 20
+idle 120
+tap b 3
+idle 60
+tap b 4            # close the "playing the SNES" box — A would just reopen it
+idle 60
+mash down 10 14 10 # step off the TV tile
+idle 30
+tap start 1        # start menu
+idle 60
+mash down 3 8 14   # POKéMON / ITEM / <name> / SAVE
+idle 30
+tap a 1
+idle 90
+tap a 1            # "Would you like to SAVE the game?" -> YES
+idle 90
+tap a 1
+idle 240           # "Now saving..."
+```
+
+Run it once with `EXIT=kill` (the emulator dies mid-game, exactly like a closed window),
+then again with `PHASE=relaunch` and a script that just boots and presses A — the title
+menu goes from `NEW GAME / OPTION` to `CONTINUE / NEW GAME / OPTION`.
+
 ## Mapping suites to components
 
 | Component | Primary suites | The approximations they will catch |
@@ -261,7 +326,7 @@ face test exactly, despite the fixed mode-3 / whole-line-render approximations.
 | [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (non-goal); Mooneye `acceptance/interrupts`, `instr`; Game Boy Doctor | 16-vs-20 T-cycle interrupt dispatch (no runnable test) |
 | [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu`; Mealybug Tearoom | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural non-goals) |
 | [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug` (non-goal); Mooneye `acceptance/oam_dma`, `bits` | Instant/unguarded OAM DMA, no VRAM/OAM mode-blocking, OAM bug (structural / non-goals) |
-| [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1` | Banking bit maths; the MBC3-for-everything web/FFI bug |
+| [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1`; **`testharness/battery.rs`** (**pass**, battery-save durability + `.sav` interop) | Banking bit maths; the MBC3-for-everything web/FFI bug |
 | [APU](components/apu.md) | Blargg `dmg_sound` (**9/12 pass**), `cgb_sound` (unwired); SameSuite | Wave-RAM access-window timing (`dmg_sound` 09/10/12) — needs a T-cycle-stepped APU, **planned next** |
 | [Timer](components/timer.md) | Mooneye `acceptance/timer`; Blargg `interrupt_time` | DIV/TAC glitches, TIMA reload delay window |
 | [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` | Instantaneous transfer; the capture hook must be wired first |

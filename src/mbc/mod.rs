@@ -2,6 +2,7 @@ pub type StrResult<T> = Result<T, &'static str>;
 
 use std::path;
 
+pub mod battery;
 mod mbc0;
 mod mbc1;
 mod mbc2;
@@ -32,6 +33,19 @@ pub trait MemoryBankController: Send {
     fn rom_bank(&self) -> usize {
         0
     }
+
+    /// Per-frame battery hook: writes cartridge RAM out shortly after the game
+    /// stops touching it. This — not `Drop` — is what makes an in-game save
+    /// survive a crash, a `kill`, or a closed window. See [`battery`].
+    /// Cartridges without a battery do nothing.
+    fn autosave(&mut self) {}
+
+    /// Write battery-backed RAM out immediately (clean shutdown, ROM switch).
+    fn flush_battery(&mut self) {}
+
+    /// Note that cartridge RAM was replaced wholesale (a save-state load), so
+    /// the battery file needs rewriting even though the game wrote nothing.
+    fn battery_dirty(&mut self) {}
 
     /// The cartridge's 16-bit global checksum (header bytes 0x14E-0x14F). Used
     /// together with the title to refuse loading a state against another game.

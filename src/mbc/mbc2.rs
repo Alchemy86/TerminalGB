@@ -1,65 +1,57 @@
-use std::io::prelude::*;
-use std::{fs, io, path};
+use std::path;
 
+use crate::mbc::battery::Battery;
 use crate::mbc::{rom_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
+
+/// MBC2 has 512 x 4 bits of RAM built into the chip; the cartridge header
+/// declares no RAM size. Pan Docs: https://gbdev.io/pandocs/MBC2.html
+const MBC2_RAM_SIZE: usize = 512;
 
 pub struct MBC2 {
     rom: Vec<u8>,
     ram: Vec<u8>,
     ram_on: bool,
     rombank: usize,
-    savepath: Option<path::PathBuf>,
+    battery: Battery,
     rombanks: usize,
 }
 
 impl MBC2 {
     pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC2> {
-        let svpath = match data[0x147] {
-            0x05 => None,
-            0x06 => Some(file.with_extension("gbsave")),
-            _ => None,
+        let battery = match data[0x147] {
+            0x06 => Battery::new(&file, MBC2_RAM_SIZE),
+            _ => Battery::none(),
         };
         let rombanks = rom_banks(data[0x148]);
 
         let mut res = MBC2 {
             rom: data,
-            ram: vec![0; 512],
+            ram: vec![0; MBC2_RAM_SIZE],
             ram_on: false,
             rombank: 1,
-            savepath: svpath,
+            battery,
             rombanks,
         };
         res.loadram().map(|_| res)
     }
 
     fn loadram(&mut self) -> StrResult<()> {
-        match self.savepath {
-            None => Ok(()),
-            Some(ref savepath) => {
-                let mut data = vec![];
-                match fs::File::open(savepath).and_then(|mut f| f.read_to_end(&mut data))
-                {
-                    Err(ref e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                    Err(_) => Err("Could not open save file"),
-                    Ok(..) => {
-                        self.ram = data;
-                        Ok(())
-                    }
-                }
-            }
+        if !self.battery.is_active() {
+            return Ok(());
         }
+        let loaded = self.battery.load()?;
+        self.ram = loaded.ram;
+        if !loaded.fresh {
+            self.battery.mark_dirty();
+        }
+        Ok(())
     }
 }
 
 impl Drop for MBC2 {
     fn drop(&mut self) {
-        match self.savepath {
-            None => {}
-            Some(ref path) => {
-                let _ = fs::File::create(path).and_then(|mut f| f.write_all(&self.ram));
-            }
-        };
+        self.flush_battery();
     }
 }
 
@@ -73,7 +65,7 @@ impl MemoryBankController for MBC2 {
         if !self.ram_on {
             return 0xFF;
         }
-        self.ram[(a as usize) & 0x1FF] | 0xF0
+        self.ram.get((a as usize) & 0x1FF).copied().unwrap_or(0) | 0xF0
     }
 
     fn writerom(&mut self, a: u16, v: u8) {
@@ -93,11 +85,26 @@ impl MemoryBankController for MBC2 {
         if !self.ram_on {
             return;
         }
-        self.ram[(a as usize) & 0x1FF] = v | 0xF0;
+        if let Some(cell) = self.ram.get_mut((a as usize) & 0x1FF) {
+            *cell = v | 0xF0;
+            self.battery.touch();
+        }
     }
 
     fn rom_bank(&self) -> usize {
         self.rombank
+    }
+
+    fn autosave(&mut self) {
+        self.battery.tick(&self.ram, None);
+    }
+
+    fn flush_battery(&mut self) {
+        self.battery.flush(&self.ram, None);
+    }
+
+    fn battery_dirty(&mut self) {
+        self.battery.mark_dirty();
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {

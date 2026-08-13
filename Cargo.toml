@@ -93,6 +93,14 @@ name = "savestate"
 path = "testharness/savestate.rs"
 harness = false
 
+# Battery-backed save durability harness: proves an in-game save reaches disk
+# while the emulator runs (not only on a clean exit), stays readable bank by
+# bank, and interoperates with `.sav` files. See testharness/battery.rs.
+[[test]]
+name = "battery"
+path = "testharness/battery.rs"
+harness = false
+
 # Headless audio-capture harness: records the APU's produced samples with no
 # audio device, writes WAVs, analyses them (rate/level/silence/discontinuity/
 # pitch) and pins an FNV hash baseline. See testharness/audiocapture.rs and

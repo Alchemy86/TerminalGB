@@ -1,6 +1,6 @@
-use std::io::prelude::*;
-use std::{fs, io, path};
+use std::path;
 
+use crate::mbc::battery::Battery;
 use crate::mbc::{ram_banks, rom_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
@@ -11,87 +11,69 @@ pub struct MBC1 {
     banking_mode: u8,
     rombank: usize,
     rambank: usize,
-    savepath: Option<path::PathBuf>,
+    battery: Battery,
     rombanks: usize,
     rambanks: usize,
 }
 
 impl MBC1 {
     pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC1> {
-        let (svpath, rambanks) = match data[0x147] {
-            0x02 => (None, ram_banks(data[0x149])),
-            0x03 => (Some(file.with_extension("gbsave")), ram_banks(data[0x149])),
-            _ => (None, 0),
+        let rambanks = match data[0x147] {
+            0x02 | 0x03 => ram_banks(data[0x149]),
+            _ => 0,
         };
+        let battery = match data[0x147] {
+            0x03 => Battery::new(&file, rambanks * 0x2000),
+            _ => Battery::none(),
+        };
+        MBC1::build(data, rambanks, battery)
+    }
+
+    #[allow(dead_code)]
+    pub fn new_without_save(data: Vec<u8>) -> StrResult<MBC1> {
+        let rambanks = match data[0x147] {
+            0x02 | 0x03 => ram_banks(data[0x149]),
+            _ => 0,
+        };
+        MBC1::build(data, rambanks, Battery::none())
+    }
+
+    fn build(data: Vec<u8>, rambanks: usize, battery: Battery) -> StrResult<MBC1> {
         let rombanks = rom_banks(data[0x148]);
         let ramsize = rambanks * 0x2000;
 
         let mut res = MBC1 {
             rom: data,
-            ram: ::std::iter::repeat(0u8).take(ramsize).collect(),
+            ram: vec![0u8; ramsize],
             ram_on: false,
             banking_mode: 0,
             rombank: 1,
             rambank: 0,
-            savepath: svpath,
+            battery,
             rombanks,
             rambanks,
         };
         res.loadram().map(|_| res)
     }
 
-    #[allow(dead_code)]
-    pub fn new_without_save(data: Vec<u8>) -> StrResult<MBC1> {
-        let (svpath, rambanks) = match data[0x147] {
-            0x02 => (None, ram_banks(data[0x149])),
-            0x03 => (None, ram_banks(data[0x149])),
-            _ => (None, 0),
-        };
-        let rombanks = rom_banks(data[0x148]);
-        let ramsize = rambanks * 0x2000;
-
-        let res = MBC1 {
-            rom: data,
-            ram: ::std::iter::repeat(0u8).take(ramsize).collect(),
-            ram_on: false,
-            banking_mode: 0,
-            rombank: 1,
-            rambank: 0,
-            savepath: svpath,
-            rombanks,
-            rambanks,
-        };
-        // res.loadram().map(|_| res)
-        Ok(res)
-    }
-
     fn loadram(&mut self) -> StrResult<()> {
-        match self.savepath {
-            None => Ok(()),
-            Some(ref savepath) => {
-                let mut data = vec![];
-                match fs::File::open(savepath).and_then(|mut f| f.read_to_end(&mut data))
-                {
-                    Err(ref e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                    Err(_) => Err("Could not open save file"),
-                    Ok(..) => {
-                        self.ram = data;
-                        Ok(())
-                    }
-                }
-            }
+        if !self.battery.is_active() {
+            return Ok(());
         }
+        let loaded = self.battery.load()?;
+        self.ram = loaded.ram;
+        if !loaded.fresh {
+            // Migrates a legacy `.gbsave` to `.sav` on the next flush.
+            self.battery.mark_dirty();
+        }
+        Ok(())
     }
 }
 
 impl Drop for MBC1 {
     fn drop(&mut self) {
-        match self.savepath {
-            None => {}
-            Some(ref path) => {
-                let _ = fs::File::create(path).and_then(|mut f| f.write_all(&self.ram));
-            }
-        };
+        // Belt and braces — `autosave` is the real mechanism (see `mbc::battery`).
+        self.flush_battery();
     }
 }
 
@@ -118,7 +100,13 @@ impl MemoryBankController for MBC1 {
         } else {
             0
         };
-        self.ram[(rambank * 0x2000) | ((a & 0x1FFF) as usize)]
+        // A cart can declare RAM+BATTERY with a RAM size of 0, and a foreign
+        // `.sav` can be shorter than the declared size; open-bus rather than a
+        // panic (which `panic = 'abort'` would turn into an instant crash).
+        *self
+            .ram
+            .get((rambank * 0x2000) | ((a & 0x1FFF) as usize))
+            .unwrap_or(&0xFF)
     }
 
     // MBC1 bank registers. See docs/components/mbc.md and Pan Docs:
@@ -170,11 +158,24 @@ impl MemoryBankController for MBC1 {
         let address = (rambank * 0x2000) | ((a & 0x1FFF) as usize);
         if address < self.ram.len() {
             self.ram[address] = v;
+            self.battery.touch();
         }
     }
 
     fn rom_bank(&self) -> usize {
         self.rombank
+    }
+
+    fn autosave(&mut self) {
+        self.battery.tick(&self.ram, None);
+    }
+
+    fn flush_battery(&mut self) {
+        self.battery.flush(&self.ram, None);
+    }
+
+    fn battery_dirty(&mut self) {
+        self.battery.mark_dirty();
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {

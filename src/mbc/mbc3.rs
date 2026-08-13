@@ -1,9 +1,9 @@
+use crate::mbc::battery::{now_secs, Battery, RtcState};
 use crate::mbc::{ram_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
-use std::io::prelude::*;
 use std::path;
-use std::{fs, io, time};
+use std::time;
 
 pub struct MBC3 {
     rom: Vec<u8>,
@@ -13,7 +13,7 @@ pub struct MBC3 {
     rambanks: usize,
     selectrtc: bool,
     ram_on: bool,
-    savepath: Option<path::PathBuf>,
+    battery: Battery,
     rtc_ram: [u8; 5],
     rtc_ram_latch: [u8; 5],
     rtc_zero: Option<u64>,
@@ -22,59 +22,51 @@ pub struct MBC3 {
 impl MBC3 {
     pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC3> {
         let subtype = data[0x147];
-        let svpath = match subtype {
-            0x0F | 0x10 | 0x13 => Some(file.with_extension("gbsave")),
-            _ => None,
-        };
         let rambanks = match subtype {
             0x10 | 0x12 | 0x13 => ram_banks(data[0x149]),
             _ => 0,
         };
         let ramsize = rambanks * 0x2000;
-        let rtc = match subtype {
-            0x0F | 0x10 => Some(0),
-            _ => None,
+        let battery = match subtype {
+            // Cart types with a battery. 0x0F has an RTC but no RAM, so it gets
+            // no `.sav`; its clock still rides in the `.rtc` sidecar via
+            // `flush_battery` below.
+            0x10 | 0x13 => Battery::new(&file, ramsize),
+            _ => Battery::none(),
         };
-
-        let mut res = MBC3 {
-            rom: data,
-            ram: ::std::iter::repeat(0u8).take(ramsize).collect(),
-            rombank: 1,
-            rambank: 0,
-            rambanks,
-            selectrtc: false,
-            ram_on: false,
-            savepath: svpath,
-            rtc_ram: [0u8; 5],
-            rtc_ram_latch: [0u8; 5],
-            rtc_zero: rtc,
-        };
-        res.loadram().map(|_| res)
+        MBC3::build(data, subtype, rambanks, ramsize, battery)
     }
 
     pub fn new_without_save(data: Vec<u8>) -> StrResult<MBC3> {
         let subtype = data[0x147];
-        let svpath = None;
-
         let rambanks = match subtype {
             0x10 | 0x12 | 0x13 => ram_banks(data[0x149]),
             _ => 0,
         };
         let ramsize = rambanks * 0x2000;
+        MBC3::build(data, subtype, rambanks, ramsize, Battery::none())
+    }
+
+    fn build(
+        data: Vec<u8>,
+        subtype: u8,
+        rambanks: usize,
+        ramsize: usize,
+        battery: Battery,
+    ) -> StrResult<MBC3> {
         let rtc = match subtype {
             0x0F | 0x10 => Some(0),
             _ => None,
         };
-
         let mut res = MBC3 {
             rom: data,
-            ram: ::std::iter::repeat(0u8).take(ramsize).collect(),
+            ram: vec![0u8; ramsize],
             rombank: 1,
             rambank: 0,
             rambanks,
             selectrtc: false,
             ram_on: false,
-            savepath: svpath,
+            battery,
             rtc_ram: [0u8; 5],
             rtc_ram_latch: [0u8; 5],
             rtc_zero: rtc,
@@ -83,31 +75,42 @@ impl MBC3 {
     }
 
     fn loadram(&mut self) -> StrResult<()> {
-        match self.savepath {
-            None => Ok(()),
-            Some(ref savepath) => {
-                let mut file = match fs::File::open(savepath) {
-                    Ok(f) => f,
-                    Err(ref e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-                    Err(..) => return Err("Could not read existing save file"),
-                };
-                let mut rtc_bytes = [0; 8];
-                file.read_exact(&mut rtc_bytes)
-                    .map_err(|_| "Could not read RTC")?;
-                let rtc = u64::from_be_bytes(rtc_bytes);
-                if self.rtc_zero.is_some() {
-                    self.rtc_zero = Some(rtc);
-                }
-                let mut data = vec![];
-                match file.read_to_end(&mut data) {
-                    Err(..) => Err("Could not read ROM"),
-                    Ok(..) => {
-                        self.ram = data;
-                        Ok(())
-                    }
-                }
+        if !self.battery.is_active() {
+            return Ok(());
+        }
+        let loaded = self.battery.load()?;
+        self.ram = loaded.ram;
+        if self.rtc_zero.is_some() {
+            if let Some(state) = loaded.rtc {
+                // A cartridge's clock keeps ticking while the console is off, so
+                // anchor it at the moment the sidecar was written and let the
+                // elapsed wall time carry it forward.
+                self.rtc_ram = state.regs;
+                self.rtc_ram_latch = state.latched;
+                self.rtc_zero =
+                    Some(state.timestamp.saturating_sub(rtc_regs_secs(&state.regs)));
+            } else if let Some(anchor) = loaded.legacy_rtc_zero {
+                self.rtc_zero = Some(anchor);
             }
         }
+        if !loaded.fresh {
+            // Content came from disk: if it came from a legacy `.gbsave`, this
+            // is what writes the migrated `.sav` out (the old file is kept as a
+            // backup and never touched again).
+            self.battery.mark_dirty();
+        }
+        Ok(())
+    }
+
+    /// The RTC in the neutral shape the sidecar stores, brought up to date.
+    fn rtc_state(&mut self) -> Option<RtcState> {
+        self.rtc_zero?;
+        self.calc_rtc_reg();
+        Some(RtcState {
+            regs: self.rtc_ram,
+            latched: self.rtc_ram_latch,
+            timestamp: now_secs(),
+        })
     }
 
     fn latch_rtc_reg(&mut self) {
@@ -169,26 +172,18 @@ impl MBC3 {
     }
 }
 
+/// Seconds represented by the five RTC registers (s, m, h, day-lo, day-hi).
+fn rtc_regs_secs(regs: &[u8; 5]) -> u64 {
+    let days = ((regs[4] as u64 & 0x1) << 8) | regs[3] as u64;
+    regs[0] as u64 + regs[1] as u64 * 60 + regs[2] as u64 * 3600 + days * 3600 * 24
+}
+
 impl Drop for MBC3 {
     fn drop(&mut self) {
-        match self.savepath {
-            None => {}
-            Some(ref path) => {
-                let mut file = match fs::File::create(path) {
-                    Ok(f) => f,
-                    Err(..) => return,
-                };
-                let rtc = self.rtc_zero.unwrap_or(0);
-                let mut ok = true;
-                if ok {
-                    let rtc_bytes = rtc.to_be_bytes();
-                    ok = file.write_all(&rtc_bytes).is_ok();
-                };
-                if ok {
-                    let _ = file.write_all(&self.ram);
-                };
-            }
-        };
+        // A last chance, not the mechanism: `autosave` has almost always
+        // written this already, and the frontends cannot guarantee `Drop` runs
+        // at all (see `mbc::battery`).
+        self.flush_battery();
     }
 }
 
@@ -206,7 +201,8 @@ impl MemoryBankController for MBC3 {
             return 0xFF;
         }
         if !self.selectrtc && self.rambank < self.rambanks {
-            self.ram[(self.rambank * 0x2000) | ((a as usize) & 0x1FFF)]
+            let idx = (self.rambank * 0x2000) | ((a as usize) & 0x1FFF);
+            *self.ram.get(idx).unwrap_or(&0xFF)
         } else if self.selectrtc && self.rambank < 5 {
             self.rtc_ram_latch[self.rambank]
         } else {
@@ -235,7 +231,12 @@ impl MemoryBankController for MBC3 {
             return;
         }
         if !self.selectrtc && self.rambank < self.rambanks {
-            self.ram[(self.rambank * 0x2000) | ((a as usize) & 0x1FFF)] = v;
+            let idx = (self.rambank * 0x2000) | ((a as usize) & 0x1FFF);
+            if idx < self.ram.len() {
+                self.ram[idx] = v;
+                // The battery would have held this the instant it was written.
+                self.battery.touch();
+            }
         } else if self.selectrtc && self.rambank < 5 {
             self.calc_rtc_reg();
             let vmask = match self.rambank {
@@ -246,11 +247,37 @@ impl MemoryBankController for MBC3 {
             };
             self.rtc_ram[self.rambank] = v & vmask;
             self.calc_rtc_zero();
+            // Setting the clock is battery-backed too: a game that sets the
+            // date (Pokémon Gold's day/night) must find it again next launch.
+            self.battery.touch();
         }
     }
 
     fn rom_bank(&self) -> usize {
         self.rombank
+    }
+
+    fn autosave(&mut self) {
+        // `rtc_state` reads the host clock and re-derives the RTC registers;
+        // only worth doing on frames where a write is actually pending.
+        if !self.battery.is_active() || !self.battery.is_dirty() {
+            return;
+        }
+        // Bring the clock up to date first: `tick` may write it out.
+        let rtc = self.rtc_state();
+        self.battery.tick(&self.ram, rtc);
+    }
+
+    fn flush_battery(&mut self) {
+        if !self.battery.is_active() {
+            return;
+        }
+        let rtc = self.rtc_state();
+        self.battery.flush(&self.ram, rtc);
+    }
+
+    fn battery_dirty(&mut self) {
+        self.battery.mark_dirty();
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {

@@ -286,9 +286,19 @@ rationale: **[docs/testing.md](docs/testing.md)**.
   these cycle-exact needs a cycle-stepped PPU/CPU — the same structural step the APU wave-RAM
   tests (`dmg_sound` 09/10/12) are waiting on; that APU work is now **planned next**.
 - Web build has no sound and always treats cartridges as MBC3.
-- Battery saves work only on the native (filepath) path. **Save states are implemented** in the
+- Battery saves work only on the native (filepath) path — the web and FFI builds have no
+  filesystem, so in-game saves are not persisted there. **Save states are implemented** in the
   core (versioned, ROM-checked `GBSS` format; byte-identical round-trip proof) and exposed in
   the terminal frontend as quick-save/-load slots — see [`docs/savestates.md`](docs/savestates.md).
+
+**Battery saves** are written to `<rom>.sav` — **raw cartridge RAM with no header**, the
+same format every other emulator uses, so saves can be carried in either direction. MBC3's
+real-time clock goes in a `<rom>.rtc` sidecar (the 48-byte VBA-M/mGBA layout); a `.sav`
+with that block appended is also accepted on load. Saves are written **while the emulator
+runs** — about a second after the game finishes writing cartridge RAM — and atomically, so
+closing the window, a crash or a `kill` cannot lose or truncate them. Saves from older
+builds (`<rom>.gbsave`) are read and migrated automatically; the old file is left in place
+untouched as a backup.
 
 ---
 

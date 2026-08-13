@@ -82,10 +82,32 @@ Each controller: **MBC0** (no banking, [`mbc0.rs:4`](https://github.com/Alchemy8
 see below; [`mbc3.rs`](../../src/mbc/mbc3.rs)); **MBC5** (9-bit ROM bank split across
 `0x2000` and `0x3000`; [`mbc5.rs:90`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L90)).
 
-**Battery saves** are written in each controller's `Drop` impl, only when a `savepath` was
-set — which requires both a battery cart subtype *and* a real filepath
-([`mbc1.rs:87`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L87), [`mbc3.rs:172`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc3.rs#L172), etc.). Saves use a `.gbsave`
-extension; MBC3 prepends 8 RTC bytes.
+**Battery saves** live in [`src/mbc/battery.rs`](../../src/mbc/battery.rs), shared by MBC1/2/3/5. A `Battery`
+exists only for a battery cart subtype *with* a real filepath and a non-zero declared RAM
+size; otherwise it is `Battery::none()` and persists nothing (the web and FFI builds).
+
+- **Written while the emulator runs, not on `Drop`.** `writeram` calls `Battery::touch`;
+  `Gameboy::frame` calls `MemoryBankController::autosave` once per frame, which writes the
+  save out after the game has left cartridge RAM alone for 60 frames (~1 s), or after 600
+  frames of continuous writing. `Drop` still flushes, but only as a last chance — **no
+  frontend can guarantee `Drop` runs** (see the sharp edge below), and relying on it was the
+  cause of total save loss.
+- **Atomic.** Every write goes to `<file>.tmp`, is `fsync`ed, then `rename`d over the
+  target, so an interrupted write can never truncate an existing save.
+- **Never writes unless the game wrote.** A session that does not touch cartridge RAM
+  leaves the save file alone — the old code unconditionally wrote its pristine all-zero RAM,
+  which is how one failed load turned into permanent data loss.
+- **File formats.** `<rom>.sav` is **raw cartridge RAM, no header** — the universal format,
+  interchangeable with other emulators in both directions. MBC3's clock goes in a separate
+  `<rom>.rtc` sidecar (48 bytes little-endian: 5 × `u32` current registers, 5 × `u32`
+  latched, `u64` UNIX timestamp — the VBA-M/mGBA layout). On load a `.sav` of
+  `ramsize + 48` bytes is also accepted, which is how VBA-M and mGBA append that same block.
+  The legacy `<rom>.gbsave` (8-byte big-endian RTC anchor + RAM) is still **read** when no
+  `.sav` exists and is migrated to `.sav` on the next flush; the old file is left on disk
+  untouched as a backup and never written again.
+- **A save that cannot be read is never overwritten.** A read error poisons the battery so
+  later writes are refused, and construction fails loudly rather than silently starting a
+  new game on top of an existing save.
 
 **The header checksum** — `check_checksum`
 ([`src/mbc/mod.rs:116`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L116), `#[allow(dead_code)]`) sums `0x134..0x14D`
@@ -114,6 +136,16 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 - **MBC5 rumble is not implemented** — the motor-control range is an explicit no-op
   (`0x6000..=0x7FFF => { /* ? */ }`, [`mbc5.rs:101`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L101)); rumble carts
   still load (RAM/battery handled) but never rumble.
+- **`Drop` is not a shutdown hook — do not persist anything in one.** The desktop
+  frontend's `glutin`/`winit` `event_loop.run()` **never returns**: winit 0.26 calls
+  `process::exit(0)` on `ControlFlow::Exit` (`winit-0.26.1/src/platform_impl/linux/x11/mod.rs:393`
+  and the Wayland equivalent), so the `Gameboy` moved into the closure is never dropped.
+  `[profile.release] panic = 'abort'` skips destructors too, as does closing a terminal
+  window or any `kill`. This is why cartridge RAM is now persisted per-frame; anything else
+  that must survive a shutdown needs the same treatment.
+- **The RTC is not persisted for a timer-only cart (`0x0F`, TIMER+BATTERY, no RAM).** The
+  battery keys off cartridge RAM size, so a `0x0F` cart gets no files at all. No commercial
+  cart uses `0x0F`.
 - **No MBC1M multicart detection** — only the mode-1 `& 0xE0` bank-0 remap
   ([`mbc1.rs:104`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L104)) is present; true multicart masking (`& 0x30`) is
   absent.
@@ -135,8 +167,9 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: only the two header-checksum tests** (#1 below); all banking behaviour
-> is untested.
+> **Coverage today: the two header-checksum tests (#1) and the battery-save durability
+> harness (#9–#14, `testharness/battery.rs`).** All *banking* behaviour is still untested —
+> though #11 exercises MBC3 RAM banking end to end as a side effect.
 
 1. **Header checksum.** `check_checksum` accepts a header whose `0x14D` matches the
    computed sum and rejects one that doesn't. ✅ **Covered** (`checksum_zero`,
@@ -156,8 +189,27 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
    until the next latch. *(Not covered.)*
 8. **MBC5 9-bit ROM bank.** Selecting bank `0x100` (via `0x3000` bit 0) reads from ROM
    bank 256. *(Not covered.)*
-9. **Battery save round-trip.** Writing cartridge RAM then dropping the MBC produces a
-   `.gbsave` that reloads to the same bytes (native/filepath path only). *(Not covered.)*
+9. **Battery save survives an unclean exit.** A game writes cartridge RAM; the process dies
+   with **no destructor run at all**; the save is on disk and complete. ✅ **Covered**
+   (`testharness/battery.rs`, `cargo test --release --test battery`).
+   *Player-visible symptom when this fails: you save in Pokémon, quit, relaunch, and the
+   title screen offers only "NEW GAME".*
+10. **Battery save is a raw `.sav`.** The file is exactly `ramsize` bytes of cartridge RAM
+    with no header, so other emulators can read it. ✅ **Covered** (same harness).
+11. **Every RAM bank reloads through the bank register.** A fresh machine reads back each
+    of the four MBC3 banks correctly. A save whose banks are stored out of order has the
+    right file size but fails the game's own checksum, which looks identical to an empty
+    save. ✅ **Covered** (same harness).
+12. **A session that saves nothing does not touch the save file.** ✅ **Covered** (same
+    harness) — this is the guard against one failed load erasing a real save.
+13. **Legacy `.gbsave` migrates.** It loads, is rewritten as `.sav`, and the original file
+    is left byte-identical as a backup. ✅ **Covered** (same harness).
+14. **A foreign `.sav` loads**, including the VBA-M/mGBA convention of a 48-byte RTC block
+    appended to the RAM. ✅ **Covered** (same harness).
+15. **MBC3 RTC sidecar round-trip.** After a save and reload the clock reads the stored time
+    plus the wall time that elapsed while the emulator was closed. *(Not covered — no
+    battery-RTC cart is available to the harness; the `.rtc` encode/decode is unit-tested in
+    [`battery.rs`](../../src/mbc/battery.rs).)*
 
 ## 7. Test ROMs that exercise it
 

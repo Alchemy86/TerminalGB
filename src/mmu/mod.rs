@@ -349,6 +349,10 @@ impl<'a> MemoryManagementUnit<'a> {
         let mbc = r.blob()?;
         let mut mr = crate::savestate::Reader::new(&mbc);
         self.mbc.load_state(&mut mr)?;
+        // A save-state load replaces cartridge RAM wholesale without the game
+        // ever writing it, so the battery file has to be rewritten too — else
+        // the next launch resurrects the pre-load save.
+        self.mbc.battery_dirty();
         Ok(())
     }
 
