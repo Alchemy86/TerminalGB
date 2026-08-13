@@ -31,8 +31,11 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
-use crate::screen::config::{CellScale, Config, Palette, Recent};
+use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath};
+use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
+use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry};
+use crate::termimage::{CellRect, TermImage, Wire};
 use crate::upscale::Upscaler;
 
 use std::env;
@@ -91,6 +94,22 @@ fn debug_layout(msg: &str) {
 /// found on the desktop path. 1/59.7275 s ≈ 16743 µs. Emulation of a single
 /// frame runs on the main loop; input is polled between frames.
 const FRAME_TIME: Duration = Duration::from_micros(16_743);
+/// The DMG refresh rate as a number, for "% of real hardware" reporting.
+const DMG_HZ: f32 = 59.7275;
+/// Most emulated frames one loop iteration will run to catch up after a slow
+/// draw. At the 16.743 ms frame period this absorbs a ~200 ms stall (a huge
+/// terminal repaint, a window resize, the machine swapping) without the
+/// emulator ever running *fast* afterwards; beyond it the deadline is resynced
+/// and the extra frames are counted as dropped rather than fast-forwarded.
+const MAX_CATCHUP: u32 = 12;
+/// Input-poll timeout on the ROM picker, where nothing is due on a clock. Long
+/// enough that an idle picker costs no measurable CPU, short enough that a
+/// terminal resize is picked up immediately.
+const IDLE_POLL: Duration = Duration::from_millis(50);
+/// Width and height of the live stats panel, which gets a rectangle of its own
+/// so it never lands on top of the game picture (see [`App::render_stats`]).
+const STATS_W: u16 = 22;
+const STATS_H: u16 = 15;
 /// A held Game Boy key auto-releases this long after its last press/repeat.
 /// A safety net (we require the kitty keyboard protocol, so real key-release
 /// events normally arrive first); it must exceed the terminal's key-autorepeat
@@ -211,8 +230,15 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let config = Config::load();
+    let (config, warnings) = Config::load_reporting();
     let recent = Recent::load();
+
+    // Say it before the alternate screen swallows it: a config key that does
+    // not apply must never fail silently. These stay in the scrollback after
+    // exit, and are repeated in the picker footer and the `?` help overlay.
+    for w in &warnings {
+        eprintln!("gameboy: {w}");
+    }
 
     // Terminal setup. Restore on panic so a crash doesn't leave the terminal
     // in raw mode / alternate screen.
@@ -236,7 +262,7 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(config, recent);
+    let mut app = App::with_warnings(config, recent, warnings);
     if let Some(path) = initial_rom {
         app.start_game(&path); // a load error surfaces as a picker message
     }
@@ -276,21 +302,96 @@ struct Session {
     gb: Gameboy,
     entry: RomEntry,
     paused: bool,
-    /// Terminal image protocol for the current framebuffer; recreated each
-    /// emulated frame so a window resize re-fits without a keypress.
+    /// Palette-mapping stage, owning its buffer so a frame allocates nothing.
+    prep: FramePrep,
+    /// Fast path: our own capped-resolution encoder. `None` when the protocol
+    /// has no cell-addressed placement (sixel, halfblocks) or the user asked
+    /// for [`RenderPath::Legacy`], in which case `image` below is used.
+    term_image: Option<TermImage>,
+    /// Legacy path: `ratatui-image` protocol state, rebuilt only when the frame
+    /// actually changes (it used to be rebuilt every frame).
     image: Option<StatefulProtocol>,
+    /// Hash of the last frame encoded on the legacy path.
+    legacy_hash: u64,
     /// Last computed effective scale (for the status panel).
     scale: f32,
-    // FPS accounting.
-    frames: u32,
+    /// Display rectangle and transmitted image size, for the status panel and
+    /// telemetry — the gap between them is the whole optimisation.
+    disp_cells: (u16, u16),
+    /// Top-left cell of the picture, so nothing else can be laid out on top.
+    disp_origin: (u16, u16),
+    disp_px: (u32, u32),
+    tx_px: (u32, u32),
+    /// Escape-sequence bytes handed to the terminal for the last drawn frame.
+    tx_bytes: usize,
+    /// The image sequence to write straight to the terminal once the frame has
+    /// been flushed. Empty when the picture did not change.
+    pending_wire: String,
+
+    // --- accounting -----------------------------------------------------
+    /// Displayed frames per second, averaged over the last second.
     fps: f32,
+    /// **Emulated** frames per second — the number that must stay at 59.7275
+    /// whatever the display manages.
+    emu_fps: f32,
+    disp_count: u32,
+    emu_count: u32,
     fps_mark: Instant,
+    /// Cumulative totals for telemetry.
+    emu_frames: u64,
+    disp_frames: u64,
+    /// Frames whose picture was byte-identical to the previous one, so nothing
+    /// was encoded or transmitted.
+    frames_identical: u64,
+    /// Emulated frames that were never displayed because rendering was behind.
+    frames_dropped: u64,
+    /// Emulated frames since the last displayed one.
+    skipped_since_display: u64,
+    /// Per-stage timings of the most recent displayed frame, milliseconds.
+    t_emulate: f32,
+    t_palette: f32,
+    t_upscale: f32,
+    t_encode: f32,
+    t_write: f32,
+
     /// Per-button last press time (index by [`key_index`]); drives auto-release.
     held: [Option<Instant>; 8],
+    /// Read-only handle on the host audio queue, for telemetry. `sound.rs` is
+    /// not touched: [`crate::sound::cpal_audio::CpalPlayer::queue_handle`] is
+    /// the diagnostic handle it already publishes.
+    #[cfg(feature = "audio")]
+    audio_queue:
+        Option<std::sync::Arc<std::sync::Mutex<crate::sound::sample_queue::SampleQueue>>>,
+    #[cfg(feature = "audio")]
+    audio_rate: u32,
     /// Host-audio stream for this game. Must stay alive for the whole session —
     /// dropping it stops the sound — so it is dropped when the session ends or a
     /// different ROM is loaded. `()` when built without the `audio` feature.
-    _audio: AudioHold,
+    _audio: AudioStream,
+}
+
+impl Session {
+    /// Audio queue health, if a host stream is attached. Never blocks the
+    /// render loop: a contended lock reports nothing rather than waiting.
+    #[cfg(feature = "audio")]
+    fn audio_sample(&self) -> Option<AudioSample> {
+        let q = self.audio_queue.as_ref()?;
+        let g = q.try_lock().ok()?;
+        Some(AudioSample {
+            queue_depth: g.len(),
+            underruns: g.stats.underruns,
+            dropped: g.stats.dropped,
+            callbacks: g.stats.callbacks,
+            sample_rate: self.audio_rate,
+        })
+    }
+
+    /// Without the `audio` feature there is no host stream, so there is
+    /// nothing to report — the telemetry record carries `"audio": null`.
+    #[cfg(not(feature = "audio"))]
+    fn audio_sample(&self) -> Option<AudioSample> {
+        None
+    }
 }
 
 struct App {
@@ -300,7 +401,15 @@ struct App {
     palette: Palette,
     /// Pixel-art upscaler applied to every frame before the image protocol
     /// (see [`crate::upscale`]); `]` cycles the algorithm, `}` the factor.
+    ///
+    /// Its `factor` is set per frame to the *transmission* factor
+    /// ([`App::transmit_factor`]); the factor the user chose lives in
+    /// `upscale_factor` below, because with `transmit_scale = auto` the two
+    /// deliberately differ (a `nearest` upscale before transmission is work the
+    /// terminal would redo for free).
     upscaler: Upscaler,
+    /// The upscale factor the user selected, as shown in the status panel.
+    upscale_factor: u8,
     screen: Screen,
     overlay: Overlay,
     fullscreen: bool,
@@ -330,13 +439,37 @@ struct App {
     message: Option<String>,
     /// Last layout values logged (dedupe `GB_DEBUG_LAYOUT` spam to changes).
     dbg_last: Option<(Rect, Rect, f32)>,
+    /// Where the stats panel was last drawn, so its "never on top of the
+    /// picture" invariant can be asserted directly rather than scraped.
+    stats_rect: Option<Rect>,
+    /// Signature of everything about the UI that can paint over the picture.
+    /// When it changes, the image is retransmitted even if the frame did not,
+    /// because the terminal's copy of it may have been partly overwritten.
+    ui_sig: Option<(u8, bool, bool, bool)>,
+    /// Machine-readable run telemetry; disabled (and free) unless configured.
+    telemetry: Telemetry,
+    /// Complaints from config parsing, shown once so a mistyped key cannot
+    /// fail silently.
+    config_warnings: Vec<String>,
 }
 
 impl App {
-    fn new(config: Config, recent: Recent) -> App {
+    fn with_warnings(config: Config, recent: Recent, warnings: Vec<String>) -> App {
         // Prefer the sharpest protocol the terminal advertises (build_picker),
         // then let an explicit config `protocol` override it.
-        let mut picker = build_picker();
+        App::build(config, recent, warnings, build_picker())
+    }
+
+    /// The rest of construction, with the [`Picker`] already chosen. Split out
+    /// so tests can drive the real render path with a fixed protocol and cell
+    /// size instead of querying a terminal that is not there.
+    fn build(
+        config: Config,
+        recent: Recent,
+        warnings: Vec<String>,
+        picker: Picker,
+    ) -> App {
+        let mut picker = picker;
         // HiDPI correction: on a display scaled by S, a pixel-addressed protocol
         // (iTerm2/sixel) renders our image in *physical* device pixels while the
         // terminal reported its cell size in *logical* pixels, so an image sized
@@ -367,6 +500,36 @@ impl App {
         ));
         let palette = config.palette;
         let upscaler = Upscaler::new(config.upscale, config.upscale_factor);
+        let config_factor = upscaler.factor();
+
+        // Telemetry: `$GB_TELEMETRY` wins over the config key. Writing to
+        // stdout from inside the alternate screen would corrupt the display, so
+        // the terminal frontend refuses that destination and says why.
+        let mut warnings = warnings;
+        let dest = telemetry::Destination::from_env().or_else(|| {
+            config
+                .telemetry
+                .as_deref()
+                .and_then(telemetry::Destination::parse)
+        });
+        let telemetry = match dest {
+            Some(telemetry::Destination::Stdout) => {
+                warnings.push(
+                    "telemetry: stdout would corrupt the terminal display — give a file \
+                     path instead (telemetry = \"/tmp/gb.ndjson\")"
+                        .to_string(),
+                );
+                Telemetry::disabled()
+            }
+            Some(d) => {
+                let (t, err) = Telemetry::open(&d);
+                if let Some(e) = err {
+                    warnings.push(e);
+                }
+                t
+            }
+            None => Telemetry::disabled(),
+        };
 
         let mut app = App {
             config,
@@ -374,6 +537,7 @@ impl App {
             picker,
             palette,
             upscaler,
+            upscale_factor: config_factor,
             screen: Screen::Picker,
             overlay: Overlay::None,
             fullscreen: false,
@@ -391,8 +555,15 @@ impl App {
             selected: 0,
             message: None,
             dbg_last: None,
+            stats_rect: None,
+            ui_sig: None,
+            telemetry,
+            config_warnings: warnings,
         };
         app.rescan();
+        if let Some(first) = app.config_warnings.first() {
+            app.message = Some(first.clone());
+        }
         app
     }
 
@@ -421,6 +592,7 @@ impl App {
     /// Load a ROM and switch to the Playing screen. On failure, stay on the
     /// picker and show why.
     fn start_game(&mut self, path: &Path) {
+        let term_image = self.new_term_image();
         match load_session(path) {
             Ok((mut gb, entry, audio)) => {
                 self.recent.record(path);
@@ -428,22 +600,57 @@ impl App {
                 // Carry the current speed rung's audio contract into the new
                 // session (see bump_speed): non-1x must drop, not wait.
                 gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
+                #[cfg(feature = "audio")]
+                let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
                 self.session = Some(Session {
                     gb,
                     entry,
                     paused: false,
+                    prep: FramePrep::new(),
+                    term_image,
                     image: None,
+                    legacy_hash: 0,
                     scale: 1.0,
-                    frames: 0,
+                    disp_cells: (0, 0),
+                    disp_origin: (0, 0),
+                    disp_px: (0, 0),
+                    tx_px: (160, 144),
+                    tx_bytes: 0,
+                    pending_wire: String::new(),
                     fps: 0.0,
+                    emu_fps: 0.0,
+                    disp_count: 0,
+                    emu_count: 0,
                     fps_mark: Instant::now(),
+                    emu_frames: 0,
+                    disp_frames: 0,
+                    frames_identical: 0,
+                    frames_dropped: 0,
+                    skipped_since_display: 0,
+                    t_emulate: 0.0,
+                    t_palette: 0.0,
+                    t_upscale: 0.0,
+                    t_encode: 0.0,
+                    t_write: 0.0,
                     held: [None; 8],
+                    #[cfg(feature = "audio")]
+                    audio_queue,
+                    #[cfg(feature = "audio")]
+                    audio_rate,
+                    #[cfg(feature = "audio")]
+                    _audio: audio.stream,
+                    #[cfg(not(feature = "audio"))]
                     _audio: audio,
                 });
                 self.screen = Screen::Playing;
                 self.overlay = Overlay::None;
                 self.fullscreen = false;
                 self.message = None;
+                // Config problems follow you into the game — silently ignoring
+                // a key the user set is the bug being fixed here.
+                if let Some(w) = self.config_warnings.first().cloned() {
+                    self.set_toast(format!("⚠ {w}"));
+                }
             }
             Err(e) => {
                 self.screen = Screen::Picker;
@@ -477,6 +684,13 @@ impl App {
         // catch-up (extra emulated frames, cheap next to terminal drawing)
         // absorbs slow draws and late wakeups.
         let mut next_frame = Instant::now() + FRAME_TIME;
+        // Rendering is paced *separately* from emulation. `next_draw` is
+        // pushed out by however long the last draw actually took, so a terminal
+        // that cannot repaint at 60 Hz simply gets fewer pictures — it never
+        // makes the emulator (and therefore the game, and the audio clock that
+        // is slaved to it) run slow. Display frames are dropped, not emulated
+        // ones. See the frames_dropped counter and docs/display.md.
+        let mut next_draw = Instant::now();
         let mut dirty = true;
 
         while !self.should_quit {
@@ -507,22 +721,15 @@ impl App {
                         // `now` instead would add the step/draw/poll overhead
                         // of every loop iteration to the period — emulation
                         // runs slow, audio production (slaved to it) starves
-                        // the queue, and playback goes "blocky". Bounded
-                        // catch-up absorbs slow draws; resync when hopelessly
-                        // behind (stall, suspend) rather than fast-forwarding.
-                        self.step_frame();
-                        next_frame += level.interval();
-                        let now = Instant::now();
-                        if now > next_frame {
-                            let mut extra = 0;
-                            while now > next_frame && extra < 3 {
-                                self.step_frame();
-                                next_frame += level.interval();
-                                extra += 1;
-                            }
-                            if now > next_frame {
-                                next_frame = now + level.interval();
-                            }
+                        // the queue, and playback goes "blocky". Catch-up is
+                        // bounded by MAX_CATCHUP so a long stall resyncs
+                        // instead of fast-forwarding the game.
+                        let interval = level.interval();
+                        let (due, deadline) =
+                            frames_due(Instant::now(), next_frame, interval);
+                        next_frame = deadline;
+                        for _ in 0..due {
+                            self.step_frame();
                         }
                         dirty = true;
                     }
@@ -533,14 +740,46 @@ impl App {
                 }
             }
 
-            // 3. Draw only when something changed (bounds encode cost).
-            if dirty {
+            // 3. Draw when something changed *and* the display is due. On a
+            //    large window a draw can cost more than a frame; rather than
+            //    stalling emulation behind it we simply draw less often.
+            let now = Instant::now();
+            if dirty && now >= next_draw {
+                let t = Instant::now();
                 terminal.draw(|f| self.render(f))?;
+                // The picture goes out *after* the text frame has been
+                // flushed, so it is never clipped, re-diffed or overwritten by
+                // `ratatui`. Nothing is written when the frame was unchanged.
+                self.flush_image()?;
+                let last_draw_cost = t.elapsed();
+                // Never faster than the panel refresh, never slower than the
+                // draw itself can sustain.
+                next_draw = next_draw_at(t, last_draw_cost);
                 dirty = false;
+                self.emit_telemetry(last_draw_cost);
             }
 
-            // 4. Poll input with a short timeout so input feels immediate.
-            if event::poll(Duration::from_millis(4))? {
+            // 4. Poll input until the next thing is due, so the loop sleeps
+            //    instead of spinning but still reacts to a keypress at once.
+            //    `poll` returns as soon as a key arrives, so a longer timeout
+            //    costs nothing in responsiveness — only in how promptly the
+            //    next emulated frame starts, which is why it is bounded.
+            let now = Instant::now();
+            let timeout = match self.screen {
+                // Nothing is due on a clock: wait on input alone.
+                Screen::Picker => IDLE_POLL,
+                Screen::Playing => {
+                    let deadline = if dirty {
+                        next_frame.min(next_draw)
+                    } else {
+                        next_frame
+                    };
+                    deadline
+                        .saturating_duration_since(now)
+                        .clamp(Duration::from_millis(1), Duration::from_millis(8))
+                }
+            };
+            if event::poll(timeout)? {
                 match event::read()? {
                     Event::Key(key) => {
                         self.handle_key(key);
@@ -551,27 +790,102 @@ impl App {
                 }
             }
         }
+        self.telemetry.flush();
         self.recent.save();
         Ok(())
     }
 
+    /// Advance the machine exactly one emulated frame. **Emulation only** — no
+    /// palette mapping, no upscaling, no encoding. Those used to happen here,
+    /// which is what coupled the game's speed to the terminal's; they now
+    /// happen in [`App::render_display`], at most once per displayed frame.
     fn step_frame(&mut self) {
-        // Split borrows: pull the fields we need out of `self` first.
-        let palette = self.palette;
-        let picker = self.picker;
-        let upscaler = &mut self.upscaler;
         if let Some(s) = self.session.as_mut() {
+            let t = Instant::now();
             s.gb.frame();
-            let img = framebuffer_image(&s.gb, palette, upscaler);
-            s.image = Some(picker.new_resize_protocol(img));
-            s.frames += 1;
+            s.t_emulate = telemetry::ms(t.elapsed());
+            s.emu_count += 1;
+            s.emu_frames += 1;
+            s.skipped_since_display += 1;
             let elapsed = s.fps_mark.elapsed();
             if elapsed >= Duration::from_secs(1) {
-                s.fps = s.frames as f32 / elapsed.as_secs_f32();
-                s.frames = 0;
+                let secs = elapsed.as_secs_f32();
+                s.fps = s.disp_count as f32 / secs;
+                s.emu_fps = s.emu_count as f32 / secs;
+                s.disp_count = 0;
+                s.emu_count = 0;
                 s.fps_mark = Instant::now();
             }
         }
+    }
+
+    /// Write the game picture to the terminal, after `ratatui` has flushed the
+    /// text frame.
+    ///
+    /// Writing it here rather than through a cell symbol is what makes an
+    /// unchanged frame cost literally nothing, and what stops an overlay from
+    /// freezing the picture. See [`crate::termimage`] for both failure modes.
+    fn flush_image(&mut self) -> io::Result<()> {
+        let Some(s) = self.session.as_mut() else {
+            return Ok(());
+        };
+        if s.pending_wire.is_empty() {
+            return Ok(());
+        }
+        use std::io::Write as _;
+        let mut out = io::stdout().lock();
+        out.write_all(s.pending_wire.as_bytes())?;
+        out.flush()?;
+        s.pending_wire.clear();
+        Ok(())
+    }
+
+    /// Publish one telemetry record for the frame just drawn. Costs a single
+    /// `Option` test when telemetry is off, which is the default.
+    fn emit_telemetry(&mut self, draw_cost: Duration) {
+        if !self.telemetry.is_enabled() {
+            return;
+        }
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        let ctx = Context {
+            rom_title: s.entry.title.clone(),
+            mbc: s.entry.mbc.to_string(),
+            frontend: "terminal".to_string(),
+            protocol: protocol_name(self.picker.protocol_type()).to_string(),
+            palette: self.palette.name().to_string(),
+            upscale: self.upscaler.algorithm().name().to_string(),
+            upscale_factor: self.upscaler.factor(),
+            scale: s.scale,
+            speed: SPEED_LADDER[self.speed].label.to_string(),
+            term_cols: 0,
+            term_rows: 0,
+            display_cols: s.disp_cells.0,
+            display_rows: s.disp_cells.1,
+            tx_w: s.tx_px.0,
+            tx_h: s.tx_px.1,
+            display_px_w: s.disp_px.0,
+            display_px_h: s.disp_px.1,
+        };
+        let sample = FrameSample {
+            frame: s.emu_frames,
+            fps: s.fps,
+            emulated_fps: s.emu_fps,
+            speed_pct: s.emu_fps / DMG_HZ * 100.0,
+            frame_ms: telemetry::ms(draw_cost),
+            emulate_ms: s.t_emulate,
+            palette_ms: s.t_palette,
+            upscale_ms: s.t_upscale,
+            encode_ms: s.t_encode,
+            write_ms: s.t_write,
+            frames_skipped: s.skipped_since_display,
+            frames_identical: s.frames_identical,
+            frames_dropped: s.frames_dropped,
+            tx_bytes: s.tx_bytes,
+            audio: s.audio_sample(),
+        };
+        self.telemetry.frame(&ctx, &sample);
     }
 
     fn release_expired(&mut self) -> bool {
@@ -755,12 +1069,17 @@ impl App {
                 // Upscaler: `]` cycles the algorithm, `}` the scale factor.
                 KeyCode::Char(']') => {
                     self.upscaler.cycle_algorithm();
-                    self.set_toast(format!("Upscale {}", self.upscaler.label()));
+                    self.upscale_factor =
+                        self.upscaler.algorithm().clamp_factor(self.upscale_factor);
+                    let label = self.upscale_label();
+                    self.set_toast(format!("Upscale {label}"));
                     return;
                 }
                 KeyCode::Char('}') => {
-                    self.upscaler.cycle_factor();
-                    self.set_toast(format!("Upscale {}", self.upscaler.label()));
+                    self.upscale_factor =
+                        self.upscaler.algorithm().next_factor(self.upscale_factor);
+                    let label = self.upscale_label();
+                    self.set_toast(format!("Upscale {label}"));
                     return;
                 }
                 // Stats overlay: off by default, does not pause the game.
@@ -916,19 +1235,13 @@ impl App {
     /// display image so the restored frame shows immediately.
     fn load_slot(&mut self) {
         let slot = self.slot;
-        let palette = self.palette;
-        let picker = self.picker;
-        let upscaler = &mut self.upscaler;
         let outcome = if let Some(s) = self.session.as_mut() {
             let path = state_path(&s.gb.rom_title(), slot);
             match std::fs::read(&path) {
                 Ok(bytes) => match s.gb.load_state(&bytes) {
-                    Ok(()) => {
-                        // Refresh the on-screen frame without advancing emulation.
-                        let img = framebuffer_image(&s.gb, palette, upscaler);
-                        s.image = Some(picker.new_resize_protocol(img));
-                        Ok(())
-                    }
+                    // The next draw rebuilds the picture from `gb.image()`, so
+                    // the restored frame shows immediately with no extra work.
+                    Ok(()) => Ok(()),
                     Err(e) => Err(format!("Load failed: {e}")),
                 },
                 Err(_) => Err(format!("Slot {slot} empty")),
@@ -1045,11 +1358,31 @@ impl App {
 
     fn render_game(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
+        self.stats_rect = None;
 
         if self.fullscreen {
-            self.render_display(f, area);
-            self.render_stats_overlay(f, area);
-            self.render_toast(f, area);
+            // Even in fullscreen the stats panel and the toast take their own
+            // space rather than sitting on top of the picture. A terminal
+            // graphics image owns whole cells: text drawn into a cell the image
+            // covers *replaces* that part of the image, and for Kitty's
+            // placeholder placement it stops the picture updating altogether.
+            // See `render_stats`.
+            let mut rest = area;
+            if self.toast_text().is_some() && rest.height > 1 {
+                rest.height -= 1;
+                self.render_toast(f, Rect::new(area.x, area.bottom() - 1, area.width, 1));
+            }
+            if self.stats && rest.width > STATS_W + 8 {
+                let panel = Rect::new(rest.x, rest.y, STATS_W, rest.height);
+                rest = Rect::new(
+                    rest.x + STATS_W,
+                    rest.y,
+                    rest.width - STATS_W,
+                    rest.height,
+                );
+                self.render_stats(f, panel);
+            }
+            self.render_display(f, rest);
             return;
         }
 
@@ -1083,56 +1416,91 @@ impl App {
             .constraints([Constraint::Min(30), Constraint::Length(30)])
             .split(rows[1]);
 
-        self.render_display(f, body[0]);
-        self.render_sidebar(f, body[1]);
-        self.render_stats_overlay(f, body[0]);
-        self.render_toast(f, body[0]);
+        // The stats panel lives in the sidebar, above Status — never over the
+        // picture.
+        let game = body[0];
+        if self.stats {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(STATS_H), Constraint::Min(0)])
+                .split(body[1]);
+            self.render_stats(f, split[0]);
+            self.render_sidebar(f, split[1]);
+        } else {
+            self.render_sidebar(f, body[1]);
+        }
+        self.render_display(f, game);
 
-        f.render_widget(
-            Paragraph::new(Line::from(Span::styled(
+        // The toast replaces the footer hint while it is up, for the same
+        // reason: it must not land on the picture.
+        let footer = match self.toast_text() {
+            Some(msg) => Line::from(Span::styled(
+                format!(" {msg}"),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            None => Line::from(Span::styled(
                 " ?help · p pause · +/- speed · t stats · F5/F8 save/load · f full · q quit",
                 Style::default().fg(Color::DarkGray),
-            ))),
-            rows[2],
-        );
+            )),
+        };
+        f.render_widget(Paragraph::new(footer), rows[2]);
     }
 
-    /// Small stats overlay pinned to the top-left of the game picture. Off by
-    /// default (`t`); reads already-computed values so it costs no emulation
-    /// time. Shows FPS, emulated speed %, frame time, PC and ROM bank.
-    fn render_stats_overlay(&self, f: &mut Frame<'_>, area: Rect) {
-        if !self.stats {
-            return;
-        }
+    /// The live stats panel (`t`), showing what the telemetry stream carries:
+    /// displayed and emulated fps, emulated speed as a percentage of real
+    /// hardware, the per-stage millisecond breakdown, bytes on the wire, the
+    /// dropped/identical frame counters, and the audio queue when a host stream
+    /// is attached.
+    ///
+    /// It is given **its own rectangle**, never drawn over the picture. That is
+    /// not cosmetic: a terminal graphics image owns whole cells, so text drawn
+    /// into them replaces that part of the image — and with Kitty's Unicode
+    /// placeholders it removes the placeholders that make the picture update at
+    /// all, which froze the game on screen while the overlay was up.
+    fn render_stats(&mut self, f: &mut Frame<'_>, area: Rect) {
+        self.stats_rect = Some(area);
         let Some(s) = self.session.as_ref() else {
             return;
         };
-        let speed_pct = s.fps as f64 / 59.7275 * 100.0;
-        let frame_ms = if s.fps > 0.0 {
-            1000.0 / s.fps as f64
-        } else {
-            0.0
-        };
-        let lines = vec![
-            Line::from(format!("fps {:.0}", s.fps)),
-            Line::from(format!("spd {speed_pct:.0}%")),
-            Line::from(format!("ft  {frame_ms:.1}ms")),
-            Line::from(format!("pc  {:04X}", s.gb.debug_pc())),
-            Line::from(format!("bnk {}", s.gb.debug_rom_bank())),
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        // Emulated speed, not display speed: the game runs at 100 % even when
+        // the terminal cannot repaint that fast.
+        let speed_pct = s.emu_fps as f64 / DMG_HZ as f64 * 100.0;
+        let mut lines = vec![
+            Line::from(format!("fps  {:.0} / {:.0} emu", s.fps, s.emu_fps)),
+            Line::from(format!("spd  {speed_pct:.0}% of real")),
+            Line::from(format!("emu  {:.2}ms", s.t_emulate)),
+            Line::from(format!("pal  {:.2}ms", s.t_palette)),
+            Line::from(format!("up   {:.2}ms", s.t_upscale)),
+            Line::from(format!("enc  {:.2}ms", s.t_encode)),
+            Line::from(format!("tx   {:.0}K", s.tx_bytes as f32 / 1024.0)),
+            Line::from(format!("drop {}", s.frames_dropped)),
+            Line::from(format!("same {}", s.frames_identical)),
+            Line::from(format!("pc   {:04X}", s.gb.debug_pc())),
+            Line::from(format!("bank {}", s.gb.debug_rom_bank())),
         ];
-        let w = 12u16.min(area.width);
-        let h = (lines.len() as u16 + 2).min(area.height);
-        let rect = Rect::new(area.x, area.y, w, h);
-        f.render_widget(Clear, rect);
+        if let Some(a) = s.audio_sample() {
+            lines.push(Line::from(format!("aq   {}", a.queue_depth)));
+            lines.push(Line::from(format!("aur  {}", a.underruns)));
+        }
+        lines.truncate(area.height.saturating_sub(2) as usize);
+        f.render_widget(Clear, area);
         f.render_widget(
             Paragraph::new(lines)
                 .block(Block::default().borders(Borders::ALL).title(" stats "))
                 .style(Style::default().fg(Color::Green)),
-            rect,
+            area,
         );
     }
 
-    /// Transient save/load/speed notice, bottom-left of the game picture.
+    /// Transient save/load/speed notice. Drawn into a row of its own (the
+    /// footer, or a reserved row in fullscreen) — never over the picture, for
+    /// the reason given on [`App::render_stats`].
     fn render_toast(&self, f: &mut Frame<'_>, area: Rect) {
         let Some(msg) = self.toast_text() else { return };
         let text = format!(" {msg} ");
@@ -1140,7 +1508,7 @@ impl App {
         if w == 0 || area.height == 0 {
             return;
         }
-        let rect = Rect::new(area.x, area.y + area.height - 1, w, 1);
+        let rect = Rect::new(area.x, area.y, w, 1);
         f.render_widget(Clear, rect);
         f.render_widget(
             Paragraph::new(text).style(
@@ -1167,8 +1535,71 @@ impl App {
     /// source to fill the centred rect at pixel resolution with nearest-
     /// neighbour (crisp pixels, correct aspect), so size steps are as fine as
     /// the protocol allows and re-fit is automatic on resize.
+    /// Build the [`TermImage`] encoder for the active protocol, or `None` when
+    /// the fast path does not apply.
+    ///
+    /// Sixel and halfblocks have no way to say "draw this image over these
+    /// cells" — sixel carries its own pixel grid and halfblocks *is* text — so
+    /// they keep the resize-to-the-area path. Kitty and iTerm2 both scale a
+    /// cell-addressed placement for us, which is what makes the transmission
+    /// size independent of the window.
+    fn new_term_image(&self) -> Option<TermImage> {
+        if self.config.render_path == RenderPath::Legacy {
+            return None;
+        }
+        let wire = match self.picker.protocol_type() {
+            ProtocolType::Kitty => Wire::Kitty,
+            ProtocolType::Iterm2 => Wire::Iterm2,
+            _ => return None,
+        };
+        Some(TermImage::new(wire, 0x0067_6201))
+    }
+
+    /// The upscale factor actually applied before transmission (see
+    /// [`crate::screen::config::TransmitScale`]) — usually smaller than the
+    /// factor shown in the status
+    /// panel, because the terminal does the rest of the enlargement for free.
+    fn transmit_factor(&self) -> u8 {
+        self.config
+            .transmit_scale
+            .factor_for(self.upscaler.algorithm(), self.upscale_factor)
+    }
+
+    /// The upscaler label for the status panel and toasts — built from the
+    /// factor the *user* chose, not the (possibly smaller) transmission factor.
+    fn upscale_label(&self) -> String {
+        format!(
+            "{} x{}",
+            self.upscaler.algorithm().name(),
+            self.upscale_factor
+        )
+    }
+
     fn render_display(&mut self, f: &mut Frame<'_>, area: Rect) {
         let (font_w, font_h) = self.picker.font_size();
+        // Kitty addresses placeholder rows/columns with a fixed table of
+        // combining marks, so a placement cannot exceed `MAX_CELLS` cells on
+        // either axis. Clamp the *area* rather than the fitted rectangle, so
+        // the picture stays aspect-correct and centred on a very large display.
+        let area = if self
+            .session
+            .as_ref()
+            .and_then(|s| s.term_image.as_ref())
+            .map(TermImage::wire)
+            == Some(Wire::Kitty)
+        {
+            let max = crate::termimage::MAX_CELLS;
+            let w = area.width.min(max);
+            let h = area.height.min(max);
+            Rect::new(
+                area.x + (area.width - w) / 2,
+                area.y + (area.height - h) / 2,
+                w,
+                h,
+            )
+        } else {
+            area
+        };
         let (rect, scale) = fit_metrics(area, 160, 144, font_w, font_h);
         // Temporary instrumentation for the scaling bug: dump the real numbers
         // (terminal cells, font_size, area, fitted rect, scale, source dims)
@@ -1194,34 +1625,174 @@ impl App {
             ));
             self.dbg_last = Some((area, rect, scale));
         }
-        if let Some(s) = self.session.as_mut() {
-            s.scale = scale;
-            if let Some(proto) = s.image.as_mut() {
-                let image = StatefulImage::default().resize(Resize::Scale(None));
-                f.render_stateful_widget(image, rect, proto);
+
+        // Anything that paints over the picture (a modal popup, the stats
+        // panel appearing and reflowing the layout, the toast row) may have
+        // destroyed part of the terminal's copy of the image, so the next
+        // transmission must be unconditional.
+        let sig = (
+            match self.overlay {
+                Overlay::None => 0u8,
+                Overlay::Help => 1,
+                Overlay::Quit => 2,
+            },
+            self.fullscreen,
+            self.stats,
+            self.toast_text().is_some(),
+        );
+        let ui_changed = self.ui_sig != Some(sig);
+        self.ui_sig = Some(sig);
+        // A modal popup is drawn *over* the picture, and the picture is written
+        // after the frame is flushed — so while one is up we deliberately do
+        // not retransmit, leaving the last frame on screen behind the popup.
+        // Emulation is paused under a modal overlay anyway, so it is not stale.
+        let modal = self.overlay != Overlay::None;
+
+        // Split borrows: everything we need out of `self` before `session`.
+        let palette = self.palette;
+        let picker = self.picker;
+        let tx_factor = self.transmit_factor();
+        let upscaler = &mut self.upscaler;
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        s.scale = scale;
+        s.disp_cells = (rect.width, rect.height);
+        s.disp_origin = (rect.x, rect.y);
+        s.disp_px = (
+            rect.width as u32 * font_w as u32,
+            rect.height as u32 * font_h as u32,
+        );
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+
+        // 1. Palette-map into a reused buffer (was a fresh Vec per frame).
+        let t = Instant::now();
+        let mapped = s.prep.map(s.gb.image(), palette);
+        s.t_palette = telemetry::ms(t.elapsed());
+
+        // 2. Upscale, at the *transmission* factor — never at the display
+        //    resolution. For a real filter this is the visual effect and must
+        //    happen here; for `nearest` it is the terminal's job (see
+        //    `TransmitScale`).
+        let t = Instant::now();
+        if upscaler.factor() != tx_factor {
+            upscaler.set_factor(tx_factor);
+        }
+        let (tw, th) = upscaler.output_size(160, 144);
+        let scaled = upscaler.apply(mapped, 160, 144);
+        s.t_upscale = telemetry::ms(t.elapsed());
+        s.tx_px = (tw as u32, th as u32);
+
+        // 3. Encode + place.
+        match s.term_image.as_mut() {
+            Some(term) => {
+                if ui_changed {
+                    term.invalidate();
+                }
+                let t = Instant::now();
+                let placement = term.place(
+                    scaled,
+                    tw as u32,
+                    th as u32,
+                    CellRect::new(rect.x, rect.y, rect.width, rect.height),
+                );
+                s.t_encode = telemetry::ms(t.elapsed());
+                if !placement.changed {
+                    s.frames_identical += 1;
+                }
+                s.tx_bytes = placement.payload_bytes;
+                // The sequence is written to the terminal *after* the frame is
+                // flushed (see the main loop), not stuffed into a cell symbol:
+                // a 92 KB symbol makes `ratatui`'s diff re-emit the whole
+                // screen every frame, and anything drawn over that cell stops
+                // the picture updating. See `crate::termimage`.
+                s.pending_wire.clear();
+                if placement.changed && !modal {
+                    s.pending_wire.push_str(placement.seq);
+                }
+                // Every cell the picture covers is marked `skip`, so `ratatui`
+                // leaves the image alone.
+                let buf = f.buffer_mut();
+                for y in 0..rect.height {
+                    for x in 0..rect.width {
+                        if let Some(cell) = buf.cell_mut((rect.x + x, rect.y + y)) {
+                            cell.set_skip(true);
+                        }
+                    }
+                }
+            }
+            None => {
+                // Legacy path: hand `ratatui-image` the frame and let it resize
+                // to the display rectangle. Rebuilt only when the picture
+                // changes — it used to be rebuilt every single frame, which
+                // re-hashed and re-encoded a still screen sixty times a second.
+                let t = Instant::now();
+                let hash = crate::termimage::fnv1a(scaled);
+                if hash != s.legacy_hash || s.image.is_none() || ui_changed {
+                    let buffer = image::ImageBuffer::from_raw(
+                        tw as u32,
+                        th as u32,
+                        scaled.to_vec(),
+                    )
+                    .expect("upscaled framebuffer size matches output dimensions");
+                    s.image = Some(
+                        picker.new_resize_protocol(DynamicImage::ImageRgba8(buffer)),
+                    );
+                    s.legacy_hash = hash;
+                } else {
+                    s.frames_identical += 1;
+                }
+                s.t_encode = telemetry::ms(t.elapsed());
+                s.tx_bytes = 0;
+                if let Some(proto) = s.image.as_mut() {
+                    let image = StatefulImage::default().resize(Resize::Scale(None));
+                    f.render_stateful_widget(image, rect, proto);
+                }
             }
         }
+
+        // Displayed-frame accounting.
+        s.disp_count += 1;
+        s.disp_frames += 1;
+        s.frames_dropped += s.skipped_since_display.saturating_sub(1);
+        s.skipped_since_display = 0;
     }
 
     fn render_sidebar(&mut self, f: &mut Frame<'_>, area: Rect) {
         let split = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(11), Constraint::Min(0)])
+            .constraints([Constraint::Length(12), Constraint::Min(0)])
             .split(area);
 
-        // Status.
-        let (title, mbc, scale, fps, paused) = self
+        // Status. `Sent` is the size actually transmitted to the terminal each
+        // frame, which the terminal then stretches to `Scale`; keeping those
+        // two apart is what holds the frame rate up on a large window.
+        let (title, mbc, scale, fps, emu_fps, paused, sent, kb) = self
             .session
             .as_ref()
-            .map(|s| (s.entry.title.clone(), s.entry.mbc, s.scale, s.fps, s.paused))
-            .unwrap_or_default();
+            .map(|s| {
+                (
+                    s.entry.title.clone(),
+                    s.entry.mbc,
+                    s.scale,
+                    s.fps,
+                    s.emu_fps,
+                    s.paused,
+                    s.tx_px,
+                    s.tx_bytes as f32 / 1024.0,
+                )
+            })
+            .unwrap_or((String::new(), "", 1.0, 0.0, 0.0, false, (160, 144), 0.0));
         let status = vec![
             kv("ROM", &truncate(&title, 18)),
             kv("MBC", mbc),
             kv("Scale", &format!("{scale:.1}x")),
+            kv("Sent", &format!("{}x{} {:.0}K", sent.0, sent.1, kb)),
             kv("Proto", protocol_name(self.picker.protocol_type())),
             kv("Palette", self.palette.name()),
-            kv("Upscale", &self.upscaler.label()),
+            kv("Upscale", &self.upscale_label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
             kv("Slot", &self.slot.to_string()),
             kv(
@@ -1229,7 +1800,7 @@ impl App {
                 &if paused {
                     "paused".to_string()
                 } else {
-                    format!("{fps:.0}")
+                    format!("{fps:.0} · emu {emu_fps:.0}")
                 },
             ),
         ];
@@ -1293,6 +1864,19 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
         ];
+        // A config key that did not apply is repeated here, so it cannot be
+        // missed by someone who started the emulator from a launcher and never
+        // saw the startup stderr.
+        let mut text = text;
+        if !self.config_warnings.is_empty() {
+            text.push(Line::from(""));
+            for w in &self.config_warnings {
+                text.push(Line::from(Span::styled(
+                    format!("⚠ {w}"),
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        }
         f.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: true })
@@ -1358,6 +1942,39 @@ fn fit_metrics(
     let x = area.x + (area.width - cols) / 2;
     let y = area.y + (area.height - rows) / 2;
     (Rect::new(x, y, cols, rows), scale as f32)
+}
+
+/// How many emulated frames are due at `now`, and the deadline to carry
+/// forward. **This is what keeps the game running at true speed when the
+/// terminal cannot keep up.**
+///
+/// The deadline is advanced by exactly one `interval` per frame run, so the
+/// long-run rate is exact (resetting it to `now` would silently add every loop
+/// iteration's overhead to the period — the bug that made the emulator, and the
+/// audio clock slaved to it, run slow). Catch-up is capped at [`MAX_CATCHUP`]
+/// frames; past that the machine has been stalled long enough that replaying
+/// the backlog would fast-forward the game, so the deadline is resynced and the
+/// missed frames are simply lost.
+fn frames_due(now: Instant, next_frame: Instant, interval: Duration) -> (u32, Instant) {
+    if now < next_frame || interval.is_zero() {
+        return (0, next_frame);
+    }
+    let behind = now.duration_since(next_frame);
+    let due = (behind.as_nanos() / interval.as_nanos()) as u32 + 1;
+    if due > MAX_CATCHUP {
+        return (MAX_CATCHUP, now + interval);
+    }
+    (due, next_frame + interval * due)
+}
+
+/// When the next draw may start, given that the last one *started* at `started`
+/// and took `cost`.
+///
+/// Never faster than one panel refresh (there would be no new picture), and
+/// otherwise as often as the draw can sustain: a draw costing 50 ms yields a
+/// 20 fps *display* while emulation carries on at 59.7275 fps in the gaps.
+fn next_draw_at(started: Instant, cost: Duration) -> Instant {
+    started + cost.max(FRAME_TIME)
 }
 
 /// A centred popup covering `pct_w`% × `pct_h`% of `area`.
@@ -1590,12 +2207,24 @@ fn key_from_index(i: usize) -> KeypadKey {
 // ROM loading + framebuffer conversion
 // ---------------------------------------------------------------------------
 
-/// What keeps the game's host-audio alive. The concrete cpal stream when built
-/// with `--features audio`, otherwise a zero-sized `()`.
+/// What keeps the game's host-audio alive, plus the read-only diagnostic handle
+/// telemetry reports from. Zero-sized without the `audio` feature.
 #[cfg(feature = "audio")]
-type AudioHold = Option<cpal::Stream>;
+struct AudioHold {
+    stream: Option<cpal::Stream>,
+    queue:
+        Option<std::sync::Arc<std::sync::Mutex<crate::sound::sample_queue::SampleQueue>>>,
+    rate: u32,
+}
 #[cfg(not(feature = "audio"))]
 type AudioHold = ();
+
+/// The value [`Session`] holds for the lifetime of the game: dropping it stops
+/// the sound.
+#[cfg(feature = "audio")]
+type AudioStream = Option<cpal::Stream>;
+#[cfg(not(feature = "audio"))]
+type AudioStream = ();
 
 /// Wire host audio into `gb`, returning the stream to keep alive. Feature-gated
 /// (cpal pulls in ALSA) and graceful when no output device is available. Mirror
@@ -1604,12 +2233,26 @@ type AudioHold = ();
 /// because we are inside the alternate screen — a stray line would corrupt it.
 #[cfg(feature = "audio")]
 fn init_audio(gb: &mut Gameboy) -> AudioHold {
+    use crate::sound::AudioPlayer;
     match crate::sound::cpal_audio::CpalPlayer::new() {
         Some((player, stream)) => {
+            // Grab the diagnostic handles before the player is boxed away —
+            // `sound.rs` already publishes both, so telemetry needs no change
+            // there.
+            let queue = Some(player.queue_handle());
+            let rate = player.samples_rate();
             gb.enable_audio(Box::new(player));
-            Some(stream)
+            AudioHold {
+                stream: Some(stream),
+                queue,
+                rate,
+            }
         }
-        None => None,
+        None => AudioHold {
+            stream: None,
+            queue: None,
+            rate: 0,
+        },
     }
 }
 #[cfg(not(feature = "audio"))]
@@ -1630,45 +2273,6 @@ fn load_session(path: &Path) -> Result<(Gameboy, RomEntry, AudioHold), String> {
     let mut gb = Gameboy::new(data, Some(path.to_path_buf()));
     let audio = init_audio(&mut gb);
     Ok((gb, entry, audio))
-}
-
-/// Convert the emulator's RGBA framebuffer into an RGB [`DynamicImage`],
-/// applying the configured palette to greyscale (DMG) output.
-fn framebuffer_image(
-    gb: &Gameboy,
-    palette: Palette,
-    upscaler: &mut Upscaler,
-) -> DynamicImage {
-    let width = gb.width as usize;
-    let height = gb.height as usize;
-    let input = gb.image();
-    // Palette-map first (so the LCD-grid filter's darkened gaps survive — the
-    // palette buckets to four shades and would quantise them away), keeping
-    // RGBA because the upscaler works on whole 4-byte pixels.
-    let mut rgba = vec![0u8; width * height * 4];
-
-    let mut i = 0;
-    for chunk in input.chunks(4) {
-        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
-        // DMG output is greyscale (r==g==b); recolour those via the palette.
-        // Colour (CGB) pixels pass through untouched.
-        if r == g && g == b {
-            let px = palette.map(r);
-            rgba[i..i + 3].copy_from_slice(&px);
-        } else {
-            rgba[i] = r;
-            rgba[i + 1] = g;
-            rgba[i + 2] = b;
-        }
-        rgba[i + 3] = 255;
-        i += 4;
-    }
-
-    let (ow, oh) = upscaler.output_size(width, height);
-    let scaled = upscaler.apply(&rgba, width, height);
-    let buffer = image::ImageBuffer::from_raw(ow as u32, oh as u32, scaled.to_vec())
-        .expect("upscaled framebuffer size matches output dimensions");
-    DynamicImage::ImageRgba8(buffer)
 }
 
 // ---------------------------------------------------------------------------
@@ -1846,10 +2450,10 @@ mod tests {
     }
 
     #[test]
-    fn framebuffer_image_upscales_with_every_algorithm() {
-        // Exercise the real TUI display path headlessly: emulate the vendored
-        // dmg-acid2 ROM a few frames, then build the display image through
-        // each upscaler algorithm and check the produced dimensions.
+    fn display_pipeline_upscales_with_every_algorithm() {
+        // Exercise the real TUI display stages headlessly: emulate the vendored
+        // dmg-acid2 ROM a few frames, then run palette-map + upscale through
+        // each algorithm and check the produced dimensions.
         use crate::upscale::Algorithm;
         let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb")
             .expect("vendored acid2 ROM present");
@@ -1857,15 +2461,396 @@ mod tests {
         for _ in 0..5 {
             gb.frame();
         }
+        let mut prep = FramePrep::new();
         for (algo, factor, want) in [
-            (Algorithm::Nearest, 1, (160, 144)),
+            (Algorithm::Nearest, 1, (160usize, 144usize)),
             (Algorithm::Scale2x, 3, (480, 432)),
             (Algorithm::Mmpx, 2, (320, 288)),
             (Algorithm::LcdGrid, 4, (640, 576)),
         ] {
             let mut up = Upscaler::new(algo, factor);
-            let img = framebuffer_image(&gb, Palette::Green, &mut up);
-            assert_eq!((img.width(), img.height()), want, "{algo:?}");
+            let mapped = prep.map(gb.image(), Palette::Green).to_vec();
+            assert_eq!(up.output_size(160, 144), want, "{algo:?}");
+            let out = up.apply(&mapped, 160, 144);
+            assert_eq!(out.len(), want.0 * want.1 * 4, "{algo:?}");
         }
+    }
+
+    // -- Pacing: emulation must not be coupled to the display -------------
+
+    #[test]
+    fn frames_due_is_zero_before_the_deadline() {
+        let t0 = Instant::now();
+        let (n, next) = frames_due(t0, t0 + FRAME_TIME, FRAME_TIME);
+        assert_eq!(n, 0);
+        assert_eq!(next, t0 + FRAME_TIME);
+    }
+
+    #[test]
+    fn frames_due_advances_by_exact_periods_not_to_now() {
+        // 2.5 frame periods late => 3 frames due, deadline advanced by exactly
+        // 3 periods (never reset to `now`, which would leak drift).
+        let t0 = Instant::now();
+        let deadline = t0;
+        let now = t0 + FRAME_TIME * 5 / 2;
+        let (n, next) = frames_due(now, deadline, FRAME_TIME);
+        assert_eq!(n, 3);
+        assert_eq!(next, deadline + FRAME_TIME * 3);
+    }
+
+    #[test]
+    fn frames_due_resyncs_after_a_long_stall_instead_of_fast_forwarding() {
+        let t0 = Instant::now();
+        let now = t0 + FRAME_TIME * 500; // suspended laptop, say
+        let (n, next) = frames_due(now, t0, FRAME_TIME);
+        assert_eq!(n, MAX_CATCHUP, "must not replay 500 frames at once");
+        assert_eq!(next, now + FRAME_TIME);
+    }
+
+    #[test]
+    fn a_slow_display_drops_pictures_not_emulated_frames() {
+        // Thirty simulated seconds of the real loop arithmetic with a draw that
+        // costs 50 ms — three times the frame budget, i.e. the captain's
+        // window. Emulation must still run at 59.7275 fps; the display gets
+        // ~20, and the difference is dropped *pictures*, not emulated frames.
+        let start = Instant::now();
+        let draw_cost = Duration::from_millis(50);
+        let horizon = Duration::from_secs(30);
+        let mut now = start;
+        let mut next_frame = start;
+        let mut next_draw = start;
+        let (mut emulated, mut drawn) = (0u32, 0u32);
+        while now < start + horizon {
+            let (due, deadline) = frames_due(now, next_frame, FRAME_TIME);
+            emulated += due;
+            next_frame = deadline;
+            if now >= next_draw {
+                drawn += 1;
+                let started = now;
+                now += draw_cost; // the draw blocks the loop for this long
+                next_draw = next_draw_at(started, draw_cost);
+            } else {
+                // Otherwise the loop waits for whichever deadline is nearer.
+                now = next_frame
+                    .min(next_draw)
+                    .max(now + Duration::from_micros(100));
+            }
+        }
+        let secs = now.duration_since(start).as_secs_f32();
+        let emu_rate = emulated as f32 / secs;
+        let draw_rate = drawn as f32 / secs;
+        // The accumulator must never be more than one batch behind the clock:
+        // that is the invariant that keeps the game at true speed.
+        assert!(
+            now.saturating_duration_since(next_frame) <= FRAME_TIME * MAX_CATCHUP,
+            "emulation fell irrecoverably behind"
+        );
+        assert!(
+            (emu_rate - DMG_HZ).abs() < 0.15,
+            "emulation ran at {emu_rate:.1} fps, not {DMG_HZ} — the game would lag"
+        );
+        assert!(
+            (18.0..=21.0).contains(&draw_rate),
+            "expected ~20 displayed fps with a 50 ms draw, got {draw_rate:.1}"
+        );
+    }
+
+    #[test]
+    fn a_fast_display_is_capped_at_the_panel_rate() {
+        let t = Instant::now();
+        // A draw that costs nothing still may not run more often than 59.7 Hz.
+        assert_eq!(next_draw_at(t, Duration::ZERO), t + FRAME_TIME);
+        assert_eq!(next_draw_at(t, Duration::from_millis(5)), t + FRAME_TIME);
+        assert_eq!(
+            next_draw_at(t, Duration::from_millis(40)),
+            t + Duration::from_millis(40)
+        );
+    }
+
+    // -- End-to-end render path ------------------------------------------
+    //
+    // These drive the *real* `App::render` against a `TestBackend`, so they
+    // assert on the bytes the frontend would actually put on the wire. That is
+    // as close to "watch it run" as a headless test gets, and it is what makes
+    // the performance claim checkable rather than asserted.
+
+    /// An `App` with a fixed protocol and cell size, playing the vendored
+    /// acid2 ROM. The ROM is committed, so a missing one is a hard failure
+    /// rather than a silently-skipped test.
+    fn test_app(protocol: ProtocolType, path: RenderPath) -> Option<App> {
+        let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb")
+            .expect("vendored dmg-acid2 ROM present");
+        let mut picker = Picker::from_fontsize((8, 16));
+        picker.set_protocol_type(protocol);
+        let config = Config {
+            render_path: path,
+            palette: Palette::Green,
+            ..Config::default()
+        };
+        let mut app = App::build(config, Recent::default(), Vec::new(), picker);
+        // A private copy per call: tests run in parallel, the MBC writes a
+        // `.gbsave` next to the ROM, and a shared path means one test can be
+        // reading a file another is truncating.
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir()
+            .join(format!("gameboy-render-test/{}-{n}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let rom_path = dir.join("acid2.gb");
+        std::fs::write(&rom_path, &rom).expect("write temp ROM");
+        app.start_game(&rom_path);
+        assert!(
+            app.session.is_some(),
+            "ROM failed to load: {:?}",
+            app.message
+        );
+        Some(app)
+    }
+
+    /// Draw one frame at the given terminal size and return the number of image
+    /// bytes the frontend would write to the terminal for it.
+    fn drawn_bytes(app: &mut App, cols: u16, rows: u16) -> usize {
+        drawn_wire(app, cols, rows).len()
+    }
+
+    /// Draw one frame and return the image sequence the loop would flush.
+    fn drawn_wire(app: &mut App, cols: u16, rows: u16) -> String {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let wire = app
+            .session
+            .as_ref()
+            .map(|s| s.pending_wire.clone())
+            .unwrap_or_default();
+        if let Some(s) = app.session.as_mut() {
+            s.pending_wire.clear(); // the real loop flushes and clears it
+        }
+        wire
+    }
+
+    #[test]
+    fn transmitted_bytes_do_not_grow_with_the_window() {
+        // The captain's bug, as a test: at 320x90 cells the old path encoded a
+        // 1568x1408 image every frame (11.6 MB); the new one sends the same
+        // 160x144 image whatever the window size, plus kitty's own per-cell
+        // placeholder grid.
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        let small = drawn_bytes(&mut app, 80, 24);
+        app.session.as_mut().unwrap().gb.frame();
+        let large = drawn_bytes(&mut app, 320, 90);
+        assert!(small > 1000, "expected a real payload, got {small} bytes");
+        assert!(
+            large < 300_000,
+            "a 1568x1408 display cost {large} bytes/frame (legacy: 11.6 MB)"
+        );
+    }
+
+    #[test]
+    fn kitty_placement_asks_the_terminal_to_scale() {
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        let wire = drawn_wire(&mut app, 160, 50);
+        assert!(
+            wire.contains("a=T,U=1"),
+            "no kitty virtual placement emitted"
+        );
+        assert!(
+            wire.contains("s=160,v=144"),
+            "not transmitting the source size"
+        );
+        let (cols, rows) = app.session.as_ref().unwrap().disp_cells;
+        assert!(
+            wire.contains(&format!("c={cols},r={rows}")),
+            "placement does not cover the fitted rectangle {cols}x{rows}"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_frame_transmits_nothing() {
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        drawn_wire(&mut app, 160, 50);
+        let before = app.session.as_ref().unwrap().frames_identical;
+        // Draw again without advancing the machine: same picture, so nothing
+        // may be encoded or written.
+        let again = drawn_wire(&mut app, 160, 50);
+        let s = app.session.as_ref().unwrap();
+        assert_eq!(s.frames_identical, before + 1, "re-encoded a still frame");
+        assert!(again.is_empty(), "retransmitted {} bytes", again.len());
+    }
+
+    /// **The captain's live bug.** With the stats overlay on, the picture froze
+    /// while the game kept running: the overlay was drawn on top of the image,
+    /// replacing the very cells that carry it, so no new image data reached the
+    /// terminal until the overlay was closed.
+    ///
+    /// The fix is twofold — the stats panel takes a rectangle of its own, and
+    /// the image is written outside `ratatui`'s cell buffer entirely — and this
+    /// asserts what was missing: **new frames keep being transmitted while the
+    /// overlay is up.**
+    #[test]
+    fn the_picture_keeps_updating_with_the_stats_overlay_on() {
+        for protocol in [ProtocolType::Kitty, ProtocolType::Iterm2] {
+            let mut app = test_app(protocol, RenderPath::Fast).unwrap();
+            app.stats = true;
+            let first = drawn_wire(&mut app, 200, 60);
+            assert!(!first.is_empty(), "{protocol:?}: nothing drawn at all");
+
+            // Three successive *changed* pictures must each be transmitted.
+            // The framebuffer is poked directly rather than relying on the ROM
+            // to animate: the property under test is "a changed picture reaches
+            // the terminal while the overlay is up", and the vendored acid2 ROM
+            // draws a still image (which correctly transmits nothing).
+            for round in 0..3 {
+                app.step_frame();
+                if let Some(s) = app.session.as_mut() {
+                    s.gb.image_mut()[0] = 17 * (round as u8 + 1);
+                }
+                let wire = drawn_wire(&mut app, 200, 60);
+                assert!(
+                    !wire.is_empty(),
+                    "{protocol:?}: picture frozen with the stats overlay up (round {round})"
+                );
+                assert!(
+                    wire.contains(match protocol {
+                        ProtocolType::Iterm2 => "inline=1",
+                        _ => "a=T,U=1",
+                    }),
+                    "{protocol:?}: round {round} sent no image data"
+                );
+            }
+        }
+    }
+
+    /// The other half of the same bug: the stats panel must not occupy a cell
+    /// the picture occupies, **at any window size**. A terminal image owns whole
+    /// cells, so an overlap is not "text on top of an image" — it is text
+    /// *instead of* it, and for Kitty's placeholder placement it removes the
+    /// cells that make the picture update at all.
+    #[test]
+    fn the_stats_panel_never_overlaps_the_picture_at_any_size() {
+        use ratatui::backend::TestBackend;
+        let sizes = [
+            (60u16, 20u16),
+            (80, 24),
+            (120, 40),
+            (160, 50),
+            (200, 60),
+            (320, 90),
+            (240, 30),
+            (100, 80),
+        ];
+        for fullscreen in [false, true] {
+            for (cols, rows) in sizes {
+                let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+                app.stats = true;
+                app.fullscreen = fullscreen;
+                let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                terminal.draw(|f| app.render(f)).unwrap();
+                let s = app.session.as_ref().unwrap();
+                let picture = Rect::new(
+                    s.disp_origin.0,
+                    s.disp_origin.1,
+                    s.disp_cells.0,
+                    s.disp_cells.1,
+                );
+                let stats = app.stats_rect.expect("stats panel not drawn");
+                assert!(
+                    picture.intersection(stats).area() == 0,
+                    "{cols}x{rows} fullscreen={fullscreen}: stats {stats:?} overlaps \
+                     picture {picture:?} — that blanks the game and, with kitty \
+                     placeholders, freezes it"
+                );
+                assert!(picture.area() > 0, "{cols}x{rows}: no picture drawn at all");
+            }
+        }
+    }
+
+    #[test]
+    fn iterm2_places_in_cells_and_stays_small() {
+        let mut app = test_app(ProtocolType::Iterm2, RenderPath::Fast).unwrap();
+        let wire = drawn_wire(&mut app, 200, 60);
+        let (cols, rows) = app.session.as_ref().unwrap().disp_cells;
+        assert!(
+            wire.contains(&format!("width={cols};height={rows}")),
+            "iTerm2 image is not sized in cells"
+        );
+        assert!(
+            !wire.contains("px;height"),
+            "sized in pixels — would not scale"
+        );
+    }
+
+    #[test]
+    fn legacy_path_still_works_as_an_escape_hatch() {
+        use ratatui::backend::TestBackend;
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Legacy).unwrap();
+        assert!(app.session.as_ref().unwrap().term_image.is_none());
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let bytes: usize = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().len())
+            .filter(|n| *n > 1)
+            .sum();
+        assert!(bytes > 1000, "legacy path drew nothing");
+    }
+
+    #[test]
+    fn sixel_falls_back_to_the_resize_path() {
+        // Sixel has no cell-addressed placement, so the fast path must not
+        // claim it.
+        let app = test_app(ProtocolType::Sixel, RenderPath::Fast).unwrap();
+        assert!(app.session.as_ref().unwrap().term_image.is_none());
+    }
+
+    #[test]
+    fn telemetry_records_the_stage_breakdown_from_a_real_frame() {
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        app.telemetry = Telemetry::in_memory();
+        app.step_frame();
+        drawn_wire(&mut app, 200, 60);
+        app.emit_telemetry(Duration::from_millis(3));
+        let line = app.telemetry.records().first().cloned().unwrap_or_default();
+        for field in [
+            "\"frontend\":\"terminal\"",
+            "\"protocol\":\"kitty\"",
+            "\"palette\":\"green\"",
+            "\"tx_w\":160",
+            "\"tx_h\":144",
+            "\"encode_ms\"",
+            "\"upscale_ms\"",
+            "\"frames_dropped\"",
+        ] {
+            assert!(line.contains(field), "telemetry missing {field}: {line}");
+        }
+        assert!(
+            line.contains("\"display_px_w\":") && !line.contains("\"display_px_w\":0"),
+            "display size not reported: {line}"
+        );
+    }
+
+    /// The regression this whole change is about: what we transmit must be
+    /// sized by the upscaler, never by the window.
+    #[test]
+    fn transmit_size_does_not_follow_the_window() {
+        use crate::screen::config::TransmitScale;
+        use crate::upscale::Algorithm;
+        // `nearest` never pre-upscales for the wire — the terminal does that
+        // stretch for free.
+        for factor in 1..=6u8 {
+            assert_eq!(
+                TransmitScale::Auto.factor_for(Algorithm::Nearest, factor),
+                1
+            );
+        }
+        // A real filter transmits at its own factor, and only that.
+        assert_eq!(TransmitScale::Auto.factor_for(Algorithm::Mmpx, 4), 4);
+        assert_eq!(TransmitScale::Auto.factor_for(Algorithm::LcdGrid, 3), 3);
+        // An explicit override is still clamped to what the algorithm can do.
+        assert_eq!(TransmitScale::Fixed(3).factor_for(Algorithm::Mmpx, 2), 2);
+        assert_eq!(TransmitScale::Fixed(2).factor_for(Algorithm::Nearest, 1), 2);
     }
 }

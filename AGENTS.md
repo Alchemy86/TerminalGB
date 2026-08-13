@@ -413,4 +413,129 @@ lines per fix, not a process document.
   stream (render crew, EMIT half of `docs/debugging.md`) should be the reference adapter, so the
   adapter contract and the telemetry format must be designed to match. Also linked from the
   README "Roadmap & goals" section.
+
+## Terminal render path — capped transmission (`src/termimage.rs`)
+
+- **Full analysis + measured numbers: [`docs/terminal-render.md`](docs/terminal-render.md).**
+  The rule: **never size the transmitted image by the window.** `ratatui-image`'s
+  `Resize::Scale` resizes the frame to the *display rectangle* and re-encodes it every frame —
+  measured at a 1568×1408 rectangle that is **39.7 ms / 11.6 MB per frame on Kitty** and
+  **86.4 ms on iTerm2** (25 fps / 12 fps). Transmitting 160×144 and letting the terminal scale
+  costs **0.10 ms / 160 KB** and does not move when the window grows.
+- `src/termimage.rs` is dependency-free (hand-rolled base64 + a **stored-deflate** PNG — no
+  compression, hence no compression cost at 60 Hz) and speaks two protocols that can place an
+  image over a rectangle measured in **cells**: Kitty (`a=T,U=1,c=,r=` + Unicode placeholders)
+  and iTerm2 (`width=`/`height=` default to cells; `Npx` would mean pixels). **Sixel and
+  halfblocks have no cell placement** and keep the `ratatui-image` path — their cost really
+  does scale with the window.
+- **Never put a large escape sequence in a `ratatui` cell symbol.** `Buffer::diff` computes
+  `invalidated = max(symbol.width(), invalidated)` and re-emits every following cell while it
+  is non-zero; a 92 KB payload has width ~92 000, so the whole screen is retransmitted every
+  frame (measured: 84 KB for an *unchanged* picture). The image sequence is therefore written
+  straight to stdout **after** `terminal.draw` returns, and the cells it covers are marked
+  `skip`.
+- **Nothing may be drawn on top of the picture.** A terminal image owns whole cells: text there
+  is not *over* the image, it is *instead of* it, and for Kitty it removes the placeholders
+  that make the picture update at all. This was a live bug — the stats overlay froze the game
+  on screen. The stats panel and toast now get their own rectangles (sidebar + footer; a left
+  column + reserved row in fullscreen), asserted across eight window sizes by
+  `the_stats_panel_never_overlaps_the_picture_at_any_size` (it fails on the old layout).
+- **`Picker::new_resize_protocol` picks a random Kitty image id (`rand::random()`).** Calling
+  it per frame — which the old `step_frame` did — hands the terminal 60 new images a second,
+  8.8 MB each at fullscreen, never deleted, and blows its image-storage quota (Kitty's default
+  is 320 MB) in under a second, after which the picture stops updating. Reuse one id.
+- **Emulation is decoupled from rendering.** `step_frame` is emulation *only*; palette,
+  upscale and encode happen in `render_display`, at most once per displayed frame. `frames_due`
+  advances the deadline by exact periods (capped at `MAX_CATCHUP`, then resyncs);
+  `next_draw_at` paces drawing at `max(FRAME_TIME, last_draw_cost)` from the draw's *start*.
+  **Display frames are dropped; emulated frames never are** — the audio clock is slaved to
+  emulation. Both rules are unit-tested over a virtual clock.
+- `transmit_scale` config (default `auto`): `nearest` → ×1 (the terminal's own stretch does
+  exactly the same thing for 1/16th the bytes), a real filter → its own factor. `render_path =
+  legacy` restores the old behaviour as an escape hatch.
+- Reproduce any of it: `cargo run --release --example render_bench -- --frames 120 --motion
+  --rom tests/cpu_instrs/cpu_instrs.gb` (add `--json` for one machine-readable line).
+
+### Conformance record for the three render bugs
+
+Per the [standing convention](#standing-convention-every-emulation-fix-feeds-the-conformance-tool).
+These are **presentation** bugs, not emulation ones, so point 3 cites the *protocol or library
+contract* violated rather than Pan Docs — and point 2 is the same answer for all three, which is
+itself the finding: **no test ROM catches any of them.** A ROM-driven suite compares
+framebuffers, and all three leave the framebuffer perfectly correct while the player sees a
+frozen or crawling picture. That is a real gap in what a conformance tool built only on test
+ROMs can see, and the argument for the telemetry stream being the reference adapter
+([`docs/conformance.md`](docs/conformance.md)): `speed_pct`, `fps`, `tx_bytes` and
+`frames_dropped` expose all three, a framebuffer hash exposes none.
+
+1. **Transmission sized by the window.**
+   *Symptom* — the game runs slowly and the picture stutters, progressively worse as the window
+   is enlarged; ~18 fps at fullscreen with the emulator itself 60× faster than needed.
+   *Caught by* — no test ROM. `examples/render_bench.rs` (`--json`) measures it; the telemetry
+   invariant is `tx_bytes` independent of `display_px_*`.
+   *Contract violated* — `ratatui-image`'s `Resize::Scale` is documented as resizing to the
+   render area, which is correct for a photo and wrong for a 60 Hz video source; the terminal
+   protocols both offer cell-sized placement precisely so the client need not
+   ([kitty graphics protocol, Unicode placeholders](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders);
+   [iTerm2 inline images](https://iterm2.com/documentation-images.html) — `width`/`height`
+   default to cells).
+   *New test* — `transmitted_bytes_do_not_grow_with_the_window`,
+   `image_payload_is_independent_of_the_display_rectangle`. Conformance candidate: **cost per
+   displayed frame must not be a function of output size.**
+
+2. **A large escape sequence in a `ratatui` cell symbol.**
+   *Symptom* — the whole UI flickers/redraws constantly and a *still* game screen still costs
+   84 KB/frame on the wire.
+   *Caught by* — no test ROM.
+   *Contract violated* — `ratatui`'s `Buffer::diff` computes
+   `invalidated = max(symbol.width(), invalidated)` and re-emits every subsequent cell while it
+   is non-zero (`ratatui-0.29.0/src/buffer/buffer.rs`); a cell symbol is assumed to be a
+   *glyph*, so a 92 KB payload reports a display width of ~92 000 and invalidates the screen.
+   *New test* — `an_unchanged_frame_transmits_nothing`. Conformance candidate: **an unchanged
+   frame must produce zero output.**
+
+3. **A new Kitty image id per frame.**
+   *Symptom* — the picture freezes after roughly a second while sound and input keep working;
+   it recovers only when something forces a full redraw.
+   *Caught by* — no test ROM.
+   *Contract violated* — Kitty images persist until deleted and the terminal enforces a storage
+   quota (320 MB by default), so a client must reuse an id or delete what it uploads
+   ([kitty graphics protocol, "Image persistence and storage quotas"](https://sw.kovidgoyal.net/kitty/graphics-protocol/)).
+   `Picker::new_resize_protocol` picks `rand::random()`, so calling it per frame uploads 60
+   undeleted images/second (8.8 MB each at fullscreen).
+   *New test* — `the_picture_keeps_updating_with_the_stats_overlay_on` covers the same
+   user-visible symptom. Conformance candidate: **a long run must not grow terminal-side
+   resource use without bound.**
+
+## Telemetry — NDJSON run data (`src/telemetry.rs`)
+
+- **Schema contract: [`docs/telemetry.md`](docs/telemetry.md).** Everything the stats overlay
+  shows a human is also emitted as newline-delimited JSON, so a change can be verified without
+  anyone watching the screen: fps (displayed *and* emulated), `speed_pct`, the per-stage
+  millisecond breakdown, `tx_bytes`, dropped/identical frame counts, ROM/MBC/protocol/palette/
+  upscale/scale, and audio queue depth + underruns.
+- **Off by default**, one `Option` test per frame when disabled. `GB_TELEMETRY=<path>` (or the
+  `telemetry` config key; the env var wins), `GB_TELEMETRY_EVERY=<n>` to sample. **The TUI
+  refuses `stdout`** — it would corrupt the alternate screen — and says so.
+- One-shot mode for CI: `render_bench --json` runs N frames headless and prints a single
+  summary object. The invariant worth asserting: **`speed_pct` stays at 100 whatever `fps`
+  does.** Falling `fps` with `speed_pct` 100 is correct (display frames dropped); `speed_pct`
+  below 100 is a real bug and would break audio too.
+- Audio stats come from `CpalPlayer::queue_handle()` with a **non-blocking `try_lock`** —
+  `sound.rs` is not modified, and telemetry never stalls the render loop.
+- This is the first implementation of the *emit* half of
+  [`docs/debugging.md`](docs/debugging.md)'s extension surface (the "frame rendered" event).
+  Bump `telemetry::SCHEMA_VERSION` if a field is renamed, retyped or removed; additions are free.
+
+## Config parsing — fail loudly
+
+- `config.toml` invites TOML syntax and TOML has **two** string forms. Single-quoted values
+  (`palette = 'green'`) used to be dropped silently while a numeric key beside them applied —
+  which reads exactly like "the feature is broken". `unquote` now strips both, and
+  `Config::parse_reporting` returns a complaint for **every** key that is unknown or whose
+  value could not be applied. Warnings go to stderr before the alternate screen opens, to the
+  picker footer, to a toast on entering a game, and to the `?` help overlay.
+- When adding a config key, add it to the `get(...)` list in `Config::parse_reporting` — keys
+  not read there are reported as unknown.
+
 - Add durable project-specific notes here as they are discovered through real work.

@@ -192,6 +192,10 @@ impl Glcx {
         }
     }
 
+    // No `Default`: constructing this issues GL calls, so it is only valid
+    // once a context is current — exactly what a `Default::default()` would
+    // invite someone to get wrong.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Glcx {
         unsafe {
             let mut vao = 0;

@@ -84,6 +84,20 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > out shrunk by the scale factor. If the game renders far smaller than the window, add
 > `cell_scale = auto` (or an explicit number like `cell_scale = 2.0`) to
 > `~/.config/gameboy/config.toml`. The default is `1.0` (no correction).
+>
+> **Frame rate is independent of window size.** The picture is transmitted at the resolution
+> the emulator computed (160×144, or the pixel-art filter's own output) and the terminal
+> scales it to the cell rectangle, so a fullscreen window costs the same as a small one —
+> ~0.1 ms and ~100 KB per frame, against ~40 ms and 11.6 MB for the old resize-to-the-window
+> path. Emulation is paced separately from drawing: if the terminal cannot repaint fast
+> enough the *display* drops frames while the game itself stays at exactly 59.7275 fps. Press
+> **t** for live stats, and see [terminal-render.md](docs/terminal-render.md). If your
+> terminal's own scaling looks too soft, `transmit_scale = 2` sends more pixels;
+> `render_path = legacy` restores the old path.
+>
+> Config problems are reported rather than ignored: an unknown key, or a value that cannot be
+> applied, prints a warning at startup and shows in the picker footer and the `?` overlay.
+> Values may be bare, `"double-quoted"` or `'single-quoted'`.
 
 #### Terminal config file
 
@@ -174,7 +188,11 @@ frontends attach, with every reference a clickable link into the source.
 
 👉 **Start at the [component reference index](docs/components/README.md)**, read the
 [accuracy-testing yardstick](docs/testing.md) that every component's test list is built on,
-see the [display-scaling design](docs/display.md) — how each frontend enlarges the 160×144
+see the [terminal render-performance notes](docs/terminal-render.md) — why a large terminal
+window used to cost frames and what caps the cost now — the
+[telemetry schema](docs/telemetry.md) — machine-readable NDJSON run data (fps, per-stage
+breakdown, emulated speed) for automated checks — or the
+[display-scaling design](docs/display.md) — how each frontend enlarges the 160×144
 screen today and how to make it crisp (nearest/integer), smooth, or "vector-like",
 or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the
 running machine (the deterministic frame-hashing that ties into the tests, plus a public

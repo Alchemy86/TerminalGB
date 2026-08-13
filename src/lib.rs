@@ -13,9 +13,14 @@ mod mmu;
 mod mode;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
-mod screen;
+pub mod screen;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sound;
+/// Machine-readable run telemetry (NDJSON) — see [`telemetry`].
+#[cfg(not(target_arch = "wasm32"))]
+pub mod telemetry;
+/// Capped-resolution terminal image transmission — see [`termimage`].
+pub mod termimage;
 pub mod upscale;
 
 pub use crate::input::KeypadKey;

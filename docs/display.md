@@ -132,15 +132,27 @@ own, so it renders at **160×144 CSS pixels — a ~4 cm postage stamp** on a mod
 
 > **Updated after the `tui.rs` rewrite (file under active development — line hints omitted).**
 > The old text below described a capped `o`-key pre-scale and `Resize::Fit`; both are gone.
+>
+> **Superseded again (2026-08-13) by the render-performance work.** The frontend no longer
+> hands the frame to `ratatui-image` at all on the Kitty and iTerm2 paths: it transmits the
+> picture at the resolution the emulator computed and asks the terminal to scale it to a
+> cell-addressed placement, because resizing to the display rectangle cost ~40 ms and 11.6 MB
+> **per frame** on a large window (≈20 fps). Measurements, the fix, and the emulation/render
+> decoupling that goes with it: **[terminal-render.md](terminal-render.md)**.
 
-`get_image` in [`tui.rs`](../src/screen/tui.rs) maps the framebuffer through the selected
-palette and then the selected **pixel-art upscaler** (`nearest`/`scale2x`/`mmpx`/`lcd`, cycled
-with `]`/`}` — see [upscaling.md](upscaling.md)). The result is handed to `ratatui-image` with
-**`Resize::Scale`** (not `Fit`): `Fit` refuses to enlarge a source smaller than the area, which
-is why a 160×144 image used to render tiny; `Scale` upscales at pixel resolution to fill a
-centred, aspect-correct `fit_metrics` rect that **re-fits automatically on resize** — there is no
-manual scale key any more. (On scaled-Wayland HiDPI terminals the `cell_scale` config corrects a
-logical-vs-physical pixel mismatch — see the top-level README.)
+`framebuffer_image` in [`tui.rs`](../src/screen/tui.rs) maps the framebuffer through the
+selected palette ([`frame.rs`](../src/screen/frame.rs)) and then the selected **pixel-art
+upscaler** (`nearest`/`scale2x`/`mmpx`/`lcd`, cycled with `]`/`}` — see
+[upscaling.md](upscaling.md)), at the *transmission* factor rather than the display scale.
+
+The result is placed by [`termimage.rs`](../src/termimage.rs) into a centred, aspect-correct
+`fit_metrics` rect that **re-fits automatically on resize** — there is no manual scale key any
+more. Enlargement is the terminal's job: Kitty scales a virtual placement carrying `c=`/`r=`,
+iTerm2 scales an inline image whose `width`/`height` are given in cells. Sixel and halfblocks
+have no cell-addressed placement, so they keep the `ratatui-image` `Resize::Scale` path —
+`Scale`, not `Fit`, because `Fit` refuses to enlarge a source smaller than the area, which is
+why a 160×144 image used to render tiny. (On scaled-Wayland HiDPI terminals the `cell_scale`
+config corrects a logical-vs-physical pixel mismatch — see the top-level README.)
 
 ### FFI — no scaling; the embedder owns it
 

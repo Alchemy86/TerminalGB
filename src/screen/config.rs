@@ -29,6 +29,10 @@ pub enum Palette {
 }
 
 impl Palette {
+    /// Parse a config value. Accepts a few aliases per palette. (Named like
+    /// [`crate::upscale::Algorithm::from_str`], hence not the `FromStr` trait —
+    /// the config layer wants `Option`, not `Result`.)
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Palette> {
         match s.trim().to_ascii_lowercase().as_str() {
             "grayscale" | "greyscale" | "gray" | "grey" | "dmg" | "off" => {
@@ -159,6 +163,97 @@ impl CellScale {
     }
 }
 
+/// How big an image the frontend sends to the terminal, relative to the
+/// 160×144 framebuffer.
+///
+/// **This is the knob that stops render cost scaling with window size.** The
+/// terminal scales whatever it is sent to the display rectangle, so sending a
+/// window-sized image is pure waste: measured at a 1568×1408 rectangle it costs
+/// ~41 ms and 11.6 MB *per frame* (≈20 fps), against ~0.1 ms and 90 KB for the
+/// 160×144 original. See [`crate::termimage`] and `examples/render_bench.rs`.
+///
+/// `Auto` sends:
+/// * `nearest` → **×1**. Integer pixel duplication is exactly what the terminal
+///   does when it stretches the image, so doing it first buys nothing and costs
+///   16× the bytes.
+/// * a real filter (`scale2x`/`mmpx`/`lcd`) → **its own factor**, because there
+///   the upscale *is* the visual effect and must happen before transmission —
+///   but never more than the algorithm's own factor, and never the window size.
+///
+/// A fixed value overrides that, for a terminal whose own scaling is too soft
+/// for taste. Bigger is sharper under a smoothing terminal and linearly more
+/// bytes per frame; `2` is the usual answer, `4` is 1.4 MB/frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransmitScale {
+    #[default]
+    Auto,
+    Fixed(u8),
+}
+
+impl TransmitScale {
+    /// The factor to actually upscale by before transmitting, given the
+    /// configured upscaler.
+    pub fn factor_for(self, algo: Algorithm, factor: u8) -> u8 {
+        match self {
+            TransmitScale::Auto => match algo {
+                Algorithm::Nearest => 1,
+                _ => factor,
+            },
+            // A fixed request still has to be a factor the algorithm can
+            // produce (mmpx has no ×3).
+            TransmitScale::Fixed(n) => algo.clamp_factor(n.max(1)),
+        }
+    }
+
+    fn parse(s: &str) -> Option<TransmitScale> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("auto") {
+            return Some(TransmitScale::Auto);
+        }
+        match s.parse::<u8>() {
+            Ok(n) if (1..=6).contains(&n) => Some(TransmitScale::Fixed(n)),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            TransmitScale::Auto => "auto".to_string(),
+            TransmitScale::Fixed(n) => format!("x{n}"),
+        }
+    }
+}
+
+/// Which terminal render path to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenderPath {
+    /// Transmit at a capped resolution and let the terminal scale (default).
+    #[default]
+    Fast,
+    /// The pre-2026 path: `ratatui-image` resizes the frame to the display
+    /// rectangle and re-encodes it every frame. Kept as an escape hatch for a
+    /// terminal that mis-renders cell-scaled images; it is 20–400× more
+    /// expensive on a large window.
+    Legacy,
+}
+
+impl RenderPath {
+    fn parse(s: &str) -> Option<RenderPath> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fast" | "capped" | "default" => Some(RenderPath::Fast),
+            "legacy" | "old" | "resize" => Some(RenderPath::Legacy),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RenderPath::Fast => "fast",
+            RenderPath::Legacy => "legacy",
+        }
+    }
+}
+
 /// The parsed terminal-frontend configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -176,6 +271,13 @@ pub struct Config {
     /// [`CellScale`]. Default `Fixed(1.0)` = no correction (never regresses a
     /// low-DPI or already-physical terminal).
     pub cell_scale: CellScale,
+    /// How large an image is sent to the terminal. See [`TransmitScale`].
+    pub transmit_scale: TransmitScale,
+    /// Which render path the game picture uses. See [`RenderPath`].
+    pub render_path: RenderPath,
+    /// Where to append NDJSON run telemetry, or `None` (the default) for off.
+    /// See [`crate::telemetry`].
+    pub telemetry: Option<String>,
 }
 
 impl Default for Config {
@@ -188,6 +290,9 @@ impl Default for Config {
             upscale_factor: 1,
             keys: KeyBindings::default(),
             cell_scale: CellScale::default(),
+            transmit_scale: TransmitScale::default(),
+            render_path: RenderPath::default(),
+            telemetry: None,
         }
     }
 }
@@ -225,25 +330,54 @@ impl Config {
     /// Load the config file if present, otherwise return defaults. Never fails:
     /// an unreadable or partially malformed file degrades to defaults per-key.
     pub fn load() -> Config {
+        Config::load_reporting().0
+    }
+
+    /// [`Config::load`] plus every complaint the parser has about the file.
+    ///
+    /// A config key that does not apply used to fail **silently** — `palette =
+    /// 'green'` (a perfectly good TOML literal string) left the picture
+    /// grayscale with nothing said, while the numeric `upscale_factor = 4` next
+    /// to it worked, which is a genuinely maddening way to lose an afternoon.
+    /// Values are now accepted single-quoted as well as double-quoted or bare,
+    /// and anything still unusable is *reported* rather than dropped.
+    pub fn load_reporting() -> (Config, Vec<String>) {
         match config_path().filter(|p| p.exists()) {
             Some(path) => match std::fs::read_to_string(&path) {
-                Ok(text) => Config::parse(&text),
-                Err(_) => Config::default(),
+                Ok(text) => Config::parse_reporting(&text),
+                Err(e) => (
+                    Config::default(),
+                    vec![format!("config: cannot read {}: {e}", path.display())],
+                ),
             },
-            None => Config::default(),
+            None => (Config::default(), Vec::new()),
         }
     }
 
     /// Parse a `key = value` document into a [`Config`], filling defaults for
     /// anything missing or unrecognised.
     pub fn parse(text: &str) -> Config {
+        Config::parse_reporting(text).0
+    }
+
+    /// [`Config::parse`], also returning a human-readable complaint for every
+    /// key that was not understood or whose value could not be applied.
+    pub fn parse_reporting(text: &str) -> (Config, Vec<String>) {
         let kv = parse_kv(text);
         let mut cfg = Config::default();
+        let mut warn: Vec<String> = Vec::new();
+        // Tracks which keys were consumed, so anything left over is reported as
+        // an unknown key (a typo silently doing nothing is the same bug class).
+        let mut seen: Vec<&str> = Vec::new();
+        let mut get = |key: &'static str| -> Option<&String> {
+            seen.push(key);
+            kv.get(key)
+        };
 
-        if let Some(v) = kv.get("rom_dir") {
+        if let Some(v) = get("rom_dir") {
             cfg.rom_dir = expand_tilde(v);
         }
-        if let Some(v) = kv.get("protocol") {
+        if let Some(v) = get("protocol") {
             let v = v.trim();
             cfg.protocol = if v.is_empty() || v.eq_ignore_ascii_case("auto") {
                 None
@@ -251,46 +385,95 @@ impl Config {
                 Some(v.to_string())
             };
         }
-        if let Some(v) = kv.get("palette") {
-            if let Some(p) = Palette::from_str(v) {
-                cfg.palette = p;
+        if let Some(v) = get("palette") {
+            match Palette::from_str(v) {
+                Some(p) => cfg.palette = p,
+                None => warn.push(bad("palette", v, "grayscale, green, amber")),
             }
         }
-        if let Some(v) = kv.get("upscale") {
-            if let Some(a) = Algorithm::from_str(v) {
-                cfg.upscale = a;
-                // An algorithm without an explicit factor gets that
-                // algorithm's smallest useful factor rather than staying 1.
-                cfg.upscale_factor = a.clamp_factor(cfg.upscale_factor);
+        if let Some(v) = get("upscale") {
+            match Algorithm::from_str(v) {
+                Some(a) => {
+                    cfg.upscale = a;
+                    // An algorithm without an explicit factor gets that
+                    // algorithm's smallest useful factor rather than staying 1.
+                    cfg.upscale_factor = a.clamp_factor(cfg.upscale_factor);
+                }
+                None => warn.push(bad("upscale", v, "nearest, scale2x, mmpx, lcd")),
             }
         }
-        if let Some(f) = kv
-            .get("upscale_factor")
-            .and_then(|v| v.trim().parse::<u8>().ok())
-        {
-            cfg.upscale_factor = cfg.upscale.clamp_factor(f);
+        if let Some(v) = get("upscale_factor") {
+            match v.trim().parse::<u8>() {
+                Ok(f) => cfg.upscale_factor = cfg.upscale.clamp_factor(f),
+                Err(_) => warn.push(bad("upscale_factor", v, "a number 1-6")),
+            }
         }
-        if let Some(c) = kv.get("key_a").and_then(|v| first_char(v)) {
-            cfg.keys.a = c;
+        for key in ["key_a", "key_b", "key_start", "key_select"] {
+            let Some(v) = get(key) else { continue };
+            let Some(c) = first_char(v) else {
+                warn.push(bad(key, v, "a single character"));
+                continue;
+            };
+            match key {
+                "key_a" => cfg.keys.a = c,
+                "key_b" => cfg.keys.b = c,
+                "key_start" => cfg.keys.start = c,
+                _ => cfg.keys.select = c,
+            }
         }
-        if let Some(c) = kv.get("key_b").and_then(|v| first_char(v)) {
-            cfg.keys.b = c;
+        if let Some(v) = get("cell_scale") {
+            let parsed = CellScale::from_str(v);
+            if parsed == CellScale::default()
+                && !v.trim().eq_ignore_ascii_case("1")
+                && !v.trim().eq_ignore_ascii_case("1.0")
+            {
+                warn.push(bad("cell_scale", v, "auto, or a number 1.0-8.0"));
+            }
+            cfg.cell_scale = parsed;
         }
-        if let Some(c) = kv.get("key_start").and_then(|v| first_char(v)) {
-            cfg.keys.start = c;
+        if let Some(v) = get("transmit_scale") {
+            match TransmitScale::parse(v) {
+                Some(t) => cfg.transmit_scale = t,
+                None => warn.push(bad("transmit_scale", v, "auto, or a number 1-6")),
+            }
         }
-        if let Some(c) = kv.get("key_select").and_then(|v| first_char(v)) {
-            cfg.keys.select = c;
+        if let Some(v) = get("render_path") {
+            match RenderPath::parse(v) {
+                Some(p) => cfg.render_path = p,
+                None => warn.push(bad("render_path", v, "fast, legacy")),
+            }
         }
-        if let Some(v) = kv.get("cell_scale") {
-            cfg.cell_scale = CellScale::from_str(v);
+        if let Some(v) = get("telemetry") {
+            let v = v.trim();
+            cfg.telemetry = if v.is_empty()
+                || v.eq_ignore_ascii_case("off")
+                || v.eq_ignore_ascii_case("false")
+                || v == "0"
+            {
+                None
+            } else {
+                Some(v.to_string())
+            };
         }
-        cfg
+
+        let mut unknown: Vec<&String> =
+            kv.keys().filter(|k| !seen.contains(&k.as_str())).collect();
+        unknown.sort();
+        for k in unknown {
+            warn.push(format!("config: unknown key `{k}` (ignored)"));
+        }
+        warn.sort();
+        (cfg, warn)
     }
 }
 
+fn bad(key: &str, value: &str, expected: &str) -> String {
+    format!("config: `{key} = {value}` not understood (expected {expected}) — using the default")
+}
+
 /// Parse `key = value` lines into a map. `#` starts a comment; values may be
-/// bare or double-quoted; blank lines and unknown junk are ignored.
+/// bare, `"double-quoted"` or `'single-quoted'`; blank lines and unknown junk
+/// are ignored.
 fn parse_kv(text: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for raw in text.lines() {
@@ -306,16 +489,24 @@ fn parse_kv(text: &str) -> HashMap<String, String> {
             continue;
         };
         let key = key.trim().to_ascii_lowercase();
-        let value = value.trim();
-        let value = value
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .unwrap_or(value);
+        let value = unquote(value.trim());
         if !key.is_empty() {
             map.insert(key, value.to_string());
         }
     }
     map
+}
+
+/// Strip a matching pair of surrounding quotes. TOML has both basic (`"…"`) and
+/// literal (`'…'`) strings and `config.toml` invites both; only handling one
+/// was the silent-config bug.
+fn unquote(value: &str) -> &str {
+    for q in ['"', '\''] {
+        if let Some(inner) = value.strip_prefix(q).and_then(|v| v.strip_suffix(q)) {
+            return inner;
+        }
+    }
+    value
 }
 
 fn first_char(s: &str) -> Option<char> {
@@ -494,6 +685,109 @@ mod tests {
         let cfg = Config::parse("wobble = 3\npalette = tartan\n");
         assert_eq!(cfg.palette, Palette::Grayscale);
         assert_eq!(cfg, Config::default());
+    }
+
+    // -- The silent-config bug -------------------------------------------
+    //
+    // `config.toml` invites TOML syntax, and TOML has *two* string forms.
+    // Single-quoted values were silently dropped: `palette = 'green'` left the
+    // picture grayscale while the numeric `upscale_factor = 4` beside it
+    // applied, which looks exactly like "the feature is broken".
+
+    #[test]
+    fn single_quoted_values_apply() {
+        let cfg =
+            Config::parse("palette = 'green'\nupscale = 'lcd'\nupscale_factor = 4\n");
+        assert_eq!(cfg.palette, Palette::Green);
+        assert_eq!(cfg.upscale, Algorithm::LcdGrid);
+        assert_eq!(cfg.upscale_factor, 4);
+    }
+
+    #[test]
+    fn every_quoting_style_agrees() {
+        for form in ["green", "\"green\"", "'green'", "  green  "] {
+            assert_eq!(
+                Config::parse(&format!("palette = {form}")).palette,
+                Palette::Green,
+                "{form}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_that_does_not_apply_is_reported() {
+        let (cfg, warnings) = Config::parse_reporting("palette = tartan\n");
+        assert_eq!(cfg.palette, Palette::Grayscale);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("palette"), "{warnings:?}");
+        assert!(warnings[0].contains("tartan"), "{warnings:?}");
+        assert!(
+            warnings[0].contains("green"),
+            "should list what is accepted"
+        );
+    }
+
+    #[test]
+    fn a_mistyped_key_is_reported() {
+        let (_, warnings) = Config::parse_reporting("pallete = green\n");
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("unknown key `pallete`"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn every_bad_value_is_reported_not_just_the_first() {
+        let (_, warnings) = Config::parse_reporting(
+            "palette = tartan\nupscale = hqx\nupscale_factor = banana\nrender_path = sideways\n",
+        );
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+    }
+
+    #[test]
+    fn a_good_config_warns_about_nothing() {
+        let (_, warnings) = Config::parse_reporting(
+            "# comment\nrom_dir = \"/games\"\npalette = green\nupscale = mmpx\n\
+             upscale_factor = 2\nprotocol = kitty\ncell_scale = auto\n\
+             transmit_scale = auto\nrender_path = fast\ntelemetry = /tmp/gb.ndjson\n\
+             key_a = j\nkey_b = k\nkey_start = n\nkey_select = m\n",
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn transmit_scale_parses_and_clamps() {
+        assert_eq!(Config::default().transmit_scale, TransmitScale::Auto);
+        assert_eq!(
+            Config::parse("transmit_scale = 2").transmit_scale,
+            TransmitScale::Fixed(2)
+        );
+        assert_eq!(
+            Config::parse("transmit_scale = auto").transmit_scale,
+            TransmitScale::Auto
+        );
+        // Out of range falls back to the default *and* says so.
+        let (cfg, warnings) = Config::parse_reporting("transmit_scale = 99");
+        assert_eq!(cfg.transmit_scale, TransmitScale::Auto);
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn render_path_and_telemetry_parse() {
+        assert_eq!(Config::default().render_path, RenderPath::Fast);
+        assert_eq!(
+            Config::parse("render_path = legacy").render_path,
+            RenderPath::Legacy
+        );
+        assert_eq!(
+            Config::parse("telemetry = '/tmp/gb.ndjson'")
+                .telemetry
+                .as_deref(),
+            Some("/tmp/gb.ndjson")
+        );
+        assert_eq!(Config::parse("telemetry = off").telemetry, None);
+        assert_eq!(Config::default().telemetry, None);
     }
 
     #[test]

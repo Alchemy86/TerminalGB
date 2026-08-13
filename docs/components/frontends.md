@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`beb723e`](https://github.com/Alchemy86/gameboy/tree/beb723e75a25129f4899f62c1730efb903569aac) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -49,7 +49,7 @@ a `RenderMode`; `web/` is the JS/webpack shell around the WASM build.
 
 **Desktop** — [`src/screen/desktop.rs`](../../src/screen/desktop.rs). `Glcx`
 ([`desktop.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L17)) sets up a textured quad and uploads each
-frame via `gl::TexImage2D` in `draw()` ([`desktop.rs:351`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L351)).
+frame via `gl::TexImage2D` in `draw()` ([`desktop.rs:377`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L377)).
 The event loop lives in `Gameboy::render_desktop` ([`src/gameboy.rs:98`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L98)),
 which also initialises `cpal` audio. Key mapping is in `process_window`
 ([`desktop.rs:81`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L81)): **Z→Select, X→Start, A→A, B→B**, arrows →
