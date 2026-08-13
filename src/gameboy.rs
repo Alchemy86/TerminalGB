@@ -50,6 +50,20 @@ pub fn load_rom(filepath: &str) -> Result<(Vec<u8>, std::path::PathBuf), String>
 // Match rboy's timing: (4194304 / 1000 * 16) = ~67,109 cycles per 16ms frame
 pub const CYCLES: u32 = 67109;
 
+/// Launch the terminal frontend. `initial_rom` starts straight into that game;
+/// `None` opens the ROM picker. This is the entry point terminal binaries
+/// should use — it lets the TUI own ROM loading, so the picker and in-app ROM
+/// switching work.
+#[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+pub fn run_terminal(initial_rom: Option<std::path::PathBuf>) {
+    // Fail loudly (and non-zero) on setup errors — e.g. a terminal with no
+    // kitty keyboard support — rather than silently returning.
+    if let Err(e) = crate::screen::tui::run(initial_rom) {
+        eprintln!("terminal frontend error: {e}");
+        std::process::exit(1);
+    }
+}
+
 impl Gameboy {
     pub fn new(data: Vec<u8>, filepath: Option<std::path::PathBuf>) -> Gameboy {
         // let rom = load_rom();
@@ -196,9 +210,11 @@ impl Gameboy {
 
     #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
     pub fn render_terminal(self) {
-        use crate::screen::tui;
-
-        if let Err(e) = tui::run(self) {
+        // The terminal frontend now owns ROM loading (so it can offer a picker
+        // and switch games in-process). A pre-built `Gameboy` carries no path,
+        // so this legacy entry just opens the picker. Prefer `run_terminal`.
+        // Fail loudly (audio/dead-code crew's intent) rather than swallowing.
+        if let Err(e) = crate::screen::tui::run(None) {
             eprintln!("terminal frontend error: {e}");
             std::process::exit(1);
         }

@@ -1,21 +1,51 @@
+//! Terminal frontend — a proper TUI, not a bare image blitter.
+//!
+//! Two screens share one event loop:
+//!   * **Picker** — browse/filter ROMs from the configured directory, with the
+//!     cartridge's internal title, MBC type and recently-played first.
+//!   * **Playing** — the game, drawn *centred* and scaled to fill the window,
+//!     with framed status/controls panels, a help overlay and in-app ROM
+//!     switching.
+//!
+//! Launching with a ROM path jumps straight into Playing (bypassing the
+//! picker); launching with none opens the picker.
+//!
+//! Layout maths ([`fit_metrics`], [`popup_area`]), config parsing and ROM
+//! header reading are all unit-tested without a terminal; the interactive parts
+//! (rendering, input, protocols) are exercised by actually running it.
+//
+// This file was rebased on top of the dead-code/audio crew's hardening
+// (commit 8357546); their intent is kept and mine layered on top:
+//   * Audio: `init_audio` (feature-gated on `audio`, silent+graceful without a
+//     device) is wired per-session in `load_session`, so sound follows the
+//     active game across in-app ROM switches. The stream lives in `Session`.
+//   * Protocol: their `build_picker` (prefer the advertised protocol, e.g.
+//     Kitty over an env-guessed iTerm2; never panic on timeout) is used, then a
+//     config `protocol` may override it.
+//   * Loud failure: a terminal without the kitty keyboard protocol returns a
+//     clear error before touching the screen (kept from their change).
+//   * Scaling (mine wins — more complete): no `MAX_SCALE`; the image is
+//     `Resize::Scale`-upscaled into a centred `fit_metrics` rect that grows
+//     smoothly with the window. `Fit` can't upscale a 160x144 source, which is
+//     what limited it to "small" and to a few coarse tiers.
+
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
+use crate::screen::config::{Config, Palette, Recent};
+use crate::screen::romlib::{self, RomEntry};
+
 use std::env;
-use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicU32};
-use std::sync::{Arc, Mutex};
-use std::{
-    error::Error,
-    io,
-    time::{Duration, Instant},
-};
+use std::error::Error;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     crossterm::{
         event::{
-            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
-            KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent,
+            KeyEventKind, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
             PushKeyboardEnhancementFlags,
         },
         execute,
@@ -23,36 +53,963 @@ use ratatui::{
             disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
         },
     },
-    Terminal,
-};
-
-use image::DynamicImage;
-use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::Color,
-    text::{Line, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    Frame, Terminal,
 };
 use ratatui_image::{
     picker::{Picker, ProtocolType},
-    protocol::{Protocol, StatefulProtocol},
+    protocol::StatefulProtocol,
     Resize, StatefulImage,
 };
 
-/// Width (in terminal cells) reserved for the controls sidebar; the rest of the
-/// screen goes to the game picture.
-const SIDEBAR_WIDTH: u16 = 28;
+use image::DynamicImage;
+
+/// Wall-clock time one emulated frame occupies. The DMG refreshes at
+/// 59.7275 Hz (4194304 Hz / 70224 cycles-per-frame), **not** a rounded 60 —
+/// pacing at 16ms would run ~4.6% fast (62.5 fps), the same bug the audio crew
+/// found on the desktop path. 1/59.7275 s ≈ 16743 µs. Emulation of a single
+/// frame runs on the main loop; input is polled between frames.
+const FRAME_TIME: Duration = Duration::from_micros(16_743);
+/// A held Game Boy key auto-releases this long after its last press/repeat.
+/// A safety net (we require the kitty keyboard protocol, so real key-release
+/// events normally arrive first); it must exceed the terminal's key-autorepeat
+/// interval so held keys don't flicker.
+const KEY_HOLD: Duration = Duration::from_millis(110);
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+/// Run the terminal frontend. `initial_rom` launches straight into that game;
+/// `None` opens the ROM picker.
+pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+    // Fail loudly on a terminal without the kitty keyboard protocol — the
+    // frontend needs it for clean key up/down. (Kept from the dead-code/audio
+    // crew's hardening; error returned *before* touching the terminal.)
+    if let Ok(false) = ratatui::crossterm::terminal::supports_keyboard_enhancement() {
+        return Err(
+            "the terminal reports no support for the kitty keyboard protocol, which the \
+             terminal frontend needs for key input. This is usually the protocol being \
+             disabled in the terminal's config rather than truly missing — e.g. in WezTerm \
+             set `enable_kitty_keyboard = true`. Terminals known to support it: Kitty, \
+             WezTerm (with that setting), Ghostty, foot. Otherwise use the desktop frontend: \
+             `cargo run --example desktop -- <path-to-rom.gb>`."
+                .into(),
+        );
+    }
+
+    let config = Config::load();
+    let recent = Recent::load();
+
+    // Terminal setup. Restore on panic so a crash doesn't leave the terminal
+    // in raw mode / alternate screen.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        original_hook(panic);
+    }));
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // We required kitty keyboard support above; enable event-type reporting so
+    // key-release events arrive (real up/down instead of just autorepeat).
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+    );
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = App::new(config, recent);
+    if let Some(path) = initial_rom {
+        app.start_game(&path); // a load error surfaces as a picker message
+    }
+    let res = app.run(&mut terminal);
+
+    // Restore terminal.
+    disable_raw_mode()?;
+    let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    res
+}
+
+// ---------------------------------------------------------------------------
+// App state
+// ---------------------------------------------------------------------------
+
+enum Screen {
+    Picker,
+    Playing,
+}
+
+#[derive(PartialEq, Eq)]
+enum Overlay {
+    None,
+    Help,
+    Quit,
+}
+
+/// The live game, present only while a ROM is loaded.
+struct Session {
+    gb: Gameboy,
+    entry: RomEntry,
+    paused: bool,
+    /// Terminal image protocol for the current framebuffer; recreated each
+    /// emulated frame so a window resize re-fits without a keypress.
+    image: Option<StatefulProtocol>,
+    /// Last computed effective scale (for the status panel).
+    scale: f32,
+    // FPS accounting.
+    frames: u32,
+    fps: f32,
+    fps_mark: Instant,
+    /// Per-button last press time (index by [`key_index`]); drives auto-release.
+    held: [Option<Instant>; 8],
+    /// Host-audio stream for this game. Must stay alive for the whole session —
+    /// dropping it stops the sound — so it is dropped when the session ends or a
+    /// different ROM is loaded. `()` when built without the `audio` feature.
+    _audio: AudioHold,
+}
+
+struct App {
+    config: Config,
+    recent: Recent,
+    picker: Picker,
+    palette: Palette,
+    screen: Screen,
+    overlay: Overlay,
+    fullscreen: bool,
+    session: Option<Session>,
+    should_quit: bool,
+
+    // Picker screen state.
+    entries: Vec<RomEntry>,
+    /// Indices into `entries` that are "recently played" (shown first, starred).
+    recent_flags: Vec<bool>,
+    filter: String,
+    filtering: bool,
+    /// Visible (post-filter) indices into `entries`.
+    visible: Vec<usize>,
+    selected: usize,
+    /// A transient message shown in the picker (e.g. a load error).
+    message: Option<String>,
+}
+
+impl App {
+    fn new(config: Config, recent: Recent) -> App {
+        // Prefer the sharpest protocol the terminal advertises (build_picker),
+        // then let an explicit config `protocol` override it.
+        let mut picker = build_picker();
+        picker.set_background_color([0, 0, 0, 0]);
+        if let Some(pref) = config.protocol.as_deref().and_then(protocol_from_str) {
+            picker.set_protocol_type(pref);
+        }
+        let palette = config.palette;
+
+        let mut app = App {
+            config,
+            recent,
+            picker,
+            palette,
+            screen: Screen::Picker,
+            overlay: Overlay::None,
+            fullscreen: false,
+            session: None,
+            should_quit: false,
+            entries: Vec::new(),
+            recent_flags: Vec::new(),
+            filter: String::new(),
+            filtering: false,
+            visible: Vec::new(),
+            selected: 0,
+            message: None,
+        };
+        app.rescan();
+        app
+    }
+
+    /// (Re)build the ROM list from the configured directory, ordering
+    /// recently-played entries first.
+    fn rescan(&mut self) {
+        let scanned = romlib::scan_dir(&self.config.rom_dir);
+        let (entries, flags) = order_with_recent(scanned, &self.recent.paths);
+        self.entries = entries;
+        self.recent_flags = flags;
+        self.filter.clear();
+        self.filtering = false;
+        self.selected = 0;
+        self.recompute_visible();
+    }
+
+    fn recompute_visible(&mut self) {
+        self.visible = romlib::filter_indices(&self.entries, &self.filter);
+        if self.visible.is_empty() {
+            self.selected = 0;
+        } else if self.selected >= self.visible.len() {
+            self.selected = self.visible.len() - 1;
+        }
+    }
+
+    /// Load a ROM and switch to the Playing screen. On failure, stay on the
+    /// picker and show why.
+    fn start_game(&mut self, path: &Path) {
+        match load_session(path) {
+            Ok((gb, entry, audio)) => {
+                self.recent.record(path);
+                self.recent.save();
+                self.session = Some(Session {
+                    gb,
+                    entry,
+                    paused: false,
+                    image: None,
+                    scale: 1.0,
+                    frames: 0,
+                    fps: 0.0,
+                    fps_mark: Instant::now(),
+                    held: [None; 8],
+                    _audio: audio,
+                });
+                self.screen = Screen::Playing;
+                self.overlay = Overlay::None;
+                self.fullscreen = false;
+                self.message = None;
+            }
+            Err(e) => {
+                self.screen = Screen::Picker;
+                self.message = Some(format!("Failed to load {}: {e}", path.display()));
+            }
+        }
+    }
+
+    /// Return to the picker, dropping the current session (refresh recents).
+    fn back_to_picker(&mut self) {
+        self.session = None;
+        self.screen = Screen::Picker;
+        self.overlay = Overlay::None;
+        self.recent = Recent::load();
+        self.rescan();
+    }
+
+    // ---- main loop ----
+
+    fn run<B: Backend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut last_tick = Instant::now();
+        let mut dirty = true;
+
+        while !self.should_quit {
+            // 1. Advance emulation on a fixed cadence.
+            if let Screen::Playing = self.screen {
+                let running = self
+                    .session
+                    .as_ref()
+                    .map(|s| !s.paused && self.overlay == Overlay::None)
+                    .unwrap_or(false);
+                if running && last_tick.elapsed() >= FRAME_TIME {
+                    self.step_frame();
+                    last_tick = Instant::now();
+                    dirty = true;
+                }
+                // 2. Auto-release keys that were not refreshed.
+                if self.release_expired() {
+                    dirty = true;
+                }
+            }
+
+            // 3. Draw only when something changed (bounds encode cost).
+            if dirty {
+                terminal.draw(|f| self.render(f))?;
+                dirty = false;
+            }
+
+            // 4. Poll input with a short timeout so input feels immediate.
+            if event::poll(Duration::from_millis(4))? {
+                match event::read()? {
+                    Event::Key(key) => {
+                        self.handle_key(key);
+                        dirty = true;
+                    }
+                    Event::Resize(_, _) => dirty = true,
+                    _ => {}
+                }
+            }
+        }
+        self.recent.save();
+        Ok(())
+    }
+
+    fn step_frame(&mut self) {
+        // Split borrows: pull the fields we need out of `self` first.
+        let palette = self.palette;
+        let picker = self.picker;
+        if let Some(s) = self.session.as_mut() {
+            s.gb.frame();
+            let img = framebuffer_image(&s.gb, palette);
+            s.image = Some(picker.new_resize_protocol(img));
+            s.frames += 1;
+            let elapsed = s.fps_mark.elapsed();
+            if elapsed >= Duration::from_secs(1) {
+                s.fps = s.frames as f32 / elapsed.as_secs_f32();
+                s.frames = 0;
+                s.fps_mark = Instant::now();
+            }
+        }
+    }
+
+    fn release_expired(&mut self) -> bool {
+        let now = Instant::now();
+        let mut changed = false;
+        if let Some(s) = self.session.as_mut() {
+            for idx in 0..8 {
+                if let Some(t) = s.held[idx] {
+                    if now.duration_since(t) >= KEY_HOLD {
+                        s.gb.keyup(key_from_index(idx));
+                        s.held[idx] = None;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    // ---- input ----
+
+    fn handle_key(&mut self, key: KeyEvent) {
+        // Overlays intercept everything first, and every overlay is escapable.
+        match self.overlay {
+            Overlay::Help => {
+                if key.kind == KeyEventKind::Press {
+                    self.overlay = Overlay::None;
+                }
+                return;
+            }
+            Overlay::Quit => {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            self.should_quit = true
+                        }
+                        _ => self.overlay = Overlay::None,
+                    }
+                }
+                return;
+            }
+            Overlay::None => {}
+        }
+
+        match self.screen {
+            Screen::Picker => self.handle_picker_key(key),
+            Screen::Playing => self.handle_game_key(key),
+        }
+    }
+
+    fn handle_picker_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        self.message = None;
+
+        // While filtering, printable keys edit the query.
+        if self.filtering {
+            match key.code {
+                KeyCode::Esc => {
+                    self.filtering = false;
+                    self.filter.clear();
+                    self.recompute_visible();
+                }
+                KeyCode::Enter => {
+                    self.filtering = false;
+                    self.launch_selected();
+                }
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                    self.recompute_visible();
+                }
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.recompute_visible();
+                }
+                KeyCode::Up => self.move_selection(-1),
+                KeyCode::Down => self.move_selection(1),
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            KeyCode::Char('?') => self.overlay = Overlay::Help,
+            KeyCode::Char('/') => self.filtering = true,
+            KeyCode::Char('r') => self.rescan(),
+            // Resume the most-recently-played ROM directly, even if it lives
+            // outside the current `rom_dir` (so it isn't in the list).
+            KeyCode::Char('.') => self.resume_last(),
+            KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
+            KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
+            KeyCode::Char('G') | KeyCode::End => {
+                self.selected = self.visible.len().saturating_sub(1)
+            }
+            KeyCode::Enter => self.launch_selected(),
+            _ => {}
+        }
+    }
+
+    /// The title of the most-recently-played ROM, if any (for the picker hint).
+    fn last_played_title(&self) -> Option<String> {
+        let path = self.recent.paths.first()?;
+        Some(
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+        )
+    }
+
+    /// Launch the most-recently-played ROM straight away.
+    fn resume_last(&mut self) {
+        if let Some(path) = self.recent.paths.first().cloned() {
+            self.start_game(&path);
+        } else {
+            self.message = Some("no recently-played ROM yet".to_string());
+        }
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if self.visible.is_empty() {
+            return;
+        }
+        let len = self.visible.len() as isize;
+        let mut sel = self.selected as isize + delta;
+        if sel < 0 {
+            sel = 0;
+        }
+        if sel >= len {
+            sel = len - 1;
+        }
+        self.selected = sel as usize;
+    }
+
+    fn launch_selected(&mut self) {
+        if let Some(&ei) = self.visible.get(self.selected) {
+            let path = self.entries[ei].path.clone();
+            self.start_game(&path);
+        }
+    }
+
+    fn handle_game_key(&mut self, key: KeyEvent) {
+        let press = key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat;
+        let release = key.kind == KeyEventKind::Release;
+
+        // Control keys act on press only.
+        if press {
+            match key.code {
+                KeyCode::Char('q') => {
+                    self.overlay = Overlay::Quit;
+                    return;
+                }
+                KeyCode::Char('?') => {
+                    self.overlay = Overlay::Help;
+                    return;
+                }
+                KeyCode::Char('p') => {
+                    if let Some(s) = self.session.as_mut() {
+                        s.paused = !s.paused;
+                    }
+                    return;
+                }
+                KeyCode::Char('R') => {
+                    self.reset_game();
+                    return;
+                }
+                KeyCode::Char('L') => {
+                    self.back_to_picker();
+                    return;
+                }
+                KeyCode::Char('f') => {
+                    self.fullscreen = !self.fullscreen;
+                    return;
+                }
+                KeyCode::Char('[') => {
+                    self.palette = self.palette.next();
+                    return;
+                }
+                KeyCode::Esc => {
+                    if self.fullscreen {
+                        self.fullscreen = false;
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Game-button keys (movement + configurable A/B/Start/Select).
+        if let Some(button) = self.map_button(&key.code) {
+            if press {
+                self.press_button(button);
+            } else if release {
+                self.release_button(button);
+            }
+        }
+    }
+
+    fn map_button(&self, code: &KeyCode) -> Option<KeypadKey> {
+        match code {
+            KeyCode::Up => Some(KeypadKey::Up),
+            KeyCode::Down => Some(KeypadKey::Down),
+            KeyCode::Left => Some(KeypadKey::Left),
+            KeyCode::Right => Some(KeypadKey::Right),
+            KeyCode::Char(c) => {
+                let lc = c.to_ascii_lowercase();
+                let k = &self.config.keys;
+                if lc == k.a.to_ascii_lowercase() {
+                    Some(KeypadKey::A)
+                } else if lc == k.b.to_ascii_lowercase() {
+                    Some(KeypadKey::B)
+                } else if lc == k.start.to_ascii_lowercase() {
+                    Some(KeypadKey::Start)
+                } else if lc == k.select.to_ascii_lowercase() {
+                    Some(KeypadKey::Select)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn press_button(&mut self, button: KeypadKey) {
+        if let Some(s) = self.session.as_mut() {
+            s.gb.keydown(button);
+            s.held[key_index(button)] = Some(Instant::now());
+        }
+    }
+
+    fn release_button(&mut self, button: KeypadKey) {
+        if let Some(s) = self.session.as_mut() {
+            s.gb.keyup(button);
+            s.held[key_index(button)] = None;
+        }
+    }
+
+    fn reset_game(&mut self) {
+        if let Some(s) = self.session.as_ref() {
+            let path = s.entry.path.clone();
+            self.start_game(&path);
+        }
+    }
+
+    // ---- rendering ----
+
+    fn render(&mut self, f: &mut Frame<'_>) {
+        match self.screen {
+            Screen::Picker => self.render_picker(f),
+            Screen::Playing => self.render_game(f),
+        }
+        match self.overlay {
+            Overlay::Help => self.render_help(f),
+            Overlay::Quit => render_quit(f),
+            Overlay::None => {}
+        }
+    }
+
+    fn render_picker(&mut self, f: &mut Frame<'_>) {
+        let area = f.area();
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),                                  // header
+                Constraint::Min(0),                                     // list
+                Constraint::Length(if self.filtering { 1 } else { 0 }), // filter
+                Constraint::Length(1),                                  // footer
+            ])
+            .split(area);
+
+        let header = format!(" gameboy · pick a ROM — {}", self.config.rom_dir.display());
+        f.render_widget(
+            Paragraph::new(header).style(Style::default().add_modifier(Modifier::BOLD)),
+            rows[0],
+        );
+
+        let list_block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" ROMs ({}) ", self.visible.len()));
+
+        if self.entries.is_empty() {
+            let msg = self.message.clone().unwrap_or_else(|| {
+                format!(
+                    "No .gb/.gbc ROMs found in {}.\n\nSet `rom_dir` in {} or pass a ROM path on the command line.",
+                    self.config.rom_dir.display(),
+                    crate::screen::config::config_path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "the config file".into()),
+                )
+            });
+            f.render_widget(
+                Paragraph::new(msg)
+                    .wrap(Wrap { trim: true })
+                    .block(list_block),
+                rows[1],
+            );
+        } else {
+            let items: Vec<ListItem> = self
+                .visible
+                .iter()
+                .map(|&ei| {
+                    let e = &self.entries[ei];
+                    let star = if self.recent_flags[ei] { "★ " } else { "  " };
+                    let line = format!(
+                        "{star}{title:<20}  {mbc:<22}  {size} KiB",
+                        title = truncate(&e.title, 20),
+                        mbc = e.mbc,
+                        size = e.size / 1024,
+                    );
+                    ListItem::new(line)
+                })
+                .collect();
+            let list = List::new(items).block(list_block).highlight_style(
+                Style::default()
+                    .bg(Color::Indexed(24))
+                    .add_modifier(Modifier::BOLD),
+            );
+            let mut state = ListState::default();
+            if !self.visible.is_empty() {
+                state.select(Some(self.selected.min(self.visible.len() - 1)));
+            }
+            f.render_stateful_widget(list, rows[1], &mut state);
+        }
+
+        if self.filtering {
+            f.render_widget(
+                Paragraph::new(format!("/{}", self.filter))
+                    .style(Style::default().fg(Color::Yellow)),
+                rows[2],
+            );
+        }
+
+        let footer = if let Some(msg) = &self.message {
+            Span::styled(format!(" {msg}"), Style::default().fg(Color::Red))
+        } else {
+            let base = " ↑/↓ move · enter play · / filter · r rescan · ? help · q quit";
+            let hint = match self.last_played_title() {
+                Some(title) => format!("{base} · . resume {title}"),
+                None => base.to_string(),
+            };
+            Span::styled(hint, Style::default().fg(Color::DarkGray))
+        };
+        f.render_widget(Paragraph::new(Line::from(footer)), rows[3]);
+    }
+
+    fn render_game(&mut self, f: &mut Frame<'_>) {
+        let area = f.area();
+
+        if self.fullscreen {
+            self.render_display(f, area);
+            return;
+        }
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // header
+                Constraint::Min(0),    // body
+                Constraint::Length(1), // footer
+            ])
+            .split(area);
+
+        let title = self
+            .session
+            .as_ref()
+            .map(|s| s.entry.title.clone())
+            .unwrap_or_default();
+        let paused = self.session.as_ref().map(|s| s.paused).unwrap_or(false);
+        let header = if paused {
+            format!(" gameboy · {title}  [PAUSED]")
+        } else {
+            format!(" gameboy · {title}")
+        };
+        f.render_widget(
+            Paragraph::new(header).style(Style::default().add_modifier(Modifier::BOLD)),
+            rows[0],
+        );
+
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(30), Constraint::Length(30)])
+            .split(rows[1]);
+
+        self.render_display(f, body[0]);
+        self.render_sidebar(f, body[1]);
+
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                " ?help · p pause · R reset · L load · f full · [ palette · q quit",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            rows[2],
+        );
+    }
+
+    /// Draw the game picture, centred and upscaled to fill `area`.
+    ///
+    /// The display is deliberately *borderless* (the framed regions are the
+    /// status/controls panels) so the picture gets every row of height — height
+    /// is the binding constraint for a 10:9 image in a terminal whose cells are
+    /// ~twice as tall as wide.
+    ///
+    /// Scaling uses `Resize::Scale`, **not** `Resize::Fit`: Fit refuses to
+    /// enlarge an image smaller than the area (it caps the target at the source
+    /// size), which is exactly why the old frontend was "limited to small" and
+    /// faked enlargement with a capped integer pre-scale. `Scale` upscales the
+    /// source to fill the centred rect at pixel resolution with nearest-
+    /// neighbour (crisp pixels, correct aspect), so size steps are as fine as
+    /// the protocol allows and re-fit is automatic on resize.
+    fn render_display(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let (font_w, font_h) = self.picker.font_size();
+        let (rect, scale) = fit_metrics(area, 160, 144, font_w, font_h);
+        if let Some(s) = self.session.as_mut() {
+            s.scale = scale;
+            if let Some(proto) = s.image.as_mut() {
+                let image = StatefulImage::default().resize(Resize::Scale(None));
+                f.render_stateful_widget(image, rect, proto);
+            }
+        }
+    }
+
+    fn render_sidebar(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(9), Constraint::Min(0)])
+            .split(area);
+
+        // Status.
+        let (title, mbc, scale, fps, paused) = self
+            .session
+            .as_ref()
+            .map(|s| (s.entry.title.clone(), s.entry.mbc, s.scale, s.fps, s.paused))
+            .unwrap_or_default();
+        let status = vec![
+            kv("ROM", &truncate(&title, 18)),
+            kv("MBC", mbc),
+            kv("Scale", &format!("{scale:.1}x")),
+            kv("Proto", protocol_name(self.picker.protocol_type())),
+            kv("Palette", self.palette.name()),
+            kv(
+                "FPS",
+                &if paused {
+                    "paused".to_string()
+                } else {
+                    format!("{fps:.0}")
+                },
+            ),
+        ];
+        f.render_widget(
+            Paragraph::new(status)
+                .block(Block::default().borders(Borders::ALL).title(" Status ")),
+            split[0],
+        );
+
+        // Controls.
+        let k = &self.config.keys;
+        let controls = vec![
+            Line::from("Arrows  move"),
+            Line::from(format!("{}       A", k.a)),
+            Line::from(format!("{}       B", k.b)),
+            Line::from(format!("{}       Start", k.start)),
+            Line::from(format!("{}       Select", k.select)),
+            Line::from(""),
+            Line::from("p  pause    R  reset"),
+            Line::from("L  load     f  full"),
+            Line::from("[  palette  ?  help"),
+        ];
+        f.render_widget(
+            Paragraph::new(controls)
+                .block(Block::default().borders(Borders::ALL).title(" Controls ")),
+            split[1],
+        );
+    }
+
+    fn render_help(&self, f: &mut Frame<'_>) {
+        let area = popup_area(f.area(), 60, 60);
+        f.render_widget(Clear, area);
+        let text = vec![
+            Line::from(Span::styled(
+                "Help",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Picker"),
+            Line::from("  ↑/↓ j/k   move        enter   play"),
+            Line::from("  /         filter      r       rescan"),
+            Line::from("  .         resume last g/G     top/bottom"),
+            Line::from("  q/esc     quit"),
+            Line::from(""),
+            Line::from("Game"),
+            Line::from("  arrows    move        a/s     A / B"),
+            Line::from("  x/z       Start/Sel   p       pause"),
+            Line::from("  R         reset       L       load ROM"),
+            Line::from("  f         fullscreen  [       palette"),
+            Line::from("  ?         this help   q       quit"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "press any key to close",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title(" ? ")),
+            area,
+        );
+    }
+}
+
+fn render_quit(f: &mut Frame<'_>) {
+    let area = popup_area(f.area(), 34, 20);
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from("Quit gameboy?"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "y = yes    any other = no",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ])
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title(" Quit ")),
+        area,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers (unit-tested)
+// ---------------------------------------------------------------------------
+
+/// Largest centred rectangle inside `area` whose footprint matches the game
+/// image at the terminal's pixel-per-cell `font` size, plus the effective
+/// scale factor. There is deliberately **no upper cap** — the image grows to
+/// fill the whole panel and re-fits when the terminal is resized.
+fn fit_metrics(
+    area: Rect,
+    img_w: u32,
+    img_h: u32,
+    font_w: u16,
+    font_h: u16,
+) -> (Rect, f32) {
+    if area.width == 0 || area.height == 0 || font_w == 0 || font_h == 0 {
+        return (area, 1.0);
+    }
+    // Available drawing surface in pixels.
+    let avail_w = area.width as f64 * font_w as f64;
+    let avail_h = area.height as f64 * font_h as f64;
+    // Largest scale that fits both dimensions.
+    let scale = (avail_w / img_w as f64)
+        .min(avail_h / img_h as f64)
+        .max(0.0);
+    let px_w = img_w as f64 * scale;
+    let px_h = img_h as f64 * scale;
+    // Footprint in cells, clamped to the area.
+    let cols = ((px_w / font_w as f64).round() as u16)
+        .clamp(1, area.width)
+        .max(1);
+    let rows = ((px_h / font_h as f64).round() as u16)
+        .clamp(1, area.height)
+        .max(1);
+    let x = area.x + (area.width - cols) / 2;
+    let y = area.y + (area.height - rows) / 2;
+    (Rect::new(x, y, cols, rows), scale as f32)
+}
+
+/// A centred popup covering `pct_w`% × `pct_h`% of `area`.
+fn popup_area(area: Rect, pct_w: u16, pct_h: u16) -> Rect {
+    let w = (area.width as u32 * pct_w as u32 / 100).max(10) as u16;
+    let h = (area.height as u32 * pct_h as u32 / 100).max(5) as u16;
+    let w = w.min(area.width);
+    let h = h.min(area.height);
+    let x = area.x + (area.width - w) / 2;
+    let y = area.y + (area.height - h) / 2;
+    Rect::new(x, y, w, h)
+}
+
+/// Order a scanned ROM list so recently-played entries (that still exist) come
+/// first, and return a parallel "is recent" flag vector.
+fn order_with_recent(
+    scanned: Vec<RomEntry>,
+    recent_paths: &[PathBuf],
+) -> (Vec<RomEntry>, Vec<bool>) {
+    // Canonicalise for comparison where possible.
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let recent_canon: Vec<PathBuf> = recent_paths.iter().map(|p| canon(p)).collect();
+
+    let mut recent_entries = Vec::new();
+    let mut rest = Vec::new();
+    for e in scanned {
+        let ec = canon(&e.path);
+        match recent_canon.iter().position(|r| r == &ec) {
+            Some(pos) => recent_entries.push((pos, e)),
+            None => rest.push(e),
+        }
+    }
+    recent_entries.sort_by_key(|(pos, _)| *pos);
+
+    let mut entries: Vec<RomEntry> =
+        Vec::with_capacity(recent_entries.len() + rest.len());
+    let mut flags = Vec::with_capacity(entries.capacity());
+    for (_, e) in recent_entries {
+        entries.push(e);
+        flags.push(true);
+    }
+    for e in rest {
+        entries.push(e);
+        flags.push(false);
+    }
+    (entries, flags)
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn kv<'a>(key: &'a str, value: &str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{key:<8}"), Style::default().fg(Color::DarkGray)),
+        Span::raw(value.to_string()),
+    ])
+}
 
 /// Build a [`Picker`], preferring the sharpest graphics protocol the terminal
-/// actually advertises.
+/// actually advertises (kept from the dead-code/audio crew).
 ///
 /// `Picker::from_query_stdio()` lets an env-var guess (e.g. `TERM_PROGRAM=WezTerm`)
-/// force the fuzzy iTerm2 protocol even when the terminal advertises the much
-/// crisper Kitty graphics protocol. We first query capabilities with those env
-/// guesses suppressed, so the *advertised* protocol wins; only if the terminal
-/// advertises no real graphics protocol do we fall back to the env-based guess.
-/// Never panics on a query timeout — falls back to a sane default instead.
+/// force the fuzzy iTerm2 protocol even when the terminal advertises the crisper
+/// Kitty graphics protocol. We first query with those env guesses suppressed so
+/// the *advertised* protocol wins; only if the terminal advertises no real
+/// graphics protocol do we fall back to the env-based guess. Never panics on a
+/// query timeout — falls back to a sane default font size instead.
 fn build_picker() -> Picker {
     let saved_term_program = env::var_os("TERM_PROGRAM");
     let saved_lc_terminal = env::var_os("LC_TERMINAL");
@@ -67,392 +1024,282 @@ fn build_picker() -> Picker {
     }
 
     match advertised {
-        // The terminal advertised a real graphics protocol (Kitty/Sixel/iTerm2) — use it.
+        // The terminal advertised a real graphics protocol — use it.
         Ok(p) if p.protocol_type() != ProtocolType::Halfblocks => p,
-        // Otherwise fall back to the env-guess query (e.g. a genuine iTerm2), and if even
-        // that fails (timeout / no capabilities) use a default rather than panicking.
+        // Otherwise fall back to the env-guess query (e.g. a genuine iTerm2), and
+        // if even that fails (timeout / no capabilities) use a default rather
+        // than panicking.
         _ => {
             Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20)))
         }
     }
 }
 
-/// Largest integer source-scale whose upscaled 160×144 frame still covers the
-/// on-screen game area, so `Resize::Fit` downsamples (crisp) instead of upsampling
-/// a tiny source (blurry). Clamped to keep per-frame resizing cheap.
-fn fit_scale(picker: &Picker, game_cols: u16, rows: u16) -> u32 {
-    let (font_w, font_h) = picker.font_size();
-    let area_w = game_cols as u32 * font_w.max(1) as u32;
-    let area_h = rows as u32 * font_h.max(1) as u32;
-    let by_w = area_w.div_ceil(160);
-    let by_h = area_h.div_ceil(144);
-    by_w.max(by_h).clamp(1, 5)
+fn protocol_from_str(s: &str) -> Option<ProtocolType> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "kitty" => Some(ProtocolType::Kitty),
+        "sixel" => Some(ProtocolType::Sixel),
+        "iterm2" | "iterm" => Some(ProtocolType::Iterm2),
+        "halfblocks" | "blocks" | "ascii" => Some(ProtocolType::Halfblocks),
+        _ => None,
+    }
 }
 
-pub fn run(gameboy: Gameboy) -> Result<(), Box<dyn Error>> {
-    if let Ok(false) = ratatui::crossterm::terminal::supports_keyboard_enhancement() {
-        return Err(
-            "the terminal reports no support for the kitty keyboard protocol, which the \
-             terminal frontend needs for key input. This is usually the protocol being \
-             disabled in the terminal's config rather than truly missing — e.g. in WezTerm \
-             set `enable_kitty_keyboard = true`. Terminals known to support it: Kitty, \
-             WezTerm (with that setting), Ghostty, foot. Otherwise use the desktop frontend: \
-             `cargo run --example desktop -- <path-to-rom.gb>`."
-                .into(),
-        );
+fn protocol_name(p: ProtocolType) -> &'static str {
+    match p {
+        ProtocolType::Kitty => "kitty",
+        ProtocolType::Sixel => "sixel",
+        ProtocolType::Iterm2 => "iterm2",
+        ProtocolType::Halfblocks => "halfblocks",
     }
+}
 
-    // Initialize audio for the terminal frontend too (the desktop path does the same in
-    // render_desktop). Requires the `audio` feature; degrades gracefully with no device.
-    // `_audio_stream` must live for the whole run — dropping it stops the sound.
-    #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
-    let mut gameboy = gameboy;
-    #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
-    let _audio_stream = match crate::sound::cpal_audio::CpalPlayer::new() {
+/// Map a [`KeypadKey`] to a stable 0..8 index (matches the enum order).
+fn key_index(k: KeypadKey) -> usize {
+    match k {
+        KeypadKey::Right => 0,
+        KeypadKey::Left => 1,
+        KeypadKey::Up => 2,
+        KeypadKey::Down => 3,
+        KeypadKey::A => 4,
+        KeypadKey::B => 5,
+        KeypadKey::Select => 6,
+        KeypadKey::Start => 7,
+    }
+}
+
+fn key_from_index(i: usize) -> KeypadKey {
+    match i {
+        0 => KeypadKey::Right,
+        1 => KeypadKey::Left,
+        2 => KeypadKey::Up,
+        3 => KeypadKey::Down,
+        4 => KeypadKey::A,
+        5 => KeypadKey::B,
+        6 => KeypadKey::Select,
+        _ => KeypadKey::Start,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ROM loading + framebuffer conversion
+// ---------------------------------------------------------------------------
+
+/// What keeps the game's host-audio alive. The concrete cpal stream when built
+/// with `--features audio`, otherwise a zero-sized `()`.
+#[cfg(feature = "audio")]
+type AudioHold = Option<cpal::Stream>;
+#[cfg(not(feature = "audio"))]
+type AudioHold = ();
+
+/// Wire host audio into `gb`, returning the stream to keep alive. Feature-gated
+/// (cpal pulls in ALSA) and graceful when no output device is available. Mirror
+/// of `Gameboy::render_desktop`'s audio init, but per-session so it follows the
+/// active game across in-app ROM switches. Deliberately silent (no `eprintln`)
+/// because we are inside the alternate screen — a stray line would corrupt it.
+#[cfg(feature = "audio")]
+fn init_audio(gb: &mut Gameboy) -> AudioHold {
+    match crate::sound::cpal_audio::CpalPlayer::new() {
         Some((player, stream)) => {
-            gameboy.enable_audio(Box::new(player));
+            gb.enable_audio(Box::new(player));
             Some(stream)
         }
-        None => {
-            eprintln!("audio: no output device available; continuing without sound");
-            None
-        }
-    };
-    #[cfg(any(target_arch = "wasm32", not(feature = "audio")))]
-    let _audio_stream: Option<()> = None;
-
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic| {
-        disable_raw_mode().unwrap();
-        ratatui::crossterm::execute!(io::stdout(), LeaveAlternateScreen).unwrap();
-        original_hook(panic);
-    }));
-
-    // setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    execute!(
-        stdout,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::all())
-    )?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let app = App::new(&mut terminal, &gameboy);
-
-    // run app
-    let res = run_app(&mut terminal, app, Arc::new(Mutex::new(gameboy)));
-
-    // restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        PopKeyboardEnhancementFlags
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{err:?}");
-    }
-
-    Ok(())
-}
-
-fn run_app<B: Backend>(
-    terminal: &mut Terminal<B>,
-    mut app: App,
-    gameboy: Arc<Mutex<Gameboy>>,
-) -> io::Result<()> {
-    let mut last_tick = Instant::now();
-    let cloned_gameboy = gameboy.clone();
-
-    // Open at the largest scale that fits the current terminal, not a fixed 1x, so the
-    // picture is usefully sized from the start. `o` cycles 1..=max_scale.
-    let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
-    let game_cols = cols.saturating_sub(SIDEBAR_WIDTH);
-    let max_scale = fit_scale(&app.picker, game_cols, rows);
-    let scale = Arc::new(AtomicU32::new(max_scale));
-    let scale_me = scale.clone();
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_me = stop.clone();
-    let change_protocol = Arc::new(AtomicBool::new(false));
-    let change_protocol_me = change_protocol.clone();
-
-    std::thread::spawn(move || {
-        loop {
-            // let timeout = app
-            //     .tick_rate
-            //     .checked_sub(last_tick.elapsed())
-            //     .unwrap_or_else(|| Duration::from_secs(0));
-            let timeout = Duration::from_millis(5);
-            if ratatui::crossterm::event::poll(timeout).is_ok() {
-                if let Ok(Event::Key(key)) = event::read() {
-                    let is_pressed = key.kind == KeyEventKind::Press;
-
-                    if let Ok(mut gameboy) = cloned_gameboy.lock() {
-                        if let KeyCode::Char(c) = key.code {
-                            match (c, is_pressed) {
-                                ('q', true) => {
-                                    stop.store(true, Ordering::Relaxed);
-                                }
-                                ('i', true) => {
-                                    change_protocol.store(true, Ordering::Relaxed);
-                                }
-                                ('o', true) => {
-                                    let s = scale.load(Ordering::Relaxed);
-                                    if s >= max_scale {
-                                        scale.store(1, Ordering::Relaxed);
-                                    } else {
-                                        scale.store(s + 1, Ordering::Relaxed);
-                                    }
-                                }
-                                // ('H', true) => {
-                                //     if self.split_percent >= 10 {
-                                //         self.split_percent -= 10;
-                                //     }
-                                // }
-                                // ('L', true) => {
-                                //     if self.split_percent <= 90 {
-                                //         self.split_percent += 10;
-                                //     }
-                                // }
-                                ('a', true) | ('A', true) => {
-                                    gameboy.keydown(KeypadKey::A);
-                                }
-                                ('b', true) | ('B', true) => {
-                                    gameboy.keydown(KeypadKey::B);
-                                }
-                                ('z', true) | ('Z', true) => {
-                                    gameboy.keydown(KeypadKey::Select);
-                                }
-                                ('x', true) | ('X', true) => {
-                                    gameboy.keydown(KeypadKey::Start);
-                                }
-                                ('a', false) | ('A', false) => {
-                                    gameboy.keyup(KeypadKey::A);
-                                }
-                                ('b', false) | ('B', false) => {
-                                    gameboy.keyup(KeypadKey::B);
-                                }
-                                ('z', false) | ('Z', false) => {
-                                    gameboy.keyup(KeypadKey::Select);
-                                }
-                                ('x', false) | ('X', false) => {
-                                    gameboy.keyup(KeypadKey::Start);
-                                }
-                                _ => {}
-                            }
-                        } else if let KeyCode::Up = key.code {
-                            if is_pressed {
-                                gameboy.keydown(KeypadKey::Up);
-                            } else {
-                                gameboy.keyup(KeypadKey::Up);
-                            }
-                        } else if let KeyCode::Down = key.code {
-                            if is_pressed {
-                                gameboy.keydown(KeypadKey::Down);
-                            } else {
-                                gameboy.keyup(KeypadKey::Down);
-                            }
-                        } else if let KeyCode::Left = key.code {
-                            if is_pressed {
-                                gameboy.keydown(KeypadKey::Left);
-                            } else {
-                                gameboy.keyup(KeypadKey::Left);
-                            }
-                        } else if let KeyCode::Right = key.code {
-                            if is_pressed {
-                                gameboy.keydown(KeypadKey::Right);
-                            } else {
-                                gameboy.keyup(KeypadKey::Right);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    loop {
-        if change_protocol_me.load(Ordering::Relaxed) {
-            app.change_image_protocol();
-            change_protocol_me.store(false, Ordering::Relaxed);
-        }
-
-        terminal.draw(|f| ui(f, &mut app))?;
-
-        if last_tick.elapsed() >= app.tick_rate {
-            if let Ok(mut gameboy) = gameboy.lock() {
-                gameboy.frame();
-                app.on_tick(&mut gameboy, scale_me.load(Ordering::Relaxed));
-            }
-            last_tick = Instant::now();
-        }
-        if stop_me.load(Ordering::Relaxed) {
-            return Ok(());
-        }
+        None => None,
     }
 }
+#[cfg(not(feature = "audio"))]
+fn init_audio(_gb: &mut Gameboy) -> AudioHold {}
 
-struct App {
-    tick_rate: Duration,
-    // split_percent: u16,
-    picker: Picker,
-    image_source: DynamicImage,
-    image_static: Protocol,
-    image_fit_state: StatefulProtocol,
+/// Build a [`Gameboy`], its [`RomEntry`] and its audio hold from a ROM on disk.
+///
+/// NOTE: always pass `Some(path)` to `Gameboy::new` so the MBC is detected from
+/// the header — with `None`, `get_mbc` forces MBC3 and mis-drives other carts.
+// `audio` is `()` without the audio feature; that unit binding is intentional.
+#[cfg_attr(not(feature = "audio"), allow(clippy::let_unit_value))]
+fn load_session(path: &Path) -> Result<(Gameboy, RomEntry, AudioHold), String> {
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    if data.len() < 0x150 {
+        return Err("file is too small to be a Game Boy ROM".to_string());
+    }
+    let entry = romlib::entry_from_bytes(path, &data);
+    let mut gb = Gameboy::new(data, Some(path.to_path_buf()));
+    let audio = init_audio(&mut gb);
+    Ok((gb, entry, audio))
 }
 
-fn size() -> Rect {
-    Rect::new(0, 0, 30, 16)
-}
-
-#[inline]
-fn get_image(gameboy: &Gameboy, scale: u32) -> image::DynamicImage {
-    // let harvest_moon = "/Users/rapha/harvest-moon.png";
-    // image::io::Reader::open(harvest_moon).unwrap().decode().unwrap()
-
-    let width = gameboy.width;
-    let height = gameboy.height;
-
-    // Get the raw image data as a vector
-    let input: &[u8] = gameboy.image();
-
-    // Allocate a new buffer for the RGB image, 3 bytes per pixel
-    let mut output_data = vec![0u8; width as usize * height as usize * 3];
+/// Convert the emulator's RGBA framebuffer into an RGB [`DynamicImage`],
+/// applying the configured palette to greyscale (DMG) output.
+fn framebuffer_image(gb: &Gameboy, palette: Palette) -> DynamicImage {
+    let width = gb.width;
+    let height = gb.height;
+    let input = gb.image();
+    let mut out = vec![0u8; width as usize * height as usize * 3];
 
     let mut i = 0;
-    // Iterate through 4-byte chunks of the image data (RGBA bytes)
     for chunk in input.chunks(4) {
-        // ... and copy each of them to output, leaving out the A byte
-        output_data[i..i + 3].copy_from_slice(&chunk[0..3]);
+        let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
+        // DMG output is greyscale (r==g==b); recolour those via the palette.
+        // Colour (CGB) pixels pass through untouched.
+        if r == g && g == b {
+            let px = palette.map(r);
+            out[i..i + 3].copy_from_slice(&px);
+        } else {
+            out[i] = r;
+            out[i + 1] = g;
+            out[i + 2] = b;
+        }
         i += 3;
     }
 
-    let mut buffer = image::ImageBuffer::from_raw(width, height, output_data).unwrap();
-    if scale > 1 {
-        buffer = image::imageops::resize(
-            &buffer,
-            width * scale,
-            height * scale,
-            image::imageops::FilterType::Nearest,
-        );
-    }
-    image::DynamicImage::ImageRgb8(buffer)
+    let buffer = image::ImageBuffer::from_raw(width, height, out)
+        .expect("framebuffer size matches width*height*3");
+    DynamicImage::ImageRgb8(buffer)
 }
 
-impl App {
-    pub fn new<B: Backend>(_: &mut Terminal<B>, gameboy: &Gameboy) -> Self {
-        let image_source = get_image(gameboy, 1);
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
-        let mut picker = build_picker();
-        picker.set_background_color([0, 0, 0, 0]);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let image_static = picker
-            .new_protocol(image_source.clone(), size(), Resize::Fit(None))
-            .unwrap();
-        let image_fit_state = picker.new_resize_protocol(image_source.clone());
+    #[test]
+    fn fit_uses_whole_area_and_centres() {
+        // 100x40 cells, square 8x16px font. Image 160x144.
+        let (rect, scale) = fit_metrics(Rect::new(0, 0, 100, 40), 160, 144, 8, 16);
+        // Must stay within the area.
+        assert!(rect.width <= 100 && rect.height <= 40);
+        // Must be centred: equal margins on each axis (±1 for rounding).
+        let left = rect.x;
+        let right = 100 - (rect.x + rect.width);
+        assert!((left as i32 - right as i32).abs() <= 1, "not h-centred");
+        let top = rect.y;
+        let bottom = 40 - (rect.y + rect.height);
+        assert!((top as i32 - bottom as i32).abs() <= 1, "not v-centred");
+        assert!(scale > 1.0, "should upscale into a large area");
+    }
 
-        Self {
-            tick_rate: Duration::from_millis(5),
-            // split_percent: 40,
-            picker,
-            image_source,
+    #[test]
+    fn fit_scales_up_with_bigger_terminal() {
+        let small = fit_metrics(Rect::new(0, 0, 40, 20), 160, 144, 8, 16).1;
+        let big = fit_metrics(Rect::new(0, 0, 200, 80), 160, 144, 8, 16).1;
+        // No artificial cap: a bigger window yields a bigger picture.
+        assert!(big > small, "bigger terminal must give bigger scale");
+    }
 
-            image_static,
-            image_fit_state,
+    #[test]
+    fn fit_no_cap_can_exceed_four() {
+        // The old code capped scale at 4. A large window must beat that.
+        let (_r, scale) = fit_metrics(Rect::new(0, 0, 400, 200), 160, 144, 10, 20);
+        assert!(scale > 4.0, "scale {scale} should be uncapped");
+    }
+
+    #[test]
+    fn fit_gives_many_smooth_tiers_not_three() {
+        // The captain's complaint was "three tiers". Sweep terminal height with
+        // ample width (the normal, height-limited case) and count distinct
+        // effective scales. Height-limited fit yields ~one tier per row.
+        let mut scales = std::collections::BTreeSet::new();
+        let mut prev = 0.0f32;
+        for rows in 18..=70u16 {
+            let (_r, s) = fit_metrics(Rect::new(0, 0, 200, rows), 160, 144, 8, 16);
+            // Monotonic non-decreasing as the window grows.
+            assert!(s + 1e-3 >= prev, "scale must not shrink as window grows");
+            prev = s;
+            scales.insert((s * 100.0) as u32);
+        }
+        assert!(
+            scales.len() >= 20,
+            "expected many smooth tiers, got {}",
+            scales.len()
+        );
+    }
+
+    #[test]
+    fn fit_preserves_aspect_across_sizes() {
+        // The on-screen picture must keep the DMG's 10:9 (~1.111) aspect at
+        // every size, accounting for the non-square cell (8x16 here).
+        for rows in [18u16, 24, 30, 45, 60, 78] {
+            let (r, _s) = fit_metrics(Rect::new(0, 0, 200, rows), 160, 144, 8, 16);
+            let px_w = r.width as f32 * 8.0;
+            let px_h = r.height as f32 * 16.0;
+            let aspect = px_w / px_h;
+            assert!(
+                (aspect - 160.0 / 144.0).abs() < 0.05,
+                "aspect {aspect} drifted from 1.111 at {rows} rows"
+            );
         }
     }
 
-    #[inline]
-    fn reset_images(&mut self) {
-        self.image_static = self
-            .picker
-            .new_protocol(self.image_source.clone(), size(), Resize::Fit(None))
-            .unwrap();
-        self.image_fit_state = self.picker.new_resize_protocol(self.image_source.clone());
+    #[test]
+    fn fit_handles_degenerate_area() {
+        let (rect, scale) = fit_metrics(Rect::new(0, 0, 0, 0), 160, 144, 8, 16);
+        assert_eq!(scale, 1.0);
+        assert_eq!(rect, Rect::new(0, 0, 0, 0));
     }
 
-    #[inline]
-    pub fn change_image_protocol(&mut self) {
-        self.picker
-            .set_protocol_type(self.picker.protocol_type().next());
-        self.reset_images();
+    #[test]
+    fn fit_tiny_area_stays_in_bounds() {
+        let (rect, _s) = fit_metrics(Rect::new(5, 5, 3, 2), 160, 144, 8, 16);
+        assert!(rect.width >= 1 && rect.height >= 1);
+        assert!(rect.x + rect.width <= 5 + 3);
+        assert!(rect.y + rect.height <= 5 + 2);
     }
 
-    #[inline]
-    pub fn on_tick(&mut self, gameboy: &mut Gameboy, scale: u32) {
-        self.image_source = get_image(gameboy, scale);
-        self.image_static = self
-            .picker
-            .new_protocol(self.image_source.clone(), size(), Resize::Fit(None))
-            .unwrap();
-        self.image_fit_state = self.picker.new_resize_protocol(self.image_source.clone());
+    #[test]
+    fn popup_is_centred_and_bounded() {
+        let a = Rect::new(0, 0, 80, 40);
+        let p = popup_area(a, 50, 50);
+        assert_eq!(p.width, 40);
+        assert_eq!(p.height, 20);
+        assert_eq!(p.x, 20);
+        assert_eq!(p.y, 10);
     }
 
-    #[inline]
-    fn render_resized_image(&mut self, f: &mut Frame<'_>, resize: Resize, area: Rect) {
-        let title = format!(
-            "Gameboy on {} terminal",
-            env::var("TERM").unwrap_or("unknown".to_string())
-        );
-        let (state, name, _color) = (&mut self.image_fit_state, title, Color::Black);
-        let block = block(&name);
-        let inner_area = block.inner(area);
-        let image = StatefulImage::default().resize(resize);
-        f.render_stateful_widget(image, inner_area, state);
-        f.render_widget(block, area);
+    #[test]
+    fn popup_clamped_to_small_screen() {
+        let a = Rect::new(0, 0, 8, 4);
+        let p = popup_area(a, 90, 90);
+        assert!(p.width <= 8 && p.height <= 4);
     }
-}
 
-#[inline]
-fn ui(f: &mut Frame<'_>, app: &mut App) {
-    let outer_block = Block::default();
+    #[test]
+    fn recent_ordering_puts_recents_first_and_flags() {
+        use romlib::entry_from_bytes;
+        let mut rom = vec![0u8; 0x150];
+        rom[0x147] = 0x00;
+        let a = entry_from_bytes(Path::new("/r/a.gb"), &rom);
+        let b = entry_from_bytes(Path::new("/r/b.gb"), &rom);
+        let c = entry_from_bytes(Path::new("/r/c.gb"), &rom);
+        // Recent = [c, a]; b is not recent.
+        let recents = vec![PathBuf::from("/r/c.gb"), PathBuf::from("/r/a.gb")];
+        let (ordered, flags) =
+            order_with_recent(vec![a.clone(), b.clone(), c.clone()], &recents);
+        assert_eq!(ordered[0].path, c.path);
+        assert_eq!(ordered[1].path, a.path);
+        assert_eq!(ordered[2].path, b.path);
+        assert_eq!(flags, vec![true, true, false]);
+    }
 
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            [
-                // Give the game everything except a fixed-width controls sidebar, so the
-                // picture is as large as the terminal allows instead of a cramped 40%.
-                Constraint::Min(0),
-                Constraint::Length(SIDEBAR_WIDTH),
-            ]
-            .as_ref(),
-        )
-        .split(outer_block.inner(f.area()));
-    f.render_widget(outer_block, f.area());
+    #[test]
+    fn truncate_adds_ellipsis() {
+        assert_eq!(truncate("SHORT", 20), "SHORT");
+        assert_eq!(truncate("A VERY LONG GAME TITLE", 6), "A VER…");
+    }
 
-    app.render_resized_image(f, Resize::Fit(None), chunks[0]);
+    #[test]
+    fn protocol_string_roundtrip() {
+        assert_eq!(protocol_from_str("kitty"), Some(ProtocolType::Kitty));
+        assert_eq!(protocol_from_str("ITERM"), Some(ProtocolType::Iterm2));
+        assert_eq!(protocol_from_str("nonsense"), None);
+        assert_eq!(protocol_name(ProtocolType::Sixel), "sixel");
+    }
 
-    let block_right_bottom = block("Controls");
-    let area = block_right_bottom.inner(chunks[1]);
-    f.render_widget(
-        paragraph(vec![
-            Line::from("Controls:"),
-            Line::from("arrows: movement"),
-            Line::from("Key a/A: A"),
-            Line::from("Key b/B: B"),
-            Line::from("Key z/Z: select"),
-            Line::from("Key x/X: start"),
-            // Line::from("H/L: resize splits"),
-            Line::from("o: scale image"),
-            Line::from(format!(
-                "i: cycle image protocols (current: {:?})",
-                app.picker.protocol_type()
-            )),
-        ]),
-        area,
-    );
-}
-
-fn paragraph<'a, T: Into<Text<'a>>>(str: T) -> Paragraph<'a> {
-    Paragraph::new(str).wrap(Wrap { trim: true })
-}
-
-fn block(name: &str) -> Block<'_> {
-    Block::default().borders(Borders::ALL).title(name)
+    #[test]
+    fn key_index_roundtrips() {
+        for i in 0..8usize {
+            assert_eq!(key_index(key_from_index(i)), i);
+        }
+    }
 }

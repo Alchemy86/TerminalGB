@@ -134,5 +134,43 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   64-max channels (`sound.rs`, `0xFF11|0xFF16|0xFF20`) does `self.max - (v as u16)` without
   masking the duty bits, so a duty-carrying write (e.g. NR11=0x80) panics in debug / wraps in
   release. Mask `v & 0x3F` if ever touched; re-bless `testharness/baseline.txt` if hashes move.
+## Terminal frontend (TUI)
+
+- The terminal frontend is a proper `ratatui` TUI split across three files in `src/screen/`:
+  `config.rs` (config + recent-list, hand-rolled `key = value` parser — **no config crate**),
+  `romlib.rs` (cartridge-header title/MBC reading, directory scan, fuzzy filter — pure,
+  file-system-only, heavily unit-tested), and `tui.rs` (the App: picker screen + game screen,
+  one single-threaded event loop, help/quit overlays, centred display).
+- **Entry point is `gameboy::run_terminal(Option<PathBuf>)`** — `Some(path)` launches straight
+  into the game, `None` opens the ROM picker. The TUI **owns ROM loading** (so the picker and
+  in-app ROM switching can build `Gameboy`s); the old `render(Terminal)` on a pre-built
+  `Gameboy` is a legacy shim that just opens the picker. `load_session()` in `tui.rs` is the
+  single place a `Gameboy` is constructed; it also wires **per-session audio** there
+  (`init_audio`, feature-gated on `audio`, silent+graceful with no device) so sound follows
+  the active game across in-app ROM switches — the cpal stream lives in `Session` for the
+  session's lifetime. Non-kitty-keyboard terminals **fail loudly** (clear error, exit 1).
+  Protocol selection uses `build_picker()` (prefer the advertised protocol, e.g. Kitty over an
+  env-guessed iTerm2; never panic on query timeout), then a config `protocol` may override.
+  Frame pacing targets **59.7275 Hz** (`FRAME_TIME = 16_743µs`), not a rounded 60.
+- **Scaling gotcha (the "limited to small" bug):** `ratatui_image::Resize::Fit` **refuses to
+  upscale** an image smaller than the area (it caps the target at the source size), so a
+  160×144 source always rendered tiny; the old code faked enlargement with a capped integer
+  pre-scale (`MAX_SCALE=4`) → the coarse "3–4 tiers". Use **`Resize::Scale`**, which upscales
+  to fill at pixel resolution (nearest-neighbour, aspect-preserved). The image is drawn into a
+  centred rect from `fit_metrics()` (uncapped, aspect-correct for non-square cells, one tier
+  per terminal row); it re-fits on resize with no keypress. The display is **borderless** so
+  height (the binding constraint for a 10:9 image in tall cells) isn't wasted; status/controls
+  are the framed panels.
+- Config lives at `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml`; recents at
+  `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`. Missing config = defaults, never an
+  error. `rom_dir` defaults to `~/roms`.
+- The picker opens with the most-recently-played ROM pre-selected (recents sorted first), so
+  **Enter loads the last game**; `.` resumes the last-played ROM directly even if it lives
+  outside `rom_dir`.
+- **ALSA is only needed with `--features audio`** (default builds/tests need none). For that
+  feature without system dev headers, a shim exists at `~/.local/lib/alsashim/libasound.so` +
+  `~/.local/lib/pkgconfig/alsa.pc`; build with `PKG_CONFIG_PATH=~/.local/lib/pkgconfig
+  LIBRARY_PATH=~/.local/lib/alsashim LD_LIBRARY_PATH=~/.local/lib/alsashim cargo build
+  --features audio`.
 
 - Add durable project-specific notes here as they are discovered through real work.
