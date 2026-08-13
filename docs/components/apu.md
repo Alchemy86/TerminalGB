@@ -105,9 +105,23 @@ output stream. The desktop frontend wires it up in `render_desktop`
   ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
   `0xFF` and is silent. The terminal frontend also runs without audio.
 - **The subtle length-counter edge case is NOT modelled.** Only "trigger reloads length
-  when the counter is zero" is handled ([`sound.rs:117`](../../src/sound.rs)); the
-  hardware "extra length clock when enabling length in the first half of a frame-sequencer
-  period" is absent — a classic `cgb_sound`/`dmg_sound` failure.
+  when the counter is zero" is handled; the hardware "extra length clock when enabling
+  length in the first half of a frame-sequencer period" is absent — a classic
+  `cgb_sound`/`dmg_sound` failure.
+- **Register accuracy is measured, and it is low: Blargg `dmg_sound` passes 1 of 12
+  subtests** (`06-overflow on trigger`), per the offline audio harness
+  ([`testharness/audiocapture.rs`](../../testharness/audiocapture.rs)), which reads the
+  suite's memory-mapped verdict at `$A000`. The failures are read-back masks and
+  trigger/length/sweep/wave edge cases — playback *quality* is unaffected (see
+  [docs/audio.md](../audio.md) §6/§10).
+- **NRx1 length writes mask the duty bits** (`v & 0x3F`) — a duty-carrying write like
+  `NR11=0x80` used to underflow (debug-mode panic).
+- **NR52 power-off now actually zeroes NR10–NR51** and the channel-status bits; the old
+  clear-loop ran after `on = false` and was silently a no-op.
+- **A powered-off APU keeps emitting (silent) samples at the full rate** instead of
+  stalling the stream — hardware keeps driving the DACs, and a stalled stream starves
+  the host audio queue and breaks the samples==cycles×rate/4194304 invariant the
+  harness checks.
 - **DAC-disable interplay** is partially handled (clearing the upper 5 bits of `NRx2`
   disables the channel, [`sound.rs:807`](../../src/sound.rs)).
 - **Cosmetic:** two `unused variable` warnings in release builds at
@@ -132,8 +146,13 @@ output stream. The desktop frontend wires it up in `render_desktop`
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: none.** (Audio is also hard to unit-test without a headless
-> `AudioPlayer` capture stub — worth building.)
+> **Coverage today: the headless capture harness exists.**
+> [`testharness/audiocapture.rs`](../../testharness/audiocapture.rs) records every
+> sample the APU produces with a device-free `AudioPlayer`, writes WAVs, analyses
+> pitch/level/continuity/rate, runs Blargg `dmg_sound` and reads its `$A000`
+> verdict (currently **1/12 pass** — the baseline to beat), and pins a
+> determinism hash in `testharness/audio_baseline.txt`. `src/sound.rs` unit tests
+> additionally cover pitch, rate-honesty, and the playback queue policy.
 
 1. **Frame-sequencer rates.** Over one second the length counter steps 256×, the envelope
    64×, and channel-1 sweep 128×. *(Not covered.)*
@@ -164,6 +183,9 @@ output stream. The desktop frontend wires it up in `render_desktop`
 | **Mooneye `acceptance/` (no dedicated APU dir)** | — | Mooneye focuses on timing/PPU/CPU; Blargg is the APU authority. |
 | **SameBoy APU tests** | Reference-emulator APU behaviour | Useful cross-check but require SameBoy tooling. |
 
-The declared `retrio/gb-test-roms` submodule includes the Blargg sound suites but is
-**uninitialised**. Audio pass/fail is reported over the serial port like other Blargg
-tests — see [Serial](serial.md) and [testing](../testing.md).
+The `retrio/gb-test-roms` submodule (initialised; wired into CI) includes the Blargg
+sound suites. Unlike the CPU suites, `dmg_sound` reports through **cartridge RAM**, not
+serial: `$A000` holds the status (`$80` = running, `0` = pass), `$A001–$A003` the
+signature `$DE $B0 $61`, and a result string follows at `$A004` — this is how
+[`testharness/audiocapture.rs`](../../testharness/audiocapture.rs) reads the verdict
+headlessly. See [testing](../testing.md).

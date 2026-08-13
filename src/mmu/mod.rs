@@ -633,4 +633,13 @@ impl<'a> MemoryManagementUnit<'a> {
         }
         self.sound.as_mut().unwrap().set_player(player);
     }
+
+    /// Tell the audio player whether the frontend is running faster than real
+    /// time (fast-forward). See `AudioPlayer::set_fast_forward`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_audio_fast_forward(&mut self, enabled: bool) {
+        if let Some(ref mut sound) = self.sound {
+            sound.set_fast_forward(enabled);
+        }
+    }
 }

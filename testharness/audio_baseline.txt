@@ -1,0 +1,10 @@
+# Audio-capture baseline: FNV-1a64 of the 16-bit interleaved PCM stream.
+# A changed hash means the emulator now produces different samples for the
+# same ROM — inspect the WAV in target/testrom-artifacts/audio/ and re-bless
+# deliberately with:
+#
+#   UPDATE_AUDIO_BASELINE=1 cargo test --release --test audiocapture
+
+tone440 = HASH:67cc5f8307f67805 SAMPLES:218000
+blargg/dmg_sound-01-registers = HASH:8dae065428bcf125 SAMPLES:220000
+blargg/dmg_sound = HASH:b8cc7b620f71bbfd SAMPLES:1622000

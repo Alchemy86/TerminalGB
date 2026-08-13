@@ -105,10 +105,13 @@ const NUM_SLOTS: u32 = 3;
 /// burst of frames per loop iteration so input/redraw stay responsive.
 ///
 /// Audio interaction: the APU emits at a fixed sample rate, so running faster
-/// than real time produces more samples than the host drains — the cpal queue
-/// ([`init_audio`], bounded to ~180 ms by the audio crew) discards the oldest,
-/// i.e. **fast-forward drops samples rather than pitch-shifting**; slow-motion
-/// under-runs into brief silence. No resampling, by choice.
+/// than real time produces more samples than the host drains. At 1x the cpal
+/// queue paces the emulator against the audio clock (high-watermark *wait*),
+/// so every non-1x rung flips the player to drop-on-overflow via
+/// [`Gameboy::set_audio_fast_forward`] — i.e. **fast-forward drops samples
+/// rather than pitch-shifting**; slow-motion drains the queue, which holds the
+/// last sample with a fade and re-primes (no hard silence steps). No
+/// resampling, by choice. See docs/audio.md §4.
 struct SpeedLevel {
     label: &'static str,
     mult_num: u32,
@@ -413,9 +416,12 @@ impl App {
     /// picker and show why.
     fn start_game(&mut self, path: &Path) {
         match load_session(path) {
-            Ok((gb, entry, audio)) => {
+            Ok((mut gb, entry, audio)) => {
                 self.recent.record(path);
                 self.recent.save();
+                // Carry the current speed rung's audio contract into the new
+                // session (see bump_speed): non-1x must drop, not wait.
+                gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
                 self.session = Some(Session {
                     gb,
                     entry,
@@ -455,7 +461,16 @@ impl App {
         &mut self,
         terminal: &mut Terminal<B>,
     ) -> Result<(), Box<dyn Error>> {
-        let mut last_tick = Instant::now();
+        // Deadline accumulator, NOT `last_tick = Instant::now()` after each
+        // frame. Resetting to `now` adds the step/draw/poll overhead of every
+        // loop iteration to the frame period, so emulation runs several
+        // percent slow on average — and audio sample production is slaved to
+        // emulation speed, so a slow producer drains the audio queue and
+        // underruns ("blocky" sound). Advancing the deadline by exactly
+        // FRAME_TIME keeps the long-run average at 59.7275 Hz; a bounded
+        // catch-up (extra emulated frames, cheap next to terminal drawing)
+        // absorbs slow draws and late wakeups.
+        let mut next_frame = Instant::now() + FRAME_TIME;
         let mut dirty = true;
 
         while !self.should_quit {
@@ -467,17 +482,42 @@ impl App {
                     .as_ref()
                     .map(|s| !s.paused && self.overlay == Overlay::None)
                     .unwrap_or(false);
-                if running {
+                if !running {
+                    // Paused / overlay: don't accumulate frame debt.
+                    next_frame = Instant::now() + FRAME_TIME;
+                } else {
                     let level = &SPEED_LADDER[self.speed];
                     if level.uncapped {
+                        // MAX is deliberately unpaced: run a bounded burst,
+                        // and don't carry frame debt into the capped rungs.
                         for _ in 0..level.burst {
                             self.step_frame();
                         }
-                        last_tick = Instant::now();
+                        next_frame = Instant::now() + FRAME_TIME;
                         dirty = true;
-                    } else if last_tick.elapsed() >= level.interval() {
+                    } else if Instant::now() >= next_frame {
+                        // Deadline accumulator: advance by the rung's period
+                        // so the long-run average rate is exact. Resetting to
+                        // `now` instead would add the step/draw/poll overhead
+                        // of every loop iteration to the period — emulation
+                        // runs slow, audio production (slaved to it) starves
+                        // the queue, and playback goes "blocky". Bounded
+                        // catch-up absorbs slow draws; resync when hopelessly
+                        // behind (stall, suspend) rather than fast-forwarding.
                         self.step_frame();
-                        last_tick = Instant::now();
+                        next_frame += level.interval();
+                        let now = Instant::now();
+                        if now > next_frame {
+                            let mut extra = 0;
+                            while now > next_frame && extra < 3 {
+                                self.step_frame();
+                                next_frame += level.interval();
+                                extra += 1;
+                            }
+                            if now > next_frame {
+                                next_frame = now + level.interval();
+                            }
+                        }
                         dirty = true;
                     }
                 }
@@ -811,6 +851,14 @@ impl App {
         } else {
             self.speed.saturating_sub(1)
         };
+        // The audio player paces the emulator against the audio clock at 1x
+        // (high-watermark wait). Any non-1x rung must switch it to
+        // drop-on-overflow, or the wait would clamp fast-forward back to
+        // real time (and slow-motion is fine either way — the queue just
+        // drains and re-primes).
+        if let Some(s) = self.session.as_mut() {
+            s.gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
+        }
         self.set_toast(format!("Speed {}", SPEED_LADDER[self.speed].label));
     }
 

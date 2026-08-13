@@ -121,19 +121,34 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   **59.7275 Hz = 16.7427 ms/frame**. `render_desktop` paced at **16 ms (62.5 fps, +4.64 %)`,
   so the emulator — and thus APU sample production — ran 4.64 % fast: the queue overflowed and
   dropped samples (rough) while the game ran fast (tempo). Fixed to `from_micros(16_743)`.
-  **The terminal frontend (`src/screen/tui.rs`, another crew) has the same bug: a 5 ms tick =
-  ~200 fps target, uncapped.** Same fix applies there (gate `frame()` on 16.743 ms).
+- **"Blocky and broken" was the pacing again, plus queue policy.** Both frontends reset their
+  frame timer with `last = Instant::now()` *after* stepping — the period silently included
+  draw/poll overhead, so the emulator ran a few % **slow**, the audio queue drained, and each
+  underrun stepped to 0.0 (a click) then played the next 45 ms block: machine-gun gaps. Both
+  loops now use a **deadline accumulator** (`next += FRAME_TIME`, bounded catch-up) — keep it
+  that way; never reset a pacing timer to `now()`. The queue is `sample_queue::SampleQueue`
+  (`src/sound.rs`): prime to 7000 samples before draining, hold-and-fade + re-prime on
+  underrun, producer *waits* at a 12000-sample high watermark (audio clock = master clock),
+  drop only when the callback counter proves the consumer stalled. Sizes came from the
+  simulation in `mod queue_tests` + a real 2-min soak (`examples/audio_soak.rs`,
+  `GB_AUDIO_STATS=1`): zero underruns/drops, depth 5731–8717, residual drift −0.013 %
+  (≈ one smooth ~160 ms re-prime per ~20 min; full DRC is the documented next step).
 - **cpal negotiation gotcha:** `device.supported_output_configs()` often lists the first `F32`
   range as `ch=1, min=1, max=384000` (mono!). Never break on the first F32 range. Prefer
   `device.default_output_config()` when it's F32 (real channel count + a rate the HW actually
   runs); else scan all F32 ranges preferring span-44100 then max channels. `examples/audio_probe.rs`
   dumps a machine's configs + negotiated rate (`cargo run --features audio --example audio_probe`).
-- **Bound the hand-off queue.** `CpalPlayer`'s `Arc<Mutex<Vec>>` cap governs worst-case latency
-  before samples are dropped; keep it small (~4 output blocks ≈ 180 ms), not 1 s.
-- **Latent bug (not fixed — would touch accuracy baseline):** `LengthCounter::wb` for the
-  64-max channels (`sound.rs`, `0xFF11|0xFF16|0xFF20`) does `self.max - (v as u16)` without
-  masking the duty bits, so a duty-carrying write (e.g. NR11=0x80) panics in debug / wraps in
-  release. Mask `v & 0x3F` if ever touched; re-bless `testharness/baseline.txt` if hashes move.
+- **Offline audio harness:** `cargo test --release --test audiocapture`
+  (`testharness/audiocapture.rs`) captures the APU's sample stream device-free, writes WAVs to
+  `target/testrom-artifacts/audio/`, checks rate/pitch/level/continuity (built-in 440 Hz tone
+  ROM), reads Blargg `dmg_sound`'s memory verdict at `$A000` (**currently 1/12 pass** — the
+  accuracy frontier), and pins an FNV hash in `testharness/audio_baseline.txt`
+  (re-bless: `UPDATE_AUDIO_BASELINE=1`). Any change to `src/sound.rs` synthesis will move
+  these hashes — listen to the WAVs before re-blessing.
+- **APU semantic fixes to preserve:** NRx1 length writes mask duty bits (`v & 0x3F`; NR11=0x80
+  used to panic in debug); NR52 power-off zeroes NR10–NR51 *while still on* (clearing after
+  `on=false` is a no-op because `wb` ignores writes when off); a powered-off APU still emits
+  silence at full sample rate (never stall the stream).
 ## Terminal frontend (TUI)
 
 - The terminal frontend is a proper `ratatui` TUI split across three files in `src/screen/`:

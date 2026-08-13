@@ -136,7 +136,6 @@ impl Gameboy {
 
         let cx = Glcx::new();
         let mut focused = true;
-        let mut last_frame_time = std::time::Instant::now();
         // The DMG refreshes every 70224 CPU cycles at 4.194304 MHz = 59.7275 Hz,
         // i.e. one frame every 16.7427 ms. The old value (16 ms = 62.5 fps) paced
         // the whole emulator ~4.64% fast, which the player hears as the game (and
@@ -145,6 +144,15 @@ impl Gameboy {
         // so the output queue overflows and drops samples periodically. Pacing at
         // the true frame period fixes both — see docs/audio.md.
         let frame_duration = std::time::Duration::from_micros(16_743); // 59.73 FPS (true DMG)
+
+        // Deadline accumulator, NOT `last = Instant::now()` after each frame.
+        // Resetting to `now` adds the draw/scheduling overhead to every period,
+        // so the emulator runs a few percent slow on average — and audio sample
+        // production is slaved to emulation speed, so a slow producer drains
+        // the audio queue and underruns ("blocky" sound). Advancing the
+        // deadline by exactly one period keeps the long-run average at
+        // 59.7275 Hz; a bounded catch-up absorbs late wakeups.
+        let mut next_frame_time = std::time::Instant::now() + frame_duration;
 
         event_loop.run(move |event, _, control_flow| {
             let window = gl_window.window();
@@ -173,15 +181,31 @@ impl Gameboy {
                         process_window(window, &wevent, &mut self, &mut focused)
                 }
                 glutin::event::Event::MainEventsCleared => {
-                    // Only request redraw if enough time has passed
-                    let now = std::time::Instant::now();
-                    if now.duration_since(last_frame_time) >= frame_duration {
+                    // Only request redraw if the frame deadline has passed
+                    if std::time::Instant::now() >= next_frame_time {
                         window.request_redraw();
                     }
                 }
                 glutin::event::Event::RedrawRequested(_) => {
                     if focused {
                         self.frame();
+                        next_frame_time += frame_duration;
+                        // Late (slow draw, OS jitter)? Run extra emulated
+                        // frames — bounded — to hold the average rate; if
+                        // hopelessly behind (unfocus pause, suspend), resync
+                        // instead of fast-forwarding.
+                        let now = std::time::Instant::now();
+                        if now > next_frame_time {
+                            let mut extra = 0;
+                            while now > next_frame_time && extra < 3 {
+                                self.frame();
+                                next_frame_time += frame_duration;
+                                extra += 1;
+                            }
+                            if now > next_frame_time {
+                                next_frame_time = now + frame_duration;
+                            }
+                        }
                         // Physical (device-pixel) window size drives the
                         // integer-scale + letterbox computation in draw().
                         let fb = gl_window.window().inner_size();
@@ -193,11 +217,9 @@ impl Gameboy {
                             self.image(),
                         );
                         gl_window.swap_buffers().unwrap();
-                        last_frame_time = std::time::Instant::now();
                     }
 
                     // Schedule next frame
-                    let next_frame_time = last_frame_time + frame_duration;
                     *control_flow =
                         glutin::event_loop::ControlFlow::WaitUntil(next_frame_time);
                 }
@@ -306,5 +328,13 @@ impl Gameboy {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn enable_audio(&mut self, player: Box<dyn crate::sound::AudioPlayer>) {
         self.cpu.memory.enable_audio(player);
+    }
+
+    /// Frontend hint: emulation is deliberately running faster than real time.
+    /// The audio player then drops overflow instead of pacing the emulator
+    /// against the audio clock (which would clamp fast-forward back to 1x).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_audio_fast_forward(&mut self, enabled: bool) {
+        self.cpu.memory.set_audio_fast_forward(enabled);
     }
 }

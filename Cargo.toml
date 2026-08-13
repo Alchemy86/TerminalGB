@@ -92,3 +92,12 @@ harness = false
 name = "savestate"
 path = "testharness/savestate.rs"
 harness = false
+
+# Headless audio-capture harness: records the APU's produced samples with no
+# audio device, writes WAVs, analyses them (rate/level/silence/discontinuity/
+# pitch) and pins an FNV hash baseline. See testharness/audiocapture.rs and
+# docs/audio.md.
+[[test]]
+name = "audiocapture"
+path = "testharness/audiocapture.rs"
+harness = false

@@ -190,6 +190,19 @@ The section above is the design sketch. What is now checked in and runs in CI:
   CRC32) are hand-rolled in the harness — a few dozen lines each — rather than pulling in a
   hashing or image crate.
 
+- **The audio pipeline has the same treatment:**
+  [`testharness/audiocapture.rs`](../testharness/audiocapture.rs)
+  (`cargo test --release --test audiocapture`) runs ROMs headlessly with a device-free
+  capture `AudioPlayer`, records every sample the APU + blip_buf pipeline produces,
+  writes listenable WAVs to `target/testrom-artifacts/audio/`, and checks objective
+  properties: sample count == cycles×rate/4194304, RMS/peak, silence runs,
+  discontinuities, dominant frequency (a built-in 440 Hz tone ROM must measure 440 Hz),
+  plus Blargg `dmg_sound`'s memory-mapped `$A000` verdict. Captures are byte-identical
+  across runs and profiles; the FNV hash of the PCM stream is pinned in
+  [`testharness/audio_baseline.txt`](../testharness/audio_baseline.txt)
+  (re-bless with `UPDATE_AUDIO_BASELINE=1`). A third mechanism, alongside serial and
+  frame-hash: **sample-stream hash**. Full story in [docs/audio.md](audio.md).
+
 ### The known-failures baseline — how to keep CI honest
 
 Most ROMs fail today, on purpose (six documented divergences below). A CI job that is red

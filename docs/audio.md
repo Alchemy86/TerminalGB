@@ -141,30 +141,50 @@ and then the most channels**. After the fix the probe reports:
 
 ---
 
-## 4. The hand-off queue — roughness and latency
+## 4. The hand-off queue — the "blocky and broken" regression and its cure
 
-Producer and consumer share `Arc<Mutex<Vec<(f32,f32)>>>`:
+Producer and consumer share a mutex-guarded queue:
 
-- **`CpalPlayer::play`** pushes 2000-sample blocks onto the tail.
-- **`cpal_thread`** copies from the head into each device callback and drains what
-  it used. If the queue is **short**, the remaining device frames are filled with
-  **silence** — an underrun, heard as a click/crackle. If the queue **grows**, you
-  hear **latency** (input-to-sound lag), the "aged/laggy" feel.
+- **`CpalPlayer::play`** pushes 2000-sample blocks (~45 ms at 44.1 kHz) onto the
+  tail — audio arrives in coarse lumps, not a smooth stream.
+- **`cpal_thread`** drains from the head at exactly the sound card's rate.
 
-The original cap was **`MAX_BUFFER_SIZE = 44100` — a full second** of audio before
-anything was dropped. That is a lot of allowable lag, and when the producer
-overruns (see §5) it lets a whole second accumulate, then dumps it in one abrupt
-`drain`, i.e. a large audible skip.
+### Post-mortem: why "~180 ms cap" made it *worse*
 
-**The fix:** bound the queue at **4 output blocks (~180 ms)** — enough slack to
-ride frame-timing jitter without underrunning, small enough that lag stays
-imperceptible; on overflow the oldest samples are dropped so the stream snaps
-back to low latency instead of drifting ever further behind
-([`sound.rs`](../src/sound.rs), `CpalPlayer::play`).
+An earlier fix bounded the queue at 4 blocks (~180 ms) to kill the 1-second
+latency of the original code. The captain then reported the music as **"blocky
+and broken"** — a regression. The measured causes (see §5a for the numbers):
 
-> Note this is *damage control*, not the cure. With correct pacing (§5) the queue
-> barely moves and neither underruns nor overflows matter. The tighter cap simply
-> guarantees the failure is graceful if the two clocks ever drift.
+1. **The producer ran systematically slow.** Both frontends reset their frame
+   timer with `last = Instant::now()` *after* stepping, so every frame period
+   silently included the draw/poll/scheduling overhead. The emulator therefore
+   produced *fewer* than 44,100 samples per wall second. Under the old regime
+   (62.5 fps = +4.6 % overproduction, 1 s of buffer) this deficit was masked;
+   with exact-rate pacing and a 180 ms cap it meant the queue **drained to
+   empty over and over**.
+2. **Underrun emitted zeros.** The callback stepped from the last sample value
+   straight to 0.0 — a wideband click — then played ~45 ms of tone when the
+   next block landed, then clicked again. A starved producer plus
+   step-to-silence underruns *is* "blocky and broken", literally: ~45 ms of
+   sound alternating with gaps.
+3. **No priming.** Playback started draining the moment the stream opened, so
+   the very first frames underran before the queue ever built a cushion.
+
+### The policy that replaced it (`sample_queue::SampleQueue`)
+
+Chosen from simulation (`src/sound.rs`, `mod queue_tests`) and verified on real
+hardware (§5a) — not picked as "a nicer buffer number":
+
+| Rule | Why |
+|---|---|
+| **Prime to `START_FILL` = 7000 samples (~159 ms) before draining** | Samples arrive in whole 2000-sample blocks, so the effective floor is `START_FILL − BLOCK`; that absorbs a ~113 ms production stall with margin. 3×BLOCK measurably underruns in the simulated 90 ms-stall profile; 3.5×BLOCK measures zero. |
+| **On underrun: hold the last sample and fade it (~0.999/sample), then re-prime** | A step to zero is itself a click ("play silence" is SDL's *baseline* behaviour, not the best). Re-priming turns one hiccup into one smooth gap instead of a 45 ms on/off machine-gun. |
+| **Producer *waits* above `HIGH_WATER` = 12000 (~272 ms)** | The audio crystal becomes the master clock whenever the frame timer runs fast — the community's "sync to audio" advice (§10). Samples are dropped **only** if the callback counter proves the consumer is stalled, to bound latency. |
+| **Everything is counted** | `underruns`, `held`, `dropped`, depth min/max. `GB_AUDIO_STATS=1` logs a line every 5 s. Sizing stays measured, not argued. |
+
+The queue policy itself is device-free (`sample_queue` module) and unit-tested,
+including a 5-minute virtual-time replay of the real producer/consumer cadences
+with jitter and stalls.
 
 ---
 
@@ -198,14 +218,41 @@ being skipped and the game logic itself runs 4.64 % fast, the music plays
 let frame_duration = std::time::Duration::from_micros(16_743); // was 16 ms = 62.5 fps
 ```
 
-### ⚠️ The terminal frontend has the same disease (owned elsewhere)
+### 5a. Pacing must be a *deadline accumulator* — and the measured proof
 
-[`src/screen/tui.rs`](../src/screen/tui.rs) drives `frame()` on a **5 ms** tick
-(`tick_rate`), i.e. it targets **200 fps** and runs as fast as the terminal can
-redraw — uncapped, and typically **faster than 59.73 Hz**. That frontend is owned
-by another crew; **this change does not touch it.** The recommended fix is
-identical: gate `frame()` on the real 16.743 ms period (a frame budget), so audio
-inherits true speed there too.
+Setting the period to 16.743 ms is necessary but not sufficient. Both frontends
+originally did `last = Instant::now()` after each frame, which adds the
+draw/poll/scheduling overhead of every loop iteration to the period — the
+emulator runs a few percent **slow**, and audio production is slaved to
+emulation speed (§4, cause 1). Both loops now advance a deadline by exactly one
+period (`next_frame += FRAME_TIME`) and run bounded catch-up frames when late,
+so the *long-run average* is exactly 59.7275 Hz regardless of per-iteration
+overhead ([`src/gameboy.rs`](../src/gameboy.rs) `render_desktop`,
+[`src/screen/tui.rs`](../src/screen/tui.rs) main loop — pacing only; the
+terminal *display* work is owned elsewhere).
+
+**Measured** (`cargo run --release --features audio --example audio_soak -- 120`
+on real hardware, 2026-08-13, device negotiated 44100 Hz stereo):
+
+```
+frames emulated:      7168 (59.7264 Hz vs 59.7275 target)   → −18 ppm
+underruns:            0
+dropped (overflow):   0
+held (substituted):   11937  — all from the one-time initial prime
+queue depth:          min 5731  max 8717  (bounds 0 / 12000)
+```
+
+- The −18 ppm frame-rate deficit is the `16_743 µs` rounding of the true
+  16 742.706 µs period — **0.0018 % slow**, three orders of magnitude below the
+  old +4.64 % bug and far below audibility (a semitone is ~6 %).
+- Residual producer-vs-consumer drift, measured from the queue-depth trend over
+  100 s: **≈ −5.8 samples/s (−0.013 %)** — the sum of the pacing rounding and
+  the host-timer-vs-audio-crystal difference. At that rate the ~7000-sample
+  cushion lasts ≈ 20 minutes, after which the queue re-primes **once**: one
+  smooth ~160 ms fade, not a blocky cascade, then another ~20 quiet minutes.
+  If the drift ever runs the other way, the high-watermark throttle absorbs it
+  with zero artifacts. Full dynamic rate control (§10) would remove even this
+  and is the documented next step if that rare hiccup bothers anyone.
 
 ---
 
@@ -226,10 +273,15 @@ The bugs above (mono downmix, 62.5 fps pacing, 1-second queue) made it sound
 makes it sound like a DMG, which is the goal. Resist "improving" the 4-bit grit
 into something smooth and inauthentic.
 
-An honest remaining gap (tracked in [apu.md](components/apu.md), not fixed here):
-the length-counter "extra clock" edge case is unmodelled, so Blargg
-`dmg_sound`/`cgb_sound` do not fully pass. That is APU *accuracy*, not the
-playback *quality* this page is about.
+An honest remaining gap (tracked in [apu.md](components/apu.md), measured, not
+hidden): the offline harness runs Blargg `dmg_sound` and reads its memory-mapped
+verdict — **1 of 12 subtests passes** (`06-overflow on trigger`). The failures
+are register-visible accuracy corners (read-back masks, trigger/length/sweep
+edge cases, wave-RAM access rules — see §10 item 4), not the playback *quality*
+this page is about. Three of those corners were fixed in this pass because the
+harness tripped over them: NRx1 length writes no longer underflow on duty bits,
+NR52 power-off now actually zeroes NR10–NR51, and a powered-off APU now emits
+silence at the full sample rate instead of stalling the stream.
 
 ---
 
@@ -272,6 +324,32 @@ cargo test --lib sound
 # tone_pitch_is_correct        — a programmed 440 Hz tone comes out at ~440 Hz
 # output_matches_reported_rate — N emulated seconds yield ~N×rate samples,
 #                                and the count tracks the reported rate (44.1/48/22.05 k)
+# queue_tests::*               — virtual-time replay of the hand-off queue:
+#                                zero underruns under realistic jitter+stalls,
+#                                hold-and-fade on underrun, re-prime behaviour
+```
+
+**Capture what a ROM actually produces** (no audio device needed — this is the
+offline audio harness, wired into CI like the video frame-hash harness):
+
+```bash
+cargo test --release --test audiocapture
+# Runs each fixture headlessly, captures every APU sample, writes WAVs to
+# target/testrom-artifacts/audio/ (LISTEN to them!), and checks:
+#   - sample count == cycles × rate / 4194304 (a drifting count is a rate bug)
+#   - tone440: dominant frequency ≈ 439.84 Hz, peak ≈ 0.25, no unfiltered steps,
+#     no silence gaps — absolute expectations, known a priori
+#   - dmg_sound: non-silent; Blargg's $A000 memory verdict is reported
+#   - byte-identical determinism across runs, FNV-hash pinned in
+#     testharness/audio_baseline.txt (re-bless: UPDATE_AUDIO_BASELINE=1)
+```
+
+**Does the real device pipeline underrun?** (needs `--features audio` + a card):
+
+```bash
+GB_AUDIO_STATS=1 cargo run --release --features audio --example audio_soak -- 120
+# Real 2-minute run against the sound card: reports underruns, drops, queue
+# depth min/max and the achieved production rate vs the device rate.
 ```
 
 **Did I break emulation?** The test-ROM harness must still match baseline:
@@ -282,15 +360,93 @@ cargo test --release --test testroms      # see docs/testing.md
 
 ---
 
-## 9. Change log (this fix)
+## 9. Change log
+
+### First pass ("rough & fast")
 
 | Area | File | Change |
 |---|---|---|
 | Device negotiation | [`src/sound.rs`](../src/sound.rs) | Prefer the device default `F32` config; otherwise scan all `F32` ranges preferring span-44100 then max-channels. Kills mono downmix and 96/192/384 kHz surprises. |
-| Queue discipline | [`src/sound.rs`](../src/sound.rs) | Cap the hand-off queue at 4 blocks (~180 ms) instead of 1 s; bounded, graceful latency. |
 | Frame pacing (root cause of "fast") | [`src/gameboy.rs`](../src/gameboy.rs) | Desktop frame period 16 ms → 16.743 ms (62.5 → 59.73 fps). |
 | Tests | [`src/sound.rs`](../src/sound.rs) | `tone_pitch_is_correct`, `output_matches_reported_rate` (device-free). |
 | Probe | [`examples/audio_probe.rs`](../examples/audio_probe.rs) | Report a machine's real configs + negotiated rate. |
 
-**Not changed on purpose:** the terminal frontend's 5 ms tick (§5, other crew's
-file) and APU length-counter accuracy (§6, tracked in apu.md).
+### Second pass ("blocky and broken" regression + offline harness)
+
+| Area | File | Change |
+|---|---|---|
+| Queue policy | [`src/sound.rs`](../src/sound.rs) `sample_queue` | Prime-before-play (7000 samples), hold-and-fade + re-prime on underrun, high-watermark producer wait (audio clock as master), stall-detected drop as last resort, full instrumentation. Sizes from simulation + real-device soak, §4/§5a. |
+| Frame pacing (root cause of "blocky") | [`src/gameboy.rs`](../src/gameboy.rs), [`src/screen/tui.rs`](../src/screen/tui.rs) | Deadline-accumulator scheduling (`next += FRAME_TIME`, bounded catch-up) in both frontends — the average rate is now exactly the period, with no draw/poll overhead bias. TUI change is the pacing block only. |
+| APU semantics | [`src/sound.rs`](../src/sound.rs) | NRx1 length writes mask duty bits (`v & 0x3F` — was a debug-mode panic on `NR11=0x80`); NR52 power-off actually zeroes NR10–NR51 and channel status (the old clear-loop ran *after* `on=false` and was a no-op); a powered-off APU emits silence at full rate instead of stalling the sample stream. |
+| Offline audio harness | [`testharness/audiocapture.rs`](../testharness/audiocapture.rs) | Device-free capture → WAV + analysis (count/RMS/silence/steps/pitch) + Blargg `$A000` verdict + pinned determinism baseline ([`testharness/audio_baseline.txt`](../testharness/audio_baseline.txt)). |
+| Soak evidence | [`examples/audio_soak.rs`](../examples/audio_soak.rs) | Real-device instrumented run; the §5a numbers. |
+
+---
+
+## 10. Why emulator audio breaks — the community's map (with sources)
+
+The failure modes above are all well-documented in the emulation community;
+this project's bugs were textbook instances. All links verified 2026-08-13.
+
+1. **Aliasing → band-limited synthesis (why blip_buf exists).** The APU changes
+   amplitude at up to 4.19 MHz; naively downsampling that to 44.1 kHz folds
+   everything above Nyquist back into the audible band as inharmonic buzz.
+   Blargg's fix — replace each transition with a precomputed band-limited step —
+   is the basis of his Blip_Buffer/blip_buf libraries, used across the emulation
+   scene (and by this emulator via the `blip_buf` crate). With that in place,
+   resampling *quality* is solved; what an emulator can still get wrong is
+   **rate and pacing**.
+   - Blargg, *Band-Limited Sound Synthesis*: http://slack.net/~ant/bl-synth/
+   - Blargg's audio libraries: http://slack.net/~ant/libs/audio.html
+   - blip-buf readme (mirror): https://github.com/nesbox/blip-buf
+
+2. **The producer/consumer contract: sync to audio, or drift forever.** The
+   sound card is a hard-realtime consumer draining at its own crystal's rate;
+   the display (or a frame timer) ticks at a different crystal. Near's article
+   spells out the trilemma: sync to video only → the audio buffer slowly
+   drains/grows (periodic crackle or mounting latency); sync to audio only →
+   video stutter; block on both → both artifacts. **Dynamic rate control** —
+   nudge the resample ratio ≤0.5 % based on buffer fill so it hovers half-full —
+   is the polished answer (bsnes, RetroArch). *This emulator's structural
+   choice:* pace video by a deadline accumulator (§5a) and let the producer
+   **wait at the queue's high watermark**, which makes the audio clock the
+   master whenever the timer runs fast; the residual −0.013 % drift costs one
+   smooth re-prime per ~20 min (measured). Full DRC is the documented upgrade
+   path if that ever matters.
+   - Near (byuu), *Dynamic Rate Control*: https://bsnes.org/articles/dynamic-rate-control/
+     (article archive: https://github.com/higan-emu/emulation-articles)
+   - Libretro docs, *Dynamic Rate Control*: https://docs.libretro.com/development/cores/dynamic-rate-control/
+   - NESdev, *audio buffering and timing discrepancies*: https://forums.nesdev.org/viewtopic.php?t=9454
+
+3. **Buffer sizing and underrun handling.** Too small → any scheduling jitter
+   finds the buffer empty (gap/click); too big → audible input-to-sound lag.
+   The classic symptom description — "periods of silence after one segment of
+   audio has finished playing but before the next one is queued" — is exactly
+   the "blocky" report. On underrun, "play silence" is the platform *default*
+   (SDL documents it), and a hard step to zero is itself a wideband transient;
+   hold-last-sample / short fades are the standard softenings. Keep a cushion
+   of a couple of callback blocks and target roughly half-full.
+   - NESdev, *Cracking Sound for APU*: https://forums.nesdev.org/viewtopic.php?p=234578&t=18493
+   - SDL2 `SDL_QueueAudio` docs (silence on underrun): https://wiki.libsdl.org/SDL2/SDL_QueueAudio
+
+4. **Game Boy APU correctness traps** (the accuracy frontier `dmg_sound`
+   measures, distinct from playback quality): NRx4 trigger semantics (reload
+   length/envelope/period but *not* the wave sample buffer; no enable if DAC
+   off); length-counter extra clocking in the frame-sequencer's off-phase;
+   DMG-vs-CGB length behaviour across power-off; the CH1 sweep negate quirk;
+   DMG wave-RAM corruption on mid-read retrigger; NR52 power-off zeroing
+   NR10–NR51; and the DAC-off vs channel-enabled distinction (digital 0 is a
+   *non-silent* analog level — the DAC-toggle pop is real hardware).
+   - Pan Docs: https://gbdev.io/pandocs/Audio_details.html and
+     https://gbdev.io/pandocs/Audio_Registers.html
+   - gg8 wiki, *Gameboy sound hardware* (Obscure Behavior):
+     https://gbdev.gg8.se/wiki/articles/Gameboy_sound_hardware
+   - Blargg's `dmg_sound` ROMs + readme (memory-mapped `$A000` reporting):
+     https://github.com/retrio/gb-test-roms
+
+**How this project's bugs map onto that list:** first "rough & fast" was §2's
+map item 2 (video-timer pacing +4.6 % fast, buffer overrun → drops); "blocky
+and broken" was items 2+3 combined (reset-to-now pacing → producer slow →
+starvation, step-to-zero underruns, no priming, 45 ms producer granularity
+against a 4-block cap). The 4-bit grit that remains is item-4 territory —
+genuine DMG character, not a defect.
