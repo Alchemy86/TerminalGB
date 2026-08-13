@@ -23,6 +23,25 @@ enum DMAType {
     Hdma,
 }
 
+impl DMAType {
+    fn to_u8(&self) -> u8 {
+        match self {
+            DMAType::NoDma => 0,
+            DMAType::Gdma => 1,
+            DMAType::Hdma => 2,
+        }
+    }
+
+    fn from_u8(v: u8) -> Result<DMAType, crate::savestate::StateError> {
+        match v {
+            0 => Ok(DMAType::NoDma),
+            1 => Ok(DMAType::Gdma),
+            2 => Ok(DMAType::Hdma),
+            _ => Err(crate::savestate::StateError::BadField("DMAType")),
+        }
+    }
+}
+
 pub struct MemoryManagementUnit<'a> {
     wram: [u8; WRAM_SIZE],
     zram: [u8; ZRAM_SIZE],
@@ -217,6 +236,112 @@ impl<'a> MemoryManagementUnit<'a> {
         let prev = self.bus_tick_enabled;
         self.bus_tick_enabled = on;
         prev
+    }
+
+    /// Serialise the MMU and every device it owns. The APU is written as a
+    /// length-prefixed, self-describing block so a reader that lacks a `Sound`
+    /// instance (wasm, or the headless core) can skip it — that is what lets a
+    /// native state with audio load cleanly elsewhere.
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bytes(&self.wram);
+        w.bytes(&self.zram);
+        w.bytes(&self.hdma);
+        w.u8(self.inte);
+        w.u8(self.intf);
+        w.usize(self.wrambank);
+        w.u8(self.gbmode.to_u8());
+        w.u8(self.gbspeed.to_u8());
+        w.bool(self.speed_switch_req);
+        w.u8(self.hdma_status.to_u8());
+        w.u16(self.hdma_src);
+        w.u16(self.hdma_dst);
+        w.u8(self.hdma_len);
+        w.bytes(&self.undocumented_cgb_regs);
+        // Sub-instruction timer stepping (mem_timing fix). These are reset to
+        // false/0 between instructions, so at a normal frame-boundary save they
+        // are default — but capturing them keeps the state complete regardless
+        // of when it is taken.
+        w.bool(self.bus_tick_enabled);
+        w.u32(self.bus_ticked);
+
+        self.serial.save_state(w);
+        self.timer.save_state(w);
+        self.keypad.save_state(w);
+        self.gpu.save_state(w);
+
+        // APU block (present flag + payload), length-prefixed & skippable.
+        let mut apu = crate::savestate::Writer::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match &self.sound {
+                Some(s) => {
+                    apu.bool(true);
+                    s.save_state(&mut apu);
+                }
+                None => apu.bool(false),
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            apu.bool(false);
+        }
+        w.blob(&apu.buf);
+
+        // MBC block, length-prefixed (RAM size varies by cartridge).
+        let mut mbc = crate::savestate::Writer::new();
+        self.mbc.save_state(&mut mbc);
+        w.blob(&mbc.buf);
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        r.fill(&mut self.wram)?;
+        r.fill(&mut self.zram)?;
+        r.fill(&mut self.hdma)?;
+        self.inte = r.u8()?;
+        self.intf = r.u8()?;
+        self.wrambank = r.usize()?;
+        self.gbmode = GbMode::from_u8(r.u8()?)?;
+        self.gbspeed = GbSpeed::from_u8(r.u8()?)?;
+        self.speed_switch_req = r.bool()?;
+        self.hdma_status = DMAType::from_u8(r.u8()?)?;
+        self.hdma_src = r.u16()?;
+        self.hdma_dst = r.u16()?;
+        self.hdma_len = r.u8()?;
+        r.fill(&mut self.undocumented_cgb_regs)?;
+        self.bus_tick_enabled = r.bool()?;
+        self.bus_ticked = r.u32()?;
+
+        self.serial.load_state(r)?;
+        self.timer.load_state(r)?;
+        self.keypad.load_state(r)?;
+        self.gpu.load_state(r)?;
+
+        // APU block. Parse only if this build has a Sound instance to restore
+        // into; otherwise the whole block is skipped (its length was consumed).
+        let apu = r.blob()?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut ar = crate::savestate::Reader::new(&apu);
+            let present = ar.bool()?;
+            if present {
+                if let Some(s) = self.sound.as_mut() {
+                    s.load_state(&mut ar)?;
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = apu;
+        }
+
+        // MBC block.
+        let mbc = r.blob()?;
+        let mut mr = crate::savestate::Reader::new(&mbc);
+        self.mbc.load_state(&mut mr)?;
+        Ok(())
     }
 
     pub fn do_cycle(&mut self, ticks: u32) -> u32 {

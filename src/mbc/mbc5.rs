@@ -108,4 +108,30 @@ impl MemoryBankController for MBC5 {
         }
         self.ram[(self.rambank * 0x2000) | ((a as usize) & 0x1FFF)] = v;
     }
+
+    fn rom_bank(&self) -> usize {
+        self.rombank
+    }
+
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bool(self.ram_on);
+        w.usize(self.rombank);
+        w.usize(self.rambank);
+        w.blob(&self.ram);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.ram_on = r.bool()?;
+        self.rombank = r.usize()?;
+        self.rambank = r.usize()?;
+        let ram = r.blob()?;
+        if ram.len() != self.ram.len() {
+            return Err(crate::savestate::StateError::BadField("mbc5 ram size"));
+        }
+        self.ram = ram;
+        Ok(())
+    }
 }

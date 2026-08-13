@@ -119,6 +119,126 @@ impl Gpu {
         Gpu::new()
     }
 
+    /// Serialise the PPU. Everything that drives future rendering is captured,
+    /// including the internal `modeclock`/`line` counters and the CGB palette
+    /// memory. `bgprio` is *not* saved: it is fully rewritten at the start of
+    /// every `renderscan` before being read, so it holds no state across
+    /// frames. The `data` framebuffer *is* saved so the visible frame is
+    /// correct the instant a state loads.
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.u8(self.mode);
+        w.u32(self.modeclock);
+        w.u8(self.line);
+        w.u8(self.lyc);
+        w.bool(self.lcd_on);
+        w.u16(self.win_tilemap);
+        w.bool(self.win_on);
+        w.u16(self.tilebase);
+        w.u16(self.bg_tilemap);
+        w.u32(self.sprite_size);
+        w.bool(self.sprite_on);
+        w.bool(self.lcdc0);
+        w.bool(self.lyc_inte);
+        w.bool(self.m0_inte);
+        w.bool(self.m1_inte);
+        w.bool(self.m2_inte);
+        w.u8(self.scy);
+        w.u8(self.scx);
+        w.u8(self.winy);
+        w.u8(self.winx);
+        w.bool(self.wy_trigger);
+        w.i32(self.wy_pos);
+        w.u8(self.palbr);
+        w.u8(self.pal0r);
+        w.u8(self.pal1r);
+        w.bytes(&self.palb);
+        w.bytes(&self.pal0);
+        w.bytes(&self.pal1);
+        w.bytes(&self.vram);
+        w.bytes(&self.voam);
+        w.bool(self.cbgpal_inc);
+        w.u8(self.cbgpal_ind);
+        Self::save_cpal(w, &self.cbgpal);
+        w.bool(self.csprit_inc);
+        w.u8(self.csprit_ind);
+        Self::save_cpal(w, &self.csprit);
+        w.usize(self.vrambank);
+        w.bytes(&self.data[..]);
+        w.bool(self.updated);
+        w.u8(self.interrupt);
+        w.u8(self.gbmode.to_u8());
+        w.bool(self.hblanking);
+    }
+
+    fn save_cpal(w: &mut crate::savestate::Writer, pal: &[[[u8; 3]; 4]; 8]) {
+        for p in pal {
+            for c in p {
+                w.bytes(c);
+            }
+        }
+    }
+
+    fn load_cpal(
+        r: &mut crate::savestate::Reader,
+        pal: &mut [[[u8; 3]; 4]; 8],
+    ) -> Result<(), crate::savestate::StateError> {
+        for p in pal.iter_mut() {
+            for c in p.iter_mut() {
+                r.fill(c)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.mode = r.u8()?;
+        self.modeclock = r.u32()?;
+        self.line = r.u8()?;
+        self.lyc = r.u8()?;
+        self.lcd_on = r.bool()?;
+        self.win_tilemap = r.u16()?;
+        self.win_on = r.bool()?;
+        self.tilebase = r.u16()?;
+        self.bg_tilemap = r.u16()?;
+        self.sprite_size = r.u32()?;
+        self.sprite_on = r.bool()?;
+        self.lcdc0 = r.bool()?;
+        self.lyc_inte = r.bool()?;
+        self.m0_inte = r.bool()?;
+        self.m1_inte = r.bool()?;
+        self.m2_inte = r.bool()?;
+        self.scy = r.u8()?;
+        self.scx = r.u8()?;
+        self.winy = r.u8()?;
+        self.winx = r.u8()?;
+        self.wy_trigger = r.bool()?;
+        self.wy_pos = r.i32()?;
+        self.palbr = r.u8()?;
+        self.pal0r = r.u8()?;
+        self.pal1r = r.u8()?;
+        r.fill(&mut self.palb)?;
+        r.fill(&mut self.pal0)?;
+        r.fill(&mut self.pal1)?;
+        r.fill(&mut self.vram)?;
+        r.fill(&mut self.voam)?;
+        self.cbgpal_inc = r.bool()?;
+        self.cbgpal_ind = r.u8()?;
+        Self::load_cpal(r, &mut self.cbgpal)?;
+        self.csprit_inc = r.bool()?;
+        self.csprit_ind = r.u8()?;
+        Self::load_cpal(r, &mut self.csprit)?;
+        self.vrambank = r.usize()?;
+        r.fill(&mut self.data[..])?;
+        self.updated = r.bool()?;
+        self.interrupt = r.u8()?;
+        self.gbmode = crate::mode::GbMode::from_u8(r.u8()?)?;
+        self.hblanking = r.bool()?;
+        Ok(())
+    }
+
     pub fn do_cycle(&mut self, ticks: u32) {
         if !self.lcd_on {
             return;

@@ -14,6 +14,31 @@ pub trait MemoryBankController: Send {
     fn writerom(&mut self, a: u16, v: u8);
     fn writeram(&mut self, a: u16, v: u8);
 
+    /// Serialise the *mutable* MBC state (banks, RAM-enable, cartridge RAM, and
+    /// the MBC3 RTC). The ROM is never written — it is referenced by identity in
+    /// the state header and provided by whoever loads the state.
+    fn save_state(&self, w: &mut crate::savestate::Writer);
+
+    /// Restore MBC state written by [`MemoryBankController::save_state`]. The
+    /// loader already holds the matching ROM, so only the mutable state is
+    /// restored in place.
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError>;
+
+    /// The currently-selected ROM bank, for debug/stats display. Defaults to 0
+    /// for controllers without banking (MBC0).
+    fn rom_bank(&self) -> usize {
+        0
+    }
+
+    /// The cartridge's 16-bit global checksum (header bytes 0x14E-0x14F). Used
+    /// together with the title to refuse loading a state against another game.
+    fn global_checksum(&self) -> u16 {
+        ((self.readrom(0x014E) as u16) << 8) | (self.readrom(0x014F) as u16)
+    }
+
     fn romname(&self) -> String {
         const TITLE_START: u16 = 0x134;
         const CGB_FLAG: u16 = 0x143;

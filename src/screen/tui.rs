@@ -79,6 +79,95 @@ const FRAME_TIME: Duration = Duration::from_micros(16_743);
 /// interval so held keys don't flicker.
 const KEY_HOLD: Duration = Duration::from_millis(110);
 
+/// Number of save-state slots the terminal exposes (`1`/`2`/`3`).
+const NUM_SLOTS: u32 = 3;
+
+/// Speed ladder. Each rung scales the wall-clock interval between emulated
+/// frames relative to [`FRAME_TIME`] (`interval = FRAME_TIME * mult_num /
+/// mult_den`); `1x` is real time. `MAX` is uncapped and instead runs a bounded
+/// burst of frames per loop iteration so input/redraw stay responsive.
+///
+/// Audio interaction: the APU emits at a fixed sample rate, so running faster
+/// than real time produces more samples than the host drains — the cpal queue
+/// ([`init_audio`], bounded to ~180 ms by the audio crew) discards the oldest,
+/// i.e. **fast-forward drops samples rather than pitch-shifting**; slow-motion
+/// under-runs into brief silence. No resampling, by choice.
+struct SpeedLevel {
+    label: &'static str,
+    mult_num: u32,
+    mult_den: u32,
+    burst: u32,
+    uncapped: bool,
+}
+
+const SPEED_LADDER: &[SpeedLevel] = &[
+    SpeedLevel {
+        label: "0.5x",
+        mult_num: 2,
+        mult_den: 1,
+        burst: 1,
+        uncapped: false,
+    },
+    SpeedLevel {
+        label: "1x",
+        mult_num: 1,
+        mult_den: 1,
+        burst: 1,
+        uncapped: false,
+    },
+    SpeedLevel {
+        label: "2x",
+        mult_num: 1,
+        mult_den: 2,
+        burst: 1,
+        uncapped: false,
+    },
+    SpeedLevel {
+        label: "4x",
+        mult_num: 1,
+        mult_den: 4,
+        burst: 1,
+        uncapped: false,
+    },
+    SpeedLevel {
+        label: "MAX",
+        mult_num: 0,
+        mult_den: 1,
+        burst: 8,
+        uncapped: true,
+    },
+];
+/// Index of the `1x` rung — the default.
+const SPEED_NORMAL: usize = 1;
+
+impl SpeedLevel {
+    /// Wall-clock interval between frames at this speed (unused when `uncapped`).
+    fn interval(&self) -> Duration {
+        (FRAME_TIME * self.mult_num) / self.mult_den
+    }
+}
+
+/// Where save states live. The core is filesystem-agnostic; the terminal decides
+/// this. Slots are namespaced by cartridge title so games don't collide (and a
+/// wrong-game load fails cleanly anyway via the state's ROM check). Prefers
+/// `$XDG_STATE_HOME`, then `$HOME/.local/state`, else a temp dir.
+fn state_path(title: &str, slot: u32) -> PathBuf {
+    let base = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+        .unwrap_or_else(env::temp_dir)
+        .join("gameboy/states");
+    let _ = std::fs::create_dir_all(&base);
+    let mut safe: String = title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    if safe.trim_matches('_').is_empty() {
+        safe = "rom".to_string();
+    }
+    base.join(format!("{safe}.slot{slot}.gbss"))
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -194,6 +283,16 @@ struct App {
     session: Option<Session>,
     should_quit: bool,
 
+    // Emulation controls (see the corresponding key handlers).
+    /// Index into [`SPEED_LADDER`].
+    speed: usize,
+    /// Stats overlay toggle (off by default). Does not pause the game.
+    stats: bool,
+    /// Active save-state slot (`1..=NUM_SLOTS`).
+    slot: u32,
+    /// Transient in-game notice (save/load/speed feedback) with its raise time.
+    toast: Option<(String, Instant)>,
+
     // Picker screen state.
     entries: Vec<RomEntry>,
     /// Indices into `entries` that are "recently played" (shown first, starred).
@@ -228,6 +327,10 @@ impl App {
             fullscreen: false,
             session: None,
             should_quit: false,
+            speed: SPEED_NORMAL,
+            stats: false,
+            slot: 1,
+            toast: None,
             entries: Vec::new(),
             recent_flags: Vec::new(),
             filter: String::new(),
@@ -312,17 +415,27 @@ impl App {
         let mut dirty = true;
 
         while !self.should_quit {
-            // 1. Advance emulation on a fixed cadence.
+            // 1. Advance emulation, paced to the selected speed (1x = real
+            //    time; faster rungs shorten the interval; MAX runs a burst).
             if let Screen::Playing = self.screen {
                 let running = self
                     .session
                     .as_ref()
                     .map(|s| !s.paused && self.overlay == Overlay::None)
                     .unwrap_or(false);
-                if running && last_tick.elapsed() >= FRAME_TIME {
-                    self.step_frame();
-                    last_tick = Instant::now();
-                    dirty = true;
+                if running {
+                    let level = &SPEED_LADDER[self.speed];
+                    if level.uncapped {
+                        for _ in 0..level.burst {
+                            self.step_frame();
+                        }
+                        last_tick = Instant::now();
+                        dirty = true;
+                    } else if last_tick.elapsed() >= level.interval() {
+                        self.step_frame();
+                        last_tick = Instant::now();
+                        dirty = true;
+                    }
                 }
                 // 2. Auto-release keys that were not refreshed.
                 if self.release_expired() {
@@ -548,6 +661,38 @@ impl App {
                     self.palette = self.palette.next();
                     return;
                 }
+                // Stats overlay: off by default, does not pause the game.
+                KeyCode::Char('t') if key.kind == KeyEventKind::Press => {
+                    self.stats = !self.stats;
+                    return;
+                }
+                // Speed control: `+`/`=` faster, `-`/`_` slower.
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    self.bump_speed(true);
+                    return;
+                }
+                KeyCode::Char('-') | KeyCode::Char('_') => {
+                    self.bump_speed(false);
+                    return;
+                }
+                // Save-slot select.
+                KeyCode::Char(c @ '1'..='9') => {
+                    let n = c as u32 - '0' as u32;
+                    if (1..=NUM_SLOTS).contains(&n) {
+                        self.slot = n;
+                        self.set_toast(format!("Slot {n}"));
+                    }
+                    return;
+                }
+                // Save/load the active slot (emulator-standard quicksave keys).
+                KeyCode::F(5) if key.kind == KeyEventKind::Press => {
+                    self.save_slot();
+                    return;
+                }
+                KeyCode::F(8) if key.kind == KeyEventKind::Press => {
+                    self.load_slot();
+                    return;
+                }
                 KeyCode::Esc => {
                     if self.fullscreen {
                         self.fullscreen = false;
@@ -611,6 +756,78 @@ impl App {
         if let Some(s) = self.session.as_ref() {
             let path = s.entry.path.clone();
             self.start_game(&path);
+        }
+    }
+
+    // ---- speed / save-state / stats ----
+
+    fn bump_speed(&mut self, up: bool) {
+        self.speed = if up {
+            (self.speed + 1).min(SPEED_LADDER.len() - 1)
+        } else {
+            self.speed.saturating_sub(1)
+        };
+        self.set_toast(format!("Speed {}", SPEED_LADDER[self.speed].label));
+    }
+
+    fn set_toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some((msg.into(), Instant::now()));
+    }
+
+    /// The toast text if it is still fresh (shown for ~2.5 s).
+    fn toast_text(&self) -> Option<&str> {
+        match &self.toast {
+            Some((msg, when)) if when.elapsed() < Duration::from_millis(2500) => {
+                Some(msg.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    /// Save the running machine to the active slot (a file the terminal owns;
+    /// the core just hands us bytes).
+    fn save_slot(&mut self) {
+        let slot = self.slot;
+        let result = self.session.as_ref().map(|s| {
+            let path = state_path(&s.gb.rom_title(), slot);
+            let bytes = s.gb.save_state();
+            (bytes.len(), std::fs::write(&path, &bytes))
+        });
+        match result {
+            Some((len, Ok(()))) => {
+                self.set_toast(format!("★ Saved slot {slot} ({} KB)", len / 1024))
+            }
+            Some((_, Err(e))) => self.set_toast(format!("Save failed: {e}")),
+            None => {}
+        }
+    }
+
+    /// Restore the active slot into the running machine, then rebuild the
+    /// display image so the restored frame shows immediately.
+    fn load_slot(&mut self) {
+        let slot = self.slot;
+        let palette = self.palette;
+        let picker = self.picker;
+        let outcome = if let Some(s) = self.session.as_mut() {
+            let path = state_path(&s.gb.rom_title(), slot);
+            match std::fs::read(&path) {
+                Ok(bytes) => match s.gb.load_state(&bytes) {
+                    Ok(()) => {
+                        // Refresh the on-screen frame without advancing emulation.
+                        let img = framebuffer_image(&s.gb, palette);
+                        s.image = Some(picker.new_resize_protocol(img));
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("Load failed: {e}")),
+                },
+                Err(_) => Err(format!("Slot {slot} empty")),
+            }
+        } else {
+            return;
+        };
+        match outcome {
+            Ok(()) => self.set_toast(format!("↺ Loaded slot {slot}")),
+            Err(msg) => self.set_toast(msg),
         }
     }
 
@@ -720,6 +937,8 @@ impl App {
 
         if self.fullscreen {
             self.render_display(f, area);
+            self.render_stats_overlay(f, area);
+            self.render_toast(f, area);
             return;
         }
 
@@ -755,13 +974,71 @@ impl App {
 
         self.render_display(f, body[0]);
         self.render_sidebar(f, body[1]);
+        self.render_stats_overlay(f, body[0]);
+        self.render_toast(f, body[0]);
 
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                " ?help · p pause · R reset · L load · f full · [ palette · q quit",
+                " ?help · p pause · +/- speed · t stats · F5/F8 save/load · f full · q quit",
                 Style::default().fg(Color::DarkGray),
             ))),
             rows[2],
+        );
+    }
+
+    /// Small stats overlay pinned to the top-left of the game picture. Off by
+    /// default (`t`); reads already-computed values so it costs no emulation
+    /// time. Shows FPS, emulated speed %, frame time, PC and ROM bank.
+    fn render_stats_overlay(&self, f: &mut Frame<'_>, area: Rect) {
+        if !self.stats {
+            return;
+        }
+        let Some(s) = self.session.as_ref() else {
+            return;
+        };
+        let speed_pct = s.fps as f64 / 59.7275 * 100.0;
+        let frame_ms = if s.fps > 0.0 {
+            1000.0 / s.fps as f64
+        } else {
+            0.0
+        };
+        let lines = vec![
+            Line::from(format!("fps {:.0}", s.fps)),
+            Line::from(format!("spd {speed_pct:.0}%")),
+            Line::from(format!("ft  {frame_ms:.1}ms")),
+            Line::from(format!("pc  {:04X}", s.gb.debug_pc())),
+            Line::from(format!("bnk {}", s.gb.debug_rom_bank())),
+        ];
+        let w = 12u16.min(area.width);
+        let h = (lines.len() as u16 + 2).min(area.height);
+        let rect = Rect::new(area.x, area.y, w, h);
+        f.render_widget(Clear, rect);
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(Block::default().borders(Borders::ALL).title(" stats "))
+                .style(Style::default().fg(Color::Green)),
+            rect,
+        );
+    }
+
+    /// Transient save/load/speed notice, bottom-left of the game picture.
+    fn render_toast(&self, f: &mut Frame<'_>, area: Rect) {
+        let Some(msg) = self.toast_text() else { return };
+        let text = format!(" {msg} ");
+        let w = (text.chars().count() as u16).min(area.width);
+        if w == 0 || area.height == 0 {
+            return;
+        }
+        let rect = Rect::new(area.x, area.y + area.height - 1, w, 1);
+        f.render_widget(Clear, rect);
+        f.render_widget(
+            Paragraph::new(text).style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            rect,
         );
     }
 
@@ -794,7 +1071,7 @@ impl App {
     fn render_sidebar(&mut self, f: &mut Frame<'_>, area: Rect) {
         let split = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(9), Constraint::Min(0)])
+            .constraints([Constraint::Length(11), Constraint::Min(0)])
             .split(area);
 
         // Status.
@@ -809,6 +1086,8 @@ impl App {
             kv("Scale", &format!("{scale:.1}x")),
             kv("Proto", protocol_name(self.picker.protocol_type())),
             kv("Palette", self.palette.name()),
+            kv("Speed", SPEED_LADDER[self.speed].label),
+            kv("Slot", &self.slot.to_string()),
             kv(
                 "FPS",
                 &if paused {
@@ -833,9 +1112,12 @@ impl App {
             Line::from(format!("{}       Start", k.start)),
             Line::from(format!("{}       Select", k.select)),
             Line::from(""),
-            Line::from("p  pause    R  reset"),
-            Line::from("L  load     f  full"),
-            Line::from("[  palette  ?  help"),
+            Line::from("p pause     R reset"),
+            Line::from("+/- speed   t stats"),
+            Line::from("1-3 slot"),
+            Line::from("F5 save     F8 load"),
+            Line::from("L load ROM  f full"),
+            Line::from("[ palette   ? help"),
         ];
         f.render_widget(
             Paragraph::new(controls)
@@ -862,6 +1144,8 @@ impl App {
             Line::from("Game"),
             Line::from("  arrows    move        a/s     A / B"),
             Line::from("  x/z       Start/Sel   p       pause"),
+            Line::from("  +/-       speed        t       stats overlay"),
+            Line::from("  1-3       save slot    F5/F8   save / load"),
             Line::from("  R         reset       L       load ROM"),
             Line::from("  f         fullscreen  [       palette"),
             Line::from("  ?         this help   q       quit"),
@@ -1301,5 +1585,32 @@ mod tests {
         for i in 0..8usize {
             assert_eq!(key_index(key_from_index(i)), i);
         }
+    }
+
+    #[test]
+    fn speed_ladder_intervals_and_default() {
+        assert_eq!(SPEED_LADDER[SPEED_NORMAL].label, "1x");
+        assert_eq!(SPEED_LADDER[SPEED_NORMAL].interval(), FRAME_TIME);
+        // 2x halves the frame interval; 0.5x doubles it.
+        let two = SPEED_LADDER.iter().find(|l| l.label == "2x").unwrap();
+        assert_eq!(two.interval(), FRAME_TIME / 2);
+        let half = SPEED_LADDER.iter().find(|l| l.label == "0.5x").unwrap();
+        assert_eq!(half.interval(), FRAME_TIME * 2);
+        assert!(SPEED_LADDER.last().unwrap().uncapped);
+    }
+
+    #[test]
+    fn state_path_sanitises_and_namespaces() {
+        let p = state_path("Zelda / DX", 2);
+        let name = p.file_name().unwrap().to_string_lossy();
+        assert!(!name.contains('/') && !name.contains(' '));
+        assert!(name.ends_with(".slot2.gbss"));
+        assert_ne!(state_path("Zelda", 1), state_path("Zelda", 2));
+        assert_ne!(state_path("Zelda", 1), state_path("Mario", 1));
+        assert!(state_path("", 1)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("rom"));
     }
 }

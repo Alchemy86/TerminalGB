@@ -57,6 +57,24 @@ impl Keypad {
         self.data = (self.data & 0xF0) | new_values;
     }
 
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.u8(self.row0);
+        w.u8(self.row1);
+        w.u8(self.data);
+        w.u8(self.interrupt);
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.row0 = r.u8()?;
+        self.row1 = r.u8()?;
+        self.data = r.u8()?;
+        self.interrupt = r.u8()?;
+        Ok(())
+    }
+
     pub fn keydown(&mut self, key: KeypadKey) {
         match key {
             KeypadKey::Right => self.row0 &= !(1 << 0),

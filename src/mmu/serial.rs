@@ -45,6 +45,24 @@ impl<'a> Serial<'a> {
         }
     }
 
+    /// Save the serial *state*. The host callback is not part of the machine
+    /// state and is left untouched by a load.
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.u8(self.data);
+        w.u8(self.control);
+        w.u8(self.interrupt);
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.data = r.u8()?;
+        self.control = r.u8()?;
+        self.interrupt = r.u8()?;
+        Ok(())
+    }
+
     pub fn set_callback(&mut self, cb: SerialCallback<'static>) {
         self.callback = cb;
     }

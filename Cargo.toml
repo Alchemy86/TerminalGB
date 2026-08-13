@@ -85,3 +85,10 @@ path = "examples/terminal/bin.rs"
 name = "testroms"
 path = "testharness/testroms.rs"
 harness = false
+
+# Save-state round-trip proof. `harness = false` so it can print progress and
+# control the exit code. See testharness/savestate.rs.
+[[test]]
+name = "savestate"
+path = "testharness/savestate.rs"
+harness = false

@@ -20,4 +20,13 @@ impl MemoryBankController for MBC0 {
     }
     fn writerom(&mut self, _a: u16, _v: u8) {}
     fn writeram(&mut self, _a: u16, _v: u8) {}
+
+    // MBC0 has no banks and no RAM: nothing to serialise.
+    fn save_state(&self, _w: &mut crate::savestate::Writer) {}
+    fn load_state(
+        &mut self,
+        _r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        Ok(())
+    }
 }

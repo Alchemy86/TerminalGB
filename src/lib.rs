@@ -11,6 +11,7 @@ mod input;
 mod mbc;
 mod mmu;
 mod mode;
+pub mod savestate;
 #[cfg(not(feature = "ffi"))]
 mod screen;
 #[cfg(not(target_arch = "wasm32"))]
@@ -102,6 +103,62 @@ pub extern "C" fn image() -> ImageBuffer {
         len: 0,
         data: std::ptr::null_mut(),
     }
+}
+
+/// Holds the most recent serialised save state so the returned pointer stays
+/// valid until the next call (mirrors how `image()` hands out a borrowed ptr).
+static STATE_BUF: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+
+/// Serialise the running machine. The returned [`ImageBuffer`] points at bytes
+/// owned by [`STATE_BUF`]; copy them out before the next `save_state` call. The
+/// browser can persist these to local storage or offer them as a download.
+#[no_mangle]
+pub extern "C" fn save_state() -> ImageBuffer {
+    if let Some(gb) = GAMEBOY.get() {
+        if let Ok(locked_gb) = gb.lock() {
+            if let Some(gameboy) = locked_gb.as_ref() {
+                let bytes = gameboy.save_state();
+                let buf = STATE_BUF.get_or_init(|| Mutex::new(Vec::new()));
+                if let Ok(mut b) = buf.lock() {
+                    *b = bytes;
+                    return ImageBuffer {
+                        len: b.len() as i32,
+                        data: b.as_ptr(),
+                    };
+                }
+            }
+        }
+    }
+    ImageBuffer {
+        len: 0,
+        data: std::ptr::null(),
+    }
+}
+
+/// Restore a machine state produced by [`save_state`]. Returns `0` on success,
+/// `-1` if no machine is loaded, `-2` if the state is invalid (bad magic,
+/// version, or wrong game).
+///
+/// # Safety
+///
+/// Not safe due to `from_raw_parts`.
+#[no_mangle]
+pub unsafe extern "C" fn load_state(
+    bytes: *const std::ffi::c_uchar,
+    bytes_length: usize,
+) -> i32 {
+    let slice = std::slice::from_raw_parts(bytes, bytes_length);
+    if let Some(gb) = GAMEBOY.get() {
+        if let Ok(mut locked_gb) = gb.lock() {
+            if let Some(gameboy) = locked_gb.as_mut() {
+                return match gameboy.load_state(slice) {
+                    Ok(()) => 0,
+                    Err(_) => -2,
+                };
+            }
+        }
+    }
+    -1
 }
 
 #[no_mangle]

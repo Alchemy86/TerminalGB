@@ -105,4 +105,34 @@ impl Registers {
         let mask = flags as u8;
         self.f & mask > 0
     }
+
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.u8(self.a);
+        w.u8(self.b);
+        w.u8(self.c);
+        w.u8(self.d);
+        w.u8(self.e);
+        w.u8(self.h);
+        w.u8(self.l);
+        w.u8(self.f);
+        w.u16(self.pc);
+        w.u16(self.sp);
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.a = r.u8()?;
+        self.b = r.u8()?;
+        self.c = r.u8()?;
+        self.d = r.u8()?;
+        self.e = r.u8()?;
+        self.h = r.u8()?;
+        self.l = r.u8()?;
+        self.f = r.u8()?;
+        self.pc = r.u16()?;
+        self.sp = r.u16()?;
+        Ok(())
+    }
 }

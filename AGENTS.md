@@ -173,4 +173,66 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   LIBRARY_PATH=~/.local/lib/alsashim LD_LIBRARY_PATH=~/.local/lib/alsashim cargo build
   --features audio`.
 
+## Save states
+
+- **Core API, frontend-agnostic:** `Gameboy::save_state() -> Vec<u8>` /
+  `Gameboy::load_state(&[u8]) -> Result<(), savestate::StateError>` (delegating to the same
+  pair on `Cpu`). The core serialises to bytes and makes **no filesystem assumptions** — each
+  frontend decides where the bytes go. Full design + block layout + the BESS verdict in
+  [`docs/savestates.md`](docs/savestates.md).
+- **Format `GBSS`, hand-rolled, versioned, native (NOT BESS).** `src/savestate.rs` holds the
+  no-dependency little-endian `Writer`/`Reader`/`StateError` codec (same no-dep ethos as the
+  test harness's hash/PNG). Every stateful component got an **additive** `save_state`/
+  `load_state` pair (no struct restructured, nothing added to the `rb`/`wb`/`do_cycle` hot
+  path). BESS was rejected for now because it can't represent this core's internal counters
+  (PPU `modeclock`/mode, timer `internaldiv`/`internalcnt`, HDMA bookkeeping, APU
+  frame-seq phase) without desync — proposed as an additive follow-up (`bess.rs`).
+- **Bump `savestate::FORMAT_VERSION` on ANY layout change** — loads reject a version mismatch
+  rather than corrupting. The ROM is never stored; states carry the title + global checksum
+  and refuse a mismatched cartridge (`StateError::RomMismatch`).
+- **Sharp edges:** (1) The GPU framebuffer `data` IS saved (so the visible frame is right on
+  load) but `bgprio` is NOT (it is rebuilt at the top of every `renderscan`). (2) The APU
+  section is written **length-prefixed and present-flagged** so it is skippable — that is what
+  lets a native-with-audio state load on `wasm32`, where `MMU.sound` doesn't exist. The
+  `blip_buf` buffers and host player are runtime plumbing, never serialised. (3) MBC RAM is
+  length-checked on load. (4) MBC3 RTC captures `rtc_ram`, `rtc_ram_latch`, and the
+  `rtc_zero` epoch anchor.
+- **Round-trip proof:** `testharness/savestate.rs` (`cargo test --release --test savestate`,
+  `harness = false`). Runs N frames → save → run reference forward, load into a fresh machine,
+  and asserts **byte-identical framebuffers AND byte-identical full-state snapshots every
+  frame**, plus negative checks (magic/version/truncation/wrong-game). Uses the vendored
+  dmg-acid2 always, and Blargg cpu_instrs (scrolling screen ⇒ non-trivial frame variation)
+  when the submodule is present.
+
+## Terminal frontend: stats / speed / save-slots (`src/screen/tui.rs`)
+
+- Integrated into the **shell crew's single-threaded `App` state machine** (Screen/Overlay,
+  one event loop — no separate input thread). Added `App` fields `speed`/`stats`/`slot`/`toast`
+  and handled in `handle_game_key`. In-game keys: **`t`** stats overlay (off by default, does
+  NOT pause), **`+`/`-`** speed ladder (0.5x/1x/2x/4x/MAX), **`1`-`3`** select save slot,
+  **`F5`/`F8`** quick-save / quick-load the active slot (F-keys because their default game
+  buttons are `a`/`s`/`x`/`z`, so `s`/`l` were taken). All listed in the Status/Controls sidebar
+  and the `?` help overlay.
+- Speed is a wall-clock **interval** derived from `FRAME_TIME` (`SPEED_LADDER`); `1x` = the true
+  16.743 ms DMG frame, so it is real time. `MAX` runs an uncapped per-iteration burst. Save/load
+  and all emulator mutation happen on the single loop thread (no locking needed here). After a
+  load, `Session.image` is rebuilt so the restored frame shows immediately.
+- Stats overlay reuses the shell crew's per-second `Session.fps`; emulated speed % =
+  `fps/59.7275*100`, frame-ms = `1000/fps`, plus `gb.debug_pc()`/`gb.debug_rom_bank()`. Rendered
+  only when toggled, so it costs no emulation time.
+- **Audio + fast-forward:** the APU emits at a fixed rate; faster-than-real play overruns the
+  cpal queue (bounded to ~180 ms by the audio crew), which discards the oldest — i.e.
+  fast-forward **drops samples** rather than pitch-shifting; slow-mo under-runs to brief
+  silence. No resampling, by choice.
+- Save states live under `$XDG_STATE_HOME` (or `$HOME/.local/state`, else temp) in
+  `gameboy/states/<sanitised-title>.slot<N>.gbss`.
+- **Save-state capture must track new machine state.** After the accuracy crew's fixes it now
+  also covers `Cpu.halt_bug` (HALT-bug latch — can be live at a frame boundary) and the MMU's
+  `bus_tick_enabled`/`bus_ticked` (per-access timer stepping; reset between instructions but
+  captured for completeness). Any future CPU/MMU/PPU field that survives across a `do_cycle`
+  boundary MUST be added to the `save_state`/`load_state` pair or `savestate` round-trip desyncs.
+- **Terminal pacing:** the speed ladder gates `frame()` on the true 16.743 ms DMG frame time,
+  so `1x` is real-time (fixing the old 5 ms/~200 fps terminal bug the audio crew flagged);
+  `2x`/`4x` shorten the interval and `MAX` runs an uncapped burst.
+
 - Add durable project-specific notes here as they are discovered through real work.

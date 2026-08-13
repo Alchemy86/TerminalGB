@@ -79,6 +79,26 @@ impl VolumeEnvelope {
             _ => {}
         }
     }
+
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.u8(self.period);
+        w.bool(self.goes_up);
+        w.u8(self.delay);
+        w.u8(self.initial_volume);
+        w.u8(self.volume);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.period = r.u8()?;
+        self.goes_up = r.bool()?;
+        self.delay = r.u8()?;
+        self.initial_volume = r.u8()?;
+        self.volume = r.u8()?;
+        Ok(())
+    }
 }
 
 struct LengthCounter {
@@ -126,6 +146,22 @@ impl LengthCounter {
         if self.enabled && self.value > 0 {
             self.value -= 1;
         }
+    }
+
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bool(self.enabled);
+        w.u16(self.value);
+        w.u16(self.max);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.enabled = r.bool()?;
+        self.value = r.u16()?;
+        self.max = r.u16()?;
+        Ok(())
     }
 }
 
@@ -261,6 +297,52 @@ impl SquareChannel {
             }
         }
     }
+
+    // The `blip` buffer holds transient output deltas that are drained every
+    // output period; it is not part of the logical channel state, so it is not
+    // serialised (a fresh, correctly-rated BlipBuf is kept on load). `last_amp`
+    // is saved to preserve delta continuity.
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bool(self.enabled);
+        w.bool(self.dac_enabled);
+        self.volume.save_state(w);
+        self.length.save_state(w);
+        w.u8(self.duty);
+        w.u8(self.phase);
+        w.u16(self.freq);
+        w.u32(self.period);
+        w.u32(self.delay);
+        w.u8(self.sweep_period);
+        w.u8(self.sweep_shift);
+        w.bool(self.sweep_decrease);
+        w.u8(self.sweep_delay);
+        w.u16(self.sweep_freq);
+        w.bool(self.sweep_enabled);
+        w.i32(self.last_amp);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.enabled = r.bool()?;
+        self.dac_enabled = r.bool()?;
+        self.volume.load_state(r)?;
+        self.length.load_state(r)?;
+        self.duty = r.u8()?;
+        self.phase = r.u8()?;
+        self.freq = r.u16()?;
+        self.period = r.u32()?;
+        self.delay = r.u32()?;
+        self.sweep_period = r.u8()?;
+        self.sweep_shift = r.u8()?;
+        self.sweep_decrease = r.bool()?;
+        self.sweep_delay = r.u8()?;
+        self.sweep_freq = r.u16()?;
+        self.sweep_enabled = r.bool()?;
+        self.last_amp = r.i32()?;
+        Ok(())
+    }
 }
 
 struct WaveChannel {
@@ -358,6 +440,36 @@ impl WaveChannel {
         self.calculate_period();
         self.delay = 4; // Initial delay for wave channel
     }
+
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bool(self.enabled);
+        w.bool(self.dac_enabled);
+        self.length.save_state(w);
+        w.u16(self.freq);
+        w.u32(self.period);
+        w.u32(self.delay);
+        w.u8(self.volume_shift);
+        w.bytes(&self.waveram);
+        w.u8(self.wave_pos);
+        w.i32(self.last_amp);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.enabled = r.bool()?;
+        self.dac_enabled = r.bool()?;
+        self.length.load_state(r)?;
+        self.freq = r.u16()?;
+        self.period = r.u32()?;
+        self.delay = r.u32()?;
+        self.volume_shift = r.u8()?;
+        r.fill(&mut self.waveram)?;
+        self.wave_pos = r.u8()?;
+        self.last_amp = r.i32()?;
+        Ok(())
+    }
 }
 
 struct NoiseChannel {
@@ -445,6 +557,38 @@ impl NoiseChannel {
         self.calculate_period();
         self.delay = 0;
     }
+
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bool(self.enabled);
+        w.bool(self.dac_enabled);
+        self.volume.save_state(w);
+        self.length.save_state(w);
+        w.u8(self.shift);
+        w.bool(self.width_mode);
+        w.u8(self.divisor);
+        w.u16(self.lfsr);
+        w.u32(self.period);
+        w.u32(self.delay);
+        w.i32(self.last_amp);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.enabled = r.bool()?;
+        self.dac_enabled = r.bool()?;
+        self.volume.load_state(r)?;
+        self.length.load_state(r)?;
+        self.shift = r.u8()?;
+        self.width_mode = r.bool()?;
+        self.divisor = r.u8()?;
+        self.lfsr = r.u16()?;
+        self.period = r.u32()?;
+        self.delay = r.u32()?;
+        self.last_amp = r.i32()?;
+        Ok(())
+    }
 }
 
 pub struct Sound {
@@ -523,6 +667,49 @@ impl Sound {
         // Recalculate output period based on actual sample rate
         self.output_period = ((OUTPUT_SAMPLE_COUNT_U32 as u64 * CLOCKS_PER_SECOND as u64)
             / sample_rate as u64) as u32;
+    }
+
+    /// Serialise the logical APU state. The host `player` and the per-channel
+    /// `blip` buffers are runtime plumbing, not machine state, and are left in
+    /// place by a load. Because audio never feeds back into the CPU or PPU, the
+    /// APU has no effect on frame-output determinism — but it is captured so
+    /// sound continues coherently across a save/load.
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.bool(self.on);
+        self.channel1.save_state(w);
+        self.channel2.save_state(w);
+        self.channel3.save_state(w);
+        self.channel4.save_state(w);
+        w.u8(self.left_volume);
+        w.u8(self.right_volume);
+        w.u8(self.channel_to_left);
+        w.u8(self.channel_to_right);
+        w.u8(self.frame_seq_counter);
+        w.u32(self.time);
+        w.u32(self.prev_time);
+        w.u32(self.next_time);
+        w.u32(self.output_period);
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.on = r.bool()?;
+        self.channel1.load_state(r)?;
+        self.channel2.load_state(r)?;
+        self.channel3.load_state(r)?;
+        self.channel4.load_state(r)?;
+        self.left_volume = r.u8()?;
+        self.right_volume = r.u8()?;
+        self.channel_to_left = r.u8()?;
+        self.channel_to_right = r.u8()?;
+        self.frame_seq_counter = r.u8()?;
+        self.time = r.u32()?;
+        self.prev_time = r.u32()?;
+        self.next_time = r.u32()?;
+        self.output_period = r.u32()?;
+        Ok(())
     }
 
     pub fn do_cycle(&mut self, cycles: u32) {

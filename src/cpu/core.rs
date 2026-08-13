@@ -46,6 +46,74 @@ impl Cpu<'_> {
             _executed_operations: Vec::new(),
         }
     }
+    /// Serialise the **complete** machine to a versioned, ROM-checked byte
+    /// blob. See [`crate::savestate`] for the format and the BESS verdict.
+    pub fn save_state(&self) -> Vec<u8> {
+        use crate::savestate::{Writer, FORMAT_VERSION, MAGIC};
+        let mut w = Writer::new();
+        w.bytes(&MAGIC);
+        w.u16(FORMAT_VERSION);
+
+        // ROM identity — never the ROM itself. Title + global checksum let a
+        // load refuse a mismatched cartridge.
+        w.string(&self.memory.mbc.romname());
+        w.u16(self.memory.mbc.global_checksum());
+
+        // CPU core.
+        self.registers.save_state(&mut w);
+        w.bool(self.ime);
+        w.u32(self.setdi);
+        w.u32(self.setei);
+        w.u32(self.halt);
+        // HALT-bug latch: set by a `HALT` that trips the DMG/CGB bug and cleared
+        // on the next opcode fetch, so it can be live at a frame boundary —
+        // omitting it would silently desync the instruction after HALT.
+        w.bool(self.halt_bug);
+        w.u32(self.stop);
+
+        // Everything the MMU owns (RAM, IO, PPU, APU, timer, serial, MBC…).
+        self.memory.save_state(&mut w);
+        w.buf
+    }
+
+    /// Restore a machine from bytes written by [`Cpu::save_state`]. Fails loudly
+    /// on a bad magic, an unknown version, or a different cartridge, rather than
+    /// loading a subtly corrupt state. The ROM currently loaded is kept.
+    pub fn load_state(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), crate::savestate::StateError> {
+        use crate::savestate::{Reader, StateError, FORMAT_VERSION};
+        let mut r = Reader::new(bytes);
+        r.expect_magic()?;
+        let version = r.u16()?;
+        if version != FORMAT_VERSION {
+            return Err(StateError::UnsupportedVersion(version));
+        }
+
+        let title = r.string()?;
+        let checksum = r.u16()?;
+        let cur_title = self.memory.mbc.romname();
+        let cur_checksum = self.memory.mbc.global_checksum();
+        if title != cur_title || checksum != cur_checksum {
+            return Err(StateError::RomMismatch {
+                expected: cur_title,
+                found: title,
+            });
+        }
+
+        self.registers.load_state(&mut r)?;
+        self.ime = r.bool()?;
+        self.setdi = r.u32()?;
+        self.setei = r.u32()?;
+        self.halt = r.u32()?;
+        self.halt_bug = r.bool()?;
+        self.stop = r.u32()?;
+
+        self.memory.load_state(&mut r)?;
+        Ok(())
+    }
+
     fn mut_find_or_insert<T: PartialEq>(vec: &mut Vec<T>, val: T) -> &mut T {
         if let Some(i) = vec.iter().position(|each| *each == val) {
             &mut vec[i]

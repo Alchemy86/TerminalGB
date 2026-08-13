@@ -243,6 +243,50 @@ impl Gameboy {
         }
     }
 
+    /// Serialise the complete machine state to bytes. The caller decides where
+    /// the bytes live (a file, local storage, a download). See
+    /// [`crate::savestate`] for the format.
+    pub fn save_state(&self) -> Vec<u8> {
+        self.cpu.save_state()
+    }
+
+    /// Restore machine state produced by [`Gameboy::save_state`]. Returns an
+    /// error string on a corrupt, version-mismatched, or wrong-game state.
+    pub fn load_state(
+        &mut self,
+        bytes: &[u8],
+    ) -> Result<(), crate::savestate::StateError> {
+        self.cpu.load_state(bytes)
+    }
+
+    /// Cartridge title from the ROM header, for save-slot naming and stats.
+    pub fn rom_title(&self) -> String {
+        self.cpu.memory.mbc.romname()
+    }
+
+    /// Advance exactly one CPU instruction (`Cpu::do_cycle` executes one). For
+    /// the debug surface and fine-grained tests that need to land on
+    /// instruction boundaries a whole-frame step would skip past.
+    pub fn step_instruction(&mut self) {
+        self.cpu.do_cycle();
+    }
+
+    /// Whether the DMG/CGB HALT-bug latch is currently set — a briefly-live bit
+    /// of CPU state. Exposed so tests can prove save states capture it.
+    pub fn debug_halt_bug(&self) -> bool {
+        self.cpu.halt_bug
+    }
+
+    /// Program counter — cheap read for a debug/stats overlay.
+    pub fn debug_pc(&self) -> u16 {
+        self.cpu.registers.pc
+    }
+
+    /// Currently-selected ROM bank — cheap read for a debug/stats overlay.
+    pub fn debug_rom_bank(&self) -> usize {
+        self.cpu.memory.mbc.rom_bank()
+    }
+
     pub fn image(&self) -> &[u8] {
         &*self.cpu.memory.gpu.data
     }

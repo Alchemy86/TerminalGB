@@ -248,4 +248,40 @@ impl MemoryBankController for MBC3 {
             self.calc_rtc_zero();
         }
     }
+
+    fn rom_bank(&self) -> usize {
+        self.rombank
+    }
+
+    fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.usize(self.rombank);
+        w.usize(self.rambank);
+        w.bool(self.selectrtc);
+        w.bool(self.ram_on);
+        w.bytes(&self.rtc_ram);
+        w.bytes(&self.rtc_ram_latch);
+        // rtc_zero is the UNIX-epoch anchor for the real-time clock; capturing
+        // it (and the latch) is what keeps the RTC coherent across a load.
+        w.opt_u64(self.rtc_zero);
+        w.blob(&self.ram);
+    }
+
+    fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.rombank = r.usize()?;
+        self.rambank = r.usize()?;
+        self.selectrtc = r.bool()?;
+        self.ram_on = r.bool()?;
+        r.fill(&mut self.rtc_ram)?;
+        r.fill(&mut self.rtc_ram_latch)?;
+        self.rtc_zero = r.opt_u64()?;
+        let ram = r.blob()?;
+        if ram.len() != self.ram.len() {
+            return Err(crate::savestate::StateError::BadField("mbc3 ram size"));
+        }
+        self.ram = ram;
+        Ok(())
+    }
 }

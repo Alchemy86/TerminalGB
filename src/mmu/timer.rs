@@ -67,6 +67,32 @@ impl Timer {
         };
     }
 
+    pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
+        w.u8(self.divider);
+        w.u8(self.counter);
+        w.u8(self.modulo);
+        w.bool(self.enabled);
+        w.u32(self.step);
+        w.u32(self.internalcnt);
+        w.u32(self.internaldiv);
+        w.u8(self.interrupt);
+    }
+
+    pub(crate) fn load_state(
+        &mut self,
+        r: &mut crate::savestate::Reader,
+    ) -> Result<(), crate::savestate::StateError> {
+        self.divider = r.u8()?;
+        self.counter = r.u8()?;
+        self.modulo = r.u8()?;
+        self.enabled = r.bool()?;
+        self.step = r.u32()?;
+        self.internalcnt = r.u32()?;
+        self.internaldiv = r.u32()?;
+        self.interrupt = r.u8()?;
+        Ok(())
+    }
+
     pub fn do_cycle(&mut self, ticks: u32) {
         self.internaldiv += ticks;
         while self.internaldiv >= 256 {
