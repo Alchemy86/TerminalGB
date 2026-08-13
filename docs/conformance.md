@@ -1,9 +1,17 @@
 # Goal: a standalone Game Boy emulator conformance tool
 
-> **Status: a project goal, not yet built.** This page captures enough design thinking to be
-> actionable later — it is deliberately a reasoned goal, not a specification. · [← Top-level
-> README](../README.md) · Related: [testing](testing.md) · [audio](audio.md) ·
-> [debugging](debugging.md)
+> **Status: the first shippable form is BUILT** — a reusable GitHub Action that scores any
+> emulator through a small adapter contract, documented in
+> **[`conformance-action.md`](conformance-action.md)**. This page remains the design thinking
+> behind the *full* standalone tool; read it for the reasoning, and the action page for what
+> exists today. · [← Top-level README](../README.md) · Related: [testing](testing.md) ·
+> [audio](audio.md) · [debugging](debugging.md)
+>
+> **What the action already settles from this page:** the adapter interface (serial capture +
+> framebuffer comparison, each an independent capability), the explanation-first reporting, and
+> the licensing line — dmg-acid2 vendored under MIT, Blargg's fetched from upstream at a pinned
+> commit, commercial ROMs never. **What it does not:** the audio capability, Mooneye, CGB, and
+> extraction into its own repository.
 
 ## The idea
 

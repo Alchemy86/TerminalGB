@@ -1,0 +1,141 @@
+name: Game Boy conformance
+
+# A **reusable workflow**: another emulator's repository adds one job and gets a
+# conformance score, a badge and an explanation of every failure.
+#
+#   jobs:
+#     conformance:
+#       uses: Alchemy86/gameboy/.github/workflows/conformance.yml@main
+#       with:
+#         build: cargo build --release
+#         adapter: ./ci/gbconform-adapter.sh
+#
+# `build` runs in YOUR checkout, so the adapter can point straight at whatever
+# it produced. Everything else has a working default.
+#
+# If you would rather own the job (matrix, containers, caching, extra steps),
+# use the composite action directly instead — it is one step:
+#
+#   - uses: Alchemy86/gameboy/.github/actions/conformance@main
+#     with: { adapter: ./ci/gbconform-adapter.sh }
+#
+# Contract, adapter examples and the badge recipes: docs/conformance-action.md.
+
+on:
+  workflow_call:
+    inputs:
+      adapter:
+        description: "Command implementing the gbconform/1 adapter contract."
+        required: true
+        type: string
+      build:
+        description: "Shell command that builds your emulator first (optional)."
+        required: false
+        type: string
+        default: ""
+      label:
+        description: "Badge label."
+        required: false
+        type: string
+        default: conformance
+      model:
+        description: "dmg or cgb."
+        required: false
+        type: string
+        default: dmg
+      only:
+        description: "Comma-separated check-id prefixes to run."
+        required: false
+        type: string
+        default: ""
+      roms-dir:
+        description: "Use ROMs from here instead of fetching them."
+        required: false
+        type: string
+        default: ""
+      timeout:
+        description: "Per-ROM wall-clock budget, in seconds."
+        required: false
+        type: number
+        default: 120
+      fail-below:
+        description: >-
+          Fail the job if the pass percentage is below this. Empty never fails
+          on score.
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: "Runner label."
+        required: false
+        type: string
+        default: ubuntu-latest
+      tool-ref:
+        description: >-
+          Ref of Alchemy86/gameboy to take the runner and check registry from.
+          Pin it to a tag if you want a score that cannot move under you.
+        required: false
+        type: string
+        default: main
+      artifact-name:
+        required: false
+        type: string
+        default: conformance-results
+    outputs:
+      passed:
+        description: "Checks that passed."
+        value: ${{ jobs.conformance.outputs.passed }}
+      total:
+        description: "Checks attempted."
+        value: ${{ jobs.conformance.outputs.total }}
+      percent:
+        description: "Pass percentage of attempted checks."
+        value: ${{ jobs.conformance.outputs.percent }}
+      skipped:
+        description: "Checks skipped for want of an adapter capability."
+        value: ${{ jobs.conformance.outputs.skipped }}
+
+jobs:
+  conformance:
+    name: Conformance
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      passed: ${{ steps.conformance.outputs.passed }}
+      total: ${{ steps.conformance.outputs.total }}
+      percent: ${{ steps.conformance.outputs.percent }}
+      skipped: ${{ steps.conformance.outputs.skipped }}
+    steps:
+      # A called workflow gets a bare runner: it must check the caller out
+      # itself. This is the CALLER's repository at the commit under test.
+      - name: Check out the emulator under test
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ...and the tool. `uses: ./path` resolves against the workspace, so the
+      # composite action is used from here exactly as an external caller would
+      # use it directly.
+      - name: Check out the conformance tool
+        uses: actions/checkout@v4
+        with:
+          repository: Alchemy86/gameboy
+          ref: ${{ inputs.tool-ref }}
+          path: .gbconform-tool
+
+      - name: Build the emulator
+        if: ${{ inputs.build != '' }}
+        shell: bash
+        run: ${{ inputs.build }}
+
+      - name: Run the conformance suite
+        id: conformance
+        uses: ./.gbconform-tool/.github/actions/conformance
+        with:
+          adapter: ${{ inputs.adapter }}
+          label: ${{ inputs.label }}
+          model: ${{ inputs.model }}
+          only: ${{ inputs.only }}
+          roms-dir: ${{ inputs.roms-dir }}
+          timeout: ${{ inputs.timeout }}
+          fail-below: ${{ inputs.fail-below }}
+          artifact-name: ${{ inputs.artifact-name }}

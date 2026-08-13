@@ -1019,3 +1019,65 @@ another branch; when those land, this belongs beside them.)
 - **`wCurMap` is populated by `TryLoadSaveFile` at the top of the main menu**, long before
   CONTINUE is chosen, so it cannot mean "we are in the game". Same trap during Oak's speech.
 - **`CableClubLeftGameboy` requires the player to be facing RIGHT** and to be the clock master.
+
+## Conformance GitHub Action — scoring *foreign* emulators (`tools/conformance/`, `.github/actions/conformance/`)
+
+- **Full contract, badge recipes, licensing position and honest gaps:
+  [`docs/conformance-action.md`](docs/conformance-action.md).** This is the first shippable form
+  of the standalone-tool goal in [`docs/conformance.md`](docs/conformance.md); that page is now
+  design rationale, this one is what exists.
+- **The adapter contract is `gbconform/1` and it must stay tiny.** The runner executes
+  `<adapter> <rom>` with `GBCONFORM_{ROM,MODEL,FRAMES,TIMEOUT_S}` plus **at most two** output
+  paths — `GBCONFORM_SERIAL_OUT` (raw link-port bytes) and `GBCONFORM_FRAME_OUT` (one frame).
+  No protocol, nothing parsed from stdout, and **deliberately no way for an adapter to report a
+  verdict** — verdicts come from the ROM. Every demand added here is a project that will not
+  adopt it; resist growing it. Our reference adapter is
+  [`examples/conformance_adapter.rs`](examples/conformance_adapter.rs) and is written to be read
+  as documentation of the whole ask.
+- **The two outputs are independent CAPABILITIES, and declining is `exit 0` + write nothing.**
+  A crash or timeout during the capability probe means *assume the capability exists*, so every
+  check runs and records a real error. Get that backwards and an emulator that segfaults on
+  every ROM produces no files, reads as "no capabilities", and scores **0 out of 0** — which a
+  badge renders as a clean slate. `test_an_adapter_that_crashes_is_an_error_everywhere_not_a_skip`
+  pins it; it caught this exact bug during development.
+- **Screen checks compare SHADE RANK (luminance order), never RGB.** Not optional politeness:
+  our own frames are `000000/606060/c0c0c0/ffffff` and the upstream dmg-acid2 reference is
+  `000000/555555/aaaaaa/ffffff`, so a literal compare fails on every run. `image.quantise_shades`.
+- **Accept permissive frame formats.** PNG (colour types 0/2/3/4/6, bit depth 1–16), Netpbm
+  `P6`/`P5` **and the ASCII `P3`/`P2`**, and raw RGBA/RGB/8-bit dumps. The `P3` support exists
+  because binjgb writes it — assuming binary PPM rejected a perfectly good frame. The upstream
+  acid2 reference is **2-bit greyscale** PNG, an uncommon shape a naive decoder gets wrong.
+- **Guiding principle, worth defending: no check's expected output is defined by our emulator.**
+  Serial verdicts are the ROM's own printed judgement; the acid2 verdict is its author's
+  reference image. This is why Blargg's *screen-only* ROMs (`mem_timing-2`, `halt_bug`,
+  `interrupt_time`, `oam_bug`) are NOT in the action — including them means shipping reference
+  frames produced by us, which is a weaker claim. Read the verdict text off the frame instead.
+- **ROM licensing (the constraint that shaped the design):** dmg-acid2 is MIT and vendored
+  (`third_party/`), so the action already has it. **Blargg's ROMs carry no explicit licence** —
+  freely distributed but not relicensed — so they are **fetched at run time** from
+  `retrio/gb-test-roms` pinned to `c240dd7d…`, the same commit our baselines were made against.
+  Never vendor them here. Commercial ROMs never, in any form.
+- **Runner is Python stdlib only** (`tools/conformance/gbconform.py`, `image.py`) — hand-rolled
+  PNG decode/encode and badge SVG, same dependency-light ethos as `testharness/`. Adding a
+  dependency means every adopting project pays for it. Its own tests:
+  `python3 -m unittest discover -s tools/conformance -p 'test_*.py'` (fake adapters, no
+  emulator involved) and they run in CI.
+- **Our own score is enforced, not asserted.** `.github/workflows/conformance-self.yml` scores us
+  through the *same composite action* an external project calls, fails below 100%, and fails if
+  `docs/conformance-badge.json` (which the README badge renders) has drifted from the real
+  result. Regenerate it deliberately — the command is in that workflow's header comment. A
+  second job runs the **fetch** path with no submodule, because that is what every external
+  caller takes and it is the one that breaks silently when a mirror moves.
+- **Proven foreign against [binjgb](https://github.com/binji/binjgb)** (`gcc -O2 -Isrc -o
+  binjgb-tester src/{tester,emulator,joypad,options,common,memory}.c -lm`): its shipped headless
+  tester covers the screen capability in a four-line adapter and **passes dmg-acid2 unmodified**.
+  It has **no serial output** (no flag, and `emulator.h` publishes no serial hook), so the serial
+  half is *not* proven foreign — say so rather than implying it is.
+- **`.github/actions/conformance` is the primary product**; the reusable workflow
+  (`.github/workflows/conformance.yml`) is a wrapper. A called workflow gets a bare runner and
+  must `actions/checkout` the caller itself; the composite action instead gets this whole repo
+  checked out for it, which is why `${{ github.action_path }}/../../..` reaches the vendored ROM.
+- **Where the "why" comes from:** `tools/conformance/checks.json`, fed by the standing
+  per-fix convention at the top of this file and `docs/conformance-notes.md`. A check with no
+  `behaviour`, no `explain` or no `hardware` citation **fails the runner's test suite** — the
+  explanation is the product, so it is enforced.

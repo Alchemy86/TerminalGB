@@ -1,0 +1,87 @@
+name: Conformance (self)
+
+# We publish a conformance tool, so our own emulator has to be scored by it —
+# publicly, on every push, with the number kept honest.
+#
+# `docs/conformance.md` calls this the credibility requirement: a suite whose
+# author quietly fails their own checks is worthless. So this job
+#
+#   1. runs the runner's own unit tests (it is the part that has to work in
+#      other people's repositories, where nothing else will catch a mistake),
+#   2. scores this emulator through the SAME composite action an external
+#      project would call — no private path, no shortcut,
+#   3. fails if the score drops below 100%, and
+#   4. fails if the committed badge (docs/conformance-badge.json, which the
+#      README renders) has drifted from the real result.
+#
+# Step 4 is the part that stops the badge lying. Regenerate it deliberately:
+#
+#   cargo build --release --example conformance_adapter
+#   python3 tools/conformance/gbconform.py \
+#       --adapter target/release/examples/conformance_adapter \
+#       --roms-dir tests --no-fetch --out target/conformance
+#   cp target/conformance/badge.json docs/conformance-badge.json
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  self:
+    name: Score ourselves
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # Blargg ROMs; the fetch path is exercised below
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Runner unit tests
+        run: python3 -m unittest discover -s tools/conformance -p 'test_*.py' -v
+
+      # The reference implementation of the adapter contract.
+      - name: Build the reference adapter
+        run: cargo build --release --example conformance_adapter
+
+      # Exactly what an external project runs, pointed at ourselves. The
+      # submodule is already present, so `roms-dir` is used and no download
+      # happens — the fetch path gets its own job below.
+      - name: Conformance
+        id: conformance
+        uses: ./.github/actions/conformance
+        with:
+          adapter: target/release/examples/conformance_adapter
+          roms-dir: tests
+          fail-below: "100"
+          output-dir: target/conformance
+
+      - name: The committed badge must match the real score
+        run: |
+          set -eu
+          if ! diff -u docs/conformance-badge.json target/conformance/badge.json; then
+            echo "::error::docs/conformance-badge.json is stale — the README badge"
+            echo "::error::would show a score this build did not produce."
+            exit 1
+          fi
+          echo "badge is current: $(cat docs/conformance-badge.json | tr -d '\n ')"
+
+  # The path every external caller actually takes: no submodule, ROMs fetched
+  # from their own upstream at the pinned commit. Worth its own job because it
+  # is the one that breaks silently when an upstream mirror moves.
+  fetch-path:
+    name: Score ourselves with fetched ROMs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4        # deliberately WITHOUT submodules
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --example conformance_adapter
+      - uses: ./.github/actions/conformance
+        with:
+          adapter: target/release/examples/conformance_adapter
+          fail-below: "100"
+          label: conformance (fetched)
+          artifact-name: conformance-results-fetched
+          output-dir: target/conformance-fetched

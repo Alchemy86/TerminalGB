@@ -1,6 +1,7 @@
 # gameboy
 
 [![CI](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml/badge.svg)](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml)
+[![conformance](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Alchemy86/gameboy/main/docs/conformance-badge.json)](docs/conformance-action.md)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
 [![Rust 1.83+](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](rust-toolchain)
 
@@ -476,6 +477,54 @@ test-ROM harness, and a desktop build on every push/PR.
 
 ---
 
+## 🧪 Conformance for *your* emulator
+
+**A reusable GitHub Action that runs Game Boy test ROMs against *someone else's* emulator and
+gives it a score, a badge, and an explanation of every failure.** Add one job:
+
+```yaml
+jobs:
+  conformance:
+    uses: Alchemy86/gameboy/.github/workflows/conformance.yml@main
+    with:
+      build: cargo build --release          # optional: build your emulator first
+      adapter: ./ci/gbconform-adapter.sh    # the only thing you have to write
+```
+
+Anyone can run a test ROM. The point of this one is the **why**: a failure comes back as
+*"`POP AF` must mask the low nibble of F — bits 0-3 of the flag register do not exist on the
+chip"*, with the hardware citation attached, drawn from the same per-fix conformance notes
+this project has been keeping all along.
+
+**Your emulator only has to do two things**, and not even both — write the bytes a ROM sends
+to the link port, and/or write one frame. No API, no protocol, nothing parsed from stdout.
+The adapter is usually a four-line shell script over a headless mode you already have:
+
+```sh
+#!/bin/sh
+[ -n "${GBCONFORM_FRAME_OUT:-}" ] || exit 0     # decline the capability you lack
+exec my-emulator --headless --frames "$GBCONFORM_FRAMES" \
+     --screenshot "$GBCONFORM_FRAME_OUT" "$GBCONFORM_ROM"
+```
+
+| | |
+|---|---|
+| **Runs today** | Blargg `cpu_instrs` 01–11, `instr_timing`, `mem_timing` (serial) + `dmg-acid2` (screen) — 14 checks |
+| **Badge** | shields.io endpoint JSON **and** a self-contained SVG; `conformance 24/26`, not pass/fail |
+| **Report** | `results.json`, a Markdown summary in the job page, captured serial text, actual + diff frames |
+| **Cost** | Python standard library only — no `pip install`, no toolchain, seconds to run |
+| **ROMs** | dmg-acid2 is MIT and vendored here; **Blargg's are fetched from their own upstream** at a pinned commit, never redistributed by us; commercial ROMs never |
+| **Proven on** | ourselves (14/14, enforced in CI) and on **[binjgb](https://github.com/binji/binjgb)** — an unrelated emulator, which passes dmg-acid2 through it unmodified |
+
+Screen checks compare **shade rank, not colour**, so your palette can be green, grey or
+anything else. Checks needing a capability your adapter does not have are reported *skipped*
+and excluded from the score, rather than failed.
+
+📖 **Full contract, adapter examples, badge recipes, the licensing position and an honest
+account of what is *not* covered: [`docs/conformance-action.md`](docs/conformance-action.md).**
+
+---
+
 ## Roadmap & goals
 
 Near-term, in priority order:
@@ -495,7 +544,8 @@ Bigger picture:
   fails, and **why** — and eventually extract it into its own crate/repo. The design thinking
   (what it reports, how it attaches to a foreign emulator, what we already have, the extraction
   and licensing path, and why our own honest scores are the proof) is written up in
-  **[`docs/conformance.md`](docs/conformance.md)**.
+  **[`docs/conformance.md`](docs/conformance.md)**. **Its first shippable form now exists** —
+  see [Conformance for *your* emulator](#-conformance-for-your-emulator) above.
 
 ---
 

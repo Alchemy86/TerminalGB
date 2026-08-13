@@ -1,0 +1,265 @@
+{
+  "contract": "gbconform/1",
+  "note": [
+    "The check registry: what is run, how the verdict is reached, and — the part",
+    "that makes this worth using — what a failure actually MEANS in hardware",
+    "terms. Every `explain` entry is a hypothesis an emulator author can act on;",
+    "`hardware` cites where the behaviour is documented.",
+    "",
+    "PRINCIPLE: no check's expected output is defined by our emulator. A serial",
+    "verdict is the test ROM's own printed judgement; the dmg-acid2 verdict is",
+    "its author's own reference image. We are a participant in this suite, not",
+    "the authority for it — see docs/conformance-action.md."
+  ],
+  "suites": {
+    "blargg": {
+      "name": "Blargg's Game Boy hardware test ROMs",
+      "author": "Shay Green (blargg)",
+      "source": {
+        "kind": "fetch",
+        "reason": [
+          "These ROMs are freely distributed by their author and widely mirrored,",
+          "but they carry no explicit licence file, so this repository does not",
+          "vendor or redistribute them. The runner fetches them from the",
+          "community mirror at a pinned commit — the same commit this project's",
+          "own baselines were produced against."
+        ],
+        "url": "https://codeload.github.com/retrio/gb-test-roms/tar.gz/{ref}",
+        "repo": "https://github.com/retrio/gb-test-roms",
+        "ref": "c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15",
+        "strip_components": 1
+      }
+    },
+    "acid2": {
+      "name": "dmg-acid2",
+      "author": "Matt Currie",
+      "source": {
+        "kind": "vendored",
+        "reason": [
+          "MIT licensed, so it is redistributable and is vendored in this",
+          "repository together with its author's reference image."
+        ],
+        "dir": "third_party/dmg-acid2",
+        "url": "https://github.com/mattcurrie/dmg-acid2"
+      }
+    }
+  },
+  "checks": [
+    {
+      "id": "blargg/cpu_instrs/01-special",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/01-special.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "The awkward one-off instructions: DAA, CPL, SCF, CCF, and the flag effects nothing else shares.",
+      "explain": [
+        "DAA is the usual culprit. Its correction depends on the N flag — after a SUB the adjustment SUBTRACTS 0x06/0x60 rather than adding — and on H and C, not on the value of A alone. An implementation that only looks at A's nibbles passes addition and fails subtraction.",
+        "DAA must also set C when the correction pushes the result past 0x99, and must leave N alone while clearing H.",
+        "SCF/CCF clear N and H; CCF complements C rather than setting it."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, `DAA` / `CPL` / `SCF` / `CCF`.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/02-interrupts",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/02-interrupts.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "Interrupt enable/disable ordering and dispatch: EI, DI, HALT, and the IE/IF handshake.",
+      "explain": [
+        "EI takes effect AFTER the following instruction, so `EI; DI` never services an interrupt. Setting IME immediately is the classic failure.",
+        "Dispatch must clear only the serviced bit of IF, push PC, and jump to the fixed vector — with IME cleared, so a handler does not re-enter.",
+        "The HALT bug: with IME=0 and `IE & IF & 0x1F != 0`, HALT does not halt — the byte after it is fetched twice because PC is not incremented. Emulators that skip this hang or mis-time. See also the dedicated `halt_bug` ROM.",
+        "Only bits 0-4 of IE/IF are meaningful; IF's top three bits read as 1."
+      ],
+      "hardware": "Pan Docs — Interrupts (`EI`/`DI` timing, the HALT bug).",
+      "reference": "https://gbdev.io/pandocs/Interrupts.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/03-op-sp-hl",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/03-op sp,hl.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "`ADD SP,e8` and `LD HL,SP+e8` — the two instructions with the strangest flag rules on the chip.",
+      "explain": [
+        "Both compute H and C from an UNSIGNED 8-bit addition of SP's low byte and the operand — bit 3 carry sets H, bit 7 carry sets C — even though the operand is a SIGNED offset applied to the full 16-bit SP. Computing the flags from the 16-bit result is the single most common bug here.",
+        "Both instructions CLEAR Z and N, including when the result is zero.",
+        "`ADD SP,e8` is 16 T-cycles and `LD HL,SP+e8` is 12; if `instr_timing` also fails, fix the flags here first."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, 16-bit arithmetic.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/04-op-r-imm",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/04-op r,imm.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "8-bit ALU against an immediate operand: ADD/ADC/SUB/SBC/AND/XOR/OR/CP and their flags.",
+      "explain": [
+        "ADC/SBC must fold the carry IN to the half-carry calculation: H for ADC is `(a & 0xF) + (n & 0xF) + carry > 0xF`, not the carry-less form.",
+        "AND sets H; XOR and OR clear it. CP is SUB with the result discarded, so it still sets N and both carries.",
+        "SUB and CP set C when a BORROW occurred (a < operand), which is the inverse of the addition sense."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, 8-bit arithmetic and logic.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/05-op-rp",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/05-op rp.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "16-bit register-pair operations: INC/DEC rr and `ADD HL,rr`.",
+      "explain": [
+        "`ADD HL,rr` takes H from a carry out of BIT 11 and C from a carry out of bit 15, and leaves Z COMPLETELY UNTOUCHED. Setting Z from the 16-bit result is the usual failure.",
+        "`INC rr` / `DEC rr` affect NO flags at all — they are address arithmetic, not ALU operations.",
+        "The AF pair is not a valid `rr` operand here; SP is."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, 16-bit arithmetic.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/06-ld-r-r",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/06-ld r,r.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "The whole `LD r,r'` block (opcodes 0x40-0x7F) including the (HL) forms.",
+      "explain": [
+        "A failure here is almost always an opcode-table transcription error rather than a behavioural one: check the register decode order B, C, D, E, H, L, (HL), A.",
+        "0x76 sits inside this block and is HALT, not `LD (HL),(HL)`.",
+        "No `LD r,r'` touches any flag."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, 8-bit load instructions.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/07-jr-jp-etc",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/07-jr,jp,call,ret,rst.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "Control flow: JR/JP/CALL/RET/RST and the four condition codes.",
+      "explain": [
+        "JR's operand is a SIGNED byte relative to the address of the instruction AFTER the jump — i.e. PC has already advanced past both bytes.",
+        "The stack grows DOWN: CALL/PUSH decrement SP then write the high byte first (`[--SP]=hi, [--SP]=lo`); RET/POP read low then high.",
+        "`JP (HL)` does not read memory — it loads PC from HL directly, despite the parenthesised mnemonic.",
+        "RST n jumps to `n` where n is one of 0x00,0x08,...,0x38, pushing the return address like CALL."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, jumps and calls.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/08-misc",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/08-misc instrs.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "The leftovers: PUSH/POP (AF in particular), LD (a16),SP, and the odd stack forms.",
+      "explain": [
+        "`POP AF` must MASK the low nibble of F to zero — bits 0-3 of the flag register do not exist on the chip, so a value pushed with them set comes back with them clear. Storing F verbatim is the classic failure and it is what this test hunts.",
+        "`LD (a16),SP` writes two bytes, low first.",
+        "PUSH is 16 T-cycles, POP is 12 — relevant if `instr_timing` also fails."
+      ],
+      "hardware": "Pan Docs — CPU Registers (the F register's unused low nibble).",
+      "reference": "https://gbdev.io/pandocs/CPU_Registers_and_Flags.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/09-op-r-r",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/09-op r,r.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "8-bit ALU with a register operand — the same operations as 04 across every register.",
+      "explain": [
+        "If 04 passes and this fails, the ALU itself is right and the operand decode is wrong: check that the low three bits of the opcode select the source register in the order B, C, D, E, H, L, (HL), A.",
+        "If both fail, fix 04 first — the flag rules are the shared cause."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, 8-bit arithmetic and logic.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/10-bit-ops",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/10-bit ops.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "The CB-prefixed page: rotates, shifts, SWAP, BIT/RES/SET.",
+      "explain": [
+        "The non-prefixed RLCA/RRCA/RLA/RRA always CLEAR Z; their CB-prefixed counterparts RLC A/RRC A/RL A/RR A set it from the result. Sharing one implementation between them is the most common bug in this test.",
+        "BIT sets H, clears N, and sets Z from the INVERSE of the tested bit; it leaves C alone.",
+        "SRL shifts in a zero; SRA preserves bit 7. SWAP clears every flag except Z.",
+        "Every `(HL)` form is a read-modify-write: 16 T-cycles, and BIT (HL) is 12 because it does not write back."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set, rotate/shift and bit operations.",
+      "reference": "https://gbdev.io/pandocs/CPU_Instruction_Set.html"
+    },
+    {
+      "id": "blargg/cpu_instrs/11-op-a-hl",
+      "suite": "blargg",
+      "rom": "cpu_instrs/individual/11-op a,(hl).gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "8-bit ALU with `(HL)` as the operand — the memory-operand path through the ALU.",
+      "explain": [
+        "Same flag rules as 04 and 09. If those pass and this does not, the fault is in the memory read path rather than the ALU: check that `(HL)` is read once, before the operation, and that it goes through the same bus as any other read (echo RAM, unusable OAM range, I/O mirrors).",
+        "This is also the first test many emulators fail once a memory-mapper is involved — confirm HL can address ROM, VRAM and WRAM equally."
+      ],
+      "hardware": "Pan Docs — Memory Map, and CPU Instruction Set.",
+      "reference": "https://gbdev.io/pandocs/Memory_Map.html"
+    },
+    {
+      "id": "blargg/instr_timing",
+      "suite": "blargg",
+      "rom": "instr_timing/instr_timing.gb",
+      "method": "serial",
+      "frames": 4000,
+      "behaviour": "The duration of every instruction, measured against the timer.",
+      "explain": [
+        "Conditional branches have TWO durations: JR cc is 12 T-cycles taken and 8 not taken, JP cc 16/12, CALL cc 24/12, RET cc 20/8. Charging one fixed cost is the usual failure.",
+        "Unconditional RET is 16 T-cycles; RETI is 16 as well.",
+        "This test measures instruction LENGTH only. If it passes but `mem_timing` fails, the totals are right and the placement of the memory access WITHIN the instruction is wrong — a different fix entirely.",
+        "A failure at the very first sub-test usually means the timer's DIV/TIMA divider itself is wrong rather than any instruction."
+      ],
+      "hardware": "Pan Docs — CPU Instruction Set (cycle counts) and Timer and Divider Registers.",
+      "reference": "https://gbdev.io/pandocs/Timer_and_Divider_Registers.html"
+    },
+    {
+      "id": "blargg/mem_timing",
+      "suite": "blargg",
+      "rom": "mem_timing/mem_timing.gb",
+      "method": "serial",
+      "frames": 6000,
+      "behaviour": "WHICH M-cycle inside an instruction each memory read or write lands on — not how long the instruction takes in total.",
+      "explain": [
+        "This is a structural test, not a table of numbers. If your emulator executes a whole instruction and only then advances the timer/PPU by its cycle count, no per-instruction table can pass it: the read happens on a specific M-cycle and observes the timer's value AT THAT CYCLE.",
+        "The fix that worked in this project was to step the timer one M-cycle BEFORE each bus access and charge only the instruction's remaining internal cycles at the end — no per-T-cycle CPU loop needed, and the cost measured at about 15% on a pure-CPU benchmark. See docs/components/timer.md and the `bus_tick` hook in src/mmu.rs.",
+        "The same hook is what later made the sub-instruction APU tests (Blargg `dmg_sound` 09/10/12) passable at all: anything measured at sub-instruction resolution is unreachable while 'now' only advances at instruction boundaries.",
+        "If `instr_timing` passes and this does not, that is the expected signature of exactly this gap."
+      ],
+      "hardware": "Pan Docs — Timer and Divider Registers; the ROM's own readme.txt describes the measurement.",
+      "reference": "https://gbdev.io/pandocs/Timer_and_Divider_Registers.html"
+    },
+    {
+      "id": "acid2/dmg-acid2",
+      "suite": "acid2",
+      "rom": "dmg-acid2.gb",
+      "reference_image": "reference-dmg.png",
+      "method": "screen",
+      "frames": 600,
+      "behaviour": "PPU rendering as a whole: the test draws a face, and each broken feature deforms it in a specific, documented way.",
+      "explain": [
+        "Compare your frame with the upstream reference image — the author's own README maps each deformation to the feature that causes it, which is more precise than any pixel count. The diff artifact this runner writes marks the differing pixels in red.",
+        "Features under test include: the 10-sprites-per-scanline limit, sprite X-coordinate priority, the OBJ-to-BG priority bit, 8x16 sprite tile-index bit 0 being ignored, sprite and background flipping, the window, the BG/window tile-data select, and the OBJ palettes.",
+        "This runner compares SHADE RANK, not RGB, so your palette can be green, grey or anything else — only which of the four shades each pixel received is judged.",
+        "A frame that differs everywhere usually means the run never reached the finished image (too few frames, or the LCD never enabled), not a rendering bug. Check the artifact before chasing the PPU.",
+        "Run it in DMG mode. In CGB mode the ROM draws a different (also correct) image, which this reference does not describe."
+      ],
+      "hardware": "Pan Docs — Rendering, OBJ priority, and the LCDC register.",
+      "reference": "https://github.com/mattcurrie/dmg-acid2"
+    }
+  ]
+}

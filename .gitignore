@@ -20,3 +20,5 @@ main_static
 .DS_Store
 log
 NOTES
+# The conformance runner is Python; keep its bytecode cache out of the tree.
+__pycache__/

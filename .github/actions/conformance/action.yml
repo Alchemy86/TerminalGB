@@ -1,0 +1,141 @@
+name: "Game Boy conformance"
+description: >-
+  Run Game Boy test ROMs against your emulator through a tiny adapter contract,
+  and get a score, a badge and an explanation of every failure.
+author: "gameboy contributors"
+
+# This is the composite action — one step, usable from any workflow. There is
+# also a reusable *workflow* wrapper (.github/workflows/conformance.yml) for
+# callers who would rather hand over a whole job.
+#
+# GitHub checks this repository out for us when the action is referenced as
+# `Alchemy86/gameboy/.github/actions/conformance@<ref>`, so `github.action_path`
+# gives us the runner, the check registry AND the vendored, MIT-licensed
+# dmg-acid2 ROM with its reference image. Nothing else is downloaded except the
+# Blargg suite, which is fetched from its own upstream mirror at a pinned
+# commit because this repository does not redistribute it — see
+# docs/conformance-action.md, "ROM licensing".
+
+branding:
+  icon: check-square
+  color: green
+
+inputs:
+  adapter:
+    description: >-
+      Command implementing the gbconform/1 adapter contract. Usually a short
+      shell script that maps the contract's environment variables onto your
+      emulator's own flags. Run the runner with `--contract` to print the
+      contract, or see docs/conformance-action.md.
+    required: true
+  label:
+    description: "Badge label."
+    required: false
+    default: conformance
+  model:
+    description: "Which model the adapter should emulate: dmg or cgb."
+    required: false
+    default: dmg
+  only:
+    description: >-
+      Comma-separated check-id prefixes to run (e.g. `blargg/cpu_instrs`).
+      Empty runs every check.
+    required: false
+    default: ""
+  roms-dir:
+    description: >-
+      Use ROMs from this directory instead of fetching them. Set it when your
+      runner has no network access, or when you keep a local mirror.
+    required: false
+    default: ""
+  timeout:
+    description: "Per-ROM wall-clock budget, in seconds."
+    required: false
+    default: "120"
+  fail-below:
+    description: >-
+      Fail the step if the pass percentage is below this. Empty (the default)
+      never fails the build on score — the report is still produced, which is
+      the right default for a project adopting the suite mid-way.
+    required: false
+    default: ""
+  output-dir:
+    description: "Where results, badges and artifacts are written."
+    required: false
+    default: conformance-out
+  upload-artifact:
+    description: "Upload the results directory as a workflow artifact."
+    required: false
+    default: "true"
+  artifact-name:
+    description: "Name of that artifact."
+    required: false
+    default: conformance-results
+
+outputs:
+  passed:
+    description: "Checks that passed."
+    value: ${{ steps.run.outputs.passed }}
+  total:
+    description: "Checks attempted (skipped ones excluded)."
+    value: ${{ steps.run.outputs.total }}
+  percent:
+    description: "Pass percentage of attempted checks."
+    value: ${{ steps.run.outputs.percent }}
+  skipped:
+    description: >-
+      Checks skipped because your adapter cannot provide the capability they
+      need. Not failures, and not counted in `total`.
+    value: ${{ steps.run.outputs.skipped }}
+  results-dir:
+    description: "Directory holding results.json, badge.json, badge.svg, summary.md."
+    value: ${{ steps.run.outputs.results-dir }}
+
+runs:
+  using: composite
+  steps:
+    # No setup-python step on purpose: every GitHub-hosted runner already has
+    # python3, the runner is standard library only, and skipping the setup
+    # keeps this action a few seconds rather than a minute.
+    - name: Run the conformance suite
+      id: run
+      shell: bash
+      # Inputs arrive as environment variables, never interpolated into the
+      # script body: an adapter command is user text, and `${{ }}` inside a
+      # `run:` block is textual substitution, not quoting.
+      env:
+        GBC_ADAPTER: ${{ inputs.adapter }}
+        GBC_OUT: ${{ inputs.output-dir }}
+        GBC_LABEL: ${{ inputs.label }}
+        GBC_MODEL: ${{ inputs.model }}
+        GBC_TIMEOUT: ${{ inputs.timeout }}
+        GBC_ONLY: ${{ inputs.only }}
+        GBC_ROMS_DIR: ${{ inputs.roms-dir }}
+        GBC_FAIL_BELOW: ${{ inputs.fail-below }}
+        GBC_ROOT: ${{ github.action_path }}/../../..
+      run: |
+        set -euo pipefail
+        args=(
+          --adapter "$GBC_ADAPTER"
+          --out "$GBC_OUT"
+          --label "$GBC_LABEL"
+          --model "$GBC_MODEL"
+          --timeout "$GBC_TIMEOUT"
+          --repo-root "$GBC_ROOT"
+        )
+        # `if`, not `[ … ] && …`: under `set -e` a false test as the last
+        # command of an && list exits the whole script.
+        if [ -n "$GBC_ONLY" ]; then args+=(--only "$GBC_ONLY"); fi
+        if [ -n "$GBC_ROMS_DIR" ]; then args+=(--roms-dir "$GBC_ROMS_DIR"); fi
+        if [ -n "$GBC_FAIL_BELOW" ]; then args+=(--fail-below "$GBC_FAIL_BELOW"); fi
+        python3 "$GBC_ROOT/tools/conformance/gbconform.py" "${args[@]}"
+
+    # Always uploaded, including when the score gated the build — a report you
+    # cannot read is not a report.
+    - name: Upload results
+      if: ${{ always() && inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.output-dir }}
+        if-no-files-found: warn
