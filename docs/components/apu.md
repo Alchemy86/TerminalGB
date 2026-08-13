@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`a82eaa6`](https://github.com/Alchemy86/gameboy/tree/a82eaa62024ad5694dfaf355aa4798baa34a3239) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 > ⚠️ **`src/sound.rs` is being rewritten right now** (two audio crews). To avoid minting
 > line links that break every rebase, this page's `sound.rs` references are **file-level
