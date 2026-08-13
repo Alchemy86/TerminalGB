@@ -49,6 +49,29 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled
   reference file, not a module.
-- The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
+- The `retrio/gb-test-roms` submodule (`.gitmodules`) holds the Blargg ROMs; it is now
+  initialised and wired into CI (see the test-ROM harness below).
+
+## Test-ROM correctness harness
+
+- **Runner:** `testharness/testroms.rs`, a `harness = false` Cargo integration test
+  (`[[test]] name = "testroms"`). Run it with `cargo test --release --test testroms`. It
+  lives in `testharness/` (not `tests/`) because **`tests/` is the gb-test-roms submodule** —
+  Cargo cannot track `.rs` files inside a submodule path.
+- **Two mechanisms:** Blargg → serial string (`Serial::set_callback`) capped at 250M cycles;
+  dmg-acid2 + Blargg screen-only ROMs → FNV-1a hash of the RGBA framebuffer over a fixed 600
+  frames. On mismatch it dumps the actual frame to `target/testrom-artifacts/<id>.png`.
+- **Baseline:** `testharness/baseline.txt` records the expected result of every ROM. CI is
+  red only on a *change* from it (regression or improvement). Update deliberately with
+  `UPDATE_BASELINE=1 cargo test --release --test testroms`. Full explanation in
+  `docs/testing.md`.
+- **Sharp edges learned:** (1) always drive test ROMs via `Cpu::new(data, Some(path))` — with
+  `None`, `get_mbc` forces MBC3 and mis-drives them. (2) The MBC writes a `.gbsave` next to
+  the ROM path, so the harness **copies each ROM into `target/` first** to keep the submodule
+  checkout clean. (3) Emulation is deterministic (WRAM seeded with a fixed value, audio never
+  enabled), so frame hashes reproduce exactly — the harness asserts this at startup.
+- **Vendored ROM:** `third_party/dmg-acid2/` holds the prebuilt MIT acid2 ROM + reference PNG
+  (upstream ships source only); `.gitignore`'s `**/*.gb` rule is negated for that one file.
+- No new crate dependencies: the hash and PNG writer are hand-rolled.
 
 - Add durable project-specific notes here as they are discovered through real work.

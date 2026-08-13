@@ -18,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+        with:
+          submodules: recursive   # test ROMs live in the tests/ submodule
       - uses: Swatinem/rust-cache@v2
       - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
       - run: rustup component add rustfmt clippy
@@ -31,3 +33,31 @@ jobs:
         run: cargo test --release
       - name: Make desktop build
         run: cd ./examples/desktop && cargo build
+
+  testroms:
+    name: Test-ROM correctness harness
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive   # Blargg ROMs live in the tests/ submodule
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
+      - name: Install ALSA development libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # Runs Blargg (serial) + dmg-acid2/Blargg-screen (frame hash) ROMs headlessly,
+      # compares against testharness/baseline.txt, and is red only on a change from it.
+      # Prints a pass count (e.g. "Blargg serial suite: 12/13 passing"). ~1.5s to run.
+      - name: Run test-ROM harness
+        run: cargo test --release --test testroms
+      # On any baseline mismatch the harness dumps the actual frame(s) — keep them.
+      - name: Upload frame artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testrom-frames
+          path: target/testrom-artifacts/*.png
+          if-no-files-found: ignore

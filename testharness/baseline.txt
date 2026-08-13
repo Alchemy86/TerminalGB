@@ -1,0 +1,30 @@
+# Test-ROM known-failures baseline.
+#
+# The EXPECTED result of every ROM. CI is green when reality matches this
+# file and red only when a result changes (a regression, or an improvement
+# that should be blessed here). Regenerate deliberately with:
+#
+#   UPDATE_BASELINE=1 cargo test --release --test testroms
+#
+# Serial ROMs record PASS / FAIL. Frame-hash ROMs record HASH:<fnv1a64>;
+# a changed hash means the rendered output changed (inspect the dumped PNG).
+# See docs/testing.md for the full explanation.
+
+blargg/cpu_instrs/01-special = PASS
+blargg/cpu_instrs/02-interrupts = PASS
+blargg/cpu_instrs/03-op-sp-hl = PASS
+blargg/cpu_instrs/04-op-r-imm = PASS
+blargg/cpu_instrs/05-op-rp = PASS
+blargg/cpu_instrs/06-ld-r-r = PASS
+blargg/cpu_instrs/07-jr-jp-etc = PASS
+blargg/cpu_instrs/08-misc = PASS
+blargg/cpu_instrs/09-op-r-r = PASS
+blargg/cpu_instrs/10-bit-ops = PASS
+blargg/cpu_instrs/11-op-a-hl = PASS
+blargg/instr_timing = PASS
+blargg/mem_timing = FAIL
+blargg/mem_timing-2 = HASH:df362fd7be363c0d
+blargg/interrupt_time = HASH:2f54218861112ee5
+blargg/halt_bug = HASH:8bc6421af30ea5c5
+blargg/oam_bug = HASH:af715310321146ad
+acid2/dmg-acid2 = HASH:01acf78fe505f31c

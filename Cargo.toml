@@ -72,3 +72,11 @@ path = "examples/desktop/bin.rs"
 [[example]]
 name = "terminal"
 path = "examples/terminal/bin.rs"
+
+# Headless test-ROM correctness harness. `harness = false` gives it its own
+# main() so it can print a pass count and control the process exit code (red on
+# regression). See testharness/testroms.rs and docs/testing.md.
+[[test]]
+name = "testroms"
+path = "testharness/testroms.rs"
+harness = false
