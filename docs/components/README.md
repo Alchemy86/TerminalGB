@@ -51,6 +51,10 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
 - **[Accuracy testing / the yardstick](../testing.md)** — the Blargg, Mooneye, and
   dmg-acid2/cgb-acid2 suites every component page's test list refers to, how a headless
   harness would run them, and an honest note on the "Nintendo's emulator scored 100%" claim.
+- **[Debug-tooling design](../debugging.md)** — the inspect / manipulate / capture surface
+  (registers, disassembly, tile & OAM viewers, stepping, breakpoints, watchpoints,
+  screenshots, and the deterministic frame-hashing that feeds the accuracy tests), with a
+  core/frontend boundary that keeps debug cost out of release builds.
 
 ## Provenance & honesty
 

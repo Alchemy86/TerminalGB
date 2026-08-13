@@ -118,8 +118,10 @@ The **MMU is the hub**: the CPU only reads and writes addresses, and the MMU rou
 a component. Components raise interrupts by setting a bit the MMU folds into `IF`; the CPU
 dispatches them (priority VBlank → STAT → Timer → Serial → Joypad).
 
-👉 **Start at the [component reference index](docs/components/README.md)**, or read the
-[accuracy-testing yardstick](docs/testing.md) that every component's test list is built on.
+👉 **Start at the [component reference index](docs/components/README.md)**, read the
+[accuracy-testing yardstick](docs/testing.md) that every component's test list is built on,
+or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the
+running machine (and the deterministic frame-hashing that ties into the tests).
 
 <details>
 <summary><strong>Memory map</strong> (click to expand)</summary>

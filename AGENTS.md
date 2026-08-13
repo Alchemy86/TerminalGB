@@ -26,6 +26,16 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **[`docs/testing.md`](docs/testing.md)** is the accuracy yardstick: Blargg + Mooneye GB +
   dmg-acid2/cgb-acid2, how a headless harness runs each, and how pass/fail is detected
   (Blargg → serial string; Mooneye → `LD B,B` + Fibonacci registers; acid2 → reference PNG).
+- **[`docs/debugging.md`](docs/debugging.md)** is the debug-tooling design (inspect /
+  manipulate / capture), grounded in a reading of `ioncodes/ayyboy-advance`. Key
+  architectural facts it establishes, worth knowing before adding debug features:
+  `Cpu::do_cycle()` already executes exactly **one instruction**, so instruction/scanline/
+  frame stepping and PC-breakpoints are cheap *driver-loop* work with **zero hot-path cost**;
+  decode and execute are **fused** in `Cpu::operation()` so a disassembler must be written
+  from scratch (it also feeds Game Boy Doctor logging); the **only** feature needing a
+  hot-path hook is memory watchpoints in `mmu::rb/wb`, which must be behind a `debug` cargo
+  feature so release builds pay nothing. First thing to build: deterministic frame-hash +
+  reference compare wired into the acid2 harness.
 - When touching emulation code, keep the relevant component page's "how it works here"
   references and "honest approximations" in sync.
 
