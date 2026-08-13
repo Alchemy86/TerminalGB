@@ -125,8 +125,8 @@ fn main() {
     println!("queue depth:          min {} max {} now {depth_now} (start-fill {}, high-water {})",
         if stats.depth_min == usize::MAX { 0 } else { stats.depth_min },
         stats.depth_max,
-        gameboy::sound::sample_queue::START_FILL,
-        gameboy::sound::sample_queue::HIGH_WATER);
+        gameboy::sound::sample_queue::start_fill(),
+        gameboy::sound::sample_queue::high_water());
     println!("audio callbacks:      {}", stats.callbacks);
 
     let ok = stats.underruns == 0 && stats.dropped == 0;

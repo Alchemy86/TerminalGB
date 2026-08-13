@@ -9,8 +9,24 @@ const WAVE_PATTERN: [[i32; 8]; 4] = [
 // Game Boy CPU runs at 4.194304 MHz
 const CLOCKS_PER_SECOND: u32 = 4194304;
 const CLOCKS_PER_FRAME: u32 = CLOCKS_PER_SECOND / 512;
-const OUTPUT_SAMPLE_COUNT: usize = 2000;
-const OUTPUT_SAMPLE_COUNT_U32: u32 = 2000;
+/// How many samples the APU accumulates before handing a block to the player.
+///
+/// **This value is the floor under end-to-end audio latency.** The consumer can
+/// never hold less than one block, and the hand-off queue must cushion a whole
+/// block of production burstiness, so the smallest safe queue is several blocks
+/// deep. At the original 2000 samples a block is 45 ms at 44.1 kHz — which
+/// forced a 159 ms cushion and a 272 ms watermark, i.e. a quarter-second of
+/// delay before anything else was even counted, felt on every button press.
+///
+/// 256 samples is 5.8 ms: comfortably shorter than one emulated frame (16.7 ms,
+/// which is the real granularity at which a frame-paced frontend produces
+/// audio), so the queue's inherent sawtooth is set by the frame rate rather
+/// than by this. Measured cost of the 8x more frequent hand-off is below the
+/// noise floor of a headless benchmark — the per-block work is O(samples), so
+/// the total is unchanged and only the per-call overhead multiplies, which is
+/// why `play_samples` reuses its scratch buffers instead of allocating.
+const OUTPUT_SAMPLE_COUNT: usize = 256;
+const OUTPUT_SAMPLE_COUNT_U32: u32 = 256;
 const SAMPLE_RATE: u32 = 44100;
 
 pub trait AudioPlayer: Send {
@@ -611,6 +627,30 @@ const NR_READBACK_MASKS: [u8; 23] = [
     0x00, 0x00, 0x70, // NR50, NR51, NR52
 ];
 
+/// Reusable scratch for one output block. Allocated once; `play_samples` runs
+/// every 5.8 ms of emulated audio and must not allocate.
+struct Mixdown {
+    left: Vec<f32>,
+    right: Vec<f32>,
+    ch1: Vec<i16>,
+    ch2: Vec<i16>,
+    ch3: Vec<i16>,
+    ch4: Vec<i16>,
+}
+
+impl Default for Mixdown {
+    fn default() -> Self {
+        Mixdown {
+            left: vec![0.0; OUTPUT_SAMPLE_COUNT],
+            right: vec![0.0; OUTPUT_SAMPLE_COUNT],
+            ch1: vec![0; OUTPUT_SAMPLE_COUNT],
+            ch2: vec![0; OUTPUT_SAMPLE_COUNT],
+            ch3: vec![0; OUTPUT_SAMPLE_COUNT],
+            ch4: vec![0; OUTPUT_SAMPLE_COUNT],
+        }
+    }
+}
+
 pub struct Sound {
     on: bool,
     channel1: SquareChannel,
@@ -636,6 +676,8 @@ pub struct Sound {
     prev_time: u32,
     next_time: u32,
     output_period: u32,
+    /// Reusable mixing scratch (see [`Mixdown`]).
+    mixdown: Mixdown,
 }
 
 impl Default for Sound {
@@ -676,6 +718,7 @@ impl Sound {
             prev_time: 0,
             next_time: CLOCKS_PER_FRAME,
             output_period,
+            mixdown: Mixdown::default(),
         }
     }
 
@@ -914,13 +957,16 @@ impl Sound {
             return;
         }
 
-        let mut left_buf = vec![0f32; OUTPUT_SAMPLE_COUNT];
-        let mut right_buf = vec![0f32; OUTPUT_SAMPLE_COUNT];
-
-        let mut ch1_buf = vec![0i16; OUTPUT_SAMPLE_COUNT];
-        let mut ch2_buf = vec![0i16; OUTPUT_SAMPLE_COUNT];
-        let mut ch3_buf = vec![0i16; OUTPUT_SAMPLE_COUNT];
-        let mut ch4_buf = vec![0i16; OUTPUT_SAMPLE_COUNT];
+        // Scratch buffers live on `self`: this runs once per 5.8 ms of emulated
+        // audio, and six heap allocations at that rate is pure waste.
+        let Mixdown {
+            left: left_buf,
+            right: right_buf,
+            ch1: ch1_buf,
+            ch2: ch2_buf,
+            ch3: ch3_buf,
+            ch4: ch4_buf,
+        } = &mut self.mixdown;
 
         self.channel1.blip.read_samples(&mut ch1_buf[..], false);
         self.channel2.blip.read_samples(&mut ch2_buf[..], false);
@@ -971,7 +1017,7 @@ impl Sound {
         }
 
         if let Some(ref mut player) = self.player {
-            player.play(&left_buf, &right_buf);
+            player.play(&self.mixdown.left, &self.mixdown.right);
         }
     }
 
@@ -1271,20 +1317,65 @@ pub mod sample_queue {
     use std::collections::VecDeque;
 
     /// Producer block size: `Sound::play_samples` always hands over exactly
-    /// this many samples (blip_buf's OUTPUT_SAMPLE_COUNT), ~45 ms at 44.1 kHz.
+    /// this many samples, ~5.8 ms at 44.1 kHz.
     pub const BLOCK: usize = super::OUTPUT_SAMPLE_COUNT;
-    /// The callback drains only once this many samples are queued (~159 ms at
-    /// 44.1 kHz): the jitter cushion. Sized by the simulation in
-    /// `queue_tests`, not picked: samples arrive in whole 45 ms blocks, so the
-    /// *effective* floor is START_FILL - BLOCK, and the largest silently
-    /// absorbed production stall is (START_FILL - BLOCK)/rate ≈ 113 ms — which
-    /// rides out a 90 ms stall plus 8 ms of scheduling jitter with margin.
-    /// 3*BLOCK measurably underruns in that profile (4 underruns / 5 min in
-    /// the sim); this value measures zero.
-    pub const START_FILL: usize = 7 * BLOCK / 2;
-    /// Producer waits above this (~272 ms at 44.1 kHz). Queue latency is
-    /// bounded by this plus the device's own buffer.
-    pub const HIGH_WATER: usize = 6 * BLOCK;
+
+    /// The callback drains only once this many samples are queued: the jitter
+    /// cushion, and — because the producer waits at [`HIGH_WATER`] — the lower
+    /// end of the latency the player actually feels.
+    ///
+    /// **Sized against the real symptom, measured both ways.** The previous
+    /// values (7000 / 12000 samples, when a block was 45 ms) measured zero
+    /// underruns but parked end-to-end latency at ~300 ms, which the player
+    /// feels as sound arriving after every button press. Cushioning is not free:
+    /// every queued sample is delay.
+    ///
+    /// What the cushion has to cover, at 44.1 kHz:
+    ///   * one frame of production burstiness — a frame-paced frontend emits a
+    ///     whole frame's audio at once, 70224 cycles = **16.7 ms**;
+    ///   * one device callback — measured at 118 frames = **2.7 ms** with the
+    ///     buffer pinned (it was 1882 frames = 42.7 ms when left to the host);
+    ///   * scheduler jitter on top.
+    ///
+    /// The guarantee chosen: **the frontend may drop one whole frame without an
+    /// audible glitch.** Note that a dropped frame costs more than a frame of
+    /// audio: the queue drains continuously, so the production *gap* is the
+    /// missed frame plus the normal 16.7 ms period. One frame + 8 ms of
+    /// measured scheduler jitter is ~41 ms, so the cushion is 1792 samples =
+    /// **40.6 ms**. That is a principled promise rather than a fudge, and the
+    /// simulation in `queue_tests` holds it to exactly that promise (it also
+    /// shows a 20 ms stall still clears with 17 ms of depth to spare).
+    ///
+    /// A two-frame guarantee would need ~58 ms of cushion and put end-to-end
+    /// latency back around 70 ms — perceptible again. Given the *measured*
+    /// stall rate (4 late frames in 5375, p99.9 = 0.0 ms), one frame is the
+    /// right side of that trade.
+    ///
+    /// Override with `GB_AUDIO_START_FILL` to re-run the sweep in
+    /// `examples/audio_latency.rs`; `docs/audio.md` has the measured results.
+    pub fn start_fill() -> usize {
+        env_samples("GB_AUDIO_START_FILL", 7 * BLOCK)
+    }
+
+    /// Producer waits above this. Because the producer *blocks* here rather
+    /// than being nudged, this — not [`start_fill`] — is what sets steady-state
+    /// latency whenever the frame timer runs even slightly fast, which it
+    /// always does. That is why it was the dominant term in the measured
+    /// 300 ms: at 12000 samples the queue simply parked at 272 ms.
+    ///
+    /// 2816 samples = **63.8 ms** leaves the queue room to breathe above the
+    /// cushion without itself becoming the latency.
+    pub fn high_water() -> usize {
+        env_samples("GB_AUDIO_HIGH_WATER", 11 * BLOCK)
+    }
+
+    fn env_samples(key: &str, default: usize) -> usize {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n >= BLOCK && *n <= 64 * BLOCK)
+            .unwrap_or(default)
+    }
 
     #[derive(Default, Clone, Copy)]
     pub struct QueueStats {
@@ -1410,20 +1501,47 @@ pub mod sample_queue {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
 pub mod cpal_audio {
-    use super::sample_queue::{SampleQueue, HIGH_WATER, START_FILL};
+    use super::sample_queue::{high_water, start_fill, SampleQueue};
     use super::AudioPlayer;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, Sample};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    /// Frames per device callback we ask cpal for.
+    ///
+    /// 256 frames is 5.8 ms at 44.1 kHz. The host typically keeps a small
+    /// multiple of this in flight, so the device's own contribution to
+    /// end-to-end delay lands in the low tens of milliseconds instead of the
+    /// tens-to-hundreds `BufferSize::Default` produces. Small enough to matter,
+    /// large enough that the callback is not so frequent it risks xruns.
+    /// Override with `GB_AUDIO_DEVICE_FRAMES` (0 = let the host choose).
+    const DEVICE_FRAMES: u32 = 256;
+
+    /// Latency the *device* adds, sampled from cpal's callback timestamps.
+    ///
+    /// End-to-end delay is not just our queue: it is `queue_depth/rate` **plus**
+    /// whatever the host stack holds between the callback returning and the
+    /// speaker moving. cpal reports both instants — `timestamp().callback` (now)
+    /// and `timestamp().playback` (when this buffer will be heard) — so the
+    /// device's share is measurable rather than assumed. Measuring it is the
+    /// difference between tuning the number that matters and tuning the one we
+    /// happen to own.
+    #[derive(Default)]
+    pub struct DeviceLatency {
+        /// Most recent playback-minus-callback, in microseconds.
+        pub micros: std::sync::atomic::AtomicU64,
+        /// Frames requested by the most recent callback.
+        pub callback_frames: std::sync::atomic::AtomicUsize,
+    }
+
     pub struct CpalPlayer {
         queue: Arc<Mutex<SampleQueue>>,
+        device_latency: Arc<DeviceLatency>,
+        /// Frames per device callback the stream was configured with, if we
+        /// were able to pin it (`None` = the host chose).
+        configured_buffer: Option<u32>,
         sample_rate: u32,
-        /// Callback count observed at the previous `play()`: if it has not
-        /// moved while we are over the watermark, the consumer is stalled and
-        /// waiting on it would only freeze the emulator.
-        last_seen_callbacks: u64,
         /// Fast-forward: the frontend is deliberately outrunning real time, so
         /// the watermark policy switches from *wait* to *drop-oldest* (waiting
         /// would silently clamp the game back to 1x).
@@ -1438,6 +1556,16 @@ pub mod cpal_audio {
         /// `examples/audio_soak.rs` to report measured stats after a real run.
         pub fn queue_handle(&self) -> Arc<Mutex<SampleQueue>> {
             self.queue.clone()
+        }
+
+        /// Live device-side latency measurement (see [`DeviceLatency`]).
+        pub fn device_latency(&self) -> Arc<DeviceLatency> {
+            self.device_latency.clone()
+        }
+
+        /// The device buffer size we asked for, if the request was accepted.
+        pub fn configured_buffer(&self) -> Option<u32> {
+            self.configured_buffer
         }
 
         pub fn new() -> Option<(CpalPlayer, cpal::Stream)> {
@@ -1523,6 +1651,7 @@ pub mod cpal_audio {
             };
             let sample_format = selected_config.sample_format();
             let channels = selected_config.channels();
+            let selected_buffer_size = *selected_config.buffer_size();
             let config: cpal::StreamConfig = selected_config.into();
 
             let err_fn = |err| {
@@ -1531,13 +1660,28 @@ pub mod cpal_audio {
             };
 
             let shared_queue =
-                Arc::new(Mutex::new(SampleQueue::new(START_FILL, HIGH_WATER)));
+                Arc::new(Mutex::new(SampleQueue::new(start_fill(), high_water())));
             let stream_buffer = shared_queue.clone();
+            let device_latency = Arc::new(DeviceLatency::default());
+            let cb_latency = device_latency.clone();
+
+            // Pin the device buffer size. Left to `BufferSize::Default` the
+            // host picks, and on ALSA/PipeWire that is routinely tens of
+            // milliseconds — latency we pay on every sound and cannot see. It
+            // is separately configurable from our own queue and is often the
+            // larger of the two, so ask for a small period explicitly and
+            // measure what we actually got.
+            let mut config = config;
+            let configured_buffer = requested_buffer_frames(&selected_buffer_size);
+            if let Some(frames) = configured_buffer {
+                config.buffer_size = cpal::BufferSize::Fixed(frames);
+            }
 
             let player = CpalPlayer {
                 queue: shared_queue,
+                device_latency: device_latency.clone(),
+                configured_buffer,
                 sample_rate: config.sample_rate.0,
-                last_seen_callbacks: 0,
                 fast_forward: false,
                 stats_enabled: std::env::var("GB_AUDIO_STATS").is_ok(),
                 last_stats_log: Instant::now(),
@@ -1546,7 +1690,12 @@ pub mod cpal_audio {
             let stream = match sample_format {
                 cpal::SampleFormat::F32 => device.build_output_stream(
                     &config,
-                    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                        note_device_latency(
+                            info,
+                            data.len() / channels as usize,
+                            &cb_latency,
+                        );
                         cpal_thread(data, &stream_buffer, channels as usize)
                     },
                     err_fn,
@@ -1571,6 +1720,41 @@ pub mod cpal_audio {
                 }
             }
         }
+    }
+
+    /// Frames per device callback to request.
+    ///
+    /// `GB_AUDIO_DEVICE_FRAMES=0` restores `BufferSize::Default` (let the host
+    /// decide) — that is the pre-fix behaviour and the A/B control.
+    fn requested_buffer_frames(supported: &cpal::SupportedBufferSize) -> Option<u32> {
+        let wanted: u32 = std::env::var("GB_AUDIO_DEVICE_FRAMES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEVICE_FRAMES);
+        if wanted == 0 {
+            return None;
+        }
+        match supported {
+            cpal::SupportedBufferSize::Range { min, max } => {
+                Some(wanted.clamp(*min, *max))
+            }
+            // The host will not tell us its limits; asking for a fixed size is
+            // then a guess that can fail stream construction, so don't.
+            cpal::SupportedBufferSize::Unknown => None,
+        }
+    }
+
+    fn note_device_latency(
+        info: &cpal::OutputCallbackInfo,
+        frames: usize,
+        out: &Arc<DeviceLatency>,
+    ) {
+        use std::sync::atomic::Ordering;
+        let ts = info.timestamp();
+        if let Some(d) = ts.playback.duration_since(&ts.callback) {
+            out.micros.store(d.as_micros() as u64, Ordering::Relaxed);
+        }
+        out.callback_frames.store(frames, Ordering::Relaxed);
     }
 
     fn cpal_thread<T: Sample + FromSample<f32>>(
@@ -1621,7 +1805,21 @@ pub mod cpal_audio {
                 }
                 return;
             }
-            let deadline = Instant::now() + Duration::from_millis(150);
+            // Is the consumer stalled? Only wall time can answer that.
+            //
+            // This used to compare the callback counter against the value seen
+            // at the *previous* `play()`. That was sound while a block was
+            // 45 ms — consecutive blocks were always more than a callback apart
+            // — but a block is now 5.8 ms, so one emulated frame hands over
+            // several blocks back-to-back within microseconds of each other. No
+            // callback can occur between them, the counter is unchanged, and
+            // every block after the first in a frame was misread as "consumer
+            // stalled" and dropped instead of waited for. Measured: 14539
+            // samples (330 ms of audio) discarded in 90 s, with the consumer
+            // perfectly healthy. Judge by elapsed time instead.
+            const STALL_TIMEOUT: Duration = Duration::from_millis(50);
+            const MAX_WAIT: Duration = Duration::from_millis(150);
+            let wait_start = Instant::now();
             loop {
                 let (over, callbacks_now) = match self.queue.lock() {
                     Ok(q) => (q.over_high_water(), q.stats.callbacks),
@@ -1630,20 +1828,19 @@ pub mod cpal_audio {
                 if over == 0 {
                     break;
                 }
-                let stalled = callbacks_now == self.last_seen_callbacks
-                    && callbacks_now == callbacks_before;
-                if stalled || Instant::now() >= deadline {
+                let waited = wait_start.elapsed();
+                // 50 ms without a single callback means the device really has
+                // stopped: the callback period is a few milliseconds.
+                let stalled =
+                    waited >= STALL_TIMEOUT && callbacks_now == callbacks_before;
+                if stalled || waited >= MAX_WAIT {
                     if let Ok(mut q) = self.queue.lock() {
                         q.drop_to_high_water();
                     }
                     break;
                 }
-                // ~1 ms ≈ 44 samples at 44.1 kHz; the wait to drain one block
-                // is tens of iterations.
+                // ~1 ms is a few callbacks' worth of drain at 2.7 ms per call.
                 std::thread::sleep(Duration::from_millis(1));
-            }
-            if let Ok(q) = self.queue.lock() {
-                self.last_seen_callbacks = q.stats.callbacks;
             }
 
             if self.stats_enabled
@@ -1701,7 +1898,7 @@ mod queue_tests {
     //! deterministic jitter and stalls, and underruns/depth are *counted*.
     //! Wall-clock-free, device-free, exact same `SampleQueue` code the cpal
     //! player runs.
-    use super::sample_queue::{SampleQueue, BLOCK, HIGH_WATER, START_FILL};
+    use super::sample_queue::{high_water, start_fill, SampleQueue, BLOCK};
 
     const RATE: f64 = 44100.0;
     /// True DMG frame period: 70224 cycles / 4.194304 MHz.
@@ -1731,7 +1928,7 @@ mod queue_tests {
     /// at k*FRAME_S but lands late by `jitter_ms`-bounded noise, plus a
     /// `stall_ms` production stall every `stall_every_s` (a slow terminal
     /// draw, a GC hiccup...). Samples accumulate at 44100/emulated-second and
-    /// are pushed in whole 2000-sample blocks, exactly as `play_samples`
+    /// are pushed in whole `BLOCK`-sample blocks, exactly as `play_samples`
     /// does. The consumer is an audio callback of `cb` frames every cb/RATE
     /// seconds, jitter-free (the sound card's DMA clock).
     fn simulate(
@@ -1769,7 +1966,7 @@ mod queue_tests {
             }
         }
 
-        let mut q = SampleQueue::new(START_FILL, HIGH_WATER);
+        let mut q = SampleQueue::new(start_fill(), high_water());
         let mut push_idx = 0usize;
         let mut post_min = usize::MAX;
         let mut post_max = 0usize;
@@ -1801,19 +1998,37 @@ mod queue_tests {
         }
     }
 
-    /// Healthy case: matched rates, realistic OS jitter (up to 8 ms late
-    /// frames), a 90 ms production stall every 5 s (a slow terminal draw).
-    /// Requirement: ZERO underruns over five minutes, depth bounded (no drops
-    /// would occur), i.e. the cushion rides through every hiccup silently.
+    /// Healthy case, with the stall profile taken from **measurement** rather
+    /// than assumption.
+    ///
+    /// The original profile here was a 90 ms production stall every 5 s. That
+    /// is what forced a 159 ms cushion, and a cushion is latency: end-to-end
+    /// delay measured 299 ms, which the player feels after every button press.
+    /// Instrumenting the real frame loop (`examples/audio_latency.rs` reports
+    /// the lateness distribution) shows that profile is not what happens: over
+    /// 5375 frames of Pokémon Blue, **4 frames (0.075%) finished more than 1 ms
+    /// late**, p99 and p99.9 both 0.0 ms, with rare isolated excursions.
+    ///
+    /// So the profile encodes the *promise* instead: 8 ms of per-frame jitter
+    /// plus **one whole frame dropped every 2 seconds** — hundreds of times
+    /// more stall time than measured, and exactly the guarantee [`start_fill`]
+    /// is sized for. Requirement is unchanged: ZERO underruns over five minutes
+    /// with bounded depth.
+    ///
+    /// The cushion's limit is explicit: a production gap longer than
+    /// `start_fill / rate` (~41 ms) costs one re-prime. That is the price of
+    /// ~50 ms end-to-end instead of 299 ms, and the failure mode is a
+    /// fade-and-rebuild, not a click.
     #[test]
     fn no_underruns_with_realistic_jitter_and_stalls() {
-        let r = simulate(300.0, 512, 8.0, 5.0, 90.0);
+        // 8 ms jitter, plus one whole frame dropped every 2 s.
+        let r = simulate(300.0, 512, 8.0, 2.0, 1000.0 / 59.7275);
         assert_eq!(
             r.queue.stats.underruns, 0,
             "underruns in the healthy profile — cushion too small"
         );
         assert!(
-            r.post_prime_depth_max <= HIGH_WATER + BLOCK,
+            r.post_prime_depth_max <= high_water() + BLOCK,
             "depth {} exceeded high watermark + one block — latency unbounded",
             r.post_prime_depth_max
         );
@@ -1821,23 +2036,27 @@ mod queue_tests {
         // The cushion must actually be exercised: depth should dip well below
         // START_FILL during stalls (otherwise the test proves nothing).
         assert!(
-            r.post_prime_depth_min < START_FILL,
+            r.post_prime_depth_min < start_fill(),
             "stalls never stressed the queue (min depth {})",
             r.post_prime_depth_min
         );
     }
 
-    /// A stall longer than the cushion (~136 ms at 44.1 kHz) MUST underrun —
-    /// this pins the meaning of START_FILL: it is the largest production gap
-    /// that stays inaudible. If this test starts passing with 0 underruns,
-    /// START_FILL grew and the latency story changed; revisit docs/audio.md.
+    /// A stall longer than the cushion MUST underrun — this pins the meaning
+    /// of the cushion: it is the largest production gap that stays inaudible,
+    /// and it is bought with latency. If this starts passing with 0 underruns,
+    /// the cushion grew and the latency story changed; revisit docs/audio.md.
+    ///
+    /// This is the honest cost of the 300 ms -> 48 ms latency reduction: the
+    /// absorbable gap shrank with it. The trade is deliberate, and the profile
+    /// above is what says it is the right one on measured evidence.
     #[test]
     fn stall_longer_than_cushion_underruns_once_and_recovers() {
         let r = simulate(60.0, 512, 0.0, 20.0, 400.0);
         assert!(
             r.queue.stats.underruns >= 1,
             "a 400 ms stall cannot be absorbed by a {} ms cushion",
-            START_FILL as f64 * 1000.0 / RATE
+            start_fill() as f64 * 1000.0 / RATE
         );
         // Each stall costs at most ONE rebuffer (underrun -> re-prime), never
         // a burst of on/off gaps: 60 s / one stall per 20 s = 3 stalls max.
@@ -1909,15 +2128,18 @@ mod queue_tests {
     /// bounds latency and counts every discarded sample.
     #[test]
     fn drop_to_high_water_bounds_latency() {
-        let mut q = SampleQueue::new(START_FILL, HIGH_WATER);
+        let mut q = SampleQueue::new(start_fill(), high_water());
         let block = vec![0.1f32; BLOCK];
-        for _ in 0..10 {
+        // Push well past the watermark whatever it is currently sized at.
+        let pushes = high_water() / BLOCK + 4;
+        for _ in 0..pushes {
             q.push(&block, &block);
         }
-        assert_eq!(q.over_high_water(), 10 * BLOCK - HIGH_WATER);
+        let over = pushes * BLOCK - high_water();
+        assert_eq!(q.over_high_water(), over);
         q.drop_to_high_water();
-        assert_eq!(q.len(), HIGH_WATER);
-        assert_eq!(q.stats.dropped, (10 * BLOCK - HIGH_WATER) as u64);
+        assert_eq!(q.len(), high_water());
+        assert_eq!(q.stats.dropped, over as u64);
     }
 }
 

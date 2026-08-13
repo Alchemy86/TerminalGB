@@ -5,6 +5,6 @@
 #
 #   UPDATE_AUDIO_BASELINE=1 cargo test --release --test audiocapture
 
-tone440 = HASH:80eca4c8a665ad45 SAMPLES:218000
-blargg/dmg_sound-01-registers = HASH:8dae065428bcf125 SAMPLES:220000
-blargg/dmg_sound = HASH:86dd7fc527e194d1 SAMPLES:1622000
+tone440 = HASH:1d40297c145c3bc1 SAMPLES:221184
+blargg/dmg_sound-01-registers = HASH:1487907e8cde7e05 SAMPLES:222464
+blargg/dmg_sound = HASH:be1a005fd81bcd76 SAMPLES:1625344

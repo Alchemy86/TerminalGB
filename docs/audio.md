@@ -145,8 +145,9 @@ and then the most channels**. After the fix the probe reports:
 
 Producer and consumer share a mutex-guarded queue:
 
-- **`CpalPlayer::play`** pushes 2000-sample blocks (~45 ms at 44.1 kHz) onto the
-  tail — audio arrives in coarse lumps, not a smooth stream.
+- **`CpalPlayer::play`** pushes `OUTPUT_SAMPLE_COUNT`-sample blocks onto the
+  tail — audio arrives in lumps, not a smooth stream. This was **2000 samples
+  (~45 ms)**; it is now **256 samples (~5.8 ms)**, for the reason in §4b.
 - **`cpal_thread`** drains from the head at exactly the sound card's rate.
 
 ### Post-mortem: why "~180 ms cap" made it *worse*
@@ -177,14 +178,129 @@ hardware (§5a) — not picked as "a nicer buffer number":
 
 | Rule | Why |
 |---|---|
-| **Prime to `START_FILL` = 7000 samples (~159 ms) before draining** | Samples arrive in whole 2000-sample blocks, so the effective floor is `START_FILL − BLOCK`; that absorbs a ~113 ms production stall with margin. 3×BLOCK measurably underruns in the simulated 90 ms-stall profile; 3.5×BLOCK measures zero. |
-| **On underrun: hold the last sample and fade it (~0.999/sample), then re-prime** | A step to zero is itself a click ("play silence" is SDL's *baseline* behaviour, not the best). Re-priming turns one hiccup into one smooth gap instead of a 45 ms on/off machine-gun. |
-| **Producer *waits* above `HIGH_WATER` = 12000 (~272 ms)** | The audio crystal becomes the master clock whenever the frame timer runs fast — the community's "sync to audio" advice (§10). Samples are dropped **only** if the callback counter proves the consumer is stalled, to bound latency. |
-| **Everything is counted** | `underruns`, `held`, `dropped`, depth min/max. `GB_AUDIO_STATS=1` logs a line every 5 s. Sizing stays measured, not argued. |
+| **Prime to `start_fill()` = 1792 samples (~41 ms) before draining** | The cushion's promise: the frontend may drop **one whole frame** without an audible glitch. A dropped frame costs more than a frame of audio — the queue drains continuously, so the gap is the missed frame *plus* the normal 16.7 ms period — so one frame + the measured 8 ms of scheduler jitter is ~41 ms. See §4b for why this used to be 7000 (~159 ms). |
+| **On underrun: hold the last sample and fade it (~0.999/sample), then re-prime** | A step to zero is itself a click ("play silence" is SDL's *baseline* behaviour, not the best). Re-priming turns one hiccup into one smooth gap instead of an on/off machine-gun. |
+| **Producer *waits* above `high_water()` = 2816 (~64 ms)** | The audio crystal becomes the master clock whenever the frame timer runs fast — the community's "sync to audio" advice (§10). Measured residual drift over 5 minutes: **−0.0005 %**. |
+| **Drop only on a consumer stall, judged by elapsed time** | See §4b: the stall detector was counter-based and misfired once blocks got small, discarding 330 ms of healthy audio per 90 s. |
+| **Everything is counted** | `underruns`, `held`, `dropped`, depth min/max, and now device-side latency. `GB_AUDIO_STATS=1` logs a line every 5 s; `examples/audio_latency.rs` reports the full path. |
 
 The queue policy itself is device-free (`sample_queue` module) and unit-tested,
 including a 5-minute virtual-time replay of the real producer/consumer cadences
 with jitter and stalls.
+
+---
+
+## 4b. "Sounds appear just AFTER they should" — the latency fix
+
+The queue fix above removed the stuttering. The captain then reported the next
+problem precisely:
+
+> "sounds appear to be playing just AFTER they should. Like a click to scroll
+> text, and a moment after I hear the A button sound. And I feel it on every
+> action."
+
+That is the classic trade: underruns were cured by holding more samples, and
+**every held sample is delay**. So this had to be measured as one thing, not
+two. `examples/audio_latency.rs` reports end-to-end latency *and* underruns from
+the same run, on a real device, so a change cannot win one by losing the other.
+
+### Measure the whole path, not the part we own
+
+```text
+  APU  --block-->  SampleQueue  --callback-->  host/device  -->  speaker
+        BLOCK           depth/rate                cpal timestamp
+```
+
+The third hop was never measured. cpal reports both `timestamp().callback` (now)
+and `timestamp().playback` (when this buffer is heard); the difference is the
+host's own latency. Measured on Pokémon Blue, 45 s, as shipped:
+
+| Hop | Latency |
+|---|---|
+| `SampleQueue` depth | **199.7 ms** (123–251) |
+| host/device | **99.5 ms** |
+| **end to end** | **299.3 ms** (223–351) |
+
+Two findings fall straight out:
+
+1. **The device buffer was a third of the problem and nobody had looked.**
+   `BufferSize::Default` let the host choose, and it chose 1882 frames per
+   callback (42.7 ms) with ~99.5 ms in flight. Asking for `BufferSize::Fixed(256)`
+   — one line — took that hop from **99.5 ms to 5.9 ms**, with zero underruns.
+2. **`HIGH_WATER`, not `START_FILL`, was setting the queue latency.** The
+   producer *blocks* at the watermark, so whenever the frame timer runs even
+   slightly fast (it did, +0.47 %) the queue parks near the top: 272 ms, not the
+   159 ms cushion.
+
+### The 45 ms block was the floor under everything
+
+The queue cannot be smaller than a few producer blocks, so a 2000-sample
+(45 ms) block *forces* a six-figure-microsecond cushion. `OUTPUT_SAMPLE_COUNT`
+is now **256 samples (5.8 ms)** — comfortably shorter than one emulated frame,
+which is the real granularity at which a frame-paced frontend produces audio.
+With that floor removed the cushion could be sized against the actual
+requirement (§4 table) instead of against the block size.
+
+The synthesis is unchanged by this: the offline harness measures the same RMS
+(0.2467), peak (0.267), silence fraction and dominant frequency (440.0 Hz) as
+before, and the sample count got *more* accurate (221184 for 5.0157 s, against
+an exact 221192 — the tail shortfall fell from ~3000 samples to ~8). Only the
+fixture hashes moved, because the block boundaries did.
+
+### A bug the smaller block exposed
+
+The producer's "is the consumer stalled?" test compared the callback counter
+against the value seen at the *previous* `play()`. That was sound at 45 ms per
+block — consecutive blocks were always more than a callback apart — but at
+5.8 ms one emulated frame hands over several blocks back-to-back within
+microseconds. No callback can occur between them, the counter is unchanged, and
+every block after the first in a frame was misread as "consumer stalled" and
+**dropped instead of waited for**: 14539 samples (330 ms of audio) discarded per
+90 s with a perfectly healthy device. The test is now elapsed-time based
+(50 ms without a callback = genuinely stalled).
+
+### Result, measured
+
+Pokémon Blue, real device, **5-minute** soak:
+
+| | as shipped | after |
+|---|---|---|
+| queue latency | 199.7 ms | **46.8 ms** (40.3–53.7) |
+| device/host latency | 99.5 ms | **5.9 ms** (5.6–6.2) |
+| **end to end** | **299.3 ms** (223–351) | **52.7 ms** (46.2–59.8) |
+| underruns | 0 | **0** |
+| dropped samples | 3187 | **0** |
+| residual drift | +0.470 % | **−0.0005 %** |
+| frame rate | 59.662 fps | 59.660 fps |
+
+Production stalls over those 5 minutes: **4 frames of 17899 ran more than 1 ms
+late** (p99 and p99.9 both 0.0 ms). The worst, 129.6 ms, is at t = 0.20 s —
+startup, during priming, before anything is heard. The genuine mid-run stalls
+were 30.7, 45.4 and 46.1 ms, and all were absorbed with no underrun; the cushion
+has margin but not a great deal, which is the honest cost of 52 ms instead of
+299 ms.
+
+### What is *not* fixed
+
+- **The terminal frontend's redraw cost is unmeasured.** Production stalls come
+  from whatever the frame loop does besides emulating, and re-encoding a
+  160×144 image for a terminal graphics protocol every frame is far more work
+  than a GL blit. If the TUI stalls longer than ~41 ms it will cost one
+  re-prime (a smooth fade and rebuild, not a click). Measuring it needs a real
+  terminal.
+- **Production is still bursty at frame granularity.** The cushion is dominated
+  by the 16.7 ms of audio a frame emits in one go. Stepping emulation in
+  sub-frame chunks would cut the required cushion roughly in half again and
+  take end-to-end towards 30 ms. That is the next structural step, and it
+  changes the frontends rather than the audio code.
+
+Everything above is overridable for re-measurement:
+
+```text
+GB_AUDIO_DEVICE_FRAMES=0     # let the host pick the device buffer (old behaviour)
+GB_AUDIO_START_FILL=7000     # queue cushion, samples
+GB_AUDIO_HIGH_WATER=12000    # producer wait threshold, samples
+```
 
 ---
 
@@ -351,6 +467,20 @@ GB_AUDIO_STATS=1 cargo run --release --features audio --example audio_soak -- 12
 # depth min/max and the achieved production rate vs the device rate.
 ```
 
+**How far behind is the sound?** — end-to-end latency *and* underruns together,
+because they trade off and a fix that wins one by losing the other is not a fix:
+
+```bash
+cargo run --release --features audio --example audio_latency -- <rom.gb> 300
+# Reports, per second and in summary:
+#   - our queue's latency          (depth / rate)
+#   - the host/device's latency    (cpal playback-minus-callback timestamp)
+#   - END TO END                   (the number the player actually feels)
+#   - underruns, drops, drift
+#   - the production-stall distribution, with the timestamp of each late frame
+#     (a stall during startup priming is harmless; one mid-run is not)
+```
+
 **Did I break emulation?** The test-ROM harness must still match baseline:
 
 ```bash
@@ -379,6 +509,20 @@ cargo test --release --test testroms      # see docs/testing.md
 | APU semantics | [`src/sound.rs`](../src/sound.rs) | NRx1 length writes mask duty bits (`v & 0x3F` — was a debug-mode panic on `NR11=0x80`); NR52 power-off actually zeroes NR10–NR51 and channel status (the old clear-loop ran *after* `on=false` and was a no-op); a powered-off APU emits silence at full rate instead of stalling the sample stream. |
 | Offline audio harness | [`testharness/audiocapture.rs`](../testharness/audiocapture.rs) | Device-free capture → WAV + analysis (count/RMS/silence/steps/pitch) + Blargg `$A000` verdict + pinned determinism baseline ([`testharness/audio_baseline.txt`](../testharness/audio_baseline.txt)). |
 | Soak evidence | [`examples/audio_soak.rs`](../examples/audio_soak.rs) | Real-device instrumented run; the §5a numbers. |
+
+### Third pass (perceptible latency)
+
+| Area | File | Change |
+|---|---|---|
+| Device buffer | [`src/sound.rs`](../src/sound.rs) `cpal_audio` | Ask for `BufferSize::Fixed(256)` instead of letting the host choose. Measured host latency **99.5 ms → 5.9 ms**. Override with `GB_AUDIO_DEVICE_FRAMES` (`0` = host default). |
+| Producer block size | [`src/sound.rs`](../src/sound.rs) | `OUTPUT_SAMPLE_COUNT` 2000 → **256** (45 ms → 5.8 ms). The block size is the floor under the queue and therefore under latency; `play_samples` now reuses scratch buffers rather than allocating six `Vec`s per block. |
+| Queue sizing | [`src/sound.rs`](../src/sound.rs) `sample_queue` | `START_FILL`/`HIGH_WATER` consts → `start_fill()`/`high_water()` (env-overridable), 7000/12000 → **1792/2816**. Sized to a stated promise — absorb one dropped frame — with the simulation profile re-derived from the *measured* stall distribution instead of an assumed 90 ms stall. |
+| Consumer-stall detection | [`src/sound.rs`](../src/sound.rs) | Elapsed-time based, not callback-counter based: the counter test misfired once a frame pushed several blocks back-to-back, discarding 330 ms of healthy audio per 90 s. |
+| Full-path measurement | [`examples/audio_latency.rs`](../examples/audio_latency.rs) | End-to-end latency (queue + device, from cpal timestamps), underruns and the production-stall distribution from one real-device run. |
+
+**Not verified by ear.** Every number above is measured; nobody has listened to
+the result. What a human must confirm: that sound now follows a button press
+without a felt delay, and that nothing crackles.
 
 ---
 

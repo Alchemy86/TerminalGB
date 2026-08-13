@@ -127,12 +127,33 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   underrun stepped to 0.0 (a click) then played the next 45 ms block: machine-gun gaps. Both
   loops now use a **deadline accumulator** (`next += FRAME_TIME`, bounded catch-up) — keep it
   that way; never reset a pacing timer to `now()`. The queue is `sample_queue::SampleQueue`
-  (`src/sound.rs`): prime to 7000 samples before draining, hold-and-fade + re-prime on
-  underrun, producer *waits* at a 12000-sample high watermark (audio clock = master clock),
-  drop only when the callback counter proves the consumer stalled. Sizes came from the
-  simulation in `mod queue_tests` + a real 2-min soak (`examples/audio_soak.rs`,
-  `GB_AUDIO_STATS=1`): zero underruns/drops, depth 5731–8717, residual drift −0.013 %
-  (≈ one smooth ~160 ms re-prime per ~20 min; full DRC is the documented next step).
+  (`src/sound.rs`): prime before draining, hold-and-fade + re-prime on underrun, producer
+  *waits* at a high watermark (audio clock = master clock), drop only when the consumer is
+  proven stalled. Sizes come from the simulation in `mod queue_tests` + real soaks
+  (`examples/audio_soak.rs`, `GB_AUDIO_STATS=1`).
+- **"Sounds play just AFTER they should" — latency. Measure the WHOLE path, not our queue.**
+  Killing the stutter by holding more samples bought delay: measured **299 ms end-to-end**.
+  `examples/audio_latency.rs` reports queue latency, device latency and underruns from one
+  real-device run — always judge them together, they trade off. Three things mattered, in
+  order of size:
+  1. **The cpal device buffer was never pinned.** `BufferSize::Default` gave 1882 frames/callback
+     and **99.5 ms** of host latency. `BufferSize::Fixed(256)` → **5.9 ms**. cpal reports this
+     directly: `info.timestamp().playback.duration_since(&callback)`. Always measure it.
+  2. **`OUTPUT_SAMPLE_COUNT` is the floor under all audio latency.** At 2000 (45 ms/block) no
+     queue can be small. Now **256** (5.8 ms) — shorter than a frame, which is the real
+     production granularity. `play_samples` reuses `Sound::mixdown` scratch (no per-block allocs).
+  3. **`high_water()`, not `start_fill()`, sets steady-state latency** — the producer *blocks*
+     there, so a slightly-fast frame timer parks the queue at the top. Now 1792/2816 samples
+     (41/64 ms), sized to a stated promise: *absorb one dropped frame* (a dropped frame costs
+     the frame **plus** the normal 16.7 ms period, since the queue drains continuously).
+  Result, 5-min real soak: **52.7 ms end-to-end (46–60), 0 underruns, 0 drops, drift −0.0005 %**.
+  Measured stall reality on this box: 4 of 17899 frames >1 ms late, p99.9 = 0.0 ms — so
+  `queue_tests`' profile is derived from that, not from an assumed 90 ms stall.
+- **Small blocks broke the consumer-stall detector (fixed; don't reintroduce).** It compared
+  the callback counter against the previous `play()`. Fine at 45 ms/block, but at 5.8 ms one
+  frame pushes several blocks back-to-back with no callback between them, so every block after
+  the first was misread as "consumer stalled" and **dropped**: 330 ms of healthy audio per 90 s.
+  Judge a stall by **elapsed time** (50 ms with no callback), never by counter equality.
 - **cpal negotiation gotcha:** `device.supported_output_configs()` often lists the first `F32`
   range as `ch=1, min=1, max=384000` (mono!). Never break on the first F32 range. Prefer
   `device.default_output_config()` when it's F32 (real channel count + a rate the HW actually
@@ -157,6 +178,15 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   power-on resets the frame sequencer to step 0 (DIV divider keeps running); a powered-off
   APU still emits silence at full sample rate (never stall the stream). Save-state format is
   v2 (APU shadow regs + flags added).
+- **Audio knobs for re-measuring (and for A/B by ear):** `GB_AUDIO_DEVICE_FRAMES` (0 = host
+  default), `GB_AUDIO_START_FILL`, `GB_AUDIO_HIGH_WATER`, `GB_AUDIO_STATS=1`. The old,
+  laggy configuration is `GB_AUDIO_DEVICE_FRAMES=0 GB_AUDIO_START_FILL=7000
+  GB_AUDIO_HIGH_WATER=12000`.
+- **Next structural step for latency:** production is still bursty at frame granularity —
+  a frame emits 16.7 ms of audio in one go, and that burst dominates the cushion. Stepping
+  emulation in sub-frame chunks would roughly halve the required cushion again (towards
+  ~30 ms end-to-end). That changes the frontends, not the audio code.
+
 ## Terminal frontend (TUI)
 
 - The terminal frontend is a proper `ratatui` TUI split across three files in `src/screen/`:
