@@ -1,6 +1,6 @@
 # Frontends — desktop, terminal, web & FFI
 
-> Source: [`src/screen/`](../../src/screen), [`examples/`](../../examples), [`web/`](../../web), [`src/lib.rs`](../../src/lib.rs) · Related: [Joypad](input.md) · [APU](apu.md)
+> Source: [`src/screen/`](../../src/screen), [`examples/`](../../examples), [`web/`](../../web), [`src/lib.rs`](../../src/lib.rs) · Related: [Joypad](input.md) · [APU](apu.md) · [Display scaling](../display.md)
 > [← Component index](README.md)
 
 ---
@@ -90,6 +90,10 @@ These are the frontends' rough edges (from the scout report, confirmed in code):
   (`tui.rs:358`) says something different again. Worth reconciling.
 - **Dead code:** commented-out `render` in `desktop.rs`, WebGL helpers in `web.rs`, and the
   `docs/*.wasm` prebuilt blobs (~2.2 MB) are stale build artifacts.
+- **Display scaling is rough:** desktop upscales with bilinear `LINEAR` (blurry) and never
+  calls `gl::Viewport`, so window resize doesn't fill correctly; the web canvas is a fixed
+  1:1 160×144 with no `image-rendering: pixelated`. Full analysis and fixes:
+  **[docs/display.md](../display.md)**.
 
 ## 5. Known quirks and edge cases
 

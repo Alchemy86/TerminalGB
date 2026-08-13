@@ -120,6 +120,8 @@ dispatches them (priority VBlank → STAT → Timer → Serial → Joypad).
 
 👉 **Start at the [component reference index](docs/components/README.md)**, read the
 [accuracy-testing yardstick](docs/testing.md) that every component's test list is built on,
+see the [display-scaling design](docs/display.md) — how each frontend enlarges the 160×144
+screen today and how to make it crisp (nearest/integer), smooth, or "vector-like",
 or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the
 running machine (the deterministic frame-hashing that ties into the tests, plus a public
 extension surface external tools can emit from, control, and plug into).
