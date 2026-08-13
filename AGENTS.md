@@ -2,6 +2,40 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
+## Standing convention: every emulation fix feeds the conformance tool
+
+**When you fix an emulation bug, capture it as a conformance-tool test case *at the moment of
+the fix*.** Every real accuracy bug we fix here is a ready-made check for the standalone
+[emulator conformance tool](docs/conformance.md) we plan to extract — and the *reasoning* behind
+the fix is exactly the "why did this fail / what behaviour is missing" explanation that makes
+such a tool worth using instead of a bare pass/fail runner. That knowledge is most valuable now
+and evaporates afterwards, so write it down in the same change (commit message + the relevant
+[`docs/components/`](docs/components/README.md) page, or `docs/audio.md` / `docs/display.md`).
+
+For each emulation-bug fix, record four things:
+
+1. **The observable symptom in user terms** — what a player would *see or hear*, or what a test
+   would show, not just the code defect. That is what a foreign emulator with the same bug
+   exhibits, so it is how the tool would detect it.
+2. **Which test ROM or check catches it** — name it (e.g. Blargg `mem_timing`, dmg-acid2, a
+   `dmg_sound` subtest). **If nothing in the suite catches it, say so explicitly** — a coverage
+   gap is itself a finding worth writing down and a candidate check to add.
+3. **The hardware behaviour being violated, with a citation** (Pan Docs / gbdev / a test-ROM
+   readme). This is the explanation the tool hands its users.
+4. **Any new test the fix produced** — flag it as a candidate to carry into the standalone tool
+   (a reference frame hash, a serial verdict, an audio property, a unit assertion).
+
+*Example (the HALT bug):* **symptom** — some games freeze or mis-time interrupts after a `HALT`
+with interrupts disabled and one pending; **caught by** Blargg `halt_bug` (frame-hash pinned in
+`testharness/baseline.txt`); **hardware** — `HALT` with `IME=0` and `IE & IF & 0x1F != 0`
+re-reads the byte after `HALT` without incrementing `PC` (Pan Docs "Halt bug"); **new test** —
+`halt_bug` moved FAIL→PASS in the baseline, a ready conformance check.
+
+**Seed set already carrying this material** (the starting corpus for the tool): the per-access
+timer / `mem_timing` fix, the HALT-bug fix, the eight `dmg_sound` accuracy fixes (1/12→9/12), the
+HiDPI `cell_scale` fix, and the audio pacing + latency work. Keep it proportionate — a few honest
+lines per fix, not a process document.
+
 ## Build & test
 
 - **Audio is behind the `audio` cargo feature, OFF by default.** `cpal` is an *optional*

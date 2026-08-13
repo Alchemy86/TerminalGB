@@ -83,6 +83,17 @@ Most of the hard parts exist and are battle-tested in this repo:
 - **The spec** — the per-component "expected behaviours phrased as tests" in
   [`docs/components/`](components/README.md), which is where each failure's *why* comes from.
 
+### Growing the corpus: the standing convention
+
+The most valuable material for this tool is produced every time we fix an emulation bug — the
+observable symptom, which check catches it (or that none does), the hardware behaviour violated,
+and any new test the fix created. That knowledge evaporates if not captured at the moment of the
+fix, so **[`AGENTS.md`](../AGENTS.md) carries a standing convention** requiring every
+emulation-bug fix to record exactly those four things. Follow it: each fix that does so is one
+more ready-made conformance check with its explanation already written. The current **seed set**
+is the day's accuracy work — the `mem_timing` per-access fix, the HALT bug, the eight `dmg_sound`
+fixes, the HiDPI `cell_scale` fix, and the audio pacing/latency work.
+
 ## The extraction path
 
 To become a standalone crate/repo, the following would have to be decoupled from this emulator:
