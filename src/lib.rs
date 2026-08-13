@@ -16,6 +16,7 @@ pub mod savestate;
 mod screen;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sound;
+pub mod upscale;
 
 pub use crate::input::KeypadKey;
 

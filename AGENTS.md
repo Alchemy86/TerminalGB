@@ -300,4 +300,29 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   dispatch/echo-RAM/OAM-DMA, MBC1 banking). The APU "why" lives in `docs/components/apu.md`
   prose, not in `src/sound.rs`, to avoid conflicting with the active audio rewrites.
 
+## Pixel-art upscaler (`src/upscale/`)
+
+- **Full design + survey + measured costs: [`docs/upscaling.md`](docs/upscaling.md).**
+  Core module, dependency-free, wasm/ffi-safe: `Upscaler::apply(rgba, w, h)` → upscaled
+  RGBA; algorithms `nearest`(×1–6) / `scale2x`(×2–4) / `mmpx`(×2,×4) / `lcd`(×2–6), all
+  runtime-switchable. Worst case measured ~1.6 ms (MMPX ×4) vs the 16.7 ms frame — CPU
+  pre-pass everywhere by choice (one code path for desktop GL, TUI and web canvas).
+- **Licensing was the design constraint:** Scale2x reimplemented from the published rule
+  (reference impl is GPL-2.0 — do not copy it); MMPX ported from the **MIT** reference
+  (attribution comment above `fn mmpx` must stay); xBRZ (GPLv3) and hqx (LGPL tables)
+  deliberately excluded — do not vendor them into this MPL-2.0 repo. The MMPX port is
+  locked by a unit test pinned to the reference's exact output (verified byte-identical
+  against the authors' C reference; note that the ITotalJustice c99 port has an
+  out-of-bounds `clamp()` bug — ours clamps correctly).
+- Wiring: config keys `upscale` / `upscale_factor` (parsed in `screen/config.rs`, clamped
+  via `Algorithm::clamp_factor`); TUI keys `]`/`}` + Status line (`screen/tui.rs`,
+  upscale runs **after** palette mapping or the LCD grid would be quantised away);
+  desktop keys `U`/`I` (`gameboy.rs::render_desktop`, texture is uploaded at upscaled
+  size so `out_w/out_h` replace `self.width/height` in draw/resize); web keys `]`/`\`
+  (`screen/web.rs`, canvas auto-resizes). Default is `nearest` ×1 = exact old behaviour.
+- **Evidence pack:** `cargo run --release --example upscale_gallery [-- rom --frames N]`
+  writes per-algorithm PNGs + side-by-side strips + `bench.txt` (headless, deterministic);
+  committed samples from the MIT dmg-acid2 ROM live in `docs/upscale-samples/` (never
+  commit galleries from commercial ROMs — generate those into `target/upscale-gallery/`).
+
 - Add durable project-specific notes here as they are discovered through real work.

@@ -33,6 +33,7 @@ use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
 use crate::screen::config::{CellScale, Config, Palette, Recent};
 use crate::screen::romlib::{self, RomEntry};
+use crate::upscale::Upscaler;
 
 use std::env;
 use std::error::Error;
@@ -297,6 +298,9 @@ struct App {
     recent: Recent,
     picker: Picker,
     palette: Palette,
+    /// Pixel-art upscaler applied to every frame before the image protocol
+    /// (see [`crate::upscale`]); `]` cycles the algorithm, `}` the factor.
+    upscaler: Upscaler,
     screen: Screen,
     overlay: Overlay,
     fullscreen: bool,
@@ -362,12 +366,14 @@ impl App {
             protocol_name(picker.protocol_type())
         ));
         let palette = config.palette;
+        let upscaler = Upscaler::new(config.upscale, config.upscale_factor);
 
         let mut app = App {
             config,
             recent,
             picker,
             palette,
+            upscaler,
             screen: Screen::Picker,
             overlay: Overlay::None,
             fullscreen: false,
@@ -553,9 +559,10 @@ impl App {
         // Split borrows: pull the fields we need out of `self` first.
         let palette = self.palette;
         let picker = self.picker;
+        let upscaler = &mut self.upscaler;
         if let Some(s) = self.session.as_mut() {
             s.gb.frame();
-            let img = framebuffer_image(&s.gb, palette);
+            let img = framebuffer_image(&s.gb, palette, upscaler);
             s.image = Some(picker.new_resize_protocol(img));
             s.frames += 1;
             let elapsed = s.fps_mark.elapsed();
@@ -745,6 +752,17 @@ impl App {
                     self.palette = self.palette.next();
                     return;
                 }
+                // Upscaler: `]` cycles the algorithm, `}` the scale factor.
+                KeyCode::Char(']') => {
+                    self.upscaler.cycle_algorithm();
+                    self.set_toast(format!("Upscale {}", self.upscaler.label()));
+                    return;
+                }
+                KeyCode::Char('}') => {
+                    self.upscaler.cycle_factor();
+                    self.set_toast(format!("Upscale {}", self.upscaler.label()));
+                    return;
+                }
                 // Stats overlay: off by default, does not pause the game.
                 KeyCode::Char('t') if key.kind == KeyEventKind::Press => {
                     self.stats = !self.stats;
@@ -900,13 +918,14 @@ impl App {
         let slot = self.slot;
         let palette = self.palette;
         let picker = self.picker;
+        let upscaler = &mut self.upscaler;
         let outcome = if let Some(s) = self.session.as_mut() {
             let path = state_path(&s.gb.rom_title(), slot);
             match std::fs::read(&path) {
                 Ok(bytes) => match s.gb.load_state(&bytes) {
                     Ok(()) => {
                         // Refresh the on-screen frame without advancing emulation.
-                        let img = framebuffer_image(&s.gb, palette);
+                        let img = framebuffer_image(&s.gb, palette, upscaler);
                         s.image = Some(picker.new_resize_protocol(img));
                         Ok(())
                     }
@@ -1202,6 +1221,7 @@ impl App {
             kv("Scale", &format!("{scale:.1}x")),
             kv("Proto", protocol_name(self.picker.protocol_type())),
             kv("Palette", self.palette.name()),
+            kv("Upscale", &self.upscaler.label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
             kv("Slot", &self.slot.to_string()),
             kv(
@@ -1234,6 +1254,7 @@ impl App {
             Line::from("F5 save     F8 load"),
             Line::from("L load ROM  f full"),
             Line::from("[ palette   ? help"),
+            Line::from("] upscale   } factor"),
         ];
         f.render_widget(
             Paragraph::new(controls)
@@ -1264,6 +1285,7 @@ impl App {
             Line::from("  1-3       save slot    F5/F8   save / load"),
             Line::from("  R         reset       L       load ROM"),
             Line::from("  f         fullscreen  [       palette"),
+            Line::from("  ]         upscaler    }       upscale factor"),
             Line::from("  ?         this help   q       quit"),
             Line::from(""),
             Line::from(Span::styled(
@@ -1612,11 +1634,18 @@ fn load_session(path: &Path) -> Result<(Gameboy, RomEntry, AudioHold), String> {
 
 /// Convert the emulator's RGBA framebuffer into an RGB [`DynamicImage`],
 /// applying the configured palette to greyscale (DMG) output.
-fn framebuffer_image(gb: &Gameboy, palette: Palette) -> DynamicImage {
-    let width = gb.width;
-    let height = gb.height;
+fn framebuffer_image(
+    gb: &Gameboy,
+    palette: Palette,
+    upscaler: &mut Upscaler,
+) -> DynamicImage {
+    let width = gb.width as usize;
+    let height = gb.height as usize;
     let input = gb.image();
-    let mut out = vec![0u8; width as usize * height as usize * 3];
+    // Palette-map first (so the LCD-grid filter's darkened gaps survive — the
+    // palette buckets to four shades and would quantise them away), keeping
+    // RGBA because the upscaler works on whole 4-byte pixels.
+    let mut rgba = vec![0u8; width * height * 4];
 
     let mut i = 0;
     for chunk in input.chunks(4) {
@@ -1625,18 +1654,21 @@ fn framebuffer_image(gb: &Gameboy, palette: Palette) -> DynamicImage {
         // Colour (CGB) pixels pass through untouched.
         if r == g && g == b {
             let px = palette.map(r);
-            out[i..i + 3].copy_from_slice(&px);
+            rgba[i..i + 3].copy_from_slice(&px);
         } else {
-            out[i] = r;
-            out[i + 1] = g;
-            out[i + 2] = b;
+            rgba[i] = r;
+            rgba[i + 1] = g;
+            rgba[i + 2] = b;
         }
-        i += 3;
+        rgba[i + 3] = 255;
+        i += 4;
     }
 
-    let buffer = image::ImageBuffer::from_raw(width, height, out)
-        .expect("framebuffer size matches width*height*3");
-    DynamicImage::ImageRgb8(buffer)
+    let (ow, oh) = upscaler.output_size(width, height);
+    let scaled = upscaler.apply(&rgba, width, height);
+    let buffer = image::ImageBuffer::from_raw(ow as u32, oh as u32, scaled.to_vec())
+        .expect("upscaled framebuffer size matches output dimensions");
+    DynamicImage::ImageRgba8(buffer)
 }
 
 // ---------------------------------------------------------------------------
@@ -1811,5 +1843,29 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with("rom"));
+    }
+
+    #[test]
+    fn framebuffer_image_upscales_with_every_algorithm() {
+        // Exercise the real TUI display path headlessly: emulate the vendored
+        // dmg-acid2 ROM a few frames, then build the display image through
+        // each upscaler algorithm and check the produced dimensions.
+        use crate::upscale::Algorithm;
+        let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb")
+            .expect("vendored acid2 ROM present");
+        let mut gb = Gameboy::new(rom, None);
+        for _ in 0..5 {
+            gb.frame();
+        }
+        for (algo, factor, want) in [
+            (Algorithm::Nearest, 1, (160, 144)),
+            (Algorithm::Scale2x, 3, (480, 432)),
+            (Algorithm::Mmpx, 2, (320, 288)),
+            (Algorithm::LcdGrid, 4, (640, 576)),
+        ] {
+            let mut up = Upscaler::new(algo, factor);
+            let img = framebuffer_image(&gb, Palette::Green, &mut up);
+            assert_eq!((img.width(), img.height()), want, "{algo:?}");
+        }
     }
 }

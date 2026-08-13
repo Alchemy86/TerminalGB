@@ -1,0 +1,17 @@
+per-frame upscale cost on one real 160x144 frame (release build)
+algorithm  factor  avg µs   min µs   output px
+nearest    x2         214      212   320x288
+nearest    x3         466      451   480x432
+nearest    x4         810      790   640x576
+nearest    x5        1239     1225   800x720
+nearest    x6        1785     1765   960x864
+scale2x    x2         243      241   320x288
+scale2x    x3         612      607   480x432
+scale2x    x4        1008      997   640x576
+mmpx       x2         302      296   320x288
+mmpx       x4        1258     1238   640x576
+lcd        x2         420      412   320x288
+lcd        x3         903      886   480x432
+lcd        x4        1579     1550   640x576
+lcd        x5        2454     2423   800x720
+lcd        x6        3549     3498   960x864

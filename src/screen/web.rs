@@ -68,10 +68,20 @@ pub async fn render(rom: Vec<u8>) -> Result<(), JsValue> {
     let g = f.clone();
     // let mut i = 0;
     let current_key_code: Rc<RefCell<i32>> = Rc::new(RefCell::new(0));
+    // Pixel-art upscaler (see crate::upscale). Starts as a 1x no-op; `]`
+    // (keycode 221) cycles the algorithm live, `\` (220) the scale factor.
+    // Shared with the keydown listener so cycling happens once per press, not
+    // once per animation frame.
+    let upscaler = Rc::new(RefCell::new(crate::upscale::Upscaler::new(
+        crate::upscale::Algorithm::Nearest,
+        1,
+    )));
     gb.frame();
 
     {
         let current_key_code = current_key_code.clone();
+        let upscaler = upscaler.clone();
+        let canvas = canvas.clone();
         *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
             // if i >= 10 {
             //     let _ = f.borrow_mut().take();
@@ -113,11 +123,19 @@ pub async fn render(rom: Vec<u8>) -> Result<(), JsValue> {
             }
 
             gb.frame();
-            let data: &mut [u8] = gb.image_mut();
+            let mut up = upscaler.borrow_mut();
+            let (ow, oh) = up.output_size(160, 144);
+            // Keep the canvas sized to the upscaled frame (the algorithm can
+            // change between frames via the hotkeys).
+            if canvas.width() != ow as u32 || canvas.height() != oh as u32 {
+                canvas.set_width(ow as u32);
+                canvas.set_height(oh as u32);
+            }
+            let scaled: &[u8] = up.apply(gb.image(), 160, 144);
             let _image_data = match ImageData::new_with_u8_clamped_array_and_sh(
-                wasm_bindgen::Clamped(data),
-                160,
-                144,
+                wasm_bindgen::Clamped(scaled),
+                ow as u32,
+                oh as u32,
             ) {
                 Ok(d) => {
                     context.put_image_data(&d, 0.0, 0.0).ok();
@@ -126,16 +144,24 @@ pub async fn render(rom: Vec<u8>) -> Result<(), JsValue> {
                     // log(format!("{:?}", _err));
                 }
             };
+            drop(up);
 
             request_animation_frame(f.borrow().as_ref().unwrap());
         }) as Box<dyn FnMut()>));
     }
     {
         let current_key_code = current_key_code.clone();
+        let upscaler = upscaler.clone();
         let closure =
             Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
                 let key = event.key_code();
-                *current_key_code.borrow_mut() = key as i32;
+                // `]` cycles the upscaling algorithm, `\` its factor — handled
+                // here (once per press) rather than in the frame loop.
+                match key {
+                    221 => upscaler.borrow_mut().cycle_algorithm(),
+                    220 => upscaler.borrow_mut().cycle_factor(),
+                    _ => *current_key_code.borrow_mut() = key as i32,
+                }
             });
         window().add_event_listener_with_callback(
             "keydown",

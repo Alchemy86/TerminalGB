@@ -117,11 +117,22 @@ impl Gameboy {
         #[cfg(any(target_arch = "wasm32", not(feature = "audio")))]
         let _audio_stream: Option<()> = None;
 
+        // Pixel-art upscaler (see crate::upscale): a CPU pre-pass on the
+        // 160x144 frame before the texture upload. Chosen over a GL shader
+        // because the same code then serves every frontend (terminal, wasm)
+        // and the measured cost (<2 ms worst case, MMPX x4) is far inside the
+        // 16.7 ms frame budget. Initial algorithm/factor come from the shared
+        // config file; U cycles the algorithm live, I cycles the factor.
+        let cfg = crate::screen::config::Config::load();
+        let mut upscaler = crate::upscale::Upscaler::new(cfg.upscale, cfg.upscale_factor);
+        let (mut out_w, mut out_h) =
+            upscaler.output_size(self.width as usize, self.height as usize);
+
         let event_loop: glutin::event_loop::EventLoop<()> =
             glutin::event_loop::EventLoop::with_user_event();
         let inner_size = glutin::dpi::LogicalSize {
-            width: self.width,
-            height: self.height,
+            width: out_w as u32,
+            height: out_h as u32,
         };
         let window_builder = glutin::window::WindowBuilder::new()
             .with_title("Gameboy")
@@ -170,12 +181,43 @@ impl Gameboy {
                     if let glutin::event::WindowEvent::Resized(physical_size) = &wevent {
                         gl_window.resize(*physical_size);
                         cx.resize(
-                            self.width,
-                            self.height,
+                            out_w as u32,
+                            out_h as u32,
                             physical_size.width,
                             physical_size.height,
                         );
                         window.request_redraw();
+                    }
+                    // Upscaler hotkeys (handled here, not in process_window,
+                    // because the upscaler lives in this closure): U cycles
+                    // the algorithm, I the scale factor.
+                    if let glutin::event::WindowEvent::KeyboardInput { input, .. } =
+                        &wevent
+                    {
+                        if input.state == glutin::event::ElementState::Pressed {
+                            let changed = match input.virtual_keycode {
+                                Some(glutin::event::VirtualKeyCode::U) => {
+                                    upscaler.cycle_algorithm();
+                                    true
+                                }
+                                Some(glutin::event::VirtualKeyCode::I) => {
+                                    upscaler.cycle_factor();
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if changed {
+                                (out_w, out_h) = upscaler.output_size(
+                                    self.width as usize,
+                                    self.height as usize,
+                                );
+                                window.set_title(&format!(
+                                    "Gameboy — {}",
+                                    upscaler.label()
+                                ));
+                                window.request_redraw();
+                            }
+                        }
                     }
                     *control_flow =
                         process_window(window, &wevent, &mut self, &mut focused)
@@ -209,13 +251,9 @@ impl Gameboy {
                         // Physical (device-pixel) window size drives the
                         // integer-scale + letterbox computation in draw().
                         let fb = gl_window.window().inner_size();
-                        cx.draw(
-                            self.width,
-                            self.height,
-                            fb.width,
-                            fb.height,
-                            self.image(),
-                        );
+                        let (w, h) = (self.width as usize, self.height as usize);
+                        let scaled = upscaler.apply(self.image(), w, h);
+                        cx.draw(out_w as u32, out_h as u32, fb.width, fb.height, scaled);
                         gl_window.swap_buffers().unwrap();
                     }
 

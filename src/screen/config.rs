@@ -11,6 +11,7 @@
 //! separate state file so we never rewrite (and lose the comments in) the
 //! user's config.
 
+use crate::upscale::Algorithm;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -166,6 +167,10 @@ pub struct Config {
     /// Preferred image protocol, or `None` to auto-detect the best available.
     pub protocol: Option<String>,
     pub palette: Palette,
+    /// Pixel-art upscaler run on every frame before display. `nearest` at
+    /// factor 1 (the default) is a no-op. See [`crate::upscale`].
+    pub upscale: Algorithm,
+    pub upscale_factor: u8,
     pub keys: KeyBindings,
     /// Device-pixels-per-cell correction for HiDPI pixel protocols. See
     /// [`CellScale`]. Default `Fixed(1.0)` = no correction (never regresses a
@@ -179,6 +184,8 @@ impl Default for Config {
             rom_dir: default_rom_dir(),
             protocol: None,
             palette: Palette::Grayscale,
+            upscale: Algorithm::Nearest,
+            upscale_factor: 1,
             keys: KeyBindings::default(),
             cell_scale: CellScale::default(),
         }
@@ -248,6 +255,20 @@ impl Config {
             if let Some(p) = Palette::from_str(v) {
                 cfg.palette = p;
             }
+        }
+        if let Some(v) = kv.get("upscale") {
+            if let Some(a) = Algorithm::from_str(v) {
+                cfg.upscale = a;
+                // An algorithm without an explicit factor gets that
+                // algorithm's smallest useful factor rather than staying 1.
+                cfg.upscale_factor = a.clamp_factor(cfg.upscale_factor);
+            }
+        }
+        if let Some(f) = kv
+            .get("upscale_factor")
+            .and_then(|v| v.trim().parse::<u8>().ok())
+        {
+            cfg.upscale_factor = cfg.upscale.clamp_factor(f);
         }
         if let Some(c) = kv.get("key_a").and_then(|v| first_char(v)) {
             cfg.keys.a = c;
@@ -489,6 +510,28 @@ mod tests {
             let cfg = Config::parse("rom_dir = ~/games");
             assert_eq!(cfg.rom_dir, PathBuf::from(home).join("games"));
         }
+    }
+
+    #[test]
+    fn upscale_keys_parse_and_clamp() {
+        // Explicit pair.
+        let cfg = Config::parse("upscale = mmpx\nupscale_factor = 2\n");
+        assert_eq!(cfg.upscale, Algorithm::Mmpx);
+        assert_eq!(cfg.upscale_factor, 2);
+        // Algorithm without a factor gets its smallest useful factor.
+        let cfg = Config::parse("upscale = scale2x\n");
+        assert_eq!(cfg.upscale, Algorithm::Scale2x);
+        assert_eq!(cfg.upscale_factor, 2);
+        // Factor is clamped to what the algorithm supports.
+        let cfg = Config::parse("upscale = mmpx\nupscale_factor = 9\n");
+        assert_eq!(cfg.upscale_factor, 4);
+        // Unknown algorithm and junk factors fall back to defaults.
+        let cfg = Config::parse("upscale = hqx\nupscale_factor = banana\n");
+        assert_eq!(cfg.upscale, Algorithm::Nearest);
+        assert_eq!(cfg.upscale_factor, 1);
+        // Default is a no-op.
+        assert_eq!(Config::default().upscale, Algorithm::Nearest);
+        assert_eq!(Config::default().upscale_factor, 1);
     }
 
     #[test]
