@@ -1,9 +1,12 @@
 # Serial — the link cable
 
 > Source: [`src/mmu/serial.rs`](../../src/mmu/serial.rs) · Related: [MMU](mmu.md) · [testing](../testing.md)
-> [← Component index](README.md)
+> [← Component index](README.md) · [🗺️ Code map](../codemap.md)
 
 ---
+
+<!-- codemap:asof -->
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -44,10 +47,10 @@ The link *protocol* is unchanged across models; a DMG and a CGB can link for DMG
 
 ## 4. How it works here
 
-**The `Serial` struct** — [`src/mmu/serial.rs:7`](../../src/mmu/serial.rs): `data` (SB),
+**The `Serial` struct** — [`src/mmu/serial.rs:7`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L7): `data` (SB),
 `control` (SC), a `callback`, and `interrupt`.
 
-**Registers** — `wb`/`rb` ([`serial.rs:24`,`40`](../../src/mmu/serial.rs)). Writing `SC`
+**Registers** — `wb`/`rb` ([`serial.rs:24`,`40`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L24)). Writing `SC`
 with **bit 7 and bit 0 both set** (`v & 0x81 == 0x81`, an internal-clock transfer) hands
 the outgoing byte to the callback and, if it returns a byte, stores it into `SB` and raises
 the serial interrupt:
@@ -65,19 +68,19 @@ the serial interrupt:
 ```
 
 `SC` reads back with the unused bits set (`control | 0b01111110`,
-[`serial.rs:43`](../../src/mmu/serial.rs)).
+[`serial.rs:43`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L43)).
 
 **The capture hook exists but is unused.** There is a `SerialCallback` type, a
 `new_with_callback`, and `set_callback`/`unset_callback`
-([`serial.rs:1`,`15`,`48`](../../src/mmu/serial.rs)) — exactly the seam a Blargg harness
+([`serial.rs:1`,`15`,`66`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L1)) — exactly the seam a Blargg harness
 needs. But both MMU constructors install `Serial::default()`, whose callback is a `noop`
-returning `None` ([`serial.rs:3`,`57`](../../src/mmu/serial.rs)), and **nothing in the repo
+returning `None` ([`serial.rs:3`,`75`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L3)), and **nothing in the repo
 ever calls `set_callback`**. So today serial output is silently dropped.
 
 ### Honest approximations
 
 - **Transfer is instantaneous.** The full byte is "transferred" the moment `SC` is written
-  ([`serial.rs:29`](../../src/mmu/serial.rs)); there is no per-bit 8192 Hz shifting and no
+  ([`serial.rs:29`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L29)); there is no per-bit 8192 Hz shifting and no
   transfer-in-progress timing.
 - **The start bit is not auto-cleared** after the transfer.
 - **No real link partner.** With the default no-op callback, a transfer returns `None`, so

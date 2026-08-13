@@ -386,12 +386,16 @@ impl<'a> MemoryManagementUnit<'a> {
         gputicks
     }
 
+    // Address dispatch. See docs/components/mmu.md §"The dispatch" and Pan Docs
+    // memory map: https://gbdev.io/pandocs/Memory_Map.html
     pub fn rb(&mut self, address: u16) -> u8 {
         self.bus_tick();
         match address {
             0x0000..=0x7FFF => self.mbc.readrom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
             0xA000..=0xBFFF => self.mbc.readram(address),
+            // Echo RAM (E000-FDFF) mirrors WRAM: the same arms serve both ranges
+            // because & 0x0FFF folds the echo address onto the C000-page bank.
             0xC000..=0xCFFF | 0xE000..=0xEFFF => self.wram[address as usize & 0x0FFF],
             0xD000..=0xDFFF | 0xF000..=0xFDFF => {
                 self.wram[(self.wrambank * 0x1000) | address as usize & 0x0FFF]
@@ -400,6 +404,8 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF00 => self.keypad.rb(),
             0xFF01..=0xFF02 => self.serial.rb(address),
             0xFF04..=0xFF07 => self.timer.rb(address),
+            // IF: only 5 interrupt bits exist; the unused top 3 always read 1
+            // (Pan Docs "Interrupts").
             0xFF0F => self.intf | 0b11100000,
             0xFF10..=0xFF3F => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -431,6 +437,8 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF76..=0xFF77 => 0x00, // CGB PCM registers. Not yet implemented.
             0xFF80..=0xFFFE => self.zram[address as usize & 0x007F],
             0xFFFF => self.inte,
+            // Prohibited region FEA0-FEFF and any unmapped I/O read back 0xFF.
+            // Hardware's OAM-block-dependent value here is not modelled (mmu.md).
             _ => 0xFF,
         }
     }
@@ -507,6 +515,9 @@ impl<'a> MemoryManagementUnit<'a> {
         self.speed_switch_req = false;
     }
 
+    // OAM DMA (FF46): copy 0xA0 bytes from XX00-XX9F into OAM. Deliberately
+    // instantaneous and unguarded here; hardware takes 160 M-cycles and restricts
+    // the CPU to HRAM meanwhile — see mmu.md and https://gbdev.io/pandocs/OAM_DMA_Transfer.html
     fn oamdma(&mut self, value: u8) {
         // OAM DMA re-uses rb/wb internally; it is a single (instantaneous, in
         // this model) transfer, not 160 CPU memory accesses, so suppress the

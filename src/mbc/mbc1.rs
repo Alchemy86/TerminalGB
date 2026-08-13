@@ -121,12 +121,17 @@ impl MemoryBankController for MBC1 {
         self.ram[(rambank * 0x2000) | ((a & 0x1FFF) as usize)]
     }
 
+    // MBC1 bank registers. See docs/components/mbc.md and Pan Docs:
+    // https://gbdev.io/pandocs/MBC1.html
     fn writerom(&mut self, a: u16, v: u8) {
         match a {
             0x0000..=0x1FFF => {
+                // RAM enable: only the low nibble == 0xA counts.
                 self.ram_on = v & 0xF == 0xA;
             }
             0x2000..=0x3FFF => {
+                // ROM bank low 5 bits. Bank 0 is unreachable through this
+                // register — a written 0 reads as 1 (the classic MBC1 quirk).
                 let lower_bits = match (v as usize) & 0x1F {
                     0 => 1,
                     n => n,
@@ -134,6 +139,8 @@ impl MemoryBankController for MBC1 {
                 self.rombank = ((self.rombank & 0x60) | lower_bits) % self.rombanks;
             }
             0x4000..=0x5FFF => {
+                // 2-bit "upper" register: ROM bank bits 5-6 on >512 KiB carts
+                // (rombanks > 0x20), else the RAM bank select.
                 if self.rombanks > 0x20 {
                     let upper_bits = (v as usize & 0x03) % (self.rombanks >> 5);
                     self.rombank = self.rombank & 0x1F | (upper_bits << 5)
@@ -143,6 +150,8 @@ impl MemoryBankController for MBC1 {
                 }
             }
             0x6000..=0x7FFF => {
+                // Mode 0: upper bits apply to ROM only. Mode 1: they also bank
+                // the 0000-3FFF window and cart RAM (see readrom/readram).
                 self.banking_mode = v & 0x01;
             }
             _ => panic!("Could not write to {:04X} (MBC1)", a),

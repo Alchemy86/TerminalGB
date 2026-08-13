@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop
+.PHONY: web desktop docs-links docs-check
 
 all: build install
 
@@ -10,6 +10,17 @@ watch:
 lint:
 	cargo fmt -- --check --color always
 	cargo clippy --all-targets -- -D warnings
+
+# Code map (docs/codemap.md + docs/components/): rewrite every `path:line`
+# reference into a fresh blob/main GitHub link and restamp the per-page
+# "documented as of <sha>" marker. See docs/codemap.md §"How the links stay honest".
+docs-links:
+	python3 docs/tools/codemap_links.py
+
+# Fail if any doc reference is broken: a missing file/dir target, or a line
+# number past the end of its file. Suitable for CI.
+docs-check:
+	python3 docs/tools/codemap_links.py --check
 
 build-wasm:
 	cargo build --release --target wasm32-unknown-unknown

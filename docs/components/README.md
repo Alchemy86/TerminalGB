@@ -12,6 +12,9 @@
 
 ---
 
+<!-- codemap:asof -->
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
+
 ## The components
 
 The list below is derived from the code (`src/cpu`, `src/gpu`, `src/mmu`, `src/mbc`,
@@ -48,6 +51,10 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
 
 ## Read this first
 
+- **[🗺️ Code map](../codemap.md)** — the top-level orientation page: how a frame flows, how a
+  memory access travels CPU → MMU → device, how interrupts are delivered, and where the
+  frontends attach — with clickable links into the source and the linking strategy that keeps
+  them honest.
 - **[Accuracy testing / the yardstick](../testing.md)** — the Blargg, Mooneye, and
   dmg-acid2/cgb-acid2 suites every component page's test list refers to, how a headless
   harness would run them, and an honest note on the "Nintendo's emulator scored 100%" claim.
@@ -61,7 +68,7 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
 ## Provenance & honesty
 
 The emulation core is closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**
-(the one literal `rboy` credit in the tree is [`src/gameboy.rs:50`](../../src/gameboy.rs),
+(the one literal `rboy` credit in the tree is [`src/gameboy.rs:50`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L50),
 but the structure runs throughout). Every page's **"honest approximations"** section names
 where this emulator is *not* cycle-perfect — the fixed PPU mode-3 length, instantaneous
 unguarded OAM DMA, separate timer counters, the unmodelled HALT and OAM-corruption bugs, the

@@ -1,9 +1,12 @@
 # MMU — memory bus, DMA & interrupt wiring
 
 > Source: [`src/mmu/mod.rs`](../../src/mmu/mod.rs) · Related: [Cartridges/MBC](mbc.md) · [PPU](ppu.md) · [Timer](timer.md) · [Serial](serial.md) · [Joypad](input.md)
-> [← Component index](README.md)
+> [← Component index](README.md) · [🗺️ Code map](../codemap.md)
 
 ---
+
+<!-- codemap:asof -->
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -57,23 +60,23 @@ registers behind mode checks, returning `0xFF`/no-op in Classic mode.
 Mirrors rboy's MMU: components expose `rb`/`wb`/`do_cycle` and raise interrupts by ORing a
 per-device `interrupt` byte, which the MMU folds into `IF`.
 
-**The struct** — [`src/mmu/mod.rs:26`](../../src/mmu/mod.rs). Owns `wram` (`0x8000` = 8
+**The struct** — [`src/mmu/mod.rs:45`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L45). Owns `wram` (`0x8000` = 8
 banks), `zram` (HRAM, note it's named `zram`), `gpu`, `timer`, `serial`, `keypad`,
 `Option<Sound>`, `mbc`, the interrupt bytes `inte` (IE) and `intf` (IF), the HDMA state,
 `wrambank`, and mode/speed fields.
 
-**Two constructors** — `new` ([`mod.rs:64`](../../src/mmu/mod.rs), DMG, rejects
-CGB-only carts) and `new_cgb` ([`mod.rs:102`](../../src/mmu/mod.rs), calls
+**Two constructors** — `new` ([`mod.rs:99`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L99), DMG, rejects
+CGB-only carts) and `new_cgb` ([`mod.rs:139`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L139), calls
 `determine_mode`). Both `fill_random` the WRAM and run `set_initial`
-([`mod.rs:137`](../../src/mmu/mod.rs)) to write the post-boot I/O defaults — this is the
+([`mod.rs:176`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L176)) to write the post-boot I/O defaults — this is the
 **boot-ROM handoff** (see §5).
 
-**The dispatch** — `rb` ([`mod.rs:211`](../../src/mmu/mod.rs)) / `wb`
-([`mod.rs:263`](../../src/mmu/mod.rs)) are the address `match`. Echo RAM is folded into the
-WRAM arms with `& 0x0FFF` masking ([`mod.rs:216–217`](../../src/mmu/mod.rs)). `IF` reads
-back with the top three bits set (`intf | 0b11100000`, [`mod.rs:224`](../../src/mmu/mod.rs)).
+**The dispatch** — `rb` ([`mod.rs:391`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L391)) / `wb`
+([`mod.rs:450`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L450)) are the address `match`. Echo RAM is folded into the
+WRAM arms with `& 0x0FFF` masking ([`mod.rs:399–400`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L399)). `IF` reads
+back with the top three bits set (`intf | 0b11100000`, [`mod.rs:409`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L409)).
 
-**`do_cycle`** ([`mod.rs:180`](../../src/mmu/mod.rs)) ticks the sub-components and folds
+**`do_cycle`** ([`mod.rs:347`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L347)) ticks the sub-components and folds
 their interrupts into `intf`: it runs VRAM DMA first, then `timer` and `sound` on
 double-speed-aware `cputicks`, and `gpu`/VRAM-DMA on `gputicks`. **The timer, however, is
 advanced per memory access, not just here.** While a CPU instruction executes, every
@@ -84,7 +87,7 @@ total is unchanged. `bus_tick` is a no-op unless a CPU instruction is executing,
 DMA (which re-uses `rb`/`wb`) and boot-time setup do not double-count — `oamdma` toggles
 the flag off around its copy.
 
-**OAM DMA** — `oamdma` ([`mod.rs:330`](../../src/mmu/mod.rs)):
+**OAM DMA** — `oamdma` ([`mod.rs:521`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L521)):
 
 ```rust
 fn oamdma(&mut self, value: u8) {
@@ -98,14 +101,14 @@ fn oamdma(&mut self, value: u8) {
 }
 ```
 
-**HDMA/GDMA (CGB)** — `hdma_write`/`hdma_read` ([`mod.rs:353`,`338`](../../src/mmu/mod.rs)),
-`perform_gdma` (all rows at once, [`mod.rs:407`](../../src/mmu/mod.rs)) and `perform_hdma`
-(one 16-byte row per HBlank, gated on `gpu.may_hdma()`, [`mod.rs:394`](../../src/mmu/mod.rs)).
+**HDMA/GDMA (CGB)** — `hdma_write`/`hdma_read` ([`mod.rs:549`,`534`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L549)),
+`perform_gdma` (all rows at once, [`mod.rs:603`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L603)) and `perform_hdma`
+(one 16-byte row per HBlank, gated on `gpu.may_hdma()`, [`mod.rs:590`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L590)).
 
 ### Honest approximations
 
 - **OAM DMA is instantaneous and unguarded.** `oamdma` copies all 160 bytes synchronously
-  the instant `0xFF46` is written ([`mod.rs:330`](../../src/mmu/mod.rs)). Real hardware
+  the instant `0xFF46` is written ([`mod.rs:521`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L521)). Real hardware
   takes **160 M-cycles (640 dots)**, during which **the CPU may access only HRAM**. Here
   the transfer takes zero emulated time and the bus is never restricted, so DMA-timing
   tricks (and the standard HRAM DMA-wait routine's *timing*) are not reproduced.
@@ -113,10 +116,10 @@ fn oamdma(&mut self, value: u8) {
   any mode; hardware returns `0xFF` during modes 2/3. This interacts with the OAM
   corruption bug (see §5).
 - **GDMA/HDMA cycle costs are approximate** (`len*8` / `8` ticks;
-  [`mod.rs:413`,`402`](../../src/mmu/mod.rs)) and GDMA does not stall the CPU for its full
+  [`mod.rs:610`,`593`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L610)) and GDMA does not stall the CPU for its full
   duration.
 - **Prohibited region `0xFEA0–0xFEFF`** is not given the documented OAM-block-dependent
-  read behaviour; unmapped reads return `0xFF` ([`mod.rs:255`](../../src/mmu/mod.rs)).
+  read behaviour; unmapped reads return `0xFF` ([`mod.rs:442`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L442)).
 
 ## 5. Known quirks and edge cases
 
@@ -134,13 +137,13 @@ fn oamdma(&mut self, value: u8) {
   DMA-bus garbage unless it runs from HRAM; games copy a tiny wait loop into HRAM for
   exactly this. The emulator's instant DMA sidesteps the whole mechanism.
 - **The boot-ROM handoff.** There is no boot ROM here; `set_initial`
-  ([`mod.rs:137`](../../src/mmu/mod.rs)) writes the exact post-boot I/O register values
+  ([`mod.rs:176`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L176)) writes the exact post-boot I/O register values
   (`NR*`, `LCDC=0x91`, `BGP=0xFC`, timer regs, …) the boot ROM would have left, and the
   CPU starts at `PC=0x0100` with the boot registers (see [CPU](cpu.md)). The Nintendo logo
   scroll and the header checksum lock are therefore skipped.
 - **Echo RAM** is faithfully mirrored (writes to `0xE000+` change `0xC000+`).
 - **CGB double-speed** halves per-cycle divisions for timer/sound and doubles DMA cost via
-  `cpudivider` ([`mod.rs:181`](../../src/mmu/mod.rs)), but `STOP`-based speed switching
+  `cpudivider` ([`mod.rs:348`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L348)), but `STOP`-based speed switching
   itself is only plumbed, not cycle-accurate.
 
 ## 6. Expected behaviours as tests

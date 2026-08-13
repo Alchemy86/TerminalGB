@@ -1,9 +1,12 @@
 # Frontends — desktop, terminal, web & FFI
 
 > Source: [`src/screen/`](../../src/screen), [`examples/`](../../examples), [`web/`](../../web), [`src/lib.rs`](../../src/lib.rs) · Related: [Joypad](input.md) · [APU](apu.md) · [Display scaling](../display.md)
-> [← Component index](README.md)
+> [← Component index](README.md) · [🗺️ Code map](../codemap.md)
 
 ---
+
+<!-- codemap:asof -->
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -45,21 +48,27 @@ The renderers live in `src/screen/`; the `examples/` binaries are thin `main()`s
 a `RenderMode`; `web/` is the JS/webpack shell around the WASM build.
 
 **Desktop** — [`src/screen/desktop.rs`](../../src/screen/desktop.rs). `Glcx`
-([`desktop.rs:17`](../../src/screen/desktop.rs)) sets up a textured quad and uploads each
-frame via `gl::TexImage2D` in `draw()` ([`desktop.rs:301`](../../src/screen/desktop.rs)).
-The event loop lives in `Gameboy::render_desktop` ([`src/gameboy.rs:84`](../../src/gameboy.rs)),
+([`desktop.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L17)) sets up a textured quad and uploads each
+frame via `gl::TexImage2D` in `draw()` ([`desktop.rs:351`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L351)).
+The event loop lives in `Gameboy::render_desktop` ([`src/gameboy.rs:98`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L98)),
 which also initialises `cpal` audio. Key mapping is in `process_window`
-([`desktop.rs:81`](../../src/screen/desktop.rs)): **Z→Select, X→Start, A→A, B→B**, arrows →
-D-pad. Frame pacing targets ~60 FPS ([`gameboy.rs:125`](../../src/gameboy.rs)).
+([`desktop.rs:81`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L81)): **Z→Select, X→Start, A→A, B→B**, arrows →
+D-pad. The loop now paces to a real **59.73 Hz** frame clock
+([`gameboy.rs:147`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L147)) rather than free-running.
 
-**Terminal** — [`src/screen/tui.rs`](../../src/screen/tui.rs). Uses `ratatui` +
-`ratatui-image` to draw the framebuffer with the terminal's image protocol (sixel/kitty).
-`q` quits, `i` cycles image protocol, `o` scales.
+**Terminal** — [`src/screen/tui.rs`](../../src/screen/tui.rs). A full ratatui application
+(recently rebuilt): `run` ([`tui.rs:194`](../../src/screen/tui.rs)) sets up an in-app **ROM
+picker**, a centred game pane, a status panel, and a **help overlay** (`?`); `q` quits.
+
+> ⚠️ **In flux.** The terminal frontend (`src/screen/tui.rs`) and the `examples/` binaries
+> were rewritten while this page was being made clickable, so the prose in this section and
+> the [display-scaling doc](../display.md) may lag the code — the `path:line` links point at
+> the current tree, but treat the terminal-specific narrative as provisional.
 
 **Web** — [`src/screen/web.rs`](../../src/screen/web.rs). `#[wasm_bindgen] render(rom)`
-([`web.rs:44`](../../src/screen/web.rs)) creates a 160×144 `<canvas>`, builds
+([`web.rs:44`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/web.rs#L44)) creates a 160×144 `<canvas>`, builds
 `Gameboy::new(rom, None)`, and in a `requestAnimationFrame` loop calls `frame()` and blits
-via `put_image_data` ([`web.rs:123`](../../src/screen/web.rs)). Keys are read from a shared
+via `put_image_data` ([`web.rs:123`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/web.rs#L123)). Keys are read from a shared
 `Rc<RefCell<i32>>` keycode. The JS shell ([`web/index.js`](../../web/index.js)) is a file
 picker + a Play button that calls `render(rom)`.
 
@@ -72,22 +81,22 @@ statically links `libgameboy.a` and calls them from Go.
 
 These are the frontends' rough edges (from the scout report, confirmed in code):
 
-- **The examples don't take a ROM path.** `examples/desktop/bin.rs:9` hardcodes
-  `/Users/rapha/Downloads/dragon-ball.gbc` and `examples/terminal/bin.rs:8` hardcodes
-  another `/Users/rapha/...` path, each with a `// TODO: Allow receive path by arguments`
-  ([`examples/desktop/bin.rs:6`](../../examples/desktop/bin.rs)). `make desktop`/`make
-  terminal` fail for anyone but the original author until edited.
-- **Terminal needs a kitty-keyboard-protocol terminal.** `tui.rs:46` returns immediately
-  with a WARN if `supports_keyboard_enhancement()` is false — works in kitty/WezTerm/Rio/
-  foot, silently no-ops elsewhere ([`src/screen/tui.rs:46`](../../src/screen/tui.rs)).
-- **No web audio.** The `sound` module is compiled out on wasm ([`src/lib.rs:16`](../../src/lib.rs)).
+- **The examples now take a ROM path** (previously hard-coded). Both read
+  `std::env::args().nth(1)` ([`examples/desktop/bin.rs:6`](https://github.com/Alchemy86/gameboy/blob/main/examples/desktop/bin.rs#L6),
+  [`examples/terminal/bin.rs:10`](https://github.com/Alchemy86/gameboy/blob/main/examples/terminal/bin.rs#L10)); desktop prints a usage
+  line with no argument, terminal falls back to the in-app ROM picker.
+- **Terminal needs a kitty-keyboard-protocol terminal.** `run` **fails loudly** with a clear
+  error if `supports_keyboard_enhancement()` is false
+  ([`tui.rs:198`](../../src/screen/tui.rs)) — works in kitty/WezTerm/Ghostty/foot; elsewhere it
+  exits with instructions rather than silently misbehaving.
+- **No web audio.** The `sound` module is compiled out on wasm ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)).
 - **Web mis-detects cartridges.** The FFI/web path always builds MBC3 (see [MBC](mbc.md) §4).
-- **`RenderMode::WebAssembly` is a no-op arm** ([`src/gameboy.rs:73`](../../src/gameboy.rs))
+- **`RenderMode::WebAssembly` is a no-op arm** ([`src/gameboy.rs:87`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L87))
   and `lib.rs::start()` is a TODO stub — the real web path enters through
   `#[wasm_bindgen] render()`, bypassing `render()`.
-- **Inconsistent key mapping for "B".** The desktop/web builds map B to a specific host
-  key, the terminal binds B to the physical `b`/`B` keys, and the TUI's on-screen help text
-  (`tui.rs:358`) says something different again. Worth reconciling.
+- **Key mapping differs per frontend.** The desktop/web builds map B to a specific host key,
+  while the terminal has its own binding table and on-screen help
+  ([`tui.rs:969`](../../src/screen/tui.rs)). Worth reconciling.
 - **Dead code:** commented-out `render` in `desktop.rs`, WebGL helpers in `web.rs`, and the
   `docs/*.wasm` prebuilt blobs (~2.2 MB) are stale build artifacts.
 - **Display scaling is rough:** desktop upscales with bilinear `LINEAR` (blurry) and never
@@ -99,9 +108,10 @@ These are the frontends' rough edges (from the scout report, confirmed in code):
 
 Frontends don't emulate hardware quirks, but they must respect these console realities:
 
-- **Frame pacing vs. real 59.7 Hz.** The frame loop ([`gameboy.rs:178`](../../src/gameboy.rs))
-  runs `~67,109` cycles or until the PPU signals a finished frame — a whole-frame batch,
-  not real-time audio-synced pacing. Fast/slow hosts can drift from 59.7 Hz.
+- **Frame pacing.** The desktop loop now sleeps to a fixed **59.73 Hz** frame clock
+  ([`gameboy.rs:178`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L178)); each step runs `Gameboy::frame` (≈`CYCLES`
+  worth of work or until the PPU signals a finished frame). Audio is still drained separately
+  by the `cpal` callback, so there is no single A/V clock.
 - **Colour resolution happens in the core**, so a frontend must not re-gamma the RGBA it
   receives (the CGB Gambatte correction already ran in the [PPU](ppu.md)).
 - **Audio/video sync** is loose — audio is drained opportunistically by the `cpal` callback;
@@ -119,7 +129,7 @@ Frontends don't emulate hardware quirks, but they must respect these console rea
 3. **Key mapping round-trip.** `keydown(A)` then reading `0xFF00` with the button row
    selected shows A pressed (see [Joypad](input.md)). *(Not covered.)*
 4. **Examples accept a ROM path argument.** `cargo run --example desktop -- game.gb` loads
-   `game.gb`. **Expected to FAIL — paths are hardcoded.** *(Not covered; known bug.)*
+   `game.gb` (now implemented — the binaries read `args().nth(1)`). *(Not covered by a test.)*
 5. **Headless build without ALSA.** With audio feature-gated off, `cargo build
    --no-default-features` succeeds on a box with no sound headers. **Expected to FAIL
    today — `cpal` is non-optional.** *(Not covered; known issue — prerequisite for the

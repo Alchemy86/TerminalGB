@@ -239,6 +239,8 @@ impl Gpu {
         Ok(())
     }
 
+    // The PPU mode cycle. See docs/components/ppu.md §"The mode cycle" and Pan Docs:
+    // https://gbdev.io/pandocs/Rendering.html  (STAT modes: https://gbdev.io/pandocs/STAT.html)
     pub fn do_cycle(&mut self, ticks: u32) {
         if !self.lcd_on {
             return;
@@ -248,11 +250,14 @@ impl Gpu {
         let mut ticksleft = ticks;
 
         while ticksleft > 0 {
+            // Stepped in <=80-tick chunks so the 80-dot OAM-scan boundary is never
+            // overshot; finer register/LY visibility is not modelled (see ppu.md).
             let curticks = if ticksleft >= 80 { 80 } else { ticksleft };
             self.modeclock += curticks;
             ticksleft -= curticks;
 
-            // Full line takes 114 ticks
+            // A scanline is 456 dots (Pan Docs "Rendering"): 144 visible + 10 VBlank
+            // = 154 lines/frame. (The old "114 ticks" was the M-cycle count.)
             if self.modeclock >= 456 {
                 self.modeclock -= 456;
                 self.line = (self.line + 1) % 154;
@@ -264,7 +269,9 @@ impl Gpu {
                 }
             }
 
-            // This is a normal line
+            // Fixed 80 / 172 / 204 dot split for mode 2 (OAM) / 3 (draw) / 0 (HBlank).
+            // Hardware mode 3 is variable (172-289) and steals from HBlank; this flat
+            // split is a deliberate approximation — see ppu.md "honest approximations".
             if self.line < 144 {
                 if self.modeclock <= 80 {
                     if self.mode != 2 {

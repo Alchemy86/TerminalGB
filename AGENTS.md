@@ -256,4 +256,33 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   so `1x` is real-time (fixing the old 5 ms/~200 fps terminal bug the audio crew flagged);
   `2x`/`4x` shorten the interval and `MAX` runs an uncapped burst.
 
+## Documentation code map & clickable links
+
+- **[`docs/codemap.md`](docs/codemap.md)** is the top-level orientation page (frame flow,
+  memory-access routing CPU→MMU→device, interrupt delivery, frontend attach points) with
+  Mermaid diagrams. Linked from the README and `docs/components/README.md`.
+- **Every `path:line` reference in the docs is a generated GitHub link**, not hand-typed.
+  The source of truth is the human-readable ``path:line`` code span; the URL is derived.
+  - Strategy: **branch links** (`blob/main/…#Lnn`) so they track moving code, plus a
+    per-page **"documented as of `<sha>`" marker** (an HTML sentinel `<!-- codemap:asof -->`
+    the tool refreshes). File/dir links and doc-to-doc links stay **relative** (editor- and
+    GitHub-friendly); only references carrying a `:line` become absolute GitHub links.
+  - Tool: `docs/tools/codemap_links.py`. `make docs-links` rewrites every reference + restamps
+    the marker (idempotent); `make docs-check` fails on a missing file/dir or an out-of-range
+    line number (CI-suitable). Repo slug/branch via `CODEMAP_REPO`/`CODEMAP_REF` env vars
+    (default `Alchemy86/gameboy` / `main`). `docs/display.md` is in the tool's `EXCLUDE` set
+    (whole doc, terminal-scaling refs track `src/screen/tui.rs`); refs whose target is in
+    `SRC_EXCLUDE` (`src/sound.rs`, `src/screen/tui.rs` — both being rewritten live) are kept
+    as file-level relative links with a flux note (apu.md, frontends.md) rather than churned
+    every rebase. Drop a file from `SRC_EXCLUDE`/`EXCLUDE` and re-run `make docs-links` once it settles.
+  - **After editing source that shifts line numbers, run `make docs-links`** then
+    `make docs-check`. `docs-check` catches out-of-range rot but *not* in-range wrong-content
+    rot — when another crew rewrites a file, re-anchor the affected pages' references by
+    content, not just by range. Fenced ASCII-diagram cites (e.g. ppu.md's mode-cycle box) are
+    plain text the tool does not touch — update them by hand.
+- **Code↔docs cross-links:** hard-part functions carry a short comment pointing at their
+  component page and the Pan Docs section (CPU interrupt dispatch, PPU mode cycle, MMU
+  dispatch/echo-RAM/OAM-DMA, MBC1 banking). The APU "why" lives in `docs/components/apu.md`
+  prose, not in `src/sound.rs`, to avoid conflicting with the active audio rewrites.
+
 - Add durable project-specific notes here as they are discovered through real work.

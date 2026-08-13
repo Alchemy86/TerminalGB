@@ -139,6 +139,10 @@ The **MMU is the hub**: the CPU only reads and writes addresses, and the MMU rou
 a component. Components raise interrupts by setting a bit the MMU folds into `IF`; the CPU
 dispatches them (priority VBlank → STAT → Timer → Serial → Joypad).
 
+🗺️ **New here? Read the [code map](docs/codemap.md)** — one orientation page that traces a
+frame through the system, follows a memory access from CPU → MMU → device, and shows where the
+frontends attach, with every reference a clickable link into the source.
+
 👉 **Start at the [component reference index](docs/components/README.md)**, read the
 [accuracy-testing yardstick](docs/testing.md) that every component's test list is built on,
 see the [display-scaling design](docs/display.md) — how each frontend enlarges the 160×144

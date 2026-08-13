@@ -1,9 +1,12 @@
 # Timer & Divider
 
 > Source: [`src/mmu/timer.rs`](../../src/mmu/timer.rs) · Related: [MMU](mmu.md) · [CPU](cpu.md)
-> [← Component index](README.md)
+> [← Component index](README.md) · [🗺️ Code map](../codemap.md)
 
 ---
+
+<!-- codemap:asof -->
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -51,16 +54,16 @@ variation:
 
 ## 4. How it works here
 
-**The `Timer` struct** — [`src/mmu/timer.rs:1`](../../src/mmu/timer.rs): `divider` (DIV),
+**The `Timer` struct** — [`src/mmu/timer.rs:1`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L1): `divider` (DIV),
 `counter` (TIMA), `modulo` (TMA), `enabled`, `step` (T-cycles per TIMA tick), two internal
 accumulators `internaldiv`/`internalcnt`, and `interrupt`.
 
-**Registers** — `rb`/`wb` ([`timer.rs:28`,`46`](../../src/mmu/timer.rs)): writing `DIV`
-resets it to 0 ([`timer.rs:48`](../../src/mmu/timer.rs)); writing `TAC` sets `step` to
-`16 / 64 / 256 / 1024` T-cycles ([`timer.rs:59–64`](../../src/mmu/timer.rs)), i.e.
+**Registers** — `rb`/`wb` ([`timer.rs:28`,`46`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L28)): writing `DIV`
+resets it to 0 ([`timer.rs:48`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L48)); writing `TAC` sets `step` to
+`16 / 64 / 256 / 1024` T-cycles ([`timer.rs:59–67`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L59)), i.e.
 262144 / 65536 / 16384 / 4096 Hz.
 
-**Counting** — `do_cycle` ([`timer.rs:70`](../../src/mmu/timer.rs)) accumulates ticks:
+**Counting** — `do_cycle` ([`timer.rs:96`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L96)) accumulates ticks:
 every 256 ticks bumps `DIV`; when enabled, every `step` ticks bumps `TIMA`, and on overflow
 reloads from `TMA` and sets the interrupt:
 
@@ -91,13 +94,13 @@ not vendored — so each remains a documented divergence rather than a red test)
 
 - **DIV-write does not glitch `TIMA`.** On hardware, resetting `DIV` can produce a spurious
   `TIMA` increment (a falling edge on the selected bit). Here `DIV` and `TIMA` are separate
-  counters, so writing `DIV` never touches `TIMA` ([`timer.rs:48`](../../src/mmu/timer.rs)).
+  counters, so writing `DIV` never touches `TIMA` ([`timer.rs:48`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L48)).
 - **Changing `TAC` mid-count doesn't glitch.** Hardware can generate an extra increment
   when the selected bit changes; not modelled.
 - **`TIMA` overflow reload is instantaneous.** Real hardware has a **4-cycle window**
   between overflow and reload during which `TIMA` reads `0x00`, and writes to `TIMA`/`TMA`
   in that window have special effects (the "TMA write on the reload cycle" behaviour).
-  Here reload happens immediately in the same tick ([`timer.rs:82`](../../src/mmu/timer.rs)).
+  Here reload happens immediately in the same tick ([`timer.rs:108`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L108)).
 
 ## 5. Known quirks and edge cases
 
@@ -108,7 +111,7 @@ not vendored — so each remains a documented divergence rather than a red test)
 - **`DIV` keeps counting regardless of `TAC` enable** — correctly modelled (`internaldiv`
   is always advanced).
 - **Overflow requests the interrupt but doesn't dispatch it** — the MMU folds
-  `timer.interrupt` into `IF` and clears it ([`src/mmu/mod.rs:190`](../../src/mmu/mod.rs));
+  `timer.interrupt` into `IF` and clears it ([`src/mmu/mod.rs:368`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L368));
   the CPU dispatches (see [CPU](cpu.md)).
 
 ## 6. Expected behaviours as tests

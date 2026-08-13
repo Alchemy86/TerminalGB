@@ -156,7 +156,11 @@ impl Cpu<'_> {
         };
     }
 
+    // Interrupt dispatch. See docs/components/cpu.md §"Interrupts" and Pan Docs:
+    // https://gbdev.io/pandocs/Interrupts.html
     fn handleinterrupt(&mut self) -> u32 {
+        // HALT wakes on any pending+enabled interrupt even with IME off; a
+        // still-masked (IME) CPU wakes but does not dispatch (Pan Docs "HALT").
         if !self.ime && self.halt == 0 {
             return 0;
         }
@@ -172,6 +176,9 @@ impl Cpu<'_> {
         }
         self.ime = false;
 
+        // Priority = lowest set bit wins, so the fixed order is
+        // VBlank(0) > STAT(1) > Timer(2) > Serial(3) > Joypad(4). Only that one
+        // bit is acknowledged/cleared; the others stay pending in IF.
         let n = triggered.trailing_zeros();
         if n >= 5 {
             panic!("Invalid interrupt triggered");
@@ -179,8 +186,11 @@ impl Cpu<'_> {
         self.memory.intf &= !(1 << n);
         let pc = self.registers.pc;
         stack::pushstack(self, pc);
+        // Vector = 0x40, 0x48, 0x50, 0x58, 0x60 (0x0040 | n<<3).
         self.registers.pc = 0x0040 | ((n as u16) << 3);
 
+        // 4 M-cycles here; real hardware spends 5 (20 T-cycles) — see cpu.md
+        // "honest approximations".
         4
     }
 

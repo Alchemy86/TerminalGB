@@ -1,9 +1,19 @@
 # APU — sound (audio processing unit)
 
 > Source: [`src/sound.rs`](../../src/sound.rs) · Related: [MMU](mmu.md) · [Frontends](frontends.md)
-> [← Component index](README.md)
+> [← Component index](README.md) · [🗺️ Code map](../codemap.md)
 
 ---
+
+<!-- codemap:asof -->
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9162be3`](https://github.com/Alchemy86/gameboy/tree/9162be32ec660ef0c10a9e4164b9b5f6792950a8) · regenerate with `make docs-links`, verify with `make docs-check`.
+
+> ⚠️ **`src/sound.rs` is being rewritten right now** (two audio crews). To avoid minting
+> line links that break every rebase, this page's `sound.rs` references are **file-level
+> links** — the `:line` in the text is a hint, and the link opens the file, not an exact
+> line. `sound.rs` is in the `SRC_EXCLUDE` set of `docs/tools/codemap_links.py`; drop it and
+> re-run `make docs-links` once the APU settles to restore precise anchors. The APU "why"
+> (frame sequencer, length counter, frequency sweep) lives in the prose below.
 
 ## 1. What it is
 
@@ -58,16 +68,16 @@ its high register (`NRx4`).
 The design closely follows rboy's APU: a per-channel `BlipBuf` with `add_delta`/`last_amp`
 band-limited synthesis and the standard frame-sequencer structure.
 
-**The `Sound` struct** — [`src/sound.rs:450`](../../src/sound.rs): four channel structs,
+**The `Sound` struct** — [`src/sound.rs:458`](../../src/sound.rs): four channel structs,
 volume/panning registers, `frame_seq_counter`, an `Option<Box<dyn AudioPlayer>>`, and the
 timing bookkeeping (`CLOCKS_PER_FRAME = 4194304 / 512`, [`sound.rs:11`](../../src/sound.rs)).
 
 **The channels** — `SquareChannel` (used for **both** channel 1 and 2; sweep fields only
-stepped for channel 1) [`sound.rs:132`](../../src/sound.rs); `WaveChannel` with
-`waveram: [u8; 16]` [`sound.rs:266`](../../src/sound.rs); `NoiseChannel` with the LFSR
-[`sound.rs:363`](../../src/sound.rs).
+stepped for channel 1) [`sound.rs:134`](../../src/sound.rs); `WaveChannel` with
+`waveram: [u8; 16]` [`sound.rs:274`](../../src/sound.rs); `NoiseChannel` with the LFSR
+[`sound.rs:371`](../../src/sound.rs).
 
-**The frame sequencer** — `Sound::run` ([`sound.rs:561`](../../src/sound.rs)) advances a
+**The frame sequencer** — `Sound::run` ([`sound.rs:569`](../../src/sound.rs)) advances a
 0–7 counter, one step per `CLOCKS_PER_FRAME`:
 
 ```
@@ -78,30 +88,30 @@ frame_seq_counter == 7      → volume.step()    (ch 1,2,4)        //  64 Hz
 
 matching the hardware rates exactly. Length reload on trigger is modelled
 ([`sound.rs:117`](../../src/sound.rs)); envelope ([`sound.rs:68`](../../src/sound.rs)) and
-sweep with overflow-disable ([`sound.rs:228`](../../src/sound.rs)) are present.
+sweep with overflow-disable ([`sound.rs:234`](../../src/sound.rs)) are present.
 
 **Output** — each channel feeds a `blip_buf::BlipBuf` (`add_delta` at
-[`sound.rs:198`,`343`,`431`](../../src/sound.rs)); `play_samples`
-([`sound.rs:600`](../../src/sound.rs)) drains them to the `AudioPlayer`.
+[`sound.rs:200`,`439`,`439`](../../src/sound.rs)); `play_samples`
+([`sound.rs:612`](../../src/sound.rs)) drains them to the `AudioPlayer`.
 
 **Playback** — the `AudioPlayer` trait ([`sound.rs:16`](../../src/sound.rs)) is implemented
-by `CpalPlayer` ([`sound.rs:910`](../../src/sound.rs)), which opens a 44.1 kHz `cpal`
+by `CpalPlayer` ([`sound.rs:922`](../../src/sound.rs)), which opens a 44.1 kHz `cpal`
 output stream. The desktop frontend wires it up in `render_desktop`
-([`src/gameboy.rs:89`](../../src/gameboy.rs)).
+([`src/gameboy.rs:103`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L103)).
 
 ### Honest approximations & caveats
 
 - **No sound on web.** The whole module is `#[cfg(not(target_arch = "wasm32"))]`
-  ([`src/lib.rs:16`](../../src/lib.rs)), so the browser build reads `0xFF10–0xFF3F` as
+  ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
   `0xFF` and is silent. The terminal frontend also runs without audio.
 - **The subtle length-counter edge case is NOT modelled.** Only "trigger reloads length
   when the counter is zero" is handled ([`sound.rs:117`](../../src/sound.rs)); the
   hardware "extra length clock when enabling length in the first half of a frame-sequencer
   period" is absent — a classic `cgb_sound`/`dmg_sound` failure.
 - **DAC-disable interplay** is partially handled (clearing the upper 5 bits of `NRx2`
-  disables the channel, [`sound.rs:795`](../../src/sound.rs)).
+  disables the channel, [`sound.rs:807`](../../src/sound.rs)).
 - **Cosmetic:** two `unused variable` warnings in release builds at
-  [`sound.rs:959`,`993`](../../src/sound.rs) (`err`/`e` used only inside a
+  [`sound.rs:1013`,`1047`](../../src/sound.rs) (`err`/`e` used only inside a
   `#[cfg(debug_assertions)] eprintln!`).
 
 ## 5. Known quirks and edge cases
@@ -109,16 +119,16 @@ output stream. The desktop frontend wires it up in `render_desktop`
 - **Trigger behaviour (`NRx4` bit 7).** Writing a trigger restarts the channel: reloads
   length if zero, reloads the frequency timer, re-arms the envelope, and (channel 1)
   performs an immediate sweep overflow check that can disable the channel instantly
-  ([`sound.rs:222`](../../src/sound.rs)).
+  ([`sound.rs:224`](../../src/sound.rs)).
 - **Length-counter "extra clock" edge case.** Enabling the length counter in the first
   half of a sequencer step gives one extra length tick on hardware — **not modelled** (§4).
 - **Powering off the APU** (`NR52` bit 7 = 0) zeroes `0xFF10–0xFF25` and blocks most
-  register writes while off ([`sound.rs:773`,`890`](../../src/sound.rs)) — modelled.
+  register writes while off ([`sound.rs:785`,`902`](../../src/sound.rs)) — modelled.
 - **Wave-RAM access while channel 3 is on.** Reads return the byte currently being played,
-  and writes are blocked while playing ([`sound.rs:760`,`876`](../../src/sound.rs)) — a
+  and writes are blocked while playing ([`sound.rs:888`,`888`](../../src/sound.rs)) — a
   simplified version of the (model-dependent, timing-sensitive) hardware behaviour.
 - **Noise LFSR width** (7-bit vs 15-bit) via `NR43` bit 3 — modelled
-  ([`sound.rs:363`](../../src/sound.rs)).
+  ([`sound.rs:371`](../../src/sound.rs)).
 
 ## 6. Expected behaviours as tests
 

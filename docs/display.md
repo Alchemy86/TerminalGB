@@ -1,7 +1,16 @@
 # Display scaling — enlarging the 160×144 screen
 
-> Source: [`src/screen/`](../src/screen), [`src/gameboy.rs`](../src/gameboy.rs), [`web/`](../web) · Related: [Frontends](components/frontends.md) · [PPU](components/ppu.md)
+> Source: [`src/screen/`](../src/screen), [`src/gameboy.rs`](../src/gameboy.rs), [`web/`](../web) · Related: [Frontends](components/frontends.md) · [PPU](components/ppu.md) · [🗺️ Code map](codemap.md)
 > [← Docs: components index](components/README.md) · [testing](testing.md) · [debugging](debugging.md)
+
+---
+
+> ⚠️ **In flux — line hints may lag.** The terminal renderer (`src/screen/tui.rs`) was
+> rewritten (in-app ROM picker, centred `fit_metrics` scaling) after this analysis was
+> written, so the terminal-specific `tui.rs:NNN` numbers below point at the file rather than
+> exact lines and the terminal narrative is provisional. This page is intentionally left out
+> of the `make docs-links` rewrite (see the `EXCLUDE` set in `docs/tools/codemap_links.py`)
+> until the terminal-scaling story is refreshed; the desktop/web parts remain accurate.
 
 ---
 
