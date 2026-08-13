@@ -25,6 +25,6 @@ blargg/instr_timing = PASS
 blargg/mem_timing = PASS
 blargg/mem_timing-2 = HASH:f66c658114ad0205
 blargg/interrupt_time = HASH:2f54218861112ee5
-blargg/halt_bug = HASH:8bc6421af30ea5c5
+blargg/halt_bug = HASH:0e9895cff3533aad
 blargg/oam_bug = HASH:af715310321146ad
 acid2/dmg-acid2 = HASH:01acf78fe505f31c

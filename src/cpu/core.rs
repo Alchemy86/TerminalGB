@@ -17,6 +17,11 @@ pub struct Cpu<'a> {
     pub setdi: u32,
     pub setei: u32,
     pub halt: u32,
+    /// Set when `HALT` is executed with IME=0 while an interrupt is pending
+    /// (`IE & IF & 0x1F != 0`). On hardware this triggers the "HALT bug": the
+    /// CPU does not halt, and the program counter fails to increment when the
+    /// next opcode is fetched, so the byte after `HALT` is read twice.
+    pub halt_bug: bool,
     pub stop: u32,
     pub memory: MemoryManagementUnit<'a>,
 
@@ -36,6 +41,7 @@ impl Cpu<'_> {
             setdi: 0,
             setei: 0,
             halt: 0,
+            halt_bug: false,
             stop: 0,
             _executed_operations: Vec::new(),
         }
@@ -195,6 +201,13 @@ impl Cpu<'_> {
 
     fn operation(&mut self) -> u32 {
         let op = self.get_byte();
+        if self.halt_bug {
+            // HALT bug: the opcode was fetched but PC must not have advanced,
+            // so rewind it — the same byte is fetched again next time (and any
+            // operands of this instruction are read one byte early).
+            self.halt_bug = false;
+            self.registers.pc = self.registers.pc.wrapping_sub(1);
+        }
         // self.debug(op);
         // println!("{:?}", self.registers);
         match op {
@@ -645,7 +658,15 @@ impl Cpu<'_> {
                 2
             }
             0x76 => {
-                self.halt = 1;
+                // HALT with interrupts disabled but one already pending does
+                // not halt on hardware; instead it trips the HALT bug (PC not
+                // incremented on the next fetch — the following byte is read
+                // twice). Otherwise, halt normally.
+                if !self.ime && (self.memory.inte & self.memory.intf & 0x1F) != 0 {
+                    self.halt_bug = true;
+                } else {
+                    self.halt = 1;
+                }
                 1
             }
             0x77 => {
