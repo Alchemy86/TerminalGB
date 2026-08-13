@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`eaae57b`](https://github.com/Alchemy86/gameboy/tree/eaae57ba1a6c6bc97508ef179ed567d401dad24f) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`b8a3dbd`](https://github.com/Alchemy86/gameboy/tree/b8a3dbd9f12c8bf98ba5fecf2c86f3d8e6ac3feb) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -70,7 +70,14 @@ the serial interrupt:
 `SC` reads back with the unused bits set (`control | 0b01111110`,
 [`serial.rs:43`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L43)).
 
-**The capture hook exists but is unused.** There is a `SerialCallback` type, a
+**The capture hook is now used — and there is a second seam beside it.** A
+[plugin](../plugins.md) holding `SERIAL_LINK` can *be the console on the other end of the
+cable*: when the host callback declines a transfer, the byte is parked in `Serial::pending`
+and answered by the plugin host from `Cpu::do_cycle`, before the interrupt is folded into
+`IF` — so the game sees unchanged timing. That is what completes a real Generation 1 Pokémon
+trade (see [plugins.md](../plugins.md) §7). Historically, though:
+
+**The capture hook existed but was unused.** There is a `SerialCallback` type, a
 `new_with_callback`, and `set_callback`/`unset_callback`
 ([`serial.rs:1`,`15`,`66`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L1)) — exactly the seam a Blargg harness
 needs. But both MMU constructors install `Serial::default()`, whose callback is a `noop`
@@ -87,6 +94,10 @@ ever calls `set_callback`**. So today serial output is silently dropped.
   no interrupt is raised and nothing is received. A harness must install a callback to see
   output.
 - **External-clock transfers** (`SC` bit 0 = 0) are ignored (no partner drives the clock).
+  This is survivable in practice because a link protocol gets to choose who takes the clock:
+  Gen 1 offers both, so answering its "I'll take the clock" byte makes the *game* the master
+  and every transfer internally clocked. A protocol that insists on clocking the emulated
+  console would not work here.
 
 ## 5. Known quirks and edge cases
 
@@ -100,7 +111,11 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: none.**
+> **Coverage today: none from test ROMs** — and per
+> [conformance-notes.md](../conformance-notes.md) (2026-08-13) that is structural: a link
+> partner is a second machine, so a single-ROM harness has nothing to talk to. The
+> two-console half of the Game Boy is covered instead by `examples/gen1_trade.rs`, which
+> drives a real Gen 1 trade to completion.
 
 1. **Callback capture.** After `set_callback`, writing a byte to `SB` then `0x81` to `SC`
    invokes the callback with that byte. *(Not covered — but this is the hook the test

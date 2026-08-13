@@ -123,3 +123,21 @@ If any of those regressed and we hid it, the tool would be checking behaviour we
 meet — which is exactly the failure mode that makes a benchmark worthless. So the same
 baseline-diff discipline that keeps this repo honest ([testing.md](testing.md)) is also a
 precondition for the tool having any authority.
+
+## The same instinct, elsewhere: transfer and the Bank shutdown
+
+The argument for this tool — *official tooling disappears, well-made open tools fill the gap* —
+now has a second instance in this repo, and the two are worth reading together.
+
+Pokémon Bank, the official route for moving a Pokémon from the older games into the modern ones,
+is **reported to be closing on 27 February 2027**. Taken at face value, that removes the only
+sanctioned forward path for a Pokémon on an old cartridge. The [plugin system](plugins.md) is the
+other half of the answer: its first plugin completes a **real Generation 1 link trade** through
+the emulated serial port, and it deliberately separates the trade *protocol* from the *source* of
+the Pokémon, so a file, a converter, a remote peer and a live partner are interchangeable.
+
+That separation matters here for a reason beyond tidiness. A conformance tool needs a
+`SERIAL_LINK` adapter to test the two-console half of the machine at all — see the 2026-08-13
+entry in [conformance-notes.md](conformance-notes.md), which records that **no test ROM can
+cover a link partner**, because a link partner is by definition a second machine. The virtual
+partner built for trading *is* that adapter. One piece of work serves both goals.

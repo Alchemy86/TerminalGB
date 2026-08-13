@@ -31,7 +31,6 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
-use crate::plugin::PluginHost;
 use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
@@ -524,9 +523,6 @@ struct Session {
     /// Legacy path: `ratatui-image` protocol state, rebuilt only when the frame
     /// actually changes (it used to be rebuilt every frame).
     image: Option<StatefulProtocol>,
-    /// Read-only plugins attached to this machine (see [`crate::plugin`]).
-    /// Costs one `is_empty` test per emulated frame when nothing is attached.
-    plugins: PluginHost,
     /// A **second** terminal image slot, for the trainer view's Pokémon sprite.
     /// Its own id, because Kitty images are addressed by id and reusing the
     /// game's would replace the picture (see `crate::termimage`).
@@ -734,6 +730,10 @@ struct App {
     /// Complaints from config parsing, shown once so a mistyped key cannot
     /// fail silently.
     config_warnings: Vec<String>,
+    /// What happened when plugins were attached for the current session —
+    /// shown in the help overlay so "is anything modifying my game?" always
+    /// has an answer.
+    plugin_notes: Vec<String>,
 }
 
 impl App {
@@ -869,6 +869,7 @@ impl App {
             video_named: false,
             video_template,
             config_warnings: warnings,
+            plugin_notes: Vec::new(),
         };
         app.rescan();
         if let Some(first) = app.config_warnings.first() {
@@ -904,20 +905,19 @@ impl App {
     fn start_game(&mut self, path: &Path) {
         let term_image = self.new_term_image();
         let sprite_image = self.new_sprite_image();
-        match load_session(path) {
-            Ok((mut gb, entry, audio, rom)) => {
+        match load_session(path, &self.config) {
+            Ok((mut gb, entry, audio, plugin_notes)) => {
                 self.recent.record(path);
                 self.recent.save();
                 // Carry the current speed rung's audio contract into the new
                 // session (see bump_speed): non-1x must drop, not wait.
                 gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
-                // Attach the read-only trainer plugin. It refuses anything that
-                // is not Pokémon Red/Blue, and does no work at all until its
-                // panel is switched on.
-                let mut plugins = PluginHost::new();
-                let mut trainer = TrainerPlugin::new(rom);
-                trainer.set_active(self.trainer);
-                plugins.attach(Box::new(trainer), &gb);
+                // Plugins were attached by `load_session`; the machine owns the
+                // single host (see `crate::plugin`). All the frontend does here
+                // is tell the trainer view whether its panel is on screen.
+                if let Some(t) = gb.plugin_mut::<TrainerPlugin>() {
+                    t.set_active(self.trainer);
+                }
                 self.trainer_sel = 0;
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
@@ -928,7 +928,6 @@ impl App {
                     prep: FramePrep::new(),
                     term_image,
                     image: None,
-                    plugins,
                     sprite_image,
                     sprite_key: None,
                     sprite_rgba: Vec::new(),
@@ -983,10 +982,14 @@ impl App {
                     self.start_video();
                 }
                 // Config problems follow you into the game — silently ignoring
-                // a key the user set is the bug being fixed here.
-                if let Some(w) = self.config_warnings.first().cloned() {
+                // a key the user set is the bug being fixed here. A plugin
+                // attaching (or failing to) is at least as important to say.
+                if let Some(n) = plugin_notes.first().cloned() {
+                    self.set_toast(n);
+                } else if let Some(w) = self.config_warnings.first().cloned() {
                     self.set_toast(format!("⚠ {w}"));
                 }
+                self.plugin_notes = plugin_notes;
             }
             Err(e) => {
                 self.screen = Screen::Picker;
@@ -1144,10 +1147,9 @@ impl App {
     fn step_frame(&mut self) {
         if let Some(s) = self.session.as_mut() {
             let t = Instant::now();
+            // `Gameboy::frame` publishes the "frame rendered" event to any
+            // attached plugin itself, so there is nothing to drive from here.
             s.gb.frame();
-            // Publish the "frame rendered" event to any attached plugin. With
-            // nothing attached (or the trainer panel off) this is one branch.
-            s.plugins.frame(&s.gb);
             s.t_emulate = telemetry::ms(t.elapsed());
             s.emu_count += 1;
             s.emu_frames += 1;
@@ -1860,7 +1862,7 @@ impl App {
         let on = self.trainer;
         let mut msg = None;
         if let Some(s) = self.session.as_mut() {
-            if let Some(p) = s.plugins.get_mut::<TrainerPlugin>() {
+            if let Some(p) = s.gb.plugin_mut::<TrainerPlugin>() {
                 p.set_active(on);
                 if on {
                     msg = p.refusal();
@@ -1880,7 +1882,7 @@ impl App {
         let n = self
             .session
             .as_ref()
-            .and_then(|s| s.plugins.get::<TrainerPlugin>())
+            .and_then(|s| s.gb.plugin::<TrainerPlugin>())
             .map(|p| p.state().party.len())
             .unwrap_or(0);
         if n == 0 {
@@ -2208,7 +2210,7 @@ impl App {
         let Some(session) = self.session.as_mut() else {
             return;
         };
-        let Some(plugin) = session.plugins.get_mut::<TrainerPlugin>() else {
+        let Some(plugin) = session.gb.plugin_mut::<TrainerPlugin>() else {
             return;
         };
 
@@ -2699,7 +2701,15 @@ impl App {
                 0.0,
                 "-",
             ));
-        let status = vec![
+        // A plugin can answer the link cable and (if it declared the
+        // capability) write memory, so the user must be able to *see* that one
+        // is attached without going looking. `!` marks a plugin that may write
+        // emulated memory, `!!` one that has — see crate::plugin.
+        let plugin_line = self
+            .session
+            .as_ref()
+            .and_then(|s| s.gb.plugin_status_line());
+        let mut status = vec![
             kv("ROM", &truncate(&title, 18)),
             kv("MBC", mbc),
             kv("Scale", &format!("{scale:.1}x")),
@@ -2726,6 +2736,9 @@ impl App {
                 },
             ),
         ];
+        if let Some(p) = &plugin_line {
+            status.push(kv("Plugin", &truncate(p, 18)));
+        }
         f.render_widget(
             Paragraph::new(status)
                 .block(Block::default().borders(Borders::ALL).title(" Status ")),
@@ -3408,20 +3421,84 @@ fn init_audio(_gb: &mut Gameboy) -> AudioHold {}
 /// the header — with `None`, `get_mbc` forces MBC3 and mis-drives other carts.
 // `audio` is `()` without the audio feature; that unit binding is intentional.
 #[cfg_attr(not(feature = "audio"), allow(clippy::let_unit_value))]
-fn load_session(path: &Path) -> Result<(Gameboy, RomEntry, AudioHold, Vec<u8>), String> {
+fn load_session(
+    path: &Path,
+    cfg: &crate::screen::config::Config,
+) -> Result<(Gameboy, RomEntry, AudioHold, Vec<String>), String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     if data.len() < 0x150 {
         return Err("file is too small to be a Game Boy ROM".to_string());
     }
     let entry = romlib::entry_from_bytes(path, &data);
-    // The cartridge image is handed to plugins as well as to the emulator:
-    // `DebugView` can only read the currently-mapped bank, so a plugin that
-    // needs cartridge tables (the trainer view's sprites and name tables) has
-    // no other way to reach them. See `crate::plugin`.
-    let rom = data.clone();
-    let mut gb = Gameboy::new(data, Some(path.to_path_buf()));
+    let mut gb = Gameboy::new(data.clone(), Some(path.to_path_buf()));
     let audio = init_audio(&mut gb);
-    Ok((gb, entry, audio, rom))
+    let notes = attach_plugins(&mut gb, cfg, &data);
+    Ok((gb, entry, audio, notes))
+}
+
+/// Attach the plugins the user configured, returning a line per plugin — one
+/// that says what attached, or why one did not.
+///
+/// **Nothing is attached implicitly.** A plugin is loaded only because a name
+/// appears in `plugins = …` (or `GB_PLUGINS`), and the result is reported so an
+/// active plugin is never a surprise. See [`crate::plugin`].
+fn attach_plugins(
+    gb: &mut Gameboy,
+    cfg: &crate::screen::config::Config,
+    rom: &[u8],
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(msg) = gb.open_plugin_trace() {
+        notes.push(msg);
+    }
+    // The trainer view is the one plugin attached without being asked for. That
+    // is defensible precisely because it is *inert*: it declares no
+    // WRITE_MEMORY, and it does no work at all until `T` switches its panel on
+    // (see `crate::trainer`, "Cost"). Everything that can touch the machine
+    // still has to be named explicitly below.
+    let mut trainer = TrainerPlugin::new(rom.to_vec());
+    trainer.set_active(false);
+    if let Err(e) = gb.add_plugin(Box::new(trainer)) {
+        notes.push(format!("plugin trainer: {e}"));
+    }
+    // The environment wins over the config file, as it does for telemetry.
+    let names: Vec<String> = match std::env::var("GB_PLUGINS") {
+        Ok(v) => v
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Err(_) => cfg.plugins.clone(),
+    };
+    for name in names {
+        match name.as_str() {
+            // Already attached above; naming it explicitly is not an error.
+            crate::trainer::NAME => {}
+            crate::plugin::gen1::NAME => {
+                let trade = std::env::var("GB_GEN1_TRADE")
+                    .ok()
+                    .or_else(|| cfg.gen1_trade.clone());
+                let path = trade.as_deref().map(std::path::Path::new);
+                match crate::plugin::gen1::Gen1LinkPartner::from_trade_file(
+                    rom.to_vec(),
+                    path,
+                ) {
+                    Ok(p) => {
+                        let offer = p.offer().to_string();
+                        match gb.add_plugin(Box::new(p)) {
+                            Ok(()) => notes.push(format!(
+                                "plugin gen1-link attached, offering {offer}"
+                            )),
+                            Err(e) => notes.push(format!("plugin gen1-link: {e}")),
+                        }
+                    }
+                    Err(e) => notes.push(format!("plugin gen1-link: {e}")),
+                }
+            }
+            other => notes.push(format!("unknown plugin '{other}'")),
+        }
+    }
+    notes
 }
 
 // ---------------------------------------------------------------------------
@@ -4218,8 +4295,8 @@ mod tests {
             .session
             .as_ref()
             .unwrap()
-            .plugins
-            .get::<TrainerPlugin>()
+            .gb
+            .plugin::<TrainerPlugin>()
             .expect("the trainer plugin is attached to every session");
         assert!(plugin.game().is_none(), "a synthetic ROM is not Red/Blue");
         assert!(plugin.refusal().is_some(), "and it explains itself");

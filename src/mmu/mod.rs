@@ -497,6 +497,32 @@ impl<'a> MemoryManagementUnit<'a> {
         (self.rb(address) as u16) | ((self.rb(address + 1) as u16) << 8)
     }
 
+    /// Read a byte **without perturbing timing** — the observer's read.
+    ///
+    /// This is the `peek` of the Tier-1 inspector in `docs/debugging.md`, and
+    /// what [`crate::plugin::Machine::peek`] is built on. It reuses the normal
+    /// dispatch (so banking, echo RAM and I/O read-back all behave) but
+    /// suppresses the per-access bus tick, because a debugger or plugin looking
+    /// at memory must not advance the timer and APU and change the run it is
+    /// observing.
+    pub fn debug_peek(&mut self, address: u16) -> u8 {
+        let prev = self.set_bus_ticking(false);
+        let v = self.rb(address);
+        self.set_bus_ticking(prev);
+        v
+    }
+
+    /// Write a byte without perturbing timing. The `poke` of the same design.
+    /// **This can corrupt a running game or its save** — it is reachable only
+    /// through a plugin that declared
+    /// [`Capability::WRITE_MEMORY`](crate::plugin::Capability::WRITE_MEMORY),
+    /// which the frontend then flags to the user.
+    pub fn debug_poke(&mut self, address: u16, value: u8) {
+        let prev = self.set_bus_ticking(false);
+        self.wb(address, value);
+        self.set_bus_ticking(prev);
+    }
+
     pub fn wb(&mut self, address: u16, value: u8) {
         self.bus_tick();
         match address {

@@ -91,6 +91,9 @@ impl MemoryBankController for MBC1 {
         let idx = (bank * 0x4000) | ((a as usize) & 0x3FFF);
         *self.rom.get(idx).unwrap_or(&0xFF)
     }
+    fn readrom_bank(&self, bank: usize, a: u16) -> u8 {
+        super::banked_rom_byte(&self.rom, bank, a)
+    }
     fn readram(&self, a: u16) -> u8 {
         if !self.ram_on {
             return 0xFF;

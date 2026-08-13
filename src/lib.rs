@@ -13,7 +13,7 @@ mod input;
 mod mbc;
 mod mmu;
 mod mode;
-/// Read-only plugin surface — see [`plugin`].
+/// Runtime plugins — the *attach* half of the extension surface. See [`plugin`].
 pub mod plugin;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]

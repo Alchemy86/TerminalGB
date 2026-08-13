@@ -98,3 +98,44 @@ Entries are newest-first.
 - **Carries into the tool:** `sound::tests::wave_window_state_survives_save_load`
   — proves the new `since_fetch` counter is serialised (deliberately dropping it
   makes the test fail with a windowed-read desync, verified 2026-08-13).
+
+## 2026-08-13 — the serial port had never been driven by a partner (coverage gap)
+
+Recorded per the standing convention. This entry is unusual: **nothing was
+broken**, and that is the finding.
+
+- **Symptom, in user terms:** a game that needs a link partner — every Pokémon
+  trade, Tetris versus, any two-player cable game — cannot get past its
+  handshake, because an internal-clock transfer with nothing on the other end
+  never receives a byte and never raises the serial interrupt. The game waits
+  for ever. On this emulator that was the *only* possible outcome before now:
+  both MMU constructors installed a no-op callback and nothing in the repo ever
+  replaced it, so serial output was silently dropped and serial input never
+  existed.
+- **Caught by:** **no test ROM catches this, and none can.** Blargg's suite
+  *uses* the serial port as its results channel but never tests it; Mooneye's
+  one serial test (`boot_sclk_align-dmgABCmgb`) checks clock alignment, not
+  exchange. A link partner is by definition a second machine, so a single-ROM
+  harness has nothing to talk to. That is the gap: **the whole two-console half
+  of the Game Boy is invisible to a ROM-driven suite.**
+- **Hardware behaviour:** one console supplies the clock and both shift a byte
+  simultaneously; with the internal clock the rate is 8192 Hz and `SC` bit 7
+  clears with a serial interrupt when eight bits are done (Pan Docs,
+  [Serial Data Transfer](https://gbdev.io/pandocs/Serial_Data_Transfer_(Link_Cable).html)).
+- **New test — and it is a *protocol* test, not a frame hash.**
+  `examples/gen1_trade.rs` completes a Generation 1 Pokémon trade against
+  Pokémon Blue and reads the received Pokémon back out of WRAM. That is a
+  different *kind* of check from everything else in the suite: no serial
+  string, no framebuffer hash, no audio property — a real bidirectional
+  protocol conversation with a commercial game, whose verdict is "the game
+  accepted what we sent and inserted it into its own data structures".
+  **Conformance candidate: drive a documented link protocol to completion and
+  verify the far side's state.** It is the strongest kind of evidence a
+  conformance tool can offer, because the game itself is the judge, and it is
+  the natural home for the `SERIAL_LINK` adapter the tool will need anyway.
+- **Also worth carrying:** the emulator's serial model is *instantaneous* (the
+  whole byte transfers the moment `SC` is written, and bit 7 is never cleared).
+  Gen 1 does not notice, because it drives everything from the serial interrupt
+  rather than polling `SC` — but a game that polls bit 7 would hang for ever.
+  That is a real divergence with **no ROM coverage**, and a good check for the
+  tool: *after an internal-clock transfer, `SC` bit 7 must read back clear.*

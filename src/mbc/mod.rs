@@ -9,6 +9,17 @@ mod mbc2;
 mod mbc3;
 mod mbc5;
 
+/// Index a cartridge image by bank number, for
+/// [`MemoryBankController::readrom_bank`]. Shared by every controller because
+/// the mapping from (bank, address) to a file offset is a property of the
+/// cartridge layout, not of the mapper.
+pub(crate) fn banked_rom_byte(rom: &[u8], bank: usize, a: u16) -> u8 {
+    let idx = bank
+        .wrapping_mul(0x4000)
+        .wrapping_add((a as usize) & 0x3FFF);
+    *rom.get(idx).unwrap_or(&0xFF)
+}
+
 pub trait MemoryBankController: Send {
     fn readrom(&self, a: u16) -> u8;
     fn readram(&self, a: u16) -> u8;
@@ -33,6 +44,17 @@ pub trait MemoryBankController: Send {
     fn rom_bank(&self) -> usize {
         0
     }
+
+    /// Read from an explicitly numbered 16 KiB ROM bank, ignoring whatever the
+    /// game currently has mapped and **without touching the bank registers**.
+    ///
+    /// This exists for the plugin surface: cartridge data tables live in banks
+    /// the game maps only while it is using them, so an observer polling once a
+    /// second cannot reach them through [`MemoryBankController::readrom`]. See
+    /// [`crate::plugin::Machine::peek_bank`]. `a` is taken modulo the bank
+    /// window, so both `$0000` and `$4000` addressing work; reads past the end
+    /// of the cartridge are open bus (`0xFF`), as in `readrom`.
+    fn readrom_bank(&self, bank: usize, a: u16) -> u8;
 
     /// Per-frame battery hook: writes cartridge RAM out shortly after the game
     /// stops touching it. This — not `Drop` — is what makes an in-game save

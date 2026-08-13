@@ -24,6 +24,11 @@ pub struct Cpu<'a> {
     pub halt_bug: bool,
     pub stop: u32,
     pub memory: MemoryManagementUnit<'a>,
+    /// Attached plugins — see [`crate::plugin`]. Lives here rather than in the
+    /// MMU so dispatch can hand a plugin `&mut MemoryManagementUnit` (two
+    /// disjoint fields) without a self-borrow. Empty unless a frontend attaches
+    /// something, and an empty host costs one `is_empty` test per transfer.
+    pub plugins: crate::plugin::PluginHost,
 
     // To debug
     _executed_operations: Vec<u8>,
@@ -43,6 +48,7 @@ impl Cpu<'_> {
             halt: 0,
             halt_bug: false,
             stop: 0,
+            plugins: crate::plugin::PluginHost::new(),
             _executed_operations: Vec::new(),
         }
     }
@@ -217,6 +223,16 @@ impl Cpu<'_> {
 
     pub fn do_cycle(&mut self) -> u32 {
         let ticks = self.exec() * 4;
+        // Answer any link-cable transfer the instruction just started, *before*
+        // `MMU::do_cycle` folds `serial.interrupt` into `IF` — so a plugin
+        // partner produces exactly the interrupt timing the host-callback path
+        // already did. `take_pending` always clears, so an unanswered transfer
+        // behaves like an unplugged cable rather than being answered late.
+        if let Some(sent) = self.memory.serial.take_pending() {
+            if let Some(reply) = self.plugins.on_serial_transfer(sent, &mut self.memory) {
+                self.memory.serial.complete_transfer(reply);
+            }
+        }
         self.memory.do_cycle(ticks)
 
         // match self.delay {

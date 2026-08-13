@@ -301,6 +301,13 @@ pub struct Config {
     /// [`crate::video::VideoSpec::resolve`] so the config file and the
     /// `GB_VIDEO_*` environment variables cannot drift apart.
     pub video: crate::video::RawSettings,
+    /// Plugins to attach, by name (`gen1-link`). Empty by default: **nothing
+    /// loads implicitly**, so an unmodified `config.toml` runs an unmodified
+    /// machine. See [`crate::plugin`].
+    pub plugins: Vec<String>,
+    /// Trade file for the Gen 1 link partner, or `None` for its built-in offer.
+    /// See [`crate::plugin::gen1::spec`].
+    pub gen1_trade: Option<String>,
 }
 
 impl Default for Config {
@@ -320,6 +327,8 @@ impl Default for Config {
             video_dir: None,
             video_device: None,
             video: crate::video::RawSettings::default(),
+            plugins: Vec::new(),
+            gen1_trade: None,
         }
     }
 }
@@ -519,6 +528,33 @@ impl Config {
                 _ => &mut cfg.video.pace,
             };
             *slot = if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
+
+        // Plugins. Listed by name, comma-separated; unknown names are reported
+        // by the frontend when it tries to attach them, not here, so the
+        // config parser stays a parser.
+        if let Some(v) = get("plugins") {
+            let v = v.trim();
+            cfg.plugins = if v.is_empty()
+                || v.eq_ignore_ascii_case("off")
+                || v.eq_ignore_ascii_case("none")
+                || v == "0"
+            {
+                Vec::new()
+            } else {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            };
+        }
+        if let Some(v) = get("gen1_trade") {
+            let v = v.trim();
+            cfg.gen1_trade = if v.is_empty() || v.eq_ignore_ascii_case("off") {
                 None
             } else {
                 Some(v.to_string())
@@ -875,6 +911,40 @@ mod tests {
         assert_eq!(cfg.video.size.as_deref(), Some("640x480"));
         assert_eq!(cfg.video.source.as_deref(), Some("display"));
         assert_eq!(cfg.video.pace.as_deref(), Some("realtime"));
+    }
+
+    #[test]
+    fn no_plugins_are_configured_by_default() {
+        // The safety property from docs/plugins.md: nothing attaches unless the
+        // user asked for it by name.
+        assert!(Config::default().plugins.is_empty());
+        assert!(Config::parse("palette = green").plugins.is_empty());
+        assert_eq!(Config::default().gen1_trade, None);
+    }
+
+    #[test]
+    fn plugins_and_trade_file_parse() {
+        let c = Config::parse("plugins = gen1-link\ngen1_trade = '/tmp/mew.txt'\n");
+        assert_eq!(c.plugins, vec!["gen1-link".to_string()]);
+        assert_eq!(c.gen1_trade.as_deref(), Some("/tmp/mew.txt"));
+        // A list, bare or quoted, with whitespace tolerated.
+        assert_eq!(
+            Config::parse("plugins = gen1-link, trainer-view").plugins,
+            vec!["gen1-link".to_string(), "trainer-view".to_string()]
+        );
+        // And the explicit off switches.
+        assert!(Config::parse("plugins = none").plugins.is_empty());
+        assert!(Config::parse("plugins =").plugins.is_empty());
+    }
+
+    #[test]
+    fn the_plugin_keys_are_not_reported_as_unknown() {
+        // Every config key must be in the `get(...)` list or the user is told
+        // their setting is unknown — the bug docs/plugins.md's §4 relies on not
+        // having.
+        let (_, warnings) =
+            Config::parse_reporting("plugins = gen1-link\ngen1_trade = /tmp/x\n");
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     }
 
     #[test]

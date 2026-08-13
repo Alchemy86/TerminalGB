@@ -1,11 +1,13 @@
 //! A live trainer view: the party, the badges and the battle opponent, read out
 //! of a running Gen 1 Pokémon game.
 //!
-//! This is the second consumer of the plugin surface in [`crate::plugin`] (the
-//! first being the telemetry stream), and it is deliberately **read-only**: it
-//! is handed a [`crate::plugin::DebugView`], which borrows `&Gameboy`, so it is
-//! statically incapable of writing to the machine. A tracker that can corrupt a
-//! save is worse than no tracker.
+//! This is a consumer of the plugin surface in [`crate::plugin`], and it is
+//! deliberately **read-only**: it declares
+//! [`Capability::OBSERVE`](crate::plugin::Capability::OBSERVE) and
+//! [`READ_MEMORY`](crate::plugin::Capability::READ_MEMORY) and nothing else, so
+//! [`Machine::poke`](crate::plugin::Machine::poke) refuses it outright. A
+//! tracker that can corrupt a save is worse than no tracker, and that is
+//! enforced by the host rather than promised in a comment.
 //!
 //! # Prior art
 //!
@@ -51,13 +53,39 @@ pub mod text;
 
 use std::collections::HashMap;
 
-use crate::plugin::{DebugView, Event, Plugin};
+use crate::plugin::{Capability, Event, Machine, Plugin};
 use gen1::{addr, battle, party, BattleKind, Dvs, Mon, Status};
 
 /// How often the party is re-read, in emulated frames. Six frames is about
 /// 10 Hz — a tenth of a second behind the game, which no one can see, for a
 /// tenth of the work.
 pub const SAMPLE_EVERY: u64 = 6;
+
+/// The name this plugin registers under, in `plugins = …` and the status bar.
+pub const NAME: &str = "trainer";
+
+/// Reads through a capability-checked [`Machine`], with the plugin's own
+/// "unreadable is `0xFF`" convention applied once here.
+///
+/// The panel would rather show open-bus values than carry an `Option` through
+/// every field: a refused read means the plugin was misconfigured (it declared
+/// no `READ_MEMORY`), which the status line reports, and is not a per-address
+/// condition worth branching on sixty times a sample.
+struct Reads<'x, 'm, 'a>(&'x mut Machine<'m, 'a>);
+
+impl Reads<'_, '_, '_> {
+    fn peek(&mut self, a: u16) -> u8 {
+        self.0.peek(a).unwrap_or(0xFF)
+    }
+
+    fn peek_be16(&mut self, a: u16) -> u16 {
+        self.0.peek_be16(a).unwrap_or(0)
+    }
+
+    fn peek_into(&mut self, base: u16, out: &mut [u8]) {
+        self.0.peek_into(base, out);
+    }
+}
 
 /// Which game the cartridge is, if it is one this can read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,9 +188,12 @@ pub struct TrainerPlugin {
 impl TrainerPlugin {
     /// Build a plugin against a cartridge image.
     ///
-    /// The ROM is passed in rather than read through the view because
-    /// [`DebugView`] cannot read a bank the game does not currently have
-    /// mapped; see the note at the top of [`crate::plugin`].
+    /// The ROM is passed in whole rather than read through
+    /// [`Machine::peek_bank`](crate::plugin::Machine::peek_bank) because
+    /// [`rom::RomTables`] *scans every bank* to locate its tables by signature,
+    /// which is a different need from reading a known table out of a known bank
+    /// — that is what `peek_bank` is for, and it is what closed the banked-read
+    /// gap this plugin originally reported.
     pub fn new(rom: Vec<u8>) -> TrainerPlugin {
         TrainerPlugin {
             game: None,
@@ -231,7 +262,8 @@ impl TrainerPlugin {
     }
 
     /// Read the whole state. Called at [`SAMPLE_EVERY`], never per frame.
-    fn sample(&mut self, view: &DebugView<'_>) {
+    fn sample(&mut self, machine: &mut Machine<'_, '_>) {
+        let view = &mut Reads(machine);
         let mut st = TrainerState::default();
 
         let mut name = [0u8; gen1::NAME_LENGTH as usize];
@@ -290,7 +322,12 @@ impl TrainerPlugin {
     }
 
     /// Decode one 44-byte `party_struct`.
-    fn read_party_mon(&self, view: &DebugView<'_>, base: u16, nick: &[u8]) -> Mon {
+    fn read_party_mon(
+        &self,
+        view: &mut Reads<'_, '_, '_>,
+        base: u16,
+        nick: &[u8],
+    ) -> Mon {
         let species = view.peek(base + party::SPECIES);
         let moves: Vec<u8> = (0..gen1::NUM_MOVES as u16)
             .map(|i| view.peek(base + party::MOVES + i))
@@ -335,7 +372,12 @@ impl TrainerPlugin {
 
     /// Decode one 28-byte `battle_struct` — the same Pokémon, laid out
     /// differently because the battle engine drops the fields it does not need.
-    fn read_battle_mon(&self, view: &DebugView<'_>, base: u16, nick: &[u8]) -> Mon {
+    fn read_battle_mon(
+        &self,
+        view: &mut Reads<'_, '_, '_>,
+        base: u16,
+        nick: &[u8],
+    ) -> Mon {
         let species = view.peek(base + battle::SPECIES);
         let moves: Vec<u8> = (0..gen1::NUM_MOVES as u16)
             .map(|i| view.peek(base + battle::MOVES + i))
@@ -411,27 +453,43 @@ impl TrainerPlugin {
 }
 
 impl Plugin for TrainerPlugin {
-    fn name(&self) -> &'static str {
-        "trainer"
+    fn name(&self) -> &str {
+        NAME
     }
 
-    fn on_attach(&mut self, view: &DebugView<'_>) {
-        self.detected_title = view.rom_title();
-        self.game = Game::detect(&self.detected_title, view.global_checksum());
+    /// Read-only, and declared as such. It never asks for
+    /// [`Capability::WRITE_MEMORY`], so [`Machine::poke`] refuses it — a tracker
+    /// that can corrupt a save is worse than no tracker, and here that is
+    /// enforced by the host rather than promised by the author.
+    fn capabilities(&self) -> Capability {
+        Capability::OBSERVE | Capability::READ_MEMORY
     }
 
-    fn on_events(&mut self, events: &[Event], view: &DebugView<'_>) {
+    fn status(&self) -> String {
+        match self.game {
+            None => "unsupported cartridge".to_string(),
+            Some(_) if !self.active => "idle".to_string(),
+            Some(_) => format!("{} in party", self.state.party.len()),
+        }
+    }
+
+    fn on_attach(&mut self, machine: &mut Machine) {
+        self.detected_title = machine.rom_title();
+        self.game = Game::detect(&self.detected_title, machine.global_checksum());
+    }
+
+    fn on_event(&mut self, event: &Event, machine: &mut Machine) {
         if self.game.is_none() || !self.active {
             return;
         }
-        for e in events {
-            let Event::Frame { index } = *e;
-            if index.saturating_sub(self.last_sample) < SAMPLE_EVERY {
-                continue;
-            }
-            self.last_sample = index;
-            self.sample(view);
+        let Event::Frame { number } = *event else {
+            return;
+        };
+        if number.saturating_sub(self.last_sample) < SAMPLE_EVERY {
+            return;
         }
+        self.last_sample = number;
+        self.sample(machine);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

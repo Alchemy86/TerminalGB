@@ -70,6 +70,9 @@ impl MemoryBankController for MBC5 {
         };
         *self.rom.get(idx).unwrap_or(&0)
     }
+    fn readrom_bank(&self, bank: usize, a: u16) -> u8 {
+        super::banked_rom_byte(&self.rom, bank, a)
+    }
     fn readram(&self, a: u16) -> u8 {
         // Disabled or absent cartridge RAM reads as open bus (0xFF) on hardware,
         // which is what every other controller in this tree returns.

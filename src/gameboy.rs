@@ -376,6 +376,11 @@ impl Gameboy {
         // release profile aborts on panic, and a closed window or `kill` skips
         // destructors entirely). See `crate::mbc::battery`.
         self.cpu.memory.mbc.autosave();
+
+        // Publish the frame event. `on_frame` returns immediately when nothing
+        // is attached and no trace is open, so this is one test per frame.
+        let Gameboy { cpu, .. } = self;
+        cpu.plugins.on_frame(&mut cpu.memory);
     }
 
     /// Write battery-backed cartridge RAM out now. Frontends should call this
@@ -383,6 +388,48 @@ impl Gameboy {
     /// saves as they happen, so this only shortens the worst-case window.
     pub fn flush_battery(&mut self) {
         self.cpu.memory.mbc.flush_battery();
+    }
+
+    /// Attach a plugin. See [`crate::plugin`] for the contract; the frontend is
+    /// responsible for telling the user one is active.
+    pub fn add_plugin(
+        &mut self,
+        plugin: Box<dyn crate::plugin::Plugin>,
+    ) -> Result<(), crate::plugin::RegisterError> {
+        self.cpu.plugins.register(plugin)
+    }
+
+    /// Live status of every attached plugin, for the status bar.
+    pub fn plugin_statuses(&self) -> Vec<crate::plugin::PluginStatus> {
+        self.cpu.plugins.statuses()
+    }
+
+    /// Borrow an attached plugin by concrete type, so the frontend can render
+    /// it. A plugin never draws — it exposes state and the frontend lays it out.
+    pub fn plugin<T: crate::plugin::Plugin + 'static>(&self) -> Option<&T> {
+        self.cpu.plugins.get::<T>()
+    }
+
+    /// Mutable counterpart of [`Gameboy::plugin`], for the frontend to
+    /// configure the plugin it attached (whether its panel is on screen, say).
+    pub fn plugin_mut<T: crate::plugin::Plugin + 'static>(&mut self) -> Option<&mut T> {
+        self.cpu.plugins.get_mut::<T>()
+    }
+
+    /// One status-bar line describing attached plugins, or `None` when the
+    /// machine is running unmodified.
+    pub fn plugin_status_line(&self) -> Option<String> {
+        self.cpu.plugins.status_line()
+    }
+
+    /// Open the `GB_PLUGIN_TRACE` NDJSON event log, if the environment asks for
+    /// one. Returns a message to show the user on failure.
+    pub fn open_plugin_trace(&mut self) -> Option<String> {
+        self.cpu.plugins.open_trace_from_env()
+    }
+
+    pub fn flush_plugins(&mut self) {
+        self.cpu.plugins.flush();
     }
 
     /// Serialise the complete machine state to bytes. The caller decides where
@@ -398,7 +445,14 @@ impl Gameboy {
         &mut self,
         bytes: &[u8],
     ) -> Result<(), crate::savestate::StateError> {
-        self.cpu.load_state(bytes)
+        let r = self.cpu.load_state(bytes);
+        // Plugin state is NOT machine state and is not in the save file (see
+        // docs/plugins.md). A link partner holding half a trade would desync
+        // silently against a restored machine, so it is reset instead.
+        if r.is_ok() {
+            self.cpu.plugins.reset();
+        }
+        r
     }
 
     /// Cartridge title from the ROM header, for save-slot naming and stats.
@@ -417,6 +471,20 @@ impl Gameboy {
     /// of CPU state. Exposed so tests can prove save states capture it.
     pub fn debug_halt_bug(&self) -> bool {
         self.cpu.halt_bug
+    }
+
+    /// Read a byte of emulated address space without perturbing timing — the
+    /// Tier-1 inspector read of `docs/debugging.md`. Always compiled in; it
+    /// costs nothing until called.
+    pub fn peek(&mut self, address: u16) -> u8 {
+        self.cpu.memory.debug_peek(address)
+    }
+
+    /// Read a run of bytes. See [`Gameboy::peek`].
+    pub fn peek_range(&mut self, address: u16, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| self.cpu.memory.debug_peek(address.wrapping_add(i as u16)))
+            .collect()
     }
 
     /// Program counter — cheap read for a debug/stats overlay.
@@ -440,18 +508,6 @@ impl Gameboy {
     /// Currently-selected ROM bank — cheap read for a debug/stats overlay.
     pub fn debug_rom_bank(&self) -> usize {
         self.cpu.memory.mbc.rom_bank()
-    }
-
-    /// Read-only snapshot access for plugins and debuggers — Tier 1 of
-    /// [`docs/debugging.md`](../docs/debugging.md). Pure reads: safe to call
-    /// between steps or frames, and free when nobody calls it.
-    pub fn debug(&self) -> crate::plugin::DebugView<'_> {
-        crate::plugin::DebugView::new(self)
-    }
-
-    /// Side-effect-free bus read backing [`Gameboy::debug`].
-    pub fn peek(&self, addr: u16) -> u8 {
-        self.cpu.memory.peek(addr)
     }
 
     /// Cartridge header global checksum, for identifying a specific game build.

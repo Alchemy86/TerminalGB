@@ -31,7 +31,6 @@
 use std::path::{Path, PathBuf};
 
 use gameboy::gameboy::Gameboy;
-use gameboy::plugin::PluginHost;
 use gameboy::screen::trainer_view as tv;
 use gameboy::trainer::{gen1, text, Game, TrainerPlugin};
 use gameboy::KeypadKey;
@@ -273,10 +272,10 @@ fn check_against_reference(rom: &[u8]) -> usize {
 fn check_live_state(rom_path: &Path, rom: &[u8]) -> usize {
     println!("\n[3] live state");
     let mut gb = Gameboy::new(rom.to_vec(), Some(rom_path.to_path_buf()));
-    let mut host = PluginHost::new();
     let mut plugin = TrainerPlugin::new(rom.to_vec());
     plugin.set_active(true);
-    host.attach(Box::new(plugin), &gb);
+    gb.add_plugin(Box::new(plugin))
+        .expect("trainer plugin attaches");
 
     // Boot, then mash A/START to get past the intro, the title screen and the
     // CONTINUE menu. CONTINUE is the preselected entry when a save exists, so
@@ -296,13 +295,12 @@ fn check_live_state(rom_path: &Path, rom: &[u8]) -> usize {
             gb.frame();
         }
         frames += 1;
-        host.frame(&gb);
-        if really_in_game(&host) {
+        if really_in_game(&gb) {
             break;
         }
     }
 
-    let Some(plugin) = host.get::<TrainerPlugin>() else {
+    let Some(plugin) = gb.plugin::<TrainerPlugin>() else {
         eprintln!("  FAIL the plugin did not attach");
         return 1;
     };
@@ -318,7 +316,7 @@ fn check_live_state(rom_path: &Path, rom: &[u8]) -> usize {
     // into WRAM before any save is loaded, so it passes the name check while
     // the party is still uninitialised. A running play clock or a non-empty
     // party is what actually distinguishes a loaded save.
-    if !really_in_game(&host) {
+    if !really_in_game(&gb) {
         println!(
             "    after {frames} frames no save had loaded — the cartridge's \
              battery file is empty or absent, so there is no existing game to \
@@ -426,8 +424,8 @@ fn check_live_state(rom_path: &Path, rom: &[u8]) -> usize {
 
 /// A save is genuinely loaded, as opposed to the title-screen demo having left
 /// a player name in WRAM.
-fn really_in_game(host: &PluginHost) -> bool {
-    host.get::<TrainerPlugin>()
+fn really_in_game(gb: &Gameboy) -> bool {
+    gb.plugin::<TrainerPlugin>()
         .map(|p| {
             let st = p.state();
             st.in_game
@@ -480,10 +478,10 @@ fn check_against_the_games_own_screen(rom_path: &Path, rom: &[u8]) -> usize {
 
     // Boot into it.
     let mut gb = Gameboy::new(rom.to_vec(), Some(rom_path.to_path_buf()));
-    let mut host = PluginHost::new();
     let mut plugin = TrainerPlugin::new(rom.to_vec());
     plugin.set_active(true);
-    host.attach(Box::new(plugin), &gb);
+    gb.add_plugin(Box::new(plugin))
+        .expect("trainer plugin attaches");
     let mut loaded = false;
     for step in 0..300u32 {
         let key = if step % 2 == 0 {
@@ -494,14 +492,12 @@ fn check_against_the_games_own_screen(rom_path: &Path, rom: &[u8]) -> usize {
         gb.keydown(key);
         for _ in 0..4 {
             gb.frame();
-            host.frame(&gb);
         }
         gb.keyup(key);
         for _ in 0..20 {
             gb.frame();
-            host.frame(&gb);
         }
-        if gb.debug().peek(0xD163) == expected.count {
+        if gb.peek(0xD163) == expected.count {
             loaded = true;
             break;
         }
@@ -512,8 +508,8 @@ fn check_against_the_games_own_screen(rom_path: &Path, rom: &[u8]) -> usize {
     }
 
     let mut bad = 0;
-    let st = host
-        .get::<TrainerPlugin>()
+    let st = gb
+        .plugin::<TrainerPlugin>()
         .expect("plugin attached")
         .state()
         .clone();
@@ -524,21 +520,21 @@ fn check_against_the_games_own_screen(rom_path: &Path, rom: &[u8]) -> usize {
     // (b) the plugin's reading against the game's own party menu. Get to the
     // overworld, open START, choose POKéMON, and read the tiles.
     for _ in 0..12 {
-        press(&mut gb, &mut host, KeypadKey::A, 40);
+        press(&mut gb, KeypadKey::A, 40);
     }
     for _ in 0..120 {
         gb.frame();
     }
-    press(&mut gb, &mut host, KeypadKey::Start, 40);
+    press(&mut gb, KeypadKey::Start, 40);
     for _ in 0..8 {
-        if gb.debug().peek(0xCC26) == 0 {
+        if gb.peek(0xCC26) == 0 {
             break;
         }
-        press(&mut gb, &mut host, KeypadKey::Up, 12);
+        press(&mut gb, KeypadKey::Up, 12);
     }
-    press(&mut gb, &mut host, KeypadKey::A, 90);
+    press(&mut gb, KeypadKey::A, 90);
 
-    let rows = read_screen(&gb);
+    let rows = read_screen(&mut gb);
     println!("    the game's own party menu:");
     for l in rows.iter().take(6) {
         println!("      |{l}|");
@@ -581,25 +577,22 @@ fn check_against_the_games_own_screen(rom_path: &Path, rom: &[u8]) -> usize {
     bad
 }
 
-fn press(gb: &mut Gameboy, host: &mut PluginHost, key: KeypadKey, gap: u32) {
+fn press(gb: &mut Gameboy, key: KeypadKey, gap: u32) {
     gb.keydown(key);
     for _ in 0..4 {
         gb.frame();
-        host.frame(gb);
     }
     gb.keyup(key);
     for _ in 0..gap {
         gb.frame();
-        host.frame(gb);
     }
 }
 
 /// Decode the 20x18 tilemap as the text a player sees.
-fn read_screen(gb: &Gameboy) -> Vec<String> {
-    let v = gb.debug();
+fn read_screen(gb: &mut Gameboy) -> Vec<String> {
     (0..18)
         .map(|y| {
-            let row: Vec<u8> = (0..20).map(|x| v.peek(0xC3A0 + y * 20 + x)).collect();
+            let row: Vec<u8> = (0..20).map(|x| gb.peek(0xC3A0 + y * 20 + x)).collect();
             text::decode_screen(&row)
         })
         .collect()
@@ -625,7 +618,7 @@ fn make_a_real_save(rom_path: &Path, rom: &[u8]) -> Result<(), String> {
             gb.frame();
         }
         // The play clock only advances once the game is really running.
-        if gb.debug().peek(0xDA43) > 0 || gb.debug().peek(0xDA44) > 4 {
+        if gb.peek(0xDA43) > 0 || gb.peek(0xDA44) > 4 {
             in_game = true;
             break;
         }
@@ -636,7 +629,7 @@ fn make_a_real_save(rom_path: &Path, rom: &[u8]) -> Result<(), String> {
     // START -> SAVE. Find the row the game drew SAVE on rather than assuming an
     // item count, because the menu's entries depend on progress.
     tap(&mut gb, KeypadKey::Start, 40);
-    let rows = read_screen(&gb);
+    let rows = read_screen(&mut gb);
     let save_row = rows
         .iter()
         .position(|l| l.contains("SAVE"))
@@ -644,7 +637,7 @@ fn make_a_real_save(rom_path: &Path, rom: &[u8]) -> Result<(), String> {
     // Menu rows are two apart starting at screen row 2.
     let want = ((save_row.saturating_sub(2)) / 2) as u8;
     for _ in 0..8 {
-        if gb.debug().peek(0xCC26) == want {
+        if gb.peek(0xCC26) == want {
             break;
         }
         tap(&mut gb, KeypadKey::Down, 12);

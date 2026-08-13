@@ -843,22 +843,31 @@ price.** Concretely, for anything that reads or decodes a commercial cartridge:
 (The FlashGBX GPL note and the licence-hygiene section in `CONTRIBUTING.md` are being added on
 another branch; when those land, this belongs beside them.)
 
-## Live trainer view — the second plugin (`src/trainer/`, `src/plugin/`)
+## Live trainer view — the read-only plugin (`src/trainer/`)
 
 - **Full design, address table, verification and follow-ups: [`docs/trainer.md`](docs/trainer.md).**
   A read-only plugin that reads a running Pokémon Red/Blue cartridge and shows the party,
   badges, the battle opponent's stats and a decompressed sprite beside the game. `T` toggles it
   in the TUI, `d` is the per-Pokémon detail view, `Tab` cycles the party.
-- **The plugin contract lives in [`src/plugin/mod.rs`](src/plugin/mod.rs)** and implements the
-  two pieces of `docs/debugging.md`'s extension surface a read-only plugin needs: Tier-1
-  `DebugView` (borrowing `&Gameboy`, so a plugin is *statically* unable to write — that is the
-  read-only guarantee, not a convention) and the cheap "frame rendered" event. **`MemoryManagementUnit::peek`
-  is the `&self` counterpart of `rb`**: no bus tick, no APU catch-up, no register side-effects,
-  and therefore `0xFF` for the I/O range `$FF00-$FF7F`. Two gaps this consumer found in the
-  documented contract, both recorded in the module header and `docs/trainer.md`: the sketched
-  `DebugSink::on_events` has **no view parameter** (so a plugin cannot read in response to an
-  event), and there is **no banked-ROM read** (so the frontend has to hand a plugin the
-  cartridge image; `peek_bank(bank, addr)` is the fix).
+- **It implements the same `Plugin` trait as the link partner** — see the plugin-contract
+  section below. There is deliberately **one** contract, not a read-only one beside a
+  read-write one: this plugin declares `OBSERVE | READ_MEMORY` and nothing else, so
+  `Machine::poke` refuses it. The read-only guarantee is the *host's*, enforced per call,
+  rather than a borrow-checker consequence of handing out `&Gameboy`.
+- **The two gaps this consumer reported are now closed**, which is the main reason the
+  contract has the shape it does. (1) `on_event(&mut self, &Event, &mut Machine)` passes the
+  machine alongside the event, so a plugin can read state *in response to* an event — the
+  original `DebugSink::on_events` sketch could not. (2) `Machine::peek_bank(bank, addr)` reads
+  an explicitly numbered ROM bank whatever the game has mapped, backed by
+  `MemoryBankController::readrom_bank` (one line per MBC over the shared `banked_rom_byte`
+  helper); it does **not** touch the bank registers, so it cannot perturb the running game.
+  The trainer still takes the cartridge image in `TrainerPlugin::new` because `rom::RomTables`
+  *scans every bank* to locate tables by signature — a different need from reading a known
+  table out of a known bank, which is what `peek_bank` is for.
+- **`Gameboy::peek` is the `&mut self`, exact read** (`MemoryManagementUnit::debug_peek`:
+  reuses the normal `rb` dispatch with the bus tick suppressed, so banking, echo RAM and I/O
+  read-back are all correct). `MemoryManagementUnit::peek` is a separate `&self` variant that
+  cannot reach the I/O range and returns `0xFF` for `$FF00-$FF7F`; prefer `debug_peek`.
 - **Addresses are derived, not looked up.** `pret/pokered` was built at its pinned RGBDS 1.0.3
   and the ROMs checked against its `roms.sha1`; the captain's cartridge is byte-identical to
   `pokeblue.gbc`, so the build's own `pokeblue.sym` is exact for it. Every constant in
@@ -903,3 +912,110 @@ another branch; when those land, this belongs beside them.)
   presses buttons at menus.
 - **Reading the game's own screen (`text::decode_screen` over `wTileMap`) is a general tool** —
   any future test that wants to check emulator state against what the game displays can use it.
+
+## Plugins & the Gen 1 virtual link partner (`src/plugin/`)
+
+- **Full contract: [`docs/plugins.md`](docs/plugins.md).** A plugin is an **in-process Rust
+  trait** (`Plugin`), not a dylib or a script — that is the only mechanism that works
+  identically on `wasm32` (no sockets, no `dlopen`) and needs no new dependencies. Messages are
+  wire-shaped anyway (`Event::write_json` emits the same NDJSON telemetry uses, and
+  `GB_PLUGIN_TRACE=<path>` writes that stream), so a socket transport is additive. **Be honest
+  about it: you cannot write a plugin in Python today.**
+- **Capabilities are enforced, not advisory.** `OBSERVE / READ_MEMORY / WRITE_MEMORY /
+  SERIAL_LINK`, declared by `Plugin::capabilities`; `Machine::peek` returns `None` and
+  `Machine::poke` returns `false` for anything undeclared. Pinned by
+  `capabilities_are_enforced_not_trusted`. At most **one** plugin may hold `SERIAL_LINK` (a
+  cable has two ends). Nothing loads implicitly — only `plugins = …` / `GB_PLUGINS`.
+- **The user must be able to see it.** The TUI Status panel gains a `Plugin` row whenever one is
+  attached; `!` = may write memory, `!!` = has written (sticky). Attaching also raises a toast.
+- **ONE contract, two very different plugins — do not add a second trait.** The trainer view is
+  read-only and the link partner answers the cable, and both implement the same `Plugin`. The
+  read-only guarantee is the *host's* (an undeclared `poke` returns `false`), not a
+  borrow-checker artefact of handing out `&Gameboy`. There is one `PluginHost` and it lives on
+  the `Cpu`, so `Gameboy::frame` dispatches the `Frame` event itself — **a frontend must not
+  drive plugins**; `Gameboy::plugin::<T>()` / `plugin_mut::<T>()` are how it reaches a concrete
+  plugin to render or configure it.
+- **`Machine::peek_bank(bank, addr)` reads a numbered ROM bank whatever is mapped**, backed by
+  `MemoryBankController::readrom_bank` (one line per MBC over the shared `banked_rom_byte`).
+  It does **not** touch the bank registers, so it cannot perturb the running game. This closed
+  the second gap the trainer crew reported; the first (`on_events` had no view) is closed by
+  `on_event(&mut self, &Event, &mut Machine)`. Pinned by
+  `a_plugin_can_read_a_rom_bank_the_game_has_not_mapped`.
+- **`on_attach` runs on the first *dispatch*, not in `register`** — that is the first moment a
+  `Machine` exists. Both `on_frame` and `on_serial_transfer` complete a pending attach, because
+  a game can clock the link before its first frame boundary.
+- **The trade is proved by a number we never sent.** The partner puts a level 5 Mew on the wire
+  with **exp 125**; the party afterwards reads **135**. Gen 1's boosted experience for traded
+  Pokémon, applied by the *game*, on the receiving side — a memory poke would have left 125.
+  That single number is the difference between arriving *through* the trade path and *beside*
+  it, and it is checked on every run of `examples/gen1_trade.rs`.
+- **Two techniques worth stealing for any test that drives a real game** (both in
+  `examples/gen1_trade.rs`): (1) **navigate by reading the screen**, not by counting frames —
+  `wTileMap` (`$C3A0`, 20×18) holds charmap codes, so pressing A when the screen *says*
+  `TRADE CENTER` is robust against animation length and emulation speed; (2) **redirect the
+  room's own warp (`wWarpEntries`), never relocate the player** — map, tileset, sprite and warp
+  state are mutually consistent state the game maintains together, so writing coordinates
+  produces a save that looks right and hangs. Move the world's pointers, not the player.
+- **`CableClubLeftGameboy` needs the player on the LEFT console tile facing RIGHT**
+  (`engine/link/cable_club.asm`); the right tile is the other Game Boy's seat. That player also
+  becomes clock master, which is the role the partner wants the game to have. A run that hangs
+  at "Please wait…" is almost always the wrong seat.
+- **`--shots <dir>` captures a PNG per stage transition, and those PNGs are NOT committed.**
+  They are rendered frames of a commercial game; the licence-boundary rule above forbids
+  vendoring game assets, including as documentation. `docs/upscale-samples/` is committed only
+  because dmg-acid2 is MIT. The reproduction command is the deliverable, not the images.
+- **Plugin state is NOT machine state** and is not serialised. `Gameboy::load_state` calls
+  `PluginHost::reset` — a link partner holding half a trade would otherwise desync silently.
+- **Where it hooks:** `PluginHost` lives on `Cpu`, *not* in the MMU, so dispatch can pass
+  `&mut MemoryManagementUnit` without a self-borrow. `Serial::wb` parks a declined transfer in
+  `pending`; `Cpu::do_cycle` answers it **before** `MMU::do_cycle` folds `serial.interrupt` into
+  `IF`, so timing is unchanged. An unanswered transfer is dropped (an unplugged cable), never
+  answered late. `Plugin: Send` because the FFI build parks a `Gameboy` in a `static Mutex`.
+- **`MemoryManagementUnit::debug_peek/debug_poke`** reuse the normal dispatch with `bus_tick`
+  suppressed, so an observer cannot advance the timer/APU and change the run it is watching.
+
+### Gen 1 link trade — things to preserve
+
+- **Answer `$01` with `$02` and the game takes the clock.** `ESTABLISH_CONNECTION_WITH_*` and
+  `USING_*_CLOCK` share values (`$01`/`$02`) so the reply *is* the role assignment. Being the
+  slave is why this needs **no timing tolerance at all**: the partner answers synchronously
+  inside the `SC = $81` write. Every hardware/network bridge has to solve the clocked-timing
+  problem; we sidestep it by choosing the other role.
+- **Each block costs `N + 1` transfers.** `Serial_ExchangeBytes` re-sends its first byte until
+  it receives `$FD`, so our stream leads every block with one extra preamble byte. Stream is
+  **644 bytes** (18 + 425 + 201) for blocks of 17 / 424 / 200. Off by one ⇒ the party block
+  shifts and the game receives garbage.
+- **`AddEnemyMonToPlayerParty` copies the 44 bytes verbatim** — nothing is recomputed after a
+  trade. Stats, experience-for-level, types, catch rate and PP must all be right *on the wire*.
+  Multi-byte fields are **big-endian**. The HP DV is assembled from the low bits of the other
+  four.
+- **The patch list is not optional.** `$FE` is the protocol's "no data" byte and the receiver
+  *skips* it, so every `$FE` in the 264-byte mon region is swapped for `$FF` and its 1-based
+  offset recorded in a two-part list (split at 252). Silent corruption otherwise. Names cannot
+  contain `$FE` either — the digit `8` — and that is refused with a clear error.
+- **No game data is embedded.** Base stats, dex↔index mapping, species names and move PP are
+  located in the player's own ROM by byte signature and cross-checked (Pikachu, THUNDERBOLT)
+  before use. Mew's base stats live *outside* the main table in Red/Blue — handled explicitly.
+- **`PokemonSource` keeps the *source* of the Pokémon separate from the protocol.** That is the
+  load-bearing abstraction: a file, a converter, a remote peer and a live partner all become
+  interchangeable, which is what makes cross-generation and remote trading possible later.
+
+### Verifying a trade (`examples/gen1_trade.rs`) — hard-won gotchas
+
+- **Gen 1 draws the whole screen through the WINDOW layer** (`LCDC` bit 5, `WY=0`, `WX=7`), not
+  the BG map. Reading `$9800` returns 20×18 spaces and every menu looks empty. Because the game
+  writes character codes straight into the tilemap and loads the font so tile id == char code,
+  **the tilemap is readable as text** — that is what lets a headless bot navigate menus instead
+  of replaying a brittle button script.
+- **Save files are `<rom>.sav`, raw cartridge RAM with no header** (`src/mbc/battery.rs`), so a
+  file offset is an SRAM offset. Cost a lot of debugging when it was the older `.gbsave`, which
+  put an 8-byte RTC epoch *in front* of the RAM and silently shifted every offset by 8.
+- **Continuing a save deliberately skips most of `LoadMapHeader`** (it returns early while
+  `BIT_NO_PREVIOUS_MAP` is set), so the map header, the block-map view pointer, the border block
+  and the warp/sign/NPC tables are all *saved* state. Writing a different `wCurMap` over the top
+  renders one map through another's tileset and stride, and walking onto a stale warp coordinate
+  crashes the game. **Don't relocate the player by hand** — redirect the room's own warp instead
+  and let the first real warp do the full load.
+- **`wCurMap` is populated by `TryLoadSaveFile` at the top of the main menu**, long before
+  CONTINUE is chosen, so it cannot mean "we are in the game". Same trap during Oak's speech.
+- **`CableClubLeftGameboy` requires the player to be facing RIGHT** and to be the clock master.
