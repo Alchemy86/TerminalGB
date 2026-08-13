@@ -123,7 +123,14 @@ impl Gameboy {
         let cx = Glcx::new();
         let mut focused = true;
         let mut last_frame_time = std::time::Instant::now();
-        let frame_duration = std::time::Duration::from_millis(16); // ~60 FPS
+        // The DMG refreshes every 70224 CPU cycles at 4.194304 MHz = 59.7275 Hz,
+        // i.e. one frame every 16.7427 ms. The old value (16 ms = 62.5 fps) paced
+        // the whole emulator ~4.64% fast, which the player hears as the game (and
+        // its music) running slightly fast AND as audio roughness: the APU then
+        // produces ~4.6% more samples per wall-second than the sound card drains,
+        // so the output queue overflows and drops samples periodically. Pacing at
+        // the true frame period fixes both — see docs/audio.md.
+        let frame_duration = std::time::Duration::from_micros(16_743); // 59.73 FPS (true DMG)
 
         event_loop.run(move |event, _, control_flow| {
             let window = gl_window.window();

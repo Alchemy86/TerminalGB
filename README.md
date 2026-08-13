@@ -113,7 +113,7 @@ behaviours phrased as future tests.**
 | **PPU (GPU)** | [`src/gpu/mod.rs`](src/gpu/mod.rs) | Scanline pixel engine — the mode cycle, background/window/sprites, DMG + CGB palettes, STAT/LYC timing. | **[docs](docs/components/ppu.md)** |
 | **MMU** | [`src/mmu/mod.rs`](src/mmu/mod.rs) | The 64 KB memory bus — address routing, OAM DMA, CGB HDMA/GDMA, and the `IF`/`IE` interrupt wiring. | **[docs](docs/components/mmu.md)** |
 | **Cartridges (MBC)** | [`src/mbc/`](src/mbc) | Bank switching for MBC0/1/2/3/5, MBC3's real-time clock, battery-backed saves. | **[docs](docs/components/mbc.md)** |
-| **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal`. *Native only.* | **[docs](docs/components/apu.md)** |
+| **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal`. *Native only.* | **[registers](docs/components/apu.md)** · **[audio pipeline & quality](docs/audio.md)** |
 | **Timer & Divider** | [`src/mmu/timer.rs`](src/mmu/timer.rs) | `DIV`/`TIMA`/`TMA`/`TAC` — the programmable interrupt heartbeat. | **[docs](docs/components/timer.md)** |
 | **Serial** | [`src/mmu/serial.rs`](src/mmu/serial.rs) | The link cable — and the channel Blargg test ROMs report results through. | **[docs](docs/components/serial.md)** |
 | **Joypad (Input)** | [`src/input.rs`](src/input.rs) | The 2×4 button matrix at `0xFF00` and the joypad interrupt. | **[docs](docs/components/input.md)** |
@@ -138,6 +138,37 @@ screen today and how to make it crisp (nearest/integer), smooth, or "vector-like
 or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the
 running machine (the deterministic frame-hashing that ties into the tests, plus a public
 extension surface external tools can emit from, control, and plug into).
+
+---
+
+## 🔊 Audio
+
+The Game Boy is authentically **4-bit, chiptune lo-fi** — two square waves, a
+32-step wavetable, and an LFSR noise channel, band-limited through `blip_buf` and
+played out via `cpal`. That grit is genuine DMG character and is meant to stay.
+
+Sound is **opt-in** (`--features audio`) so a fresh clone needs no system audio
+library. What the emulator produces is pitch-accurate: `blip_buf` resamples the
+4.194304 MHz APU to whatever rate the device negotiates, so **a programmed 440 Hz
+tone comes out at 440 Hz** (asserted by `cargo test --lib sound`).
+
+A "rough and slightly fast" report (Pokémon Blue) traced to **three** issues, now
+fixed:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Only one channel / odd rates | Device negotiation broke on the *first* `F32` config — often mono, or forced 96–384 kHz | Prefer the device's **stereo default** config; else scan for span-44100 + most channels |
+| "Aged", laggy, skippy | Hand-off queue allowed up to **1 s** of latency before dumping it | Bound to **~180 ms**, drop-oldest → snap back to low latency |
+| **Slightly fast + rough** | Desktop paced at **16 ms = 62.5 fps** vs the real **59.73 fps** (**+4.64 %**) — the APU overproduced and the queue overflowed | Pace at the true **16.743 ms** frame period |
+
+> The **fast** was the *emulator*, not the audio — audio was a symptom. The
+> terminal frontend has the same too-fast pacing (a 5 ms tick) and wants the same
+> fix.
+
+📖 **Full breakdown — the signal path, the negotiation logic, the pacing maths,
+what's genuine DMG character, and how to measure it yourself — in
+[`docs/audio.md`](docs/audio.md).** Probe your own machine's negotiated rate with
+`cargo run --features audio --example audio_probe`.
 
 <details>
 <summary><strong>Memory map</strong> (click to expand)</summary>

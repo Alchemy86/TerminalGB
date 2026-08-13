@@ -923,35 +923,77 @@ pub mod cpal_audio {
                 }
             };
 
-            let wanted_samplerate = cpal::SampleRate(44100);
-            let supported_configs = match device.supported_output_configs() {
-                Ok(e) => e,
-                Err(err) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("Failed to get supported configs: {}", err);
-                    return None;
+            let wanted_samplerate = cpal::SampleRate(super::SAMPLE_RATE);
+
+            // Pick an output config. Whatever rate we settle on is reported back
+            // to the APU via `samples_rate()`, and `Sound::set_player` retunes
+            // blip_buf's resampler to exactly that rate — so pitch is correct for
+            // *any* rate we choose, as long as the number we report is the rate
+            // the stream actually runs at. The job here is therefore only to pick
+            // a *sensible, real* config, not to force 44100.
+            //
+            // The old code walked `supported_output_configs()` and broke on the
+            // FIRST F32 range regardless of suitability. On a typical ALSA/
+            // PipeWire device the first F32 range is `channels=1, min=1,
+            // max=384000` — i.e. it would build a MONO stream (dropping the right
+            // channel) and, on any device whose first F32 range does not span
+            // 44100, fall through to `with_max_sample_rate()` and open the stream
+            // at 96k/192k/384k. Prefer the device's advertised default config
+            // instead: it carries the device's real channel count and a rate the
+            // hardware genuinely runs at, so no host-side resample and no
+            // channel-count surprise.
+            let selected_config = match device.default_output_config() {
+                Ok(def) if def.sample_format() == cpal::SampleFormat::F32 => def,
+                _ => {
+                    // Default is missing or not F32: scan every F32 range and keep
+                    // the best one, preferring (a) ranges that span 44100 and then
+                    // (b) the most channels (>= stereo). Only settle for a range's
+                    // max rate when nothing spans 44100.
+                    let configs = match device.supported_output_configs() {
+                        Ok(e) => e,
+                        Err(err) => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("Failed to get supported configs: {}", err);
+                            return None;
+                        }
+                    };
+                    let mut best: Option<cpal::SupportedStreamConfigRange> = None;
+                    for f in configs {
+                        if f.sample_format() != cpal::SampleFormat::F32 {
+                            continue;
+                        }
+                        let spans = f.min_sample_rate() <= wanted_samplerate
+                            && wanted_samplerate <= f.max_sample_rate();
+                        best = Some(match best {
+                            None => f,
+                            Some(b) => {
+                                let b_spans = b.min_sample_rate() <= wanted_samplerate
+                                    && wanted_samplerate <= b.max_sample_rate();
+                                if (spans, f.channels()) > (b_spans, b.channels()) {
+                                    f
+                                } else {
+                                    b
+                                }
+                            }
+                        });
+                    }
+                    let best = match best {
+                        Some(b) => b,
+                        None => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("No supported F32 audio configuration found");
+                            return None;
+                        }
+                    };
+                    if best.min_sample_rate() <= wanted_samplerate
+                        && wanted_samplerate <= best.max_sample_rate()
+                    {
+                        best.with_sample_rate(wanted_samplerate)
+                    } else {
+                        best.with_max_sample_rate()
+                    }
                 }
             };
-            let mut supported_config = None;
-            for f in supported_configs {
-                if f.sample_format() == cpal::SampleFormat::F32 {
-                    if f.min_sample_rate() <= wanted_samplerate
-                        && wanted_samplerate <= f.max_sample_rate()
-                    {
-                        supported_config = Some(f.with_sample_rate(wanted_samplerate));
-                    } else {
-                        supported_config = Some(f.with_max_sample_rate());
-                    }
-                    break;
-                }
-            }
-            if supported_config.is_none() {
-                #[cfg(debug_assertions)]
-                eprintln!("No supported audio configuration found");
-                return None;
-            }
-
-            let selected_config = supported_config.unwrap();
             let sample_format = selected_config.sample_format();
             let channels = selected_config.channels();
             let config: cpal::StreamConfig = selected_config.into();
@@ -1039,7 +1081,17 @@ pub mod cpal_audio {
                 buffer.push((left_channel[i], right_channel[i]));
             }
 
-            const MAX_BUFFER_SIZE: usize = 44100;
+            // Bound the queue so latency can't grow without limit. The producer
+            // (emulator) and consumer (cpal callback) run on independent clocks;
+            // if the emulator is paced even slightly fast the queue creeps up and
+            // you hear ever-growing lag ("aged", laggy). The old cap was 44100 =
+            // a *full second* of latency before anything was dropped. Cap instead
+            // at ~4 output chunks (~180 ms at 44.1 kHz): enough slack to ride out
+            // frame-timing jitter without underrunning, small enough that lag
+            // stays imperceptible. On overflow we drop the OLDEST samples so the
+            // stream snaps back to low latency (one small skip) rather than
+            // playing further and further behind.
+            const MAX_BUFFER_SIZE: usize = super::OUTPUT_SAMPLE_COUNT * 4;
             if buffer.len() > MAX_BUFFER_SIZE {
                 let to_remove = buffer.len() - MAX_BUFFER_SIZE;
                 buffer.drain(0..to_remove);
@@ -1056,5 +1108,127 @@ pub mod cpal_audio {
                 Err(_) => true,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Objective audio checks. These drive the real APU + blip_buf resampler
+    //! through a mock `AudioPlayer` that just records the left channel, so they
+    //! need no host audio device and run under a plain `cargo test` (the `audio`
+    //! feature only gates *host playback*, never synthesis). They pin down two
+    //! facts the "rough and fast" investigation established:
+    //!   1. the APU emits exactly the reported sample rate per emulated second
+    //!      (so wall-clock speed, not resampling, governs perceived tempo), and
+    //!   2. a programmed tone comes out at the correct pitch.
+    use super::{AudioPlayer, Sound, CLOCKS_PER_SECOND};
+    use std::sync::{Arc, Mutex};
+
+    struct Capture {
+        rate: u32,
+        samples: Arc<Mutex<Vec<f32>>>,
+    }
+    impl AudioPlayer for Capture {
+        fn play(&mut self, left: &[f32], _right: &[f32]) {
+            self.samples.lock().unwrap().extend_from_slice(left);
+        }
+        fn samples_rate(&self) -> u32 {
+            self.rate
+        }
+        fn underflowed(&self) -> bool {
+            false
+        }
+    }
+
+    /// Build a `Sound` wired to a capture player at `rate`, powered on with a
+    /// 50%-ish duty square on channel 1 at frequency register `freq_x`.
+    fn tone(rate: u32, freq_x: u16) -> (Sound, Arc<Mutex<Vec<f32>>>) {
+        let samples = Arc::new(Mutex::new(Vec::new()));
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate,
+            samples: samples.clone(),
+        }));
+        snd.wb(0xFF26, 0x80); // APU power on
+        snd.wb(0xFF25, 0xFF); // route all channels to L+R
+        snd.wb(0xFF24, 0x77); // master volume max both sides
+        snd.wb(0xFF11, 0x00); // ch1 duty 12.5%, length load 0
+        snd.wb(0xFF12, 0xF0); // ch1 volume 15, DAC on, no envelope
+        snd.wb(0xFF13, (freq_x & 0xFF) as u8);
+        snd.wb(0xFF14, 0x80 | (((freq_x >> 8) & 0x7) as u8)); // trigger, length off
+        (snd, samples)
+    }
+
+    fn run_seconds(snd: &mut Sound, secs: u32) {
+        let total = CLOCKS_PER_SECOND * secs;
+        let mut done = 0u32;
+        while done < total {
+            snd.do_cycle(64);
+            done += 64;
+        }
+    }
+
+    /// Count of produced samples per emulated second must equal the rate we told
+    /// the APU, independent of that rate. This is what guarantees pitch is
+    /// correct for whatever rate the device negotiates: blip is retuned to the
+    /// reported rate, so N seconds of emulation always yields N*rate samples.
+    #[test]
+    fn output_matches_reported_rate() {
+        let secs = 10u32;
+        for &rate in &[44100u32, 48000, 22050] {
+            let (mut snd, cap) = tone(rate, 1750);
+            run_seconds(&mut snd, secs);
+            let n = cap.lock().unwrap().len() as i64;
+            let expected = (rate * secs) as i64;
+            // blip only emits in fixed 2000-sample blocks, so up to a couple of
+            // blocks may be withheld at the tail — a small absolute shortfall,
+            // never an overshoot. Tolerance is in blocks (rate-independent) so it
+            // stays tight in *rate* terms: a genuine rate mismatch (e.g. emitting
+            // 44100 for a 48000 device) is a ~4000-sample/sec drift that blows
+            // straight past this. That the count tracks `rate` and not a fixed
+            // 44100 is the point — pitch follows whatever rate the device reports.
+            let block = super::OUTPUT_SAMPLE_COUNT as i64;
+            assert!(
+                n <= expected + block && n >= expected - 3 * block,
+                "rate {rate}: produced {n} samples, expected ~{expected} \
+                 (drift {} samples)",
+                n - expected
+            );
+        }
+    }
+
+    /// A tone programmed to ~440 Hz must come out at ~440 Hz. Proves the
+    /// synthesis + resampling pitch is correct — so any perceived "fast" is
+    /// wall-clock pacing, not the APU.
+    #[test]
+    fn tone_pitch_is_correct() {
+        let rate = 44100u32;
+        // GB square: f = 131072 / (2048 - x). x = 1750 -> 439.84 Hz.
+        let freq_x = 1750u16;
+        let expected = 131072.0 / (2048 - freq_x) as f64;
+        let (mut snd, cap) = tone(rate, freq_x);
+        run_seconds(&mut snd, 2);
+        let s = cap.lock().unwrap();
+        assert!(s.len() > rate as usize, "not enough samples captured");
+
+        // Measure fundamental by upward zero-crossings of the AC-coupled signal.
+        let mean: f32 = s.iter().sum::<f32>() / s.len() as f32;
+        let mut crossings = 0usize;
+        let mut prev = s[0] - mean;
+        for &x in &s[1..] {
+            let v = x - mean;
+            if prev <= 0.0 && v > 0.0 {
+                crossings += 1;
+            }
+            prev = v;
+        }
+        let dur = s.len() as f64 / rate as f64;
+        let measured = crossings as f64 / dur;
+        let err = (measured / expected - 1.0).abs();
+        assert!(
+            err < 0.03,
+            "expected {expected:.2} Hz, measured {measured:.2} Hz (err {:.2}%)",
+            err * 100.0
+        );
     }
 }

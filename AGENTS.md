@@ -106,4 +106,33 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   961 lines of dead/unreferenced code, was deleted — no `mod old_gpu` ever existed.)
 - The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
 
+## Audio quality & pacing
+
+- **Full audio breakdown: [`docs/audio.md`](docs/audio.md)** — the signal path from APU
+  synthesis → `blip_buf` resample → `cpal` queue → speaker, plus the "rough & fast"
+  investigation and fixes. Complements the register-level [`docs/components/apu.md`](docs/components/apu.md).
+- **Pitch is decoupled from device rate.** `blip.set_rates(4_194_304, sample_rate)` means the
+  APU emits exactly `sample_rate` samples per *emulated* second; `Sound::set_player` retunes
+  blip to whatever the player reports. So pitch is correct for any rate **iff the reported
+  rate equals the rate the stream truly runs at**. A mismatch is the only thing that makes a
+  *tone* sharp/flat; verified by `src/sound.rs` `mod tests` (`tone_pitch_is_correct`,
+  `output_matches_reported_rate` — device-free, run under plain `cargo test`).
+- **"Fast" was the frame pacing, not the audio.** The DMG runs at 70224 cyc / 4.194304 MHz =
+  **59.7275 Hz = 16.7427 ms/frame**. `render_desktop` paced at **16 ms (62.5 fps, +4.64 %)`,
+  so the emulator — and thus APU sample production — ran 4.64 % fast: the queue overflowed and
+  dropped samples (rough) while the game ran fast (tempo). Fixed to `from_micros(16_743)`.
+  **The terminal frontend (`src/screen/tui.rs`, another crew) has the same bug: a 5 ms tick =
+  ~200 fps target, uncapped.** Same fix applies there (gate `frame()` on 16.743 ms).
+- **cpal negotiation gotcha:** `device.supported_output_configs()` often lists the first `F32`
+  range as `ch=1, min=1, max=384000` (mono!). Never break on the first F32 range. Prefer
+  `device.default_output_config()` when it's F32 (real channel count + a rate the HW actually
+  runs); else scan all F32 ranges preferring span-44100 then max channels. `examples/audio_probe.rs`
+  dumps a machine's configs + negotiated rate (`cargo run --features audio --example audio_probe`).
+- **Bound the hand-off queue.** `CpalPlayer`'s `Arc<Mutex<Vec>>` cap governs worst-case latency
+  before samples are dropped; keep it small (~4 output blocks ≈ 180 ms), not 1 s.
+- **Latent bug (not fixed — would touch accuracy baseline):** `LengthCounter::wb` for the
+  64-max channels (`sound.rs`, `0xFF11|0xFF16|0xFF20`) does `self.max - (v as u16)` without
+  masking the duty bits, so a duty-carrying write (e.g. NR11=0x80) panics in debug / wraps in
+  release. Mask `v & 0x3F` if ever touched; re-bless `testharness/baseline.txt` if hashes move.
+
 - Add durable project-specific notes here as they are discovered through real work.
