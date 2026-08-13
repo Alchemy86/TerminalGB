@@ -330,11 +330,28 @@ lines per fix, not a process document.
   code unconditionally dumped its pristine all-zero RAM on exit, so one launch that failed
   to load permanently erased a real save. That is exactly what happened to the captain's
   Pokémon Blue `.gbsave` (32,776 bytes, all zeros).
-- **Formats:** `<rom>.sav` = raw cartridge RAM, no header (universal, interchangeable).
-  MBC3 RTC in a `<rom>.rtc` sidecar, 48 bytes LE (5×u32 regs, 5×u32 latched, u64 unix ts —
-  the VBA-M/mGBA layout). A `.sav` of `ramsize + 48` is also accepted on load (VBA-M/mGBA
-  append that block). Legacy `<rom>.gbsave` (8-byte BE RTC anchor + RAM) is still **read**
-  when no `.sav` exists, migrated to `.sav`, and **left on disk untouched as a backup**.
+- **Formats (settled by the FlashGBX study — this is the ecosystem's format, not ours):**
+  `<rom>.sav` = raw cartridge RAM, bank 0 first, no header, exactly `ramsize` bytes. An MBC3
+  clock is a **48-byte footer appended to that same file**, all little-endian: 5×`u32`
+  registers (S, M, H, day-low, day-high where bit0=day bit 8, bit6=HALT, bit7=CARRY), the
+  same five again as the latched copy, then a `u64` UNIX timestamp. Written **only for
+  header types 0x0F/0x10** — 0x13 has no clock and must get nothing extra. Load detection is
+  by size (`filesize - ramsize` == 48, or 44 for an older 32-bit-timestamp variant);
+  `rtc_zero = timestamp - regs_total`, which is what makes the clock advance while the
+  emulator is closed. `.srm` also read. Legacy `<rom>.gbsave` (8-byte **big-endian** RTC
+  anchor **prepended** to the RAM) is still **read** when no `.sav` exists, migrated, and
+  **left on disk untouched as a backup**. That prefix was applied even to type 0x13, so
+  every foreign save used to load 8 bytes shifted — never reintroduce a header.
+- **Crashes fixed here (all were aborts under `panic = 'abort'`, which also loses the save):**
+  RAM-less MBC5+RUMBLE (types 0x19/0x1C) `% rambanks` divide-by-zero on the bank register —
+  and bit 3 of that register is the rumble motor, so every rumble game hits it;
+  `rom_banks()` returning 0 for unofficial `0x148` codes (0x52/0x53/0x54 are real) making
+  every `% rombanks` divide by zero — it now falls back to `rom.len()/0x4000`, minimum 2;
+  and unchecked RAM indexing on a short or foreign `.sav`. Cart types 0x08/0x09 (no mapper,
+  with RAM/battery) are now supported rather than rejected — MBC0's save-state block stays
+  byte-identical for 0x00 carts, so **no `savestate::FORMAT_VERSION` bump**.
+- **MBC2 stores the low nibble (`v & 0x0F`), reads OR in `0xF0`.** Storing `v | 0xF0` plays
+  identically but makes our `.sav` differ byte-for-byte from a hardware dump.
 - **A save that cannot be read is never overwritten** (the battery poisons itself on a read
   error). Loading fails loudly instead of silently starting a new game over an existing save.
 - **Loaded saves are normalised to the declared RAM size** (pad/truncate) and every MBC
@@ -347,11 +364,33 @@ lines per fix, not a process document.
   by disabling the `autosave()` call in `Gameboy::frame`. For a real cartridge use
   `examples/rom_script.rs` (scripted headless input, `EXIT=kill` aborts with no destructors);
   the Pokémon Blue save script is in `docs/testing.md`.
-- **Conformance-tool note:** no public suite (Blargg / Mooneye / acid2) covers persistence —
+- **Conformance-tool notes:** no public suite (Blargg / Mooneye / acid2) covers persistence —
   they run in one process and never look at the filesystem. **That gap is itself a finding.**
-  Observable symptom of the bug: *save in-game, quit, relaunch → "NEW GAME" only.* Hardware
-  behaviour violated: a battery-backed cart holds SRAM from the instant the game writes it
-  (Pan Docs, [MBC3](https://gbdev.io/pandocs/MBC3.html)) — there is no "quit cleanly" step.
+  Per-fix records:
+  - *Drop-only persistence.* Symptom: save in-game, quit, relaunch → "NEW GAME" only.
+    Caught by: nothing before; now `battery.rs` case 1. Hardware: a battery-backed cart holds
+    SRAM from the instant the game writes it (Pan Docs, MBC3) — no "quit cleanly" step exists.
+  - *8-byte RTC prefix on every save.* Symptom: a save from another emulator or a real
+    cartridge loads shifted by 8 bytes and its last 8 bytes are gone; with a save checksum
+    that is indistinguishable from "NEW GAME". Caught by: nothing before; now case 6.
+    Contract: `.sav` is raw RAM, and type 0x13 has no clock.
+  - *RAM-less MBC5+RUMBLE bank write.* Symptom: any rumble game crashes the emulator on its
+    first motor poke. Caught by: nothing — no rumble or RAM-less MBC5 ROM in the suite, a
+    coverage gap; now case 7. Hardware: bit 3 of 0x4000-0x5FFF is the motor (Pan Docs, MBC5).
+  - *Unofficial ROM-size code.* Symptom: a bootleg, corrupt or 1.1/1.2/1.5 MiB cart crashes
+    on its first bank switch. Caught by: nothing; now case 7. Real dumpers never size a cart
+    from byte 0x148 either.
+  - *Undersized cartridge RAM does not mirror* (we allocate a full 8 KiB bank for RAM code
+    0x01 = 2 KiB). Not fixed, deliberately — recorded as a conformance check, since mirroring
+    is how FlashGBX recovers a cartridge's true save size.
+  - *MBC3 latches on any write to 0x6000-0x7FFF*, not on the 0x00→0x01 sequence. Not fixed;
+    harmless for real games, recorded as a conformance check.
+- **A real cartridge is a reference oracle for saves** now that our format matches: play in
+  the emulator, write the `.sav`, restore it to the cart with a dumper, read it back, compare.
+  No emulator-only suite can make that check.
+- **Do not vendor FlashGBX's `db_DMG.json`** (GPL-3.0 compiled database, and our repo is
+  MPL-2.0). Formats, header constants and hardware behaviour are facts and were adopted; no
+  code was taken.
 
 ## Save states
 

@@ -20,10 +20,10 @@ pub struct MBC2 {
 impl MBC2 {
     pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC2> {
         let battery = match data[0x147] {
-            0x06 => Battery::new(&file, MBC2_RAM_SIZE),
+            0x06 => Battery::new(&file, MBC2_RAM_SIZE, false),
             _ => Battery::none(),
         };
-        let rombanks = rom_banks(data[0x148]);
+        let rombanks = rom_banks(data[0x148], data.len());
 
         let mut res = MBC2 {
             rom: data,
@@ -85,8 +85,13 @@ impl MemoryBankController for MBC2 {
         if !self.ram_on {
             return;
         }
+        // Store the low nibble only. The chip holds 4 bits per cell; `readram`
+        // ORs the high nibble back to 1. Storing `v | 0xF0` instead behaves
+        // identically to a game but makes our `.sav` differ byte-for-byte from a
+        // hardware dump of the same cartridge (FlashGBX masks with 0x0F), which
+        // breaks any comparison against a real cartridge.
         if let Some(cell) = self.ram.get_mut((a as usize) & 0x1FF) {
-            *cell = v | 0xF0;
+            *cell = v & 0x0F;
             self.battery.touch();
         }
     }

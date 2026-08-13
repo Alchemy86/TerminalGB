@@ -27,11 +27,11 @@ impl MBC3 {
             _ => 0,
         };
         let ramsize = rambanks * 0x2000;
+        // 0x0F TIMER+BATTERY (clock, no RAM), 0x10 TIMER+RAM+BATTERY,
+        // 0x13 RAM+BATTERY (**no clock** — it must never get an RTC footer).
         let battery = match subtype {
-            // Cart types with a battery. 0x0F has an RTC but no RAM, so it gets
-            // no `.sav`; its clock still rides in the `.rtc` sidecar via
-            // `flush_battery` below.
-            0x10 | 0x13 => Battery::new(&file, ramsize),
+            0x0F | 0x10 => Battery::new(&file, ramsize, true),
+            0x13 => Battery::new(&file, ramsize, false),
             _ => Battery::none(),
         };
         MBC3::build(data, subtype, rambanks, ramsize, battery)

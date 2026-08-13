@@ -274,12 +274,25 @@ first and last byte of each of the four 8 KiB banks, then spins. The harness the
 | Every bank reads back through the bank register on a fresh machine | The file looks the right size but the game's own checksum rejects it — "NEW GAME" only |
 | A session that writes no cartridge RAM leaves the save file untouched | One launch that failed to load erases a real save on its next clean exit |
 | A legacy `.gbsave` loads, migrates to `.sav`, and stays on disk as a backup | Upgrading the emulator loses your old saves |
-| A foreign `.sav` loads (including a trailing 48-byte VBA-M/mGBA RTC block) | Saves from other emulators are rejected |
+| A foreign `.sav` loads (including a trailing 48-byte VBA-M/BGB/FlashGBX RTC footer) | Saves from other emulators are rejected |
+| A plain `.sav` loads at offset 0, with nothing prepended | Every save from another emulator or a real cartridge arrives 8 bytes shifted — and everything we write is shifted for everyone else |
+| Malformed input does not crash: RAM-less MBC5+RUMBLE bank write, unofficial ROM-size code, short `.sav`, truncated ROM, no-mapper `0x09` battery cart | The emulator aborts (`panic = 'abort'`) the moment you load an unusual cart or a save from elsewhere — and the abort also loses the save |
 
 Each failure prints *why* it matters and what hardware behaviour is being violated (a
 battery-backed cart holds SRAM from the instant the game writes it — Pan Docs,
 [MBC3](https://gbdev.io/pandocs/MBC3.html)), not just a red line. The harness was validated
-by disabling the per-frame autosave hook and confirming it goes red with those messages.
+by disabling the per-frame autosave hook (2/5 at the time, with those messages) and by
+reintroducing the MBC5 divide-by-zero (the harness reproduces the panic).
+
+The **save-file format itself is settled, not invented here**: `.sav` is raw cartridge RAM
+with no header, and an MBC3 clock is a 48-byte little-endian footer appended to the same
+file (five registers as `u32`, a latched copy, then a `u64` UNIX timestamp). That is what
+FlashGBX writes when it dumps a real cartridge, and what VBA-M and BGB read — so a real
+cartridge is usable as a **reference oracle**: play in the emulator, write the `.sav`,
+restore it to the cartridge with a dumper, read it back and compare. No emulator-only suite
+can make that check. The exact layout is pinned by a unit test in
+[`src/mbc/battery.rs`](../../src/mbc/battery.rs) so a refactor cannot quietly change what we
+hand to other tools.
 
 For an end-to-end check against a real cartridge there is
 [`examples/rom_script.rs`](../examples/rom_script.rs): a headless scripted-input driver

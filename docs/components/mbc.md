@@ -38,7 +38,8 @@ is a single byte in the header at **`0x0147`**; the ROM/RAM sizes are at `0x0148
 This is the "history / versions" that matters for a cartridge: not model names, but what
 each controller could *do*, and which games needed it.
 
-- **No MBC / "ROM only" (type `0x00`).** Up to 32 KB, no banking, no controller. Early/
+- **No MBC / "ROM only" (types `0x00`, `0x08` ROM+RAM, `0x09` ROM+RAM+BATTERY).** Up to
+  32 KB, no banking, no controller, and optionally 8 KB of (battery-backed) RAM. Early/
   small titles: *Tetris*, *Dr. Mario*, *Alleyway*.
 - **MBC1 (`0x01–0x03`).** The classic controller: up to **2 MB ROM** (125 usable banks)
   and **32 KB RAM**, with a mode bit that trades the two high ROM-bank bits for RAM-bank
@@ -68,23 +69,24 @@ are not supported.
 `data[0x147]` and constructs the right controller:
 
 ```
-0x00        → MBC0     (mod.rs:51)
+0x00/08/09  → MBC0     (no mapper; 0x09 is battery-backed)
 0x01..=0x03 → MBC1     (mod.rs:54)
 0x05..=0x06 → MBC2     (mod.rs:56)
 0x0F..=0x13 → MBC3     (mod.rs:58)
 0x19..=0x1E → MBC5     (mod.rs:60)
 ```
 
-Each controller: **MBC0** (no banking, [`mbc0.rs:4`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc0.rs#L4)); **MBC1**
+Each controller: **MBC0** (no banking, optional 8 KB RAM for `0x08`/`0x09`,
+[`mbc0.rs:4`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc0.rs#L4)); **MBC1**
 (5-bit + 2-bit bank registers, mode select, bank-0 remap;
-[`mbc1.rs:99–186`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L99)); **MBC2** (512-byte nibble RAM masked with
-`| 0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC via the host clock —
+[`mbc1.rs:99–186`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L99)); **MBC2** (512-byte nibble RAM: the low nibble is
+stored, reads OR in `0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC via the host clock —
 see below; [`mbc3.rs`](../../src/mbc/mbc3.rs)); **MBC5** (9-bit ROM bank split across
 `0x2000` and `0x3000`; [`mbc5.rs:90`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L90)).
 
-**Battery saves** live in [`src/mbc/battery.rs`](../../src/mbc/battery.rs), shared by MBC1/2/3/5. A `Battery`
-exists only for a battery cart subtype *with* a real filepath and a non-zero declared RAM
-size; otherwise it is `Battery::none()` and persists nothing (the web and FFI builds).
+**Battery saves** live in [`src/mbc/battery.rs`](../../src/mbc/battery.rs), shared by every controller. A `Battery`
+exists only for a battery cart subtype *with* a real filepath and either some declared RAM or
+an RTC; otherwise it is `Battery::none()` and persists nothing (the web and FFI builds).
 
 - **Written while the emulator runs, not on `Drop`.** `writeram` calls `Battery::touch`;
   `Gameboy::frame` calls `MemoryBankController::autosave` once per frame, which writes the
@@ -97,14 +99,33 @@ size; otherwise it is `Battery::none()` and persists nothing (the web and FFI bu
 - **Never writes unless the game wrote.** A session that does not touch cartridge RAM
   leaves the save file alone — the old code unconditionally wrote its pristine all-zero RAM,
   which is how one failed load turned into permanent data loss.
-- **File formats.** `<rom>.sav` is **raw cartridge RAM, no header** — the universal format,
-  interchangeable with other emulators in both directions. MBC3's clock goes in a separate
-  `<rom>.rtc` sidecar (48 bytes little-endian: 5 × `u32` current registers, 5 × `u32`
-  latched, `u64` UNIX timestamp — the VBA-M/mGBA layout). On load a `.sav` of
-  `ramsize + 48` bytes is also accepted, which is how VBA-M and mGBA append that same block.
-  The legacy `<rom>.gbsave` (8-byte big-endian RTC anchor + RAM) is still **read** when no
-  `.sav` exists and is migrated to `.sav` on the next flush; the old file is left on disk
-  untouched as a backup and never written again.
+- **File format: `<rom>.sav`, raw cartridge RAM, bank 0 first, no header.** Byte-for-byte
+  what FlashGBX writes when it dumps a real cartridge and what every emulator reads, so
+  saves move in both directions. `<rom>.srm` is accepted on load as well.
+- **The MBC3 clock is a 48-byte footer appended to that same file** — the VBA-M / BGB /
+  FlashGBX convention, all little-endian:
+
+  | offset | size | field |
+  |---|---|---|
+  | 0x00 | 4 | RTC S (seconds), as `u32` |
+  | 0x04 | 4 | RTC M (minutes) |
+  | 0x08 | 4 | RTC H (hours) |
+  | 0x0C | 4 | RTC DL (day counter, low 8 bits) |
+  | 0x10 | 4 | RTC DH — bit 0 = day bit 8, bit 6 = HALT, bit 7 = day CARRY |
+  | 0x14 | 20 | the same five registers again: the latched copy |
+  | 0x28 | 8 | `u64` UNIX timestamp of the write |
+
+  It is written **only for header types `0x0F` and `0x10`**, the MBC3 variants that really
+  have a clock. Type `0x13` is RAM+BATTERY with no RTC and gets nothing extra. Detection on
+  load is by size — `filesize - ramsize` of 48 (or 44, an older 32-bit-timestamp variant)
+  means a footer. On load `rtc_zero = timestamp - (S + 60·M + 3600·H + 86400·days)`, so the
+  clock advances by the wall time that passed while the emulator was closed — which is what
+  the coin cell does on hardware.
+- **Legacy `<rom>.gbsave`** (8-byte **big-endian** RTC epoch anchor prepended to the RAM) is
+  still **read** when no `.sav` exists and is migrated on the next flush; the old file is
+  left on disk untouched as a backup and never written again. Nothing else in the ecosystem
+  ever read that format, and the prefix was applied even to type `0x13` — so every foreign
+  save loaded 8 bytes shifted and every save we wrote was shifted for everyone else.
 - **A save that cannot be read is never overwritten.** A read error poisons the battery so
   later writes are refused, and construction fails loudly rather than silently starting a
   new game on top of an existing save.
@@ -143,12 +164,32 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   `[profile.release] panic = 'abort'` skips destructors too, as does closing a terminal
   window or any `kill`. This is why cartridge RAM is now persisted per-frame; anything else
   that must survive a shutdown needs the same treatment.
-- **The RTC is not persisted for a timer-only cart (`0x0F`, TIMER+BATTERY, no RAM).** The
-  battery keys off cartridge RAM size, so a `0x0F` cart gets no files at all. No commercial
-  cart uses `0x0F`.
+- **Header byte `0x148` is not trusted for sizing.** `rom_banks` falls back to the ROM's own
+  length and never returns fewer than 2 banks. The unofficial codes `0x52`/`0x53`/`0x54`
+  (1.1/1.2/1.5 MiB) occur in real cartridges and used to make every `% rombanks` a
+  divide-by-zero. Real dumpers agree: FlashGBX uses `0x148` for display only and measures the
+  hardware.
+- **RAM size code `0x01` is emulated as a full 8 KiB bank, not 2 KiB.** The ecosystem treats
+  `0x01` as 0x800 bytes, so our `.sav` for such a cart would be 8192 bytes where FlashGBX
+  writes 2048. Left as-is deliberately: our own header note records that no real cartridge
+  ever shipped a 2 KiB chip, and some test ROMs rely on the whole bank. The related hardware
+  behaviour we do *not* model is that an undersized SRAM chip **mirrors** across the
+  0xA000-0xBFFF window — a ready-made conformance check (it is how FlashGBX recovers the true
+  save size), recorded as test #17 below.
+- **MBC3 latches the RTC on any write to `0x6000-0x7FFF`**, not on the `0x00`→`0x01`
+  sequence hardware requires. Harmless for real games (consecutive stores differ by
+  microseconds), but a conformance check would catch it.
+- **MBC3's ROM-bank register masks to 7 bits (`v & 0x7F`, 2 MiB).** MBC30 allows 8. Every
+  real MBC30 cartridge is 2 MiB so this is currently invisible, but 4 MiB MBC30 ROM hacks
+  exist and would mis-bank. (64 KiB MBC30 RAM *does* work — the RAM-bank register already
+  keeps 3 bits.)
 - **No MBC1M multicart detection** — only the mode-1 `& 0xE0` bank-0 remap
   ([`mbc1.rs:104`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L104)) is present; true multicart masking (`& 0x30`) is
-  absent.
+  absent. Seven known cartridges declare MBC1 in the header but wire bank2 differently
+  (`MOMOCOL`, `BOMCOL`, `BOMSEL`, `GENCOL`, `SUPERCHINESE 123`, `MORTALKOMBATI&II`,
+  `MORTALKOMBAT DUO`); they can only be told apart by title + header checksum, and they boot
+  into the wrong game after the menu. MMM01 and M161 carts likewise hide behind ordinary
+  MBC3-looking headers.
 
 ## 5. Known quirks and edge cases
 
@@ -168,7 +209,7 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 ## 6. Expected behaviours as tests
 
 > **Coverage today: the two header-checksum tests (#1) and the battery-save durability
-> harness (#9–#14, `testharness/battery.rs`).** All *banking* behaviour is still untested —
+> harness (#9–#16, `testharness/battery.rs`).** All *banking* behaviour is still untested —
 > though #11 exercises MBC3 RAM banking end to end as a side effect.
 
 1. **Header checksum.** `check_checksum` accepts a header whose `0x14D` matches the
@@ -206,10 +247,24 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
     is left byte-identical as a backup. ✅ **Covered** (same harness).
 14. **A foreign `.sav` loads**, including the VBA-M/mGBA convention of a 48-byte RTC block
     appended to the RAM. ✅ **Covered** (same harness).
-15. **MBC3 RTC sidecar round-trip.** After a save and reload the clock reads the stored time
-    plus the wall time that elapsed while the emulator was closed. *(Not covered — no
-    battery-RTC cart is available to the harness; the `.rtc` encode/decode is unit-tested in
-    [`battery.rs`](../../src/mbc/battery.rs).)*
+15. **A plain `.sav` loads at offset 0.** A save from another emulator or a real cartridge
+    is not shifted, and nothing is prepended to what we write. ✅ **Covered** (same harness).
+    *Symptom when this fails: every foreign save is corrupt on load and every save we write
+    is corrupt for everyone else — and for a game with a save checksum, indistinguishable
+    from "NEW GAME".*
+16. **Malformed or unusual input does not crash.** A RAM-less MBC5+RUMBLE bank write, an
+    unofficial ROM-size code, a `.sav` far shorter than the cartridge's RAM, a ROM truncated
+    below 32 KiB, and a no-mapper ROM+RAM+BATTERY cart (`0x09`). ✅ **Covered** (same
+    harness). *Under `panic = 'abort'` each of these was an instant process death, which also
+    means the player's save never got written.*
+17. **Undersized cartridge RAM mirrors.** On a 2 KiB chip, `0xA800` reads the same byte as
+    `0xA000`. *(Not covered — we allocate a full 8 KiB bank; see the honest-approximations
+    note above.)*
+18. **MBC3 RTC footer round-trip.** After a save and reload the clock reads the stored time
+    plus the wall time that elapsed while the emulator was closed. *(Partly covered — the
+    48-byte layout, the 44-byte variant, the footer-only-for-clock-carts rule and a
+    write/read round trip are unit-tested in [`battery.rs`](../../src/mbc/battery.rs); no
+    battery-RTC cartridge is available to the end-to-end harness.)*
 
 ## 7. Test ROMs that exercise it
 

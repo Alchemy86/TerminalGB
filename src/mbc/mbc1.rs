@@ -23,7 +23,7 @@ impl MBC1 {
             _ => 0,
         };
         let battery = match data[0x147] {
-            0x03 => Battery::new(&file, rambanks * 0x2000),
+            0x03 => Battery::new(&file, rambanks * 0x2000, false),
             _ => Battery::none(),
         };
         MBC1::build(data, rambanks, battery)
@@ -39,7 +39,7 @@ impl MBC1 {
     }
 
     fn build(data: Vec<u8>, rambanks: usize, battery: Battery) -> StrResult<MBC1> {
-        let rombanks = rom_banks(data[0x148]);
+        let rombanks = rom_banks(data[0x148], data.len());
         let ramsize = rambanks * 0x2000;
 
         let mut res = MBC1 {

@@ -413,6 +413,171 @@ fn case_foreign_sav_loads() -> Case {
     }
 }
 
+/// A plain `.sav` from another emulator or a real cartridge must land at RAM
+/// offset 0. We used to write an 8-byte big-endian RTC anchor *in front of* the
+/// RAM and consume it unconditionally on load — even for header type `0x13`,
+/// MBC3+RAM+BATTERY, which has no clock at all. Every foreign save therefore
+/// arrived shifted by 8 bytes (RAM byte 0 read file byte 8) and lost its last 8
+/// bytes, and every save we wrote was shifted for everyone else.
+fn case_no_byte_shift_on_a_plain_sav() -> Case {
+    let dir = workdir("shift");
+    let rom = stage(&dir);
+
+    // A recognisable ramp: RAM offset N must read as the file's byte N.
+    let plain: Vec<u8> = (0..0x8000usize).map(|i| (i % 251) as u8).collect();
+    std::fs::write(dir.join("battery.sav"), &plain).expect("write plain save");
+
+    let mut gb = boot(&rom);
+    gb.debug_write(0x0000, 0x0A);
+    gb.debug_write(0x4000, 0);
+    let first = gb.debug_read(0xA000);
+    // The very last byte of the last bank: it is what a prefix silently drops.
+    gb.debug_write(0x4000, 3);
+    let last = gb.debug_read(0xBFFF);
+    std::mem::forget(gb);
+
+    let (want_first, want_last) = (plain[0], plain[0x7FFF]);
+    let ok = first == want_first && last == want_last;
+    Case {
+        name: "a plain .sav loads at offset 0, not shifted",
+        ok,
+        detail: if ok {
+            format!("RAM[0]={first:02X}, RAM[0x7FFF]={last:02X} — no header consumed")
+        } else {
+            format!(
+                "RAM[0]={first:02X} (expected {want_first:02X}), \
+                 RAM[0x7FFF]={last:02X} (expected {want_last:02X}).\n      \
+                 The loader is consuming a header the file does not have, so every \
+                 save from another emulator or a real cartridge is corrupted — and \
+                 every save we write is corrupted for everyone else. Cartridge type \
+                 0x13 has no RTC; nothing may be prepended."
+            )
+        },
+    }
+}
+
+/// Malformed or unusual headers and save files must not crash. Under
+/// `[profile.release] panic = 'abort'` a panic is an instant process death —
+/// which also means the player's save never gets written.
+fn case_odd_carts_and_saves_do_not_panic() -> Case {
+    let dir = workdir("robust");
+    let mut problems: Vec<String> = Vec::new();
+
+    // 1. MBC5+RUMBLE with no cartridge RAM (header type 0x1C). The rumble motor
+    //    is bit 3 of the RAM-bank register, so every rumble game writes there;
+    //    `bank % rambanks` with zero banks divided by zero.
+    {
+        let sub = dir.join("rumble");
+        std::fs::create_dir_all(&sub).unwrap();
+        let mut data = build_battery_rom();
+        data[0x0147] = 0x1C; // MBC5+RUMBLE, no RAM
+        data[0x0149] = 0x00;
+        let rom = sub.join("rumble.gb");
+        std::fs::write(&rom, data).unwrap();
+        let mut gb = boot(&rom);
+        gb.debug_write(0x4000, 0x08); // motor on — the classic rumble poke
+        gb.debug_write(0x4000, 0x00);
+        let _ = gb.debug_read(0xA000);
+        std::mem::forget(gb);
+    }
+
+    // 2. An unofficial ROM-size code. 0x52/0x53/0x54 (1.1/1.2/1.5 MiB) are real,
+    //    and a bootleg header can hold anything; `rom_banks` returned 0 and the
+    //    bank register's `% rombanks` divided by zero.
+    {
+        let sub = dir.join("romsize");
+        std::fs::create_dir_all(&sub).unwrap();
+        let mut data = build_battery_rom();
+        data[0x0147] = 0x01; // MBC1
+        data[0x0148] = 0x54; // unofficial size code
+        let rom = sub.join("odd.gb");
+        std::fs::write(&rom, data).unwrap();
+        let mut gb = boot(&rom);
+        gb.debug_write(0x2000, 0x05); // bank switch
+        let _ = gb.debug_read(0x4000);
+        std::mem::forget(gb);
+    }
+
+    // 3. A save file far shorter than the cartridge's RAM — e.g. an MBC2-sized
+    //    file handed to an 8 KiB cart. `readram` indexed the loaded buffer
+    //    unchecked, so the first RAM read was out of bounds.
+    {
+        let sub = dir.join("shortsave");
+        std::fs::create_dir_all(&sub).unwrap();
+        let mut data = build_battery_rom();
+        data[0x0147] = 0x03; // MBC1+RAM+BATTERY
+        data[0x0149] = 0x02; // 8 KiB
+        let rom = sub.join("short.gb");
+        std::fs::write(&rom, data).unwrap();
+        std::fs::write(sub.join("short.sav"), vec![0xEEu8; 512]).unwrap();
+        let mut gb = boot(&rom);
+        gb.debug_write(0x0000, 0x0A);
+        for a in [0xA000u16, 0xA1FF, 0xBFFF] {
+            let _ = gb.debug_read(a);
+        }
+        std::mem::forget(gb);
+    }
+
+    // 4. A ROM truncated below the 32 KiB window (homebrew, partial download).
+    {
+        let sub = dir.join("truncated");
+        std::fs::create_dir_all(&sub).unwrap();
+        let mut data = build_battery_rom();
+        data[0x0147] = 0x00; // ROM ONLY
+        data.truncate(0x1000);
+        let rom = sub.join("trunc.gb");
+        std::fs::write(&rom, data).unwrap();
+        let mut gb = boot(&rom);
+        let _ = gb.debug_read(0x7FFF);
+        std::mem::forget(gb);
+    }
+
+    // 5. ROM+RAM+BATTERY with no mapper (header type 0x09) must load and save.
+    {
+        let sub = dir.join("nombc-battery");
+        std::fs::create_dir_all(&sub).unwrap();
+        let mut data = build_battery_rom();
+        data[0x0147] = 0x09; // ROM+RAM+BATTERY, no mapper
+        data[0x0149] = 0x02; // 8 KiB
+        let rom = sub.join("nombc.gb");
+        std::fs::write(&rom, data).unwrap();
+        let mut gb = boot(&rom);
+        for _ in 0..180 {
+            gb.frame();
+        }
+        std::mem::forget(gb);
+        // With no mapper there is one 8 KiB RAM chip and the bank register does
+        // nothing, so all four of the ROM's passes alias it — the last one wins.
+        let (want_head, want_tail) = (bank_marker(3), bank_tail(3));
+        match std::fs::read(sub.join("nombc.sav")) {
+            Ok(b) if b.len() == 0x2000 && b[0] == want_head && b[0x1FFF] == want_tail => {
+            }
+            Ok(b) => problems.push(format!(
+                "no-mapper battery cart (0x09): saved {} bytes, RAM[0]={:02X?} \
+                 (expected 8192 bytes, {want_head:02X})",
+                b.len(),
+                b.first()
+            )),
+            Err(e) => problems.push(format!(
+                "no-mapper battery cart (0x09) wrote no save file ({e}) — a cart type \
+                 with a battery that cannot save at all"
+            )),
+        }
+    }
+
+    Case {
+        name: "malformed headers and foreign save files do not crash",
+        ok: problems.is_empty(),
+        detail: if problems.is_empty() {
+            "RAM-less MBC5+RUMBLE bank write, unofficial ROM-size code, short .sav, \
+             truncated ROM, and no-mapper battery cart all handled"
+                .to_string()
+        } else {
+            problems.join("; ")
+        },
+    }
+}
+
 fn main() {
     let cases = vec![
         case_survives_an_unclean_exit(),
@@ -420,6 +585,8 @@ fn main() {
         case_a_boot_that_never_saves_writes_nothing(),
         case_legacy_gbsave_migrates(),
         case_foreign_sav_loads(),
+        case_no_byte_shift_on_a_plain_sav(),
+        case_odd_carts_and_saves_do_not_panic(),
     ];
 
     let mut failed = 0;

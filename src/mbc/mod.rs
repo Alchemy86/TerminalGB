@@ -87,9 +87,11 @@ pub fn get_mbc(
     let file = filepath.unwrap();
 
     match data[0x147] {
-        0x00 => {
-            mbc0::MBC0::new(data).map(|v| Box::new(v) as Box<dyn MemoryBankController>)
-        }
+        // 0x00 ROM ONLY, 0x08 ROM+RAM, 0x09 ROM+RAM+BATTERY. All three are the
+        // same "no mapper" cartridge; 0x09 is battery-backed, so rejecting it
+        // outright meant a save-capable cart could not save at all.
+        0x00 | 0x08 | 0x09 => mbc0::MBC0::new(data, file)
+            .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
         0x01..=0x03 => mbc1::MBC1::new(data, file)
             .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
         0x05..=0x06 => mbc2::MBC2::new(data, file)
@@ -119,11 +121,25 @@ fn ram_banks(v: u8) -> usize {
     }
 }
 
-fn rom_banks(v: u8) -> usize {
-    if v <= 8 {
-        2 << v
+/// Number of 16 KiB ROM banks, from header byte `0x148` with the ROM itself as
+/// the fallback.
+///
+/// The header byte is not trustworthy: the unofficial codes `0x52`/`0x53`/`0x54`
+/// (1.1/1.2/1.5 MiB) appear in real cartridges, and bootleg or corrupt headers
+/// can hold anything. The old version returned **0** for any `v > 8`, and every
+/// MBC's bank register then does `% rombanks` — an immediate divide-by-zero
+/// panic (an abort, under `panic = 'abort'`) on the game's first bank switch.
+/// Real dumping tools never size a cartridge from this byte either; FlashGBX
+/// uses it for display only and measures the hardware. We always hold the whole
+/// ROM in memory, so its length is the better fallback. Never below 2 — a
+/// one-bank cartridge does not exist and would still divide by zero at `% 1`
+/// giving bank 0. Pan Docs: <https://gbdev.io/pandocs/The_Cartridge_Header.html>
+fn rom_banks(v: u8, rom_len: usize) -> usize {
+    let declared = if v <= 8 { 2usize << v } else { 0 };
+    if declared > 0 {
+        declared
     } else {
-        0
+        (rom_len / 0x4000).max(2)
     }
 }
 

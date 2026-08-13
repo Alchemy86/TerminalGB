@@ -24,10 +24,10 @@ impl MBC5 {
         };
         let ramsize = 0x2000 * rambanks;
         let battery = match subtype {
-            0x1B | 0x1E => Battery::new(&file, ramsize),
+            0x1B | 0x1E => Battery::new(&file, ramsize, false),
             _ => Battery::none(),
         };
-        let rombanks = rom_banks(data[0x148]);
+        let rombanks = rom_banks(data[0x148], data.len());
 
         let mut res = MBC5 {
             rom: data,
@@ -71,8 +71,10 @@ impl MemoryBankController for MBC5 {
         *self.rom.get(idx).unwrap_or(&0)
     }
     fn readram(&self, a: u16) -> u8 {
+        // Disabled or absent cartridge RAM reads as open bus (0xFF) on hardware,
+        // which is what every other controller in this tree returns.
         if !self.ram_on {
-            return 0;
+            return 0xFF;
         }
         let idx = (self.rambank * 0x2000) | ((a as usize) & 0x1FFF);
         self.ram.get(idx).copied().unwrap_or(0)
@@ -87,7 +89,17 @@ impl MemoryBankController for MBC5 {
                 self.rombank =
                     ((self.rombank & 0x0FF) | (((v & 0x1) as usize) << 8)) % self.rombanks
             }
-            0x4000..=0x5FFF => self.rambank = ((v & 0x0F) as usize) % self.rambanks,
+            // RAM bank select — and on MBC5+RUMBLE (types 0x1C-0x1E) bit 3 of
+            // this same register drives the rumble motor, so *every* rumble game
+            // writes here. Types 0x19 and 0x1C have no cartridge RAM at all, and
+            // `% 0` is a divide-by-zero panic (an abort under `panic = 'abort'`).
+            // With no RAM there is no bank to select. Pan Docs:
+            // https://gbdev.io/pandocs/MBC5.html
+            0x4000..=0x5FFF => {
+                if self.rambanks > 0 {
+                    self.rambank = ((v & 0x0F) as usize) % self.rambanks;
+                }
+            }
             0x6000..=0x7FFF => { /* ? */ }
             _ => panic!("Could not write to {:04X} (MBC5)", a),
         }

@@ -23,20 +23,44 @@
 //!
 //! ## File formats
 //!
-//! * `<rom>.sav` — **raw cartridge RAM, no header**, exactly `ramsize` bytes.
-//!   This is what every other emulator uses, so saves are interchangeable in
-//!   both directions.
-//! * `<rom>.rtc` — MBC3 real-time-clock sidecar, 48 bytes little-endian, the
-//!   layout VBA-M/mGBA append to their `.sav`: 5 × `u32` current registers
-//!   (s, m, h, day-low, day-high), 5 × `u32` latched registers, then a `u64`
-//!   UNIX timestamp of when it was written.
-//! * `<rom>.gbsave` — this emulator's **legacy** format (8-byte big-endian RTC
-//!   anchor followed by the RAM). Still *read* when no `.sav` exists, never
-//!   written again; the old file is left in place untouched as a backup.
+//! `<rom>.sav` — **raw cartridge RAM, no header, bank 0 first**, exactly
+//! `ramsize` bytes. This is what the ecosystem uses: it is byte-for-byte what
+//! FlashGBX writes when it dumps a real cartridge (`LK_Device.py` walks the RAM
+//! banks in order and appends 0x2000 bytes each), and what every emulator reads.
 //!
-//! On load a `.sav` of `ramsize + 48` bytes is also accepted — that is the
-//! VBA-M/mGBA convention of appending the RTC struct to the save — so their
-//! files load here directly.
+//! **An MBC3 real-time clock is appended to that same file as a 48-byte
+//! footer** — the VBA-M / BGB / FlashGBX convention:
+//!
+//! ```text
+//! offset  size  meaning                                    (all little-endian)
+//! 0x00    4     RTC S   seconds 0-59                       u32
+//! 0x04    4     RTC M   minutes 0-59                       u32
+//! 0x08    4     RTC H   hours   0-23                       u32
+//! 0x0C    4     RTC DL  day counter, low 8 bits            u32
+//! 0x10    4     RTC DH  bit0 = day bit 8, bit6 = HALT, bit7 = day CARRY
+//! 0x14   20     the same five registers again — the latched copy
+//! 0x28    8     UNIX timestamp when the file was written   u64
+//!         = 0x30 (48) total
+//! ```
+//!
+//! The footer is written **only for cartridges that actually have an RTC**
+//! (header types `0x0F` and `0x10`). Type `0x13` is MBC3+RAM+BATTERY with *no*
+//! clock, and writing anything extra for it is what made our old saves
+//! unreadable elsewhere. Detection on load is `filesize - ramsize`: 48 (or 44,
+//! an older variant with a 32-bit timestamp) means a footer is present.
+//!
+//! The stored timestamp is what makes "the clock kept running while the console
+//! was off" work, exactly as the coin cell does on hardware: the registers are
+//! anchored at the moment they were saved and the elapsed wall time carries them
+//! forward.
+//!
+//! ### Legacy
+//!
+//! `<rom>.gbsave` — this emulator's old format (8-byte **big-endian** RTC epoch
+//! anchor prepended to the RAM). Nothing else in the world reads it. It is still
+//! *read* when no `.sav` exists and migrated on the next write; the old file is
+//! left in place untouched as a backup and never written again. `<rom>.srm` (the
+//! other common battery-RAM extension) is accepted on load too.
 
 use std::io::prelude::*;
 use std::{fs, io, path};
@@ -53,7 +77,7 @@ const SETTLE_FRAMES: u32 = 60;
 /// rare game that dribbles into SRAM continuously and so never "settles".
 const MAX_DIRTY_FRAMES: u32 = 600;
 
-/// The MBC3 real-time clock, in the neutral shape the sidecar file stores.
+/// The MBC3 real-time clock, in the shape the 48-byte save footer stores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtcState {
     /// Live registers: seconds, minutes, hours, day-low, day-high/flags.
@@ -69,7 +93,7 @@ pub struct RtcState {
 pub struct Loaded {
     /// Cartridge RAM, always exactly `ramsize` bytes (padded/truncated).
     pub ram: Vec<u8>,
-    /// RTC from a `.rtc` sidecar or an appended VBA-M/mGBA block, if any.
+    /// RTC decoded from the file's trailing footer, if it had one.
     pub rtc: Option<RtcState>,
     /// Legacy `.gbsave` RTC anchor (UNIX seconds), when that is all we have.
     pub legacy_rtc_zero: Option<u64>,
@@ -80,7 +104,8 @@ pub struct Loaded {
 /// Persistence for one cartridge's battery-backed RAM.
 pub struct Battery {
     sav: Option<path::PathBuf>,
-    rtc: Option<path::PathBuf>,
+    /// Other battery-RAM extensions accepted when loading (never written).
+    alternates: Vec<path::PathBuf>,
     legacy: Option<path::PathBuf>,
     ramsize: usize,
     /// RAM has changed since the last successful write.
@@ -95,15 +120,18 @@ pub struct Battery {
 }
 
 impl Battery {
-    /// A battery for `rom` with `ramsize` bytes of cartridge RAM. `ramsize == 0`
-    /// (a cart claiming battery-backed RAM but declaring none) gets no files.
-    pub fn new(rom: &path::Path, ramsize: usize) -> Battery {
-        if ramsize == 0 {
+    /// A battery for `rom` with `ramsize` bytes of cartridge RAM. `has_rtc` is
+    /// true only for header types `0x0F`/`0x10`, the MBC3 variants that really
+    /// carry a clock — it is what decides whether a 48-byte footer is written.
+    ///
+    /// A cartridge with neither RAM nor a clock gets no files at all.
+    pub fn new(rom: &path::Path, ramsize: usize, has_rtc: bool) -> Battery {
+        if ramsize == 0 && !has_rtc {
             return Battery::none();
         }
         Battery {
             sav: Some(rom.with_extension("sav")),
-            rtc: Some(rom.with_extension("rtc")),
+            alternates: vec![rom.with_extension("srm")],
             legacy: Some(rom.with_extension("gbsave")),
             ramsize,
             dirty: false,
@@ -118,7 +146,7 @@ impl Battery {
     pub fn none() -> Battery {
         Battery {
             sav: None,
-            rtc: None,
+            alternates: Vec::new(),
             legacy: None,
             ramsize: 0,
             dirty: false,
@@ -140,10 +168,11 @@ impl Battery {
         self.dirty
     }
 
-    /// Read the save, preferring `<rom>.sav` and falling back to the legacy
-    /// `<rom>.gbsave`. A missing file is not an error (a brand-new cartridge);
-    /// anything else is, because silently starting fresh would let the next
-    /// write destroy a save we simply failed to read.
+    /// Read the save: `<rom>.sav` first, then the other common battery-RAM
+    /// extensions, then the legacy `<rom>.gbsave`. A missing file is not an
+    /// error (a brand-new cartridge); anything else is, because silently
+    /// starting fresh would let the next write destroy a save we merely failed
+    /// to read.
     pub fn load(&mut self) -> StrResult<Loaded> {
         let blank = |b: &Battery| Loaded {
             ram: vec![0; b.ramsize],
@@ -151,35 +180,42 @@ impl Battery {
             legacy_rtc_zero: None,
             fresh: true,
         };
-        let Some(ref sav) = self.sav else {
+        if self.sav.is_none() {
             return Ok(blank(self));
-        };
+        }
 
-        match read_file(sav) {
-            Ok(Some(bytes)) => {
-                // VBA-M/mGBA append the 48-byte RTC block to the .sav; accept it.
-                let (ram_bytes, trailing) = if bytes.len() == self.ramsize + RTC_BYTES {
-                    bytes.split_at(self.ramsize)
-                } else {
-                    (&bytes[..], &[][..])
-                };
-                let mut rtc = decode_rtc(trailing);
-                if rtc.is_none() {
-                    rtc = self.read_rtc_sidecar()?;
+        let mut candidates: Vec<path::PathBuf> = self.sav.iter().cloned().collect();
+        candidates.extend(self.alternates.iter().cloned());
+        for path in candidates {
+            match read_file(&path) {
+                Ok(None) => continue,
+                Ok(Some(bytes)) => {
+                    // Footer detection is by size, as FlashGBX does it: whatever
+                    // the file carries beyond the cartridge's RAM size is the RTC
+                    // block. 48 bytes is the standard; 44 is an older variant
+                    // whose timestamp is 32-bit.
+                    let extra = bytes.len().saturating_sub(self.ramsize);
+                    let (ram_bytes, trailing) = if bytes.len() > self.ramsize
+                        && (extra == RTC_BYTES || extra == RTC_BYTES_32)
+                    {
+                        bytes.split_at(self.ramsize)
+                    } else {
+                        (&bytes[..], &[][..])
+                    };
+                    return Ok(Loaded {
+                        ram: self.fit(ram_bytes),
+                        rtc: decode_rtc(trailing),
+                        legacy_rtc_zero: None,
+                        fresh: false,
+                    });
                 }
-                Ok(Loaded {
-                    ram: self.fit(ram_bytes),
-                    rtc,
-                    legacy_rtc_zero: None,
-                    fresh: false,
-                })
-            }
-            Ok(None) => self.load_legacy(),
-            Err(e) => {
-                self.poisoned = true;
-                Err(e)
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e);
+                }
             }
         }
+        self.load_legacy()
     }
 
     /// Legacy `<rom>.gbsave`: 8 bytes of big-endian RTC anchor, then the RAM.
@@ -214,20 +250,6 @@ impl Battery {
                     fresh: false,
                 })
             }
-            Err(e) => {
-                self.poisoned = true;
-                Err(e)
-            }
-        }
-    }
-
-    fn read_rtc_sidecar(&mut self) -> StrResult<Option<RtcState>> {
-        let Some(ref path) = self.rtc else {
-            return Ok(None);
-        };
-        match read_file(path) {
-            Ok(None) => Ok(None),
-            Ok(Some(bytes)) => Ok(decode_rtc(&bytes)),
             Err(e) => {
                 self.poisoned = true;
                 Err(e)
@@ -286,12 +308,17 @@ impl Battery {
             self.dirty = false;
             return;
         };
-        // Leave `dirty` set if the write fails so the next tick retries.
-        if write_atomic(sav, ram).is_err() {
-            return;
+        // RAM first, then the RTC footer in the same file — that is the layout
+        // FlashGBX writes and every emulator expects. No footer for a cartridge
+        // without a clock: an unexpected 48 trailing bytes is precisely what
+        // made our old saves unreadable elsewhere.
+        let mut blob = ram.to_vec();
+        if let Some(state) = rtc {
+            blob.extend_from_slice(&encode_rtc(&state));
         }
-        if let (Some(path), Some(state)) = (self.rtc.as_ref(), rtc) {
-            let _ = write_atomic(path, &encode_rtc(&state));
+        // Leave `dirty` set if the write fails so the next tick retries.
+        if write_atomic(sav, &blob).is_err() {
+            return;
         }
         self.dirty = false;
         self.quiet = 0;
@@ -339,11 +366,19 @@ fn write_atomic(path: &path::Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Size of the VBA-M/mGBA RTC block: 10 x u32 + u64, little-endian.
+/// The standard MBC3 RTC footer: 10 × `u32` + `u64`, all little-endian.
+/// This is what FlashGBX writes when it dumps a cartridge, and what VBA-M and
+/// BGB read. See the module docs for the field layout.
 pub const RTC_BYTES: usize = 48;
+
+/// An older variant with a 32-bit timestamp. Read, never written.
+pub const RTC_BYTES_32: usize = 44;
 
 fn encode_rtc(state: &RtcState) -> Vec<u8> {
     let mut out = Vec::with_capacity(RTC_BYTES);
+    // Each 8-bit register is stored widened to u32, upper three bytes zero.
+    // The HALT (bit 6) and day-CARRY (bit 7) flags in DH must survive — other
+    // emulators read them, even though some cartridge writers drop them.
     for v in state.regs.iter().chain(state.latched.iter()) {
         out.extend_from_slice(&(*v as u32).to_le_bytes());
     }
@@ -352,7 +387,7 @@ fn encode_rtc(state: &RtcState) -> Vec<u8> {
 }
 
 fn decode_rtc(bytes: &[u8]) -> Option<RtcState> {
-    if bytes.len() < RTC_BYTES {
+    if bytes.len() != RTC_BYTES && bytes.len() != RTC_BYTES_32 {
         return None;
     }
     let u32_at = |i: usize| {
@@ -366,12 +401,19 @@ fn decode_rtc(bytes: &[u8]) -> Option<RtcState> {
         regs[i] = u32_at(i);
         latched[i] = u32_at(5 + i);
     }
-    let mut ts = [0u8; 8];
-    ts.copy_from_slice(&bytes[40..48]);
+    let timestamp = if bytes.len() == RTC_BYTES {
+        let mut ts = [0u8; 8];
+        ts.copy_from_slice(&bytes[40..48]);
+        u64::from_le_bytes(ts)
+    } else {
+        let mut ts = [0u8; 4];
+        ts.copy_from_slice(&bytes[40..44]);
+        u32::from_le_bytes(ts) as u64
+    };
     Some(RtcState {
         regs,
         latched,
-        timestamp: u64::from_le_bytes(ts),
+        timestamp,
     })
 }
 
@@ -411,7 +453,7 @@ mod tests {
     fn writes_raw_sav_with_no_header() {
         let dir = tmpdir("raw");
         let rom = dir.join("game.gb");
-        let mut b = Battery::new(&rom, 0x2000);
+        let mut b = Battery::new(&rom, 0x2000, false);
         let ram = vec![0xABu8; 0x2000];
         b.touch();
         b.flush(&ram, None);
@@ -432,7 +474,7 @@ mod tests {
         }));
         fs::write(dir.join("game.sav"), &blob).unwrap();
 
-        let loaded = Battery::new(&rom, 0x2000).load().unwrap();
+        let loaded = Battery::new(&rom, 0x2000, false).load().unwrap();
         assert_eq!(loaded.ram, vec![0x11u8; 0x2000]);
         assert_eq!(loaded.rtc.unwrap().timestamp, 42);
     }
@@ -445,7 +487,7 @@ mod tests {
         legacy.extend_from_slice(&vec![0x5Au8; 0x2000]);
         fs::write(dir.join("game.gbsave"), &legacy).unwrap();
 
-        let mut b = Battery::new(&rom, 0x2000);
+        let mut b = Battery::new(&rom, 0x2000, false);
         let loaded = b.load().unwrap();
         assert_eq!(loaded.ram, vec![0x5Au8; 0x2000]);
         assert_eq!(loaded.legacy_rtc_zero, Some(1234));
@@ -463,13 +505,13 @@ mod tests {
         let dir = tmpdir("fit");
         let rom = dir.join("game.gb");
         fs::write(dir.join("game.sav"), vec![7u8; 16]).unwrap();
-        let loaded = Battery::new(&rom, 0x2000).load().unwrap();
+        let loaded = Battery::new(&rom, 0x2000, false).load().unwrap();
         assert_eq!(loaded.ram.len(), 0x2000);
         assert_eq!(&loaded.ram[..16], &[7u8; 16]);
         assert_eq!(loaded.ram[16], 0);
 
         fs::write(dir.join("game.sav"), vec![3u8; 0x4000]).unwrap();
-        let loaded = Battery::new(&rom, 0x2000).load().unwrap();
+        let loaded = Battery::new(&rom, 0x2000, false).load().unwrap();
         assert_eq!(loaded.ram, vec![3u8; 0x2000]);
     }
 
@@ -477,7 +519,7 @@ mod tests {
     fn a_clean_boot_never_creates_a_save_file() {
         let dir = tmpdir("noboot");
         let rom = dir.join("game.gb");
-        let mut b = Battery::new(&rom, 0x2000);
+        let mut b = Battery::new(&rom, 0x2000, false);
         let _ = b.load().unwrap();
         for _ in 0..1000 {
             b.tick(&vec![0u8; 0x2000], None);
@@ -492,7 +534,7 @@ mod tests {
     fn autosave_lands_without_any_drop() {
         let dir = tmpdir("autosave");
         let rom = dir.join("game.gb");
-        let mut b = Battery::new(&rom, 0x2000);
+        let mut b = Battery::new(&rom, 0x2000, false);
         let ram = vec![0xC3u8; 0x2000];
         b.touch();
         for _ in 0..SETTLE_FRAMES {
@@ -507,12 +549,110 @@ mod tests {
         let rom = dir.join("game.gb");
         // A legacy file too short to hold its own header: unreadable, but real.
         fs::write(dir.join("game.gbsave"), vec![1u8; 4]).unwrap();
-        let mut b = Battery::new(&rom, 0x2000);
+        let mut b = Battery::new(&rom, 0x2000, false);
         assert!(b.load().is_err());
         b.touch();
         b.flush(&vec![0u8; 0x2000], None);
         assert!(!dir.join("game.sav").exists());
         assert_eq!(fs::read(dir.join("game.gbsave")).unwrap(), vec![1u8; 4]);
+    }
+
+    /// The exact byte layout FlashGBX writes and VBA-M/BGB read. Pinned so a
+    /// future refactor cannot quietly change what we hand to other tools.
+    #[test]
+    fn rtc_footer_matches_the_ecosystem_layout() {
+        let bytes = encode_rtc(&RtcState {
+            regs: [0x01, 0x02, 0x03, 0x04, 0xC1],
+            latched: [0x11, 0x12, 0x13, 0x14, 0x81],
+            timestamp: 0x0102_0304_0506_0708,
+        });
+        assert_eq!(bytes.len(), 48);
+        // Five registers, each widened to u32 LE with the upper bytes zero.
+        assert_eq!(
+            &bytes[0x00..0x14],
+            &[
+                0x01, 0, 0, 0, 0x02, 0, 0, 0, 0x03, 0, 0, 0, 0x04, 0, 0, 0, 0xC1, 0, 0,
+                0,
+            ]
+        );
+        // Then the latched copy.
+        assert_eq!(
+            &bytes[0x14..0x28],
+            &[
+                0x11, 0, 0, 0, 0x12, 0, 0, 0, 0x13, 0, 0, 0, 0x14, 0, 0, 0, 0x81, 0, 0,
+                0,
+            ]
+        );
+        // Then a u64 LE timestamp.
+        assert_eq!(&bytes[0x28..0x30], &[8, 7, 6, 5, 4, 3, 2, 1]);
+        // DH bit 6 (HALT) and bit 7 (day CARRY) must survive the round trip —
+        // some cartridge writers drop them, but emulators read them.
+        let back = decode_rtc(&bytes).unwrap();
+        assert_eq!(back.regs[4], 0xC1);
+        assert_eq!(back.latched[4], 0x81);
+    }
+
+    /// An older 44-byte variant stores a 32-bit timestamp. Read, never written.
+    #[test]
+    fn reads_the_44_byte_rtc_variant() {
+        let mut bytes = encode_rtc(&RtcState {
+            regs: [1, 2, 3, 4, 5],
+            latched: [1, 2, 3, 4, 5],
+            timestamp: 0,
+        });
+        bytes.truncate(40);
+        bytes.extend_from_slice(&7777u32.to_le_bytes());
+        let s = decode_rtc(&bytes).unwrap();
+        assert_eq!(s.timestamp, 7777);
+        assert_eq!(s.regs, [1, 2, 3, 4, 5]);
+    }
+
+    /// A cartridge with no clock must get no footer: an unexpected 48 trailing
+    /// bytes is exactly what made our old saves unreadable elsewhere.
+    #[test]
+    fn a_clockless_cart_writes_no_footer() {
+        let dir = tmpdir("nofooter");
+        let rom = dir.join("game.gb");
+        let mut b = Battery::new(&rom, 0x2000, false);
+        b.touch();
+        b.flush(&vec![0x42u8; 0x2000], None);
+        assert_eq!(fs::read(dir.join("game.sav")).unwrap().len(), 0x2000);
+    }
+
+    /// A clock cart appends the footer to the same file, and reloads from it.
+    #[test]
+    fn an_rtc_cart_round_trips_through_one_file() {
+        let dir = tmpdir("footer");
+        let rom = dir.join("game.gb");
+        let state = RtcState {
+            regs: [5, 4, 3, 2, 0x41],
+            latched: [5, 4, 3, 2, 0x41],
+            timestamp: 1_600_000_000,
+        };
+        let mut b = Battery::new(&rom, 0x2000, true);
+        b.touch();
+        b.flush(&vec![0x99u8; 0x2000], Some(state));
+
+        let written = fs::read(dir.join("game.sav")).unwrap();
+        assert_eq!(written.len(), 0x2000 + 48);
+        assert!(
+            !dir.join("game.rtc").exists(),
+            "no sidecar: the footer is in the .sav"
+        );
+
+        let loaded = Battery::new(&rom, 0x2000, true).load().unwrap();
+        assert_eq!(loaded.ram, vec![0x99u8; 0x2000]);
+        assert_eq!(loaded.rtc, Some(state));
+    }
+
+    /// `.srm` is the other extension in common use; accept it on load.
+    #[test]
+    fn reads_an_srm_file() {
+        let dir = tmpdir("srm");
+        let rom = dir.join("game.gb");
+        fs::write(dir.join("game.srm"), vec![0x33u8; 0x2000]).unwrap();
+        let loaded = Battery::new(&rom, 0x2000, false).load().unwrap();
+        assert_eq!(loaded.ram, vec![0x33u8; 0x2000]);
     }
 
     #[test]

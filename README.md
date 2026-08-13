@@ -292,13 +292,13 @@ rationale: **[docs/testing.md](docs/testing.md)**.
   the terminal frontend as quick-save/-load slots — see [`docs/savestates.md`](docs/savestates.md).
 
 **Battery saves** are written to `<rom>.sav` — **raw cartridge RAM with no header**, the
-same format every other emulator uses, so saves can be carried in either direction. MBC3's
-real-time clock goes in a `<rom>.rtc` sidecar (the 48-byte VBA-M/mGBA layout); a `.sav`
-with that block appended is also accepted on load. Saves are written **while the emulator
-runs** — about a second after the game finishes writing cartridge RAM — and atomically, so
-closing the window, a crash or a `kill` cannot lose or truncate them. Saves from older
-builds (`<rom>.gbsave`) are read and migrated automatically; the old file is left in place
-untouched as a backup.
+format every other emulator uses and the one real-cartridge dumpers produce, so saves can be
+carried in either direction. For MBC3 cartridges that have a real-time clock, the clock is
+appended to the same file as the standard 48-byte footer. `.srm` files are read too, as are
+saves from older builds of this emulator (`<rom>.gbsave`), which are migrated automatically
+with the old file left in place untouched as a backup. Saves are written **while the
+emulator runs** — about a second after the game finishes writing cartridge RAM — and
+atomically, so closing the window, a crash or a `kill` cannot lose or truncate them.
 
 ---
 
