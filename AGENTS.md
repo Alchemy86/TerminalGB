@@ -98,8 +98,12 @@ lines per fix, not a process document.
   `bus_tick_enabled` around `Cpu::operation`): each `rb`/`wb` advances the timer one
   M-cycle *before* the access, and `do_cycle` applies only the instruction's remaining
   internal cycles. This makes memory reads/writes land on the correct sub-instruction cycle
-  → **Blargg `mem_timing` + `mem_timing-2` PASS**. Only the timer is per-access; PPU/APU
-  stay batched, so frame rendering is unchanged. Costs ~15% on a pure-CPU benchmark
+  → **Blargg `mem_timing` + `mem_timing-2` PASS**. The **APU clock is per-access too**
+  (same hook: `bus_tick` calls `Sound::do_cycle(4)`, remainder at instruction end), which
+  is what lets `catch_up()` sync the APU to the exact access cycle → dmg_sound 09/10/12.
+  APU *synthesis* stays event-driven and the PPU stays batched, so frame rendering is
+  unchanged; per-access APU stepping costs ~25 µs/frame with audio enabled, zero without
+  (sound is `None` headless). Timer stepping costs ~15% on a pure-CPU benchmark
   (headless still ~60× realtime). The **HALT bug IS modelled** now (`halt_bug` flag; PC
   rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
 - Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
@@ -196,12 +200,16 @@ lines per fix, not a process document.
 - **Offline audio harness:** `cargo test --release --test audiocapture`
   (`testharness/audiocapture.rs`) captures the APU's sample stream device-free, writes WAVs to
   `target/testrom-artifacts/audio/`, checks rate/pitch/level/continuity (built-in 440 Hz tone
-  ROM), reads Blargg `dmg_sound`'s memory verdict at `$A000` (**9/12 pass**: 01–08 + 11;
-  09/10/12 are the cycle-stepped-APU wave-timing non-goal), and pins an FNV hash in
+  ROM), reads Blargg `dmg_sound`'s memory verdict at `$A000` (**12/12 pass**, and the
+  expected verdict is pinned per fixture so a pass→fail regression is named, not just a
+  hash change), and pins an FNV hash in
   `testharness/audio_baseline.txt` (re-bless: `UPDATE_AUDIO_BASELINE=1`). Single-ROM TDD
   mode: `AUDIO_ROM=<path> [AUDIO_FRAMES=n]` runs one ROM and prints its verdict. Any change
   to `src/sound.rs` synthesis will move these hashes — listen to the WAVs before re-blessing.
-- **APU accuracy model (dmg_sound 1/12 → 9/12) — things to preserve:** register read-back is
+  **Gotcha: single-ROM mode runs the ROM in place** (no `target/` staging like the fixture
+  path), so pointing it at `tests/…` drops `.gbsave` files into the submodule checkout —
+  delete them (`/usr/bin/find tests -name '*.gbsave' -delete`) before committing.
+- **APU accuracy model (dmg_sound 1/12 → 9/12 → 12/12) — things to preserve:** register read-back is
   `regs[i] | NR_READBACK_MASKS[i]` (raw-byte shadow; NRx1 length loads mask duty `v & 0x3F`);
   the MMU calls `Sound::catch_up()` before every APU register access (lazy ~45 ms blocks
   otherwise leave NR52/length/sweep stale — this is what makes all the timing subtests pass);
@@ -211,7 +219,20 @@ lines per fix, not a process document.
   DMG preserves length counters across power and allows NRx1 length writes while off, and
   power-on resets the frame sequencer to step 0 (DIV divider keeps running); a powered-off
   APU still emits silence at full sample rate (never stall the stream). Save-state format is
-  v2 (APU shadow regs + flags added).
+  v3 (v2 added APU shadow regs + flags; v3 added `WaveChannel::since_fetch`).
+- **DMG wave-RAM window (dmg_sound 9/12 → 12/12) — things to preserve:** the APU clock is
+  stepped per memory access (see the timer sharp-edge above) — without it no wave-window
+  constant can be right, since `catch_up()` would sync to instruction boundaries only.
+  `WaveChannel::since_fetch` (T-cycles since the channel's last wave-RAM byte fetch, valid
+  at every catch-up point) drives `dmg_access_byte`: while CH3 plays, DMG reads/writes of
+  `$FF30-$FF3F` hit `waveram[wave_pos/2]` iff `since_fetch <= 2`, else read `$FF` / are
+  dropped; CGB always hits the current byte. Trigger reloads the fetch timer with
+  `period + WAVE_TRIGGER_DELAY(=4)`; NR34-trigger with `delay == 0` (fetch imminent this
+  cycle) corrupts wave RAM (byte 0 or aligned 4-byte block). Constants are calibrated by
+  dmg_sound 09's 2-cycle phase sweep — a ±2 change flips all three CRCs. `since_fetch` is
+  serialised (format v3); `sound::tests::wave_window_state_survives_save_load` fails if it
+  is dropped (teeth proven by dropping it deliberately). Conformance-tool notes for these
+  fixes: `docs/conformance-notes.md`.
 - **Audio knobs for re-measuring (and for A/B by ear):** `GB_AUDIO_DEVICE_FRAMES` (0 = host
   default), `GB_AUDIO_START_FILL`, `GB_AUDIO_HIGH_WATER`, `GB_AUDIO_STATS=1`. The old,
   laggy configuration is `GB_AUDIO_DEVICE_FRAMES=0 GB_AUDIO_START_FILL=7000

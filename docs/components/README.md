@@ -13,7 +13,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`490f8a7`](https://github.com/Alchemy86/gameboy/tree/490f8a7a986b7795ca8d7feb8fe49a2fbbc27e75) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1ab5c6ad3d69285098251279a666ccb064) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The components
 
@@ -58,10 +58,6 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
 - **[Accuracy testing / the yardstick](../testing.md)** — the Blargg, Mooneye, and
   dmg-acid2/cgb-acid2 suites every component page's test list refers to, how a headless
   harness would run them, and an honest note on the "Nintendo's emulator scored 100%" claim.
-- **[Terminal render performance](../terminal-render.md)** — the measured per-frame breakdown,
-  capped transmission resolution, and emulation/render decoupling
-- **[Telemetry](../telemetry.md)** — the NDJSON run stream (the first implementation of the
-  debug design's *emit* half) and its schema contract
 - **[Debug-tooling design](../debugging.md)** — the inspect / manipulate / capture surface
   (registers, disassembly, tile & OAM viewers, stepping, breakpoints, watchpoints,
   screenshots, and the deterministic frame-hashing that feeds the accuracy tests), plus

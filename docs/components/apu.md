@@ -104,25 +104,33 @@ output stream. The desktop frontend wires it up in `render_desktop`
 - **No sound on web.** The whole module is `#[cfg(not(target_arch = "wasm32"))]`
   ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
   `0xFF` and is silent. The terminal frontend also runs without audio.
-- **Register accuracy is measured: Blargg `dmg_sound` passes 9 of 12 subtests**
-  (01–08 and 11), per the offline audio harness
+- **Register accuracy is measured: Blargg `dmg_sound` passes 12 of 12 subtests**,
+  per the offline audio harness
   ([`testharness/audiocapture.rs`](../../testharness/audiocapture.rs)), which reads the
-  suite's memory-mapped verdict at `$A000`. This was 1/12 before the APU accuracy pass:
+  suite's memory-mapped verdict at `$A000`. This was 1/12 before the APU accuracy pass
+  (which took it to 9/12) plus the wave-window pass (9→12). The accuracy pass:
   the register-shadow read-back model (`regs` + `NR_READBACK_MASKS`), catch-up-on-access
   synchronisation (`Sound::catch_up`, called from the MMU before every APU register
   access so NR52/length/sweep state is never stale), length-expiry disabling the channel,
   the NRx4 extra-length-clocking quirks (`apply_nrx4_length`), full sweep semantics
   (always-reloaded shadow/timer/enable on trigger, negate-used tracking, the NR10
   negate-exit disable), DAC-gated triggers, and the power-on frame-sequencer reset.
-- **The remaining three failures (09/10/12, the wave-RAM access quirks) are the next
-  planned accuracy step** (the captain has now asked for this work — it is no longer a
-  permanent non-goal): they sweep a CPU access across a ~2-T-cycle window around the wave
-  channel's sample fetch (read-returns-current-byte / retrigger corruption / write
-  lands only in the window) and CRC the result. That needs a **T-cycle-stepped APU**
-  with a modelled wave sample-buffer/fetch pipeline plus cycle-exact CPU access
-  positions inside instructions — the same class of restructure as the cycle-stepped
-  PPU the video approximations (mode-3 timing, OAM-DMA bus restriction) also want.
-  Until that lands these three stay red, pinned in the baseline so the gap is visible.
+- **The last three (09/10/12, the DMG wave-RAM access quirks) did NOT need a wholesale
+  T-cycle-stepped APU** — the once-documented non-goal was resolved with two contained
+  changes. (1) The **APU clock is stepped per CPU memory access**, exactly like the
+  timer: `MemoryManagementUnit::bus_tick` advances `Sound::do_cycle(4)` before each
+  bus access and `MMU::do_cycle` applies only the instruction's remaining cycles, so
+  `catch_up()` syncs the APU to the exact sub-instruction cycle of a wave-RAM or NR5x
+  access. Synthesis stays event-driven (blip_buf deltas, skip-ahead between channel
+  timer events) — nothing runs 4.19 M times a second, and the measured cost is
+  ~25 µs/frame with audio enabled (0.15 % of the 16.74 ms frame budget), zero without.
+  (2) The wave channel tracks `since_fetch` (T-cycles since its last wave-RAM byte
+  fetch) and models the **DMG access window**: while CH3 plays, CPU reads/writes of
+  `$FF30–$FF3F` map to the byte CH3 just fetched for the 2 T-cycles after a fetch and
+  are `$FF`/dropped otherwise; retriggering while a fetch is imminent (`delay == 0`)
+  corrupts the first bytes of wave RAM (byte 0, or the aligned 4-byte block, per Pan
+  Docs "Audio Details"). Trigger reloads the fetch timer with period + 4 T-cycles
+  (`WAVE_TRIGGER_DELAY`, calibrated against dmg_sound 09's 2-cycle phase sweep).
 - **NRx1 length writes mask the duty bits** (`v & 0x3F`) — a duty-carrying write like
   `NR11=0x80` used to underflow (debug-mode panic).
 - **NR52 power-off now actually zeroes NR10–NR51** and the channel-status bits; the old
@@ -157,10 +165,12 @@ output stream. The desktop frontend wires it up in `render_desktop`
   keeps running — modelled (dmg_sound 07/08/11 pass).
 - **Sweep negate quirk**: clearing NR10's negate bit after any negate-mode calculation
   since the last trigger disables the channel — modelled (dmg_sound 05 passes).
-- **Wave-RAM access while channel 3 is on.** Reads return the byte currently being
-  played and writes are blocked — a simplification. The real DMG behaviour is a
-  ~2-T-cycle access window around the channel's fetch; **not modelled** (the 09/10/12
-  planned-next item above).
+- **Wave-RAM access while channel 3 is on — modelled** (dmg_sound 09/10/12 pass).
+  On DMG every `$FF30–$FF3F` address maps to the byte CH3 is currently reading, but
+  only during the 2 T-cycles after the channel's own fetch (`WaveChannel::since_fetch`
+  + `dmg_access_byte`); outside the window reads return `$FF` and writes are dropped.
+  On CGB (`dmg_mode == false`) the access always maps to the current byte. Retriggering
+  CH3 on DMG while a fetch is imminent corrupts wave RAM's first bytes (see §4).
 - **Noise LFSR width** (7-bit vs 15-bit) via `NR43` bit 3 — modelled
   ([`sound.rs:371`](../../src/sound.rs)).
 
@@ -170,8 +180,9 @@ output stream. The desktop frontend wires it up in `render_desktop`
 > [`testharness/audiocapture.rs`](../../testharness/audiocapture.rs) records every
 > sample the APU produces with a device-free `AudioPlayer`, writes WAVs, analyses
 > pitch/level/continuity/rate, runs Blargg `dmg_sound` and reads its `$A000`
-> verdict (**9/12 pass** — 01–08 + 11; 09/10/12 need the T-cycle-stepped APU,
-> **planned next**), and pins a determinism hash in `testharness/audio_baseline.txt`.
+> verdict (**12/12 pass**, pinned explicitly in the harness so a pass→fail
+> regression is named, not just a hash change), and pins a determinism hash in
+> `testharness/audio_baseline.txt`.
 > Single-ROM TDD mode: `AUDIO_ROM=path/to/rom.gb cargo test --release --test
 > audiocapture` prints one ROM's verdict. `src/sound.rs` unit tests additionally
 > cover pitch, rate-honesty, and the playback queue policy.
@@ -191,9 +202,12 @@ output stream. The desktop frontend wires it up in `render_desktop`
    powering off zeroes `NR10`–`NR25`. *(Covered: dmg_sound 01/08/11 pass.)*
 7. **Register read-back masks.** Each `NRxx` read ORs the correct "unused bit" mask.
    *(Covered: dmg_sound 01 passes — see `NR_READBACK_MASKS`.)*
-8. **Wave RAM write-block while playing.** Writes to `0xFF30–0xFF3F` are ignored while
-   channel 3 is enabled. *(Approximated; the exact DMG access window is the 09/10/12
-   non-goal.)*
+8. **Wave RAM access window while playing.** On DMG, reads/writes to `0xFF30–0xFF3F`
+   while channel 3 is enabled hit the channel's current byte only within 2 T-cycles of
+   its own fetch — reads otherwise return `$FF`, writes are otherwise dropped — and a
+   retrigger coinciding with a fetch corrupts the first bytes of wave RAM. *(Covered:
+   dmg_sound 09/10/12 pass; the save/load survival of the window state is covered by
+   `sound::tests::wave_window_state_survives_save_load`.)*
 9. **The length-counter extra-clock edge case.** Matches hardware. *(Covered:
    dmg_sound 03 passes — `apply_nrx4_length`.)*
 10. **Web build is silent** (module compiled out). *(Documented behaviour, not a bug.)*
@@ -202,7 +216,7 @@ output stream. The desktop frontend wires it up in `render_desktop`
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Blargg `dmg_sound`** (12 sub-tests, **9/12 pass**: 01–08 + 11) | Registers, trigger, length, sweep, envelope on DMG | 09/10/12 = the wave-RAM timing tests, **planned next** (§4). |
+| **Blargg `dmg_sound`** (12 sub-tests, **12/12 pass**) | Registers, trigger, length, sweep, envelope, wave-RAM access timing on DMG | Any failure is a regression — the harness pins the `$A000` verdict. |
 | **Blargg `cgb_sound`** (not wired) | The CGB APU edge cases | CGB-specific power/length rules — `Sound::dmg_mode` selects per-model behaviour, but the CGB side is untested. |
 | **Mooneye `acceptance/` (no dedicated APU dir)** | — | Mooneye focuses on timing/PPU/CPU; Blargg is the APU authority. |
 | **SameBoy APU tests** | Reference-emulator APU behaviour | Useful cross-check but require SameBoy tooling. |

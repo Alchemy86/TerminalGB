@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`490f8a7`](https://github.com/Alchemy86/gameboy/tree/490f8a7a986b7795ca8d7feb8fe49a2fbbc27e75) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1ab5c6ad3d69285098251279a666ccb064) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -100,10 +100,7 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: the capture hook is live.** `Serial::set_callback` is now wired by the
-> test-ROM harness to reconstruct Blargg's `Passed`/`Failed` output, which is how the whole
-> 13/13 serial suite is read (see [testing](../testing.md)). No dedicated Rust unit test asserts
-> the register/timing behaviours below, and transfer *timing* remains instantaneous (uncovered).
+> **Coverage today: none.**
 
 1. **Callback capture.** After `set_callback`, writing a byte to `SB` then `0x81` to `SC`
    invokes the callback with that byte. *(Not covered — but this is the hook the test
@@ -124,7 +121,6 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 | **Blargg (all suites)** | Not testing serial itself — **using** it as the results channel | If the capture callback isn't wired, the harness can't read *any* Blargg result (see [testing](../testing.md)). |
 | **Mooneye `acceptance/serial/`** (`boot_sclk_align-dmgABCmgb`) | Serial clock alignment/timing | The instantaneous-transfer approximation is the expected red. |
 
-The `retrio/gb-test-roms` submodule is Blargg, whose entire reporting mechanism is serial —
-making a working `set_callback` the **first** thing a test harness must add. That is now **done**:
-the submodule is initialised and wired into CI, and the harness installs a `set_callback` sink to
-read every Blargg verdict. See [testing](../testing.md).
+The declared `retrio/gb-test-roms` submodule is Blargg, whose entire reporting mechanism is
+serial — making a working `set_callback` the **first** thing a test harness must add.
+**Uninitialised** today. See [testing](../testing.md).

@@ -197,8 +197,9 @@ The section above is the design sketch. What is now checked in and runs in CI:
   writes listenable WAVs to `target/testrom-artifacts/audio/`, and checks objective
   properties: sample count == cycles×rate/4194304, RMS/peak, silence runs,
   discontinuities, dominant frequency (a built-in 440 Hz tone ROM must measure 440 Hz),
-  plus Blargg `dmg_sound`'s memory-mapped `$A000` verdict (**9/12 pass** — 01–08 + 11;
-  09/10/12 are the wave-RAM timing tests, planned next). Captures are byte-identical
+  plus Blargg `dmg_sound`'s memory-mapped `$A000` verdict (**12/12 pass** — the
+  expected verdict is pinned per fixture, so a pass→fail regression is reported by
+  name, never as an opaque hash change). Captures are byte-identical
   across runs and profiles; the FNV hash of the PCM stream is pinned in
   [`testharness/audio_baseline.txt`](../testharness/audio_baseline.txt)
   (re-bless with `UPDATE_AUDIO_BASELINE=1`). A third mechanism, alongside serial and

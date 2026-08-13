@@ -379,9 +379,33 @@ struct WaveChannel {
     volume_shift: u8,
     waveram: [u8; 16],
     wave_pos: u8,
+    /// T-cycles from the channel's most recent wave-RAM byte fetch to the
+    /// point `run()` last synced to (`u32::MAX` = no fetch yet). Consulted at
+    /// CPU access time for the DMG wave-RAM access window: on DMG, wave RAM
+    /// is only readable/writable while CH3 is enabled during the couple of
+    /// T-cycles around the channel's own fetch (Pan Docs "Audio Details" →
+    /// Wave RAM access; Blargg dmg_sound 09/12). Valid because the MMU steps
+    /// the APU clock per bus access and calls `catch_up` before every APU
+    /// register access, so `run()` has always synced to the exact access
+    /// cycle when this is read.
+    since_fetch: u32,
     blip: BlipBuf,
     last_amp: i32,
 }
+
+/// T-cycles added to the wave channel's first fetch delay on trigger, beyond
+/// one full period: hardware reloads the frequency timer with period + 4
+/// (calibrated against Blargg dmg_sound 09 — a ±2-cycle error shifts every
+/// windowed read/write and fails 09/10/12; matches SameBoy's
+/// `(freq ^ 0x7FF) + 3` 2-MHz reload).
+const WAVE_TRIGGER_DELAY: u32 = 4;
+
+/// Width of the DMG wave-RAM access window, in T-cycles since the channel's
+/// last fetch. CPU accesses land on a 4-T-cycle grid while fetches land on a
+/// 2-T-cycle grid, so this 2-cycle window admits exactly one fetch phase —
+/// which is why dmg_sound 09's answer alternates $FF / current-byte as it
+/// steps its read time 2 cycles per iteration.
+const WAVE_ACCESS_WINDOW: u32 = 2;
 
 impl WaveChannel {
     fn new(blip: BlipBuf) -> WaveChannel {
@@ -398,8 +422,29 @@ impl WaveChannel {
                 0x34, 0xB8, 0x2E, 0xDA,
             ], // Default wave pattern
             wave_pos: 0,
+            since_fetch: u32::MAX,
             blip,
             last_amp: 0,
+        }
+    }
+
+    /// The wave-RAM byte index CH3 is reading at the current sync point, if
+    /// the CPU may access wave RAM right now under DMG rules — `None` means
+    /// the access window is closed (reads see $FF, writes are dropped). The
+    /// window is the `WAVE_ACCESS_WINDOW` T-cycles *after* a fetch: the CPU
+    /// sees the byte CH3 just loaded into its sample latch. Calibrated
+    /// against Blargg dmg_sound 09/10/12 (each steps its access phase in
+    /// 2-T-cycle increments, so a ±2-cycle error in either constant flips
+    /// every windowed access and fails all three CRCs).
+    fn dmg_access_byte(&self) -> Option<usize> {
+        if !self.enabled {
+            // Channel off: wave RAM is freely accessible (not this path).
+            return None;
+        }
+        if self.since_fetch <= WAVE_ACCESS_WINDOW {
+            Some(self.wave_pos as usize / 2)
+        } else {
+            None
         }
     }
 
@@ -418,6 +463,9 @@ impl WaveChannel {
                 self.last_amp = 0;
                 self.delay = 0;
             }
+            self.since_fetch = self
+                .since_fetch
+                .saturating_add(end_time.saturating_sub(start_time));
         } else {
             let mut time = start_time + self.delay;
 
@@ -430,6 +478,7 @@ impl WaveChannel {
                 _ => 4 + 2,
             };
 
+            let mut last_fetch: Option<u32> = None;
             while time < end_time {
                 let byte = self.waveram[self.wave_pos as usize / 2];
                 let sample = if self.wave_pos & 1 == 0 {
@@ -446,11 +495,18 @@ impl WaveChannel {
                     self.last_amp = amp;
                 }
 
+                last_fetch = Some(time);
                 time += self.period;
                 self.wave_pos = (self.wave_pos + 1) % 32;
             }
 
             self.delay = time - end_time;
+            self.since_fetch = match last_fetch {
+                Some(t) => end_time - t,
+                None => self
+                    .since_fetch
+                    .saturating_add(end_time.saturating_sub(start_time)),
+            };
         }
     }
 
@@ -458,7 +514,11 @@ impl WaveChannel {
         self.enabled = true;
         self.wave_pos = 0;
         self.calculate_period();
-        self.delay = 4; // Initial delay for wave channel
+        // Hardware reloads the frequency timer with one full period plus a
+        // small fixed lag; the first wave-RAM fetch after a trigger lands
+        // period + WAVE_TRIGGER_DELAY T-cycles later (dmg_sound 09 measures
+        // this to 2 T-cycles).
+        self.delay = self.period + WAVE_TRIGGER_DELAY;
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {
@@ -471,6 +531,10 @@ impl WaveChannel {
         w.u8(self.volume_shift);
         w.bytes(&self.waveram);
         w.u8(self.wave_pos);
+        // Live at any save point while CH3 plays: the DMG access window is
+        // derived from it, so dropping it desyncs windowed wave-RAM
+        // reads/writes after a load (format v3).
+        w.u32(self.since_fetch);
         w.i32(self.last_amp);
     }
 
@@ -487,6 +551,7 @@ impl WaveChannel {
         self.volume_shift = r.u8()?;
         r.fill(&mut self.waveram)?;
         self.wave_pos = r.u8()?;
+        self.since_fetch = r.u32()?;
         self.last_amp = r.i32()?;
         Ok(())
     }
@@ -1043,12 +1108,20 @@ impl Sound {
                     | if self.channel3.enabled { 0x04 } else { 0 }
                     | if self.channel4.enabled { 0x08 } else { 0 }
             }
-            // Wave RAM
+            // Wave RAM. While CH3 is enabled every address maps to the byte
+            // the channel is currently reading — but on DMG only during the
+            // narrow window around the channel's own fetch; outside it reads
+            // return $FF (Pan Docs "Audio Details"; dmg_sound 09).
             0xFF30..=0xFF3F => {
                 if !self.channel3.enabled {
                     self.channel3.waveram[a as usize - 0xFF30]
+                } else if self.dmg_mode {
+                    match self.channel3.dmg_access_byte() {
+                        Some(idx) => self.channel3.waveram[idx],
+                        None => 0xFF,
+                    }
                 } else {
-                    // Return current sample when playing
+                    // CGB: always readable while playing, at the current byte.
                     self.channel3.waveram[self.channel3.wave_pos as usize / 2]
                 }
             }
@@ -1189,6 +1262,25 @@ impl Sound {
                     v,
                 );
                 if v & 0x80 == 0x80 {
+                    // DMG wave-RAM corruption: retriggering CH3 while it is
+                    // enabled and about to fetch a byte on this very cycle
+                    // rewrites the first bytes of wave RAM. If the imminent
+                    // fetch targets one of the first four bytes, only the
+                    // first byte is overwritten with it; otherwise the
+                    // aligned four-byte block containing it is copied over
+                    // bytes 0-3 (Pan Docs "Audio Details" → triggering while
+                    // reading; dmg_sound 10).
+                    if self.dmg_mode && self.channel3.enabled && self.channel3.delay == 0
+                    {
+                        let idx = (self.channel3.wave_pos as usize + 1) & 31;
+                        let byte = idx / 2;
+                        if byte < 4 {
+                            self.channel3.waveram[0] = self.channel3.waveram[byte];
+                        } else {
+                            let src = byte & !3;
+                            self.channel3.waveram.copy_within(src..src + 4, 0);
+                        }
+                    }
                     self.channel3.trigger();
                     self.channel3.enabled &= self.channel3.dac_enabled;
                 }
@@ -1221,10 +1313,19 @@ impl Sound {
                     self.channel4.enabled &= self.channel4.dac_enabled;
                 }
             }
-            // Wave RAM
+            // Wave RAM. Same access rules as reads (see rb): while CH3 plays,
+            // DMG writes land on the channel's current byte only inside the
+            // fetch window and are dropped outside it; CGB writes always land
+            // on the current byte (dmg_sound 12).
             0xFF30..=0xFF3F => {
                 if !self.channel3.enabled {
                     self.channel3.waveram[a as usize - 0xFF30] = v;
+                } else if self.dmg_mode {
+                    if let Some(idx) = self.channel3.dmg_access_byte() {
+                        self.channel3.waveram[idx] = v;
+                    }
+                } else {
+                    self.channel3.waveram[self.channel3.wave_pos as usize / 2] = v;
                 }
             }
             0xFF24 => {
@@ -2198,6 +2299,55 @@ mod tests {
             snd.do_cycle(64);
             done += 64;
         }
+    }
+
+    /// The DMG wave-RAM access window is derived from
+    /// `WaveChannel::since_fetch`, which is live at any point CH3 is playing —
+    /// so it must be serialised, or a state saved with the window open loads
+    /// with it closed and windowed reads desync ($FF instead of the fetched
+    /// byte). This test has teeth: deliberately dropping the `since_fetch`
+    /// write/read pair from `WaveChannel::{save,load}_state` makes the loaded
+    /// machine read $FF below while the original reads $84 (verified by doing
+    /// exactly that — the assert fires).
+    #[test]
+    fn wave_window_state_survives_save_load() {
+        let samples = Arc::new(Mutex::new(Vec::new()));
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples,
+        }));
+        snd.wb(0xFF26, 0x80); // APU power on
+        snd.wb(0xFF1A, 0x80); // CH3 DAC on
+        snd.wb(0xFF1C, 0x20); // CH3 volume 100%
+        snd.wb(0xFF1D, 0xFE); // freq low: freq = 0x7FE -> period 4 T-cycles
+        snd.wb(0xFF1E, 0x87); // trigger + freq high
+                              // Trigger reloads the fetch timer with period + 4 = 8 T-cycles, so the
+                              // first wave-RAM fetch lands at T+8; sync to T+10 puts us 2 T-cycles
+                              // after it — inside the DMG access window.
+        snd.do_cycle(10);
+        snd.catch_up();
+        let live = snd.rb(0xFF30);
+        assert_ne!(
+            live, 0xFF,
+            "DMG wave window should be open 2 cycles after a fetch"
+        );
+
+        let mut w = crate::savestate::Writer::new();
+        snd.save_state(&mut w);
+        let mut loaded = Sound::new();
+        let mut r = crate::savestate::Reader::new(&w.buf);
+        loaded.load_state(&mut r).expect("APU state load");
+        assert_eq!(
+            loaded.rb(0xFF30),
+            live,
+            "windowed wave-RAM read desynced across save/load"
+        );
+
+        // And the full APU block must round-trip byte-identically.
+        let mut w2 = crate::savestate::Writer::new();
+        loaded.save_state(&mut w2);
+        assert_eq!(w.buf, w2.buf, "APU state not byte-identical after load");
     }
 
     /// Count of produced samples per emulated second must equal the rate we told

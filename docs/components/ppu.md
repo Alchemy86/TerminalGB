@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`490f8a7`](https://github.com/Alchemy86/gameboy/tree/490f8a7a986b7795ca8d7feb8fe49a2fbbc27e75) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1ab5c6ad3d69285098251279a666ccb064) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -141,12 +141,7 @@ colour-correction curve ([`mod.rs:550`](https://github.com/Alchemy86/gameboy/blo
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: the compositor is covered by dmg-acid2**, which the harness renders every
-> run and compares pixel-for-pixel against the reference (zero differing pixels) — so BG/window/
-> sprite composition, priority, the 10-per-line limit, flips and palettes (items 5–8 below) are
-> exercised end-to-end. No dedicated *per-behaviour* Rust unit test exists yet, and the
-> mid-scanline/timing items (mode-3 length, STAT edges) remain uncovered — they need the
-> cycle-stepped PPU noted in §3–§5.
+> **Coverage today: none.** Framebuffer/timing tests do not exist yet.
 
 1. **Frame geometry.** A full frame is 154 lines × 456 dots = **70,224 dots**; `LY` cycles
    `0→153→0`. *(Not covered.)*
@@ -188,8 +183,6 @@ colour-correction curve ([`mod.rs:550`](https://github.com/Alchemy86/gameboy/blo
 | **Blargg `oam_bug`** | The OAM corruption bug (DMG) | Fails — the bug isn't modelled. |
 | **Blargg `cgb_sound`** shares no PPU code, but its screenshot is in the repo as "failing" | — | (APU, listed under [APU](apu.md).) |
 
-The `retrio/gb-test-roms` submodule (Blargg) is now **initialised and wired into CI**, and
-dmg-acid2 ships **vendored** under [`third_party/dmg-acid2/`](../../third_party/dmg-acid2/) (MIT
-ROM + reference PNG) and is rendered pixel-for-pixel every harness run — so the acid2 face test
-is live, not proposed. cgb-acid2 and Mooneye are separate repos **not yet wired**. See
-[testing](../testing.md).
+The declared submodule `retrio/gb-test-roms` is Blargg-only and **uninitialised**; acid2
+and Mooneye are separate repos not yet referenced. See [testing](../testing.md) for the
+proposed headless harness.

@@ -391,13 +391,15 @@ into something smooth and inauthentic.
 
 The register-visible accuracy corners (§10 item 4) were then driven green by a
 TDD pass against the harness's `$A000` verdict: **Blargg `dmg_sound` passes
-9 of 12 subtests** (from 1/12) — register read-back masks, length-counter
+12 of 12 subtests** (1/12 → 9/12 via register read-back masks, length-counter
 clocking including the extra-clock quirks, trigger semantics, sweep details
-including the negate quirk, and NR52 power semantics. The three remaining
-failures (09/10/12) are the DMG wave-RAM access-window quirks, which need a
-T-cycle-stepped APU — the **next planned accuracy step** (the captain has asked
-for it), the same class of restructure as the video mode-3/OAM approximations.
-Details in [apu.md](components/apu.md).
+including the negate quirk, and NR52 power semantics; 9/12 → 12/12 via the DMG
+wave-RAM access window). The wave-window work did *not* need the feared
+wholesale T-cycle-stepped APU: the APU *clock* is stepped per CPU memory
+access (like the timer), synthesis stays event-driven, and the wave channel
+tracks its fetch phase (`since_fetch`) so `$FF30–$FF3F` accesses resolve
+against the real 2-T-cycle DMG window. Measured cost ~25 µs/frame with audio
+enabled; zero without. Details in [apu.md](components/apu.md).
 
 ---
 

@@ -225,6 +225,14 @@ impl<'a> MemoryManagementUnit<'a> {
             self.timer.do_cycle(4);
             self.intf |= self.timer.interrupt;
             self.timer.interrupt = 0;
+            // The APU clock advances per-access too, so a wave-RAM or NR5x
+            // access lands on its exact sub-instruction cycle (Blargg
+            // dmg_sound 09/10/12 measure this to 2 T-cycles). Synthesis stays
+            // event-driven; this only moves the "now" that catch_up syncs to.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(ref mut sound) = self.sound {
+                sound.do_cycle(4);
+            }
             self.bus_ticked += 4;
         }
     }
@@ -375,9 +383,12 @@ impl<'a> MemoryManagementUnit<'a> {
         self.intf |= self.gpu.interrupt;
         self.gpu.interrupt = 0;
 
+        // Like the timer, the APU already advanced `bus_ticked` T-cycles
+        // during this instruction's accesses (bus_tick); apply only the
+        // remainder so the per-instruction total is unchanged.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref mut sound) = self.sound {
-            sound.do_cycle(cputicks);
+            sound.do_cycle(timerticks);
         }
 
         self.intf |= self.serial.interrupt;

@@ -358,6 +358,10 @@ struct AudioSpec {
     /// None = the built-in tone ROM (synthesised into the work dir).
     rom: Option<&'static str>,
     frames: u32,
+    /// Expected Blargg $A000 verdict, if the ROM reports one. Pinned
+    /// explicitly (not just via the sample hash) so a pass→fail regression
+    /// is reported as exactly that, never as an opaque hash mismatch.
+    blargg_verdict: Option<u8>,
 }
 
 const SPECS: &[AudioSpec] = &[
@@ -365,16 +369,19 @@ const SPECS: &[AudioSpec] = &[
         id: "tone440",
         rom: None,
         frames: 300, // ~5 s
+        blargg_verdict: None,
     },
     AudioSpec {
         id: "blargg/dmg_sound-01-registers",
         rom: Some("tests/dmg_sound/rom_singles/01-registers.gb"),
         frames: 300,
+        blargg_verdict: Some(0x00),
     },
     AudioSpec {
         id: "blargg/dmg_sound",
         rom: Some("tests/dmg_sound/dmg_sound.gb"),
-        frames: 2200, // full suite needs ~35 s of emulated time
+        frames: 2200,               // full suite needs ~35 s of emulated time
+        blargg_verdict: Some(0x00), // 12/12 as of the T-cycle wave-window work
     },
 ];
 
@@ -511,6 +518,24 @@ fn main() {
         let mut notes = Vec::new();
         if let Some((status, text)) = &cap.blargg_status {
             notes.push(format!("blargg=${status:02X} {:?}", text.trim()));
+        }
+
+        // --- Pinned Blargg verdict: a pass must stay a pass. ---
+        if let Some(expected) = spec.blargg_verdict {
+            match &cap.blargg_status {
+                Some((status, text)) if *status != expected => {
+                    failures.push(format!(
+                        "{}: blargg verdict ${status:02X}, expected ${expected:02X}: {:?}",
+                        spec.id,
+                        text.trim()
+                    ));
+                }
+                None => failures.push(format!(
+                    "{}: no blargg verdict at $A000, expected ${expected:02X}",
+                    spec.id
+                )),
+                _ => {}
+            }
         }
 
         // --- Fixture-specific absolute expectations ---

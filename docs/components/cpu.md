@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`490f8a7`](https://github.com/Alchemy86/gameboy/tree/490f8a7a986b7795ca8d7feb8fe49a2fbbc27e75) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`6ec57e1`](https://github.com/Alchemy86/gameboy/tree/6ec57e1ab5c6ad3d69285098251279a666ccb064) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -177,11 +177,8 @@ reads zero, matching hardware.
 ## 6. Expected behaviours as tests
 
 > The specification we test *against*, before changing any emulation. Each is phrased so
-> it could become an assertion. **Coverage today: no dedicated *Rust unit* test asserts these
-> individually, but the CPU is now exercised end-to-end by the headless test-ROM harness** —
-> Blargg `cpu_instrs` (11/11), `instr_timing`, `mem_timing`/`mem_timing-2` and `halt_bug` all
-> pass (see [testing](../testing.md)), which collectively cover opcode results/flags, memory
-> timing and the HALT bug (item 10 below).
+> it could become an assertion. **Coverage today: none of these have a Rust test** — the
+> only CPU-adjacent tests in the tree are the input/MBC checksum ones.
 
 1. **Boot register state (CGB).** After `Cpu::new` on a Color cartridge, `A=0x11`,
    `F=0x80`, `SP=0xFFFE`, `PC=0x0100`. *(Not covered.)*
@@ -215,15 +212,14 @@ reads zero, matching hardware.
 
 ## 7. Test ROMs that exercise it
 
-The [`retrio/gb-test-roms`](https://github.com/retrio/gb-test-roms) submodule
-([`.gitmodules`](../../.gitmodules), mounted at `tests/`) is now **initialised and wired into
-CI**: the headless harness ([`testharness/testroms.rs`](../../testharness/testroms.rs), run with
-`cargo test --release --test testroms`) drives these ROMs automatically and gates on a
-checked-in baseline — no more manual screenshots. See [testing](../testing.md).
+The repo declares the [`retrio/gb-test-roms`](https://github.com/retrio/gb-test-roms)
+submodule in [`.gitmodules`](../../.gitmodules) as `tests/`, but it is **uninitialised**
+(`git submodule status` → `-c240dd7…`). The Blargg "results" in the old README are manual
+OpenEmu screenshots, not an automated harness.
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Blargg `cpu_instrs`** (11 sub-tests) | Every opcode's result and flag behaviour | A decode/flag bug in `operation()`/`cbmap`. **PASS** (11/11) — locked in by the baseline. |
+| **Blargg `cpu_instrs`** (11 sub-tests) | Every opcode's result and flag behaviour | A decode/flag bug in `operation()`/`cbmap`. *Claimed passing today — lock it in.* |
 | **Blargg `instr_timing`** | Per-instruction M-cycle counts | Wrong cycle table entry (affects everything downstream). |
 | **Blargg `mem_timing` / `mem_timing-2`** | *When* within an instruction memory is touched | **PASS** — timer stepped per memory access (§4). |
 | **Blargg `halt_bug`** | The HALT bug | **PASS** — modelled (quirk §5). |
