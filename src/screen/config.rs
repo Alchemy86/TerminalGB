@@ -78,6 +78,14 @@ impl Palette {
         }
     }
 
+    /// One of the four LCD shades by index, lightest first. Game Boy 2bpp
+    /// pixels are already palette *indices*, so anything decoding tiles
+    /// directly (the trainer view's sprites) wants this rather than
+    /// [`Palette::map`], which takes a framebuffer luma.
+    pub fn shade(self, index: u8) -> [u8; 3] {
+        self.shades()[(index & 3) as usize]
+    }
+
     /// Map one greyscale pixel to this palette. `luma` is the framebuffer byte
     /// (all three channels are equal for DMG output). Returns the pixel
     /// unchanged for [`Palette::Grayscale`].

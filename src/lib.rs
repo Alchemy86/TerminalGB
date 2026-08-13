@@ -11,6 +11,8 @@ mod input;
 mod mbc;
 mod mmu;
 mod mode;
+/// Read-only plugin surface — see [`plugin`].
+pub mod plugin;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
 pub mod screen;
@@ -21,6 +23,8 @@ pub mod sound;
 pub mod telemetry;
 /// Capped-resolution terminal image transmission — see [`termimage`].
 pub mod termimage;
+/// Live Gen 1 Pokémon trainer view — see [`trainer`].
+pub mod trainer;
 pub mod upscale;
 /// Raw video-out: the picture as a stream other tools consume — see [`video`].
 #[cfg(not(target_arch = "wasm32"))]

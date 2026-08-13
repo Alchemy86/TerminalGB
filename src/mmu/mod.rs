@@ -401,6 +401,35 @@ impl<'a> MemoryManagementUnit<'a> {
         gputicks
     }
 
+    /// Side-effect-free bus read — Tier 1 of the debug surface
+    /// ([`docs/debugging.md`](../../docs/debugging.md) §"Read-only inspector").
+    ///
+    /// Unlike [`MemoryManagementUnit::rb`] this takes `&self`, so it cannot
+    /// tick the bus, catch the APU up, or trip a register's read side-effects.
+    /// That is the whole point: an inspector must be able to look at memory
+    /// between instructions without perturbing the machine it is inspecting.
+    ///
+    /// The consequence is that the **I/O range `$FF00-$FF7F` reads back
+    /// `0xFF`**: every live value there is behind a device whose read is not
+    /// `&self` (the APU needs `catch_up`, the joypad multiplexes on the last
+    /// write). Plain memory — ROM, VRAM, cartridge RAM, WRAM and its echo, OAM,
+    /// HRAM and `IE` — is exact.
+    pub fn peek(&self, address: u16) -> u8 {
+        match address {
+            0x0000..=0x7FFF => self.mbc.readrom(address),
+            0x8000..=0x9FFF => self.gpu.rb(address),
+            0xA000..=0xBFFF => self.mbc.readram(address),
+            0xC000..=0xCFFF | 0xE000..=0xEFFF => self.wram[address as usize & 0x0FFF],
+            0xD000..=0xDFFF | 0xF000..=0xFDFF => {
+                self.wram[(self.wrambank * 0x1000) | address as usize & 0x0FFF]
+            }
+            0xFE00..=0xFE9F => self.gpu.rb(address),
+            0xFF80..=0xFFFE => self.zram[address as usize & 0x007F],
+            0xFFFF => self.inte,
+            _ => 0xFF,
+        }
+    }
+
     // Address dispatch. See docs/components/mmu.md §"The dispatch" and Pan Docs
     // memory map: https://gbdev.io/pandocs/Memory_Map.html
     pub fn rb(&mut self, address: u16) -> u8 {

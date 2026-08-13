@@ -11,7 +11,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`562e7cd`](https://github.com/Alchemy86/gameboy/tree/562e7cd57815957f518db83c933c438a8cdf1045) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`45d1baf`](https://github.com/Alchemy86/gameboy/tree/45d1baf7e2c675633ce4f63b0c7621a1ae19713d) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -551,6 +551,17 @@ or resumes calling `step_frame`), **step** (instruction / scanline / frame), **r
 (any `Breakpoint` from the section above), **read + write memory and registers** (`peek`/
 `peek_range`/`poke`/`set_reg`), and **reset**. Nothing new to invent — the extension surface
 is the *transport* over these existing entry points, not a second control model.
+
+> **First consumer, and what it found.** The read-only half of this surface is now
+> implemented in [`src/plugin/mod.rs`](../src/plugin/mod.rs) — `DebugView` (Tier 1) plus the
+> cheap *frame rendered* event — and its first user is the
+> [live trainer view](trainer.md), a Gen 1 Pokémon party/battle tracker. Building a second
+> consumer surfaced two gaps in the sketch above, both worth fixing when the rest lands:
+> the `DebugSink::on_events` signature **passes no view**, so a plugin cannot read state in
+> response to an event (the shipped `Plugin::on_events` passes one); and there is **no
+> banked-ROM read**, so a plugin wanting cartridge tables in a bank the game is not currently
+> using has no route to them short of a bank switch, which is a write. A
+> `peek_bank(bank, addr)` on `DebugView` would close it.
 
 ### Transport — reaching a tool in any language
 

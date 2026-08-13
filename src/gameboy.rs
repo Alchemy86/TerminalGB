@@ -442,6 +442,23 @@ impl Gameboy {
         self.cpu.memory.mbc.rom_bank()
     }
 
+    /// Read-only snapshot access for plugins and debuggers — Tier 1 of
+    /// [`docs/debugging.md`](../docs/debugging.md). Pure reads: safe to call
+    /// between steps or frames, and free when nobody calls it.
+    pub fn debug(&self) -> crate::plugin::DebugView<'_> {
+        crate::plugin::DebugView::new(self)
+    }
+
+    /// Side-effect-free bus read backing [`Gameboy::debug`].
+    pub fn peek(&self, addr: u16) -> u8 {
+        self.cpu.memory.peek(addr)
+    }
+
+    /// Cartridge header global checksum, for identifying a specific game build.
+    pub fn global_checksum(&self) -> u16 {
+        self.cpu.memory.mbc.global_checksum()
+    }
+
     pub fn image(&self) -> &[u8] {
         &*self.cpu.memory.gpu.data
     }

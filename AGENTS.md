@@ -717,3 +717,89 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
   59.7275` under `realtime` pacing, whatever `fps` does.
 
 - Add durable project-specific notes here as they are discovered through real work.
+
+## Licence boundary: format knowledge is ours, game assets are not
+
+**Facts about a game — addresses, structure layouts, character maps, compression formats,
+constants — are usable freely and must be cited. The game's *assets* are not ours at any
+price.** Concretely, for anything that reads or decodes a commercial cartridge:
+
+- **Never vendor sprite data, pixel arrays, tile sheets, music, text corpora or any other game
+  asset into this repo — including as a test fixture.** Extract them at runtime from the user's
+  own ROM (or from VRAM), never from a copy we ship. This applies to golden files and hashes of
+  assets used as fixtures just as much as to the assets themselves.
+- **Disassemblies are reference material.** [`pret/pokered`](https://github.com/pret/pokered)
+  and friends are the authority for addresses and formats; cite the *file and symbol* for every
+  address used, which is what turns a magic number into something a reviewer can check. That is
+  the same standard as the conformance convention at the top of this file.
+- **Reference implementations are read, not copied.** Reimplement from the documented format in
+  our own idiom, the way Scale2x was (see the upscaler section) — and check the licence before
+  drawing on anything concrete. The Ironmon Tracker (MIT, Lua, Gen 3) informed *which data
+  earns screen space*; none of its code is here.
+- When a check genuinely needs a real asset to compare against, take it from a path the user
+  supplies at run time (`POKERED_GFX=<dir>` in `testharness/trainer.rs`) and skip the check when
+  it is absent. Never commit the asset to make the test hermetic.
+
+(The FlashGBX GPL note and the licence-hygiene section in `CONTRIBUTING.md` are being added on
+another branch; when those land, this belongs beside them.)
+
+## Live trainer view — the second plugin (`src/trainer/`, `src/plugin/`)
+
+- **Full design, address table, verification and follow-ups: [`docs/trainer.md`](docs/trainer.md).**
+  A read-only plugin that reads a running Pokémon Red/Blue cartridge and shows the party,
+  badges, the battle opponent's stats and a decompressed sprite beside the game. `T` toggles it
+  in the TUI, `d` is the per-Pokémon detail view, `Tab` cycles the party.
+- **The plugin contract lives in [`src/plugin/mod.rs`](src/plugin/mod.rs)** and implements the
+  two pieces of `docs/debugging.md`'s extension surface a read-only plugin needs: Tier-1
+  `DebugView` (borrowing `&Gameboy`, so a plugin is *statically* unable to write — that is the
+  read-only guarantee, not a convention) and the cheap "frame rendered" event. **`MemoryManagementUnit::peek`
+  is the `&self` counterpart of `rb`**: no bus tick, no APU catch-up, no register side-effects,
+  and therefore `0xFF` for the I/O range `$FF00-$FF7F`. Two gaps this consumer found in the
+  documented contract, both recorded in the module header and `docs/trainer.md`: the sketched
+  `DebugSink::on_events` has **no view parameter** (so a plugin cannot read in response to an
+  event), and there is **no banked-ROM read** (so the frontend has to hand a plugin the
+  cartridge image; `peek_bank(bank, addr)` is the fix).
+- **Addresses are derived, not looked up.** `pret/pokered` was built at its pinned RGBDS 1.0.3
+  and the ROMs checked against its `roms.sha1`; the captain's cartridge is byte-identical to
+  `pokeblue.gbc`, so the build's own `pokeblue.sym` is exact for it. Every constant in
+  `src/trainer/gen1.rs` carries its symbol name. `pokered.sym` gives identical addresses, which
+  is why one table serves Red and Blue. **Re-derive rather than edit by hand.**
+- **Three traps that produce plausible-but-wrong data** (all handled, all worth remembering):
+  Gen 1 species indices are **not** Pokédex numbers (`MonsterNames` is indexed by internal
+  index, `BaseStats` by dex number, converted via `PokedexOrder` — as `GetMonHeader` does, Mew
+  special-cased); every HP and stat is **big-endian**; and `party_struct` (44 bytes) and
+  `battle_struct` (28) put level and stats at **different offsets**.
+- **Sprites come from the ROM, not VRAM**, because VRAM only holds what is on screen and a
+  party panel would be blank in the overworld. `src/trainer/sprite.rs` implements Gen 1's
+  picture compression from the format documented in `pokered`. Proven **byte-identical** to
+  `pokered`'s own 2bpp output for 13 species covering every "Pics" bank and both special cases.
+- **The sprite is a SECOND terminal image.** It has its own Kitty image id (`0x00676202` vs the
+  game's `0x00676201`), its own cell rectangle, and its cells marked `skip`. All three rules
+  from `docs/terminal-render.md` apply to it. It is also drawn **after** `render_display`,
+  because `render_display` clears `pending_wire` for the frame.
+- **Cost discipline:** nothing is read per frame — the plugin samples every 6 emulated frames
+  (~10 Hz) and **only while its panel is visible** (`set_active`). Sprites decompress once per
+  species and cache. A session with no plugin attached pays one `is_empty` test per frame.
+- **Graceful refusal is a feature.** The cartridge is identified by title **and header global
+  checksum**, so a hack, translation or randomiser with a shifted layout is refused with an
+  explanation rather than displayed wrongly. Yellow (`pret/pokeyellow`, same structures at
+  different addresses) and Gen 2 (`pret/pokecrystal`, different structures) are named as
+  extensions, not pretended.
+- **Derived values are the point** (`src/trainer/derived.rs`): shiny-if-traded-to-Gen-2 from the
+  DVs a Gen 1 Pokémon already has (`CheckShininess`, pokecrystal `engine/gfx/color.asm` —
+  def/spd/spc all exactly 10, attack DV with bit 1 set; note perfect 15s are **not** shiny),
+  Hidden Power type and power, stat experience, DV total. **Gen 1 has no Poké Ball field at
+  all** — that concept arrives in Gen 2 and must never be inferred. Gender needs a Gen 2
+  gender-ratio table that is not in the cartridge; named as a follow-up.
+- **How the harness proves it** (`cargo test --release --test trainer`): it plays a **new** game
+  to the overworld, drives the START menu to SAVE so the *game* writes an internally consistent
+  battery file, edits a known party into `sPartyData` and fixes `sMainDataCheckSum`
+  (`CalcCheckSum`, `engine/menus/save.asm`; the battery file is `<rom>.sav`, **raw cartridge
+  RAM with no header** — `src/mbc/battery.rs` — so SRAM bank 1 starts at file offset
+  `0x2000`), boots into it, and then compares the panel against **the game's own party
+  menu** — `wTileMap` (`$C3A0`, 20×18) holds charmap codes directly, so decoding it reads back
+  what a player sees. A hand-built save **hangs** the game: its map/tileset/sprite state is not
+  consistent. The harness copies the ROM *and* its save into `target/` first, because it
+  presses buttons at menus.
+- **Reading the game's own screen (`text::decode_screen` over `wTileMap`) is a general tool** —
+  any future test that wants to check emulator state against what the game displays can use it.

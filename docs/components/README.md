@@ -13,7 +13,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`562e7cd`](https://github.com/Alchemy86/gameboy/tree/562e7cd57815957f518db83c933c438a8cdf1045) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`45d1baf`](https://github.com/Alchemy86/gameboy/tree/45d1baf7e2c675633ce4f63b0c7621a1ae19713d) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The components
 
@@ -64,6 +64,11 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
   Rust breakpoint handlers with a declarative runtime-configurable condition format and a
   public extension surface (emit / control / transport) external tools can plug into — with a
   core/frontend boundary that keeps debug cost out of release builds.
+- **[The live trainer view](../trainer.md)** — the first thing built on that extension
+  surface: a read-only plugin that reads a running Pokémon Red/Blue cartridge and shows the
+  party, badges and battle opponent beside the game, with every address derived from the
+  `pret/pokered` disassembly and cited by symbol. Also the feedback a second consumer gave
+  the plugin contract.
 
 ## Provenance & honesty
 

@@ -31,11 +31,14 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
+use crate::plugin::PluginHost;
 use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
+use crate::screen::trainer_view as tv;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
+use crate::trainer::TrainerPlugin;
 use crate::upscale::Upscaler;
 use crate::video::{self, Source as VideoSource, VideoOut};
 
@@ -515,6 +518,19 @@ struct Session {
     /// Legacy path: `ratatui-image` protocol state, rebuilt only when the frame
     /// actually changes (it used to be rebuilt every frame).
     image: Option<StatefulProtocol>,
+    /// Read-only plugins attached to this machine (see [`crate::plugin`]).
+    /// Costs one `is_empty` test per emulated frame when nothing is attached.
+    plugins: PluginHost,
+    /// A **second** terminal image slot, for the trainer view's Pokémon sprite.
+    /// Its own id, because Kitty images are addressed by id and reusing the
+    /// game's would replace the picture (see `crate::termimage`).
+    sprite_image: Option<TermImage>,
+    /// Species currently encoded into `sprite_image`, so an unchanged party
+    /// re-encodes nothing.
+    sprite_key: Option<(u8, Palette)>,
+    /// RGBA scratch for the sprite, reused so drawing it allocates nothing.
+    sprite_rgba: Vec<u8>,
+    sprite_dims: (u32, u32),
     /// Hash of the last frame encoded on the legacy path.
     legacy_hash: u64,
     /// Last computed effective scale (for the status panel).
@@ -625,6 +641,13 @@ struct App {
     speed: usize,
     /// Stats overlay toggle (off by default). Does not pause the game.
     stats: bool,
+    /// Live trainer panel (`T`). Off by default, and while it is off the
+    /// plugin reads no memory at all.
+    trainer: bool,
+    /// Per-Pokémon detail view inside the trainer panel (`d`).
+    trainer_detail: bool,
+    /// Selected party slot, cycled with Tab.
+    trainer_sel: usize,
     /// Active save-state slot (`1..=NUM_SLOTS`).
     slot: u32,
     /// Transient in-game notice (save/load/speed feedback) with its raise time.
@@ -646,10 +669,15 @@ struct App {
     /// Where the stats panel was last drawn, so its "never on top of the
     /// picture" invariant can be asserted directly rather than scraped.
     stats_rect: Option<Rect>,
+    /// Where the trainer panel and its sprite image were last drawn, for the
+    /// same invariant — the sprite is a second terminal image, so it must not
+    /// share a cell with the game picture either.
+    trainer_rect: Option<Rect>,
+    sprite_rect: Option<Rect>,
     /// Signature of everything about the UI that can paint over the picture.
     /// When it changes, the image is retransmitted even if the frame did not,
     /// because the terminal's copy of it may have been partly overwritten.
-    ui_sig: Option<(u8, bool, bool, bool)>,
+    ui_sig: Option<(u8, bool, bool, bool, bool, bool)>,
     /// Machine-readable run telemetry; disabled (and free) unless configured.
     telemetry: Telemetry,
     /// Raw video-out; disabled (and free) unless configured. Driven from
@@ -789,6 +817,9 @@ impl App {
             should_quit: false,
             speed: SPEED_NORMAL,
             stats: false,
+            trainer: false,
+            trainer_detail: false,
+            trainer_sel: 0,
             slot: 1,
             toast: None,
             entries: Vec::new(),
@@ -800,6 +831,8 @@ impl App {
             message: None,
             dbg_last: None,
             stats_rect: None,
+            trainer_rect: None,
+            sprite_rect: None,
             ui_sig: None,
             telemetry,
             video,
@@ -843,13 +876,22 @@ impl App {
     /// picker and show why.
     fn start_game(&mut self, path: &Path) {
         let term_image = self.new_term_image();
+        let sprite_image = self.new_sprite_image();
         match load_session(path) {
-            Ok((mut gb, entry, audio)) => {
+            Ok((mut gb, entry, audio, rom)) => {
                 self.recent.record(path);
                 self.recent.save();
                 // Carry the current speed rung's audio contract into the new
                 // session (see bump_speed): non-1x must drop, not wait.
                 gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
+                // Attach the read-only trainer plugin. It refuses anything that
+                // is not Pokémon Red/Blue, and does no work at all until its
+                // panel is switched on.
+                let mut plugins = PluginHost::new();
+                let mut trainer = TrainerPlugin::new(rom);
+                trainer.set_active(self.trainer);
+                plugins.attach(Box::new(trainer), &gb);
+                self.trainer_sel = 0;
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
                 self.session = Some(Session {
@@ -859,6 +901,11 @@ impl App {
                     prep: FramePrep::new(),
                     term_image,
                     image: None,
+                    plugins,
+                    sprite_image,
+                    sprite_key: None,
+                    sprite_rgba: Vec::new(),
+                    sprite_dims: (0, 0),
                     legacy_hash: 0,
                     scale: 1.0,
                     disp_cells: (0, 0),
@@ -1069,6 +1116,9 @@ impl App {
         if let Some(s) = self.session.as_mut() {
             let t = Instant::now();
             s.gb.frame();
+            // Publish the "frame rendered" event to any attached plugin. With
+            // nothing attached (or the trainer panel off) this is one branch.
+            s.plugins.frame(&s.gb);
             s.t_emulate = telemetry::ms(t.elapsed());
             s.emu_count += 1;
             s.emu_frames += 1;
@@ -1631,6 +1681,27 @@ impl App {
                     self.stats = !self.stats;
                     return;
                 }
+                // Live trainer panel. `T` is deliberately shifted: the game
+                // buttons are configurable lowercase letters, so an unshifted
+                // key could collide with somebody's A/B binding.
+                KeyCode::Char('T') => {
+                    self.toggle_trainer();
+                    return;
+                }
+                // Detail view and party selection only bind while the panel is
+                // up, so they stay free as game buttons the rest of the time.
+                KeyCode::Char('d') if self.trainer => {
+                    self.trainer_detail = !self.trainer_detail;
+                    return;
+                }
+                KeyCode::Tab if self.trainer => {
+                    self.cycle_trainer_selection(1);
+                    return;
+                }
+                KeyCode::BackTab if self.trainer => {
+                    self.cycle_trainer_selection(-1);
+                    return;
+                }
                 // Speed control: `+`/`=` faster, `-`/`_` slower.
                 KeyCode::Char('+') | KeyCode::Char('=') => {
                     self.bump_speed(true);
@@ -1741,6 +1812,43 @@ impl App {
             s.gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
         }
         self.set_toast(format!("Speed {}", SPEED_LADDER[self.speed].label));
+    }
+
+    /// Switch the trainer panel on or off, telling the plugin so that a hidden
+    /// panel costs nothing.
+    fn toggle_trainer(&mut self) {
+        self.trainer = !self.trainer;
+        let on = self.trainer;
+        let mut msg = None;
+        if let Some(s) = self.session.as_mut() {
+            if let Some(p) = s.plugins.get_mut::<TrainerPlugin>() {
+                p.set_active(on);
+                if on {
+                    msg = p.refusal();
+                }
+            }
+        }
+        match msg {
+            // An unsupported cartridge says so once, rather than showing an
+            // empty panel the user has to guess about.
+            Some(why) => self.set_toast(why),
+            None if on => self.set_toast("Trainer view · Tab select · d detail"),
+            None => {}
+        }
+    }
+
+    fn cycle_trainer_selection(&mut self, delta: isize) {
+        let n = self
+            .session
+            .as_ref()
+            .and_then(|s| s.plugins.get::<TrainerPlugin>())
+            .map(|p| p.state().party.len())
+            .unwrap_or(0);
+        if n == 0 {
+            return;
+        }
+        let cur = self.trainer_sel.min(n - 1) as isize;
+        self.trainer_sel = (cur + delta).rem_euclid(n as isize) as usize;
     }
 
     fn set_toast(&mut self, msg: impl Into<String>) {
@@ -1903,6 +2011,8 @@ impl App {
     fn render_game(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
         self.stats_rect = None;
+        self.trainer_rect = None;
+        self.sprite_rect = None;
 
         if self.fullscreen {
             // Even in fullscreen the stats panel and the toast take their own
@@ -1916,6 +2026,16 @@ impl App {
                 rest.height -= 1;
                 self.render_toast(f, Rect::new(area.x, area.bottom() - 1, area.width, 1));
             }
+            let mut trainer_panel = None;
+            if self.trainer && rest.width > tv::PANEL_W + 8 {
+                trainer_panel = Some(Rect::new(
+                    rest.right() - tv::PANEL_W,
+                    rest.y,
+                    tv::PANEL_W,
+                    rest.height,
+                ));
+                rest = Rect::new(rest.x, rest.y, rest.width - tv::PANEL_W, rest.height);
+            }
             if self.stats && rest.width > STATS_W + 8 {
                 let panel = Rect::new(rest.x, rest.y, STATS_W, rest.height);
                 rest = Rect::new(
@@ -1927,6 +2047,12 @@ impl App {
                 self.render_stats(f, panel);
             }
             self.render_display(f, rest);
+            // After the picture: `render_display` clears the pending image
+            // sequence for the frame, and the sprite's sequence has to survive
+            // into the same flush.
+            if let Some(panel) = trainer_panel {
+                self.render_trainer(f, panel);
+            }
             return;
         }
 
@@ -1955,15 +2081,23 @@ impl App {
             rows[0],
         );
 
+        // With the trainer panel up the right-hand column becomes the panel:
+        // the Status sidebar is reference information, the party is what is
+        // being watched, and splitting the column three ways would make both
+        // unreadable.
+        let side_w = if self.trainer { tv::PANEL_W } else { 30 };
         let body = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(30), Constraint::Length(30)])
+            .constraints([Constraint::Min(20), Constraint::Length(side_w)])
             .split(rows[1]);
 
         // The stats panel lives in the sidebar, above Status — never over the
         // picture.
         let game = body[0];
-        if self.stats {
+        let trainer_panel = self.trainer.then(|| body[1]);
+        if self.trainer {
+            // drawn after render_display, below
+        } else if self.stats {
             let split = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(STATS_H), Constraint::Min(0)])
@@ -1974,6 +2108,9 @@ impl App {
             self.render_sidebar(f, body[1]);
         }
         self.render_display(f, game);
+        if let Some(panel) = trainer_panel {
+            self.render_trainer(f, panel);
+        }
 
         // The toast replaces the footer hint while it is up, for the same
         // reason: it must not land on the picture.
@@ -1986,11 +2123,185 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             )),
             None => Line::from(Span::styled(
-                " ?help · p pause · +/- speed · t stats · F5/F8 save/load · f full · q quit",
+                " ?help · p pause · +/- speed · t stats · T trainer · F5/F8 save/load · f full · q quit",
                 Style::default().fg(Color::DarkGray),
             )),
         };
         f.render_widget(Paragraph::new(footer), rows[2]);
+    }
+
+    /// Everything about the UI that can paint over a terminal image. When it
+    /// changes, every image must be retransmitted even if its pixels did not,
+    /// because the terminal's copy may have been partly overwritten.
+    fn ui_signature(&self) -> (u8, bool, bool, bool, bool, bool) {
+        (
+            match self.overlay {
+                Overlay::None => 0u8,
+                Overlay::Help => 1,
+                Overlay::Quit => 2,
+            },
+            self.fullscreen,
+            self.stats,
+            self.toast_text().is_some(),
+            self.trainer,
+            self.trainer_detail,
+        )
+    }
+
+    /// The live trainer panel.
+    ///
+    /// Three rectangles, none of which overlap the game picture or each other
+    /// (see [`crate::screen::trainer_view::layout`]): the trainer header, the
+    /// focused Pokémon's sprite — a **second terminal image**, with its own id —
+    /// and the party list or detail view.
+    fn render_trainer(&mut self, f: &mut Frame<'_>, area: Rect) {
+        if area.width < 24 || area.height < 4 {
+            return;
+        }
+        self.trainer_rect = Some(area);
+        // Split borrows: pull everything needed out of `self` before `session`.
+        let detail = self.trainer_detail;
+        let selected = self.trainer_sel;
+        let palette = self.palette;
+        let (font_w, font_h) = self.picker.font_size();
+        let sig = self.ui_signature();
+        let modal = self.overlay != Overlay::None;
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(plugin) = session.plugins.get_mut::<TrainerPlugin>() else {
+            return;
+        };
+
+        let Some(game) = plugin.game() else {
+            let why = plugin
+                .refusal()
+                .unwrap_or_else(|| "no trainer data for this cartridge".to_string());
+            f.render_widget(
+                Paragraph::new(why)
+                    .wrap(ratatui::widgets::Wrap { trim: true })
+                    .style(Style::default().fg(Color::DarkGray))
+                    .block(tv::body_block(" Trainer ")),
+                area,
+            );
+            return;
+        };
+
+        if !plugin.state().in_game {
+            f.render_widget(
+                Paragraph::new(
+                    "Waiting for a save to load.\n\nThe party area holds \
+                     uninitialised bytes until the game reaches the overworld, \
+                     so nothing is shown rather than nonsense.",
+                )
+                .wrap(ratatui::widgets::Wrap { trim: true })
+                .style(Style::default().fg(Color::DarkGray))
+                .block(tv::body_block(" Trainer ")),
+                area,
+            );
+            return;
+        }
+
+        // The focused Pokémon: the opponent while a battle is on (that is what
+        // is being watched), otherwise the selected party member.
+        let focus = plugin
+            .state()
+            .opponent
+            .as_ref()
+            .map(|o| o.species)
+            .or_else(|| plugin.state().party.get(selected).map(|m| m.species));
+
+        let want_sprite = focus.is_some() && session.sprite_image.is_some();
+        let l = tv::layout(area, want_sprite);
+
+        let mut lines = if detail {
+            match plugin.state().party.get(selected) {
+                Some(m) => tv::detail_lines(m),
+                None => Vec::new(),
+            }
+        } else {
+            tv::party_lines(plugin.state(), selected)
+        };
+        lines.extend(tv::battle_lines(plugin.state()));
+        if !detail {
+            lines.extend(tv::badge_lines(plugin.state()));
+        }
+        let title = if detail {
+            " Pokémon (d: party) "
+        } else {
+            " Party (d: detail) "
+        };
+        let header = tv::header(plugin.state(), game.label());
+
+        // Encode the sprite before dropping the plugin borrow.
+        let mut sprite_ready = false;
+        if l.sprite.height > 0 {
+            if let Some(species) = focus {
+                if session.sprite_key != Some((species, palette)) {
+                    if let Some(img) = plugin.sprite(species) {
+                        session.sprite_rgba.clear();
+                        session.sprite_rgba.reserve(img.pixels.len() * 4);
+                        for &px in &img.pixels {
+                            let [r, g, b] = palette.shade(px);
+                            session.sprite_rgba.extend_from_slice(&[r, g, b, 255]);
+                        }
+                        session.sprite_dims = (img.width as u32, img.height as u32);
+                        session.sprite_key = Some((species, palette));
+                    } else {
+                        session.sprite_key = None;
+                        session.sprite_dims = (0, 0);
+                        session.sprite_rgba.clear();
+                    }
+                }
+                sprite_ready = session.sprite_dims.0 > 0;
+            }
+        }
+
+        f.render_widget(header, l.header);
+        f.render_widget(Paragraph::new(lines).block(tv::body_block(title)), l.body);
+
+        if !sprite_ready || l.sprite.height == 0 {
+            return;
+        }
+        // Fit the picture inside its rectangle, aspect-correct for the cell
+        // shape, and centre it — the same arithmetic the game picture uses.
+        let (sw, sh) = session.sprite_dims;
+        let (rect, _) = fit_metrics(l.sprite, sw, sh, font_w, font_h);
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        // The panel is drawn *before* the game picture, so `ui_sig` still holds
+        // the previous frame's signature here — comparing against it is exactly
+        // the "something may have painted over the image" test.
+        let ui_changed = self.ui_sig != Some(sig);
+        self.sprite_rect = Some(rect);
+        if let Some(img) = session.sprite_image.as_mut() {
+            if ui_changed {
+                img.invalidate();
+            }
+            let placement = img.place(
+                &session.sprite_rgba,
+                sw,
+                sh,
+                CellRect::new(rect.x, rect.y, rect.width, rect.height),
+            );
+            // While a modal popup is up nothing is retransmitted, for the same
+            // reason the game picture is not: the popup is drawn over it.
+            if placement.changed && !modal {
+                session.pending_wire.push_str(placement.seq);
+            }
+            // The cells the sprite covers are marked `skip`, exactly as the
+            // game picture's are: text drawn into them would replace part of
+            // the image and, on Kitty, stop it updating.
+            let buf = f.buffer_mut();
+            for y in 0..rect.height {
+                for x in 0..rect.width {
+                    if let Some(cell) = buf.cell_mut((rect.x + x, rect.y + y)) {
+                        cell.set_skip(true);
+                    }
+                }
+            }
+        }
     }
 
     /// The live stats panel (`t`), showing what the telemetry stream carries:
@@ -2099,6 +2410,14 @@ impl App {
         Some(TermImage::new(wire, 0x0067_6201))
     }
 
+    /// The trainer view's sprite slot. A **distinct** image id from the game
+    /// picture: Kitty stores images by id, so sharing one would have the sprite
+    /// and the game overwrite each other every frame.
+    fn new_sprite_image(&self) -> Option<TermImage> {
+        self.new_term_image()
+            .map(|t| TermImage::new(t.wire(), 0x0067_6202))
+    }
+
     /// The upscale factor actually applied before transmission (see
     /// [`crate::screen::config::TransmitScale`]) — usually smaller than the
     /// factor shown in the status
@@ -2174,16 +2493,7 @@ impl App {
         // panel appearing and reflowing the layout, the toast row) may have
         // destroyed part of the terminal's copy of the image, so the next
         // transmission must be unconditional.
-        let sig = (
-            match self.overlay {
-                Overlay::None => 0u8,
-                Overlay::Help => 1,
-                Overlay::Quit => 2,
-            },
-            self.fullscreen,
-            self.stats,
-            self.toast_text().is_some(),
-        );
+        let sig = self.ui_signature();
         let ui_changed = self.ui_sig != Some(sig);
         self.ui_sig = Some(sig);
         // A modal popup is drawn *over* the picture, and the picture is written
@@ -2408,6 +2718,14 @@ impl App {
             Line::from("  c         screenshot  C       screenshot (raw 160x144)"),
             Line::from("  v         video stream on/off (see docs/video-out.md)"),
             Line::from("  ?         this help   q       quit"),
+            Line::from(""),
+            Line::from("Trainer view (Pokémon Red/Blue)"),
+            Line::from("  T         show/hide   d       detail for one Pokémon"),
+            Line::from("  tab       next party member   shift-tab  previous"),
+            Line::from(Span::styled(
+                "  read-only: it never writes to the game",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 format!("screenshots -> {}", screenshot_dir(&self.config).display()),
@@ -2819,15 +3137,20 @@ fn init_audio(_gb: &mut Gameboy) -> AudioHold {}
 /// the header — with `None`, `get_mbc` forces MBC3 and mis-drives other carts.
 // `audio` is `()` without the audio feature; that unit binding is intentional.
 #[cfg_attr(not(feature = "audio"), allow(clippy::let_unit_value))]
-fn load_session(path: &Path) -> Result<(Gameboy, RomEntry, AudioHold), String> {
+fn load_session(path: &Path) -> Result<(Gameboy, RomEntry, AudioHold, Vec<u8>), String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     if data.len() < 0x150 {
         return Err("file is too small to be a Game Boy ROM".to_string());
     }
     let entry = romlib::entry_from_bytes(path, &data);
+    // The cartridge image is handed to plugins as well as to the emulator:
+    // `DebugView` can only read the currently-mapped bank, so a plugin that
+    // needs cartridge tables (the trainer view's sprites and name tables) has
+    // no other way to reach them. See `crate::plugin`.
+    let rom = data.clone();
     let mut gb = Gameboy::new(data, Some(path.to_path_buf()));
     let audio = init_audio(&mut gb);
-    Ok((gb, entry, audio))
+    Ok((gb, entry, audio, rom))
 }
 
 // ---------------------------------------------------------------------------
@@ -3547,6 +3870,99 @@ mod tests {
                 assert!(picture.area() > 0, "{cols}x{rows}: no picture drawn at all");
             }
         }
+    }
+
+    /// The trainer panel adds a *second* terminal image (the Pokémon sprite) to
+    /// a screen that already has one, so the "an image owns whole cells" rule
+    /// now has to hold for two rectangles rather than one. Neither the panel's
+    /// text nor its sprite may share a cell with the game picture, and the
+    /// sprite may not share one with the panel's own text either.
+    #[test]
+    fn the_trainer_panel_and_its_sprite_never_touch_the_picture() {
+        use ratatui::backend::TestBackend;
+        let sizes = [
+            (60u16, 20u16),
+            (80, 24),
+            (100, 30),
+            (120, 40),
+            (160, 50),
+            (200, 60),
+            (240, 30),
+            (320, 90),
+        ];
+        for fullscreen in [false, true] {
+            for detail in [false, true] {
+                for (cols, rows) in sizes {
+                    let mut app =
+                        test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+                    app.trainer = true;
+                    app.trainer_detail = detail;
+                    app.fullscreen = fullscreen;
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                    terminal.draw(|f| app.render(f)).unwrap();
+                    let s = app.session.as_ref().unwrap();
+                    let picture = Rect::new(
+                        s.disp_origin.0,
+                        s.disp_origin.1,
+                        s.disp_cells.0,
+                        s.disp_cells.1,
+                    );
+                    assert!(picture.area() > 0, "{cols}x{rows}: no picture drawn");
+                    if let Some(panel) = app.trainer_rect {
+                        assert_eq!(
+                            picture.intersection(panel).area(),
+                            0,
+                            "{cols}x{rows} fullscreen={fullscreen} detail={detail}: \
+                             trainer panel {panel:?} overlaps picture {picture:?}"
+                        );
+                    }
+                    if let Some(sprite) = app.sprite_rect {
+                        assert_eq!(
+                            picture.intersection(sprite).area(),
+                            0,
+                            "{cols}x{rows}: the sprite image overlaps the game \
+                             picture — two kitty images on the same cells"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Switching the panel on must not cost the emulator anything when the
+    /// cartridge is not a game the plugin understands — and the test ROM here
+    /// is not one, so the plugin must refuse and say why.
+    #[test]
+    fn an_unsupported_cartridge_refuses_the_trainer_panel() {
+        use ratatui::backend::TestBackend;
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+        app.toggle_trainer();
+        assert!(app.trainer, "the panel still opens");
+        let plugin = app
+            .session
+            .as_ref()
+            .unwrap()
+            .plugins
+            .get::<TrainerPlugin>()
+            .expect("the trainer plugin is attached to every session");
+        assert!(plugin.game().is_none(), "a synthetic ROM is not Red/Blue");
+        assert!(plugin.refusal().is_some(), "and it explains itself");
+        // It draws without panicking, and says so on screen rather than
+        // showing an empty box.
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("Red/Blue"),
+            "the panel must explain the refusal on screen"
+        );
     }
 
     #[test]

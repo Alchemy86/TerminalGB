@@ -108,6 +108,24 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > applied, prints a warning at startup and shows in the picker footer and the `?` overlay.
 > Values may be bare, `"double-quoted"` or `'single-quoted'`.
 
+#### 🔴 Live trainer view (Pokémon Red/Blue)
+
+Press **`T`** while playing Pokémon Red or Blue and a panel appears beside the game showing
+your **party live** — nickname, species, level, HP bar, status, types — your **badges**, and,
+while you are in a battle, the **opponent's level, HP, stats and moves**. **`d`** opens a
+detail view for one Pokémon with its moves and PP, its DVs, the stat experience the game keeps
+hidden, its Hidden Power, and whether it **would be shiny if traded to Gen 2**; **`Tab`**
+cycles the party. The focused Pokémon's sprite is decompressed straight out of your own
+cartridge, so it works in the overworld and not just in battle.
+
+It is **strictly read-only** — the plugin is handed a borrowing view of the machine and cannot
+write to it — and it reads memory ten times a second rather than every frame, so it costs the
+render path nothing. Every address is derived from the
+[`pret/pokered`](https://github.com/pret/pokered) disassembly and cited by symbol name; any
+cartridge that is not verified English Red or Blue is **refused with an explanation** instead
+of shown wrong numbers. Full design, address table and verification:
+[docs/trainer.md](docs/trainer.md).
+
 #### Terminal config file
 
 The terminal frontend reads `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml` (a small
