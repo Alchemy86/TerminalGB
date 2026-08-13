@@ -121,7 +121,13 @@ impl Cpu<'_> {
             // Emulate an noop instruction
             1
         } else {
-            self.operation()
+            // Step the timer per memory access for the duration of this
+            // instruction so reads/writes land on the correct M-cycle
+            // (Blargg mem_timing). See MemoryManagementUnit::bus_tick.
+            self.memory.set_bus_ticking(true);
+            let cycles = self.operation();
+            self.memory.set_bus_ticking(false);
+            cycles
         }
     }
 

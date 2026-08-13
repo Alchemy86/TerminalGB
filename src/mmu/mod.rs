@@ -45,6 +45,22 @@ pub struct MemoryManagementUnit<'a> {
     gbspeed: GbSpeed,
     speed_switch_req: bool,
     undocumented_cgb_regs: [u8; 3], // 0xFF72, 0xFF73, 0xFF75
+    // --- Sub-instruction memory-access timing (Blargg mem_timing) ---
+    //
+    // The CPU executes a whole instruction "atomically" and then advances the
+    // peripherals by the instruction's full length. That is fine for the PPU
+    // (which nothing samples mid-instruction) but wrong for the *timer*: an
+    // instruction that reads TIMA reads it on its LAST M-cycle on hardware, not
+    // its first. To model that without a full cycle-stepped CPU, we advance the
+    // timer by one M-cycle (4 T-cycles) at each CPU memory access, *before* the
+    // access is performed, so a read/write sees the timer as of that cycle. The
+    // remaining "internal" cycles of the instruction are applied in `do_cycle`.
+    //
+    // Only the timer is stepped per-access; the GPU/sound/DMA stay batched, so
+    // frame rendering is byte-for-byte unchanged. `bus_tick_enabled` is true
+    // only while a CPU instruction is executing (not during OAM DMA or setup).
+    bus_tick_enabled: bool,
+    bus_ticked: u32,
 }
 
 fn fill_random(slice: &mut [u8], start: u32) {
@@ -90,6 +106,8 @@ impl<'a> MemoryManagementUnit<'a> {
             hdma_status: DMAType::NoDma,
             hdma_len: 0xFF,
             undocumented_cgb_regs: [0; 3],
+            bus_tick_enabled: false,
+            bus_ticked: 0,
         };
         fill_random(&mut res.wram, 42);
         if res.rb(0x0143) == 0xC0 {
@@ -127,6 +145,8 @@ impl<'a> MemoryManagementUnit<'a> {
             hdma_status: DMAType::NoDma,
             hdma_len: 0xFF,
             undocumented_cgb_regs: [0; 3],
+            bus_tick_enabled: false,
+            bus_ticked: 0,
         };
         fill_random(&mut res.wram, 42);
         res.determine_mode();
@@ -177,6 +197,28 @@ impl<'a> MemoryManagementUnit<'a> {
         self.gpu.gbmode = mode;
     }
 
+    /// Advance the timer by exactly one M-cycle for a single CPU memory access,
+    /// *before* the access reads/writes the bus. See the `bus_tick_enabled`
+    /// field docs. No-op unless a CPU instruction is currently executing.
+    #[inline]
+    fn bus_tick(&mut self) {
+        if self.bus_tick_enabled {
+            self.timer.do_cycle(4);
+            self.intf |= self.timer.interrupt;
+            self.timer.interrupt = 0;
+            self.bus_ticked += 4;
+        }
+    }
+
+    /// Enable per-access timer stepping for the duration of one CPU
+    /// instruction. Returns the previous value so it can be restored (OAM DMA
+    /// re-uses `rb`/`wb` internally and must not be double-counted).
+    pub fn set_bus_ticking(&mut self, on: bool) -> bool {
+        let prev = self.bus_tick_enabled;
+        self.bus_tick_enabled = on;
+        prev
+    }
+
     pub fn do_cycle(&mut self, ticks: u32) -> u32 {
         let cpudivider = match self.gbspeed {
             GbSpeed::Single => 1,
@@ -186,7 +228,18 @@ impl<'a> MemoryManagementUnit<'a> {
         let gputicks = ticks / cpudivider + vramticks;
         let cputicks = ticks + vramticks * cpudivider;
 
-        self.timer.do_cycle(cputicks);
+        // The timer was already advanced by `bus_ticked` T-cycles during this
+        // instruction's memory accesses; apply only the remaining internal
+        // cycles here so the total per instruction is unchanged.
+        debug_assert!(
+            self.bus_ticked <= cputicks,
+            "bus_ticked {} exceeded instruction ticks {}",
+            self.bus_ticked,
+            cputicks
+        );
+        let timerticks = cputicks.saturating_sub(self.bus_ticked);
+        self.bus_ticked = 0;
+        self.timer.do_cycle(timerticks);
         self.intf |= self.timer.interrupt;
         self.timer.interrupt = 0;
 
@@ -209,6 +262,7 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     pub fn rb(&mut self, address: u16) -> u8 {
+        self.bus_tick();
         match address {
             0x0000..=0x7FFF => self.mbc.readrom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
@@ -261,6 +315,7 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     pub fn wb(&mut self, address: u16, value: u8) {
+        self.bus_tick();
         match address {
             0x0000..=0x7FFF => self.mbc.writerom(address, value),
             0x8000..=0x9FFF => self.gpu.wb(address, value),
@@ -328,11 +383,16 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     fn oamdma(&mut self, value: u8) {
+        // OAM DMA re-uses rb/wb internally; it is a single (instantaneous, in
+        // this model) transfer, not 160 CPU memory accesses, so suppress the
+        // per-access timer stepping while it runs.
+        let prev = self.set_bus_ticking(false);
         let base = (value as u16) << 8;
         for i in 0..0xA0 {
             let b = self.rb(base + i);
             self.wb(0xFE00 + i, b);
         }
+        self.set_bus_ticking(prev);
     }
 
     fn hdma_read(&self, a: u16) -> u8 {
