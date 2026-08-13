@@ -53,7 +53,9 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
   harness would run them, and an honest note on the "Nintendo's emulator scored 100%" claim.
 - **[Debug-tooling design](../debugging.md)** — the inspect / manipulate / capture surface
   (registers, disassembly, tile & OAM viewers, stepping, breakpoints, watchpoints,
-  screenshots, and the deterministic frame-hashing that feeds the accuracy tests), with a
+  screenshots, and the deterministic frame-hashing that feeds the accuracy tests), plus
+  Rust breakpoint handlers with a declarative runtime-configurable condition format and a
+  public extension surface (emit / control / transport) external tools can plug into — with a
   core/frontend boundary that keeps debug cost out of release builds.
 
 ## Provenance & honesty

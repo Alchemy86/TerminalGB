@@ -121,7 +121,8 @@ dispatches them (priority VBlank → STAT → Timer → Serial → Joypad).
 👉 **Start at the [component reference index](docs/components/README.md)**, read the
 [accuracy-testing yardstick](docs/testing.md) that every component's test list is built on,
 or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the
-running machine (and the deterministic frame-hashing that ties into the tests).
+running machine (the deterministic frame-hashing that ties into the tests, plus a public
+extension surface external tools can emit from, control, and plug into).
 
 <details>
 <summary><strong>Memory map</strong> (click to expand)</summary>
