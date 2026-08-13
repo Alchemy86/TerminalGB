@@ -208,6 +208,10 @@ expected-results file, [`testharness/baseline.txt`](../testharness/baseline.txt)
 
 ### Results today (the honest baseline)
 
+> **See [`testharness/README.md`](../testharness/README.md) for the full per-ROM
+> compatibility & progress scoreboard** (every ROM, its status, and the documented
+> non-goals). The summary below is the same data at suite granularity.
+
 | Suite | Result | Notes |
 |---|---|---|
 | Blargg `cpu_instrs` (01–11) | **11/11 PASS** | every opcode group |

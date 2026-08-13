@@ -11,10 +11,12 @@
 | ![Web](resources/demo-web.png) | ![Desktop](resources/demo-desktop-1.png) | ![Terminal](resources/demo-terminal-1.png) |
 
 > ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The CPU
-> passes Blargg's `cpu_instrs`; several hardware edge-cases (the HALT bug, parts of CGB
-> sound, cycle-exact timing) are known-inaccurate — see **[Status](#status)** and the
-> honest per-component notes. This project is a study of emulation, not a piracy tool: it
-> ships no ROMs and no BIOS.
+> passes Blargg's `cpu_instrs`, `instr_timing`, `mem_timing` and `halt_bug`; a few
+> edge-cases (interrupt-dispatch cycle count, the DMG OAM-corruption bug, parts of CGB
+> sound, variable mode-3 timing) remain known-inaccurate as documented non-goals — see
+> **[Status](#status)**, the [test scoreboard](testharness/README.md), and the honest
+> per-component notes. This project is a study of emulation, not a piracy tool: it ships no
+> ROMs and no BIOS.
 
 ---
 
@@ -201,23 +203,25 @@ what's genuine DMG character, and how to measure it yourself — in
 
 **Accuracy — hardware test ROMs**
 
-Today these are **manual OpenEmu screenshots** ([`resources/tests/`](resources/tests)), not
-an automated harness. The [`retrio/gb-test-roms`](https://github.com/retrio/gb-test-roms)
-submodule is declared in [`.gitmodules`](.gitmodules) but **uninitialised**. Wiring a
-headless Blargg/Mooneye/acid2 harness is the highest-value next step — see
-**[docs/testing.md](docs/testing.md)**.
+A **headless Blargg/acid2 harness is now wired in** ([`testharness/`](testharness/), run
+with `cargo test --release --test testroms`) and gated in CI against a checked-in
+baseline. Full per-ROM breakdown: **[testharness/README.md](testharness/README.md)** ·
+rationale: **[docs/testing.md](docs/testing.md)**.
 
-| Test | Result |
+| Suite | Result |
 |---|---|
-| Blargg `cpu_instrs` | ✅ Pass |
-| Blargg `instr_timing` / `mem_timing` | ⚠️ Not yet verified |
-| Blargg `bits-unused`, `bits-bank1` | ❌ Failing |
-| Blargg `halt_bug` | ❌ Failing (the HALT bug is not modelled) |
-| Blargg `cgb_sound` | ❌ Failing |
+| Blargg `cpu_instrs` (11) | ✅ 11/11 pass |
+| Blargg `instr_timing` | ✅ Pass |
+| Blargg `mem_timing` / `mem_timing-2` | ✅ Pass (timer stepped per memory access) |
+| Blargg `halt_bug` | ✅ Pass (HALT bug modelled) |
+| `dmg-acid2` (PPU) | ✅ Pixel-correct vs reference |
+| Blargg `interrupt_time`, `oam_bug` | 🚫 Documented non-goals ([why](testharness/README.md#documented-non-goals-pinned-red-on-purpose)) |
+
+**Blargg serial suite: 13/13.**
 
 **Known limitations** (each is documented honestly on the relevant component page)
 - No boot ROM / logo scroll; the post-boot register state is written directly.
-- The HALT bug and DMG OAM-corruption bug are not modelled.
+- The DMG OAM-corruption bug is not modelled (deliberate non-goal); the HALT bug **is**.
 - OAM DMA is instantaneous and does not restrict the bus; PPU mode 3 is fixed-length.
 - Web build has no sound and always treats cartridges as MBC3.
 - Save states are not implemented; battery saves work only for the native (filepath) path.

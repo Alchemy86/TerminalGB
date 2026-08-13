@@ -29,6 +29,9 @@
 //! The harness has NO external dependencies beyond the emulator crate: the hash
 //! and the PNG writer are hand-rolled (a few dozen lines each) rather than
 //! pulling in a hashing or image crate.
+//!
+//! For the per-ROM compatibility & progress scoreboard, see
+//! `testharness/README.md`; for the full rationale, `docs/testing.md`.
 
 use gameboy::cpu::core::Cpu;
 use std::collections::BTreeMap;
