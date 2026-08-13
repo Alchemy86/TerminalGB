@@ -609,6 +609,72 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
    user-visible symptom. Conformance candidate: **a long run must not grow terminal-side
    resource use without bound.**
 
+## Frame transport — how a frame reaches the terminal (`src/termimage.rs`, `src/shmframe.rs`, `src/deflate.rs`)
+
+- **Full write-up: [`docs/rendering.md`](docs/rendering.md)** — the ladder, the measured
+  numbers, the terminal-compatibility table, and the conformance record. Read it before
+  changing anything here. The earlier [`docs/terminal-render.md`](docs/terminal-render.md)
+  fixed the *size* of the transmitted image; this fixed the *transport*.
+- **The cost that matters is the terminal's, not ours.** Capping resolution left 92 KB of raw
+  RGBA (~123 KB base64) per frame = **5.5 MB/s** for WezTerm to parse — **6 fps** while the
+  core held 59.73. Our own path measured 2,395 fps because the bench wrote to `/dev/null`.
+  Never conclude "the render path is fast" from a headless number again; use
+  `render_bench --tty`, which drives the real terminal and uses a **`CSI 6 n` round-trip per
+  frame as a barrier** (WezTerm does *not* answer `CSI 5 n`; CPR is the portable fence).
+- **Measured ladder** (213×55 window, `--motion` so nothing is deduped):
+  kitty raw RGB + placeholders **118,788 B** → iTerm2 uncompressed PNG **93,093** → kitty
+  indexed PNG + placeholders **27,725** → iTerm2 indexed+deflate PNG **2,022** → kitty
+  indexed PNG + direct **1,448** → **kitty shared memory + direct 81 B** (encode
+  0.103 ms → **0.057 ms**, i.e. compressing/handing over is *cheaper* than base64-ing).
+- **Kitty `t=s` (shared memory) is the real fix, and WezTerm supports it** — confirmed by
+  handshake, not by guessing (`render_bench --probe`). The frame is `memcpy`d into a POSIX
+  shm object as `f=32` RGBA (our framebuffer's exact layout) and only the *name* goes on the
+  wire. **The terminal unlinks the object after reading**, so an object can never be reused
+  across frames — a fresh one per frame is required, not a wasteful choice.
+- **`Drop` is not cleanup — again.** A `SIGKILL`/`panic = 'abort'`/crash leaves a 92 KB
+  object in `/dev/shm` forever, so `shmframe` **sweeps stale `gb-<pid>-*` objects on first
+  use**. Liveness is `kill(pid, 0)`; **`EPERM` means alive**, only `ESRCH` means gone — get
+  that wrong and the sweep deletes a running emulator's frames.
+- **THE WEZTERM TRAP, do not rediscover it:** WezTerm implements the Kitty graphics protocol
+  but **not** its Unicode placeholders, so the placeholder grid renders as missing-glyph
+  boxes and *no picture* — which is why this project was on the iTerm2 fallback at all.
+  **Direct placement is now the Kitty default** (`GB_TERM_KITTY=placeholder` restores the
+  grid). It is also far cheaper: placements are deleted whenever image data is re-transmitted
+  under an id, so the grid costs 4 UTF-8 bytes per covered cell **every frame** (25 KB at
+  122×55) and can never be cached on screen.
+- **Ask the terminal, never infer from `$TERM`.** `termimage::shm_query`/`shm_reply_ok` build
+  and read the protocol's `a=q` handshake; `tui::probe_shm_support` runs it **once, after
+  `enable_raw_mode` and before the event loop owns stdin** (crossterm parses input into
+  `Event`s and drops the APC reply, so this reads the fd directly — nothing else may). A
+  **CPR fence is appended** so silence is a conclusive "no". Anything not an explicit `OK`
+  means no; guessing yes shows a blank rectangle.
+- **Indexed colour is most of the win even without shm.** A DMG frame is 4 shades: 2-bit
+  palette PNG is 5,904 bytes before compression vs 69,120 as RGB. `PngEncoder` picks 1/2/4/8
+  bpp from the frame's actual colour count (cap `MAX_PALETTE`, then truecolour fallback);
+  `deflate.rs` is a hand-rolled fixed-Huffman LZ77 (no new dependency, wasm-safe).
+- **Unchanged-frame dedup was always working**; the *benchmark* hard-coded
+  `frames_identical: 0` into its telemetry sample. Real figures: dmg-acid2 **299/300**
+  identical (6 B/frame avg), cpu_instrs **292/300** (26 B/frame). Use `--motion` to defeat it
+  when measuring a transport.
+- **The status panel must show small numbers.** `{:.0}K` renders 87 bytes as `0K` — i.e. it
+  hides the difference between excellent and broken. `human_bytes` prints `87B`/`2.0K`, and
+  `Proto` names the live transport (`shm`/`png`/`legacy`) because a transport negotiated at
+  runtime that nobody can see is one nobody can debug.
+- **Escape hatches:** `GB_TERM_KITTY=shm|noshm|placeholder`, `GB_TERM_IMAGE=rgb` (the
+  *pre-compression* payload, so one binary can measure before/after on the same terminal).
+- **Half-block rendering is NOT implemented** — scoped with arithmetic in
+  [`docs/rendering.md`](docs/rendering.md) §2. Note the trap: naive half-blocks are ~484 KB
+  per frame, *worse* than what we started with; all of the value is in cell-level
+  differencing against a retained back buffer, which `TermImage`'s whole-frame hash cannot
+  provide.
+- **Measuring against a real terminal, hard-won mechanics:** `tcsetattr` from outside the
+  foreground process group raises SIGTTOU and **stops** the process (a stopped process
+  ignores SIGTERM, so even `timeout` cannot clear it); merely ignoring SIGTTIN makes reads
+  fail with **EIO**, so every reply looks like a timeout. Ignore SIGTTOU and `tcsetpgrp` to
+  claim the terminal. Also set the tty **non-blocking**: a terminal that has stopped draining
+  its pty parks a blocking 91 KB write beyond the reach of `timeout`, and reporting
+  `terminal_saturated` is the measurement we actually want.
+
 ## Telemetry — NDJSON run data (`src/telemetry.rs`)
 
 - **Schema contract: [`docs/telemetry.md`](docs/telemetry.md).** Everything the stats overlay

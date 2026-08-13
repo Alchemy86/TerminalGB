@@ -5,6 +5,8 @@ use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 
 pub mod cpu;
+/// Minimal DEFLATE compressor for terminal transmission — see [`deflate`].
+pub mod deflate;
 pub mod gameboy;
 mod gpu;
 mod input;
@@ -16,6 +18,10 @@ pub mod plugin;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
 pub mod screen;
+/// Shared-memory frame handoff for the Kitty protocol — see [`shmframe`].
+/// Compiles everywhere; the module itself stubs out where shared memory does
+/// not exist, so callers need no `cfg` of their own.
+pub mod shmframe;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sound;
 /// Machine-readable run telemetry (NDJSON) — see [`telemetry`].

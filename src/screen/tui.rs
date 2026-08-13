@@ -46,6 +46,7 @@ use std::env;
 use std::error::Error;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ratatui::{
@@ -360,6 +361,11 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     }));
 
     enable_raw_mode()?;
+    // Ask the terminal, once, whether it can read frames out of shared memory.
+    // Must happen here: raw mode is on (so the reply is not swallowed by the
+    // line discipline) but the event loop has not started, so nothing else is
+    // competing for stdin.
+    probe_shm_support();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     // We required kitty keyboard support above; enable event-type reporting so
@@ -591,6 +597,17 @@ struct Session {
 }
 
 impl Session {
+    /// How this session is getting frames to the terminal, for the status
+    /// panel: the transport is chosen at runtime by asking the terminal, so it
+    /// has to be *visible* or nobody can tell which one they got.
+    fn transport_label(&self) -> &'static str {
+        match self.term_image.as_ref() {
+            None => "legacy",
+            Some(t) if t.kitty_shm() => "shm",
+            Some(_) => "png",
+        }
+    }
+
     /// Audio queue health, if a host stream is attached. Never blocks the
     /// render loop: a contended lock reports nothing rather than waiting.
     #[cfg(feature = "audio")]
@@ -2333,7 +2350,8 @@ impl App {
             Line::from(format!("pal  {:.2}ms", s.t_palette)),
             Line::from(format!("up   {:.2}ms", s.t_upscale)),
             Line::from(format!("enc  {:.2}ms", s.t_encode)),
-            Line::from(format!("tx   {:.0}K", s.tx_bytes as f32 / 1024.0)),
+            Line::from(format!("tx   {}", human_bytes(s.tx_bytes))),
+            Line::from(format!("via  {}", s.transport_label())),
             Line::from(format!("drop {}", s.frames_dropped)),
             Line::from(format!("same {}", s.frames_identical)),
             Line::from(format!("pc   {:04X}", s.gb.debug_pc())),
@@ -2407,7 +2425,15 @@ impl App {
             ProtocolType::Iterm2 => Wire::Iterm2,
             _ => return None,
         };
-        Some(TermImage::new(wire, 0x0067_6201))
+        let mut img = TermImage::new(wire, 0x0067_6201);
+        // Kitty can take the frame out of shared memory instead of off the
+        // wire — about sixty bytes per frame rather than a couple of kilobytes.
+        // The answer was worked out once at startup (see `probe_shm_support`);
+        // it is a property of the terminal, not of the session.
+        if wire == Wire::Kitty && shm_supported() {
+            img.set_kitty_shm(true);
+        }
+        Some(img)
     }
 
     /// The trainer view's sprite slot. A **distinct** image id from the game
@@ -2623,7 +2649,7 @@ impl App {
         // Status. `Sent` is the size actually transmitted to the terminal each
         // frame, which the terminal then stretches to `Scale`; keeping those
         // two apart is what holds the frame rate up on a large window.
-        let (title, mbc, scale, fps, emu_fps, paused, sent, kb) = self
+        let (title, mbc, scale, fps, emu_fps, paused, sent, tx, via) = self
             .session
             .as_ref()
             .map(|s| {
@@ -2635,16 +2661,23 @@ impl App {
                     s.emu_fps,
                     s.paused,
                     s.tx_px,
-                    s.tx_bytes as f32 / 1024.0,
+                    s.tx_bytes,
+                    s.transport_label(),
                 )
             })
-            .unwrap_or((String::new(), "", 1.0, 0.0, 0.0, false, (160, 144), 0.0));
+            .unwrap_or((String::new(), "", 1.0, 0.0, 0.0, false, (160, 144), 0, "-"));
         let status = vec![
             kv("ROM", &truncate(&title, 18)),
             kv("MBC", mbc),
             kv("Scale", &format!("{scale:.1}x")),
-            kv("Sent", &format!("{}x{} {:.0}K", sent.0, sent.1, kb)),
-            kv("Proto", protocol_name(self.picker.protocol_type())),
+            kv(
+                "Sent",
+                &format!("{}x{} {}", sent.0, sent.1, human_bytes(tx)),
+            ),
+            kv(
+                "Proto",
+                &format!("{} {via}", protocol_name(self.picker.protocol_type())),
+            ),
             kv("Palette", self.palette.name()),
             kv("Upscale", &self.upscale_label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
@@ -2906,11 +2939,123 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Per-frame transmitted bytes, in units a human can act on.
+///
+/// This used to be `{:.0}K`, which renders the shared-memory transport's ~87
+/// bytes as "0K" and the compressed one's 2 KB as "2K" — i.e. it hides the
+/// difference between "excellent" and "broken". The status panel is how the
+/// captain checks whether the transport is doing its job, so it must show the
+/// small numbers.
+fn human_bytes(n: usize) -> String {
+    if n < 1024 {
+        format!("{n}B")
+    } else if n < 100 * 1024 {
+        format!("{:.1}K", n as f32 / 1024.0)
+    } else {
+        format!("{:.0}K", n as f32 / 1024.0)
+    }
+}
+
 fn kv<'a>(key: &'a str, value: &str) -> Line<'a> {
     Line::from(vec![
         Span::styled(format!("{key:<8}"), Style::default().fg(Color::DarkGray)),
         Span::raw(value.to_string()),
     ])
+}
+
+// ---------------------------------------------------------------------------
+// Shared-memory capability
+// ---------------------------------------------------------------------------
+
+/// Whether this terminal answered "yes, I can read a frame out of shared
+/// memory". Resolved once by [`probe_shm_support`] before the event loop starts.
+static SHM_OK: AtomicBool = AtomicBool::new(false);
+
+fn shm_supported() -> bool {
+    SHM_OK.load(Ordering::Relaxed)
+}
+
+/// Ask the terminal whether it implements Kitty's `t=s` transmission medium,
+/// and remember the answer.
+///
+/// **Ask; do not infer.** WezTerm implements the Kitty graphics protocol but
+/// not its Unicode placeholders, so any rule of the form "if `$TERM` looks like
+/// X then it supports Y" is wrong in a way that shows the user a blank
+/// rectangle. The protocol has an `a=q` handshake precisely for this; a
+/// cursor-position request is appended as a fence so that *silence* is a
+/// conclusive "no" rather than us not having waited long enough.
+///
+/// Failure in any direction — no reply, an error reply, no `/dev/shm`, a
+/// platform without shared memory — leaves the flag false and the frontend on
+/// the compressed-PNG transport, which works everywhere.
+fn probe_shm_support() {
+    if !cfg!(unix) || std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
+        return;
+    }
+    let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
+        return;
+    };
+    use std::io::Write as _;
+    let mut out = io::stdout();
+    let asked = out
+        .write_all(query.seq.as_bytes())
+        .and_then(|_| out.write_all(b"\x1b[6n"))
+        .and_then(|_| out.flush())
+        .is_ok();
+    if asked {
+        let reply = read_reply(Duration::from_millis(250));
+        SHM_OK.store(
+            crate::termimage::shm_reply_ok(&reply, SHM_QUERY_ID),
+            Ordering::Relaxed,
+        );
+    }
+    query.finish();
+}
+
+const SHM_QUERY_ID: u32 = 0x0067_6209;
+
+/// Read whatever the terminal says back, up to the cursor-position fence.
+///
+/// `crossterm` cannot help here: it parses input into `Event`s and drops the
+/// application-specific `APC` reply we are waiting for. So this reads the raw
+/// descriptor, and only during startup — once the event loop owns stdin,
+/// nothing else may read it.
+#[cfg(all(unix, feature = "libc"))]
+fn read_reply(timeout: Duration) -> String {
+    use std::os::unix::io::AsRawFd;
+    let fd = io::stdin().as_raw_fd();
+    let deadline = Instant::now() + timeout;
+    let mut got = String::new();
+    let mut buf = [0u8; 256];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut p, 1, left.as_millis() as i32) } <= 0 {
+            break;
+        }
+        let n =
+            unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        if n <= 0 {
+            break;
+        }
+        got.push_str(&String::from_utf8_lossy(&buf[..n as usize]));
+        if got.contains('R') {
+            break; // the fence arrived: everything else is already here
+        }
+    }
+    got
+}
+
+#[cfg(not(all(unix, feature = "libc")))]
+fn read_reply(_timeout: Duration) -> String {
+    String::new()
 }
 
 /// Build a [`Picker`], preferring the sharpest graphics protocol the terminal
@@ -3526,16 +3671,23 @@ mod tests {
     fn transmitted_bytes_do_not_grow_with_the_window() {
         // The captain's bug, as a test: at 320x90 cells the old path encoded a
         // 1568x1408 image every frame (11.6 MB); the new one sends the same
-        // 160x144 image whatever the window size, plus kitty's own per-cell
-        // placeholder grid.
+        // 160x144 image whatever the window size. (Direct placement, the
+        // default, does not even pay kitty's per-cell placeholder grid.)
         let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
         let small = drawn_bytes(&mut app, 80, 24);
         app.session.as_mut().unwrap().gb.frame();
         let large = drawn_bytes(&mut app, 320, 90);
-        assert!(small > 1000, "expected a real payload, got {small} bytes");
+        assert!(small > 200, "expected a real payload, got {small} bytes");
         assert!(
             large < 300_000,
             "a 1568x1408 display cost {large} bytes/frame (legacy: 11.6 MB)"
+        );
+        // Since compression landed the payload is small enough that the window
+        // must barely move it at all: the old path grew by four orders of
+        // magnitude between these two sizes.
+        assert!(
+            large < small * 4,
+            "{small} -> {large} bytes: payload is still following the window"
         );
     }
 
@@ -3543,10 +3695,7 @@ mod tests {
     fn kitty_placement_asks_the_terminal_to_scale() {
         let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
         let wire = drawn_wire(&mut app, 160, 50);
-        assert!(
-            wire.contains("a=T,U=1"),
-            "no kitty virtual placement emitted"
-        );
+        assert!(wire.contains("a=T"), "no kitty placement emitted");
         assert!(
             wire.contains("s=160,v=144"),
             "not transmitting the source size"
@@ -3606,7 +3755,7 @@ mod tests {
                 assert!(
                     wire.contains(match protocol {
                         ProtocolType::Iterm2 => "inline=1",
-                        _ => "a=T,U=1",
+                        _ => "a=T",
                     }),
                     "{protocol:?}: round {round} sent no image data"
                 );

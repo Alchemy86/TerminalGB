@@ -4,7 +4,7 @@
 > memory access travels**, **how an interrupt is delivered**, and **where the frontends
 > attach**. Every code reference below is a clickable link; the per-component deep dives
 > live in [`docs/components/`](components/README.md).
-> [README](../README.md) · [component index](components/README.md) · [testing](testing.md) · [debugging](debugging.md) · [display](display.md)
+> [README](../README.md) · [component index](components/README.md) · [testing](testing.md) · [debugging](debugging.md) · [display](display.md) · [terminal rendering](rendering.md)
 
 ---
 

@@ -28,6 +28,30 @@
 //! The write stage writes real bytes to a real file (`--out`, default
 //! `/dev/null`). That measures our side of the pipe honestly; it cannot measure
 //! the terminal's own parse and texture upload, which no headless tool can.
+//!
+//! # `--tty`: measuring the half that was hiding
+//!
+//! Headless numbers are why a 91 KB-per-frame bug survived: the bench reported
+//! **2,395 fps** while the captain's WezTerm ran the same build at **6**. Our
+//! side of the pipe was never the problem — the terminal's parse and upload
+//! was, and writing to `/dev/null` cannot see it.
+//!
+//! `--tty` closes that hole. It drives the *controlling terminal*, and after
+//! each frame asks for a cursor-position report (`CSI 6 n`) and waits for the
+//! reply. A terminal answers only once it has consumed everything queued ahead of
+//! it, so the round-trip is a real barrier: the measured frame rate includes the
+//! terminal's own work, not just ours.
+//!
+//! ```text
+//! # run it from a graphics-capable terminal, NOT inside tmux
+//! cargo run --release --example render_bench -- --tty --frames 300 --json
+//! GB_TERM_IMAGE=rgb \
+//!   cargo run --release --example render_bench -- --tty --frames 300 --json
+//! ```
+//!
+//! The second command is the "before" measurement: `GB_TERM_IMAGE=rgb` restores
+//! the uncompressed Kitty payload, so the two runs differ only in what is on the
+//! wire.
 
 use gameboy::gameboy::Gameboy;
 use gameboy::screen::config::Palette;
@@ -64,6 +88,11 @@ struct Args {
     /// the worst case for a moving picture regardless of what the ROM draws;
     /// off means the ROM decides and unchanged-frame skipping shows up.
     motion: bool,
+    /// Drive the real controlling terminal and measure what it can actually
+    /// keep up with (see the module docs).
+    tty: bool,
+    /// Ask the terminal which transports it supports, and print the answers.
+    probe: bool,
 }
 
 impl Default for Args {
@@ -82,13 +111,24 @@ impl Default for Args {
             ndjson: false,
             out: "/dev/null".to_string(),
             motion: false,
+            tty: false,
+            probe: false,
         }
     }
 }
 
 fn main() {
     let args = parse_args();
+    if args.probe {
+        tty_bench::probe();
+        return;
+    }
     let rom = load_rom(args.rom.as_deref());
+
+    if args.tty {
+        tty_bench::run(&args, &rom);
+        return;
+    }
 
     // Matrix: window sizes × upscaler settings × render paths.
     let sizes: Vec<(u16, u16)> = if args.sizes.is_empty() {
@@ -332,7 +372,12 @@ fn run_case(
             encode_ms: telemetry::ms(encode),
             write_ms: telemetry::ms(write),
             frames_skipped: 0,
-            frames_identical: 0,
+            // The real count, not a zero. Reporting 0 here is what made
+            // unchanged-frame skipping look broken when it was in fact doing
+            // almost all of the work on a static screen: `tx_bytes_avg` had
+            // already collapsed to single digits while this field still said
+            // "no frames were identical".
+            frames_identical: (n + 1 - changed_frames) as u64,
             frames_dropped: 0,
             tx_bytes: bytes,
             audio: None::<AudioSample>,
@@ -423,6 +468,472 @@ fn print_table(rows: &[CaseResult], args: &Args) {
             r.render_fps,
             r.total_fps,
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Real-terminal benchmark
+// ---------------------------------------------------------------------------
+
+/// Drives the controlling terminal for real and measures the frame rate it can
+/// actually sustain, using a Device Status Report round-trip per frame as the
+/// barrier. See the module docs for why this exists.
+mod tty_bench {
+    use super::{fit_metrics, Args, DMG_HZ, SRC_H, SRC_W};
+
+    use gameboy::gameboy::Gameboy;
+    use gameboy::screen::frame::FramePrep;
+    use gameboy::termimage::{CellRect, TermImage, Wire};
+    use gameboy::upscale::{Algorithm, Upscaler};
+
+    use std::fs::File;
+    use std::io::{Read, Write};
+    use std::os::unix::io::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    use ratatui::layout::Rect;
+    use ratatui_image::picker::ProtocolType;
+
+    /// How long to wait for a terminal to answer `CSI 6 n` before giving up on
+    /// synchronisation. Generous: a terminal that is genuinely 6 fps takes
+    /// 170 ms to answer, and that is exactly the case we are here to catch.
+    const DSR_TIMEOUT: Duration = Duration::from_millis(2000);
+    /// How long the terminal may refuse to drain its pty before we call it
+    /// saturated and stop.
+    const STALL_TIMEOUT: Duration = Duration::from_millis(3000);
+
+    struct RawTty {
+        f: File,
+        saved: libc::termios,
+    }
+
+    impl RawTty {
+        fn open() -> Result<RawTty, String> {
+            let f = File::options()
+                .read(true)
+                .write(true)
+                .open("/dev/tty")
+                .map_err(|e| format!("cannot open /dev/tty: {e}"))?;
+            let fd = f.as_raw_fd();
+            if unsafe { libc::isatty(fd) } != 1 {
+                return Err("/dev/tty is not a terminal".to_string());
+            }
+            // Job control, the two ways it bites a program that wants to both
+            // write to and *read from* its terminal:
+            //
+            // * `tcsetattr` from outside the terminal's foreground process
+            //   group raises SIGTTOU, which **stops** us — and a stopped
+            //   process does not act on SIGTERM, so the run hangs in a way even
+            //   `timeout` cannot clear.
+            // * `read` from outside it raises SIGTTIN, and if SIGTTIN is merely
+            //   ignored the read fails with EIO instead. Every reply then looks
+            //   like "the terminal did not answer", which is a lie.
+            //
+            // So: ignore SIGTTOU (that makes `tcsetpgrp` succeed rather than
+            // stop us), claim the terminal, and leave SIGTTIN alone.
+            unsafe {
+                libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+                if libc::tcgetpgrp(fd) != libc::getpgrp() {
+                    libc::tcsetpgrp(fd, libc::getpgrp());
+                }
+            }
+            let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(fd, &mut saved) } != 0 {
+                return Err("tcgetattr failed".to_string());
+            }
+            let mut raw = saved;
+            unsafe { libc::cfmakeraw(&mut raw) };
+            if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+                return Err("tcsetattr failed".to_string());
+            }
+            // Non-blocking writes. A terminal that cannot keep up stops draining
+            // its pty, and a blocking `write` of a 91 KB frame then parks the
+            // process somewhere `timeout` cannot reach it — the run hangs
+            // instead of *reporting* the saturation, which is the one thing this
+            // mode exists to measure.
+            unsafe {
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+            }
+            Ok(RawTty { f, saved })
+        }
+
+        /// Write every byte, waiting for the terminal to make room. Returns
+        /// `false` if it stopped draining for [`STALL_TIMEOUT`], which means it
+        /// is saturated — the honest answer for what we are measuring.
+        fn write_all_timed(&mut self, mut bytes: &[u8]) -> bool {
+            let fd = self.f.as_raw_fd();
+            let deadline = Instant::now() + STALL_TIMEOUT;
+            while !bytes.is_empty() {
+                match self.f.write(bytes) {
+                    Ok(0) => return false,
+                    Ok(n) => bytes = &bytes[n..],
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        let left = deadline.saturating_duration_since(Instant::now());
+                        if left.is_zero() {
+                            return false;
+                        }
+                        let mut p = libc::pollfd {
+                            fd,
+                            events: libc::POLLOUT,
+                            revents: 0,
+                        };
+                        if unsafe { libc::poll(&mut p, 1, left.as_millis() as i32) } <= 0
+                        {
+                            return false;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => return false,
+                }
+            }
+            true
+        }
+
+        fn size(&self) -> (u16, u16, u16, u16) {
+            let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+            unsafe { libc::ioctl(self.f.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) };
+            let (cols, rows) = (ws.ws_col.max(1), ws.ws_row.max(1));
+            // Cell size in pixels, when the terminal reports it.
+            let cw = if ws.ws_col > 0 && ws.ws_xpixel > 0 {
+                ws.ws_xpixel / ws.ws_col
+            } else {
+                0
+            };
+            let ch = if ws.ws_row > 0 && ws.ws_ypixel > 0 {
+                ws.ws_ypixel / ws.ws_row
+            } else {
+                0
+            };
+            (cols, rows, cw, ch)
+        }
+
+        /// Write `query` and collect whatever the terminal says back, stopping
+        /// when it goes quiet. Returns `None` if it never answered.
+        ///
+        /// A cursor-position request is appended as a **fence**: CPR is
+        /// answered by everything, and it is answered *after* whatever the
+        /// query itself produced, so "silence" is a real answer rather than an
+        /// impatient reader. Without it a terminal that simply ignores an
+        /// unsupported query is indistinguishable from a slow one.
+        fn ask(&mut self, query: &[u8]) -> Option<String> {
+            let mut probe = query.to_vec();
+            probe.extend_from_slice(b"\x1b[6n");
+            if !self.write_all_timed(&probe) {
+                return None;
+            }
+            let fd = self.f.as_raw_fd();
+            let deadline = Instant::now() + DSR_TIMEOUT;
+            let mut got = String::new();
+            let mut buf = [0u8; 512];
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                let mut p = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut p, 1, left.as_millis() as i32) } <= 0 {
+                    break;
+                }
+                match self.f.read(&mut buf) {
+                    Ok(k) if k > 0 => {
+                        got.push_str(&String::from_utf8_lossy(&buf[..k]));
+                        // The CPR fence has arrived: everything the query was
+                        // going to produce is already in `got`.
+                        if got.contains('R') {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            if got.is_empty() {
+                None
+            } else {
+                Some(got)
+            }
+        }
+
+        /// Send a cursor-position report request and block until the terminal
+        /// answers. Returns the round-trip time, or `None` on timeout.
+        ///
+        /// `CSI 6 n` rather than `CSI 5 n`: CPR is answered by every terminal
+        /// worth measuring, while DSR-5 is optional and WezTerm — the terminal
+        /// this whole investigation is about — does not answer it.
+        fn sync(&mut self) -> Option<Duration> {
+            let t = Instant::now();
+            if !self.write_all_timed(b"\x1b[6n") {
+                return None;
+            }
+            let fd = self.f.as_raw_fd();
+            let mut buf = [0u8; 64];
+            loop {
+                let mut p = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let left = DSR_TIMEOUT.saturating_sub(t.elapsed());
+                if left.is_zero() {
+                    return None;
+                }
+                let n = unsafe { libc::poll(&mut p, 1, left.as_millis() as i32) };
+                if n <= 0 {
+                    return None;
+                }
+                match self.f.read(&mut buf) {
+                    // The reply is `CSI <row>;<col> R`; 'R' terminates it and
+                    // no other byte of the reply is 'R'.
+                    Ok(k) if k > 0 => {
+                        if buf[..k].contains(&b'R') {
+                            return Some(t.elapsed());
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+        }
+    }
+
+    impl Drop for RawTty {
+        fn drop(&mut self) {
+            unsafe {
+                let fd = self.f.as_raw_fd();
+                let fl = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, fl & !libc::O_NONBLOCK);
+            }
+            let _ = self.f.write_all(b"\x1b_Ga=d\x1b\\\x1b[?25h\x1b[2J\x1b[H");
+            let _ = self.f.flush();
+            unsafe { libc::tcsetattr(self.f.as_raw_fd(), libc::TCSANOW, &self.saved) };
+        }
+    }
+
+    /// Ask the terminal what it can actually do, and print the answers.
+    ///
+    /// This exists because guessing cost a previous investigation real time:
+    /// WezTerm implements the Kitty graphics protocol but **not** its Unicode
+    /// placeholders, so the placeholder path renders as missing glyphs and the
+    /// obvious conclusion ("WezTerm can't do Kitty") is wrong. The protocol has
+    /// a handshake — use it.
+    pub fn probe() {
+        let mut tty = match RawTty::open() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("--probe needs a real terminal: {e}");
+                std::process::exit(3);
+            }
+        };
+        let (cols, rows, cw, ch) = tty.size();
+        println!("terminal: {cols}x{rows} cells, cell {cw}x{ch}px");
+        for (k, v) in [
+            ("TERM", "TERM"),
+            ("TERM_PROGRAM", "TERM_PROGRAM"),
+            ("TERM_PROGRAM_VERSION", "TERM_PROGRAM_VERSION"),
+        ] {
+            println!("{k} = {}", std::env::var(v).unwrap_or_default());
+        }
+
+        // Primary device attributes: proves the terminal answers us at all, and
+        // separates "no support" from "no reply".
+        println!("DA1        : {}", tty.ask(b"\x1b[c").unwrap_or_default());
+
+        // Kitty a=q handshakes, one per transmission medium.
+        let direct = format!("\x1b_Ga=q,i={},f=24,t=d,s=1,v=1;AAAA\x1b\\", 91);
+        println!("kitty t=d  : {}", describe(tty.ask(direct.as_bytes()), 91));
+        match gameboy::termimage::shm_query(92) {
+            Some(q) => {
+                let reply = tty.ask(q.seq.as_bytes());
+                println!("kitty t=s  : {}", describe(reply, 92));
+                q.finish();
+            }
+            None => println!("kitty t=s  : unavailable in this build/platform"),
+        }
+        // Unicode placeholders have no handshake of their own; the protocol
+        // reports support for the *transmission*, and placement support has to
+        // be seen. Say so rather than implying we tested it.
+        println!("placeholders: no protocol handshake exists — must be eyeballed");
+    }
+
+    fn describe(reply: Option<String>, id: u32) -> String {
+        match reply {
+            None => "no reply (unsupported or swallowed by a multiplexer)".into(),
+            Some(r) if gameboy::termimage::shm_reply_ok(&r, id) => {
+                format!("OK  [{}]", escape(&r))
+            }
+            Some(r) => format!("not OK  [{}]", escape(&r)),
+        }
+    }
+
+    fn escape(s: &str) -> String {
+        s.chars()
+            .map(|c| {
+                if c == '\x1b' {
+                    "ESC".to_string()
+                } else if c.is_control() {
+                    format!("\\x{:02x}", c as u32)
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect()
+    }
+
+    pub fn run(args: &Args, rom: &[u8]) {
+        let mut tty = match RawTty::open() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "--tty needs a real terminal: {e}\n\
+                     Run it directly from a graphics-capable terminal (not under a \
+                     pipe, and not inside tmux, which does not pass graphics \
+                     sequences through)."
+                );
+                std::process::exit(3);
+            }
+        };
+        let (cols, rows, cw, ch) = tty.size();
+        let (font_w, font_h) = if cw > 0 && ch > 0 {
+            (cw, ch)
+        } else {
+            args.font
+        };
+
+        // Probe: if the terminal will not answer DSR there is nothing to
+        // measure, and silently timing our own writes is exactly the lie this
+        // mode exists to stop telling.
+        tty.write_all_timed(b"\x1b[?25l\x1b[2J");
+        if tty.sync().is_none() {
+            drop(tty);
+            eprintln!(
+                "terminal did not answer CSI 6 n — cannot measure it honestly \
+                 (foreground pgrp {}, ours {}; a mismatch means reads fail with \
+                 EIO and every reply looks like a timeout)",
+                unsafe { libc::tcgetpgrp(libc::STDIN_FILENO) },
+                unsafe { libc::getpgrp() },
+            );
+            std::process::exit(3);
+        }
+
+        let wire = match args.protocol {
+            ProtocolType::Iterm2 => Wire::Iterm2,
+            _ => Wire::Kitty,
+        };
+        let (algo, factor) = args.upscale.unwrap_or((Algorithm::Nearest, 1));
+        let mut gb = Gameboy::new(rom.to_vec(), None);
+        let mut prep = FramePrep::new();
+        let mut upscaler = Upscaler::new(algo, factor);
+        let (tx_w, tx_h) = upscaler.output_size(SRC_W as usize, SRC_H as usize);
+        let (rect, scale) =
+            fit_metrics(Rect::new(0, 0, cols, rows), SRC_W, SRC_H, font_w, font_h);
+        let mut term = TermImage::new(wire, 0x0067_6202);
+        // Choose the transport the way the frontend does: ask the terminal
+        // whether it can read shared memory, and only then use it.
+        let mut shm_asked = false;
+        if wire == Wire::Kitty && std::env::var("GB_TERM_KITTY").as_deref() != Ok("noshm")
+        {
+            if let Some(q) = gameboy::termimage::shm_query(0x5348) {
+                shm_asked = true;
+                let reply = tty.ask(q.seq.as_bytes()).unwrap_or_default();
+                if gameboy::termimage::shm_reply_ok(&reply, 0x5348) {
+                    term.set_kitty_shm(true);
+                }
+                q.finish();
+            }
+        }
+        let _ = shm_asked;
+        let at = CellRect::new(rect.x, rect.y, rect.width, rect.height);
+
+        for _ in 0..30 {
+            gb.frame();
+        }
+
+        let mut encode_total = Duration::ZERO;
+        let mut write_total = Duration::ZERO;
+        let mut sync_total = Duration::ZERO;
+        let mut bytes_total = 0usize;
+        let mut identical = 0u32;
+        let mut timeouts = 0u32;
+        let mut stalled = false;
+        let mut done = 0u32;
+        let start = Instant::now();
+        for n in 0..args.frames {
+            gb.frame();
+            let mapped = prep.map_with(gb.image(), args.palette, |rgba| {
+                if args.motion {
+                    rgba[0] = rgba[0].wrapping_add(n as u8);
+                }
+            });
+            let scaled = upscaler.apply(mapped, SRC_W as usize, SRC_H as usize);
+
+            let t = Instant::now();
+            let p = term.place(scaled, tx_w as u32, tx_h as u32, at);
+            encode_total += t.elapsed();
+            bytes_total += p.payload_bytes;
+            if !p.changed {
+                identical += 1;
+            }
+            let t = Instant::now();
+            let wrote = !p.changed || tty.write_all_timed(p.seq.as_bytes());
+            write_total += t.elapsed();
+            if !wrote {
+                stalled = true;
+                done = n + 1;
+                break;
+            }
+            match tty.sync() {
+                Some(d) => sync_total += d,
+                None => timeouts += 1,
+            }
+            done = n + 1;
+        }
+        let wall = start.elapsed();
+        drop(tty);
+
+        let f = done.max(1) as f64;
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0 / f;
+        let achieved = f / wall.as_secs_f64();
+        let payload = if term.kitty_shm() {
+            "shm"
+        } else if std::env::var("GB_TERM_IMAGE").as_deref() == Ok("rgb") {
+            "rgb"
+        } else {
+            "png"
+        };
+        let line = format!(
+            "{{\"schema\":1,\"type\":\"tty\",\"protocol\":\"{:?}\",\"payload\":\"{payload}\",\
+             \"term_cols\":{cols},\"term_rows\":{rows},\"cell_px\":\"{font_w}x{font_h}\",\
+             \"display_cols\":{},\"display_rows\":{},\"scale\":{scale:.3},\
+             \"tx_w\":{tx_w},\"tx_h\":{tx_h},\"frames\":{},\
+             \"terminal_saturated\":{stalled},\"achieved_fps\":{achieved:.2},\"dmg_fps\":{DMG_HZ:.3},\
+             \"tx_bytes_avg\":{:.0},\"tx_mb_per_s\":{:.3},\
+             \"encode_ms_avg\":{:.3},\"write_ms_avg\":{:.3},\"sync_ms_avg\":{:.3},\
+             \"frames_identical\":{identical},\"dsr_timeouts\":{timeouts}}}",
+            args.protocol,
+            rect.width,
+            rect.height,
+            done,
+            bytes_total as f64 / f,
+            bytes_total as f64 / wall.as_secs_f64() / 1_048_576.0,
+            ms(encode_total),
+            ms(write_total),
+            ms(sync_total),
+        );
+        println!("{line}");
+        if !args.json {
+            eprintln!(
+                "\nreal terminal: {achieved:.1} fps achieved ({:.1} % of DMG's \
+                 {DMG_HZ:.2}), {:.1} KB/frame, encode {:.3} ms, \
+                 write+sync {:.2} ms",
+                achieved / DMG_HZ as f64 * 100.0,
+                bytes_total as f64 / f / 1024.0,
+                ms(encode_total),
+                ms(write_total) + ms(sync_total),
+            );
+        }
     }
 }
 
@@ -550,6 +1061,8 @@ fn parse_args() -> Args {
                 i += 1;
             }
             "--motion" => a.motion = true,
+            "--tty" => a.tty = true,
+            "--probe" => a.probe = true,
             "--json" => a.json = true,
             "--ndjson" => a.ndjson = true,
             "-h" | "--help" => {
@@ -557,7 +1070,9 @@ fn parse_args() -> Args {
                     "render_bench [--rom PATH] [--frames N] [--cols C --rows R]...\n\
                                  [--font WxH] [--upscale ALGO --factor N] [--palette P]\n\
                                  [--protocol kitty|iterm2] [--path legacy|capped]\n\
-                                 [--out FILE] [--motion] [--json] [--ndjson]"
+                                 [--out FILE] [--motion] [--json] [--ndjson]\n\
+                                 [--tty]   drive the real terminal and measure it\n\
+                                 [--probe] ask the terminal what it supports"
                 );
                 std::process::exit(0);
             }

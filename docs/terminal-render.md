@@ -4,6 +4,10 @@
 > [`src/screen/frame.rs`](../src/screen/frame.rs) · Related: [Display scaling](display.md) ·
 > [Telemetry](telemetry.md) · [Frontends](components/frontends.md) · [🗺️ Code map](codemap.md)
 
+> **Sequel:** this page fixed the *size* of what we transmit. The transport itself — shared
+> memory, indexed PNG, and why WezTerm rendered nothing over the Kitty protocol — is
+> [How a frame gets into a terminal](rendering.md).
+
 > The captain, playing on a big window: *"The frame rate on larger screen is diabolical. We
 > should not be losing running speed and lag just because our 8-bit game screen is larger.
 > We are lightyears ahead with tech and power. It's just a fixed size of square — let's scale
