@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`bb6bca5`](https://github.com/Alchemy86/gameboy/tree/bb6bca551af229f6aae1b67da5ce8052ac12f8fa) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`151dd79`](https://github.com/Alchemy86/gameboy/tree/151dd797c4b34712a38edf423efbc041649bfa35) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 > ⚠️ **`src/sound.rs` is being rewritten right now** (two audio crews). To avoid minting
 > line links that break every rebase, this page's `sound.rs` references are **file-level
@@ -104,16 +104,24 @@ output stream. The desktop frontend wires it up in `render_desktop`
 - **No sound on web.** The whole module is `#[cfg(not(target_arch = "wasm32"))]`
   ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
   `0xFF` and is silent. The terminal frontend also runs without audio.
-- **The subtle length-counter edge case is NOT modelled.** Only "trigger reloads length
-  when the counter is zero" is handled; the hardware "extra length clock when enabling
-  length in the first half of a frame-sequencer period" is absent — a classic
-  `cgb_sound`/`dmg_sound` failure.
-- **Register accuracy is measured, and it is low: Blargg `dmg_sound` passes 1 of 12
-  subtests** (`06-overflow on trigger`), per the offline audio harness
+- **Register accuracy is measured: Blargg `dmg_sound` passes 9 of 12 subtests**
+  (01–08 and 11), per the offline audio harness
   ([`testharness/audiocapture.rs`](../../testharness/audiocapture.rs)), which reads the
-  suite's memory-mapped verdict at `$A000`. The failures are read-back masks and
-  trigger/length/sweep/wave edge cases — playback *quality* is unaffected (see
-  [docs/audio.md](../audio.md) §6/§10).
+  suite's memory-mapped verdict at `$A000`. This was 1/12 before the APU accuracy pass:
+  the register-shadow read-back model (`regs` + `NR_READBACK_MASKS`), catch-up-on-access
+  synchronisation (`Sound::catch_up`, called from the MMU before every APU register
+  access so NR52/length/sweep state is never stale), length-expiry disabling the channel,
+  the NRx4 extra-length-clocking quirks (`apply_nrx4_length`), full sweep semantics
+  (always-reloaded shadow/timer/enable on trigger, negate-used tracking, the NR10
+  negate-exit disable), DAC-gated triggers, and the power-on frame-sequencer reset.
+- **The remaining three failures (09/10/12, the wave-RAM access quirks) are a documented
+  non-goal**: they sweep a CPU access across a ~2-T-cycle window around the wave
+  channel's sample fetch (read-returns-current-byte / retrigger corruption / write
+  lands only in the window) and CRC the result. That needs a **T-cycle-stepped APU**
+  with a modelled wave sample-buffer/fetch pipeline plus cycle-exact CPU access
+  positions inside instructions — the same class of restructure as the cycle-stepped
+  PPU the video non-goals (oam_bug, mode-3 timing) are waiting on. Half-modelling it
+  would be guesswork; stopped deliberately, like the CPU crew's non-goals.
 - **NRx1 length writes mask the duty bits** (`v & 0x3F`) — a duty-carrying write like
   `NR11=0x80` used to underflow (debug-mode panic).
 - **NR52 power-off now actually zeroes NR10–NR51** and the channel-status bits; the old
@@ -130,17 +138,28 @@ output stream. The desktop frontend wires it up in `render_desktop`
 
 ## 5. Known quirks and edge cases
 
-- **Trigger behaviour (`NRx4` bit 7).** Writing a trigger restarts the channel: reloads
-  length if zero, reloads the frequency timer, re-arms the envelope, and (channel 1)
-  performs an immediate sweep overflow check that can disable the channel instantly
-  ([`sound.rs:224`](../../src/sound.rs)).
-- **Length-counter "extra clock" edge case.** Enabling the length counter in the first
-  half of a sequencer step gives one extra length tick on hardware — **not modelled** (§4).
-- **Powering off the APU** (`NR52` bit 7 = 0) zeroes `0xFF10–0xFF25` and blocks most
-  register writes while off ([`sound.rs:785`,`902`](../../src/sound.rs)) — modelled.
-- **Wave-RAM access while channel 3 is on.** Reads return the byte currently being played,
-  and writes are blocked while playing ([`sound.rs:888`,`888`](../../src/sound.rs)) — a
-  simplified version of the (model-dependent, timing-sensitive) hardware behaviour.
+- **Trigger behaviour (`NRx4` bit 7).** A trigger restarts the channel: reloads a zero
+  length (with the first-half quirk below), reloads the frequency timer and envelope,
+  resets the sweep unit's shadow copy/timer/enable, performs an immediate sweep
+  calculation + overflow check when shift > 0, and **cannot enable a channel whose DAC
+  is off** — all modelled (dmg_sound 02/03/04 pass).
+- **Length-counter "extra clock" quirks** (`Sound::apply_nrx4_length`): enabling a
+  previously-disabled length counter while the sequencer's next step won't clock length
+  decrements it immediately (disabling the channel on a no-trigger zero), and a trigger
+  reloading a zero counter in that phase loads max−1 — modelled (dmg_sound 03 passes).
+- **Length expiry disables the channel** (the NR52 status flip-flop): reloading or
+  disabling length afterwards does not re-enable it; only a trigger does — modelled.
+- **Powering off the APU** (`NR52` bit 7 = 0) zeroes `0xFF10–0xFF25` (while-on clear,
+  then the flag flips) and blocks non-length register writes while off; on DMG the
+  length counters survive power-off and NRx1 length loads still land while off.
+  Powering **on** resets the frame sequencer to step 0 while the 8192-cycle DIV divider
+  keeps running — modelled (dmg_sound 07/08/11 pass).
+- **Sweep negate quirk**: clearing NR10's negate bit after any negate-mode calculation
+  since the last trigger disables the channel — modelled (dmg_sound 05 passes).
+- **Wave-RAM access while channel 3 is on.** Reads return the byte currently being
+  played and writes are blocked — a simplification. The real DMG behaviour is a
+  ~2-T-cycle access window around the channel's fetch; **not modelled** (the 09/10/12
+  non-goal above).
 - **Noise LFSR width** (7-bit vs 15-bit) via `NR43` bit 3 — modelled
   ([`sound.rs:371`](../../src/sound.rs)).
 
@@ -150,36 +169,40 @@ output stream. The desktop frontend wires it up in `render_desktop`
 > [`testharness/audiocapture.rs`](../../testharness/audiocapture.rs) records every
 > sample the APU produces with a device-free `AudioPlayer`, writes WAVs, analyses
 > pitch/level/continuity/rate, runs Blargg `dmg_sound` and reads its `$A000`
-> verdict (currently **1/12 pass** — the baseline to beat), and pins a
-> determinism hash in `testharness/audio_baseline.txt`. `src/sound.rs` unit tests
-> additionally cover pitch, rate-honesty, and the playback queue policy.
+> verdict (**9/12 pass** — 01–08 + 11; 09/10/12 are the cycle-stepped-APU
+> non-goal), and pins a determinism hash in `testharness/audio_baseline.txt`.
+> Single-ROM TDD mode: `AUDIO_ROM=path/to/rom.gb cargo test --release --test
+> audiocapture` prints one ROM's verdict. `src/sound.rs` unit tests additionally
+> cover pitch, rate-honesty, and the playback queue policy.
 
 1. **Frame-sequencer rates.** Over one second the length counter steps 256×, the envelope
-   64×, and channel-1 sweep 128×. *(Not covered.)*
+   64×, and channel-1 sweep 128×. *(Covered indirectly: dmg_sound 07 measures the
+   length/sweep periods and their sync.)*
 2. **Length auto-stop.** A channel triggered with a finite length and length-enable set
-   goes silent after exactly `length` 256 Hz ticks. *(Not covered.)*
+   goes silent after exactly `length` 256 Hz ticks. *(Covered: dmg_sound 02 passes.)*
 3. **Trigger reloads a zero length** to its max (`64`, or `256` for the wave channel).
-   *(Not covered.)*
+   *(Covered: dmg_sound 02/03 pass.)*
 4. **Envelope fade.** With an increasing envelope, volume steps up by 1 every `period`
-   envelope ticks until 15, then holds. *(Not covered.)*
+   envelope ticks until 15, then holds. *(Not covered directly.)*
 5. **Sweep overflow disables channel 1.** A sweep configuration whose next frequency
-   exceeds 2047 clears `NR52` bit 0 (channel-1 status). *(Not covered.)*
+   exceeds 2047 clears `NR52` bit 0 (channel-1 status). *(Covered: dmg_sound 04/06 pass.)*
 6. **`NR52` status bits.** Reading `0xFF26` reflects which channels are currently active;
-   powering off zeroes `NR10`–`NR25`. *(Not covered.)*
-7. **Register read-back masks.** Each `NRxx` read ORs the correct "unused bit" mask
-   (e.g. `NR52` reads back with bits 4–6 set). *(Not covered.)*
+   powering off zeroes `NR10`–`NR25`. *(Covered: dmg_sound 01/08/11 pass.)*
+7. **Register read-back masks.** Each `NRxx` read ORs the correct "unused bit" mask.
+   *(Covered: dmg_sound 01 passes — see `NR_READBACK_MASKS`.)*
 8. **Wave RAM write-block while playing.** Writes to `0xFF30–0xFF3F` are ignored while
-   channel 3 is enabled. *(Not covered.)*
-9. **The length-counter extra-clock edge case.** Matches hardware. **Expected to FAIL —
-   not modelled.** *(Not covered; known-divergent — this is the `cgb_sound` failure.)*
+   channel 3 is enabled. *(Approximated; the exact DMG access window is the 09/10/12
+   non-goal.)*
+9. **The length-counter extra-clock edge case.** Matches hardware. *(Covered:
+   dmg_sound 03 passes — `apply_nrx4_length`.)*
 10. **Web build is silent** (module compiled out). *(Documented behaviour, not a bug.)*
 
 ## 7. Test ROMs that exercise it
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Blargg `dmg_sound`** (12 sub-tests) | Registers, trigger, length, sweep, envelope on DMG | Any of the §5 edge behaviours. |
-| **Blargg `cgb_sound`** (repo screenshot: *failing*) | The CGB APU edge cases | The repo's known APU failure — points straight at the length/trigger edge cases (§4/§5). |
+| **Blargg `dmg_sound`** (12 sub-tests, **9/12 pass**: 01–08 + 11) | Registers, trigger, length, sweep, envelope on DMG | 09/10/12 = the wave-RAM timing non-goal (§4). |
+| **Blargg `cgb_sound`** (not wired) | The CGB APU edge cases | CGB-specific power/length rules — `Sound::dmg_mode` selects per-model behaviour, but the CGB side is untested. |
 | **Mooneye `acceptance/` (no dedicated APU dir)** | — | Mooneye focuses on timing/PPU/CPU; Blargg is the APU authority. |
 | **SameBoy APU tests** | Reference-emulator APU behaviour | Useful cross-check but require SameBoy tooling. |
 

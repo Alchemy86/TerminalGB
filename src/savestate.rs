@@ -39,7 +39,9 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 
 /// State format version. **Bump on any change to the serialised layout.** A
 /// state written by a different version is rejected rather than mis-parsed.
-pub const FORMAT_VERSION: u16 = 1;
+/// v2: APU register shadow (`Sound::regs`, 22 bytes) + `dmg_mode` flag added
+/// for hardware-accurate NRxx read-back (dmg_sound 01-registers).
+pub const FORMAT_VERSION: u16 = 2;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

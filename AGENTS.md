@@ -141,14 +141,22 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - **Offline audio harness:** `cargo test --release --test audiocapture`
   (`testharness/audiocapture.rs`) captures the APU's sample stream device-free, writes WAVs to
   `target/testrom-artifacts/audio/`, checks rate/pitch/level/continuity (built-in 440 Hz tone
-  ROM), reads Blargg `dmg_sound`'s memory verdict at `$A000` (**currently 1/12 pass** — the
-  accuracy frontier), and pins an FNV hash in `testharness/audio_baseline.txt`
-  (re-bless: `UPDATE_AUDIO_BASELINE=1`). Any change to `src/sound.rs` synthesis will move
-  these hashes — listen to the WAVs before re-blessing.
-- **APU semantic fixes to preserve:** NRx1 length writes mask duty bits (`v & 0x3F`; NR11=0x80
-  used to panic in debug); NR52 power-off zeroes NR10–NR51 *while still on* (clearing after
-  `on=false` is a no-op because `wb` ignores writes when off); a powered-off APU still emits
-  silence at full sample rate (never stall the stream).
+  ROM), reads Blargg `dmg_sound`'s memory verdict at `$A000` (**9/12 pass**: 01–08 + 11;
+  09/10/12 are the cycle-stepped-APU wave-timing non-goal), and pins an FNV hash in
+  `testharness/audio_baseline.txt` (re-bless: `UPDATE_AUDIO_BASELINE=1`). Single-ROM TDD
+  mode: `AUDIO_ROM=<path> [AUDIO_FRAMES=n]` runs one ROM and prints its verdict. Any change
+  to `src/sound.rs` synthesis will move these hashes — listen to the WAVs before re-blessing.
+- **APU accuracy model (dmg_sound 1/12 → 9/12) — things to preserve:** register read-back is
+  `regs[i] | NR_READBACK_MASKS[i]` (raw-byte shadow; NRx1 length loads mask duty `v & 0x3F`);
+  the MMU calls `Sound::catch_up()` before every APU register access (lazy ~45 ms blocks
+  otherwise leave NR52/length/sweep stale — this is what makes all the timing subtests pass);
+  length expiry clears the channel-enable flip-flop; NRx4 extra-length-clock quirks live in
+  `apply_nrx4_length`; sweep state fully reloads on trigger + negate-exit disable quirk;
+  NR52 power-off zeroes NR10–NR51 *while still on* (clearing after `on=false` is a no-op),
+  DMG preserves length counters across power and allows NRx1 length writes while off, and
+  power-on resets the frame sequencer to step 0 (DIV divider keeps running); a powered-off
+  APU still emits silence at full sample rate (never stall the stream). Save-state format is
+  v2 (APU shadow regs + flags added).
 ## Terminal frontend (TUI)
 
 - The terminal frontend is a proper `ratatui` TUI split across three files in `src/screen/`:

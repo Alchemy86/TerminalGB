@@ -77,6 +77,10 @@ struct Capture {
 }
 
 fn run_capture(rom_path: &Path, frames: u32) -> Capture {
+    run_capture_inner(rom_path, frames, false)
+}
+
+fn run_capture_inner(rom_path: &Path, frames: u32, stop_on_verdict: bool) -> Capture {
     let data = std::fs::read(rom_path)
         .unwrap_or_else(|e| panic!("cannot read ROM {}: {e}", rom_path.display()));
     let mut cpu = Cpu::new(data, Some(rom_path.to_path_buf()));
@@ -95,6 +99,23 @@ fn run_capture(rom_path: &Path, frames: u32) -> Capture {
         if cpu.memory.gpu.updated {
             cpu.memory.gpu.updated = false;
             frames_done += 1;
+            // TDD mode: stop as soon as the Blargg verdict lands (plus a
+            // small grace so the result text is fully written).
+            if stop_on_verdict
+                && frames_done % 10 == 0
+                && cpu.memory.rb(0xA001) == 0xDE
+                && cpu.memory.rb(0xA002) == 0xB0
+                && cpu.memory.rb(0xA003) == 0x61
+                && cpu.memory.rb(0xA000) != 0x80
+            {
+                for _ in 0..5 {
+                    while !cpu.memory.gpu.updated {
+                        cpu.do_cycle();
+                    }
+                    cpu.memory.gpu.updated = false;
+                }
+                break;
+            }
         }
     }
 
@@ -397,6 +418,33 @@ fn staged_rom(spec: &AudioSpec) -> PathBuf {
 }
 
 fn main() {
+    // Single-ROM TDD mode: AUDIO_ROM=<path> [AUDIO_FRAMES=<n>] runs one ROM,
+    // prints its stats + Blargg $A000 verdict, and exits non-zero unless the
+    // verdict is pass. The red→green flip of one dmg_sound sub-test is
+    // observed through exactly this mode.
+    if let Ok(rom) = std::env::var("AUDIO_ROM") {
+        let frames: u32 = std::env::var("AUDIO_FRAMES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3600);
+        let cap = run_capture_inner(Path::new(&rom), frames, true);
+        let stats = analyze(&cap.samples);
+        println!(
+            "{rom}: {} samples ({:.2}s emulated), rms {:.4}, peak {:.3}",
+            stats.samples, stats.seconds, stats.rms, stats.peak
+        );
+        match &cap.blargg_status {
+            Some((status, text)) => {
+                println!("blargg verdict: ${status:02X}\n---\n{}\n---", text.trim());
+                std::process::exit(if *status == 0 { 0 } else { 1 });
+            }
+            None => {
+                println!("no blargg signature at $A001-3 (ran {} cycles)", cap.cycles);
+                std::process::exit(2);
+            }
+        }
+    }
+
     let update = std::env::var("UPDATE_AUDIO_BASELINE").is_ok();
     let baseline = load_baseline();
     let mut failures: Vec<String> = Vec::new();

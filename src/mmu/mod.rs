@@ -408,8 +408,14 @@ impl<'a> MemoryManagementUnit<'a> {
             // (Pan Docs "Interrupts").
             0xFF0F => self.intf | 0b11100000,
             0xFF10..=0xFF3F => {
+                // Catch the APU up to "now" first: NR52 status, length and
+                // sweep state are otherwise evaluated lazily in ~45 ms blocks
+                // and read stale (see Sound::catch_up).
                 #[cfg(not(target_arch = "wasm32"))]
-                return self.sound.as_ref().map_or(0xFF, |s| s.rb(address));
+                return self.sound.as_mut().map_or(0xFF, |s| {
+                    s.catch_up();
+                    s.rb(address)
+                });
                 #[cfg(target_arch = "wasm32")]
                 0xFF
             }
@@ -463,10 +469,12 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF00 => self.keypad.wb(value),
             0xFF01..=0xFF02 => self.serial.wb(address, value),
             0xFF04..=0xFF07 => self.timer.wb(address, value),
-            0xFF10..=0xFF3F =>
-            {
+            0xFF10..=0xFF3F => {
+                // Catch-up before the write so the frame-sequencer position
+                // the write interacts with is current (see Sound::catch_up).
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(ref mut sound) = self.sound {
+                    sound.catch_up();
                     sound.wb(address, value);
                 }
             }
@@ -631,7 +639,11 @@ impl<'a> MemoryManagementUnit<'a> {
         if self.sound.is_none() {
             self.sound = Some(crate::sound::Sound::new());
         }
-        self.sound.as_mut().unwrap().set_player(player);
+        let sound = self.sound.as_mut().unwrap();
+        // DMG carts get DMG APU semantics (length counters survive power-off
+        // etc. — what Blargg's dmg_sound asserts); CGB carts get CGB rules.
+        sound.set_mode(self.gbmode != GbMode::Color);
+        sound.set_player(player);
     }
 
     /// Tell the audio player whether the frontend is running faster than real

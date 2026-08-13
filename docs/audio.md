@@ -273,15 +273,14 @@ The bugs above (mono downmix, 62.5 fps pacing, 1-second queue) made it sound
 makes it sound like a DMG, which is the goal. Resist "improving" the 4-bit grit
 into something smooth and inauthentic.
 
-An honest remaining gap (tracked in [apu.md](components/apu.md), measured, not
-hidden): the offline harness runs Blargg `dmg_sound` and reads its memory-mapped
-verdict — **1 of 12 subtests passes** (`06-overflow on trigger`). The failures
-are register-visible accuracy corners (read-back masks, trigger/length/sweep
-edge cases, wave-RAM access rules — see §10 item 4), not the playback *quality*
-this page is about. Three of those corners were fixed in this pass because the
-harness tripped over them: NRx1 length writes no longer underflow on duty bits,
-NR52 power-off now actually zeroes NR10–NR51, and a powered-off APU now emits
-silence at the full sample rate instead of stalling the stream.
+The register-visible accuracy corners (§10 item 4) were then driven green by a
+TDD pass against the harness's `$A000` verdict: **Blargg `dmg_sound` passes
+9 of 12 subtests** (from 1/12) — register read-back masks, length-counter
+clocking including the extra-clock quirks, trigger semantics, sweep details
+including the negate quirk, and NR52 power semantics. The three remaining
+failures (09/10/12) are the DMG wave-RAM access-window quirks, which need a
+T-cycle-stepped APU — a documented structural non-goal, like the video
+mode-3/OAM ones. Details in [apu.md](components/apu.md).
 
 ---
 

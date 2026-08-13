@@ -44,17 +44,6 @@ impl VolumeEnvelope {
         }
     }
 
-    fn rb(&self, a: u16) -> u8 {
-        match a {
-            0xFF12 | 0xFF17 | 0xFF21 => {
-                ((self.initial_volume & 0xF) << 4)
-                    | if self.goes_up { 0x08 } else { 0 }
-                    | (self.period & 0x7)
-            }
-            _ => unimplemented!(),
-        }
-    }
-
     fn wb(&mut self, a: u16, v: u8) {
         match a {
             0xFF12 | 0xFF17 | 0xFF21 => {
@@ -122,18 +111,6 @@ impl LengthCounter {
         }
     }
 
-    fn is_active(&self) -> bool {
-        self.value > 0
-    }
-
-    fn rb(&self, a: u16) -> u8 {
-        match a {
-            0xFF11 | 0xFF16 | 0xFF20 => (self.max - self.value) as u8,
-            0xFF1B => (256 - self.value) as u8,
-            _ => unimplemented!(),
-        }
-    }
-
     fn wb(&mut self, a: u16, v: u8) {
         match a {
             // NRx1 for the 64-step channels carries the duty cycle in bits 7-6
@@ -143,20 +120,24 @@ impl LengthCounter {
             // 64 - 128: underflow panic in debug, wrap in release.
             0xFF11 | 0xFF16 | 0xFF20 => self.value = self.max - ((v & 0x3F) as u16),
             0xFF1B => self.value = 256 - (v as u16),
-            0xFF14 | 0xFF19 | 0xFF1E | 0xFF23 => {
-                self.enabled = v & 0x40 == 0x40;
-                if v & 0x80 == 0x80 && self.value == 0 {
-                    self.value = self.max;
-                }
-            }
+            // NRx4 (enable + trigger reload) is handled by
+            // Sound::apply_nrx4_length — it needs the frame-sequencer phase
+            // and the channel-enable flag for the extra-clocking quirks.
             _ => (),
         }
     }
 
-    fn step(&mut self) {
+    /// One 256 Hz length clock. Returns true when the counter just expired —
+    /// the caller must then disable the channel (hardware clears the channel
+    /// enable; nothing short of a trigger re-enables it, so a later length
+    /// reload or length-disable must NOT resurrect the NR52 status bit —
+    /// dmg_sound 02-len ctr tests 8 and 10).
+    fn step(&mut self) -> bool {
         if self.enabled && self.value > 0 {
             self.value -= 1;
+            return self.value == 0;
         }
+        false
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {
@@ -192,6 +173,9 @@ struct SquareChannel {
     sweep_delay: u8,
     sweep_freq: u16,
     sweep_enabled: bool,
+    /// A sweep calculation has run in negate mode since the last trigger —
+    /// clearing NR10's negate bit while this is set disables the channel.
+    sweep_negate_used: bool,
     blip: BlipBuf,
     last_amp: i32,
 }
@@ -214,6 +198,7 @@ impl SquareChannel {
             sweep_delay: 0,
             sweep_freq: 0,
             sweep_enabled: false,
+            sweep_negate_used: false,
             blip,
             last_amp: 0,
         }
@@ -228,7 +213,7 @@ impl SquareChannel {
     }
 
     fn run(&mut self, start_time: u32, end_time: u32) {
-        if !self.enabled || !self.length.is_active() || self.period == 0 {
+        if !self.enabled || self.period == 0 {
             if self.last_amp != 0 {
                 self.blip.add_delta(start_time, -self.last_amp);
                 self.last_amp = 0;
@@ -258,24 +243,34 @@ impl SquareChannel {
         self.enabled = true;
         self.calculate_period();
         self.delay = 0; // No initial delay for square channels
-        if self.sweep_period != 0 || self.sweep_shift != 0 {
-            self.sweep_enabled = true;
-            self.sweep_freq = self.freq;
-            self.sweep_delay = if self.sweep_period == 0 {
-                8
-            } else {
-                self.sweep_period
-            };
-            if self.sweep_shift != 0 {
-                let _ = self.calc_sweep_freq();
-            }
+                        // Sweep trigger semantics (gg8 wiki; dmg_sound 04-sweep): the shadow
+                        // frequency and timer ALWAYS reload, the internal enable flag is set
+                        // iff period or shift is non-zero (a stale `true` from an earlier
+                        // trigger must not survive — 04-sweep test 10), the negate-used flag
+                        // resets, and a non-zero shift performs an immediate calculation +
+                        // overflow check (which can disable the channel on the spot).
+        self.sweep_freq = self.freq;
+        self.sweep_delay = if self.sweep_period == 0 {
+            8
+        } else {
+            self.sweep_period
+        };
+        self.sweep_enabled = self.sweep_period != 0 || self.sweep_shift != 0;
+        self.sweep_negate_used = false;
+        if self.sweep_shift != 0 {
+            let _ = self.calc_sweep_freq();
         }
     }
 
+    /// One sweep frequency calculation + overflow check. Every calculation
+    /// made in negate mode is remembered (`sweep_negate_used`): clearing the
+    /// negate bit in NR10 afterwards kills the channel (the sweep negate
+    /// quirk — dmg_sound 05-sweep details tests 4-6).
     fn calc_sweep_freq(&mut self) -> u16 {
         let offset = self.sweep_freq >> self.sweep_shift;
         if self.sweep_decrease {
-            self.sweep_freq - offset
+            self.sweep_negate_used = true;
+            self.sweep_freq.wrapping_sub(offset)
         } else {
             let new_freq = self.sweep_freq + offset;
             if new_freq > 2047 {
@@ -329,6 +324,7 @@ impl SquareChannel {
         w.u8(self.sweep_delay);
         w.u16(self.sweep_freq);
         w.bool(self.sweep_enabled);
+        w.bool(self.sweep_negate_used);
         w.i32(self.last_amp);
     }
 
@@ -351,6 +347,7 @@ impl SquareChannel {
         self.sweep_delay = r.u8()?;
         self.sweep_freq = r.u16()?;
         self.sweep_enabled = r.bool()?;
+        self.sweep_negate_used = r.bool()?;
         self.last_amp = r.i32()?;
         Ok(())
     }
@@ -399,11 +396,7 @@ impl WaveChannel {
     }
 
     fn run(&mut self, start_time: u32, end_time: u32) {
-        if !self.enabled
-            || !self.length.is_active()
-            || !self.dac_enabled
-            || self.period == 0
-        {
+        if !self.enabled || !self.dac_enabled || self.period == 0 {
             if self.last_amp != 0 {
                 self.blip.add_delta(start_time, -self.last_amp);
                 self.last_amp = 0;
@@ -526,7 +519,7 @@ impl NoiseChannel {
     }
 
     fn run(&mut self, start_time: u32, end_time: u32) {
-        if !self.enabled || !self.length.is_active() {
+        if !self.enabled {
             if self.last_amp != 0 {
                 self.blip.add_delta(start_time, -self.last_amp);
                 self.last_amp = 0;
@@ -602,6 +595,22 @@ impl NoiseChannel {
     }
 }
 
+/// Read-back masks for `NR10`–`NR52` (`0xFF10..=0xFF26`): a CPU read returns
+/// the last written byte OR'd with this mask — unused/write-only bits read as
+/// ones. This is the exact table Blargg's `dmg_sound` `01-registers` asserts
+/// (`tests/dmg_sound/source/01-registers.s`, `masks:`), and it matches Pan
+/// Docs' Audio_Registers page. Note NR13/NR31/NR33/NR41 read as pure `0xFF`
+/// (frequency and length loads are write-only), NRx2 reads back verbatim, and
+/// NR52's entry covers only its always-set bits 4–6 (bit 7 + status bits are
+/// live state, composed in `rb`).
+const NR_READBACK_MASKS: [u8; 23] = [
+    0x80, 0x3F, 0x00, 0xFF, 0xBF, // NR10-NR14 (0xFF15 unused ->
+    0xFF, 0x3F, 0x00, 0xFF, 0xBF, //  slot 5 reads 0xFF), NR21-NR24
+    0x7F, 0xFF, 0x9F, 0xFF, 0xBF, // NR30-NR34 (0xFF1F unused ->
+    0xFF, 0xFF, 0x00, 0x00, 0xBF, //  slot 15), NR41-NR44
+    0x00, 0x00, 0x70, // NR50, NR51, NR52
+];
+
 pub struct Sound {
     on: bool,
     channel1: SquareChannel,
@@ -613,6 +622,15 @@ pub struct Sound {
     channel_to_left: u8,
     channel_to_right: u8,
     frame_seq_counter: u8,
+    /// Raw last-written bytes for `0xFF10..=0xFF25`. Hardware read-back is
+    /// `written | mask` (see [`NR_READBACK_MASKS`]) — the decoded channel
+    /// state below is what *plays*, this shadow is what *reads*.
+    regs: [u8; 22],
+    /// DMG APU semantics (true for DMG carts — `GbMode::Classic` /
+    /// `ColorAsClassic`): length counters survive power-off and NRx1 stays
+    /// writable while off. CGB (false) clears lengths on power-off and
+    /// ignores those writes. Blargg's `dmg_sound` asserts the DMG side.
+    dmg_mode: bool,
     player: Option<Box<dyn AudioPlayer>>,
     time: u32,
     prev_time: u32,
@@ -651,6 +669,8 @@ impl Sound {
             channel_to_left: 0xF,  // All channels to left (only lower 4 bits)
             channel_to_right: 0xF, // All channels to right (only lower 4 bits)
             frame_seq_counter: 0,
+            regs: [0; 22],
+            dmg_mode: true,
             player: None,
             time: 0,
             prev_time: 0,
@@ -696,6 +716,10 @@ impl Sound {
         w.u8(self.channel_to_left);
         w.u8(self.channel_to_right);
         w.u8(self.frame_seq_counter);
+        for b in self.regs {
+            w.u8(b);
+        }
+        w.bool(self.dmg_mode);
         w.u32(self.time);
         w.u32(self.prev_time);
         w.u32(self.next_time);
@@ -716,11 +740,57 @@ impl Sound {
         self.channel_to_left = r.u8()?;
         self.channel_to_right = r.u8()?;
         self.frame_seq_counter = r.u8()?;
+        for b in self.regs.iter_mut() {
+            *b = r.u8()?;
+        }
+        self.dmg_mode = r.bool()?;
         self.time = r.u32()?;
         self.prev_time = r.u32()?;
         self.next_time = r.u32()?;
         self.output_period = r.u32()?;
         Ok(())
+    }
+
+    /// Select DMG vs CGB APU semantics (see the `dmg_mode` field docs).
+    /// Called by the MMU once the cartridge's mode is known.
+    pub fn set_mode(&mut self, dmg: bool) {
+        self.dmg_mode = dmg;
+    }
+
+    /// NRx4 length-counter semantics, including the "extra length clocking"
+    /// quirks (gg8 wiki "Gameboy sound hardware" → Obscure Behavior; Blargg
+    /// dmg_sound 03-trigger). `first_half` = the frame sequencer's *next*
+    /// step is one that does NOT clock length (odd step pending), i.e. we
+    /// are in the first half of a 256 Hz length period:
+    ///
+    /// * Enabling a previously-disabled counter in the first half clocks it
+    ///   once immediately; if that clock zeroes it and there is no trigger,
+    ///   the channel is disabled on the spot.
+    /// * A trigger reloads a zero counter with max — but with length enabled
+    ///   in the first half it loads max-1 (the reload is clocked too).
+    fn apply_nrx4_length(
+        length: &mut LengthCounter,
+        channel_enabled: &mut bool,
+        first_half: bool,
+        v: u8,
+    ) {
+        let was_enabled = length.enabled;
+        let enable = v & 0x40 == 0x40;
+        let trigger = v & 0x80 == 0x80;
+        length.enabled = enable;
+        if first_half && !was_enabled && enable && length.value > 0 {
+            length.value -= 1;
+            if length.value == 0 && !trigger {
+                *channel_enabled = false;
+            }
+        }
+        if trigger && length.value == 0 {
+            length.value = if enable && first_half {
+                length.max - 1
+            } else {
+                length.max
+            };
+        }
     }
 
     /// Forward the frontend's fast-forward hint to the player (see
@@ -729,6 +799,18 @@ impl Sound {
         if let Some(ref mut p) = self.player {
             p.set_fast_forward(enabled);
         }
+    }
+
+    /// Process all emulated time that has already elapsed (frame-sequencer
+    /// steps included) *before* a CPU register access lands. The APU is
+    /// otherwise evaluated lazily in ~45 ms blocks (`do_output`), which is
+    /// fine for the sample stream but makes NR52/length/sweep state stale by
+    /// up to a block at read time — Blargg's dmg_sound waits a few length
+    /// periods (3.9 ms each) and reads NR52, so lazy state fails every
+    /// timing-sensitive subtest. Classic catch-up-on-access synchronisation;
+    /// cost is bounded by APU-register access frequency, not bus traffic.
+    pub fn catch_up(&mut self) {
+        self.run();
     }
 
     pub fn do_cycle(&mut self, cycles: u32) {
@@ -779,10 +861,20 @@ impl Sound {
             self.channel4.run(self.prev_time, self.next_time);
 
             if self.frame_seq_counter % 2 == 0 {
-                self.channel1.length.step();
-                self.channel2.length.step();
-                self.channel3.length.step();
-                self.channel4.length.step();
+                // Length expiry disables the channel itself (NR52 status bit),
+                // not just its output — see LengthCounter::step.
+                if self.channel1.length.step() {
+                    self.channel1.enabled = false;
+                }
+                if self.channel2.length.step() {
+                    self.channel2.enabled = false;
+                }
+                if self.channel3.length.step() {
+                    self.channel3.enabled = false;
+                }
+                if self.channel4.length.step() {
+                    self.channel4.enabled = false;
+                }
             }
             if self.frame_seq_counter % 4 == 2 {
                 self.channel1.sweep_step();
@@ -885,87 +977,25 @@ impl Sound {
 
     pub fn rb(&self, a: u16) -> u8 {
         match a {
-            0xFF10 => {
-                0x80 | (self.channel1.sweep_period << 4)
-                    | (if self.channel1.sweep_decrease {
-                        0x08
-                    } else {
-                        0
-                    })
-                    | self.channel1.sweep_shift
+            // NR10..NR51: hardware reads back the raw stored byte OR the
+            // register's always-set mask — write-only bits (frequency loads,
+            // length loads) read as 1s. One rule for all 22 registers; the
+            // per-register truth lives in NR_READBACK_MASKS. This is exactly
+            // what Blargg's dmg_sound 01-registers asserts, value-by-value.
+            0xFF10..=0xFF25 => {
+                let i = (a - 0xFF10) as usize;
+                self.regs[i] | NR_READBACK_MASKS[i]
             }
-            0xFF11 => (self.channel1.duty << 6) | self.channel1.length.rb(a),
-            0xFF12 => self.channel1.volume.rb(a),
-            0xFF13 => 0xFF,
-            0xFF14 => {
-                0xBF | if self.channel1.length.enabled {
-                    0x40
-                } else {
-                    0
-                }
-            }
-            0xFF16 => (self.channel2.duty << 6) | self.channel2.length.rb(a),
-            0xFF17 => self.channel2.volume.rb(a),
-            0xFF18 => 0xFF,
-            0xFF19 => {
-                0xBF | if self.channel2.length.enabled {
-                    0x40
-                } else {
-                    0
-                }
-            }
-            // Wave channel
-            0xFF1A => (if self.channel3.dac_enabled { 0x80 } else { 0 }) | 0x7F,
-            0xFF1B => self.channel3.length.rb(a),
-            0xFF1C => 0x9F | (self.channel3.volume_shift << 5),
-            0xFF1D => 0xFF,
-            0xFF1E => {
-                0xBF | if self.channel3.length.enabled {
-                    0x40
-                } else {
-                    0
-                }
-            }
-            // Noise channel
-            0xFF20 => self.channel4.length.rb(a),
-            0xFF21 => self.channel4.volume.rb(a),
-            0xFF22 => {
-                (self.channel4.shift << 4)
-                    | if self.channel4.width_mode { 0x08 } else { 0 }
-                    | (self.channel4.divisor & 0x07)
-            }
-            0xFF23 => {
-                0xBF | if self.channel4.length.enabled {
-                    0x40
-                } else {
-                    0
-                }
-            }
-            0xFF24 => (self.left_volume << 4) | self.right_volume,
-            0xFF25 => self.channel_to_left << 4 | self.channel_to_right,
             0xFF26 => {
+                // Status bits report the channel-enable flip-flops. Length
+                // expiry and DAC-off clear them; nothing but a trigger (with
+                // DAC on) sets them.
                 (if self.on { 0x80 } else { 0 })
                     | 0x70
-                    | if self.channel1.enabled && self.channel1.length.is_active() {
-                        0x01
-                    } else {
-                        0
-                    }
-                    | if self.channel2.enabled && self.channel2.length.is_active() {
-                        0x02
-                    } else {
-                        0
-                    }
-                    | if self.channel3.enabled && self.channel3.length.is_active() {
-                        0x04
-                    } else {
-                        0
-                    }
-                    | if self.channel4.enabled && self.channel4.length.is_active() {
-                        0x08
-                    } else {
-                        0
-                    }
+                    | if self.channel1.enabled { 0x01 } else { 0 }
+                    | if self.channel2.enabled { 0x02 } else { 0 }
+                    | if self.channel3.enabled { 0x04 } else { 0 }
+                    | if self.channel4.enabled { 0x08 } else { 0 }
             }
             // Wave RAM
             0xFF30..=0xFF3F => {
@@ -982,13 +1012,47 @@ impl Sound {
 
     pub fn wb(&mut self, a: u16, v: u8) {
         if !self.on && a != 0xFF26 {
+            match a {
+                // Wave RAM is unaffected by APU power: always writable.
+                0xFF30..=0xFF3F => {
+                    if !self.channel3.enabled {
+                        self.channel3.waveram[a as usize - 0xFF30] = v;
+                    }
+                }
+                // DMG only: length counters live outside the powered domain —
+                // NRx1 length loads still land while the APU is off (the
+                // readable duty bits do NOT: the register shadow stays 0, and
+                // NRx1 length bits are write-only anyway, so power-off
+                // read-back stays all-clear as 01-registers requires).
+                0xFF11 if self.dmg_mode => self.channel1.length.wb(a, v),
+                0xFF16 if self.dmg_mode => self.channel2.length.wb(a, v),
+                0xFF1B if self.dmg_mode => self.channel3.length.wb(a, v),
+                0xFF20 if self.dmg_mode => self.channel4.length.wb(a, v),
+                _ => {}
+            }
             return;
+        }
+
+        // Shadow every NR10..NR51 write so read-back returns the raw byte
+        // (see rb / NR_READBACK_MASKS). The decode below is what plays.
+        if let 0xFF10..=0xFF25 = a {
+            self.regs[(a - 0xFF10) as usize] = v;
         }
 
         match a {
             0xFF10 => {
+                let new_decrease = v & 0x08 == 0x08;
+                // Sweep negate quirk: leaving negate mode after at least one
+                // negate-mode calculation since the last trigger disables the
+                // channel immediately (Pan Docs; dmg_sound 05-sweep details).
+                if self.channel1.sweep_decrease
+                    && !new_decrease
+                    && self.channel1.sweep_negate_used
+                {
+                    self.channel1.enabled = false;
+                }
                 self.channel1.sweep_period = (v >> 4) & 0x7;
-                self.channel1.sweep_decrease = v & 0x08 == 0x08;
+                self.channel1.sweep_decrease = new_decrease;
                 self.channel1.sweep_shift = v & 0x7;
             }
             0xFF11 => {
@@ -1009,10 +1073,19 @@ impl Sound {
                 self.channel1.freq =
                     (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel1.calculate_period();
-                self.channel1.length.wb(a, v);
+                let fh = self.frame_seq_counter % 2 == 1;
+                Self::apply_nrx4_length(
+                    &mut self.channel1.length,
+                    &mut self.channel1.enabled,
+                    fh,
+                    v,
+                );
                 self.channel1.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
                     self.channel1.trigger();
+                    // A trigger cannot enable a channel whose DAC is off
+                    // (Pan Docs, Audio_details "Triggering").
+                    self.channel1.enabled &= self.channel1.dac_enabled;
                 }
             }
             0xFF16 => {
@@ -1033,14 +1106,25 @@ impl Sound {
                 self.channel2.freq =
                     (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel2.calculate_period();
-                self.channel2.length.wb(a, v);
+                let fh = self.frame_seq_counter % 2 == 1;
+                Self::apply_nrx4_length(
+                    &mut self.channel2.length,
+                    &mut self.channel2.enabled,
+                    fh,
+                    v,
+                );
                 self.channel2.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
                     self.channel2.trigger();
+                    self.channel2.enabled &= self.channel2.dac_enabled;
                 }
             }
             // Wave channel
-            0xFF1A => self.channel3.dac_enabled = v & 0x80 == 0x80,
+            0xFF1A => {
+                self.channel3.dac_enabled = v & 0x80 == 0x80;
+                // DAC off silences AND disables the channel immediately.
+                self.channel3.enabled &= self.channel3.dac_enabled;
+            }
             0xFF1B => self.channel3.length.wb(a, v),
             0xFF1C => self.channel3.volume_shift = (v >> 5) & 0x3,
             0xFF1D => {
@@ -1051,9 +1135,16 @@ impl Sound {
                 self.channel3.freq =
                     (self.channel3.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel3.calculate_period();
-                self.channel3.length.wb(a, v);
+                let fh = self.frame_seq_counter % 2 == 1;
+                Self::apply_nrx4_length(
+                    &mut self.channel3.length,
+                    &mut self.channel3.enabled,
+                    fh,
+                    v,
+                );
                 if v & 0x80 == 0x80 {
                     self.channel3.trigger();
+                    self.channel3.enabled &= self.channel3.dac_enabled;
                 }
             }
             // Noise channel
@@ -1071,10 +1162,17 @@ impl Sound {
                 self.channel4.calculate_period();
             }
             0xFF23 => {
-                self.channel4.length.wb(a, v);
+                let fh = self.frame_seq_counter % 2 == 1;
+                Self::apply_nrx4_length(
+                    &mut self.channel4.length,
+                    &mut self.channel4.enabled,
+                    fh,
+                    v,
+                );
                 self.channel4.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
                     self.channel4.trigger();
+                    self.channel4.enabled &= self.channel4.dac_enabled;
                 }
             }
             // Wave RAM
@@ -1100,13 +1198,41 @@ impl Sound {
                     // flipping `on` first would turn the loop into a no-op
                     // (the old bug — registers and channel-status bits
                     // survived a power cycle).
+                    //
+                    // DMG: the length *counters* live outside the powered
+                    // domain and survive a power cycle (gg8 wiki "Gameboy
+                    // sound hardware", Obscure Behavior; Blargg dmg_sound
+                    // 08-len ctr during power) — the wb(_, 0) sweep below
+                    // would reload them via the NRx1 handlers, so save and
+                    // restore around it.
+                    let saved_lengths = (
+                        self.channel1.length.value,
+                        self.channel2.length.value,
+                        self.channel3.length.value,
+                        self.channel4.length.value,
+                    );
                     for i in 0xFF10..=0xFF25 {
                         self.wb(i, 0);
+                    }
+                    if self.dmg_mode {
+                        self.channel1.length.value = saved_lengths.0;
+                        self.channel2.length.value = saved_lengths.1;
+                        self.channel3.length.value = saved_lengths.2;
+                        self.channel4.length.value = saved_lengths.3;
                     }
                     self.channel1.enabled = false;
                     self.channel2.enabled = false;
                     self.channel3.enabled = false;
                     self.channel4.enabled = false;
+                }
+                if !self.on && will_be_on {
+                    // Powering on resets the frame sequencer so its NEXT step
+                    // is 0 (length-clocking) — but the underlying 8192-cycle
+                    // divider is DIV-driven and keeps running, which is why
+                    // `next_time` is deliberately left alone (dmg_sound
+                    // 07-len sweep period sync: "Powering up APU MODs next
+                    // frame time with 8192" / "resets 128 Hz sweep divider").
+                    self.frame_seq_counter = 0;
                 }
                 self.on = will_be_on;
             }
