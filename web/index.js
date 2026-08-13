@@ -27,3 +27,31 @@ async function loadFile(file) {
   const u8View = new Uint8Array(arrayBuffer);
   rom = u8View;
 }
+
+// Size the emulator canvas to the largest integer multiple of the native
+// 160x144 that fits the viewport, centred (CSS flex centres it; the surrounding
+// #game backdrop is the black letterbox). Integer scaling keeps `pixelated`
+// rendering crisp — every source pixel maps to the same NxN block. Clamps to 1x
+// so a tiny window crops rather than collapsing the canvas to nothing.
+const NATIVE_W = 160;
+const NATIVE_H = 144;
+
+function fitCanvas() {
+  const canvas = document.querySelector('#game canvas');
+  if (!canvas) return;
+  const scale = Math.max(1, Math.min(
+    Math.floor(window.innerWidth / NATIVE_W),
+    Math.floor(window.innerHeight / NATIVE_H),
+  ));
+  canvas.style.width = `${NATIVE_W * scale}px`;
+  canvas.style.height = `${NATIVE_H * scale}px`;
+}
+
+window.addEventListener('resize', fitCanvas);
+
+// The wasm renderer creates the <canvas> lazily inside #game (only after Play),
+// so watch for it and fit as soon as it appears, then on every resize.
+const gameEl = document.querySelector('#game');
+if (gameEl) {
+  new MutationObserver(fitCanvas).observe(gameEl, { childList: true });
+}

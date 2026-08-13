@@ -147,7 +147,51 @@ void main() {
 }
 ";
 
+/// Compute the centred, integer-scaled OpenGL viewport rectangle
+/// `(x, y, w, h)` in framebuffer pixels for a `tex_w`×`tex_h` source drawn
+/// inside a `fb_w`×`fb_h` framebuffer.
+///
+/// The largest integer N for which `tex_w*N × tex_h*N` still fits the
+/// framebuffer is chosen, so every Game Boy pixel maps to the *same* whole
+/// number of screen pixels (no shimmer from uneven pixel sizes) and the 10:9
+/// aspect ratio is preserved. The rectangle is centred; the leftover border is
+/// letterboxed by the caller's clear.
+///
+/// **N = 0 handling:** when the framebuffer is smaller than the source in
+/// either axis, integer division would give N = 0. We clamp to **N = 1** and
+/// centre, so the image is shown at 1× and cropped by the window edges rather
+/// than dividing to zero or vanishing. `x`/`y` may therefore be negative — that
+/// is deliberate (it centres the crop) and is exactly what `glViewport` expects.
+pub fn integer_scale_viewport(
+    tex_w: u32,
+    tex_h: u32,
+    fb_w: u32,
+    fb_h: u32,
+) -> (i32, i32, i32, i32) {
+    // Degenerate source: nothing sensible to scale; fill the framebuffer.
+    if tex_w == 0 || tex_h == 0 {
+        return (0, 0, fb_w as i32, fb_h as i32);
+    }
+
+    let scale = std::cmp::min(fb_w / tex_w, fb_h / tex_h).max(1);
+    let w = (tex_w * scale) as i32;
+    let h = (tex_h * scale) as i32;
+    let x = (fb_w as i32 - w) / 2;
+    let y = (fb_h as i32 - h) / 2;
+    (x, y, w, h)
+}
+
 impl Glcx {
+    /// Update the GL viewport to a centred, integer-scaled rectangle for the
+    /// given framebuffer size. Called on the `Resized` window event (and each
+    /// frame in `draw`) so enlarging the window actually re-fills it.
+    pub fn resize(&self, tex_w: u32, tex_h: u32, fb_w: u32, fb_h: u32) {
+        let (x, y, w, h) = integer_scale_viewport(tex_w, tex_h, fb_w, fb_h);
+        unsafe {
+            gl::Viewport(x, y, w, h);
+        }
+    }
+
     pub fn new() -> Glcx {
         unsafe {
             let mut vao = 0;
@@ -263,8 +307,12 @@ impl Glcx {
                 gl::TEXTURE_WRAP_T,
                 gl::CLAMP_TO_EDGE as i32,
             );
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            // NEAREST (not LINEAR): the Game Boy screen is a 160x144 grid of
+            // hard-edged pixels. Bilinear filtering smears each pixel into its
+            // neighbours when the image is enlarged, which looks blurry on pixel
+            // art. NEAREST keeps every source pixel an exact square.
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
 
             Glcx {
                 tex,
@@ -298,10 +346,29 @@ impl Glcx {
         panic!("{}", str::from_utf8(&buf).unwrap());
     }
 
-    pub fn draw(&self, width: u32, height: u32, data: &[u8]) {
+    /// Draw the `width`×`height` frame `data` into a `fb_width`×`fb_height`
+    /// framebuffer, integer-scaled and centred with a black letterbox border.
+    pub fn draw(
+        &self,
+        width: u32,
+        height: u32,
+        fb_width: u32,
+        fb_height: u32,
+        data: &[u8],
+    ) {
         unsafe {
-            gl::ClearColor(0.0, 0.0, 1.0, 1.0);
+            // Black border for the letterbox. glClear ignores the viewport (it
+            // clears the whole framebuffer since scissor test is off), so this
+            // paints the border first; the scaled quad is then drawn on top
+            // inside the integer-scaled viewport.
+            gl::ClearColor(0.0, 0.0, 0.0, 1.0);
             gl::Clear(gl::COLOR_BUFFER_BIT);
+
+            // Recompute the integer-scaled, centred viewport every frame so the
+            // image tracks the current window size (and any DPI change).
+            let (vx, vy, vw, vh) =
+                integer_scale_viewport(width, height, fb_width, fb_height);
+            gl::Viewport(vx, vy, vw, vh);
 
             gl::TexImage2D(
                 gl::TEXTURE_2D,
@@ -318,5 +385,106 @@ impl Glcx {
 
             gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::integer_scale_viewport;
+
+    // The Game Boy source resolution used throughout.
+    const GB_W: u32 = 160;
+    const GB_H: u32 = 144;
+
+    /// Every returned rectangle must be a whole-number multiple of the source
+    /// (so pixels stay even) and centred (borders on opposite sides differ by
+    /// at most 1 from integer division).
+    fn assert_integer_and_centred(tex_w: u32, tex_h: u32, fb_w: u32, fb_h: u32) {
+        let (x, y, w, h) = integer_scale_viewport(tex_w, tex_h, fb_w, fb_h);
+        assert_eq!(w % tex_w as i32, 0, "width {w} not a multiple of {tex_w}");
+        assert_eq!(h % tex_h as i32, 0, "height {h} not a multiple of {tex_h}");
+        assert_eq!(
+            w / tex_w as i32,
+            h / tex_h as i32,
+            "aspect ratio not preserved (unequal scale on the two axes)"
+        );
+        // Centred: leading border equals trailing border within rounding.
+        let right = fb_w as i32 - (x + w);
+        let bottom = fb_h as i32 - (y + h);
+        assert!(
+            (x - right).abs() <= 1,
+            "not horizontally centred: {x} vs {right}"
+        );
+        assert!(
+            (y - bottom).abs() <= 1,
+            "not vertically centred: {y} vs {bottom}"
+        );
+    }
+
+    #[test]
+    fn exact_multiple_fills_completely() {
+        // 2x: 320x288 fits exactly, no border.
+        assert_eq!(
+            integer_scale_viewport(GB_W, GB_H, 320, 288),
+            (0, 0, 320, 288)
+        );
+        // 4x.
+        assert_eq!(
+            integer_scale_viewport(GB_W, GB_H, 640, 576),
+            (0, 0, 640, 576)
+        );
+    }
+
+    #[test]
+    fn picks_largest_fitting_integer() {
+        // 700x600: width allows 4x (640), height allows 4x (576) -> 4x.
+        assert_eq!(
+            integer_scale_viewport(GB_W, GB_H, 700, 600),
+            (30, 12, 640, 576)
+        );
+        // Height is the limiting axis: 1000x300 -> height/144 = 2 -> 2x.
+        let (_, _, w, h) = integer_scale_viewport(GB_W, GB_H, 1000, 300);
+        assert_eq!((w, h), (320, 288));
+    }
+
+    #[test]
+    fn non_integer_framebuffer_letterboxes() {
+        // 2.5x worth of space: must snap DOWN to 2x and centre, never 2.5x.
+        assert_integer_and_centred(GB_W, GB_H, 400, 360);
+        let (x, y, w, h) = integer_scale_viewport(GB_W, GB_H, 400, 360);
+        assert_eq!((w, h), (320, 288), "must snap to 2x, not stretch to 2.5x");
+        assert_eq!((x, y), (40, 36), "leftover space must be centred");
+        // Odd/awkward sizes stay integer + centred.
+        assert_integer_and_centred(GB_W, GB_H, 483, 291);
+        assert_integer_and_centred(GB_W, GB_H, 1000, 1000);
+        assert_integer_and_centred(GB_W, GB_H, 161, 145);
+    }
+
+    #[test]
+    fn window_smaller_than_source_clamps_to_1x_and_crops() {
+        // N would be 0; we clamp to 1x. Rect is source-sized and centred, so
+        // x/y go negative -> the window edges crop it. Never zero-sized.
+        let (x, y, w, h) = integer_scale_viewport(GB_W, GB_H, 100, 100);
+        assert_eq!((w, h), (160, 144), "must clamp to 1x, not 0x");
+        assert!(w > 0 && h > 0, "viewport must never collapse to zero");
+        assert_eq!(
+            (x, y),
+            (-30, -22),
+            "1x crop must be centred (negative offset)"
+        );
+
+        // Zero-sized framebuffer (e.g. minimised window) still yields 1x, not a
+        // divide-by-zero or empty rect.
+        let (_, _, w0, h0) = integer_scale_viewport(GB_W, GB_H, 0, 0);
+        assert_eq!((w0, h0), (160, 144));
+    }
+
+    #[test]
+    fn degenerate_source_fills_framebuffer() {
+        // A zero-dimension source can't be scaled; fall back to filling the fb
+        // rather than dividing by zero.
+        assert_eq!(integer_scale_viewport(0, 144, 640, 480), (0, 0, 640, 480));
+        assert_eq!(integer_scale_viewport(160, 0, 640, 480), (0, 0, 640, 480));
+        assert_eq!(integer_scale_viewport(0, 0, 640, 480), (0, 0, 640, 480));
     }
 }

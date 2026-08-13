@@ -9,7 +9,38 @@
   </head>
   <style type="text/css">
     html, body { height: 100%; overflow: hidden }
-    #game {border: 1px solid black; width: 160px; height: 144px; background: black;}
+
+    /* Before a ROM is loaded #game is the little placeholder inside the
+       decorative Game Boy shell. */
+    #game { width: 160px; height: 144px; background: black; }
+
+    /* Once the wasm renderer appends its <canvas>, blow the screen up to fill
+       the viewport: a black, flex-centred backdrop (this is the letterbox)
+       holding the integer-scaled canvas. Keyboard controls drive the emulator,
+       so covering the decorative on-screen buttons costs nothing. */
+    #game:not(:empty) {
+      position: fixed;
+      inset: 0;
+      width: auto; height: auto;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    /* Keep every Game Boy pixel a hard square when the canvas is scaled up.
+       Without this the browser bilinear-smooths the upscale and blurs it.
+       `pixelated` is listed last so modern browsers prefer it; the earlier
+       values are fallbacks for Firefox / Safari / older WebKit. */
+    #game canvas {
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: -moz-crisp-edges;
+      image-rendering: crisp-edges;
+      image-rendering: pixelated;
+      display: block;
+      /* width/height are set by fitCanvas() to the largest integer multiple. */
+    }
   </style>
   <body>
     <div class="theater"></div>

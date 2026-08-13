@@ -10,6 +10,19 @@ shades (DMG) or 15-bit RGB (CGB). Every frontend has to blow that up to fill a r
 window/canvas/terminal, and **how** it does the blow-up is the whole question the captain
 asked: *"it's just pixel screens — can we enlarge, smoothly, scale like vector?"*
 
+> **Implementation status (2026-08-13).** The 🥇 desktop fix and 🥈 web fix below
+> are now **implemented** on the desktop GL path (`src/screen/desktop.rs`,
+> `src/gameboy.rs`) and the web frontend (`web/index.html`, `web/index.js`):
+> `NEAREST` filtering, a `gl::Viewport` update on resize, integer-scale +
+> black letterbox (default, with a documented N=0 clamp-to-1×-and-crop), and a
+> `image-rendering: pixelated` + integer-CSS-scale web canvas that fills the
+> viewport and re-fits on window resize. The integer-scale maths is unit-tested
+> (`integer_scale_viewport`, `src/screen/desktop.rs`), and both paths were
+> visually verified headlessly — desktop through a faithful replica of the GL
+> pipeline on llvmpipe, web in Chrome via computed-layout + screenshot. The
+> pixel-art upscalers (§2 option 3) and the LCD/CRT shaders remain **proposals**,
+> not implemented. Per-frontend detail is corrected inline below.
+
 This page answers three things:
 
 1. **[What each frontend does today](#1-what-happens-today-per-frontend)** — from the code,
@@ -24,8 +37,8 @@ This page answers three things:
 
 | Frontend | Native size | Scaled by | Filter | User can resize? | Aspect ratio |
 |---|---|---|---|---|---|
-| **Desktop** | opens at **160×144** logical px | the **GPU** (textured quad) | **bilinear (`LINEAR`)** — *blurry* | **Yes** (`resizable(true)`) | **not preserved**, and resize is **broken** (no viewport update) |
-| **Web** | canvas **160×144**, shown at **160×144 CSS px** | **not scaled at all** (1:1) | n/a (no upscale happens) | **No** | 1:1, so correct but tiny |
+| **Desktop** | opens at **160×144** logical px | the **GPU** (textured quad) | ~~`LINEAR`~~ → **`NEAREST`** — *crisp* ✅ | **Yes** (`resizable(true)`) | **preserved** — integer scale + black letterbox; resize updates the viewport ✅ |
+| **Web** | backing store **160×144**, CSS-scaled up | **CSS integer scale** (GPU compositor) | **`pixelated`** — *crisp* ✅ | **Yes** — fills viewport, re-fits on resize ✅ | **preserved** (integer multiple, centred, letterboxed) |
 | **Terminal** | source **160×144**, ×1–4 | **nearest** at source, then protocol **fits** to a pane | nearest → protocol's fit | **Yes** (bigger terminal/pane) | **preserved** (letterboxed by `Resize::Fit`) |
 
 ### Desktop — GPU-scaled, but smoothed *and* the resize is broken
@@ -38,30 +51,45 @@ drawn onto a quad whose vertices span the full **normalised device coordinates**
 ([`desktop.rs:160`](../src/screen/desktop.rs)) — i.e. the image is stretched to fill whatever
 the GL viewport is. So there **is** a real GPU scaling pipeline (glutin 0.28 + raw OpenGL).
 
-Two problems live in that pipeline:
+Two problems used to live in that pipeline — **both are now fixed**; the original
+diagnosis is kept here for context, with the fix noted after each:
 
-- **It smooths.** Both the min and mag texture filters are `gl::LINEAR`
-  ([`desktop.rs:266-267`](../src/screen/desktop.rs)) — bilinear. Enlarging the window makes
-  the picture **blurry**, not crisp. For pixel art this is the classic accidental-blur
-  source, and it is exactly what a purist does *not* want.
-- **Resize doesn't actually work.** There is **no `gl::Viewport` call anywhere** in the
-  codebase, and the `Resized` window event is a no-op that just returns `Poll`
-  ([`desktop.rs:115-118`](../src/screen/desktop.rs)). OpenGL sets the viewport to the window
-  size **once**, when the context is first made current (160×144 here), and never again. The
-  quad is in NDC, so it maps to that stale viewport. Net effect when you drag the window
-  bigger: the 160×144 image stays pinned to a 160×144 patch (bottom-left on most drivers) and
-  the rest of the window shows the clear colour — which is set to **blue** (`ClearColor(0,0,1,1)`,
-  [`desktop.rs:303`](../src/screen/desktop.rs)), another cosmetic oddity. *(Behaviour is
-  driver-dependent and was reasoned from the code, not observed — this environment has no
-  display. The definite, code-level fact is that viewport management is absent.)*
-- **No aspect-ratio handling.** Even once the viewport is fixed, the quad fills the whole
-  viewport, so a non-10:9 window would **stretch/distort** the image. There is no letterbox
-  and no integer-scale snapping.
+- **It smoothed.** Both the min and mag texture filters were `gl::LINEAR`
+  ([`desktop.rs`](../src/screen/desktop.rs)) — bilinear. Enlarging the window made the
+  picture **blurry**, not crisp. → **Fixed:** both filters are now `gl::NEAREST`, so every
+  Game Boy pixel stays an exact square. (Verified: a headless llvmpipe render of the pipeline
+  shows hard pixel edges and a staircased diagonal instead of a soft ramp.)
+- **Resize didn't actually work.** There was **no `gl::Viewport` call anywhere**, and the
+  `Resized` window event was a no-op. OpenGL set the viewport once, at context creation
+  (160×144), and never again, so dragging the window bigger left the image pinned to a
+  160×144 patch with the rest showing the (blue) clear colour. → **Fixed:** the `Resized`
+  event now calls `gl_window.resize()` + `Glcx::resize()` (`src/gameboy.rs`), and `draw()`
+  re-applies the integer-scaled viewport every frame, so the image tracks the window. The
+  clear colour is now **black** for a clean letterbox.
+- **No aspect-ratio handling.** Even with a live viewport, the quad fills the whole viewport,
+  so a non-10:9 window would **stretch/distort** the image. → **Fixed:** `integer_scale_viewport()`
+  picks the largest N where `160N×144N` fits, centres it, and the black clear letterboxes the
+  border — preserving 10:9 and keeping pixels even. **N=0** (window smaller than 160×144) is
+  clamped to **1× and centre-cropped**, so the image never divides to zero or vanishes.
 
-So the honest summary for desktop: *it can enlarge and it uses the GPU, but the result is
-blurry and the enlarge path is currently broken by a missing viewport update.*
+So the honest summary for desktop: *it enlarges on the GPU, crisply (`NEAREST`), with a
+working viewport and integer-scale letterboxing that preserves 10:9.*
 
-### Web — pixel-perfect, but stuck at 160×144 (no enlarging)
+### Web — pixel-perfect, and now enlargeable (was stuck at 160×144)
+
+> **Now implemented.** The backing store stays 160×144 (the `put_image_data` blit is
+> unchanged — no Rust/WASM change), but the canvas now carries
+> `image-rendering: pixelated` (+ `-moz-crisp-edges` / `crisp-edges` /
+> `-webkit-optimize-contrast` fallbacks) and `web/index.js`'s `fitCanvas()` sets its CSS
+> size to the largest integer multiple of 160×144 that fits the viewport, re-running on
+> `resize` and when the wasm renderer appends the canvas (`MutationObserver`). `#game`
+> becomes a fixed, flex-centred black backdrop once it holds the canvas (`#game:not(:empty)`),
+> giving a centred, aspect-correct, letterboxed, crisp image that grows with the window.
+> Verified in Chrome: at 640×480 → 3×, 900×500 → 3× (height-limited), 1280×800 → 5×, each
+> centred with 10:9 preserved and `image-rendering` computing to `pixelated`; a live
+> window resize re-fit 3×→5× without reload. The original 1:1 analysis follows for context.
+
+
 
 The canvas backing store is set to the native size — `canvas.set_width(160)` /
 `set_height(144)` ([`web.rs:54-55`](../src/screen/web.rs)) — and the frame is written with
@@ -195,48 +223,48 @@ libretro/RetroArch ship a large, battle-tested free shader library (`dmg`, `lcd-
 
 Ranked by **value-for-effort**. The decisive fact: **desktop already has a GPU pipeline**
 (glutin + OpenGL), so nearest-scaling and shaders are nearly free *there*; the terminal
-already does the right thing; and the web path does **no** scaling at all, so its fix is the
-biggest visible win for the least code.
+already does the right thing; and the web path did **no** scaling at all, so its fix was the
+biggest visible win for the least code. The 🥇 and 🥈 items below are now **implemented**
+(status noted in each heading); 🥉 and the follow-ups remain as before.
 
-### 🥇 First thing to do — Desktop: make it crisp and make resize work
+### 🥇 Desktop: crisp + working resize + integer letterbox — ✅ DONE
 
-The most likely current complaint ("it's blurry / it won't enlarge properly") is entirely in
-the desktop GL path, and the pipeline to fix it already exists. Three small, cheap changes:
+The most likely complaint ("it's blurry / it won't enlarge properly") was entirely in the
+desktop GL path. Three changes, all in the existing pipeline, now landed:
 
-1. **Switch the texture filter `LINEAR` → `NEAREST`** ([`desktop.rs:266-267`](../src/screen/desktop.rs)).
-   One-line-each change; instantly crisp instead of blurry. This is the single highest-value
-   lever.
-2. **Add `gl::Viewport` on the `Resized` event** ([`desktop.rs:115`](../src/screen/desktop.rs))
-   so enlarging the window actually fills it. Without this, (1) alone still won't visibly
-   help — which is why this is a *small set* of changes, not a true one-liner, and is left for
-   the implementation task rather than done here.
-3. **Compute an integer scale + letterbox** — pick the largest N where `160N×144N` fits the
-   framebuffer, size the quad to `160N×144N` centred, and clear the border. Preserves 10:9,
-   avoids uneven pixels. (A non-integer "fill" mode can be an option, but integer should be
-   the default.)
+1. **Texture filter `LINEAR` → `NEAREST`** ([`desktop.rs`](../src/screen/desktop.rs), the
+   `TEXTURE_MIN/MAG_FILTER` params) — instantly crisp instead of blurry. ✅
+2. **`gl::Viewport` on the `Resized` event** — `src/gameboy.rs` intercepts `Resized` and calls
+   `gl_window.resize()` + `Glcx::resize()`; `draw()` also re-applies the viewport every frame,
+   so enlarging the window fills it. ✅
+3. **Integer scale + letterbox (default).** `integer_scale_viewport()` picks the largest N
+   where `160N×144N` fits the framebuffer, centres it, and the black clear letterboxes the
+   border — preserving 10:9 and keeping pixels even. **N=0** clamps to 1× and centre-crops.
+   No stretch/fill mode was added (integer is the only mode); a fill mode remains an easy
+   opt-in follow-up. ✅
 
-Cost: all three live in the existing GL pipeline — **essentially free per frame**. This is
-what I would do first.
+Cost: all three live in the existing GL pipeline — **essentially free per frame**. The scale
+maths is unit-tested (`integer_scale_viewport` tests in `desktop.rs`: exact multiples, largest
+fitting N, non-integer framebuffers, N=0 clamp, degenerate source) and the pipeline was
+rendered headlessly on llvmpipe to confirm crisp `NEAREST` output with a centred black
+letterbox.
 
-> **Why not implemented in this docs pass:** (1) is arguably a safe one-liner, but on its own
-> it changes nothing the user can see until (2) fixes the viewport, and I can't visually
-> verify GL output in this display-less environment. Per "verify, don't claim," the whole
-> desktop fix is scoped as the first implementation task, not slipped into a docs change.
+### 🥈 Web: enlargeable + pixelated — ✅ DONE (no Rust/WASM change)
 
-### 🥈 Web: enlarge it at all — one CSS property + an integer CSS scale
+Web used to show a 160×144 postage stamp with **no** way to grow it. Now, with **no** change
+to the `put_image_data` blit:
 
-Web currently shows a 160×144 postage stamp with **no** way to grow it, so this is the
-biggest quality-of-life jump for the least effort, and needs **no** Rust/WASM change:
+1. The canvas carries **`image-rendering: pixelated`** (with `-moz-crisp-edges` /
+   `crisp-edges` / `-webkit-optimize-contrast` fallbacks) so the CSS upscale stays crisp. ✅
+2. **`fitCanvas()`** ([`web/index.js`](../web/index.js)) sets the canvas CSS size to the
+   largest integer multiple of 160×144 that fits the viewport, centred (via the flex-centred
+   `#game:not(:empty)` black backdrop), re-running on `resize` and when the wasm renderer
+   appends the canvas. The backing store stays 160×144 (cheap); CSS scales on the GPU
+   compositor (free). ✅
 
-1. Add **`image-rendering: pixelated`** to the canvas (and `-webkit-optimize-contrast` for
-   older WebKit) so any CSS upscale stays crisp instead of browser-smoothed.
-2. Give the canvas a **CSS size that is an integer multiple** of 160×144 (e.g.
-   `width: 480px; height: 432px` for 3×), or size it to the largest integer multiple that
-   fits its container in JS and letterbox the rest. The backing store stays 160×144 (cheap);
-   CSS does the scale on the GPU compositor (free).
-
-This keeps the current `put_image_data` blit exactly as-is — only [`web/index.html`](../web/index.html)
-CSS (and optionally a few lines of JS) change.
+Only [`web/index.html`](../web/index.html) (CSS) and [`web/index.js`](../web/index.js) (JS)
+changed. Verified in Chrome across window sizes (3×/5×, centred, 10:9, `pixelated`) plus a
+live resize.
 
 ### 🥉 Terminal: already good — leave it
 
@@ -269,17 +297,18 @@ raises source resolution), and expose it in the on-screen help.
 Phrased like the component pages' test lists, so this slots into the same spec-first flow
 (and ties into the deterministic frame-hashing in [debugging](debugging.md)):
 
-1. **Desktop enlarges crisply.** Resizing the window scales the image to fill it with
-   `NEAREST` filtering; no blur. *(Not covered — blurry `LINEAR` today.)*
+1. **Desktop enlarges crisply.** Resizing the window scales the image with `NEAREST`
+   filtering; no blur. ✅ **Done** — filters are `NEAREST`; verified by headless llvmpipe render.
 2. **Desktop resize actually fills the window.** A `gl::Viewport` update on `Resized` makes
-   the image track the window. **Expected to FAIL today — no viewport call.** *(Not covered.)*
+   the image track the window. ✅ **Done** — `Resized` handler + per-frame viewport in `draw()`.
 3. **Integer scale + letterbox.** At any window size the image is the largest `160N×144N` that
-   fits, centred, 10:9 preserved, border cleared. *(Not covered.)*
+   fits, centred, 10:9 preserved, border cleared (N=0 → 1× crop). ✅ **Done** — `integer_scale_viewport()`,
+   unit-tested including non-integer sizes and the N=0 edge case.
 4. **Web canvas can be enlarged and stays crisp.** With `image-rendering: pixelated` and an
-   integer CSS size, the canvas scales up without browser smoothing. **Expected to FAIL today
-   — 1:1, property absent.** *(Not covered.)*
+   integer CSS size, the canvas scales up without browser smoothing. ✅ **Done** — verified in
+   Chrome at several window sizes and across a live resize.
 5. **Terminal remains nearest + aspect-correct.** `o` scales with `Nearest`; `Resize::Fit`
-   keeps 10:9. *(Partially true today — regression guard.)*
+   keeps 10:9. *(Unchanged — regression guard; not touched by this pass.)*
 
-**First step:** the desktop crispness + viewport + integer-letterbox change in §3 🥇 — the
-pipeline already exists, the cost is ~zero, and it fixes the most likely current complaint.
+**Remaining next steps:** the pixel-art upscalers and DMG/LCD/CRT shaders (§2–§3) are still
+proposals; a non-integer "fill" desktop mode is an easy opt-in if wanted.

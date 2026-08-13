@@ -131,6 +131,22 @@ impl Gameboy {
                     window_id: _,
                     event: wevent,
                 } => {
+                    // Resizing must update the GL surface *and* the viewport, or
+                    // the image stays pinned to the original 160x144 patch.
+                    // (Both the surface resize and the gl::Viewport call live
+                    // here because they need the GL context, which is current on
+                    // this thread.) draw() re-applies the viewport every frame
+                    // too, so this mainly makes the resize feel immediate.
+                    if let glutin::event::WindowEvent::Resized(physical_size) = &wevent {
+                        gl_window.resize(*physical_size);
+                        cx.resize(
+                            self.width,
+                            self.height,
+                            physical_size.width,
+                            physical_size.height,
+                        );
+                        window.request_redraw();
+                    }
                     *control_flow =
                         process_window(window, &wevent, &mut self, &mut focused)
                 }
@@ -144,7 +160,16 @@ impl Gameboy {
                 glutin::event::Event::RedrawRequested(_) => {
                     if focused {
                         self.frame();
-                        cx.draw(self.width, self.height, self.image());
+                        // Physical (device-pixel) window size drives the
+                        // integer-scale + letterbox computation in draw().
+                        let fb = gl_window.window().inner_size();
+                        cx.draw(
+                            self.width,
+                            self.height,
+                            fb.width,
+                            fb.height,
+                            self.image(),
+                        );
                         gl_window.swap_buffers().unwrap();
                         last_frame_time = std::time::Instant::now();
                     }
