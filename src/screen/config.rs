@@ -116,8 +116,50 @@ impl Default for KeyBindings {
     }
 }
 
+/// How many *device* pixels one terminal cell really is, relative to the cell
+/// size the terminal reports over its escape queries.
+///
+/// This exists because of a HiDPI mismatch specific to pixel-addressed image
+/// protocols (iTerm2/sixel) on scaled Wayland: the terminal answers the
+/// cell-size query (`CSI 16 t`) in **logical** pixels, but renders an inline
+/// image sized in **physical** device pixels. On a display scaled by *S*, an
+/// image sized to the logical cell grid therefore comes out *S* times too small
+/// — the "tiny picture" bug. Multiplying the cell size the frontend feeds to
+/// `ratatui-image` by *S* makes the emitted image physical-pixel sized again, so
+/// it fills the panel. See [`crate::screen::tui`] for where it is applied.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CellScale {
+    /// Detect the factor at runtime (env / X resources); falls back to 1.0.
+    Auto,
+    /// A fixed multiplier. `1.0` is "trust the terminal" (the safe default).
+    Fixed(f32),
+}
+
+impl Default for CellScale {
+    fn default() -> Self {
+        CellScale::Fixed(1.0)
+    }
+}
+
+impl CellScale {
+    /// Parse a config value: `auto`, or a positive number. Out-of-range or
+    /// unparseable values fall back to the default (1.0), never an error.
+    fn from_str(s: &str) -> CellScale {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("auto") {
+            return CellScale::Auto;
+        }
+        match s.parse::<f32>() {
+            // Clamp to a sane band: below 1 would shrink, and nothing needs more
+            // than 8x. A non-finite or <=0 value is meaningless → default.
+            Ok(v) if v.is_finite() && v > 0.0 => CellScale::Fixed(v.clamp(1.0, 8.0)),
+            _ => CellScale::default(),
+        }
+    }
+}
+
 /// The parsed terminal-frontend configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Directory the ROM picker browses by default.
     pub rom_dir: PathBuf,
@@ -125,6 +167,10 @@ pub struct Config {
     pub protocol: Option<String>,
     pub palette: Palette,
     pub keys: KeyBindings,
+    /// Device-pixels-per-cell correction for HiDPI pixel protocols. See
+    /// [`CellScale`]. Default `Fixed(1.0)` = no correction (never regresses a
+    /// low-DPI or already-physical terminal).
+    pub cell_scale: CellScale,
 }
 
 impl Default for Config {
@@ -134,6 +180,7 @@ impl Default for Config {
             protocol: None,
             palette: Palette::Grayscale,
             keys: KeyBindings::default(),
+            cell_scale: CellScale::default(),
         }
     }
 }
@@ -213,6 +260,9 @@ impl Config {
         }
         if let Some(c) = kv.get("key_select").and_then(|v| first_char(v)) {
             cfg.keys.select = c;
+        }
+        if let Some(v) = kv.get("cell_scale") {
+            cfg.cell_scale = CellScale::from_str(v);
         }
         cfg
     }
@@ -367,6 +417,49 @@ mod tests {
         assert_eq!(cfg.keys.b, 'k');
         assert_eq!(cfg.keys.start, 'n');
         assert_eq!(cfg.keys.select, 'm');
+    }
+
+    #[test]
+    fn cell_scale_defaults_to_one() {
+        assert_eq!(Config::default().cell_scale, CellScale::Fixed(1.0));
+        assert_eq!(Config::parse("").cell_scale, CellScale::Fixed(1.0));
+    }
+
+    #[test]
+    fn cell_scale_parses_float_auto_and_clamps() {
+        assert_eq!(
+            Config::parse("cell_scale = 2.0").cell_scale,
+            CellScale::Fixed(2.0)
+        );
+        assert_eq!(
+            Config::parse("cell_scale = 2").cell_scale,
+            CellScale::Fixed(2.0)
+        );
+        assert_eq!(
+            Config::parse("cell_scale = auto").cell_scale,
+            CellScale::Auto
+        );
+        assert_eq!(
+            Config::parse("cell_scale = AUTO").cell_scale,
+            CellScale::Auto
+        );
+        // Out of band / nonsense → safe default 1.0.
+        assert_eq!(
+            Config::parse("cell_scale = 0").cell_scale,
+            CellScale::Fixed(1.0)
+        );
+        assert_eq!(
+            Config::parse("cell_scale = -3").cell_scale,
+            CellScale::Fixed(1.0)
+        );
+        assert_eq!(
+            Config::parse("cell_scale = 99").cell_scale,
+            CellScale::Fixed(8.0)
+        );
+        assert_eq!(
+            Config::parse("cell_scale = nope").cell_scale,
+            CellScale::Fixed(1.0)
+        );
     }
 
     #[test]

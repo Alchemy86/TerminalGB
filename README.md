@@ -67,6 +67,12 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > ([`src/screen/tui.rs`](src/screen/tui.rs)). It opens sized to the terminal and auto-selects
 > the sharpest graphics protocol the terminal advertises; **o** cycles scale, **i** cycles
 > protocol. Audio works here too with `--features audio` (see the ALSA note above).
+>
+> **HiDPI displays:** on a *scaled* Wayland session some terminals (e.g. WezTerm) report their
+> cell size in logical pixels but draw inline images in physical pixels, so the picture comes
+> out shrunk by the scale factor. If the game renders far smaller than the window, add
+> `cell_scale = auto` (or an explicit number like `cell_scale = 2.0`) to
+> `~/.config/gameboy/config.toml`. The default is `1.0` (no correction).
 
 ### 🌐 Web (WebAssembly)
 

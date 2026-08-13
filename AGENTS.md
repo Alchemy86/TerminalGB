@@ -161,6 +161,27 @@ This file is the project's committed home for project-intrinsic agent knowledge:
   per terminal row); it re-fits on resize with no keypress. The display is **borderless** so
   height (the binding constraint for a 10:9 image in tall cells) isn't wasted; status/controls
   are the framed panels.
+- **HiDPI "tiny picture" gotcha (the *real* one, proven with `GB_DEBUG_LAYOUT`):** the earlier
+  `Resize::Scale` fix is correct, but on a **scaled Wayland display** the picture still rendered
+  tiny. Cause, measured on a 192-DPI (2×) box: WezTerm answers the cell-size query (`CSI 16 t`)
+  and `TIOCGWINSZ` in **logical** pixels (cell `8×16`, so `ratatui-image` sizes the iTerm2/sixel
+  image in logical px), but **renders that inline image in *physical* device pixels** — so on
+  scale *S* the picture comes out *S*× too small (784 logical px asked → ~306 px shown ≈ the
+  "310×275" report). Under **XWayland** WezTerm instead reports the *physical* cell (`17×41`) and
+  renders correctly, which is why it only bites native Wayland. Fix: a **`cell_scale`** config
+  key (`config.rs` `CellScale`; default `Fixed(1.0)` = untouched) that multiplies the cell size
+  the frontend feeds the picker — the picker is *rebuilt* via `Picker::from_fontsize(scaled)`
+  (there is no `set_font_size`) so **both** `fit_metrics` and the encoded image become
+  physical-pixel sized. `cell_scale = auto` reads `Xft.dpi/96` (via `xrdb`) / `GDK_SCALE`;
+  `$GAMEBOY_CELL_SCALE` overrides for testing. Proven: at `142×46` cells, `disp_px` 784×704 →
+  1568×1408 with `cell_scale=2`, i.e. it now fills the physical window. **Screenshots are blocked
+  (GNOME/Wayland denies the D-Bus screenshot and `import -window root` is empty), so this was
+  verified by the logged numbers, not by eye** — a human on a HiDPI display must confirm the
+  picture visibly fills. `GB_DEBUG_LAYOUT=<file>` dumps term cells, queried/effective font,
+  area, fit rect, scale and `disp_px` (gated, zero-cost when unset).
+- **Note for HiDPI users:** the correction is **opt-in** (default `1.0` never regresses low-DPI /
+  XWayland). A native-Wayland HiDPI user must add `cell_scale = auto` (or an explicit `2.0`) to
+  their `config.toml` for the picture to fill.
 - Config lives at `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml`; recents at
   `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`. Missing config = defaults, never an
   error. `rom_dir` defaults to `~/roms`.

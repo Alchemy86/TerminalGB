@@ -31,7 +31,7 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
-use crate::screen::config::{Config, Palette, Recent};
+use crate::screen::config::{CellScale, Config, Palette, Recent};
 use crate::screen::romlib::{self, RomEntry};
 
 use std::env;
@@ -66,6 +66,23 @@ use ratatui_image::{
 };
 
 use image::DynamicImage;
+
+/// Append a line to the file named by `$GB_DEBUG_LAYOUT`, if set. Temporary
+/// runtime instrumentation for diagnosing the scaling bug — writes to a file
+/// (never the alternate screen). No-op with the env var unset, so it costs
+/// nothing in normal use.
+fn debug_layout(msg: &str) {
+    if let Some(path) = env::var_os("GB_DEBUG_LAYOUT") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{msg}");
+        }
+    }
+}
 
 /// Wall-clock time one emulated frame occupies. The DMG refreshes at
 /// 59.7275 Hz (4194304 Hz / 70224 cycles-per-frame), **not** a rounded 60 —
@@ -304,6 +321,8 @@ struct App {
     selected: usize,
     /// A transient message shown in the picker (e.g. a load error).
     message: Option<String>,
+    /// Last layout values logged (dedupe `GB_DEBUG_LAYOUT` spam to changes).
+    dbg_last: Option<(Rect, Rect, f32)>,
 }
 
 impl App {
@@ -311,10 +330,34 @@ impl App {
         // Prefer the sharpest protocol the terminal advertises (build_picker),
         // then let an explicit config `protocol` override it.
         let mut picker = build_picker();
+        // HiDPI correction: on a display scaled by S, a pixel-addressed protocol
+        // (iTerm2/sixel) renders our image in *physical* device pixels while the
+        // terminal reported its cell size in *logical* pixels, so an image sized
+        // to the reported grid comes out S times too small. Rebuild the picker
+        // with a cell size multiplied by S, so both `fit_metrics` and the image
+        // the protocol encodes are physical-pixel sized and fill the panel. The
+        // default S is 1.0 (no change), so low-DPI / already-physical terminals
+        // are untouched. See `CellScale`.
+        let (qfw, qfh) = picker.font_size();
+        let scale = resolve_cell_scale(config.cell_scale);
+        if (scale - 1.0).abs() > 1e-3 {
+            let sw = ((qfw as f32 * scale).round() as u16).max(1);
+            let sh = ((qfh as f32 * scale).round() as u16).max(1);
+            let proto = picker.protocol_type();
+            let mut scaled = Picker::from_fontsize((sw, sh));
+            scaled.set_protocol_type(proto);
+            picker = scaled;
+        }
         picker.set_background_color([0, 0, 0, 0]);
         if let Some(pref) = config.protocol.as_deref().and_then(protocol_from_str) {
             picker.set_protocol_type(pref);
         }
+        let (fw, fh) = picker.font_size();
+        debug_layout(&format!(
+            "[picker] protocol={} queried_font=({qfw},{qfh}) cell_scale={scale:.3} \
+             effective_font=({fw},{fh})",
+            protocol_name(picker.protocol_type())
+        ));
         let palette = config.palette;
 
         let mut app = App {
@@ -338,6 +381,7 @@ impl App {
             visible: Vec::new(),
             selected: 0,
             message: None,
+            dbg_last: None,
         };
         app.rescan();
         app
@@ -1059,6 +1103,30 @@ impl App {
     fn render_display(&mut self, f: &mut Frame<'_>, area: Rect) {
         let (font_w, font_h) = self.picker.font_size();
         let (rect, scale) = fit_metrics(area, 160, 144, font_w, font_h);
+        // Temporary instrumentation for the scaling bug: dump the real numbers
+        // (terminal cells, font_size, area, fitted rect, scale, source dims)
+        // once per distinct layout. Read via `GB_DEBUG_LAYOUT=<file>`.
+        if self.dbg_last != Some((area, rect, scale)) {
+            let term = f.area();
+            debug_layout(&format!(
+                "[render] term_cells={}x{} font_size=({font_w},{font_h}) \
+                 area={}x{}@{},{} rect={}x{}@{},{} scale={scale:.3} \
+                 src=160x144 disp_px={}x{}",
+                term.width,
+                term.height,
+                area.width,
+                area.height,
+                area.x,
+                area.y,
+                rect.width,
+                rect.height,
+                rect.x,
+                rect.y,
+                rect.width as u32 * font_w as u32,
+                rect.height as u32 * font_h as u32,
+            ));
+            self.dbg_last = Some((area, rect, scale));
+        }
         if let Some(s) = self.session.as_mut() {
             s.scale = scale;
             if let Some(proto) = s.image.as_mut() {
@@ -1317,6 +1385,89 @@ fn build_picker() -> Picker {
             Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20)))
         }
     }
+}
+
+/// Resolve a [`CellScale`] to a concrete device-pixels-per-cell multiplier.
+///
+/// Priority (first hit wins):
+///   1. `$GAMEBOY_CELL_SCALE` — a quick override for testing, beats the config.
+///   2. an explicit `CellScale::Fixed(x)` from the config.
+///   3. `CellScale::Auto` → [`detect_display_scale`].
+///
+/// Always returns a finite value in `[1.0, 8.0]`; `1.0` means "no correction".
+fn resolve_cell_scale(configured: CellScale) -> f32 {
+    let clamp = |v: f32| {
+        if v.is_finite() {
+            v.clamp(1.0, 8.0)
+        } else {
+            1.0
+        }
+    };
+    if let Some(v) = env::var("GAMEBOY_CELL_SCALE")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+    {
+        return clamp(v);
+    }
+    match configured {
+        CellScale::Fixed(x) => clamp(x),
+        CellScale::Auto => clamp(detect_display_scale()),
+    }
+}
+
+/// Best-effort detection of the display's pixel scale factor, for
+/// `cell_scale = auto`. This is inherently heuristic — there is no in-band way
+/// to read a Wayland output's scale from inside a terminal — so it is opt-in and
+/// falls back to `1.0` (no correction) whenever nothing reliable is found.
+///
+/// Order: `$GDK_SCALE` (integer), `$QT_SCALE_FACTOR` (float), then the X
+/// resource `Xft.dpi` (GNOME sets it for the whole session, XWayland included)
+/// read via `xrdb`, as `dpi / 96`.
+fn detect_display_scale() -> f32 {
+    if let Some(v) = env::var("GDK_SCALE")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+    {
+        if v.is_finite() && v > 0.0 {
+            return v;
+        }
+    }
+    if let Some(v) = env::var("QT_SCALE_FACTOR")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+    {
+        if v.is_finite() && v > 0.0 {
+            return v;
+        }
+    }
+    if let Some(dpi) = xft_dpi() {
+        if dpi > 0.0 {
+            return dpi / 96.0;
+        }
+    }
+    1.0
+}
+
+/// Read `Xft.dpi` from the X resource database via `xrdb -query`. Returns `None`
+/// if `xrdb` is absent, errors, or the key is missing (e.g. a headless or
+/// non-X session). One cheap sub-process at startup, never on the hot path.
+fn xft_dpi() -> Option<f32> {
+    let out = std::process::Command::new("xrdb")
+        .arg("-query")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("Xft.dpi:") {
+            if let Ok(dpi) = rest.trim().parse::<f32>() {
+                return Some(dpi);
+            }
+        }
+    }
+    None
 }
 
 fn protocol_from_str(s: &str) -> Option<ProtocolType> {
