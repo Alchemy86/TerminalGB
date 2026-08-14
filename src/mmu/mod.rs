@@ -1012,8 +1012,18 @@ mod vramdma_tests {
     #[test]
     fn an_hblank_transfer_armed_during_mode_0_moves_a_block_at_once() {
         let mut mem = cgb();
-        mem.wb(0xFF40, 0x80); // LCD on — line 0 starts in mode 2
-        mem.do_cycle(4);
+        mem.wb(0xFF40, 0x80);
+        // The line the PPU *restarts* on has no OAM scan — `STAT` reads mode 0
+        // there and goes straight to mode 3 (`Gpu::skip_first_oam`; Mooneye
+        // `acceptance/ppu/lcdon_timing-GS`: "line 0 starts with mode 0 and goes
+        // straight to mode 3"). So walk on to the next line's real mode 2
+        // rather than assuming the enable puts us in one.
+        for _ in 0..200 {
+            if mem.rb(0xFF41) & 0x03 == 2 {
+                break;
+            }
+            mem.do_cycle(4);
+        }
         assert_eq!(mem.rb(0xFF41) & 0x03, 2, "not in HBlank yet");
         arm(&mut mem, 0xC000, 0x8800);
         mem.wb(0xFF55, 0x83);

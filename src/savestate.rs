@@ -56,7 +56,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// v7: APU corner cases — the sweep unit's pending-calculation timer (and
 /// whether it was armed with a zero shift) and the volume envelope's
 /// pending-step latch, all three of which can be live at a frame boundary
-/// (SameSuite `channel_1_sweep`, `channel_N_nrx2_speed_change`).
+/// (SameSuite `channel_1_sweep`, `channel_N_nrx2_speed_change`); plus the PPU's
+/// STAT interrupt line (`Gpu::stat_line`), the latched `LY==LYC` coincidence
+/// flip-flop (`lyc_match`) and the "no OAM scan on the line the PPU restarts
+/// on" latch (`skip_first_oam`) — all three survive a frame boundary too, so a
+/// state that dropped them would resume with a stale STAT edge (Mooneye
+/// `acceptance/ppu/stat_irq_blocking`, `stat_lyc_onoff`).
 pub const FORMAT_VERSION: u16 = 7;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.

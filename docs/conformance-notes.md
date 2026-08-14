@@ -17,6 +17,129 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the STAT interrupt was four triggers, not one line
+
+`STAT` has four selectable interrupt sources (HBlank, VBlank, OAM, `LY == LYC`).
+On hardware they are wired into **one** signal, and `IF.1` is set on that
+signal's **0→1 transition**. We raised `IF.1` independently from each source,
+which is a different machine: it produces extra interrupts whenever two sources
+overlap, and misses none — so it looks harmless until a game counts them.
+
+Three related defects, all in `src/gpu/mod.rs`, all fixed together because they
+are three terms of the same equation.
+
+### 1. No edge detection ("STAT blocking")
+
+- **Symptom, in user terms:** a game that runs its raster-effect handler off
+  more than one STAT source advances its effect *twice as fast as intended*.
+  The classic shape is a status-bar split driven by both the LYC source and the
+  HBlank source: on the split line the two overlap, we fired twice, and the
+  handler ran an extra time every frame.
+- **Caught by:** Mooneye `acceptance/ppu/stat_irq_blocking`, which arranges
+  `LY == LYC` to stay set across mode 3 so the line is *never* released, and
+  fails on any further interrupt. Nothing in Blargg, dmg-acid2 or SameSuite
+  catches it — a framebuffer comparison cannot see an interrupt that fired.
+- **Hardware behaviour:** the four sources are ORed into one internal signal;
+  the interrupt is requested on its rising edge only. Pan Docs,
+  [STAT](https://gbdev.io/pandocs/STAT.html) ("Spurious STAT interrupts" and the
+  STAT-interrupt-line description); AntonioND's TCAGBD §8.7 gives the OR
+  explicitly.
+- **Carries into the tool:** *count* interrupts over a window rather than
+  observing that one arrived. `gpu::tests::a_source_going_high_behind_another_raises_nothing`
+  is the shape: step the PPU one M-cycle at a time, clear `IF` between steps,
+  and assert the number of raises.
+
+### 2. `STAT` bit 2 was a live comparison, not a latch
+
+- **Symptom, in user terms:** a game that blanks the screen (`LCDC` bit 7 = 0)
+  to rebuild VRAM and reads `STAT` back sees the `LY == LYC` bit change under
+  it, because with the LCD off we reset `LY` to 0 and recomputed the bit. On
+  hardware the comparison is a flip-flop clocked by the PPU: stopping the PPU
+  freezes it, and an `LYC` written while the PPU is off is invisible until it
+  restarts.
+- **Caught by:** Mooneye `acceptance/ppu/stat_lyc_onoff`, whose four rounds
+  read `STAT` back after each step and check both the retained bit and the
+  presence/absence of the interrupt on re-enable. Nothing else in the suite.
+- **Hardware behaviour:** the coincidence flag is latched by the PPU's own
+  comparison clock (Pan Docs, [STAT](https://gbdev.io/pandocs/STAT.html), "LYC
+  == LY"; the test's own comments state the rule outright: "Changing LYC should
+  not have an effect, because the comparison clock is not running").
+- **Also fixed here:** switching the LCD off must **not** force the STAT line
+  low. The flag keeps feeding the OR gate, so a program that switches the LCD
+  off with the flag already set and then switches it back on sees *no* edge and
+  *no* interrupt. Forcing the line low manufactures one — `stat_lyc_onoff`
+  round 2 fails with exactly that.
+
+### 3. The line-144 OAM strobe was modelled as "all of VBlank"
+
+- **Symptom, in user terms:** a game whose only STAT source is the OAM one
+  receives its first interrupt of the frame a whole scanline late — at `LY = 1`
+  instead of `LY = 0` — because the line was held high across VBlank by the same
+  source and the real mode 2 at `LY = 0` produced no edge. Anything that counts
+  scanlines from that interrupt is off by one for the whole frame.
+- **Caught by:** Mooneye `acceptance/ppu/intr_1_2_timing-GS`, which times the
+  gap between the mode-1 interrupt and the next mode-2 interrupt and reports it
+  as a loop count (`$14`/`$15` expected; a one-line delay reads `$31`).
+  `vblank_stat_intr-GS` pins the other half — that the line-144 strobe happens
+  at all, simultaneously with the VBlank interrupt.
+- **Hardware behaviour:** the OAM strobe the mode-2 select bit watches also
+  occurs on line 144, where `STAT` already reads mode 1 — and only there; lines
+  145-153 have no OAM scan. Pan Docs, [STAT](https://gbdev.io/pandocs/STAT.html)
+  ("the STAT OAM interrupt is also triggered by entering VBlank").
+- **Carries into the tool:** the two failure modes are *opposites* and a check
+  must name which one it saw — "no interrupt at `LY = 144`" and "the `LY = 0`
+  interrupt arrived one line late" are both symptoms of getting this term wrong.
+
+### 4. The line the PPU restarts on has no OAM scan
+
+- **Symptom, in user terms:** a game that enables the LCD and immediately polls
+  `STAT` for a mode reads 2 where hardware reads 0, so a "wait until we are out
+  of OAM scan" loop exits at the wrong moment on the very first line.
+- **Caught by:** `stat_lyc_onoff` round 1 step 3 (it reads `STAT` one
+  instruction after the enable and demands `$C0`) and, in much more detail,
+  `lcdon_timing-GS`.
+- **Hardware behaviour:** `lcdon_timing-GS`'s own header states it — "line 0
+  starts with mode 0 and goes straight to mode 3".
+
+### What this did NOT fix, and why it is not STAT work
+
+`acceptance/ppu/lcdon_timing-GS` and `lcdon_write_timing-GS` are still red, and
+after attempting them the honest verdict is that they are **not** separable from
+the cycle-stepped-PPU rewrite (`docs/mealybug.md`), whatever their names
+suggest. Both sample `LY`, `STAT`, and OAM/VRAM **accessibility** at 1 M-cycle
+resolution across the first three scanlines after the LCD is switched on
+(`lcdon_timing-GS`'s expectation table is 24 samples at nop counts 0, 17, 60,
+110, 130, 174, 224, 244 in three passes one M-cycle apart). Passing them needs
+two things this core does not have:
+
+1. **VRAM/OAM access blocking** by mode. We do not enforce it, deliberately: our
+   mode 3 is a fixed 172 dots where hardware varies it 172-289, so enforcing
+   blocking on top of the approximation would silently *drop* writes a game
+   placed legally in HBlank. Not enforcing loses two test rows; enforcing on a
+   wrong mode 3 corrupts real games.
+2. **A PPU stepped per bus access**, not once per instruction. Today
+   `Gpu::do_cycle` runs after the whole instruction, so a mid-instruction read
+   sees the PPU as of the previous instruction — a systematic 1-2 M-cycle skew
+   that no amount of phase tuning fixes.
+
+Recorded as a coverage/priority finding rather than a fix: the audit that
+scheduled this work marked the separability of these two as an inference, and
+the inference was wrong for exactly half the item.
+
+### Measured
+
+Mooneye `acceptance` **53 → 55** of 75 (`stat_irq_blocking`, `stat_lyc_onoff`
+FAIL→PASS; no other row moved). GB Emulator Shootout published rows **192 → 194
+of 264**, full suite **194 → 196 of 311**, **zero regressions** — every other row
+identical, run before and after through the same manifest, against `main` at
+`c10da12` (the VRAM DMA work above had already taken it from 188 to 192). In-repo
+harnesses unchanged: `testroms` 33/35 matching baseline, `savestate`, `battery`,
+`audiocapture` (dmg_sound 12/12), `trainer`, `audioperf` (0.265 ms/frame) all
+green. Mealybug 3/79, SameSuite 54/76, Mooneye `emulator-only` 27/28 and `misc`
+2/8 all unmoved.
+
+---
+
 ## 2026-08-14 — CGB VRAM DMA: two aborts a guest can trigger, and four SameSuite rows
 
 SameSuite `dma/` was **0/4**. Reading the code to size the work turned up two `panic!`s

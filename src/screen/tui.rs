@@ -5674,7 +5674,23 @@ mod tests {
             );
             assert_eq!(app.video_status(), "off", "{what}: launch state");
 
-            let fds = || std::fs::read_dir("/proc/self/fd").map(|d| d.count()).ok();
+            // Count only the descriptors pointing into *this* test's directory.
+            // `/proc/self/fd` is process-global and the rest of the suite runs
+            // in parallel, so a raw count is a race: it failed at random on
+            // roughly one run in six with nothing about the video path changed,
+            // and more often as the suite grew. Filtering by target makes the
+            // measurement mean what the assertion says it means.
+            let fds = || {
+                std::fs::read_dir("/proc/self/fd").ok().map(|d| {
+                    d.filter_map(|e| e.ok())
+                        .filter(|e| {
+                            std::fs::read_link(e.path())
+                                .map(|t| t.starts_with(&dir))
+                                .unwrap_or(false)
+                        })
+                        .count()
+                })
+            };
             let before = fds();
             for cycle in 0..10 {
                 app.toggle_video();

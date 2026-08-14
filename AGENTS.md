@@ -321,13 +321,14 @@ record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
     rendering criteria": at the start of each scanline, `WY == LY` latches it for the frame;
     nothing about the enable bit. We tested `win_on` first, so a game that sets `WY` while the
     window is off and enables it later in the frame **never showed the window at all**.
-  - **Entering mode 1 raises STAT for the mode-1 *or* the mode-2 select bit.** AntonioND
-    TCAGBD §8.7: `(ScreenMode = 1) AND (STAT.ENABLE_VBL || STAT.ENABLE_OAM)` — "Not only
-    VBL!!". Missing the `LY=144` fire loses one STAT interrupt per frame and puts everything
-    the handler toggles on the wrong parity of scanlines. Also flips
+  - **The OAM strobe reaches LY=144.** A program with only the mode-2 select bit still takes
+    a STAT interrupt at `LY = 144`; missing it loses one STAT interrupt per frame and puts
+    everything the handler toggles on the wrong parity of scanlines. Flips
     `mooneye/acceptance/ppu/vblank_stat_intr-GS` FAIL → PASS (**acceptance 52 → 53**, PPU reds
     11 → 10). **A PPU test ROM caught an interrupt bug** — an argument for scoring screens, not
-    only serial verdicts.
+    only serial verdicts. *(This used to be recorded as TCAGBD §8.7's "mode 1 honours the
+    mode-2 bit". That framing is wrong for the rest of VBlank and cost `intr_1_2_timing-GS` —
+    see the STAT-line section below.)*
 - **Calibration before anyone promises a number:** on the shootout's 24 published Mealybug
   rows, SameBoy scores 15, **bgb scores 2**, PyBoy 0. This is not a suite a competent
   cycle-stepped PPU sweeps.
@@ -335,6 +336,52 @@ record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
   `make docs-links` reported "rewrote 0 references" for a change that shifted every line after
   295 by +9 and after 535 by +35 — `docs-check` only catches out-of-range rot. Fix the
   `path:line` spans by hand, then re-run `make docs-check`.
+
+## The STAT interrupt is ONE LINE, not four triggers (`src/gpu/mod.rs`)
+
+**Mooneye `acceptance` 53 → 55/75; shootout published rows 192 → 194/264 (full suite
+194 → 196/311), zero regressions, measured before and after through the same manifest
+against `main` at `c10da12`.**
+Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
+
+- **`stat_signal` ORs the enabled sources; `refresh_stat_line` raises `IF.1` on the 0→1
+  transition ONLY.** Every path that can move a term must call it: a mode change, an `LY`
+  increment, and writes to `STAT`, `LYC` and `LCDC`. `do_cycle` also re-samples once per
+  chunk, because the line-144 OAM strobe expires on a plain dot count with no event of its
+  own. This is "STAT blocking" and it **affects real games** — a raster split driven off
+  both the LYC and the HBlank source ran twice as fast when we fired per source.
+- **`STAT` bit 2 is a LATCHED flip-flop (`lyc_match`), not `line == lyc` computed on read.**
+  With the LCD off the comparison clock stops: the flag freezes, a write to `LYC` is
+  invisible, and enabling the LCD re-latches it against the `LY` the PPU restarts from.
+  `acceptance/ppu/stat_lyc_onoff` reads `STAT` back after every step to check exactly this.
+- **Switching the LCD off must NOT force the STAT line low.** The coincidence flag keeps
+  feeding the OR gate, so off-then-on with the flag already set produces no edge and no
+  interrupt. Forcing it low manufactures one and fails `stat_lyc_onoff` round 2. The *mode*
+  terms are gated on `lcd_on` — a deliberate choice, not a hardware reading: `STAT` really
+  does read mode 0 with the LCD off, but an ungated `m0_inte` would fire every time a game
+  blanks the screen, and no test covers it. Documented at `stat_signal`.
+- **The line-144 OAM strobe is line 144 ONLY** (`oam_strobe`), not "mode 1 honours the
+  mode-2 bit". Held across all of VBlank it keeps the line high through lines 145-153, which
+  *blocks* the real mode 2 at `LY = 0` and delivers its interrupt a scanline late —
+  `intr_1_2_timing-GS` counts precisely that and reads `$31` instead of `$14`/`$15`.
+  **This is a two-sided constraint: both the presence and the narrowness are wired.**
+- **The line the PPU restarts on has no OAM scan** (`skip_first_oam`): `STAT` reads mode 0
+  through the OAM slot and goes straight to mode 3.
+- **`lcdon_timing-GS` and `lcdon_write_timing-GS` are NOT separable from the cycle-stepped
+  PPU** — this was attempted and the audit's separability call was an inference that turned
+  out wrong for half the item. They sample OAM/VRAM **accessibility** at 1 M-cycle
+  resolution over three scanlines, so they need (a) mode-based VRAM/OAM access blocking and
+  (b) the PPU stepped per bus access. **Do not add (a) alone**: with mode 3 fixed at 172
+  dots where hardware varies it 172-289, blocking would silently drop writes a game placed
+  legally in HBlank — strictly worse than not blocking. Schedule both with the FIFO rewrite.
+- **Save-state `FORMAT_VERSION` is now 6** (`stat_line`, `lyc_match`, `skip_first_oam`).
+- **Debugging tool worth knowing: `GB_SCOUT_SCREEN=1 mooneye_scout <rom>`** prints the ROM's
+  own assertion table by decoding the BG tilemap as ASCII. `stat_lyc_onoff` says
+  `Fail: r1 step 3` and `lcdon_timing-GS` prints the cycle, expected and actual byte — the
+  Fibonacci register dump says none of that. **And the Mooneye sources are the real
+  documentation**: `git clone --depth 1 https://github.com/Gekkio/mooneye-test-suite` and
+  read the `.s` file. Every behaviour above was derived from the assembly plus its expected
+  table, not guessed from the test's name.
 
 ## Test-ROM correctness harness
 

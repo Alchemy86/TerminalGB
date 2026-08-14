@@ -6,6 +6,16 @@ const VOAM_SIZE: usize = 0xA0;
 pub const HEIGHT: usize = 144;
 pub const WIDTH: usize = 160;
 
+/// Dots of OAM scan (mode 2) at the head of every scanline.
+const OAM_DOTS: u32 = 80;
+/// Dots of pixel transfer (mode 3). Fixed length here — hardware varies it
+/// between 172 and 289 and steals the difference from HBlank.
+const DRAW_DOTS: u32 = 172;
+/// Dots in one scanline: 80 + 172 + 204 (HBlank).
+const LINE_DOTS: u32 = 456;
+/// The first VBlank line.
+const VBLANK_LINE: u8 = 144;
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum PrioType {
     Color0,
@@ -58,6 +68,20 @@ pub struct Gpu {
     pub interrupt: u8,
     pub gbmode: GbMode,
     hblanking: bool,
+    /// The current level of the **STAT interrupt line** — the OR of every
+    /// enabled STAT source. `IF.1` is raised on its 0→1 transition only; see
+    /// [`Gpu::refresh_stat_line`].
+    stat_line: bool,
+    /// The **latched** `LY == LYC` coincidence flag (`STAT` bit 2). It is a
+    /// flip-flop clocked by the PPU, not a live comparison: with the LCD off
+    /// the comparison clock stops, so the flag keeps whatever it held and a
+    /// new `LYC` cannot move it. See [`Gpu::refresh_lyc_match`].
+    lyc_match: bool,
+    /// Set when `LCDC` bit 7 goes 0→1: the scanline the PPU restarts on has
+    /// **no OAM scan**. `STAT` reads mode 0 where every other line reads
+    /// mode 2, and the mode-2 STAT source does not strobe. Cleared as soon as
+    /// that line reaches mode 3.
+    skip_first_oam: bool,
 }
 
 impl Default for Gpu {
@@ -112,6 +136,9 @@ impl Gpu {
             csprit: [[[0u8; 3]; 4]; 8],
             vrambank: 0,
             hblanking: false,
+            stat_line: false,
+            lyc_match: false,
+            skip_first_oam: false,
         }
     }
 
@@ -168,6 +195,9 @@ impl Gpu {
         w.u8(self.interrupt);
         w.u8(self.gbmode.to_u8());
         w.bool(self.hblanking);
+        w.bool(self.stat_line);
+        w.bool(self.lyc_match);
+        w.bool(self.skip_first_oam);
     }
 
     fn save_cpal(w: &mut crate::savestate::Writer, pal: &[[[u8; 3]; 4]; 8]) {
@@ -236,6 +266,9 @@ impl Gpu {
         self.interrupt = r.u8()?;
         self.gbmode = crate::mode::GbMode::from_u8(r.u8()?)?;
         self.hblanking = r.bool()?;
+        self.stat_line = r.bool()?;
+        self.lyc_match = r.bool()?;
+        self.skip_first_oam = r.bool()?;
         Ok(())
     }
 
@@ -252,19 +285,25 @@ impl Gpu {
         while ticksleft > 0 {
             // Stepped in <=80-tick chunks so the 80-dot OAM-scan boundary is never
             // overshot; finer register/LY visibility is not modelled (see ppu.md).
-            let curticks = if ticksleft >= 80 { 80 } else { ticksleft };
+            let curticks = if ticksleft >= OAM_DOTS {
+                OAM_DOTS
+            } else {
+                ticksleft
+            };
             self.modeclock += curticks;
             ticksleft -= curticks;
 
             // A scanline is 456 dots (Pan Docs "Rendering"): 144 visible + 10 VBlank
             // = 154 lines/frame. (The old "114 ticks" was the M-cycle count.)
-            if self.modeclock >= 456 {
-                self.modeclock -= 456;
+            if self.modeclock >= LINE_DOTS {
+                self.modeclock -= LINE_DOTS;
                 self.line = (self.line + 1) % 154;
-                self.check_interrupt_lyc();
+                // LY moved, so the comparison clock re-latches the coincidence
+                // flag and the STAT line may follow it.
+                self.refresh_lyc_match();
 
                 // This is a VBlank line
-                if self.line >= 144 && self.mode != 1 {
+                if self.line >= VBLANK_LINE && self.mode != 1 {
                     self.change_mode(1);
                 }
             }
@@ -272,14 +311,19 @@ impl Gpu {
             // Fixed 80 / 172 / 204 dot split for mode 2 (OAM) / 3 (draw) / 0 (HBlank).
             // Hardware mode 3 is variable (172-289) and steals from HBlank; this flat
             // split is a deliberate approximation — see ppu.md "honest approximations".
-            if self.line < 144 {
-                if self.modeclock <= 80 {
-                    if self.mode != 2 {
+            if self.line < VBLANK_LINE {
+                if self.modeclock <= OAM_DOTS {
+                    // The line the PPU restarts on has no OAM scan: `STAT`
+                    // keeps reading mode 0 until pixel transfer begins. See
+                    // `skip_first_oam`.
+                    if self.skip_first_oam {
+                        self.check_wy_trigger();
+                    } else if self.mode != 2 {
                         self.change_mode(2);
                     }
-                } else if self.modeclock <= (80 + 172) {
-                    // 252 cycles
+                } else if self.modeclock <= (OAM_DOTS + DRAW_DOTS) {
                     if self.mode != 3 {
+                        self.skip_first_oam = false;
                         self.change_mode(3);
                     }
                 } else {
@@ -289,6 +333,11 @@ impl Gpu {
                     }
                 }
             }
+            // Re-sample the line at the end of every chunk. Mode changes and
+            // LY increments already refresh it, but the line-144 OAM strobe
+            // expires on a plain dot count with no event of its own, and
+            // nothing else in VBlank would notice it fall.
+            self.refresh_stat_line();
         }
     }
 
@@ -301,37 +350,114 @@ impl Gpu {
         }
     }
 
-    fn check_interrupt_lyc(&mut self) {
-        if self.lyc_inte && self.line == self.lyc {
+    /// The level of the **STAT interrupt line**: the OR of every enabled STAT
+    /// source, as the hardware wires them together.
+    ///
+    /// From AntonioND's TCAGBD §8.7 "STAT Interrupt" (and Pan Docs
+    /// <https://gbdev.io/pandocs/STAT.html>, "STAT interrupt"):
+    ///
+    /// ```text
+    /// line = ((LY = LYC)       AND STAT.ENABLE_LYC)
+    ///     OR ((ScreenMode = 0) AND STAT.ENABLE_HBL)
+    ///     OR ((ScreenMode = 1) AND STAT.ENABLE_VBL)
+    ///     OR (OAM strobe       AND STAT.ENABLE_OAM)
+    /// ```
+    ///
+    /// The last term is [`Gpu::oam_strobe`] rather than "mode = 2" because the
+    /// strobe also happens on line 144 — see there.
+    ///
+    /// **Switching the LCD off does not clear the line** — it stops the PPU,
+    /// so the mode-derived terms go away, but the coincidence flip-flop holds
+    /// its value and keeps feeding the OR gate. That is what makes
+    /// `acceptance/ppu/stat_lyc_onoff` rounds 1 and 2 come out right: with the
+    /// LYC source enabled and the flag already set, the program switches the
+    /// LCD off, `ei`s, and must see **no** interrupt (the line never fell, so
+    /// there is no edge to find) — and then switching the LCD back on with the
+    /// flag still set must *also* raise nothing. Forcing the line low while
+    /// the LCD is off fails round 2 with a spurious interrupt on re-enable.
+    ///
+    /// The mode terms *are* gated on `lcd_on`, which is a deliberate choice
+    /// rather than a reading of the hardware: `STAT` genuinely reads mode 0
+    /// with the LCD off, so an ungated `m0_inte` term would raise a STAT
+    /// interrupt every time a game blanks the screen. No test in any suite
+    /// covers it, and inventing an interrupt there is the more dangerous of
+    /// the two guesses.
+    fn stat_signal(&self) -> bool {
+        (self.lyc_inte && self.lyc_match)
+            || (self.lcd_on
+                && ((self.m0_inte && self.mode == 0)
+                    || (self.m1_inte && self.mode == 1)
+                    || (self.m2_inte && self.oam_strobe())))
+    }
+
+    /// Is the PPU's **OAM-scan strobe** — the thing the mode-2 STAT select bit
+    /// actually watches — currently asserted?
+    ///
+    /// It is asserted during mode 2 on every visible line, and *also* on
+    /// **line 144 only**, the first VBlank line, where `STAT` already reads
+    /// mode 1. Pan Docs <https://gbdev.io/pandocs/STAT.html>: "the STAT OAM
+    /// interrupt is also triggered by entering VBlank"; Mooneye's
+    /// `acceptance/ppu/vblank_stat_intr-GS` measures that trigger as
+    /// *simultaneous* with the VBlank interrupt itself.
+    ///
+    /// The "line 144 only" half is load-bearing in both directions:
+    ///
+    /// * without it, a game that enables only the mode-2 source misses one
+    ///   interrupt per frame — Mealybug's `m2_win_en_toggle` toggles LCDC.5
+    ///   once per fire, so the whole frame's window pattern lands on the wrong
+    ///   parity of lines;
+    /// * treating it instead as "mode 1 also honours the mode-2 bit" for the
+    ///   whole of VBlank *holds the STAT line high* across lines 145-153, so
+    ///   the real mode 2 at `LY=0` is blocked and its interrupt arrives a line
+    ///   late. `acceptance/ppu/intr_1_2_timing-GS` counts exactly that gap.
+    fn oam_strobe(&self) -> bool {
+        self.mode == 2 || (self.line == VBLANK_LINE && self.modeclock < OAM_DOTS)
+    }
+
+    /// Re-latch the `LY == LYC` coincidence flag and follow the STAT line.
+    ///
+    /// Only ever called while the PPU is running: with the LCD off the
+    /// comparison clock is stopped, so the flag holds its last value and a
+    /// write to `LYC` cannot change it (`acceptance/ppu/stat_lyc_onoff`
+    /// rounds 1-3 read `STAT` back to prove exactly that).
+    fn refresh_lyc_match(&mut self) {
+        self.lyc_match = self.line == self.lyc;
+        self.refresh_stat_line();
+    }
+
+    /// Recompute the STAT line and raise `IF.1` on its **0→1 transition only**.
+    ///
+    /// This is "STAT blocking": there is one interrupt line, not four
+    /// independent triggers, so a second source going high while another is
+    /// already high raises *nothing*. A game whose handler runs off both the
+    /// HBlank and the LYC source sees one interrupt per coincidence, not two —
+    /// raster-effect titles split the screen by counting those interrupts, and
+    /// an emulator that fires per-source runs their effect twice as fast.
+    ///
+    /// Every path that can move a term of [`Gpu::stat_signal`] must call this:
+    /// a mode change, an `LY` increment, and writes to `STAT`, `LYC` and
+    /// `LCDC` (which can switch the whole line off).
+    fn refresh_stat_line(&mut self) {
+        let now = self.stat_signal();
+        if now && !self.stat_line {
             self.interrupt |= 0x02;
         }
+        self.stat_line = now;
     }
 
     fn change_mode(&mut self, mode: u8) {
         self.mode = mode;
 
-        if match self.mode {
+        match self.mode {
             0 => {
                 self.renderscan();
                 self.hblanking = true;
-                self.m0_inte
             }
             1 => {
                 // Vertical blank
                 self.wy_trigger = false;
                 self.interrupt |= 0x01;
                 self.updated = true;
-                // Entering mode 1 raises the STAT line for the mode-1 *or* the
-                // mode-2 select bit. From AntonioND's TCAGBD §8.7 "STAT
-                // Interrupt", the internal signal is set by
-                //   ((ScreenMode = 1) AND (STAT.ENABLE_VBL || STAT.ENABLE_OAM))
-                // — "Not only VBL!!". So a program that enables only the mode-2
-                // source still gets a STAT interrupt at LY=144, one line before
-                // the first real OAM scan of the frame. Mealybug's
-                // `m2_win_en_toggle` depends on it: its handler toggles LCDC.5
-                // once per fire, and without the LY=144 fire the whole frame's
-                // window/no-window pattern lands on the wrong parity of lines.
-                self.m1_inte || self.m2_inte
             }
             2 => {
                 // The window's "Y condition" (Pan Docs, "Window mid-frame
@@ -354,13 +480,10 @@ impl Gpu {
                 // and modelling it would need the mid-mode-3 PPU this scanline
                 // renderer does not have — see docs/mealybug.md.
                 self.check_wy_trigger();
-                self.m2_inte
             }
-            3 => false,
-            _ => false,
-        } {
-            self.interrupt |= 0x02;
+            _ => {}
         }
+        self.refresh_stat_line();
     }
 
     pub fn rb(&self, a: u16) -> u8 {
@@ -384,7 +507,7 @@ impl Gpu {
                     | (if self.m2_inte { 0x20 } else { 0 })
                     | (if self.m1_inte { 0x10 } else { 0 })
                     | (if self.m0_inte { 0x08 } else { 0 })
-                    | (if self.line == self.lyc { 0x04 } else { 0 })
+                    | (if self.lyc_match { 0x04 } else { 0 })
                     | self.mode
             }
             0xFF42 => self.scy,
@@ -467,23 +590,53 @@ impl Gpu {
                     // gets to clear this — leave it set and a pending HBlank
                     // DMA would move a block on every single `do_cycle`.
                     self.hblanking = false;
+                    self.skip_first_oam = false;
                     self.clear_screen();
                 }
                 if !orig_lcd_on && self.lcd_on {
-                    self.change_mode(2);
+                    // Enabling the LCD restarts the comparison clock, so the
+                    // coincidence flag is re-latched here against the LY the
+                    // PPU restarts from — and if that flips it from 0 to 1
+                    // with the LYC source enabled, this write is itself the
+                    // rising edge (`stat_lyc_onoff` round 4 demands the
+                    // interrupt; round 2 demands its *absence* when the flag
+                    // was already set).
+                    self.lyc_match = self.line == self.lyc;
+                    // The PPU restarts *mid-line-0 with no OAM scan*: `STAT`
+                    // reads mode 0 and goes straight to mode 3
+                    // (`acceptance/ppu/lcdon_timing-GS`: "line 0 starts with
+                    // mode 0 and goes straight to mode 3"; `stat_lyc_onoff`
+                    // round 1 step 3 reads `STAT` back one instruction after
+                    // the enable and demands mode 0).
+                    self.mode = 0;
+                    self.skip_first_oam = true;
                     self.modeclock = 4;
                 }
+                self.refresh_stat_line();
             }
             0xFF41 => {
                 self.lyc_inte = v & 0x40 == 0x40;
                 self.m2_inte = v & 0x20 == 0x20;
                 self.m1_inte = v & 0x10 == 0x10;
                 self.m0_inte = v & 0x08 == 0x08;
+                // Enabling a source whose condition is *already* true raises
+                // the line here and now (`acceptance/ppu/stat_lyc_onoff`
+                // toggles STAT.6 while LY == LYC and counts the fires);
+                // disabling the last high source arms the next rising edge.
+                self.refresh_stat_line();
             }
             0xFF42 => self.scy = v,
             0xFF43 => self.scx = v,
             0xFF44 => {} // Read-only
-            0xFF45 => self.lyc = v,
+            0xFF45 => {
+                self.lyc = v;
+                // With the LCD off the comparison clock is stopped: the flag
+                // keeps its last value and this write is invisible until the
+                // PPU is switched back on (`stat_lyc_onoff` rounds 1-3).
+                if self.lcd_on {
+                    self.refresh_lyc_match();
+                }
+            }
             // $FF46 is OAM DMA and never reaches here — the MMU claims it.
             0xFF46 => {}
             0xFF47 => {
@@ -856,6 +1009,23 @@ mod tests {
         }
     }
 
+    /// Step `dots` one M-cycle at a time and count how many *separate* times
+    /// the PPU raised `IF.1`, clearing the flag between steps exactly as a CPU
+    /// servicing the interrupt would. Counting raises rather than reading the
+    /// flag once is the whole point: a source-per-trigger PPU produces several
+    /// where hardware produces one.
+    fn count_stat_raises(gpu: &mut Gpu, dots: u32) -> u32 {
+        let mut n = 0;
+        for _ in 0..dots / 4 {
+            gpu.interrupt = 0;
+            gpu.do_cycle(4);
+            if gpu.interrupt & 0x02 != 0 {
+                n += 1;
+            }
+        }
+        n
+    }
+
     /// The window's frame-long "Y condition" is latched by WY == LY *at the
     /// start of a scanline* and does not consult LCDC bit 5 (Pan Docs, "Window
     /// rendering criteria"). Requiring the window to be enabled at latch time
@@ -892,9 +1062,10 @@ mod tests {
         assert!(!gpu.wy_trigger, "VBlank clears the Y condition");
     }
 
-    /// Entering mode 1 raises the STAT line for the mode-1 *or* the mode-2
-    /// select bit — AntonioND's TCAGBD §8.7: `(ScreenMode = 1) AND
-    /// (STAT.ENABLE_VBL || STAT.ENABLE_OAM)`, "Not only VBL!!".
+    /// Entering VBlank strobes the OAM source too, so a program that selects
+    /// only the mode-2 bit still gets a STAT interrupt at `LY=144`. Mooneye's
+    /// `acceptance/ppu/vblank_stat_intr-GS` measures it as *simultaneous* with
+    /// the VBlank interrupt itself.
     #[test]
     fn entering_vblank_raises_stat_for_the_mode_2_source_too() {
         for (stat, want_stat_at_144) in [(0x20u8, true), (0x00u8, false)] {
@@ -916,5 +1087,153 @@ mod tests {
                 "STAT=${stat:02X}: mode-2 select must raise STAT on entering mode 1"
             );
         }
+    }
+
+    /// **STAT blocking.** There is one interrupt line, not four triggers: a
+    /// second source going high while another is already high raises nothing.
+    /// On a line where `LY == LYC` with both the LYC and the HBlank source
+    /// selected, hardware fires **once** — Mooneye's
+    /// `acceptance/ppu/stat_irq_blocking` builds a whole frame out of exactly
+    /// that arrangement and fails on any extra interrupt. Raising per source
+    /// (as this used to) gives two, which runs a raster split twice as fast as
+    /// the game intended.
+    #[test]
+    fn a_source_going_high_behind_another_raises_nothing() {
+        let mut gpu = lcd_on(0x48, 0xFF); // LYC + HBlank selected
+        gpu.wb(0xFF45, 5);
+        advance_lines(&mut gpu, 4);
+        assert_eq!(gpu.line, 4);
+
+        // The window below covers the LY 4->5 increment (LYC coincidence goes
+        // high) and then all of line 5's mode 2 -> 3 -> 0 walk.
+        let raises = count_stat_raises(&mut gpu, DOTS_PER_LINE);
+        assert_eq!(gpu.line, 5, "should have crossed into the LYC line");
+        assert_eq!(
+            raises, 1,
+            "LYC and HBlank share one line: entering HBlank with the LYC \
+             source already high must not raise a second interrupt"
+        );
+
+        // Control: the same line with only the HBlank source selected still
+        // fires once, so the assertion above is not just counting nothing.
+        let mut gpu = lcd_on(0x08, 0xFF);
+        gpu.wb(0xFF45, 5);
+        advance_lines(&mut gpu, 4);
+        assert_eq!(count_stat_raises(&mut gpu, DOTS_PER_LINE), 1);
+    }
+
+    /// The `LY == LYC` bit in `STAT` is a flip-flop clocked by the PPU, not a
+    /// live comparison. Switching the LCD off stops the comparison clock: the
+    /// flag keeps its value, a new `LYC` cannot move it, and switching the LCD
+    /// back on re-latches it against the `LY` the PPU restarts from. All three
+    /// steps are read back by `acceptance/ppu/stat_lyc_onoff` round 1.
+    #[test]
+    fn the_lyc_comparison_clock_stops_with_the_lcd() {
+        let mut gpu = lcd_on(0x40, 0xFF); // LYC source selected
+        gpu.wb(0xFF45, 3);
+        advance_lines(&mut gpu, 3);
+        assert_eq!(gpu.line, 3);
+        assert_eq!(gpu.rb(0xFF41) & 0x04, 0x04, "LY == LYC == 3");
+
+        gpu.interrupt = 0;
+        gpu.wb(0xFF40, 0x00); // LCD off
+        assert_eq!(
+            gpu.rb(0xFF41),
+            0xC4,
+            "the coincidence bit is retained, and mode reads 0"
+        );
+        assert_eq!(
+            gpu.interrupt & 0x02,
+            0,
+            "the line never fell, so there is no edge to fire on"
+        );
+
+        gpu.wb(0xFF45, 0x01); // a new LYC while the clock is stopped
+        assert_eq!(gpu.rb(0xFF41), 0xC4, "invisible until the PPU runs again");
+
+        gpu.wb(0xFF40, 0x80); // LCD on: LY=0 vs LYC=1
+        assert_eq!(gpu.rb(0xFF41) & 0x04, 0, "re-latched against LY=0");
+        assert_eq!(gpu.interrupt & 0x02, 0, "a falling flag raises nothing");
+    }
+
+    /// ...and the same restart *can* raise a STAT interrupt when it flips the
+    /// flag on — `stat_lyc_onoff` round 4 turns the PPU on with `LYC=0` and
+    /// requires the interrupt, while round 2 does it with the flag already set
+    /// and requires silence.
+    #[test]
+    fn enabling_the_lcd_raises_stat_only_if_the_coincidence_flag_flips_on() {
+        // Round 4: flag false while off, true on restart -> one interrupt.
+        let mut gpu = lcd_on(0x40, 0xFF);
+        gpu.wb(0xFF45, 0x00);
+        advance_lines(&mut gpu, 3); // LY=3 != LYC=0
+        gpu.wb(0xFF40, 0x00);
+        gpu.interrupt = 0;
+        gpu.wb(0xFF40, 0x80);
+        assert_eq!(gpu.interrupt & 0x02, 0x02, "LY=0 == LYC=0 is a rising edge");
+
+        // Round 2: flag true while off, still true on restart -> silence.
+        let mut gpu = lcd_on(0x40, 0xFF);
+        gpu.wb(0xFF45, 3);
+        advance_lines(&mut gpu, 3); // LY=3 == LYC=3, flag set
+        gpu.wb(0xFF40, 0x00);
+        gpu.wb(0xFF45, 0x00); // ignored while the clock is stopped
+        gpu.interrupt = 0;
+        gpu.wb(0xFF40, 0x80); // LY=0 == LYC=0: the flag does not change
+        assert_eq!(gpu.interrupt & 0x02, 0, "no edge, no interrupt");
+    }
+
+    /// The scanline the PPU restarts on has **no OAM scan**: `STAT` reads
+    /// mode 0 where every other line reads mode 2, and goes straight to
+    /// mode 3. `acceptance/ppu/lcdon_timing-GS` states it outright ("line 0
+    /// starts with mode 0 and goes straight to mode 3") and `stat_lyc_onoff`
+    /// reads `STAT` back one instruction after the enable to check it.
+    #[test]
+    fn the_line_the_ppu_restarts_on_has_no_oam_scan() {
+        let mut gpu = Gpu::new();
+        gpu.wb(0xFF40, 0x80);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 0, "mode 0, not mode 2");
+        gpu.do_cycle(76);
+        assert_eq!(
+            gpu.rb(0xFF41) & 0x03,
+            0,
+            "still mode 0 through the OAM slot"
+        );
+        gpu.do_cycle(4);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 3, "straight to pixel transfer");
+
+        // The next line is an ordinary one again.
+        gpu.do_cycle(DOTS_PER_LINE - 84 + 4);
+        assert_eq!(gpu.line, 1);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 2, "line 1 has a normal OAM scan");
+    }
+
+    /// The OAM strobe that the mode-2 select bit watches happens on line 144
+    /// and **nowhere else in VBlank**. Holding it for all ten VBlank lines
+    /// keeps the STAT line high across them, which blocks the real mode 2 at
+    /// `LY=0` — `acceptance/ppu/intr_1_2_timing-GS` counts the gap between the
+    /// two interrupts and sees it arrive a whole scanline late.
+    #[test]
+    fn the_vblank_oam_strobe_is_line_144_only() {
+        let mut gpu = lcd_on(0x20, 0xFF); // only the mode-2 source
+        advance_lines(&mut gpu, 143);
+        assert_eq!(gpu.line, 143);
+
+        gpu.interrupt = 0;
+        gpu.do_cycle(DOTS_PER_LINE);
+        assert_eq!(gpu.line, 144);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 1, "STAT reads mode 1 at LY=144");
+        assert_eq!(gpu.interrupt & 0x02, 0x02, "...but the OAM source strobes");
+
+        // Lines 145-153: nothing.
+        assert_eq!(
+            count_stat_raises(&mut gpu, DOTS_PER_LINE * 9),
+            0,
+            "the rest of VBlank has no OAM scan to strobe"
+        );
+        assert_eq!(gpu.line, 153);
+
+        // And the first real OAM scan of the next frame is not blocked by it.
+        assert_eq!(count_stat_raises(&mut gpu, DOTS_PER_LINE), 1);
+        assert_eq!(gpu.line, 0);
     }
 }
