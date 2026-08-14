@@ -2816,7 +2816,7 @@ mod tests {
     //!   1. the APU emits exactly the reported sample rate per emulated second
     //!      (so wall-clock speed, not resampling, governs perceived tempo), and
     //!   2. a programmed tone comes out at the correct pitch.
-    use super::{AudioPlayer, Sound, CLOCKS_PER_SECOND};
+    use super::{AudioPlayer, Sound, CLOCKS_PER_FRAME, CLOCKS_PER_SECOND};
     use std::sync::{Arc, Mutex};
 
     struct Capture {
@@ -2939,6 +2939,117 @@ mod tests {
                 n - expected
             );
         }
+    }
+
+    /// PCM12/PCM34 report each channel's live 4-bit digital output, CH1/CH3
+    /// in the low nibble and CH2/CH4 in the high nibble — the window every
+    /// SameSuite APU test observes the APU through. A channel that is off, or
+    /// whose DAC is off, reports zero.
+    #[test]
+    fn pcm_registers_report_each_channel_digital_output() {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        snd.set_mode(false); // CGB
+        snd.wb(0xFF26, 0x80); // power on
+        assert_eq!(snd.rb(0xFF76), 0x00, "nothing triggered yet");
+        assert_eq!(snd.rb(0xFF77), 0x00);
+
+        // CH2: duty 3 (high for six of eight positions), volume 9, no envelope.
+        snd.wb(0xFF16, 0xC0);
+        snd.wb(0xFF17, 0x90);
+        snd.wb(0xFF18, 0x00);
+        snd.wb(0xFF19, 0x80); // trigger, frequency 0 -> slowest sweep of the duty
+                              // Run until the duty latch has taken a high position.
+        let mut high = None;
+        for _ in 0..64 {
+            snd.do_cycle(2048 * 4);
+            snd.catch_up();
+            let v = snd.rb(0xFF76);
+            if v != 0 {
+                high = Some(v);
+                break;
+            }
+        }
+        assert_eq!(
+            high,
+            Some(0x90),
+            "CH2 output belongs in the high nibble of PCM12 and carries the envelope volume"
+        );
+
+        // Killing the DAC must zero it immediately, channel-enable and all.
+        snd.wb(0xFF17, 0x00);
+        snd.catch_up();
+        assert_eq!(snd.rb(0xFF76), 0x00, "a dead DAC reports zero");
+    }
+
+    /// Writing DIV clocks the frame sequencer when the DIV-APU bit is set: the
+    /// reset drops the bit, and a falling edge *is* the DIV-APU event. Pinned
+    /// through the length counter, which is what SameSuite `div_write_trigger`
+    /// reads back through NR52.
+    #[test]
+    fn a_div_write_clocks_the_frame_sequencer() {
+        for (advance, expect_clock) in [(0u32, false), (CLOCKS_PER_FRAME / 2, true)] {
+            let mut snd = Sound::new();
+            snd.set_player(Box::new(Capture {
+                rate: 44100,
+                samples: Arc::new(Mutex::new(Vec::new())),
+            }));
+            snd.set_mode(false);
+            snd.wb(0xFF26, 0x80);
+            // CH1: length 1, DAC on, trigger with length enabled.
+            snd.wb(0xFF11, 0x3F);
+            snd.wb(0xFF12, 0xF0);
+            snd.wb(0xFF14, 0xC0);
+            assert_eq!(snd.rb(0xFF26) & 1, 1, "channel 1 is on after the trigger");
+
+            snd.do_cycle(advance);
+            snd.catch_up();
+            snd.div_write();
+            snd.catch_up();
+            assert_eq!(
+                snd.rb(0xFF26) & 1 == 0,
+                expect_clock,
+                "DIV write with the DIV-APU bit {} should{} clock length",
+                if expect_clock { "set" } else { "clear" },
+                if expect_clock { "" } else { " not" },
+            );
+        }
+    }
+
+    /// At CGB double speed the CPU ticks twice as fast and the APU does not:
+    /// it is wired to the unmodified 4.194304 MHz clock. Feeding it CPU ticks
+    /// unhalved made every sound an octave high *and* — because the audio queue
+    /// paces the emulator — throttled CGB double-speed games to about half
+    /// speed. Same emulated second, same sample count, either way.
+    #[test]
+    fn double_speed_halves_the_apu_clock() {
+        let mut counts = Vec::new();
+        for double in [false, true] {
+            let (mut snd, cap) = tone(44100, 1750);
+            snd.set_double_speed(double);
+            // One emulated second of *CPU* ticks: twice as many at double speed.
+            let cpu_ticks = if double {
+                CLOCKS_PER_SECOND * 2
+            } else {
+                CLOCKS_PER_SECOND
+            };
+            // Small steps: `do_cycle` is fed instruction-sized ticks in
+            // practice, and blip's frame buffer is sized for that.
+            let chunk = 64;
+            for _ in 0..(cpu_ticks / chunk) {
+                snd.do_cycle(chunk);
+            }
+            counts.push(cap.lock().unwrap().len());
+        }
+        let (single, double) = (counts[0] as i64, counts[1] as i64);
+        assert!(
+            (single - double).abs() <= super::OUTPUT_SAMPLE_COUNT as i64,
+            "one emulated second must yield the same sample count at either \
+             speed: {single} single vs {double} double"
+        );
     }
 
     /// A tone programmed to ~440 Hz must come out at ~440 Hz. Proves the

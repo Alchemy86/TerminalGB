@@ -11,6 +11,15 @@
 # reproduces the pre-DMG-mode numbers. The ROM verdicts pinned per
 # fixture below are what actually asserts accuracy; the hash only pins
 # "the samples did not change".
+#
+# Re-blessed 2026-08-14 for the SameSuite APU accuracy work (canonical duty
+# table, duty output latch, measured trigger delays, CGB-E NRx2 zombie mode).
+# Every one of those changes moves the samples, all of them deliberately.
+# Checked against the properties rather than the hash: sample counts
+# unchanged by the APU work (so the sample rate did not move), tone440 RMS
+# identical at 0.2467, and its measured pitch improved from 438.0 Hz to
+# 440.0 Hz against a ROM that programs 439.84 Hz. dmg_sound still reads
+# 01:ok..12:ok Passed.
 
 tone440 = HASH:0ac634f8a550f5c1 SAMPLES:221184
 blargg/dmg_sound-01-registers = HASH:8cbc50be13896325 SAMPLES:222208

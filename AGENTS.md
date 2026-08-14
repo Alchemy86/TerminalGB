@@ -479,9 +479,11 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   `apply_nrx4_length`; sweep state fully reloads on trigger + negate-exit disable quirk;
   NR52 power-off zeroes NR10–NR51 *while still on* (clearing after `on=false` is a no-op),
   DMG preserves length counters across power and allows NRx1 length writes while off, and
-  power-on resets the frame sequencer to step 0 (DIV divider keeps running); a powered-off
-  APU still emits silence at full sample rate (never stall the stream). Save-state format is
-  v3 (v2 added APU shadow regs + flags; v3 added `WaveChannel::since_fetch`).
+  power-on resets the frame sequencer to step 0 (DIV divider keeps running — but see the
+  SameSuite section below: with the DIV-APU bit already set, the first event is *skipped*);
+  a powered-off APU still emits silence at full sample rate (never stall the stream). Save-state format is
+  v4 (v2 added APU shadow regs + flags; v3 added `WaveChannel::since_fetch`; v4 added the
+  double-speed clock divider, the duty latch, the 1 MHz grid phase and the DIV-APU skip).
 - **DMG wave-RAM window (dmg_sound 9/12 → 12/12) — things to preserve:** the APU clock is
   stepped per memory access (see the timer sharp-edge above) — without it no wave-window
   constant can be right, since `catch_up()` would sync to instruction boundaries only.
@@ -503,6 +505,85 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   a frame emits 16.7 ms of audio in one go, and that burst dominates the cushion. Stepping
   emulation in sub-frame chunks would roughly halve the required cushion again (towards
   ~30 ms end-to-end). That changes the frontends, not the audio code.
+
+
+## SameSuite APU accuracy (2/61 → 49/61) — `src/sound.rs`
+
+**Full write-up: [`docs/components/apu.md`](docs/components/apu.md) §8; per-fix conformance
+records in [`docs/conformance-notes.md`](docs/conformance-notes.md).** Read those before
+touching APU timing — every constant below is *measured* against a named test, not chosen.
+
+- **Run the suite:** `cargo run --release --example samesuite -- <dir> [--dump] [--frames N]`.
+  It reads SameSuite's own `RESULT_CODE` at `$CFFE` (`"P"`/`"F"`) — the ROM's verdict, not a
+  screenshot. `--dump` prints the measurement table for debugging against the test's `.asm`.
+  ROMs: `LIJI32/SameSuite` (source only) or the prebuilt copies in `gbdev/GBEmulatorShootout`
+  under `testroms/samesuite/`. **Score against the shootout's published 61**, not the 69 ROMs
+  in the directory — the 8 `*-cgb0B`/`-cgbB`/`-cgb0BC`/`-A` variants encode *older* CGB
+  revisions and are deliberately not chased (we target CGB-E).
+- **The APU only runs when a player is installed.** `Sound::do_cycle` returns immediately
+  when `player.is_none()`, so a harness with no `enable_audio` call has *no APU at all* —
+  not a quiet one. Any APU measurement without a player is measuring nothing.
+- **PCM12/PCM34 (`$FF76`/`$FF77`) are the whole interface.** 57 of the 61 tests are
+  unreachable without them. The MMU routes them to `Sound::rb` with a `catch_up()` first,
+  exactly like NRxx. Low nibble CH1/CH3, high nibble CH2/CH4; zero when the channel or its
+  DAC is off.
+- **The frame sequencer is DIV-driven.** Falling edge of system-counter bit 12 (bit 13 at
+  double speed) — so `Sound::div_write()` (called from the MMU's `$FF04` path, after
+  `catch_up`) fires an event when the bit was set, and resets the phase. `div_apu_bit_set()`
+  derives the bit from `next_time - time` rather than keeping a counter copy; that identity
+  only holds because `div_write` resets both. **`Timer::wb($FF04)` must zero `internaldiv`
+  as well as `divider`** — leaving the sub-DIV counter running desynchronises everything
+  clocked off the same counter and made the whole `div_*` group non-deterministic.
+- **Power-on while the DIV-APU bit is set skips the first event** (`frame_seq_skip`), and a
+  pending skip counts as `first_half()` for the NRx4 extra-length-clock quirk. Both halves
+  are needed: without the skip `div_trigger_volume_10` fails, without the `first_half`
+  clause `div_write_trigger_10` does.
+- **The APU runs off the base clock.** `Sound::set_double_speed` (from
+  `MemoryManagementUnit::switch_speed`) halves the CPU T-cycles it is handed. Before this,
+  CGB double-speed games played an octave high *and* — because the audio queue paces the
+  emulator — ran at about half speed: Blargg `cpu_instrs` measured **33.7 fps / 48% of
+  frames late before, 59.70 fps / 0% after**.
+- **`grid_phase`** tracks the APU's position on its free-running 1 MHz (4 T) grid, kept
+  separately from `time` because `do_output` rebases `time` by `output_period` (24344 T,
+  not a multiple of 4). **APU power-on resets it** — that is what makes SameSuite's
+  measurements repeatable, since every subtest power-cycles the APU first.
+- **Measured trigger constants — do not "tidy" these:** `SQUARE_TRIGGER_DELAY = 6` T
+  (`channel_N_delay`), `SQUARE_TRIGGER_ALIGN = 0` (`channel_N_align`, double speed),
+  `SQUARE_RESTART_SPEEDUP = 4` T (`channel_N_restart` — a re-trigger is one tick shorter and
+  does *not* reset the duty position), `WAVE_TRIGGER_DELAY = 4` T (`channel_3_delay` **and**
+  Blargg `dmg_sound` 09/10/12 — this one is doubly constrained), `NOISE_TRIGGER_DELAY = 2`
+  with `NOISE_TRIGGER_ALIGN = 0`.
+- **Square duty output is a LATCH** (`duty_out`), not `DUTY_PATTERN[duty][duty_pos]`. It
+  updates only at a frequency-timer expiry, so a freshly powered channel reads 0 for its
+  whole first position. Power-off resets `duty_pos` *and* `duty_out`. The duty table is the
+  canonical Pan Docs one — ours used to be rotated, which sounds identical and is measurable.
+- **CH3 advances its position before fetching**, so a triggered wave channel starts at
+  sample **1**, never 0; and its `sample_latch` empties on power-off (a trigger does not
+  refill it). The stale latch is what `channel_3_first_sample` actually measures.
+- **CH4's trigger reloads only the NR43 divisor**, not the shift stage above it:
+  `delay = divisor + (period - divisor)/2`. Getting this right fixed all four LFSR tests at
+  once, because they reconstruct the LFSR from 128 consecutive samples and rotate wholesale
+  if the first sample is off.
+- **NRx2 does not reload the live volume** (`VolumeEnvelope::write_nrx2`) — only a trigger
+  does. Writing it while the channel plays is "zombie mode", and the rule is **CGB revision
+  E's**, derived from `channel_N_volume`'s twelve old/new direction+period combinations. The
+  gg8-wiki DMG formula does not fit and must not be substituted.
+- **Still failing (12), scoped not half-built** — see `docs/components/apu.md` §8: the long
+  half of `nrx2_glitch` needs the envelope's internal delay counter; the three sweep tests
+  turn on a 4 T race between the DIV-APU sweep tick and the register write after it (timer
+  territory); `channel_4_frequency_alignment`/`equivalent_frequencies` need the NR43 divisor
+  counter free-running too; SameBoy itself fails `channel_4_freq_change` and
+  `channel_1_sweep_restart_2`.
+- **Cost and audio quality re-measured after the work** (both required, both green):
+  APU cost `32.6 µs/frame` vs `31.4 µs` before — inside the noise of the measurement
+  (`cargo run --release --example apu_bench -- <rom> [frames]`, best-of-3 with/without a
+  player). Real-device latency on a single-speed ROM: **52.2–52.6 ms end to end, 0
+  underruns, 0 drops, 59.52 fps** — matching the documented 52.7 ms baseline
+  (`--features audio --example audio_latency`).
+- **`testharness/audio_baseline.txt` was re-blessed** for this work. Judge it by the
+  properties, not the hash: sample counts identical (so the rate did not move), tone440 RMS
+  identical at 0.2467, and its measured pitch *improved* from 438.0 Hz to 440.0 Hz against a
+  ROM programming 439.84 Hz. dmg_sound still reads `01:ok..12:ok Passed`.
 
 ## Terminal frontend (TUI)
 

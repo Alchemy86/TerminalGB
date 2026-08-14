@@ -211,6 +211,43 @@ output stream. The desktop frontend wires it up in `render_desktop`
 9. **The length-counter extra-clock edge case.** Matches hardware. *(Covered:
    dmg_sound 03 passes — `apply_nrx4_length`.)*
 10. **Web build is silent** (module compiled out). *(Documented behaviour, not a bug.)*
+11. **PCM12 / PCM34 (`$FF76`/`$FF77`, CGB only).** Each register reports the *live*
+    4-bit digital output of two channels — CH1/CH3 in the low nibble, CH2/CH4 in the
+    high nibble — sampled at the exact cycle of the read, and zero for a channel whose
+    channel-enable or DAC is off. *(Covered: `sound::tests::pcm_registers_report_each_channel_digital_output`,
+    and every SameSuite APU test observes the APU through these.)*
+12. **The frame sequencer is clocked by DIV, not by a free-running divider.** It steps
+    on the falling edge of system-counter bit 12 (bit 13 at double speed), so writing
+    `DIV` while that bit is set clocks it immediately. *(Covered:
+    `sound::tests::a_div_write_clocks_the_frame_sequencer`; SameSuite `div_write_trigger`
+    and `div_write_trigger_volume`.)*
+13. **Powering the APU on while the DIV-APU bit is set skips the first event.**
+    The sequencer starts at step 0 and one event passes doing nothing — which also
+    puts the machine in the "first half" of a length period, so the next NRx4
+    length-enable write clocks length itself. *(Covered: SameSuite
+    `div_write_trigger_10`, `div_trigger_volume_10`.)*
+14. **The APU runs off the base clock.** At CGB double speed it advances at half the
+    CPU's tick rate; one emulated second yields the same number of samples either way.
+    *(Covered: `sound::tests::double_speed_halves_the_apu_clock`.)*
+15. **Square duty is a latch, not a function of the position.** The duty output only
+    takes a new value at a frequency-timer expiry, so a freshly powered-on channel
+    reads 0 for its whole first pattern position even where the duty table says high;
+    an APU power-off resets the duty counters. *(Covered: SameSuite `channel_N_duty`.)*
+16. **Trigger delays are measured, not assumed.** A square channel's first duty step is
+    `period + 6` T-cycles after the trigger, rounded up to the APU's own free-running
+    1 MHz grid; a *re*-trigger of a running channel is 4 T-cycles earlier and does not
+    reset the duty position. CH3's first fetch is `period + 4` and lands on wave sample
+    **1**, never 0. CH4's first LFSR step is `divisor + (period - divisor)/2`, because a
+    trigger reloads only the NR43 divisor and leaves the shift stage half-way through.
+    *(Covered: SameSuite `channel_N_delay`, `channel_N_align`, `channel_N_restart`,
+    `channel_3_first_sample`, `channel_4_delay`.)*
+17. **CH3's sample buffer empties on APU power-off** and is *not* refilled by a trigger,
+    so a channel re-triggered after a power cycle must not report the sample it was
+    playing before. *(Covered: SameSuite `channel_3_first_sample`.)*
+18. **Writing NRx2 does not reload the live volume** — it sets what the next trigger
+    will load. Writing it while the channel plays perturbs the running volume instead
+    ("zombie mode"), by the CGB revision-E rule in `VolumeEnvelope::write_nrx2`.
+    *(Covered: SameSuite `channel_N_volume`.)*
 
 ## 7. Test ROMs that exercise it
 
@@ -218,6 +255,7 @@ output stream. The desktop frontend wires it up in `render_desktop`
 |---|---|---|
 | **Blargg `dmg_sound`** (12 sub-tests, **12/12 pass**) | Registers, trigger, length, sweep, envelope, wave-RAM access timing on DMG | Any failure is a regression — the harness pins the `$A000` verdict. |
 | **Blargg `cgb_sound`** (not wired) | The CGB APU edge cases | CGB-specific power/length rules — `Sound::dmg_mode` selects per-model behaviour, but the CGB side is untested. |
+| **SameSuite `apu`** (61 published tests, **49/61 pass**, was 2/61) | Sample-accurate channel behaviour read back through PCM12/PCM34 | The deep end: trigger and re-trigger timing to the T-cycle, the duty output latch, the DIV-APU's exact phase, the NRx2 zombie glitch, the wave sample buffer, the noise divisor/shift split. Run it with `cargo run --release --example samesuite -- <dir>`; see §8. |
 | **Mooneye `acceptance/` (no dedicated APU dir)** | — | Mooneye focuses on timing/PPU/CPU; Blargg is the APU authority. |
 | **SameBoy APU tests** | Reference-emulator APU behaviour | Useful cross-check but require SameBoy tooling. |
 
@@ -227,3 +265,67 @@ serial: `$A000` holds the status (`$80` = running, `0` = pass), `$A001–$A003` 
 signature `$DE $B0 $61`, and a result string follows at `$A004` — this is how
 [`testharness/audiocapture.rs`](../../testharness/audiocapture.rs) reads the verdict
 headlessly. See [testing](../testing.md).
+
+## 8. SameSuite: the sample-accurate suite
+
+[SameSuite](https://github.com/LIJI32/SameSuite)'s APU sub-suite is a much deeper test
+of this component than Blargg's `dmg_sound`, and it is where the honest number lives:
+**49 of the 61 tests in the GB Emulator Shootout's published set pass, up from 2.**
+
+**Run it headlessly:**
+
+```sh
+cargo run --release --example samesuite -- <dir-with-samesuite-roms> [--dump]
+```
+
+The runner reads SameSuite's own `RESULT_CODE` at `$CFFE` (`"P"` / `"F"`), written by
+the ROM after it compares its measurements against the `CorrectResults` table assembled
+into it — so a verdict is the ROM's judgement, never ours, and no screenshot comparison
+is involved. `--dump` prints the raw measurement table so a failure can be read against
+the expectations in the test's `.asm` source. **The APU must be installed** (the runner
+attaches a device-free player): with no player `Sound::do_cycle` returns immediately and
+the APU never advances at all.
+
+**How the suite observes the APU.** Almost every test writes some registers, waits an
+exact number of M-cycles, and reads `PCM12`/`PCM34` — the CGB-only registers that expose
+each channel's live 4-bit digital output. 57 of the 61 are unreachable without them.
+Several run at CGB **double speed** deliberately, because that halves the CPU's cycle
+relative to the APU's and so resolves timing to 2 T-cycles instead of 4.
+
+**Constants calibrated against it** (all in `src/sound.rs`, all measured rather than
+guessed — each test steps its read point one cycle at a time, so a wrong constant is
+visible as a whole column shifting):
+
+| Constant | Value | Fixed by |
+|---|---|---|
+| `SQUARE_TRIGGER_DELAY` | 6 T | `channel_N_delay` |
+| `SQUARE_TRIGGER_ALIGN` | grid phase 0 | `channel_N_align` (double speed) |
+| `SQUARE_RESTART_SPEEDUP` | 4 T | `channel_N_restart` |
+| `WAVE_TRIGGER_DELAY` | 4 T | `channel_3_delay`, and still Blargg `dmg_sound` 09/10/12 |
+| `NOISE_TRIGGER_DELAY` | 2 T | `channel_4_delay` |
+| `NOISE_TRIGGER_ALIGN` | grid phase 0 | `channel_4_align` |
+
+**Still failing, and why** — these are scoped, not half-built:
+
+* `channel_N_nrx2_glitch` (2) — the *long* half of the test lets the envelope run for 16
+  DIV-APU events before the NRx2 write, and its answers then depend on the new period's
+  actual value, not just on whether it is zero. That needs the envelope's internal delay
+  counter modelled, not a formula over the register bits.
+* `channel_1_sweep`, `channel_1_sweep_restart`, `channel_1_sweep_restart_2` (3) — these
+  turn on a 4 T-cycle race between a DIV-APU sweep tick and the register write that
+  immediately follows it (`nops $0ffe` then a 3 M-cycle `ldh`, which puts the write 4 T
+  after the edge in our timing). Getting them right needs the DIV write's effect placed
+  within its M-cycle, which is timer territory rather than APU. (SameBoy and real
+  CPU-CGB-D both fail `sweep_restart_2` too.)
+* `channel_4_frequency_alignment`, `channel_4_equivalent_frequencies` (2) — the NR43
+  *divisor* counter is free-running as well as the 1 MHz grid: the test's own comments
+  mark divisor codes 1-7 as "affected" by alignment and code 0 as "not affected", which a
+  single 1 MHz grid cannot express.
+* `channel_4_freq_change` (1) — SameBoy fails this one too.
+* `channel_4_lfsr_restart`, `channel_4_lfsr_restart_fast`, `channel_N_nrx2_speed_change`
+  (4) — not investigated.
+
+The eight `*-cgb0B` / `*-cgbB` / `*-cgb0BC` / `-A` variants in the SameSuite repository
+encode *older* CGB revisions' behaviour and are deliberately not chased: they are not in
+the shootout's published set, and this emulator targets CGB-E (which is also the revision
+SameSuite's README documents the NRx2 glitch for).

@@ -503,3 +503,171 @@ finding, not an interrupt-timing one, and it is a candidate check in its own
 right: *after a `KEY1` bit-0 write followed by `STOP`, `KEY1` bit 7 must read
 set.* It also explains why `daid/speed_switch_timing_*` are red.
 
+---
+
+## APU sample accuracy — the SameSuite fixes (2026-08-14)
+
+SameSuite's APU sub-suite went from **2/61 to 49/61** on the GB Emulator
+Shootout's published set. These are the fixes, each with the observable symptom
+a foreign emulator carrying the same bug would show.
+
+**A note on the whole class first:** every one of these is invisible to Blargg's
+`dmg_sound`, which we pass 12/12. Blargg reads register *state*; SameSuite reads
+the channels' *output*, sample by sample, through the CGB PCM registers. **An
+emulator can pass every published DMG sound test and still be wrong about what
+the speaker hears on every single frame.** That is the finding, and it is the
+argument for the conformance tool carrying an audio-capture adapter rather than
+only a serial/framebuffer one.
+
+### 1. No PCM12 / PCM34 registers at all
+
+- **Symptom:** a CGB game that reads `$FF76`/`$FF77` to visualise or gate on its
+  own audio output sees a constant value. On our build the MMU returned a
+  hard-coded `0x00`. 57 of SameSuite's 61 APU tests cannot even run.
+- **Caught by:** every `samesuite/apu/channel_*` test; nothing in Blargg,
+  Mooneye or acid2.
+- **Hardware:** `PCM12`/`PCM34` are CGB-only read-only registers exposing each
+  channel's live 4-bit digital output, CH1/CH3 in the low nibble and CH2/CH4 in
+  the high nibble; a channel whose enable or DAC is off reads 0
+  ([Pan Docs, Audio Registers](https://gbdev.io/pandocs/Audio_Registers.html)).
+- **Carries into the tool:** *a CGB adapter must expose the APU's digital
+  output per channel.* This is the cheapest possible audio-conformance probe —
+  no waveform comparison, no resampling, no tolerance: an integer per channel
+  per cycle, and the ROM does the judging.
+
+### 2. The frame sequencer was a free-running counter, not DIV-driven
+
+- **Symptom:** a game that resets `DIV` (many do, to seed randomness or to
+  re-time the timer) gets note lengths, envelopes and sweeps that drift from
+  hardware — audibly wrong tempo in tracker-style music that resets DIV.
+- **Caught by:** SameSuite `div_write_trigger`, `div_write_trigger_10`,
+  `div_write_trigger_volume`, `div_write_trigger_volume_10`,
+  `div_trigger_volume_10` — and **note that the first two do not need PCM at
+  all: a DMG passes them.** Blargg does not catch it.
+- **Hardware:** the DIV-APU is clocked by the *falling edge* of system-counter
+  bit 12 (bit 13 at double speed), so zeroing `DIV` while that bit is set is
+  itself an event ([Pan Docs, Audio Details → DIV-APU](https://gbdev.io/pandocs/Audio_details.html)).
+- **Carries into the tool:** *reset DIV at a known phase and check the length
+  counter advanced.* Cheap, model-independent, and observable through `NR52`
+  alone — no PCM required, so it works on a DMG adapter too.
+
+### 3. Writing DIV left the sub-DIV counter running (timer, not APU)
+
+- **Symptom:** none, if you only read `DIV` — which is exactly why it survives.
+  Everything else clocked off the same 16-bit counter is silently up to 255
+  T-cycles out of phase after any DIV write.
+- **Caught by:** Mooneye `acceptance/timer/div_write`; and it makes SameSuite's
+  whole `div_*` group non-deterministic, which is how we found it.
+- **Hardware:** writing `DIV` resets the **whole** 16-bit counter
+  ([Pan Docs, Timer and Divider Registers](https://gbdev.io/pandocs/Timer_and_Divider_Registers.html)).
+- **Carries into the tool:** a good example of a bug whose *only* symptom is in
+  another component. A conformance tool that reports "timer OK, APU broken"
+  when the defect is in the timer is not helping; cross-component provenance is
+  worth designing for.
+
+### 4. The APU ran at CPU speed in CGB double-speed mode
+
+- **Symptom, and it is a big one:** every sound in a CGB double-speed game plays
+  an octave high. Worse on a real frontend — the audio queue paces the emulator
+  against the sound card, so producing samples twice as fast throttles the
+  *whole emulator*. Measured on Blargg `cpu_instrs` (which switches to double
+  speed): **33.7 fps and 48% of frames late before the fix, 59.70 fps and 0%
+  after**, same box, same run.
+- **Caught by:** no test ROM we run. `examples/audio_latency.rs` shows it
+  plainly once you look at the frame rate; SameSuite's double-speed tests
+  (`channel_N_align`, `channel_N_duty`, `channel_3_delay`, …) fail on it.
+- **Hardware:** the APU is wired to the unmodified 4.194304 MHz clock; only the
+  CPU is doubled ([Pan Docs, CGB Registers → KEY1](https://gbdev.io/pandocs/CGB_Registers.html)).
+- **Carries into the tool:** *play a tone, switch to double speed, and check the
+  pitch does not move.* An audio-capture adapter can check this with a
+  zero-crossing count and no reference data at all — the expected answer is
+  "the same as before the switch", which is the strongest kind of check because
+  nothing has to be blessed.
+
+### 5. Duty output was a function of position, not a latch; and the table was rotated
+
+- **Symptom:** the square channels' waveform is phase-shifted relative to
+  hardware and their first pattern position after a power-on is wrong. Inaudible
+  on its own — a square wave's phase is not something you can hear — which is
+  precisely why it survives in emulators that only listen.
+- **Caught by:** SameSuite `channel_N_duty` and `channel_N_align`. **Nothing
+  audible catches it, and no framebuffer or serial test can.**
+- **Hardware:** the duty bit is latched at each frequency-timer expiry, so a
+  freshly powered channel outputs 0 for its whole first position regardless of
+  the table; an APU power-off resets the duty counters
+  ([Pan Docs, Audio Registers → NRx1](https://gbdev.io/pandocs/Audio_Registers.html);
+  gg8 wiki, "Gameboy sound hardware" → Power Control).
+- **Carries into the tool:** *a check whose expected value is a phase, not a
+  level.* Worth keeping as an example of something only a cycle-resolved probe
+  can see.
+
+### 6. Trigger timing: every channel started at the wrong cycle
+
+- **Symptom:** short percussive notes and rapid retriggering (drum tracks, sound
+  effects fired every frame) come out with the wrong first sample. Individually
+  a few T-cycles; over a fast arpeggio it is a different waveform.
+- **Caught by:** SameSuite `channel_N_delay`, `channel_N_align`,
+  `channel_N_restart`, `channel_3_first_sample`, `channel_4_delay`,
+  `channel_4_lfsr*`.
+- **Hardware, per channel:**
+  - Square: the trigger reloads the frequency timer, so the first duty step is a
+    whole period away — plus 6 T, rounded up to the free-running 1 MHz grid the
+    timer counts on. A *re*-trigger of a running channel is 4 T earlier and does
+    not reset the duty position (SameSuite `channel_N_restart` states this
+    outright).
+  - Wave: the position advances *before* the fetch, so a triggered CH3 never
+    plays sample 0 — it starts at sample 1 (Pan Docs, Audio Details → Wave
+    Channel).
+  - Noise: the trigger reloads only the NR43 divisor and leaves the shift stage
+    half-way through, so the first step is at `divisor + (period - divisor)/2`.
+    `channel_4_delay` measures this at three shift settings and a plain
+    full-period reload is late by 0/1/3 M-cycles as the sample grows 2/4/8.
+- **Carries into the tool:** *the trigger-to-first-sample delay is a per-channel
+  constant worth publishing.* It is the single most useful number an APU
+  conformance report could hand an author, because it is one integer per channel
+  and it is what every one of these tests is really measuring.
+
+### 7. CH3's sample buffer survived an APU power-off
+
+- **Symptom:** re-triggering the wave channel after a power cycle plays the
+  sample it was playing *before* the power-off for a whole period — a click, or
+  a wrong first sample on every note in a game that power-cycles the APU between
+  notes (which is a common way to silence it).
+- **Caught by:** SameSuite `channel_3_first_sample`. Blargg's wave tests
+  (`dmg_sound` 09/10/12, all passing here) do not.
+- **Hardware:** the sample buffer is inside the powered domain and empties with
+  it; a trigger deliberately does *not* refill it (Pan Docs, Audio Details →
+  Wave Channel).
+- **Carries into the tool:** a good example of *stale state surviving a reset*,
+  a bug class worth probing generally: power a component down, power it up, and
+  check nothing from before is visible.
+
+### 8. NRx2 reloaded the live volume ("zombie mode")
+
+- **Symptom:** any game that writes NRx2 while a note is sounding — which is how
+  a lot of Game Boy music does its volume envelopes by hand — hears a volume
+  jump back to the register value instead of hardware's perturbation of the
+  running value.
+- **Caught by:** SameSuite `channel_N_volume` (all twelve old/new
+  direction+period combinations) and `channel_N_nrx2_glitch`.
+- **Hardware:** NRx2 sets what the *next trigger* loads; writing it while the
+  channel plays perturbs the live volume by a revision-dependent rule. SameSuite's
+  own README records that the glitch "behaves differently across CPU-CGB
+  revisions" and that only revision E is documented, so the gg8-wiki DMG formula
+  is *not* the right answer for a CGB-booting emulator. Derived rule for CGB-E,
+  in `VolumeEnvelope::write_nrx2`: an envelope with period 0 is idle, so loading
+  a fresh NRx2 restarts its timer and it fires once immediately in the **old**
+  direction; switching from decrement to increment adds two; reversing direction
+  reverses the counter (`v = 16 - v`).
+- **Carries into the tool:** *this check must be revision-qualified.* It is the
+  clearest case in the whole suite where "correct" depends on which console you
+  mean, and a tool that reports a bare FAIL here is misleading its user. The
+  report should say *which* revision the emulator matches.
+
+### 9. Coverage gap worth recording
+
+Blargg `dmg_sound` 12/12 and `cgb_sound` 12/12 were true before any of this, and
+stayed true throughout. **Neither moved by a single sub-test across nine
+behavioural fixes.** Any conformance tool that treats "passes Blargg sound" as
+"the APU is right" will report a clean bill of health on an emulator that is
+wrong about the output of every channel on every frame.
