@@ -2543,34 +2543,24 @@ impl App {
         // never over the picture (a terminal image owns whole cells) and never
         // folded into the footer, which the toast already owns.
         let banner_h = u16::from(self.banner_state() != 0);
+        // The bottom row is taken **only while a toast is up**. The controls
+        // that used to live there are on the top bar now, which is what frees
+        // it — so the tall narrow split this was reported from gains a row
+        // rather than spending one on the bar.
+        let toast_h = u16::from(self.toast_text().is_some());
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),        // header
+                Constraint::Length(1),        // the bar
                 Constraint::Length(banner_h), // wild-encounter verdict
                 Constraint::Min(0),           // body
-                Constraint::Length(1),        // footer
+                Constraint::Length(toast_h),  // toast, when there is one
             ])
             .split(area);
         if banner_h > 0 {
             self.render_encounter_banner(f, rows[1]);
         }
-
-        let title = self
-            .session
-            .as_ref()
-            .map(|s| s.entry.title.clone())
-            .unwrap_or_default();
-        let paused = self.session.as_ref().map(|s| s.paused).unwrap_or(false);
-        let header = if paused {
-            format!(" gameboy · {title}  [PAUSED]")
-        } else {
-            format!(" gameboy · {title}")
-        };
-        f.render_widget(
-            Paragraph::new(header).style(Style::default().add_modifier(Modifier::BOLD)),
-            rows[0],
-        );
+        self.render_top_bar(f, rows[0]);
 
         // With the trainer panel up the right-hand column becomes the panel:
         // the Status sidebar is reference information, the party is what is
@@ -2625,22 +2615,11 @@ impl App {
             self.render_trainer(f, panel);
         }
 
-        // The toast replaces the footer hint while it is up, for the same
-        // reason: it must not land on the picture.
-        let footer = match self.toast_text() {
-            Some(msg) => Line::from(Span::styled(
-                format!(" {msg}"),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            None => Line::from(Span::styled(
-                " ?help · p pause · +/- speed · t stats · T trainer · F5/F8 save/load · f full · q quit",
-                Style::default().fg(Color::DarkGray),
-            )),
-        };
-        f.render_widget(Paragraph::new(footer), rows[3]);
+        // The toast gets the bottom row for as long as it is up — it must not
+        // land on the picture (a terminal image owns whole cells).
+        if toast_h > 0 {
+            self.render_toast(f, rows[3]);
+        }
     }
 
     /// Everything about the UI that can paint over a terminal image. When it
@@ -2708,6 +2687,136 @@ impl App {
     /// Take the pending full-repaint request, if any. See [`App::full_redraw`].
     fn take_full_redraw(&mut self) -> bool {
         std::mem::replace(&mut self.full_redraw, false)
+    }
+
+    /// The bar across the top of the game screen: what is running, what is
+    /// live, **what the plugins are doing**, and the keys in constant use.
+    ///
+    /// # Why it is here and not along the bottom
+    ///
+    /// The controls used to run along the last row, which is the row a terminal
+    /// clips when the window's pixel height is not a whole number of cells —
+    /// exactly the defect that was reported. Plugin state lived inside the
+    /// trainer panel, competing for space with the party and the battle, which
+    /// is the panel's actual job; and nothing on screen advertised that plugins
+    /// existed at all, so the link partner had to be discovered by reading the
+    /// documentation. Both belong where a person looks first.
+    ///
+    /// **It costs no rows.** It replaces the title row rather than adding to
+    /// it, and the bottom row it replaces is now taken only while a toast is
+    /// up — so in the tall narrow split this work was done for, the layout
+    /// gains a row rather than spending one.
+    ///
+    /// # What it carries, and what it drops first
+    ///
+    /// Identity, then anything abnormal (paused, fast-forwarding, recording),
+    /// then the plugins, then the keys. Each of those has its own ladder of
+    /// shorter forms and shrinks through it before anything is dropped — see
+    /// [`fit_bar`]. It is a **stream-facing** surface, so it names things the
+    /// way a viewer would and never shows a path.
+    ///
+    /// The full key reference stays behind `?`; this is the subset in constant
+    /// use.
+    fn render_top_bar(&self, f: &mut Frame<'_>, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let width = area.width as usize;
+        let title = self
+            .session
+            .as_ref()
+            .map(|s| s.entry.title.clone())
+            .unwrap_or_else(|| "gameboy".to_string());
+
+        // Anything abnormal. Nothing here appears in the ordinary case, which
+        // is the point: the bar should be quiet until something is true.
+        let mut flags: Vec<String> = Vec::new();
+        if self.session.as_ref().is_some_and(|s| s.paused) {
+            flags.push("PAUSED".into());
+        }
+        if self.speed != SPEED_NORMAL {
+            flags.push(SPEED_LADDER[self.speed].label.to_string());
+        }
+        let video = self.video_status();
+        if !video.starts_with("off") {
+            flags.push(video.split_whitespace().next().unwrap_or("REC").to_string());
+        }
+
+        let plugins = self
+            .session
+            .as_ref()
+            .map(|s| s.gb.plugin_statuses())
+            .unwrap_or_default();
+        // The detail is bounded rather than shown in full: a plugin's own
+        // summary can be a whole sentence (the trainer view reports the live
+        // encounter), and the bar's job is *state at a glance*, not a second
+        // copy of what the encounter banner already says a row below.
+        let long: Vec<String> = plugins
+            .iter()
+            .map(|p| {
+                if p.detail.is_empty() {
+                    p.name.clone()
+                } else {
+                    format!("{} {}", p.name, truncate(&p.detail, 18))
+                }
+            })
+            .collect();
+        let names: Vec<String> = plugins.iter().map(|p| p.name.clone()).collect();
+
+        let ladders = vec![
+            vec![title.clone(), truncate(&title, 12)],
+            vec![flags.join(" · ")],
+            vec![
+                long.join(" · "),
+                names.join(" · "),
+                match plugins.len() {
+                    0 => String::new(),
+                    1 => names.first().cloned().unwrap_or_default(),
+                    n => format!("{n} plugins"),
+                },
+            ],
+            vec![
+                "? help · T trainer · p pause · F5/F8 save · +/- speed · q quit".into(),
+                "? help · T trainer · p pause · q quit".into(),
+                "? help · T trainer · q quit".into(),
+                "? help".into(),
+            ],
+        ];
+        let fitted = fit_bar(&ladders, "  ", width);
+
+        let dim = Style::default().fg(Color::DarkGray);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let push = |text: &str, style: Style, spans: &mut Vec<Span<'static>>| {
+            if text.is_empty() {
+                return;
+            }
+            if !spans.is_empty() {
+                spans.push(Span::styled("  ", dim));
+            }
+            spans.push(Span::styled(text.to_string(), style));
+        };
+        push(
+            &fitted[0],
+            Style::default().add_modifier(Modifier::BOLD),
+            &mut spans,
+        );
+        push(
+            &fitted[1],
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            &mut spans,
+        );
+        // A plugin that can write the game is marked on its *name*, so the
+        // warning survives any shortening — see crate::plugin.
+        let wrote = plugins.iter().any(|p| p.name.contains('!'));
+        push(
+            &fitted[2],
+            Style::default().fg(if wrote { Color::Yellow } else { Color::Cyan }),
+            &mut spans,
+        );
+        push(&fitted[3], dim, &mut spans);
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 
     /// The live trainer panel.
@@ -3640,6 +3749,55 @@ fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut 
         };
         out.extend_from_slice(&[r, g, b, a]);
     }
+}
+
+/// Fit a bar of segments into `width`, shrinking each through **its own ladder
+/// of shorter forms** before any of it is dropped.
+///
+/// Each segment is given longest-first; the bar repeatedly shortens whichever
+/// segment is currently costing the most until the whole line fits, and only
+/// once nothing can shrink further does it drop segments from the right. That
+/// is what stops a narrow window losing the controls entirely — they shorten to
+/// `? help · q quit` rather than vanishing — and it is why the ladders are
+/// written as *complete alternatives* rather than as a string to truncate: a
+/// clipped control hint is worse than a short one, because the reader cannot
+/// tell it was clipped.
+fn fit_bar(ladders: &[Vec<String>], sep: &str, width: usize) -> Vec<String> {
+    let mut at: Vec<usize> = vec![0; ladders.len()];
+    let mut live: Vec<bool> = vec![true; ladders.len()];
+    let total = |at: &[usize], live: &[bool]| -> usize {
+        let parts: Vec<usize> = (0..ladders.len())
+            .filter(|&i| live[i] && !ladders[i][at[i]].is_empty())
+            .map(|i| ladders[i][at[i]].chars().count())
+            .collect();
+        parts.iter().sum::<usize>() + sep.chars().count() * parts.len().saturating_sub(1)
+    };
+    // Shrink the longest segment that still has a shorter form.
+    while total(&at, &live) > width {
+        let worst = (0..ladders.len())
+            .filter(|&i| live[i] && at[i] + 1 < ladders[i].len())
+            .max_by_key(|&i| ladders[i][at[i]].chars().count());
+        match worst {
+            Some(i) => at[i] += 1,
+            None => break,
+        }
+    }
+    // Then, only then, drop whole segments from the right.
+    while total(&at, &live) > width {
+        match (0..ladders.len()).rev().find(|&i| live[i]) {
+            Some(i) if i > 0 => live[i] = false,
+            _ => break,
+        }
+    }
+    (0..ladders.len())
+        .map(|i| {
+            if live[i] {
+                ladders[i][at[i]].clone()
+            } else {
+                String::new()
+            }
+        })
+        .collect()
 }
 
 /// Lay the picture and the trainer panel out as **one block**: adjacent, the
@@ -5945,6 +6103,90 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The bar is one row, never wraps, never clips, and **never loses the
+    /// plugins or the controls entirely** — those are the two things it exists
+    /// to make visible.
+    #[test]
+    fn the_top_bar_fits_one_row_at_every_width() {
+        use ratatui::backend::TestBackend;
+        for cols in [30u16, 40, 50, 62, 80, 100, 140, 200] {
+            let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+                return;
+            };
+            app.trainer = true;
+            let mut terminal = Terminal::new(TestBackend::new(cols, 30)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let row: String = (0..cols)
+                .map(|x| buf.cell((x, 0)).map(|c| c.symbol()).unwrap_or(" "))
+                .collect();
+            assert!(
+                row.chars().count() == cols as usize,
+                "{cols}: the bar is not exactly one row wide"
+            );
+            // Identity survives everywhere; so does a way into the help.
+            assert!(
+                row.contains("ACID2") || row.contains('?'),
+                "{cols}: {row:?}"
+            );
+            // Wide enough to say anything at all, and the two things the bar
+            // exists for are both on it.
+            if cols >= 62 {
+                assert!(row.contains("trainer"), "{cols}: no plugin state: {row:?}");
+                assert!(row.contains("? help"), "{cols}: no controls: {row:?}");
+            }
+        }
+    }
+
+    /// The bar replaces the title row and frees the bottom one, so it costs no
+    /// rows — which matters because it was asked for in a pane where vertical
+    /// space is the scarce thing.
+    #[test]
+    fn the_top_bar_costs_no_rows() {
+        use ratatui::backend::TestBackend;
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.trainer = true;
+        let mut terminal = Terminal::new(TestBackend::new(100, 40)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let last: String = (0..100)
+            .map(|x| buf.cell((x, 39)).map(|c| c.symbol()).unwrap_or(" "))
+            .collect();
+        assert!(
+            last.trim().is_empty(),
+            "the bottom row should be free unless a toast is up: {last:?}"
+        );
+    }
+
+    /// Segments shrink through their own ladders before any is dropped, so a
+    /// narrow bar carries a short control hint rather than none — and never a
+    /// clipped one, which the reader cannot tell from a complete one.
+    #[test]
+    fn the_bar_shortens_before_it_drops() {
+        let ladders = vec![
+            vec!["TITLE".to_string()],
+            vec!["a-very-long-plugin-detail".into(), "plug".into()],
+            vec!["? help · p pause · q quit".into(), "? help".into()],
+        ];
+        let wide = fit_bar(&ladders, "  ", 80);
+        assert_eq!(wide[1], "a-very-long-plugin-detail");
+        assert_eq!(wide[2], "? help · p pause · q quit");
+        let mid = fit_bar(&ladders, "  ", 24);
+        assert_eq!(mid[0], "TITLE");
+        assert!(!mid[1].is_empty() && !mid[2].is_empty(), "{mid:?}");
+        assert!(
+            mid.iter().filter(|s| !s.is_empty()).count() == 3,
+            "shorten before dropping: {mid:?}"
+        );
+        // Only when nothing can shrink further does a segment go, from the
+        // right, and the first one never does.
+        let tiny = fit_bar(&ladders, "  ", 8);
+        assert_eq!(tiny[0], "TITLE");
+        assert_eq!(tiny[2], "", "the rightmost goes first");
     }
 
     /// The picture and the panel are **one composition**: adjacent, sharing a

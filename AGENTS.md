@@ -1535,6 +1535,14 @@ another branch; when those land, this belongs beside them.)
   `party_cols` grows the name/bar/type columns above the design width instead of stranding
   the space. A fixed 40-column panel beside a picture that grows with the window reads as "a
   footnote pinned next to a poster", which is exactly how it was reported.
+- **The controls and plugin state live on a ONE-ROW BAR across the top** (`render_top_bar`),
+  not along the bottom and not inside the trainer panel. The bottom row is the row a terminal
+  clips when its pixel height is not a whole number of cells, which is how the controls were
+  being lost; and plugin state inside the panel competes with the party for the panel's actual
+  job. **It costs no rows**: it replaces the title row, and the bottom row it freed is now
+  taken only while a toast is up. `fit_bar` shrinks each segment through its own ladder of
+  complete shorter forms before dropping any of it — never truncate a control hint, because a
+  clipped hint is indistinguishable from a complete one.
 - **`trainer = on` in `config.toml`** opens the panel at startup. Also the only reliable way
   to get the panel up when screenshotting through `wezterm cli send-text`, which does not
   deliver every key.

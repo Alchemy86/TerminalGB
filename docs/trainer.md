@@ -103,6 +103,39 @@ be open, and it is the only part of this feature that shows up uninvited.
 otherwise. `T` is shifted deliberately: the A/B/Start/Select bindings are configurable
 lowercase letters and an unshifted key could collide with somebody's.
 
+### The bar across the top
+
+One row above the game carries what a person looks for first: what is running,
+anything abnormal (paused, fast-forwarding, recording), **what the plugins are
+doing**, and the keys in constant use.
+
+![the top bar](trainer-panel/7-top-bar.png)
+
+It replaced two worse places. The controls used to run along the **last** row —
+the row a terminal clips when its pixel height is not a whole number of cells,
+which is exactly how they were being lost. Plugin state lived **inside this
+panel**, competing with the party and the battle for the space that is the
+panel's actual job; and nothing on screen advertised that plugins existed at
+all, so the link partner had to be found by reading the documentation.
+
+**It costs no rows.** It replaces the title row rather than adding to it, and
+the bottom row it freed is now taken only while a toast is up — so the tall
+narrow split this was asked for gains a row rather than spending one.
+
+Each part has its own ladder of shorter forms and shrinks through it before
+anything is dropped ([`fit_bar`](../src/screen/tui.rs)), so a narrow window gets
+`? help` rather than losing the controls, and never a *clipped* hint — which a
+reader cannot tell from a complete one. The full key reference stays behind `?`.
+
+**Not a menu.** The captain asked for "controls across the top, menu bits or
+whatever". This is the status half. A genuine interactive menu — focus,
+navigation, a modal stack, and every action reachable two ways — is a
+substantially larger piece of work than a bar, and building half of one
+silently would be worse than either. What exists today is a bar you read and a
+key you press; a menu would mean a focus model over the existing single-threaded
+`App` state machine, and it should be asked for deliberately rather than
+arrived at.
+
 ### One composition, not two columns
 
 The picture and the panel are laid out as a **single block**: adjacent, sharing
