@@ -503,6 +503,25 @@ finding, not an interrupt-timing one, and it is a candidate check in its own
 right: *after a `KEY1` bit-0 write followed by `STOP`, `KEY1` bit 7 must read
 set.* It also explains why `daid/speed_switch_timing_*` are red.
 
+> **Resolved — and by the other half of the same day's work.** The speed switch
+> *was* taking effect; the ROM could not see it because it synchronises through
+> the APU (`apu.s`, spinning on `NR52`) and the APU was being clocked at CPU
+> speed instead of the base clock, so at double speed it ran twice as fast and
+> the ROM's sync never landed where it expected. Fixing that (see "APU sample
+> accuracy" below) makes rounds 3 and 4 print `01`, and the ROM prints
+> **`Passed`** — its baseline row is now `PASS`.
+>
+> **This is the entry worth keeping.** Neither fix turns the test green alone:
+> the dispatch fix supplies the `0D`, the APU clock fix supplies the `01`, and
+> they were found independently by two people looking at different suites. It is
+> the strongest argument in this file for recording a **verdict** rather than a
+> frame hash — a hash would have been re-blessed twice and told nobody that the
+> ROM had started passing. It is also a caution for the conformance tool's
+> explanations: "the CGB double-speed switch is not taking effect" was a
+> reasonable reading of the evidence and was **wrong about the component**. When
+> a test synchronises through one subsystem to measure another, the failure
+> names the wrong one.
+
 ---
 
 ## APU sample accuracy — the SameSuite fixes (2026-08-14)

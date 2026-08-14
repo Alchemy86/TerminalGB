@@ -109,16 +109,19 @@ lines per fix, not a process document.
 - Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
   OAM-corruption bug not modelled (`oam_bug` red-by-design — 3 of its 8 sub-tests pass; it
   is a DMG hardware *defect*); PPU mode 3 fixed-length (needs a cycle-stepped PPU — it
-  costs us Mealybug 0/71); the CGB double-speed switch does not take effect (see the
-  `interrupt_time` note below).
+  costs us Mealybug 0/71). *(The "CGB double-speed switch does not take effect" entry that
+  used to sit here was a misdiagnosis and is gone — the switch was working; the APU was
+  clocked at CPU speed, so a ROM that synchronises through the APU could not see it. See
+  the SameSuite APU section.)*
 - **The timer, interrupt dispatch and OAM DMA are no longer non-goals** — all three are
   modelled now; see the "Core timing" section below. Two claims that used to live in this
   list are gone for good: the timer divergence did *not* have "no wired test" (Mooneye
   `acceptance/timer/*` wires it, and we were failing 10 of 13 — now 13/13), and OAM DMA
   being instantaneous was not merely a DMA inaccuracy, it made 14 Mooneye *instruction*-
-  timing tests unmeasurable. `interrupt_time` still prints **Failed**, but no longer for
-  the dispatch-timing reason recorded here before: it now measures the correct 13 cycles
-  and fails on the double-speed switch instead.
+  timing tests unmeasurable. **`interrupt_time` now PASSES** — and it took both halves of
+  that day's work: the 5-cycle dispatch fix supplies the correct 13 cycles, the APU
+  base-clock fix lets the ROM see the double-speed switch it makes halfway through.
+  Neither turns it green alone.
 - `get_mbc` (`src/mbc/mod.rs`) returns MBC3 for **any** cartridge when built without a
   filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled
@@ -213,13 +216,18 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   three plus the 11 PPU tests are the whole remaining red list.
 - **`blargg/interrupt_time` moves `$0C` → `$0D` and `$0D` is CORRECT** —
   `tests/interrupt_time/interrupt_time.s` says "Should take 13 cycles at either speed". Any
-  baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. The ROM still
-  says `Failed` for an unrelated reason its own output shows: rounds 3 and 4 print speed
-  `00` after `cpu_fast`, so the **CGB double-speed switch is not taking effect**. That is a
-  separate finding and it also explains `daid/speed_switch_timing_*`.
-- **Do not read wall-clock timings from a run with the `audio` feature enabled** — a crew is
-  fixing a ~62× slowdown there (17.9 ms/frame vs 0.29 ms). The ~6 % figure above was
-  measured with no APU installed, so it isolates this change.
+  baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. It then still
+  said `Failed` because rounds 3 and 4 printed speed `00` after `cpu_fast` — which read as
+  "the CGB double-speed switch is not taking effect" and **was wrong about the component**.
+  The switch worked; the ROM syncs through the APU (`apu.s` spins on `NR52`) and the APU
+  was clocked at CPU speed, so at double speed it ran twice as fast and the sync missed.
+  With the APU on the base clock the ROM prints `01` and **`Passed`**. Worth remembering as
+  a class: *when a test synchronises through one subsystem to measure another, its failure
+  names the wrong one.*
+- **Do not read wall-clock timings from a run with the `audio` feature enabled** — that
+  slowdown (17.9 ms/frame vs 0.29 ms) was the *player pacing the emulator*, since fixed;
+  the ~6 % figure above was measured with no APU installed, so it isolates this change.
+
 ## PPU: Mealybug Tearoom and the mid-scanline question (`src/gpu/`)
 
 - **Full scoping, with the split of what is winnable now versus what needs the rewrite:
