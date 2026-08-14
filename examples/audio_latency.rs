@@ -239,6 +239,10 @@ fn main() {
     );
     println!("  dropped         : {}", st.dropped);
     println!(
+        "  dropped pre-roll: {} (device still opening; not a glitch)",
+        st.dropped_before_playback
+    );
+    println!(
         "  produced/consumed: {} / {}  ({:+.4}% drift vs {rate} Hz)",
         st.pushed,
         st.consumed,

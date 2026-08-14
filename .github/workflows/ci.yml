@@ -35,6 +35,14 @@ jobs:
         run: make lint-audio
       - name: Build with the audio feature enabled
         run: cargo build --release --features audio
+      # Emulation speed WITH a host audio player attached. Nothing else in CI
+      # measures this: every benchmark we had ran headless with no player, so a
+      # player that blocked inside `Cpu::do_cycle` reported a healthy 0.246 ms
+      # here while the captain's real session emulated at 17.93 ms/frame and
+      # displayed 6 fps. Needs the `audio` feature but no sound card — see
+      # testharness/audioperf.rs.
+      - name: Emulation speed with audio attached
+        run: cargo test --release --features audio --test audioperf
       - name: cargo test build
         run: cargo build --tests --release
       - name: cargo test

@@ -180,8 +180,9 @@ hardware (§5a) — not picked as "a nicer buffer number":
 |---|---|
 | **Prime to `start_fill()` = 1792 samples (~41 ms) before draining** | The cushion's promise: the frontend may drop **one whole frame** without an audible glitch. A dropped frame costs more than a frame of audio — the queue drains continuously, so the gap is the missed frame *plus* the normal 16.7 ms period — so one frame + the measured 8 ms of scheduler jitter is ~41 ms. See §4b for why this used to be 7000 (~159 ms). |
 | **On underrun: hold the last sample and fade it (~0.999/sample), then re-prime** | A step to zero is itself a click ("play silence" is SDL's *baseline* behaviour, not the best). Re-priming turns one hiccup into one smooth gap instead of an on/off machine-gun. |
-| **Producer *waits* above `high_water()` = 2816 (~64 ms)** | The audio crystal becomes the master clock whenever the frame timer runs fast — the community's "sync to audio" advice (§10). Measured residual drift over 5 minutes: **−0.0005 %**. |
-| **Drop only on a consumer stall, judged by elapsed time** | See §4b: the stall detector was counter-based and misfired once blocks got small, discarding 330 ms of healthy audio per 90 s. |
+| **Above `high_water()` = 2816 (~64 ms), discard the oldest samples down to `start_fill()` — never wait** | The producer runs *inside* `Cpu::do_cycle`, so a wait is charged to the emulated frame. It used to wait here; see §4c, which is the bug that made the captain's session emulate at 17.93 ms/frame and display 6 fps. |
+| **Clip back to `start_fill()`, not to the ceiling** | Draining to the ceiling leaves zero headroom, so the next production burst clips again and every frame sheds a few samples for ever (measured: 668 over a 120 s soak with a perfectly healthy consumer). |
+| **Discards before the device's first callback are counted separately** | Opening a cpal stream takes ~150–250 ms, during which the emulator is already synthesising. Dropping that backlog is what makes playback start from *current* audio instead of a fifth of a second behind, and it is not a glitch — `dropped_before_playback`. |
 | **Everything is counted** | `underruns`, `held`, `dropped`, depth min/max, and now device-side latency. `GB_AUDIO_STATS=1` logs a line every 5 s; `examples/audio_latency.rs` reports the full path. |
 
 The queue policy itself is device-free (`sample_queue` module) and unit-tested,
@@ -299,8 +300,171 @@ Everything above is overridable for re-measurement:
 ```text
 GB_AUDIO_DEVICE_FRAMES=0     # let the host pick the device buffer (old behaviour)
 GB_AUDIO_START_FILL=7000     # queue cushion, samples
-GB_AUDIO_HIGH_WATER=12000    # producer wait threshold, samples
+GB_AUDIO_HIGH_WATER=12000    # latency ceiling, samples
 ```
+
+---
+
+## 4c. "The game lags with sound on" — the producer was pacing the emulator
+
+The captain's report, and the one that had been misdiagnosed four times: with
+`--features audio` the terminal frontend displayed **6 fps**. Same binary, same
+window, same ROM; the only variable was the feature.
+
+| build | `emulate_ms` | display fps |
+|---|---|---|
+| `--features audio` | **17.93** | **5.98** |
+| without audio | **0.29** | **56.75** |
+
+The obvious suspect was the T-cycle-stepped APU that took `dmg_sound` from 9/12
+to 12/12 (§ [apu.md](components/apu.md)), whose own estimate had been "+25 µs
+per frame" against a measured 17,600 µs. **It was not the APU.**
+
+### What the profile actually said
+
+`examples/audio_frame_cost.rs` times each emulated frame against a real device
+and reports wall time *and* `CLOCK_THREAD_CPUTIME_ID` beside it. On Pokémon
+Blue, 600 frames, unpaced:
+
+```text
+emulate_ms   : avg 17.285  p50 16.520  p90 19.046  max 335.053
+  executing  : 0.419 ms/frame — 97.6% of the frame cost was NOT executing
+emulated fps : 57.85 (real time = 59.73)
+queue        : depth 2817..3072  (high_water 2816)
+```
+
+**97.6 % of the frame was blocked, not computing.** The APU's whole per-access
+cost is inside that 0.419 ms — 0.26 ms of it is emulation the no-audio build
+does too. Removing only the wait (the fast-forward path, which already skipped
+it) gave **0.259 ms/frame**, i.e. the no-audio number.
+
+### The mechanism
+
+`Sound::play_samples` → `AudioPlayer::play` runs inside `Cpu::do_cycle`, inside
+`Gameboy::frame`. `CpalPlayer::play` waited in a 1 ms poll loop until the queue
+had drained to `high_water`, to make the audio crystal the master clock. So:
+
+1. Every frame's wait was charged to `emulate_ms`, which is what the frontend
+   measures and what telemetry publishes.
+2. The wait's equilibrium was **slower than real time** — it polls at 1 ms
+   granularity and only resumes once the queue is at or below the watermark, so
+   it overshoots a little every block. Measured unpaced: 57.85 fps against
+   59.7275. An emulator that cannot reach real time can never repay frame debt.
+3. The frontends pace emulation *themselves* with a deadline accumulator, so a
+   frame that costs more than 16.743 ms puts the loop into catch-up. Catch-up
+   asks for more frames back-to-back, which fills the queue faster, which makes
+   every one of them block. The loop pinned at `MAX_CATCHUP` (12) emulated
+   frames per draw: 59.73 / 12 ≈ **5 fps**, and it can never escape.
+
+Two clocks, and the emulator was slaved to the slower one from inside its own
+inner loop.
+
+### The fix
+
+The hand-off is now non-blocking, and it is the *whole* of it
+(`sample_queue::hand_off`): push the block, and if the queue is above
+`high_water()` discard the oldest samples down to `start_fill()`. Latency stays
+bounded, the frontend's deadline accumulator is the only clock, and
+`emulate_ms` measures emulation again.
+
+Dropping instead of waiting is not a new policy — it is the one already
+documented for fast-forward ("drop samples rather than pitch-shift"), now
+applied uniformly. `set_fast_forward` consequently needs no special case.
+
+### Measured, before and after
+
+Real device, back to back on this machine.
+
+`examples/audio_soak.rs`, 120 s, quiet 440 Hz tone:
+
+| | before | after |
+|---|---|---|
+| frames emulated | 59.6620 Hz | **59.7264 Hz** (target 59.7275) |
+| underruns | 0 | **0** |
+| dropped | 768 | **0** |
+| queue depth | 2742..3072 (~65 ms) | 256..2058 (~27 ms) |
+| verdict | FAIL | **PASS** |
+
+`examples/audio_latency.rs`, 90 s, Pokémon Blue from cold boot:
+
+| | before | after |
+|---|---|---|
+| end-to-end latency | 44.8 ms | **36.3 ms** |
+| our queue | 38.9 ms | 30.4 ms |
+| underruns | 2 | 2 |
+| production stalls > 1 ms | 6 / 5342 | **2 / 5369** |
+| discarded during playback | 768 | 8,513 |
+| discarded before playback | — | 6,400 |
+
+A cold-boot ROM run varies run to run (the boot sequence's stalls are not
+deterministic); across four pairs the latency win ranged 1.4–8.5 ms, underruns
+were equal or better (6→4, 4→3, 2→2), held samples were consistently lower and
+production stalls consistently about half. The *soak* is the deterministic
+comparison — same tone ROM, same tree — and it goes FAIL → PASS.
+
+`emulate_ms` with audio on: **17.93 → 0.34** (paced against the real device;
+0.26 with no consumer at all). `dmg_sound` is unchanged at **12/12** and every
+audio-capture hash still matches its baseline — nothing in synthesis moved.
+
+### The one thing that got worse, and why
+
+Discards during playback rose from 768 to ~8,500 over a 90 s Pokémon Blue run.
+Every one of them is in the **first 20 seconds**; from t=20 s to t=90 s the
+count is zero, with the queue stable at 1,180..2,180 samples.
+
+They are LCD-off bursts. A frame-paced loop advances the machine until the GPU
+raises `updated`, and `Gpu::do_cycle` returns immediately while the LCD is off —
+so during Pokémon's boot and its screen transitions one "frame" ran **845,836
+cycles** (twelve frames' worth of audio in one go) instead of 70,224. The
+emulator genuinely runs fast there, and the queue does the documented thing.
+The old code absorbed the same burst by stalling the emulator for ~130 ms
+instead, which is the behaviour being removed.
+
+Two honest consequences, both the same coin as the 8.5 ms latency win: the
+steady-state queue sits ~8 ms shallower, so a stall substitutes more held
+samples before it recovers (157 ms vs 82 ms across the run), while measured
+underruns are unchanged. `GB_AUDIO_START_FILL` raises the cushion for anyone who
+prefers the other side of that trade.
+
+**Follow-ups this leaves on the table**, in order of value:
+
+1. **Frame-paced frontends run the machine unbounded while the LCD is off.**
+   That is a frontend pacing bug, not an audio one — the fix is to cap an
+   iteration by cycles, not only by `gpu.updated`. It is the sole remaining
+   source of playback discards.
+2. **Dynamic rate control** (§10) would remove the last of them and the residual
+   crystal drift with them, by nudging blip's resample ratio ≤0.5 % from the
+   queue depth instead of discarding. It belongs behind an optional
+   `AudioPlayer` method so the device-free harnesses keep producing exactly
+   `cycles × rate / 4194304` samples and their hashes stay pinned.
+
+### Conformance record
+
+Per the standing convention in [`AGENTS.md`](../AGENTS.md):
+
+1. **Symptom** — with sound enabled the game runs at a fraction of speed and the
+   picture crawls; without it, full speed. Telemetry shows `emulate_ms` at or
+   above the frame period while every render stage is ~0 ms.
+2. **Caught by** — **nothing**, and that is the finding. No test ROM can see it:
+   the framebuffer is perfect, and the defect only exists when a host audio
+   player is attached, which no ROM-driven suite does. Our own benchmarks missed
+   it for the same reason — `render_bench` is headless and reported 0.246 ms.
+   Now caught by `testharness/audioperf.rs` (`make test-audio-perf`), which
+   attaches the real producer half with no consumer and fails if a frame costs
+   more than 4 ms or emulation runs slower than 4× real time. It fails at
+   29.6 ms / 0.57× against the old policy.
+3. **Contract violated** — not hardware, but the host's: a real Game Boy's APU
+   is driven by the machine's clock and cannot stall it. An emulator's audio
+   sink is a consumer, never the emulator's clock source, unless it is *the*
+   clock (this project paces on a frame deadline instead). Near, *Dynamic Rate
+   Control* — <https://bsnes.org/articles/dynamic-rate-control/> — states the
+   trilemma directly: block on both clocks and you get both artifacts.
+4. **New tests** — `testharness/audioperf.rs` (CI, no device needed);
+   `examples/audio_frame_cost.rs` (real device, reports wall vs CPU time per
+   frame); `sample_queue::clipping_drains_to_the_cushion_not_to_the_ceiling`.
+   Conformance candidates: **emulated speed must not depend on whether an audio
+   device is attached**, and **`speed_pct` must stay at 100 whatever `fps`
+   does** (already the stated telemetry invariant — it was violated here).
 
 ---
 
@@ -481,6 +645,28 @@ cargo test --release --test audiocapture
 #     testharness/audio_baseline.txt (re-bless: UPDATE_AUDIO_BASELINE=1)
 ```
 
+**Is emulation still inside the frame budget with audio attached?** — the check
+that was missing, and the reason §4c shipped. Needs `--features audio` but **no
+sound card**, so it runs in CI:
+
+```bash
+make test-audio-perf     # cargo test --release --features audio --test audioperf
+# Attaches the real producer half with no consumer, so the queue saturates and
+# stays saturated — the state the captain's machine was in. Fails if a frame
+# costs more than 4 ms, or if emulation runs slower than 4x real time, or if the
+# queue grows past high_water. Against the old wait-at-the-watermark policy it
+# reports 29.6 ms/frame at 0.57x and fails.
+```
+
+**What does one frame cost against a real device?** (needs a card):
+
+```bash
+PACED=1 cargo run --release --features audio --example audio_frame_cost -- <rom.gb> 3600
+# Per-frame wall time AND thread CPU time side by side: if they diverge,
+# emulation is not what is slow. Also reports cycles/frame, which is not always
+# 70224 (see §4c on LCD-off bursts).
+```
+
 **Does the real device pipeline underrun?** (needs `--features audio` + a card):
 
 ```bash
@@ -538,7 +724,7 @@ cargo test --release --test testroms      # see docs/testing.md
 |---|---|---|
 | Device buffer | [`src/sound.rs`](../src/sound.rs) `cpal_audio` | Ask for `BufferSize::Fixed(256)` instead of letting the host choose. Measured host latency **99.5 ms → 5.9 ms**. Override with `GB_AUDIO_DEVICE_FRAMES` (`0` = host default). |
 | Producer block size | [`src/sound.rs`](../src/sound.rs) | `OUTPUT_SAMPLE_COUNT` 2000 → **256** (45 ms → 5.8 ms). The block size is the floor under the queue and therefore under latency; `play_samples` now reuses scratch buffers rather than allocating six `Vec`s per block. |
-| Queue sizing | [`src/sound.rs`](../src/sound.rs) `sample_queue` | `START_FILL`/`HIGH_WATER` consts → `start_fill()`/`high_water()` (env-overridable), 7000/12000 → **1792/2816**. Sized to a stated promise — absorb one dropped frame — with the simulation profile re-derived from the *measured* stall distribution instead of an assumed 90 ms stall. |
+| Queue sizing | [`src/sound.rs`](../src/sound.rs) `sample_queue` | `START_FILL`/`HIGH_WATER` consts → `start_fill()`/`high_water()` (env-overridable), 7000/12000 → **1792/2816**. `high_water` is now a latency *ceiling* the producer clips to `start_fill` at, never a point it waits at (§4c). Sized to a stated promise — absorb one dropped frame — with the simulation profile re-derived from the *measured* stall distribution instead of an assumed 90 ms stall. |
 | Consumer-stall detection | [`src/sound.rs`](../src/sound.rs) | Elapsed-time based, not callback-counter based: the counter test misfired once a frame pushed several blocks back-to-back, discarding 330 ms of healthy audio per 90 s. |
 | Full-path measurement | [`examples/audio_latency.rs`](../examples/audio_latency.rs) | End-to-end latency (queue + device, from cpal timestamps), underruns and the production-stall distribution from one real-device run. |
 
@@ -573,11 +759,14 @@ this project's bugs were textbook instances. All links verified 2026-08-13.
    video stutter; block on both → both artifacts. **Dynamic rate control** —
    nudge the resample ratio ≤0.5 % based on buffer fill so it hovers half-full —
    is the polished answer (bsnes, RetroArch). *This emulator's structural
-   choice:* pace video by a deadline accumulator (§5a) and let the producer
-   **wait at the queue's high watermark**, which makes the audio clock the
-   master whenever the timer runs fast; the residual −0.013 % drift costs one
-   smooth re-prime per ~20 min (measured). Full DRC is the documented upgrade
-   path if that ever matters.
+   choice:* pace video by a deadline accumulator (§5a) and make the queue's
+   high watermark a **latency bound rather than a wait** — the producer runs
+   inside `Cpu::do_cycle`, so waiting there makes the audio clock the master
+   from inside the emulator's own inner loop, which is exactly the "sync to
+   audio only" corner of the trilemma and cost 17.6 ms of every frame (§4c).
+   Residual crystal drift is therefore absorbed by hold-and-fade below and by
+   discarding above; measured over 120 s at −0.006 %, that is zero of either.
+   Full DRC is the documented upgrade path if it ever matters.
    - Near (byuu), *Dynamic Rate Control*: https://bsnes.org/articles/dynamic-rate-control/
      (article archive: https://github.com/higan-emu/emulation-articles)
    - Libretro docs, *Dynamic Rate Control*: https://docs.libretro.com/development/cores/dynamic-rate-control/

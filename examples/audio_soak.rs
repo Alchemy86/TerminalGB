@@ -122,6 +122,12 @@ fn main() {
         stats.held as f64 * 1000.0 / device_rate as f64
     );
     println!("dropped (overflow):   {}", stats.dropped);
+    println!(
+        "  before playback:    {} ({:.0} ms of pre-roll discarded while the \
+         device was still opening)",
+        stats.dropped_before_playback,
+        stats.dropped_before_playback as f64 * 1000.0 / device_rate as f64
+    );
     println!("queue depth:          min {} max {} now {depth_now} (start-fill {}, high-water {})",
         if stats.depth_min == usize::MAX { 0 } else { stats.depth_min },
         stats.depth_max,

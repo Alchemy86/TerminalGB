@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check lint lint-audio
+.PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf
 
 all: build install
 
@@ -37,6 +37,13 @@ build-wasm:
 
 test:
 	cargo test --release
+
+# Emulation speed with a host audio player attached — the one thing no other
+# benchmark measures, because they all run headless with no player. Needs the
+# `audio` feature (so, ALSA dev headers) but NOT a sound card. See
+# testharness/audioperf.rs and docs/audio.md.
+test-audio-perf:
+	cargo test --release --features audio --test audioperf
 
 desktop:
 	cd examples/desktop && cargo run --release

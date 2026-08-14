@@ -17,6 +17,65 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the audio player paced the emulator (host-integration, not hardware)
+
+**Symptom.** With sound enabled the game runs at a fraction of speed and the
+picture crawls; with sound disabled, full speed. Same binary, same window, same
+ROM. Telemetry shows `emulate_ms` at or above the frame period (17.93 ms against
+16.743) while every render stage is ~0 ms, and the display falls to ~6 fps —
+`59.7275 / MAX_CATCHUP`, the signature of a frame loop that can never repay its
+debt. Misdiagnosed four times as APU cost.
+
+**Caught by.** *Nothing, and that is the finding.* No test ROM can see it: the
+framebuffer is byte-perfect throughout, and the defect only exists when a **host
+audio player is attached**, which no ROM-driven suite does. Our own benchmarks
+missed it for the same reason — `render_bench` is headless and reported a
+healthy 0.246 ms/frame while the captain's session ran at 6 fps. This is the
+same class of gap as the three terminal-render bugs: a ROM-driven suite compares
+framebuffers, and everything here leaves the framebuffer correct.
+
+**Behaviour violated.** Not silicon — the *host integration contract*. A real
+Game Boy's APU is driven by the machine clock and cannot stall it; an emulator's
+audio sink is a consumer, never the emulator's clock source, unless it is *the*
+clock. Here `AudioPlayer::play` is called from `Sound::play_samples` inside
+`Cpu::do_cycle`, and it waited at the queue's high watermark to make the sound
+card the master clock — while the frontends already paced emulation with a
+59.7275 Hz deadline accumulator. Near (byuu), *Dynamic Rate Control*
+(<https://bsnes.org/articles/dynamic-rate-control/>) states the trilemma
+directly: sync to video only and the buffer drifts, sync to audio only and video
+stutters, **block on both and you get both artifacts**. Two compounding details
+worth carrying: the wait's equilibrium was *slower* than real time (1 ms poll
+granularity, resuming only at/below the watermark → 57.85 fps unpaced), and
+catch-up made it self-reinforcing (more frames back-to-back → queue fills faster
+→ every frame blocks).
+
+**Carries into the tool.** Two checks, neither expressible as a frame hash:
+
+1. **Emulated speed must not depend on whether an audio device is attached.**
+   Run the same ROM with and without host audio and compare emulated frames per
+   wall-clock second; a difference is this bug. Cheap, and no reference data of
+   ours is involved.
+2. **`speed_pct` must stay at 100 whatever `fps` does.** Already the stated
+   invariant of our telemetry stream (`docs/telemetry.md`) — it was violated
+   here, which is a second argument for the telemetry stream being the reference
+   adapter (`docs/conformance.md`): `speed_pct` and `emulate_ms` expose this,
+   a framebuffer hash exposes nothing.
+
+Our own gate is `testharness/audioperf.rs` (`make test-audio-perf`), which needs
+no sound card: it attaches the real producer half with no consumer so the queue
+saturates, then fails above 4 ms/frame or below 4x real time. It reports 29.6 ms
+and 0.57x against the old policy.
+
+**Adjacent finding, not fixed (recorded as a check).** A frame-paced loop
+advances the machine until the GPU raises `updated`, and `Gpu::do_cycle` returns
+immediately while the LCD is off — so during a screen-off transition one "frame"
+ran **845,836** cycles instead of 70,224 (measured, Pokémon Blue boot) and the
+APU emitted the matching burst. Any emulator whose frontend paces on frames has
+this. Check: **the emulated cycle count between two consecutive frame deliveries
+must be bounded**, or audio and wall-clock pacing diverge whenever a game blanks
+the LCD.
+
+---
 ## 2026-08-14 — no DMG boot mode: every "DMG" test was run on a Game Boy Color
 
 - **Symptom** — a test ROM that prints its boot registers shows `HL: 007C` where a real

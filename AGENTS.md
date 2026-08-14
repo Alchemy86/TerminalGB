@@ -345,9 +345,10 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   underrun stepped to 0.0 (a click) then played the next 45 ms block: machine-gun gaps. Both
   loops now use a **deadline accumulator** (`next += FRAME_TIME`, bounded catch-up) — keep it
   that way; never reset a pacing timer to `now()`. The queue is `sample_queue::SampleQueue`
-  (`src/sound.rs`): prime before draining, hold-and-fade + re-prime on underrun, producer
-  *waits* at a high watermark (audio clock = master clock), drop only when the consumer is
-  proven stalled. Sizes come from the simulation in `mod queue_tests` + real soaks
+  (`src/sound.rs`): prime before draining, hold-and-fade + re-prime on underrun, and above
+  the high watermark **discard the oldest samples down to `start_fill()` — never wait**
+  (the producer runs inside `Cpu::do_cycle`; see the "producer must never block" entry
+  below). Sizes come from the simulation in `mod queue_tests` + real soaks
   (`examples/audio_soak.rs`, `GB_AUDIO_STATS=1`).
 - **"Sounds play just AFTER they should" — latency. Measure the WHOLE path, not our queue.**
   Killing the stutter by holding more samples bought delay: measured **299 ms end-to-end**.
@@ -360,13 +361,47 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   2. **`OUTPUT_SAMPLE_COUNT` is the floor under all audio latency.** At 2000 (45 ms/block) no
      queue can be small. Now **256** (5.8 ms) — shorter than a frame, which is the real
      production granularity. `play_samples` reuses `Sound::mixdown` scratch (no per-block allocs).
-  3. **`high_water()`, not `start_fill()`, sets steady-state latency** — the producer *blocks*
-     there, so a slightly-fast frame timer parks the queue at the top. Now 1792/2816 samples
-     (41/64 ms), sized to a stated promise: *absorb one dropped frame* (a dropped frame costs
-     the frame **plus** the normal 16.7 ms period, since the queue drains continuously).
+  3. **The clip target sets steady-state latency, and it is `start_fill()`.** Opening a device
+     always overfills the queue, so wherever the latency bound leaves it is where it stays.
+     Now 1792/2816 samples (41/64 ms): `start_fill` is the cushion and the clip target,
+     `high_water` is only the ceiling. Sized to a stated promise: *absorb one dropped frame*
+     (a dropped frame costs the frame **plus** the normal 16.7 ms period, since the queue
+     drains continuously). (Historical note: this used to read "`high_water()`, not
+     `start_fill()`" because the producer *blocked* at the watermark. It no longer does —
+     that was the 6 fps bug.)
   Result, 5-min real soak: **52.7 ms end-to-end (46–60), 0 underruns, 0 drops, drift −0.0005 %**.
   Measured stall reality on this box: 4 of 17899 frames >1 ms late, p99.9 = 0.0 ms — so
   `queue_tests`' profile is derived from that, not from an assumed 90 ms stall.
+- **AN `AudioPlayer` MUST NEVER BLOCK — it runs inside the emulated frame.** `Sound::play_samples`
+  is called from `Cpu::do_cycle`, so anything the player does is charged to `emulate_ms`. The
+  cpal player used to *wait* at the queue's high watermark to make the sound card the master
+  clock. Result, measured on the captain's session: `emulate_ms` **17.93** against a 16.743 ms
+  budget with the no-audio build at **0.29** — and **97.6 % of that was blocked, not
+  executing** (`examples/audio_frame_cost.rs` prints wall time beside
+  `CLOCK_THREAD_CPUTIME_ID`; if they diverge, emulation is not what is slow). It was
+  misdiagnosed four times as the T-cycle-stepped APU, which in fact costs ~0.16 ms/frame.
+  Two compounding effects, both worth remembering: the wait's equilibrium is **slower than
+  real time** (1 ms poll granularity, resumes only at/below the watermark → 57.85 fps
+  unpaced), and the frontends pace emulation themselves, so a frame over budget puts the loop
+  into catch-up, which fills the queue faster, which blocks every frame — pinned at
+  `MAX_CATCHUP` = 12 emulated frames per draw, i.e. 59.73/12 ≈ **5 fps**, with no escape.
+  **Never put a second clock inside the emulator's inner loop.** The hand-off is now the whole
+  of `sample_queue::hand_off`: push, then bound latency by *discarding*, which is the policy
+  fast-forward already documented ("drop samples rather than pitch-shift"), so
+  `set_fast_forward` needs no special case. After: `emulate_ms` **0.34** with a real device,
+  soak **PASS** (0 underruns, 0 drops, 59.7264 Hz), end-to-end latency **44.8 → 36.3 ms**,
+  `dmg_sound` still **12/12**, all audio hashes unchanged. Gated by
+  `testharness/audioperf.rs` (`make test-audio-perf`, in CI) — needs the `audio` feature but
+  **no sound card**: it attaches the real producer half with no consumer so the queue
+  saturates, and fails above 4 ms/frame or below 4x real time. Teeth proven: 29.6 ms and
+  0.57x against the old policy. Full write-up + conformance record: `docs/audio.md` §4c.
+- **A frame-paced loop runs the machine unbounded while the LCD is off** (`Gpu::do_cycle`
+  returns immediately when `!lcd_on`, so `updated` never fires). Measured on Pokémon Blue's
+  boot: one "frame" ran **845,836** cycles instead of 70,224, and the APU emitted the matching
+  burst — which the queue's latency bound then discards. That is a **frontend pacing** defect,
+  not an audio one, and it is the only remaining source of playback discards (all inside the
+  first 20 s of a cold boot; zero thereafter). Cap an iteration by cycles as well as by
+  `gpu.updated` if it ever matters. Do not "fix" it in `sound.rs`.
 - **Small blocks broke the consumer-stall detector (fixed; don't reintroduce).** It compared
   the callback counter against the previous `play()`. Fine at 45 ms/block, but at 5.8 ms one
   frame pushes several blocks back-to-back with no callback between them, so every block after

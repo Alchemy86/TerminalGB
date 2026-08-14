@@ -13,7 +13,25 @@ history. See [Credits & lineage](README.md#credits--lineage).
 
 ## [Unreleased]
 
+### Fixed
+- **Audio no longer paces the emulator.** With `--features audio` one emulated frame cost
+  **17.93 ms** against a 16.743 ms budget (0.29 ms without the feature), so the terminal
+  frontend sat permanently in catch-up and displayed **6 fps**. Profiling showed **97.6 % of
+  that frame was blocked, not executing**: `AudioPlayer::play` runs inside `Cpu::do_cycle`,
+  and the cpal player *waited* at its queue's high watermark to make the sound card the master
+  clock, fighting the frontend's own 59.7275 Hz deadline accumulator. The hand-off is now
+  non-blocking — above the watermark the oldest samples are discarded down to the cushion,
+  which is the policy fast-forward already documented. `emulate_ms` **17.93 → 0.34** against a
+  real device; end-to-end latency **44.8 → 36.3 ms**; the 120 s soak goes FAIL → PASS (0
+  underruns, 0 drops); `dmg_sound` unchanged at 12/12 and every audio-capture hash unchanged.
+  Full write-up and conformance record: [`docs/audio.md`](docs/audio.md) §4c.
+
 ### Added
+- **`testharness/audioperf.rs`** — emulation speed *with a host audio player attached*, the
+  check nothing in CI performed (every benchmark ran headless with no player, which is why the
+  above shipped). Needs the `audio` feature but no sound card; `make test-audio-perf`.
+- **`examples/audio_frame_cost.rs`** — per-frame wall time beside thread CPU time against a
+  real device, so "emulation got slow" can be answered rather than guessed.
 - Repository furniture: this `CHANGELOG.md`, `CONTRIBUTING.md`, and GitHub issue / pull-request
   templates.
 - README badges (CI status, licence, Rust version) and a "Credits & lineage" section naming

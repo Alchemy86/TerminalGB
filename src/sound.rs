@@ -34,10 +34,14 @@ pub trait AudioPlayer: Send {
     fn samples_rate(&self) -> u32;
     fn underflowed(&self) -> bool;
     /// Hint from the frontend that emulation is deliberately running faster
-    /// than real time (fast-forward). Players that pace the emulator against
-    /// the audio clock (the cpal high-watermark throttle) must NOT wait in
-    /// this mode — the documented fast-forward contract is "drop samples
-    /// rather than pitch-shift", and waiting would silently force 1x speed.
+    /// than real time (fast-forward). **A player must never pace the emulator
+    /// by blocking in [`play`](AudioPlayer::play)** — it is called from inside
+    /// `Cpu::do_cycle`, so any wait there is charged to the emulated frame (see
+    /// `cpal_audio::CpalPlayer::play`). The cpal player therefore bounds
+    /// latency by discarding, which is already the documented fast-forward
+    /// contract ("drop samples rather than pitch-shift"), and this hint needs
+    /// no special case there. It stays on the trait for players that do want
+    /// one.
     fn set_fast_forward(&mut self, _enabled: bool) {}
 }
 
@@ -1405,17 +1409,37 @@ impl Sound {
 ///   (https://wiki.libsdl.org/SDL2/SDL_QueueAudio). After an underrun the
 ///   queue re-primes to `start_fill` before draining again, so one hiccup
 ///   costs one smooth gap instead of a burst of 45 ms on/off "blocky" cycles.
-/// * **High watermark instead of hard drop.** The producer consults
-///   `over_high_water()` and *waits* for the callback to drain (audio-crystal-
-///   as-master-clock, the community's "sync to audio" advice; see Near's
-///   dynamic-rate-control article). Samples are dropped only if the consumer
-///   is provably stalled, to bound latency.
+/// * **High watermark, and the producer never waits at it.** Above
+///   `high_water()` the emulator is ahead of the sound card, and the oldest
+///   samples are discarded down to `start_fill()` ([`SampleQueue::bound_latency`]).
+///   The obvious alternative — *wait* for the callback to drain, making the
+///   audio crystal the master clock — is **wrong here and was a shipped bug**:
+///   [`hand_off`] is called from `Sound::play_samples`, which runs inside
+///   `Cpu::do_cycle`, so the wait is charged to the emulated frame. Measured on
+///   the captain's session: `emulate_ms` 17.93 against a 16.743 ms budget,
+///   97.6 % of it not executing, the frontend permanently in catch-up, and the
+///   display down to 6 fps. The frontends already pace to 59.7275 Hz with a
+///   deadline accumulator; a second clock inside the emulator can only fight it.
 /// * **Instrumentation.** Underruns, held/dropped counts and depth min/max are
 ///   counted so buffer sizing is measured, not argued. `GB_AUDIO_STATS=1`
 ///   logs a line every ~5 s to stderr.
 #[cfg(any(all(not(target_arch = "wasm32"), feature = "audio"), test))]
 pub mod sample_queue {
     use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    /// The producer half of the hand-off, whole. Extracted from
+    /// `cpal_audio::CpalPlayer::play` so the one property that matters can be
+    /// tested with no audio device at all: **this must return in microseconds
+    /// however full the queue is, because it runs inside an emulated frame**.
+    /// `testharness/audioperf.rs` is the gate.
+    pub fn hand_off(queue: &Mutex<SampleQueue>, left: &[f32], right: &[f32]) {
+        let Ok(mut q) = queue.lock() else {
+            return;
+        };
+        q.push(left, right);
+        q.bound_latency();
+    }
 
     /// Producer block size: `Sound::play_samples` always hands over exactly
     /// this many samples, ~5.8 ms at 44.1 kHz.
@@ -1484,9 +1508,18 @@ pub mod sample_queue {
         pub underruns: u64,
         /// Samples substituted with the decaying hold value (priming included).
         pub held: u64,
-        /// Samples discarded because the consumer was stalled at the high
-        /// watermark. Zero in healthy operation.
+        /// Samples discarded at the high watermark **after playback started**.
+        /// Zero in healthy operation — this is the number the soak test gates
+        /// on, because every one of them is audio a listener would have heard.
         pub dropped: u64,
+        /// Samples discarded at the high watermark *before the device consumed
+        /// its first sample*. Counted apart from [`dropped`] because nothing
+        /// has been played yet: opening a cpal stream takes a couple of hundred
+        /// milliseconds, during which the emulator is already synthesising, and
+        /// discarding the oldest of that backlog is what makes playback start
+        /// from *current* audio instead of a fifth of a second behind. Expect a
+        /// few thousand here on every run; it is a startup cost, not a glitch.
+        pub dropped_before_playback: u64,
         /// Queue depth extremes observed at callback entry.
         pub depth_min: usize,
         pub depth_max: usize,
@@ -1541,12 +1574,36 @@ pub mod sample_queue {
             self.queue.len().saturating_sub(self.high_water)
         }
 
-        /// Last resort when the consumer is stalled: bound latency by
-        /// discarding the oldest samples down to the high watermark.
-        pub fn drop_to_high_water(&mut self) {
-            let n = self.over_high_water();
+        /// Bound latency by discarding the oldest samples. This is the *only*
+        /// back-pressure the producer applies — see
+        /// `cpal_audio::CpalPlayer::play` for why it may not wait instead.
+        ///
+        /// **The ceiling and the target are deliberately different levels.**
+        /// [`high_water`] is where clipping *starts*; the queue is drained back
+        /// to [`start_fill`], not to the ceiling. Draining to the ceiling
+        /// leaves zero headroom, so the very next production burst clips again
+        /// and every frame sheds a handful of samples for ever (measured: 668
+        /// samples over a 120 s soak, with the consumer perfectly healthy).
+        /// Draining to the cushion level restores the full `high_water -
+        /// start_fill` band, which is what absorbs one frame's burst plus
+        /// scheduler jitter.
+        ///
+        /// It is also what sets steady-state latency now that nothing blocks:
+        /// opening the device always overfills the queue (see
+        /// [`QueueStats::dropped_before_playback`]), so wherever this clip
+        /// leaves the queue is where it stays. That is `start_fill` — the
+        /// cushion the buffer sizing was actually reasoned about.
+        pub fn bound_latency(&mut self) {
+            if self.over_high_water() == 0 {
+                return;
+            }
+            let n = self.queue.len() - self.start_fill;
             self.queue.drain(0..n);
-            self.stats.dropped += n as u64;
+            if self.stats.consumed == 0 {
+                self.stats.dropped_before_playback += n as u64;
+            } else {
+                self.stats.dropped += n as u64;
+            }
         }
 
         /// Record callback entry for depth instrumentation.
@@ -1801,6 +1858,7 @@ pub mod host_status {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
 pub mod cpal_audio {
+    use super::sample_queue;
     use super::sample_queue::{high_water, start_fill, SampleQueue};
     use super::AudioPlayer;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -1842,10 +1900,6 @@ pub mod cpal_audio {
         /// were able to pin it (`None` = the host chose).
         configured_buffer: Option<u32>,
         sample_rate: u32,
-        /// Fast-forward: the frontend is deliberately outrunning real time, so
-        /// the watermark policy switches from *wait* to *drop-oldest* (waiting
-        /// would silently clamp the game back to 1x).
-        fast_forward: bool,
         stats_enabled: bool,
         last_stats_log: Instant,
     }
@@ -1985,7 +2039,6 @@ pub mod cpal_audio {
                 device_latency: device_latency.clone(),
                 configured_buffer,
                 sample_rate: config.sample_rate.0,
-                fast_forward: false,
                 stats_enabled: std::env::var("GB_AUDIO_STATS").is_ok(),
                 last_stats_log: Instant::now(),
             };
@@ -2082,72 +2135,14 @@ pub mod cpal_audio {
     }
 
     impl AudioPlayer for CpalPlayer {
+        /// Hand one block to the device queue. **This runs inside
+        /// `Cpu::do_cycle`, i.e. inside one emulated frame, and therefore must
+        /// never block** — see the module note on the audio-clock throttle.
         fn play(&mut self, left_channel: &[f32], right_channel: &[f32]) {
-            let callbacks_before;
-            {
-                let mut q = match self.queue.lock() {
-                    Ok(q) => q,
-                    Err(_) => return,
-                };
-                q.push(left_channel, right_channel);
-                callbacks_before = q.stats.callbacks;
-            }
-
-            // Audio-clock throttle. Above the high watermark the emulator is
-            // running ahead of the sound card; *wait* for the callback to
-            // drain instead of dropping samples. This makes the audio crystal
-            // the master clock whenever the frame timer runs fast — the
-            // standard emulator answer to producer/consumer clock drift (see
-            // docs/audio.md). Waiting is pointless if the consumer is stalled
-            // (stream error, device gone): detect that by the callback counter
-            // not advancing, and bound latency by dropping instead.
-            //
-            // Fast-forward opts out of waiting entirely: the overrun is
-            // intentional, and the documented contract is "drop samples
-            // rather than pitch-shift" — waiting would clamp the game to 1x.
-            if self.fast_forward {
-                if let Ok(mut q) = self.queue.lock() {
-                    q.drop_to_high_water();
-                }
-                return;
-            }
-            // Is the consumer stalled? Only wall time can answer that.
-            //
-            // This used to compare the callback counter against the value seen
-            // at the *previous* `play()`. That was sound while a block was
-            // 45 ms — consecutive blocks were always more than a callback apart
-            // — but a block is now 5.8 ms, so one emulated frame hands over
-            // several blocks back-to-back within microseconds of each other. No
-            // callback can occur between them, the counter is unchanged, and
-            // every block after the first in a frame was misread as "consumer
-            // stalled" and dropped instead of waited for. Measured: 14539
-            // samples (330 ms of audio) discarded in 90 s, with the consumer
-            // perfectly healthy. Judge by elapsed time instead.
-            const STALL_TIMEOUT: Duration = Duration::from_millis(50);
-            const MAX_WAIT: Duration = Duration::from_millis(150);
-            let wait_start = Instant::now();
-            loop {
-                let (over, callbacks_now) = match self.queue.lock() {
-                    Ok(q) => (q.over_high_water(), q.stats.callbacks),
-                    Err(_) => return,
-                };
-                if over == 0 {
-                    break;
-                }
-                let waited = wait_start.elapsed();
-                // 50 ms without a single callback means the device really has
-                // stopped: the callback period is a few milliseconds.
-                let stalled =
-                    waited >= STALL_TIMEOUT && callbacks_now == callbacks_before;
-                if stalled || waited >= MAX_WAIT {
-                    if let Ok(mut q) = self.queue.lock() {
-                        q.drop_to_high_water();
-                    }
-                    break;
-                }
-                // ~1 ms is a few callbacks' worth of drain at 2.7 ms per call.
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            // Push, then bound latency by discarding — never by waiting. See
+            // `sample_queue::hand_off` and the module docs for why waiting here
+            // cost the captain 17.6 ms of every 16.743 ms frame.
+            sample_queue::hand_off(&self.queue, left_channel, right_channel);
 
             if self.stats_enabled
                 && self.last_stats_log.elapsed() >= Duration::from_secs(5)
@@ -2157,7 +2152,8 @@ pub mod cpal_audio {
                     let s = q.stats;
                     eprintln!(
                         "audio: depth {}..{} (now {}), underruns {}, held {}, \
-                         dropped {}, pushed {}, consumed {}, callbacks {}",
+                         dropped {} (+{} pre-roll), pushed {}, consumed {}, \
+                         callbacks {}",
                         if s.depth_min == usize::MAX {
                             0
                         } else {
@@ -2168,6 +2164,7 @@ pub mod cpal_audio {
                         s.underruns,
                         s.held,
                         s.dropped,
+                        s.dropped_before_playback,
                         s.pushed,
                         s.consumed,
                         s.callbacks,
@@ -2188,9 +2185,10 @@ pub mod cpal_audio {
             }
         }
 
-        fn set_fast_forward(&mut self, enabled: bool) {
-            self.fast_forward = enabled;
-        }
+        /// No-op: the hand-off is non-blocking in every mode, so fast-forward
+        /// already gets the documented "drop samples rather than pitch-shift"
+        /// behaviour from the latency bound in `play`.
+        fn set_fast_forward(&mut self, _enabled: bool) {}
     }
 }
 
@@ -2430,10 +2428,11 @@ mod queue_tests {
         );
     }
 
-    /// Producer overrun: pushing far past the high watermark then dropping
-    /// bounds latency and counts every discarded sample.
+    /// Producer overrun: pushing far past the high watermark clips back to the
+    /// *cushion* (not the ceiling) and counts every discarded sample, split by
+    /// whether the device had started playing.
     #[test]
-    fn drop_to_high_water_bounds_latency() {
+    fn clipping_drains_to_the_cushion_not_to_the_ceiling() {
         let mut q = SampleQueue::new(start_fill(), high_water());
         let block = vec![0.1f32; BLOCK];
         // Push well past the watermark whatever it is currently sized at.
@@ -2441,11 +2440,29 @@ mod queue_tests {
         for _ in 0..pushes {
             q.push(&block, &block);
         }
-        let over = pushes * BLOCK - high_water();
-        assert_eq!(q.over_high_water(), over);
-        q.drop_to_high_water();
-        assert_eq!(q.len(), high_water());
-        assert_eq!(q.stats.dropped, over as u64);
+        assert_eq!(q.over_high_water(), pushes * BLOCK - high_water());
+        let over = pushes * BLOCK - start_fill();
+        q.bound_latency();
+        // Drained to the cushion, leaving the whole band free again — not to
+        // the ceiling, which would re-clip on the next burst for ever.
+        assert_eq!(q.len(), start_fill());
+        // Nothing has been played yet, so this is startup backlog, not a
+        // glitch — it must not land in the counter the soak test gates on.
+        assert_eq!(q.stats.dropped, 0);
+        assert_eq!(q.stats.dropped_before_playback, over as u64);
+
+        // Once the device has taken a sample, further clipping is real audio
+        // the listener would have heard, and is counted as such.
+        q.next_sample();
+        for _ in 0..pushes {
+            q.push(&block, &block);
+        }
+        assert!(q.over_high_water() > 0);
+        let expected = q.len() - start_fill();
+        q.bound_latency();
+        assert_eq!(q.len(), start_fill());
+        assert_eq!(q.stats.dropped, expected as u64);
+        assert_eq!(q.stats.dropped_before_playback, over as u64);
     }
 }
 

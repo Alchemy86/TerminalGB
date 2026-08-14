@@ -115,6 +115,14 @@ name = "audiocapture"
 path = "testharness/audiocapture.rs"
 harness = false
 
+# Emulation speed with a host audio player attached. `harness = false` so it
+# can print the measured numbers and control the exit code. Needs the `audio`
+# feature but NOT a sound card — see testharness/audioperf.rs.
+[[test]]
+name = "audioperf"
+path = "testharness/audioperf.rs"
+harness = false
+
 # Trainer-view harness: proves the Gen 1 RAM reader and the sprite
 # decompressor against a real Pokémon Red/Blue cartridge, and prints the live
 # party so it can be compared with the game. Skips (exit 0) with no cartridge.
