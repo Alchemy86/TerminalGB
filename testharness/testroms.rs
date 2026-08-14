@@ -212,7 +212,8 @@ const ROMS: &[RomSpec] = &[
         id: "blargg/interrupt_time",
         path: "tests/interrupt_time/interrupt_time.gb",
         kind: Kind::Verdict,
-        note: "16-vs-20 T-cycle interrupt dispatch (documented non-goal)",
+        note: "CGB double-speed switch not taking effect (the dispatch time it \
+               measures, 13 cycles, is now correct)",
     },
     RomSpec {
         id: "blargg/halt_bug",

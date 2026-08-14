@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`bdc55f3`](https://github.com/Alchemy86/gameboy/tree/bdc55f37f648d0aa16ad0311ec2170aa854c75ec) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`50ecb56`](https://github.com/Alchemy86/gameboy/tree/50ecb56d60eaa1153604ae57ca887959688eeb39) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -255,7 +255,7 @@ OpenEmu screenshots, not an automated harness.
 | **Blargg `mem_timing` / `mem_timing-2`** | *When* within an instruction memory is touched | **PASS** — timer stepped per memory access (§4). |
 | **Blargg `halt_bug`** | The HALT bug | **PASS** — modelled (quirk §5). |
 | **Blargg `interrupt_time`** | Interrupt dispatch timing | **Runs and prints `Failed`** — but the dispatch time it measures is now correct (13). The remaining failure is the CGB double-speed switch (§4). Needs an APU installed or it hangs on its title screen. |
-| **Mooneye `acceptance/`** (66 tests) | Interrupt edge timing, instruction M-cycle placement, timer, OAM DMA | The gold standard for the corners above. Run it with `cargo run --release --example mooneye_scout -- <mooneye-test-suite>/acceptance`; Mooneye is **not** a vendored submodule. |
+| **Mooneye `acceptance/`** (66 tests) | Interrupt edge timing, instruction M-cycle placement, timer, OAM DMA | The gold standard for the corners above. **52/66 pass** (same under Mooneye's register criterion and the shootout's screenshot compare). Run it with `cargo run --release --example mooneye_scout -- <mooneye-test-suite>/acceptance`; Mooneye is **not** a vendored submodule. |
 
 Blargg ROMs report pass/fail over the **serial port** — see [Serial](serial.md) for the
 capture plumbing that a harness would use.

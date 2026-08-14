@@ -340,22 +340,31 @@ boot mode this emulator does not have — it always boots the CGB core. Neither 
 a timer, interrupt or MMU defect. **Nothing in the timer, interrupt-dispatch or
 OAM-DMA groups is red.**
 
-### Measured against the DMG boot mode (trial merge, not yet landed)
+### Measured with the DMG boot mode (landed in `9d70c17`)
 
-The DMG boot mode on `fm/gameboy-harness-dmg-f1` was trial-merged with this work
-to check the interaction. Result, on the shootout's 66-test acceptance set:
+On the shootout's 66-test acceptance set, measured all three ways so the two
+changes can be told apart:
 
 | | register criterion | screenshot criterion |
 |---|---:|---:|
-| before this work | 13/66 | 6/66 |
+| before either | 13/66 | 6/66 |
+| DMG mode alone (`origin/main`) | 15/66 | — |
 | this work alone | 50/66 | 32/66 |
-| **with the DMG boot mode** | **52/66** | **52/66** |
+| **both** | **52/66** | **52/66** |
+
+37 of the 39 tests gained are this work; 2 are DMG mode. No regressions in
+either direction. An earlier scout measured "+9 tests from forcing DMG" against
+the *old* core — that gain was real but it lands almost entirely in the
+screenshot column, on tests this work has since made pass on registers too, so
+the two overlap rather than adding.
 
 Two things worth recording:
 
 - **The two criteria converge exactly once we can boot a DMG.** That is the
   scout report's diagnosis confirmed: the 50-vs-32 gap was never a behaviour
   difference, only the boot-register dump Mooneye prints beside its verdict.
+  It is also a reminder that a screenshot-compare suite conflates *behaviour*
+  with *boot state*, which is worth saying out loud in a conformance tool.
 - **The DMG boot flips two of the five boot-state tests, not five**:
   `bits/unused_hwio-GS` and `boot_regs-dmgABC`. `boot_div-dmgABCmgb` and
   `boot_hwio-dmgABCmgb` need the exact hardware state the *boot ROM* leaves
@@ -370,9 +379,10 @@ different bug
 
 The 5-M-cycle dispatch fix moves this ROM's measured interrupt time from `$0C`
 to `$0D`. **`$0D` is the correct answer** — `tests/interrupt_time/interrupt_time.s`
-says so in its own header: *"Should take 13 cycles at either speed."* So a
-baseline note reading "16-vs-20 T-cycle interrupt dispatch" is now stale and the
-row should be re-blessed.
+says so in its own header: *"Should take 13 cycles at either speed."* The row in
+`testharness/baseline.txt` has been re-blessed and its note in
+`testharness/testroms.rs` now names the real remaining cause instead of the
+dispatch gap, which is fixed.
 
 The ROM still reports `Failed`, for an unrelated reason that its output makes
 plain. It prints four rounds of `speed, d, cycles`:

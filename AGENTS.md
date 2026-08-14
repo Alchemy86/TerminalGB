@@ -128,11 +128,25 @@ lines per fix, not a process document.
 
 ## Core timing: timer, interrupt dispatch, OAM DMA — measured against Mooneye
 
-**Mooneye `acceptance`: 13/66 → 50/66** by Mooneye's own criterion (`LD B,B` + Fibonacci
-registers), **6/66 → 32/66** by the GBEmulatorShootout's screenshot criterion. Both numbers
-are honest and they differ for one reason: Mooneye prints a *boot-register dump* next to
-its verdict, so a test we genuinely pass still fails a screenshot compare against a DMG
-reference. **Quote the register number for accuracy claims and say which criterion it is.**
+**Mooneye `acceptance`: 13/66 → 52/66**, under *both* criteria — Mooneye's own (`LD B,B` +
+Fibonacci registers) and the GBEmulatorShootout's screenshot compare, which used to score
+us 6/66. **They now agree exactly**, because with a real DMG mode the boot-register dump
+Mooneye prints beside its verdict finally matches the DMG reference images. Before DMG mode
+landed this work alone scored 50/66 on registers but only 32/66 on screenshots, and that
+whole gap was the dump — not behaviour. Attribution, measured all three ways:
+
+| | register | screenshot |
+|---|---:|---:|
+| before either | 13/66 | 6/66 |
+| DMG mode alone (`origin/main`) | 15/66 | — |
+| this work alone | 50/66 | 32/66 |
+| **both** | **52/66** | **52/66** |
+
+So of the 39 tests gained, **37 are this work and 2 are DMG mode**
+(`bits/unused_hwio-GS`, `boot_regs-dmgABC`); no regressions in either direction. The "+9
+from forcing DMG" measured earlier was against the *old* core, where DMG boot rescued
+tests that pass on registers but failed the screenshot — that gain is real but it lands in
+the screenshot column and overlaps almost entirely with this work.
 Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
 
 - **Runner: `cargo run --release --example mooneye_scout -- <mooneye-test-suite>/acceptance`**
@@ -191,12 +205,12 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   `Cpu::setdi` removed; `OamDma` added).
 - **What is still red is not ours:** 11 PPU tests (mode-3 timing, STAT blocking, LCD-on)
   and 5 boot-state tests.
-- **Trial-merged with the DMG boot mode (`fm/gameboy-harness-dmg-f1`): 52/66 under *both*
-  criteria**, no regressions either way. The two criteria converging is the point — the
-  50-vs-32 gap really was only Mooneye's boot-register dump. The DMG boot flips two of the
-  five boot-state tests (`bits/unused_hwio-GS`, `boot_regs-dmgABC`); `boot_div`/`boot_hwio`
-  need the exact machine state the *boot ROM* leaves at `PC=$0100`, which is a harder claim
-  than the boot registers and is the natural next step.
+- **DMG mode flips two of the five boot-state tests**, not five — my earlier estimate was
+  optimistic. `boot_div-dmgABCmgb` and `boot_hwio-dmgABCmgb` need the exact machine state
+  the *boot ROM* leaves behind at `PC=$0100` (the system counter's value, and every I/O
+  register), which is a strictly harder claim than the boot registers, and
+  `serial/boot_sclk_align` needs the serial clock's phase against that same counter. Those
+  three plus the 11 PPU tests are the whole remaining red list.
 - **`blargg/interrupt_time` moves `$0C` → `$0D` and `$0D` is CORRECT** —
   `tests/interrupt_time/interrupt_time.s` says "Should take 13 cycles at either speed". Any
   baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. The ROM still
