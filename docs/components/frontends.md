@@ -21,6 +21,18 @@ drives the same tiny surface: `Gameboy::new(rom) → frame() → image()`, plus 
 - **Web** — WebAssembly drawing to an HTML `<canvas>`.
 - **FFI** — a C ABI so other languages (there's a Go example) can embed the core.
 
+| Terminal | Desktop | The `?` overlay |
+|:---:|:---:|:---:|
+| <img src="../shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2, the picture scaled to fill the pane with Status and Controls panels beside it" width="360" /> | <img src="../shots/desktop-acid2.png" alt="The OpenGL desktop window showing dmg-acid2" width="180" /> | <img src="../shots/tui-help.png" alt="The help overlay listing every picker and in-game key, drawn beside the running picture rather than over it" width="360" /> |
+| `cargo run --example terminal` | `cargo run --example desktop` | every key, without leaving the game |
+
+<p align="center"><em>The same core, the same frame, three ways out. Note what the terminal
+frontend is <strong>not</strong> doing in the third shot: the overlay sits beside the picture,
+never on top of it. A terminal image owns whole cells, so text drawn there is not over the
+picture — it <em>replaces</em> it, and under the kitty protocol it removes the placeholders
+that make the picture update at all. That was a live bug; see
+<a href="../terminal-render.md">terminal-render</a>.</em></p>
+
 ## 2. The real hardware
 
 There is no single "frontend" chip — a frontend stands in for the parts of the *console

@@ -17,6 +17,21 @@ second the PPU walks the screen **one horizontal line at a time**, top to bottom
 each line works out the colour of all 160 pixels from that data. The result is a
 160×144 framebuffer the frontend draws to a window, terminal, or canvas.
 
+| What this PPU renders | What the test's author says it should be |
+|:---:|:---:|
+| <img src="../shots/screenshot-key-acid2.png" alt="dmg-acid2 rendered by this emulator: a 160 by 144 image of a face made of background tiles, window and sprites" width="280" /> | <img src="../../third_party/dmg-acid2/reference-dmg.png" alt="The dmg-acid2 author's reference image of the same face, for a hardware-accurate DMG" width="280" /> |
+| our framebuffer, straight out of `renderscan` | [`third_party/dmg-acid2/reference-dmg.png`](../../third_party/dmg-acid2/reference-dmg.png) |
+
+<p align="center"><em><a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> draws a face
+in which every feature is a different PPU behaviour — sprite priority, the window, tile
+flipping, the 10-sprites-per-line limit — so a wrong face names the bug. <strong>0 of 23,040
+pixels differ</strong> between these two, checked on every CI run by
+<code>testharness/testroms.rs</code>, comparing by shade rank rather than RGB (§7). The two
+images look slightly different in tone because they are: our shades are
+<code>000000/606060/c0c0c0/ffffff</code> and the reference's are
+<code>000000/555555/aaaaaa/ffffff</code>, which is exactly why the comparison ranks shades
+instead of matching colours.</em></p>
+
 Crucially, the PPU is a *clock*, not just a renderer. Its progress across the screen is
 observable to the running game (through the `LY`, `STAT` registers and interrupts), and
 games rely on that timing to change graphics mid-frame. Getting the timing right is what

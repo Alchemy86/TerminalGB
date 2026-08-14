@@ -145,9 +145,20 @@ plain memory traffic (the nearest row shows the floor per output size).
 **The author of this feature cannot judge how these look — the numbers above
 prove speed, not beauty. A human has to pick the default.** The evidence:
 
+<p align="center">
+  <img src="upscale-samples/compare-x4.png" alt="One dmg-acid2 frame upscaled four ways at times four, side by side: nearest, scale2x, mmpx and lcd" width="900" />
+</p>
+
+<p align="center"><em>The choice, side by side: <strong>nearest | scale2x | mmpx | lcd</strong>,
+one real emulated dmg-acid2 frame at ×4
+(<a href="upscale-samples/compare-x4.png"><code>docs/upscale-samples/compare-x4.png</code></a>).
+Look at the face outline and the eye circles — do curves smooth, or stay blocky? — at the
+<code>HELLO WORLD!</code> text, which is where scale2x and mmpx disagree most, and at whether
+the LCD grid reads as texture or as noise at your viewing size. dmg-acid2 is MIT-licensed,
+which is why these samples can be committed at all.</em></p>
+
 * **`docs/upscale-samples/`** (committed) — one real emulated dmg-acid2 frame
-  through each algorithm. Open **`compare-x4.png`** first: nearest | scale2x |
-  mmpx | lcd side by side at ×4. Then `compare-x4-green.png` for the same with
+  through each algorithm. That is `compare-x4.png` above. Then `compare-x4-green.png` for the same with
   the DMG green palette, and `lcd-x4-green.png` for the full "it's a Game Boy"
   look. Things to look for: the face outline and eye circles (do curves smooth
   or stay blocky?), the "HELLO WORLD!" text (does it stay crisp or grow

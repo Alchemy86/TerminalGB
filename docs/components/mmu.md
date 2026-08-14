@@ -21,6 +21,15 @@ It also owns two things that don't belong to any one chip: the **DMA engines** (
 memory copies), and the **interrupt flags** (`IF`/`IE`) that let the components signal the
 CPU.
 
+<p align="center">
+  <img src="../diagrams/memory-map.svg" alt="The 64 KiB address space drawn to scale: ROM bank 0 at 0000-3FFF, switchable ROM bank N at 4000-7FFF, VRAM at 8000-9FFF, cartridge RAM at A000-BFFF, work RAM at C000-DFFF and echo RAM at E000-FDFF, with the last 512 bytes magnified below into OAM, the unusable region, the I/O registers, high RAM and the interrupt-enable byte" width="880" />
+</p>
+
+<p align="center"><em>What the switchboard is switching between. Drawn to scale, which is the
+point: the regions with the most hardware behaviour packed into them — OAM, the I/O
+registers, HRAM and <code>IE</code> — are the sliver at the far right, magnified into the
+second bar. The exact bounds are tabulated in §2 below.</em></p>
+
 ## 2. The real hardware
 
 The Game Boy CPU has a **16-bit address bus**, so it can address **65,536 bytes (64 KB)**.

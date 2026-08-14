@@ -20,6 +20,18 @@ report their pass/fail result by "printing" text out the serial port.** A headle
 harness reads that serial output to know whether a test passed. So serial is the plumbing
 our future test suite depends on — see [testing](../testing.md).
 
+<p align="center">
+  <img src="../link-trade/1-trade-screen.png" alt="The terminal frontend at a Gen 1 Cable Club trade screen: the player's party listed above, a virtual link partner named ORACLE offering a Pokemon below, with the emulator's Status panel reporting the gen1-link plugin as offering" width="760" />
+</p>
+
+<p align="center"><em>The other end of the cable, with nothing plugged into it. A
+<a href="../plugins.md">plugin</a> holding <code>SERIAL_LINK</code> answers
+<code>Serial::wb</code> directly, so the game is talking to software rather than to a second
+console — the <code>Plugin</code> row in the Status panel is what tells the player that.
+Answering the handshake byte <code>$01</code> with <code>$02</code> makes the <em>game</em> take
+the clock, which is why this needs no timing tolerance at all: the reply happens synchronously
+inside the <code>SC = $81</code> write. Full protocol in <a href="../link-trade.md">link-trade</a>.</em></p>
+
 ## 2. The real hardware
 
 Two registers (Pan Docs — [Serial](https://gbdev.io/pandocs/Serial_Data_Transfer_(Link_Cable).html)):

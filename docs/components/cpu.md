@@ -20,6 +20,16 @@ In this emulator the CPU is a Rust struct that keeps a copy of the console's reg
 and, each "tick", decodes the next opcode and mutates that state. It does not run on the
 real chip; it *imitates* what the real chip would do, byte for byte.
 
+<p align="center">
+  <img src="../shots/tui-blargg-cpu-instrs.png" alt="Blargg's cpu_instrs test ROM running in the terminal frontend, printing 01:ok through 11:ok and Passed all tests, with the status panel showing 732 emulated frames per second" width="820" />
+</p>
+
+<p align="center"><em>"Byte for byte" is a claim somebody else gets to check. Blargg's
+<code>cpu_instrs</code> exercises every opcode and every flag against what real hardware
+produces and prints its own verdict — <strong>11 of 11, <code>Passed all tests</code></strong>.
+The verdict in this shot is the ROM's, not ours; the harness reads it off the link port rather
+than comparing against a frame we recorded (see <a href="../testing.md">testing</a>).</em></p>
+
 ## 2. The real hardware
 
 The Game Boy's processor is a **Sharp LR35902**, whose CPU core is usually called the
