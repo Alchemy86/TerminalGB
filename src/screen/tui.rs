@@ -6885,6 +6885,7 @@ const REGISTRY: &[(&str, &str)] = &[
     ("gen1-link", "plugin-gen1-link"),
     ("gen1-battle", "plugin-battle-control"),
     ("agent", "plugin-agent"),
+    ("gen1-shinyhunt", "plugin-gen1-shinyhunt"),
     ("example-tracer", "plugin-example-tracer"),
 ];
 
@@ -6975,6 +6976,34 @@ fn attach_named(
             }
             Err(e) => format!("plugin agent: {e}"),
         });
+    }
+
+    // The hunter, attached to the *interactive* machine, is a watcher: it
+    // reports whether the wild Pokémon on screen matches the target, in the
+    // status panel, without touching anything (it declares no WRITE_MEMORY and
+    // no CONTROL_INPUT). The parallel hunt is a different program —
+    // `examples/shiny_hunt.rs` — because N machines and a driving loop are not
+    // things a plugin attached to somebody's game can be.
+    #[cfg(feature = "plugin-gen1-shinyhunt")]
+    if name == terminalgb_plugin_gen1_shinyhunt::NAME {
+        let spec = std::env::var("GB_SHINY_TARGET").unwrap_or_else(|_| "shiny".into());
+        return Some(
+            match terminalgb_plugin_gen1_shinyhunt::Target::parse(&spec, None) {
+                Ok(target) => {
+                    let label = target.label();
+                    let odds = target.expected_encounters();
+                    let p = terminalgb_plugin_gen1_shinyhunt::ShinyHunt::new(target);
+                    match gb.add_plugin(Box::new(p)) {
+                        Ok(()) => format!(
+                            "plugin gen1-shinyhunt attached, watching for {label} \
+                             (1 in {odds:.0} encounters)"
+                        ),
+                        Err(e) => format!("plugin gen1-shinyhunt: {e}"),
+                    }
+                }
+                Err(e) => format!("plugin gen1-shinyhunt: {e}"),
+            },
+        );
     }
 
     // The documentation example, and the shape every third-party arm takes:

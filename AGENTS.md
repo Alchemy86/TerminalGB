@@ -2207,13 +2207,13 @@ and the virtual camera's idle card) before the codebase used it; the rename made
 - Sweeping a rename like this: protect the not-ours tokens *first* (`Alchemy86/gameboy`,
   `raphamorim/gameboy`, `crate::gameboy`, `CableClubLeftGameboy`, the XDG paths), then apply
   the token rules, then **read every survivor**. Two traps this one hit: a `gameboy.h` rule
-  chewed `gameboy.height`, and a `gameboy::` rule turned `gameboy::gameboy::` into
-  `terminalgb::terminalgb::`. Both compiled-or-not immediately; a prose-only file would not
+  chewed `gameboy.height`, and a `terminalgb::` rule turned `terminalgb::gameboy::` into
+  `terminalgb::gameboy::`. Both compiled-or-not immediately; a prose-only file would not
   have told you.
-- **A bare `grep gameboy::` over this tree is NOT a stale-rename check, and will read as a
+- **A bare `grep terminalgb::` over this tree is NOT a stale-rename check, and will read as a
   regression when it is not.** It matches inside `terminalgb::gameboy::`, which is the
   *correct* post-rename spelling, and inside the built `docs/*.module.wasm` binaries, which
-  are deliberately not swept. Anchor the pattern (`grep -v 'crate::gameboy::\|terminalgb::gameboy::'`
+  are deliberately not swept. Anchor the pattern (`grep -v 'crate::terminalgb::\|terminalgb::gameboy::'`
   and exclude the wasm) or the answer is ~20 false positives every time. Two crews reached
   that grep independently within an hour of the rename, which is why it is written down.
 - **Check a cross-branch worry by trial-merging, not by comparing line numbers.** Treehouse
@@ -4107,3 +4107,116 @@ than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o 
 - **Re-scoring the board is one `workflow_dispatch`, not a new PR** — each emulator has its own
   `ci-<name>.yml`. That is the argument for submitting before the Mealybug campaign finishes
   rather than after: the gains land whenever we ask for them.
+
+## Gen 1 shiny hunting — N emulators in parallel (`plugins/gen1-shinyhunt/`, `examples/shiny_hunt.rs`)
+
+**Full write-up, measured rates and the cartridge traps: [`docs/shiny-hunt.md`](docs/shiny-hunt.md).**
+The software answer to a hunter's four Nintendo DS consoles wired to one controller through an
+input splitter — and it wins for a reason unrelated to parallelism: **we never look at a
+sprite**. The DVs come out of `wEnemyMonDVs` the instant `LoadEnemyMonData` rolls them.
+
+- **Gen 1 has no shiny Pokémon, and no string in this feature may imply otherwise.** What is
+  hunted is the spread that *becomes* shiny in the Time Capsule (def/spd/spc all exactly 10,
+  attack bit 1 set — 8 in 65,536, **1 in 8192**). **There is ONE implementation of that rule in
+  the tree** (`terminalgb_plugin_trainer::derived::shiny_if_traded`), shared with the trainer
+  panel's `★` and the encounter banner; `target::tests::the_shiny_target_is_the_trainer_panels_rule_and_nothing_else`
+  enumerates all 65,536 spreads so a second copy cannot appear quietly. The hit *report* also
+  picks its preamble from the actual verdict — a `--target spc=10` run stops on a Pokémon that
+  is emphatically not shiny, and a report explaining the Gen 2 rule over it would be claiming
+  something the run never checked.
+- **The plugin declares `OBSERVE | READ_MEMORY` and nothing else** — not tidiness: a hunter that
+  could write memory could fabricate its own hit, and then no result it ever reported would mean
+  anything.
+- **`wCurOpponent` reads back `0` once a battle has begun.** The latch first required
+  `wEnemyMonSpecies == wCurOpponent` as an "independent witness" that the enemy structure was
+  populated, and consequently **never latched anything at all** — every attempt was a stall and
+  the feature looked completely broken while being one comparison away from working. The class of
+  mistake: *an independent witness has to be observed to still hold at the moment you read it*,
+  not assumed from where it was written. `--diagnose` exists because the four causes of "every
+  attempt stalled" are indistinguishable from outside.
+- **There is no half-written window on a wild encounter.** `InitWildBattle` is straight-line —
+  `ld [wIsInBattle],a` then `call LoadEnemyMonData`, animation afterwards — so a once-per-frame
+  sampler can never see the flag up and the DVs stale. Do not build machinery for that race.
+- **The host's plugin frame counter is NOT machine state.** `Event::Frame { number }` keeps
+  counting across `load_state` and `PluginHost::reset` does not rewind it. Putting it in a
+  `Sighting` made **every** hit report "DID NOT REPRODUCE" while the replay was producing a
+  byte-identical Pokémon. `Sighting::frames_into_attempt` is relative to the last `arm()` for
+  exactly that reason. Anything else that wants a reproducible per-attempt value has the same
+  problem.
+- **A 24-frame hold is one *and a half* Gen 1 steps** and the game commits to a step once begun,
+  so a navigation press moves the player two tiles as often as one; a greedy walker aiming at an
+  exact coordinate oscillates 34 → 32 → 34 for ever. Close the last tile with a ~10-frame press.
+  **A house's front door is a map-*edge* warp** (`RedsHouse1F` `warp_event 2,7` / `3,7`, row 7 of
+  an 8-row map): arriving on the tile is not leaving through it, press Down again. **Mum has
+  something to say downstairs** and a text box swallows every direction key — clear it with **B**,
+  never A.
+- **A base save state taken *during* a battle is the classic setup mistake** (the last step into
+  grass is quite likely to be the step that rolls an encounter) and it makes every attempt a
+  silent stall. `Instance::attempt` detects and names it.
+- **Decorrelation is proved in BOTH directions, and it is NOT sufficient — this is the finding
+  that cost the most.** Instances all start from the same bytes and emulation is deterministic, so
+  identical input is one instance wearing N hats. The lever is *time* — `Random_` folds `rDIV` in
+  on every call. `--probe` must show every instance different; `--probe --no-decorrelate` must
+  show them **identical**, because a "divergence" that came from non-determinism would be a far
+  worse bug. Both are pinned at unit speed with no ROM
+  (`hunt::tests::instances_diverge_when_decorrelated_and_agree_when_they_are_not`).
+  **But instances that differ from each other can still, between them, reach almost nothing.**
+- **`Random_` builds BOTH DV bytes from ONE `rDIV` sample, so `lo - hi` IS that sample.**
+  `LoadEnemyMonData` takes them from two consecutive `Random` calls microseconds apart:
+  `hi = A + R`, `lo = hi + R` where `A` is `hRandomAdd` before the roll. The two bytes are not
+  independent. Reload the same save state before every roll and `A` and `R` are both functions of
+  elapsed frames, so every result lands on **one thin one-dimensional band**: measured **968 of
+  the 65,536 spreads reachable, 2.7 distinct `lo` per `hi`**. A **97,212-encounter** hunt for a
+  1-in-8192 target found nothing and never would have — while reporting 81 encounters/s, twelve
+  diverging instances and a 1.7-minute ETA the whole time. **That is the failure shape to fear
+  here: confident, well-instrumented and wrong.** (Corollary for anyone hand-checking: every
+  shiny spread needs `lo = $AA` and `def = 10`, so `R` is always a multiple of 16 — a wild roll
+  can only be shiny when its `rDIV` sample has a zero low nibble.)
+- **A battle is how the RNG gets off the band, so an attempt is a RUN, not one encounter.**
+  Gen 1's battle engine calls `Random` constantly, so the state after fleeing is somewhere else
+  entirely. `run_length` (default 32) encounters per reload, fleeing between them, every one
+  judged; purity is kept, so a hit still replays from `(base state, seed, attempt)` and the report
+  names which encounter of the run it was. Measured: coverage **968 → ~6,150** of 65,536, i.e.
+  **0.12 → 0.75 expected shiny spreads reachable**. Still short, and running *longer* inside an
+  attempt does not push it further (4.8 and 26.2 encounters per run both give ~6,000), so the
+  remaining narrowness looks structural to the wild-encounter path. **Say "roughly a coin-flip
+  whether a wild shiny hunt is possible from a given base state at all", never "it will find
+  one".**
+- **`Coverage` is the product feature that falls out of this**, and it is the number that decides
+  whether a hunt can ever win: `--probe` reports distinct spreads, an estimated reachable-set size
+  (inverting `distinct = S(1-e^(-n/S))`) and a verdict. **`TOO NARROW` means reconfigure, not
+  wait.** Never quote an ETA without it.
+- **Two walk bugs that both looked exactly like "a bad encounter rate"**, and neither is visible
+  without the run-health line (`mean run N of M`, plus stalls / flee failures / blackouts):
+  a press is held 20-48 frames and a Gen 1 step is 16, so a long press walks **two or three
+  tiles** while Route 1's grass is only four deep — uncapped, the walker paced 30 → 36 through a
+  band of 32 → 35 and every run stalled after ~5 encounters (capped at the room left in the band:
+  mean run **4.8 → 26.2** of 32); and the press floor must be long enough for **a turn AND a
+  step**, because a press in a direction the player is not facing only turns the sprite and a
+  narrow band flips direction constantly. Also: anchor the band once per attempt, or fleeing lets
+  it *walk* out of the grass over a long run.
+- **A party that faints ends the run** — `wIsInBattle` reads `$FF` and the game teleports the
+  player to a Pokémon Center, where there is no grass. `--make-state` hands the scout a level 50
+  Pokémon with Speed 250 so it can flee thirty battles in a row and survive them; blackouts are
+  counted separately so a weak party is a *reported cause*, not a mysteriously short run.
+- **Which instance wins a hunt is a race, so a whole hunt is NOT reproducible from its seed** —
+  only each *attempt* is, which is the property a hit report needs. `Hunt::run` replays the
+  winning attempt in a fresh machine before claiming anything, and `--replay <inst>:<att>` is
+  printed in every report as the recipe. Do not restate this as "the hunt is deterministic".
+- **The driver is not the plugin, and that is a finding for the plugin-API crew, not a
+  workaround.** A plugin cannot press on a schedule, step a frame, load a state or own N
+  machines; the driver therefore sits over `hunt::HuntMachine`, an eight-method seam the emulator
+  implements for `Gameboy` in `src/gameboy.rs` behind the feature. The MCP server reached the
+  same conclusion from the other side (`docs/mcp.md` §7). **Never make a plugin crate depend on
+  `gameboy`** outside `[dev-dependencies]` — the trait is what keeps the graph acyclic, and it is
+  also what makes the whole driver loop testable in CI against a fake machine with no ROM.
+- **A hunt never touches the filesystem near the cartridge**: every instance is
+  `Gameboy::new(bytes, None)`, and `src/mbc/battery.rs` only wires a battery when given a path.
+  Keep it that way — N instances sharing one `.sav` would be a save-destroying bug at N=2.
+- **Measured on this box (20 cores, contended): 8-18 encounters/s and 176-367x realtime on 12
+  instances** (the spread is other work on the box; quote the range, not the flattering end) with the run loop (~1,250 emulated frames per encounter, most of it battle); the
+  old reload-every-encounter loop did 81/s and 438x but see above for why its encounters were
+  worth less. The useful instance count is bounded by cores;
+  the default is `available_parallelism() - 1`. ETAs are computed from the *measured* rate and the
+  target's exact odds — enumerated over all 65,536 DV pairs, never multiplied, because the HP DV
+  is derived from the low bit of the other four and the terms are not independent.

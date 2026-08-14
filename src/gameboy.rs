@@ -980,6 +980,72 @@ impl Gameboy {
     }
 }
 
+/// **The shiny hunter's driving seam.**
+///
+/// A plugin is a passenger: it is handed a borrowed [`crate::plugin::Machine`]
+/// inside a callback and cannot press a button on a schedule, step a frame, load
+/// a save state or start a second emulator. Hunting needs all four, so
+/// `terminalgb-plugin-gen1-shinyhunt` states what it needs of a host as an
+/// eight-method trait and this is the emulator's implementation of it. Every method
+/// below is a one-line forward to an existing public `Gameboy` method — the
+/// trait adds nothing the emulator did not already offer, except a way to reach
+/// the attached hunter's latch, which the plugin API has no verb for.
+///
+/// It lives here rather than in the plugin crate because of the orphan rule and
+/// the dependency direction: `gameboy` depends on its plugins, never the
+/// reverse. `docs/shiny-hunt.md` §"What the plugin API could not do" records the
+/// gap as a finding for the crew that owns the contract.
+#[cfg(feature = "plugin-gen1-shinyhunt")]
+impl terminalgb_plugin_gen1_shinyhunt::hunt::HuntMachine for Gameboy {
+    fn load_state(&mut self, bytes: &[u8]) -> Result<(), String> {
+        Gameboy::load_state(self, bytes).map_err(|e| e.to_string())
+    }
+
+    fn save_state(&self) -> Vec<u8> {
+        Gameboy::save_state(self)
+    }
+
+    fn frame(&mut self) {
+        Gameboy::frame(self)
+    }
+
+    fn key(&mut self, key: KeypadKey, down: bool) {
+        if down {
+            self.keydown(key)
+        } else {
+            self.keyup(key)
+        }
+    }
+
+    fn peek(&mut self, address: u16) -> u8 {
+        Gameboy::peek(self, address)
+    }
+
+    fn sighting(&self) -> Option<terminalgb_plugin_gen1_shinyhunt::Sighting> {
+        self.plugin::<terminalgb_plugin_gen1_shinyhunt::ShinyHunt>()
+            .and_then(|p| p.sighting())
+    }
+
+    fn arm(&mut self) {
+        if let Some(p) = self.plugin_mut::<terminalgb_plugin_gen1_shinyhunt::ShinyHunt>()
+        {
+            p.arm();
+        }
+    }
+
+    fn refusal(&self) -> Option<String> {
+        match self.plugin::<terminalgb_plugin_gen1_shinyhunt::ShinyHunt>() {
+            None => Some("no shiny-hunt plugin is attached to this machine".into()),
+            Some(p) if p.game().is_none() => Some(format!(
+                "`{}` is not a verified Pokémon Red/Blue cartridge — refusing to \
+                 read another game's memory as if it were",
+                p.detected_title().trim()
+            )),
+            Some(_) => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

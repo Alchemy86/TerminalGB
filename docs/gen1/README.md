@@ -26,6 +26,7 @@ Anything unproven says so.
 | [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one. Includes the Gen 1 ↔ Gen 2 Time Capsule rules | **Gen 1 ↔ Gen 1 trade verified; Time Capsule needs a Gold save** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost somebody hours | **verified the hard way** |
 | [Agent play](agent-play.md) | An AI agent that reads game state and presses buttons, with commentary for a stream | **plays the opening on the retail ROM** |
+| [Shiny hunting](../shiny-hunt.md) | Hunting the DV spread that becomes shiny in Gen 2, across many headless emulators at once — including how to decorrelate machines that all start from the same save state | **hunts on the retail ROM** |
 
 ---
 

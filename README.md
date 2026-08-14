@@ -324,11 +324,12 @@ copy-pasteable and was run to produce this table.
 | `audio` | | `cpal` | a sound device (ALSA **dev headers** to *build* on Linux) |
 | `mcp` | | `plugin-agent`, `chiptune` — **no third-party crate** | an [MCP](https://modelcontextprotocol.io) client (Claude Desktop, Claude Code, …). Builds the `terminalgb-mcp` binary. |
 | `chiptune` | ✅ | `terminalgb-chiptune` — first-party, **no dependencies at all** | nothing. Builds the `terminalgb-chiptune` binary — [instructions in, real Game Boy audio out](#-chiptune-renderer--hear-what-the-hardware-would-do). |
-| `standard-plugins` | ✅ | the four plugin crates below | nothing; each still has to be named to attach |
+| `standard-plugins` | ✅ | the five plugin crates below | nothing; each still has to be named to attach |
 | `plugin-trainer` | ✅ | `terminalgb-plugin-trainer` | a Pokémon R/B cartridge, or it declines |
 | `plugin-gen1-link` | ✅ | + `terminalgb-plugin-gen1-link` | as above |
 | `plugin-battle-control` | ✅ | + `terminalgb-plugin-battle-control` | as above |
 | `plugin-agent` | ✅ | + `terminalgb-plugin-agent` | an `agent_command` driver, or it declines |
+| `plugin-gen1-shinyhunt` | ✅ | + `terminalgb-plugin-gen1-shinyhunt` | a Pokémon R/B cartridge, or it declines |
 | `plugin-example-tracer` | | `terminalgb-plugin-example-tracer` | nothing — **[the one to copy](#-plugins-other-people-can-write)** |
 | `testing` | | — | — (`terminalgb::testing::TestMachine`, for plugin authors' tests) |
 | `ffi` | | — | — (drops the Rust frontends; exposes the C ABI) |
@@ -656,6 +657,57 @@ docs/gen1/battle-control.md](docs/gen1/battle-control.md)**
 
 ---
 
+## ✨ Shiny-hunt Gen 1, in parallel
+
+A hunter we watched runs **four Nintendo DS consoles wired to one controller through a hardware
+input splitter**, so identical presses hit all four at once — and had to drop back to two,
+because the four-way rig kept desyncing. This is the software equivalent, and it wins for a
+reason that has nothing to do with parallelism: **it never looks at a sprite.** The instant the
+game rolls the encounter, the DVs are read straight out of `wEnemyMonDVs`.
+
+**Gen 1 has no shiny Pokémon.** Shininess arrives in Gen 2 and is derived from DVs a Gen 1
+Pokémon already carries, so what this hunts is the spread that *becomes* shiny once the Pokémon
+is traded forward — defence, speed and special all exactly 10, attack with bit 1 set. Eight
+spreads in 65,536: **1 in 8,192**. It is the same rule the trainer panel's `★` uses, called from
+there rather than copied.
+
+```bash
+# from a bare cartridge: a fresh game walked to the grass on Route 1
+cargo run --release --example shiny_hunt -- --rom blue.gb --make-state route1.gbss
+
+# N headless emulators, one encounter loop each, stop the moment one matches
+cargo run --release --example shiny_hunt -- --rom blue.gb --state route1.gbss --out ~/hit
+```
+
+**Measured on a 20-core box: 8–18 encounters per second on 12 instances, 176–367x realtime**
+(the spread is other work on the same machine; both figures are real). The
+progress line reports encounters/s, attempts, elapsed and an ETA computed from the *measured*
+rate and the target's exact odds — the number that answers "should I leave it running
+overnight?".
+
+**Instances that all did the same thing would be one instance wearing four hats**, since
+emulation is deterministic. They are decorrelated by varying input *timing* — Gen 1's `Random_`
+folds the free-running `rDIV` in on every call — and `--probe` proves it in both directions: with
+decorrelation on, every instance must produce a different sequence; with `--no-decorrelate`, they
+must be identical.
+
+**And divergence turned out not to be enough — which is the most interesting thing this found.**
+`Random_` builds both DV bytes from a single `rDIV` sample, so `lo − hi` *is* that sample and the
+pair is not two free bytes. Reload the same save state before every roll and every result lands
+on one thin band: **968 of the 65,536 spreads**, measured — which is why a 97,212-encounter hunt
+found nothing while reporting a healthy rate and a 1.7-minute ETA the whole time. An attempt is
+now a *run* of encounters with a flee between them, so the RNG drifts the way a real hunter's
+console does, and `--probe` **measures and reports coverage** instead of assuming it.
+
+A hit stops every instance and preserves the save state at the encounter, a report, and the frame
+— plus the one command that re-rolls that exact Pokémon in a fresh machine, which the driver runs
+itself before it will call anything a hit.
+
+📖 **[What is actually being hunted, the measured rates, and the cartridge sharp edges →
+docs/shiny-hunt.md](docs/shiny-hunt.md)**
+
+---
+
 ## 🎮 Game mechanics & hacking — Pokémon Gen 1
 
 A documented area for how these games keep their state and how to drive them from outside:
@@ -805,6 +857,7 @@ cost someone to find.
 | [`gen1-link/`](plugins/gen1-link/README.md) | `gen1-link` | a virtual link-cable partner: [real trades](#-trade-a-pokémon-in-over-the-link-cable) and Colosseum battles | observe + read + link |
 | [`battle-control/`](plugins/battle-control/README.md) | `gen1-battle` | [start any Gen 1 battle](#-start-any-gen-1-battle--and-film-it) from a preset | observe + read + write + input |
 | [`agent/`](plugins/agent/README.md) | `agent` | [an AI that plays the game](#-claude-plays-pokémon), under a budget | observe + read + input |
+| [`gen1-shinyhunt/`](plugins/gen1-shinyhunt/README.md) | `gen1-shinyhunt` | [hunt a Gen 1 DV spread](#-shiny-hunt-gen-1-in-parallel) across many headless emulators | observe + read |
 
 ### Installing one is two lines
 

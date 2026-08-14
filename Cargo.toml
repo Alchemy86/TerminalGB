@@ -97,6 +97,10 @@ plugin-battle-control = [
     "plugin-trainer",
 ]
 plugin-agent = ["terminalgb-plugin-agent", "plugin-trainer", "plugin-gen1-link"]
+# Gen 1 shiny hunting: N headless emulators rolling encounters in parallel and
+# stopping on a DV spread. Depends on `plugin-trainer` because the ONE
+# implementation of the Gen 2 shiny rule lives there and is shared, not copied.
+plugin-gen1-shinyhunt = ["terminalgb-plugin-gen1-shinyhunt", "plugin-trainer"]
 # The documentation example, kept out of `standard-plugins` on purpose: it is
 # the thing a stranger copies, and it is also the end-to-end proof that the
 # documented install path works for a plugin nothing in the emulator special-
@@ -110,6 +114,7 @@ standard-plugins = [
     "plugin-gen1-link",
     "plugin-battle-control",
     "plugin-agent",
+    "plugin-gen1-shinyhunt",
 ]
 
 [profile.release]
@@ -153,6 +158,7 @@ terminalgb-plugin-trainer = { path = "plugins/trainer", version = "0.1.0", optio
 terminalgb-plugin-gen1-link = { path = "plugins/gen1-link", version = "0.1.0", optional = true }
 terminalgb-plugin-battle-control = { path = "plugins/battle-control", version = "0.1.0", optional = true }
 terminalgb-plugin-agent = { path = "plugins/agent", version = "0.1.0", optional = true }
+terminalgb-plugin-gen1-shinyhunt = { path = "plugins/gen1-shinyhunt", version = "0.1.0", optional = true }
 terminalgb-plugin-example-tracer = { path = "plugins/example-tracer", version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -285,6 +291,14 @@ required-features = ["image"]
 name = "trainer_layout"
 path = "examples/trainer_layout.rs"
 required-features = ["tui", "plugin-trainer"]
+
+# The shiny hunter's driver and CLI: N headless emulators, an encounter loop
+# each, stop on a DV spread. Headless — no window, no terminal UI, no audio —
+# so it needs only the plugin. See docs/shiny-hunt.md.
+[[example]]
+name = "shiny_hunt"
+path = "examples/shiny_hunt.rs"
+required-features = ["plugin-gen1-shinyhunt"]
 
 # The other audio examples deliberately carry a no-`audio` `main()` that
 # prints how to enable the feature, so they stay buildable and are NOT given

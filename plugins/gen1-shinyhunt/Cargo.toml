@@ -1,0 +1,21 @@
+[package]
+name = "terminalgb-plugin-gen1-shinyhunt"
+version = "0.1.0"
+description = "Gen 1 shiny hunting: many headless emulators rolling encounters in parallel, stopping on a DV spread"
+authors = ["gameboy contributors"]
+repository = "https://github.com/Alchemy86/gameboy"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "terminalgb_plugin_gen1_shinyhunt"
+path = "src/lib.rs"
+
+[dependencies]
+terminalgb-plugin-api = { path = "../../crates/terminalgb-plugin-api", version = "0.1.0" }
+# For the Gen 1 RAM map, the `Dvs` decoder and — the point — the ONE
+# implementation of the Gen 2 shiny rule (`derived::shiny_if_traded`). The
+# hunter must never grow a second copy of that rule; `target.rs` has a test that
+# fails if it ever does.
+terminalgb-plugin-trainer = { path = "../trainer", version = "0.1.0" }

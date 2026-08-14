@@ -43,8 +43,8 @@ history. See [Credits & lineage](README.md#credits--lineage).
 - **The project is now called TerminalGB.** It was already the name the product used — the
   terminal window title and the virtual camera's idle card both said `TerminalGB` — so this
   makes the codebase match what a user sees. The rename is mechanical and covers the crate
-  (`gameboy` → `terminalgb`, so `use gameboy::…` becomes `use terminalgb::…`), the plugin
-  crates (`gameboy-plugin-*` → `terminalgb-plugin-*`, and `crates/gameboy-plugin-api/` →
+  (`gameboy` → `terminalgb`, so `use terminalgb::…` becomes `use terminalgb::…`), the plugin
+  crates (`terminalgb-plugin-*` → `terminalgb-plugin-*`, and `crates/terminalgb-plugin-api/` →
   `crates/terminalgb-plugin-api/`), the MCP binary (`gameboy-mcp` → `terminalgb-mcp`) and the
   name that server reports to a client (`gameboy` → `terminalgb`), the generated FFI header
   (`gameboy.h` → `terminalgb.h`) and static library (`libgameboy.a` → `libterminalgb.a`), the
@@ -66,6 +66,30 @@ history. See [Credits & lineage](README.md#credits--lineage).
   - The `gameboy` value of the `palette` config key (an alias for `green`) is unchanged.
 
 ### Added
+- **Gen 1 shiny hunting, in parallel** (`plugins/gen1-shinyhunt/`,
+  `examples/shiny_hunt.rs`, `plugins = gen1-shinyhunt`) — N headless emulators run their own
+  encounter loop from one save state, read the DVs out of `wEnemyMonDVs` the instant the game
+  rolls them, and all stop the moment one matches. The software answer to a hunter's four
+  Nintendo DS consoles wired to one controller through an input splitter, and it wins for a
+  reason unrelated to parallelism: **it never looks at a sprite**. **Gen 1 has no shiny
+  Pokémon** — what is hunted is the spread that becomes shiny once traded to Gen 2, using the
+  one implementation of that rule already in the tree (the trainer panel's), never a copy.
+  Instances starting from identical bytes would be one instance wearing N hats, so they are
+  decorrelated by varying input *timing* (Gen 1's `Random_` folds the free-running `rDIV` in on
+  every call) and `--probe` proves it **in both directions** — decorrelated instances must
+  differ, identically-seeded ones must be identical. **And divergence turned out not to be
+  enough**: `Random_` builds both DV bytes from one `rDIV` sample, so `lo − hi` *is* that sample
+  and reloading the same state before every roll pins every result to one thin band — **968 of
+  the 65,536 spreads, measured**, which is why a 97,212-encounter hunt found nothing while
+  reporting a healthy 81/s and a 1.7-minute ETA throughout. An attempt is therefore a *run* of
+  encounters with a flee between them (the RNG drifts through the battle engine the way a real
+  hunter's console does), which lifts coverage to ~6,150, and `--probe` now **measures and
+  reports** coverage with a verdict rather than assuming it. **Measured on a 20-core box: 8–18
+  encounters/s and 176–367x real time on 12 instances.** A hit preserves the save state, a report
+  and the frame, and the driver replays the winning attempt in a fresh machine before it will
+  call anything a hit. The plugin declares `OBSERVE | READ_MEMORY` and nothing else, so a
+  hunter provably cannot fabricate its own result. See
+  [`docs/shiny-hunt.md`](docs/shiny-hunt.md).
 - **Super Game Boy support** (`src/sgb.rs`, `GB_MODEL=sgb` / `sgb2`) — the half of an SGB a
   cartridge can actually observe: the ICD2 command-packet receiver on `$FF00`, `MLT_REQ`
   multiplayer and the joypad index a game reads back, plus the SGB/SGB2 boot registers.
@@ -173,6 +197,10 @@ history. See [Credits & lineage](README.md#credits--lineage).
   [`docs/audio.md`](docs/audio.md) §6b.
 
 ### Fixed
+- **CI ran no plugin crate's tests at all.** The root `Cargo.toml` is both a `[package]` and a
+  `[workspace]`, so a bare `cargo test` covers the `gameboy` package only — 263 tests across
+  `plugins/*` and `crates/*` were invisible. The CI step is `cargo test --release --workspace`
+  now.
 - **The DMG boot ROM's leftover Nintendo-logo tilemap is written** (`$9904`-`$990F`,
   `$9924`-`$992F`, `$9910`). A ROM that draws on part of the screen and never clears the
   tilemap renders its own tiles in rows 8 and 9 on hardware, and rendered nothing here — a
