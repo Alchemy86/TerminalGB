@@ -1,0 +1,115 @@
+# A demonstration phrase, written for this tool.
+#
+# Nothing here is sampled, transcribed or borrowed: it is eight bars of my own
+# arithmetic, chosen to exercise the four channels and the hardware behaviours a
+# naive tone generator gets wrong. Render it with:
+#
+#     terminalgb-chiptune docs/chiptune-examples/demo.gbscore -o demo.wav
+#
+# and see what the chip is really told with:
+#
+#     terminalgb-chiptune docs/chiptune-examples/demo.gbscore --dump-registers
+
+title Four channels, one Game Boy
+tempo 132
+model dmg
+
+# --- Channel 1: a C major scale, then an arpeggio, then a sweep ------------
+# A plucked lead: full volume, decaying with envelope period 3 (~187 ms to
+# silence), 50% duty.
+ch1 duty 2
+ch1 env 15 - 3
+
+ch1 note C4 1/8
+ch1 note D4 1/8
+ch1 note E4 1/8
+ch1 note F4 1/8
+ch1 note G4 1/8
+ch1 note A4 1/8
+ch1 note B4 1/8
+ch1 note C5 1/8
+
+ch1 duty 1
+ch1 note C4 1/8
+ch1 note E4 1/8
+ch1 note G4 1/8
+ch1 note C5 1/8
+ch1 note G4 1/8
+ch1 note E4 1/8
+ch1 note C4 1/4
+
+# The frequency sweep — channel 1's, and nothing else's. Period 3, downward,
+# shift 2: the classic falling "landing" sound. A tone generator with an
+# envelope but no sweep unit cannot produce this at all.
+ch1 sweep 3 - 2
+ch1 env 15 - 2
+ch1 note C5 1/2
+ch1 sweep off
+
+# ...and upward, which is the same unit run the other way. A gentle shift, on
+# purpose: the sweep adds `period >> shift` to the period register each step, so
+# a big shift climbs fast and overflows past 2047 — at which point the hardware
+# **switches the channel off**. `sweep 4 + 3` from here is silent after 30 ms,
+# and that is correct, not a bug. It is also how the classic vanishing
+# "power-up" is made.
+ch1 sweep 5 + 6
+ch1 note C4 1/2
+ch1 sweep off
+
+# --- Channel 2: a bass line under all of it -------------------------------
+ch2 duty 1
+ch2 env 12 - 2
+ch2 note C3 1/4
+ch2 note C3 1/4
+ch2 note G2 1/4
+ch2 note G2 1/4
+ch2 note C3 1/4
+ch2 note C3 1/4
+ch2 note F2 1/4
+ch2 note G2 1/4
+ch2 note C3 1/2
+ch2 note G2 1/2
+
+# --- Channel 3: a wavetable pad -------------------------------------------
+# 32 four-bit samples: a triangle. Channel 3 plays whatever is in wave RAM, so
+# this is the one channel whose *timbre* is data rather than a duty setting.
+ch3 wave 0123456789ABCDEFFEDCBA9876543210
+ch3 level 2
+ch3 note C3 1/1
+ch3 note F2 1/1
+
+# A sawtooth on the same channel, to hear the difference the table makes.
+ch3 wave 00112233445566778899AABBCCDDEEFF
+ch3 note C3 1/1
+ch3 note G2 1/1
+
+# --- Channel 4: the drum kit ----------------------------------------------
+# Noise is an LFSR, not a random-number generator: the 7-bit width gives the
+# short, pitched, metallic rattle a snare is made of, and the 15-bit width the
+# long hiss of a hi-hat. Same channel, one bit of difference.
+ch4 env 15 - 2
+ch4 noise 4 15 4
+ch4 hit 1/8
+ch4 rest 1/8
+ch4 noise 2 7 3
+ch4 hit 1/8
+ch4 rest 1/8
+
+ch4 noise 4 15 4
+ch4 hit 1/8
+ch4 rest 1/8
+ch4 noise 2 7 3
+ch4 hit 1/8
+ch4 rest 1/8
+
+ch4 env 15 - 1
+ch4 noise 6 15 6
+ch4 hit 1/4
+ch4 rest 1/4
+ch4 noise 2 7 3
+ch4 hit 1/8
+ch4 hit 1/8
+ch4 hit 1/8
+ch4 hit 1/8
+
+tail 400ms

@@ -1,6 +1,6 @@
 //! The MCP wire: JSON-RPC 2.0 over stdio, and the tool surface.
 //!
-//! # Why the surface is ten tools and not thirty
+//! # Why the surface is eleven tools and not thirty
 //!
 //! A tool a model cannot tell when to use is worse than no tool: it costs
 //! tokens in every request and it invites the wrong call. So each of these
@@ -16,6 +16,7 @@
 //! | `run_actions` | *achieve this* — walk, go to, read through the dialogue; one call is hundreds of frames |
 //! | `step` | *let time pass* — a boot, an animation, a cartridge the observer does not know |
 //! | `save_state` / `load_state` | *let me try that again* |
+//! | `render_audio` | *what would this music sound like on the hardware?* — the only one that needs no cartridge |
 //!
 //! `write_memory` is an eleventh that exists only when the operator passed
 //! `--allow-write-memory`; it is **not listed** otherwise, so a client never
@@ -162,6 +163,25 @@ const TOOLS: &[Tool] = &[
         description: "Restore a snapshot taken by save_state. A state from a different \
              cartridge is refused rather than loaded.",
         schema: r#""properties":{"slot":{"type":"integer","minimum":0,"maximum":99,"description":"Slot number. Default 1."},"path":{"type":"string","description":"Read this exact file instead of a slot."}}"#,
+    },
+    Tool {
+        name: "render_audio",
+        description: "Render Game Boy sound-chip instructions to a WAV file through the \
+             emulated APU — the same chip the accuracy suites score, so the \
+             answer is what the hardware would produce, not an imitation. \
+             Needs no cartridge. Feed it a score (notes, durations, envelopes, \
+             duty, sweep, noise), a register script (NR10-NR52 with timings), \
+             or the path of a .vgm log. Returns what was produced — length, \
+             peak level, which channels sounded — and optionally the compiled \
+             register writes, which is the ground truth the audio comes from. \
+             You cannot hear the file; use `registers` and the reported levels \
+             to check your work, and give the path to a person to listen to. \
+             Score syntax: `tempo 120`, then lines like `ch1 duty 2`, \
+             `ch1 env 15 - 3`, `ch1 note C4 1/8`, `ch3 wave <32 hex digits>`, \
+             `ch4 noise 4 15 4`, `ch4 hit 1/16`, `ch2 rest 1/4`. Each channel \
+             keeps its own cursor from time zero, so parts written one after \
+             another play together.",
+        schema: r#""properties":{"score":{"type":"string","description":"The source text: a score, or a register script. Mutually exclusive with \"path\"."},"path":{"type":"string","description":"Read the source from this file instead. This is the only way to render a .vgm log."},"out":{"type":"string","description":"Where to write the .wav. Default: a file in the system temp directory."},"rate":{"type":"integer","minimum":4000,"maximum":192000,"description":"Sample rate. Default 44100."},"model":{"type":"string","enum":["dmg","cgb"],"description":"Which console's APU. A `model` line in the source wins. Default dmg."},"seconds":{"type":"number","description":"Override the piece's length."},"registers":{"type":"boolean","description":"Include the compiled register writes in the reply. Default false; they can be long."}}"#,
     },
 ];
 
@@ -644,8 +664,137 @@ fn run_tool(host: &mut Host, name: &str, args: &Json) -> ToolOut {
                 Err(e) => ToolOut::err(e),
             }
         }
+        "render_audio" => render_audio(args),
         other => ToolOut::err(format!("unknown tool '{other}'")),
     }
+}
+
+/// Compile chiptune instructions and render them through the emulated APU.
+///
+/// Deliberately independent of the session: there is no cartridge involved, so
+/// this works on a server that has never been given a ROM. It is a thin
+/// wrapper over [`crate::chiptune`] and must stay one — anything that starts
+/// deciding what music *means* belongs in the `terminalgb-chiptune` crate.
+fn render_audio(args: &Json) -> ToolOut {
+    use terminalgb_chiptune::{compile_auto, track::Model};
+
+    let model = match args.str_field("model") {
+        Some(m) => match Model::parse(m) {
+            Some(m) => m,
+            None => return ToolOut::err(format!("unknown model '{m}' — dmg or cgb")),
+        },
+        None => Model::Dmg,
+    };
+
+    let (bytes, source) = match (args.str_field("score"), args.str_field("path")) {
+        (Some(_), Some(_)) => {
+            return ToolOut::err("give either \"score\" or \"path\", not both")
+        }
+        (Some(s), None) => (s.as_bytes().to_vec(), "the score given".to_string()),
+        (None, Some(p)) => {
+            let p = std::path::PathBuf::from(shellexpand_home(p));
+            match std::fs::read(&p) {
+                Ok(b) => (b, p.display().to_string()),
+                Err(e) => return ToolOut::err(format!("reading {}: {e}", p.display())),
+            }
+        }
+        (None, None) => return ToolOut::err("render_audio needs \"score\" or \"path\""),
+    };
+
+    let mut track = match compile_auto(&bytes, model) {
+        Ok(t) => t,
+        Err(e) => return ToolOut::err(e),
+    };
+    if let Some(s) = args.get("seconds").and_then(|v| v.as_f64()) {
+        if !(s.is_finite() && s > 0.0 && s < 3600.0) {
+            return ToolOut::err("\"seconds\" must be between 0 and 3600");
+        }
+        track.duration = (s * terminalgb_chiptune::CLOCK_HZ as f64).round() as u64;
+        track.writes.retain(|w| w.at <= track.duration);
+    }
+    let rate = args.u64_field("rate").unwrap_or(44_100);
+    if !(4_000..=192_000).contains(&rate) {
+        return ToolOut::err("\"rate\" must be between 4000 and 192000");
+    }
+    let rate = rate as u32;
+
+    let out = match args.str_field("out") {
+        Some(p) => std::path::PathBuf::from(shellexpand_home(p)),
+        None => std::env::temp_dir().join("terminalgb-chiptune-render.wav"),
+    };
+
+    let opts = crate::chiptune::RenderOptions {
+        sample_rate: rate,
+        model: track.model,
+        ..Default::default()
+    };
+    let samples = crate::chiptune::render(&track, opts);
+    if let Err(e) = terminalgb_chiptune::wav::write(&out, &samples, rate) {
+        return ToolOut::err(format!("writing {}: {e}", out.display()));
+    }
+
+    let peak = samples
+        .iter()
+        .fold(0f32, |m, &(l, r)| m.max(l.abs()).max(r.abs()));
+    let rms = (samples
+        .iter()
+        .map(|&(l, r)| (l as f64) * (l as f64) + (r as f64) * (r as f64))
+        .sum::<f64>()
+        / (2.0 * samples.len().max(1) as f64))
+        .sqrt();
+    let mut used = [false; 4];
+    for w in &track.writes {
+        match w.reg {
+            0xFF10..=0xFF14 => used[0] = true,
+            0xFF16..=0xFF19 => used[1] = true,
+            0xFF1A..=0xFF1E | 0xFF30..=0xFF3F => used[2] = true,
+            0xFF20..=0xFF23 => used[3] = true,
+            _ => {}
+        }
+    }
+    let names = ["square 1", "square 2", "wave", "noise"];
+    let live: Vec<&str> = names
+        .iter()
+        .zip(used)
+        .filter(|(_, u)| *u)
+        .map(|(n, _)| *n)
+        .collect();
+
+    let mut msg = format!(
+        "Rendered {source} on a {} through the emulated APU.\n\
+         Wrote {}\n\
+         {:.3} s, {} samples at {} Hz, {} register writes.\n\
+         Peak {peak:.3}, RMS {rms:.4}. Channels used: {}.",
+        track.model.name().to_uppercase(),
+        out.display(),
+        track.seconds(),
+        samples.len(),
+        rate,
+        track.writes.len(),
+        if live.is_empty() {
+            "none".to_string()
+        } else {
+            live.join(", ")
+        },
+    );
+    if peak == 0.0 {
+        msg.push_str(
+            "\n\nWARNING: the render is silent. Check that the APU is powered on \
+             (NR52 bit 7), that NR50 and NR51 route the channel to an output, and \
+             that the channel's DAC is on — NRx2 non-zero, or NR30 bit 7 for the \
+             wave channel. A score gets the power-on for free unless it says \
+             `power off`.",
+        );
+    }
+    if args
+        .get("registers")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        msg.push_str("\n\nCompiled register writes:\n");
+        msg.push_str(&track.to_register_script());
+    }
+    ToolOut::text(msg)
 }
 
 /// `~` is the one thing a person types into a config file that a bare

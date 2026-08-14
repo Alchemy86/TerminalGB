@@ -39,6 +39,11 @@ use std::sync::OnceLock;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+/// Render chiptune instructions through the emulated APU — see [`chiptune`].
+/// Behind the `chiptune` feature; the music side of it lives in the
+/// dependency-free `terminalgb-chiptune` crate, which does not depend on this one.
+#[cfg(all(feature = "chiptune", not(target_arch = "wasm32")))]
+pub mod chiptune;
 pub mod cpu;
 /// Minimal DEFLATE compressor for terminal transmission — see [`deflate`].
 pub mod deflate;

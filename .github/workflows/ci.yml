@@ -54,6 +54,14 @@ jobs:
       # Needs only the vendored dmg-acid2 ROM. See docs/mcp.md.
       - name: MCP server
         run: make test-mcp
+      # The chiptune renderer, judged by properties of the audio it produces —
+      # the envelope's 64 Hz counter, the sweep's overflow disable, the 7-bit
+      # LFSR's 127-bit period, the duty spectra — against numbers from Pan Docs
+      # rather than from our own previous output. `cargo test --release` above
+      # already runs it; this step exists so the measured table is a named,
+      # greppable part of the log. ~2 s. See docs/chiptune.md.
+      - name: Chiptune renderer
+        run: make test-chiptune
       - name: Make desktop build
         run: cd ./examples/desktop && cargo build
       # The web build. Audio is compiled out on wasm; a fresh clone must keep building it.

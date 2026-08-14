@@ -308,7 +308,8 @@ copy-pasteable and was run to produce this table.
 | `desktop` | ✅ | `glutin`, `gl`, `libc`, `image` | a display server (X11 / Wayland / Windows / macOS) |
 | `tui` | ✅ | `ratatui`, `ratatui-image`, `icy_sixel`, `image`, `libc` | a terminal — [any terminal](#which-terminals-give-you-what); it degrades rather than refusing |
 | `audio` | | `cpal` | a sound device (ALSA **dev headers** to *build* on Linux) |
-| `mcp` | | `plugin-agent` — **no third-party crate** | an [MCP](https://modelcontextprotocol.io) client (Claude Desktop, Claude Code, …). Builds the `terminalgb-mcp` binary. |
+| `mcp` | | `plugin-agent`, `chiptune` — **no third-party crate** | an [MCP](https://modelcontextprotocol.io) client (Claude Desktop, Claude Code, …). Builds the `terminalgb-mcp` binary. |
+| `chiptune` | ✅ | `terminalgb-chiptune` — first-party, **no dependencies at all** | nothing. Builds the `terminalgb-chiptune` binary — [instructions in, real Game Boy audio out](#-chiptune-renderer--hear-what-the-hardware-would-do). |
 | `standard-plugins` | ✅ | the four plugin crates below | nothing; each still has to be named to attach |
 | `plugin-trainer` | ✅ | `terminalgb-plugin-trainer` | a Pokémon R/B cartridge, or it declines |
 | `plugin-gen1-link` | ✅ | + `terminalgb-plugin-gen1-link` | as above |
@@ -839,6 +840,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 
 | page | what it answers |
 |---|---|
+| [chiptune renderer](docs/chiptune.md) | sound-chip instructions in, real Game Boy audio out — the score/`.vgm`/register formats, and the accuracy evidence |
 | [the MCP server](docs/mcp.md) | driving the emulator from Claude Desktop / Claude Code: install steps, every flag, the measured numbers, the honest limitations |
 | [writing a plugin](docs/writing-a-plugin.md) | zero to a working plugin for someone who has never seen this codebase |
 | [the plugin contract](docs/plugins.md) | what a plugin may do, how you can tell one is attached, the trust model, the version boundary |
@@ -1025,10 +1027,11 @@ cargo build --release --no-default-features --features mcp
 claude mcp add terminalgb -- "$PWD/target/release/terminalgb-mcp" --rom ~/roms/blue.gb
 ```
 
-Ten tools, each answering a different question — `observe` (the structured game state: mode,
+Eleven tools, each answering a different question — `observe` (the structured game state: mode,
 on-screen text, map, coordinates, party, battle), `screenshot`, `read_memory`, `press_buttons`
 (frame-accurate), `run_actions` (`walk` / `goto` / `advance_text` — one call covering hundreds
-of frames), `step`, `load_rom`, `reset`, `save_state`, `load_state`.
+of frames), `step`, `load_rom`, `reset`, `save_state`, `load_state`, and `render_audio` (compose
+a phrase and render it through the emulated sound chip — the one tool that needs no cartridge).
 
 * **It is a thin wrapper over the [agent plugin](plugins/agent/), not a new subsystem.** `observe` *is*
   the agent's `Gen1Observer`; `run_actions` *is* its `Executor`. Nothing was re-implemented.
@@ -1042,6 +1045,40 @@ of frames), `step`, `load_rom`, `reset`, `save_state`, `load_state`.
 
 Install steps for both clients, the config blocks, every flag, the measured numbers and the
 honest limitations: **[`docs/mcp.md`](docs/mcp.md)**.
+
+---
+
+## 🎼 Chiptune renderer — hear what the hardware would do
+
+**Feed sound-chip instructions in, get real Game Boy audio out.** For a composer who wants
+the authoritative answer to "what will this actually sound like?" without owning hardware.
+
+```bash
+cargo run --release --bin terminalgb-chiptune -- docs/chiptune-examples/demo.gbscore -o demo.wav
+paplay demo.wav
+```
+
+The renderer is **not a synthesiser imitating a Game Boy** — it is this repository's emulated
+APU, the one scored at **64/69 on SameSuite's APU group** and **12/12 on Blargg's `dmg_sound`
+and `cgb_sound`**, by those ROMs' own verdicts. Everything a real chip does, it does:
+
+* **Three input layers, one ground truth.** Register writes with timing (`NR10`-`NR52` and wave
+  RAM, at exact cycles — the layer that *cannot* be wrong); a small score on top of it (notes,
+  durations, duty, envelope, sweep, wavetable, noise); and a **`.vgm` importer**, because a VGM
+  already *is* a timed register log and there are archives of Game Boy ones. `--dump-registers`
+  shows you exactly what the chip is told, in a form the tool reads back.
+* **Deterministic.** Same input, same bytes — integer time throughout, no clock read.
+* **Things only real hardware behaviour gets right**, all measured in CI: a C major scale lands
+  on the frequencies the 11-bit period register can actually express (C5 is **524.288 Hz** on a
+  Game Boy, not 523.25); the envelope steps every **46.9 ms** against 3/64 s from hardware; an
+  upward sweep that overflows past 2047 **switches the channel off**; the 7-bit noise LFSR
+  repeats every **127 bits at 3.878 ms** (autocorrelation 0.995) where the 15-bit one does not
+  repeat at all; 50% duty has odd harmonics only. DMG and CGB really differ, and you choose.
+* **Not in the core.** It is its own dependency-free crate reaching the chip through a trait, so
+  `--no-default-features` inherits no music renderer at all.
+
+Format reference, the accuracy evidence and how to re-measure it:
+**[`docs/chiptune.md`](docs/chiptune.md)**.
 
 ---
 

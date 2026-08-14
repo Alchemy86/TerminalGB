@@ -2091,6 +2091,7 @@ dependencies = [
  "libc",
  "ratatui",
  "ratatui-image",
+ "terminalgb-chiptune",
  "terminalgb-plugin-agent",
  "terminalgb-plugin-api",
  "terminalgb-plugin-battle-control",
@@ -2101,6 +2102,10 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
 ]
+
+[[package]]
+name = "terminalgb-chiptune"
+version = "0.1.0"
 
 [[package]]
 name = "terminalgb-plugin-agent"

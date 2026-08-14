@@ -111,8 +111,8 @@ claude -p --mcp-config mcp.json \
 
 ## 4. The tools
 
-Ten, plus one that only exists when you ask for it. Each answers a different question, which
-is the whole design rule: a tool a model cannot tell when to use costs tokens in every
+Eleven, plus one that only exists when you ask for it. Each answers a different question,
+which is the whole design rule: a tool a model cannot tell when to use costs tokens in every
 request and invites the wrong call.
 
 | tool | what it is for |
@@ -126,6 +126,7 @@ request and invites the wrong call.
 | `run_actions` | Higher-level Pokémon Red/Blue primitives — `walk`, `goto`, `advance_text`, `wait`, `press` — that one call carries out over hundreds of frames, reporting what each achieved. |
 | `step` | Advance N frames and do nothing else. ~60 frames is one second. |
 | `save_state` / `load_state` | Snapshot and restore the whole machine, to a numbered slot or a named file. |
+| `render_audio` | Render Game Boy sound-chip instructions to a WAV through the emulated APU — notes, a register script, or a `.vgm` log. The one tool here that needs **no cartridge**. See [`docs/chiptune.md`](chiptune.md). |
 | `write_memory` | Only when the server was started with `--allow-write-memory`. Otherwise it is not even listed. |
 
 ### Why `run_actions` matters
@@ -156,6 +157,20 @@ This is not new code. It is [`plugins/agent/src/action.rs`](../plugins/agent/src
 agent could play the game; the MCP server is a wrapper over it. Same for perception:
 `observe` is [`plugins/agent/src/observe.rs`](../plugins/agent/src/observe.rs). See
 [`docs/gen1/agent-play.md`](gen1/agent-play.md) for the reasoning behind each primitive.
+
+### Why `render_audio` reports rather than returns audio
+
+A model cannot listen to a WAV, so returning one would be a tool whose output is opaque to
+its only caller. The reply is the feedback loop instead: length, peak level, RMS, which
+channels sounded, and — with `"registers": true` — the compiled register writes, which is
+the ground truth the audio came from. `Peak 0.000` comes with a warning naming the three
+usual causes (APU not powered on, NR51 not routing the channel, the channel's DAC off).
+The file path is for a person.
+
+It composes with everything else here for free because it shares the chip: the same
+`gameboy::sound::Sound` that plays a cartridge renders the phrase, so what a model hears
+about is what the hardware would do. It needs no cartridge and no session — it works on a
+server that has never been given a ROM.
 
 ### What `write_memory` is not
 

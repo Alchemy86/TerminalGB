@@ -29,7 +29,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # audio. See README "Embedding the core". Zero third-party crates besides
 # `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
 # belongs behind `desktop`/`tui`/`audio`, not in the core.
-default = ["desktop", "tui", "standard-plugins"]
+default = ["desktop", "tui", "standard-plugins", "chiptune"]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
 # Needs a display server at run time.
@@ -51,7 +51,19 @@ audio = ["cpal"]
 # It depends on `plugin-agent` because that crate is where structured perception
 # and the bounded action executor already live — the MCP surface is a wrapper
 # over them, not a second implementation. See docs/mcp.md §7.
-mcp = ["plugin-agent"]
+#
+# It also pulls in `chiptune`, so an agent can render a musical phrase through
+# the emulated sound chip and be told what it produced. That costs no
+# third-party crate either.
+mcp = ["plugin-agent", "chiptune"]
+# Chiptune renderer (`terminalgb-chiptune` binary, `terminalgb::chiptune`, and the
+# MCP server's `render_audio` tool). Compiles notes, a `.vgm` log or a register
+# script into APU register writes and renders them through the emulated sound
+# chip. In `default` so `cargo build` produces the CLI, and out of
+# `--no-default-features` so the embedding build inherits no music renderer —
+# someone putting the core in hardware should not get one. It adds **no
+# third-party crate**: `terminalgb-chiptune` is first-party and dependency-free.
+chiptune = ["terminalgb-chiptune"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
@@ -112,6 +124,13 @@ opt-level = 0
 [dependencies]
 terminalgb-plugin-api = { path = "crates/terminalgb-plugin-api", version = "0.1.0" }
 
+# The chiptune renderer's music half: score/`.vgm`/register-script parsing, the
+# `Apu` trait and the WAV encoder. Dependency-free, and it deliberately does
+# **not** depend on `gameboy` — the emulated sound chip reaches it through the
+# trait, which is what keeps this edge acyclic. Same arrangement, same reason,
+# as `gameboy-plugin-api`.
+terminalgb-chiptune = { path = "crates/terminalgb-chiptune", version = "0.1.0", optional = true }
+
 # Our own plugins. Optional, and the frontend's panels for them are `cfg`-gated
 # on the matching feature, so `--no-default-features` (or deleting `plugins/`
 # entirely) still builds a working emulator.
@@ -160,6 +179,13 @@ web-sys = {version = "0.3.4", features = [
 name = "terminalgb-mcp"
 path = "src/bin/terminalgb-mcp.rs"
 required-features = ["mcp"]
+
+# The chiptune renderer. A `[[bin]]` rather than an example because it is a
+# tool a composer runs, not a demonstration of the library.
+[[bin]]
+name = "terminalgb-chiptune"
+path = "src/bin/terminalgb-chiptune.rs"
+required-features = ["chiptune"]
 
 [[example]]
 name = "desktop"
@@ -288,6 +314,21 @@ harness = false
 name = "audiocapture"
 path = "testharness/audiocapture.rs"
 harness = false
+# For `terminalgb_chiptune::wav`, which is where this harness's WAV encoder now
+# lives so there is exactly one of it in the workspace. `chiptune` is in
+# `default`, so an ordinary `cargo test` still runs this.
+required-features = ["chiptune"]
+
+# Chiptune renderer harness: proves properties of the *rendered audio* that
+# only a real APU model gets right — the envelope's 64 Hz counter, the sweep's
+# overflow disable, the 7-bit LFSR's 127-bit period, the duty spectra — plus
+# determinism and the VGM round trip. No ROM, no audio device, ~2 s.
+# See testharness/chiptune.rs and docs/chiptune.md.
+[[test]]
+name = "chiptune"
+path = "testharness/chiptune.rs"
+harness = false
+required-features = ["chiptune"]
 
 # Emulation speed with a host audio player attached. `harness = false` so it
 # can print the measured numbers and control the exit code. Needs the `audio`

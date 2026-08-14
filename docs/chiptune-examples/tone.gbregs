@@ -1,0 +1,53 @@
+# The ground-truth layer: register writes with timing, and nothing else.
+#
+# This is exactly what a cartridge puts on the bus, so it is the layer that
+# cannot be wrong — the score compiler and the VGM importer both produce this,
+# and `terminalgb-chiptune <file> --dump-registers` prints it back out.
+#
+#     terminalgb-chiptune docs/chiptune-examples/tone.gbregs -o tone.wav
+#
+# Times are absolute unless prefixed with `+`, which makes them relative to the
+# previous line. `1234t` is T-cycles of the 4,194,304 Hz master clock; `ms` and
+# `s` also work, as do note values like `1/8` once a `tempo` is given.
+
+title A440 for one second, then an envelope, then silence
+model dmg
+
+# Power the APU on. Nothing but NR52 lands while it is off, so this must be
+# first — write NR50 before this line and it is simply discarded.
+0t      NR52 $80
+
+# Master volume 7 both sides; every channel routed to both.
++0t     NR50 $77
++0t     NR51 $FF
+
+# Channel 1: 50% duty (NR11 bits 7-6 = %10), length load 0 (unused, because
+# the length counter is left disabled below).
++0t     NR11 $80
+
+# Envelope: initial volume 15, direction down (bit 3 clear), period 0 = the
+# envelope does not run. A flat, full-volume tone.
++0t     NR12 $F0
+
+# Frequency. The Game Boy stores a *period*, not a frequency:
+#   f = 131072 / (2048 - x),  so x = 2048 - 131072/440 = 1750 = $6D6.
+# Which means the chip actually produces 439.84 Hz, not 440 — the period
+# register is 11 bits and there is no finer tuning. That is the sort of answer
+# this tool exists to give.
++0t     NR13 $D6
+# NR14: bit 7 triggers the channel, bit 6 would enable the length counter
+# (left clear), bits 2-0 are the period's high bits ($6D6 >> 8 = 6).
++0t     NR14 $86
+
+# One second later, switch the DAC off. Volume 0 with direction 0 in NRx2 is
+# how hardware silences a channel; it also clears the enable bit NR52 reports.
++1s     NR12 $00
+
+# Now the same note again, but with a real envelope: volume 15 counting down
+# with period 3, so it decays over about 187 ms. This is the second thing a
+# naive tone generator gets wrong.
++250ms  NR12 $F3
++0t     NR13 $D6
++0t     NR14 $86
+
+end +1s

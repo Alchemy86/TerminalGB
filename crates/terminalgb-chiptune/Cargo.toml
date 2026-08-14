@@ -1,0 +1,17 @@
+[package]
+name = "terminalgb-chiptune"
+version = "0.1.0"
+description = "Compile chiptune instructions to Game Boy APU register writes, and render them through an emulated sound chip. No dependencies."
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/gameboy"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+# Deliberately empty, for the same reason `terminalgb-plugin-api` is: this crate is
+# the *contract* half of the music renderer. It knows how to turn notes, a
+# `.vgm` log or a register script into a timed list of APU register writes, and
+# how to write a WAV — it does not know how to emulate a sound chip. The host
+# supplies that through the `Apu` trait, which is what keeps the dependency
+# graph acyclic (`terminalgb` -> `terminalgb-chiptune`, never the other way).
+[dependencies]

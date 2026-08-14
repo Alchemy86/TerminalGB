@@ -3740,3 +3740,88 @@ with a real device attached: **0.256 ms/frame** (`make test-audio-perf`) and **0
 **0.219** for the same run with no audio at all. The single biggest performance lever in the
 emulator today is the **PPU engine** (0.219 → 0.467, 2.13x), not audio. Re-measure before
 repeating either number.
+
+## Chiptune renderer — the APU driven with no CPU (`crates/terminalgb-chiptune/`, `src/chiptune.rs`)
+
+**Full guide: [`docs/chiptune.md`](docs/chiptune.md).** Instructions in (a score, a `.vgm`
+log, or register writes with timings), a `.wav` out, through the *emulated* APU rather
+than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o out.wav`;
+`make test-chiptune` is the gate; `make chiptune-demo` renders the shipped phrase.
+
+- **The APU can be driven directly, with no CPU, MMU or cartridge in the picture** —
+  `Sound::new()`, `set_player`, `set_mode`, `catch_up`, `wb`, `do_cycle`, `rb` are the
+  whole interface, and the frame sequencer is internal to `Sound` (it runs off `next_time`,
+  not off the timer). That is the single fact the tool rests on. Writes go
+  `catch_up()` **then** `wb()`, exactly as `MemoryManagementUnit` does on every APU access.
+- **DO NOT advance the APU by large steps.** `Sound::do_cycle` calls `do_output()` **once**
+  per call when `time >= output_period`, because it is written for a CPU that never
+  advances it by more than one instruction. Step it by 1024 T-cycles and `blip_buf` panics
+  with "buffer size was exceeded" / an out-of-bounds index — the overshot deltas land on
+  top of a block that has not been read yet. `terminalgb_chiptune::STEP_CHUNK` is **64**
+  (three times the longest instruction). Chunk size is otherwise *invisible*: channels are
+  evaluated lazily over exact time ranges, so it changes not one sample.
+- **`Sound::new()` reads `$GB_CGB_REVISION`** (`CgbRevision::from_env`). Anything claiming
+  determinism must call `set_cgb_revision` explicitly; `RenderOptions` pins `CgbC`.
+- **Layering, and why it is this way round:** `crates/terminalgb-chiptune` has **zero
+  dependencies and does not depend on `terminalgb`** — the chip reaches it through an `Apu`
+  trait the host implements (`src/chiptune.rs`, ~60 lines). That is not tidiness, it is the
+  only acyclic arrangement: the CLI and the MCP tool live in `terminalgb`, so `terminalgb` must
+  depend on the chiptune crate. Identical reasoning to `terminalgb-plugin-api`/`MachineAccess`.
+  It is **not a plugin**: a `Plugin` is handed a machine during a frame the emulator decided
+  to run, and there is no machine here.
+- **`terminalgb_chiptune::wav` is now the workspace's ONE WAV encoder.** It is
+  `testharness/audiocapture.rs`'s former private RIFF writer, moved byte-for-byte —
+  `testharness/audio_baseline.txt` hashes the *interleaved PCM*, so any drift in `to_i16`
+  or the 44-byte header moves a baseline that has nothing to do with music. A unit test
+  pins the header field by field; the audio harness was run before and after the move and
+  every hash was unchanged. `audiocapture` therefore carries
+  `required-features = ["chiptune"]`. Agreed with the music-mode crew rather than
+  discovered — do not add a second encoder.
+- **Verdicts are properties of the audio, never a hash of our own output**
+  (`testharness/chiptune.rs`, 27 checks, ~2 s, no ROM, no device): the envelope steps every
+  3/64 s; an upward sweep that overflows past 2047 **switches the channel off**; the 7-bit
+  LFSR repeats every 127 bits at 3.876 ms (measured autocorrelation 0.995) and the 15-bit
+  one does not repeat at all; 50% duty is odd harmonics only, 25% and 75% share a magnitude
+  spectrum. Each expected number comes from Pan Docs. Determinism is asserted *and* its
+  converse (a changed note must change the samples).
+- **Pitch quantisation is the headline answer for a composer, not a rounding error.** The
+  period register is 11 bits, so C5 is **524.288 Hz** on a Game Boy against 523.25 in equal
+  temperament, and `square_period`/`square_hz` report what the chip will really produce.
+  **Channel 3 counts at half the square channels' rate** (`65536/(2048-x)`, not
+  `131072/(2048-x)`) — using the square formula for the wave channel transposes it an
+  octave, which is the classic Game Boy bug.
+- **VGM was investigated and adopted, and it was the cheapest of the three front ends.**
+  `0xB3 aa dd` writes `dd` to Game Boy register `aa`, and **register `0x00` is `$FF10`** —
+  so a VGM *is* a `Track` and importing one involves no interpretation. Unknown commands are
+  skipped by their documented operand lengths so the Game Boy part's timing stays exact.
+  `.vgz` is detected by its gzip magic and reported with `gunzip` rather than mis-parsed
+  (no DEFLATE decoder, no dependency). We export VGM too, so a phrase can be checked
+  against a second implementation — a renderer only checkable against itself is not
+  checkable.
+- **`--no-default-features` must never inherit this.** The crate is an optional dependency;
+  CI's "the core has exactly one third-party dependency" gate is measured on that build and
+  is unmoved.
+- **Nothing here writes `DIV`**, so the 512 Hz frame-sequencer phase is never reset. A score
+  cannot ask for it and a `.vgm` cannot express it; `Sound::div_write` is the hook if it is
+  ever wanted.
+- **`cargo test` intermittently dies with a wall of "the crate X requires panic strategy
+  `abort` which is incompatible with this crate's strategy of `unwind`" — RE-RUN IT.** Not
+  caused by the chiptune work: it was reproduced on an untouched tree before any of it
+  existed, and it has since hit `--test audiocapture` alone and a whole-suite run, passing on
+  the retry each time with no change in between. The cause is the same one behind the
+  "output filename collision" warnings every build prints: `[lib] crate-type = ["cdylib",
+  "rlib", "staticlib"]` makes three targets share one output path, and with
+  `[profile.release] panic = 'abort'` the `abort`-built rlib is occasionally picked up by a
+  test target, which cargo builds `unwind`. Cargo's own warning says it "may become a hard
+  error in the future". Do not go looking for it in your own change, and do not "fix" it by
+  removing `panic = 'abort'` — that is load-bearing (see the battery section: a panic is
+  process death *and* the loss of unwritten cartridge RAM). A real fix is giving the lib
+  targets distinct names, which is a repo-wide change nobody has scheduled.
+- **The renderer tracks the emulator's accuracy, and that was demonstrated by accident.**
+  Rebasing across `7556dde fix(apu): a square's frequency reload is latched late` changed
+  the demo render in exactly the places it should: **0.0 %** of the scale and arpeggio
+  samples moved, 1.8 % of the falling sweep and **43.4 %** of the rising sweep — the sweep
+  unit being the only thing that rewrites `NR13`/`NR14` mid-note. Expect any APU fix to move
+  chiptune output, expect it to be *confined to what the fix is about*, and treat a diff that
+  is not so confined as a finding. Nothing in `testharness/chiptune.rs` pins a hash of our
+  own audio, which is why an accuracy fix does not turn it red.

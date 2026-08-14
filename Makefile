@@ -2,7 +2,7 @@
 
 .PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
         fetch-test-suites test-external test-external-accurate no-plugins \
-        test-mcp lint-mcp
+        test-mcp lint-mcp test-chiptune chiptune-demo
 
 all: build install
 
@@ -64,6 +64,21 @@ embed:
 # testharness/audioperf.rs and docs/audio.md.
 test-audio-perf:
 	cargo test --release --features audio --test audioperf
+
+# The chiptune renderer, judged by properties of the audio it produces rather
+# than by a hash of it: the envelope's 64 Hz counter, the sweep's overflow
+# disable, the 7-bit LFSR's 127-bit period, the duty spectra, DMG-vs-CGB, the
+# VGM round trip, and determinism. No ROM, no audio device, ~2 s.
+# See testharness/chiptune.rs and docs/chiptune.md.
+test-chiptune:
+	cargo test --release --test chiptune
+
+# Render the shipped demo phrase so a human can listen to it. Written for this
+# tool — nothing sampled or borrowed. Play it with `paplay`, `aplay` or ffplay.
+chiptune-demo:
+	cargo run --release --bin terminalgb-chiptune -- \
+	  docs/chiptune-examples/demo.gbscore -o target/chiptune-demo.wav
+	@echo "listen with: paplay target/chiptune-demo.wav"
 
 # The MCP server, driven the way a client drives it: the harness spawns the real
 # `terminalgb-mcp` binary and speaks JSON-RPC down its stdin. Needs only the

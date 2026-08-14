@@ -302,51 +302,24 @@ fn analyze(samples: &[(f32, f32)]) -> Stats {
 }
 
 // ---------------------------------------------------------------------------
-// WAV writer (16-bit PCM stereo) + FNV-1a hash — hand-rolled, no deps
+// WAV writer (16-bit PCM stereo) + FNV-1a hash
 // ---------------------------------------------------------------------------
+//
+// This encoder used to be forty private lines here, and by the time three
+// separate pieces of work wanted a WAV there were nearly three copies of it.
+// It now lives in `terminalgb_chiptune::wav` — still hand-rolled, still
+// dependency-free, and byte-for-byte the same, which matters because
+// `audio_baseline.txt` pins an FNV hash of the interleaved PCM. That crate has
+// a unit test asserting the 44-byte header field by field, so a future edit
+// cannot quietly move this baseline.
+//
+// (This is why the test carries `required-features = ["chiptune"]`: it is the
+// one thing here that is not core-only.)
 
-fn to_i16(x: f32) -> i16 {
-    (x.clamp(-1.0, 1.0) * 32767.0).round() as i16
-}
-
-fn interleave_i16(samples: &[(f32, f32)]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(samples.len() * 4);
-    for &(l, r) in samples {
-        out.extend_from_slice(&to_i16(l).to_le_bytes());
-        out.extend_from_slice(&to_i16(r).to_le_bytes());
-    }
-    out
-}
+use terminalgb_chiptune::wav::{fnv1a64, interleave_i16, write_pcm};
 
 fn write_wav(path: &Path, pcm: &[u8], rate: u32) {
-    let mut w = Vec::with_capacity(44 + pcm.len());
-    w.extend_from_slice(b"RIFF");
-    w.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
-    w.extend_from_slice(b"WAVE");
-    w.extend_from_slice(b"fmt ");
-    w.extend_from_slice(&16u32.to_le_bytes());
-    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    w.extend_from_slice(&2u16.to_le_bytes()); // stereo
-    w.extend_from_slice(&rate.to_le_bytes());
-    w.extend_from_slice(&(rate * 4).to_le_bytes()); // byte rate
-    w.extend_from_slice(&4u16.to_le_bytes()); // block align
-    w.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    w.extend_from_slice(b"data");
-    w.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
-    w.extend_from_slice(pcm);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).unwrap();
-    }
-    std::fs::write(path, w).unwrap();
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
+    write_pcm(path, pcm, rate).expect("writing WAV");
 }
 
 // ---------------------------------------------------------------------------
