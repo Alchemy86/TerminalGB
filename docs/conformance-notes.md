@@ -445,6 +445,76 @@ one of its six phases. Everywhere else the player was sealed in the Cable Club.
      that exercises a byte in one state and asserts only the reply is the exact
      shape of test that shipped this bug. A conformance report for a link
      adapter should say *which states* a message was accepted in.
+---
+
+## 2026-08-14 — the MBC3 clock ran on the host's wall clock, not the console's
+
+**Symptom.** A cartridge with a real-time clock keeps time at whatever multiple
+of real time the *emulator* happens to be running at, because it was never
+running on the console's clock at all — the registers were derived from
+`SystemTime::now()` at every read. Concretely, and all measured:
+
+* Fast-forward, or any headless/benchmark run, makes the in-game clock crawl:
+  the game sees the host's seconds while its own world runs 60× faster, so
+  Pokémon Gold's day/night cycle takes a real hour per emulated hour however
+  fast you play. Pause the emulator and the clock keeps running.
+* The sub-second phase does not exist, so nothing that measures *when* the next
+  tick lands can work.
+* The counters were re-derived from a `SystemTime`, so an out-of-range value a
+  game wrote (say 62 minutes) was normalised away instead of counting on.
+* `compute_difftime` **panicked** if the host clock predated the UNIX epoch —
+  an abort, under `panic = 'abort'`, on a machine with a wrong RTC battery.
+
+**Caught by.** ax6's [`rtc3test`](https://github.com/aaaaaa123456789/rtc3test)
+(all three sub-suites), which is *not* in our harness and is not in the
+conformance action either — it is judged by a reference screenshot, and neither
+the ROM nor the reference is ours to vendor. Measured through the
+GBEmulatorShootout's copies: **0/3 → 3/3**. Nothing in the in-repo suite caught
+any of it, and that is itself the finding: `testroms`, `battery` and `savestate`
+all exercise the RTC's *persistence* and none of them its *rate*.
+
+The three sub-suites map onto three separate defects:
+
+| `rtc3test` | what it measures | what was wrong |
+|---|---|---|
+| Basic tests | the tick interval, with the Game Boy's own timer, to 1000 ms ± 1 ms | the clock was not driven by emulated time at all |
+| Range tests | out-of-range register values counting on without carrying | registers were derived from a normalised time, so out-of-range values could not survive a tick |
+| Sub-second writes | which register writes restart the sub-second divider, to 1.5 ms | there was no divider |
+
+**Hardware behaviour.** The clock is on the *cartridge*: its own 32768 Hz
+crystal and its own coin cell, independent of the console. The five registers
+are **counters**, not a time — each is a binary counter of its own physical
+width (6/6/5/8+1 bits) that carries into the next only when it rolls over from
+its natural maximum (59, 59, 23), and simply wraps to zero **without carrying**
+when a value loaded above that maximum overflows the bits it has. The day
+counter is 9 bits and sets a sticky overflow flag (`DH` bit 7) past 511. `DH`
+bit 6 halts the clock, freezing the sub-second divider with it, so the clock
+resumes mid-second. Writing the *seconds* register restarts the divider;
+writing any other register does not. Pan Docs, "MBC3"
+(<https://gbdev.io/pandocs/MBC3.html>); `rtc3test`'s own test descriptions
+(<https://github.com/aaaaaa123456789/rtc3test/blob/master/tests.md>).
+
+**A documented "deviation" that turned out to be the correct behaviour.** This
+repo recorded "MBC3 latches on any write to `$6000-$7FFF`, not on the
+`$00`→`$01` sequence" as a known divergence and a candidate conformance check.
+It is not a divergence. CasualPokePlayer's `latch-rtc-test` writes five random
+register values and then **one** random byte to `$6000` per row, and its
+reference dump has every row reading back what was just written — so any single
+write latches, whatever its value. Implementing the strict `$00`→`$01` pair was
+tried here and turned that ROM's output into a screen of zeroes (`FAIL`,
+measured); reverting to any-write restored it. Pan Docs describes the idiom
+games use, not the decode. **Delete the check, do not add it.**
+
+**Carries into the tool.** Two things worth absorbing:
+
+1. `rtc3test` itself, as a screenshot check, with the caveat that its ROM is
+   menu-driven — the shootout's `rtc3test-1/2/3` are pre-selected variants.
+2. A property no ROM states but every RTC emulator gets wrong the same way:
+   **the cartridge clock must advance with emulated time, not host time.** An
+   adapter can be asked to run N emulated seconds as fast as it likes and then
+   report the clock; a wall-clock implementation reports nearly zero. That is a
+   check the telemetry adapter can make without any ROM at all, and it is the
+   single question that separates a real RTC from a `SystemTime` wrapper.
 
 ---
 

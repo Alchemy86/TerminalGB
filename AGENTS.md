@@ -1006,14 +1006,72 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   - *Undersized cartridge RAM does not mirror* (we allocate a full 8 KiB bank for RAM code
     0x01 = 2 KiB). Not fixed, deliberately — recorded as a conformance check, since mirroring
     is how FlashGBX recovers a cartridge's true save size.
-  - *MBC3 latches on any write to 0x6000-0x7FFF*, not on the 0x00→0x01 sequence. Not fixed;
-    harmless for real games, recorded as a conformance check.
+  - ~~*MBC3 latches on any write to 0x6000-0x7FFF*, not on the 0x00→0x01 sequence.~~
+    **Withdrawn — this was never a deviation.** See the MBC3 RTC section below; latching on
+    any single write is what hardware does, and CasualPokePlayer's `latch-rtc-test` is built
+    to prove it. Do not "fix" it and do not add the conformance check.
 - **A real cartridge is a reference oracle for saves** now that our format matches: play in
   the emulator, write the `.sav`, restore it to the cart with a dumper, read it back, compare.
   No emulator-only suite can make that check.
 - **Do not vendor FlashGBX's `db_DMG.json`** (GPL-3.0 compiled database, and our repo is
   MPL-2.0). Formats, header constants and hardware behaviour are facts and were adopted; no
   code was taken.
+
+## MBC3 real-time clock — `src/mbc/rtc.rs` (ax6 `rtc3test` 0/3 → 3/3)
+
+- **The clock is driven by EMULATED time, never by the host's.** `Rtc::tick` counts T-cycles
+  of *real console* time into a sub-second divider and ticks the counter chain once every
+  `CYCLES_PER_SECOND` (4,194,304) of them; `MemoryManagementUnit::do_cycle` calls it once per
+  instruction with `gputicks`, which is already divided by the CGB speed multiplier (the
+  crystal is on the cartridge and does not know the console changed gear). The old code
+  derived every register from `SystemTime::now()`, so the in-game clock ran at whatever
+  multiple of real time the emulator did — 60× too slow relative to the game headless, frozen
+  while paused — and there was no sub-second phase at all. It also **panicked** if the host
+  clock predated the UNIX epoch. **The host clock is now used for exactly one thing: the gap
+  between a save being written and reloaded.**
+- **The registers are counters, not a time.** Seconds/minutes are 6-bit, hours 5-bit, the day
+  counter 9-bit (day-low + `DH` bit 0). Each carries into the next **only** when it rolls over
+  from its natural maximum (59/59/23); a value loaded *above* that maximum counts up to the
+  top of its physical width and wraps to 0 **without carrying** — 62 minutes → 63 → 0, hours
+  untouched. One helper (`advance_counter`) implements this and is used by both the per-second
+  tick and the shutdown catch-up, so the two cannot disagree. Deriving from a normalised
+  `SystemTime` cannot express any of it, which is the whole of `rtc3test`'s "range tests".
+- **`DH` bit 6 (HALT) freezes the sub-second divider too**, so a clock stopped 600 ms into a
+  second and restarted later ticks 400 ms after the restart, not a full second
+  (`rtc3test` "RTC off/400"). **Writing the seconds register restarts the divider; writing any
+  other RTC register does not** ("Sub-second writes", measured to 1.5 ms). `DH` bit 7 is the
+  day-counter overflow flag past 511 days and is sticky.
+- **ANY single write to `$6000-$7FFF` latches — this is correct, not an approximation.**
+  The repo used to record the `$00`→`$01` sequence as the hardware rule and our behaviour as a
+  known deviation. It is the other way round: CasualPokePlayer's `latch-rtc-test` writes five
+  random register values and then **one random byte** to `$6000` per row, and its reference
+  dump has every row reading back what was just written. Implementing the strict pair was
+  tried here and turned that ROM into a screen of zeroes (FAIL, measured); any-write restored
+  it. Pan Docs describes the idiom games use, not the decode.
+- **Measured against `main` (`b386a15`), both directions:** ax6 `rtc3test` **0/3 → 3/3**
+  (shootout's `rtc3test-1/2/3`, `GB_MODEL=cgb`, 930/810/1560 frames); CasualPokePlayer
+  `latch-rtc-test`, `rtc-invalid-banks-test`, `ramg-mbc3-test` **3/3 before and after**;
+  `testroms` 33/35 "all results match the baseline"; Mooneye acceptance 55/75,
+  `emulator-only` 28/28 and `misc` 2/8 all unchanged; 607 lib tests, `savestate`, `battery`
+  8/8, `audiocapture` (`dmg_sound` 12/12) and the audio-perf gate (0.243 ms/frame, 68.9×)
+  all green.
+- **Cost: it is not free on a clock cartridge.** 400 M cycles headless, min of 3: a cartridge
+  **without** a clock 1.526 → 1.545 s (+1.3 %, at the level of code-layout noise — that path
+  is one bool test), a cartridge **with** one 1.410 → 1.484 s (**+5.2 %**, a `dyn` call plus
+  an add and a compare per instruction), still ~64× real time. Batching the call was
+  considered and rejected: the accumulator would be machine state needing serialisation, and
+  it would race with the seconds-write divider reset, for ~0.3 ms per emulated frame.
+- **None of this is in CI.** `rtc3test` is judged by a reference screenshot and neither the
+  ROM nor the reference is ours to vendor, so the in-repo gate is the unit tests in
+  `src/mbc/rtc.rs`, one per `rtc3test` sub-behaviour. If you touch the RTC, re-run `rtc3test`
+  by hand against a shootout checkout — the unit tests cover the behaviours but not the ROM.
+- **`savestate::FORMAT_VERSION` bumped** (the MBC3 block is now counters + latch + sub-second
+  divider instead of `rtc_ram`/`rtc_ram_latch`/`rtc_zero`). The sub-second divider **is**
+  machine state: drop it and every load moves the next tick by up to a second.
+- The `.sav` footer format is unchanged — 48 bytes, FlashGBX/VBA-M/BGB layout. On load
+  `Rtc::restore` masks the stored registers and advances them by `now - timestamp`; a halted
+  clock gains nothing and a timestamp from the future advances nothing rather than going
+  backwards.
 
 ## Save states
 

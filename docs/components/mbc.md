@@ -80,8 +80,9 @@ Each controller: **MBC0** (no banking, optional 8 KB RAM for `0x08`/`0x09`,
 [`mbc0.rs:4`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc0.rs#L4)); **MBC1**
 (5-bit + 2-bit bank registers, mode select, bank-0 remap;
 [`mbc1.rs:164–243`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L164)); **MBC2** (512-byte nibble RAM: the low nibble is
-stored, reads OR in `0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC via the host clock —
-see below; [`mbc3.rs`](../../src/mbc/mbc3.rs)); **MBC5** (9-bit ROM bank split across
+stored, reads OR in `0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC clocked by
+emulated time — see below; [`mbc3.rs`](../../src/mbc/mbc3.rs) +
+[`rtc.rs`](../../src/mbc/rtc.rs)); **MBC5** (9-bit ROM bank split across
 `0x2000` and `0x3000`; [`mbc5.rs:90`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L90)).
 
 **Battery saves** live in [`src/mbc/battery.rs`](../../src/mbc/battery.rs), shared by every controller. A `Battery`
@@ -118,9 +119,11 @@ an RTC; otherwise it is `Battery::none()` and persists nothing (the web and FFI 
   It is written **only for header types `0x0F` and `0x10`**, the MBC3 variants that really
   have a clock. Type `0x13` is RAM+BATTERY with no RTC and gets nothing extra. Detection on
   load is by size — `filesize - ramsize` of 48 (or 44, an older 32-bit-timestamp variant)
-  means a footer. On load `rtc_zero = timestamp - (S + 60·M + 3600·H + 86400·days)`, so the
-  clock advances by the wall time that passed while the emulator was closed — which is what
-  the coin cell does on hardware.
+  means a footer. On load the counters are restored as stored and then advanced by
+  `now - timestamp` seconds (`Rtc::restore`), so the clock gains exactly the wall time that
+  passed while the emulator was closed — which is what the coin cell does on hardware. A
+  halted clock gains nothing, and a timestamp from the future advances nothing rather than
+  running backwards.
 - **Legacy `<rom>.gbsave`** (8-byte **big-endian** RTC epoch anchor prepended to the RAM) is
   still **read** when no `.sav` exists and is migrated on the next flush; the old file is
   left on disk untouched as a backup and never written again. Nothing else in the ecosystem
@@ -157,11 +160,14 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   an **MBC3 regardless of `0x0147`**. An MBC1 or MBC5 game in the browser is mis-driven as
   MBC3, so its banking is wrong. This is the scout report's finding, confirmed at
   [`mbc/mod.rs:68`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L68).
-- **MBC3 RTC uses the host wall clock**, not tick counters. `rtc_zero` is a Unix-epoch
-  baseline and registers are derived from `SystemTime::now()`
-  ([`mbc3.rs:118`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc3.rs#L118)); it **panics if the system clock predates the
-  epoch** ([`mbc3.rs:156`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc3.rs#L156)). Sub-second precision and the exact
-  halt/latch cycle behaviour are approximate.
+- **MBC3 RTC is driven by emulated time** ([`rtc.rs`](../../src/mbc/rtc.rs)): a sub-second
+  divider counts T-cycles of *real console* time, ticking the counter chain once every
+  4,194,304 of them, and `MemoryManagementUnit::do_cycle` advances it once per instruction.
+  The host wall clock is used for exactly one thing — the gap between a save being written
+  and reloaded, which is what the coin cell covers. *(This used to derive every register from
+  `SystemTime::now()`, which made the in-game clock run at whatever multiple of real time the
+  emulator was running at, and panicked outright if the host clock predated the UNIX epoch.
+  ax6 `rtc3test` 0/3 → 3/3.)*
 - **MBC5 rumble is not implemented** — the motor-control range is an explicit no-op
   (`0x6000..=0x7FFF => { /* ? */ }`, [`mbc5.rs:101`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L101)); rumble carts
   still load (RAM/battery handled) but never rumble.
@@ -184,9 +190,12 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   behaviour we do *not* model is that an undersized SRAM chip **mirrors** across the
   0xA000-0xBFFF window — a ready-made conformance check (it is how FlashGBX recovers the true
   save size), recorded as test #17 below.
-- **MBC3 latches the RTC on any write to `0x6000-0x7FFF`**, not on the `0x00`→`0x01`
-  sequence hardware requires. Harmless for real games (consecutive stores differ by
-  microseconds), but a conformance check would catch it.
+- **MBC3 latches the RTC on any write to `0x6000-0x7FFF`** — and that is not an
+  approximation. This page used to record it as a deviation from the `0x00`→`0x01` sequence;
+  it is not. CasualPokePlayer's `latch-rtc-test` writes one *random* byte to `0x6000` per row
+  and its reference dump has every row reading back fresh values. Requiring the pair was tried
+  and turned that ROM's output into a screen of zeroes. Pan Docs describes the idiom games
+  use, not the decode.
 - **MBC3's ROM-bank register masks to 7 bits (`v & 0x7F`, 2 MiB).** MBC30 allows 8. Every
   real MBC30 cartridge is 2 MiB so this is currently invisible, but 4 MiB MBC30 ROM hacks
   exist and would mis-bank. (64 KiB MBC30 RAM *does* work — the RAM-bank register already
@@ -213,9 +222,18 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   ["MBC1M"](https://gbdev.io/pandocs/MBC1.html).
 - **MBC2's 4-bit RAM.** Only the low nibble of each of 512 bytes is real; reads force the
   high nibble to `1` ([`mbc2.rs:72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L72)).
-- **MBC3 RTC latch.** Writing `0x00` then `0x01` to `0x6000–0x7FFF` latches the current
-  time into readable registers ([`mbc3.rs:113`,`229`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc3.rs#L113)); the day
-  counter's carry bit sets at 512 days ([`mbc3.rs:144`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc3.rs#L144)).
+- **MBC3 RTC latch.** Any write to `0x6000–0x7FFF` snapshots the counters into the registers
+  the game reads (`Rtc::write_latch`, [`rtc.rs`](../../src/mbc/rtc.rs)); games write `0x00`
+  then `0x01`. The day counter's sticky carry bit sets past 511 days (`Rtc::advance_day`).
+- **MBC3 RTC counters are counters, not a time.** Seconds and minutes are 6-bit, hours 5-bit,
+  the day counter 9-bit. Each carries only when it rolls over from its natural maximum (59,
+  59, 23); a value loaded *above* that maximum counts on to the top of its physical width and
+  wraps to zero **without** carrying — so 62 minutes becomes 63 and then 0, leaving the hours
+  alone. `Rtc::advance_counter`.
+- **MBC3 RTC halt freezes the sub-second divider too** (`DH` bit 6), so a clock stopped 600 ms
+  into a second and restarted a while later ticks 400 ms after the restart, not a full second.
+- **Writing the seconds register restarts the sub-second divider**; writing any other RTC
+  register leaves it running.
 - **MBC5 9-bit bank.** `0x2000–0x2FFF` sets the low 8 bits, `0x3000–0x3FFF` bit 0 is the
   9th ([`mbc5.rs:93–98`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L93)).
 
@@ -239,8 +257,23 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
    `0x0000`; in mode 1 the RAM bank register selects among 4 RAM banks. *(Not covered.)*
 6. **MBC2 nibble RAM.** Writing `0xFF` to a RAM cell reads back as `0xFF` but only 4 bits
    are stored (upper nibble always 1). *(Not covered.)*
-7. **MBC3 RTC latch.** After a latch sequence, the seconds register reads a stable value
-   until the next latch. *(Not covered.)*
+7. **MBC3 RTC latch.** After a latch, the seconds register reads a stable value until the
+   next latch — and *any* single write to `0x6000–0x7FFF` is a latch. ✅ **Covered**
+   (`src/mbc/rtc.rs` unit tests `reads_come_from_the_latch_not_the_counters`,
+   `any_single_write_latches`; externally by CasualPokePlayer `latch-rtc-test`).
+   - *The clock ticks once per emulated second, not once per host second.* ✅ **Covered**
+     (`one_second_is_one_second_of_emulated_time`; externally by ax6 `rtc3test` "Basic tests",
+     which times it with the Game Boy's own timer to 1000 ms ± 1 ms).
+   - *Out-of-range RTC values count on without carrying*, and a carry *into* an out-of-range
+     counter still increments it. ✅ **Covered**
+     (`an_out_of_range_time_ticks_without_carrying`,
+     `an_overflowing_counter_wraps_without_carrying`,
+     `a_carry_into_an_out_of_range_counter_increments_it`; externally by `rtc3test` "Range
+     tests").
+   - *The sub-second divider restarts on a seconds write and on nothing else, and freezes
+     while the clock is halted.* ✅ **Covered**
+     (`only_a_seconds_write_resets_the_sub_second_divider`, `halting_freezes_the_divider_too`;
+     externally by `rtc3test` "Sub-second writes").
 8. **MBC5 9-bit ROM bank.** Selecting bank `0x100` (via `0x3000` bit 0) reads from ROM
    bank 256. *(Not covered.)*
 9. **Battery save survives an unclean exit.** A game writes cartridge RAM; the process dies
@@ -274,10 +307,13 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
     `0xA000`. *(Not covered — we allocate a full 8 KiB bank; see the honest-approximations
     note above.)*
 18. **MBC3 RTC footer round-trip.** After a save and reload the clock reads the stored time
-    plus the wall time that elapsed while the emulator was closed. *(Partly covered — the
-    48-byte layout, the 44-byte variant, the footer-only-for-clock-carts rule and a
-    write/read round trip are unit-tested in [`battery.rs`](../../src/mbc/battery.rs); no
-    battery-RTC cartridge is available to the end-to-end harness.)*
+    plus the wall time that elapsed while the emulator was closed. ✅ **Covered** — the
+    48-byte layout, the 44-byte variant and the footer-only-for-clock-carts rule are
+    unit-tested in [`battery.rs`](../../src/mbc/battery.rs), and the catch-up itself in
+    [`rtc.rs`](../../src/mbc/rtc.rs) (`the_clock_runs_while_the_emulator_is_shut`,
+    `a_halted_clock_does_not_move_while_the_emulator_is_shut`,
+    `a_long_catch_up_matches_ticking_second_by_second`). *(Still no battery-RTC cartridge in
+    the end-to-end harness.)*
 19. **An MBC1M multicart banks by bits 4-5, an ordinary MBC1 by bits 5-6.** Writing `$10`
     to BANK1 selects bank `$00` on a multicart and bank `$10` on a plain cart, and mode 1
     shows `$00/$10/$20/$30` versus `$00/$20/$40/$60` in `0x0000–0x3FFF`. ✅ **Covered**
@@ -296,7 +332,8 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 | **Mooneye `emulator-only/mbc1/`** (`bits_bank1`, `bits_ramg`, `rom_512kb`, `multicart_rom_8Mb`, …) | Every MBC1 register bit, sizes, multicart | Precisely targets §4/§5. All green — the whole `emulator-only` suite is **28/28** (`examples/mooneye_scout.rs`). |
 | **Mooneye `emulator-only/mbc2/`, `mbc5/`** | MBC2 nibble RAM + register bits; MBC5 9-bit bank | Banking maths errors. |
 | **Blargg `bits-bank1`** (repo screenshot: *failing*) | ROM-bank register bit behaviour | One of the repo's four known-failing screenshots — a real banking/bit gap. |
-| *(No dedicated MBC3-RTC ROM in the common suites)* | — | RTC accuracy would need a custom test given the wall-clock implementation. |
+| **ax6 [`rtc3test`](https://github.com/aaaaaa123456789/rtc3test)** (`rtc3test-1/2/3` in the shootout) | The MBC3 RTC end to end: tick interval to 1 ms, register ranges and invalid-value rollovers, sub-second write behaviour to 1.5 ms | A clock that is not driven by emulated time fails all three. **3/3** — not in CI (screenshot-judged, and neither the ROM nor its reference is ours to vendor). |
+| **CasualPokePlayer `latch-rtc-test`, `rtc-invalid-banks-test`, `ramg-mbc3-test`** | Latching on a single write; RAM-bank values `0x0D-0x0F`; the width of the RAM-enable gate | **3/3**, same caveat. `latch-rtc-test` is the authority for "any write latches". |
 
 The declared `retrio/gb-test-roms` submodule (Blargg) is **uninitialised**; Mooneye's
 `emulator-only/` MBC tests are the definitive suite here and are **not wired**. See

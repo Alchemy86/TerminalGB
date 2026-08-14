@@ -678,7 +678,11 @@ is Mooneye acceptance 13/66, Mealybug 0/71, SameSuite APU 2/61. Do not read "we 
 **Battery saves** are written to `<rom>.sav` — **raw cartridge RAM with no header**, the
 format every other emulator uses and the one real-cartridge dumpers produce, so saves can be
 carried in either direction. For MBC3 cartridges that have a real-time clock, the clock is
-appended to the same file as the standard 48-byte footer. `.srm` files are read too, as are
+appended to the same file as the standard 48-byte footer. That clock runs on **emulated**
+time — one second per second of Game Boy time, so it speeds up when you fast-forward and
+stops when you pause, exactly as the console's own clock would — and gains the real elapsed
+time while the emulator is closed, as the cartridge's coin cell does. It passes all three of
+ax6's [`rtc3test`](https://github.com/aaaaaa123456789/rtc3test) suites. `.srm` files are read too, as are
 saves from older builds of this emulator (`<rom>.gbsave`), which are migrated automatically
 with the old file left in place untouched as a backup. Saves are written **while the
 emulator runs** — about a second after the game finishes writing cartridge RAM — and

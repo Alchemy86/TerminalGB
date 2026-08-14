@@ -8,6 +8,7 @@ mod mbc1;
 mod mbc2;
 mod mbc3;
 mod mbc5;
+pub mod rtc;
 
 /// Index a cartridge image by bank number, for
 /// [`MemoryBankController::readrom_bank`]. Shared by every controller because
@@ -55,6 +56,22 @@ pub trait MemoryBankController: Send {
     /// window, so both `$0000` and `$4000` addressing work; reads past the end
     /// of the cartridge are open bus (`0xFF`), as in `readrom`.
     fn readrom_bank(&self, bank: usize, a: u16) -> u8;
+
+    /// True for a cartridge that carries a real-time clock (MBC3 header types
+    /// `0x0F`/`0x10`). The MMU caches this at boot so [`Self::rtc_tick`] is
+    /// only reached for the cartridges that need it.
+    fn has_rtc(&self) -> bool {
+        false
+    }
+
+    /// Advance the cartridge's own clock by `cycles` T-cycles of **real** time
+    /// (so the caller must divide by the CGB speed multiplier: the crystal on
+    /// the cartridge does not know the console changed gear).
+    ///
+    /// Called once per instruction rather than per memory access — the clock's
+    /// finest observable granularity is a whole second, and ax6's `rtc3test`
+    /// measures it to 1 ms. See [`rtc`].
+    fn rtc_tick(&mut self, _cycles: u32) {}
 
     /// Per-frame battery hook: writes cartridge RAM out shortly after the game
     /// stops touching it. This — not `Drop` — is what makes an in-game save

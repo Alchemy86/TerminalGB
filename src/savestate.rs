@@ -66,7 +66,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// ~0.93-frame HALT a CGB speed switch runs through) and `Gpu::stop_fill` (the
 /// blanked panel of a stopped CPU), both of which can be live at a frame
 /// boundary (`daid/stop_instr`, `daid/speed_switch_timing_*`).
-pub const FORMAT_VERSION: u16 = 8;
+/// v9: the MBC3 real-time clock became a counter chain driven by emulated time —
+/// the block is now the five counters, the latch snapshot and the **sub-second
+/// divider** (which is live machine state: drop it and every load moves the next
+/// tick by up to a second) instead of `rtc_ram`/`rtc_ram_latch`/`rtc_zero`
+/// (ax6 `rtc3test`).
+pub const FORMAT_VERSION: u16 = 9;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

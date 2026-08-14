@@ -57,7 +57,7 @@ length-prefixed (`u32` length + bytes) so a reader can skip what it can't use.
 | Serial, Timer, Keypad | register-visible state (serial callback is not state) |
 | PPU | mode/clock/line/LYC, LCDC + STAT flags, scroll/window, DMG + CGB palettes, VRAM (0x4000), OAM (0xA0), palette RAM, VRAM bank, framebuffer | `bgprio` omitted (rebuilt each scanline) |
 | APU block (len-prefixed) | present-flag + logical channel/envelope/length/sweep/LFSR/wave state; the `blip` buffers and host player are runtime plumbing, not state. Absent on `wasm32`. |
-| MBC block (len-prefixed) | banks, RAM-enable, cartridge RAM, and the **MBC3 RTC** (`rtc_ram`, `rtc_ram_latch`, `rtc_zero` epoch anchor). ROM is never stored. |
+| MBC block (len-prefixed) | banks, RAM-enable, cartridge RAM, and the **MBC3 RTC** (counters, latch snapshot, **sub-second divider**). ROM is never stored. |
 
 ### Safety rails
 

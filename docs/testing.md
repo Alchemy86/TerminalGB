@@ -325,7 +325,9 @@ checked in and never actually compared.
 Measured against the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264
 tests, with their ROMs, their reference images and their comparison method, this emulator
 scores **92/264**. Mooneye acceptance is **13/66**, Mealybug **0/71**, SameSuite APU **2/61**,
-SameSuite DMA **0/4**, MBC3 RTC **0/3**. "We pass Blargg" is true and is a narrow slice.
+SameSuite DMA **0/4**, MBC3 RTC **3/3** (was 0/3 — fixed 2026-08-14, see
+[`docs/conformance-notes.md`](conformance-notes.md); the rest of this paragraph is stale in
+our favour and is being corrected separately). "We pass Blargg" is true and is a narrow slice.
 
 ## A suite no public test ROM covers: battery-save durability
 

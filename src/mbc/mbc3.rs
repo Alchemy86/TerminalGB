@@ -1,9 +1,9 @@
-use crate::mbc::battery::{now_secs, Battery, RtcState};
+use crate::mbc::battery::{Battery, RtcState};
+use crate::mbc::rtc::Rtc;
 use crate::mbc::{ram_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
 use std::path;
-use std::time;
 
 pub struct MBC3 {
     rom: Vec<u8>,
@@ -14,9 +14,9 @@ pub struct MBC3 {
     selectrtc: bool,
     ram_on: bool,
     battery: Battery,
-    rtc_ram: [u8; 5],
-    rtc_ram_latch: [u8; 5],
-    rtc_zero: Option<u64>,
+    /// The cartridge clock, for header types `0x0F`/`0x10` only. See
+    /// [`crate::mbc::rtc`].
+    rtc: Option<Rtc>,
 }
 
 impl MBC3 {
@@ -55,7 +55,7 @@ impl MBC3 {
         battery: Battery,
     ) -> StrResult<MBC3> {
         let rtc = match subtype {
-            0x0F | 0x10 => Some(0),
+            0x0F | 0x10 => Some(Rtc::new()),
             _ => None,
         };
         let mut res = MBC3 {
@@ -67,9 +67,7 @@ impl MBC3 {
             selectrtc: false,
             ram_on: false,
             battery,
-            rtc_ram: [0u8; 5],
-            rtc_ram_latch: [0u8; 5],
-            rtc_zero: rtc,
+            rtc,
         };
         res.loadram().map(|_| res)
     }
@@ -80,17 +78,14 @@ impl MBC3 {
         }
         let loaded = self.battery.load()?;
         self.ram = loaded.ram;
-        if self.rtc_zero.is_some() {
+        if let Some(rtc) = self.rtc.as_mut() {
+            // A cartridge's clock keeps ticking while the console is off: the
+            // footer's timestamp is the anchor and the elapsed wall time
+            // carries the counters forward.
             if let Some(state) = loaded.rtc {
-                // A cartridge's clock keeps ticking while the console is off, so
-                // anchor it at the moment the sidecar was written and let the
-                // elapsed wall time carry it forward.
-                self.rtc_ram = state.regs;
-                self.rtc_ram_latch = state.latched;
-                self.rtc_zero =
-                    Some(state.timestamp.saturating_sub(rtc_regs_secs(&state.regs)));
+                rtc.restore(state);
             } else if let Some(anchor) = loaded.legacy_rtc_zero {
-                self.rtc_zero = Some(anchor);
+                rtc.restore_from_epoch(anchor);
             }
         }
         if !loaded.fresh {
@@ -102,80 +97,10 @@ impl MBC3 {
         Ok(())
     }
 
-    /// The RTC in the neutral shape the sidecar stores, brought up to date.
-    fn rtc_state(&mut self) -> Option<RtcState> {
-        self.rtc_zero?;
-        self.calc_rtc_reg();
-        Some(RtcState {
-            regs: self.rtc_ram,
-            latched: self.rtc_ram_latch,
-            timestamp: now_secs(),
-        })
+    /// The RTC in the neutral shape the sidecar stores.
+    fn rtc_state(&self) -> Option<RtcState> {
+        self.rtc.as_ref().map(|r| r.snapshot())
     }
-
-    fn latch_rtc_reg(&mut self) {
-        self.calc_rtc_reg();
-        self.rtc_ram_latch.clone_from_slice(&self.rtc_ram);
-    }
-
-    fn calc_rtc_reg(&mut self) {
-        // Do not modify regs when halted
-        if self.rtc_ram[4] & 0x40 == 0x40 {
-            return;
-        }
-
-        let tzero = match self.rtc_zero {
-            Some(t) => time::UNIX_EPOCH + time::Duration::from_secs(t),
-            None => return,
-        };
-
-        if self.compute_difftime() == self.rtc_zero {
-            // No time has passed. Do not alter registers
-            return;
-        }
-
-        let difftime = match time::SystemTime::now().duration_since(tzero) {
-            Ok(n) => n.as_secs(),
-            _ => 0,
-        };
-        self.rtc_ram[0] = (difftime % 60) as u8;
-        self.rtc_ram[1] = ((difftime / 60) % 60) as u8;
-        self.rtc_ram[2] = ((difftime / 3600) % 24) as u8;
-        let days = difftime / (3600 * 24);
-        self.rtc_ram[3] = days as u8;
-        self.rtc_ram[4] = (self.rtc_ram[4] & 0xFE) | (((days >> 8) & 0x01) as u8);
-        if days >= 512 {
-            self.rtc_ram[4] |= 0x80;
-            self.calc_rtc_zero();
-        }
-    }
-
-    fn compute_difftime(&self) -> Option<u64> {
-        self.rtc_zero?;
-        let mut difftime = match time::SystemTime::now().duration_since(time::UNIX_EPOCH)
-        {
-            Ok(t) => t.as_secs(),
-            Err(_) => {
-                panic!("System clock is set to a time before the unix epoch (1970-01-01)")
-            }
-        };
-        difftime -= self.rtc_ram[0] as u64;
-        difftime -= (self.rtc_ram[1] as u64) * 60;
-        difftime -= (self.rtc_ram[2] as u64) * 3600;
-        let days = ((self.rtc_ram[4] as u64 & 0x1) << 8) | (self.rtc_ram[3] as u64);
-        difftime -= days * 3600 * 24;
-        Some(difftime)
-    }
-
-    fn calc_rtc_zero(&mut self) {
-        self.rtc_zero = self.compute_difftime();
-    }
-}
-
-/// Seconds represented by the five RTC registers (s, m, h, day-lo, day-hi).
-fn rtc_regs_secs(regs: &[u8; 5]) -> u64 {
-    let days = ((regs[4] as u64 & 0x1) << 8) | regs[3] as u64;
-    regs[0] as u64 + regs[1] as u64 * 60 + regs[2] as u64 * 3600 + days * 3600 * 24
 }
 
 impl Drop for MBC3 {
@@ -206,8 +131,11 @@ impl MemoryBankController for MBC3 {
         if !self.selectrtc && self.rambank < self.rambanks {
             let idx = (self.rambank * 0x2000) | ((a as usize) & 0x1FFF);
             *self.ram.get(idx).unwrap_or(&0xFF)
-        } else if self.selectrtc && self.rambank < 5 {
-            self.rtc_ram_latch[self.rambank]
+        } else if self.selectrtc {
+            match self.rtc {
+                Some(ref rtc) if self.rambank < 5 => rtc.read(self.rambank),
+                _ => 0xFF,
+            }
         } else {
             0xFF
         }
@@ -225,8 +153,16 @@ impl MemoryBankController for MBC3 {
                 self.selectrtc = v & 0x8 == 0x8;
                 self.rambank = (v & 0x7) as usize;
             }
-            0x6000..=0x7FFF => self.latch_rtc_reg(),
-            _ => panic!("Could not write to {:04X} (MBC3)", a),
+            0x6000..=0x7FFF => {
+                if let Some(ref mut rtc) = self.rtc {
+                    rtc.write_latch(v);
+                }
+            }
+            // Unreachable through the MMU, which only routes $0000-$7FFF here;
+            // ignoring it is what hardware does with an address the mapper does
+            // not decode, and a `panic!` on a guest-supplied address is a
+            // process abort under `panic = 'abort'`.
+            _ => {}
         }
     }
     fn writeram(&mut self, a: u16, v: u8) {
@@ -241,15 +177,8 @@ impl MemoryBankController for MBC3 {
                 self.battery.touch();
             }
         } else if self.selectrtc && self.rambank < 5 {
-            self.calc_rtc_reg();
-            let vmask = match self.rambank {
-                0 | 1 => 0x3F,
-                2 => 0x1F,
-                4 => 0xC1,
-                _ => 0xFF,
-            };
-            self.rtc_ram[self.rambank] = v & vmask;
-            self.calc_rtc_zero();
+            let Some(ref mut rtc) = self.rtc else { return };
+            rtc.write(self.rambank, v);
             // Setting the clock is battery-backed too: a game that sets the
             // date (Pokémon Gold's day/night) must find it again next launch.
             self.battery.touch();
@@ -260,9 +189,19 @@ impl MemoryBankController for MBC3 {
         self.rombank
     }
 
+    fn has_rtc(&self) -> bool {
+        self.rtc.is_some()
+    }
+
+    fn rtc_tick(&mut self, cycles: u32) {
+        if let Some(ref mut rtc) = self.rtc {
+            rtc.tick(cycles);
+        }
+    }
+
     fn autosave(&mut self) {
-        // `rtc_state` reads the host clock and re-derives the RTC registers;
-        // only worth doing on frames where a write is actually pending.
+        // `rtc_state` stamps the host clock; only worth doing on frames where a
+        // write is actually pending.
         if !self.battery.is_active() || !self.battery.is_dirty() {
             return;
         }
@@ -296,11 +235,13 @@ impl MemoryBankController for MBC3 {
         w.usize(self.rambank);
         w.bool(self.selectrtc);
         w.bool(self.ram_on);
-        w.bytes(&self.rtc_ram);
-        w.bytes(&self.rtc_ram_latch);
-        // rtc_zero is the UNIX-epoch anchor for the real-time clock; capturing
-        // it (and the latch) is what keeps the RTC coherent across a load.
-        w.opt_u64(self.rtc_zero);
+        // The clock: counters, latch snapshot, sub-second divider and latch
+        // sequence. All of it is live machine state — dropping the divider
+        // would move the next tick by up to a second on every load.
+        w.bool(self.rtc.is_some());
+        if let Some(ref rtc) = self.rtc {
+            rtc.save_state(w);
+        }
         w.blob(&self.ram);
     }
 
@@ -312,9 +253,15 @@ impl MemoryBankController for MBC3 {
         self.rambank = r.usize()?;
         self.selectrtc = r.bool()?;
         self.ram_on = r.bool()?;
-        r.fill(&mut self.rtc_ram)?;
-        r.fill(&mut self.rtc_ram_latch)?;
-        self.rtc_zero = r.opt_u64()?;
+        if r.bool()? {
+            let mut rtc = Rtc::new();
+            rtc.load_state(r)?;
+            // A state from an RTC cartridge only makes sense in one; the header
+            // check upstream already refuses a different game.
+            if self.rtc.is_some() {
+                self.rtc = Some(rtc);
+            }
+        }
         let ram = r.blob()?;
         if ram.len() != self.ram.len() {
             return Err(crate::savestate::StateError::BadField("mbc3 ram size"));

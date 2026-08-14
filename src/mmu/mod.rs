@@ -100,6 +100,11 @@ pub struct MemoryManagementUnit<'a> {
     /// fault is a fact about *this session's* host, not about the emulated
     /// machine, so it is deliberately not serialised.
     fault: Option<String>,
+    /// The cartridge carries a real-time clock, so it has to be advanced every
+    /// instruction. Cached from the MBC at boot (it is a property of the
+    /// cartridge header, never of the run) so the common case is one bool test
+    /// instead of a virtual call.
+    cart_rtc: bool,
 }
 
 fn fill_random(slice: &mut [u8], start: u32) {
@@ -125,6 +130,7 @@ impl<'a> MemoryManagementUnit<'a> {
         file: Option<path::PathBuf>,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mmu_mbc = mbc::get_mbc(data, file)?;
+        let cart_rtc = mmu_mbc.has_rtc();
         let serial = Serial::default();
         let mut res = MemoryManagementUnit {
             wram: [0; WRAM_SIZE],
@@ -153,6 +159,7 @@ impl<'a> MemoryManagementUnit<'a> {
             bus_tick_enabled: false,
             bus_ticked: 0,
             fault: None,
+            cart_rtc,
         };
         fill_random(&mut res.wram, 42);
         Ok(res)
@@ -477,6 +484,13 @@ impl<'a> MemoryManagementUnit<'a> {
 
         self.intf |= self.serial.interrupt;
         self.serial.interrupt = 0;
+
+        // The cartridge's own crystal. `gputicks` is real time — it is already
+        // divided by the CGB speed multiplier — which is what the clock on the
+        // cartridge runs on. See [`crate::mbc::rtc`].
+        if self.cart_rtc {
+            self.mbc.rtc_tick(gputicks);
+        }
 
         gputicks
     }
