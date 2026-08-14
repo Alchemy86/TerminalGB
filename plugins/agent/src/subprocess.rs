@@ -24,7 +24,7 @@
 //!
 //! [`CommandDriver::submit`] spawns a worker **thread** which spawns the child;
 //! the emulator thread only ever does a `try_recv`. A child that hangs is
-//! killed by the host's timeout ([`crate::agent::governor::Budget::call_timeout`])
+//! killed by the host's timeout ([`crate::governor::Budget::call_timeout`])
 //! through [`Driver::cancel`], and the orphaned worker's result is discarded.
 //!
 //! # One process per decision
@@ -302,7 +302,7 @@ mod tests {
                 // The detail exists for the log...
                 assert!(e.detail().contains("exited"), "{}", e.detail());
                 // ...and the panel only ever sees the category.
-                assert_eq!(e.category(), crate::agent::commentary::Problem::Crashed);
+                assert_eq!(e.category(), crate::commentary::Problem::Crashed);
             }
             other => panic!("{other:?}"),
         }

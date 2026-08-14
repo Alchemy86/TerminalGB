@@ -622,7 +622,7 @@ fn decode_received_party(rx: &[u8]) -> Option<Party> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::gen1::romdata::Stats;
+    use crate::romdata::Stats;
 
     fn test_mon(species: u8) -> Mon {
         Mon {

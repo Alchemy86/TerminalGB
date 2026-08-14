@@ -46,7 +46,7 @@
 //!
 //! It is also unnecessary. The player's console is the single authority and it
 //! maintains all of it in memory this plugin can already read
-//! ([`Capability::READ_MEMORY`](crate::plugin::Capability::READ_MEMORY)), at
+//! ([`Capability::READ_MEMORY`](gameboy_plugin_api::Capability::READ_MEMORY)), at
 //! `wEnemyMon` — "enemy" being *us*, from the host's point of view. So the
 //! partner **looks up** the state it needs rather than recomputing it. That is
 //! not a faithful two-console emulation and this module does not claim to be
@@ -56,7 +56,7 @@
 //!
 //! # Where these addresses come from
 //!
-//! The same derivation as [`crate::trainer::gen1`]: `pret/pokered`'s
+//! The same derivation as [`gameboy_plugin_trainer::gen1`]: `pret/pokered`'s
 //! `ram/wram.asm` and `macros/ram.asm`, cross-checked against this cartridge.
 //! `wEnemyMons` was additionally **located by measurement, not by faith** — the
 //! Colosseum instrument searched WRAM for a `party_struct` matching the active
@@ -64,9 +64,9 @@
 //! `$D8A4`. [`Host::party_hp`] re-checks the species at run time anyway, so a
 //! cartridge that disagrees is declined rather than misread.
 
-use crate::plugin::Machine;
-use crate::trainer::gen1::addr as trainer_addr;
-use crate::trainer::Game;
+use gameboy_plugin_api::Machine;
+use gameboy_plugin_trainer::gen1::addr as trainer_addr;
+use gameboy_plugin_trainer::Game;
 
 /// `wLinkState` — the game's own statement of what the link is doing.
 ///
@@ -175,23 +175,23 @@ pub struct NoHost;
 impl Host for NoHost {}
 
 /// [`Host`] backed by the real machine, for a cartridge whose RAM map we know.
-pub struct MachineHost<'x, 'm, 'a> {
-    machine: &'x mut Machine<'m, 'a>,
+pub struct MachineHost<'x, 'm> {
+    machine: &'x mut Machine<'m>,
     /// Species of each slot in the party we put on the wire, used to confirm
     /// that `wEnemyMons` really is the host's copy of it before its HP is
     /// trusted.
     offered_species: &'x [u8],
 }
 
-impl<'x, 'm, 'a> MachineHost<'x, 'm, 'a> {
-    /// `None` unless this is a cartridge [`crate::trainer::Game::detect`]
+impl<'x, 'm> MachineHost<'x, 'm> {
+    /// `None` unless this is a cartridge [`gameboy_plugin_trainer::Game::detect`]
     /// recognises — the addresses above are Red/Blue's and mean nothing
     /// elsewhere.
     pub fn new(
-        machine: &'x mut Machine<'m, 'a>,
+        machine: &'x mut Machine<'m>,
         game: Option<Game>,
         offered_species: &'x [u8],
-    ) -> Option<MachineHost<'x, 'm, 'a>> {
+    ) -> Option<MachineHost<'x, 'm>> {
         game?;
         Some(MachineHost {
             machine,
@@ -200,7 +200,7 @@ impl<'x, 'm, 'a> MachineHost<'x, 'm, 'a> {
     }
 }
 
-impl Host for MachineHost<'_, '_, '_> {
+impl Host for MachineHost<'_, '_> {
     fn link_state(&mut self) -> Option<u8> {
         self.machine.peek(LINK_STATE)
     }

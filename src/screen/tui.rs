@@ -31,6 +31,7 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
+#[cfg(feature = "plugin-agent")]
 use crate::screen::agent_view as av;
 use crate::screen::config::{
     CellScale, Config, Palette, Recent, RenderPath, ShinyAlert, VolumeState,
@@ -39,12 +40,37 @@ use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
 use crate::screen::termcaps;
 use crate::screen::termcost;
+#[cfg(feature = "plugin-trainer")]
 use crate::screen::trainer_view as tv;
 use crate::sound::output_volume;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
-use crate::trainer::gen1::BattleKind;
-use crate::trainer::TrainerPlugin;
+#[cfg(feature = "plugin-trainer")]
+use gameboy_plugin_trainer::gen1::BattleKind;
+#[cfg(feature = "plugin-trainer")]
+use gameboy_plugin_trainer::TrainerPlugin;
+
+/// Stand-ins for the two panel modules when their plugin is not built in.
+///
+/// Only the handful of items the *always-compiled* layout code asks for, and
+/// each answers "there is no such panel" — which is exactly true, and is also
+/// what the layout would conclude anyway, since nothing can switch a panel on
+/// when its plugin is absent.
+#[cfg(not(feature = "plugin-trainer"))]
+mod tv {
+    /// No panel exists, so no width is ever wide enough for one.
+    pub const PANEL_MIN_W: u16 = u16::MAX;
+}
+
+#[cfg(not(feature = "plugin-agent"))]
+mod av {
+    use ratatui::layout::Rect;
+    pub const PANEL_H: u16 = 0;
+    /// All of the area is the game; there is no panel to split off.
+    pub fn split(area: Rect, _rows: u16) -> (Rect, Option<Rect>) {
+        (area, None)
+    }
+}
 use crate::upscale::Upscaler;
 use crate::video::{self, Source as VideoSource, VideoOut};
 
@@ -136,6 +162,7 @@ const STATS_W: u16 = 22;
 
 /// Cells the game picture keeps whatever else is on screen. The trainer panel
 /// shrinks below its design width rather than take these.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 const MIN_GAME_W: u16 = 20;
 const STATS_H: u16 = 15;
 /// A held Game Boy key auto-releases this long after its last press/repeat.
@@ -684,6 +711,7 @@ enum Overlay {
 }
 
 /// The live game, present only while a ROM is loaded.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 struct Session {
     gb: Gameboy,
     entry: RomEntry,
@@ -877,6 +905,7 @@ impl Session {
     }
 }
 
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 struct App {
     config: Config,
     recent: Recent,
@@ -1228,13 +1257,15 @@ impl App {
                 // Plugins were attached by `load_session`; the machine owns the
                 // single host (see `crate::plugin`). All the frontend does here
                 // is tell the trainer view whether its panel is on screen.
+                #[cfg(feature = "plugin-trainer")]
                 if let Some(t) = gb.plugin_mut::<TrainerPlugin>() {
                     t.set_active(self.trainer);
                 }
                 self.trainer_sel = 0;
                 // If an agent is driving, its commentary is the show — open the
                 // panel without being asked. `A` closes it again.
-                if gb.plugin::<crate::agent::AgentPlugin>().is_some() {
+                #[cfg(feature = "plugin-agent")]
+                if gb.plugin::<gameboy_plugin_agent::AgentPlugin>().is_some() {
                     self.agent_panel = true;
                 }
                 #[cfg(feature = "audio")]
@@ -1582,6 +1613,7 @@ impl App {
     /// the moment the captain is looking at the game and not at a panel.
     ///
     /// The whole cost when nothing is happening is comparing two `u64`s.
+    #[cfg(feature = "plugin-trainer")]
     fn announce_new_encounter(&mut self) {
         let last = self.last_encounter_seq;
         let Some(session) = self.session.as_ref() else {
@@ -1615,9 +1647,16 @@ impl App {
         self.set_toast(msg);
     }
 
+    #[cfg(not(feature = "plugin-trainer"))]
+    /// No trainer plugin is built in, so there is no encounter to announce.
+    fn announce_new_encounter(&mut self) {}
+
     /// The wild encounter to draw a banner for this frame, if any. `None` in the
     /// overworld, in a trainer battle, and when the alert is configured off.
-    fn banner_encounter(&self) -> Option<&crate::trainer::encounter::WildEncounter> {
+    #[cfg(feature = "plugin-trainer")]
+    fn banner_encounter(
+        &self,
+    ) -> Option<&gameboy_plugin_trainer::encounter::WildEncounter> {
         if !self.shiny_alert.shows_banner() {
             return None;
         }
@@ -1631,6 +1670,7 @@ impl App {
     /// `0` no banner, `1` an ordinary encounter, `2` a shiny-if-traded one.
     /// Part of [`App::ui_signature`] because the row changes the layout, and a
     /// layout change means every terminal image may have been painted over.
+    #[cfg(feature = "plugin-trainer")]
     fn banner_state(&self) -> u8 {
         match self.banner_encounter() {
             None => 0,
@@ -1639,8 +1679,15 @@ impl App {
         }
     }
 
+    #[cfg(not(feature = "plugin-trainer"))]
+    /// Without the trainer plugin there is never a banner row.
+    fn banner_state(&self) -> u8 {
+        0
+    }
+
     /// Draw the encounter banner into a row of its own. Never over the picture,
     /// for the reason given on [`App::render_stats`].
+    #[cfg(feature = "plugin-trainer")]
     fn render_encounter_banner(&self, f: &mut Frame<'_>, area: Rect) {
         let Some(enc) = self.banner_encounter() else {
             return;
@@ -1655,6 +1702,9 @@ impl App {
             row,
         );
     }
+
+    #[cfg(not(feature = "plugin-trainer"))]
+    fn render_encounter_banner(&self, _f: &mut Frame<'_>, _area: Rect) {}
 
     /// Start or stop the raw video stream while the game runs (`v`).
     ///
@@ -2138,26 +2188,40 @@ impl App {
             // health without reading the commentary panel — and so the claim
             // that a thinking agent costs the emulator nothing is checkable
             // from the same record that carries `speed_pct`.
-            agent: s.gb.plugin::<crate::agent::AgentPlugin>().map(|p| {
-                let g = p.governor();
-                telemetry::AgentSample {
-                    phase: match p.phase() {
-                        crate::agent::PhaseView::Settling => "settling",
-                        crate::agent::PhaseView::Thinking => "thinking",
-                        crate::agent::PhaseView::Executing => "executing",
-                        crate::agent::PhaseView::Stopped => "stopped",
-                    },
-                    decisions: p.decisions(),
-                    calls: g.calls(),
-                    failures: g.failures(),
-                    tokens: g.tokens(),
-                    usd: g.usd(),
-                    budget_used: g.used_fraction(),
-                    halted: g.halted().map(|h| h.label()).unwrap_or(""),
-                }
-            }),
+            agent: Self::agent_sample(s),
         };
         self.telemetry.frame(&ctx, &sample);
+    }
+
+    /// The agent plugin's telemetry, or `None` when it is not attached — and
+    /// likewise `None` in a build without the plugin, which is the same record
+    /// a run with no agent produces. The schema does not change with the
+    /// build; only the field's occupancy does.
+    #[cfg(feature = "plugin-agent")]
+    fn agent_sample(s: &Session) -> Option<telemetry::AgentSample> {
+        s.gb.plugin::<gameboy_plugin_agent::AgentPlugin>().map(|p| {
+            let g = p.governor();
+            telemetry::AgentSample {
+                phase: match p.phase() {
+                    gameboy_plugin_agent::PhaseView::Settling => "settling",
+                    gameboy_plugin_agent::PhaseView::Thinking => "thinking",
+                    gameboy_plugin_agent::PhaseView::Executing => "executing",
+                    gameboy_plugin_agent::PhaseView::Stopped => "stopped",
+                },
+                decisions: p.decisions(),
+                calls: g.calls(),
+                failures: g.failures(),
+                tokens: g.tokens(),
+                usd: g.usd(),
+                budget_used: g.used_fraction(),
+                halted: g.halted().map(|h| h.label()).unwrap_or(""),
+            }
+        })
+    }
+
+    #[cfg(not(feature = "plugin-agent"))]
+    fn agent_sample(_s: &Session) -> Option<telemetry::AgentSample> {
+        None
     }
 
     fn release_expired(&mut self) -> bool {
@@ -2554,11 +2618,14 @@ impl App {
     /// the plugin then still waits for the game to be somewhere a battle can
     /// start — so this is "arm it", not "force it". Both outcomes are toasted,
     /// because a control that silently does nothing is worse than no control.
+    #[cfg(feature = "plugin-battle-control")]
     fn fire_battle(&mut self) {
         let Some(s) = self.session.as_mut() else {
             return;
         };
-        let Some(p) = s.gb.plugin_mut::<crate::plugin::battle::BattlePlugin>() else {
+        let Some(p) =
+            s.gb.plugin_mut::<gameboy_plugin_battle_control::BattlePlugin>()
+        else {
             self.set_toast(
                 "no battle plugin — add `plugins = gen1-battle` to config.toml",
             );
@@ -2575,12 +2642,22 @@ impl App {
         self.set_toast(msg);
     }
 
+    #[cfg(not(feature = "plugin-battle-control"))]
+    fn fire_battle(&mut self) {
+        self.set_toast(
+            "battle control is not built in — rebuild with --features plugin-battle-control",
+        );
+    }
+
     /// Cycle which preset `B` will fire.
+    #[cfg(feature = "plugin-battle-control")]
     fn next_battle_preset(&mut self) {
         let Some(s) = self.session.as_mut() else {
             return;
         };
-        let Some(p) = s.gb.plugin_mut::<crate::plugin::battle::BattlePlugin>() else {
+        let Some(p) =
+            s.gb.plugin_mut::<gameboy_plugin_battle_control::BattlePlugin>()
+        else {
             self.set_toast(
                 "no battle plugin — add `plugins = gen1-battle` to config.toml",
             );
@@ -2591,6 +2668,13 @@ impl App {
             None => "no battle presets".to_string(),
         };
         self.set_toast(msg);
+    }
+
+    #[cfg(not(feature = "plugin-battle-control"))]
+    fn next_battle_preset(&mut self) {
+        self.set_toast(
+            "battle control is not built in — rebuild with --features plugin-battle-control",
+        );
     }
 
     fn map_button(&self, code: &KeyCode) -> Option<KeypadKey> {
@@ -2714,6 +2798,7 @@ impl App {
 
     /// Switch the trainer panel on or off, telling the plugin so that a hidden
     /// panel costs nothing.
+    #[cfg(feature = "plugin-trainer")]
     fn toggle_trainer(&mut self) {
         self.trainer = !self.trainer;
         let on = self.trainer;
@@ -2735,15 +2820,25 @@ impl App {
         }
     }
 
+    #[cfg(not(feature = "plugin-trainer"))]
+    /// The trainer view is not built in. Say so rather than doing nothing:
+    /// a key that silently fails reads as a bug.
+    fn toggle_trainer(&mut self) {
+        self.set_toast(
+            "trainer view is not built in — rebuild with --features plugin-trainer",
+        );
+    }
+
     /// Hand the controller between the agent and the human (`G`).
     ///
     /// The game keeps running either way — switching the agent off does not
     /// pause anything, it just stops something else pressing the buttons.
+    #[cfg(feature = "plugin-agent")]
     fn toggle_agent(&mut self) {
         let Some(s) = self.session.as_mut() else {
             return;
         };
-        let Some(p) = s.gb.plugin_mut::<crate::agent::AgentPlugin>() else {
+        let Some(p) = s.gb.plugin_mut::<gameboy_plugin_agent::AgentPlugin>() else {
             self.set_toast("No agent is attached".to_string());
             return;
         };
@@ -2759,11 +2854,17 @@ impl App {
         );
     }
 
+    #[cfg(not(feature = "plugin-agent"))]
+    fn toggle_agent(&mut self) {
+        self.set_toast("agent is not built in — rebuild with --features plugin-agent");
+    }
+
     /// Walk the focus ring, which during a battle **starts at the opponent**
     /// and then runs through the party — so the opponent's full stat block is
     /// one `Tab` + `d` away, and the team you would switch to is the next few.
     /// Before this the ring was the party alone and the opponent's numbers were
     /// unreachable, which is most of what a tracker is for.
+    #[cfg(feature = "plugin-trainer")]
     fn cycle_trainer_selection(&mut self, delta: isize) {
         let n = self
             .session
@@ -2777,6 +2878,9 @@ impl App {
         let cur = self.trainer_sel.min(n - 1) as isize;
         self.trainer_sel = (cur + delta).rem_euclid(n as isize) as usize;
     }
+
+    #[cfg(not(feature = "plugin-trainer"))]
+    fn cycle_trainer_selection(&mut self, _delta: isize) {}
 
     fn set_toast(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), Instant::now()));
@@ -3133,6 +3237,7 @@ impl App {
     /// [`crate::screen::agent_view`]). It draws whatever the plugin has to
     /// say; with no agent attached it explains that, rather than being an
     /// empty box nobody can interpret.
+    #[cfg(feature = "plugin-agent")]
     fn render_agent(&mut self, f: &mut Frame<'_>, area: Rect) {
         if area.width < av::MIN_W || area.height < av::MIN_H {
             return;
@@ -3148,7 +3253,7 @@ impl App {
         let body: Vec<Line<'static>> = match self
             .session
             .as_ref()
-            .and_then(|s| s.gb.plugin::<crate::agent::AgentPlugin>())
+            .and_then(|s| s.gb.plugin::<gameboy_plugin_agent::AgentPlugin>())
         {
             Some(p) => match p.refusal() {
                 Some(why) => vec![Line::from(Span::styled(
@@ -3171,6 +3276,9 @@ impl App {
         );
     }
 
+    #[cfg(not(feature = "plugin-agent"))]
+    fn render_agent(&mut self, _f: &mut Frame<'_>, _area: Rect) {}
+
     /// How many rows the trainer panel would like, so `compose_block` can give
     /// the block a height that suits both halves.
     ///
@@ -3178,6 +3286,7 @@ impl App {
     /// a few dozen small allocations once per **displayed** frame — the price of
     /// the count being the same thing that is drawn rather than a second
     /// estimate that can drift from it.
+    #[cfg(feature = "plugin-trainer")]
     fn trainer_panel_rows(&self, panel_w: u16) -> u16 {
         let Some(p) = self
             .session
@@ -3210,6 +3319,11 @@ impl App {
                 && panel_w.saturating_sub(2) >= tv::TEAM_MIN_W,
         ) * tv::TEAM_ROWS;
         2 + tv::HEADER_ROWS + sprite + team + lines
+    }
+
+    #[cfg(not(feature = "plugin-trainer"))]
+    fn trainer_panel_rows(&self, _panel_w: u16) -> u16 {
+        0
     }
 
     /// Take the pending full-repaint request, if any. See [`App::full_redraw`].
@@ -3366,6 +3480,7 @@ impl App {
     /// (see [`crate::screen::trainer_view::layout`]): the trainer header, the
     /// focused Pokémon's sprite — a **second terminal image**, with its own id —
     /// and the party list or detail view.
+    #[cfg(feature = "plugin-trainer")]
     fn render_trainer(&mut self, f: &mut Frame<'_>, area: Rect) {
         if area.width < tv::PANEL_MIN_W || area.height < 4 {
             return;
@@ -3446,7 +3561,7 @@ impl App {
         // with a roster that read back, and granted only if the panel has the
         // width and the spare rows. Where it is refused the roster still shows
         // — as the marker line inside `[ OPPONENT ]`.
-        let team: Vec<crate::trainer::TeamMon> =
+        let team: Vec<gameboy_plugin_trainer::TeamMon> =
             if plugin.state().battle == BattleKind::Trainer {
                 plugin.state().enemy_team.clone()
             } else {
@@ -3577,6 +3692,9 @@ impl App {
             );
         }
     }
+
+    #[cfg(not(feature = "plugin-trainer"))]
+    fn render_trainer(&mut self, _f: &mut Frame<'_>, _area: Rect) {}
 
     /// The live stats panel (`t`), showing what the telemetry stream carries:
     /// displayed and emulated fps, emulated speed as a percentage of real
@@ -4362,7 +4480,7 @@ fn render_quit(f: &mut Frame<'_>) {
 /// transparent** so the panel shows through instead of a pasted-on white box.
 ///
 /// Which pixels count as the page is
-/// [`sprite::background_mask`](crate::trainer::sprite::background_mask): a
+/// [`sprite::background_mask`](gameboy_plugin_trainer::sprite::background_mask): a
 /// flood fill from the border, *not* a colour key — Gen 1 art uses the lightest
 /// shade inside the figure too, and keying on it punches holes through the
 /// middle of the Pokémon.
@@ -4371,8 +4489,9 @@ fn render_quit(f: &mut Frame<'_>) {
 /// That is what makes the fallback safe: a transport that drops alpha (the
 /// `GB_TERM_IMAGE=rgb` escape hatch, or a truecolour PNG) renders exactly the
 /// opaque picture it renders today rather than a hole full of undefined colour.
+#[cfg(feature = "plugin-trainer")]
 fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut Vec<u8>) {
-    let bg = crate::trainer::sprite::background_mask(pixels, w, h);
+    let bg = gameboy_plugin_trainer::sprite::background_mask(pixels, w, h);
     out.clear();
     out.reserve(pixels.len() * 4);
     for (i, &px) in pixels.iter().enumerate() {
@@ -4493,6 +4612,7 @@ fn compose_block(
 /// `PANEL_MIN_W` is a floor rather than a proportion, because a panel narrower
 /// than that carries less than it costs; below it `render_trainer` declines and
 /// the width goes back to the picture.
+#[cfg(feature = "plugin-trainer")]
 fn trainer_panel_width(total: u16) -> u16 {
     // Two fifths, so the two halves keep their proportions as the window grows
     // instead of the panel staying a fixed column count beside a picture that
@@ -4506,6 +4626,12 @@ fn trainer_panel_width(total: u16) -> u16 {
     }
 }
 
+#[cfg(not(feature = "plugin-trainer"))]
+/// Without the trainer plugin the panel does not exist, so it takes no width.
+fn trainer_panel_width(_total: u16) -> u16 {
+    0
+}
+
 /// Place one of the trainer panel's images over a cell rectangle and mark the
 /// cells it covers `skip`, returning the rectangle it actually took.
 ///
@@ -4516,6 +4642,7 @@ fn trainer_panel_width(total: u16) -> u16 {
 /// re-transmit when the UI may have painted over it, and never let text share a
 /// cell with a picture.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 fn place_panel_image(
     f: &mut Frame<'_>,
     image: Option<&mut TermImage>,
@@ -4576,11 +4703,13 @@ fn place_panel_image(
 /// One cell of the team strip, in pixels. The largest Gen 1 picture is 56×56,
 /// so every roster slot gets the same box whatever its occupant's size and the
 /// row does not jitter as the trainer's team changes.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 const TEAM_CELL_PX: usize = 56;
 
 /// Alpha applied to a fainted team member, so it reads as *out* rather than as
 /// missing. Both protocols alpha-blend, so this is a ghost over the panel
 /// rather than a colour we had to guess at.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 const FAINTED_ALPHA: u8 = 80;
 
 /// Compose the opposing trainer's roster into **one** wide RGBA strip:
@@ -4596,9 +4725,10 @@ const FAINTED_ALPHA: u8 = 80;
 ///
 /// Returns `None` when nothing could be drawn, which the caller reports as the
 /// marker line rather than as an empty band.
+#[cfg(feature = "plugin-trainer")]
 fn compose_team_strip(
     plugin: &mut TrainerPlugin,
-    team: &[crate::trainer::TeamMon],
+    team: &[gameboy_plugin_trainer::TeamMon],
     palette: Palette,
     out: &mut Vec<u8>,
 ) -> Option<(u32, u32)> {
@@ -4621,7 +4751,7 @@ fn compose_team_strip(
         if iw == 0 || ih == 0 || iw > TEAM_CELL_PX || ih > TEAM_CELL_PX {
             continue;
         }
-        let bg = crate::trainer::sprite::background_mask(&img.pixels, iw, ih);
+        let bg = gameboy_plugin_trainer::sprite::background_mask(&img.pixels, iw, ih);
         // Bottom-centred: Gen 1 art is drawn standing on the bottom of its own
         // box, so aligning the *feet* is what makes a row of different-sized
         // pictures look like a line-up rather than a scatter.
@@ -5496,6 +5626,11 @@ fn load_session(
 /// **Nothing is attached implicitly.** A plugin is loaded only because a name
 /// appears in `plugins = …` (or `GB_PLUGINS`), and the result is reported so an
 /// active plugin is never a surprise. See [`crate::plugin`].
+///
+/// This function is the **install path**, and it is deliberately the only one:
+/// adding a plugin — ours or a stranger's — is a Cargo dependency plus one
+/// entry in [`REGISTRY`] plus one arm in [`attach_named`]. See
+/// [`docs/plugins.md`](../docs/plugins.md) §"Installing a plugin".
 fn attach_plugins(
     gb: &mut Gameboy,
     cfg: &crate::screen::config::Config,
@@ -5507,13 +5642,15 @@ fn attach_plugins(
     }
     // The trainer view is the one plugin attached without being asked for. That
     // is defensible precisely because it is *inert*: it declares no
-    // WRITE_MEMORY, and it does no work at all until `T` switches its panel on
-    // (see `crate::trainer`, "Cost"). Everything that can touch the machine
-    // still has to be named explicitly below.
-    let mut trainer = TrainerPlugin::new(rom.to_vec());
-    trainer.set_active(false);
-    if let Err(e) = gb.add_plugin(Box::new(trainer)) {
-        notes.push(format!("plugin trainer: {e}"));
+    // WRITE_MEMORY, and it does no work at all until `T` switches its panel on.
+    // Everything that can touch the machine still has to be named explicitly.
+    #[cfg(feature = "plugin-trainer")]
+    {
+        let mut trainer = TrainerPlugin::new(rom.to_vec());
+        trainer.set_active(false);
+        if let Err(e) = gb.add_plugin(Box::new(trainer)) {
+            notes.push(format!("plugin trainer: {e}"));
+        }
     }
     // The environment wins over the config file, as it does for telemetry.
     let names: Vec<String> = match std::env::var("GB_PLUGINS") {
@@ -5525,70 +5662,133 @@ fn attach_plugins(
         Err(_) => cfg.plugins.clone(),
     };
     for name in names {
-        match name.as_str() {
-            // Already attached above; naming it explicitly is not an error.
-            crate::trainer::NAME => {}
-            crate::plugin::gen1::NAME => {
-                let trade = std::env::var("GB_GEN1_TRADE")
-                    .ok()
-                    .or_else(|| cfg.gen1_trade.clone());
-                let path = trade.as_deref().map(std::path::Path::new);
-                match crate::plugin::gen1::Gen1LinkPartner::from_trade_file(
-                    rom.to_vec(),
-                    path,
-                ) {
-                    Ok(p) => {
-                        let offer = p.offer().to_string();
-                        match gb.add_plugin(Box::new(p)) {
-                            Ok(()) => notes.push(format!(
-                                "plugin gen1-link attached, offering {offer}"
-                            )),
-                            Err(e) => notes.push(format!("plugin gen1-link: {e}")),
-                        }
-                    }
-                    Err(e) => notes.push(format!("plugin gen1-link: {e}")),
+        match attach_named(gb, cfg, rom, &name) {
+            Some(note) => {
+                if !note.is_empty() {
+                    notes.push(note)
                 }
             }
-            crate::plugin::battle::NAME => {
-                let file = std::env::var("GB_BATTLES")
-                    .ok()
-                    .or_else(|| cfg.battles.clone());
-                let path = file.as_deref().map(std::path::Path::new);
-                match crate::plugin::battle::BattlePlugin::from_preset_file(
-                    rom.to_vec(),
-                    path,
-                ) {
-                    Ok(p) => {
-                        let n = p.preset_names().len();
-                        match gb.add_plugin(Box::new(p)) {
-                            Ok(()) => notes.push(format!(
-                                "plugin gen1-battle attached, {n} presets \
-                                 (press B to start one, N to choose)"
-                            )),
-                            Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
-                        }
-                    }
-                    Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
-                }
-            }
-            crate::agent::NAME => match build_agent(cfg) {
-                Ok(p) => {
-                    let driver = p.driver_name().to_string();
-                    match gb.add_plugin(Box::new(p)) {
-                        Ok(()) => notes.push(format!(
-                            "plugin agent attached, driven by {driver} — it \
-                                 presses the buttons, and `G` takes the \
-                                 controller back"
-                        )),
-                        Err(e) => notes.push(format!("plugin agent: {e}")),
-                    }
-                }
-                Err(e) => notes.push(format!("plugin agent: {e}")),
-            },
-            other => notes.push(format!("unknown plugin '{other}'")),
+            // Told apart deliberately: "you have not built it in" and "that is
+            // not a plugin" are different problems with different fixes, and a
+            // single "unknown plugin" message sends the user hunting for a typo
+            // that is not there.
+            None => notes.push(match REGISTRY.iter().find(|(n, _)| *n == name) {
+                Some((_, feature)) => format!(
+                    "plugin {name} is not built into this binary — rebuild with \
+                     --features {feature}"
+                ),
+                None => format!("unknown plugin '{name}'"),
+            }),
         }
     }
     notes
+}
+
+/// Every plugin this project ships, whether or not this binary was built with
+/// it: `(name, cargo feature)`.
+///
+/// The point of listing the ones that are *absent* is the error message — see
+/// [`attach_plugins`]. A third-party plugin adds a row here only if it wants
+/// the same courtesy; it works without one.
+const REGISTRY: &[(&str, &str)] = &[
+    ("trainer", "plugin-trainer"),
+    ("gen1-link", "plugin-gen1-link"),
+    ("gen1-battle", "plugin-battle-control"),
+    ("agent", "plugin-agent"),
+];
+
+/// Build and attach one named plugin.
+///
+/// `None` means "this build does not have a plugin by that name" — the caller
+/// turns that into the right message. `Some(note)` means the name was
+/// recognised, whether attaching succeeded or failed; an empty note means
+/// "recognised, nothing to report".
+///
+/// **This is the function a third-party plugin edits.** One `if`, gated on the
+/// feature that brings the crate in, is the whole integration.
+fn attach_named(
+    gb: &mut Gameboy,
+    cfg: &crate::screen::config::Config,
+    rom: &[u8],
+    name: &str,
+) -> Option<String> {
+    // Already attached above; naming it explicitly is not an error.
+    #[cfg(feature = "plugin-trainer")]
+    if name == gameboy_plugin_trainer::NAME {
+        return Some(String::new());
+    }
+
+    #[cfg(feature = "plugin-gen1-link")]
+    if name == gameboy_plugin_gen1_link::NAME {
+        let trade = std::env::var("GB_GEN1_TRADE")
+            .ok()
+            .or_else(|| cfg.gen1_trade.clone());
+        let path = trade.as_deref().map(std::path::Path::new);
+        return Some(
+            match gameboy_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
+                rom.to_vec(),
+                path,
+            ) {
+                Ok(p) => {
+                    let offer = p.offer().to_string();
+                    match gb.add_plugin(Box::new(p)) {
+                        Ok(()) => {
+                            format!("plugin gen1-link attached, offering {offer}")
+                        }
+                        Err(e) => format!("plugin gen1-link: {e}"),
+                    }
+                }
+                Err(e) => format!("plugin gen1-link: {e}"),
+            },
+        );
+    }
+
+    #[cfg(feature = "plugin-battle-control")]
+    if name == gameboy_plugin_battle_control::NAME {
+        let file = std::env::var("GB_BATTLES")
+            .ok()
+            .or_else(|| cfg.battles.clone());
+        let path = file.as_deref().map(std::path::Path::new);
+        return Some(
+            match gameboy_plugin_battle_control::BattlePlugin::from_preset_file(
+                rom.to_vec(),
+                path,
+            ) {
+                Ok(p) => {
+                    let n = p.preset_names().len();
+                    match gb.add_plugin(Box::new(p)) {
+                        Ok(()) => format!(
+                            "plugin gen1-battle attached, {n} presets \
+                             (press B to start one, N to choose)"
+                        ),
+                        Err(e) => format!("plugin gen1-battle: {e}"),
+                    }
+                }
+                Err(e) => format!("plugin gen1-battle: {e}"),
+            },
+        );
+    }
+
+    #[cfg(feature = "plugin-agent")]
+    if name == gameboy_plugin_agent::NAME {
+        return Some(match build_agent(cfg) {
+            Ok(p) => {
+                let driver = p.driver_name().to_string();
+                match gb.add_plugin(Box::new(p)) {
+                    Ok(()) => format!(
+                        "plugin agent attached, driven by {driver} — it \
+                         presses the buttons, and `G` takes the controller back"
+                    ),
+                    Err(e) => format!("plugin agent: {e}"),
+                }
+            }
+            Err(e) => format!("plugin agent: {e}"),
+        });
+    }
+
+    // Silence "unused" warnings in a build with no plugins at all.
+    let _ = (gb, cfg, rom, name);
+    None
 }
 
 /// Build the agent plugin from configuration.
@@ -5596,10 +5796,13 @@ fn attach_plugins(
 /// **Nothing is defaulted into existence here.** With no `agent_command` there
 /// is no driver, and rather than attaching an agent that does nothing this
 /// says so — an inert plugin in the status bar is worse than an honest error.
+#[cfg(feature = "plugin-agent")]
 fn build_agent(
     cfg: &crate::screen::config::Config,
-) -> Result<crate::agent::AgentPlugin, String> {
-    use crate::agent::{governor::Budget, subprocess::CommandDriver, Config as AgentCfg};
+) -> Result<gameboy_plugin_agent::AgentPlugin, String> {
+    use gameboy_plugin_agent::{
+        governor::Budget, subprocess::CommandDriver, Config as AgentCfg,
+    };
 
     let command = std::env::var("GB_AGENT_CMD")
         .ok()
@@ -5626,7 +5829,7 @@ fn build_agent(
         .ok()
         .map(std::path::PathBuf::from);
 
-    Ok(crate::agent::AgentPlugin::new(
+    Ok(gameboy_plugin_agent::AgentPlugin::new(
         Box::new(CommandDriver::new(program, args)),
         AgentCfg {
             budget: Budget {
@@ -7355,8 +7558,8 @@ mod tests {
     /// pinned to the opponent.
     #[test]
     fn the_focus_ring_puts_the_opponent_first_in_a_battle() {
-        use crate::trainer::gen1::{BattleKind, Mon};
-        use crate::trainer::TrainerState;
+        use gameboy_plugin_trainer::gen1::{BattleKind, Mon};
+        use gameboy_plugin_trainer::TrainerState;
         let mut st = TrainerState {
             in_game: true,
             ..Default::default()
@@ -8146,8 +8349,8 @@ mod tests {
     /// Plant a wild encounter on the attached plugin, so the frontend can be
     /// tested without a Pokémon cartridge.
     fn plant_encounter(app: &mut App, shiny: bool) {
-        use crate::trainer::encounter::WildEncounter;
-        use crate::trainer::gen1::{BattleType, Dvs};
+        use gameboy_plugin_trainer::encounter::WildEncounter;
+        use gameboy_plugin_trainer::gen1::{BattleType, Dvs};
         let dvs = if shiny {
             Dvs::from_bytes(0xEA, 0xAA) // ATKDEFDV_SHINY / SPDSPCDV_SHINY
         } else {

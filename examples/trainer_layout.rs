@@ -15,9 +15,9 @@
 //! `docs/trainer.md`.
 
 use gameboy::screen::trainer_view as tv;
-use gameboy::trainer::derived::StatExp;
-use gameboy::trainer::gen1::{BattleKind, Dvs, Mon, MoveSlot, Status};
-use gameboy::trainer::{TeamMon, TrainerState};
+use gameboy_plugin_trainer::derived::StatExp;
+use gameboy_plugin_trainer::gen1::{BattleKind, Dvs, Mon, MoveSlot, Status};
+use gameboy_plugin_trainer::{TeamMon, TrainerState};
 
 fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -> Mon {
     Mon {
@@ -105,12 +105,12 @@ fn state(battle: bool) -> TrainerState {
         st.trainer_name = "JOEY".into();
         let mut o = mon("", "CHARMANDER", 7, 18, 20, ("FIRE", "FIRE"));
         o.moves.truncate(2);
-        o.stat_mods = Some(gameboy::trainer::derived::StatMods::from_bytes([
+        o.stat_mods = Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
             6, 7, 9, 7, 5, 7,
         ]));
         st.opponent = Some(o);
         let mut active = st.party[0].clone();
-        active.stat_mods = Some(gameboy::trainer::derived::StatMods::from_bytes([
+        active.stat_mods = Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
             7, 5, 7, 7, 7, 7,
         ]));
         st.active = Some(active);
@@ -181,7 +181,7 @@ fn live(rom: &str, state: Option<&str>, frames: u64, w: usize, keys: &str) {
     let path = std::path::PathBuf::from(rom);
     let data = std::fs::read(&path).expect("read the ROM");
     let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
-    let mut plugin = gameboy::trainer::TrainerPlugin::new(data);
+    let mut plugin = gameboy_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin))
         .expect("attach the trainer view");
@@ -215,9 +215,9 @@ fn live(rom: &str, state: Option<&str>, frames: u64, w: usize, keys: &str) {
         for (i, t) in tiles.iter_mut().enumerate() {
             *t = gb.peek(0xC3A0 + i as u16);
         }
-        println!("{}", gameboy::trainer::text::decode_screen(&tiles));
+        println!("{}", gameboy_plugin_trainer::text::decode_screen(&tiles));
     }
-    let Some(p) = gb.plugin::<gameboy::trainer::TrainerPlugin>() else {
+    let Some(p) = gb.plugin::<gameboy_plugin_trainer::TrainerPlugin>() else {
         println!("no trainer plugin");
         return;
     };
@@ -269,7 +269,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
         let _ = std::fs::remove_file(path.with_extension(ext));
     }
     let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
-    let mut plugin = gameboy::trainer::TrainerPlugin::new(data);
+    let mut plugin = gameboy_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin)).expect("attach");
 
@@ -353,7 +353,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
                 .map(|y| {
                     let row: Vec<u8> =
                         (0..20).map(|x| gb.peek(0xC3A0 + y * 20 + x)).collect();
-                    gameboy::trainer::text::decode_screen(&row)
+                    gameboy_plugin_trainer::text::decode_screen(&row)
                 })
                 .collect();
             for r in rows.iter().filter(|r| !r.trim().is_empty()) {
@@ -454,7 +454,9 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
         let bytes = std::fs::read(format!("{dir}/battle.gbss")).unwrap();
         gb.load_state(&bytes).unwrap();
     }
-    let p = gb.plugin::<gameboy::trainer::TrainerPlugin>().unwrap();
+    let p = gb
+        .plugin::<gameboy_plugin_trainer::TrainerPlugin>()
+        .unwrap();
     let st = p.state();
     println!(
         "plugin: battle={:?} trainer={:?} team={:?} unknown={}",
@@ -488,7 +490,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
 /// the two checked by eye.
 fn sprites(rom: &str, out_dir: &str) {
     let data = std::fs::read(rom).expect("read the ROM");
-    let tables = gameboy::trainer::rom::RomTables::new(data);
+    let tables = gameboy_plugin_trainer::rom::RomTables::new(data);
     std::fs::create_dir_all(out_dir).expect("create the output directory");
     for (label, index) in [
         ("bulbasaur", 0x99u8),
@@ -500,7 +502,7 @@ fn sprites(rom: &str, out_dir: &str) {
             println!("{label}: no sprite");
             continue;
         };
-        let bg = gameboy::trainer::sprite::background_mask(&pixels, w, h);
+        let bg = gameboy_plugin_trainer::sprite::background_mask(&pixels, w, h);
         let lightest = pixels.iter().filter(|&&p| p == 0).count();
         let outside = bg.iter().filter(|b| **b).count();
         println!(
@@ -557,15 +559,15 @@ fn sprites(rom: &str, out_dir: &str) {
 /// cargo run --release --example trainer_layout -- --rom <rom> --wild
 /// ```
 fn to_wild(rom: &str, seed0: u64) {
-    use gameboy::trainer::capture::{ball_set, odds, Ball, Target};
+    use gameboy_plugin_trainer::capture::{ball_set, odds, Ball, Target};
     let path = std::path::PathBuf::from(rom);
     let data = std::fs::read(&path).expect("read the ROM");
     for ext in ["sav", "srm", "gbsave"] {
         let _ = std::fs::remove_file(path.with_extension(ext));
     }
-    let tables = gameboy::trainer::rom::RomTables::new(data.clone());
+    let tables = gameboy_plugin_trainer::rom::RomTables::new(data.clone());
     let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
-    let mut plugin = gameboy::trainer::TrainerPlugin::new(data);
+    let mut plugin = gameboy_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin)).expect("attach");
 
@@ -630,7 +632,9 @@ fn to_wild(rom: &str, seed0: u64) {
             "MISMATCH"
         }
     );
-    let p = gb.plugin::<gameboy::trainer::TrainerPlugin>().unwrap();
+    let p = gb
+        .plugin::<gameboy_plugin_trainer::TrainerPlugin>()
+        .unwrap();
     let st = p.state();
     let o = st.opponent.as_ref().unwrap();
     println!("opponent {} L{} {}/{}", o.name, o.level, o.hp, o.max_hp);
@@ -646,7 +650,7 @@ fn to_wild(rom: &str, seed0: u64) {
         "  at 1 HP:      POKé {:.2}%",
         odds(hurt, Ball::Poke).chance * 100.0
     );
-    hurt.status = gameboy::trainer::gen1::Status(0x04);
+    hurt.status = gameboy_plugin_trainer::gen1::Status(0x04);
     println!(
         "  at 1 HP asleep: POKé {:.2}%",
         odds(hurt, Ball::Poke).chance * 100.0

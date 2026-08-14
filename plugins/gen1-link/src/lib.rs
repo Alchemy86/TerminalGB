@@ -42,8 +42,8 @@ pub mod romdata;
 pub mod spec;
 pub mod text;
 
-use super::{Capability, Event, Machine, Plugin};
 use battle::{MachineHost, NoHost};
+use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
 use protocol::{LinkPartner, Phase};
 use romdata::RomTables;
 use spec::{PokemonSource, SourceError, TradeSpec};
@@ -74,7 +74,7 @@ pub struct Gen1LinkPartner {
     /// Which Gen 1 game this is, if it is one whose RAM map we know. `None`
     /// means the partner still speaks the protocol but reads nothing from
     /// memory; see [`battle`].
-    game: Option<crate::trainer::Game>,
+    game: Option<gameboy_plugin_trainer::Game>,
     /// Set once the cartridge has been identified, on the first dispatch.
     identified: bool,
     /// Consecutive frames on which `wLinkState` has held an impossible value.
@@ -187,7 +187,7 @@ impl Gen1LinkPartner {
     }
 
     /// Which Gen 1 game this is, once the cartridge has been identified.
-    pub fn game(&self) -> Option<crate::trainer::Game> {
+    pub fn game(&self) -> Option<gameboy_plugin_trainer::Game> {
         self.game
     }
 
@@ -199,8 +199,10 @@ impl Gen1LinkPartner {
             return;
         }
         self.identified = true;
-        self.game =
-            crate::trainer::Game::detect(&machine.rom_title(), machine.global_checksum());
+        self.game = gameboy_plugin_trainer::Game::detect(
+            &machine.rom_title(),
+            machine.global_checksum(),
+        );
         if self.game.is_none() {
             self.events.push(
                 "cartridge not recognised: trading works, but battle turns are \
@@ -221,7 +223,7 @@ impl Gen1LinkPartner {
     ///
     /// This is the case for a plugin being allowed to report a fault at all:
     /// the CPU-level detectors
-    /// ([`crate::mmu::MemoryManagementUnit::report_fault`]) never fire on this
+    /// (`Machine::report_fault`) never fire on this
     /// crash, because the runaway code stays in executable memory and never
     /// reaches an undefined opcode. A plugin that knows the game recognises it
     /// immediately.

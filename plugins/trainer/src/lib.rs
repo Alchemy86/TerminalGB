@@ -1,11 +1,11 @@
 //! A live trainer view: the party, the badges and the battle opponent, read out
 //! of a running Gen 1 Pokémon game.
 //!
-//! This is a consumer of the plugin surface in [`crate::plugin`], and it is
+//! This is a consumer of the plugin surface in [`gameboy_plugin_api`], and it is
 //! deliberately **read-only**: it declares
-//! [`Capability::OBSERVE`](crate::plugin::Capability::OBSERVE) and
-//! [`READ_MEMORY`](crate::plugin::Capability::READ_MEMORY) and nothing else, so
-//! [`Machine::poke`](crate::plugin::Machine::poke) refuses it outright. A
+//! [`Capability::OBSERVE`](gameboy_plugin_api::Capability::OBSERVE) and
+//! [`READ_MEMORY`](gameboy_plugin_api::Capability::READ_MEMORY) and nothing else, so
+//! [`Machine::poke`](gameboy_plugin_api::Machine::poke) refuses it outright. A
 //! tracker that can corrupt a save is worse than no tracker, and that is
 //! enforced by the host rather than promised in a comment.
 //!
@@ -55,8 +55,8 @@ pub mod text;
 
 use std::collections::HashMap;
 
-use crate::plugin::{Capability, Event, Machine, Plugin};
 use encounter::WildEncounter;
+use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
 use gen1::{addr, battle, party, BattleKind, BattleType, Dvs, Mon, Status};
 
 /// How often the party is re-read, in emulated frames. Six frames is about
@@ -74,9 +74,9 @@ pub const NAME: &str = "trainer";
 /// every field: a refused read means the plugin was misconfigured (it declared
 /// no `READ_MEMORY`), which the status line reports, and is not a per-address
 /// condition worth branching on sixty times a sample.
-struct Reads<'x, 'm, 'a>(&'x mut Machine<'m, 'a>);
+struct Reads<'x, 'm>(&'x mut Machine<'m>);
 
-impl Reads<'_, '_, '_> {
+impl Reads<'_, '_> {
     fn peek(&mut self, a: u16) -> u8 {
         self.0.peek(a).unwrap_or(0xFF)
     }
@@ -281,7 +281,7 @@ impl TrainerPlugin {
     /// Build a plugin against a cartridge image.
     ///
     /// The ROM is passed in whole rather than read through
-    /// [`Machine::peek_bank`](crate::plugin::Machine::peek_bank) because
+    /// [`Machine::peek_bank`](gameboy_plugin_api::Machine::peek_bank) because
     /// [`rom::RomTables`] *scans every bank* to locate its tables by signature,
     /// which is a different need from reading a known table out of a known bank
     /// — that is what `peek_bank` is for, and it is what closed the banked-read
@@ -364,9 +364,14 @@ impl TrainerPlugin {
     }
 
     /// Plant an encounter without a cartridge, so the frontend's layout and
-    /// alert behaviour can be tested against a synthetic ROM. Not compiled
-    /// outside the crate's own unit tests.
-    #[cfg(test)]
+    /// alert behaviour can be tested against a synthetic ROM.
+    ///
+    /// Public rather than `#[cfg(test)]` because the frontend that renders this
+    /// panel is now a different crate, and a `cfg(test)` item is invisible
+    /// across a crate boundary. That is the ordinary cost of a real boundary:
+    /// a test hook another crate needs is part of the surface, and saying so
+    /// is better than the alternatives (a `testing` feature for one method, or
+    /// deleting the frontend's test).
     pub fn set_encounter_for_test(&mut self, enc: Option<WildEncounter>) {
         if enc.is_some() {
             self.encounter_seq += 1;
@@ -379,7 +384,7 @@ impl TrainerPlugin {
     /// `wEnemyMon` to latch it.
     ///
     /// Ordinary case, in the overworld: **one byte, six times a second.**
-    fn watch_encounter(&mut self, machine: &mut Machine<'_, '_>) {
+    fn watch_encounter(&mut self, machine: &mut Machine<'_>) {
         let view = &mut Reads(machine);
         let in_battle = view.peek(addr::IS_IN_BATTLE);
         // The second byte is only read once the first has said "wild battle",
@@ -439,7 +444,7 @@ impl TrainerPlugin {
     }
 
     /// Read the whole state. Called at [`SAMPLE_EVERY`], never per frame.
-    fn sample(&mut self, machine: &mut Machine<'_, '_>) {
+    fn sample(&mut self, machine: &mut Machine<'_>) {
         let view = &mut Reads(machine);
         let mut st = TrainerState::default();
 
@@ -544,7 +549,7 @@ impl TrainerPlugin {
     /// This also covers the real transient: the first frames of a trainer
     /// battle, before `LoadEnemyMonData` has run, where the block still holds
     /// the previous battle's contents.
-    fn read_enemy_team(&self, view: &mut Reads<'_, '_, '_>, st: &mut TrainerState) {
+    fn read_enemy_team(&self, view: &mut Reads<'_, '_>, st: &mut TrainerState) {
         let count = view.peek(addr::ENEMY_PARTY_COUNT) as usize;
         if count == 0 || count > gen1::PARTY_LENGTH {
             st.enemy_team_unknown = true;
@@ -578,12 +583,7 @@ impl TrainerPlugin {
     }
 
     /// Decode one 44-byte `party_struct`.
-    fn read_party_mon(
-        &self,
-        view: &mut Reads<'_, '_, '_>,
-        base: u16,
-        nick: &[u8],
-    ) -> Mon {
+    fn read_party_mon(&self, view: &mut Reads<'_, '_>, base: u16, nick: &[u8]) -> Mon {
         let species = view.peek(base + party::SPECIES);
         let moves: Vec<u8> = (0..gen1::NUM_MOVES as u16)
             .map(|i| view.peek(base + party::MOVES + i))
@@ -591,7 +591,7 @@ impl TrainerPlugin {
         let pp: Vec<u8> = (0..gen1::NUM_MOVES as u16)
             .map(|i| view.peek(base + party::PP + i))
             .collect();
-        let stat_exp = super::trainer::derived::StatExp {
+        let stat_exp = crate::derived::StatExp {
             hp: view.peek_be16(base + party::HP_EXP),
             attack: view.peek_be16(base + party::ATTACK_EXP),
             defense: view.peek_be16(base + party::DEFENSE_EXP),
@@ -630,7 +630,7 @@ impl TrainerPlugin {
     /// differently because the battle engine drops the fields it does not need.
     fn read_battle_mon(
         &self,
-        view: &mut Reads<'_, '_, '_>,
+        view: &mut Reads<'_, '_>,
         base: u16,
         mods: u16,
         nick: &[u8],
@@ -668,7 +668,7 @@ impl TrainerPlugin {
             &moves,
             &pp,
         );
-        mon.stat_mods = Some(super::trainer::derived::StatMods::from_bytes(raw));
+        mon.stat_mods = Some(crate::derived::StatMods::from_bytes(raw));
         mon
     }
 

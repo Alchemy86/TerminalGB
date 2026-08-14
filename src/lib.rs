@@ -38,9 +38,6 @@ use std::sync::OnceLock;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-/// AI agent substrate — observation, action and commentary. See [`agent`].
-#[cfg(not(target_arch = "wasm32"))]
-pub mod agent;
 pub mod cpu;
 /// Minimal DEFLATE compressor for terminal transmission — see [`deflate`].
 pub mod deflate;
@@ -61,7 +58,9 @@ pub mod mode;
 pub mod ppu {
     pub use crate::gpu::RenderMode;
 }
-/// Runtime plugins — the *attach* half of the extension surface. See [`plugin`].
+/// Runtime plugins — the *attach* half of the extension surface. The contract
+/// itself is the dependency-free [`gameboy_plugin_api`] crate; this module
+/// re-exports it and implements the emulator's side. See [`plugin`].
 pub mod plugin;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
@@ -77,8 +76,9 @@ pub mod sound;
 pub mod telemetry;
 /// Capped-resolution terminal image transmission — see [`termimage`].
 pub mod termimage;
-/// Live Gen 1 Pokémon trainer view — see [`trainer`].
-pub mod trainer;
+/// Test support for plugin authors — see [`testing`]. Off by default.
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod upscale;
 /// Raw video-out: the picture as a stream other tools consume — see [`video`].
 #[cfg(not(target_arch = "wasm32"))]

@@ -23,7 +23,7 @@
 //! Three things, in the order they matter:
 //!
 //! 1. **It never writes cartridge RAM.** A battery-backed save file is written
-//!    from cartridge RAM (`$A000-$BFFF`) by [`crate::mbc::battery`]. Every
+//!    from cartridge RAM (`$A000-$BFFF`) by the emulator’s battery module. Every
 //!    write this plugin makes goes through [`BattlePlugin::write`], which
 //!    refuses any address outside WRAM and HRAM
 //!    ([`wram::is_writable`]) and counts the refusal. A party injected into
@@ -41,7 +41,7 @@
 //! # Which games
 //!
 //! English Pokémon **Red and Blue** only. The cartridge is identified by title
-//! *and* header global checksum ([`crate::trainer::Game::detect`]) and then
+//! *and* header global checksum ([`gameboy_plugin_trainer::Game::detect`]) and then
 //! every address the plugin writes is re-derived from the cartridge's own
 //! machine code ([`wram::verify`]). Yellow moved its WRAM and is refused;
 //! Generation 2 changed the structures and is refused. A refusal says which
@@ -52,12 +52,12 @@ pub mod preset;
 pub mod script;
 pub mod wram;
 
-use crate::input::KeypadKey;
-use crate::plugin::gen1::party::{self, Mon};
-use crate::plugin::gen1::romdata::{RomError, RomTables};
-use crate::plugin::gen1::text;
-use crate::plugin::{Capability, Event, Machine, Plugin};
-use crate::trainer::Game;
+use gameboy_plugin_api::KeypadKey;
+use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
+use gameboy_plugin_gen1_link::party::{self, Mon};
+use gameboy_plugin_gen1_link::romdata::{RomError, RomTables};
+use gameboy_plugin_gen1_link::text;
+use gameboy_plugin_trainer::Game;
 use preset::{MonPlan, Opposition, Preset, PresetError, PresetFile};
 
 /// The plugin's registered name.
@@ -255,7 +255,7 @@ impl BattlePlugin {
     /// The ROM image is needed rather than borrowed memory because the species,
     /// base-stat, move and trainer-name tables live in banks the running game
     /// maps only while it is using them — the same reason
-    /// [`crate::plugin::gen1::romdata`] takes one.
+    /// [`gameboy_plugin_gen1_link::romdata`] takes one.
     pub fn new(rom: Vec<u8>, presets: PresetFile) -> Result<BattlePlugin, BattleError> {
         // Re-derive every address from this cartridge's machine code before
         // anything else. If this fails the plugin does not exist, rather than
@@ -515,10 +515,12 @@ impl BattlePlugin {
     /// it.
     fn player_blocks(&self, plan: &Plan, m: &mut Machine) -> Vec<Block> {
         let id = m
-            .peek_be16(crate::trainer::gen1::addr::PLAYER_ID)
+            .peek_be16(gameboy_plugin_trainer::gen1::addr::PLAYER_ID)
             .unwrap_or(0);
-        let name_bytes =
-            m.peek_range(crate::trainer::gen1::addr::PLAYER_NAME, wram::NAME_LENGTH);
+        let name_bytes = m.peek_range(
+            gameboy_plugin_trainer::gen1::addr::PLAYER_NAME,
+            wram::NAME_LENGTH,
+        );
         let name = text::decode(&name_bytes);
         let mut mons = plan.player.clone();
         for (i, mon) in mons.iter_mut().enumerate() {

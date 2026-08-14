@@ -37,7 +37,7 @@
 //!
 //! Nothing here knows what Claude is. A driver is *"here is the state, give me
 //! actions and commentary"* and nothing more — it never receives a
-//! [`Machine`](crate::plugin::Machine), so it cannot press a button, read
+//! [`Machine`](gameboy_plugin_api::Machine), so it cannot press a button, read
 //! memory or write a save. The host parses its reply, clamps every number and
 //! performs the plan. That is what makes
 //! [`driver::ScriptedDriver`] a complete substitute for a model in tests: it
@@ -54,10 +54,10 @@ pub mod json;
 pub mod observe;
 pub mod subprocess;
 
-use crate::plugin::{Capability, Event, Machine, Plugin};
 use action::{Action, Executor, Limits, Outcome};
 use commentary::{Activity, Commentary};
 use driver::{Driver, DriverError, Poll};
+use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
 use governor::{Escalation, Gate, Governor, Stuck, Usage};
 use observe::{classify, GameState, Gen1Observer, Screen};
 
@@ -304,7 +304,7 @@ impl AgentPlugin {
         if let Some(w) = self.watch {
             let map = machine.peek(observe::W_CUR_MAP).unwrap_or(w.map);
             let battling = machine
-                .peek(crate::trainer::gen1::addr::IS_IN_BATTLE)
+                .peek(gameboy_plugin_trainer::gen1::addr::IS_IN_BATTLE)
                 .unwrap_or(0)
                 != 0;
             if battling && !w.in_battle {
@@ -421,16 +421,16 @@ impl AgentPlugin {
         // B twice backs out of nested menus; then a step away from whatever
         // was being walked into.
         let away = match game.position.facing {
-            Some(observe::Facing::Up) => crate::input::KeypadKey::Down,
-            Some(observe::Facing::Down) => crate::input::KeypadKey::Up,
-            Some(observe::Facing::Left) => crate::input::KeypadKey::Right,
-            _ => crate::input::KeypadKey::Left,
+            Some(observe::Facing::Up) => gameboy_plugin_api::KeypadKey::Down,
+            Some(observe::Facing::Down) => gameboy_plugin_api::KeypadKey::Up,
+            Some(observe::Facing::Left) => gameboy_plugin_api::KeypadKey::Right,
+            _ => gameboy_plugin_api::KeypadKey::Left,
         };
         self.exec.start(vec![
             Action::Press {
-                button: crate::input::KeypadKey::B,
+                button: gameboy_plugin_api::KeypadKey::B,
                 times: 2,
-                hold: crate::input::DEFAULT_HOLD,
+                hold: gameboy_plugin_api::DEFAULT_HOLD,
             },
             Action::Wait { frames: 30 },
             Action::Walk {
@@ -526,7 +526,7 @@ impl AgentPlugin {
         self.watch = Some(Watch {
             map: machine.peek(observe::W_CUR_MAP).unwrap_or(0),
             in_battle: machine
-                .peek(crate::trainer::gen1::addr::IS_IN_BATTLE)
+                .peek(gameboy_plugin_trainer::gen1::addr::IS_IN_BATTLE)
                 .unwrap_or(0)
                 != 0,
         });
@@ -646,12 +646,12 @@ impl AgentPlugin {
                 w.end_obj();
             }
             w.end_arr();
-            if game.battle != crate::trainer::gen1::BattleKind::None {
+            if game.battle != gameboy_plugin_trainer::gen1::BattleKind::None {
                 w.obj_field("battle");
                 w.str_field(
                     "kind",
                     match game.battle {
-                        crate::trainer::gen1::BattleKind::Wild => "wild",
+                        gameboy_plugin_trainer::gen1::BattleKind::Wild => "wild",
                         _ => "trainer",
                     },
                 );
@@ -784,11 +784,10 @@ impl AgentPlugin {
     /// a model to read.
     fn capture_frame(&self, machine: &Machine) -> Option<String> {
         let dir = self.config.frame_capture.as_ref()?;
-        let rgba = machine.frame_rgba()?;
-        let mut png = Vec::new();
-        // The crate's own encoder: no `image` dependency, and it compresses,
-        // unlike the stored-deflate path the 60 Hz wire uses.
-        crate::termimage::PngEncoder::new().encode(rgba, 160, 144, &mut png);
+        // The emulator's own encoder, reached through the API: it compresses
+        // (unlike the stored-deflate path the 60 Hz wire uses), and asking for
+        // it here is what keeps this crate free of an image dependency.
+        let png = machine.frame_png()?;
         let path = dir.join("frame.png");
         std::fs::create_dir_all(dir).ok()?;
         std::fs::write(&path, &png).ok()?;
@@ -905,9 +904,11 @@ impl Plugin for AgentPlugin {
 
     fn on_attach(&mut self, machine: &mut Machine) {
         self.detected_title = machine.rom_title();
-        self.supported =
-            crate::trainer::Game::detect(&self.detected_title, machine.global_checksum())
-                .is_some();
+        self.supported = gameboy_plugin_trainer::Game::detect(
+            &self.detected_title,
+            machine.global_checksum(),
+        )
+        .is_some();
         self.obs = Gen1Observer::new(self.supported);
         if self.supported {
             if !self.config.objective.is_empty() {

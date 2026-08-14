@@ -1,0 +1,16 @@
+[package]
+name = "gameboy-plugin-trainer"
+version = "0.1.0"
+description = "Live Pokémon Red/Blue trainer view: party, badges, catch chance, sprites — read-only"
+authors = ["gameboy contributors"]
+repository = "https://github.com/Alchemy86/gameboy"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "gameboy_plugin_trainer"
+path = "src/lib.rs"
+
+[dependencies]
+gameboy-plugin-api = { path = "../../crates/gameboy-plugin-api", version = "0.1.0" }

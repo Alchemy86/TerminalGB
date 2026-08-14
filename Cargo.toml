@@ -1,3 +1,9 @@
+# The emulator is the product; plugins are optional extras that live in their
+# own crates under `plugins/`. See docs/plugins.md for the whole arrangement,
+# and `plugins/README.md` for the one-paragraph version.
+[workspace]
+members = ["crates/*", "plugins/*"]
+
 [package]
 name = "gameboy"
 version = "0.2.0"
@@ -23,7 +29,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # audio. See README "Embedding the core". Zero third-party crates besides
 # `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
 # belongs behind `desktop`/`tui`/`audio`, not in the core.
-default = ["desktop", "tui"]
+default = ["desktop", "tui", "standard-plugins"]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
 # Needs a display server at run time.
@@ -38,6 +44,35 @@ tui = ["libc", "ratatui", "ratatui-image", "icy_sixel", "image"]
 audio = ["cpal"]
 ffi = []
 ffi-base64 = ["image", "base64"]
+# Test support for plugin authors (`gameboy::testing::TestMachine`). Off by
+# default so an embedding build carries none of it; plugin crates switch it on
+# in their `[dev-dependencies]`.
+testing = []
+
+# --- Plugins ---------------------------------------------------------------
+# Each of ours is a crate under `plugins/`, and each is an OPTIONAL dependency:
+# this is the whole install path. Adding a third-party plugin is the same two
+# lines — a dependency, and a name in `plugins = …`. See docs/plugins.md.
+#
+# The emulator builds and runs with every one of these off; that is enforced by
+# `make no-plugins` and by CI, not merely intended.
+plugin-trainer = ["gameboy-plugin-trainer"]
+plugin-gen1-link = ["gameboy-plugin-gen1-link", "plugin-trainer"]
+plugin-battle-control = [
+    "gameboy-plugin-battle-control",
+    "plugin-gen1-link",
+    "plugin-trainer",
+]
+plugin-agent = ["gameboy-plugin-agent", "plugin-trainer", "plugin-gen1-link"]
+# The bundle the emulator ships with by default — "a bundle of standard plugins
+# people can reference or install". Drop it from `default` and you have the
+# emulator alone.
+standard-plugins = [
+    "plugin-trainer",
+    "plugin-gen1-link",
+    "plugin-battle-control",
+    "plugin-agent",
+]
 
 [profile.release]
 opt-level = "s"
@@ -53,6 +88,22 @@ split-debuginfo = "unpacked"
 lto = false
 incremental = true
 opt-level = 0
+
+# The plugin contract. Dependency-free and tiny, and it is what makes the
+# emulator extensible without knowing anything about its extensions: plugin
+# crates depend on *this*, never on `gameboy`, which is what keeps the
+# dependency graph acyclic while the frontend still draws panels for the
+# plugins it ships with. See docs/plugins.md §"Why an API crate".
+[dependencies]
+gameboy-plugin-api = { path = "crates/gameboy-plugin-api", version = "0.1.0" }
+
+# Our own plugins. Optional, and the frontend's panels for them are `cfg`-gated
+# on the matching feature, so `--no-default-features` (or deleting `plugins/`
+# entirely) still builds a working emulator.
+gameboy-plugin-trainer = { path = "plugins/trainer", version = "0.1.0", optional = true }
+gameboy-plugin-gen1-link = { path = "plugins/gen1-link", version = "0.1.0", optional = true }
+gameboy-plugin-battle-control = { path = "plugins/battle-control", version = "0.1.0", optional = true }
+gameboy-plugin-agent = { path = "plugins/agent", version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libc = { version = "0.2.126", optional = true }

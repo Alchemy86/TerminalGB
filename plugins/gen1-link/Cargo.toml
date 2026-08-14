@@ -1,0 +1,20 @@
+[package]
+name = "gameboy-plugin-gen1-link"
+version = "0.1.0"
+description = "A virtual link-cable partner for Pokémon Generation 1 — trades and Colosseum battles"
+authors = ["gameboy contributors"]
+repository = "https://github.com/Alchemy86/gameboy"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "gameboy_plugin_gen1_link"
+path = "src/lib.rs"
+
+[dependencies]
+gameboy-plugin-api = { path = "../../crates/gameboy-plugin-api", version = "0.1.0" }
+# For the Gen 1 RAM map and cartridge identification, which the trainer view
+# already establishes. Plugins depending on plugins is intended: it is the
+# cheapest evidence that the boundary is real.
+gameboy-plugin-trainer = { path = "../trainer", version = "0.1.0" }

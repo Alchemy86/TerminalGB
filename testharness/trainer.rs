@@ -32,8 +32,8 @@ use std::path::{Path, PathBuf};
 
 use gameboy::gameboy::Gameboy;
 use gameboy::screen::trainer_view as tv;
-use gameboy::trainer::{gen1, text, Game, TrainerPlugin};
 use gameboy::KeypadKey;
+use gameboy_plugin_trainer::{gen1, text, Game, TrainerPlugin};
 
 fn main() {
     let Some(rom_path) = find_rom() else {
@@ -147,7 +147,7 @@ fn stage(rom: &Path) -> std::io::Result<PathBuf> {
 // ---- 1. sprite decompression, structurally ------------------------------
 
 fn check_sprites(rom: &[u8]) -> usize {
-    let tables = gameboy::trainer::rom::RomTables::new(rom.to_vec());
+    let tables = gameboy_plugin_trainer::rom::RomTables::new(rom.to_vec());
     let (mut ok, mut skipped, mut bad) = (0, 0, 0);
     let mut widths = [0usize; 8];
 
@@ -216,7 +216,7 @@ fn check_against_reference(rom: &[u8]) -> usize {
         return 0;
     };
     let dir = PathBuf::from(dir);
-    let tables = gameboy::trainer::rom::RomTables::new(rom.to_vec());
+    let tables = gameboy_plugin_trainer::rom::RomTables::new(rom.to_vec());
 
     // Species whose file names are unambiguous, chosen to cover the whole
     // index range (and therefore every "Pics" bank) and every picture size.
@@ -637,7 +637,7 @@ const EVENT_FLAGS: u16 = 0xD747;
 /// loaded by the game itself, exactly as in play.
 fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
     println!("\n[5] a real wild encounter");
-    let tables = gameboy::trainer::rom::RomTables::new(rom.to_vec());
+    let tables = gameboy_plugin_trainer::rom::RomTables::new(rom.to_vec());
 
     let save_path = rom_path.with_extension("sav");
     for ext in ["sav", "srm", "gbsave"] {
@@ -746,7 +746,7 @@ fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
     let mut bad = 0;
     let mut seen = 0usize;
     let mut steps = 0u32;
-    let mut last: Option<gameboy::trainer::encounter::WildEncounter> = None;
+    let mut last: Option<gameboy_plugin_trainer::encounter::WildEncounter> = None;
     let want: usize = std::env::var("TRAINER_ENCOUNTERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -903,7 +903,9 @@ fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
 }
 
 /// The plugin's latched verdict, cloned so the borrow ends.
-fn encounter_of(gb: &Gameboy) -> Option<gameboy::trainer::encounter::WildEncounter> {
+fn encounter_of(
+    gb: &Gameboy,
+) -> Option<gameboy_plugin_trainer::encounter::WildEncounter> {
     gb.plugin::<TrainerPlugin>()?.encounter().cloned()
 }
 
@@ -914,9 +916,9 @@ fn encounter_of(gb: &Gameboy) -> Option<gameboy::trainer::encounter::WildEncount
 /// pokecrystal constants rather than by calling the code under test.
 fn verify_encounter(
     gb: &mut Gameboy,
-    enc: &gameboy::trainer::encounter::WildEncounter,
+    enc: &gameboy_plugin_trainer::encounter::WildEncounter,
     step: u32,
-    tables: &gameboy::trainer::rom::RomTables,
+    tables: &gameboy_plugin_trainer::rom::RomTables,
 ) -> usize {
     // `wEnemyMonSpecies` $CFE5, `wEnemyMonDVs` $CFF1, `wEnemyMonLevel` $CFF3.
     let species = gb.peek(0xCFE5);
@@ -961,7 +963,7 @@ fn verify_encounter(
     // of our assumption: offset 8 of a base-stats entry is the catch rate
     // (`data/pokemon/base_stats/*.asm`). For an ordinary wild encounter the two
     // must be equal; only bait and rocks in the Safari Zone move it.
-    let live_rate = gb.peek(gameboy::trainer::gen1::addr::ENEMY_ACTUAL_CATCH_RATE);
+    let live_rate = gb.peek(gameboy_plugin_trainer::gen1::addr::ENEMY_ACTUAL_CATCH_RATE);
     match tables.base_stats(species).map(|e| e[8]) {
         Some(from_rom) => check(
             "wEnemyMonActualCatchRate vs BaseStats",
@@ -976,8 +978,8 @@ fn verify_encounter(
     // …and the odds must be a real probability that moves the way the routine
     // says: chipping HP and landing sleep can only help.
     {
-        use gameboy::trainer::capture::{odds, Ball, Target};
-        use gameboy::trainer::gen1::Status;
+        use gameboy_plugin_trainer::capture::{odds, Ball, Target};
+        use gameboy_plugin_trainer::gen1::Status;
         let hp = ((gb.peek(0xCFE6) as u16) << 8) | gb.peek(0xCFE7) as u16;
         let max_hp = ((gb.peek(0xCFF4) as u16) << 8) | gb.peek(0xCFF5) as u16;
         let full = Target {
@@ -1034,7 +1036,10 @@ fn verify_encounter(
 
 /// Render the banner exactly as the terminal frontend would, so the log carries
 /// the thing the captain will actually see.
-fn banner_text(enc: &gameboy::trainer::encounter::WildEncounter, width: usize) -> String {
+fn banner_text(
+    enc: &gameboy_plugin_trainer::encounter::WildEncounter,
+    width: usize,
+) -> String {
     tv::encounter_banner(enc, width)
         .spans
         .iter()
@@ -1359,7 +1364,7 @@ impl Party {
         save
     }
 
-    fn compare(&self, st: &gameboy::trainer::TrainerState) -> usize {
+    fn compare(&self, st: &gameboy_plugin_trainer::TrainerState) -> usize {
         let mut bad = 0;
         let mut check = |what: &str, got: String, want: String| {
             if got != want {
@@ -1445,7 +1450,7 @@ fn encode_name(s: &str) -> [u8; 11] {
 
 /// Render the trainer panel to an off-screen terminal and print it, so the log
 /// carries a picture of what the change actually produces.
-fn print_panel(st: &gameboy::trainer::TrainerState) {
+fn print_panel(st: &gameboy_plugin_trainer::TrainerState) {
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::widgets::Paragraph;

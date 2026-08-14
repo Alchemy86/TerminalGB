@@ -267,7 +267,7 @@ impl RenderPath {
 /// The banner exists to be impossible to miss, so "on" is the default and
 /// includes the terminal bell — but a bell is exactly the sort of thing a person
 /// wants to be able to switch off, and someone watching a stream may want the
-/// row gone entirely. See [`crate::trainer::encounter`].
+/// row gone entirely. See [`gameboy_plugin_trainer::encounter`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShinyAlert {
     /// Banner for every catchable wild encounter, plus a toast and the terminal
@@ -373,10 +373,10 @@ pub struct Config {
     /// machine. See [`crate::plugin`].
     pub plugins: Vec<String>,
     /// Trade file for the Gen 1 link partner, or `None` for its built-in offer.
-    /// See [`crate::plugin::gen1::spec`].
+    /// See [`gameboy_plugin_gen1_link::spec`].
     pub gen1_trade: Option<String>,
     /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
-    /// built-in presets. See [`crate::plugin::battle::preset`].
+    /// built-in presets. See [`gameboy_plugin_battle_control::preset`].
     pub battles: Option<String>,
     /// Open the trainer panel as soon as a game starts, rather than waiting for
     /// `T`. Off by default — the panel is opt-in — but somebody who plays with
@@ -384,7 +384,7 @@ pub struct Config {
     pub trainer: bool,
     /// Program the `agent` plugin runs to decide what to do, with arguments,
     /// space-separated. `None` means the agent plugin has no driver and will
-    /// not attach. See [`crate::agent`] and `docs/claude-plays.md`.
+    /// not attach. See [`gameboy_plugin_agent`] and `docs/claude-plays.md`.
     pub agent_command: Option<String>,
     /// One sentence describing what the agent is trying to achieve this
     /// session, handed to the driver every call.

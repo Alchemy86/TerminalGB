@@ -32,7 +32,7 @@
 //! should say so, not quietly fight the wrong thing.
 
 use super::script::Script;
-use crate::plugin::gen1::party::PARTY_LENGTH;
+use gameboy_plugin_gen1_link::party::PARTY_LENGTH;
 
 /// One requested Pokémon, before it is resolved against a cartridge.
 ///
@@ -46,7 +46,7 @@ use crate::plugin::gen1::party::PARTY_LENGTH;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MonPlan {
     /// A name (`Charizard`), a `#`-prefixed Pokédex number (`#6`), or a bare
-    /// internal index — resolved by [`crate::plugin::gen1::romdata`].
+    /// internal index — resolved by [`gameboy_plugin_gen1_link::romdata`].
     pub species: String,
     pub level: u8,
     pub nickname: Option<String>,

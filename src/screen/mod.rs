@@ -36,9 +36,11 @@ pub mod tui;
 /// Layout of the live Gen 1 trainer panel — see [`trainer_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+#[cfg(feature = "plugin-trainer")]
 pub mod trainer_view;
 
 /// Layout of the AI agent's commentary panel — see [`agent_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+#[cfg(feature = "plugin-agent")]
 pub mod agent_view;

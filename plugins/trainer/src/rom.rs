@@ -71,9 +71,9 @@ mod base {
 /// The cartridge image, with the accessors a tracker needs.
 ///
 /// Held by value (the frontend clones the ROM it already loaded) because
-/// [`crate::plugin::DebugView`] has no banked-ROM read: `peek` only sees the
+/// [`gameboy_plugin_api::Machine`] has no banked-ROM read: `peek` only sees the
 /// bank the game currently has mapped, and mapping another one would be a
-/// write. See the note at the top of [`crate::plugin`].
+/// write. See the note at the top of [`gameboy_plugin_api`].
 pub struct RomTables {
     rom: Vec<u8>,
 }

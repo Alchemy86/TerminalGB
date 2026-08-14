@@ -36,7 +36,7 @@ pub enum Poll {
     /// The reply text.
     Ready(String),
     /// The call failed. The detail is for the log; the panel sees only a
-    /// [`crate::agent::commentary::Problem`] category.
+    /// [`crate::commentary::Problem`] category.
     Failed(DriverError),
 }
 
@@ -52,8 +52,8 @@ pub enum DriverError {
 }
 
 impl DriverError {
-    pub fn category(&self) -> crate::agent::commentary::Problem {
-        use crate::agent::commentary::Problem;
+    pub fn category(&self) -> crate::commentary::Problem {
+        use crate::commentary::Problem;
         match self {
             DriverError::Timeout => Problem::Timeout,
             DriverError::Unreadable(_) => Problem::Unreadable,
@@ -100,7 +100,7 @@ pub trait Driver: Send {
     /// This exists so a subprocess adapter's stderr is not simply thrown away —
     /// it is the only place an operator can see why an adapter is failing. It
     /// must never reach the commentary panel: see
-    /// [`crate::agent::commentary`]. Most drivers have nothing to say.
+    /// [`crate::commentary`]. Most drivers have nothing to say.
     fn take_stderr(&mut self) -> String {
         String::new()
     }

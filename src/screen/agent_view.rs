@@ -25,7 +25,7 @@
 //! 4. **Everything here is public and permanent.** Anything the panel renders
 //!    can be clipped and reposted. Nothing internal reaches it: the text has
 //!    already been through
-//!    [`sanitise`](crate::agent::commentary::sanitise), and errors arrive as a
+//!    [`sanitise`](gameboy_plugin_agent::commentary::sanitise), and errors arrive as a
 //!    category rather than a message.
 //!
 //! # And it must not touch the picture
@@ -42,7 +42,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::agent::commentary::{Activity, Commentary, Entry, Kind};
+use gameboy_plugin_agent::commentary::{Activity, Commentary, Entry, Kind};
 
 /// Rows the panel takes when there is room. Chosen for the OBS layout: a
 /// header, the goal (up to two wrapped lines), the "now" line, and four lines
@@ -218,7 +218,7 @@ fn wrap(s: &str, width: usize, rows: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::commentary::Problem;
+    use gameboy_plugin_agent::commentary::Problem;
 
     fn text_of(lines: &[Line<'_>]) -> String {
         lines
@@ -236,7 +236,7 @@ mod tests {
     fn busy() -> Commentary {
         let mut c = Commentary::default();
         c.set_goal(1, "Get out of the house and find Professor Oak");
-        c.set_activity(crate::agent::commentary::Activity::Playing);
+        c.set_activity(gameboy_plugin_agent::commentary::Activity::Playing);
         c.set_doing("walk down 3");
         c.thought(2, "The stairs are on the right, so I'll head over there.");
         c.act(3, "walk right 4 — walked 4 step(s) to (7,1)");

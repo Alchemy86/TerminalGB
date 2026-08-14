@@ -1,0 +1,13 @@
+[package]
+name = "gameboy-plugin-api"
+version = "0.1.0"
+description = "The plugin contract for the gameboy emulator — trait, capabilities, events. No dependencies."
+authors = ["gameboy contributors"]
+repository = "https://github.com/Alchemy86/gameboy"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+# Deliberately empty, and worth keeping that way: a plugin author should be able
+# to depend on this contract without inheriting a build-system problem.
+[dependencies]

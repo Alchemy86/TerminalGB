@@ -3,7 +3,7 @@
 //! Everything here runs against a **synthetic cartridge**: a ROM image built in
 //! this file that contains the same tables and the same machine-code shapes a
 //! real Pokémon Blue does, and a header that passes
-//! [`crate::trainer::Game::detect`]. No commercial ROM is needed, and none is
+//! [`gameboy_plugin_trainer::Game::detect`]. No commercial ROM is needed, and none is
 //! in this repository.
 //!
 //! What a synthetic ROM cannot prove is that the *engine* behaves — that a
@@ -11,9 +11,10 @@
 //! `examples/gen1_battle.rs`, which drives the real cartridge.
 
 use super::*;
-use crate::mmu::MemoryManagementUnit;
-use crate::plugin::gen1::text;
-use crate::plugin::PluginHost;
+use gameboy::testing::TestMachine;
+use gameboy_plugin_api::MachineAccess;
+use gameboy_plugin_api::PluginHost;
+use gameboy_plugin_gen1_link::text;
 
 // ---------------------------------------------------------------------------
 // A cartridge to test against
@@ -271,29 +272,29 @@ fn plugin(text: &str) -> BattlePlugin {
 
 /// An MMU running the synthetic cartridge, so the tests exercise the real
 /// [`Machine`] plumbing rather than a mock.
-fn mmu() -> MemoryManagementUnit<'static> {
-    MemoryManagementUnit::new(synthetic_rom(), None).unwrap()
+fn mmu() -> TestMachine {
+    TestMachine::new(synthetic_rom()).unwrap()
 }
 
 /// Put the machine in the state the plugin waits for: out of a battle, off the
 /// link, with a party. WRAM is seeded with a fixed pseudo-random pattern
-/// (`crate::mmu`), so none of these read as zero by default — and `wLinkState`
+/// (the emulator’s MMU), so none of these read as zero by default — and `wLinkState`
 /// reading as nonzero is exactly the "we are mid-trade, do not fire" case the
 /// plugin is meant to hold for.
-fn overworld(mem: &mut MemoryManagementUnit) {
-    mem.debug_poke(wram::addr::IS_IN_BATTLE, 0);
-    mem.debug_poke(wram::addr::LINK_STATE, 0);
-    mem.debug_poke(wram::addr::CUR_OPPONENT, 0);
-    mem.debug_poke(wram::addr::PARTY_COUNT, 1);
+fn overworld(mem: &mut TestMachine) {
+    mem.poke(wram::addr::IS_IN_BATTLE, 0);
+    mem.poke(wram::addr::LINK_STATE, 0);
+    mem.poke(wram::addr::CUR_OPPONENT, 0);
+    mem.poke(wram::addr::PARTY_COUNT, 1);
 }
 
 /// Drive `n` frames through a host, letting a closure play the part of the
 /// battle engine.
 fn run(
     host: &mut PluginHost,
-    mem: &mut MemoryManagementUnit,
+    mem: &mut TestMachine,
     n: u32,
-    mut engine: impl FnMut(u32, &mut MemoryManagementUnit),
+    mut engine: impl FnMut(u32, &mut TestMachine),
 ) {
     for f in 0..n {
         engine(f, mem);
@@ -338,7 +339,7 @@ fn an_unknown_cartridge_makes_the_plugin_inert_and_visible() {
     for (i, c) in b"POKEMON YELLOW".iter().enumerate() {
         rom[0x134 + i] = *c;
     }
-    let mut mem = MemoryManagementUnit::new(rom.clone(), None).unwrap();
+    let mut mem = TestMachine::new(rom.clone()).unwrap();
     let mut host = PluginHost::new();
     host.register(Box::new(
         BattlePlugin::new(rom, PresetFile::builtin()).unwrap(),
@@ -499,8 +500,8 @@ fn an_injected_party_inherits_the_running_games_trainer_id() {
     let plan = p.build_plan(p.selected().unwrap()).unwrap();
     let mut mem = mmu();
     // wPlayerID is big-endian, like every other multi-byte Pokémon field.
-    mem.debug_poke(crate::trainer::gen1::addr::PLAYER_ID, 0x12);
-    mem.debug_poke(crate::trainer::gen1::addr::PLAYER_ID + 1, 0x34);
+    mem.poke(gameboy_plugin_trainer::gen1::addr::PLAYER_ID, 0x12);
+    mem.poke(gameboy_plugin_trainer::gen1::addr::PLAYER_ID + 1, 0x34);
     let blocks = {
         let mut m = Machine::new(&mut mem, p.capabilities());
         p.player_blocks(&plan, &mut m)
@@ -547,8 +548,8 @@ fn the_plugin_refuses_to_write_cartridge_ram() {
     let mut p = plugin("[a]\nwild = Pidgey\n");
     let mut mem = mmu();
     // Enable cartridge RAM and put a known byte in it, the way a game would.
-    mem.wb(0x0000, 0x0A);
-    mem.wb(0xA000, 0x77);
+    mem.bus_write(0x0000, 0x0A);
+    mem.bus_write(0xA000, 0x77);
     {
         let mut m = Machine::new(&mut mem, p.capabilities());
         p.write(&mut m, 0xA000, 0xEE);
@@ -557,8 +558,8 @@ fn the_plugin_refuses_to_write_cartridge_ram() {
         // the write path being broken altogether.
         p.write(&mut m, wram::addr::CUR_OPPONENT, 0x24);
     }
-    assert_eq!(mem.rb(0xA000), 0x77, "cartridge RAM is untouched");
-    assert_eq!(mem.debug_peek(wram::addr::CUR_OPPONENT), 0x24);
+    assert_eq!(mem.bus_read(0xA000), 0x77, "cartridge RAM is untouched");
+    assert_eq!(mem.peek(wram::addr::CUR_OPPONENT), 0x24);
     assert_eq!(p.refused_writes(), 2);
 }
 
@@ -595,24 +596,24 @@ fn arming_writes_the_party_then_the_trigger_and_restores_afterwards() {
     // Whatever the save had in the party slot, recorded so we can insist it
     // comes back.
     let before: Vec<u8> = (0..44)
-        .map(|i| mem.debug_peek(wram::addr::PARTY_MONS + i))
+        .map(|i| mem.peek(wram::addr::PARTY_MONS + i))
         .collect();
-    let count_before = mem.debug_peek(wram::addr::PARTY_COUNT);
+    let count_before = mem.peek(wram::addr::PARTY_COUNT);
 
     let mut saw_trigger = None;
     run(&mut host, &mut mem, 60, |f, mem| {
         // The engine: once wCurOpponent is set, start a battle two frames
         // later and end it at frame 40.
-        let trigger = mem.debug_peek(wram::addr::CUR_OPPONENT);
+        let trigger = mem.peek(wram::addr::CUR_OPPONENT);
         if trigger != 0 && saw_trigger.is_none() {
             saw_trigger = Some(f);
         }
         if let Some(t) = saw_trigger {
             if f >= t + 2 && f < 40 {
-                mem.debug_poke(wram::addr::IS_IN_BATTLE, 1);
+                mem.poke(wram::addr::IS_IN_BATTLE, 1);
             } else if f >= 40 {
-                mem.debug_poke(wram::addr::IS_IN_BATTLE, 0);
-                mem.debug_poke(wram::addr::CUR_OPPONENT, 0);
+                mem.poke(wram::addr::IS_IN_BATTLE, 0);
+                mem.poke(wram::addr::CUR_OPPONENT, 0);
             }
         }
     });
@@ -625,10 +626,10 @@ fn arming_writes_the_party_then_the_trigger_and_restores_afterwards() {
 
     // Guarantee 2: everything it wrote, it put back.
     let after: Vec<u8> = (0..44)
-        .map(|i| mem.debug_peek(wram::addr::PARTY_MONS + i))
+        .map(|i| mem.peek(wram::addr::PARTY_MONS + i))
         .collect();
     assert_eq!(after, before, "the party was not restored");
-    assert_eq!(mem.debug_peek(wram::addr::PARTY_COUNT), count_before);
+    assert_eq!(mem.peek(wram::addr::PARTY_COUNT), count_before);
 }
 
 /// ...and the party really was different in between, or the restore test above
@@ -647,17 +648,17 @@ fn the_injected_party_is_actually_in_wram_during_the_battle() {
 
     // One frame is enough: the plugin fires as soon as it sees the overworld.
     host.on_frame(&mut mem);
-    assert_eq!(mem.debug_peek(wram::addr::CUR_OPPONENT), IDX_PIDGEY);
-    assert_eq!(mem.debug_peek(wram::addr::CUR_ENEMY_LEVEL), 3);
-    assert_eq!(mem.debug_peek(wram::addr::PARTY_COUNT), 1);
-    assert_eq!(mem.debug_peek(wram::addr::PARTY_SPECIES), IDX_CHARIZARD);
-    assert_eq!(mem.debug_peek(wram::addr::PARTY_MONS), IDX_CHARIZARD);
+    assert_eq!(mem.peek(wram::addr::CUR_OPPONENT), IDX_PIDGEY);
+    assert_eq!(mem.peek(wram::addr::CUR_ENEMY_LEVEL), 3);
+    assert_eq!(mem.peek(wram::addr::PARTY_COUNT), 1);
+    assert_eq!(mem.peek(wram::addr::PARTY_SPECIES), IDX_CHARIZARD);
+    assert_eq!(mem.peek(wram::addr::PARTY_MONS), IDX_CHARIZARD);
     // Level is at offset 33 of a party_struct, big-endian max HP at 34.
-    assert_eq!(mem.debug_peek(wram::addr::PARTY_MONS + 33), 50);
+    assert_eq!(mem.peek(wram::addr::PARTY_MONS + 33), 50);
     assert_eq!(
         u16::from_be_bytes([
-            mem.debug_peek(wram::addr::PARTY_MONS + 34),
-            mem.debug_peek(wram::addr::PARTY_MONS + 35),
+            mem.peek(wram::addr::PARTY_MONS + 34),
+            mem.peek(wram::addr::PARTY_MONS + 35),
         ]),
         153
     );
@@ -674,19 +675,19 @@ fn a_preset_without_a_player_line_leaves_every_party_byte_alone() {
     let mut mem = mmu();
     let mut host = PluginHost::new();
     overworld(&mut mem);
-    mem.debug_poke(wram::addr::PARTY_COUNT, 3);
+    mem.poke(wram::addr::PARTY_COUNT, 3);
     let before: Vec<u8> = (wram::addr::PARTY_COUNT..wram::addr::PARTY_DATA_END)
-        .map(|a| mem.debug_peek(a))
+        .map(|a| mem.peek(a))
         .collect();
     let mut p = plugin("[a]\nwild = Mew\nlevel = 70\n");
     p.arm("a").unwrap();
     host.register(Box::new(p)).unwrap();
     host.on_frame(&mut mem);
     let after: Vec<u8> = (wram::addr::PARTY_COUNT..wram::addr::PARTY_DATA_END)
-        .map(|a| mem.debug_peek(a))
+        .map(|a| mem.peek(a))
         .collect();
     assert_eq!(before, after);
-    assert_eq!(mem.debug_peek(wram::addr::CUR_OPPONENT), IDX_MEW);
+    assert_eq!(mem.peek(wram::addr::CUR_OPPONENT), IDX_MEW);
 }
 
 /// A save with no Pokémon would black out the instant a battle started, which
@@ -697,13 +698,13 @@ fn a_battle_is_not_started_for_a_save_with_no_pokemon() {
     let mut mem = mmu();
     let mut host = PluginHost::new();
     overworld(&mut mem);
-    mem.debug_poke(wram::addr::PARTY_COUNT, 0);
+    mem.poke(wram::addr::PARTY_COUNT, 0);
     let mut p = plugin("[a]\nwild = Pidgey\n");
     p.arm("a").unwrap();
     host.register(Box::new(p)).unwrap();
     run(&mut host, &mut mem, 950, |_, _| {});
     let p = host.get::<BattlePlugin>().unwrap();
-    assert_eq!(mem.debug_peek(wram::addr::CUR_OPPONENT), 0);
+    assert_eq!(mem.peek(wram::addr::CUR_OPPONENT), 0);
     match p.phase() {
         Phase::Failed(m) => assert!(m.contains("no Pokémon"), "{m}"),
         other => panic!("expected a refusal, got {other:?}"),
@@ -721,8 +722,8 @@ fn a_seed_is_written_to_the_games_own_rng_bytes() {
     p.arm("a").unwrap();
     host.register(Box::new(p)).unwrap();
     host.on_frame(&mut mem);
-    assert_eq!(mem.debug_peek(wram::addr::RANDOM_ADD), 0xBE);
-    assert_eq!(mem.debug_peek(wram::addr::RANDOM_SUB), 0xEF);
+    assert_eq!(mem.peek(wram::addr::RANDOM_ADD), 0xBE);
+    assert_eq!(mem.peek(wram::addr::RANDOM_SUB), 0xEF);
 }
 
 /// The opposition override keeps being applied until it reads back unchanged —
@@ -738,19 +739,18 @@ fn an_opposition_override_survives_the_engine_writing_after_us() {
     host.register(Box::new(p)).unwrap();
     run(&mut host, &mut mem, 30, |f, mem| {
         if f >= 1 {
-            mem.debug_poke(wram::addr::IS_IN_BATTLE, 1);
+            mem.poke(wram::addr::IS_IN_BATTLE, 1);
         }
         // The engine scribbles over the enemy struct for the first few frames,
         // as `LoadEnemyMonData` would if it landed after our write.
         if (2..6).contains(&f) {
             for i in 0..wram::BATTLE_STRUCT_LENGTH as u16 {
-                mem.debug_poke(wram::addr::ENEMY_MON + i, 0x5A);
+                mem.poke(wram::addr::ENEMY_MON + i, 0x5A);
             }
         }
     });
-    let dv_hi = mem.debug_peek(wram::addr::ENEMY_MON + wram::battle_field::DVS as u16);
-    let dv_lo =
-        mem.debug_peek(wram::addr::ENEMY_MON + wram::battle_field::DVS as u16 + 1);
+    let dv_hi = mem.peek(wram::addr::ENEMY_MON + wram::battle_field::DVS as u16);
+    let dv_lo = mem.peek(wram::addr::ENEMY_MON + wram::battle_field::DVS as u16 + 1);
     assert_eq!((dv_hi, dv_lo), (0x12, 0x34), "the override did not stick");
     let p = host.get::<BattlePlugin>().unwrap();
     assert!(
@@ -775,11 +775,11 @@ fn a_script_presses_buttons_the_console_can_see() {
     let mut pressed_frames = 0;
     for f in 0..20u32 {
         if f >= 1 {
-            mem.debug_poke(wram::addr::IS_IN_BATTLE, 1);
+            mem.poke(wram::addr::IS_IN_BATTLE, 1);
         }
         host.on_frame(&mut mem);
-        mem.wb(0xFF00, 0x10); // P15 low selects the button row
-        if mem.rb(0xFF00) & 0x01 == 0 {
+        mem.bus_write(0xFF00, 0x10); // P15 low selects the button row
+        if mem.bus_read(0xFF00) & 0x01 == 0 {
             pressed_frames += 1;
         }
     }
@@ -788,8 +788,8 @@ fn a_script_presses_buttons_the_console_can_see() {
         "A must be held for exactly the stated frames"
     );
     // ...and let go afterwards, or every later frame would read as a press.
-    mem.wb(0xFF00, 0x10);
-    assert_eq!(mem.rb(0xFF00) & 0x01, 0x01, "A was never released");
+    mem.bus_write(0xFF00, 0x10);
+    assert_eq!(mem.bus_read(0xFF00) & 0x01, 0x01, "A was never released");
     let p = host.get::<BattlePlugin>().unwrap();
     assert_eq!(p.script_progress(), Some((2, 2)));
 }

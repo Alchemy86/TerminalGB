@@ -32,7 +32,7 @@
 //! [`super::Game::detect`] refuses them rather than showing plausible garbage.
 
 /// Every address here is `WRAM0`, i.e. it lives at a fixed place on the bus
-/// regardless of banking, so a plain [`crate::plugin::DebugView::peek`] reads it
+/// regardless of banking, so a plain [`gameboy_plugin_api::Machine::peek`] reads it
 /// correctly at any time.
 pub mod addr {
     /// `wPlayerName` — 11 bytes, terminated by `$50`.
@@ -100,7 +100,7 @@ pub mod addr {
     /// same `+1` / `+8` offsets as [`PARTY_COUNT`] / [`PARTY_SPECIES`] /
     /// [`PARTY_MONS`], which `the_enemy_block_mirrors_the_player_block` pins.
     /// The values are only *used* after
-    /// [`TrainerState::enemy_team`](crate::trainer::TrainerState::enemy_team)'s
+    /// [`TrainerState::enemy_team`](crate::TrainerState::enemy_team)'s
     /// consistency check passes, so a wrong address shows `?` rather than a
     /// confident lie.
     pub const ENEMY_PARTY_COUNT: u16 = 0xD89C;

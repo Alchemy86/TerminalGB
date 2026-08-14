@@ -581,6 +581,6 @@ mod tests {
         g.call_succeeded(Usage::default());
         let s = g.status();
         assert!(s.contains("1/3 calls"), "{s}");
-        assert!(crate::agent::commentary::sanitise(&s, 200).is_some());
+        assert!(crate::commentary::sanitise(&s, 200).is_some());
     }
 }

@@ -34,11 +34,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use gameboy::agent::commentary::Problem;
-use gameboy::agent::driver::{Driver, Poll, ScriptedDriver};
-use gameboy::agent::governor::Budget;
-use gameboy::agent::{AgentPlugin, Config, PhaseView};
 use gameboy::gameboy::Gameboy;
+use gameboy_plugin_agent::commentary::Problem;
+use gameboy_plugin_agent::driver::{Driver, Poll, ScriptedDriver};
+use gameboy_plugin_agent::governor::Budget;
+use gameboy_plugin_agent::{AgentPlugin, Config, PhaseView};
 
 // ---------------------------------------------------------------------------
 // A tiny absolute-jump assembler, so the program below can be read
@@ -650,7 +650,7 @@ fn case_the_budget_cap_fires() -> Case {
     let halted = p.governor().halted();
     let said = p.commentary().pause_reason().unwrap_or("").to_string();
     let ok = calls == 4
-        && halted == Some(gameboy::agent::governor::Halt::Calls)
+        && halted == Some(gameboy_plugin_agent::governor::Halt::Calls)
         && said.contains("decision budget");
     Case {
         name: "the call budget stops the agent and says so publicly",
@@ -681,7 +681,7 @@ fn case_the_circuit_breaker_fires() -> Case {
                 return Poll::Idle;
             }
             self.busy = false;
-            Poll::Failed(gameboy::agent::driver::DriverError::Crashed(
+            Poll::Failed(gameboy_plugin_agent::driver::DriverError::Crashed(
                 "/home/somebody/secret.py exploded".to_string(),
             ))
         }
@@ -718,7 +718,7 @@ fn case_the_circuit_breaker_fires() -> Case {
         .commentary()
         .history()
         .any(|e| e.text == Problem::Crashed.public_text());
-    let ok = halted == Some(gameboy::agent::governor::Halt::Broken)
+    let ok = halted == Some(gameboy_plugin_agent::governor::Halt::Broken)
         && calls < 60
         && !leaked
         && saw_category;

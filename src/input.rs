@@ -5,55 +5,12 @@ pub struct Keypad {
     pub interrupt: u8,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[repr(C)]
-pub enum KeypadKey {
-    Right,
-    Left,
-    Up,
-    Down,
-    A,
-    B,
-    Select,
-    Start,
-}
-
-impl KeypadKey {
-    /// Every button, in the order the hardware's two rows list them.
-    pub const ALL: [KeypadKey; 8] = [
-        KeypadKey::Right,
-        KeypadKey::Left,
-        KeypadKey::Up,
-        KeypadKey::Down,
-        KeypadKey::A,
-        KeypadKey::B,
-        KeypadKey::Select,
-        KeypadKey::Start,
-    ];
-
-    /// Lower-case name, as an external driver spells it.
-    pub fn name(self) -> &'static str {
-        match self {
-            KeypadKey::Right => "right",
-            KeypadKey::Left => "left",
-            KeypadKey::Up => "up",
-            KeypadKey::Down => "down",
-            KeypadKey::A => "a",
-            KeypadKey::B => "b",
-            KeypadKey::Select => "select",
-            KeypadKey::Start => "start",
-        }
-    }
-
-    /// Parse a button name, case-insensitively. `None` for anything else — an
-    /// external driver's typo must be a reported error, never a silent no-op.
-    pub fn parse(s: &str) -> Option<KeypadKey> {
-        let s = s.trim();
-        KeypadKey::ALL
-            .into_iter()
-            .find(|k| k.name().eq_ignore_ascii_case(s))
-    }
-}
+// `KeypadKey` is defined by the plugin API rather than here, because it is
+// vocabulary both sides need: a plugin names a button, this emulator presses
+// it. Re-exported so `gameboy::KeypadKey` and `crate::input::KeypadKey` keep
+// naming the one and only such type — including across the C FFI, whose
+// `#[repr(C)]` discriminants live with the definition.
+pub use gameboy_plugin_api::KeypadKey;
 
 /// One button action waiting to be performed: hold `key` down for `hold`
 /// emulated frames, then leave every button up for `gap` frames.
@@ -69,13 +26,9 @@ pub struct QueuedPress {
     pub gap: u16,
 }
 
-/// A tap short enough to register as one press and long enough for a game
-/// polling once per frame to see it. Eight frames is ~134 ms — a brisk human
-/// press.
-pub const DEFAULT_HOLD: u16 = 8;
-/// Frames with nothing held after a tap, so consecutive presses are two
-/// presses and not one long hold.
-pub const DEFAULT_GAP: u16 = 8;
+// The tap timings are the API's too: an outside driver has to be able to name
+// the same units the emulator schedules in.
+pub use gameboy_plugin_api::{DEFAULT_GAP, DEFAULT_HOLD};
 
 /// The one mechanism for driving the buttons from outside the emulated
 /// machine.

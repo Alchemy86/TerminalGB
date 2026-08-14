@@ -42,10 +42,10 @@
 //! real game. That reads the file and never writes it.
 
 use gameboy::gameboy::Gameboy;
-use gameboy::plugin::battle::preset::PresetFile;
-use gameboy::plugin::battle::{wram, BattlePlugin, Phase};
 use gameboy::video::{Destination, Pace, PixelFormat, Source, VideoOut, VideoSpec};
 use gameboy::KeypadKey;
+use gameboy_plugin_battle_control::preset::PresetFile;
+use gameboy_plugin_battle_control::{wram, BattlePlugin, Phase};
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -495,7 +495,10 @@ fn play(
                 let tiles: Vec<u8> = (0..20u16)
                     .map(|x| gb.peek(wram::addr::TILE_MAP + row * 20 + x))
                     .collect();
-                println!("  |{}|", gameboy::trainer::text::decode_screen(&tiles));
+                println!(
+                    "  |{}|",
+                    gameboy_plugin_trainer::text::decode_screen(&tiles)
+                );
             }
         }
         if capture {
@@ -675,7 +678,7 @@ fn menu_is_open(gb: &mut Gameboy) -> bool {
     let tiles: Vec<u8> = (0..20 * 18)
         .map(|i| gb.peek(wram::addr::TILE_MAP + i as u16))
         .collect();
-    gameboy::trainer::text::decode_screen(&tiles).contains("OPTION")
+    gameboy_plugin_trainer::text::decode_screen(&tiles).contains("OPTION")
 }
 
 fn hold(gb: &mut Gameboy, key: KeypadKey, frames: u32) {
