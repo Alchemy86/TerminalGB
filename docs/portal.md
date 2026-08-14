@@ -41,6 +41,15 @@ Manual end-to-end walk (also the integration tool against the real portal):
 GB_PORTAL=<url> cargo run --release --example portal_trade -- <rom.gb> [--done]
 ```
 
+`--play --save <cableclub.sav>` goes all the way in one command: it boots the
+staged cartridge on a Cable Club save, walks the player to the Trade Center
+with the shared bot, completes the trade against the portal-armed partner,
+verifies the arriving Pokémon **in the party** field by field (level, DVs, OT
+name, OT id) against the portal's spec, and only then POSTs `/done`. Proven
+against the portal running locally on 2026-08-14: both sides of a real trade
+(`CHARRY` the Charmander for `SQUIRT` the Squirtle) landed with every field
+intact and the portal's log read `completed`.
+
 ## What never happens
 
 - **No save, no ROM, no game bytes are ever uploaded.** The only thing on the
@@ -68,12 +77,21 @@ The route list is the cross-repo agreement; the portal repo documents its side
 as `docs/api-contract.md`. **The JSON bodies below are what this client sends
 and accepts** — if the portal crew's shapes differ, one side must move, and
 that is a coordination item, not something either side changes silently.
+**Reconciled against the shipped portal, 2026-08-14**: the two repos had
+diverged (the portal's `api-contract.md` spells the OT fields camelCase, the
+DVs as an object and the trade relative to the viewer; this client had shipped
+snake_case, a DV array and a flat trade). The client moved — it now *sends*
+the portal's spellings and *accepts* both — because the portal's document is
+the stamped agreement. Verified end-to-end against the portal running locally:
+device sign-in, `trades/mine`, a completed in-game trade, `/done`.
 
 A **mon** object is `MonSpec` in JSON. Required: `species` (name, `#151`, or
-index — resolved by `RomTables::resolve_species`), `level` (1–100), `ot_id`
-(u16), `dvs` (`[atk, def, spd, spc]`, each 0–15; the HP DV is derived).
-Optional: `nickname`, `ot_name` (default `PORTAL`), `moves` (≤ 4 names).
-Out-of-range values are refused **by field name** at fetch time
+index — resolved by `RomTables::resolve_species`), `level` (1–100), `otId`
+(u16; `ot_id` also read), `dvs` (an object `{attack, defense, speed, special}`
+or the trade-file array `[atk, def, spd, spc]`, each 0–15; the HP DV is
+derived). Optional: `nickname`, `otName`/`ot_name` (default `PORTAL`), `moves`
+(≤ 4 names). The client sends both spellings of the OT fields and the object
+form of `dvs`. Out-of-range values are refused **by field name** at fetch time
 (`client::mon_from_json`), before anything is armed.
 
 ```text
@@ -89,16 +107,19 @@ POST /api/device/token   {"client_id","device_code","grant_type":
          ("access"/"refresh" also accepted)
 
 GET  /api/trades/mine                                (Bearer auth from here on)
-  → 200 {"trades":[{"id" (string or number), "friend"?, "give"? (display
-         text), "trainer"? (in-game partner name; falls back to friend,
-         uppercased), "receive": <mon>}]}
+  → 200 {"trades":[{"id" (string or number), "status"?, "youDone"?,
+         "partner"?: {"displayName"}, "youGive"?: <mon>,
+         "youReceive": <mon>}]}
+         (only status "accepted" with youDone false is armed; the flat
+          legacy spelling "friend"/"give"/"trainer"/"receive" is also read)
 
 POST /api/trades/<id>/done   {}          → 200 {}
 
-POST /api/offers             {"mon": <mon>}            → 200 {"id"}
+POST /api/offers             {"mon": <mon>}      → 200 {"offer":{"id"}|"id"}
 GET  /api/friends/<user>/offers
   → 200 {"offers":[{"id","summary"?}]}
-POST /api/offers/<id>/accept {"give": <mon>}           → 200 {"trade_id"|"id"}
+POST /api/offers/<id>/accept {"mon": <mon>}   → 200 {"trade":{"id"}
+                                                     |"trade_id"|"id"}
 
 401/403 on any authed route → "run terminal login again", never a retry loop.
 ```
@@ -110,8 +131,10 @@ Notes for the portal crew, from the client's behaviour:
   client accepts **any** 4xx whose body carries the `error` field.
 - `verification_uri_complete`, if served, is what the browser is pointed at
   (code pre-filled); the plain URI + code are always shown as the fallback.
-- The `user` field on the token reply is what "signed in as …" shows; without
-  it the client still works and just says "signed in".
+- The `user` field on the token reply is what "signed in as …" shows; the
+  live portal does not send one, so the client asks `GET /api/me` for the
+  display name right after the token lands (`auth::whoami`, fail-soft — a
+  failed lookup costs the name, never the sign-in).
 - Trade `id`s may be strings or numbers; the client echoes them back into the
   `/done` path as text.
 

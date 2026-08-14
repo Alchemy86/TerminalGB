@@ -360,6 +360,61 @@ fn main() {
         ),
     }
 
+    // [5b] The live portal's contract shape (`api-contract.md`): camelCase OT
+    // fields, a dvs *object*, the trade relative to the viewer (`youReceive`,
+    // `youGive` as a full spec, `partner.displayName`). Verified against the
+    // real portal 2026-08-14; this pins what that run proved.
+    *stub.trades_body.lock().unwrap() = r#"{"trades":[{
+        "id":10,"status":"accepted","role":"acceptor",
+        "partner":{"displayName":"trainer_red","friendCode":"2NJW4P"},
+        "youGive":{"species":"Squirtle","level":11,"nickname":"SQUIRT",
+                   "otName":"BLUE","otId":24601,"moves":["Tackle"],
+                   "dvs":{"attack":12,"defense":10,"speed":13,"special":9}},
+        "youReceive":{"species":"Charmander","level":12,"nickname":"CHARRY",
+                      "otName":"RED","otId":31337,"moves":["Scratch"],
+                      "dvs":{"attack":11,"defense":9,"speed":14,"special":7}},
+        "youDone":false,"partnerDone":false}]}"#
+        .to_string();
+    match PortalSource::fetch(&portal) {
+        Ok(Some(src)) => check(
+            "the portal's contract shape arms a source",
+            src.trade_id == "10"
+                && src.friend == "trainer_red"
+                && src.give == "SQUIRT lv11"
+                && src.incoming() == "Charmander",
+            &format!(
+                "id={} friend={} give={} incoming={}",
+                src.trade_id,
+                src.friend,
+                src.give,
+                src.incoming()
+            ),
+        ),
+        other => check(
+            "the portal's contract shape arms a source",
+            false,
+            &format!("{:?}", other.map(|o| o.is_some())),
+        ),
+    }
+
+    // [5c] trades/mine includes completed and already-confirmed trades;
+    // arming either would replay a finished trade, so both are skipped.
+    *stub.trades_body.lock().unwrap() = r#"{"trades":[
+        {"id":8,"status":"completed",
+         "partner":{"displayName":"x"},
+         "youReceive":{"species":"Mew","level":5,"otId":1,
+                       "dvs":{"attack":0,"defense":0,"speed":0,"special":0}}},
+        {"id":9,"status":"accepted","youDone":true,
+         "partner":{"displayName":"x"},
+         "youReceive":{"species":"Mew","level":5,"otId":1,
+                       "dvs":{"attack":0,"defense":0,"speed":0,"special":0}}}]}"#
+        .to_string();
+    check(
+        "completed and already-confirmed trades are never re-armed",
+        matches!(PortalSource::fetch(&portal), Ok(None)),
+        "expected Ok(None)",
+    );
+
     // [6] Confirming completion reaches the portal, authenticated.
     portal.trade_done("71").expect("trade_done");
     {

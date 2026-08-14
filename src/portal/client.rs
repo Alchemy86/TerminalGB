@@ -112,7 +112,17 @@ impl Portal {
         let arr = j.get("trades").and_then(Json::as_array).ok_or_else(|| {
             PortalError::Contract("trades/mine carries no 'trades' array".into())
         })?;
-        arr.iter().map(pending_from_json).collect()
+        // The portal's trades/mine includes recently *completed* trades and
+        // ones this side has already confirmed (`youDone`) — arming either
+        // would replay a finished trade, so both are dropped here.
+        arr.iter()
+            .filter(|t| {
+                let status = t.str_field("status").unwrap_or("accepted");
+                let done = matches!(t.get("youDone"), Some(Json::Bool(true)));
+                status == "accepted" && !done
+            })
+            .map(pending_from_json)
+            .collect()
     }
 
     /// `POST /api/trades/<id>/done` — tell the portal this side's trade
@@ -135,7 +145,11 @@ impl Portal {
         let j = json::parse(&resp.body).map_err(|e| {
             PortalError::Contract(format!("offers reply is not JSON: {e}"))
         })?;
-        id_field(&j, "id")
+        // The contract wraps the created offer (`{"offer":{"id":…}}`); a bare
+        // top-level id is accepted too.
+        j.get("offer")
+            .and_then(|o| id_field(o, "id"))
+            .or_else(|| id_field(&j, "id"))
             .ok_or_else(|| PortalError::Contract("offers reply carries no 'id'".into()))
     }
 
@@ -173,7 +187,8 @@ impl Portal {
     pub fn accept(&self, offer_id: &str, give: &MonSpec) -> Result<String, PortalError> {
         let mut w = Writer::new();
         w.begin_obj();
-        w.obj_field("give");
+        // The contract names the give-back field "mon" (what you give back).
+        w.obj_field("mon");
         mon_to_json(&mut w, give);
         w.end_obj();
         w.end_obj();
@@ -181,7 +196,10 @@ impl Portal {
         let j = json::parse(&resp.body).map_err(|e| {
             PortalError::Contract(format!("accept reply is not JSON: {e}"))
         })?;
-        id_field(&j, "trade_id")
+        // Contract reply is `{"trade": Trade}`; older stubs said trade_id/id.
+        j.get("trade")
+            .and_then(|t| id_field(t, "id"))
+            .or_else(|| id_field(&j, "trade_id"))
             .or_else(|| id_field(&j, "id"))
             .ok_or_else(|| {
                 PortalError::Contract("accept reply carries no trade id".into())
@@ -201,11 +219,17 @@ fn id_field(j: &Json, key: &str) -> Option<String> {
 /// Encode one Pokémon spec into an open JSON object (caller owns the braces
 /// via `obj_field`).
 fn mon_to_json(w: &mut Writer, m: &MonSpec) {
+    // The wire spellings are the portal contract's (`api-contract.md`):
+    // camelCase OT fields and a dvs *object*. The snake_case twins are written
+    // too, so an older stub or self-hosted portal keeps working — the portal
+    // ignores fields it does not know.
     w.str_field("species", &m.species);
     w.num_field("level", m.level as f64);
     if !m.nickname.is_empty() {
         w.str_field("nickname", &m.nickname);
     }
+    w.str_field("otName", &m.ot_name);
+    w.num_field("otId", m.ot_id as f64);
     w.str_field("ot_name", &m.ot_name);
     w.num_field("ot_id", m.ot_id as f64);
     w.arr_field("moves");
@@ -213,12 +237,12 @@ fn mon_to_json(w: &mut Writer, m: &MonSpec) {
         w.str_item(mv);
     }
     w.end_arr();
-    w.arr_field("dvs");
-    w.num_item(m.dvs.0 as f64);
-    w.num_item(m.dvs.1 as f64);
-    w.num_item(m.dvs.2 as f64);
-    w.num_item(m.dvs.3 as f64);
-    w.end_arr();
+    w.obj_field("dvs");
+    w.num_field("attack", m.dvs.0 as f64);
+    w.num_field("defense", m.dvs.1 as f64);
+    w.num_field("speed", m.dvs.2 as f64);
+    w.num_field("special", m.dvs.3 as f64);
+    w.end_obj();
 }
 
 /// Decode one Pokémon spec, refusing anything out of range **by field name**.
@@ -239,6 +263,7 @@ pub fn mon_from_json(j: &Json) -> Result<MonSpec, PortalError> {
     }
     let ot_id = j
         .u64_field("ot_id")
+        .or_else(|| j.u64_field("otId"))
         .ok_or_else(|| bad(format!("{species}: no 'ot_id'")))?;
     if ot_id > u16::MAX as u64 {
         return Err(bad(format!(
@@ -262,19 +287,27 @@ pub fn mon_from_json(j: &Json) -> Result<MonSpec, PortalError> {
             moves.len()
         )));
     }
-    let dv_arr = j
+    // `dvs` arrives either as the trade-file array `[atk, def, spd, spc]` or
+    // as the portal contract's object `{attack, defense, speed, special}`.
+    let dvs_json = j
         .get("dvs")
-        .and_then(Json::as_array)
         .ok_or_else(|| bad(format!("{species}: no 'dvs'")))?;
-    if dv_arr.len() != 4 {
+    let dv_values: Vec<Option<u64>> = match dvs_json {
+        Json::Arr(arr) => arr.iter().map(Json::as_u64).collect(),
+        Json::Obj(_) => ["attack", "defense", "speed", "special"]
+            .iter()
+            .map(|k| dvs_json.u64_field(k))
+            .collect(),
+        _ => return Err(bad(format!("{species}: 'dvs' is neither array nor object"))),
+    };
+    if dv_values.len() != 4 {
         return Err(bad(format!(
             "{species}: dvs needs four values (attack, defense, speed, special)"
         )));
     }
     let mut dvs = [0u8; 4];
-    for (i, d) in dv_arr.iter().enumerate() {
+    for (i, d) in dv_values.into_iter().enumerate() {
         let v = d
-            .as_u64()
             .filter(|v| *v <= 15)
             .ok_or_else(|| bad(format!("{species}: DV #{} is outside 0..=15", i + 1)))?;
         dvs[i] = v as u8;
@@ -283,7 +316,11 @@ pub fn mon_from_json(j: &Json) -> Result<MonSpec, PortalError> {
         species,
         level: level as u8,
         nickname: j.str_field("nickname").unwrap_or("").to_string(),
-        ot_name: j.str_field("ot_name").unwrap_or("PORTAL").to_string(),
+        ot_name: j
+            .str_field("ot_name")
+            .or_else(|| j.str_field("otName"))
+            .unwrap_or("PORTAL")
+            .to_string(),
         ot_id: ot_id as u16,
         moves,
         dvs: (dvs[0], dvs[1], dvs[2], dvs[3]),
@@ -293,16 +330,45 @@ pub fn mon_from_json(j: &Json) -> Result<MonSpec, PortalError> {
 fn pending_from_json(j: &Json) -> Result<PendingTrade, PortalError> {
     let id = id_field(j, "id")
         .ok_or_else(|| PortalError::Contract("a trade with no 'id'".into()))?;
-    let receive = j.get("receive").ok_or_else(|| {
-        PortalError::Contract(format!("trade {id}: no 'receive' Pokémon"))
-    })?;
+    // Contract shape first (`youReceive`, `partner.displayName`, `youGive` as
+    // a full spec); the flat `receive`/`friend`/`give` spelling of older
+    // stubs is still read.
+    let receive = j
+        .get("youReceive")
+        .or_else(|| j.get("receive"))
+        .ok_or_else(|| {
+            PortalError::Contract(format!("trade {id}: no 'youReceive' Pokémon"))
+        })?;
+    let partner_name = j
+        .get("partner")
+        .and_then(|p| p.str_field("displayName"))
+        .or_else(|| j.str_field("friend"))
+        .map(str::to_string);
+    // The give side is confirmation text only. The contract sends the full
+    // spec under `youGive`; summarise it the way the offer list does.
+    let give = j
+        .str_field("give")
+        .map(str::to_string)
+        .or_else(|| {
+            let g = j.get("youGive")?;
+            let name = g
+                .str_field("nickname")
+                .or_else(|| g.str_field("species"))?
+                .to_string();
+            let level = g.u64_field("level")?;
+            Some(format!("{name} lv{level}"))
+        })
+        .unwrap_or_else(|| "(unknown)".to_string());
     Ok(PendingTrade {
-        friend: j.str_field("friend").unwrap_or("a friend").to_string(),
-        give: j.str_field("give").unwrap_or("(unknown)").to_string(),
+        friend: partner_name
+            .clone()
+            .unwrap_or_else(|| "a friend".to_string()),
+        give,
         trainer: j
             .str_field("trainer")
-            .or_else(|| j.str_field("friend"))
-            .unwrap_or("PORTAL")
+            .map(str::to_string)
+            .or(partner_name)
+            .unwrap_or_else(|| "PORTAL".to_string())
             .to_ascii_uppercase(),
         receive: mon_from_json(receive)
             .map_err(|e| PortalError::Contract(format!("trade {id}: {e}")))?,

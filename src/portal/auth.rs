@@ -297,6 +297,19 @@ pub fn device_poll(portal: &str, device_code: &str) -> Result<Poll, PortalError>
     }
 }
 
+/// `GET /api/me` with a freshly issued token — learns the account's display
+/// name when the token reply carried no `user` field (the live portal's
+/// contract does not include one). Fail-soft on purpose: a name is cosmetic,
+/// and sign-in must not fail because a lookup did.
+pub fn whoami(portal: &str, access: &str) -> Option<String> {
+    let resp = http::get(&format!("{portal}/api/me"), Some(access)).ok()?;
+    if !resp.ok() {
+        return None;
+    }
+    let j = json::parse(&resp.body).ok()?;
+    j.get("user")?.str_field("displayName").map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

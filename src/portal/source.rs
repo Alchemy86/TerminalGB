@@ -63,6 +63,12 @@ impl PortalSource {
         &self.spec.mons[0].species
     }
 
+    /// The full spec of the arriving Pokémon — what a caller checks the
+    /// in-game party against after the trade lands.
+    pub fn receive(&self) -> &terminalgb_plugin_gen1_link::spec::MonSpec {
+        &self.spec.mons[0]
+    }
+
     /// Inherent copy of [`PokemonSource::describe`], for callers that do not
     /// import the trait. The test harness in particular must not link the
     /// plugin crate directly: with `[profile.release] panic = 'abort'` on the

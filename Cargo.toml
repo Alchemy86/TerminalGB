@@ -289,7 +289,9 @@ required-features = ["image", "plugin-gen1-link"]
 [[example]]
 name = "portal_trade"
 path = "examples/portal_trade.rs"
-required-features = ["portal"]
+# `--play` drives the shared Cable Club bot (screenshots via `image`, party
+# verdicts via the trainer plugin's shiny rule).
+required-features = ["portal", "image", "plugin-trainer"]
 
 [[example]]
 name = "upscale_gallery"

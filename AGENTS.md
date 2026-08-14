@@ -3837,6 +3837,39 @@ silently on one side.
   trimmed so path joins cannot `//api`; a non-URL warns and is dropped — the `protocol`
   key's rule). It is a URL, deliberately not in the tilde-expansion test.
 
+### The chain is PROVEN end-to-end against the real portal, and the wire shapes moved (2026-08-14)
+
+- **The whole chain ran locally**: portal repo (`terminalgb-portal`, docker Postgres on
+  :5433, real Clerk dev keys in its `.env.local`, `npm run dev`), two Clerk test users,
+  `terminal login` device-code sign-in for both (CLI *and* the TUI `@` key), friends by
+  code, offer/accept on the website, and **both sides' in-game trades completed and
+  field-verified** via `portal_trade --play` (below). The portal's trade log ended
+  `completed` with both attestations.
+- **The two repos had shipped INCOMPATIBLE wire shapes, and the emulator moved.** The
+  portal implements its own `docs/api-contract.md` exactly (camelCase `otId`/`otName`,
+  `dvs` as an object, trades relative to the viewer: `youReceive`/`youGive`/`partner.
+  displayName`, accept body `{"mon":…}`, replies wrapped `{"offer":…}`/`{"trade":…}`);
+  this client had shipped snake_case, a DV array, flat `receive`/`friend`/`give` and
+  `{"give":…}`. Symptom against the live portal: `portal protocol: trade 10: no
+  'receive' Pokémon` — the partner is refused, correctly, per the no-silent-fallback
+  rule. The client now **sends** the contract's spellings (both OT spellings for
+  compatibility) and **accepts** both; `testharness/portal.rs` pins both shapes plus the
+  new rule that completed/`youDone` trades are never re-armed (`trades/mine` includes
+  them; arming one would replay a finished trade — check [5b]/[5c]).
+- **The live portal's token reply carries no `user`**, so "signed in as …" comes from
+  `auth::whoami` (`GET /api/me` right after the token lands, fail-soft). A token stored
+  before that fix has no `user =` line and shows "(name unknown)" until re-login.
+- **`portal_trade --play --save <cableclub.sav>` is the one-command end-to-end proof**:
+  stages ROM+save, arms the partner from the portal, drives the shared Cable Club bot
+  (`examples/support/gen1_cable_club.rs`) through the whole trade, verifies the arrived
+  party mon field by field, and only then POSTs `/done`. ~5,100 frames headless. The
+  `~/roms` Blue `.sav` remains the Cable Club fixture (copy it, never write beside it).
+- **Clerk's sign-UP is behind a Turnstile CAPTCHA that automation cannot click**; create
+  test users through Clerk's Backend API (`POST https://api.clerk.com/v1/users` with the
+  secret key) and sign IN instead — password + the fixed `424242` OTP for
+  `+clerk_test@example.com` addresses. The portal's own `DEV_AUTH=1` bypass and real
+  Clerk keys are mutually exclusive per server run (`devMode()` short-circuits Clerk).
+
 ## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:

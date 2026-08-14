@@ -97,7 +97,10 @@ fn run_flow(portal: &str, report: impl Fn(LoginStatus)) -> Result<(), PortalErro
             auth::Poll::Pending => {}
             auth::Poll::SlowDown => interval += 5,
             auth::Poll::Denied(why) => return Err(PortalError::Auth(why)),
-            auth::Poll::Token(token) => {
+            auth::Poll::Token(mut token) => {
+                if token.user.is_none() {
+                    token.user = auth::whoami(portal, &token.access);
+                }
                 auth::save(&token)?;
                 report(LoginStatus::Done {
                     user: token.user.clone(),
