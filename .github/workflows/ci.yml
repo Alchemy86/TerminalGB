@@ -65,9 +65,15 @@ jobs:
       - name: Make desktop build
         run: cd ./examples/desktop && cargo build
       # The web build. Audio is compiled out on wasm; a fresh clone must keep building it.
+      # `make check-wasm` first: it type-checks BOTH wasm builds — the embedding
+      # core (`--no-default-features`, which this release build alone would not
+      # cover) and the default-features web build — and it is the same command
+      # the local gates run (`make embed` depends on it), so CI and a laptop
+      # measure the same thing. See AGENTS.md "GitHub CI cannot protect the
+      # wasm build" for the break that motivated it.
       - name: wasm build
         run: |
-          rustup target add wasm32-unknown-unknown
+          make check-wasm
           cargo build --release --target wasm32-unknown-unknown
       # **The plugin crates' own tests were not being run at all.** The root
       # `Cargo.toml` is both a `[package]` and a `[workspace]`, so the plain
