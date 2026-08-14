@@ -585,11 +585,13 @@ touching APU timing — every constant below is *measured* against a named test,
 - **Cost and audio quality re-measured after the work** (both required, both green):
   APU cost `32.6 µs/frame` vs `31.4 µs` before — inside the noise of the measurement
   (`cargo run --release --example apu_bench -- <rom> [frames]`, best-of-3 with/without a
-  player). Real-device latency on a single-speed ROM, four consecutive 25 s runs:
-  **51.1–52.7 ms end to end, 0 underruns, 0 drops, 59.478 fps** — against 52.1–53.1 ms
-  measured the same way on `main`, i.e. unchanged, and matching the documented 52.7 ms
-  baseline (`--features audio --example audio_latency`). A single 768-sample drop shows
-  up on either branch when the box is busy; it tracks host load, not the code.
+  player). Real-device latency, re-measured after rebasing onto the audio crew's
+  player-pacing fix (which is what moved the absolute numbers, not this work): three
+  consecutive 25 s runs on a single-speed ROM give **28.0–39.4 ms end to end, 0 underruns,
+  59.686 fps**, and `main` measured the same way in the same session gives 28.0–41.2 ms
+  with the identical run-for-run drop/held pattern (down to the same 2373 held and 4809
+  dropped samples). **Unchanged by the APU work** — which is the claim that matters here;
+  the absolute figure now belongs to the player, not to us.
 - **`testharness/audio_baseline.txt` was re-blessed** for this work. Judge it by the
   properties, not the hash: sample counts identical (so the rate did not move), tone440 RMS
   identical at 0.2467, and its measured pitch *improved* from 438.0 Hz to 440.0 Hz against a
