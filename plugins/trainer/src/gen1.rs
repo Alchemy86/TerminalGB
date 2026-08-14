@@ -128,6 +128,18 @@ pub mod addr {
 
 /// `party_struct`, `wPartyMon2 - wPartyMon1 = $D197 - $D16B`.
 pub const PARTY_MON_SIZE: u16 = 44;
+/// `box_struct` (`macros/ram.asm`) — the first 33 bytes of a `party_struct`
+/// (`party_struct` is defined as `box_struct` + level + the six computed
+/// stats), and the whole of a stored PC-box Pokémon.
+/// `wBoxMon2 - wBoxMon1 = $DAB7 - $DA96`.
+pub const BOX_MON_SIZE: u16 = 33;
+/// `MONS_PER_BOX` (`constants/pokemon_data_constants.asm`).
+pub const MONS_PER_BOX: usize = 20;
+/// `NUM_BOXES`.
+pub const NUM_BOXES: usize = 12;
+/// `NUM_ATTACKS` (`constants/move_constants.asm`) — `STRUGGLE` is `$A5`, the
+/// last real move. A stored move id above this is glitch data.
+pub const NUM_ATTACKS: u8 = 0xA5;
 /// `battle_struct`, the in-battle form: no experience or original-trainer ID,
 /// so the level and stats sit at different offsets from the party form.
 pub const BATTLE_MON_SIZE: u16 = 28;
@@ -178,6 +190,87 @@ pub mod battle {
     pub const SPEED: u16 = 21; // wEnemyMonSpeed     $CFFA
     pub const SPECIAL: u16 = 23; // wEnemyMonSpecial   $CFFC
     pub const PP: u16 = 25; // wEnemyMonPP        $CFFE
+}
+
+/// Field offsets inside a 33-byte `box_struct`, from `wBoxMon1*` symbols.
+///
+/// `party_struct` *is* `box_struct` plus a trailing level byte and six
+/// computed stats (`macros/ram.asm`), so every offset here equals the party
+/// offset of the same field — pinned by
+/// `a_party_struct_opens_with_a_box_struct`. The one field with no party twin
+/// is [`boxmon::BOX_LEVEL`]: the level the Pokémon had when it was deposited.
+/// On withdrawal the game recomputes the party level from the experience
+/// field, but the stored `BoxLevel` is what the PC's own list displays, so it
+/// is the honest number to show for a boxed Pokémon.
+pub mod boxmon {
+    pub const SPECIES: u16 = 0; // wBoxMon1Species    $DA96
+    pub const HP: u16 = 1; // wBoxMon1HP         $DA97 (big-endian)
+    pub const BOX_LEVEL: u16 = 3; // wBoxMon1BoxLevel   $DA99
+    pub const STATUS: u16 = 4; // wBoxMon1Status     $DA9A
+    pub const TYPE1: u16 = 5; // wBoxMon1Type1      $DA9B
+    pub const TYPE2: u16 = 6; // wBoxMon1Type2      $DA9C
+    pub const MOVES: u16 = 8; // wBoxMon1Moves      $DA9E
+    pub const OT_ID: u16 = 12; // wBoxMon1OTID       $DAA2 (big-endian)
+    pub const DVS: u16 = 27; // wBoxMon1DVs        $DAB1
+    pub const PP: u16 = 29; // wBoxMon1PP         $DAB3
+}
+
+/// The PC box system: the **current** box lives in WRAM, the other eleven in
+/// SRAM banks 2 and 3.
+///
+/// Layout (`ram/wram.asm` "Current Box Data" section, `ram/sram.asm`,
+/// `engine/menus/save.asm`): a box block is a count byte, a species list of
+/// `MONS_PER_BOX + 1` (an `$FF` terminator), `MONS_PER_BOX` `box_struct`s,
+/// then the OT names and nicknames, 11 bytes each. Every address is the value
+/// `pokeblue.sym` gives for the named label, from a build byte-identical to
+/// the retail ROM (`roms.sha1`), and `pokered.sym` agrees on all of them.
+pub mod boxes {
+    /// `wCurrentBoxNum` — bits 0-6 the box number (0-11), bit 7
+    /// `BIT_HAS_CHANGED_BOXES` (`constants/ram_constants.asm`).
+    pub const CURRENT_BOX_NUM: u16 = 0xD5A0;
+    /// `BOX_NUM_MASK`.
+    pub const BOX_NUM_MASK: u8 = 0x7F;
+    /// `BIT_HAS_CHANGED_BOXES` as a mask (bit 7). **Load-bearing**: the first
+    /// ever box change runs `EmptyAllSRAMBoxes` (`engine/menus/save.asm`,
+    /// `ChangeBox`), so until this bit is set SRAM banks 2/3 are
+    /// uninitialised garbage and only the WRAM box exists.
+    pub const HAS_CHANGED_BOXES: u8 = 0x80;
+    /// `wBoxDataStart` == `wBoxCount` — the current box, in WRAM.
+    pub const BOX_DATA_START: u16 = 0xDA80;
+    /// `wBoxSpecies`.
+    pub const BOX_SPECIES: u16 = 0xDA81;
+    /// `wBoxMons` — `MONS_PER_BOX` 33-byte `box_struct`s.
+    pub const BOX_MONS: u16 = 0xDA96;
+    /// `wBoxMonOT`.
+    pub const BOX_MON_OT: u16 = 0xDD2A;
+    /// `wBoxMonNicks`.
+    pub const BOX_MON_NICKS: u16 = 0xDE06;
+    /// `wBoxDataEnd`.
+    pub const BOX_DATA_END: u16 = 0xDEE2;
+    /// One whole box block, `wBoxDataEnd - wBoxDataStart` — also the SRAM
+    /// stride, `sBox2 - sBox1`.
+    pub const BOX_BLOCK: u16 = 0x462;
+
+    /// `sBox1`/`sBox7` — boxes 0-5 sit in SRAM bank 2, boxes 6-11 in bank 3,
+    /// six per bank from the bank's start (`GetBoxSRAMLocation` +
+    /// `BoxSRAMPointerTable`, `engine/menus/save.asm`).
+    pub const SBOX_BASE: u16 = 0xA000;
+    /// SRAM bank of boxes 0-5 (`ram/sram.asm` "Saved Boxes 1" = bank 2).
+    pub const SRAM_BANK_LOW: usize = 2;
+    /// SRAM bank of boxes 6-11.
+    pub const SRAM_BANK_HIGH: usize = 3;
+    /// `sBank2IndividualBoxChecksums` / `sBank3IndividualBoxChecksums` — six
+    /// bytes per bank, one per box: `CalcCheckSum` over the box's `BOX_BLOCK`
+    /// bytes (the complement of their byte sum). Recomputed on every box
+    /// change and by `EmptyAllSRAMBoxes`, so a mismatch means the block is
+    /// not a box the game wrote.
+    pub const INDIVIDUAL_CHECKSUMS: u16 = 0xBA4D;
+
+    /// Where box `n` (0-11) lives in SRAM: `(bank, base address)`.
+    pub fn sram_slot(n: usize) -> (usize, u16) {
+        let bank = if n < 6 { SRAM_BANK_LOW } else { SRAM_BANK_HIGH };
+        (bank, SBOX_BASE + (n % 6) as u16 * BOX_BLOCK)
+    }
 }
 
 /// `wObtainedBadges` bit order, from `constants/ram_constants.asm`
@@ -534,6 +627,79 @@ mod tests {
             "the tutorial Pokémon is never the player's"
         );
         assert!(!BattleType::Unknown(7).is_catchable());
+    }
+
+    /// `party_struct` is `box_struct` + level + stats (`macros/ram.asm`), so
+    /// the box offsets must equal the party offsets field for field. Holding
+    /// the relationship here means the two tables cannot drift apart.
+    #[test]
+    fn a_party_struct_opens_with_a_box_struct() {
+        assert_eq!(boxmon::SPECIES, party::SPECIES);
+        assert_eq!(boxmon::HP, party::HP);
+        assert_eq!(boxmon::STATUS, party::STATUS);
+        assert_eq!(boxmon::TYPE1, party::TYPE1);
+        assert_eq!(boxmon::TYPE2, party::TYPE2);
+        assert_eq!(boxmon::MOVES, party::MOVES);
+        assert_eq!(boxmon::DVS, party::DVS);
+        assert_eq!(boxmon::PP, party::PP);
+        // The party level byte is the first thing party_struct adds after the
+        // 33 box_struct bytes.
+        assert_eq!(party::LEVEL, BOX_MON_SIZE);
+        assert_eq!(PARTY_MON_SIZE, BOX_MON_SIZE + 1 + 10);
+        // wBoxMon1OTID $DAA2 = wBoxMons $DA96 + 12; the party twin is
+        // wPartyMon1OTID $D177 = wPartyMons $D16B + 12.
+        assert_eq!(boxes::BOX_MONS + boxmon::OT_ID, 0xDAA2);
+        assert_eq!(addr::PARTY_MONS + boxmon::OT_ID, 0xD177);
+    }
+
+    /// The box block's internal layout, pinned against the symbol file the
+    /// way `party_struct_stride_matches_the_symbol_file` pins the party's.
+    #[test]
+    fn the_box_block_walks_onto_its_symbols() {
+        // wBoxSpecies = wBoxCount + 1.
+        assert_eq!(boxes::BOX_DATA_START + 1, boxes::BOX_SPECIES);
+        // wBoxMons follows the species list (MONS_PER_BOX + terminator).
+        assert_eq!(
+            boxes::BOX_SPECIES + MONS_PER_BOX as u16 + 1,
+            boxes::BOX_MONS
+        );
+        // wBoxMon2 = $DAB7: the stride IS the struct size.
+        assert_eq!(boxes::BOX_MONS + BOX_MON_SIZE, 0xDAB7);
+        // 20 box_structs land exactly on wBoxMonOT, then the two name tables
+        // land on wBoxMonNicks and wBoxDataEnd.
+        assert_eq!(
+            boxes::BOX_MONS + MONS_PER_BOX as u16 * BOX_MON_SIZE,
+            boxes::BOX_MON_OT
+        );
+        assert_eq!(
+            boxes::BOX_MON_OT + MONS_PER_BOX as u16 * NAME_LENGTH,
+            boxes::BOX_MON_NICKS
+        );
+        assert_eq!(
+            boxes::BOX_MON_NICKS + MONS_PER_BOX as u16 * NAME_LENGTH,
+            boxes::BOX_DATA_END
+        );
+        // The block size is also the SRAM stride: sBox2 $A462 - sBox1 $A000.
+        assert_eq!(
+            boxes::BOX_DATA_END - boxes::BOX_DATA_START,
+            boxes::BOX_BLOCK
+        );
+        assert_eq!(boxes::BOX_BLOCK, 0xA462 - 0xA000);
+    }
+
+    /// `GetBoxSRAMLocation`: boxes 0-5 → bank 2 from $A000, boxes 6-11 →
+    /// bank 3 from $A000, `BOX_BLOCK` apart.
+    #[test]
+    fn sram_slots_follow_the_pointer_table() {
+        assert_eq!(boxes::sram_slot(0), (2, 0xA000)); // sBox1
+        assert_eq!(boxes::sram_slot(1), (2, 0xA462)); // sBox2
+        assert_eq!(boxes::sram_slot(5), (2, 0xA000 + 5 * 0x462)); // sBox6
+        assert_eq!(boxes::sram_slot(6), (3, 0xA000)); // sBox7
+        assert_eq!(boxes::sram_slot(11), (3, 0xA000 + 5 * 0x462)); // sBox12
+                                                                   // The checksum table sits right after the all-boxes checksum at
+                                                                   // $BA4C, which itself follows the six boxes.
+        assert_eq!(0xA000 + 6 * boxes::BOX_BLOCK, 0xBA4C);
+        assert_eq!(boxes::INDIVIDUAL_CHECKSUMS, 0xBA4D);
     }
 
     #[test]

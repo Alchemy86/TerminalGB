@@ -55,6 +55,10 @@ impl MachineAccess for MemoryManagementUnit<'_> {
         self.mbc.readrom_bank(bank, address)
     }
 
+    fn peek_sram_bank(&mut self, bank: usize, address: u16) -> Option<u8> {
+        self.mbc.readram_bank(bank, address)
+    }
+
     fn rom_title(&self) -> String {
         self.mbc.romname()
     }

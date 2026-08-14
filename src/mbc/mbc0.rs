@@ -61,6 +61,9 @@ impl MemoryBankController for MBC0 {
     fn readrom_bank(&self, bank: usize, a: u16) -> u8 {
         super::banked_rom_byte(&self.rom, bank, a)
     }
+    fn readram_bank(&self, bank: usize, a: u16) -> Option<u8> {
+        super::banked_ram_byte(&self.ram, bank, a)
+    }
     fn readram(&self, a: u16) -> u8 {
         *self.ram.get((a as usize) & 0x1FFF).unwrap_or(&0xFF)
     }

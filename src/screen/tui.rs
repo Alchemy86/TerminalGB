@@ -778,6 +778,10 @@ enum Overlay {
     None,
     Help,
     Quit,
+    /// The portal offer picker (`O`): pick a Pokémon to offer **from the
+    /// loaded save** — party and boxes. See [`crate::portal::offer`].
+    #[cfg(feature = "portal")]
+    Offer,
 }
 
 /// The live game, present only while a ROM is loaded.
@@ -1328,6 +1332,15 @@ struct App {
     /// The completed-trade confirmation call. See [`PortalDone`].
     #[cfg(feature = "portal")]
     portal_done: PortalDone,
+    /// The offer picker (`O`): the loaded save's party and boxes, filterable.
+    /// The offer flow's whole point is that these entries were *read out of
+    /// the running game* — see [`crate::portal::offer`].
+    #[cfg(feature = "portal")]
+    offer: Option<crate::portal::offer::OfferPicker>,
+    /// An offer submission in flight, on its own thread; polled by
+    /// [`App::portal_tick`]. The message is ready-made toast text.
+    #[cfg(feature = "portal")]
+    offer_inflight: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
 }
 
 impl App {
@@ -1525,6 +1538,10 @@ impl App {
             portal_login_seen: None,
             #[cfg(feature = "portal")]
             portal_done: PortalDone::default(),
+            #[cfg(feature = "portal")]
+            offer: None,
+            #[cfg(feature = "portal")]
+            offer_inflight: None,
         };
         // Read-only: resolves the sign-in state from the stored token file.
         // Safe in `build` (unlike the volume or the cable) because it writes
@@ -3000,6 +3017,13 @@ impl App {
                 }
                 return;
             }
+            #[cfg(feature = "portal")]
+            Overlay::Offer => {
+                if key.kind == KeyEventKind::Press {
+                    self.offer_overlay_key(key);
+                }
+                return;
+            }
             Overlay::None => {}
         }
 
@@ -3209,6 +3233,13 @@ impl App {
                 // Portal sign-in — `@` for the account, on both screens.
                 KeyCode::Char('@') => {
                     self.portal_key();
+                    return;
+                }
+                // Offer a Pokémon to the trade portal — picked from the
+                // loaded save's party and boxes, never typed. See
+                // `crate::portal::offer` and docs/portal.md.
+                KeyCode::Char('O') => {
+                    self.offer_key();
                     return;
                 }
                 // Screenshot: `c` captures what you see (palette + upscaler),
@@ -3697,6 +3728,8 @@ impl App {
         match self.overlay {
             Overlay::Help => self.render_help(f),
             Overlay::Quit => render_quit(f),
+            #[cfg(feature = "portal")]
+            Overlay::Offer => self.render_offer(f),
             Overlay::None => {}
         }
     }
@@ -3985,6 +4018,8 @@ impl App {
                 Overlay::None => 0u8,
                 Overlay::Help => 1,
                 Overlay::Quit => 2,
+                #[cfg(feature = "portal")]
+                Overlay::Offer => 3,
             },
             self.fullscreen,
             self.stats,
@@ -5208,6 +5243,11 @@ impl App {
         )));
         out.push(Line::from(Span::styled(
             "  an accepted trade arms the link partner at ROM load",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            "  O  (in game) offer a Pokémon — picked from your party and \
+             boxes, read out of the loaded save, never typed",
             d,
         )));
         // The boot ROM is opt-in in exactly the same sense, and findable only
@@ -7818,6 +7858,9 @@ impl App {
         if self.portal_done_tick() {
             dirty = true;
         }
+        if self.offer_tick() {
+            dirty = true;
+        }
         dirty
     }
 
@@ -8004,12 +8047,284 @@ impl App {
     }
 }
 
+/// The offer picker — `O` in game. The captain's rule, and the reason this is
+/// not a form: **an offer comes from the player's real loaded game** — their
+/// party and their boxes — because the emulator is the one component that can
+/// read the actual save. A Pokémon that cannot be read out of the loaded game
+/// cannot be offered. See [`crate::portal::offer`] and docs/portal.md.
+#[cfg(feature = "portal")]
+impl App {
+    fn offer_key(&mut self) {
+        use crate::plugin::Capability;
+        use terminalgb_plugin_trainer::collection;
+
+        if crate::portal::portal_url(self.config.portal.as_deref()).is_none() {
+            self.set_toast(
+                "offer: no portal configured — set portal = <url> in config.toml \
+                 (see docs/portal.md)",
+            );
+            return;
+        }
+        let Some(session) = self.session.as_mut() else {
+            self.set_toast("offer: load a game first");
+            return;
+        };
+        // The trainer plugin is the verification gate: it identifies the
+        // cartridge (title + header checksum) and refuses hacks and games it
+        // cannot read, so the collection below is only ever read from a save
+        // whose layout is actually known.
+        let Some(tp) = session.gb.plugin::<TrainerPlugin>() else {
+            self.set_toast("offer: the trainer plugin is not attached");
+            return;
+        };
+        if tp.game().is_none() {
+            let why = tp.refusal().unwrap_or_else(|| {
+                "the cartridge has not been identified yet".to_string()
+            });
+            self.set_toast(format!("offer: {why}"));
+            return;
+        }
+        let raw = session.gb.with_machine(
+            Capability::OBSERVE.union(Capability::READ_MEMORY),
+            collection::read_raw,
+        );
+        let raw = match raw {
+            Ok(raw) => raw,
+            Err(e) => {
+                self.set_toast(format!("offer: {e}"));
+                return;
+            }
+        };
+        // Safe to unwrap-by-construction: the plugin was there ten lines up
+        // and nothing detaches plugins mid-session.
+        let Some(tp) = session.gb.plugin::<TrainerPlugin>() else {
+            return;
+        };
+        let col = collection::decode(&raw, tp.tables());
+        if col.entries.is_empty() {
+            self.set_toast("offer: no Pokémon in the party or any box yet");
+            return;
+        }
+        self.offer = Some(crate::portal::offer::OfferPicker::new(col));
+        self.overlay = Overlay::Offer;
+    }
+
+    /// Keys while the picker is up. Typing filters; Enter arms, Enter again
+    /// submits; Esc closes.
+    fn offer_overlay_key(&mut self, key: KeyEvent) {
+        let Some(picker) = self.offer.as_mut() else {
+            self.overlay = Overlay::None;
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.offer = None;
+                self.overlay = Overlay::None;
+            }
+            KeyCode::Up => picker.move_selection(-1),
+            KeyCode::Down => picker.move_selection(1),
+            KeyCode::Backspace => picker.backspace(),
+            KeyCode::Enter => {
+                if self.offer_inflight.is_some() {
+                    self.set_toast(
+                        "offer: one is already being posted — wait for its result",
+                    );
+                    return;
+                }
+                if let Some(spec) = picker.confirm() {
+                    let desc = picker
+                        .current()
+                        .map(crate::portal::offer::describe)
+                        .unwrap_or_else(|| spec.species.clone());
+                    self.offer = None;
+                    self.overlay = Overlay::None;
+                    self.offer_submit(spec, desc);
+                }
+            }
+            KeyCode::Char(c) => picker.type_char(c),
+            _ => {}
+        }
+    }
+
+    /// Post the offer on its own thread — the portal call has 5 s/15 s curl
+    /// timeouts and nothing may stall a frame (the audio hand-off rule).
+    fn offer_submit(
+        &mut self,
+        spec: terminalgb_plugin_gen1_link::spec::MonSpec,
+        desc: String,
+    ) {
+        let Some(url) = crate::portal::portal_url(self.config.portal.as_deref()) else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.portal_announce(format!("portal: posting {} …", spec.species));
+        std::thread::spawn(move || {
+            let res = crate::portal::client::Portal::connect(&url)
+                .and_then(|p| p.offer(&spec))
+                .map(|id| {
+                    format!(
+                        "portal: offered {desc} — offer #{id} is up for your \
+                         friends (cancel it on the website)"
+                    )
+                })
+                .map_err(|e| format!("portal: the offer was NOT posted — {e}"));
+            let _ = tx.send(res);
+        });
+        self.offer_inflight = Some(rx);
+    }
+
+    /// Poll the in-flight offer; part of [`App::portal_tick`].
+    fn offer_tick(&mut self) -> bool {
+        let Some(rx) = &self.offer_inflight else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(res) => {
+                self.offer_inflight = None;
+                self.portal_announce(match res {
+                    Ok(msg) | Err(msg) => msg,
+                });
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.offer_inflight = None;
+                self.portal_announce(
+                    "portal: the offer thread died — the offer was NOT posted"
+                        .to_string(),
+                );
+                true
+            }
+        }
+    }
+
+    /// Draw the picker. Everything on it came out of the save; a row the
+    /// trade rules refuse is greyed with its reason and cannot be armed.
+    fn render_offer(&self, f: &mut Frame<'_>) {
+        use ratatui::widgets::Paragraph;
+        let Some(p) = self.offer.as_ref() else {
+            return;
+        };
+        let area = popup_area(f.area(), 70, 70);
+        f.render_widget(Clear, area);
+
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(Color::DarkGray);
+        let mut text = vec![
+            Line::from(Span::styled(
+                format!("Offer to the portal — {}'s Pokémon", p.player),
+                bold,
+            )),
+            Line::from(Span::styled(
+                "party and boxes, read from the loaded save — nothing here is typed",
+                dim,
+            )),
+            Line::from(format!(
+                "filter: {}▏   ({} of {} shown — try a name, a box, or `shiny`)",
+                p.filter,
+                p.visible_len(),
+                p.entries.len()
+            )),
+            Line::from(""),
+        ];
+
+        // A window of rows around the selection, sized to the popup.
+        let header_rows = text.len() + 4; // + footer/legend below
+        let rows = (area.height as usize)
+            .saturating_sub(header_rows + 2)
+            .max(3);
+        let skip = p.selected.saturating_sub(rows.saturating_sub(1));
+        for (row, (_, e)) in p.visible().enumerate().skip(skip).take(rows) {
+            let star = if e.shiny_if_traded { " ★" } else { "" };
+            let name = if e.nickname.is_empty() {
+                e.species_name.clone()
+            } else {
+                e.nickname.clone()
+            };
+            let line = format!(
+                "{:>3}  {:<10} {:<10} Lv{:<3} DV{:>2}{star}",
+                e.location.label(),
+                name,
+                e.species_name,
+                e.level,
+                e.dv_total(),
+            );
+            let selected = row == p.selected;
+            let style = match (&e.refusal, selected) {
+                (Some(_), _) => dim,
+                (None, true) => Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                (None, false) => Style::default(),
+            };
+            let marker = if selected { "▸" } else { " " };
+            text.push(Line::from(Span::styled(format!("{marker}{line}"), style)));
+            if selected {
+                if let Some(why) = &e.refusal {
+                    text.push(Line::from(Span::styled(
+                        format!("     cannot be offered: {why}"),
+                        Style::default().fg(Color::Red),
+                    )));
+                }
+            }
+        }
+        if p.visible_len() == 0 {
+            text.push(Line::from(Span::styled("  nothing matches", dim)));
+        }
+
+        text.push(Line::from(""));
+        if p.armed {
+            if let Some(e) = p.current() {
+                text.push(Line::from(Span::styled(
+                    format!(
+                        "Enter again to offer {} to your friends",
+                        crate::portal::offer::describe(e)
+                    ),
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            text.push(Line::from(Span::styled(
+                "↑/↓ pick · type to filter · Enter offer (twice) · Esc close",
+                dim,
+            )));
+        }
+        // The honest wording, everywhere the flag appears: Gen 1 itself has
+        // no shiny Pokémon.
+        text.push(Line::from(Span::styled(
+            "★ would be shiny if traded to Gen 2 — Gen 1 has no shinies",
+            dim,
+        )));
+        for n in &p.notes {
+            text.push(Line::from(Span::styled(format!("note: {n}"), dim)));
+        }
+
+        f.render_widget(
+            Paragraph::new(text).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Offer a Pokémon "),
+            ),
+            area,
+        );
+    }
+}
+
 /// Built without the portal: `@` says how to get it (the absent-plugin
 /// courtesy), and the tick and row cost nothing.
 #[cfg(not(feature = "portal"))]
 impl App {
     fn portal_key(&mut self) {
         let msg = "portal: not built into this binary — rebuild with --features portal";
+        match self.screen {
+            Screen::Playing => self.set_toast(msg),
+            _ => self.message = Some(msg.into()),
+        }
+    }
+
+    fn offer_key(&mut self) {
+        let msg = "offer: not built into this binary — rebuild with --features portal";
         match self.screen {
             Screen::Playing => self.set_toast(msg),
             _ => self.message = Some(msg.into()),
@@ -10202,6 +10517,97 @@ mod tests {
                  row each, never one truncated joined line"
             );
         }
+    }
+
+    /// The offer picker renders the collection with the honest shiny wording
+    /// (Gen 1 has no shinies — the flag is "would be shiny if traded to
+    /// Gen 2"), and a row the trade rules refuse shows its reason.
+    #[cfg(feature = "portal")]
+    #[test]
+    fn the_offer_picker_renders_with_the_honest_shiny_wording() {
+        use crate::portal::offer::OfferPicker;
+        use ratatui::backend::TestBackend;
+        use terminalgb_plugin_trainer::collection::{Collection, Location, Offerable};
+        use terminalgb_plugin_trainer::gen1::Dvs;
+
+        let entry = |nick: &str, shiny: bool, refusal: Option<String>| Offerable {
+            location: Location::Party(0),
+            species: 1,
+            species_name: "ABRA".into(),
+            dex: 63,
+            nickname: nick.into(),
+            level: 9,
+            ot_name: "RED".into(),
+            ot_id: 1,
+            moves: vec!["TELEPORT".into()],
+            dvs: Dvs {
+                attack: 2,
+                defense: 10,
+                speed: 10,
+                special: 10,
+            },
+            shiny_if_traded: shiny,
+            refusal,
+        };
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.offer = Some(OfferPicker::new(Collection {
+            player_name: "RED".into(),
+            player_id: 1,
+            entries: vec![
+                entry("GLIMMER", true, None),
+                entry("MEW8", false, Some("nickname contains the digit 8".into())),
+            ],
+            notes: vec!["box 3 failed its own checksum and was not read".into()],
+        }));
+        app.overlay = Overlay::Offer;
+
+        for (w, h) in [(120u16, 40u16), (100, 30)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(text.contains("GLIMMER"), "the entries render at {w}x{h}");
+            assert!(text.contains('★'), "the shiny marker renders");
+            assert!(
+                text.contains("would be shiny if traded to Gen 2"),
+                "the legend carries the qualifier at {w}x{h}"
+            );
+            assert!(
+                text.contains("read from the loaded save"),
+                "the picker says where the list came from"
+            );
+            assert!(
+                text.contains("checksum"),
+                "an unreadable box is reported, not silently dropped"
+            );
+        }
+
+        // The refused row's reason shows when it is selected — and it can
+        // never be armed.
+        let p = app.offer.as_mut().unwrap();
+        p.move_selection(1);
+        assert!(p.confirm().is_none());
+        assert!(!p.armed);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("cannot be offered"),
+            "the refusal reason renders for the selected row"
+        );
     }
 
     /// The status panel must name **both** halves of a displayed frame: the

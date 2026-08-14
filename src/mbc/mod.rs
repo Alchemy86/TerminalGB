@@ -21,6 +21,18 @@ pub(crate) fn banked_rom_byte(rom: &[u8], bank: usize, a: u16) -> u8 {
     *rom.get(idx).unwrap_or(&0xFF)
 }
 
+/// Index cartridge RAM by 8 KiB bank number, for
+/// [`MemoryBankController::readram_bank`]. `None` past the end of the RAM the
+/// cartridge actually has — "this cartridge cannot answer", not open bus,
+/// because the callers (save readers) must distinguish absent storage from a
+/// stored `$FF`.
+pub(crate) fn banked_ram_byte(ram: &[u8], bank: usize, a: u16) -> Option<u8> {
+    let idx = bank
+        .wrapping_mul(0x2000)
+        .wrapping_add((a as usize) & 0x1FFF);
+    ram.get(idx).copied()
+}
+
 pub trait MemoryBankController: Send {
     fn readrom(&self, a: u16) -> u8;
     fn readram(&self, a: u16) -> u8;
@@ -56,6 +68,21 @@ pub trait MemoryBankController: Send {
     /// window, so both `$0000` and `$4000` addressing work; reads past the end
     /// of the cartridge are open bus (`0xFF`), as in `readrom`.
     fn readrom_bank(&self, bank: usize, a: u16) -> u8;
+
+    /// Read from an explicitly numbered 8 KiB cartridge-RAM bank, ignoring the
+    /// mapped bank and the RAM-enable gate, and **without touching any
+    /// register**. The read-only sibling of [`Self::readram`], for the same
+    /// reason [`Self::readrom_bank`] exists: save data (Gen 1's PC boxes, for
+    /// instance) lives in banks the game maps only while using them, and a
+    /// game normally leaves cartridge RAM *disabled*, so an observer cannot
+    /// reach it through the bus at all.
+    ///
+    /// `None` when the bank is beyond the RAM this cartridge has (or the
+    /// mapper does not support banked RAM reads) — callers must be able to
+    /// tell "no storage there" from a stored `$FF`.
+    fn readram_bank(&self, _bank: usize, _a: u16) -> Option<u8> {
+        None
+    }
 
     /// True for a cartridge that carries a real-time clock (MBC3 header types
     /// `0x0F`/`0x10`). The MMU caches this at boot so [`Self::rtc_tick`] is

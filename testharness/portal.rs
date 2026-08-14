@@ -34,6 +34,8 @@ struct Stub {
     trades_body: Mutex<String>,
     /// Every confirmed trade: (path, bearer token presented).
     done_hits: Mutex<Vec<(String, Option<String>)>>,
+    /// Every posted offer: (body, bearer token presented).
+    offer_hits: Mutex<Vec<(String, Option<String>)>>,
 }
 
 const ACCESS: &str = "tok-abc";
@@ -146,6 +148,21 @@ fn handle(mut stream: TcpStream, stub: &Stub) {
             let body = stub.trades_body.lock().unwrap().clone();
             respond(&mut stream, "200 OK", &body);
         }
+        ("POST", "/api/offers") => {
+            if bearer.as_deref() != Some(ACCESS) {
+                return respond(
+                    &mut stream,
+                    "401 Unauthorized",
+                    r#"{"error":"unauthorized"}"#,
+                );
+            }
+            stub.offer_hits.lock().unwrap().push((body.clone(), bearer));
+            respond(
+                &mut stream,
+                "201 Created",
+                r#"{"offer":{"id":81,"status":"open"}}"#,
+            );
+        }
         ("POST", p) if p.starts_with("/api/trades/") && p.ends_with("/done") => {
             if bearer.as_deref() != Some(ACCESS) {
                 return respond(
@@ -216,6 +233,7 @@ fn main() {
         token_polls: AtomicU32::new(0),
         trades_body: Mutex::new(ONE_TRADE.to_string()),
         done_hits: Mutex::new(Vec::new()),
+        offer_hits: Mutex::new(Vec::new()),
     });
     let base = start_stub(stub.clone());
 
@@ -425,6 +443,63 @@ fn main() {
                 && hits[0].0 == "/api/trades/71/done"
                 && hits[0].1.as_deref() == Some(ACCESS),
             &format!("{hits:?}"),
+        );
+    }
+
+    // [6b] An offer travels from a *collection entry* — the shape read out
+    // of the loaded save, never a typed form — through `offer::spec_for` to
+    // the wire, authenticated, with the shiny prediction derived from its
+    // DVs riding along for the portal's lists. The entry here is built by
+    // hand only because this harness has no emulator; in the product the only
+    // constructor of these is `collection::read_raw`/`decode`.
+    {
+        use terminalgb::portal::offer::{self, Dvs, Location, Offerable};
+        let entry = Offerable {
+            location: Location::Box {
+                number: 1,
+                slot: 0,
+                current: false,
+            },
+            species: 0x94,
+            species_name: "ABRA".into(),
+            dex: 63,
+            nickname: "GLIMMER".into(),
+            level: 9,
+            ot_name: "RED".into(),
+            ot_id: 43981,
+            moves: vec!["TELEPORT".into()],
+            // GLIMMER's real spread ($EA $AA): would be shiny in Gen 2.
+            dvs: Dvs {
+                attack: 14,
+                defense: 10,
+                speed: 10,
+                special: 10,
+            },
+            shiny_if_traded: true,
+            refusal: None,
+        };
+        let spec = offer::spec_for(&entry);
+        let id = portal.offer(&spec).expect("offer");
+        check("the offer reply's id is read back", id == "81", &id);
+        let hits = stub.offer_hits.lock().unwrap();
+        let (body, bearer) = &hits[0];
+        check(
+            "the offer POST is authenticated and carries the save's own fields",
+            hits.len() == 1
+                && bearer.as_deref() == Some(ACCESS)
+                && body.contains(r#""species":"ABRA""#)
+                && body.contains(r#""nickname":"GLIMMER""#)
+                && body.contains(r#""level":9"#)
+                && body.contains(r#""otName":"RED""#)
+                && body.contains(r#""otId":43981"#)
+                && body.contains(r#""attack":14"#),
+            body,
+        );
+        check(
+            "the shiny-if-traded-to-Gen-2 flag rides the offer for the \
+             portal's lists",
+            body.contains(r#""shinyIfTradedToGen2":true"#),
+            body,
         );
     }
 

@@ -44,6 +44,7 @@ pub mod browser;
 pub mod client;
 pub mod http;
 pub mod login;
+pub mod offer;
 pub mod source;
 
 /// One error type for the whole module, so every caller can print something a

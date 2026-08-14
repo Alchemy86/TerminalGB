@@ -46,6 +46,7 @@
 //! run wants. Each is additive on top of this data.
 
 pub mod capture;
+pub mod collection;
 pub mod derived;
 pub mod encounter;
 pub mod gen1;
@@ -304,6 +305,13 @@ impl TrainerPlugin {
     /// The game, or `None` when the cartridge is not one this can read.
     pub fn game(&self) -> Option<Game> {
         self.game
+    }
+
+    /// The cartridge's own tables, for callers that decode game data outside
+    /// the sampled panel state — [`collection::decode`] most of all, which a
+    /// frontend runs *after* its `with_machine` borrow ends.
+    pub fn tables(&self) -> &rom::RomTables {
+        &self.tables
     }
 
     pub fn state(&self) -> &TrainerState {

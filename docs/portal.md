@@ -25,9 +25,11 @@ plugins = gen1-link
    The browser opens on the portal's approval page; the URL and a code like
    `WXYZ-1234` are printed too, so a headless or SSH session signs in the same
    way. `terminal logout` forgets the stored token.
-2. **Offer / accept on the website.** The emulator only *consumes* matched
-   trades in v1 (the offer/accept client calls exist — `Portal::offer`,
-   `friend_offers`, `accept` — but no UI drives them yet).
+2. **Offer from the game (`O`), accept on the website.** The offer picker
+   reads the loaded save's party and boxes and posts the chosen Pokémon —
+   see "Offering from the emulator" below. Accepting a friend's offer still
+   happens on the website (`Portal::friend_offers`/`accept` exist; no UI
+   drives them yet).
 3. **Load the game.** If a trade is pending, the attach note and the `Portal`
    status row say so, and the link partner is armed with the friend's Pokémon.
    Walk into the Cable Club → TRADE CENTER and trade.
@@ -49,6 +51,92 @@ name, OT id) against the portal's spec, and only then POSTs `/done`. Proven
 against the portal running locally on 2026-08-14: both sides of a real trade
 (`CHARRY` the Charmander for `SQUIRT` the Squirtle) landed with every field
 intact and the portal's log read `completed`.
+
+## Offering from the emulator — the save is the source of truth
+
+**An offer comes from the player's real loaded game — their party and their
+PC boxes — never from a form.** A free-text "describe your Pokémon" form is
+unverifiable: nothing stops a user inventing a flawless shiny and trading it
+to a friend, and this project's whole selling point is that its data is real
+and measured. The emulator is the one component that can read the actual
+save, so it is the only thing allowed to originate an offer.
+
+Press **`O`** while playing (Red/Blue, portal configured). The picker lists
+everything the save holds — the party from WRAM, the open box from WRAM, the
+other eleven boxes from SRAM banks 2/3 — with species, nickname, level, DV
+total, OT, and a `★` on anything that **would be shiny if traded to Gen 2**
+(Gen 1 itself has no shinies; the flag is the trainer panel's one
+implementation of pokecrystal's `CheckShininess`). Type to filter — a name, a
+box, a level, or `shiny` for the flagged ones. Enter arms the highlighted
+Pokémon, Enter again posts it (`POST /api/offers`, on its own thread — the
+frame is never stalled). Box addresses and semantics are derived from
+`pret/pokered` builds byte-identical to retail and pinned by symbol —
+`plugins/trainer/src/collection.rs` carries the whole story, including why an
+SRAM box is only believed when its own checksum passes and why a never-
+changed-boxes save has no SRAM boxes at all.
+
+What cannot be offered (greyed out, with the reason): a name carrying the
+digit `8` (charmap `$FE` is the link protocol's no-data byte — the same rule
+the gen1-link party builder enforces), glitch species or moves the receiving
+cartridge cannot resolve, levels outside 1-100, and any slot whose two
+independently-written species copies disagree. Gen 1's own Trade Center
+refuses nothing per-Pokémon (`TradeCenter_SelectMon` goes straight from
+selection to the exchange; no held items, mail or eggs exist in Gen 1), so
+every rule is the wire's or the receiver's, cited in `collection::verdict`.
+
+Two honest caveats. A **boxed** Pokémon can be offered but must be withdrawn
+to the party before the trade itself — the Cable Club trades from the party
+only; its listed level is the stored `BoxLevel` (what the PC's own list
+shows — the game recomputes the live level from experience on withdrawal).
+And the offer spec carries the contract's fields only: stat experience does
+not cross (the receiving side rebuilds the Pokémon from species, level,
+moves and DVs, as every `PokemonSource` trade always has).
+
+Evidence tool (also the end-to-end proof — run against a staged copy of a
+real Blue save, it listed the party and a checksummed SRAM box exactly):
+
+```bash
+cargo run --release --example offer_list -- <rom.gb> [--save <file.sav>]
+```
+
+### What the portal must change (spec for the portal crew — not done here)
+
+The portal repo (`terminalgb-portal`) currently lets anyone type an offer
+(`OfferForm.tsx` → `MonSpecFields`) and type an accept give-back
+(`AcceptOffer.tsx`). That defeats the design above. The proposed change, per
+the shared-contract discipline (`docs/api-contract.md` is the stamped
+agreement — this is a proposal to move it, not a unilateral move):
+
+1. **Drop the typed offer form.** `OfferForm`/`MonSpecFields` go; the offers
+   page instead explains: *"Offers come from your loaded game. In TerminalGB,
+   press `O` while playing to offer from your party or boxes."* Listing and
+   `POST /api/offers/{id}/cancel` stay on the web — they name an offer, not a
+   Pokémon.
+2. **Drop the typed accept form.** Replace `AcceptOffer`'s `MonSpecFields`
+   with a choice among **the acceptor's own open offers** (specs the portal
+   already holds, every one emulator-originated). Proposed body change for
+   `POST /api/offers/{id}/accept`: `{"giveOfferId": <id>}` alongside (or
+   instead of) `{"mon": …}`; the portal resolves the give side from that
+   offer and consumes it. This closes the loop with **no new emulator work**:
+   once typed entry is gone, every spec in the portal's database entered
+   through `POST /api/offers` from a signed-in emulator.
+3. **Enforce origin server-side, honestly.** The portal can tell a
+   device-token request (the emulator's auth path) from a Clerk browser
+   session; restrict `POST /api/offers` (and accept, once 2 lands) to
+   device-token auth and answer a web session `403 {"error":"emulator_only"}`.
+   Honest limit, to state in the portal's own docs: this verifies the offer
+   came through an emulator sign-in, **not** that the bytes match a save —
+   the portal cannot see saves, and `done` was always an attestation. The
+   emulator-side read is where the verification actually lives.
+4. **Show the shiny prediction.** Every mon this client sends now carries
+   `"shinyIfTradedToGen2": bool` (derived from the DVs at send time by the
+   trainer panel's one rule — never accepted as an input, so it cannot
+   disagree with the `dvs` it rides beside; a suspicious portal can recompute
+   it from `dvs`). Wording rule travels with it: Gen 1 has no shiny Pokémon,
+   so lists must say *"would be shiny if traded to Gen 2"*, never "is shiny".
+   Ordering note: ship 1 and 2 together (dropping only the offer form leaves
+   accept as the remaining typed hole; dropping accept's form first leaves
+   nothing to accept with).
 
 ## What never happens
 
@@ -91,8 +179,10 @@ index — resolved by `RomTables::resolve_species`), `level` (1–100), `otId`
 or the trade-file array `[atk, def, spd, spc]`, each 0–15; the HP DV is
 derived). Optional: `nickname`, `otName`/`ot_name` (default `PORTAL`), `moves`
 (≤ 4 names). The client sends both spellings of the OT fields and the object
-form of `dvs`. Out-of-range values are refused **by field name** at fetch time
-(`client::mon_from_json`), before anything is armed.
+form of `dvs`, plus `shinyIfTradedToGen2` (derived from the DVs at send time,
+never read back as an input — see the offer section above). Out-of-range
+values are refused **by field name** at fetch time (`client::mon_from_json`),
+before anything is armed.
 
 ```text
 POST /api/device/code    {"client_id":"terminalgb"}
@@ -189,8 +279,11 @@ nobody has pressed `@` in a live TUI against a portal).
 
 ## Follow-ups this leaves open
 
-- **Offering from the TUI** ("offer this one" from the trainer panel) — the
-  client calls exist, no UI drives them.
+- **Accepting from the TUI** — offering is done (`O`); accepting a friend's
+  offer still happens on the website. The portal-side spec above closes the
+  typed-accept hole without new emulator work (give back one of your own
+  emulator-created offers); an in-TUI accept flow on the same picker is the
+  natural sequel.
 - **Token refresh** — silent renewal instead of the loud re-login message.
 - Multiple pending trades arm only the **oldest**; the description says how
   many are waiting, and the rest arm on later loads after the first confirms.

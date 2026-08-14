@@ -300,6 +300,14 @@ name = "cpp_suite"
 path = "examples/cpp_suite.rs"
 required-features = ["image"]
 
+# Lists what a loaded save can offer to the trade portal, through the exact
+# code path the TUI's `O` key uses (boots into the save with the shared Cable
+# Club bot, hence gen1-link + image).
+[[example]]
+name = "offer_list"
+path = "examples/offer_list.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
 [[example]]
 name = "gen2_timecapsule"
 path = "examples/gen2_timecapsule.rs"

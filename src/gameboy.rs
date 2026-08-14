@@ -1188,6 +1188,37 @@ mod tests {
         rom
     }
 
+    /// The banked cartridge-RAM read the box reader depends on: a numbered
+    /// bank answers whether or not the game has RAM enabled or that bank
+    /// mapped, a bank past the cartridge's storage answers `None` (absent
+    /// storage must be distinguishable from a stored `$FF`), and a cartridge
+    /// with no RAM at all answers `None` everywhere.
+    #[test]
+    fn sram_banks_are_readable_by_number_and_absence_is_not_a_value() {
+        use crate::plugin::Capability;
+        let read_only = Capability::OBSERVE.union(Capability::READ_MEMORY);
+
+        // MBC3 + RAM + BATTERY-shaped header, 32 KiB RAM (4 banks) — what
+        // Pokémon Red/Blue is. RAM starts zeroed and the game has it
+        // *disabled*, which is exactly the state the reader meets.
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x147] = 0x13;
+        rom[0x149] = 0x03;
+        let mut gb = Gameboy::new(rom, None);
+        gb.with_machine(read_only, |m| {
+            assert_eq!(m.peek_sram_bank(2, 0xA000), Some(0));
+            assert_eq!(m.peek_sram_bank(3, 0xBFFF), Some(0));
+            assert_eq!(m.peek_sram_bank(4, 0xA000), None, "no fifth bank");
+            // The bus cannot see it: RAM is disabled, $A000 is open bus.
+            assert_eq!(m.peek(0xA000), Some(0xFF));
+        });
+
+        let mut gb = Gameboy::new(rom_only_cart(), None);
+        gb.with_machine(read_only, |m| {
+            assert_eq!(m.peek_sram_bank(0, 0xA000), None, "no RAM at all");
+        });
+    }
+
     /// The embedding contract: a machine can be built, stepped and read with
     /// **no path at all**, so nothing on this path touches the filesystem.
     #[test]

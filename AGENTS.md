@@ -3870,6 +3870,62 @@ silently on one side.
   `+clerk_test@example.com` addresses. The portal's own `DEV_AUTH=1` bypass and real
   Clerk keys are mutually exclusive per server run (`devMode()` short-circuits Clerk).
 
+### Offering FROM THE SAVE (`O`, `src/portal/offer.rs`, `plugins/trainer/src/collection.rs`)
+
+**An offer never comes from a form — it is picked from the loaded save's party and PC
+boxes**, because a typed offer is unverifiable and the emulator is the one component that
+can read the actual save (captain's rule; full write-up + the portal-side change spec in
+`docs/portal.md` §"Offering from the emulator"). Verified end-to-end against a staged copy
+of the captain's real Blue save: party (SPARK Lv12 / MEWTWO Lv70) **and** a checksummed
+SRAM box entry both read back (`cargo run --release --example offer_list -- <rom>
+[--save <sav>]`, the evidence tool).
+
+- **The box layout is symbol-verified, not walked.** `/tmp/pokered` + rgbds 1.0.3
+  (`/tmp/rgbds103`) build `pokered.gbc`/`pokeblue.gbc` **byte-identical to retail**
+  (`sha1sum -c roms.sha1` OK), and every constant in `gen1::boxes`/`gen1::boxmon` is the
+  `.sym` value, identical in both games: `wCurrentBoxNum $D5A0`, `wBoxDataStart $DA80`,
+  block `$462`, `sBox1..6` bank 2 / `sBox7..12` bank 3 from `$A000`, per-box checksums at
+  `$BA4D`. Re-derive by rebuilding, never by hand.
+- **Three `engine/menus/save.asm` semantics are load-bearing** (module doc of
+  `collection.rs`): until the first-ever box change (`wCurrentBoxNum` bit 7,
+  `BIT_HAS_CHANGED_BOXES`) SRAM banks 2/3 are **uninitialised garbage** — do not read
+  them; the current box's SRAM slot is deliberately emptied (WRAM is authoritative for
+  it); every SRAM box carries `CalcCheckSum` (complement of byte sum) in
+  `sBank{2,3}IndividualBoxChecksums`, and a box failing it is refused with a note, never
+  decoded.
+- **SRAM is unreachable over the bus almost always** — games leave cartridge RAM
+  *disabled*, so `Machine::peek($A000)` reads open bus. The seam is
+  `Machine::peek_sram_bank` → `MemoryBankController::readram_bank` (default `None` =
+  "this cartridge cannot answer" — absent storage must be distinguishable from a stored
+  `$FF`). Touches no MBC register, so it cannot perturb the game.
+- **The two-phase read exists for the borrow checker**: `collection::read_raw(&mut
+  Machine)` then `collection::decode(&raw, plugin.tables())` — a frontend cannot hold
+  `with_machine`'s `&mut gb` and the trainer plugin's tables at once.
+- **Tradeability verdicts are the wire's rules, not taste** (`collection::verdict`):
+  Gen 1's own Trade Center refuses nothing per-Pokémon (`TradeCenter_SelectMon` goes
+  straight to the exchange; no items/mail/eggs exist), so what is refused is: `$FE` (the
+  digit `8`) in a name — the link protocol's no-data byte; bytes outside the printable
+  charmap; glitch species (dex 0) and moves above `STRUGGLE` (`$A5`); levels outside
+  1-100; and a slot whose two independently-written species copies disagree (the
+  enemy-team rule applied to storage).
+- **The shiny flag rides the offer wire and is derived at send time**
+  (`client::mon_to_json` writes `shinyIfTradedToGen2` from the DVs via the trainer
+  panel's ONE rule — never accepted as an input, so it cannot disagree with the `dvs`
+  beside it). Wording rule everywhere it appears, picker legend included: *"would be
+  shiny if traded to Gen 2"*, never "is shiny" — Gen 1 has none. `shiny` is a filter
+  word in the picker.
+- **THE SAVE FILENAME IS `<stem>.sav` — the extension is REPLACED, not appended.**
+  `game.gb` saves to `game.sav` (`Battery`/`cable_club::stage` both use
+  `with_extension("sav")`). Staging a save as `game.gb.sav` silently boots a fresh game,
+  whose menu has no CONTINUE, and a screen-driven bot then loops in Oak's speech forever
+  — this cost an hour here. Use `cable_club::stage()`; do not hand-roll staging.
+- The offer UI is `Overlay::Offer` in the TUI (`O` in game, `Esc`/type/`Enter`×2), state
+  machine in `src/portal/offer.rs` (terminal-free, unit-tested); the POST runs on its own
+  thread polled by `portal_tick` — the never-block-a-frame rule. `testharness/portal.rs`
+  checks [6b] pin the offer POST (authenticated, save-read fields, shiny flag); the
+  harness reaches trainer types **only through `terminalgb::portal::offer` re-exports**
+  (the two-rlib trap again — never add a plugin crate to a `harness = false` target).
+
 ## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:

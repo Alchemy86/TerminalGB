@@ -243,6 +243,24 @@ fn mon_to_json(w: &mut Writer, m: &MonSpec) {
     w.num_field("speed", m.dvs.2 as f64);
     w.num_field("special", m.dvs.3 as f64);
     w.end_obj();
+    // Derived here from the DVs on every send — never accepted as an input —
+    // so it can never disagree with the spec it rides on. The rule is the
+    // trainer panel's one implementation (`derived::shiny_if_traded`,
+    // pokecrystal `CheckShininess`), and the wording rule travels with it:
+    // Gen 1 has no shiny Pokémon, this is "would be shiny IF TRADED to
+    // Gen 2". The portal shows it in its lists; a portal wanting to verify it
+    // recomputes the same derivation from `dvs`.
+    w.bool_field(
+        "shinyIfTradedToGen2",
+        terminalgb_plugin_trainer::derived::shiny_if_traded(
+            terminalgb_plugin_trainer::gen1::Dvs {
+                attack: m.dvs.0,
+                defense: m.dvs.1,
+                speed: m.dvs.2,
+                special: m.dvs.3,
+            },
+        ),
+    );
 }
 
 /// Decode one Pokémon spec, refusing anything out of range **by field name**.
@@ -401,6 +419,32 @@ mod tests {
         w.end_obj();
         let back = mon_from_json(&parse(&w.finish())).unwrap();
         assert_eq!(back, m);
+    }
+
+    /// The shiny prediction rides every outgoing mon, is derived from the DVs
+    /// at send time (never accepted as an input, so it cannot disagree with
+    /// them), and uses the one implementation the trainer panel uses.
+    #[test]
+    fn the_outgoing_mon_carries_the_shiny_if_traded_flag_derived_from_its_dvs() {
+        let encode = |dvs: (u8, u8, u8, u8)| {
+            let mut w = Writer::new();
+            w.begin_obj();
+            mon_to_json(
+                &mut w,
+                &MonSpec {
+                    species: "Abra".into(),
+                    dvs,
+                    ..MonSpec::default()
+                },
+            );
+            w.end_obj();
+            w.finish()
+        };
+        // $EA $AA: attack 14 (bit 1 set), def/spd/spc all 10 — GLIMMER's
+        // real spread, verified shiny in Gold (docs/link-cable.md §8).
+        assert!(encode((14, 10, 10, 10)).contains("\"shinyIfTradedToGen2\":true"));
+        // All-15s are NOT shiny — the classic wrong guess.
+        assert!(encode((15, 15, 15, 15)).contains("\"shinyIfTradedToGen2\":false"));
     }
 
     #[test]

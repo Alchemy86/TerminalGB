@@ -30,6 +30,15 @@ pub trait MachineAccess {
     /// A byte from an explicitly numbered ROM bank, whatever is mapped.
     /// `0xFF` (open bus) past the end of the cartridge — never a panic.
     fn peek_bank(&mut self, bank: usize, address: u16) -> u8;
+    /// A byte from an explicitly numbered 8 KiB cartridge-RAM bank, whatever
+    /// the game has mapped and whether or not it currently has RAM enabled.
+    /// `None` when the cartridge has no RAM there — a reader of save data must
+    /// be able to tell absent storage from a stored `$FF`, which is why this
+    /// is not open bus. Default `None` so a fake machine that never deals in
+    /// cartridge RAM needs no code.
+    fn peek_sram_bank(&mut self, _bank: usize, _address: u16) -> Option<u8> {
+        None
+    }
     /// Cartridge title from the ROM header.
     fn rom_title(&self) -> String;
     /// Header global checksum (`$014E-$014F`).
@@ -165,6 +174,23 @@ impl<'m> Machine<'m> {
             return None;
         }
         Some(self.inner.peek_bank(bank, address))
+    }
+
+    /// Read from an **explicitly numbered 8 KiB cartridge-RAM bank**, whatever
+    /// the game has mapped — and whether or not the game currently has RAM
+    /// enabled, which it normally does not: save data (Gen 1's PC boxes live
+    /// in SRAM banks 2 and 3) is unreachable through [`Machine::peek`] almost
+    /// all of the time. Like [`Machine::peek_bank`] this touches no MBC
+    /// register, so it cannot perturb the running game.
+    ///
+    /// `None` without [`Capability::READ_MEMORY`], and `None` where the
+    /// cartridge has no RAM — absent storage must be distinguishable from a
+    /// stored `$FF`, because the caller is reading a save.
+    pub fn peek_sram_bank(&mut self, bank: usize, address: u16) -> Option<u8> {
+        if !self.granted.contains(Capability::READ_MEMORY) {
+            return None;
+        }
+        self.inner.peek_sram_bank(bank, address)
     }
 
     /// Cartridge title from the ROM header.
