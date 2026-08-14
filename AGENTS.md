@@ -3256,6 +3256,62 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   default branch too). The fixture at `/tmp/gameboy-gen1-trade/cableclub.sav` was produced
   earlier and is what the harness finds; regenerating it is an open problem.
 
+## Two consoles on one cable (`src/link.rs`, `src/mmu/serial.rs`, `examples/link_two.rs`)
+
+- **Full write-up, with the Gen 1 ↔ Gen 2 Time Capsule rules:
+  [`docs/link-cable.md`](docs/link-cable.md).** This is the *other* way to be the far end of
+  the link port: `plugins/gen1-link` **impersonates** a console and can only know protocols
+  somebody wrote down; `LinkCable` **relays bytes between two real cores** and needs to know
+  none. Both are wanted — impersonation is the answer with one cartridge.
+- **The slave half of the port did not exist.** `Serial::wb` acted on `SC = $81` and ignored
+  `SC = $80` entirely. That is *correct* for one console alone (nothing is ever going to clock
+  it) and is exactly the half a second console needs. Adding it was the substantive work; the
+  cable on top is ~250 lines.
+- **TWO IDENTICAL CORES IN LOCKSTEP NEVER DRIFT, AND THAT BREAKS THE HANDSHAKE.** Real consoles
+  have independent crystals and real players press A on different frames, so their link
+  handshakes slide past each other until they interleave. Started together, two cores stepped
+  by one loop stay in phase **for ever**: both drive the clock at the same instant, each finds
+  the other deaf, and Gen 1's `.establishConnectionLoop` times out at 90 iterations. Measured
+  Blue-to-Blue: skew 0 **never** connects, every skew from 1 to 34 frames connects within ~700
+  frames. `examples/link_two.rs --skew N`; the TUI applies `LINK_START_SKEW = 3` at startup.
+  **This is the price of determinism, not a cable bug** — do not go looking for the bug.
+- **A torn byte must KEEP its data.** When the far console arms `SC = $80` and rewrites `SC`
+  before the eighth edge, the master keeps what was latched; only the slave half is abandoned.
+  The first version voided it and faulted both machines as a desync — and then faulted them 898
+  frames into a real trade, because Gen 1's handshake offers `SB = $02` behind `SC = $80` and
+  replaces it with `SB = $01` / `SC = $81` about **100 T-cycles** later, every frame. Reading
+  `$02` out of that window is the only way two consoles agree who drives the clock, so voiding
+  a torn byte means never connecting two Game Boys at all.
+- **The fail-safe is fault propagation, not byte accounting.** One console faulting faults the
+  other (`Gameboy::report_fault`, so both batteries are poisoned): half a trade leaves the
+  *survivor* holding the dangerous save. Byte-level desync is the games' job and Gen 1 is good
+  at it (`Serial_ExchangeBytes` re-sends until it sees the `$FD` preamble).
+- **Which Cable Club seat is not a choice.** `CableClubLeftGameboy` returns immediately unless
+  this console took the *internal* clock and wants the player facing **right**;
+  `CableClubRightGameboy` mirrors it for the external clock (`engine/pokemon/bills_pc.asm`).
+  Read `hSerialConnectionStatus` (`$FFAA`, asserted by name in `engine/link/cable_club_npc.asm`)
+  and face accordingly — pressing A at the wrong console is a silent no-op that looks exactly
+  like a broken link. Note the values: `USING_EXTERNAL_CLOCK` is **`$01`**, internal is `$02`.
+- **TUI: `link = <rom>` boots a second console, `W` swaps which one you play** (`L` was already
+  "back to the picker"). Focus is a literal `mem::swap` of the two `Gameboy`s so the renderer,
+  palette, upscaler, screenshots and plugins keep working on `Session::gb` — but the cable
+  records the master positionally, so `LinkCable::swap_ends()` must be called with it.
+  **`Session` is built on the stack by every render test: anything `Gameboy`-sized added to it
+  must be `Box`ed** or `cargo test --lib` dies with a stack overflow.
+- **`gen1_trade --make-save` still does not work on this box** (it loops in Oak's speech at a
+  "BLUE is playing the SN[ES]" screen). It does not need to: **`~/roms/*.sav` already *is* a
+  Cable Club fixture** — player BLUE standing at (11,3) in the Viridian Pokémon Center, party of
+  two, no badges. Copy it; never open it for writing.
+- **Verified end to end, Blue to Blue:** 1552 transfers, 0 unanswered, 0 torn, each console
+  holding the other's Pokémon with DVs intact, and both `.sav` files passing the game's own
+  `CalcCheckSum`.
+- **Gen 1 ↔ Gen 2 needs a Gold save nobody has yet.** The cable itself needs *nothing* added —
+  in Time Capsule mode Gen 2 speaks Gen 1's protocol byte for byte
+  (`Link_PrepPartyData_Gen1`, `ConvertMon_2to1`). What is missing is the in-game state: meet
+  Bill in Ecruteak City's Pokémon Center, wait a day (`ENGINE_TIME_CAPSULE` is a *daily* flag
+  and the receptionist is shut while it is set), and carry a party with no species `>= #152`,
+  no move `> STRUGGLE` and no mail — which rules out all three Johto starters.
+
 ## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:

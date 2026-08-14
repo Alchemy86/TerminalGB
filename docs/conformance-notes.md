@@ -17,6 +17,75 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the link port's slave half, and what a torn byte carries
+
+**Symptom.** Two consoles cannot be linked at all, and nothing about it looks
+broken from one console's point of view. `SC = $80` (transfer start, *external*
+clock) does nothing: the game sets it, waits for the serial interrupt that says
+the other console has clocked eight bits in, and waits for ever. Every Cable
+Club, every trade, every link battle hangs at "PLEASE WAIT!" — while a single
+console running the same cartridge is flawless, because a lone Game Boy's
+transfers are all internally clocked and its `SC = $80` genuinely should do
+nothing.
+
+**Caught by.** *Nothing in any public suite, and there is a structural reason.*
+Blargg, Mooneye, SameSuite, Mealybug and acid2 all run **one** cartridge on
+**one** machine, so none of them can exercise a state whose whole definition is
+"waiting for the other console". Mooneye `acceptance/serial/boot_sclk_align`
+comes closest and measures only the *internal* shift clock's phase from boot.
+That is a real coverage gap and worth writing down: **half of the link port is
+invisible to every ROM-driven test in existence**, and it is the half every
+multiplayer feature depends on. The tests written here (`src/link.rs`
+`mod tests`) drive two whole cores against each other, which is what it takes.
+
+**Hardware behaviour.** `SB` (`$FF01`) is an 8-bit shift register, not a
+mailbox; `SC` (`$FF02`) bit 7 is the transfer-start flag and bit 0 selects the
+shift clock — 1 internal ("master", ~8192 Hz on a DMG, so 4096 T-cycles per
+byte), 0 external ("slave"). Both consoles present `SB` to the wire at once and
+after eight edges each holds what the other started with; on the eighth edge
+*both* clear `SC` bit 7 and request `IF` bit 3. A master completes with `$FF`
+if nothing answers, because an unplugged cable's data line idles high. A slave
+never completes on its own. (Pan Docs, *Serial Data Transfer (Link Cable)*.)
+
+**The subtle half, which measurement decided rather than the documentation.**
+When the far console arms `SC = $80` and rewrites `SC` before the eighth edge,
+the exchange is *torn*, and no prose source says what the master receives. It
+must **keep** the byte that was latched. Voiding it — the obvious "nothing was
+really exchanged" reading — was implemented first and faults both machines 898
+frames into a real Blue-to-Blue trade, because Pokémon Red/Blue's
+`.establishConnectionLoop` (pokered `engine/link/cable_club_npc.asm`) offers
+`SB = $02` behind `SC = $80` and replaces it with `SB = $01` / `SC = $81` about
+**100 T-cycles later**, every frame, for as long as it takes to find a partner.
+Reading `$02` out of that window is the *only* way two consoles ever agree on
+who drives the clock (`USING_EXTERNAL_CLOCK` = `$01`, `USING_INTERNAL_CLOCK` =
+`$02`, sharing values with the `ESTABLISH_CONNECTION_WITH_*` bytes so the reply
+*is* the role assignment). An emulator that voids a torn byte can never connect
+two Game Boys, and its single-console behaviour is indistinguishable from a
+correct one.
+
+**Carries into the tool.** Four checks a conformance tool could run against any
+emulator that exposes two instances, none of which need a commercial ROM:
+
+1. **A slave with no partner waits for ever** — `SC = $80`, then `SC` bit 7
+   still set and `SB` unchanged after several frames.
+2. **Two cores exchange a byte** — each ends up holding what the other started
+   with, and **both** raise `IF` bit 3.
+3. **A torn byte keeps its data** — the master's `SB` holds the byte the slave
+   was offering when they were paired, not `$FF`.
+4. **Two masters shift in `$FF`, two slaves deadlock** — a cable must not
+   invent a byte for either.
+
+And one finding for the tool's *own* design, which is not about a Game Boy at
+all: **two deterministic cores stepped by one loop never drift**, so a symmetric
+race like Gen 1's clock-role handshake can never resolve if they start in phase.
+Any harness that links two emulator instances has to introduce a skew, and
+should say so rather than reporting "the games do not connect". Measured:
+skew 0 never connects; every skew from 1 to 34 frames connects within ~700.
+
+Full write-up: [`docs/link-cable.md`](link-cable.md).
+
+---
+
 ## 2026-08-14 — a square channel's frequency reload is latched a few cycles late
 
 **SameSuite 71/76 → 72/76** (`channel_1_freq_change_timing-cgbDE` FAIL → PASS,

@@ -4,6 +4,8 @@
 > [`examples/link_two.rs`](../examples/link_two.rs).
 > Related: [`docs/plugins.md`](plugins.md) (the *impersonating* link partner),
 > [`docs/gen1/link-from-outside.md`](gen1/link-from-outside.md).
+> Conformance record: [`docs/conformance-notes.md`](conformance-notes.md), 2026-08-14 —
+> including why **no public test suite can see half of the link port**.
 
 There are two ways to be the far end of a Game Boy's link port, and this repository
 now has both.
