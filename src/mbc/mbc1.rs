@@ -68,25 +68,18 @@ fn is_multicart(data: &[u8]) -> bool {
 }
 
 impl MBC1 {
-    pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC1> {
+    /// `file` is `None` when the embedder asked for no filesystem access; the
+    /// cartridge then behaves identically but its RAM lives only in memory.
+    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC1> {
         let rambanks = match data[0x147] {
             0x02 | 0x03 => ram_banks(data[0x149]),
             _ => 0,
         };
-        let battery = match data[0x147] {
-            0x03 => Battery::new(&file, rambanks * 0x2000, false),
+        let battery = match (data[0x147], &file) {
+            (0x03, Some(f)) => Battery::new(f, rambanks * 0x2000, false),
             _ => Battery::none(),
         };
         MBC1::build(data, rambanks, battery)
-    }
-
-    #[allow(dead_code)]
-    pub fn new_without_save(data: Vec<u8>) -> StrResult<MBC1> {
-        let rambanks = match data[0x147] {
-            0x02 | 0x03 => ram_banks(data[0x149]),
-            _ => 0,
-        };
-        MBC1::build(data, rambanks, Battery::none())
     }
 
     fn build(data: Vec<u8>, rambanks: usize, battery: Battery) -> StrResult<MBC1> {
@@ -362,7 +355,7 @@ mod tests {
 
     #[test]
     fn multicart_banking_matches_the_mooneye_table() {
-        let mut mbc = MBC1::new_without_save(image(true)).unwrap();
+        let mut mbc = MBC1::new(image(true), None).unwrap();
         assert!(mbc.multicart, "bank $10 header should select MBC1M wiring");
 
         for bank2 in 0..4usize {
@@ -402,7 +395,7 @@ mod tests {
     /// that would break real games.
     #[test]
     fn a_plain_1mb_cart_keeps_the_ordinary_wiring() {
-        let mut mbc = MBC1::new_without_save(image(false)).unwrap();
+        let mut mbc = MBC1::new(image(false), None).unwrap();
         assert!(!mbc.multicart);
 
         // BANK1 = $10 is bank $10, not bank $00.
@@ -428,7 +421,7 @@ mod tests {
     fn multicart_detection_requires_a_1mb_image() {
         let mut rom = image(true);
         rom.extend(std::iter::repeat(0u8).take(0x4000));
-        let mbc = MBC1::new_without_save(rom).unwrap();
+        let mbc = MBC1::new(rom, None).unwrap();
         assert!(!mbc.multicart);
     }
 }

@@ -130,30 +130,44 @@ pub trait MemoryBankController: Send {
     }
 }
 
+/// Smallest cartridge image that can carry a header: the header runs to
+/// `0x014F`, and `0x0147`/`0x0148`/`0x0149` (type / ROM size / RAM size) are
+/// what the mapper is chosen from.
+const HEADER_END: usize = 0x0150;
+
+/// Build the mapper the cartridge header asks for.
+///
+/// `filepath` is **only** about persistence: `Some(p)` battery-backs cartridge
+/// RAM to `<p>.sav`, `None` keeps it in memory and the emulator touches no
+/// file. It must never change *which* mapper is chosen — it used to, and every
+/// embedder that asked for no filesystem (the wasm build, the FFI build, and
+/// anyone calling `Gameboy::new(rom, None)`) got an **MBC3 regardless of the
+/// header**, so a non-MBC3 game was silently mis-banked from its first bank
+/// switch. Pan Docs, cartridge header byte `0x0147`:
+/// <https://gbdev.io/pandocs/The_Cartridge_Header.html>
 pub fn get_mbc(
     data: Vec<u8>,
     filepath: Option<path::PathBuf>,
 ) -> StrResult<Box<dyn MemoryBankController + 'static>> {
-    if filepath.is_none() {
-        return mbc3::MBC3::new_without_save(data)
-            .map(|v| Box::new(v) as Box<dyn MemoryBankController>);
+    // An embedder hands us arbitrary bytes. Indexing a short image would panic
+    // — an abort under `panic = 'abort'` — so refuse it as an error instead.
+    if data.len() < HEADER_END {
+        return Err("cartridge image is too short to contain a header");
     }
-
-    let file = filepath.unwrap();
 
     match data[0x147] {
         // 0x00 ROM ONLY, 0x08 ROM+RAM, 0x09 ROM+RAM+BATTERY. All three are the
         // same "no mapper" cartridge; 0x09 is battery-backed, so rejecting it
         // outright meant a save-capable cart could not save at all.
-        0x00 | 0x08 | 0x09 => mbc0::MBC0::new(data, file)
+        0x00 | 0x08 | 0x09 => mbc0::MBC0::new(data, filepath)
             .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
-        0x01..=0x03 => mbc1::MBC1::new(data, file)
+        0x01..=0x03 => mbc1::MBC1::new(data, filepath)
             .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
-        0x05..=0x06 => mbc2::MBC2::new(data, file)
+        0x05..=0x06 => mbc2::MBC2::new(data, filepath)
             .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
-        0x0F..=0x13 => mbc3::MBC3::new(data, file)
+        0x0F..=0x13 => mbc3::MBC3::new(data, filepath)
             .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
-        0x19..=0x1E => mbc5::MBC5::new(data, file)
+        0x19..=0x1E => mbc5::MBC5::new(data, filepath)
             .map(|v| Box::new(v) as Box<dyn MemoryBankController>),
         _ => Err("Unsupported MBC type"),
     }
@@ -212,6 +226,72 @@ fn check_checksum(data: &[u8]) -> StrResult<()> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+
+    /// A cartridge image with `banks` 16 KiB banks, each byte in bank *n* set
+    /// to *n*, so `readrom(0x4000)` names the mapped bank directly.
+    fn cart(kind: u8, banks: usize) -> Vec<u8> {
+        let mut rom = Vec::with_capacity(banks * 0x4000);
+        for b in 0..banks {
+            rom.extend(std::iter::repeat(b as u8).take(0x4000));
+        }
+        rom[0x147] = kind;
+        // rom_banks(5, _) == 64. rambanks 0 — persistence is not what is
+        // under test here, mapper *selection* is.
+        rom[0x148] = 5;
+        rom[0x149] = 0;
+        rom
+    }
+
+    /// The mapper must come from the cartridge header, never from whether the
+    /// caller wanted battery saves.
+    ///
+    /// This is the embedding case: `Gameboy::new(rom, None)` — a UI, a
+    /// hardware build, the wasm and FFI builds — all of which used to be handed
+    /// an **MBC3 for every cartridge**. Symptom: a non-MBC3 game reads the
+    /// wrong ROM bank from its first bank switch (garbage code, immediate
+    /// crash or freeze). No test ROM in the suite catches this — Blargg and
+    /// Mooneye are all run *with* a path, and none of them is an MBC5 or
+    /// ROM-only cartridge exercising a bank register.
+    #[test]
+    fn the_mapper_is_chosen_from_the_header_with_or_without_a_save_path() {
+        // ROM ONLY: writes to the bank register do nothing at all. Under the
+        // old MBC3 fallback this read back bank 2.
+        let mut m = get_mbc(cart(0x00, 64), None).unwrap();
+        m.writerom(0x2000, 2);
+        assert_eq!(m.readrom(0x4000), 1, "ROM-only cart must not bank switch");
+
+        // MBC1 masks the bank register to 5 bits, so 0x22 selects bank 2.
+        // MBC3 uses 7 bits and would select bank 0x22.
+        let mut m = get_mbc(cart(0x01, 64), None).unwrap();
+        m.writerom(0x2000, 0x22);
+        assert_eq!(
+            m.readrom(0x4000),
+            2,
+            "MBC1 masks the bank register to 5 bits"
+        );
+
+        // MBC5 can map bank 0 at 0x4000; MBC3 rewrites a written 0 to 1.
+        let mut m = get_mbc(cart(0x19, 64), None).unwrap();
+        m.writerom(0x2000, 0);
+        assert_eq!(m.readrom(0x4000), 0, "MBC5 can select bank 0");
+
+        // ...and an actual MBC3 still behaves like one.
+        let mut m = get_mbc(cart(0x11, 64), None).unwrap();
+        m.writerom(0x2000, 0x22);
+        assert_eq!(m.readrom(0x4000), 0x22, "MBC3 uses 7 bank bits");
+    }
+
+    /// An embedder hands the core arbitrary bytes. Too short to hold a header
+    /// must be an error, not an index panic — which under
+    /// `[profile.release] panic = 'abort'` is an instant process abort.
+    #[test]
+    fn a_cartridge_too_short_for_a_header_is_refused_not_a_panic() {
+        assert!(get_mbc(vec![0u8; 0x100], None).is_err());
+        assert!(get_mbc(Vec::new(), None).is_err());
+        assert!(get_mbc(vec![0u8; 0x150], None).is_ok());
+    }
+
     #[test]
     fn checksum_zero() {
         let mut data = vec![0; 0x150];

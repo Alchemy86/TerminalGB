@@ -148,18 +148,21 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 
 ### Honest approximations & known bugs
 
-- **The MBC3-for-everything bug.** `get_mbc` short-circuits at the top:
+- **The MBC3-for-everything bug — FIXED.** `get_mbc` used to short-circuit at the top:
 
   ```rust
   if filepath.is_none() {
-      return mbc3::MBC3::new_without_save(data)...   // mbc/mod.rs:43-45
+      return mbc3::MBC3::new_without_save(data)...
   }
   ```
 
-  When there is no filepath — **always true for the web and FFI builds** — it constructs
-  an **MBC3 regardless of `0x0147`**. An MBC1 or MBC5 game in the browser is mis-driven as
-  MBC3, so its banking is wrong. This is the scout report's finding, confirmed at
-  [`mbc/mod.rs:68`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L68).
+  With no filepath — **always true for the web and FFI builds, and for any embedder
+  calling `Gameboy::new(rom, None)`** — it constructed an **MBC3 regardless of `0x0147`**,
+  so an MBC1 or MBC5 game was mis-banked from its first bank switch, and a ROM-only
+  cartridge gained a bank register it does not have. The save path is now purely about
+  *persistence*: every `MBCx::new` takes `Option<PathBuf>` and the mapper is always chosen
+  from the header. Pinned by
+  `mbc::test::the_mapper_is_chosen_from_the_header_with_or_without_a_save_path`.
 - **MBC3 RTC is driven by emulated time** ([`rtc.rs`](../../src/mbc/rtc.rs)): a sub-second
   divider counts T-cycles of *real console* time, ticking the counter chain once every
   4,194,304 of them, and `MemoryManagementUnit::do_cycle` advances it once per instruction.

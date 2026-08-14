@@ -59,15 +59,31 @@ impl Cpu<'_> {
     }
 
     /// Boot a specific console. `Model::Auto` is [`Cpu::new`].
+    ///
+    /// Panics on a cartridge this emulator cannot map (unknown MBC type, an
+    /// image too short to hold a header, an unreadable `.sav`). Embedders
+    /// taking bytes from a user should prefer [`Cpu::try_new_with_model`] —
+    /// under `[profile.release] panic = 'abort'` a panic here takes the whole
+    /// host process down.
     pub fn new_with_model(
         data: Vec<u8>,
         file: Option<std::path::PathBuf>,
         model: Model,
     ) -> Self {
-        let memory = MemoryManagementUnit::new_with_model(data, file, model).unwrap();
+        Self::try_new_with_model(data, file, model).unwrap()
+    }
+
+    /// [`Cpu::new_with_model`] without the panic: the cartridge is rejected
+    /// with the reason instead.
+    pub fn try_new_with_model(
+        data: Vec<u8>,
+        file: Option<std::path::PathBuf>,
+        model: Model,
+    ) -> Result<Self, &'static str> {
+        let memory = MemoryManagementUnit::new_with_model(data, file, model)?;
         let registers = Registers::new(memory.gbmode);
 
-        Cpu {
+        Ok(Cpu {
             registers,
             memory,
             ime: false,
@@ -78,7 +94,7 @@ impl Cpu<'_> {
             speed_switch_halt: 0,
             plugins: crate::plugin::PluginHost::new(),
             _executed_operations: Vec::new(),
-        }
+        })
     }
     /// Serialise the **complete** machine to a versioned, ROM-checked byte
     /// blob. See [`crate::savestate`] for the format and the BESS verdict.

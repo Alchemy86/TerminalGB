@@ -14,13 +14,15 @@ pub struct MBC0 {
 }
 
 impl MBC0 {
-    pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC0> {
+    /// `file` is `None` when the embedder asked for no filesystem access; the
+    /// cartridge then behaves identically but its RAM lives only in memory.
+    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC0> {
         let rambanks = match data[0x147] {
             0x08 | 0x09 => ram_banks(data[0x149]),
             _ => 0,
         };
-        let battery = match data[0x147] {
-            0x09 => Battery::new(&file, rambanks * 0x2000, false),
+        let battery = match (data[0x147], &file) {
+            (0x09, Some(f)) => Battery::new(f, rambanks * 0x2000, false),
             _ => Battery::none(),
         };
         let mut res = MBC0 {

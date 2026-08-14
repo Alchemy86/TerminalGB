@@ -75,7 +75,14 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// timed 8-shift-clock affair now, so the shifts still owed and the byte due to
 /// land in `SB` both survive across a frame boundary (Mooneye
 /// `acceptance/serial/boot_sclk_align`).
-pub const FORMAT_VERSION: u16 = 10;
+/// v11: `get_mbc` stopped forcing an MBC3 when no save path was given, so a
+/// machine built with `Gameboy::new(rom, None)` — the FFI and wasm builds, and
+/// any embedder — now writes the block of the mapper its cartridge header
+/// actually asks for. Same cartridge, different MBC block: an older state from
+/// those builds would be mis-parsed, so it is refused instead. States written
+/// by the desktop and terminal frontends (which always pass a path) were
+/// unaffected by that fix, but the container version is global.
+pub const FORMAT_VERSION: u16 = 11;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

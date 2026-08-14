@@ -18,7 +18,19 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib", "staticlib"]
 
 [features]
-default = ["libc", "glutin", "gl" ,"ratatui" ,"icy_sixel", "image", "ratatui-image"]
+# `--no-default-features` is the EMBEDDING BUILD: the emulator core and
+# nothing else — no window system, no terminal, no image codecs, no host
+# audio. See README "Embedding the core". Zero third-party crates besides
+# `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
+# belongs behind `desktop`/`tui`/`audio`, not in the core.
+default = ["desktop", "tui"]
+
+# Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
+# Needs a display server at run time.
+desktop = ["libc", "glutin", "gl", "image"]
+# Terminal frontend (`gameboy::run_terminal`, `screen::tui`). Needs a terminal
+# with the kitty keyboard protocol at run time.
+tui = ["libc", "ratatui", "ratatui-image", "icy_sixel", "image"]
 # Real host-audio output via cpal. OFF by default because cpal pulls in ALSA
 # (libasound2-dev / alsa-lib-devel) on Linux, which would make a fresh clone
 # fail to build. Enable with `--features audio` once ALSA dev headers are
@@ -78,10 +90,70 @@ web-sys = {version = "0.3.4", features = [
 [[example]]
 name = "desktop"
 path = "examples/desktop/bin.rs"
+required-features = ["desktop"]
 
 [[example]]
 name = "terminal"
 path = "examples/terminal/bin.rs"
+required-features = ["tui"]
+
+# The proof that the core stands alone: runs a ROM headless on
+# `--no-default-features` (no window, no terminal, no audio, no image crates)
+# and prints a frame hash. See README "Embedding the core".
+[[example]]
+name = "headless"
+path = "examples/headless.rs"
+
+# Examples that reach for a frontend crate declare it, so they are skipped
+# rather than broken on a minimal build.
+[[example]]
+name = "render_bench"
+path = "examples/render_bench.rs"
+required-features = ["tui"]
+
+[[example]]
+name = "gen1_trade"
+path = "examples/gen1_trade.rs"
+required-features = ["image"]
+
+[[example]]
+name = "upscale_gallery"
+path = "examples/upscale_gallery.rs"
+required-features = ["image"]
+
+[[example]]
+name = "claude_plays"
+path = "examples/claude_plays.rs"
+required-features = ["image"]
+
+[[example]]
+name = "gen1_battle"
+path = "examples/gen1_battle.rs"
+required-features = ["image"]
+
+[[example]]
+name = "idle_card"
+path = "examples/idle_card.rs"
+required-features = ["image"]
+
+[[example]]
+name = "mealybug"
+path = "examples/mealybug.rs"
+required-features = ["image"]
+
+[[example]]
+name = "trainer_layout"
+path = "examples/trainer_layout.rs"
+required-features = ["tui"]
+
+# The other audio examples deliberately carry a no-`audio` `main()` that
+# prints how to enable the feature, so they stay buildable and are NOT given
+# `required-features`. `audio_frame_cost` is the exception: it times the frame
+# with `libc::clock_gettime`, so it needs that dependency too.
+[[example]]
+name = "audio_frame_cost"
+path = "examples/audio_frame_cost.rs"
+required-features = ["libc"]
 
 # Headless test-ROM correctness harness. `harness = false` gives it its own
 # main() so it can print a pass count and control the process exit code (red on
@@ -122,6 +194,7 @@ harness = false
 name = "audioperf"
 path = "testharness/audioperf.rs"
 harness = false
+required-features = ["audio"]
 
 # Trainer-view harness: proves the Gen 1 RAM reader and the sprite
 # decompressor against a real Pokémon Red/Blue cartridge, and prints the live
@@ -131,6 +204,8 @@ harness = false
 name = "trainer"
 path = "testharness/trainer.rs"
 harness = false
+# Compares the panel against ratatui's rendered output, so it needs the TUI.
+required-features = ["tui"]
 
 # Cable Club Colosseum harness: drives a real Pokémon Red/Blue cartridge into a
 # **link battle** against the virtual partner and asserts the game never leaves
@@ -152,6 +227,9 @@ harness = false
 name = "basicterm"
 path = "testharness/basicterm.rs"
 harness = false
+# Launches the terminal frontend itself (and drives the tty through libc), so
+# it is a TUI test, not a core one.
+required-features = ["tui"]
 
 # Agent-substrate harness: proves observation, the action executor, the budget
 # cap, the circuit breaker and stuck detection end to end against a

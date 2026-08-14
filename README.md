@@ -233,25 +233,171 @@ npm run serve     # dev server; open the printed localhost URL and choose a ROM
 ```
 
 To produce an optimized bundle: `make build-wasm` (requires
-[`wasm-opt`](https://github.com/WebAssembly/binaryen)). The web build has **no audio yet**
-and currently mis-detects non-MBC3 cartridges — see [Status](#status).
+[`wasm-opt`](https://github.com/WebAssembly/binaryen)). The web build has **no audio yet** —
+see [Status](#status).
 
-### 📦 As a library
+---
+
+## 📦 Embedding the core
+
+**Take the emulator, leave the frontends.** If you are building your own UI, a hardware
+handheld, a bot, a CI check or a research harness, you want the machine and nothing else —
+no window system, no terminal, no audio device, no image codecs.
 
 ```toml
 [dependencies]
-gameboy = { git = "https://github.com/Alchemy86/gameboy" }
+gameboy = { git = "https://github.com/Alchemy86/gameboy", default-features = false }
 ```
+
+That is the **whole** dependency tree at that feature set:
+
+```text
+$ cargo tree --no-default-features --edges normal
+gameboy v0.2.0
+└── blip_buf v0.1.5
+```
+
+One crate — `blip_buf`, the APU's band-limited resampler. For comparison, the default
+build (both frontends) resolves **193** crates. Everything else is opt-in:
+
+| feature   | default | pulls in                                     | needs at run time                    |
+|-----------|:-------:|----------------------------------------------|--------------------------------------|
+| *(none)*  |         | `blip_buf`                                   | nothing                              |
+| `desktop` |   ✅    | `glutin`, `gl`, `libc`, `image`               | a display server (X11/Wayland/Win/macOS) |
+| `tui`     |   ✅    | `ratatui`, `ratatui-image`, `image`, `libc`   | a terminal with the kitty keyboard protocol |
+| `audio`   |         | `cpal`                                        | a sound device (ALSA dev headers to *build* on Linux) |
+| `ffi`     |         | —                                             | — (drops the Rust frontends; exposes the C ABI) |
+
+### The API
+
+The whole embedding surface is [`Gameboy`](src/gameboy.rs):
+
+```rust
+use gameboy::gameboy::Gameboy;
+use gameboy::{mode::Model, KeypadKey};
+
+// You read the ROM. `None` for the path keeps cartridge RAM in memory and the
+// emulator never touches the filesystem; `Some(p)` opts into `<rom>.sav`.
+let rom = std::fs::read("game.gb")?;
+
+// `new` resolves the console from the cartridge header (and honours $GB_MODEL).
+// `new_with_model` is the reproducible form — it ignores the environment.
+// `try_new_with_model` returns Err instead of panicking on a cartridge that
+// cannot be mapped, which is what you want for bytes a user handed you.
+let mut gb = Gameboy::new_with_model(rom, None, Model::Dmg);
+
+loop {
+    gb.frame();                     // one ~59.7275 Hz frame
+    let rgba: &[u8] = gb.image();   // 160 × 144 × 4, top-left first
+    gb.keydown(KeypadKey::A);
+    gb.keyup(KeypadKey::A);
+}
+```
+
+Also available without any feature: `save_state()` / `load_state()` (versioned `GBSS`
+snapshots, [`docs/savestates.md`](docs/savestates.md)), `flush_battery()`, `rom_title()`,
+`global_checksum()`, the debug reads (`peek`, `peek_range`, `debug_pc`,
+`step_instruction`), the [plugin API](docs/plugins.md), the
+[pixel-art upscaler](docs/upscaling.md) (`gameboy::upscale`, pure CPU, no deps), and
+`enable_audio(Box<dyn AudioPlayer>)` — implement that one trait and the APU's samples are
+yours, with no `cpal` anywhere in the build.
+
+### Prove it, don't take our word
+
+[`examples/headless.rs`](examples/headless.rs) is the whole claim, executable:
+
+```bash
+cargo run --release --no-default-features --example headless -- third_party/dmg-acid2/dmg-acid2.gb 240
+```
+
+```text
+rom            DMG-ACID2
+checksum       0xa934
+frames         240
+frame hash     0x01acf78fe505f31c
+state bytes    141982
+state re-run   identical after 60 more frames
+
+        +++++-+-++  +++++++-++--
+                ########
+            ####........####
+          ##................##
+        ##..-+++++....+++++-..##
+        ##..--++++....++++--..##
+      ##........................##
+      ##..........-##-..........##
+      ##..........-##-..........##
+      ##........................##
+        ##..##............##..##
+        ##....############....##
+          ##................##
+            ####........####
+                ########
+```
+
+It runs a cartridge, takes input, round-trips a save state and prints the picture as ASCII
+— with **`HOME`, `DISPLAY` and `WAYLAND_DISPLAY` unset**, which is how the output above was
+produced.
+
+### What is and is not portable — honestly
+
+**The core does not:** read a config file, look up `$HOME` or any `$XDG_*` path, open a
+device node, require a temp directory, require a terminal, or require a display. It builds
+for `wasm32-unknown-unknown` with no changes.
+
+**The core does:**
+
+- **Require `std`.** It is not `no_std`: `Vec`, `String`, `Box<dyn>`, `std::sync::Mutex`
+  (FFI only) and `std::path::PathBuf` (battery saves) are all used. A bare-metal port would
+  mean an `alloc`-only rework of the MBC/battery layer — real work, not a flag. On embedded
+  Linux (a Pi, a handheld) none of this matters.
+- **Read one environment variable**, `GB_MODEL`, and only when the console is
+  [`Model::Auto`](src/mode.rs). `Gameboy::new_with_model` bypasses it entirely; use that
+  if your process environment is not yours to trust.
+- **Read the wall clock** — `SystemTime::now()` — in exactly one place: writing or reading
+  an **MBC3 clock cartridge's battery file**, to cover the time the console was switched
+  off, which is what the coin cell does. The running clock itself is driven by *emulated*
+  time ([`src/mbc/rtc.rs`](src/mbc/rtc.rs)), so with no save path nothing here reads a
+  host clock at all.
+- **Write `<rom>.sav`** if, and only if, you passed `Some(path)` to the constructor. The
+  format is the ecosystem's raw-cartridge-RAM `.sav`, not ours
+  ([`src/mbc/battery.rs`](src/mbc/battery.rs)).
+- **Abort on a cartridge it cannot map** if you use `new`/`new_with_model` — release builds
+  set `panic = 'abort'`, so there is no unwinding to catch. Use `try_new_with_model` for
+  bytes you did not produce.
+
+**Cross-target status.** `cargo check --no-default-features` is clean for
+`x86_64-pc-windows-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin` and
+`wasm32-unknown-unknown`. Those are type-check passes, not linked-and-run: **the only
+platform anything here has actually been executed on is x86-64 Linux.** The frontends are
+another matter — `desktop` needs GL and a windowing system, `tui` needs a kitty-protocol
+terminal, and the shared-memory frame transport
+([`docs/rendering.md`](docs/rendering.md)) is POSIX-only and stubs itself out elsewhere.
+
+**Licensing for redistributors.** The crate is [MPL-2.0](LICENSE) and every resolved
+dependency is MIT / Apache-2.0 / BSD / Zlib / ISC / 0BSD / Unlicense — **nothing GPL, in
+any feature combination** (`icy_sixel` ships MIT text without a `license` field in its
+manifest). No game ROM or commercial asset is in this repository. The one vendored ROM is
+[`third_party/dmg-acid2`](third_party/dmg-acid2/) (Matt Currie, **MIT**, redistribution
+permitted, licence included). **Blargg's test ROMs are *not* vendored** — they carry no
+explicit licence, so they are a git submodule pointing at `retrio/gb-test-roms` and are
+fetched, never redistributed here. **Mooneye GB is not vendored either**; clone
+[Gekkio/mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite) yourself. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the standing rule: formats and hardware facts are
+learned from any source and reimplemented; incompatible code and game assets never enter
+this tree.
+
+### If you want a frontend after all
 
 ```rust
 use gameboy::gameboy::{load_rom, Gameboy, RenderMode};
 
-fn main() {
-    let (rom, path) = load_rom("./game.gb").expect("load ROM");
-    let gb = Gameboy::new(rom, Some(path));
-    gb.render(RenderMode::Desktop); // or RenderMode::Terminal
-}
+let (rom, path) = load_rom("./game.gb").expect("load ROM");
+let gb = Gameboy::new(rom, Some(path));
+gb.render(RenderMode::Desktop); // needs `desktop`; or ::Terminal with `tui`
 ```
+
+`RenderMode::Headless` is the default and always available: it hands the loop back to you.
 
 ---
 
@@ -627,7 +773,7 @@ consume the same stream. Full guide, measured costs, platform limits and the cap
 |---|---|
 | Desktop (glutin/GL) | ✅ Working; audio with `--features audio` |
 | Terminal (ratatui) | ✅ Working (kitty-protocol terminals); audio with `--features audio` |
-| Web (WASM) | 🟡 Video + input work; **no audio yet**; non-MBC3 cartridges mis-detected |
+| Web (WASM) | 🟡 Video + input work; **no audio yet** |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
 
 **Console model — DMG or Game Boy Color**

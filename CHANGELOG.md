@@ -85,6 +85,20 @@ history. See [Credits & lineage](README.md#credits--lineage).
   [`docs/audio.md`](docs/audio.md) §6b.
 
 ### Fixed
+- **The mapper is chosen from the cartridge header again, with or without a save path.**
+  `get_mbc` short-circuited to an **MBC3 for every cartridge** whenever no filepath was
+  given — which is *always* the case for the WebAssembly build, the FFI build, and any
+  embedder calling `Gameboy::new(rom, None)`. An MBC1 or MBC5 game was mis-banked from its
+  first bank switch, and a ROM-only cartridge gained a bank register it does not have. The
+  save path is now purely about persistence: every `MBCx::new` takes `Option<PathBuf>`.
+  Pinned by `mbc::test::the_mapper_is_chosen_from_the_header_with_or_without_a_save_path`
+  (proved to fail against the old code). **No test ROM in the suite catches this** — the
+  harnesses all run with a path — which is itself a conformance finding.
+- **A malformed cartridge is an error, not a process abort.** An image shorter than the
+  header (`0x0150` bytes) indexed out of bounds; with `[profile.release] panic = 'abort'`
+  that takes the host process down with it. `get_mbc` refuses it, and the new
+  `Gameboy::try_new_with_model` / `Cpu::try_new_with_model` return the reason instead of
+  panicking — the constructors to use for bytes a user handed you.
 - **APU corner cases: SameSuite 50/76 → 57/76.** Three independent accuracy bugs, none of
   which any Blargg sound test can see (`dmg_sound` was and stayed 12/12 throughout).
   (1) *Frequency sweep.* The overflow check that kills a sweeping channel ran the instant
@@ -154,6 +168,27 @@ history. See [Credits & lineage](README.md#credits--lineage).
   the volume envelope's pending-step latch are machine state and are serialised).
 
 ### Added
+- **The emulator core is genuinely embeddable — `--no-default-features` is now a real build.**
+  It did not compile before: `screen::desktop` and `screen::tui` were unconditional, so the
+  crate could not be taken without `glutin`, `gl`, `ratatui`, `ratatui-image` and `image`.
+  The frontends are now behind `desktop` and `tui` features (both still on by default, so
+  nothing about the existing binaries changes). The result: **193 crates on the default
+  build, 1 with no features** (`blip_buf`, the APU resampler). Full write-up in the README's
+  new **"Embedding the core"** section — the API, the feature table, and an honest list of
+  what is and is not portable.
+- **`examples/headless.rs`** — the claim, executable: runs a cartridge with no window, no
+  terminal, no audio device, no image codec and no `$HOME`, takes input, round-trips a save
+  state and prints the frame as ASCII. `make embed` runs it with `HOME`, `DISPLAY` and
+  `WAYLAND_DISPLAY` unset, and a new **`embed` CI job** runs it on a runner with no system
+  libraries installed, asserts the dependency tree is exactly one crate, and cross-checks the
+  core for `wasm32-unknown-unknown`, `x86_64-pc-windows-gnu` and `aarch64-unknown-linux-gnu`.
+- **`Gameboy::new_with_model`** — the reproducible constructor. `Gameboy::new` resolves the
+  console via `Model::Auto`, which consults `$GB_MODEL`; an embedder that cannot vouch for its
+  process environment now has a way to say what machine it wants.
+- **`Gameboy::try_new_with_model` / `Cpu::try_new_with_model`** — construction that returns
+  `Err` rather than aborting on a cartridge that cannot be mapped.
+- **`RenderMode::Headless`** — always available, and now the default: it hands the loop back
+  to the caller. `RenderMode::Desktop`/`::Terminal` exist only with their features.
 - **`testharness/audioperf.rs`** — emulation speed *with a host audio player attached*, the
   check nothing in CI performed (every benchmark ran headless with no player, which is why the
   above shipped). Needs the `audio` feature but no sound card; `make test-audio-perf`.
@@ -207,6 +242,11 @@ history. See [Credits & lineage](README.md#credits--lineage).
   pinned by a test.
 
 ### Changed
+- **`savestate::FORMAT_VERSION` 4 → 5.** A machine built with no save path now writes the
+  block of the mapper its header asks for rather than an MBC3's, so a v4 state from the FFI
+  or wasm build would be mis-parsed. States from the desktop and terminal frontends were
+  unaffected by that fix, but the container version is global — existing slots are rejected
+  with a clear error rather than loaded wrongly.
 - `Cargo.toml` metadata: `repository` now points at this fork, authorship represents both the
   original author and this fork's contributors, `version` bumped to `0.2.0`, and the
   description updated.

@@ -11,13 +11,18 @@ pub use self::Target::{GameBoy, GameBoyColor, SuperGameBoy};
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
 pub enum RenderMode {
-    #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+    /// No frontend at all: the embedder drives [`Gameboy::frame`] itself and
+    /// reads [`Gameboy::image`]. Always available, and the default — a build
+    /// with `--no-default-features` has no other option.
     #[default]
+    Headless,
+    /// Requires the `desktop` feature.
+    #[cfg(all(feature = "desktop", not(any(target_arch = "wasm32", feature = "ffi"))))]
     Desktop,
-    #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+    /// Requires the `tui` feature.
+    #[cfg(all(feature = "tui", not(any(target_arch = "wasm32", feature = "ffi"))))]
     Terminal,
     #[cfg(any(target_arch = "wasm32", feature = "ffi"))]
-    #[default]
     WebAssembly,
 }
 
@@ -67,7 +72,7 @@ pub const FRAME_TICKS_CAP: u32 = FRAME_TICKS + 64;
 /// `None` opens the ROM picker. This is the entry point terminal binaries
 /// should use — it lets the TUI own ROM loading, so the picker and in-app ROM
 /// switching work.
-#[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+#[cfg(all(feature = "tui", not(any(target_arch = "wasm32", feature = "ffi"))))]
 pub fn run_terminal(initial_rom: Option<std::path::PathBuf>) {
     // Fail loudly (and non-zero) on setup errors — e.g. a terminal with no
     // kitty keyboard support — rather than silently returning.
@@ -78,6 +83,17 @@ pub fn run_terminal(initial_rom: Option<std::path::PathBuf>) {
 }
 
 impl Gameboy {
+    /// Build a machine from a cartridge image.
+    ///
+    /// `filepath` is the **only** thing that lets the emulator touch the
+    /// filesystem: `Some(p)` opts into battery saves beside `p` (`<rom>.sav`),
+    /// `None` keeps cartridge RAM entirely in memory. Nothing else here reads
+    /// a path, a config file or `$HOME`.
+    ///
+    /// The console model is [`crate::mode::Model::Auto`], which consults
+    /// `$GB_MODEL` before falling back to the cartridge header. An embedder
+    /// that wants a machine independent of the ambient environment should use
+    /// [`Gameboy::new_with_model`] instead.
     pub fn new(data: Vec<u8>, filepath: Option<std::path::PathBuf>) -> Gameboy {
         // let rom = load_rom();
 
@@ -90,9 +106,48 @@ impl Gameboy {
         gb
     }
 
+    /// [`Gameboy::new`] with the console chosen explicitly. An explicit model
+    /// wins over `$GB_MODEL`, so this is the constructor to use when the run
+    /// must be reproducible — a hardware build, a test rig, a library caller
+    /// that cannot vouch for its process environment.
+    pub fn new_with_model(
+        data: Vec<u8>,
+        filepath: Option<std::path::PathBuf>,
+        model: crate::mode::Model,
+    ) -> Gameboy {
+        Gameboy {
+            cpu: Cpu::new_with_model(data, filepath, model),
+            width: 160,
+            height: 144,
+        }
+    }
+
+    /// [`Gameboy::new_with_model`] without the panic. Use this when the bytes
+    /// came from somewhere you do not control — a file picker, a network
+    /// upload, a user's SD card. `new`/`new_with_model` abort the process on a
+    /// cartridge that cannot be mapped (unknown MBC type, an image too short to
+    /// hold a header, an unreadable `.sav`), because `[profile.release]` sets
+    /// `panic = 'abort'`.
+    pub fn try_new_with_model(
+        data: Vec<u8>,
+        filepath: Option<std::path::PathBuf>,
+        model: crate::mode::Model,
+    ) -> Result<Gameboy, &'static str> {
+        Ok(Gameboy {
+            cpu: Cpu::try_new_with_model(data, filepath, model)?,
+            width: 160,
+            height: 144,
+        })
+    }
+
     pub fn render(self, render_mode: RenderMode) {
         match render_mode {
-            #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+            // Nothing to do: the caller owns the loop.
+            RenderMode::Headless => {}
+            #[cfg(all(
+                feature = "desktop",
+                not(any(target_arch = "wasm32", feature = "ffi"))
+            ))]
             RenderMode::Desktop => {
                 self.render_desktop();
             }
@@ -100,14 +155,17 @@ impl Gameboy {
             RenderMode::WebAssembly => {
                 // crate::screen::web::render();
             }
-            #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+            #[cfg(all(
+                feature = "tui",
+                not(any(target_arch = "wasm32", feature = "ffi"))
+            ))]
             RenderMode::Terminal => {
                 self.render_terminal();
             }
         }
     }
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+    #[cfg(all(feature = "desktop", not(any(target_arch = "wasm32", feature = "ffi"))))]
     pub fn render_desktop(mut self) {
         use crate::screen::desktop::*;
 
@@ -417,7 +475,7 @@ impl Gameboy {
         });
     }
 
-    #[cfg(not(any(target_arch = "wasm32", feature = "ffi")))]
+    #[cfg(all(feature = "tui", not(any(target_arch = "wasm32", feature = "ffi"))))]
     pub fn render_terminal(self) {
         // The terminal frontend now owns ROM loading (so it can offer a picker
         // and switch games in-process). A pre-built `Gameboy` carries no path,
@@ -712,6 +770,7 @@ impl Gameboy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mode::Model;
 
     /// A 32 KiB cartridge that turns the LCD **off** and then counts in a tight
     /// loop forever, writing the count to HRAM so a test can read how far it
@@ -785,5 +844,44 @@ mod tests {
              ({FRAME_TICKS} cycles) — one frame's worth, not several",
             iters * LOOP_TICKS
         );
+    }
+
+    /// A minimal ROM-only cartridge: header type `0x00`, 32 KiB, `NOP`s.
+    fn rom_only_cart() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x147] = 0x00;
+        rom
+    }
+
+    /// The embedding contract: a machine can be built, stepped and read with
+    /// **no path at all**, so nothing on this path touches the filesystem.
+    #[test]
+    fn a_machine_runs_with_no_filesystem_and_no_environment() {
+        let mut gb = Gameboy::new_with_model(rom_only_cart(), None, Model::Dmg);
+        gb.keydown(KeypadKey::Start);
+        gb.frame();
+        gb.keyup(KeypadKey::Start);
+        gb.frame();
+        assert_eq!(gb.image().len(), 160 * 144 * 4);
+        // Save states are in-memory bytes; the caller decides where they go.
+        let s = gb.save_state();
+        let mut other = Gameboy::new_with_model(rom_only_cart(), None, Model::Dmg);
+        other
+            .load_state(&s)
+            .expect("state loads into a fresh machine");
+    }
+
+    /// Bytes from a user must not be able to abort the host process. Under
+    /// `[profile.release] panic = 'abort'` there is no unwinding to catch.
+    #[test]
+    fn a_bad_cartridge_is_an_error_not_a_process_abort() {
+        // Too short for a header.
+        assert!(Gameboy::try_new_with_model(vec![0u8; 0x40], None, Model::Dmg).is_err());
+        // A mapper we do not implement (0xFC = POCKET CAMERA).
+        let mut cart = rom_only_cart();
+        cart[0x147] = 0xFC;
+        assert!(Gameboy::try_new_with_model(cart, None, Model::Dmg).is_err());
+        // ...and a good one still works.
+        assert!(Gameboy::try_new_with_model(rom_only_cart(), None, Model::Dmg).is_ok());
     }
 }

@@ -16,15 +16,17 @@ pub struct MBC5 {
 }
 
 impl MBC5 {
-    pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC5> {
+    /// `file` is `None` when the embedder asked for no filesystem access; the
+    /// cartridge then behaves identically but its RAM lives only in memory.
+    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC5> {
         let subtype = data[0x147];
         let rambanks = match subtype {
             0x1A | 0x1B | 0x1D | 0x1E => ram_banks(data[0x149]),
             _ => 0,
         };
         let ramsize = 0x2000 * rambanks;
-        let battery = match subtype {
-            0x1B | 0x1E => Battery::new(&file, ramsize, false),
+        let battery = match (subtype, &file) {
+            (0x1B | 0x1E, Some(f)) => Battery::new(f, ramsize, false),
             _ => Battery::none(),
         };
         let rombanks = rom_banks(data[0x148], data.len());

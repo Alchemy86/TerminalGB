@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf
+.PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed
 
 all: build install
 
@@ -37,6 +37,18 @@ build-wasm:
 
 test:
 	cargo test --release
+
+# The embedding build: the core with NO features. Proves the crate is usable
+# from someone else's UI or hardware project — no window system, no terminal,
+# no audio device, no image codecs, no $HOME. See README "Embedding the core".
+# The `env -u` is the point: it fails if anything on this path needs a host.
+embed:
+	cargo clippy --release --no-default-features --all-targets -- -D warnings
+	cargo test --release --no-default-features --lib
+	cargo tree --no-default-features --edges normal
+	env -u HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u DISPLAY -u WAYLAND_DISPLAY \
+	  cargo run --release --no-default-features --example headless -- \
+	  third_party/dmg-acid2/dmg-acid2.gb 240
 
 # Emulation speed with a host audio player attached — the one thing no other
 # benchmark measures, because they all run headless with no player. Needs the

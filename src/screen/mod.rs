@@ -1,9 +1,16 @@
+//! Frontends. **Nothing here is part of the emulator core** — every module is
+//! behind a cargo feature so an embedder can take the machine without a window
+//! system, a terminal or an image codec. See README "Embedding the core".
+
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
-#[cfg(not(target_arch = "wasm32"))]
+/// OpenGL desktop window. Requires the `desktop` feature (glutin + gl).
+#[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
 pub mod desktop;
 
+/// Frontend config file (`config.toml`) + recent-ROM list. Dependency-free,
+/// but it reads `$HOME`/`$XDG_*`, so it is frontend furniture, not core.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod config;
 
@@ -17,13 +24,16 @@ pub mod romlib;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod termcost;
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Terminal frontend. Requires the `tui` feature (ratatui + ratatui-image).
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod tui;
 
 /// Layout of the live Gen 1 trainer panel — see [`trainer_view`].
-#[cfg(not(target_arch = "wasm32"))]
+/// Requires the `tui` feature: it renders ratatui widgets.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod trainer_view;
 
 /// Layout of the AI agent's commentary panel — see [`agent_view`].
-#[cfg(not(target_arch = "wasm32"))]
+/// Requires the `tui` feature: it renders ratatui widgets.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod agent_view;

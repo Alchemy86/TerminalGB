@@ -20,7 +20,10 @@ pub struct MBC3 {
 }
 
 impl MBC3 {
-    pub fn new(data: Vec<u8>, file: path::PathBuf) -> StrResult<MBC3> {
+    /// `file` is `None` when the embedder asked for no filesystem access; the
+    /// cartridge then behaves identically but its RAM (and RTC) live only in
+    /// memory.
+    pub fn new(data: Vec<u8>, file: Option<path::PathBuf>) -> StrResult<MBC3> {
         let subtype = data[0x147];
         let rambanks = match subtype {
             0x10 | 0x12 | 0x13 => ram_banks(data[0x149]),
@@ -29,22 +32,12 @@ impl MBC3 {
         let ramsize = rambanks * 0x2000;
         // 0x0F TIMER+BATTERY (clock, no RAM), 0x10 TIMER+RAM+BATTERY,
         // 0x13 RAM+BATTERY (**no clock** — it must never get an RTC footer).
-        let battery = match subtype {
-            0x0F | 0x10 => Battery::new(&file, ramsize, true),
-            0x13 => Battery::new(&file, ramsize, false),
+        let battery = match (subtype, &file) {
+            (0x0F | 0x10, Some(f)) => Battery::new(f, ramsize, true),
+            (0x13, Some(f)) => Battery::new(f, ramsize, false),
             _ => Battery::none(),
         };
         MBC3::build(data, subtype, rambanks, ramsize, battery)
-    }
-
-    pub fn new_without_save(data: Vec<u8>) -> StrResult<MBC3> {
-        let subtype = data[0x147];
-        let rambanks = match subtype {
-            0x10 | 0x12 | 0x13 => ram_banks(data[0x149]),
-            _ => 0,
-        };
-        let ramsize = rambanks * 0x2000;
-        MBC3::build(data, subtype, rambanks, ramsize, Battery::none())
     }
 
     fn build(

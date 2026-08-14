@@ -1,3 +1,37 @@
+//! A Game Boy / Game Boy Color emulator core, plus the frontends built on it.
+//!
+//! # Embedding
+//!
+//! `--no-default-features` gives you the **core alone**: no window system, no
+//! terminal, no image codecs, no host audio. The only third-party crate left
+//! is `blip_buf` (the APU's band-limited resampler). The whole embedding API
+//! is [`gameboy::Gameboy`]:
+//!
+//! ```no_run
+//! let rom: Vec<u8> = std::fs::read("game.gb").unwrap();
+//! // `None` = do not touch the filesystem for battery saves.
+//! let mut gb = gameboy::gameboy::Gameboy::new(rom, None);
+//! gb.frame();                       // run one ~59.7275 Hz frame
+//! let rgba: &[u8] = gb.image();     // 160 x 144 RGBA
+//! gb.keydown(gameboy::KeypadKey::A);
+//! let snapshot = gb.save_state();
+//! ```
+//!
+//! Everything else is opt-in:
+//!
+//! | feature   | brings in                              | needs at run time     |
+//! |-----------|----------------------------------------|-----------------------|
+//! | `desktop` | `glutin`, `gl`, `libc`, `image`        | a display server      |
+//! | `tui`     | `ratatui`, `ratatui-image`, `image`    | a kitty-protocol term |
+//! | `audio`   | `cpal`                                 | a sound device        |
+//! | `ffi`     | —                                      | —                     |
+//!
+//! The core reads no environment variables, opens no device and assumes no
+//! `$HOME`. Host assumptions live in [`screen`] (config/state paths),
+//! [`video`] (raw video-out) and [`sound::cpal_audio`] (playback).
+//! See the README's "Embedding the core" section for the honest portability
+//! list.
+
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
