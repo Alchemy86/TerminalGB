@@ -73,18 +73,56 @@ impl VolumeEnvelope {
 
     fn wb(&mut self, a: u16, v: u8) {
         match a {
-            0xFF12 | 0xFF17 | 0xFF21 => {
-                self.period = v & 0x7;
-                self.goes_up = v & 0x8 == 0x8;
-                self.initial_volume = v >> 4;
-                self.volume = self.initial_volume;
-            }
+            0xFF12 | 0xFF17 | 0xFF21 => self.write_nrx2(v, false),
             0xFF14 | 0xFF19 | 0xFF23 if v & 0x80 == 0x80 => {
                 self.delay = self.period;
                 self.volume = self.initial_volume;
             }
             _ => (),
         }
+    }
+
+    /// NRx2 write. **The current volume is not reloaded** — only a trigger
+    /// does that; NRx2 sets the value the *next* trigger will load. Writing it
+    /// while the channel is playing instead perturbs the live volume, the
+    /// behaviour known as "zombie mode".
+    ///
+    /// The rule below is CGB revision E's, derived from SameSuite
+    /// `channel_N_volume` (which sweeps every combination of old and new
+    /// direction and period against the resulting PCM12 reading) and confirmed
+    /// against the short half of `channel_N_nrx2_glitch`. SameSuite's own
+    /// README records that this glitch "behaves differently across CPU-CGB
+    /// revisions" and that only revision E is documented — DMG's variant, as
+    /// described on the gg8 wiki, is a different formula and is not what a
+    /// CGB-booting emulator should implement.
+    fn write_nrx2(&mut self, v: u8, channel_enabled: bool) {
+        let new_period = v & 0x7;
+        let new_up = v & 0x8 == 0x8;
+
+        if channel_enabled {
+            let mut vol = self.volume as i32;
+            // The envelope timer sits idle while its period is 0. Loading a
+            // fresh NRx2 restarts it and it fires once immediately — in the
+            // OLD direction, because the direction latch has not caught up.
+            // Writing an envelope that is off in both senses (counting down
+            // with period 0) restarts nothing.
+            if self.period == 0 && !(!new_up && new_period == 0) {
+                vol += if self.goes_up { 1 } else { -1 };
+            }
+            // Switching the envelope from decrement to increment adds two.
+            if new_up && !self.goes_up {
+                vol += 2;
+            }
+            // Reversing the direction reverses the counter itself.
+            if new_up != self.goes_up {
+                vol = 16 - vol;
+            }
+            self.volume = (vol & 0x0F) as u8;
+        }
+
+        self.period = new_period;
+        self.goes_up = new_up;
+        self.initial_volume = v >> 4;
     }
 
     fn step(&mut self) {
@@ -1401,7 +1439,8 @@ impl Sound {
                 self.channel1.length.wb(a, v);
             }
             0xFF12 => {
-                self.channel1.volume.wb(a, v);
+                let live = self.channel1.enabled;
+                self.channel1.volume.write_nrx2(v, live);
                 self.channel1.dac_enabled = v & 0xF8 != 0;
                 self.channel1.enabled =
                     self.channel1.enabled && self.channel1.dac_enabled;
@@ -1434,7 +1473,8 @@ impl Sound {
                 self.channel2.length.wb(a, v);
             }
             0xFF17 => {
-                self.channel2.volume.wb(a, v);
+                let live = self.channel2.enabled;
+                self.channel2.volume.write_nrx2(v, live);
                 self.channel2.dac_enabled = v & 0xF8 != 0;
                 self.channel2.enabled =
                     self.channel2.enabled && self.channel2.dac_enabled;
@@ -1510,7 +1550,8 @@ impl Sound {
             // Noise channel
             0xFF20 => self.channel4.length.wb(a, v),
             0xFF21 => {
-                self.channel4.volume.wb(a, v);
+                let live = self.channel4.enabled;
+                self.channel4.volume.write_nrx2(v, live);
                 self.channel4.dac_enabled = v & 0xF8 != 0;
                 self.channel4.enabled =
                     self.channel4.enabled && self.channel4.dac_enabled;
