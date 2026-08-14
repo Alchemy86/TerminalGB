@@ -659,6 +659,37 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   serialised (format v3); `sound::tests::wave_window_state_survives_save_load` fails if it
   is dropped (teeth proven by dropping it deliberately). Conformance-tool notes for these
   fixes: `docs/conformance-notes.md`.
+- **PLAYBACK VOLUME IS NOT NR50, AND MUST NEVER BECOME IT** (`sound::output_volume`,
+  `docs/audio.md` §6b). The obvious way to make the speakers quieter is to turn down the
+  Game Boy's own master volume — and it is wrong: NR50 is *emulated behaviour* the accuracy
+  suites measure (Blargg `dmg_sound`, SameSuite), a game reads it back from `$FF24`, it is in
+  save states, and it is baked into `testharness/audio_baseline.txt`. The attenuation is
+  therefore applied **past the end of emulation**, in the cpal device callback
+  (`cpal_audio::cpal_thread`), to samples the APU has already handed over. That buys three
+  things worth keeping: emulation is bit-identical at every level (no baseline, no suite and
+  no capture harness can see it — `cargo test` does not even compile `cpal`), the **frame
+  path is untouched** (`play_samples` runs inside `Cpu::do_cycle`, where a blocking hand-off
+  once cost 17.9 ms/frame — the volume costs two relaxed atomic loads *per device callback*,
+  on the audio thread), and a change is heard immediately rather than after the ~40 ms already
+  queued. Scale in **`f32` before the device-format conversion**; attenuating an integer
+  sample throws away its low bits and is exactly where "crunchy when quiet" comes from.
+  Taper is `(level/100)²` (100 % = unity = the pre-control output), default **50 %** because
+  full scale was the complaint. Verified end-to-end by recording the sink monitor with
+  `parec` while `examples/audio_volume.rs` walks the ladder: measured ratios match the taper
+  to 3 dp, crest factor and 3rd-harmonic ratio are **constant** across the ladder (the
+  waveform is scaled, not degraded), mute is digital silence. `emulate_ms` with a real device
+  0.236 → 0.235 (unchanged); dmg_sound 12/12 and SameSuite 61/76 both sides.
+- **The level is a process-wide global on purpose** — the cpal callback reads it from cpal's
+  own thread, the same reason `host_status` is one. Consequence for tests: anything that moves
+  it must take `output_volume::test_lock()`, and `App::build` deliberately does **not** apply
+  it (the render tests construct `build` in parallel; the production path applies it in
+  `App::with_warnings`). The TUI tests also point `$XDG_STATE_HOME` at a scratch dir
+  (`isolate_state_dir`) — a `cargo test` run must not rewrite the user's saved volume.
+- **The remembered volume carries the config value it was adjusted from**
+  (`VolumeState.from_config`, `${XDG_STATE_HOME}/gameboy/volume`). Without that fingerprint one
+  of the two intents is always silently ignored: either the live keys never persist, or an
+  edited `volume =` in `config.toml` does nothing. The rule is "config unchanged → the level
+  you last set wins; config edited → the config wins".
 - **Audio knobs for re-measuring (and for A/B by ear):** `GB_AUDIO_DEVICE_FRAMES` (0 = host
   default), `GB_AUDIO_START_FILL`, `GB_AUDIO_HIGH_WATER`, `GB_AUDIO_STATS=1`. The old,
   laggy configuration is `GB_AUDIO_DEVICE_FRAMES=0 GB_AUDIO_START_FILL=7000

@@ -54,6 +54,26 @@ history. See [Credits & lineage](README.md#credits--lineage).
 - **`agent` object in the telemetry record** — phase, decisions, calls, failures, tokens, spend,
   budget fraction and halt reason, beside `speed_pct` so the invariant that a *thinking* agent
   costs the emulator nothing is checkable. A field addition, so no `SCHEMA_VERSION` bump.
+- **A volume control — and it starts quieter than it used to.** There was none: the only lever
+  was the desktop mixer. **`,`** / **`.`** move the level a rung, **`m`** mutes and unmutes back
+  to the level you were at (never to full). The level is a row on the Status panel, mute is
+  called out on the top bar, and both the keys and the "playback only" caveat are in the
+  Controls list and the `?` overlay. A **`volume`** config key (`0`–`100`, or `off`) sets where
+  a fresh install starts — default **50 %**, −12 dB, because full scale was the complaint —
+  and whatever you last set with the keys is remembered across sessions in
+  `${XDG_STATE_HOME}/gameboy/volume`; editing the config key overrides the remembered value,
+  so neither expression of intent is silently ignored. The desktop frontend gets the same three
+  keys, with the level in its window title.
+  **The attenuation is applied to the samples handed to the sound card, never to the Game Boy's
+  own master volume (NR50)** — NR50 is emulated behaviour the accuracy suites measure, so
+  turning it down to quieten the room would change what the emulator models. It lives in the
+  cpal device callback, so emulation is bit-identical at every setting (`dmg_sound` 12/12 and
+  SameSuite 61/76 before and after, every baseline unchanged) and the frame path is untouched
+  (`emulate_ms` with a real device 0.236 → 0.235). Measured through the real sound card: the
+  ladder tracks its `(level/100)²` taper to three decimal places, and the crest factor and
+  harmonic ratio are constant across it — the waveform is scaled, not degraded. `examples/
+  audio_volume.rs` walks the ladder so it can be judged by ear. Full write-up:
+  [`docs/audio.md`](docs/audio.md) §6b.
 
 ### Fixed
 - **APU corner cases: SameSuite 50/76 → 57/76.** Three independent accuracy bugs, none of

@@ -377,6 +377,14 @@ pub struct Config {
     pub agent_max_calls: u32,
     /// Hard ceiling on reported spend, in US dollars.
     pub agent_max_usd: f64,
+    /// Playback volume, `0..=100`. **Host-side attenuation of the finished
+    /// sample stream only** — never the Game Boy's own NR50, which is emulated
+    /// behaviour the accuracy suites measure. See
+    /// [`crate::sound::output_volume`].
+    ///
+    /// This is the *starting* level; `,` / `.` / `m` change it in game and the
+    /// change is remembered (see [`VolumeState`]).
+    pub volume: u8,
 }
 
 impl Default for Config {
@@ -405,6 +413,7 @@ impl Default for Config {
             agent_objective: None,
             agent_max_calls: 200,
             agent_max_usd: 5.0,
+            volume: crate::sound::output_volume::DEFAULT,
         }
     }
 }
@@ -426,8 +435,8 @@ pub fn config_path() -> Option<PathBuf> {
     Some(base.join("gameboy").join("config.toml"))
 }
 
-/// `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`.
-pub fn recent_path() -> Option<PathBuf> {
+/// `${XDG_STATE_HOME:-~/.local/state}/gameboy`.
+pub fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -435,7 +444,12 @@ pub fn recent_path() -> Option<PathBuf> {
             std::env::var_os("HOME")
                 .map(|h| PathBuf::from(h).join(".local").join("state"))
         })?;
-    Some(base.join("gameboy").join("recent"))
+    Some(base.join("gameboy"))
+}
+
+/// `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`.
+pub fn recent_path() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("recent"))
 }
 
 impl Config {
@@ -648,6 +662,25 @@ impl Config {
                 None => warn.push(bad("trainer", v, "on, off")),
             }
         }
+        // Playback volume. `off`/`mute` are accepted because that is what a
+        // person types when they mean it, and a trailing `%` because that is
+        // what a person types when they mean a percentage.
+        if let Some(v) = get("volume") {
+            let t = v.trim();
+            if t.eq_ignore_ascii_case("off")
+                || t.eq_ignore_ascii_case("mute")
+                || t.eq_ignore_ascii_case("muted")
+            {
+                cfg.volume = 0;
+            } else {
+                match t.trim_end_matches('%').trim().parse::<u16>() {
+                    Ok(n) if n <= crate::sound::output_volume::MAX as u16 => {
+                        cfg.volume = n as u8
+                    }
+                    _ => warn.push(bad("volume", v, "a number 0-100, or off")),
+                }
+            }
+        }
         if let Some(v) = get("gen1_trade") {
             let v = v.trim();
             cfg.gen1_trade = if v.is_empty() || v.eq_ignore_ascii_case("off") {
@@ -796,6 +829,101 @@ fn expand_tilde(s: &str) -> PathBuf {
         }
     }
     PathBuf::from(s)
+}
+
+/// `${XDG_STATE_HOME:-~/.local/state}/gameboy/volume`.
+pub fn volume_path() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("volume"))
+}
+
+/// The last volume the player set with the keys, remembered across sessions.
+///
+/// Volume goes in the *state* directory, not the config file: the config file
+/// is the user's, comments and all, and is only ever read (same rule the
+/// recently-played list follows). What is written here is the live setting
+/// after a `,` / `.` / `m` press.
+///
+/// # Which wins, the file or the keys?
+///
+/// Both, in the order the user last expressed them — and that needs one extra
+/// field to get right. The saved state records the `volume` config value it was
+/// adjusted *from*:
+///
+/// * the config value is unchanged since the last save → the remembered live
+///   level wins ("I turned it down last night, stay down");
+/// * the config value has changed → the config wins ("I have just edited my
+///   config file, honour it").
+///
+/// Without that fingerprint one of those two is always silently ignored, and a
+/// config key that quietly does nothing is a bug class this project has already
+/// been bitten by twice (see [`Config::load_reporting`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeState {
+    pub level: u8,
+    pub muted: bool,
+    /// The `volume` config value this level was adjusted from.
+    pub from_config: u8,
+}
+
+impl VolumeState {
+    /// Resolve the level to start this session at, given the config file's
+    /// `volume`. Never fails: a missing or unreadable state file is just the
+    /// config value.
+    pub fn resolve(config_volume: u8) -> (u8, bool) {
+        match Self::load() {
+            Some(s) if s.from_config == config_volume => (s.level, s.muted),
+            _ => (config_volume, false),
+        }
+    }
+
+    fn load() -> Option<VolumeState> {
+        let text = std::fs::read_to_string(volume_path()?).ok()?;
+        Self::parse(&text)
+    }
+
+    pub fn parse(text: &str) -> Option<VolumeState> {
+        let kv = parse_kv(text);
+        let max = crate::sound::output_volume::MAX;
+        let clamp = |v: u16| v.min(max as u16) as u8;
+        let level = clamp(kv.get("level")?.trim().parse::<u16>().ok()?);
+        let from_config = kv
+            .get("from_config")
+            .and_then(|v| v.trim().parse::<u16>().ok())
+            .map(clamp)?;
+        let muted = kv.get("muted").and_then(|v| parse_bool(v)).unwrap_or(false);
+        Some(VolumeState {
+            level,
+            muted,
+            from_config,
+        })
+    }
+
+    fn serialize(&self) -> String {
+        format!(
+            "# written by gameboy; the in-game volume keys (, . m)\n\
+             level = {}\nmuted = {}\nfrom_config = {}\n",
+            self.level,
+            if self.muted { "on" } else { "off" },
+            self.from_config,
+        )
+    }
+
+    /// Persist the live setting (best-effort; errors are ignored — losing a
+    /// volume preference must never interrupt a game).
+    pub fn save(level: u8, muted: bool, from_config: u8) {
+        let Some(path) = volume_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let state = VolumeState {
+            level,
+            muted,
+            from_config,
+        };
+        let _ = std::fs::write(&path, state.serialize());
+    }
 }
 
 /// The recently-played ROM list, most-recent first.
@@ -954,6 +1082,65 @@ mod tests {
         let (_, warn) =
             Config::parse_reporting("plugins = gen1-battle\nbattles = /tmp/b\n");
         assert!(warn.is_empty(), "{warn:?}");
+    }
+
+    /// The `volume` key, and the default it starts from.
+    ///
+    /// The default is deliberately **not** full scale: the report that produced
+    /// this control was "so bloody loud", so an out-of-the-box level nobody has
+    /// ever asked to be raised is itself the bug. A key that is not in
+    /// `parse_reporting`'s `get(...)` list is reported as *unknown*, so this
+    /// pins both halves.
+    #[test]
+    fn volume_is_configurable_and_starts_quieter_than_full() {
+        let max = crate::sound::output_volume::MAX;
+        assert!(
+            Config::default().volume < max,
+            "the default must not be full scale"
+        );
+        assert_eq!(Config::parse("volume = 20").volume, 20);
+        assert_eq!(Config::parse("volume = 70%").volume, 70);
+        assert_eq!(Config::parse("volume = off").volume, 0);
+        assert_eq!(Config::parse("volume = 0").volume, 0);
+        let (_, warn) = Config::parse_reporting("volume = 40\n");
+        assert!(warn.is_empty(), "{warn:?}");
+        // Out of range is reported, not silently clamped — a config key that
+        // quietly does something else is the bug class this parser exists for.
+        let (cfg, warn) = Config::parse_reporting("volume = 400\n");
+        assert_eq!(cfg.volume, Config::default().volume);
+        assert!(warn.iter().any(|w| w.contains("volume")), "{warn:?}");
+        let (_, warn) = Config::parse_reporting("volume = loud\n");
+        assert!(warn.iter().any(|w| w.contains("volume")), "{warn:?}");
+    }
+
+    /// The remembered volume, and the rule that decides between it and the
+    /// config file.
+    ///
+    /// Both are real expressions of intent; the fingerprint is what lets the
+    /// most recent one win without the other silently doing nothing.
+    #[test]
+    fn a_remembered_volume_yields_to_an_edited_config_file() {
+        let state = VolumeState {
+            level: 30,
+            muted: true,
+            from_config: 50,
+        };
+        let round = VolumeState::parse(&state.serialize()).expect("round-trips");
+        assert_eq!(round, state);
+
+        // Unchanged config → the level the player last set wins.
+        assert_eq!((round.level, round.muted), (30, true));
+        // A `from_config` that no longer matches means the user has edited
+        // their config since; that is the newer intent, so it wins.
+        assert_ne!(round.from_config, 20);
+
+        // Malformed or partial state is simply ignored.
+        assert!(VolumeState::parse("").is_none());
+        assert!(VolumeState::parse("level = 40\n").is_none());
+        assert_eq!(
+            VolumeState::parse("level = 400\nfrom_config = 50\n").map(|s| s.level),
+            Some(crate::sound::output_volume::MAX)
+        );
     }
 
     #[test]

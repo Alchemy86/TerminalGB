@@ -131,6 +131,11 @@ output stream. The desktop frontend wires it up in `render_desktop`
   corrupts the first bytes of wave RAM (byte 0, or the aligned 4-byte block, per Pan
   Docs "Audio Details"). Trigger reloads the fetch timer with period + 4 T-cycles
   (`WAVE_TRIGGER_DELAY`, calibrated against dmg_sound 09's 2-cycle phase sweep).
+- **The user's volume control is NOT in this component, and must never be.** NR50's master
+  volume is emulated behaviour the suites measure and a game can read back from `$FF24`;
+  playback volume is a host-side attenuation applied in the cpal device callback, past the
+  end of emulation. Everything in this page is identical at every level. See
+  `sound::output_volume` and [audio.md §6b](../audio.md).
 - **NRx1 length writes mask the duty bits** (`v & 0x3F`) — a duty-carrying write like
   `NR11=0x80` used to underflow (debug-mode panic).
 - **NR52 power-off now actually zeroes NR10–NR51** and the channel-status bits; the old

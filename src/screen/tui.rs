@@ -32,11 +32,14 @@
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
 use crate::screen::agent_view as av;
-use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath, ShinyAlert};
+use crate::screen::config::{
+    CellScale, Config, Palette, Recent, RenderPath, ShinyAlert, VolumeState,
+};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
 use crate::screen::termcost;
 use crate::screen::trainer_view as tv;
+use crate::sound::output_volume;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
 use crate::trainer::gen1::BattleKind;
@@ -830,6 +833,18 @@ impl App {
         video_template: Option<video::VideoSpec>,
         video_autostart: bool,
     ) -> App {
+        // Playback volume. The config key is the *starting* level; whatever the
+        // player last set with `,` / `.` / `m` is remembered and wins unless the
+        // config file itself has changed since (see `VolumeState`). This is a
+        // host-side attenuation of the finished sample stream — never NR50.
+        //
+        // Applied here rather than in `build` because `build` is what the
+        // render tests construct, and a process-wide setting written by every
+        // constructed `App` would fight tests running in parallel.
+        let (vol_level, vol_muted) = VolumeState::resolve(config.volume);
+        output_volume::set_level(vol_level);
+        output_volume::set_muted(vol_muted);
+
         // Prefer the sharpest protocol the terminal advertises (build_picker),
         // then let an explicit config `protocol` override it.
         let mut app = App::build(
@@ -2223,6 +2238,34 @@ impl App {
                     self.bump_speed(false);
                     return;
                 }
+                // Playback volume: `,`/`<` quieter, `.`/`>` louder, `m` mute.
+                // The comma/full-stop pair is the media-player convention and
+                // both are free here (`.` is the picker's resume key, a
+                // different screen); `m` is free of the *default* game buttons
+                // (a/s/x/z) and is what a person reaches for to silence
+                // something. This is host playback only — see
+                // `crate::sound::output_volume` for why it is not NR50.
+                //
+                // All three yield to a user who has bound that character as a
+                // game button: `key_a = m` must still mean A. The player's own
+                // configuration outranks ours, and the guard costs one lookup
+                // on a key press.
+                KeyCode::Char(',') | KeyCode::Char('<')
+                    if !self.is_game_button(&key.code) =>
+                {
+                    self.bump_volume(false);
+                    return;
+                }
+                KeyCode::Char('.') | KeyCode::Char('>')
+                    if !self.is_game_button(&key.code) =>
+                {
+                    self.bump_volume(true);
+                    return;
+                }
+                KeyCode::Char('m') if !self.is_game_button(&key.code) => {
+                    self.toggle_mute();
+                    return;
+                }
                 // Save-slot select.
                 KeyCode::Char(c @ '1'..='9') => {
                     let n = c as u32 - '0' as u32;
@@ -2369,6 +2412,45 @@ impl App {
             s.gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
         }
         self.set_toast(format!("Speed {}", SPEED_LADDER[self.speed].label));
+    }
+
+    /// Move playback volume one rung and remember it.
+    ///
+    /// Host-side only: the emulated machine is untouched at every level, so no
+    /// accuracy suite and no audio baseline can see this happen. See
+    /// [`crate::sound::output_volume`].
+    fn bump_volume(&mut self, up: bool) {
+        output_volume::step(up);
+        self.persist_volume();
+        self.set_toast(format!("Volume {}", output_volume::label()));
+    }
+
+    fn toggle_mute(&mut self) {
+        let muted = output_volume::toggle_mute();
+        self.persist_volume();
+        self.set_toast(if muted {
+            "Muted (m to unmute)".to_string()
+        } else {
+            format!("Volume {}", output_volume::label())
+        });
+    }
+
+    /// Write the live volume to the state file, so tonight's setting is still
+    /// tonight's setting tomorrow. Best-effort and tiny (a few dozen bytes on a
+    /// key press); it never touches the frame path.
+    fn persist_volume(&self) {
+        VolumeState::save(
+            output_volume::level(),
+            output_volume::muted(),
+            self.config.volume,
+        );
+    }
+
+    /// Is this key one of the player's configured game buttons? Control keys
+    /// are matched before game buttons, so anything bound to a letter has to
+    /// check first or it silently steals somebody's A button.
+    fn is_game_button(&self, code: &KeyCode) -> bool {
+        self.map_button(code).is_some()
     }
 
     /// Switch the trainer panel on or off, telling the plugin so that a hidden
@@ -2928,6 +3010,14 @@ impl App {
         if !video.starts_with("off") {
             flags.push(video.split_whitespace().next().unwrap_or("REC").to_string());
         }
+        // Silence has to be self-explaining: a muted emulator looks exactly
+        // like a broken one. Only the abnormal states appear here — muted, or
+        // turned right down — so the bar stays quiet at an ordinary level.
+        if output_volume::muted() {
+            flags.push("MUTED".into());
+        } else if output_volume::level() == 0 {
+            flags.push("VOL 0%".into());
+        }
 
         let plugins = self
             .session
@@ -2963,9 +3053,10 @@ impl App {
                 },
             ],
             vec![
-                "? help · T trainer · A commentary · p pause · F5/F8 save · +/- speed · q quit"
+                "? help · T trainer · A commentary · p pause · F5/F8 save · +/- speed · ,/. vol · q quit"
                     .into(),
-                "? help · T trainer · A commentary · p pause · q quit".into(),
+                "? help · T trainer · A commentary · p pause · ,/. vol · q quit".into(),
+                "? help · T trainer · p pause · ,/. vol · q quit".into(),
                 "? help · T trainer · q quit".into(),
                 "? help".into(),
             ],
@@ -3268,6 +3359,7 @@ impl App {
             Line::from(format!("pc   {:04X}", s.gb.debug_pc())),
             Line::from(format!("bank {}", s.gb.debug_rom_bank())),
         ];
+        lines.push(Line::from(format!("vol  {}", output_volume::label())));
         if let Some(a) = s.audio_sample() {
             lines.push(Line::from(format!("aq   {}", a.queue_depth)));
             lines.push(Line::from(format!("aur  {}", a.underruns)));
@@ -3665,6 +3757,10 @@ impl App {
             // Same rule for sound. A device that never opened, or one that has
             // started erroring, used to be indistinguishable from a quiet game.
             kv("Audio", &truncate(&self.audio_status(), 18)),
+            // Playback volume, its own row beside the device status: "no sound"
+            // has two completely different causes (no device, or turned down)
+            // and the player has to be able to tell them apart at a glance.
+            kv("Volume", &output_volume::label()),
             kv(
                 "FPS",
                 &if paused {
@@ -3726,6 +3822,10 @@ impl App {
             Line::from(""),
             Line::from("p pause     R reset"),
             Line::from("+/- speed   t stats"),
+            // Volume sits high in this list on purpose: the panel is clipped
+            // from the bottom on a short window, and an everyday control must
+            // not be the first casualty. (A screenshot key can afford to be.)
+            Line::from(", . volume  m mute"),
             Line::from("1-3 slot"),
             Line::from("F5 save     F8 load"),
             Line::from("L load ROM  f full"),
@@ -3809,6 +3909,14 @@ impl App {
             Line::from("  arrows    move        a/s     A / B"),
             Line::from("  x/z       Start/Sel   p       pause"),
             Line::from("  +/-       speed        t       stats overlay"),
+            Line::from(
+                "  , / .     volume down / up      m   mute (remembers the level)",
+            ),
+            Line::from(Span::styled(
+                "  volume is playback only — the emulated machine is untouched; \
+                 `volume = 50` in config.toml sets the starting level",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from("  1-3       save slot    F5/F8   save / load"),
             Line::from("  R         reset       L       load ROM"),
             Line::from("  f         fullscreen  [       palette"),
@@ -5410,6 +5518,23 @@ mod tests {
         test_app_video(protocol, path, video_for_test())
     }
 
+    /// Point `$XDG_STATE_HOME` at a scratch directory, once per test process.
+    ///
+    /// The frontend persists things there — the recent list, save slots, and
+    /// now the playback volume, which is written on every `,` / `.` / `m`
+    /// press. A test must never write into the *user's* state directory: a
+    /// `cargo test` run would silently reset the volume of whoever ran it.
+    fn isolate_state_dir() {
+        static ONCE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        let dir = ONCE.get_or_init(|| {
+            let d = std::env::temp_dir()
+                .join(format!("gameboy-test-state/{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&d);
+            d
+        });
+        env::set_var("XDG_STATE_HOME", dir);
+    }
+
     /// Video-out is off by default, in tests as in production.
     fn video_for_test() -> VideoOut {
         VideoOut::disabled()
@@ -5421,6 +5546,7 @@ mod tests {
         path: RenderPath,
         video: VideoOut,
     ) -> Option<App> {
+        isolate_state_dir();
         let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb")
             .expect("vendored dmg-acid2 ROM present");
         let mut picker = Picker::from_fontsize((8, 16));
@@ -6281,6 +6407,96 @@ mod tests {
         // The reported scale doubles — that is the *only* thing it moves, and
         // it is a number on a panel, not bytes or pixels.
         assert!((s2 - s1 * 2.0).abs() < 0.01, "{s1} {s2}");
+    }
+
+    /// The volume keys, driven through the real dispatcher.
+    ///
+    /// A control the player cannot find does not exist — this emulator's own
+    /// history is a list of features somebody had to be *told* about — so the
+    /// binding and the feedback are pinned together: every press says what it
+    /// did, and mute says how to undo itself.
+    #[test]
+    fn the_volume_keys_are_bound_and_report_what_they_did() {
+        let _g = output_volume::test_lock();
+        isolate_state_dir();
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let press = |app: &mut App, code: KeyCode| {
+            app.toast = None;
+            app.handle_key(KeyEvent::new(code, event::KeyModifiers::NONE));
+            app.toast_text().map(str::to_string)
+        };
+
+        for code in [KeyCode::Char(','), KeyCode::Char('<')] {
+            let msg = press(&mut app, code).unwrap_or_default();
+            assert!(msg.starts_with("Volume "), "{code:?} said {msg:?}");
+        }
+        for code in [KeyCode::Char('.'), KeyCode::Char('>')] {
+            let msg = press(&mut app, code).unwrap_or_default();
+            assert!(msg.starts_with("Volume "), "{code:?} said {msg:?}");
+        }
+        // Mute names its own escape route: "there is no sound" must never be a
+        // state the player cannot get out of.
+        let msg = press(&mut app, KeyCode::Char('m')).unwrap_or_default();
+        assert!(msg.contains("Muted") && msg.contains('m'), "{msg:?}");
+        let msg = press(&mut app, KeyCode::Char('m')).unwrap_or_default();
+        assert!(msg.starts_with("Volume "), "unmute said {msg:?}");
+
+        // A player who bound `m` to a Game Boy button keeps their binding —
+        // their configuration outranks ours.
+        app.config.keys.b = 'm';
+        let before = output_volume::muted();
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(
+            output_volume::muted(),
+            before,
+            "`key_b = m` must still mean B"
+        );
+    }
+
+    /// Volume has to be *visible*: the level in the Status panel, the keys in
+    /// the Controls list, and mute called out on the top bar — a muted emulator
+    /// and a broken one look identical otherwise.
+    #[test]
+    fn the_volume_control_is_visible_on_screen() {
+        use ratatui::backend::TestBackend;
+        let _g = output_volume::test_lock();
+        isolate_state_dir();
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let screen = |app: &mut App| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+
+        let text = screen(&mut app);
+        assert!(
+            text.contains("Volume"),
+            "the Status panel must show the level"
+        );
+        assert!(
+            text.contains(", . volume"),
+            "the Controls list must name the keys"
+        );
+        assert!(text.contains("m mute"), "including mute");
+
+        // Muted is spelled out, not shown as a plausible number.
+        output_volume::set_muted(true);
+        let text = screen(&mut app);
+        assert!(
+            text.contains("MUTED"),
+            "mute must be unmissable on the top bar and in Status"
+        );
+        output_volume::set_muted(false);
     }
 
     /// The trainer panel's own keys, driven through the real dispatcher.

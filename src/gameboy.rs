@@ -137,6 +137,17 @@ impl Gameboy {
         // 16.7 ms frame budget. Initial algorithm/factor come from the shared
         // config file; U cycles the algorithm live, I cycles the factor.
         let cfg = crate::screen::config::Config::load();
+        // Playback volume: the `volume` config key is the starting level, and
+        // whatever `,` / `.` / `m` last set is remembered across sessions (see
+        // `crate::screen::config::VolumeState`). Host-side attenuation of the
+        // finished sample stream only — never the emulated NR50.
+        let volume_config = cfg.volume;
+        {
+            let (level, muted) =
+                crate::screen::config::VolumeState::resolve(volume_config);
+            crate::sound::output_volume::set_level(level);
+            crate::sound::output_volume::set_muted(muted);
+        }
         let mut upscaler = crate::upscale::Upscaler::new(cfg.upscale, cfg.upscale_factor);
         let (mut out_w, mut out_h) =
             upscaler.output_size(self.width as usize, self.height as usize);
@@ -290,6 +301,8 @@ impl Gameboy {
                         &wevent
                     {
                         if input.state == glutin::event::ElementState::Pressed {
+                            use crate::sound::output_volume;
+                            let mut volume_changed = false;
                             let changed = match input.virtual_keycode {
                                 Some(glutin::event::VirtualKeyCode::U) => {
                                     upscaler.cycle_algorithm();
@@ -299,16 +312,46 @@ impl Gameboy {
                                     upscaler.cycle_factor();
                                     true
                                 }
+                                // Playback volume, the same keys the terminal
+                                // frontend uses. Host-side attenuation only —
+                                // see `crate::sound::output_volume`.
+                                Some(glutin::event::VirtualKeyCode::Comma) => {
+                                    output_volume::step(false);
+                                    volume_changed = true;
+                                    false
+                                }
+                                Some(glutin::event::VirtualKeyCode::Period) => {
+                                    output_volume::step(true);
+                                    volume_changed = true;
+                                    false
+                                }
+                                Some(glutin::event::VirtualKeyCode::M) => {
+                                    output_volume::toggle_mute();
+                                    volume_changed = true;
+                                    false
+                                }
                                 _ => false,
                             };
-                            if changed {
+                            if volume_changed {
+                                crate::screen::config::VolumeState::save(
+                                    output_volume::level(),
+                                    output_volume::muted(),
+                                    volume_config,
+                                );
+                            }
+                            if changed || volume_changed {
                                 (out_w, out_h) = upscaler.output_size(
                                     self.width as usize,
                                     self.height as usize,
                                 );
+                                // The window title is this frontend's only
+                                // status line, so the volume lives in it —
+                                // a control nobody can see the state of is a
+                                // control nobody trusts.
                                 window.set_title(&format!(
-                                    "Gameboy — {}",
-                                    upscaler.label()
+                                    "Gameboy — {} — vol {}",
+                                    upscaler.label(),
+                                    output_volume::label()
                                 ));
                                 window.request_redraw();
                             }

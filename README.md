@@ -90,6 +90,14 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > timestamped **recording** (**`V`**). Audio works here too
 > with `--features audio` (see the ALSA note above).
 >
+> **Volume:** **`,`** and **`.`** move it a rung, **`m`** mutes (and unmutes back to the level
+> you were at, not to full). The level is on the Status panel, mute is called out on the top
+> bar, and both are remembered across sessions — `volume = 50` in `config.toml` sets where a
+> fresh install starts. **The attenuation is applied to the samples handed to the sound card,
+> not to the Game Boy's own master volume (NR50)**: NR50 is emulated behaviour that the
+> accuracy suites measure, so turning it down to quieten the room would change what the
+> emulator models. The machine is bit-identical at every setting.
+>
 > *(The terminal frontend is under active development — the render crew is adding faster
 > rendering and a machine-readable telemetry stream — so treat the exact keys as the `?`
 > overlay reports them.)*
@@ -169,6 +177,7 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
+| `volume` | `0`–`100` (a `%` is allowed), or `off` | **Playback volume**, the level a session starts at. Default **`50`** (−12 dB) — deliberately quieter than full scale. `,` / `.` change it in game and `m` mutes; whatever you last set is remembered across sessions, and editing this key overrides that. Attenuation is applied to the audio the *host device* is handed, never to the emulated machine — see below. |
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
 | `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`. |

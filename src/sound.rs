@@ -2338,6 +2338,243 @@ pub mod host_status {
     }
 }
 
+/// Playback volume: a **host-side attenuation of the finished sample stream**,
+/// and nothing else.
+///
+/// # Why this is not NR50
+///
+/// The Game Boy has its own master volume — NR50's two 3-bit fields, one per
+/// stereo side — and it is tempting to turn that down when the speakers are too
+/// loud. **Do not.** NR50 is *emulated behaviour*: the accuracy suites measure
+/// it (Blargg `dmg_sound`, SameSuite), a game can read it back from `$FF24`,
+/// and its value is captured in save states and in the offline audio baselines.
+/// Quietening the machine to quieten the room would corrupt what we model and
+/// move those scores — the emulator would no longer be emulating the console
+/// the player owns.
+///
+/// So the attenuation lives *past the end of emulation*: it is applied in the
+/// device callback ([`cpal_audio::cpal_thread`]), to samples the APU has
+/// already produced and handed over. Consequences, all of them deliberate:
+///
+/// * **Emulation is bit-identical at any setting.** Nothing upstream of the
+///   audio device — APU state, register read-back, the offline capture harness
+///   in `testharness/audiocapture.rs`, its hashes — can observe this at all.
+/// * **Zero cost on the frame path.** `Sound::play_samples` runs inside
+///   `Cpu::do_cycle`; audio work there is charged to the emulated frame, which
+///   is how a blocking hand-off once cost 17.9 ms of every 16.743 ms frame
+///   (see `docs/audio.md` §4c). The gain is a single relaxed atomic load per
+///   *device callback* on the audio thread, and a multiply per sample there.
+/// * **A change is heard immediately**, rather than after the ~40 ms already
+///   sitting in the hand-off queue.
+///
+/// Scaling is done in `f32`, before the sample is converted to the device
+/// format, so a quiet setting is quiet rather than crunchy: attenuating an
+/// integer sample throws away low bits, attenuating a float does not.
+///
+/// # The control
+///
+/// One level, `0..=100`, plus a separate mute flag that remembers the level —
+/// unmuting returns to where you were, never to full. The taper is `x²`
+/// (the usual approximation of an audio-taper pot), so the ladder sounds evenly
+/// spaced rather than doing nothing until it collapses: 100 % is unity gain
+/// (exactly today's output), 50 % is −12 dB, 10 % is −40 dB.
+pub mod output_volume {
+    use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+    /// Loudest setting. At this level the gain is exactly 1.0 — the samples
+    /// reach the device untouched, i.e. what the emulator did before there was
+    /// a volume control at all.
+    pub const MAX: u8 = 100;
+
+    /// How far one key press moves the level.
+    pub const STEP: u8 = 10;
+
+    /// Where a fresh install starts.
+    ///
+    /// **Deliberately not `MAX`.** The out-of-the-box level was full scale and
+    /// the report that produced this control was "so bloody loud" — a default
+    /// nobody has ever asked to be louder is a default that is wrong. 50 % is
+    /// −12 dB: quiet enough to start a game without reaching for the desktop
+    /// mixer, and two key presses from where it used to be.
+    pub const DEFAULT: u8 = 50;
+
+    static LEVEL: AtomicU8 = AtomicU8::new(DEFAULT);
+    static MUTED: AtomicBool = AtomicBool::new(false);
+
+    /// The multiplier the device callback applies. `0.0` while muted.
+    ///
+    /// Two relaxed loads and a multiply, read **once per device callback**
+    /// (not per sample). No lock: this runs on cpal's audio thread, where
+    /// blocking is never acceptable — the same rule
+    /// [`super::host_status::note_stream_error`] follows.
+    pub fn gain() -> f32 {
+        if MUTED.load(Ordering::Relaxed) {
+            0.0
+        } else {
+            gain_for(LEVEL.load(Ordering::Relaxed))
+        }
+    }
+
+    /// The gain a given level maps to, ignoring mute. `x²` audio taper.
+    pub fn gain_for(level: u8) -> f32 {
+        let x = level.min(MAX) as f32 / MAX as f32;
+        x * x
+    }
+
+    /// Current level, `0..=100`. Unaffected by mute — see [`muted`].
+    pub fn level() -> u8 {
+        LEVEL.load(Ordering::Relaxed)
+    }
+
+    /// Set the level, clamped to `0..=MAX`. Does **not** change mute: a level
+    /// set while muted is what unmuting will return to.
+    pub fn set_level(level: u8) {
+        LEVEL.store(level.min(MAX), Ordering::Relaxed);
+    }
+
+    pub fn muted() -> bool {
+        MUTED.load(Ordering::Relaxed)
+    }
+
+    pub fn set_muted(m: bool) {
+        MUTED.store(m, Ordering::Relaxed);
+    }
+
+    /// Flip mute; returns the new state. The level is untouched, which is the
+    /// whole promise of a mute key: unmuting returns you to where you were.
+    pub fn toggle_mute() -> bool {
+        let m = !MUTED.load(Ordering::Relaxed);
+        set_muted(m);
+        m
+    }
+
+    /// Move one rung up or down the ladder and return the new level.
+    ///
+    /// Touching the level **unmutes**: pressing volume-up on a muted emulator
+    /// obviously means "let me hear it", and leaving it silent while the number
+    /// climbs is the kind of control that reads as broken.
+    pub fn step(up: bool) -> u8 {
+        let cur = LEVEL.load(Ordering::Relaxed).min(MAX);
+        let next = if up {
+            (cur.saturating_add(STEP)).min(MAX)
+        } else {
+            // Round down to the rung below when the level did not start on one
+            // (a config file may say `volume = 35`).
+            cur.saturating_sub(if cur % STEP == 0 { STEP } else { cur % STEP })
+        };
+        MUTED.store(false, Ordering::Relaxed);
+        LEVEL.store(next, Ordering::Relaxed);
+        next
+    }
+
+    /// One short label for a status row: `70%`, `0% (silent)`, `MUTED (70%)`.
+    /// Mute is spelled out rather than shown as `0%` — "why is there no sound"
+    /// has to be answerable from the screen.
+    pub fn label() -> String {
+        let l = level();
+        if muted() {
+            format!("MUTED ({l}%)")
+        } else if l == 0 {
+            "0% (silent)".to_string()
+        } else {
+            format!("{l}%")
+        }
+    }
+
+    /// Serialises every test that moves this process-wide setting — here, in
+    /// `cpal_audio`, and in the terminal frontend — which `cargo test`
+    /// otherwise runs in parallel. Same device as
+    /// [`super::host_status::test_lock`].
+    #[cfg(test)]
+    pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        L.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// One global, so the volume tests run as a single sequential test.
+        #[test]
+        fn the_control_behaves_like_a_volume_knob() {
+            let _g = super::test_lock();
+            // Unity at the top: at MAX the emulator's output is untouched, so
+            // "loudest" is exactly what shipped before this control existed.
+            assert_eq!(gain_for(MAX), 1.0);
+            assert_eq!(gain_for(0), 0.0);
+            // Monotone, and an audio taper rather than a linear one.
+            let mut prev = -1.0;
+            for l in 0..=MAX {
+                let g = gain_for(l);
+                assert!(g > prev, "gain must rise with level at {l}");
+                assert!((0.0..=1.0).contains(&g), "gain out of range at {l}");
+                prev = g;
+            }
+            assert!((gain_for(50) - 0.25).abs() < 1e-6, "50% is -12 dB");
+
+            set_level(DEFAULT);
+            set_muted(false);
+            assert_eq!(level(), DEFAULT);
+            assert!((gain() - gain_for(DEFAULT)).abs() < 1e-6);
+
+            // Mute is silence...
+            assert!(toggle_mute());
+            assert_eq!(gain(), 0.0, "muted output must be silence");
+            assert_eq!(label(), format!("MUTED ({DEFAULT}%)"));
+            // ...and unmuting returns to the previous level, not to full.
+            assert!(!toggle_mute());
+            assert_eq!(level(), DEFAULT);
+            assert!((gain() - gain_for(DEFAULT)).abs() < 1e-6);
+
+            // The ladder clamps at both ends.
+            set_level(MAX);
+            assert_eq!(step(true), MAX);
+            set_level(0);
+            assert_eq!(step(false), 0);
+            assert_eq!(label(), "0% (silent)");
+
+            // An off-ladder level from a config file lands on a rung.
+            set_level(35);
+            assert_eq!(step(false), 30);
+            assert_eq!(step(true), 40);
+
+            // Changing the level unmutes.
+            set_muted(true);
+            step(true);
+            assert!(!muted());
+
+            set_level(DEFAULT);
+            set_muted(false);
+        }
+
+        /// Scaling is float, so a quiet setting stays clean: the classic way to
+        /// get "crunchy at low volume" is to attenuate the *integer* sample and
+        /// throw away its low bits. Nothing clips at the top either.
+        #[test]
+        fn quiet_is_clean_and_loud_does_not_clip() {
+            let src: Vec<f32> =
+                (0..1024).map(|i| (i as f32 * 0.03).sin() * 0.9).collect();
+            for level in [10u8, 20, 50, 100] {
+                let g = gain_for(level);
+                let out: Vec<f32> = src.iter().map(|s| s * g).collect();
+                assert!(out.iter().all(|s| s.abs() <= 1.0), "level {level} clipped");
+                // Distinct input samples stay distinct after scaling — no
+                // quantisation staircase, which is what integer scaling does.
+                let distinct: std::collections::BTreeSet<u32> =
+                    out.iter().map(|s| s.to_bits()).collect();
+                let src_distinct: std::collections::BTreeSet<u32> =
+                    src.iter().map(|s| s.to_bits()).collect();
+                assert_eq!(
+                    distinct.len(),
+                    src_distinct.len(),
+                    "level {level} collapsed distinct samples together"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "audio"))]
 pub mod cpal_audio {
     use super::sample_queue;
@@ -2608,10 +2845,17 @@ pub mod cpal_audio {
             Err(_) => return,
         };
         q.note_callback();
+        // Playback volume is applied HERE — on the audio thread, to finished
+        // samples, on their way out of the process. Never by touching NR50:
+        // that register is emulated behaviour the accuracy suites measure. See
+        // `super::output_volume` for the full argument. Read once per callback
+        // (two relaxed loads), in `f32` before the device-format conversion so
+        // a quiet setting does not lose the sample's low bits.
+        let gain = super::output_volume::gain();
         for frame in output.chunks_mut(channels) {
             let (left, right) = q.next_sample();
             for (i, sample) in frame.iter_mut().enumerate() {
-                *sample = T::from_sample(if i % 2 == 0 { left } else { right });
+                *sample = T::from_sample(if i % 2 == 0 { left } else { right } * gain);
             }
         }
     }
@@ -2671,6 +2915,68 @@ pub mod cpal_audio {
         /// already gets the documented "drop samples rather than pitch-shift"
         /// behaviour from the latency bound in `play`.
         fn set_fast_forward(&mut self, _enabled: bool) {}
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::sound::output_volume;
+
+        /// What actually reaches the sound card, driven through the real
+        /// callback with no device attached.
+        ///
+        /// This is the only place playback volume is applied, so it is the only
+        /// place it can be checked: the queue holds the APU's samples unchanged
+        /// at every setting (emulation is untouched), and the *device buffer*
+        /// carries the attenuation. Mute must be exact silence, and unmuting
+        /// must come back to the level it left — a mute key that returns you to
+        /// full scale is worse than no mute key.
+        #[test]
+        fn the_device_buffer_carries_the_volume_and_the_queue_does_not() {
+            let _g = output_volume::test_lock();
+
+            let src: Vec<f32> = (0..512).map(|i| (i as f32 * 0.05).sin()).collect();
+            let render = |level: u8, muted: bool| -> Vec<f32> {
+                output_volume::set_level(level);
+                output_volume::set_muted(muted);
+                let q = Arc::new(Mutex::new(SampleQueue::new(0, 4096)));
+                sample_queue::hand_off(&q, &src, &src);
+                // The producer side is untouched by volume: what the APU made
+                // is what is queued.
+                assert_eq!(q.lock().unwrap().len(), src.len());
+                let mut out = vec![0.0f32; src.len() * 2];
+                cpal_thread(&mut out, &q, 2);
+                out
+            };
+
+            let peak = |v: &[f32]| v.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+            let full = render(100, false);
+            let half = render(50, false);
+            let low = render(10, false);
+            let silent = render(50, true);
+
+            // 100 % is unity: the samples reach the device exactly as the APU
+            // made them, i.e. what this emulator did before it had a volume.
+            for (o, s) in full.chunks(2).zip(&src) {
+                assert_eq!(o[0], *s);
+            }
+            assert!((peak(&half) - peak(&full) * 0.25).abs() < 1e-6);
+            assert!((peak(&low) - peak(&full) * 0.01).abs() < 1e-6);
+            assert!(peak(&full) <= 1.0, "no clipping at the top of the range");
+            // Mute is digital silence, not "very quiet".
+            assert!(silent.iter().all(|s| *s == 0.0));
+
+            // Unmute returns to the level, not to full.
+            output_volume::set_muted(false);
+            assert_eq!(output_volume::level(), 50);
+            let back = render(output_volume::level(), false);
+            for (a, b) in back.iter().zip(&half) {
+                assert_eq!(a, b);
+            }
+
+            output_volume::set_level(output_volume::DEFAULT);
+            output_volume::set_muted(false);
+        }
     }
 }
 

@@ -573,6 +573,68 @@ enabled; zero without. Details in [apu.md](components/apu.md).
 
 ---
 
+## 6b. Playback volume — and why it is **not** NR50
+
+There was no volume control at all until now; the only lever was the desktop
+mixer. There is one now: `,` / `.` move it a rung, `m` mutes, `volume = 50` in
+`config.toml` sets where a fresh install starts, and whatever you last set is
+remembered across sessions.
+
+**The one thing that must not change: volume is applied on the OUTPUT side.**
+The Game Boy has its own master volume — NR50's two 3-bit fields — and turning
+*that* down to quieten the speakers is the obvious implementation and the wrong
+one. NR50 is emulated behaviour: the accuracy suites measure it (Blargg
+`dmg_sound`, SameSuite), a game can read it back from `$FF24`, it is captured in
+save states, and it is baked into `testharness/audio_baseline.txt`. Attenuating
+there would make the emulator model a console nobody owns.
+
+So the gain lives past the end of emulation, in the cpal device callback
+(`cpal_audio::cpal_thread`), applied to samples the APU has already produced and
+handed over. `sound::output_volume` holds the level (a global, because the
+callback runs on cpal's own audio thread — the same reason `host_status` is one).
+Consequences, all deliberate:
+
+| | |
+|---|---|
+| **Emulation** | bit-identical at every level. Nothing upstream of the device — APU state, register read-back, the offline capture harness, its hashes — can observe it. |
+| **Frame path** | untouched. `Sound::play_samples` runs inside `Cpu::do_cycle`, where audio work is charged to the emulated frame (§4c: a blocking hand-off there once cost 17.9 ms of every 16.743 ms frame). The volume costs two relaxed atomic loads **per device callback**, on the audio thread. |
+| **Latency** | a change is heard immediately, rather than after the ~40 ms already queued. |
+| **Quality** | scaling is `f32`, *before* the device-format conversion. Attenuating an integer sample throws away its low bits — that is where "clean at full, crunchy when quiet" comes from. |
+
+The taper is `gain = (level/100)²`, the usual approximation of an audio-taper
+pot: 100 % is unity gain (exactly what the emulator did before this existed),
+50 % is −12 dB, 10 % is −40 dB. The default is **50 %**, not full scale — the
+report that produced the control was "so bloody loud", so a default nobody has
+ever asked to be raised is itself wrong.
+
+Measured through the real sound card (`parec` on the sink's monitor while
+`examples/audio_volume.rs` walks the ladder with a full-envelope 440 Hz square):
+
+| level | RMS | ÷ 100 % | expected `(l/100)²` | crest factor | 3rd harmonic / fundamental |
+|---:|---:|---:|---:|---:|---:|
+| 100 % | 0.24665 | 1.00000 | 1.00 | 1.1196 | 0.0517 |
+| 70 % | 0.12014 | 0.48709 | 0.49 | 1.1263 | 0.0521 |
+| 30 % | 0.02220 | 0.09000 | 0.09 | 1.1191 | 0.0516 |
+| 20 % | 0.00987 | 0.04001 | 0.04 | 1.1195 | 0.0516 |
+| 10 % | 0.00247 | 0.01000 | 0.01 | 1.1132 | 0.0514 |
+| 0 % / mute | 0.00000 | — | 0 | — | — |
+
+Peak at 100 % is 0.276 — the APU's own full-scale output, so there is no
+clipping to introduce; every rung below it is strictly quieter. The crest factor
+and harmonic ratio are **constant across the ladder**, which is the objective
+form of "a low setting is still clean rather than crunchy": the waveform is
+scaled, not degraded. Mute and 0 % are digital silence, and unmuting returns to
+the level you left rather than to full.
+
+Re-measure it:
+
+```bash
+cargo run --release --features audio --example audio_volume       # walk the ladder
+cargo run --release --features audio --example audio_volume -- 30 # sit on one rung
+```
+
+---
+
 ## 7. Build & run
 
 Host playback is behind the `audio` feature (off by default so a fresh clone
