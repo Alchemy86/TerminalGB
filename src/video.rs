@@ -143,6 +143,16 @@ const SLACK: Duration = Duration::from_millis(2);
 /// (suspend, a long modal pause) instead of dumping seconds of video at once.
 const MAX_BURST: u32 = 4;
 
+/// How often the idle card is re-sent while the game feed is switched off.
+///
+/// **Idle must be a trickle, not silence.** A camera that stops producing is a
+/// camera consumers start treating as broken — and the whole point of holding
+/// the device is that a viewer mid-call notices nothing but the picture
+/// changing. Two frames a second is far above anything a consumer times out on
+/// and 30× less work than the game feed; the card is converted once and cached,
+/// so a tick is one `write(2)` of an unchanged buffer.
+pub const IDLE_PERIOD: Duration = Duration::from_millis(500);
+
 /// How often an armed FIFO retries its `open` while no consumer is attached.
 ///
 /// A failed non-blocking open is one cheap syscall, but doing it 60 times a
@@ -379,6 +389,8 @@ pub struct RawSettings {
     pub size: Option<String>,
     pub source: Option<String>,
     pub pace: Option<String>,
+    /// Should the stream be **live from launch**? See [`resolve_autostart`].
+    pub autostart: Option<String>,
 }
 
 /// A fully-resolved stream configuration.
@@ -514,6 +526,56 @@ impl VideoSpec {
             (w, h)
         }
     }
+}
+
+/// Does the user want the stream **live from launch**?
+///
+/// This is deliberately a separate question from [`VideoSpec::resolve`], because
+/// they are separate decisions and conflating them was a bug: naming a
+/// destination says *where* frames go, it does not say *send them*. A configured
+/// `video_out` used to mean "streaming, now, before the UI exists" — so a
+/// terminal launched with a camera configured came up already feeding it, and
+/// (worse, earlier) a FIFO destination parked the process in `open(2)` at
+/// startup with no interface and nothing to do but `kill`.
+///
+/// So: the default is **off**, `v` is what goes live, and wanting it live from
+/// launch is its own explicit `video_autostart = true` / `--video-start`.
+/// `GB_VIDEO_START` overrides the config key, as everywhere else here.
+pub fn resolve_autostart(raw: &RawSettings) -> (bool, Vec<String>) {
+    let mut warn = Vec::new();
+    let v = std::env::var("GB_VIDEO_START")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| raw.autostart.clone());
+    let Some(v) = v else {
+        return (false, warn);
+    };
+    match parse_bool(&v) {
+        Some(b) => (b, warn),
+        None => {
+            warn.push(bad("video_autostart", &v, "true or false"));
+            (false, warn)
+        }
+    }
+}
+
+/// The spellings a person actually types for a yes/no config value.
+fn parse_bool(v: &str) -> Option<bool> {
+    let v = v.trim();
+    if v.is_empty() {
+        return Some(false);
+    }
+    for y in ["1", "true", "yes", "on"] {
+        if v.eq_ignore_ascii_case(y) {
+            return Some(true);
+        }
+    }
+    for n in ["0", "false", "no", "off"] {
+        if v.eq_ignore_ascii_case(n) {
+            return Some(false);
+        }
+    }
+    None
 }
 
 fn bad(key: &str, value: &str, expected: &str) -> String {
@@ -674,6 +736,13 @@ const CLI_FLAGS: [(&str, &str); 5] = [
     ("--video-pace", "GB_VIDEO_PACE"),
 ];
 
+/// The `--video-*` flags that are a yes/no on their own.
+///
+/// `--video-start` takes no value (`--video-start=false` still works), because
+/// the point of it is to be the one extra word someone types when they want the
+/// stream live from launch — see [`resolve_autostart`].
+const CLI_BOOL_FLAGS: [(&str, &str); 1] = [("--video-start", "GB_VIDEO_START")];
+
 /// A `--video-*` flag found on a command line: the `GB_VIDEO_*` variable it
 /// maps to, and the value given.
 pub type CliFlag = (&'static str, String);
@@ -693,6 +762,10 @@ pub fn split_cli_flags<I: IntoIterator<Item = String>>(
             Some((n, v)) => (n.to_string(), Some(v.to_string())),
             None => (a.clone(), None),
         };
+        if let Some((_, var)) = CLI_BOOL_FLAGS.iter().find(|(f, _)| *f == name) {
+            found.push((*var, inline.unwrap_or_else(|| "1".to_string())));
+            continue;
+        }
         match CLI_FLAGS.iter().find(|(f, _)| *f == name) {
             Some((flag, var)) => {
                 let value = match inline {
@@ -722,7 +795,8 @@ pub fn apply_cli_flags<I: IntoIterator<Item = String>>(
 
 /// One line of `--help` text listing the flags.
 pub fn cli_usage() -> &'static str {
-    "  --video-out <-|PATH>      stream raw frames (`-` = stdout, or a file/FIFO)\n  \
+    "  --video-out <-|PATH>      where `v` sends frames (`-` = stdout, or a file/FIFO)\n  \
+     --video-start             go live at launch (default: off — press `v`)\n  \
      --video-format <fmt>      rgba (default), rgb24, yuyv\n  \
      --video-size <WxH>        letterbox into this size, e.g. 640x480\n  \
      --video-source <src>      native (default) or display (palette + upscaler)\n  \
@@ -1021,6 +1095,10 @@ pub struct VideoStats {
     /// Frames offered while nothing was reading. Not a fault — a stream can be
     /// armed long before its bridge starts.
     pub unconsumed: u64,
+    /// Idle-card frames written while the game feed was switched off. Counted
+    /// apart from `frames` on purpose: the card is the destination staying
+    /// alive, not the game going out.
+    pub idle_frames: u64,
 }
 
 /// The emitter. Cheap to hold; does nothing until a sink is attached.
@@ -1045,6 +1123,22 @@ pub struct VideoOut {
     ymap: Vec<u32>,
     /// Next wall-clock instant a frame is due (`Realtime` only).
     next: Option<Instant>,
+    /// Is the *game* being sent? `false` with a sink still present is an
+    /// **idling** stream — the destination is still held and still being fed,
+    /// with the idle card instead of the picture. See [`VideoOut::go_idle`].
+    streaming: bool,
+    /// Scratch: the idle card, drawn once per geometry.
+    card: Vec<u8>,
+    card_dims: (u32, u32),
+    /// Is `staged` currently holding the card rather than a game frame?
+    card_staged: bool,
+    /// Next wall-clock instant the idle card is due.
+    idle_next: Option<Instant>,
+    /// Source size the `xmap`/`ymap` tables were built for. The output size
+    /// alone is not enough to know they are still valid — the idle card and a
+    /// `display`-source game frame are different sizes going to the same
+    /// output.
+    map_src: (u32, u32),
     stats: VideoStats,
 }
 
@@ -1070,6 +1164,12 @@ impl VideoOut {
             xmap: Vec::new(),
             ymap: Vec::new(),
             next: None,
+            streaming: true,
+            card: Vec::new(),
+            card_dims: (0, 0),
+            card_staged: false,
+            idle_next: None,
+            map_src: (0, 0),
             stats: VideoStats::default(),
         }
     }
@@ -1260,11 +1360,14 @@ impl VideoOut {
     /// being offered frames to notice a consumer arriving. Ask [`VideoOut::state`]
     /// for the thing a user cares about.
     pub fn is_enabled(&self) -> bool {
-        self.sink.is_some()
+        self.sink.is_some() && self.streaming
     }
 
     /// Off, waiting for a consumer, or live. The answer a status row shows.
     pub fn state(&self) -> StreamState {
+        if !self.streaming {
+            return StreamState::Off;
+        }
         match &self.sink {
             None => StreamState::Off,
             Some(Sink::Fifo(f)) if !f.live() => StreamState::Waiting,
@@ -1272,6 +1375,64 @@ impl VideoOut {
             Some(Sink::V4l2(d)) if !d.live() => StreamState::Waiting,
             Some(_) => StreamState::Live,
         }
+    }
+
+    /// Stop sending the **game** without giving up the destination — the
+    /// camera keeps existing, and keeps being fed the idle card.
+    ///
+    /// **The device is a persistent output; streaming the game into it is a
+    /// mode.** Those are different things, and collapsing them is what made `v`
+    /// destructive: stopping the stream killed the camera, so a viewer in the
+    /// middle of a call lost the device and had to re-pick it.
+    ///
+    /// It also could not be undone. `v4l2loopback` is built with
+    /// `exclusive_caps=1` on every distribution that ships it, and that flag
+    /// means the node advertises `V4L2_CAP_VIDEO_OUTPUT` only while it has no
+    /// consumer: the instant the producer lets go of a device somebody is
+    /// watching, `VIDIOC_QUERYCAP` on a new fd answers CAPTURE and `VIDIOC_S_FMT`
+    /// with `V4L2_BUF_TYPE_VIDEO_OUTPUT` answers `EINVAL`, for as long as the
+    /// viewer stays open. Measured here: on/off/on worked once and then the
+    /// camera was gone. **Never releasing it dissolves that problem rather than
+    /// working around it** — there is nothing left to re-acquire.
+    ///
+    /// Off still means the game is not going out: no picture, the status row
+    /// says so, and telemetry counts no streamed frames. What continues is the
+    /// device and a card at [`IDLE_PERIOD`], because a consumer that stops
+    /// receiving frames entirely is a consumer that eventually drops the device
+    /// — which would be the same failure by a slower route.
+    pub fn go_idle(&mut self) {
+        self.streaming = false;
+        self.card_staged = false;
+        self.idle_next = None;
+    }
+
+    /// Send the game again, down a destination this stream never let go of.
+    pub fn resume(&mut self) {
+        self.streaming = true;
+        self.card_staged = false;
+        self.idle_next = None;
+        // The wall clock ran on while the game feed was off. Restarting the
+        // pacer here rather than letting `pump` discover a deadline minutes in
+        // the past is the difference between resuming and reporting a resync
+        // (and a burst of duplicates) on every press of `v`.
+        self.next = None;
+    }
+
+    /// Is the destination being held open and fed the idle card?
+    pub fn is_idle(&self) -> bool {
+        self.sink.is_some() && !self.streaming
+    }
+
+    /// Must this destination be held open across a stop rather than closed?
+    ///
+    /// **Yes for anything live, no for a recording** — and that is exactly the
+    /// distinction [`Intent`] already draws. A file has to be closed to be a
+    /// finished recording at all; a camera, a FIFO or a pipe has something on
+    /// the far end that must not be disturbed, and for the FIFO that "something"
+    /// is very often `tools/virtual-camera.sh`, whose `ffmpeg` owns the camera —
+    /// so an EOF there kills the device just as surely, one process further out.
+    pub fn must_stay_open(&self) -> bool {
+        self.sink.is_some() && self.intent() == Intent::Stream
     }
 
     /// Recording a file, or feeding a live consumer. See the module docs.
@@ -1335,7 +1496,7 @@ impl VideoOut {
 
     /// Offer an emulated frame. `rgba` is `w * h * 4` bytes.
     pub fn frame(&mut self, rgba: &[u8], w: u32, h: u32, now: Instant) {
-        if self.sink.is_none() {
+        if !self.is_enabled() {
             return;
         }
         self.stage(rgba, w, h);
@@ -1348,6 +1509,10 @@ impl VideoOut {
     /// made across a pause would otherwise be shorter than the pause.
     pub fn idle(&mut self, now: Instant) {
         if self.sink.is_none() {
+            return;
+        }
+        if !self.streaming {
+            self.tick_idle_card(now);
             return;
         }
         // A FIFO may still owe a consumer the rest of a frame. Push it here
@@ -1369,7 +1534,40 @@ impl VideoOut {
         self.pump(now, false);
     }
 
+    /// Keep an idling destination alive with the card, at [`IDLE_PERIOD`].
+    ///
+    /// Drawn at the frame's own geometry, so the text is crisp at whatever the
+    /// device negotiated rather than a 160×144 card magnified into blocks —
+    /// this is the picture strangers see mid-stream. Converted once and then
+    /// re-written unchanged, so a tick costs one `write(2)`.
+    fn tick_idle_card(&mut self, now: Instant) {
+        let due = *self.idle_next.get_or_insert(now);
+        if now < due {
+            return;
+        }
+        self.idle_next = Some(now + IDLE_PERIOD);
+        if !self.card_staged {
+            let (w, h) = self.out.or(self.spec.size).unwrap_or((SRC_W, SRC_H));
+            if self.card_dims != (w, h) {
+                self.card.clear();
+                self.card.resize(w as usize * h as usize * 4, 0);
+                card::draw_idle(&mut self.card, w, h);
+                self.card_dims = (w, h);
+            }
+            self.staged.clear();
+            self.staged.extend_from_slice(&self.card);
+            self.staged_dims = (w, h);
+            self.wire_valid = false;
+            self.card_staged = true;
+        }
+        self.emit(now);
+    }
+
     fn stage(&mut self, rgba: &[u8], w: u32, h: u32) {
+        // A game frame after an idle card (or vice versa) is a different
+        // picture at a possibly different size; the cached wire bytes and the
+        // scaling tables both have to go.
+        self.card_staged = false;
         if self.staged.len() != rgba.len() {
             self.staged.resize(rgba.len(), 0);
         }
@@ -1557,7 +1755,15 @@ impl VideoOut {
             self.stats.write_errors += 1;
             self.sink = None;
         } else if wrote {
-            self.stats.frames += 1;
+            // Idle-card frames are counted apart from the game's. `frames` is
+            // the number telemetry's `video.frames ≈ elapsed × 59.7275`
+            // invariant is written against, and a card at 2 Hz would quietly
+            // make that assertion meaningless.
+            if self.card_staged {
+                self.stats.idle_frames += 1;
+            } else {
+                self.stats.frames += 1;
+            }
             self.stats.bytes += self.wire.len() as u64;
         }
         self.stats.last_ms = t.elapsed().as_secs_f32() * 1000.0;
@@ -1579,10 +1785,18 @@ impl VideoOut {
         let src: &[u8] = if (sw, sh) == (ow, oh) {
             &self.staged
         } else {
-            if self.xmap.len() != ow as usize || self.ymap.len() != oh as usize {
+            // Keyed on the **source** size as well as the output: the idle card
+            // and a `display`-source game frame are different sizes going to the
+            // same output, and reusing one's tables for the other tears the
+            // picture.
+            if self.map_src != (sw, sh)
+                || self.xmap.len() != ow as usize
+                || self.ymap.len() != oh as usize
+            {
                 let (xm, ym) = fit_maps(sw, sh, ow, oh);
                 self.xmap = xm;
                 self.ymap = ym;
+                self.map_src = (sw, sh);
             }
             letterbox(
                 &self.staged,
@@ -1637,7 +1851,10 @@ impl VideoOut {
     /// whole failure this work exists to remove is a banner that reads like
     /// everything is fine while nothing is being delivered.
     pub fn describe(&self) -> String {
-        if self.is_camera() && self.state() != StreamState::Live {
+        // A *parked* camera is not an unavailable one — it is one nobody has
+        // asked for frames yet. Only complain about a camera we are trying to
+        // feed and cannot.
+        if self.is_camera() && self.streaming && self.state() != StreamState::Live {
             return match self.device_error() {
                 Some(why) => format!("video: camera not available — {why}"),
                 None => {
@@ -1661,6 +1878,230 @@ impl VideoOut {
             // exactly the stall this sink exists to avoid.
             _ => {}
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing into a frame: a bitmap font, and the idle card
+// ---------------------------------------------------------------------------
+
+/// Everything needed to put legible text into an RGBA frame, with no
+/// dependency and no vendored asset.
+///
+/// **Licence, deliberately:** the font below is a 5×7 cell font written by hand
+/// for this repository, so it is the repository's own MPL-2.0 code. That is not
+/// laziness about finding a good font — it is the only option with *no* licence
+/// question at all, and 5×7 uppercase is a solved shape with nothing to
+/// improve on. Vendoring a public-domain or OFL bitmap font would have been
+/// acceptable (see `CONTRIBUTING.md`), and pulling a shaping library for ASCII
+/// glyph blitting would not.
+///
+/// Written to be shared: the idle card uses it now, and compositing the status
+/// panel into the feed needs exactly this and a layout pass on top.
+pub mod card {
+    /// Glyph cell, in pixels, before scaling. One byte per row, bit 4 is the
+    /// leftmost column.
+    pub const GLYPH_W: u32 = 5;
+    pub const GLYPH_H: u32 = 7;
+    /// Cell advance including the one-pixel gap between characters.
+    pub const ADVANCE: u32 = GLYPH_W + 1;
+
+    /// The classic DMG screen palette, darkest first. The card is unmistakably
+    /// a Game Boy without needing a picture of one.
+    pub const DMG_DARKEST: [u8; 4] = [0x0F, 0x38, 0x0F, 0xFF];
+    pub const DMG_DARK: [u8; 4] = [0x30, 0x62, 0x30, 0xFF];
+    pub const DMG_LIGHT: [u8; 4] = [0x8B, 0xAC, 0x0F, 0xFF];
+    pub const DMG_LIGHTEST: [u8; 4] = [0x9B, 0xBC, 0x0F, 0xFF];
+
+    /// `A`-`Z`, `0`-`9` and the punctuation the cards need. Anything else is
+    /// drawn as a blank cell rather than a tofu box — a missing glyph must not
+    /// be the most eye-catching thing on a public stream.
+    fn glyph(c: char) -> [u8; GLYPH_H as usize] {
+        match c.to_ascii_uppercase() {
+            'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+            'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+            'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+            'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
+            'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+            'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+            'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0E],
+            'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+            'I' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1F],
+            'J' => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+            'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+            'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+            'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+            'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+            'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+            'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+            'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+            'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+            'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+            'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+            'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+            'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+            'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11],
+            'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+            'Y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+            'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+            '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+            '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+            '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+            '3' => [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+            '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+            '5' => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+            '6' => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+            '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+            '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+            '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+            '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+            '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+            ':' => [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00],
+            '/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
+            _ => [0; GLYPH_H as usize],
+        }
+    }
+
+    /// Width in pixels of `text` at `scale`.
+    pub fn text_width(text: &str, scale: u32) -> u32 {
+        match text.chars().count() as u32 {
+            0 => 0,
+            n => (n * ADVANCE - 1) * scale,
+        }
+    }
+
+    /// The largest integer scale at which `text` still fits `target` pixels.
+    /// Legibility survives re-encoding by being *big*, so text is sized to the
+    /// space it has rather than to a constant nobody re-checks.
+    pub fn fit_scale(text: &str, target: u32) -> u32 {
+        let unit = text_width(text, 1).max(1);
+        (target / unit).max(1)
+    }
+
+    /// An RGBA frame being drawn into.
+    ///
+    /// Carrying the target as one value rather than three loose arguments is
+    /// what keeps the drawing calls readable — and it is the shape the panel
+    /// compositor wants too, where a sub-rectangle of the frame is handed to a
+    /// layout pass.
+    pub struct Canvas<'a> {
+        pub buf: &'a mut [u8],
+        pub w: u32,
+        pub h: u32,
+    }
+
+    impl<'a> Canvas<'a> {
+        pub fn new(buf: &'a mut [u8], w: u32, h: u32) -> Canvas<'a> {
+            Canvas { buf, w, h }
+        }
+
+        /// One pixel, if it is inside the frame.
+        #[inline]
+        fn put(&mut self, x: i64, y: i64, c: [u8; 4]) {
+            if x < 0 || y < 0 || x >= self.w as i64 || y >= self.h as i64 {
+                return;
+            }
+            let i = (y as usize * self.w as usize + x as usize) * 4;
+            if i + 4 <= self.buf.len() {
+                self.buf[i..i + 4].copy_from_slice(&c);
+            }
+        }
+
+        /// A filled rectangle, clipped to the frame.
+        pub fn fill(&mut self, x: i64, y: i64, rw: u32, rh: u32, c: [u8; 4]) {
+            for dy in 0..rh as i64 {
+                for dx in 0..rw as i64 {
+                    self.put(x + dx, y + dy, c);
+                }
+            }
+        }
+
+        /// `text` with its top-left corner at `(x, y)`, magnified by `scale`.
+        pub fn text(&mut self, x: i64, y: i64, text: &str, scale: u32, c: [u8; 4]) {
+            let s = scale.max(1);
+            for (i, ch) in text.chars().enumerate() {
+                let g = glyph(ch);
+                let gx = x + (i as u32 * ADVANCE * s) as i64;
+                for (row, bits) in g.iter().enumerate() {
+                    for col in 0..GLYPH_W {
+                        if bits & (1 << (GLYPH_W - 1 - col)) == 0 {
+                            continue;
+                        }
+                        self.fill(
+                            gx + (col * s) as i64,
+                            y + (row as u32 * s) as i64,
+                            s,
+                            s,
+                            c,
+                        );
+                    }
+                }
+            }
+        }
+
+        /// `text` centred horizontally, at `y`.
+        pub fn text_centred(&mut self, y: i64, text: &str, scale: u32, c: [u8; 4]) {
+            let x = (self.w as i64 - text_width(text, scale) as i64) / 2;
+            self.text(x, y, text, scale, c);
+        }
+    }
+
+    /// The picture the camera shows when the game feed is switched off.
+    ///
+    /// Drawn at the frame's **own** size rather than at 160×144 and magnified,
+    /// so the text is crisp at whatever the device negotiated instead of being
+    /// nearest-neighbour blocks — this is what strangers see mid-stream, and it
+    /// has to look deliberate rather than broken.
+    ///
+    /// Deliberately says nothing about the machine it is running on: no game
+    /// title, no path, no host. Switching the feed off is very often *exactly*
+    /// the moment someone does not want what they are doing on screen.
+    pub fn draw_idle(buf: &mut [u8], w: u32, h: u32) {
+        let mut c = Canvas::new(buf, w, h);
+        let unit = (w / 160).min(h / 144).max(1);
+        c.fill(0, 0, w, h, DMG_DARKEST);
+        // A frame, inset, so the card reads as a designed screen and not as a
+        // failure to paint the background.
+        let b = unit * 2;
+        let m = unit * 6;
+        c.fill(m as i64, m as i64, w - 2 * m, b, DMG_DARK);
+        c.fill(m as i64, (h - m - b) as i64, w - 2 * m, b, DMG_DARK);
+        c.fill(m as i64, m as i64, b, h - 2 * m, DMG_DARK);
+        c.fill((w - m - b) as i64, m as i64, b, h - 2 * m, DMG_DARK);
+
+        const NAME: &str = "TERMINALGB";
+        const STATE: &str = "STREAM PAUSED";
+        const HINT: &str = "PRESS V TO RESUME";
+        let ns = fit_scale(NAME, w * 7 / 10);
+        let ss = fit_scale(STATE, w * 11 / 20);
+        let hs = fit_scale(HINT, w / 2);
+
+        // Vertical rhythm from the block heights themselves, so the card is
+        // balanced at 160x144 and at 1280x720 without a table of magic numbers.
+        let nh = GLYPH_H * ns;
+        let sh = GLYPH_H * ss;
+        let hh = GLYPH_H * hs;
+        let gap = (GLYPH_H * ss) as i64;
+        let total = nh as i64 + gap + sh as i64 + gap / 2 + hh as i64;
+        let mut y = (h as i64 - total) / 2;
+
+        c.text_centred(y, NAME, ns, DMG_LIGHTEST);
+        y += nh as i64 + gap / 3;
+        // A rule under the name, the width of the name.
+        let rule = text_width(NAME, ns);
+        c.fill((w as i64 - rule as i64) / 2, y, rule, unit.max(1), DMG_DARK);
+        y += gap * 2 / 3;
+        c.text_centred(y, STATE, ss, DMG_LIGHT);
+        y += sh as i64 + gap / 2;
+        // Not `DMG_DARK`: a low-contrast line is the first thing a stream
+        // encoder throws away, and this one is the instruction. Hierarchy comes
+        // from size here, not from fading text into the background.
+        c.text_centred(y, HINT, hs, DMG_LIGHT);
+
+        // Nothing else. A row of palette swatches was tried here and cut: on a
+        // dark card the darkest shade is invisible and on a light backing the
+        // lightest one is, so it read as three squares and a smudge — decoration
+        // that has to be explained is worse than none.
     }
 }
 

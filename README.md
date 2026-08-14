@@ -172,12 +172,13 @@ The recognised keys:
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
 | `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`. |
-| `video_out` | `-` / a file / a **FIFO** / a **`/dev/videoN` camera** / a directory / `off` | Stream raw frames out (see [video-out.md](docs/video-out.md)). Default `off`. **Safe to set to anything** — a FIFO with no reader, or a camera that does not exist, leaves the *stream* waiting and never blocks the emulator. The TUI refuses `-` — it owns stdout. |
+| `video_out` | `-` / a file / a **FIFO** / a **`/dev/videoN` camera** / a directory / `off` | **Where `v` sends the stream** (see [video-out.md](docs/video-out.md)). Default `off`. Setting it does *not* start streaming — the emulator always comes up with the feed off. **Safe to set to anything**: nothing is opened, created or claimed until you press `v`. The TUI refuses `-` — it owns stdout. |
+| `video_autostart` | `true` / `false` | Go live at launch instead of waiting for `v`. Default `false`. The separate, explicit way to ask for it, because naming a destination is not the same decision as sending frames to it. |
 | `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`. Ignored for a `/dev/videoN` camera, which negotiates YUYV itself. |
 | `video_size` | `WxH` | Letterbox the stream into this size, e.g. `640x480`. Default: the source size, or 640×480 for a camera. |
 | `video_source` | `native` / `display` | Stream the raw 160×144 framebuffer, or what you see (palette + upscaler). Default `native`. |
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
-| `video_dir` | a path (`~` expands) | Where **`v`** records when no `video_out` is set. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
+| `video_dir` | a path (`~` expands) | Where **`V`** records. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
 | `video_device` | `/dev/videoN` | A `v4l2loopback` node to *verify*: the emulator warns if its camera label names a different game. |
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
@@ -493,6 +494,12 @@ press `v`, and pick the camera in Chrome, Meet, Discord or OBS:
 video_out = "/dev/video10"
 ```
 
+**`v` toggles the picture, never the camera.** Once opened, the device is held for the session:
+pressing `v` again stops sending the game and starts sending an idle card, so a viewer in the
+middle of a Meet call or a Twitch stream sees the picture change and never loses the device.
+A stopped feed that froze on the last game frame — looking live while being dead — was the thing
+worth fixing; so was a camera that could not be turned back on once released.
+
 The emulator negotiates the V4L2 device itself (`VIDIOC_QUERYCAP` + `VIDIOC_S_FMT`) and writes
 the frames — no `ffmpeg`, no FIFO, no rule about what to start first. Size and pixel format are
 **detected, not configured**: YUYV at 640×480, with the 160×144 picture scaled by integer
@@ -507,7 +514,7 @@ default**, and free when off.
 cargo run --release --example video_out -- --rom game.gb --frames 600 \
   | ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - -pix_fmt yuv420p gb.mp4
 
-# stream a game you are PLAYING in the terminal, through a FIFO (or press `v` in-game)
+# stream a game you are PLAYING in the terminal, through a FIFO — press `v` to go live
 mkfifo /tmp/gb.raw
 ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw gb.mp4 &
 cargo run --release --example terminal -- game.gb --video-out /tmp/gb.raw

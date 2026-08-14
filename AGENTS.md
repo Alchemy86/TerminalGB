@@ -1325,6 +1325,59 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
   addition, so no `SCHEMA_VERSION` bump. The invariant to assert: `video.frames ≈ elapsed ×
   59.7275` under `realtime` pacing, whatever `fps` does.
 
+### The camera is a persistent output; streaming the game into it is a MODE
+
+Four faults, one root cause — *configuring a destination*, *sending frames to it* and *holding it
+open* were all the same flag. Full write-up in [`docs/video-out.md`](docs/video-out.md) §5b/§6.
+
+- **A configured `video_out` must NOT stream at launch.** It used to open the sink in
+  `tui::open_video` before the terminal existed, so a terminal with a camera configured came up
+  already feeding it (`Video ◌ wait gameboy-cam.…` before the user pressed anything). Nothing is
+  opened now — not even created, since opening a plain file *truncates* it and would silently
+  destroy the last recording. `v` goes live; `video_autostart` / `--video-start` /
+  `GB_VIDEO_START` is the separate opt-in. The desktop frontend has no `v` key, so it prints
+  what to add rather than arming something unreachable.
+- **NEVER close a `v4l2loopback` device to stop streaming — you cannot get it back.** Every
+  distribution builds it with `exclusive_caps=1`, which makes the node advertise
+  `V4L2_CAP_VIDEO_OUTPUT` only while it has no consumer. Let go of a device someone is watching
+  and `VIDIOC_QUERYCAP` answers CAPTURE and `VIDIOC_S_FMT` answers **`EINVAL`** for as long as
+  the viewer stays open. Measured: on/off/on worked *once*, then the camera was gone. So
+  `VideoOut::go_idle`/`resume` hold the fd and switch what is *sent*. `must_stay_open()` is
+  `intent() == Stream`: close a recording (that is what makes it a finished file), hold anything
+  live. A FIFO counts as live — its consumer is often `virtual-camera.sh`, whose `ffmpeg` owns
+  the camera, so an EOF kills the device one process further out.
+- **Idle must be a trickle, never silence.** With nothing sent, a consumer displays the **last
+  frame forever** — the captain's Meet call sat on a title screen while the game was in a Rattata
+  battle. A dead feed that looks live is worse than a lost one. `IDLE_PERIOD` (2 Hz) pushes a
+  generated card instead; it is converted once and cached, so a tick is one `write(2)`.
+- **`video::card` is a hand-written 5×7 bitmap font + `Canvas`, deliberately ours.** No vendored
+  asset and therefore no third-party font licence to audit in an MPL-2.0 repo. Draw at the
+  frame's own geometry, not at 160×144 magnified. It is also the groundwork for compositing the
+  status panel — see [`docs/stream-panel-routes.md`](docs/stream-panel-routes.md), which
+  recommends **OBS window capture instead of building that renderer**.
+- **`v` is the live feed and only ever the live feed.** It used to fall back to *recording a
+  file* when nothing was configured, so "stop the stream" answered `REC stopped: 268 frames →
+  ~/Videos/gameboy` at someone thinking about his camera. `v` now says what to set; `V` records.
+- **A camera is never "waiting for a consumer".** A V4L2 output node takes writes whether or not
+  anyone is watching, so it is never blocked on a reader the way a FIFO genuinely is — but the
+  FIFO's *words* were used for every `Waiting` stream, which sent the captain hunting for a
+  consumer problem when the real one was a second emulator holding `/dev/video10`. `waiting_toast`
+  reports the device's own reason for a camera.
+- **`convert()`'s scaling tables are keyed on the SOURCE size too**, not just the output: the
+  idle card and a `display`-source game frame are different sizes going to the same output.
+- **Verify this path with a real consumer or not at all.** `examples/video_toggle_soak.rs` mirrors
+  the frontend's decisions through the public API; `GB_SOAK_NO_PARK=1` restores the old
+  always-release policy, which is how it is shown to have teeth (every cycle after the first
+  fails). Decode what the consumer *received* — `ffmpeg -f v4l2 -i /dev/video10 -pix_fmt gray -f
+  rawvideo`, then classify frames — rather than trusting a return code. Measured: 1,028 frames
+  over 34.3 s alternating game/card across ten cycles, every transition inside one 30 fps frame,
+  `stalled=0`, fds flat, and `fuser /dev/video10` empty after exit.
+- **This box HAS v4l2loopback** (`/dev/video10`, card label `Game Boy`) — the older note saying
+  it does not is stale. `/dev/video1`/`video2` are a real webcam. Beware: the captain's own
+  session and Chrome's `VideoCaptureService` both hold `/dev/video10` at times, and a second
+  producer is exactly what makes our sink report `Waiting`. Check `fuser -v /dev/video10` before
+  concluding anything about the device.
+
 - Add durable project-specific notes here as they are discovered through real work.
 
 ## Licence boundary: format knowledge is ours, game assets are not

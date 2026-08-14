@@ -578,6 +578,11 @@ impl Config {
             "video_size",
             "video_source",
             "video_pace",
+            // Naming a destination is not the same decision as sending frames
+            // to it: `video_out` says *where* `v` puts the stream, this says
+            // "and go live at launch". Default off — see
+            // [`crate::video::resolve_autostart`].
+            "video_autostart",
         ] {
             let Some(v) = get(key) else { continue };
             let v = v.trim();
@@ -586,6 +591,7 @@ impl Config {
                 "video_format" => &mut cfg.video.format,
                 "video_size" => &mut cfg.video.size,
                 "video_source" => &mut cfg.video.source,
+                "video_autostart" => &mut cfg.video.autostart,
                 _ => &mut cfg.video.pace,
             };
             *slot = if v.is_empty() {

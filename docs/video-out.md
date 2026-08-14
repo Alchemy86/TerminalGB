@@ -11,9 +11,11 @@ emulator negotiates the device's format itself (`VIDIOC_S_FMT`) and writes the f
 `ffmpeg` bridge in [`tools/virtual-camera.sh`](../tools/virtual-camera.sh) still works and is
 still the route on macOS/Windows, but it is no longer the one you are meant to use on Linux.
 
-**Every `video_*` setting is safe to put in `config.toml`.** No destination can stop the
-emulator from starting — not a FIFO with nothing reading it, not a camera that does not exist.
-See §5a.
+**Every `video_*` setting is safe to put in `config.toml`.** A configured destination says
+*where* frames go; it does not send them, and the emulator always starts with the stream **off**
+— `v` is what goes live (`--video-start` / `video_autostart = true` if you want it live from
+launch). No destination can stop the emulator from starting either: not a FIFO with nothing
+reading it, not a camera that does not exist. See §5a.
 
 This is the **pixels** half of the emit surface in [`docs/debugging.md`](debugging.md).
 [`docs/telemetry.md`](telemetry.md) publishes the *numbers* of every frame as NDJSON; this
@@ -28,13 +30,14 @@ publishes the frame.
 cargo run --release --example video_out -- --rom game.gb --frames 600 \
   | ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - -pix_fmt yuv420p gb.mp4
 
-# stream a game you are PLAYING in the terminal, through a FIFO
+# stream a game you are PLAYING in the terminal, through a FIFO — press `v` to go live
 mkfifo /tmp/gb.raw
 ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw -pix_fmt yuv420p gb.mp4 &
 cargo run --release --example terminal -- game.gb --video-out /tmp/gb.raw
 
-# a game you are playing, in a window, straight down a pipe
-cargo run --release --example desktop -- game.gb --video-out - \
+# a game you are playing, in a window, straight down a pipe. The desktop frontend
+# has no `v` key, so this one says go: --video-start.
+cargo run --release --example desktop -- game.gb --video-out - --video-start \
   | ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - -pix_fmt yuv420p gb.mp4
 ```
 
@@ -55,6 +58,7 @@ implemented *as* environment overrides, so there is no third precedence rule to 
 | What | Flag | Env | `config.toml` | Values |
 |---|---|---|---|---|
 | destination | `--video-out` | `GB_VIDEO_OUT` | `video_out` | `-`/`stdout`, a file, a **FIFO**, a **`/dev/videoN` camera**, a directory, `off` |
+| live at launch | `--video-start` | `GB_VIDEO_START` | `video_autostart` | `false` (**default** — press `v`), `true` |
 | pixel format | `--video-format` | `GB_VIDEO_FORMAT` | `video_format` | `rgba` (default), `rgb24`, `yuyv` |
 | frame size | `--video-size` | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `640x480` |
 | picture source | `--video-source` | `GB_VIDEO_SOURCE` | `video_source` | `native` (default), `display` |
@@ -65,7 +69,10 @@ implemented *as* environment overrides, so there is no third precedence rule to 
 A `/dev/videoN` destination ignores `video_format` and `video_size`: a camera negotiates its own
 (§5). Everything here is **safe to set** — see §5a.
 
-In the terminal frontend, **`v` starts and stops the stream while the game runs** — see §6.
+In the terminal frontend, **`v` starts and stops the stream while the game runs** — see §6. It
+starts **off** whatever `video_out` says; `video_autostart` is the separate opt-in for "and go
+live at launch". The desktop frontend has no `v` key, so a destination configured there without
+`--video-start` streams nothing and says so on stderr.
 
 ### Native or upscaled? Both, selectable
 
@@ -281,40 +288,145 @@ Three rules now, for every destination that has something at the far end:
    (`docs/audio.md` §4c). Because `rawvideo` is positional, a frame that was only partly
    written is *finished* before the next one starts, so the consumer sees whole frames or none.
 
-Chosen over the alternative — deferring the open until `v` is pressed — because deferring only
-moves the hang: the captain's config auto-arms the stream at startup, and pressing `v` in a TUI
-that is already in the alternate screen would have hung it with the UI up and no way to cancel.
-Non-blocking fixes it everywhere at once, and it is what makes late attach fall out for free.
+All three are worth keeping *even though* nothing is opened at startup any more (§5b): they are
+what makes pressing `v` inside the alternate screen safe, and what makes late attach fall out
+for free. Non-blocking is the property; deferring the open is not a substitute for it.
+
+## 5b. Configuring a destination is not deciding to stream
+
+The two are separate decisions and the emulator used to conflate them: **naming a destination
+started the stream**, at launch, before the user had pressed anything. The captain's Status row
+read `Video ◌ wait gameboy-cam.…` the moment his terminal came up.
+
+That is wrong on its own terms — "where do frames go" and "send frames" are different
+questions, and only one of them belongs in a config file that applies to every launch — and it
+is the same mistake that produced the startup hang in §5a: the config file was treated as an
+instruction to open something.
+
+So:
+
+* **A configured destination means "this is where `v` will send it".** Nothing is opened,
+  nothing is created (opening a plain file *truncates* it, so a launch that opened one would
+  quietly destroy the last recording), and no camera is claimed.
+* **`v` is what goes live. Launch state is off**, always.
+* **`video_autostart = true` / `--video-start` / `GB_VIDEO_START=1`** is the separate, explicit
+  way to ask for it live from launch. That is one extra word for the people who want it, rather
+  than a surprise for everybody who does not.
+
+Pinned by `a_configured_destination_does_not_mean_streaming`, over both a FIFO and a plain file,
+which also asserts that nothing appears on disk.
+
+The desktop frontend has no `v` key, so an armed-but-idle stream there would be unreachable; it
+prints `video: <dest> configured but not streaming — add --video-start` and streams nothing.
+This is why the piped one-liner in §1 carries `--video-start`.
 
 ## 6. Toggling it live (terminal frontend)
 
-`v` arms and disarms the stream mid-game — no restart.
+**`v` is the live feed. `V` is a recording. They never trade places.** It starts off (§5b), and it
+survives being pressed repeatedly — which is not free, see below.
 
-* With `video_out` configured it simply starts/stops that destination.
-* With nothing configured it records to a file named after the game in `video_dir`.
-* **`V` (shifted) always records a file**, whatever `video_out` says. Feeding a camera and
-  keeping a recording are different jobs and now have different keys — sharing one meant a
-  configured camera made "record a clip" unreachable, and before that it meant "feed the
-  camera" silently wrote a 160×144 file nobody was reading.
-* The **Status panel**'s `Video` row distinguishes all three states and says *where*:
-  `off` · `◌ wait video10` (armed, nothing on the other end yet) · `● LIVE 12M video10`
-  (feeding a consumer) · `● REC 12M POKEMON_BLUE-….raw` (writing a file). `LIVE` and `REC` are
-  deliberately not interchangeable words: the old row said `LIVE` for a recording, which is how
-  a camera that was never being fed looked like it was working.
-* A toast confirms both directions (`● LIVE → /dev/video10`, `REC stopped: 3600 frames,
-  316.4 MB → …`), and the full detail goes into the `?` overlay's notices.
-* Loading a different ROM re-opens a *game-named* stream under the new name; a FIFO or file you
-  chose yourself keeps running across ROM switches, because its consumer is attached to that
-  path.
+* **`v`** sends the game to `video_out` and stops sending it. With **no** live destination
+  configured it says so (`set video_out (e.g. /dev/video10), or press V to record a file`) rather
+  than quietly doing the other thing. That fallback is exactly how "stop the stream" once answered
+  `REC stopped: 268 frames, 23.6 MB → /home/aaron/Videos/gameboy` at somebody who was thinking about
+  his camera, and it is the same configure-versus-send confusion as §5b wearing a third hat.
+* **`V` (shifted) always records a file**, whatever `video_out` says. Feeding a camera and keeping a
+  recording are different jobs with different destinations, different formats and different endings
+  — one is closed, the other is held — so they get different keys, and neither key ever performs the
+  other's job on its behalf.
+* The **Status panel**'s `Video` row distinguishes every state and says *where*:
+  `off` · `◍ idle video10` (the game is not going out, the camera is still ours and is showing the
+  idle card) · `◌ wait /tmp/gb.raw` (a FIFO armed with nothing on the other end yet) ·
+  `● LIVE 12M video10` (feeding a consumer) · `● REC 12M POKEMON_BLUE-….raw` (writing a file).
+  `LIVE` and `REC` are deliberately not interchangeable words: the row once said `LIVE` for a
+  recording, which is how a camera that was never being fed looked like it was working.
 
-Raw video is **5.5 MB/s at 160×144 RGBA** and 36 MB/s at 640×480 YUYV. The Status row shows the
-total so a recording left running is visible rather than a surprise.
+### Stopping the feed does not stop the camera — it changes what the camera shows
 
-**On the desktop frontend there is no toggle** (it has no toast or status panel to report
-through) — configure it at launch. Note its long-standing behaviour that an **unfocused window
-pauses emulation**: the stream then holds the last frame at the wall-clock rate rather than
-stalling, which is the right answer for a capture but means an unfocused window records a still
-picture. Click the window to keep it live.
+`v` off used to *close* whatever was open, and that turned out to be two separate faults at once.
+
+**It killed the camera.** The captain, mid-call: *"when we press `v` it doesn't just stop streaming
+the screen, it KILLS the cam, so Google loses it if we WERE streaming."* A viewer had to go back to
+the camera picker and choose the device again — unacceptable mid-call, and impossible mid-Twitch-stream.
+
+**And it could not be undone.** Every distribution builds `v4l2loopback` with `exclusive_caps=1`, and
+that flag means the node advertises `V4L2_CAP_VIDEO_OUTPUT` only while it has no consumer. The instant
+the producer lets go of a device somebody is watching, `VIDIOC_QUERYCAP` on a fresh fd answers CAPTURE
+and `VIDIOC_S_FMT` with `V4L2_BUF_TYPE_VIDEO_OUTPUT` answers `EINVAL`, for as long as the viewer stays
+open. Measured against a real `ffmpeg` consumer on `/dev/video10`: **on/off/on worked once, and from
+the second or third press the camera was gone and never came back.**
+
+The principle that fixes both: **the device is a persistent output, and streaming the game into it is a
+mode.** Exactly the same distinction as "where the video goes" versus "am I sending it" (§5b) — this is
+that confusion one level further in. So the device is opened once and kept for the session, and `v`
+switches only what is being *sent*. Never releasing it dissolves the re-acquire problem rather than
+working around it: there is nothing left to re-acquire.
+
+**Idle is not silence.** A third fault made that necessary rather than merely tidy: with the game feed
+stopped, a consumer kept displaying the **last frame indefinitely**. The captain's Meet call sat on a
+title screen while the emulator was in a Rattata battle — a dead feed that looks live, which on a public
+stream is actively misleading. So while the game is off the destination keeps receiving an **idle card**
+at [`IDLE_PERIOD`](../src/video.rs) (2 Hz):
+
+![the idle card](idle-card.png)
+
+* **Drawn in code, at the frame's own size.** No vendored asset, and the text is crisp at whatever the
+  device negotiated rather than a 160×144 card magnified into blocks. It scales from 160×144 to 1280×720
+  off one layout — sizes are derived from the canvas, not a table of magic numbers.
+* **The font is this repository's own.** A 5×7 cell font written by hand for it, so it is MPL-2.0 like
+  everything else here and there is no third-party licence question at all. A public-domain or OFL bitmap
+  font would have been acceptable; a shaping library for ASCII glyph blitting would not.
+* **It says nothing about the machine.** No game title, no path, no host. Switching the feed off is very
+  often exactly the moment somebody does not want what they are doing on screen.
+* **2 Hz, not 0 and not 60.** Consumers commonly drop a device that stops producing frames entirely, so
+  idle has to be a trickle; the card is converted once and cached, so a tick is one `write(2)` of an
+  unchanged buffer.
+
+Recordings are the exception and are still **closed** on stop — that is what makes a recording a finished
+file. The rule is [`Intent`](../src/video.rs): close a recording, hold anything live. A FIFO counts as
+live, and deliberately so: its consumer is very often `tools/virtual-camera.sh`, whose `ffmpeg` owns the
+camera, so an EOF there kills the device just as surely, one process further out.
+
+Consequence worth knowing: only one destination is held at a time, so pressing `V` (record a file) while
+a camera is idling *does* release the camera; the `?` overlay says so when it happens.
+
+### A camera is never "waiting for a consumer"
+
+A V4L2 output node accepts writes whether or not anybody is watching — that is the whole point of one —
+so unlike a FIFO it is never blocked on a reader, and the sink never waits for one. But the *words* were
+shared: any `Waiting` stream said `◌ waiting for a consumer on /dev/video10`, which sent the captain
+hunting for a consumer problem when the real one was a second emulator instance still holding the device.
+A camera that is not live now reports the device's own reason (`already being fed by another program`,
+`v4l2loopback is not loaded`, `that is a real webcam`), because that is always what it is.
+
+### Soak it yourself
+
+```bash
+cargo run --release --example video_toggle_soak -- /dev/video10 10
+GB_SOAK_NO_PARK=1 cargo run --release --example video_toggle_soak -- /dev/video10 10
+```
+
+The second form restores the old always-release policy, which is how the soak is shown to have teeth.
+
+**Measured, with `ffmpeg -f v4l2 -i /dev/video10` recording throughout and attaching *after* the emulator
+was already running** — 1,028 consumer frames over 34.3 s, decoded frame by frame:
+
+```
+t=  0.00s    24 frames  GAME grey 40      <- consumer attached to a running emulator, picture appears
+t=  0.80s    51 frames  IDLE CARD         <- `v` off: card, immediately, not a frozen game frame
+t=  2.50s    57 frames  GAME grey 61      <- `v` on: game returns, same consumer session
+...                                          (ten cycles, alternating, no gap and no re-pick)
+t= 33.27s    30 frames  IDLE CARD
+```
+
+Every transition lands within one consumer frame (33 ms) of the toggle; the device was never lost, never
+re-picked, `stalled=0`, `write_errors=0`, file descriptors flat at 5, and +108 frames / +68,812,800 bytes
+per cycle with no drift. On exit `fuser /dev/video10` reports no holders and the node is back to `OUTPUT`,
+free for the next producer. The old always-release policy under the same conditions: every cycle after the
+first failed and the consumer received nothing but its initial frame.
+
+The FIFO path was soaked the same way through a bridge-style reader that reopens the pipe: 10/10 cycles,
+424 whole frames, every cycle's level in order.
 
 ## 7. What was actually captured (proof)
 

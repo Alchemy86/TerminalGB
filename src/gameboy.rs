@@ -141,15 +141,32 @@ impl Gameboy {
         let (mut out_w, mut out_h) =
             upscaler.output_size(self.width as usize, self.height as usize);
 
-        // Raw video-out (see `crate::video`). Off unless configured. Unlike the
-        // terminal frontend this one may stream to **stdout**, because nothing
-        // else here writes there — so the documented pipe works verbatim:
-        //   desktop game.gb --video-out - | ffmpeg -f rawvideo -pix_fmt rgba \
-        //       -s 160x144 -framerate 59.7275 -i - out.mp4
+        // Raw video-out (see `crate::video`). Off unless configured **and**
+        // explicitly started: naming a destination says where frames go, not
+        // that they should be sent (`crate::video::resolve_autostart`). Unlike
+        // the terminal frontend this one may stream to **stdout**, because
+        // nothing else here writes there — so the documented pipe is:
+        //   desktop game.gb --video-out - --video-start | ffmpeg -f rawvideo \
+        //       -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - out.mp4
         let (video_spec, video_warnings) = crate::video::VideoSpec::resolve(&cfg.video);
-        for w in &video_warnings {
+        let (video_start, start_warnings) = crate::video::resolve_autostart(&cfg.video);
+        for w in video_warnings.iter().chain(start_warnings.iter()) {
             eprintln!("gameboy: {w}");
         }
+        // This frontend has no key to turn the stream on, so an armed-but-idle
+        // stream would be unreachable. Say what to add rather than leaving a
+        // configured destination looking like a setting that was ignored.
+        let video_spec = match video_spec {
+            Some(s) if !video_start => {
+                eprintln!(
+                    "gameboy: video: {} configured but not streaming — add \
+                     --video-start (or video_autostart = true) to go live",
+                    s.dest.label()
+                );
+                None
+            }
+            other => other,
+        };
         let mut video = match video_spec {
             Some(mut s) => {
                 // Fix the geometry from the configured upscaler so the size the
@@ -184,6 +201,11 @@ impl Gameboy {
             source: crate::video::Source,
         ) {
             if !video.is_enabled() {
+                // A held destination (a camera, a FIFO) keeps getting the idle
+                // card while the game feed is off — see `VideoOut::go_idle`.
+                if video.is_idle() {
+                    video.idle(std::time::Instant::now());
+                }
                 return;
             }
             let now = std::time::Instant::now();
