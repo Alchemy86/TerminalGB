@@ -177,6 +177,7 @@ The recognised keys:
 | `video_device` | `/dev/videoN` | A `v4l2loopback` node to *verify*: the emulator warns if its camera label names a different game. |
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
+| `battles` | a path | Battle-preset file for the `gen1-battle` plugin. Unset uses the built-in presets. See [docs/gen1/battle-control.md](docs/gen1/battle-control.md). |
 
 ### 🌐 Web (WebAssembly)
 
@@ -273,6 +274,72 @@ than quietly handing over something else.
 
 📖 **[The full story, the step-by-step journey, and what to do if it hangs →
 docs/link-trade.md](docs/link-trade.md)** · the [plugin contract](docs/plugins.md) it is built on.
+
+---
+
+## 🎬 Start any Gen 1 battle — and film it
+
+**Pokémon Red and Blue decide to start a battle by reading one byte.** Write it and the engine
+does the rest: the transition, the sprite, the music, the AI, the animations, the cries, the
+experience. Nothing here simulates a battle — it asks for one.
+
+So a battle becomes something you can *stage*: a named preset, one keypress, with the teams you
+chose on both sides.
+
+```text
+[charizard-flamethrower]
+player   = Charizard
+level    = 50
+moves    = Flamethrower, Slash, Fly, Earthquake
+
+wild     = Pidgey
+level    = 3
+
+do = await-battle              # …and a script that plays it out
+do = press-until b FIGHT
+do = press-until a FLAMETHROWER
+do = press-until a "used FLAMETHROWER"
+do = press-until b fainted
+do = await-overworld
+```
+
+```bash
+GB_PLUGINS=gen1-battle cargo run --release --example terminal -- ~/roms/blue.gb
+#   B  start the selected battle      N  choose the next preset
+```
+
+**A cinematic rendered by the actual game**, not a video file — and reproducible: the same
+script from the same starting state produces byte-identical frames, proved by running it three
+times and comparing a hash of *every* frame. It records through the existing video path with no
+special handling:
+
+```bash
+cargo run --release --example gen1_battle -- --preset charizard-flamethrower --video - \
+  | ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - out.mp4
+```
+
+**Your save is not at risk.** The plugin writes only WRAM and HRAM — never cartridge RAM, which
+is what a `.sav` is made of — puts back every byte it changed when the battle ends, refuses a
+cartridge it does not recognise, and does nothing at all until you name it and arm it.
+
+📖 **[How it works, what "reproducible" precisely means, and the traps →
+docs/gen1/battle-control.md](docs/gen1/battle-control.md)**
+
+---
+
+## 🎮 Game mechanics & hacking — Pokémon Gen 1
+
+A documented area for how these games keep their state and how to drive them from outside:
+the [memory map](docs/gen1/memory-map.md) with a `pret/pokered` symbol name and a derivation for
+every address, [starting battles on demand](docs/gen1/battle-control.md),
+[reading dialogue back as text](docs/gen1/reading-the-screen.md) (Gen 1 tile ids *are*
+characters), [driving the link cable](docs/gen1/link-from-outside.md), and the
+[sharp edges](docs/gen1/sharp-edges.md) that cost us hours.
+
+It is written to teach the mechanism rather than the recipe, because each of these techniques
+came from understanding a piece of the engine and asking what else touches it.
+
+📖 **[The index → docs/gen1/](docs/gen1/README.md)**
 
 ---
 

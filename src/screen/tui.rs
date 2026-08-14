@@ -1953,6 +1953,19 @@ impl App {
                     self.toggle_trainer();
                     return;
                 }
+                // Battle control (Pokémon Red/Blue, `plugins = gen1-battle`).
+                // `B` fires the selected preset, `N` chooses the next one.
+                // Both are shifted for the same reason `T` is: the game
+                // buttons are configurable lowercase letters, so an unshifted
+                // key could be somebody's A/B binding.
+                KeyCode::Char('B') => {
+                    self.fire_battle();
+                    return;
+                }
+                KeyCode::Char('N') => {
+                    self.next_battle_preset();
+                    return;
+                }
                 // Detail view and party selection only bind while the panel is
                 // up, so they stay free as game buttons the rest of the time.
                 KeyCode::Char('d') if self.trainer => {
@@ -2012,6 +2025,51 @@ impl App {
                 self.release_button(button);
             }
         }
+    }
+
+    /// Start the selected battle preset. One keypress, as asked for.
+    ///
+    /// Nothing happens unless the user configured `plugins = gen1-battle`, and
+    /// the plugin then still waits for the game to be somewhere a battle can
+    /// start — so this is "arm it", not "force it". Both outcomes are toasted,
+    /// because a control that silently does nothing is worse than no control.
+    fn fire_battle(&mut self) {
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let Some(p) = s.gb.plugin_mut::<crate::plugin::battle::BattlePlugin>() else {
+            self.set_toast(
+                "no battle plugin — add `plugins = gen1-battle` to config.toml",
+            );
+            return;
+        };
+        let name = p.selected().map(|x| x.name.clone());
+        let msg = match p.arm_selected() {
+            Ok(()) => match name {
+                Some(n) => format!("Battle: {n}"),
+                None => "Battle armed".to_string(),
+            },
+            Err(e) => format!("Battle: {e}"),
+        };
+        self.set_toast(msg);
+    }
+
+    /// Cycle which preset `B` will fire.
+    fn next_battle_preset(&mut self) {
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let Some(p) = s.gb.plugin_mut::<crate::plugin::battle::BattlePlugin>() else {
+            self.set_toast(
+                "no battle plugin — add `plugins = gen1-battle` to config.toml",
+            );
+            return;
+        };
+        let msg = match p.select_next() {
+            Some(x) => format!("Battle: {} — {}", x.name, x.summary()),
+            None => "no battle presets".to_string(),
+        };
+        self.set_toast(msg);
     }
 
     fn map_button(&self, code: &KeyCode) -> Option<KeypadKey> {
@@ -3124,6 +3182,15 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
+            Line::from("Battle control (Pokémon Red/Blue, plugins = gen1-battle)"),
+            Line::from("  B         start the selected battle   N   next preset"),
+            Line::from(Span::styled(
+                "  writes the party into RAM for the fight and puts it back \
+                 afterwards; it never writes cartridge RAM, so your .sav is \
+                 untouched unless you save in-game (docs/gen1/battle-control.md)",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
             Line::from("Wild-encounter shiny check"),
             Line::from(Span::styled(
                 format!(
@@ -3918,6 +3985,28 @@ fn attach_plugins(
                         }
                     }
                     Err(e) => notes.push(format!("plugin gen1-link: {e}")),
+                }
+            }
+            crate::plugin::battle::NAME => {
+                let file = std::env::var("GB_BATTLES")
+                    .ok()
+                    .or_else(|| cfg.battles.clone());
+                let path = file.as_deref().map(std::path::Path::new);
+                match crate::plugin::battle::BattlePlugin::from_preset_file(
+                    rom.to_vec(),
+                    path,
+                ) {
+                    Ok(p) => {
+                        let n = p.preset_names().len();
+                        match gb.add_plugin(Box::new(p)) {
+                            Ok(()) => notes.push(format!(
+                                "plugin gen1-battle attached, {n} presets \
+                                 (press B to start one, N to choose)"
+                            )),
+                            Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
+                        }
+                    }
+                    Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
                 }
             }
             other => notes.push(format!("unknown plugin '{other}'")),

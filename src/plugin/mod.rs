@@ -40,6 +40,9 @@
 //!   see the honesty rules below.
 //! * [`Capability::SERIAL_LINK`] — be the console on the other end of the link
 //!   cable ([`Plugin::on_serial`]).
+//! * [`Capability::CONTROL_INPUT`] — hold and release the console's buttons
+//!   ([`Machine::set_button`]), which is how a plugin scripts a sequence the
+//!   game plays out itself.
 //!
 //! Declaration is enforced, not advisory: [`Machine`] checks the calling plugin's
 //! declared capabilities and refuses (returning `None` / `false`) rather than
@@ -88,6 +91,7 @@
 
 use crate::mmu::MemoryManagementUnit;
 
+pub mod battle;
 pub mod gen1;
 
 /// What a plugin is allowed to do. Declared by [`Plugin::capabilities`] and
@@ -105,6 +109,10 @@ impl Capability {
     pub const WRITE_MEMORY: Capability = Capability(1 << 2);
     /// Drive the serial port as the other end of the link cable.
     pub const SERIAL_LINK: Capability = Capability(1 << 3);
+    /// Hold and release the console's buttons ([`Machine::set_button`]) — the
+    /// *control* face applied to the joypad rather than to memory. A plugin
+    /// with this is playing the game, so the frontend must show it.
+    pub const CONTROL_INPUT: Capability = Capability(1 << 4);
 
     pub const NONE: Capability = Capability(0);
 
@@ -130,6 +138,9 @@ impl Capability {
         }
         if self.contains(Capability::SERIAL_LINK) {
             parts.push("link");
+        }
+        if self.contains(Capability::CONTROL_INPUT) {
+            parts.push("input");
         }
         if parts.is_empty() {
             "none".to_string()
@@ -313,6 +324,34 @@ impl<'m, 'a> Machine<'m, 'a> {
         }
         self.mem.debug_poke(address, value);
         self.wrote = true;
+        true
+    }
+
+    /// Hold or release one of the console's buttons. Returns `false` (and does
+    /// nothing) without [`Capability::CONTROL_INPUT`].
+    ///
+    /// This is the joypad half of the *control* face `docs/debugging.md`
+    /// specifies, and it is a **separate** capability from
+    /// [`Capability::WRITE_MEMORY`] on purpose: pressing buttons is something
+    /// the game itself sanctions — every byte it changes, it changes through
+    /// its own code — whereas a poke is not. A plugin that scripts a cinematic
+    /// wants the first and should not have to ask for the second.
+    ///
+    /// Buttons are edge-triggered by the emulated joypad, so a plugin holds a
+    /// button by calling this with `true` on one frame and `false` on a later
+    /// one; the game samples the pad once per frame, so one frame held is one
+    /// press seen. The frontend's own key handling writes the same latch, so a
+    /// human pressing the same button during a scripted sequence fights it —
+    /// which is why a plugin driving input must be visible in the status bar.
+    pub fn set_button(&mut self, key: crate::input::KeypadKey, down: bool) -> bool {
+        if !self.granted.contains(Capability::CONTROL_INPUT) {
+            return false;
+        }
+        if down {
+            self.mem.keypad.keydown(key);
+        } else {
+            self.mem.keypad.keyup(key);
+        }
         true
     }
 

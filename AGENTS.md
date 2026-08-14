@@ -1589,6 +1589,85 @@ another branch; when those land, this belongs beside them.)
   CONTINUE is chosen, so it cannot mean "we are in the game". Same trap during Oak's speech.
 - **`CableClubLeftGameboy` requires the player to be facing RIGHT** and to be the clock master.
 
+## Battle control — starting a Gen 1 battle from outside (`src/plugin/battle/`)
+
+**Full technique + guarantees: [`docs/gen1/battle-control.md`](docs/gen1/battle-control.md);
+the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before touching this.
+
+- **The whole trigger is one byte.** `OverworldLoop` (`home/overworld.asm`,
+  `.checkForOpponent`) polls `wCurOpponent` (`$D059`); nonzero → `NewBattle` → `InitBattle`.
+  Below `OPP_ID_OFFSET` (200) it is a species (wild, level from `wCurEnemyLevel` `$D127`), at or
+  above it a trainer class + 200 with the roster in `wTrainerNo` (`$D05D`). **This is what the
+  game's own debug menu does** (`engine/debug/debug_menu.asm`) — not a discovered trick.
+- **It is polled ONLY by the overworld loop.** Writing it inside a menu or a text box queues
+  the battle silently. The first time this bit, a scripted run had mashed START/A through the
+  title screen and the last START left the START menu open. `NewBattle` also refuses on a
+  dungeon warp, during a cutscene, and where a map script set `BIT_NO_BATTLES`.
+- **THE LEGITIMACY TRAP, and the reason "well-formed" is not enough:**
+  `CheckForDisobedience` (`engine/battle/core.asm`) compares `wPartyMon1OTID` with `wPlayerID`
+  and treats a mismatch as a **traded** Pokémon — a badgeless player is obeyed only to level 10.
+  An injected level 50 Charizard with a made-up trainer id answers *"CHARIZARD won't obey!"* and
+  wastes the turn. The injected party must inherit the running game's `wPlayerID` (`$D359`,
+  big-endian) and `wPlayerName` (`$D158`). Generalise it: the game cross-checks between
+  structures, so injecting into one without the other is correct for the state you created and
+  wrong for the state you meant.
+- **Patching state the engine is still writing is a race, and a delay does not fix it.**
+  `LoadEnemyMonData`/`ReadTrainer` fill `wEnemyMon`/`wEnemyMons` inside `InitBattle`, not on a
+  frame boundary. Keep writing until the bytes **read back unchanged at the start of a frame** —
+  an observation, not a guess. Capped at 40 frames so a game that never settles reports it.
+- **Save safety, enforced not promised:** every write goes through one door that refuses
+  anything outside WRAM/HRAM (`wram::is_writable`) and *counts* refusals, so cartridge RAM —
+  which is what a `.sav` is written from — is unreachable; the exact byte ranges written are
+  snapshotted and restored when the battle ends; a preset with no `player =` line never touches the
+  party — nothing to restore. Pinned by pointing the write door at `$A000` and checking the byte does not move.
+- **Addresses are re-derived from the cartridge before the plugin is constructed**
+  (`wram::verify`): `ld [nn],a` is `EA lo hi`, so the address is the operand. **Match whole
+  code shapes, never short byte runs** — `3E 01 EA ?? ?? CD` and `F0 04 47 F0` each occur
+  hundreds of times in a megabyte, and `Random_` contains its own four-byte prefix twice, so
+  requiring global uniqueness of a prefix fails on the real ROM. `InitWildBattle` is searched in
+  a 256-byte window after `InitOpponent` rather than cartridge-wide.
+- **Cinematics are screen-driven, not frame-driven.** `await`/`press-until` compare against
+  `wTileMap` decoded as text. `press-until` presses at the **end** of each period: Gen 1's
+  `HandleMenuInput` delays several frames after accepting a button and does not see one that
+  arrives inside that delay — which looks exactly like dropped input. **A and B are not
+  interchangeable**: B closes menus and can never open one, so B before a move is chosen backs
+  out of the move list.
+- **Reproducibility, stated precisely.** `Random_` mixes `rDIV` in per call, so writing the seed
+  cannot fix an individual roll; but emulation is deterministic, so *same starting state + same
+  script ⇒ bit-identical frames*. **Measured: three runs, 1219 frames, FNV hash
+  `dac74ad86f8e1854`, identical.** Design the clip so no roll can change it — and know that
+  Gen 1's accuracy check gives even a 100 %-accuracy move a **1-in-256 miss**
+  (`MoveHitTest`, and the disassembly says so in its own comment).
+- **Run it:** `cargo run --release --example gen1_battle -- --check` (every preset resolves
+  against the cartridge — worth having in CI), `--preset <name> --shots <dir>`, `--repeat 3`,
+  `--video -`, `--save-state <file> --save-at <frame>`. It starts a **new game** (bedroom, no
+  party — which is why presets supply one), so it needs no save file at all, and it copies the
+  ROM into `target/` first. Verified: it leaves `~/roms` byte-identical.
+- TUI: `plugins = gen1-battle`, then **`B`** fires the selected preset and **`N`** cycles.
+  `battles = <path>` / `GB_BATTLES` for your own file.
+- **`Capability::CONTROL_INPUT` is separate from `WRITE_MEMORY` on purpose** — pressing a button
+  is something the game sanctions (every byte it changes, it changes through its own code); a
+  poke is not. A plugin scripting a sequence should not have to ask for the second.
+
+## The Gen 1 mechanics & hacking area (`docs/gen1/`)
+
+- **[`docs/gen1/README.md`](docs/gen1/README.md) is the index and it owns the standards.** Linked
+  from the README so it is discoverable. Pages: memory map, battle control, reading the screen,
+  driving the link cable, sharp edges, and a stub for agent play.
+- **Standards, because the value is that a reader can trust it:** cite `pret/pokered` by **symbol
+  name** (a symbol survives; a bare hex address is wrong for Yellow and unsearchable); grade every
+  address as *symbol file* / *walked* / *read out of the cartridge* and say which; explain the
+  **mechanism** so a reader can invent the next technique rather than repeat ours; and never put
+  game *data* in the repository (facts and formats yes, assets never — not even as a fixture).
+- **A walk through `ram/wram.asm` is only usable if it ENDS on a second known symbol.** The
+  enemy-party walk starts at `wEventFlags` `$D747` and lands exactly on `wPlayTimeHours` `$DA41`;
+  that landing is the proof, and it must be written down beside the walk.
+- **Two live investigations have homes waiting, named in the index**: the Colosseum link-battle
+  scout → `link-from-outside.md` §"The Colosseum"; the button-pressing agent → `agent-play.md`.
+  The Colosseum section already carries the disassembly's answer — `CableClubLeftGameboy`
+  (`engine/pokemon/bills_pc.asm`) branches on **`wCurMap`** alone (`TRADE_CENTER` → trade, any
+  other map → battle), so the partner is never consulted — flagged as *derived, not yet observed*.
+
 ## Conformance GitHub Action — scoring *foreign* emulators (`tools/conformance/`, `.github/actions/conformance/`)
 
 - **Full contract, badge recipes, licensing position and honest gaps:

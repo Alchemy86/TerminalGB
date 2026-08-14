@@ -358,6 +358,9 @@ pub struct Config {
     /// Trade file for the Gen 1 link partner, or `None` for its built-in offer.
     /// See [`crate::plugin::gen1::spec`].
     pub gen1_trade: Option<String>,
+    /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
+    /// built-in presets. See [`crate::plugin::battle::preset`].
+    pub battles: Option<String>,
 }
 
 impl Default for Config {
@@ -380,6 +383,7 @@ impl Default for Config {
             video: crate::video::RawSettings::default(),
             plugins: Vec::new(),
             gen1_trade: None,
+            battles: None,
         }
     }
 }
@@ -617,6 +621,14 @@ impl Config {
                 Some(v.to_string())
             };
         }
+        if let Some(v) = get("battles") {
+            let v = v.trim();
+            cfg.battles = if v.is_empty() || v.eq_ignore_ascii_case("off") {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
 
         let mut unknown: Vec<&String> =
             kv.keys().filter(|k| !seen.contains(&k.as_str())).collect();
@@ -791,6 +803,22 @@ mod tests {
         assert_eq!(cfg.keys.b, 'k');
         assert_eq!(cfg.keys.start, 'n');
         assert_eq!(cfg.keys.select, 'm');
+    }
+
+    /// The battle plugin's preset file, alongside the link partner's trade
+    /// file. A key that is not read by `parse_reporting`'s `get(...)` list is
+    /// reported as *unknown*, so a new key that is only added to the struct
+    /// looks broken to the user — this pins both halves.
+    #[test]
+    fn the_battle_preset_file_is_configurable_and_optional() {
+        assert_eq!(Config::default().battles, None);
+        let c = Config::parse("plugins = gen1-battle\nbattles = '/tmp/b.preset'\n");
+        assert_eq!(c.plugins, vec!["gen1-battle".to_string()]);
+        assert_eq!(c.battles.as_deref(), Some("/tmp/b.preset"));
+        assert_eq!(Config::parse("battles = off\n").battles, None);
+        let (_, warn) =
+            Config::parse_reporting("plugins = gen1-battle\nbattles = /tmp/b\n");
+        assert!(warn.is_empty(), "{warn:?}");
     }
 
     #[test]
