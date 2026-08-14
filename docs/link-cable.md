@@ -1,14 +1,28 @@
-# The link cable — two emulated consoles, one wire
+# The link cable — two consoles, one wire
 
-> Code: [`src/link.rs`](../src/link.rs), [`src/mmu/serial.rs`](../src/mmu/serial.rs),
-> [`examples/link_two.rs`](../examples/link_two.rs).
+> Code: [`src/link.rs`](../src/link.rs) · [`src/link/peer.rs`](../src/link/peer.rs) ·
+> [`src/mmu/serial.rs`](../src/mmu/serial.rs) · [`examples/link_two.rs`](../examples/link_two.rs) ·
+> [`examples/gen2_timecapsule.rs`](../examples/gen2_timecapsule.rs)
 > Related: [`docs/plugins.md`](plugins.md) (the *impersonating* link partner),
 > [`docs/gen1/link-from-outside.md`](gen1/link-from-outside.md).
 > Conformance record: [`docs/conformance-notes.md`](conformance-notes.md), 2026-08-14 —
 > including why **no public test suite can see half of the link port**.
 
-There are two ways to be the far end of a Game Boy's link port, and this repository
-now has both.
+**Start a second copy of the emulator and the cable is already plugged in.**
+Nothing to arm, nothing to configure, no flag. Two games running on one machine
+find each other and link, the way plugging a real cable in does.
+
+<p align="center">
+  <img src="shots/tui-link-cable.png" alt="The terminal frontend running dmg-acid2, with a Status panel whose Link row reads DMG-ACID2 and a Controls list ending in 'W cable on/off'" width="820" />
+</p>
+
+<p align="center"><em>Two instances of the emulator, linked automatically. The
+<code>Link</code> row names the cartridge on the other end; <code>W</code> unplugs the cable
+and plugs it back in. (Both consoles here are the MIT
+<a href="../third_party/dmg-acid2/">dmg-acid2</a> test ROM.)</em></p>
+
+There are two ways to be the far end of a Game Boy's link port, and this
+repository now has both.
 
 **Impersonation** — [`plugins/gen1-link`](../plugins/gen1-link) speaks Pokémon
 Red/Blue's trade protocol from Rust, convincingly enough that the real game
@@ -19,6 +33,15 @@ cartridge, and it can only ever know the protocols somebody wrote down.
 about any game. Whatever the two programs agree on works, because both ends are
 the genuine article: a Gen 1 trade, a Gen 1 link battle, the Gen 1 ↔ Gen 2 Time
 Capsule, Tetris, or something nobody has looked at.
+
+It comes in two shapes, and they are alternatives because a Game Boy has one
+link port:
+
+| `link =` | what it does |
+|---|---|
+| **`auto`** (default) | Find other instances **on this machine** and pair with one. See §5. |
+| `off` | Never link. For somebody running several games who does not want them finding each other. |
+| a path to a ROM | Boot a **second console inside this process** and wire the two together — deterministic and scriptable, which is what the tests and `examples/link_two.rs` use. |
 
 ---
 
@@ -162,7 +185,137 @@ Measured, Blue to Blue, 2500-frame budget:
 Any non-zero skew works, and which console ends up driving the clock depends on
 it. Nothing downstream should assume a role: read `hSerialConnectionStatus`.
 
-## 5. Running it
+## 5. Live by default: instances that find each other
+
+**A cable you have to arm is not a cable.** Gen 1's Cable Club attendant
+*checks the link before she lets you through* — `CableClubNPC`
+(pokered `engine/link/cable_club_npc.asm`) spends 90 frames handshaking and then
+says "This area is reserved for 2 friends who are linked by cable" if nothing
+answered. For her to see a partner, the serial port has to be genuinely live at
+the hardware level while the player is standing at her desk. A link that only
+wakes up once somebody asks for it is exactly the link she turns away.
+
+So `link = auto` is the default, and [`src/link/peer.rs`](../src/link/peer.rs)
+joins two **processes**.
+
+### Discovery
+
+Each instance looks in a rendezvous directory —
+`$XDG_RUNTIME_DIR/terminalgb/link`, else `/tmp/terminalgb-link-<uid>`;
+`$GB_LINK_DIR` overrides, which is how the tests get a private one. It tries to
+connect to every socket it finds; the first that answers is its partner. If none
+does, it creates its own and waits. A socket that refuses a connection belonged
+to an instance that has since died, and is swept — `Drop` is not a shutdown hook
+in this codebase, so leftovers are expected.
+
+The moment two pair, both **stop advertising**. That is what makes three
+instances terminate rather than loop: a socket still listed is a socket a third
+instance keeps connecting to only to be told it is busy, and to come back and
+try the same one again.
+
+### What happens with three
+
+**A cable has two ends, so instances pair up two at a time, in the order they
+start.** A third finds both ends taken, creates its own socket, and waits — so
+it links to the *fourth* instance, not to either of the first two. That is the
+honest hardware analogy: a second cable, not a four-player adapter, which this
+emulator does not model.
+
+The consequence to know: **pairing is by arrival order, not by cartridge.**
+Start Blue, then Blue, then Gold and the two Blues share the cable. Put
+`link = off` in the config of the one that should not take part, or press `W`.
+
+### Turning it off
+
+`W` in a game unplugs the cable and plugs it back in. Unplugging is a *real*
+disconnect — the far console sees a clean goodbye rather than a crash, so
+neither save is poisoned — and plugging back in runs discovery again, so it
+finds whoever is available now rather than insisting on the console it had
+before. `link = off` in `config.toml` keeps an instance out of it entirely: no
+socket, no rendezvous entry, and one `matches!` per service call.
+
+### Seeing it
+
+A second console must never be running invisibly, which is the same rule an
+attached plugin follows. Both places are fed by one `link_summary`, so they
+cannot drift:
+
+* the **Status** panel's `Link` row — `waiting`, `POKEMON GLD 1552`, `off`,
+  `gone`, with a `*` while bytes are actually moving;
+* a **`LINK` line in the trainer panel**, which is what you watch while
+  playing. It separates the three states that change the answer to "should I
+  walk into the Cable Club?" — *no one connected*, *connected to RED · POKEMON
+  BLUE*, and *connected to RED — TRADING*. It degrades through the same
+  `clamp_line` every other panel row uses, and the label survives the clip.
+
+The partner's name comes from the frontend, not the core: the cable relays
+bytes and has no business knowing what a trainer name is, so the trainer plugin
+supplies it when it recognises the cartridge (`wPlayerName`, pokered
+`ram/wram.asm`) and nothing is sent otherwise.
+
+### Holding the transfer, which is what makes it work at all
+
+Both emulators pace themselves to 59.7275 Hz, and each one emulates a whole
+frame in a fraction of a millisecond and then **sleeps for the rest of it**. Two
+such bursts need not overlap at all. A 4096-cycle transfer that completed on
+schedule would therefore shift in `$FF` every single time and no link would ever
+work.
+
+So a master transfer is **held** until the far console answers
+(`Serial::link_hold`). This costs the game nothing it can observe: a program
+waiting on a transfer is already spinning on `SC` bit 7 or on the serial
+interrupt (`Serial_ExchangeByte`, pokered `home/serial.asm`), and the timer, PPU
+and APU all keep running underneath it. When the two processes genuinely run
+side by side — the normal case on any multi-core machine — the answer arrives in
+microseconds and nothing is held for long.
+
+The socket is polled every 256 T-cycles rather than every instruction; a `read`
+per instruction would be about a million syscalls a second to learn nothing. The
+*role* check is a couple of field reads and does happen every instruction, so
+the hundred-cycle window Gen 1's handshake turns on is never missed.
+
+### Three bugs that cost 409 bytes, and how they looked
+
+The first cross-process Blue-to-Blue trade **completed** with 409 lost bytes,
+and it looked fine. The received Pokémon read `MMER` (OT `D`) instead of
+`GLIMMER` (OT `RED`) — because a lost byte arrives as `$FF`, `$FF` is not a
+character, and a decoder that skips unknown bytes turns corruption into
+something plausible. Check the bytes, not that *something* arrived.
+
+1. **Both consoles mastering deadlocked.** Each held its shift register waiting
+   for the other; only the timeout broke it, and every timeout is a lost byte.
+   Gen 1 masters on *both* consoles every frame until the roles settle, so this
+   was the ordinary case, not an exotic one. A console that is itself mastering
+   now answers "nobody listening" immediately.
+2. **A timed-out offer was answered later.** The far console armed its port
+   after we had given up, spending one of *its* bytes on a transfer nobody was
+   listening for, and sliding its whole stream by one. `Kind::Abort` retracts a
+   transfer we have abandoned.
+3. **A timeout was counted as benign.** It is `torn` now, and it **faults**: the
+   connection is alive, so the two consoles are still exchanging and have simply
+   stopped agreeing about what. Pausing one emulator in the middle of a trade
+   lands here, and that is correct — the trade really is ruined.
+
+### Failing safe
+
+Two guards, and they answer different questions:
+
+* **A peer that vanishes while the cable is carrying bytes** faults both
+  consoles, so neither writes its battery save again. Half a trade leaves the
+  *survivor* holding the dangerous file. A peer that says goodbye, or that
+  vanishes while the cable has been idle, just unplugs.
+* **Nothing faults over a peer it never handshook with.** A connection that dies
+  before saying hello is a crowded rendezvous, not a crashed partner — and
+  faulting there would poison the save of a console that was never linked. That
+  is why a paired instance drains its backlog with `Busy` before letting its
+  listener go.
+
+**Two instances of one cartridge write the same `.sav`.** It is the first thing
+anybody tries, and it is how a save gets destroyed — both consoles autosave over
+each other. The handshake carries a key derived from the save path and the
+frontend says so; the cable still works, because that is the user's call.
+
+## 6. Running it
 
 ```
 cargo run --release --features image,plugin-gen1-link,plugin-trainer \
@@ -206,7 +359,7 @@ next to the correct console (`LoadSpecialWarpData` picks `TradeCenterPlayerWarp`
 `engine/link/cable_club_npc.asm`) and faces the right way. Pressing A at the wrong
 console is a silent no-op that looks exactly like a broken link.
 
-## 6. What was measured — Gen 1 ↔ Gen 1
+## 7. What was measured — Gen 1 ↔ Gen 1
 
 Two Pokémon Blue instances, from copies of the captain's cartridge and a Cable
 Club save fixture, with distinct parties patched in:
@@ -230,7 +383,7 @@ pass the game's own `CalcCheckSum`, and `~/roms` is byte-identical.
 
 ---
 
-## 7. Gen 1 ↔ Gen 2: the Time Capsule
+## 8. Gen 1 ↔ Gen 2: the Time Capsule
 
 **Gen 1 ↔ Gen 2 does not use the ordinary link trade.** Gold/Silver's own trade
 receptionist *refuses* a Gen 1 partner — `LinkReceptionistScript_Trade` reads
@@ -293,13 +446,175 @@ Pokémon with Gen 1 moves.
    Pokédex (`CableClubNPC` refuses without `EVENT_GOT_POKEDEX`) and picks
    TRADE CENTER.
 
-### Status here
+### Crafting a Gold save that can use it
 
-The cable is ready and needs nothing added; Gold boots and runs beside Blue with
-the wire live (`examples/link_two.rs` with `--rom-b <gold.gbc>`, both screens
-rendered in the capture).
+Reaching Ecruteak legitimately is several hours of play, so
+[`examples/gen2_timecapsule.rs`](../examples/gen2_timecapsule.rs) builds the
+state instead — the same class of work as `plugins/battle-control`, which writes
+game state to start a battle.
 
-**What is missing is a Gold save.** `~/roms` has the Gold and Silver cartridges but
-no `.sav` for either, and prerequisite 1 is several hours of play that no
-headless bot in this repository can do. A save that has met Bill — plus a day, plus
-a Gen-1-legal party — is the one thing the end-to-end shiny check is waiting on.
+**Every address comes from the disassembly's own symbol table.** `pokegold` was
+built at RGBDS 1.0.3 and the result is **byte-identical to the cartridge**
+(SHA-1 `d8b8a3600a465308c9953dfa04f0081c05bdcb94`, matching the disassembly's own
+`roms.sha1`), so `pokegold.sym` is exact for it and the constants come from the
+assembler rather than being counted by hand.
+
+The save is written by the **game**, then edited — hand-building a whole save is
+how you get a file that looks right in a hex dump and hangs on load. The intro
+is played until Gold saves by itself, and then:
+
+* `EVENT_MET_BILL` (bit 1810) cleared — Bill's script clears it, and the
+  receptionist refuses while it is set;
+* `DAILYFLAGS1_TIME_CAPSULE_F` cleared — the daily flag Bill sets and
+  `CheckDailyResetTimer` clears, i.e. "and then a day went by";
+* a party the Time Capsule accepts — a Gen 1 species, Gen 1 moves, no held item,
+  in Gen 2's 48-byte `party_struct`;
+* the 16-bit `sGameData` checksum recomputed. A stale one is not a soft failure:
+  the game rejects the save.
+
+**The player is not teleported by editing the save**, and finding out why was the
+substantive lesson. `MapSetupScript_Continue`'s second command is
+`LoadMapAttributes_SkipObjects`: a continue deliberately does not load map
+objects, because it assumes you are on the map you saved on. Editing `wMapGroup`
+lands you on the right map with the *previous* map's NPCs, no receptionist to
+talk to and a stale camera — and `wObjectStructs`/`wMapObjects` are inside the
+saved region too, so the player object has to be moved as well, and even then the
+camera is wrong. Instead the player walks to the bedroom stairs and the *warp
+destination* is overridden at run time
+(`wNextWarp`/`wNextMapGroup`/`wNextMapNumber`, written between instructions
+because the game reads them back a few instructions after writing them). That
+takes the full `MAPSETUP_DOOR` path, so objects, camera and scene scripts are all
+the game's own.
+
+```
+cargo run --release --features image,plugin-gen1-link,plugin-trainer \
+    --example gen2_timecapsule -- --rom ~/roms/gold.gbc --make-save
+cargo run --release --features image,plugin-gen1-link,plugin-trainer \
+    --example gen2_timecapsule -- --rom ~/roms/gold.gbc \
+    --verify target/gen2-timecapsule/timecapsule.sav
+```
+
+### What was measured
+
+**Proved by booting it, not by asserting the flags:**
+
+```
+VERIFIED: the receptionist accepted the party and is waiting for a link partner
+```
+
+She asks *"Would you like to trade across time?"*, the party passes
+`CheckTimeCapsuleCompatibility`, and she waits for a partner. So the crafted save
+satisfies every prerequisite.
+
+**Gold and Blue then linked over the cable and exchanged 1635 bytes**, each side
+naming the other's cartridge (`POKEMON BLUE` / `POKEMON_GLD`), with Gold reaching
+"Welcome to CABLE CLUB" and "You can travel to the past and trade #MON". The
+Time Capsule protocol really is Gen 1's protocol, and the relaying cable carries
+it with nothing added — which was the design claim.
+
+**The trade itself does not complete yet, and the reason is orchestration rather
+than the wire.** Blue's bot walks through its Cable Club into the Trade Center in
+about 2,000 frames while Gold is still at the receptionist, so the two sides are
+out of phase in the *protocol* even though the cable is fine. Blue then trips the
+save guard when Gold stops answering — which is the guard doing its job. Closing
+that gap is bot choreography: both sides have to arrive at their link
+receptionists together and stay in step through the save-and-wait.
+
+### The shiny rule, verified against Gold itself
+
+The reason for the whole chain was to check the trainer panel's *"would be shiny
+if traded to Gen 2"* verdict. That is now settled, and **more strongly than one
+trade could settle it**. From the cartridge-identical build,
+`engine/gfx/color.asm`:
+
+```
+DEF SHINY_ATK_MASK EQU %0010
+DEF SHINY_DEF_DV   EQU 10
+DEF SHINY_SPD_DV   EQU 10
+DEF SHINY_SPC_DV   EQU 10
+
+CheckShininess:
+; Check if a mon is shiny by DVs at bc.  Return carry if shiny.
+```
+
+Defence, speed and special all exactly 10, and the attack DV with bit 1 set —
+which is exactly what `plugins/trainer`'s `derived::shiny_if_traded` implements,
+and exactly what the panel tells the player. A single trade would sample one DV
+pair; reading the rule out of the cartridge covers all 65,536 by construction.
+
+---
+
+## 9. Future work — playing over the internet
+
+**None of this is built.** It is the captain's stated direction written down
+honestly, with the hard parts named, so that whoever picks it up starts from the
+real problem rather than from optimism.
+
+The vision: a **website** where people authenticate from their terminal and are
+matched with each other to trade and battle over the internet.
+
+### The whole problem is latency, and it is not uniform
+
+The link is **clock-synchronous**. A master emits eight edges 512 T-cycles apart
+and the exchange is over in about a millisecond; a slave that is not listening
+for that millisecond contributes nothing. §5 already shows how little slack there
+is *between two processes on one machine*, and the fix there — holding the shift
+register until the answer arrives — is exactly the tool that survives a network,
+because the game is spinning anyway. Latency therefore costs **wall-clock
+smoothness**, not correctness, as long as the game cannot tell the difference.
+
+That gives a sharp split:
+
+| | why | verdict |
+|---|---|---|
+| **Trades** | Turn-based. 644 transfers with a human pressing buttons between phases; a held transfer is invisible. At 100 ms round trip a whole trade is ~65 s of wire time, most of it overlapping menus. | **Genuinely reachable.** |
+| **Link battles** | The same wire, but both consoles animate in lockstep and expect the exchange inside a frame. Every held byte is a visible stall on *both* screens, and the emulators must stay within a frame of each other for the animation to look right. | **A research problem.** Needs rollback or lockstep-with-prediction, i.e. the same machinery netplay emulators spend years on. |
+
+Do not promise the second because the first works. They are different problems
+that happen to share a cable.
+
+### What it needs, in the order it should be built
+
+1. **A transport that is the existing one.** `LinkPeer` already speaks a
+   32-byte fixed frame over a stream socket, non-blocking, with a
+   hold-and-timeout. Swapping `UnixStream` for a TLS `TcpStream` is a small
+   change; the protocol above it does not move. Keep the timeout tunable — 250 ms
+   of emulated time is right for a local socket and wrong for a WAN.
+2. **Device-code authentication**, the `gh auth login` pattern: the terminal
+   prints a short code and a URL, the browser does the login, the terminal polls
+   for a token. It is the natural fit because the emulator is a terminal program
+   with no browser and no redirect URI, and it is a standard people already
+   recognise. The token goes in `$XDG_STATE_HOME`, never in the config file.
+3. **A lobby service** for matchmaking: who is online, who wants to trade, who
+   is willing to battle, and a rendezvous. This is the part that is *not*
+   emulator work at all — it is a small stateful web service, and it is where
+   the real ongoing cost lives (hosting, abuse, moderation, uptime).
+4. **NAT traversal, or don't.** Two home connections usually cannot reach each
+   other directly. Relaying every byte through the lobby is far simpler than
+   STUN/TURN and, at ~64 bytes per transfer, cheap; take the extra round trip.
+
+### The parts that will bite
+
+* **Cheating is unbounded and unfixable at the wire.** The bytes a trade carries
+  *are* the Pokémon: a modified client can send anything the format allows, and
+  the receiving game will accept it because that is what the hardware does.
+  Server-side validation of the 415-byte party block is possible and is the only
+  lever; say plainly what is and is not checked.
+* **A dropped connection mid-trade is a duplicated or destroyed Pokémon.** The
+  save guard already refuses to write a damaged save, which is the right local
+  answer, but "who owns it now" is a *server* question and needs a
+  transaction — commit on both sides or neither.
+* **Save safety across the internet is the same rule, harder.** Never let a
+  remote peer's disappearance write a local save.
+* **A public service is a commitment.** Terms, abuse handling, moderation,
+  privacy for whatever the lobby stores, and an answer for when it goes away.
+  The local cable in §5 has none of that and is most of the value.
+
+### The honest summary
+
+Remote **trading** is a reachable project on top of what exists: swap the
+transport, add device-code auth, add a lobby. Remote **battling** is a research
+problem in netplay synchronisation and should not be promised alongside it. And
+the version that is already built — two instances on one machine, linked
+automatically — needs no server, no account and no network, which is why it went
+first.

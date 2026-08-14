@@ -600,6 +600,30 @@ Only `species` is required; a second `species` line adds another Pokémon, up to
 is validated against your own cartridge's tables, and a misspelled key refuses to attach rather
 than quietly handing over something else.
 
+### Or plug in a second *console*
+
+**Start another copy of the emulator and the cable is already connected.** No flag, no arming,
+no configuration: two instances running on the same machine find each other and link, the way
+plugging a real cable in does — which is what lets the Cable Club attendant *see* a partner,
+since she checks the link before she lets you through.
+
+<p align="center">
+  <img src="docs/shots/tui-link-cable.png" alt="The terminal frontend with a Status panel whose Link row names the cartridge on the other end, and a Controls list ending in 'W cable on/off'" width="820" />
+</p>
+
+The `Link` row names the console on the other end and the trainer panel says whether anyone is
+connected and whether a trade is actually happening. `W` unplugs and plugs back in;
+`link = off` keeps an instance out of it.
+
+This cable knows nothing about Pokémon — it relays bytes, so **both ends are the genuine
+article**. That is what makes it work for things nobody wrote a partner for: a Gen 1 trade
+between two real games (measured: 1,552 transfers, zero lost, both saves valid afterwards), a
+link battle, or the Gen 1 ↔ Gen 2 **Time Capsule**.
+
+📖 **[Two consoles, one wire → docs/link-cable.md](docs/link-cable.md)** — the hardware, why
+running both in one process removes the drift that would corrupt a trade, the Time Capsule's
+in-game prerequisites, and an honest design note on playing over the internet.
+
 📖 **[The full story, the step-by-step journey, and what to do if it hangs →
 docs/link-trade.md](docs/link-trade.md)** · the [plugin contract](docs/plugins.md) it is built on
 · the Cable Club's **other** room, the Colosseum, and the crash that used to eat save files →
@@ -959,6 +983,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 |---|---|
 | [audio pipeline & quality](docs/audio.md) | APU → `blip_buf` → `cpal` → speaker, the pacing maths, the latency budget, and what is genuine DMG character |
 | [how a frame gets into a terminal](docs/rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, how it is negotiated, which terminals support what |
+| [the link cable](docs/link-cable.md) | **two consoles, one wire**: start a second copy of the emulator and they find each other and link automatically. The hardware, the lockstep argument, the Gen 1 ↔ Gen 2 Time Capsule rules, and an honest design note on playing over the internet |
 | [terminal render performance](docs/terminal-render.md) | why a large terminal window used to cost frames, and what caps the cost now |
 | [Mealybug Tearoom, measured](docs/mealybug.md) | what the PPU actually scores, how hard calibration is, and §7 on the pixel-FIFO engine |
 | [display scaling](docs/display.md) | how each frontend enlarges 160×144, and how to make it crisp, smooth or vector-like |

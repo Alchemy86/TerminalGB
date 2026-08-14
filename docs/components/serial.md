@@ -122,11 +122,40 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 - **The CGB fast clock (`SC` bit 1, 262144 Hz) is not modelled** — an internally clocked
   transfer always runs at the 8192 Hz rate. Double speed *is* handled, because the system
   counter itself runs twice as fast there.
-- **External-clock transfers** (`SC` bit 0 = 0) are ignored (no partner drives the clock).
-  This is survivable in practice because a link protocol gets to choose who takes the clock:
-  Gen 1 offers both, so answering its "I'll take the clock" byte makes the *game* the master
-  and every transfer internally clocked. A protocol that insists on clocking the emulated
-  console would not work here.
+- ~~**External-clock transfers** (`SC` bit 0 = 0) are ignored.~~ **Fixed** — see §4a. A
+  console armed with `SC = $80` is now a real state that a cable can clock, which is what
+  a *second console* needs and what no single-cartridge test could ever have asked for.
+
+## 4a. The slave half, and a cable between two consoles
+
+**`SC = $80` — transfer start with the *external* clock — used to do nothing at all.** That
+is correct for one console on its own (nothing was ever going to clock it) and it is exactly
+the half a second console needs, so adding it was the substantive part of joining two cores.
+
+`Serial` now exposes the port as a **cable** sees it rather than as the game does:
+[`LinkRole`](../../src/mmu/serial.rs) (`Idle`/`Master`/`Slave`, decoded from `SC` bits 7 and
+0), the byte in the shift register, a per-transfer sequence number, and two operations — answer
+a master, and clock a slave. On top of that sit two arrangements, both in
+[`docs/link-cable.md`](../link-cable.md):
+
+* [`LinkCable`](../../src/link.rs) — two cores in **one process**, stepped by one loop an
+  instruction at a time, so they never differ by more than ~24 T-cycles against 4096 per byte.
+* [`LinkPeer`](../../src/link/peer.rs) — two **processes** that discover each other over a
+  unix socket and pair automatically. This is the default (`link = auto`).
+
+Two hardware readings that measurement forced, both recorded in
+[`conformance-notes.md`](../conformance-notes.md):
+
+- **A torn byte keeps its data.** When the far console arms `SC = $80` and rewrites `SC`
+  before the eighth edge, the master keeps what was latched. Voiding it — the obvious
+  reading — makes Gen 1's handshake impossible, because that handshake *is* a
+  hundred-cycle window (`.establishConnectionLoop` offers `SB = $02` behind `SC = $80` and
+  replaces it with `SB = $01` / `SC = $81` about 100 T-cycles later, every frame).
+- **A master transfer is held until the far console answers** (`Serial::link_hold`), for the
+  cross-process case only. Two frame-paced emulators each emulate a whole frame in a
+  fraction of a millisecond and then sleep, so a 4096-cycle transfer that completed on
+  schedule would shift in `$FF` every time. Holding costs the game nothing it can observe: a
+  program waiting on a transfer is already spinning on `SC` bit 7.
 
 ## 5. Known quirks and edge cases
 
@@ -144,10 +173,13 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 
 > **Coverage today: one test ROM** — `acceptance/serial/boot_sclk_align-dmgABCmgb`, which
 > passes. The rest is structural per
-> [conformance-notes.md](../conformance-notes.md) (2026-08-13): a link partner is a second
-> machine, so a single-ROM harness has nothing to talk to. The two-console half of the Game
-> Boy is covered instead by `examples/gen1_trade.rs`, which drives a real Gen 1 trade to
-> completion, and by the unit tests named below.
+> [conformance-notes.md](../conformance-notes.md): a link partner is a second machine, so a
+> single-ROM harness has nothing to talk to — **half of this port is invisible to every
+> ROM-driven suite in existence**, and it is the half every multiplayer feature depends on.
+> The two-console half is covered instead by `examples/gen1_trade.rs` (a real Gen 1 trade
+> against an impersonating partner), by `examples/link_two.rs` (a real Gen 1 trade between
+> **two whole cores**, in one process and across two), and by the unit tests in
+> `src/link.rs` and `src/link/peer.rs`.
 
 1. **Callback capture.** After `set_callback`, writing a byte to `SB` then `0x81` to `SC`
    invokes the callback with that byte. *(Not covered — but this is the hook the test
@@ -164,6 +196,16 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 6. **A partner's reply does not arrive early.** A plugin holding `SERIAL_LINK` answers at
    the `SC` write, but the byte must not appear in `SB` until the shift clock runs out.
    *(Covered — `plugin::tests::a_plugin_answers_a_transfer_the_running_program_started`.)*
+7. **A slave with no partner waits for ever.** `SC = $80` leaves bit 7 set and `SB`
+   unchanged indefinitely. *(Covered — `link::tests::a_slave_with_no_cable_waits_for_ever`.)*
+8. **Two cores exchange a byte, and both raise `IF` bit 3.** *(Covered —
+   `link::tests::two_cores_exchange_a_byte_through_the_cable`,
+   `completing_a_transfer_interrupts_both_consoles`.)*
+9. **Two masters shift in `$FF`; two slaves deadlock.** A cable must not invent a byte for
+   either. *(Covered — `link::tests::two_masters_shift_in_an_idle_line`,
+   `two_slaves_deadlock_quietly`.)*
+10. **A torn byte keeps its data.** *(Covered —
+    `link::tests::a_slave_that_disarms_mid_transfer_leaves_the_master_an_idle_line`.)*
 
 ## 7. Test ROMs that exercise it
 
