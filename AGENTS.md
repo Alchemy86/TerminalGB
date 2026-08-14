@@ -3574,15 +3574,15 @@ it. That is now a real, CI-enforced build; it did not compile before.
   (`ACCURATE_OAM_BUG_PHASE = 0`). Measured: with `-12` the accurate engine fails `oam_bug`
   4/5/6/8; with `0` it passes them. Swept `-12..+12`; nothing recovers #7, so #7 is a real
   finding and not a tuning knob.
-- **A wrong *variable* mode-3 length is worse than an honest constant one** for a ROM that
-  synchronises itself against `STAT`. `m3_bgp_change` and `m3_lcdc_obj_size_change_scx` render
-  a near-blank frame under the accurate engine and a nearly-right one under the fast engine,
-  because a fixed 172 keeps their own counted-dot loop in step. Expect aggregate Mealybug pixel
-  distance to get slightly *worse* before it gets better, and never quote the aggregate alone:
-  the closest tests improved by one to two orders of magnitude (`m3_scx_high_5_bits`
-  9,766 → 141) while the total moved 1,212,282 → 1,268,382 and no row flipped.
-- **Cost, measured, since the whole two-renderer decision rests on it:** dmg-acid2 0.219
-  ms/frame fast vs 0.463 accurate — **2.1x, 2.8 % of a 16.7427 ms frame, 36x real time
+- ~~*"A wrong variable mode-3 length is worse than an honest constant one"*~~ — **withdrawn,
+  and both of its examples were misdiagnosed.** `m3_bgp_change`'s near-blank frame was the
+  mode-0 deadlock below, not the mode-3 length (it is 2,244 pixels now, and the fast engine's
+  5,296 is simply "no mid-line bands at all"); `m3_lcdc_obj_size_change_scx`'s 22,032 was the
+  rank-count artefact below, from **four** wrong pixels. The surviving half of that note is
+  still true and still worth obeying: **never quote the aggregate alone**, because a handful of
+  pixels can move it by tens of thousands.
+- **Cost, measured, since the whole two-renderer decision rests on it:** dmg-acid2 0.263
+  ms/frame fast vs 0.559 accurate — **2.13x, 3.3 % of a 16.7427 ms frame, 30x real time
   headless**. Cost is *not* a reason to keep two renderers; the two red rows are.
   Reproduce with `cargo test --release --test ppuengines`.
 - **`testharness/ppuengines.rs` is the only thing in CI that runs the non-default engine.** It
@@ -3606,6 +3606,70 @@ it. That is now a real, CI-enforced build; it did not compile before.
   `cargo run --release --example mooneye_scout -- <checkout>/acceptance`, both with `GB_PPU`
   set. `GB_SCOUT_SCREEN=1` prints a failing Mooneye test's own assertion table, which is far
   faster than reading registers.
+
+### Second pass on the accurate engine (`docs/mealybug.md` §8) — 3/79 → 6/79
+
+**Measured on the pinned ROMs: Mealybug rows 3 → 6, pixel distance 1,268,382 → 693,023,
+Mooneye 86 → 89 of 103.** The default renderer is byte-identical to its five baselines
+throughout — everything here is `src/gpu/fifo.rs` plus one STAT signal.
+
+- **THE BIGGEST ONE WAS NOT AN ACCURACY BUG AT ALL: the accurate engine never left mode 0
+  after the LCD came on.** `skip_first_oam` is cleared only by entering mode 3 at dot 80 of
+  the restart line, and `do_cycle_accurate`'s "mode 0 has no per-dot behaviour, skip to end of
+  line" shortcut swallowed that dot — so the latch survived to the next line, and the next:
+  `LY` ticking over with **no mode 2, no mode 3 and no STAT interrupt** until line 144. Every
+  Mealybug ROM arms itself on the mode-2 STAT source and then falls through 1200 `nop`s, so
+  they all ran off the end of the slide and crashed before drawing anything. Most of "3/79"
+  was measuring that. **Lesson to carry: before believing a suite score, check the ROMs are
+  running** — `m3_bgp_change` hit its ten-frame breakpoint in 80,668 cycles (should be
+  ~767,000) and made exactly one `BGP` write, both visible in a five-minute trace.
+- **A fast-forward past a mode is only safe if nothing inside it changes state.** That is the
+  general form of the bug; the same shortcut is fine for real HBlank and for VBlank.
+- **The mode-2 STAT strobe rises one M-cycle BEFORE its scanline**, on lines 1-143 only. Line
+  144 keeps dot 0 (`vblank_stat_intr-GS`) and **line 0 has no early window** — Mealybug's
+  `m3_bgp_change` says so in its own source ("line 0 timing is different by 4 cycles") and
+  `intr_1_2_timing-GS` agrees. **Only the per-dot engine emits it**: the whole-scanline
+  renderer changes `mode` at instruction granularity, so a 4-dot signal there is mixing
+  resolutions, and it measures as such (Mooneye unmoved, Mealybug loses `m2_win_en_toggle`).
+- **Technique worth stealing: a test that measures the distance between two events delivered
+  through the same path has already cancelled that path's latency.** `intr_2_0_timing` times
+  the mode-2 interrupt to the mode-0 interrupt, so dispatch latency cancels and the 4-cycle
+  error had to be in the PPU signal. That is what stopped this being "fudge the CPU".
+- **The OBJ penalty is Pan Docs' algorithm, charged explicitly** (`Gpu::start_obj_fetch`): six
+  dots per object plus `max(0, 5 - ((X + SCX) % 8))` for the **first** object on each
+  background tile. Deriving it from the fetcher's phase reproduced only the maximum.
+  `acceptance/ppu/intr_2_mode0_timing_sprites` is the ground truth — 39 arrangements, and its
+  unit is one M-cycle **truncated**, so 65 dots reads as 16. Pinned device-free by
+  `the_obj_penalty_matches_mooneyes_table`.
+- **An object at `X < 8` draws nothing and still costs its six dots.** `due_sprite` used to
+  require `x > lx`, which made every object at `X = 0` free — the first ten rows of that
+  Mooneye table exist to catch exactly this.
+- **The window's takeover is decided at the OUTPUT**, so it cannot happen before the FIFO has
+  a pixel. Checking it during the head-of-line fetch (where `lx` is already 0) let `WX <= 7`
+  take over a fetcher with nothing to throw away, and cost nothing; Pan Docs says the window
+  always makes mode 3 6 dots longer. `the_window_costs_six_dots_wherever_it_starts`.
+- **`savestate::FORMAT_VERSION` is 15** (`Pipeline::obj_wait` + `obj_tile_paid`).
+- **THE PIXEL COUNT IS A RANK DISTANCE AND IT IS WILDLY NON-LINEAR.** Ranks are per frame, so
+  **one extra distinct shade re-ranks everything and reports ~23,040**.
+  `m3_lcdc_obj_size_change_scx` is four wrong pixels and scores 22,070. Read a row near 22,500
+  as "wrong shade count", not "nothing works", and never convert the total into a percentage.
+  The metric is deliberately unchanged (same shade-rank rule as `tools/conformance/image.py`).
+- **Eight rows cannot be compared at all.** The CGB references for `m3_wx_4/5/6_change` and
+  `m3_lcdc_win_en_change_multiple_wx` carry **125 distinct luminances** — a Color console
+  colourising a DMG cartridge from the boot ROM's title-hash palette — against four or fewer
+  everywhere else. That is 26 % of the remaining pixel distance and no PPU work moves it.
+- **Blocker C is now measured and it is EIGHT BYTES.** The boot logo tiles `$01`-`$18` buy
+  **nothing** (every ROM that would show them either loads the suite's own font or selects the
+  `$8800` block); the whole payoff is tile `$19`, the `®` glyph. Writing the boot ROM's eight
+  bytes to `$8190` takes the suite **693,023 → 483,005 pixels (−30 %)** and three rows from
+  ~22,750 to 66-324. **It is a licence/policy call and has NOT been taken** — see
+  `docs/mealybug.md` §8.6 for the case each way. Do not re-run the experiment without reading
+  that section; the number is already measured.
+- **The last uniform error left is 2-3 pixels at the head of the line.** After the strobe and
+  window fixes, `m3_bgp_change` and `m3_window_timing` agree with hardware in shape and sit a
+  constant **3 pixels late**; `m3_lcdc_bg_en_change` says **2**, and only on the first
+  transition of each pair. Not the interrupt path (that is M-cycle quantised and 3 is not a
+  multiple of 4) — it is inside the twelve dots between mode 3's start and the first pixel.
 
 ## MCP server (`src/mcp/`, `terminalgb-mcp` binary, `mcp` cargo feature)
 
@@ -3713,6 +3777,11 @@ Mooneye 86 → 88 → 95 (the console revisions). **Measured on `main` plus both
 **46/47**, Mooneye **95/103** (acceptance 67/75, emulator-only 28/28), Mooneye CGB misc
 **8/8**, SameSuite **72/76** (apu 65/69, dma 4/4, ppu 1/1, sgb 2/2), `cpp` **4/4**, Mealybug
 **3/79**. The one-liner that produces all of them without a full run:
+
+**Every number above is the DEFAULT (fast) engine.** The accurate one is scored separately and
+differently — `GB_PPU=accurate` gives Mooneye **89/103** and Mealybug **6/79** — so add the
+engine to any figure you quote, and read
+`testharness/{mooneye,mealybug}_accurate_baseline.txt` (not the unsuffixed files) for it.
 
 ```python
 # python3, from the repo root — reads the checked-in baselines, which ARE the expectations

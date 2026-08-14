@@ -469,3 +469,220 @@ two rows in §7.4: until the accurate engine strictly dominates, a default flip 
 published score worse, and `testharness/baseline.txt` must never be re-blessed to hide that.
 The order is: close §7.4, flip the default, run the conformance suite against the accurate
 engine, then delete `renderscan`.
+
+---
+
+## 8. Four fixes later: 3/79 → 6/79, and where the rest of the distance actually is
+
+§7 measured the pixel FIFO on its first outing. This section is the second pass over it. Every
+figure below is `GB_PPU=accurate` against the ROMs pinned in
+[`tools/fetch-test-suites.sh`](../tools/fetch-test-suites.sh), and **the default renderer is
+byte-identical to its checked-in baselines throughout** — `make test-external` was green after
+each of the four changes.
+
+| | §7 (first outing) | now |
+|---|---:|---:|
+| rows pixel-exact | 3 / 79 | **6 / 79** |
+| DMG column | 1 / 24 | **2 / 24** |
+| whole-suite pixel distance | 1,268,382 | **693,023** |
+| Mooneye `acceptance` | 58 / 75 | **61 / 75** |
+| Mooneye overall (`acceptance` + `emulator-only`) | 86 / 103 | **89 / 103** |
+| cost, dmg-acid2 | 2.1x fast | 2.13x fast (0.263 → 0.559 ms/frame) |
+
+`m3_lcdc_win_en_change_multiple` joins `m2_win_en_toggle` as pixel-exact against all three
+hardware reference sets. On the shootout's published DMG denominator that is **2/24 — level
+with bgb** ([§4](#4-calibration-how-hard-is-this-really)), with SameBoy still on 15.
+
+### 8.1 The one that was not a PPU accuracy problem at all
+
+**The accurate engine never left mode 0 after the LCD came on, for the rest of the frame.**
+
+The line the PPU restarts on after `LCDC.7` goes 0→1 reads mode 0 *through* its OAM slot and
+leaves it only by entering mode 3 at dot 80 — which is the one place that clears the
+"no OAM scan" latch. `do_cycle_accurate`'s "mode 0 has no per-dot behaviour, skip to the end of
+the line" shortcut fired there, so dot 80 was never reached, the latch survived to the next
+line, and the next: `LY` ticked over with the PPU parked in mode 0 and **no mode 2, no mode 3
+and no STAT interrupt** until the VBlank at line 144.
+
+Every Mealybug ROM arms itself on the mode-2 STAT source and then falls through a field of
+`nop`s waiting for it. With no strobe the program counter ran off the end of the slide (1200
+`nop`s ≈ 10 scanlines) long before line 144, `reti`'d on a stack that had never been pushed,
+and looped through address `$0000` into the VBlank vector. Traced on `m3_bgp_change`: ten
+"frames" counted in 80,668 cycles, **one** `BGP` write in the whole run, a blank single-shade
+frame. That — not mid-scanline accuracy — is what most of "3/79" was measuring.
+
+Pinned by `gpu::fifo::lcd_restart`, whose first assertion on the old code reads *"the PPU never
+left mode 0 on the line the LCD came on"*.
+
+### 8.2 The OAM strobe rises one M-cycle before its scanline
+
+Mooneye's `intr_2_0_timing`, `intr_2_mode0_timing` and `intr_2_mode3_timing` each measure the
+gap from the mode-2 STAT interrupt to the next PPU event, and each came out exactly 4 T-cycles
+short. Dispatch latency is common to *both* ends of `intr_2_0_timing`'s measurement, so it
+cancels there — the error was in the signal, not in the CPU. `intr_2_mode0_timing` goes
+FAIL → PASS.
+
+Two exclusions, each demanded by a test: line 144 keeps its strobe at dot 0, simultaneous with
+the VBlank interrupt (`vblank_stat_intr-GS`), and **line 0 gets no early window** — which
+Mealybug states in its own source, `m3_bgp_change` commenting *"line 0 timing is different by
+4 cycles"* and padding its handler by one taken `jr` on every line except line 0 to compensate.
+
+Only the per-dot engine emits it. The whole-scanline renderer changes `mode` at instruction
+granularity, so it has no "one M-cycle before" to represent, and asserting a 4-dot signal
+inside it measures as mixing resolutions: Mooneye does not move (it cannot resolve 4 dots)
+while Mealybug loses `m2_win_en_toggle`, the one row that engine has pixel-exact, and
+`m3_window_timing` goes 1,215 → 21,671 pixels.
+
+### 8.3 Pan Docs' OBJ penalty algorithm, calibrated against Mooneye's own table
+
+The engine used to derive the object penalty from whatever phase its fetcher happened to be in.
+That reproduced the *maximum* and nothing else — ten objects at `X = 0` and ten at `X = 7` both
+cost 66 dots where hardware wants 65 and 60 — and an object at `X < 8`, which hangs off the
+left edge and draws no pixels, cost nothing at all because it was never fetched.
+
+`acceptance/ppu/intr_2_mode0_timing_sprites` states the answer for 39 arrangements. Read back
+as dots (its unit is one M-cycle, truncated) they are exactly **6 dots per object, plus
+`max(0, 5 - ((X + SCX) % 8))` for the first object on each background tile** — Pan Docs,
+[Rendering § OBJ penalty algorithm](https://gbdev.io/pandocs/Rendering.html). All 24
+arrangements sampled by `the_obj_penalty_matches_mooneyes_table` now match to the dot.
+
+This is the fetcher's phase, so it moves the rows that photograph *which tile* a mid-mode-3
+write caught: `m3_lcdc_tile_sel_change2` @CGB-C 22,214 → 1,008, `m3_scy_change2` 18,129 →
+2,924, `m3_lcdc_tile_sel_win_change2` 22,511 → 946, `m3_scx_high_5_bits` @CGB 150 → **12**.
+
+### 8.4 The window's takeover is decided at the output
+
+`check_window_start` ran at the top of every mode-3 dot, including the twelve dots of the
+head-of-line fetch — where `lx` is already 0 and the FIFO is still empty, so a window with
+`WX <= 7` took over a fetcher that had nothing to throw away and cost nothing. The comparison
+is made at the **output**, against the pixel about to be shifted out, so it cannot happen
+before there is one; gating it on a non-empty FIFO is the whole change, and it restores Pan
+Docs' "if the window is enabled and the current scanline reaches it, mode 3 is 6 dots longer"
+for every `WX`, not just for `WX > 7`.
+
+`m3_window_timing` is built entirely out of that difference: it sets `WX = LY` on every line and
+photographs a window that started before a mid-line `BGP` write against one that started after.
+Our boundary used to sit at pixel 12 for **every** `WX`; hardware's sits at 3 and 9, and ours
+now splits 6 and 12 — the right shape, three pixels late.
+
+### 8.5 Where the remaining 693,023 pixels are — and how much of it is winnable
+
+This matters more than the total, because three quarters of it is **not** mid-scanline timing.
+
+| block | rows | pixels | what it is |
+|---|---:|---:|---|
+| post-boot VRAM (the `®` glyph) | 9 | **210,018** | measured, see §8.6 — a policy call, not a PPU problem |
+| CGB references that are colour photographs | 8 | ~182,500 | structurally uncomparable, see §8.7 |
+| `m3_lcdc_obj_size_change_scx`, `m3_wx_4_change_sprites` | 6 | ~135,000 | real errors, magnified ~500x by the metric (§8.8) |
+| genuine mid-scanline calibration | 56 | ~165,500 | the actual remaining work |
+
+**Rows now within a few hundred pixels of exact** (DMG / CGB-C / CGB-D):
+`m3_scx_high_5_bits` **77 / 12 / 12**, `m3_window_timing` 418 / 280 / 418,
+`m3_lcdc_obj_en_change_variant` 582 / 498 / 642, `m3_lcdc_obj_size_change` 641 / 611 / 611,
+`m3_window_timing_wx_0` 705 / 595 / 705, `m3_lcdc_bg_en_change` 866 / 463 / 463,
+`m3_lcdc_win_map_change` 892 / 710 / 710, `m3_lcdc_bg_map_change` 922 / 538 / 538, plus
+`m3_lcdc_tile_sel_win_change2` 946 and `m3_lcdc_tile_sel_change2` 1,008 on CGB-C.
+
+### 8.6 Blocker C is now measured, and it is **eight bytes**
+
+[§3.3](#33-blocker-c--we-do-not-reproduce-post-boot-vram) scoped this by counting ROMs. Having
+run the experiment, the shape is much narrower than that section implies:
+
+* The **logo tiles `$01`-`$18` buy nothing.** Every ROM that would show them either calls the
+  suite's own `copy_font` or selects the `$8800` signed tile block, where the logo lives at
+  addresses that are still zero. Not one Mealybug row depends on them — which also means the
+  licence-free half of Blocker C (the logo is decompressed from the *cartridge's own* header
+  bytes `$0104`-`$0133`) has no payoff at all.
+* **Ten ROMs use tile `$19` — the `®` glyph — and nothing else.** Four of them draw *only* that
+  (`m3_obp0_change`, `m3_lcdc_obj_en_change`, `m3_scx_low_3_bits`, `m3_wx_4_change_sprites`);
+  the other six place every sprite with it.
+
+Measured by writing the boot ROM's eight-byte `®` bitmap to `$8190` (low bitplane, high plane
+zero, exactly as the DMG boot ROM leaves it) on both DMG and CGB-compat machines, then
+reverting:
+
+| row | now | with the `®` |
+|---|---:|---:|
+| `m3_obp0_change` @DMG/@CGB-C/@CGB-D | 22,750 / 22,792 / 22,750 | **108 / 66 / 108** |
+| `m3_lcdc_obj_en_change` | 22,894 / 22,834 / 22,834 | **256 / 196 / 196** |
+| `m3_scx_low_3_bits` | 22,500 / 22,500 / 22,500 | **324 / 324 / 324** |
+| `m3_lcdc_bg_map_change` | 922 / 538 / 538 | 524 / 140 / 140 |
+| `m3_lcdc_win_map_change` | 892 / 710 / 710 | 494 / 312 / 312 |
+| `m3_bgp_change_sprites` | 2,772 / 2,444 / 3,160 | 1,800 / 1,472 / 2,188 |
+| **whole suite** | **693,023** | **483,005** |
+
+So the `®` is worth **210,018 pixels, 30 % of everything left**, and it takes the three worst
+rows in the suite to double figures — closer to exact than anything except
+`m3_scx_high_5_bits`. It is the single largest lever on this board and it is not a PPU change.
+
+**It remains the captain's call and has not been taken.** The case for it, stated plainly so
+the decision can be made once: this repository already reproduces the boot ROM's entire I/O
+register map, its system-counter value, its APU register writes and the tilemap entry that
+*points at tile `$19`* (`MemoryManagementUnit::set_boot_logo_tilemap` writes `$19` to `$9910`
+today). The glyph's pixels are the same category of thing — machine state at `PC=$0100`,
+transcribed — differing only in that eight of those bytes happen to draw a standard
+typographic symbol. The case against is the standing rule in
+[`CLAUDE.md`](../CLAUDE.md#licence-boundary-format-knowledge-is-ours-game-assets-are-not): it
+is data out of somebody else's ROM, and we do not ship those. Nothing here decides it.
+
+### 8.7 Eight rows compare a greyscale frame against a colour photograph
+
+Four ROMs' CGB references — `m3_wx_4_change`, `m3_wx_5_change`, `m3_wx_6_change` and
+`m3_lcdc_win_en_change_multiple_wx` — carry **125 distinct luminances**, against four or fewer
+in every other reference in the suite. They are photographs of a Color console that has
+colourised a DMG cartridge from the boot ROM's title-hash palette, and that palette happens to
+be a coloured one for those four titles. We render `ColorAsClassic` in greyscale, so
+`examples/mealybug` falls back to bucketing the reference's luminance span evenly into four —
+which cannot line up with what the palette actually did.
+
+Those eight rows are ~182,500 pixels, **26 % of the remaining total, and no amount of PPU work
+moves them.** Closing them needs the CGB boot ROM's compatibility-palette selection, which is
+a different feature *and* the same licensing question as §8.6 (the palette table is boot ROM
+data). Do not read their pixel counts as PPU progress in either direction.
+
+Counted, so nobody has to re-derive it: DMG-blob has 0 references with more than four shades;
+CPU CGB C has 7 (the four above plus three at exactly five shades, which do compare usefully);
+CPU CGB D has 4.
+
+### 8.8 The pixel count is a **rank** distance, and it is wildly non-linear
+
+The comparison ranks each frame's distinct luminances and compares ranks, which is right for
+pass/fail (a palette difference cannot manufacture or mask a result) and badly misleading as a
+magnitude. **If our frame has one more distinct shade than the reference, every rank shifts and
+essentially every pixel is reported as different.**
+
+Worked example, `m3_lcdc_obj_size_change_scx` @DMG: our frame contains **four** pixels of a
+shade hardware does not produce there. The frame is otherwise structurally right. It scores
+**22,070 / 23,040**. `m3_wx_4_change_sprites` is the same story at 23,039.
+
+Consequences, both of which apply to anyone reading
+[`testharness/mealybug_accurate_baseline.txt`](../testharness/mealybug_accurate_baseline.txt):
+a row near 22,500 means "wrong shade count", not "nothing works", and a change that fixes a
+handful of pixels can move the total by 60,000. The metric is deliberately left alone — it is
+the same shade-rank rule as `tools/conformance/image.py` and changing it mid-flight would
+invalidate every comparison against the committed baselines — but quote it with this caveat.
+
+### 8.9 What the next pass should do, in order
+
+1. **Settle the `®`** (§8.6). 210,018 pixels and three rows within ~100 of exact, for eight
+   bytes and a decision. Nothing else on this board has that ratio.
+2. **Find the residual head-of-line offset.** After §8.2 and §8.4 the two output-stage ROMs
+   agree with hardware in *shape* and sit a constant **3 pixels late** (`m3_bgp_change`'s bands
+   start at 4 / 76 / 148 against hardware's 1 / 73 / 145; `m3_window_timing`'s boundary is 6
+   and 12 against 3 and 9). `m3_lcdc_bg_en_change` says **2**, and only for the first
+   transition of each pair — so it is not one constant, and it is not the interrupt path
+   (that is M-cycle quantised, and 3 is not a multiple of 4). It is somewhere in the twelve
+   dots between mode 3's start and the first pixel. Worth one focused session; it is the last
+   *uniform* error visible in the suite.
+3. **Then the per-tile work** — `m3_lcdc_obj_size_change_scx`'s four stray pixels, the
+   `m3_wx_*` family, `m3_scy_change` on CGB-D (15,091 against 562 on CGB-C, which is the
+   DMG-vs-CGB-D bitplane difference [§5.3](#53-one-more-thing-worth-knowing-before-anyone-quotes-a-number)
+   predicted). This is genuinely the mutually-constraining calibration §5.2 warned about;
+   budget it in weeks, not days.
+
+### 8.10 What is still true from §7
+
+The two rows in [§7.4](#74-what-the-accurate-engine-is-behind-on) still block flipping the
+default: Blargg `oam_bug` sub-test 7, and `intr_1_2_timing-GS`. Both engines remain gated in
+CI ([§7.4a](#74a-it-is-gated-in-ci)), and the accurate engine's baselines carry pixel counts
+so a pipeline change is a visible diff whether or not it moves a row.

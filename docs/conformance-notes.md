@@ -17,6 +17,132 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the per-dot PPU: four defects between it and Mealybug (Mealybug 3/79 → 6/79)
+
+All four are in the **accurate** rendering engine (`src/gpu/fifo.rs`, plus the STAT
+signal in `src/gpu/mod.rs`); the default whole-scanline renderer is byte-identical
+to its checked-in baselines throughout. Full write-up with the per-row table:
+[`docs/mealybug.md`](mealybug.md) §8.
+
+### 1. The PPU never left mode 0 after the LCD came on
+
+**Symptom** — a program that turns the LCD on and then waits on the mode-2 STAT
+interrupt never gets one, for the rest of the frame. On screen: nothing is drawn at
+all, and a program relying on that interrupt to pace itself runs off the end of its
+code. Traced on Mealybug's `m3_bgp_change`: the ROM's own vblank counter reached
+its target ten frames early (80,668 cycles), one `BGP` write happened in the whole
+run, and the frame was a single flat shade — because the program counter had left
+the nop slide, `reti`'d on a stack that was never pushed, and was looping through
+address `$0000` into the VBlank vector.
+
+**Caught by** — every one of the 28 Mealybug mode-3 ROMs, all of which arm
+themselves on the mode-2 STAT source; that whole suite was measuring this rather
+than mid-scanline accuracy. **Nothing in the in-repo harness caught it**: dmg-acid2
+is pixel-exact on both engines because it recovers at the first VBlank, and no
+Blargg or Mooneye ROM re-enables the LCD and then depends on the *first* frame.
+Now `gpu::fifo::lcd_restart::the_ppu_restarts_into_mode_3_on_the_line_the_lcd_came_on`
+and `..::the_mode_2_strobe_arrives_on_the_line_after_the_lcd_comes_on`.
+
+**Hardware behaviour** — the line the PPU restarts on after `LCDC` bit 7 goes 0→1
+has no OAM scan: `STAT` reads mode 0 through the OAM slot and the PPU goes straight
+to mode 3 (Mooneye `acceptance/ppu/lcdon_timing-GS`, whose own comment is "line 0
+starts with mode 0 and goes straight to mode 3"). Our engine's "mode 0 has no
+per-dot behaviour, skip to the end of the line" shortcut swallowed dot 80, which is
+the only place that clears the latch — so it survived to the next line, and the
+next.
+
+**Carries into the tool** — *after enabling the LCD, a mode-2 STAT interrupt must
+arrive within two scanlines.* A one-frame check needing no reference image, and one
+that a framebuffer hash cannot express.
+
+### 2. The OAM/mode-2 STAT strobe rises one M-cycle before its scanline
+
+**Symptom** — every measurement a program makes from the mode-2 interrupt is four
+T-cycles short: a raster effect that counts cycles from that interrupt lands one
+M-cycle late for the whole frame.
+
+**Caught by** — Mooneye `acceptance/ppu/intr_2_0_timing`, `intr_2_mode0_timing`
+and `intr_2_mode3_timing`, all three by exactly one loop iteration.
+`intr_2_mode0_timing` goes FAIL → PASS.
+
+**Hardware behaviour** — on lines 1-143 the strobe is asserted from dot 452 of the
+*previous* line. The diagnosis is worth keeping as a technique: interrupt dispatch
+is common to **both** ends of `intr_2_0_timing`'s measurement (mode-2 interrupt to
+mode-0 interrupt), so a constant dispatch latency cancels there — what that ROM
+reads is the distance between the two strobes, which locates the error in the PPU
+signal rather than in the CPU. Two exclusions, each pinned by a different test:
+line 144 keeps its strobe at dot 0, simultaneous with the VBlank interrupt
+(`vblank_stat_intr-GS`), and line 0 gets no early window — which **Mealybug states
+in its own source**, `m3_bgp_change` commenting *"line 0 timing is different by 4
+cycles"* and padding its handler by one taken `jr` on every line except line 0.
+
+**Carries into the tool** — *the mode-2 STAT interrupt precedes STAT reading mode 2
+by one M-cycle, on every visible line except line 0.* Also the general lesson:
+**a test that measures the distance between two events delivered through the same
+path has already cancelled that path's latency** — use it to decide whether a
+timing error is in a peripheral or in dispatch.
+
+### 3. The OBJ penalty was the maximum, always — and objects at `X < 8` were free
+
+**Symptom** — mode 3 is the wrong length whenever objects are on the line, so every
+program that counts dots from a STAT interrupt to place a mid-scanline write puts it
+on the wrong pixel; and an object hanging off the left edge (`X < 8`), which draws
+nothing, cost nothing, so a line full of them ran short.
+
+**Caught by** — Mooneye `acceptance/ppu/intr_2_mode0_timing_sprites`, which states
+the answer for 39 arrangements. Ten objects at `X = 0` and ten at `X = 7` both cost
+us 66 dots where hardware wants 65 and 60.
+
+**Hardware behaviour** — Pan Docs, [Rendering § OBJ penalty
+algorithm](https://gbdev.io/pandocs/Rendering.html): six dots per object, plus
+`max(0, 5 - ((X + SCX) % 8))` for the **first** object on each background tile. The
+ROM's table confirms it exactly once its unit is read as one M-cycle, truncated:
+1 object at X=0 → 11 dots → 2 [2]; 10 at X=0 → 65 → 16 [16]; 10 at X=2 → 63 → 15
+[15]; 5 at X=0 plus 5 at X=160 → 70 → 17 [17].
+
+**Carries into the tool** — the whole table, as a mode-3-length check:
+`the_obj_penalty_matches_mooneyes_table` pins 24 of the 39 arrangements device-free,
+and none of its expectations is a figure of ours.
+
+### 4. The window's takeover is decided at the output, so `WX <= 7` was free
+
+**Symptom** — a game that puts its window at the left edge gets a mode 3 six dots
+shorter than hardware's, so anything it times from `STAT` drifts; and the window's
+own startup fetch, which a program *can* see as six pixels of the previous layer,
+does not appear.
+
+**Caught by** — Mealybug `m3_window_timing`, which sets `WX = LY` on every line
+precisely to photograph the difference between a window that started before a
+mid-line `BGP` write and one that started after. Our boundary sat at the same pixel
+for every `WX`. Now also `the_window_costs_six_dots_wherever_it_starts`.
+
+**Hardware behaviour** — Pan Docs, [Rendering § mode 3
+length](https://gbdev.io/pandocs/Rendering.html): "if the window is enabled and the
+current scanline reaches it, mode 3 is 6 dots longer". The comparison is made at the
+**output**, against the pixel about to be shifted out, so it cannot happen before
+there is one — checking it during the head-of-line fetch, where `lx` is already 0
+and the FIFO is still empty, let the window take over a fetcher with nothing to
+throw away.
+
+**Carries into the tool** — *mode 3 is 178 dots for any `WX` in 0..=166 and 172 for
+`WX > 166`.*
+
+### Two findings about the measurement itself, which the tool should inherit
+
+* **A shade-rank comparison is not a distance.** Ranks are computed per frame, so a
+  frame with one more distinct shade than the reference has *every* pixel reported
+  as different. `m3_lcdc_obj_size_change_scx` contains four pixels of a shade
+  hardware does not produce and scores 22,070 of 23,040. Right for pass/fail, useless
+  as a magnitude — a conformance tool that reports "how close" must say which of the
+  two it is reporting.
+* **Some references are not comparable at all.** Four Mealybug ROMs' CGB reference
+  screenshots carry 125 distinct luminances — a Color console colourising a DMG
+  cartridge from the boot ROM's title-hash palette — against four or fewer
+  everywhere else. Eight rows (26 % of the suite's remaining pixel distance) compare
+  a greyscale frame against a colour photograph. A tool must detect that and say so
+  rather than reporting a number.
+---
+
 ## 2026-08-14 — the Game Boy is nine machines, and eleven ROMs could tell
 
 Mooneye `acceptance` **60/75 → 67/75** and `misc` (`GB_MODEL=cgb`) **4/8 → 8/8**,
