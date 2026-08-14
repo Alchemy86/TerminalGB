@@ -917,6 +917,7 @@ pub struct Sound {
     channel_to_left: u8,
     channel_to_right: u8,
     frame_seq_counter: u8,
+    frame_seq_skip: bool,
     /// Raw last-written bytes for `0xFF10..=0xFF25`. Hardware read-back is
     /// `written | mask` (see [`NR_READBACK_MASKS`]) — the decoded channel
     /// state below is what *plays*, this shadow is what *reads*.
@@ -976,6 +977,7 @@ impl Sound {
             channel_to_left: 0xF,  // All channels to left (only lower 4 bits)
             channel_to_right: 0xF, // All channels to right (only lower 4 bits)
             frame_seq_counter: 0,
+            frame_seq_skip: false,
             regs: [0; 22],
             dmg_mode: true,
             player: None,
@@ -1027,6 +1029,7 @@ impl Sound {
         w.u8(self.channel_to_left);
         w.u8(self.channel_to_right);
         w.u8(self.frame_seq_counter);
+        w.bool(self.frame_seq_skip);
         for b in self.regs {
             w.u8(b);
         }
@@ -1054,6 +1057,7 @@ impl Sound {
         self.channel_to_left = r.u8()?;
         self.channel_to_right = r.u8()?;
         self.frame_seq_counter = r.u8()?;
+        self.frame_seq_skip = r.bool()?;
         for b in self.regs.iter_mut() {
             *b = r.u8()?;
         }
@@ -1185,6 +1189,10 @@ impl Sound {
     /// One DIV-APU event: the 512 Hz tick that drives length, sweep and
     /// envelope. Performs the action for the *current* step, then advances.
     fn frame_seq_step(&mut self) {
+        if self.frame_seq_skip {
+            self.frame_seq_skip = false;
+            return;
+        }
         if self.frame_seq_counter % 2 == 0 {
             // Length expiry disables the channel itself (NR52 status bit),
             // not just its output — see LengthCounter::step.
@@ -1211,6 +1219,20 @@ impl Sound {
         }
 
         self.frame_seq_counter = (self.frame_seq_counter + 1) % 8;
+    }
+
+    /// Are we in the *first half* of a 256 Hz length period — i.e. will the
+    /// next DIV-APU event leave the length counters alone? That is what the
+    /// NRx4 extra-length-clocking quirks key off (see `apply_nrx4_length`).
+    ///
+    /// A pending power-on skip counts as first half: the next event does
+    /// nothing at all, so the next length clock is a whole period away, which
+    /// is exactly the condition the quirk describes. SameSuite
+    /// `div_write_trigger_10` measures this — it is the extra length clock the
+    /// NR14 write performs itself that makes its channels expire two events
+    /// earlier than `div_write_trigger`'s.
+    fn first_half(&self) -> bool {
+        self.frame_seq_skip || self.frame_seq_counter % 2 == 1
     }
 
     /// Is the DIV bit that clocks the DIV-APU currently **set**?
@@ -1476,7 +1498,7 @@ impl Sound {
                 self.channel1.freq =
                     (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel1.calculate_period();
-                let fh = self.frame_seq_counter % 2 == 1;
+                let fh = self.first_half();
                 Self::apply_nrx4_length(
                     &mut self.channel1.length,
                     &mut self.channel1.enabled,
@@ -1510,7 +1532,7 @@ impl Sound {
                 self.channel2.freq =
                     (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel2.calculate_period();
-                let fh = self.frame_seq_counter % 2 == 1;
+                let fh = self.first_half();
                 Self::apply_nrx4_length(
                     &mut self.channel2.length,
                     &mut self.channel2.enabled,
@@ -1539,7 +1561,7 @@ impl Sound {
                 self.channel3.freq =
                     (self.channel3.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel3.calculate_period();
-                let fh = self.frame_seq_counter % 2 == 1;
+                let fh = self.first_half();
                 Self::apply_nrx4_length(
                     &mut self.channel3.length,
                     &mut self.channel3.enabled,
@@ -1586,7 +1608,7 @@ impl Sound {
                 self.channel4.calculate_period();
             }
             0xFF23 => {
-                let fh = self.frame_seq_counter % 2 == 1;
+                let fh = self.first_half();
                 Self::apply_nrx4_length(
                     &mut self.channel4.length,
                     &mut self.channel4.enabled,
@@ -1692,7 +1714,8 @@ impl Sound {
                     // next NRx4 length-enable write now lands in the "first
                     // half" of a length period and so clocks length once
                     // itself (see apply_nrx4_length).
-                    self.frame_seq_counter = u8::from(self.div_apu_bit_set());
+                    self.frame_seq_counter = 0;
+                    self.frame_seq_skip = self.div_apu_bit_set();
                     // The APU's own clock divider is held in reset while it is
                     // powered down, so the 1 MHz grid the channel frequency
                     // timers count on restarts here. That is what makes
