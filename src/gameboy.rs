@@ -681,6 +681,18 @@ impl Gameboy {
         self.cpu.registers.pc
     }
 
+    /// Which of the two rendering engines the PPU is running — see
+    /// [`crate::gpu::RenderMode`]. A frontend shows this so a player can tell
+    /// which machine they are looking at; it is not a picture-quality setting.
+    pub fn render_mode(&self) -> crate::gpu::RenderMode {
+        self.cpu.memory.gpu.render_mode()
+    }
+
+    /// Switch rendering engine live. See [`crate::gpu::Gpu::set_render_mode`].
+    pub fn set_render_mode(&mut self, mode: crate::gpu::RenderMode) {
+        self.cpu.memory.gpu.set_render_mode(mode)
+    }
+
     /// Read one byte through the memory bus, as the CPU would. For the debug
     /// surface and for tests that need to inspect cartridge RAM the way a game
     /// sees it — through the MBC's bank registers, not the raw save buffer.

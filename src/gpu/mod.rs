@@ -4,6 +4,75 @@ use crate::mode::GbMode;
 pub(crate) use oambug::OamBug;
 use std::cmp::Ordering;
 
+/// Which of the two rendering engines the PPU runs.
+///
+/// The two are **not** a quality/appearance choice — palettes, upscaling and
+/// every other visual enhancement live in `src/screen/`, above the PPU, and are
+/// identical either way. The only axis is *accuracy against cost*:
+///
+/// * [`RenderMode::Fast`] draws a whole scanline in one go at the mode 3 → 0
+///   transition and gives mode 3 a fixed 172-dot length. A register written
+///   part-way along a line is invisible: only its final value is ever read.
+///   Every well-behaved game looks identical under it, and it is cheap.
+/// * [`RenderMode::Accurate`] runs the real pixel pipeline dot by dot — BG
+///   fetcher, pixel FIFO, sprite fetches, window restart, `SCX & 7` discard —
+///   so a mid-mode-3 write to `BGP`/`SCX`/`LCDC`/`WX` takes effect exactly
+///   where hardware puts it, and mode 3 gets its true variable length. This is
+///   what the Mealybug Tearoom suite and Mooneye's mid-scanline
+///   `acceptance/ppu` tests photograph.
+///
+/// Selected per run by `$GB_PPU` (`fast` / `accurate`) or the `ppu` config key;
+/// a frontend may also switch it live with [`Gpu::set_render_mode`].
+#[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
+pub enum RenderMode {
+    /// Whole-scanline renderer, fixed-length mode 3.
+    #[default]
+    Fast,
+    /// Per-dot pixel FIFO.
+    Accurate,
+}
+
+/// Environment override for the rendering engine, consulted once per `Gpu`.
+pub const PPU_ENV: &str = "GB_PPU";
+
+impl RenderMode {
+    /// Parse a user-supplied engine name. `fast`/`scanline` and
+    /// `accurate`/`fifo` are accepted; case-insensitive.
+    pub fn parse(s: &str) -> Option<RenderMode> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fast" | "scanline" => Some(RenderMode::Fast),
+            "accurate" | "fifo" => Some(RenderMode::Accurate),
+            _ => None,
+        }
+    }
+
+    /// The name a user typed, and that the status row shows back to them.
+    pub fn name(self) -> &'static str {
+        match self {
+            RenderMode::Fast => "fast",
+            RenderMode::Accurate => "accurate",
+        }
+    }
+
+    /// The default engine, after `$GB_PPU`. A typo warns on stderr and is
+    /// ignored rather than silently switching engine — the same rule
+    /// [`crate::mode::Model::resolve`] applies to `$GB_MODEL`.
+    pub fn from_env() -> RenderMode {
+        match std::env::var(PPU_ENV) {
+            Err(_) => RenderMode::default(),
+            Ok(v) => match RenderMode::parse(&v) {
+                Some(m) => m,
+                None => {
+                    eprintln!(
+                        "{PPU_ENV}={v:?} is not a renderer (fast, accurate) — ignoring"
+                    );
+                    RenderMode::default()
+                }
+            },
+        }
+    }
+}
+
 const VRAM_SIZE: usize = 0x4000;
 const VOAM_SIZE: usize = 0xA0;
 pub const HEIGHT: usize = 144;
@@ -92,6 +161,9 @@ pub struct Gpu {
     /// keeps the access it already holds and carries on drawing normally.
     /// See [`Gpu::set_stop_fill`].
     stop_fill: Option<u8>,
+    /// Which rendering engine is running — see [`RenderMode`]. Read once per
+    /// `do_cycle`, never per pixel.
+    render_mode: RenderMode,
 }
 
 impl Default for Gpu {
@@ -150,7 +222,21 @@ impl Gpu {
             lyc_match: false,
             skip_first_oam: false,
             stop_fill: None,
+            render_mode: RenderMode::from_env(),
         }
+    }
+
+    /// Which rendering engine this PPU is running — see [`RenderMode`].
+    pub fn render_mode(&self) -> RenderMode {
+        self.render_mode
+    }
+
+    /// Switch rendering engine. Safe at any point: the two engines share every
+    /// register and the framebuffer, and the accurate one rebuilds its
+    /// pipeline state at the head of each scanline, so a switch shows up from
+    /// the next line onward rather than corrupting the current one.
+    pub fn set_render_mode(&mut self, mode: RenderMode) {
+        self.render_mode = mode;
     }
 
     /// The current STAT mode (0 HBlank, 1 VBlank, 2 OAM scan, 3 drawing).
@@ -186,6 +272,11 @@ impl Gpu {
     /// every `renderscan` before being read, so it holds no state across
     /// frames. The `data` framebuffer *is* saved so the visible frame is
     /// correct the instant a state loads.
+    ///
+    /// [`Gpu::render_mode`] is **not** saved. It is a property of this session's
+    /// host — which engine the user asked for — not of the emulated machine, so
+    /// loading someone else's state must not silently switch their renderer.
+    /// The accurate engine's *pipeline* state is machine state and is saved.
     pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
         w.u8(self.mode);
         w.u32(self.modeclock);
@@ -1095,6 +1186,31 @@ mod tests {
     use super::*;
 
     const DOTS_PER_LINE: u32 = 456;
+
+    /// The engine name round-trips through the spelling a user types, and an
+    /// unknown one is rejected rather than quietly meaning "fast". A silent
+    /// fallback here would publish conformance scores from the wrong renderer.
+    #[test]
+    fn a_render_mode_is_named_by_the_word_the_user_types() {
+        for (text, mode) in [
+            ("fast", RenderMode::Fast),
+            ("scanline", RenderMode::Fast),
+            ("ACCURATE", RenderMode::Accurate),
+            ("fifo", RenderMode::Accurate),
+            (" accurate ", RenderMode::Accurate),
+        ] {
+            assert_eq!(RenderMode::parse(text), Some(mode), "{text:?}");
+        }
+        assert_eq!(RenderMode::parse("sideways"), None);
+        assert_eq!(RenderMode::parse(""), None);
+        assert_eq!(RenderMode::Fast.name(), "fast");
+        assert_eq!(RenderMode::Accurate.name(), "accurate");
+        assert_eq!(
+            RenderMode::parse(RenderMode::Accurate.name()),
+            Some(RenderMode::Accurate),
+            "the name shown in the status row must be a name we accept back"
+        );
+    }
 
     /// A PPU with the LCD on, sitting at the start of line 0.
     fn lcd_on(stat: u8, wy: u8) -> Gpu {

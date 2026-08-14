@@ -340,6 +340,13 @@ pub struct Config {
     pub transmit_scale: TransmitScale,
     /// Which render path the game picture uses. See [`RenderPath`].
     pub render_path: RenderPath,
+    /// Which **PPU rendering engine** to run — see [`crate::gpu::RenderMode`].
+    /// Nothing to do with `render_path` above, which is about getting a
+    /// finished picture to the terminal; this one is about how that picture is
+    /// produced by the emulated hardware. `None` (the default) leaves whatever
+    /// `$GB_PPU` or the built-in default chose, so an environment override for
+    /// one run is not silently undone by a config file.
+    pub ppu: Option<crate::gpu::RenderMode>,
     /// How loudly a wild Pokémon's shiny-if-traded verdict is announced. See
     /// [`ShinyAlert`].
     pub shiny_alert: ShinyAlert,
@@ -409,6 +416,7 @@ impl Default for Config {
             cell_scale: CellScale::default(),
             transmit_scale: TransmitScale::default(),
             render_path: RenderPath::default(),
+            ppu: None,
             shiny_alert: ShinyAlert::default(),
             telemetry: None,
             screenshot_dir: None,
@@ -585,6 +593,12 @@ impl Config {
             match RenderPath::parse(v) {
                 Some(p) => cfg.render_path = p,
                 None => warn.push(bad("render_path", v, "fast, legacy")),
+            }
+        }
+        if let Some(v) = get("ppu") {
+            match crate::gpu::RenderMode::parse(v) {
+                Some(p) => cfg.ppu = Some(p),
+                None => warn.push(bad("ppu", v, "accurate, fast")),
             }
         }
         if let Some(v) = get("shiny_alert") {
@@ -1347,6 +1361,31 @@ mod tests {
         );
         assert_eq!(Config::parse("telemetry = off").telemetry, None);
         assert_eq!(Config::default().telemetry, None);
+    }
+
+    /// `ppu` chooses the emulated rendering engine and is a different thing
+    /// from `render_path` above, which chooses how a finished picture reaches
+    /// the terminal. Unset means "leave whatever `$GB_PPU` chose" — a config
+    /// file must not silently undo a one-off environment override.
+    #[test]
+    fn the_ppu_engine_key_is_separate_from_the_terminal_render_path() {
+        use crate::gpu::RenderMode;
+        assert_eq!(Config::default().ppu, None);
+        assert_eq!(
+            Config::parse("ppu = accurate").ppu,
+            Some(RenderMode::Accurate)
+        );
+        assert_eq!(Config::parse("ppu = fast").ppu, Some(RenderMode::Fast));
+        // Both keys at once, neither reading the other's value.
+        let cfg = Config::parse("ppu = accurate\nrender_path = legacy\n");
+        assert_eq!(cfg.ppu, Some(RenderMode::Accurate));
+        assert_eq!(cfg.render_path, RenderPath::Legacy);
+        // A typo is reported, and leaves the engine unchosen rather than
+        // guessing one.
+        let (cfg, warn) = Config::parse_reporting("ppu = sideways");
+        assert_eq!(cfg.ppu, None);
+        assert_eq!(warn.len(), 1, "{warn:?}");
+        assert!(warn[0].contains("ppu"), "{warn:?}");
     }
 
     #[test]

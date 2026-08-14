@@ -3763,6 +3763,20 @@ impl App {
         )
     }
 
+    /// The Status panel's `PPU` row — which rendering engine drew the picture.
+    /// With no ROM loaded there is no PPU to ask, so it reports what the next
+    /// one will get rather than inventing a value.
+    fn ppu_label(&self) -> &'static str {
+        match self.session.as_ref() {
+            Some(s) => s.gb.render_mode().name(),
+            None => self
+                .config
+                .ppu
+                .unwrap_or_else(crate::gpu::RenderMode::from_env)
+                .name(),
+        }
+    }
+
     fn render_display(&mut self, f: &mut Frame<'_>, area: Rect) {
         let (font_w, font_h) = self.picker.font_size();
         // Kitty addresses placeholder rows/columns with a fixed table of
@@ -4024,6 +4038,12 @@ impl App {
             kv("Input", self.input.label()),
             kv("Palette", self.palette.name()),
             kv("Upscale", &self.upscale_label()),
+            // Which of the two emulated rendering engines is live. Not a
+            // picture-quality setting — palettes and upscaling above are
+            // unaffected by it — but the two *can* disagree on a game that
+            // writes PPU registers mid-scanline, so which one produced the
+            // picture must never be a guess. See `crate::gpu::RenderMode`.
+            kv("PPU", self.ppu_label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
             kv("Slot", &self.slot.to_string()),
             // "Am I live?" must never be a guess — see `App::toggle_video`.
@@ -5457,6 +5477,14 @@ fn load_session(
     }
     let entry = romlib::entry_from_bytes(path, &data);
     let mut gb = Gameboy::new(data.clone(), Some(path.to_path_buf()));
+    // `$GB_PPU` has already chosen an engine inside `Gpu::new`; the config key
+    // only speaks when the environment did not, so a one-off `GB_PPU=fast` run
+    // is not silently undone by a config file.
+    if std::env::var_os(crate::gpu::PPU_ENV).is_none() {
+        if let Some(mode) = cfg.ppu {
+            gb.set_render_mode(mode);
+        }
+    }
     let audio = init_audio(&mut gb);
     let notes = attach_plugins(&mut gb, cfg, &data);
     Ok((gb, entry, audio, notes))
@@ -8058,8 +8086,8 @@ mod tests {
                 .collect();
             // Every row of the Status block, first to last, plus both plugins.
             for needle in [
-                "ROM", "MBC", "Scale", "Sent", "Proto", "Palette", "Upscale", "Speed",
-                "Slot", "Video", "Audio", "FPS", "trainer", "zzmarker",
+                "ROM", "MBC", "Scale", "Sent", "Proto", "Palette", "Upscale", "PPU",
+                "Speed", "Slot", "Video", "Audio", "FPS", "trainer", "zzmarker",
             ] {
                 assert!(
                     text.contains(needle),

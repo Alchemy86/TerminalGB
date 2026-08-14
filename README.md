@@ -204,6 +204,7 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
+| `ppu` | `accurate` / `fast` | Which **emulated rendering engine** runs — a per-dot pixel FIFO, or the cheap whole-scanline renderer. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way; the two engines differ only on games that write PPU registers *mid-scanline*. Shown in the Status panel's `PPU` row. `$GB_PPU` overrides this for one run. |
 | `volume` | `0`–`100` (a `%` is allowed), or `off` | **Playback volume**, the level a session starts at. Default **`50`** (−12 dB) — deliberately quieter than full scale. `,` / `.` change it in game and `m` mutes; whatever you last set is remembered across sessions, and editing this key overrides that. Attenuation is applied to the audio the *host device* is handed, never to the emulated machine — see below. |
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
