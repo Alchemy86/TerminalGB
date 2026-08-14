@@ -1624,12 +1624,10 @@ than a red row with a reason.
   quirks that SameBoy's own source annotates *"This quirk seems way too
   specific"* and *"non-deterministic"*. Attempting it without a real CGB to
   calibrate against risks the eight CH4 rows that pass today.
-- **`channel_1_sweep_restart`, `channel_1_sweep_restart_2` — one cell and one
-  phase apart.** `sweep_restart` now differs in a **single** cell of 144: the
-  duty phase of a re-trigger that immediately follows a sweep frequency change.
-  The obvious lever (`SQUARE_RESTART_SPEEDUP`) is not it — zeroing it costs four
-  other rows. `sweep_restart_2` disagrees about where the DIV-APU sweep event
-  sits relative to a `ld [rDIV],a` by about two M-cycles.
+- **`channel_1_sweep_restart` — a single cell of 144, and it is not a sweep
+  bug.** See finding 18 below, which also **corrects the diagnosis recorded here
+  for `channel_1_sweep_restart_2`** (it was not a DIV-APU phase error; it now
+  passes).
 
 ---
 
@@ -1757,3 +1755,98 @@ deliberately.
   CH4 rows that pass today, for one row nothing passes. **Recommendation:
   declare it out of scope until someone has a real CGB to calibrate against.**
 - **Caught by:** nothing but this ROM, and it is CGB-only (it reads PCM34).
+
+---
+
+## APU sweep — a trigger's shadow reload takes three M-cycles (2026-08-14)
+
+Work item ② of the full-suite audit, CH1-sweep half. **SameSuite 68/76 → 69/76**
+(its APU half 63/69 → 64/69), measured with
+`./target/release/examples/samesuite target/test-suites/samesuite` on `main`
+(`a5eb0af`, with the CH4 work of notes 14-16 already in) and on this branch —
+both built from source in the same run, not quoted from a baseline file. Every
+other suite is byte-identical across the change: Mooneye
+`acceptance`+`emulator-only` 86/103 and `misc` 4/8, Mealybug 79 rows (both PPU
+engines), `testroms` 46/47, `audiocapture` (`dmg_sound` 12/12, all hashes),
+`savestate`, `battery` 8/8, `trainer` — all still "match the baseline".
+
+**The other half of work item ② needed no work at all.** The audit listed four
+NRx2-zombie rows (`channel_{1,2}_nrx2_glitch`, `channel_{1,2}_nrx2_speed_change`)
+as failing and "partially implemented"; on current `main` all four **pass**, as
+does `channel_1_sweep`. Finding 11 above is what fixed them. The audit's ② was
+measured against `db8ba59` and that cluster closed before this branch started —
+the CH1-sweep sub-cluster was 2 rows, not 3, and the NRx2 sub-cluster was 0.
+
+### 17. The sweep shadow is not readable for three M-cycles after a trigger
+
+- **Symptom:** a music driver that re-triggers channel 1 on a beat while a
+  frequency sweep is running loses the note — the channel goes silent for the
+  rest of the phrase — if the re-trigger happens to land within a few
+  microseconds *before* a 128 Hz sweep event. On hardware the same note keeps
+  playing. It is a lost note roughly twice a second in the worst case, and it
+  only bites drivers that sweep *and* re-trigger, which is why it survives
+  every other suite.
+- **Caught by:** SameSuite `channel_1_sweep_restart_2` (FAIL → PASS). That ROM
+  is *entirely* this window: it re-triggers CH1 at `$7FF` with NR10 = `$10`
+  (period 1, add, shift 0), so the sweep's next value `$7FF + $7FF` overflows,
+  and it walks the re-trigger from 0 to 7 M-cycles before a sweep event, reading
+  NR52 0-15 M-cycles later. Hardware kills the channel for exactly **one** of
+  the eight positions. **Nothing in Blargg catches it** — `dmg_sound` `04-sweep`
+  and `05-sweep details` never re-trigger inside a sweep event's window.
+- **Hardware:** a trigger reloads the sweep unit's shadow register from the
+  frequency registers, and that reload is not instantaneous. For three M-cycles
+  afterwards the overflow check reads the shadow as zero, so a sweep event
+  landing inside the window latches no addend and the delayed check it arms
+  compares `0 + 0`. The addend is also latched when the check is *armed*, not
+  when it fires — which is why writing a different NR10 shift inside the window
+  does not change the value the check adds (`channel_1_sweep_restart` rounds 4
+  and 5 agree either way; both kill). Measured in this APU's clock phase: a
+  sweep event 12 T-cycles after the trigger kills, one at 8 T does not
+  (`SWEEP_RESTART_HOLD`).
+- **New test:** `sound::tests::a_sweep_event_inside_the_restart_hold_cannot_kill_the_channel`.
+  Teeth proven by removing the hold from both the addend latch and the shadow
+  read — it goes red. Save-state `FORMAT_VERSION` 12 → 13 (the addend and the
+  hold are both live machine state at a frame boundary).
+- **Carries into the tool:** *a re-trigger inside a peripheral's own multi-cycle
+  reload is a distinct state, not a shortcut to the post-reload state.* The
+  general check is "drive the event one M-cycle at a time across the trigger and
+  require the boundary to be in the right place", which is the shape
+  `channel_1_sweep_restart_2` already has and which no framebuffer or
+  register-dump adapter can see.
+
+### 18. Gap left open: `channel_1_sweep_restart`'s last cell is a square-timing question
+
+`channel_1_sweep_restart` now matches in **143 of its 144** cells. The one that
+differs is round 1's last subtest (`SubTest $000f`), and it is worth writing
+down precisely because the obvious reading of it — "the sweep is wrong" — is
+false.
+
+Round 1 sweeps `$7FF` down to `$7F0` in negate mode (which can never overflow,
+so nothing is ever disabled), re-triggers the channel, and reads PCM12 at
+0-15 M-cycles. Every cell must read `$00`: the first duty step after the
+re-trigger has not happened yet. Ours reads `$08` at the last one. The
+re-trigger's first duty step lands 66 T-cycles after the write and the read is
+at 68; hardware's must be at 69 or later.
+
+That is `SQUARE_TRIGGER_DELAY` / `SQUARE_RESTART_SPEEDUP`, not the sweep unit —
+and both are already pinned by four rows that pass. Measured, not assumed:
+
+| change | SameSuite | rows lost |
+|---|---:|---|
+| (as shipped) `DELAY = 6`, `SPEEDUP = 4` | **62/76** | — |
+| `SPEEDUP = 0` (what round 1 wants) | 58/76 | `channel_{1,2}_restart`, `channel_{1,2}_restart_nrx2_glitch` |
+| `DELAY = 5` | 56/76 | + more |
+| `DELAY = 7` | 62/76 | no change (the grid rounding absorbs it) |
+| `DELAY = 8` | 39/76 | most of the square-channel suite |
+
+(That sweep was run before the CH4 work of notes 14-16 landed, so its absolute
+column is 7 rows lower than today's; the *differences* are all in the square
+channels and are unaffected by it.)
+
+So round 1 wants the re-trigger reload to be one M-cycle *longer* than
+`channel_1_restart` measures it, in a case where the two differ only in how far
+through its period the frequency timer is (`delay = 62` of a 64 T period here,
+`delay = 10` of a 16 T period in `channel_1_restart`). A correct fix is a
+*conditional* re-trigger reload rule, and there is no evidence in the suite for
+what that condition is. Recorded rather than guessed: one row, and guessing
+costs four.

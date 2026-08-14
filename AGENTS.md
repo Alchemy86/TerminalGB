@@ -829,6 +829,27 @@ FAIL → PASS. Full write-up with citations: `docs/conformance-notes.md`.
   serialised (format v3); `sound::tests::wave_window_state_survives_save_load` fails if it
   is dropped (teeth proven by dropping it deliberately). Conformance-tool notes for these
   fixes: `docs/conformance-notes.md`.
+- **The sweep shadow reload takes three M-cycles, and that window is a distinct state**
+  (`SWEEP_RESTART_HOLD = 12` T, `src/sound.rs`; SameSuite `channel_1_sweep_restart_2`
+  FAIL → PASS, 68/76 → 69/76, APU half 63/69 → 64/69, measured on `a5eb0af` with the CH4
+  work already in). A CH1 trigger reloads the sweep unit's shadow register from
+  the frequency registers and for 12 T afterwards the **overflow check reads that shadow as
+  zero**. Two consequences that must both stay: a 128 Hz sweep event landing inside the
+  window latches no addend, and the delayed check it arms compares `0 + 0`, so the channel
+  survives an overflow that would kill it a cycle later. The addend is latched when the
+  check is **armed**, not when it fires (`sweep_addend`) — an NR10 shift written in between
+  does not change it. Both fields are live machine state (`savestate::FORMAT_VERSION` 12 →
+  13). Pinned by `sound::tests::a_sweep_event_inside_the_restart_hold_cannot_kill_the_channel`,
+  teeth proven by removing the hold.
+- **`channel_1_sweep_restart`'s last red cell is NOT a sweep bug — do not "fix" it in the
+  sweep unit.** 143 of its 144 cells match; the one that differs is round 1's last subtest,
+  where the first duty step after a **re-trigger** lands at 66 T and hardware's is at ≥ 69.
+  That is `SQUARE_TRIGGER_DELAY` / `SQUARE_RESTART_SPEEDUP`, both already pinned by rows
+  that pass. **Measured, so nobody re-runs it:** `SPEEDUP = 0` (what round 1 wants) →
+  62 → **58** (loses `channel_{1,2}_restart`, `channel_{1,2}_restart_nrx2_glitch`);
+  `TRIGGER_DELAY = 5` → 56; `= 7` → 62 (grid rounding absorbs it); `= 8` → **39**. A real
+  fix needs a *conditional* re-trigger reload rule and the suite carries no evidence for the
+  condition. `docs/conformance-notes.md` §15.
 - **PLAYBACK VOLUME IS NOT NR50, AND MUST NEVER BECOME IT** (`sound::output_volume`,
   `docs/audio.md` §6b). The obvious way to make the speakers quieter is to turn down the
   Game Boy's own master volume — and it is wrong: NR50 is *emulated behaviour* the accuracy

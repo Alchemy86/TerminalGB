@@ -104,6 +104,20 @@ history. See [Credits & lineage](README.md#credits--lineage).
   [`docs/audio.md`](docs/audio.md) §6b.
 
 ### Fixed
+- **A channel-1 re-trigger no longer loses the note when a frequency sweep is running.**
+  A trigger reloads the sweep unit's shadow register from the frequency registers, and that
+  reload takes three M-cycles: for 12 T-cycles afterwards the sweep's overflow check reads
+  the shadow as **zero**. We reloaded it instantly, so a 128 Hz sweep event landing just
+  after a re-trigger saw the new frequency and disabled the channel — a music driver that
+  sweeps *and* re-triggers on the beat silently lost notes. The check's addend is now also
+  latched when the check is **armed** rather than when it fires, so an NR10 shift written
+  inside the window cannot change it. **SameSuite `channel_1_sweep_restart_2` FAIL → PASS
+  (68/76 → 69/76, APU half 63/69 → 64/69)**; Mooneye, Mealybug, `testroms`, `audiocapture` (`dmg_sound` still 12/12,
+  every hash unchanged), `savestate`, `battery` and `trainer` all byte-identical.
+  `savestate::FORMAT_VERSION` 12 → 13 (the addend and the hold are live machine state).
+  Why `channel_1_sweep_restart`'s last cell is deliberately still red — it is a square
+  re-trigger constant, not the sweep unit, and the four rows that pinning it would cost are
+  measured: [`docs/conformance-notes.md`](docs/conformance-notes.md).
 - **The virtual camera is 16:9, so a video call stops slicing the top and bottom off the game.**
   Reported as a crop and diagnosed as our scaler filling instead of fitting; it is neither.
   `fit_size`/`fit_maps` have letterboxed correctly since the feature landed — at 640×480 they

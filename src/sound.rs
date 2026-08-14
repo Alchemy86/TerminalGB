@@ -299,6 +299,22 @@ fn sweep_calc_delay_for(shift: u8) -> u32 {
     (shift as u32 + 1) * 4
 }
 
+/// T-cycles after a channel-1 trigger during which the sweep unit's shadow
+/// register is not yet readable — the "restart hold".
+///
+/// A trigger reloads the shadow from the frequency registers, and that reload
+/// is not instantaneous: for three M-cycles afterwards the overflow check
+/// reads the shadow as zero. So a 128 Hz sweep event landing inside the window
+/// latches nothing, and the delayed overflow check it arms compares zeros —
+/// the channel survives an overflow that would have killed it a cycle later.
+///
+/// SameSuite `channel_1_sweep_restart_2` is entirely this window: it re-triggers
+/// channel 1 at `$7FF` (so `$7FF + $7FF` overflows) a fixed 0-7 M-cycles before
+/// a sweep event and requires the channel to die **only** when the event lands
+/// a full three M-cycles after the trigger. Measured in this APU's clock phase:
+/// an event at 12 T after the trigger kills, one at 8 T does not.
+const SWEEP_RESTART_HOLD: u32 = 12;
+
 struct SquareChannel {
     enabled: bool,
     dac_enabled: bool,
@@ -342,6 +358,15 @@ struct SquareChannel {
     /// The pending calculation was armed with a zero shift, so the "paused
     /// while NR10's shift reads zero" rule does not apply to it.
     sweep_calc_unshifted: bool,
+    /// The shifted value the pending overflow check adds to the shadow,
+    /// latched when that check was **armed** — not recomputed when it fires,
+    /// so an NR10 shift written in between does not change it, and a sweep
+    /// event inside the restart hold latches nothing at all. See
+    /// [`SWEEP_RESTART_HOLD`].
+    sweep_addend: u16,
+    /// T-cycles left of the post-trigger restart hold, during which the sweep
+    /// shadow reads zero ([`SWEEP_RESTART_HOLD`]).
+    sweep_hold: u32,
     blip: BlipBuf,
     last_amp: i32,
 }
@@ -368,6 +393,8 @@ impl SquareChannel {
             sweep_negate_used: false,
             sweep_calc_delay: 0,
             sweep_calc_unshifted: false,
+            sweep_addend: 0,
+            sweep_hold: 0,
             blip,
             last_amp: 0,
         }
@@ -398,16 +425,21 @@ impl SquareChannel {
             let span = end_time - start_time;
             if self.sweep_calc_delay <= span {
                 let mid = start_time + self.sweep_calc_delay;
+                self.sweep_hold = self.sweep_hold.saturating_sub(self.sweep_calc_delay);
                 self.sweep_calc_delay = 0;
                 self.run_span(start_time, mid);
                 // The recalculation's only job is the overflow check; the
                 // shadow frequency was already written at the sweep event.
-                let _ = self.calc_sweep_freq();
+                self.sweep_overflow_check();
+                self.sweep_hold = self.sweep_hold.saturating_sub(end_time - mid);
                 self.run_span(mid, end_time);
                 return;
             }
             self.sweep_calc_delay -= span;
         }
+        self.sweep_hold = self
+            .sweep_hold
+            .saturating_sub(end_time.saturating_sub(start_time));
         self.run_span(start_time, end_time);
     }
 
@@ -486,6 +518,18 @@ impl SquareChannel {
         self.sweep_enabled = self.sweep_period != 0 || self.sweep_shift != 0;
         self.sweep_negate_used = false;
         self.sweep_calc_delay = 0;
+        // The shadow reload is not instantaneous: for [`SWEEP_RESTART_HOLD`]
+        // T-cycles the overflow check reads the shadow as zero, and the addend
+        // a sweep event would latch in that window is never latched. The
+        // trigger's own check is armed after the hold closes, so it gets the
+        // addend for the frequency just written (SameSuite
+        // `channel_1_sweep_restart_2`).
+        self.sweep_hold = SWEEP_RESTART_HOLD;
+        self.sweep_addend = if self.sweep_shift != 0 {
+            self.freq >> self.sweep_shift
+        } else {
+            0
+        };
         if self.sweep_shift != 0 {
             // A trigger's own calculation starts one M-cycle later than a
             // sweep event's: the write has to land before the shifter starts.
@@ -500,9 +544,38 @@ impl SquareChannel {
 
     /// Start the shifter: the recalculation + overflow check runs
     /// [`sweep_calc_delay_for`] T-cycles from now.
+    ///
+    /// The value the check will add is latched **here**, at arm time — inside
+    /// the post-trigger restart hold the shadow reads zero, so nothing is
+    /// latched and the check compares whatever the trigger left behind.
     fn arm_sweep_calc(&mut self) {
         self.sweep_calc_delay = sweep_calc_delay_for(self.sweep_shift);
         self.sweep_calc_unshifted = self.sweep_shift == 0;
+        if self.sweep_hold == 0 {
+            self.sweep_addend = self.sweep_freq >> self.sweep_shift;
+        }
+    }
+
+    /// The overflow check a pending calculation performs when its shifter
+    /// finishes: the sweep shadow plus the addend latched when the check was
+    /// armed. Inside the restart hold the shadow reads zero, which is what
+    /// lets a channel survive a sweep event that lands a cycle or two after
+    /// its trigger (see [`SWEEP_RESTART_HOLD`]).
+    fn sweep_overflow_check(&mut self) {
+        if self.sweep_decrease {
+            // Negate mode never overflows; the calculation only arms the
+            // negate-exit quirk (dmg_sound 05-sweep details tests 4-6).
+            self.sweep_negate_used = true;
+            return;
+        }
+        let shadow = if self.sweep_hold == 0 {
+            self.sweep_freq
+        } else {
+            0
+        };
+        if shadow as u32 + self.sweep_addend as u32 > 2047 {
+            self.enabled = false;
+        }
     }
 
     /// One sweep frequency calculation + overflow check. Every calculation
@@ -580,6 +653,8 @@ impl SquareChannel {
         w.bool(self.sweep_negate_used);
         w.u32(self.sweep_calc_delay);
         w.bool(self.sweep_calc_unshifted);
+        w.u16(self.sweep_addend);
+        w.u32(self.sweep_hold);
         w.i32(self.last_amp);
     }
 
@@ -606,6 +681,8 @@ impl SquareChannel {
         self.sweep_negate_used = r.bool()?;
         self.sweep_calc_delay = r.u32()?;
         self.sweep_calc_unshifted = r.bool()?;
+        self.sweep_addend = r.u16()?;
+        self.sweep_hold = r.u32()?;
         self.last_amp = r.i32()?;
         Ok(())
     }
@@ -3774,6 +3851,50 @@ mod tests {
         assert!(
             !snd.channel1.enabled,
             "the overflow check never ran: channel still enabled"
+        );
+    }
+
+    /// A 128 Hz sweep event that lands a cycle or two after a trigger cannot
+    /// kill the channel: the trigger's shadow reload takes three M-cycles and
+    /// the overflow check reads the shadow as zero until it finishes, so the
+    /// check that event arms compares zeros. SameSuite
+    /// `channel_1_sweep_restart_2` walks a re-trigger past a sweep event one
+    /// M-cycle at a time and requires the channel to survive every position
+    /// except the one where the event lands a full three M-cycles after it.
+    #[test]
+    fn a_sweep_event_inside_the_restart_hold_cannot_kill_the_channel() {
+        /// `gap` T-cycles between the trigger and the 128 Hz sweep event.
+        fn survives(gap: u32) -> bool {
+            let mut snd = Sound::new();
+            snd.set_player(Box::new(Capture {
+                rate: 44100,
+                samples: Arc::new(Mutex::new(Vec::new())),
+            }));
+            snd.wb(0xFF26, 0x80);
+            snd.wb(0xFF10, 0x10); // sweep: period 1, add, shift 0
+            snd.wb(0xFF11, 0x80);
+            snd.wb(0xFF13, 0xFF);
+            snd.wb(0xFF12, 0x80); // volume 8, DAC on
+            snd.wb(0xFF14, 0x87); // trigger at $7FF, so $7FF + $7FF overflows
+            for _ in 0..gap / 4 {
+                snd.do_cycle(4);
+                snd.catch_up();
+            }
+            snd.channel1.sweep_step();
+            // Let the check that event armed run to completion.
+            for _ in 0..4 {
+                snd.do_cycle(4);
+                snd.catch_up();
+            }
+            snd.channel1.enabled
+        }
+        assert!(
+            survives(super::SWEEP_RESTART_HOLD - 4),
+            "a sweep event inside the restart hold killed the channel"
+        );
+        assert!(
+            !survives(super::SWEEP_RESTART_HOLD),
+            "a sweep event after the hold must still kill an overflowing channel"
         );
     }
 

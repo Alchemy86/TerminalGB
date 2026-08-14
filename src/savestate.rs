@@ -86,7 +86,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// resume the same scanline — mid-tile-fetch, with both FIFOs and the sprite
 /// scan list intact — so the whole of it is now in the GPU block. Written
 /// whichever renderer is running, so a state moves freely between the two.
-pub const FORMAT_VERSION: u16 = 12;
+/// v13: channel 1's sweep unit gained the two latches its delayed overflow
+/// check actually compares — the addend latched when the check was armed, and
+/// the post-trigger restart hold during which the shadow reads zero. Both can
+/// be live at a frame boundary (SameSuite `channel_1_sweep_restart_2`).
+pub const FORMAT_VERSION: u16 = 13;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

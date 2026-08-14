@@ -156,7 +156,10 @@ output stream. The desktop frontend wires it up in `render_desktop`
   length (with the first-half quirk below), reloads the frequency timer and envelope,
   resets the sweep unit's shadow copy/timer/enable, performs an immediate sweep
   calculation + overflow check when shift > 0, and **cannot enable a channel whose DAC
-  is off** — all modelled (dmg_sound 02/03/04 pass).
+  is off** — all modelled (dmg_sound 02/03/04 pass). The shadow reload is **not
+  instantaneous**: for `SWEEP_RESTART_HOLD` (12 T) afterwards the overflow check reads the
+  shadow as zero, so a 128 Hz sweep event landing in that window cannot kill the channel
+  (`channel_1_sweep_restart_2`).
 - **Length-counter "extra clock" quirks** (`Sound::apply_nrx4_length`): enabling a
   previously-disabled length counter while the sequencer's next step won't clock length
   decrements it immediately (disabling the channel on a no-trigger zero), and a trigger
@@ -315,10 +318,11 @@ visible as a whole column shifting):
 | a trigger halves **both** noise counters, floored at one divisor tick | `NoiseChannel::trigger_divisor` | `channel_4_frequency_alignment`, `channel_4_equivalent_frequencies` |
 | noise re-trigger costs one extra whole sample | +1 period | `channel_4_lfsr_restart`, `_fast` |
 | `sweep_calc_delay_for(shift)` | `(shift + 1)` M-cycles, `+1` more on a trigger | `channel_1_sweep`, `channel_1_sweep_restart` |
+| `SWEEP_RESTART_HOLD` | 12 T (the sweep shadow reads zero for three M-cycles after a trigger) | `channel_1_sweep_restart_2` |
 | envelope period counter runs on frame-sequencer step | 6 (the step it schedules lands on 7) | `channel_N_volume_div`, `channel_N_nrx2_speed_change` |
 
 **Still failing, and why** — these are scoped, not half-built. Full per-fix record with
-citations: [`../conformance-notes.md`](../conformance-notes.md) §10-16.
+citations: [`../conformance-notes.md`](../conformance-notes.md) §10-18.
 
 * `channel_4_freq_change` (1) — **left red on evidence.** SameSuite's own `apu/README.md`
   says SameBoy, the emulator the suite exists to develop, fails exactly this test and
@@ -333,11 +337,18 @@ citations: [`../conformance-notes.md`](../conformance-notes.md) §10-16.
   winnable; the plumbing (filename → revision) already exists. `-cgbDE`'s first row is
   currently one M-cycle out; its second needs `STOP`-driven double speed, which lives in
   the CPU, not here.
-* `channel_1_sweep_restart` (1) — down to a **single cell of 144**: the duty phase of a
-  re-trigger that immediately follows a sweep frequency change. `SQUARE_RESTART_SPEEDUP`
-  is not the lever (zeroing it costs four other rows).
-* `channel_1_sweep_restart_2` (1) — disagrees about where the DIV-APU sweep event sits
-  relative to a `ld [rDIV],a` by about two M-cycles.
+* `channel_1_sweep_restart` (1) — down to a **single cell of 144**: round 1's last
+  subtest, the duty phase of a re-trigger that immediately follows a sweep frequency
+  change. It is a **square-timing** question, not a sweep one — the re-trigger's first
+  duty step lands 66 T after the write and hardware's is at 69 or later. Both levers are
+  already pinned by rows that pass: `SQUARE_RESTART_SPEEDUP = 0` costs four
+  (`channel_{1,2}_restart`, `channel_{1,2}_restart_nrx2_glitch`) and
+  `SQUARE_TRIGGER_DELAY = 8` costs most of the square suite. A correct fix needs a
+  *conditional* re-trigger reload rule and the suite carries no evidence for the
+  condition. Full measurement: [`../conformance-notes.md`](../conformance-notes.md) §18.
+
+  (`channel_1_sweep_restart_2` **passes** since the restart hold landed — §17. The note
+  that used to sit here, blaming a two-M-cycle DIV-APU phase error, was wrong.)
 
 **The `-cgb0B` / `-cgbB` / `-cgb0BC` / `-A` variants name a CPU CGB revision in the
 filename, and the runner honours it.** The APU's extra-length-clocking rule changed in CPU
