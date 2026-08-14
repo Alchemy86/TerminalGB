@@ -99,6 +99,7 @@ fn main() {
     let mut probe = false;
     let mut make = false;
     let mut verify: Option<PathBuf> = None;
+    let mut link_trade: Option<PathBuf> = None;
     let mut frames = 60 * 60 * 6;
     let mut verbose = false;
 
@@ -110,6 +111,7 @@ fn main() {
             "--probe" => probe = true,
             "--make-save" => make = true,
             "--verify" => verify = args.next().map(PathBuf::from),
+            "--link-trade" => link_trade = args.next().map(PathBuf::from),
             "--frames" => {
                 frames = args.next().and_then(|s| s.parse().ok()).unwrap_or(frames)
             }
@@ -148,6 +150,11 @@ fn main() {
     if let Some(fixture) = verify {
         std::fs::copy(&fixture, &sav).expect("stage the fixture");
         run_verify(&work, frames, verbose);
+        return;
+    }
+    if let Some(fixture) = link_trade {
+        std::fs::copy(&fixture, &sav).expect("stage the fixture");
+        run_link_trade(&work, frames, verbose);
         return;
     }
     eprintln!("nothing to do: pass --probe or --make-save");
@@ -724,6 +731,8 @@ enum VerifyStage {
     /// On Pokémon Center 2F, walking to the Time Capsule desk.
     ToDesk,
     Talk,
+    /// Through the door: in the Time Capsule room with the link up.
+    Linked,
 }
 
 /// `wNextWarp` / `wNextMapGroup` / `wNextMapNumber` — where the warp the player
@@ -734,6 +743,11 @@ const W_NEXT_WARP: u16 = 0xD043;
 /// Which warp of Pokémon Center 2F to arrive at: warp 1 is the staircase at
 /// (0, 7) (`maps/Pokecenter2F.asm`).
 const PC2F_ARRIVE_WARP: u8 = 1;
+
+/// `GROUP_TIME_CAPSULE` / `MAP_TIME_CAPSULE` — the room the receptionist sends
+/// you into once the link is up.
+const GROUP_TIME_CAPSULE: u8 = 20;
+const MAP_TIME_CAPSULE: u8 = 4;
 
 /// One frame, optionally holding the warp destination at Pokémon Center 2F.
 ///
@@ -828,7 +842,44 @@ impl VerifyBot {
             return;
         }
         self.ticks += 1;
+        // **Once the receptionist has sent us through, stop navigating.** The
+        // player is warped into the Time Capsule room, so the "am I beside the
+        // desk?" test goes false and a bot that keeps steering walks straight
+        // back out of the link. Measured: exactly that, mid-handshake.
+        if gb.peek(W_MAP_GROUP) == GROUP_TIME_CAPSULE
+            && gb.peek(W_MAP_NUMBER) == MAP_TIME_CAPSULE
+        {
+            self.stage = VerifyStage::Linked;
+        }
         match self.stage {
+            VerifyStage::Linked => {
+                // Two consoles, at (4, 4) and (5, 4), and each is a
+                // *direction-restricted* bg event: (4, 4) fires only when the
+                // player faces RIGHT into it and (5, 4) only when they face
+                // LEFT (`maps/TimeCapsule.asm`). So the seat is (3, 4) facing
+                // right or (6, 4) facing left, and which one is ours depends on
+                // the warp we came in through.
+                let (x, y) = (gb.peek(W_X_COORD), gb.peek(W_Y_COORD));
+                let left_seat = x <= 4;
+                let (tx, ty) = if left_seat { (3, 4) } else { (6, 4) };
+                let face = if left_seat {
+                    KeypadKey::Right
+                } else {
+                    KeypadKey::Left
+                };
+                if verbose && self.ticks % 30 == 0 {
+                    println!("  time capsule: at ({x},{y}) heading for ({tx},{ty})");
+                }
+                if (x, y) == (tx, ty) {
+                    if self.ticks % 2 == 0 {
+                        self.press(gb, face, 6);
+                    } else {
+                        self.press(gb, KeypadKey::A, 6);
+                    }
+                } else {
+                    self.step_towards(gb, x, y, tx, ty);
+                }
+            }
             VerifyStage::Continue => {
                 // CONTINUE is the top item and the cursor starts on it, so A
                 // through the main menu and the save-info panel.
@@ -899,5 +950,100 @@ impl VerifyBot {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The real thing: Gold on one end of an automatically discovered cable, a Gen 1
+// game on the other, trading through the Time Capsule.
+// ---------------------------------------------------------------------------
+
+fn run_link_trade(rom: &Path, frames: u32, verbose: bool) {
+    use terminalgb::link::peer::LinkPeer;
+
+    let mut gb = Gameboy::new(std::fs::read(rom).expect("rom"), Some(rom.to_path_buf()));
+    let sav = rom.with_extension("sav");
+    let mut peer = LinkPeer::discover(&gb.rom_title(), Some(&sav));
+    let mut bot = VerifyBot::default();
+    println!("[gold] {} — cable {:?}", gb.rom_title(), peer.state());
+
+    let mut last_stage = None;
+    let mut last_peer = String::new();
+    for f in 0..frames {
+        bot.act(&mut gb, verbose);
+        // The warp override needs instruction granularity; so does the cable.
+        // Both are serviced in the same loop.
+        gb.begin_frame();
+        let mut ticks = 0u32;
+        let force = bot.stage == VerifyStage::ToStairs;
+        while ticks < terminalgb::gameboy::FRAME_TICKS {
+            let t = gb.step_instruction();
+            ticks += t;
+            if force {
+                gb.debug_write(W_NEXT_WARP, PC2F_ARRIVE_WARP);
+                gb.debug_write(W_NEXT_WARP + 1, GROUP_POKECENTER_2F);
+                gb.debug_write(W_NEXT_WARP + 2, MAP_POKECENTER_2F);
+            }
+            peer.service(&mut gb, t);
+        }
+        gb.end_frame();
+
+        if Some(bot.stage) != last_stage {
+            println!("[gold][{f:6}] {:?}", bot.stage);
+            last_stage = Some(bot.stage);
+        }
+        let ps = format!("{:?}", peer.state());
+        if ps != last_peer {
+            println!("[gold][{f:6}] cable {ps}");
+            last_peer = ps;
+        }
+        if verbose && f % 600 == 0 {
+            println!(
+                "[gold][{f:6}] transfers {} | {}",
+                peer.stats().transfers,
+                squash(&screen_text(&mut gb))
+            );
+        }
+        if gb.fault().is_some() {
+            eprintln!("[gold] FAULT: {:?}", gb.fault());
+            break;
+        }
+    }
+
+    println!(
+        "[gold] cable: {} transfers, {} unanswered, {} torn",
+        peer.stats().transfers,
+        peer.stats().unanswered,
+        peer.stats().torn
+    );
+    report_party(&mut gb);
+    if let Some(img) = image::RgbaImage::from_raw(160, 144, gb.image().to_vec()) {
+        let _ = img.save("target/gen2-timecapsule/link-trade.png");
+        println!("[gold] screenshot: target/gen2-timecapsule/link-trade.png");
+    }
+    gb.flush_battery();
+    peer.close();
+}
+
+/// What Gold is holding, and what **Gold's own rule** says about each one.
+fn report_party(gb: &mut Gameboy) {
+    let n = gb.peek(W_PARTY_COUNT);
+    println!("[gold] party of {n}:");
+    for i in 0..n.min(6) as u16 {
+        let base = W_PARTY_MONS + i * PARTYMON_LEN as u16;
+        let species = gb.peek(W_PARTY_SPECIES + i);
+        let dv_hi = gb.peek(base + 21);
+        let dv_lo = gb.peek(base + 22);
+        let (atk, def, spd, spc) = (dv_hi >> 4, dv_hi & 15, dv_lo >> 4, dv_lo & 15);
+        let level = gb.peek(base + 31);
+        // `CheckShininess`, pokegold `engine/gfx/color.asm`:
+        //   SHINY_ATK_MASK = %0010, SHINY_DEF_DV = SHINY_SPD_DV = SHINY_SPC_DV = 10.
+        let shiny = atk & 0b0010 != 0 && def == 10 && spd == 10 && spc == 10;
+        println!(
+            "[gold]   slot {}: species {species} Lv{level} DVs {atk}/{def}/{spd}/{spc} \
+             (${dv_hi:02X}${dv_lo:02X}) -> Gold says {}",
+            i + 1,
+            if shiny { "SHINY" } else { "not shiny" }
+        );
     }
 }
