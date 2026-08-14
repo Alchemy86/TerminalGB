@@ -683,7 +683,7 @@ axis is **accuracy against cost.**
 | **A mid-scanline register write** | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read | takes effect exactly where hardware puts it |
 | **Cost** | **0.263 ms/frame** (63.8× real time) | **0.559 ms/frame** (30.0× real time) — **2.13×** |
 | **dmg-acid2 vs the author's reference** | 0 / 23,040 pixels differ | **0 / 23,040** |
-| **Mooneye `acceptance`** | 60 / 75 | **61 / 75** — and not the same rows: the variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS` |
+| **Mooneye `acceptance`** | 67 / 75 | **68 / 75** — and not the same rows: the variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS` |
 | **Mealybug Tearoom rows** | 3 / 79 | **6 / 79** |
 | **Mealybug pixel distance** | 1,212,282 | **693,023** |
 | **Well-behaved games** | identical output, proved frame-for-frame | identical output |

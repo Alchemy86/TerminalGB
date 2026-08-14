@@ -485,9 +485,15 @@ each of the four changes.
 | rows pixel-exact | 3 / 79 | **6 / 79** |
 | DMG column | 1 / 24 | **2 / 24** |
 | whole-suite pixel distance | 1,268,382 | **693,023** |
-| Mooneye `acceptance` | 58 / 75 | **61 / 75** |
-| Mooneye overall (`acceptance` + `emulator-only`) | 86 / 103 | **89 / 103** |
+| Mooneye `acceptance` | 58 / 75 | **59 / 75** (+`intr_2_mode0_timing`) |
 | cost, dmg-acid2 | 2.1x fast | 2.13x fast (0.263 → 0.559 ms/frame) |
+
+> **Those Mooneye figures are the before/after of *this* work in isolation, measured on the
+> base it started from.** `main` has since gained the nine-machine model work, so the absolute
+> numbers are higher: re-measured at `e58b651`, `GB_PPU=accurate` scores **68/75 acceptance,
+> 28/28 emulator-only, 8/8 misc** and the default engine scores 67/75 — the +1 for
+> `intr_2_mode0_timing` (§8.2) survives on top. The Mealybug figures are unchanged by that
+> work, re-measured at the same commit.
 
 `m3_lcdc_win_en_change_multiple` joins `m2_win_en_toggle` as pixel-exact against all three
 hardware reference sets. On the shootout's published DMG denominator that is **2/24 — level

@@ -3609,9 +3609,13 @@ it. That is now a real, CI-enforced build; it did not compile before.
 
 ### Second pass on the accurate engine (`docs/mealybug.md` §8) — 3/79 → 6/79
 
-**Measured on the pinned ROMs: Mealybug rows 3 → 6, pixel distance 1,268,382 → 693,023,
-Mooneye 86 → 89 of 103.** The default renderer is byte-identical to its five baselines
-throughout — everything here is `src/gpu/fifo.rs` plus one STAT signal.
+**Measured on the pinned ROMs: Mealybug rows 3 → 6, pixel distance 1,268,382 → 693,023, and
+Mooneye `acceptance` +1 (`intr_2_mode0_timing`).** The default renderer is byte-identical to
+its five baselines throughout — everything here is `src/gpu/fifo.rs` plus one STAT signal.
+**Re-measure before quoting an absolute Mooneye figure**: this work's delta was taken against
+the base it started from, and the nine-machine model work has since moved the totals — at
+`e58b651` the accurate engine is **68/75 acceptance, 28/28 emulator-only, 8/8 misc** and the
+default is 67/75. Mealybug is unaffected by that work (re-measured, identical).
 
 - **THE BIGGEST ONE WAS NOT AN ACCURACY BUG AT ALL: the accurate engine never left mode 0
   after the LCD came on.** `skip_first_oam` is cleared only by entering mode 3 at dot 80 of
@@ -3834,7 +3838,8 @@ Mooneye 86 → 88 → 95 (the console revisions). **Measured on `main` plus both
 **3/79**. The one-liner that produces all of them without a full run:
 
 **Every number above is the DEFAULT (fast) engine.** The accurate one is scored separately and
-differently — `GB_PPU=accurate` gives Mooneye **89/103** and Mealybug **6/79** — so add the
+differently — at `e58b651`, `GB_PPU=accurate` gives Mooneye **96/103** (acceptance 68/75)
+against the default's 95/103, and Mealybug **6/79** against 3/79 — so add the
 engine to any figure you quote, and read
 `testharness/{mooneye,mealybug}_accurate_baseline.txt` (not the unsuffixed files) for it.
 
