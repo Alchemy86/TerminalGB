@@ -17,6 +17,100 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — a square channel's frequency reload is latched a few cycles late
+
+**SameSuite 71/76 → 72/76** (`channel_1_freq_change_timing-cgbDE` FAIL → PASS,
+APU half 64/69 → 65/69). Measured with `make test-external` — the CI gate, on
+the ROMs pinned in `tools/fetch-test-suites.sh` — before and after. Everything
+else is byte-identical across the change: Mooneye 103/103 and 8/8 rows,
+Mealybug 79/79 rows, `cpp` 4/4, `testroms` 46/47, `audiocapture` (`dmg_sound`
+12/12 **and every hash**), `savestate`, `battery` 8/8, the audio-perf gate
+(0.253 ms/frame, 66x real time) and 469 library tests. The accurate PPU engine's
+gate (`make test-external-accurate`) is unchanged too, as it must be — this is
+not a PPU change.
+
+**Symptom.** A game that retunes a playing note by writing NRx3/NRx4 — which is
+every vibrato, portamento and pitch bend in every music driver — puts the change
+one sample step in the wrong place when the write lands within a few cycles of
+the channel's own frequency timer expiring. It is a sub-sample error, so it is
+inaudible in isolation; what it corrupts is the *phase* a driver has been
+carefully counting, and a driver that retunes every frame accumulates it.
+
+**Caught by.** SameSuite `channel_1_freq_change_timing`, and only there. The
+suite ships it as three ROMs — `-A`, `-cgb0BC`, `-cgbDE` — that differ **only**
+in their `CorrectResults` tables, because the three machines genuinely disagree.
+Nothing else in any suite we run sees it: Blargg `dmg_sound` is 12/12 with every
+captured audio hash unmoved on both sides of this fix, which is itself the
+finding — **a whole class of sub-sample APU timing is invisible to a suite that
+judges by ear or by checksum**, and it took a ROM that reads PCM12 twice around
+a single write to expose it.
+
+**Hardware behaviour.** A square channel's frequency timer counts down and, at
+each expiry, reloads itself from NRx3/NRx4. The reload is not instantaneous: the
+period is sampled a few T-cycles *after* the expiry, so a write landing inside
+that window still supplies the period the timer has just reloaded with. The next
+sample then arrives one whole **new** period from that expiry, instead of the
+old countdown running out first. Outside the window the ordinary documented rule
+holds — "a frequency write takes effect at the next expiry", the rule
+`channel_1_freq_change`'s own header states as *"changing channel 1's frequency
+takes effect after the current sample finishes"*.
+
+The window is **measured, not chosen**. The ROM sweeps the write across the
+expiry one `nop` at a time at single *and* double speed and reads PCM12 twice —
+immediately after the write, and once more when the channel has frozen on the
+sample it will hold — so it constrains the constant from both sides at both
+clock rates. The passing band is `5..=6` T-cycles, *uniform across both speeds*;
+`≤4` swaps our verdict onto `-A`'s table and `≥7` fails all three.
+`SQUARE_RELOAD_LATCH = 6` (`src/sound.rs`), chosen inside that band to match
+`SQUARE_TRIGGER_DELAY`, the square channel's other measured start latency.
+
+**Two of the three ROMs are deliberately left red, on evidence.**
+
+- **`-A` is the Game Boy Advance, not a CGB revision.** Every CGB stepping tag
+  in this suite is spelled `cgb…` (`-cgb0`, `-cgbB`, `-cgb0B`, `-cgb0BC`,
+  `-cgbDE`); `-A` is the gbdev-wide suffix for the AGB, and SameSuite's
+  `apu/README.md` names *"the Game Boy Advance line"* as the one device family
+  still to be verified. We do not emulate an AGB at all, so passing it would
+  have been an accident — and we did briefly, at latch 4, which is exactly how
+  the constant's lower bound was found.
+- **`-cgb0BC` is blocked on a quirk its own author has not characterised.** Its
+  table differs from `-cgbDE` in the *immediate* PCM12 read, not in the frozen
+  sample — i.e. in the read-back, not the frequency timer. `apu/README.md`
+  records it: *"A quirk in CPU-CGB revisions C and older makes registers PCM12
+  and PCM34 report a glitched PCM amplitude … if they're read in the same
+  M-cycle they change. This behavior needs to be understood, tested and
+  documented."* That is the documented reason C-and-older fail much of the
+  suite. There is no reference implementation to calibrate against.
+
+  This also **retires a note that stood in `CLAUDE.md` and in `CgbRevision`'s
+  own doc comment**: that these three rows would need `CgbRevision::CgbC` split
+  from a `CgbDE`. They would not. Splitting the enum buys nothing, because the
+  other two rows are a console we do not emulate and a quirk nobody has
+  documented — not a revision knob we are missing.
+
+**The subtlety worth keeping.** "Time since the last expiry" **cannot** be
+inferred as `period - delay`, and getting that wrong is not a rounding error —
+it is a regression in two other rows. A freshly *triggered* channel walks
+through exactly that range with no expiry behind it at all (a trigger loads the
+timer itself), and `channel_1_freq_change` / `channel_2_freq_change` write NRx3
+precisely there: the first attempt at this fix derived the window arithmetically
+and turned both of those FAIL. `SquareChannel::since_expiry` therefore tracks
+the real thing, is parked out of range by a trigger, and is live machine state —
+`savestate::FORMAT_VERSION` is **15**.
+
+**Carries into the tool.** Three device-free unit assertions in
+`src/sound.rs`, each pinned to the rule applied to a known timer rather than to
+a recording of our own output, and each proved to fail against the specific
+defect it names: `a_frequency_write_just_after_an_expiry_redoes_that_reload`
+(teeth: remove the retro-apply), `the_latch_does_not_reach_back_past_a_trigger`
+(teeth: derive the window from `period - delay` — the exact bug above) and
+`a_frequency_write_outside_the_latch_leaves_the_countdown_alone`. Conformance
+candidate for the standalone tool: **a mid-note frequency write must move the
+next sample by a whole new period when it lands in the reload window, and not
+at all when it does not** — checkable through the PCM registers on any CGB.
+
+---
+
 ## 2026-08-14 — the Super Game Boy: a joypad port that is also a command channel
 
 Not a fix to an existing subsystem — a subsystem that was not there. Three of

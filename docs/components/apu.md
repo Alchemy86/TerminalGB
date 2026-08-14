@@ -278,7 +278,7 @@ headlessly. See [testing](../testing.md).
 
 [SameSuite](https://github.com/LIJI32/SameSuite)'s APU sub-suite is a much deeper test
 of this component than Blargg's `dmg_sound`, and it is where the honest number lives:
-**63 of the 69 APU ROMs in the shootout's vendored set pass, up from 2** (68/76 across
+**65 of the 69 APU ROMs in the shootout's vendored set pass, up from 2** (72/76 across
 the whole SameSuite directory, which also holds its dma, ppu and sgb tests). Measured by
 `make test-external`, which is CI-gated against `testharness/samesuite_baseline.txt` and
 red on a change in *either* direction.
@@ -332,11 +332,17 @@ citations: [`../conformance-notes.md`](../conformance-notes.md) §10-18.
   ~56–70 T — a two-stage counter keeping its position and counting on to the new
   `2^shift`. That is a `NoiseChannel` restructure, a save-state format bump and a
   re-calibration of the ten green CH4 rows, for one row nothing passes.
-* `channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` (3) — three revision variants of one
-  measurement. `CgbRevision` lumps C/D/E, so this needs it split before more than one is
-  winnable; the plumbing (filename → revision) already exists. `-cgbDE`'s first row is
-  currently one M-cycle out; its second needs `STOP`-driven double speed, which lives in
-  the CPU, not here.
+* `channel_1_freq_change_timing-{A,cgb0BC}` (2) — **`-cgbDE`, the machine we model,
+  passes** since the frequency-reload latch landed
+  ([`../conformance-notes.md`](../conformance-notes.md), 2026-08-14). The other two are
+  not a revision knob we are missing, which an earlier note here claimed: **`-A` is the
+  Game Boy Advance** (every CGB stepping tag in this suite is spelled `cgb…`, and
+  `apu/README.md` names the AGB line as the family still to be verified) — a console this
+  emulator does not have. **`-cgb0BC` differs in the PCM12 *read-back*, not the frequency
+  timer**: it is the "PCM12/PCM34 report a glitched amplitude if read in the same M-cycle
+  they change" quirk of revisions C and older, which the same README lists as needing to
+  *"be understood, tested and documented"* by anyone at all. Splitting `CgbRevision` was
+  tried on paper and buys neither row.
 * `channel_1_sweep_restart` (1) — down to a **single cell of 144**: round 1's last
   subtest, the duty phase of a re-trigger that immediately follows a sweep frequency
   change. It is a **square-timing** question, not a sweep one — the re-trigger's first

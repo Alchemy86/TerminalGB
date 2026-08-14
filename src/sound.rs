@@ -286,6 +286,28 @@ const SQUARE_TRIGGER_ALIGN: u32 = 0;
 /// alone here.
 const SQUARE_RESTART_SPEEDUP: u32 = 4;
 
+/// How late, in T-cycles, the frequency timer samples the value it reloads
+/// itself with after an expiry.
+///
+/// The reload is not instantaneous. A square channel's period register is
+/// read a few cycles *after* the expiry that reloads the timer, so a write to
+/// NRx3/NRx4 landing inside that window still chooses the period the timer
+/// has just reloaded with: the next sample then arrives a whole **new** period
+/// from that expiry, rather than the old countdown finishing first. That is
+/// one duty step earlier than the plain "a frequency write takes effect at the
+/// next expiry" rule gives, and it is the whole of
+/// `channel_1_freq_change_timing`.
+///
+/// **Measured, not chosen** (`-cgbDE`, which is the CPU CGB revision this
+/// emulator models). The ROM sweeps the write across the expiry one nop at a
+/// time and reads PCM12 twice — right after the write, and 16 nops later once
+/// the channel has frozen on the sample it will hold — at single **and**
+/// double speed, so it pins the window from both sides. The passing band is
+/// `5..=6` T-cycles, uniform across both speeds; `4` and below swaps the
+/// verdict onto `-A`, the Game Boy Advance table, and `7` and above fails all
+/// three. **Do not "tidy" this to a round 4.**
+const SQUARE_RELOAD_LATCH: u32 = 6;
+
 /// How long the sweep unit's recalculation takes, in T-cycles, for a given
 /// NR10 shift.
 ///
@@ -337,6 +359,15 @@ struct SquareChannel {
     freq: u16,
     period: u32,
     delay: u32,
+    /// T-cycles since the frequency timer last latched a reload value, i.e.
+    /// since the last expiry. Saturates, and a trigger parks it out of range —
+    /// a trigger loads the timer itself, so the expiry the reload latch would
+    /// edit no longer exists. Only ever read within [`SQUARE_RELOAD_LATCH`] of
+    /// zero, by [`SquareChannel::write_freq`]; `period - delay` cannot stand in
+    /// for it, because a freshly triggered channel walks that same range with
+    /// no expiry behind it (SameSuite `channel_N_freq_change` writes NRx3
+    /// exactly there).
+    since_expiry: u32,
     sweep_period: u8,
     sweep_shift: u8,
     sweep_decrease: bool,
@@ -384,6 +415,7 @@ impl SquareChannel {
             freq: 0,
             period: 2048,
             delay: 0,
+            since_expiry: u32::MAX,
             sweep_period: 0,
             sweep_shift: 0,
             sweep_decrease: false,
@@ -405,6 +437,32 @@ impl SquareChannel {
             self.period = 0;
         } else {
             self.period = (2048 - self.freq as u32) * 4;
+        }
+    }
+
+    /// Write the frequency registers of a *running* channel.
+    ///
+    /// The frequency timer keeps its countdown — a frequency write never
+    /// reloads it — so the new period normally takes effect only at the next
+    /// expiry. The exception is [`SQUARE_RELOAD_LATCH`]: the expiry that has
+    /// just happened has not yet committed to a reload value, so a write
+    /// inside that window is applied to it retroactively and the next sample
+    /// lands a whole *new* period from that expiry.
+    ///
+    /// The window is tested against [`SquareChannel::since_expiry`] and **not**
+    /// against `period - delay`, which looks equivalent and is not: a channel
+    /// that has been triggered but not yet expired sits in that range with no
+    /// reload behind it to edit.
+    fn write_freq(&mut self, freq: u16) {
+        let old_period = self.period;
+        let inside_latch =
+            self.enabled && old_period != 0 && self.since_expiry < SQUARE_RELOAD_LATCH;
+        self.freq = freq;
+        self.calculate_period();
+        if inside_latch && self.period != 0 {
+            // Re-do the last reload with the value just written: the next
+            // sample is now a whole new period from that expiry.
+            self.delay = (self.delay + self.period).saturating_sub(old_period);
         }
     }
 
@@ -454,6 +512,7 @@ impl SquareChannel {
             let mut time = start_time + self.delay;
             let pattern = DUTY_PATTERN[self.duty as usize];
             let vol = self.volume.volume as i32;
+            let mut last_expiry = None;
 
             // At each frequency-timer expiry the duty counter advances and
             // the channel latches the bit at the new position. (`delay` is
@@ -467,10 +526,17 @@ impl SquareChannel {
                     self.last_amp = amp;
                 }
 
+                last_expiry = Some(time);
                 time += self.period;
             }
 
             self.delay = time - end_time;
+            self.since_expiry = match last_expiry {
+                Some(t) => end_time - t,
+                None => self
+                    .since_expiry
+                    .saturating_add(end_time.saturating_sub(start_time)),
+            };
         }
     }
 
@@ -503,6 +569,9 @@ impl SquareChannel {
             SQUARE_TRIGGER_DELAY
         };
         self.delay = self.period + base + pad;
+        // The trigger latched the reload itself, so there is no just-expired
+        // reload for a following NRx3/NRx4 write to edit.
+        self.since_expiry = u32::MAX;
         // Sweep trigger semantics (gg8 wiki; dmg_sound 04-sweep): the shadow
         // frequency and timer ALWAYS reload, the internal enable flag is set
         // iff period or shift is non-zero (a stale `true` from an earlier
@@ -644,6 +713,7 @@ impl SquareChannel {
         w.u16(self.freq);
         w.u32(self.period);
         w.u32(self.delay);
+        w.u32(self.since_expiry);
         w.u8(self.sweep_period);
         w.u8(self.sweep_shift);
         w.bool(self.sweep_decrease);
@@ -672,6 +742,7 @@ impl SquareChannel {
         self.freq = r.u16()?;
         self.period = r.u32()?;
         self.delay = r.u32()?;
+        self.since_expiry = r.u32()?;
         self.sweep_period = r.u8()?;
         self.sweep_shift = r.u8()?;
         self.sweep_decrease = r.bool()?;
@@ -1164,12 +1235,21 @@ impl CgbRevision {
     /// tag means "these revisions agree here", so it maps to any one of them
     /// we model.
     ///
-    /// **Known limit:** `CgbC` lumps C, D and E together, so `cgb0BC` and
-    /// `cgbDE` both land on it. That is fine for everything modelled today —
-    /// C/D/E agree on extra length clocking — but `channel_1_freq_change_timing`
-    /// ships as `-cgb0BC` / `-cgbDE` / `-A`, which is a *different* axis and
-    /// would need `CgbC` split from a `CgbDE`. Unrecognised tags return
-    /// `None`, i.e. the caller's default, so adding one is additive.
+    /// `CgbC` lumps C, D and E together. An earlier note here warned that
+    /// `channel_1_freq_change_timing` (`-cgb0BC` / `-cgbDE` / `-A`) is a
+    /// *different* axis and would need `CgbC` split — **splitting it would win
+    /// nothing, and that was measured.** We model CGB-E and pass `-cgbDE`; of
+    /// the other two, `-A` is the Game Boy Advance (every CGB revision tag is
+    /// spelled `cgb…`, and SameSuite's `apu/README.md` names the AGB line as
+    /// the device family still to be verified), which is not a machine this
+    /// emulator has at all; and `-cgb0BC` differs from `-cgbDE` in *when
+    /// PCM12 reads back*, not in the frequency timer — the "registers PCM12
+    /// and PCM34 report a glitched amplitude if read in the same M-cycle they
+    /// change" quirk of revisions C and older, which that same README lists as
+    /// not yet understood or documented by anyone.
+    ///
+    /// Unrecognised tags return `None`, i.e. the caller's default, so adding
+    /// one is still additive if a future ROM does separate C from D/E.
     pub fn from_tag(tag: &str) -> Option<CgbRevision> {
         match tag.to_ascii_lowercase().as_str() {
             "cgb0" | "0" | "cgb0b" => Some(CgbRevision::Cgb0),
@@ -1902,13 +1982,12 @@ impl Sound {
                     self.channel1.enabled && self.channel1.dac_enabled;
             }
             0xFF13 => {
-                self.channel1.freq = (self.channel1.freq & 0x700) | (v as u16);
-                self.channel1.calculate_period();
+                let f = (self.channel1.freq & 0x700) | (v as u16);
+                self.channel1.write_freq(f);
             }
             0xFF14 => {
-                self.channel1.freq =
-                    (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
-                self.channel1.calculate_period();
+                let f = (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
+                self.channel1.write_freq(f);
                 let fh = self.first_half();
                 let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
@@ -1938,13 +2017,12 @@ impl Sound {
                     self.channel2.enabled && self.channel2.dac_enabled;
             }
             0xFF18 => {
-                self.channel2.freq = (self.channel2.freq & 0x700) | (v as u16);
-                self.channel2.calculate_period();
+                let f = (self.channel2.freq & 0x700) | (v as u16);
+                self.channel2.write_freq(f);
             }
             0xFF19 => {
-                self.channel2.freq =
-                    (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
-                self.channel2.calculate_period();
+                let f = (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
+                self.channel2.write_freq(f);
                 let fh = self.first_half();
                 let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
@@ -3543,7 +3621,7 @@ mod tests {
     //!   2. a programmed tone comes out at the correct pitch.
     use super::{
         AudioPlayer, CgbRevision, LengthCounter, Sound, CLOCKS_PER_FRAME,
-        CLOCKS_PER_SECOND,
+        CLOCKS_PER_SECOND, SQUARE_TRIGGER_DELAY,
     };
     use std::sync::{Arc, Mutex};
 
@@ -4049,6 +4127,93 @@ mod tests {
                 snd.channel4.delay
             );
         }
+    }
+
+    /// A square channel triggered at frequency `$7FC`: period 16 T, first
+    /// expiry at [`SQUARE_TRIGGER_DELAY`] past a whole period, i.e. T=22.
+    fn ticking_square() -> Sound {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        snd.wb(0xFF26, 0x80); // APU on — also zeroes the 1 MHz grid phase
+        snd.wb(0xFF11, 0x00); // NR11: duty 0
+        snd.wb(0xFF12, 0xF8); // NR12: volume 15, no envelope, DAC on
+        snd.wb(0xFF13, 0xFC); // NR13/NR14: frequency $7FC -> period 16 T
+        snd.wb(0xFF14, 0x87); // trigger
+        assert_eq!(snd.channel1.period, 16);
+        assert_eq!(snd.channel1.delay, 16 + SQUARE_TRIGGER_DELAY);
+        snd
+    }
+
+    /// The frequency-timer reload latch — [`SQUARE_RELOAD_LATCH`].
+    ///
+    /// The rule, and both sides of it, are SameSuite
+    /// `channel_1_freq_change_timing-cgbDE`'s; nothing in `cargo test` runs
+    /// SameSuite, so this is the gate. Numbers below are the rule applied to a
+    /// known timer, not a recording of our output: with expiries on a 16 T grid
+    /// starting at T=22, a write at T=40 sits 2 T past the expiry at 38 and so
+    /// lands inside the window, and the channel's next sample must be a whole
+    /// **new** period from 38 — not the 14 T left of the old one.
+    #[test]
+    fn a_frequency_write_just_after_an_expiry_redoes_that_reload() {
+        let mut snd = ticking_square();
+        snd.channel1.run(0, 40);
+        assert_eq!(snd.channel1.since_expiry, 2, "expiries are 22, 38, 54, …");
+        assert_eq!(snd.channel1.delay, 14, "old countdown had 14 T left");
+
+        snd.wb(0xFF13, 0x00); // frequency $700 -> period 1024 T
+        assert_eq!(snd.channel1.period, 1024);
+        assert_eq!(
+            snd.channel1.delay,
+            1024 - 2,
+            "the next sample must be one whole new period from the expiry at \
+             38, i.e. at 1062"
+        );
+    }
+
+    /// The other side of the same constant: a write that misses the window
+    /// leaves the running countdown alone, and the new period only applies
+    /// from the *next* expiry. This is the plain documented rule, and it is
+    /// what all but a few T-cycles of every frequency write does.
+    #[test]
+    fn a_frequency_write_outside_the_latch_leaves_the_countdown_alone() {
+        let mut snd = ticking_square();
+        snd.channel1.run(0, 46);
+        assert_eq!(snd.channel1.since_expiry, 8);
+        assert_eq!(snd.channel1.delay, 8);
+
+        snd.wb(0xFF13, 0x00);
+        assert_eq!(snd.channel1.period, 1024);
+        assert_eq!(snd.channel1.delay, 8, "the expiry at 54 still happens");
+    }
+
+    /// A trigger loads the frequency timer itself, so there is no just-expired
+    /// reload behind it for the latch to edit — however close the write is.
+    ///
+    /// This is not hypothetical tidiness: `since_expiry` exists *because* of
+    /// it. Inferring "time since the last expiry" as `period - delay` reads 2 T
+    /// here, inside the window, and retimes a channel that has never expired —
+    /// which is exactly where SameSuite `channel_1_freq_change` /
+    /// `channel_2_freq_change` write NRx3, and both go red on it.
+    #[test]
+    fn the_latch_does_not_reach_back_past_a_trigger() {
+        let mut snd = ticking_square();
+        snd.channel1.run(0, 8);
+        assert_eq!(snd.channel1.delay, 14, "first expiry is still at 22");
+        assert_eq!(
+            snd.channel1.period - snd.channel1.delay,
+            2,
+            "…and `period - delay` would call that 2 T past an expiry"
+        );
+
+        snd.wb(0xFF13, 0x00);
+        assert_eq!(snd.channel1.period, 1024);
+        assert_eq!(
+            snd.channel1.delay, 14,
+            "the trigger's own countdown must run out first"
+        );
     }
 
     /// Extra length clocking, on each CPU CGB revision we model. Nothing in

@@ -1063,6 +1063,14 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   depends on, and it is what `channel_N_nrx2_speed_change` and the long half of
   `channel_N_nrx2_glitch` measure. `VolumeEnvelope::step` is gone; `div_event` is called
   for CH1/CH2/CH4 on **every** frame-sequencer step.
+  **The NRx2 "zombie mode" cluster is CLOSED — all six rows** (`channel_{1,2}_nrx2_glitch`,
+  `_nrx2_speed_change`, `_restart_nrx2_glitch`) pass on their own `RESULT_CODE`. It took
+  two commits and neither alone was enough: `e2006f1` got the CGB-E formula over the
+  register bits (the short half), this envelope split got the long half, whose answers
+  depend on the counter's actual value. `e2006f1`'s own message honestly scoped the
+  remainder as "not fixed" and was never amended, so briefs kept naming the cluster as
+  the last open APU gap long after it was green — **check the baseline, not a commit
+  message, before starting on a named gap.**
 - **The envelope's period counter runs on frame-sequencer step 6, not 7.** Length (even
   steps) and sweep (step 2 of 4) were already one step ahead of the event that acts on
   them; the envelope was not, and that inconsistency is exactly what an extra 512 Hz of
@@ -1083,7 +1091,8 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   itself calls a bug that *"breaks at least one game (Prehistorik Man)"* and that was fixed
   in later revisions. We model CGB-E. `-cgb0` and `-cgbB` also contradict each other, so no
   single machine passes both. Likewise only one of the three
-  `channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` variants is winnable at all.
+  `channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` variants is winnable at all — and it is
+  **`-cgbDE`, which passes now**; see "the frequency reload is latched late" below.
 - **The three remaining CH4 failures have ONE cause, and it is scoped not attempted**:
   *(Superseded — two of the three are green; the cause was the two-stage counter, as
   described here. See below.)* the
@@ -1153,11 +1162,18 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   a frontend (a typo warns and is ignored). **A DMG is never affected** —
   `Sound::extra_length_rule` pins the modern rule whenever `dmg_mode` is set, pinned by
   `the_revision_quirk_never_reaches_a_dmg`.
-- **`CgbRevision` deliberately lumps C/D/E.** That is exactly right for length clocking,
-  but `channel_1_freq_change_timing` ships as `-cgb0BC` / `-cgbDE` / `-A`, which is a
-  *different* revision axis and would need `CgbC` split. Whoever takes those three rows
-  gets the plumbing for free; `from_tag` returning `None` falls back to the default, so
-  adding a tag is additive.
+- **`CgbRevision` deliberately lumps C/D/E, and splitting it would win NOTHING.** This
+  entry used to say `channel_1_freq_change_timing`'s `-cgb0BC` / `-cgbDE` / `-A` was "a
+  different revision axis needing `CgbC` split"; that was measured and is wrong. `-cgbDE`
+  passes on the machine we already are. **`-A` is the Game Boy Advance** — every CGB
+  stepping tag in this suite is spelled `cgb…`, and SameSuite's `apu/README.md` names the
+  AGB line as the device family still to be verified — a console we do not emulate, so
+  passing it would be an accident (we briefly did, which is how the latch's lower bound
+  was found). **`-cgb0BC` differs in the PCM12 *read-back*, not the frequency timer**: the
+  "PCM12/PCM34 report a glitched amplitude if read in the same M-cycle they change" quirk
+  of revisions C and older, which that README lists as not understood or documented by
+  anyone. `from_tag` returning `None` still falls back to the default, so adding a tag
+  stays additive if a future ROM does separate C from D/E.
 - **`cgb_revision` is machine configuration, NOT cartridge state, so it is not
   serialised** — no `savestate::FORMAT_VERSION` bump. A save state restores into whatever
   machine is running, which is the behaviour you want.
@@ -1176,6 +1192,41 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   `.asm` `CorrectResults` tables plus the header comments are where every expectation in
   this section came from.
 
+## The square frequency reload is latched LATE (SameSuite 71/76 → 72/76)
+
+**`channel_1_freq_change_timing-cgbDE` FAIL → PASS**, APU half 64/69 → 65/69. Measured
+with `make test-external` before and after; everything else byte-identical (Mooneye
+103/103 + 8/8, Mealybug 79/79, `cpp` 4/4, `testroms` 46/47, `audiocapture` **including
+every hash**, `savestate`, `battery`, audio-perf 0.253 ms/frame, 469 lib tests, and the
+accurate-PPU gate). Full record: [`docs/conformance-notes.md`](docs/conformance-notes.md)
+(newest entry).
+
+- **A frequency write does not merely "take effect at the next expiry".** The timer
+  samples its reload value a few T-cycles *after* the expiry, so a write inside that
+  window supplies the period the timer has **just** reloaded with, and the next sample
+  lands one whole *new* period from that expiry instead of the old countdown finishing.
+  `SquareChannel::write_freq`, `SQUARE_RELOAD_LATCH`.
+- **The constant is measured and the band is narrow: `5..=6` T, uniform at BOTH speeds.**
+  The ROM sweeps the write across the expiry one `nop` at a time, single *and* double
+  speed, reading PCM12 immediately and again once the channel has frozen — so it pins the
+  window from both ends at both clock rates. `≤4` moves the verdict onto `-A` (the AGB
+  table), `≥7` fails all three. **Do not "tidy" it to a round 4**, and do not make it
+  speed-dependent — that was tried and only a uniform value fits.
+- **`period - delay` IS NOT "time since the last expiry", and inferring it costs two
+  rows.** A freshly triggered channel walks that same range with no expiry behind it (a
+  trigger loads the timer itself), and `channel_{1,2}_freq_change` write NRx3 exactly
+  there — the first attempt derived the window arithmetically and turned both FAIL.
+  Hence `SquareChannel::since_expiry`, tracked in `run_span` and parked at `u32::MAX` by
+  a trigger. It is live machine state: `savestate::FORMAT_VERSION` is **15**.
+- **Nothing outside SameSuite sees this.** `dmg_sound` stays 12/12 with every captured
+  audio hash unmoved on both sides — a whole class of sub-sample APU timing is invisible
+  to a suite judged by ear or by checksum. That gap is the finding, not an aside.
+- **Cost: ~1.3 µs/frame** on the APU's own figure (`apu_bench`, min of 5: 26.7 → 28.0
+  µs/frame) — 0.008 % of a 16.743 ms frame; one comparison per NRx3/NRx4 write plus one
+  `Option` store per channel span.
+- **Two red rows here are deliberate and evidenced** — `-A` is an AGB, `-cgb0BC` is the
+  undocumented PCM12 read-back glitch of revisions C and older. See the `CgbRevision`
+  entry above, which this work corrected.
 
 ## Terminal frontend (TUI)
 
@@ -3450,10 +3501,11 @@ it. That is now a real, CI-enforced build; it did not compile before.
 
 Several crews landing APU, PPU and SGB work in the same week means any absolute suite number
 in a brief is probably a few days stale. In one afternoon SameSuite moved 68 → 69 (the CH1
-sweep-shadow fix `52d98f5`) → 71 (SGB), and Mooneye 86 → 88. **Measured on `main` at
-`8747e7d`:** testroms **46/47**, Mooneye **88/103** (acceptance 60/75, emulator-only 28/28),
-Mooneye CGB misc **4/8**, SameSuite **71/76** (apu 64/69, dma 4/4, ppu 1/1, sgb 2/2),
-`cpp` **4/4**, Mealybug **3/79**. The one-liner that produces all of them without a full run:
+sweep-shadow fix `52d98f5`) → 71 (SGB) → 72 (the square frequency-reload latch), and
+Mooneye 86 → 88. **Measured on `43f8fdb` plus the reload latch:** testroms **46/47**,
+Mooneye **88/103** (acceptance 60/75, emulator-only 28/28), Mooneye CGB misc **4/8**,
+SameSuite **72/76** (apu 65/69, dma 4/4, ppu 1/1, sgb 2/2), `cpp` **4/4**, Mealybug
+**3/79**. The one-liner that produces all of them without a full run:
 
 ```python
 # python3, from the repo root — reads the checked-in baselines, which ARE the expectations

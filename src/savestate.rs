@@ -95,7 +95,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// receiver and the multiplayer joypad index ([`crate::sgb`]). It is skippable
 /// like the APU block, so a state taken on an SGB still loads on a build that
 /// is not one, but its position in the stream moved every later block.
-pub const FORMAT_VERSION: u16 = 14;
+/// v15: each square channel now carries how long ago its frequency timer last
+/// reloaded, which decides whether an NRx3/NRx4 write still edits that reload
+/// (SameSuite `channel_1_freq_change_timing-cgbDE`). It cannot be derived from
+/// the countdown, and it is live at a frame boundary.
+pub const FORMAT_VERSION: u16 = 15;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
