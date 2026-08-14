@@ -485,12 +485,12 @@ mod tests {
         let cases = [
             "my key is sk-ant-api03-AAAABBBBCCCCDDDDEEEEFFFF and it works",
             "set ANTHROPIC_API_KEY=abcdef123456 before running",
-            "failed to open /home/aaron/.claude/.credentials.json for reading",
-            "error at C:\\Users\\aaron\\secret.txt while starting",
+            "failed to open /home/example-user/.claude/.credentials.json for reading",
+            "error at C:\\Users\\example-user\\secret.txt while starting",
             "posting the state to https://api.anthropic.com/v1/messages now",
             "the adapter lives in tools/claude_plays/adapter.py somewhere",
             "reaching the box at 192.168.1.44:8080 to continue the run",
-            "mailing the log to codebyexample@gmail.com right now",
+            "mailing the log to someone@example.com right now",
             "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
             "the token=9f8e7d6c5b4a3f2e1d0c9b8a7 was rejected by the server",
         ];
@@ -500,12 +500,12 @@ mod tests {
             for needle in [
                 "sk-ant",
                 "ANTHROPIC_API_KEY",
-                "/home/aaron",
+                "/home/example-user",
                 "C:\\Users",
                 "https://",
                 "adapter.py",
                 "192.168.1.44",
-                "@gmail.com",
+                "@example.com",
                 "eyJhbGciOi",
                 "9f8e7d6c5b4a3f2e1d0c9b8a7",
             ] {

@@ -352,7 +352,7 @@ fn safe_title(title: &str) -> String {
 
 /// The last component of a path, for a status row that is ~18 columns wide.
 ///
-/// A truncated *head* (`/home/aaron/Videos/game…`) tells the reader nothing;
+/// A truncated *head* (`/home/user/Videos/game…`) tells the reader nothing;
 /// the leaf is the part that distinguishes `gb.raw` from
 /// `POKEMON_BLUE-…-160x144-rgba.raw`, which is exactly the distinction that was
 /// missed. The full path is always in the `?` overlay's notices.

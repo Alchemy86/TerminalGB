@@ -328,7 +328,7 @@ survives being pressed repeatedly — which is not free, see below.
 * **`v`** sends the game to `video_out` and stops sending it. With **no** live destination
   configured it says so (`set video_out (e.g. /dev/video10), or press V to record a file`) rather
   than quietly doing the other thing. That fallback is exactly how "stop the stream" once answered
-  `REC stopped: 268 frames, 23.6 MB → /home/aaron/Videos/gameboy` at somebody who was thinking about
+  `REC stopped: 268 frames, 23.6 MB → /home/user/Videos/gameboy` at somebody who was thinking about
   his camera, and it is the same configure-versus-send confusion as §5b wearing a third hat.
 * **`V` (shifted) always records a file**, whatever `video_out` says. Feeding a camera and keeping a
   recording are different jobs with different destinations, different formats and different endings

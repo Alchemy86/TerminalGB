@@ -315,7 +315,7 @@ rom            DMG-ACID2
 checksum       0xa934
 frames         240
 frame hash     0x01acf78fe505f31c
-state bytes    141982
+state bytes    141965          # moves with savestate::FORMAT_VERSION
 state re-run   identical after 60 more frames
 
         +++++-+-++  +++++++-++--

@@ -1188,6 +1188,12 @@ impl VideoOut {
     ///   is why this one is opened `O_NONBLOCK` and left in
     ///   [`StreamState::Waiting`] until a consumer turns up. That used to be a
     ///   hang at startup with no UI and no way out but `kill`.
+    // The V4L2 branch below is `#[cfg(all(target_os = "linux", feature =
+    // "libc"))]`, so on a build without it (the embeddable core, and every
+    // non-Linux target) `spec` is never rewritten and the two `if`s have
+    // nothing between them. Both lints are therefore about code that is not
+    // compiled rather than about this code.
+    #[allow(unused_mut, clippy::collapsible_if)]
     pub fn open(spec: VideoSpec) -> (VideoOut, Option<String>) {
         let mut spec = spec;
         let mut note = None;

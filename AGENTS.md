@@ -2726,3 +2726,70 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   must come last; and a "print what is new" display must key on a **monotonic counter**
   (`Commentary::accepted()`), never on the length of the bounded history buffer — that bug hid
   28,000 frames of a real run.
+
+## Embeddability — the core stands alone (`--no-default-features`)
+
+The captain's requirement: someone must be able to pull this crate into their own UI, tool
+or hardware project and get the emulator, with nothing about this machine or this owner in
+it. That is now a real, CI-enforced build; it did not compile before.
+
+- **`--no-default-features` is THE EMBEDDING BUILD, and the dependency count is the contract:
+  `gameboy -> blip_buf`, one crate, against 193 on the default build.** `make embed` and the
+  **`embed` CI job** assert exactly that (the job installs no system libraries at all). If a
+  frontend crate ever appears in that tree, something has leaked into the core — fix the
+  layering, do not relax the check.
+- **Frontends live behind `desktop` and `tui` cargo features** (both still in `default`, so
+  every existing binary is unchanged). Before this, `screen::desktop` and `screen::tui` were
+  unconditional `mod`s, so glutin/gl/ratatui/ratatui-image/image came with the emulator
+  whether you wanted them or not. **New rule: anything a frontend needs goes behind a
+  feature.** A new example or test that reaches for `image`/`ratatui`/`cpal`/`libc` needs an
+  explicit `[[example]]`/`[[test]]` entry with `required-features` — otherwise the minimal
+  build goes red on code that was never meant to be in it.
+- **`examples/headless.rs` is the proof, not a demo.** It runs a cartridge, takes input and
+  round-trips a save state with **no window, no terminal, no audio device, no image codec and
+  no `$HOME`** — `make embed` runs it with `HOME`, `DISPLAY` and `WAYLAND_DISPLAY` unset. Keep
+  it dependency-free (its FNV hash and ASCII renderer are hand-rolled on purpose).
+- **The core's whole host surface, enumerated so it can be defended:** one environment read
+  (`$GB_MODEL`, and only for `Model::Auto` — `Gameboy::new_with_model` bypasses it), one wall
+  clock read (only writing/reading an MBC3 clock cartridge's battery file), and `<rom>.sav`
+  **only** if the caller passed `Some(path)`. Everything else — config files, `$XDG_*`,
+  `/dev/video*`, terminals, displays — is in `screen`/`video`/`sound::cpal_audio`. Adding a
+  host dependency to `cpu`/`mmu`/`gpu`/`mbc`/`sound`/`savestate`/`mode`/`upscale` breaks the
+  claim; put it in a frontend.
+- **`std` is required and `no_std` is not a flag away** (`Vec`, `Box<dyn>`, `std::sync::Mutex`
+  in the FFI shim, `PathBuf` in the battery layer). Say so rather than implying otherwise;
+  embedded *Linux* is fine, bare metal is a rework of the MBC/battery layer.
+- **`get_mbc` used to force an MBC3 whenever no save path was given** — i.e. for the wasm
+  build, the FFI build and every embedder — so a non-MBC3 game was mis-banked from its first
+  bank switch. Persistence and mapper selection are now separate: every `MBCx::new` takes
+  `Option<PathBuf>`. *Conformance record:* **symptom** — a ROM-only or MBC1/MBC5 game runs
+  wrong (garbage code, freeze) in the browser or in any embedder, while the identical ROM is
+  fine in the desktop build; **caught by** — nothing in the suite, because every harness
+  passes a path, which is itself the finding; now
+  `mbc::test::the_mapper_is_chosen_from_the_header_with_or_without_a_save_path` (proved to
+  fail against the old code); **hardware** — the mapper is cartridge header byte `0x0147`
+  (Pan Docs, The Cartridge Header), and nothing about a save file can change it.
+- **Arbitrary bytes must not abort the host.** `[profile.release] panic = 'abort'` means a
+  panic in the core takes the embedder's process down with no unwinding. A cartridge shorter
+  than its header used to index out of bounds; `get_mbc` refuses it, and
+  `Gameboy::try_new_with_model` / `Cpu::try_new_with_model` return the reason. **Use the
+  `try_` form for bytes you did not produce.**
+- **Cross-target reality:** `cargo check --no-default-features` is clean for `wasm32`,
+  `x86_64-pc-windows-gnu`, `aarch64-unknown-linux-gnu` and `x86_64-apple-darwin` (in CI for
+  the first three). Those are **type checks, not linked-and-run** — x86-64 Linux is still the
+  only platform anything has been executed on. Do not upgrade that claim without running
+  something.
+- **Licensing position, per suite, for redistributors** (README "Embedding the core" carries
+  the user-facing version): every resolved dependency in every feature combination is
+  MIT/Apache-2.0/BSD/Zlib/ISC/0BSD/Unlicense — **nothing GPL**; `icy_sixel` ships MIT text
+  with no `license` field in its manifest, which is a metadata gap, not a licence problem.
+  The only vendored ROM is `third_party/dmg-acid2` (MIT, redistribution permitted, licence
+  included). **Blargg's ROMs carry no explicit licence and are a submodule, never vendored;
+  Mooneye is not vendored either.** Re-run the check with
+  `cargo metadata --all-features` when a dependency is added.
+- **Personal identifiers:** the tree is clean of them (`git grep -iE 'aaron|codebyexample'`
+  returns nothing outside the `tests/` submodule). Sanitiser fixtures in
+  `src/agent/commentary.rs` deliberately feed private-looking shapes through `sanitise` —
+  keep them **obviously synthetic** (`/home/example-user`, `someone@example.com`), never a
+  real address or path. Commit *author* emails in git history are a separate thing and are
+  not editable without rewriting history — a captain decision, not a crew one.

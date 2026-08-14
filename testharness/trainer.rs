@@ -1342,7 +1342,7 @@ impl Party {
             put(
                 &mut save,
                 PARTY + 272 + (i as u16) * 11,
-                &encode_name("AARON"),
+                &encode_name("RED"),
             );
             put(
                 &mut save,
