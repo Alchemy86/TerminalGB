@@ -4220,26 +4220,60 @@ it. That is now a real, CI-enforced build; it did not compile before.
   real address or path. Commit *author* emails in git history are a separate thing and are
   not editable without rewriting history — a captain decision, not a crew one.
 
-## Two PPU engines — the pixel FIFO and the whole-scanline renderer (`src/gpu/fifo.rs`)
+## Two picture modes — `standard` and `identical` (`src/gpu/fifo.rs`, `docs/picture-modes.md`)
 
-- **Full state, per-test numbers and the recommendation: [`docs/mealybug.md`](docs/mealybug.md) §7.**
-  Component-level orientation: [`docs/components/ppu.md`](docs/components/ppu.md) §4.0.
-- **`RenderMode { Fast, Accurate }` picks the engine**; `GB_PPU=fast|accurate`, the `ppu` config
-  key (env wins), or `Gpu::set_render_mode`, and it is shown in the TUI Status panel's `PPU` row.
-  It is deliberately **not** in the save state — it is a property of this session's host, not of
-  the emulated machine, so loading someone else's state must not switch their renderer.
-  `Gameboy::set_render_mode` takes `terminalgb::ppu::RenderMode`; the `gpu` module itself stays
-  private, and the crate root's `terminalgb::RenderMode` is a *different* enum (which frontend).
-- **`Fast` is still the default and every baseline is measured on it — but the accuracy
-  argument for that is GONE.** The accurate engine used to be behind on two rows; both are
+- **Reader-facing page: [`docs/picture-modes.md`](docs/picture-modes.md).** Per-test numbers and
+  the calibration argument: [`docs/mealybug.md`](docs/mealybug.md) §7. Component-level
+  orientation: [`docs/components/ppu.md`](docs/components/ppu.md) §4.0.
+- **THE MODES ARE `standard` AND `identical`; THE RUST VARIANTS ARE STILL `RenderMode::{Fast,
+  Accurate}`.** That split is deliberate: `Fast`/`Accurate` describe what the two engines *are*
+  and are referenced from a large amount of code, docs and history, while `standard`/`identical`
+  are what a person types and sees (the captain's own words). `RenderMode::name()` returns the
+  user-facing name, `alias()` the pre-rename one. **Both spellings parse everywhere** —
+  `parse()` accepts `standard|fast|scanline` and `identical|accurate|fifo` — so every existing
+  `config.toml`, `$GB_PPU` invocation and script keeps working, and the `make` targets
+  deliberately still say `GB_PPU=accurate` to keep the alias exercised in CI.
+- **It is a real, findable mode, not an internal switch, and five surfaces say so**: the TUI's
+  **`P` key** (shifted, like `T`/`B`/`A` — `p` is pause and the unshifted letters are
+  configurable game buttons), the Status panel's `PPU` row, the Controls list, the `?` overlay,
+  and the `ppu` config key whose warning offers every spelling back. Also `GB_PPU`, and
+  `Gpu::set_render_mode` for an embedder. Switching is safe mid-frame — the two engines share
+  every register and the framebuffer, and the accurate one rebuilds its pipeline at the head of
+  the next scanline.
+- **THE COST IS QUOTED FROM A CONSTANT THAT IS CHECKED AGAINST A MEASUREMENT.**
+  `RenderMode::IDENTICAL_COST` = **2.1**, printed on the Status row (`identical ~2.1x`), in the
+  `P` toast and in the `?` overlay — and `testharness/ppuengines.rs` times both engines over 400
+  frames of dmg-acid2 on every `cargo test --release` and **fails the build if the constant
+  disagrees with what it measured** (teeth proven: setting it to 4.5 turns the harness red).
+  This repository has been bitten by a stale performance number before ("audio costs ~8 ms a
+  frame" outlived its fix by months); a figure shown to users has to be a measurement.
+  Measured here four runs running: 0.221 → 0.461 ms/frame, ratio **2.07-2.09x**. Older notes
+  saying 2.13x or 2.17x are other ROMs/boxes, not wrong — hence the `~`.
+- **`standard` is still the default and every unsuffixed baseline is measured on it — but the
+  accuracy argument for that is GONE.** `identical` used to be behind on two rows; both are
   closed (see "The line-0 STAT phase" below) and it now **loses no row to the default on any
   gate**: in-repo harness 46/47 both with *identical verdicts row for row*, Mooneye
   `acceptance`+`emulator-only` 95 vs **97**/103, `misc` 8/8 both, SameSuite 72/76 both, `cpp`
-  4/4 both, Mealybug 3 vs **12**/79. What stands between it and the default is its **2.17x
-  cost** (0.243 → 0.527 ms/frame, 31.8x real time headless) and the fact that flipping it
-  swaps `testharness/{baseline,mealybug_baseline,mooneye_baseline,mooneye_cgb_baseline}.txt`
+  4/4 both, Mealybug 3 vs **12**/79. What stands between it and the default is **cost alone**,
+  plus the fact that flipping it swaps
+  `testharness/{baseline,mealybug_baseline,mooneye_baseline,mooneye_cgb_baseline}.txt`
   with the `*_accurate_baseline.txt` files in one commit. That is a captain-facing product
   decision, not a crew one. **Never re-bless `testharness/baseline.txt` to hide a regression.**
+- **The mode is deliberately NOT in the save state** — it is a property of this session's host,
+  not of the emulated machine, so loading someone else's state must not switch their renderer.
+  `Gameboy::set_render_mode` takes `terminalgb::ppu::RenderMode`; the `gpu` module itself stays
+  private, and the crate root's `terminalgb::RenderMode` is a *different* enum (which frontend).
+- **`docs/tools/status_numbers.py` reports BOTH modes** and both pages are gated by
+  `make docs-check`: the Markdown table has a column each (`same` where a suite has only one
+  baseline because the mode does not reach what it measures), and the HTML page carries a
+  generated `<!-- picture-modes:begin -->` block. That block is a plain `<table>` on purpose —
+  `ROW_RE` rewrites the `.name`/`.score`/`.bar` rows by name, and a second row called "Mooneye
+  GB — acceptance" would be an obvious trap.
+- **Adding a line to the `?` overlay can silently delete one further down.** The overlay does
+  not scroll and is already longer than its popup; a six-line paragraph added here pushed the
+  "GAME PICTURE ONLY" line off the bottom and turned
+  `the_help_says_the_feed_is_game_only_and_where_to_go_instead` red. Keep additions to two lines
+  and re-run that test.
 ### The line-0 STAT phase — the OAM strobe must ask `LY`, not `mode` (accurate 6/79 → 12/79)
 
 **Full write-up: [`docs/mealybug.md`](docs/mealybug.md) §9.** Mealybug on the accurate engine
@@ -4581,11 +4615,12 @@ Mooneye 86 → 88 → 95 (the console revisions). **Measured on `main` plus both
 **8/8**, SameSuite **72/76** (apu 65/69, dma 4/4, ppu 1/1, sgb 2/2), `cpp` **4/4**, Mealybug
 **3/79**. The one-liner that produces all of them without a full run:
 
-**Every number above is the DEFAULT (fast) engine.** The accurate one is scored separately and
-differently — at `e58b651`, `GB_PPU=accurate` gives Mooneye **96/103** (acceptance 68/75)
-against the default's 95/103, and Mealybug **6/79** against 3/79 — so add the
-engine to any figure you quote, and read
-`testharness/{mooneye,mealybug}_accurate_baseline.txt` (not the unsuffixed files) for it.
+**Every number above is the DEFAULT `standard` picture mode.** `identical` is scored separately
+and differently — measured on this branch, `GB_PPU=identical` gives Mooneye **97/103**
+(acceptance **69/75**) against the default's 95/103 (67/75), and Mealybug **12/79** against
+3/79 — so **add the mode to any figure you quote**, and read
+`testharness/{mooneye,mealybug}_accurate_baseline.txt` (not the unsuffixed files) for it. The
+baseline filenames still say `accurate`; the mode is `identical`. Both spellings parse.
 
 ```python
 # python3, from the repo root — reads the checked-in baselines, which ARE the expectations

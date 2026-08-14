@@ -1191,6 +1191,13 @@ struct App {
     last_control: Option<(KeyCode, Instant)>,
 
     // Emulation controls (see the corresponding key handlers).
+    /// The [picture mode](crate::gpu::RenderMode) the player last chose with
+    /// `P`, or `None` while nobody has. It follows them across an in-app ROM
+    /// switch, the way the palette, the upscaler and the speed rung do —
+    /// silently reverting to the config's mode on the next cartridge would look
+    /// like the key had stopped working. `None` leaves whatever `$GB_PPU` or
+    /// the `ppu` config key chose for that session.
+    ppu_choice: Option<crate::gpu::RenderMode>,
     /// Index into [`SPEED_LADDER`].
     speed: usize,
     /// Stats overlay toggle (off by default). Does not pause the game.
@@ -1505,6 +1512,7 @@ impl App {
             should_quit: false,
             input: InputMode::default(),
             last_control: None,
+            ppu_choice: None,
             speed: SPEED_NORMAL,
             stats: false,
             trainer: trainer_open,
@@ -1928,6 +1936,12 @@ impl App {
                 // Carry the current speed rung's audio contract into the new
                 // session (see bump_speed): non-1x must drop, not wait.
                 gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
+                // …and the picture mode the player chose with `P`, for the same
+                // reason the palette and the upscaler follow them (see
+                // `App::ppu_choice`).
+                if let Some(mode) = self.ppu_choice {
+                    gb.set_render_mode(mode);
+                }
                 // Plugins were attached by `load_session`; the machine owns the
                 // single host (see `crate::plugin`). All the frontend does here
                 // is tell the trainer view whether its panel is on screen.
@@ -3227,6 +3241,16 @@ impl App {
                 }
                 KeyCode::Char('[') => {
                     self.palette = self.palette.next();
+                    return;
+                }
+                // Picture mode: `standard` (fast) ↔ `identical` (hardware-exact
+                // per-dot, ~2x the CPU). `P` for picture — shifted like `T`,
+                // `B` and `A`, because the unshifted letters are configurable
+                // game buttons and `p` is already pause. An option nobody can
+                // find is an option nobody has, so it is a key, a Status row
+                // and a `?` section — not just a config file.
+                KeyCode::Char('P') => {
+                    self.toggle_ppu_mode();
                     return;
                 }
                 // Upscaler: `]` cycles the algorithm, `}` the scale factor.
@@ -4789,17 +4813,39 @@ impl App {
         )
     }
 
-    /// The Status panel's `PPU` row — which rendering engine drew the picture.
-    /// With no ROM loaded there is no PPU to ask, so it reports what the next
-    /// one will get rather than inventing a value.
-    fn ppu_label(&self) -> &'static str {
+    /// Which **picture mode** is live — the running machine's if there is one,
+    /// otherwise the one the next machine will get, rather than a guess.
+    fn ppu_mode(&self) -> crate::gpu::RenderMode {
         match self.session.as_ref() {
-            Some(s) => s.gb.render_mode().name(),
+            Some(s) => s.gb.render_mode(),
             None => self
-                .config
-                .ppu
-                .unwrap_or_else(crate::gpu::RenderMode::from_env)
-                .name(),
+                .ppu_choice
+                .or(self.config.ppu)
+                .unwrap_or_else(crate::gpu::RenderMode::from_env),
+        }
+    }
+
+    /// The Status panel's `PPU` row. It carries the **price** as well as the
+    /// name, because that is where the choice is made: a player who has pressed
+    /// `P` and wonders why the game feels heavier must be able to see why.
+    fn ppu_label(&self) -> String {
+        self.ppu_mode().status_label()
+    }
+
+    /// `P` — switch picture mode live. Safe mid-frame (`Gpu::set_render_mode`
+    /// rebuilds the pipeline at the head of the next scanline), so this needs
+    /// no pause and no reload. With no ROM loaded there is nothing to switch,
+    /// and saying so beats appearing to do nothing.
+    fn toggle_ppu_mode(&mut self) {
+        let next = self.ppu_mode().toggled();
+        match self.session.as_mut() {
+            Some(s) => {
+                s.gb.set_render_mode(next);
+                // Remembered for the next cartridge too — see `ppu_choice`.
+                self.ppu_choice = Some(next);
+                self.set_toast(format!("Picture mode: {}", next.describe()));
+            }
+            None => self.set_toast("No game loaded".to_string()),
         }
     }
 
@@ -5064,12 +5110,13 @@ impl App {
             kv("Input", self.input.label()),
             kv("Palette", self.palette.name()),
             kv("Upscale", &self.upscale_label()),
-            // Which of the two emulated rendering engines is live. Not a
-            // picture-quality setting — palettes and upscaling above are
-            // unaffected by it — but the two *can* disagree on a game that
-            // writes PPU registers mid-scanline, so which one produced the
-            // picture must never be a guess. See `crate::gpu::RenderMode`.
-            kv("PPU", self.ppu_label()),
+            // Which of the two emulated picture modes is live, and what the
+            // expensive one costs. Not a picture-quality setting — palettes and
+            // upscaling above are unaffected by it — but the two *can* disagree
+            // on a game that writes PPU registers mid-scanline, so which one
+            // produced the picture must never be a guess. `P` switches it.
+            // See `crate::gpu::RenderMode`.
+            kv("PPU", &self.ppu_label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
             kv("Slot", &self.slot.to_string()),
             // "Am I live?" must never be a guess — see `App::toggle_video`.
@@ -5186,6 +5233,10 @@ impl App {
             Line::from("L load ROM  f full"),
             Line::from("[ palette   ? help"),
             Line::from("] upscale   } factor"),
+            // The picture mode sits with the other look-and-feel keys and above
+            // the capture keys, which are the ones that can afford to be
+            // clipped first on a short window.
+            Line::from("P picture mode"),
             Line::from("c shot      C raw shot"),
             Line::from("v stream    V record"),
         ];
@@ -5363,6 +5414,20 @@ impl App {
             Line::from("  R         reset       L       load ROM"),
             Line::from("  f         fullscreen  [       palette"),
             Line::from("  ]         upscaler    }       upscale factor"),
+            Line::from(format!(
+                "  P         picture: standard ⇄ identical    (now: {})",
+                self.ppu_mode().name()
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "  identical draws the picture dot by dot as the hardware \
+                     does, so a mid-scanline effect lands exactly right — for \
+                     ~{:.1}x the CPU. Most games look the same either way \
+                     (`ppu =` in config.toml)",
+                    crate::gpu::RenderMode::IDENTICAL_COST
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from("  c         screenshot  C       screenshot (raw 160x144)"),
             Line::from(
                 "  v         live feed to `video_out` on/off — starts OFF; a camera \
@@ -11122,6 +11187,126 @@ mod tests {
             "mute must be unmissable on the top bar and in Status"
         );
         output_volume::set_muted(false);
+    }
+
+    /// **The picture mode is switchable from inside the emulator, and the
+    /// switch reaches the emulated PPU.** Driven through the real dispatcher,
+    /// because the whole point of this feature is that it is a key a player can
+    /// press — a mode reachable only from `config.toml` is one nobody finds.
+    /// The default must survive the round trip: `P` twice is a no-op.
+    #[test]
+    fn the_picture_mode_key_switches_the_emulated_ppu() {
+        use crate::gpu::RenderMode;
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let press = |app: &mut App| {
+            app.handle_key(KeyEvent::new(
+                KeyCode::Char('P'),
+                event::KeyModifiers::SHIFT,
+            ));
+        };
+        let live = |app: &App| app.session.as_ref().unwrap().gb.render_mode();
+        assert_eq!(live(&app), RenderMode::Fast, "the default must not move");
+
+        press(&mut app);
+        assert_eq!(live(&app), RenderMode::Accurate);
+        // The toast has to name the mode AND its price — this is where the
+        // choice is made, so this is where the cost is stated.
+        let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("identical"), "{toast:?}");
+        assert!(
+            toast.contains(&format!("{:.1}x", RenderMode::IDENTICAL_COST)),
+            "{toast:?}"
+        );
+
+        press(&mut app);
+        assert_eq!(live(&app), RenderMode::Fast, "two taps return to default");
+
+        // `p` (unshifted) is pause and must not have become a mode switch.
+        app.handle_key(KeyEvent::new(KeyCode::Char('p'), event::KeyModifiers::NONE));
+        assert_eq!(live(&app), RenderMode::Fast);
+        assert!(app.session.as_ref().unwrap().paused);
+
+        // **The choice follows the player across an in-app ROM switch**, the way
+        // the palette, the upscaler and the speed rung do. Reverting to the
+        // config's mode on the next cartridge would look like `P` had stopped
+        // working. Restarting the same ROM is the cheapest way to drive the real
+        // `start_game` path.
+        press(&mut app);
+        assert_eq!(live(&app), RenderMode::Accurate);
+        let rom = app.session.as_ref().unwrap().entry.path.clone();
+        app.start_game(&rom);
+        assert_eq!(
+            live(&app),
+            RenderMode::Accurate,
+            "a new cartridge must keep the mode the player chose"
+        );
+    }
+
+    /// **A mode nobody can see is a mode nobody can debug** — the same rule the
+    /// plugin row follows. Asserted against *rendered* output: the `PPU` row
+    /// names the live mode, and the expensive one carries its price there too,
+    /// so a player who wonders why the game got heavier can see why.
+    #[test]
+    fn the_status_panel_names_the_live_picture_mode_and_its_cost() {
+        use crate::gpu::RenderMode;
+        use ratatui::backend::TestBackend;
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let screen = |app: &mut App| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+        assert!(
+            screen(&mut app).contains("standard"),
+            "the default is named"
+        );
+        app.session
+            .as_mut()
+            .unwrap()
+            .gb
+            .set_render_mode(RenderMode::Accurate);
+        let text = screen(&mut app);
+        assert!(text.contains("identical"), "{text}");
+        assert!(
+            text.contains(&format!("{:.1}x", RenderMode::IDENTICAL_COST)),
+            "the price rides with the name:\n{text}"
+        );
+        // The Controls list has to name the key, and the `?` overlay has to
+        // explain the choice. The overlay does not scroll, so a section added
+        // to it can be pushed off the bottom and silently stop existing — that
+        // is exactly what happened while this feature was being written.
+        assert!(
+            text.contains("P picture mode"),
+            "the Controls list:\n{text}"
+        );
+        // …and the `?` overlay has to explain the choice. The overlay does not
+        // scroll, so a section added to it can be pushed off the bottom and
+        // silently stop existing — which is exactly what happened while this
+        // feature was being written. Rendered at the same size as the sibling
+        // overlay test, since a 40-row terminal clips the tail either way.
+        app.overlay = Overlay::Help;
+        let mut terminal = Terminal::new(TestBackend::new(140, 60)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let help: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        for want in ["picture:", "standard", "identical"] {
+            assert!(help.contains(want), "the help overlay omits {want:?}");
+        }
     }
 
     /// The trainer panel's own keys, driven through the real dispatcher.

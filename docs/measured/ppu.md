@@ -23,32 +23,36 @@ directly relevant to the STAT section below. Component page:
 <!-- codemap:asof -->
 > 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
-## Two engines
+## Two picture modes
 
-`RenderMode` ([`src/gpu/mod.rs:29`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L29)) picks which one runs — `GB_PPU=fast`
-or `GB_PPU=accurate`, the `ppu` config key (the environment variable wins), or
-`Gameboy::set_render_mode`. It is deliberately **not** in the save state: it is a property of
-this session's host, not of the emulated machine, so loading somebody else's state must not
-switch their renderer.
+`RenderMode` ([`src/gpu/mod.rs:29`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L29)) picks which one runs — the terminal's `P` key,
+`GB_PPU=standard|identical`, the `ppu` config key (the environment variable wins), or
+`Gameboy::set_render_mode`. The pre-rename spellings `fast`/`accurate` still parse everywhere;
+the whole user-facing story is [`docs/picture-modes.md`](../picture-modes.md). It is
+deliberately **not** in the save state: it is a property of this session's host, not of the
+emulated machine, so loading somebody else's state must not switch their renderer.
 
-| | `Fast` (default) | `Accurate` |
+| | `standard` (default, `RenderMode::Fast`) | `identical` (`RenderMode::Accurate`) |
 |---|---|---|
 | Source | [`src/gpu/mod.rs:1027`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1027) `renderscan` | [`src/gpu/fifo.rs:317`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/fifo.rs#L317) `do_cycle_accurate` |
 | Granularity | one whole scanline at the mode 3 → 0 transition | one dot at a time |
 | Mode 3 length | fixed 172 dots | variable, from the fetcher |
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
-| Mooneye `acceptance` | 67/75 | **68/75** |
-| Mealybug pixel-exact | 3/79 | **6/79** |
-| Mealybug total distance | 1,212,282 px | **693,023 px** |
-| Cost (dmg-acid2) | **0.263 ms/frame** | 0.559 ms/frame |
+| Mooneye `acceptance` | 67/75 | **69/75** |
+| Mealybug pixel-exact | 3/79 | **12/79** |
+| Mealybug total distance | 1,212,282 px | **646,838 px** |
+| Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |
 
-**2.13×** — 3.3 % of a 16.7427 ms frame, ~30× real time headless. Reproduce with
-`cargo test --release --test ppuengines`.
+**~2.1×** — 2.8 % of a 16.7427 ms frame, ~36× real time headless. Reproduce with
+`cargo test --release --test ppuengines`, which also **fails if
+`RenderMode::IDENTICAL_COST` — the figure printed to users on the Status row, in the `P` toast
+and in the `?` overlay — stops matching what the two modes actually cost.**
 
-**Cost is not why the fast engine is still the default; one row is.** The accurate engine
-gains `hblank_ly_scx_timing-GS` and `intr_2_mode0_timing` and *loses* `intr_1_2_timing-GS`.
-Until that regression is closed, flipping the default would make a published score worse.
-Never re-bless [`testharness/baseline.txt`](../../testharness/baseline.txt) to hide it.
+**Cost is now the only reason `standard` is still the default.** That was not always true:
+`identical` used to lose `ppu/intr_1_2_timing-GS` and Blargg `oam_bug` sub-test 7, and while it
+did, flipping the default would have made a published score worse. Both are closed, so
+`identical` loses no row on any gate. Whichever way the default eventually goes, never re-bless
+[`testharness/baseline.txt`](../../testharness/baseline.txt) to hide a regression.
 
 ### The trap that cost the most: `change_mode(0)` runs `renderscan()`
 
@@ -58,7 +62,7 @@ because the two agree on ordinary content. What exposed it was a side effect: `d
 advances the window's line counter as it goes, so running both moved the window down two rows
 per scanline.
 
-**Anything else hung off a mode transition must ask which engine is running.**
+**Anything else hung off a mode transition must ask which picture mode is running.**
 
 ---
 

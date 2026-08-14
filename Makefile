@@ -149,13 +149,16 @@ test-external: fetch-test-suites
 	./target/release/examples/cpp_suite $(SUITES)/cpp \
 	    --baseline testharness/cpp_baseline.txt
 
-# The same suites again, against the OTHER PPU engine (src/gpu/fifo.rs). The
-# baselines above are scored on whichever engine is the default, so the per-dot
-# one — the whole point of which is these very suites — would otherwise be
-# scored by nobody. Its own baselines carry its own pixel counts, so the next
-# change to the pipeline shows up as a diff whether it moves a row or only moves
-# the distance to one. Only the two PPU-bearing suites are re-scored; SameSuite
-# is APU/DMA and does not distinguish the engines.
+# The same suites again, in the OTHER picture mode — `identical`, the per-dot
+# pixel FIFO in src/gpu/fifo.rs (docs/picture-modes.md). The baselines above are
+# scored in whichever mode is the default (`standard`), so the per-dot one — the
+# whole point of which is these very suites — would otherwise be scored by
+# nobody. `GB_PPU=accurate` below is the pre-rename spelling of `identical`; it
+# still parses, and leaving it here keeps the alias exercised in CI.
+# Its own baselines carry its own pixel counts, so the next change to the
+# pipeline shows up as a diff whether it moves a row or only moves the distance
+# to one. Only the two PPU-bearing suites are re-scored; SameSuite is APU/DMA
+# and does not distinguish the modes.
 # Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external-accurate`.
 test-external-accurate: fetch-test-suites
 	cargo build --release --example mooneye_scout --example mealybug

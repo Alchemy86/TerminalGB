@@ -360,10 +360,14 @@ conflated verdict [`docs/conformance.md`](conformance.md) argues a good tool sho
 ## 7. The pixel-FIFO engine, measured (14 Aug 2026)
 
 The rewrite §5 scoped now exists, as a **second** engine beside the whole-scanline one rather
-than a replacement for it: `RenderMode::Accurate` (`src/gpu/fifo.rs`), selected with
-`GB_PPU=accurate`, the `ppu` config key, or `Gpu::set_render_mode`. `RenderMode::Fast` — the
-renderer this page has been about — is unchanged and is still the default. Reproduce everything
-below by putting `GB_PPU=accurate` in front of the command in the header of this page.
+than a replacement for it. It is the user-facing **`identical` picture mode**
+(`RenderMode::Accurate`, `src/gpu/fifo.rs`), selected with the terminal's `P` key,
+`GB_PPU=identical`, the `ppu` config key, or `Gpu::set_render_mode`. The **`standard`** mode
+(`RenderMode::Fast`) — the renderer this page has been about — is unchanged and is still the
+default; [`docs/picture-modes.md`](picture-modes.md) is the reader-facing page for the choice.
+Reproduce everything below by putting `GB_PPU=identical` in front of the command in the header
+of this page (the older spelling `GB_PPU=accurate` still parses, and is what the `make` targets
+use).
 
 ### 7.1 What it does
 

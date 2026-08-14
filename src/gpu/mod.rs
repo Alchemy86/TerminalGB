@@ -6,31 +6,38 @@ use fifo::Pipeline;
 pub(crate) use oambug::OamBug;
 use std::cmp::Ordering;
 
-/// Which of the two rendering engines the PPU runs.
+/// Which of the two picture engines the PPU runs — a **user-facing mode**,
+/// named for what you get rather than for how it is built.
 ///
 /// The two are **not** a quality/appearance choice — palettes, upscaling and
 /// every other visual enhancement live in `src/screen/`, above the PPU, and are
-/// identical either way. The only axis is *accuracy against cost*:
+/// identical either way. The only axis is *exactness against speed*:
 ///
-/// * [`RenderMode::Fast`] draws a whole scanline in one go at the mode 3 → 0
-///   transition and gives mode 3 a fixed 172-dot length. A register written
-///   part-way along a line is invisible: only its final value is ever read.
-///   Every well-behaved game looks identical under it, and it is cheap.
-/// * [`RenderMode::Accurate`] runs the real pixel pipeline dot by dot — BG
-///   fetcher, pixel FIFO, sprite fetches, window restart, `SCX & 7` discard —
-///   so a mid-mode-3 write to `BGP`/`SCX`/`LCDC`/`WX` takes effect exactly
-///   where hardware puts it, and mode 3 gets its true variable length. This is
-///   what the Mealybug Tearoom suite and Mooneye's mid-scanline
-///   `acceptance/ppu` tests photograph.
+/// * **`standard`** ([`RenderMode::Fast`], the default) draws a whole scanline
+///   in one go at the mode 3 → 0 transition and gives mode 3 a fixed 172-dot
+///   length. A register written part-way along a line is invisible: only its
+///   final value is ever read. Every well-behaved game looks identical under
+///   it, and it is cheap.
+/// * **`identical`** ([`RenderMode::Accurate`]) runs the real pixel pipeline
+///   dot by dot — BG fetcher, pixel FIFO, sprite fetches, window restart,
+///   `SCX & 7` discard — so a mid-mode-3 write to `BGP`/`SCX`/`LCDC`/`WX` takes
+///   effect exactly where hardware puts it, and mode 3 gets its true variable
+///   length. This is what the Mealybug Tearoom suite and Mooneye's
+///   mid-scanline `acceptance/ppu` tests photograph. It costs about
+///   [`RenderMode::IDENTICAL_COST`] times as much CPU.
 ///
-/// Selected per run by `$GB_PPU` (`fast` / `accurate`) or the `ppu` config key;
-/// a frontend may also switch it live with [`Gpu::set_render_mode`].
+/// The Rust identifiers stay `Fast`/`Accurate` because that is what the two
+/// engines *are*; `standard`/`identical` is what a person types and sees.
+/// Both spellings parse, so nothing written against the old names breaks.
+///
+/// Selected per run by `$GB_PPU` or the `ppu` config key; a frontend may also
+/// switch it live with [`Gpu::set_render_mode`] (the TUI's `P` key).
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
 pub enum RenderMode {
-    /// Whole-scanline renderer, fixed-length mode 3.
+    /// `standard` — whole-scanline renderer, fixed-length mode 3. The default.
     #[default]
     Fast,
-    /// Per-dot pixel FIFO.
+    /// `identical` — per-dot pixel FIFO, hardware-exact mid-scanline timing.
     Accurate,
 }
 
@@ -38,22 +45,90 @@ pub enum RenderMode {
 pub const PPU_ENV: &str = "GB_PPU";
 
 impl RenderMode {
-    /// Parse a user-supplied engine name. `fast`/`scanline` and
-    /// `accurate`/`fifo` are accepted; case-insensitive.
+    /// How much more CPU `identical` costs than `standard`. **Measured, not
+    /// chosen:** `testharness/ppuengines.rs` times both engines over the same
+    /// 400 frames of dmg-acid2 on every `cargo test --release`, and checks this
+    /// constant against what it measured — so it cannot quietly become a lie.
+    /// Four consecutive runs here gave 0.221 → 0.461 ms/frame, ratio
+    /// 2.07-2.09x; earlier measurements on other ROMs and boxes reached 2.17x,
+    /// so the figure is approximate and is shown with a `~`.
+    ///
+    /// Quoted wherever the choice is offered — a player trading speed for
+    /// exactness has to be told the price at the moment they trade.
+    pub const IDENTICAL_COST: f32 = 2.1;
+
+    /// Every mode, in the order the TUI's `P` key cycles them: the default
+    /// first, so a player who taps `P` twice is back where they started.
+    pub const ALL: [RenderMode; 2] = [RenderMode::Fast, RenderMode::Accurate];
+
+    /// Parse a user-supplied mode name, case-insensitively.
+    ///
+    /// `standard` and `identical` are the names; `fast`/`scanline` and
+    /// `accurate`/`fifo` are kept as aliases so every existing `config.toml`,
+    /// `$GB_PPU` invocation, `Makefile` target and script keeps working.
     pub fn parse(s: &str) -> Option<RenderMode> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "fast" | "scanline" => Some(RenderMode::Fast),
-            "accurate" | "fifo" => Some(RenderMode::Accurate),
+            "standard" | "fast" | "scanline" => Some(RenderMode::Fast),
+            "identical" | "accurate" | "fifo" => Some(RenderMode::Accurate),
             _ => None,
         }
     }
 
-    /// The name a user typed, and that the status row shows back to them.
+    /// The mode's name — what a user types, and what the status row shows back.
     pub fn name(self) -> &'static str {
+        match self {
+            RenderMode::Fast => "standard",
+            RenderMode::Accurate => "identical",
+        }
+    }
+
+    /// The pre-rename spelling, still accepted everywhere. Written into the
+    /// baseline headers and the `make` target names so a reader can join the
+    /// two vocabularies up.
+    pub fn alias(self) -> &'static str {
         match self {
             RenderMode::Fast => "fast",
             RenderMode::Accurate => "accurate",
         }
+    }
+
+    /// The status row's value: the mode, and — for the expensive one — its
+    /// price, right there beside it.
+    pub fn status_label(self) -> String {
+        match self {
+            RenderMode::Fast => "standard".to_string(),
+            RenderMode::Accurate => {
+                format!("identical ~{:.1}x", Self::IDENTICAL_COST)
+            }
+        }
+    }
+
+    /// One line saying what this mode gives you and what it costs — the toast
+    /// on switching, and the line in the help overlay.
+    pub fn describe(self) -> String {
+        match self {
+            RenderMode::Fast => {
+                "standard — whole-scanline picture, full speed (the default)".to_string()
+            }
+            RenderMode::Accurate => format!(
+                "identical — hardware-exact picture, drawn dot by dot; about \
+                 {:.1}x the CPU",
+                Self::IDENTICAL_COST
+            ),
+        }
+    }
+
+    /// The other mode. `P` in the terminal frontend toggles with this.
+    pub fn toggled(self) -> RenderMode {
+        match self {
+            RenderMode::Fast => RenderMode::Accurate,
+            RenderMode::Accurate => RenderMode::Fast,
+        }
+    }
+
+    /// The names a warning offers back to somebody who mistyped one.
+    pub fn choices() -> String {
+        "identical, standard (aliases: accurate, fast)".to_string()
     }
 
     /// The default engine, after `$GB_PPU`. A typo warns on stderr and is
@@ -66,7 +141,8 @@ impl RenderMode {
                 Some(m) => m,
                 None => {
                     eprintln!(
-                        "{PPU_ENV}={v:?} is not a renderer (fast, accurate) — ignoring"
+                        "{PPU_ENV}={v:?} is not a picture mode ({}) — ignoring",
+                        RenderMode::choices()
                     );
                     RenderMode::default()
                 }
@@ -1341,11 +1417,37 @@ mod tests {
 
     const DOTS_PER_LINE: u32 = 456;
 
-    /// The engine name round-trips through the spelling a user types, and an
-    /// unknown one is rejected rather than quietly meaning "fast". A silent
+    /// The mode name round-trips through the spelling a user types, and an
+    /// unknown one is rejected rather than quietly meaning "standard". A silent
     /// fallback here would publish conformance scores from the wrong renderer.
     #[test]
     fn a_render_mode_is_named_by_the_word_the_user_types() {
+        for (text, mode) in [
+            ("standard", RenderMode::Fast),
+            ("IDENTICAL", RenderMode::Accurate),
+            (" identical ", RenderMode::Accurate),
+        ] {
+            assert_eq!(RenderMode::parse(text), Some(mode), "{text:?}");
+        }
+        assert_eq!(RenderMode::parse("sideways"), None);
+        assert_eq!(RenderMode::parse(""), None);
+        assert_eq!(RenderMode::Fast.name(), "standard");
+        assert_eq!(RenderMode::Accurate.name(), "identical");
+        for mode in RenderMode::ALL {
+            assert_eq!(
+                RenderMode::parse(mode.name()),
+                Some(mode),
+                "the name shown in the status row must be a name we accept back"
+            );
+        }
+    }
+
+    /// **The pre-rename spellings must keep working.** `config.toml` files,
+    /// shell aliases, the `Makefile`'s `GB_PPU=accurate` targets and every
+    /// script anyone has written say `fast`/`accurate`; renaming the modes must
+    /// cost none of them.
+    #[test]
+    fn the_old_engine_names_are_still_accepted() {
         for (text, mode) in [
             ("fast", RenderMode::Fast),
             ("scanline", RenderMode::Fast),
@@ -1355,15 +1457,45 @@ mod tests {
         ] {
             assert_eq!(RenderMode::parse(text), Some(mode), "{text:?}");
         }
-        assert_eq!(RenderMode::parse("sideways"), None);
-        assert_eq!(RenderMode::parse(""), None);
-        assert_eq!(RenderMode::Fast.name(), "fast");
-        assert_eq!(RenderMode::Accurate.name(), "accurate");
-        assert_eq!(
-            RenderMode::parse(RenderMode::Accurate.name()),
-            Some(RenderMode::Accurate),
-            "the name shown in the status row must be a name we accept back"
-        );
+        for mode in RenderMode::ALL {
+            assert_eq!(RenderMode::parse(mode.alias()), Some(mode));
+        }
+        // A warning must offer back every spelling it accepts, so somebody who
+        // typed one of the old ones is not told it does not exist.
+        let choices = RenderMode::choices();
+        for word in ["identical", "standard", "accurate", "fast"] {
+            assert!(choices.contains(word), "{choices:?} omits {word:?}");
+        }
+    }
+
+    /// `P` toggles, and two taps are a no-op — an option a player can get lost
+    /// inside is one they will not touch twice.
+    #[test]
+    fn toggling_the_picture_mode_twice_returns_to_where_it_started() {
+        for mode in RenderMode::ALL {
+            assert_ne!(mode.toggled(), mode);
+            assert_eq!(mode.toggled().toggled(), mode);
+        }
+        assert_eq!(RenderMode::ALL[0], RenderMode::default());
+    }
+
+    /// **The cost is stated where the choice is made.** A player trading speed
+    /// for exactness has to see the price, and only the expensive mode carries
+    /// one — labelling the default "1.0x" would imply it is a compromise.
+    #[test]
+    fn the_expensive_mode_says_what_it_costs() {
+        let acc = RenderMode::Accurate;
+        // Read the figure off the constant rather than repeating it, so a
+        // re-measurement moves one number and this stays true.
+        let cost = format!("{:.1}x", RenderMode::IDENTICAL_COST);
+        assert!(acc.status_label().contains(&cost), "{}", acc.status_label());
+        assert!(acc.describe().contains(&cost), "{}", acc.describe());
+        assert_eq!(RenderMode::Fast.status_label(), "standard");
+        assert!(!RenderMode::Fast.describe().contains('x'));
+        for mode in RenderMode::ALL {
+            assert!(mode.status_label().starts_with(mode.name()));
+            assert!(mode.describe().starts_with(mode.name()));
+        }
     }
 
     /// A PPU with the LCD on, sitting at the start of line 0.

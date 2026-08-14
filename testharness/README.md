@@ -129,14 +129,16 @@ counted as open defects. Each is recorded on its component page.
   a machine nobody has. The `@dmg` row passes all eight sub-tests.
   ([MMU §5](../docs/components/mmu.md).)
 
-The remaining structural approximation is the **default** PPU's fixed mode-3 length. A
-cycle-stepped PPU sharing the bus dot by dot now exists beside it —
-[`src/gpu/fifo.rs`](../src/gpu/fifo.rs), `GB_PPU=accurate` — and derives mode 3's length
-instead of assuming it, but it is not yet the default and Mealybug is still **3/79** on both.
-Those tests live outside this harness and are gated by `make test-external` (default engine)
-and `make test-external-accurate` (the FIFO), both pinned with pixel counts so a rewrite's
-progress *and* its regressions are visible. The two engines are held against each other
-hermetically by [`ppuengines.rs`](ppuengines.rs). See [PPU](../docs/components/ppu.md),
+The remaining structural approximation is the fixed mode-3 length of the **default `standard`
+[picture mode](../docs/picture-modes.md)**. A cycle-stepped PPU sharing the bus dot by dot
+exists beside it as the selectable `identical` mode —
+[`src/gpu/fifo.rs`](../src/gpu/fifo.rs), `GB_PPU=identical` — and derives mode 3's length
+instead of assuming it: Mealybug is **3/79** in `standard` and **12/79** in `identical`.
+Those tests live outside this harness and are gated by `make test-external` (`standard`)
+and `make test-external-accurate` (`identical`), both pinned with pixel counts so a rewrite's
+progress *and* its regressions are visible. The two modes are held against each other
+hermetically by [`ppuengines.rs`](ppuengines.rs), which also re-measures the ~2.1x cost figure
+the product quotes. See [PPU](../docs/components/ppu.md),
 [MMU](../docs/components/mmu.md) and [mealybug.md §7](../docs/mealybug.md).
 
 ## Running it

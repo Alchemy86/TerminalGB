@@ -72,36 +72,38 @@ groups are the hard ones:
 one-M-cycle resolution. `lcdon_timing-GS` and `lcdon_write_timing-GS` in particular are **not
 separable** from a per-dot PPU — this was attempted, and the conclusion that they could be
 done alone turned out to be wrong for half of them. Do **not** add mode-based VRAM/OAM
-blocking to the fast engine alone: with mode 3 fixed at 172 dots where hardware varies it
+blocking to the `standard` mode alone: with mode 3 fixed at 172 dots where hardware varies it
 172–289, blocking would silently drop writes a game placed legally in HBlank, which is
 strictly worse than not blocking. See [ppu.md](ppu.md).
 
-### The accurate engine scores differently — and now dominates
+### The `identical` picture mode scores differently — and now dominates
 
-`GB_PPU=accurate` gives **69/75** acceptance against the default's 67/75. The delta is two
-rows and it is one-directional:
+The [`identical` picture mode](../picture-modes.md) (`GB_PPU=identical`, formerly `accurate`)
+gives **69/75** acceptance against the default `standard` mode's 67/75. The delta is two rows
+and it is one-directional:
 
-| Row | `fast` | `accurate` |
+| Row | `standard` | `identical` |
 |---|---|---|
 | `acceptance/ppu/hblank_ly_scx_timing-GS` | FAIL | **PASS** |
 | `acceptance/ppu/intr_2_mode0_timing` | FAIL | **PASS** |
 | `acceptance/ppu/intr_1_2_timing-GS` | PASS | PASS |
 
-`intr_1_2_timing-GS` used to be the one row the accurate engine lost, and it was the last
-thing blocking a default flip. It is fixed — see
+`intr_1_2_timing-GS` used to be the one row `identical` lost, and it was the last thing
+blocking a default flip. It is fixed — see
 [mealybug.md §9](../mealybug.md#9-the-line-0-stat-phase-679--1279-and-the-last-blocking-row).
-The engine is gated separately (`make test-external-accurate`, against
+The mode is gated separately (`make test-external-accurate`, against
 `testharness/mooneye_accurate_baseline.txt`) so progress *and* regression are both visible.
 
-**Measured engine-for-engine, every gate, same build:** in-repo harness 46/47 both (identical
+**Measured mode-for-mode, every gate, same build:** in-repo harness 46/47 both (identical
 verdicts row for row), Mooneye `acceptance` + `emulator-only` 95 vs **97**/103, Mooneye `misc`
 8/8 both, SameSuite 72/76 both, `cpp` 4/4 both, Mealybug 3 vs **12**/79. No row goes the other
-way, so the accuracy precondition for making it the default is met; what remains is a cost
-decision (2.17x on the PPU, 0.243 → 0.527 ms/frame, 31.8x real time headless).
+way, so the accuracy precondition for making `identical` the default is met; what remains is a
+cost decision — **~2.1x**, 0.221 → 0.461 ms/frame, 36x real time headless, re-measured on every
+`cargo test --release --test ppuengines`.
 
 > **Both baselines must move together when a non-PPU change flips a row.** Boot registers, the
 > timer and the APU do not depend on `GB_PPU`, so such a change flips the row under both
-> engines and both files need re-blessing in the same commit — otherwise the accurate gate
+> modes and both files need re-blessing in the same commit — otherwise the `identical` gate
 > goes red on merge and reads as a PPU regression that isn't one.
 
 ### Three different denominators, all called "Mooneye"
@@ -146,10 +148,10 @@ whole-scanline renderer from a pixel FIFO, and it is *hard*: on the Shootout's 2
 Mealybug rows, **SameBoy scores 15, bgb scores 2, PyBoy 0.** This is not a suite a competent
 cycle-stepped PPU sweeps.
 
-| Engine | Rows pixel-exact | Total pixel distance |
+| Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
-| `fast` (default) | 3 / 79 | 1,212,282 |
-| `accurate` (`GB_PPU=accurate`) | **6 / 79** | **693,023** |
+| `standard` (default) | 3 / 79 | 1,212,282 |
+| `identical` (`GB_PPU=identical`) | **12 / 79** | **646,838** |
 
 The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at 3/79 a
 pass/fail file is a flat wall that cannot show a rewrite getting closer. Consequence to expect:

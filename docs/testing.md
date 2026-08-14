@@ -319,9 +319,10 @@ hardware does not have, even running a monochrome cartridge, so a real CGB fails
 too. Turning that row green would mean emulating a machine nobody has. Every row here is
 measured rather than pinned as a hash, so `oam_bug` reports which of its eight sub-tests
 pass rather than an opaque number. The mode-3-length approximation applies to the **default
-(`fast`) PPU engine**; the cycle-stepped one exists and is gated (`GB_PPU=accurate`, and the
-`external-suites-accurate` job below) — it is simply not the default yet, because it still
-loses one Mooneye row that the fast engine passes. See
+`standard` [picture mode](picture-modes.md)**; the cycle-stepped one is the selectable
+`identical` mode and is gated (`GB_PPU=identical`, and the `external-suites-accurate` job
+below) — it is simply not the default yet, because it costs about 2.1x the CPU, not because it
+is behind on anything. See
 [`docs/measured/ppu.md`](measured/ppu.md). The whole suite runs
 in **~3.6 s** (the twelve `cgb_sound` rows cost about 0.8 s of that).
 
@@ -345,19 +346,20 @@ way to show either its progress or its regressions.
 
 ```text
 make test-external           # fetches the suites if needed, then gates all five groups
-make test-external-accurate  # the two PPU suites again, on the OTHER rendering engine
+make test-external-accurate  # the two PPU suites again, in the `identical` picture mode
 make fetch-test-suites       # just the download (~20 s, cached in target/test-suites)
 ```
 
-**Both PPU engines are scored.** `test-external` runs whichever engine is the default
-(`RenderMode::Fast`); `test-external-accurate` re-scores Mooneye and Mealybug on the per-dot
-pixel FIFO (`GB_PPU=accurate`) against `mooneye_accurate_baseline.txt` and
-`mealybug_accurate_baseline.txt`. Without the second pass the engine whose entire purpose is
+**Both [picture modes](picture-modes.md) are scored.** `test-external` runs whichever mode is
+the default (`standard`, `RenderMode::Fast`); `test-external-accurate` re-scores Mooneye and
+Mealybug in the per-dot `identical` mode (`GB_PPU=identical`, or the older spelling
+`GB_PPU=accurate`, which the Makefile still uses) against `mooneye_accurate_baseline.txt` and
+`mealybug_accurate_baseline.txt`. Without the second pass the mode whose entire purpose is
 these two suites would be gated by nobody. SameSuite is not re-scored — it is APU and DMA and
-does not distinguish the engines. Every baseline file **opens with the engine that produced it
+does not distinguish the modes. Every baseline file **opens with the mode that produced it
 and the target that re-blesses it**: the same ROMs score differently on the two, so the obvious
-command would otherwise rewrite a file with the other machine's numbers. Where the accurate
-engine stands is [`mealybug.md`](mealybug.md) §7.
+command would otherwise rewrite a file with the other machine's numbers. Where `identical`
+stands is [`mealybug.md`](mealybug.md) §7.
 
 **The ROMs are fetched, never vendored.** They are other people's work under other people's
 licences — the same reason [`conformance.yml`](../.github/workflows/conformance.yml)

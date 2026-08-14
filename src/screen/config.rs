@@ -362,7 +362,10 @@ pub struct Config {
     pub transmit_scale: TransmitScale,
     /// Which render path the game picture uses. See [`RenderPath`].
     pub render_path: RenderPath,
-    /// Which **PPU rendering engine** to run — see [`crate::gpu::RenderMode`].
+    /// Which **picture mode** the emulated PPU runs — `standard` (the default,
+    /// fast) or `identical` (hardware-exact, about 2.2x the CPU). The old
+    /// spellings `fast`/`accurate` still parse. See [`crate::gpu::RenderMode`].
+    ///
     /// Nothing to do with `render_path` above, which is about getting a
     /// finished picture to the terminal; this one is about how that picture is
     /// produced by the emulated hardware. `None` (the default) leaves whatever
@@ -693,7 +696,7 @@ impl Config {
         if let Some(v) = get("ppu") {
             match crate::gpu::RenderMode::parse(v) {
                 Some(p) => cfg.ppu = Some(p),
-                None => warn.push(bad("ppu", v, "accurate, fast")),
+                None => warn.push(bad("ppu", v, &crate::gpu::RenderMode::choices())),
             }
         }
         if let Some(v) = get("shiny_alert") {
@@ -1559,7 +1562,7 @@ mod tests {
         assert_eq!(Config::default().telemetry, None);
     }
 
-    /// `ppu` chooses the emulated rendering engine and is a different thing
+    /// `ppu` chooses the emulated **picture mode** and is a different thing
     /// from `render_path` above, which chooses how a finished picture reaches
     /// the terminal. Unset means "leave whatever `$GB_PPU` chose" — a config
     /// file must not silently undo a one-off environment override.
@@ -1568,20 +1571,30 @@ mod tests {
         use crate::gpu::RenderMode;
         assert_eq!(Config::default().ppu, None);
         assert_eq!(
+            Config::parse("ppu = identical").ppu,
+            Some(RenderMode::Accurate)
+        );
+        assert_eq!(Config::parse("ppu = standard").ppu, Some(RenderMode::Fast));
+        // The pre-rename spellings still parse — an existing config.toml must
+        // not stop working because the modes were given clearer names.
+        assert_eq!(
             Config::parse("ppu = accurate").ppu,
             Some(RenderMode::Accurate)
         );
         assert_eq!(Config::parse("ppu = fast").ppu, Some(RenderMode::Fast));
         // Both keys at once, neither reading the other's value.
-        let cfg = Config::parse("ppu = accurate\nrender_path = legacy\n");
+        let cfg = Config::parse("ppu = identical\nrender_path = legacy\n");
         assert_eq!(cfg.ppu, Some(RenderMode::Accurate));
         assert_eq!(cfg.render_path, RenderPath::Legacy);
-        // A typo is reported, and leaves the engine unchosen rather than
-        // guessing one.
+        // A typo is reported, and leaves the mode unchosen rather than
+        // guessing one. The complaint names every spelling we accept.
         let (cfg, warn) = Config::parse_reporting("ppu = sideways");
         assert_eq!(cfg.ppu, None);
         assert_eq!(warn.len(), 1, "{warn:?}");
         assert!(warn[0].contains("ppu"), "{warn:?}");
+        for word in ["identical", "standard", "accurate", "fast"] {
+            assert!(warn[0].contains(word), "{warn:?} omits {word:?}");
+        }
     }
 
     #[test]

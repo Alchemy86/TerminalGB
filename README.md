@@ -167,7 +167,9 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > in-app **ROM picker**. Press **`?`** in-game for the full, always-current key list; the
 > highlights are save-state slots (**`1`**–**`3`**, **`F5`** save / **`F8`** load), a speed
 > ladder (**`+`**/**`-`**), a stats overlay (**`t`**), palette cycling (**`[`**), pixel-art
-> upscaler cycling (**`]`** algorithm / **`}`** factor), **screenshots** (**`c`** what you see,
+> upscaler cycling (**`]`** algorithm / **`}`** factor), the
+> [**picture mode**](#two-picture-modes--standard-and-identical) (**`P`**: `standard`, or
+> hardware-exact `identical`), **screenshots** (**`c`** what you see,
 > **`C`** the raw 160×144 frame), the **video stream / webcam** on/off (**`v`**) and a
 > timestamped **recording** (**`V`**). Audio works here too
 > with `--features audio` (see the ALSA note above).
@@ -299,7 +301,7 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
-| `ppu` | `accurate` / `fast` | Which **emulated rendering engine** runs — a per-dot pixel FIFO, or the cheap whole-scanline renderer. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way; the two engines differ only on games that write PPU registers *mid-scanline*. Shown in the Status panel's `PPU` row. `$GB_PPU` overrides this for one run. |
+| `ppu` | `standard` / `identical` (aliases: `fast` / `accurate`) | Which **[picture mode](docs/picture-modes.md)** the emulated hardware runs. `standard` (default) draws a whole scanline at a time; `identical` runs the real per-dot pixel pipeline, so a mid-scanline register write lands exactly where a Game Boy puts it — for about **2.1x** the CPU. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way. **`P` toggles it live**; the Status panel's `PPU` row says which is on and what it costs. `$GB_PPU` overrides this for one run. |
 | `volume` | `0`–`100` (a `%` is allowed), or `off` | **Playback volume**, the level a session starts at. Default **`50`** (−12 dB) — deliberately quieter than full scale. `,` / `.` change it in game and `m` mutes; whatever you last set is remembered across sessions, and editing this key overrides that. Attenuation is applied to the audio the *host device* is handed, never to the emulated machine — see below. |
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
@@ -389,12 +391,13 @@ Neither is a compile flag; both are read once at start-up, and a typo warns on s
 **ignored** rather than silently changing machine.
 
 ```bash
-GB_PPU=accurate   cargo run --release --example terminal -- game.gb   # the per-dot pixel FIFO
+GB_PPU=identical  cargo run --release --example terminal -- game.gb   # the per-dot picture mode
 GB_MODEL=dmg      cargo run --release --example terminal -- game.gbc  # force an original Game Boy
 ```
 
-`GB_PPU` picks the [rendering engine](#two-ppu-engines--pick-your-tradeoff); `GB_MODEL` picks
-the [console](#console-model--dmg-game-boy-color-or-super-game-boy). Both also have a config key (`ppu`,
+`GB_PPU` picks the [picture mode](#two-picture-modes--standard-and-identical) (`P` switches it
+without leaving the game); `GB_MODEL` picks the
+[console](#console-model--dmg-game-boy-color-or-super-game-boy). Both also have a config key (`ppu`,
 and `GB_MODEL` only overrides `Model::Auto`). There is a third, `GB_BOOT_ROM=<path>`, which
 points at [a boot ROM you dumped yourself](#bring-your-own-boot-rom-optional) — optional, never
 bundled, and silently ignored when it is absent.
@@ -409,11 +412,11 @@ attached:
 
 | build | emulated frame cost | budget |
 |---|---:|---:|
-| `--no-default-features`, fast PPU | **0.219 ms** | 16.743 ms |
+| `--no-default-features`, `standard` picture mode | **0.221 ms** | 16.743 ms |
 | `--features audio`, real device | **0.267 ms** | 16.743 ms |
-| `--no-default-features`, `GB_PPU=accurate` | **0.467 ms** | 16.743 ms |
+| `--no-default-features`, `GB_PPU=identical` | **0.461 ms** | 16.743 ms |
 
-So **audio is nearly free and the PPU engine is the real lever** (2.13×, and still 35× real
+So **audio is nearly free and the picture mode is the real lever** (~2.1×, and still 36× real
 time). Reproduce these with `cargo test --release --test ppuengines` and
 `cargo run --release --features audio,libc --example audio_frame_cost -- <rom>`; CI holds the
 audio number under 4 ms/frame on every push (`make test-audio-perf`).
@@ -793,52 +796,60 @@ came from understanding a piece of the engine and asking what else touches it.
 
 ---
 
-## Two PPU engines — pick your tradeoff
+## Two picture modes — `standard` and `identical`
 
-There are **two complete rendering engines** in `src/gpu/`, and you choose between them at
-launch. They are not a quality or appearance choice — palette, upscaler and every other visual
-enhancement live above the PPU in `src/screen/` and are byte-identical either way. The only
-axis is **accuracy against cost.**
+There are **two complete picture engines** in `src/gpu/`, and which one runs is a mode you pick —
+**live, with the `P` key**, or in the config, or from the environment. They are not a quality or
+appearance choice: palette, upscaler and every other visual enhancement live above the PPU in
+`src/screen/` and are byte-identical either way. The only axis is **exactness against speed.**
 
-| | `fast` (default) | `accurate` |
+Very few emulators offer a per-dot renderer at all. Here it is one keypress.
+
+| | **`standard`** (default) | **`identical`** |
 |---|---|---|
 | **What it is** | draws a whole scanline in one go at the mode 3 → 0 transition; mode 3 has a fixed 172-dot length | the real pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard, and a mode 3 length that falls out of the machine |
 | **A mid-scanline register write** | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read | takes effect exactly where hardware puts it |
-| **Cost** | **0.263 ms/frame** (63.8× real time) | **0.559 ms/frame** (30.0× real time) — **2.13×** |
+| **Cost** | **0.221 ms/frame** (76× real time) | **0.461 ms/frame** (36× real time) — about **2.1×** |
 | **dmg-acid2 vs the author's reference** | 0 / 23,040 pixels differ | **0 / 23,040** |
-| **Mooneye `acceptance`** | 67 / 75 | **68 / 75** — and not the same rows: the variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS` |
-| **Mealybug Tearoom rows** | 3 / 79 | **6 / 79** |
-| **Mealybug pixel distance** | 1,212,282 | **693,023** |
+| **Mooneye `acceptance`** | 67 / 75 | **69 / 75** |
+| **Mealybug Tearoom rows** | 3 / 79 | **12 / 79** |
+| **Mealybug pixel distance** | 1,212,282 | **646,838** |
 | **Well-behaved games** | identical output, proved frame-for-frame | identical output |
 
 <p align="center">
-  <img src="docs/shots/tui-status-accurate.png" alt="The terminal Status panel with the PPU row reading accurate" width="240" />
+  <img src="docs/shots/tui-status-picture-mode.png" alt="The terminal Status panel with the PPU row reading &quot;identical ~2.1x&quot;" width="240" />
 </p>
 
-<p align="center"><em>The <code>PPU</code> row says which engine is live. A run-time choice
-nobody can see is one nobody can debug.</em></p>
+<p align="center"><em>The <code>PPU</code> row says which mode is live, and what the expensive one
+costs. A run-time choice nobody can see is one nobody can debug.</em></p>
 
 ```bash
-GB_PPU=accurate cargo run --release --example terminal -- game.gb   # per-dot pixel FIFO
-GB_PPU=fast     cargo run --release --example terminal -- game.gb   # the default
+GB_PPU=identical cargo run --release --example terminal -- game.gb   # per-dot, hardware-exact
+GB_PPU=standard  cargo run --release --example terminal -- game.gb   # the default
 ```
 
-…or `ppu = accurate` in `config.toml` (the environment variable wins for one run), or
-`Gpu::set_render_mode` if you are embedding.
+…or press **`P`** in the game, or `ppu = identical` in `config.toml` (the environment variable
+wins for one run), or `Gpu::set_render_mode` if you are embedding. **The old spellings `fast` and
+`accurate` still parse everywhere**, so nothing written against them breaks.
 
-**Fast is the default deliberately.** For every game that does not write PPU registers
-mid-scanline — which is almost all of them — the two produce byte-identical frames, and fast
-does it at half the cost. Reach for `accurate` when a game has a mid-scanline effect (a split
+**`standard` is the default deliberately.** For every game that does not write PPU registers
+mid-scanline — which is almost all of them — the two produce byte-identical frames, and `standard`
+does it at half the cost. Reach for `identical` when a game has a mid-scanline effect (a split
 status bar, a wobble, a parallax band) that looks wrong, or when you are working on the PPU.
 
-**And the honest part:** `accurate` is *structurally* right and *part-way* calibrated. It is
-pixel-exact on two Mealybug ROMs against all three hardware reference sets and within a few
-hundred pixels on eight more (`m3_scx_high_5_bits` is **12**), but it still loses
-`ppu/intr_1_2_timing-GS` and Blargg `oam_bug` sub-test 7 to the default — which is why the
-default has not moved. For calibration, quote the **pixel distance**, not the row count: it is
-a *rank* distance, so a frame with one extra distinct shade reports ~23,040 whatever else is
-right, and a four-pixel error can move the total by 60,000. Both engines have **their own
-baseline** and both are scored in CI on every push, so neither can drift unnoticed.
+**And the honest part:** `identical` is *structurally* right and *part-way* calibrated. It is
+pixel-exact on twelve Mealybug rows against hardware references and within a few hundred pixels on
+several more (`m3_scx_high_5_bits` is **12**), and it **no longer loses a single row to
+`standard` on any gate** — the two it used to lose, `ppu/intr_1_2_timing-GS` and Blargg `oam_bug`
+sub-test 7, are both closed. What keeps it opt-in is the 2.1× cost, nothing else. For calibration,
+quote the **pixel distance**, not the row count: it is a *rank* distance, so a frame with one extra
+distinct shade reports ~23,040 whatever else is right, and a four-pixel error can move the total by
+60,000. Both modes have **their own baselines** and both are scored in CI on every push, so
+neither can drift unnoticed — and the 2.1× figure itself is re-measured by
+`cargo test --release --test ppuengines`, which fails the build if the number printed to users
+stops matching what the engines actually cost.
+
+📖 **[The whole story → docs/picture-modes.md](docs/picture-modes.md)**
 
 ### Bring your own boot ROM (optional)
 
@@ -984,7 +995,7 @@ behaviours phrased as future tests.**
 | Component | Source | What it does | Deep dive |
 |---|---|---|---|
 | **CPU** | [`src/cpu/`](src/cpu) | Sharp **LR35902 (SM83)** core — registers, flags, full opcode + `CB` tables, interrupts. *It is not a Z80.* | **[docs](docs/components/cpu.md)** |
-| **PPU (GPU)** | [`src/gpu/mod.rs`](src/gpu/mod.rs) · [`fifo.rs`](src/gpu/fifo.rs) | **Two engines**, chosen at launch — a whole-scanline renderer and a per-dot pixel FIFO. The mode cycle, background/window/sprites, DMG + CGB palettes, STAT/LYC timing, and the DMG OAM-corruption bug. | **[docs](docs/components/ppu.md)** · **[engines](#two-ppu-engines--pick-your-tradeoff)** |
+| **PPU (GPU)** | [`src/gpu/mod.rs`](src/gpu/mod.rs) · [`fifo.rs`](src/gpu/fifo.rs) | **Two picture modes**, switchable live — a whole-scanline renderer (`standard`) and a per-dot pixel FIFO (`identical`). The mode cycle, background/window/sprites, DMG + CGB palettes, STAT/LYC timing, and the DMG OAM-corruption bug. | **[docs](docs/components/ppu.md)** · **[picture modes](docs/picture-modes.md)** |
 | **MMU** | [`src/mmu/mod.rs`](src/mmu/mod.rs) | The 64 KB memory bus — address routing, OAM DMA, CGB HDMA/GDMA, and the `IF`/`IE` interrupt wiring. | **[docs](docs/components/mmu.md)** |
 | **Cartridges (MBC)** | [`src/mbc/`](src/mbc) | Bank switching for MBC0/1/2/3/5, MBC3's real-time clock, battery-backed saves. | **[docs](docs/components/mbc.md)** |
 | **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal`. *Native only.* | **[registers](docs/components/apu.md)** · **[audio pipeline & quality](docs/audio.md)** |
@@ -1031,6 +1042,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | [how a frame gets into a terminal](docs/rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, how it is negotiated, which terminals support what |
 | [the link cable](docs/link-cable.md) | **two consoles, one wire**: start a second copy of the emulator and they find each other and link automatically. The hardware, the lockstep argument, the Gen 1 ↔ Gen 2 Time Capsule rules, and an honest design note on playing over the internet |
 | [terminal render performance](docs/terminal-render.md) | why a large terminal window used to cost frames, and what caps the cost now |
+| [picture modes](docs/picture-modes.md) | `standard` vs `identical`: what each draws, what each scores, what the exact one costs, and how to switch |
 | [Mealybug Tearoom, measured](docs/mealybug.md) | what the PPU actually scores, how hard calibration is, and §7 on the pixel-FIFO engine |
 | [display scaling](docs/display.md) | how each frontend enlarges 160×144, and how to make it crisp, smooth or vector-like |
 | [pixel-art upscaler](docs/upscaling.md) | the four algorithms, their measured costs, and the licensing constraint that shaped them |
@@ -1548,7 +1560,7 @@ in [`tools/fetch-test-suites.sh`](tools/fetch-test-suites.sh).
 
 ```bash
 make fetch-test-suites && make test-external            # the default (fast) engine
-make test-external-accurate                             # the same suites, per-dot PPU
+make test-external-accurate                             # the same suites, `identical` mode
 ```
 
 That Mealybug 3/79 is the real remaining gap and it is **not hidden by a pass/fail column**:
@@ -1584,15 +1596,18 @@ the 24 DMG Mealybug rows:
 | emulator | Mealybug (DMG rows) |
 |---|---:|
 | SameBoy | 15 / 24 |
+| **us, `identical` mode** | **4 / 24** |
 | bgb | 2 / 24 |
-| **us** | **1 / 24** |
+| **us, `standard` mode (default)** | **1 / 24** |
 | PyBoy | 0 / 24 |
 
 This is not a suite where a competent cycle-stepped PPU scores 24/24 — it is the suite that
 separates the two or three most accurate emulators in the world from everyone else, and the
-top scorer on the board still fails nine rows. **We are a long way from the top and one row
-behind bgb**, which is the accurate way to say it. See
-[Two PPU engines](#two-ppu-engines--pick-your-tradeoff) and
+top scorer on the board still fails nine rows. **We are a long way from the top; the default
+mode is one row behind bgb and the opt-in one is twice ahead of it**, which is the accurate way
+to say it. (The shootout screenshots whatever the emulator boots with, so 1/24 is the figure
+that belongs on their board today.) See
+[Two picture modes](#two-picture-modes--standard-and-identical) and
 [`docs/mealybug.md`](docs/mealybug.md) for the full calibration argument.
 
 Two figures that used to appear here are **out of date and should not be requoted**: "Mooneye
@@ -1606,12 +1621,12 @@ read the table above, which is measured, not remembered.
   eleven now pass. What is still not reproduced is the logo animation itself, the
   header-checksum lock-up, and the boot ROM's beep (its envelope volume is not readable from
   any register, so how far it has decayed cannot be derived).
-- The DMG OAM-corruption bug **is** modelled, as is the HALT bug. In the `fast` engine the PPU
+- The DMG OAM-corruption bug **is** modelled, as is the HALT bug. In the `standard` picture mode the PPU
   is stepped once per instruction, so which OAM row a mid-instruction bus cycle hits is
   predicted arithmetically rather than observed; one calibrated constant absorbs the phase the
   batched PPU picks up when the LCD is switched on mid-instruction.
-- **Mode 3 is fixed-length in the default engine.** The per-dot engine derives it instead
-  (`GB_PPU=accurate`) and is structurally right but not yet calibrated — the sprite penalty,
+- **Mode 3 is fixed-length in the default picture mode.** The `identical` mode derives it instead
+  (`GB_PPU=identical`) and is structurally right but not yet calibrated — the sprite penalty,
   the window's WX penalty and the exact dot a CPU write becomes visible are the open work.
   This is what Mealybug is waiting on.
 - Web build has no sound and always treats cartridges as MBC3.
@@ -1649,14 +1664,14 @@ The test harnesses, each of which is its own binary with its own baseline:
 | command | what it proves |
 |---|---|
 | `cargo test --release --test testroms` | Blargg + dmg-acid2, **every ROM on both consoles**, judged by the ROM's own verdict — never by a hash of our output |
-| `cargo test --release --test ppuengines` | the two [PPU engines](#two-ppu-engines--pick-your-tradeoff) against each other, against dmg-acid2's reference, and against the clock |
+| `cargo test --release --test ppuengines` | the two [picture modes](#two-picture-modes--standard-and-identical) against each other, against dmg-acid2's reference, and against the clock |
 | `cargo test --release --test savestate` | byte-identical save-state round trip, every frame, plus the negative cases |
 | `cargo test --release --test battery` | an in-game save reaches disk **while the emulator runs** — no destructor involved |
 | `cargo test --release --test audiocapture` | the APU's sample stream with no audio device: rate, pitch, level, continuity, and Blargg `dmg_sound`'s own verdict |
 | `cargo test --release --test basicterm` | the frontend runs, draws, takes input and quits in a terminal with **no** kitty keyboard protocol |
 | `cargo test --release --test agent` | the agent plugin's budget cap, circuit breaker and stuck detection, against a hand-assembled cartridge |
 | `make test-audio-perf` | emulation stays inside the frame budget with a host audio player attached (needs `audio`, **not** a sound card) |
-| `make test-external` / `make test-external-accurate` | Mooneye + SameSuite + Mealybug, both PPU engines, against pinned baselines |
+| `make test-external` / `make test-external-accurate` | Mooneye + SameSuite + Mealybug, both picture modes, against pinned baselines |
 | `make embed` | the core alone: one third-party dependency, and a ROM runs with `HOME` and `DISPLAY` unset |
 | `make no-plugins` | no plugin crate is reachable from the emulator or either frontend |
 | `make docs-check` | every generated `path:line` doc link still points at a real line |
@@ -1727,11 +1742,12 @@ account of what is *not* covered: [`docs/conformance-action.md`](docs/conformanc
 
 Near-term, in priority order:
 
-- **Calibrate the per-dot PPU engine.** The pixel FIFO exists and is structurally right
-  ([`GB_PPU=accurate`](#two-ppu-engines--pick-your-tradeoff)); what is left is the sprite
-  penalty, the window's WX penalty, and the exact dot on which a CPU write becomes visible to
-  the fetcher. There is no single constant left to find — there are many, and they constrain
-  each other. Mealybug 3/79 is the number that moves when this lands.
+- **Calibrate the `identical` picture mode.** The pixel FIFO exists, is structurally right and is
+  already the better scorer on every gate ([`GB_PPU=identical`](#two-picture-modes--standard-and-identical));
+  what is left is the sprite penalty, the window's WX penalty, and the exact dot on which a CPU
+  write becomes visible to the fetcher. There is no single constant left to find — there are many,
+  and they constrain each other. Mealybug 12/79 is the number that moves when this lands, and
+  closing the gap is also what would let `identical` become the default.
   See [`docs/mealybug.md`](docs/mealybug.md) §7.
 - **Every remaining Mooneye red is a mid-scanline PPU row** and belongs with the pixel FIFO
   above. The named-machine rows that used to sit here — SGB, MGB, DMG0, CGB0, AGB boot state —

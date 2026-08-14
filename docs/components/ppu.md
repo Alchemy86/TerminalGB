@@ -75,26 +75,29 @@ driven in CGB mode by default. SGB border/recolour is **not** implemented.
 
 ## 4. How it works here
 
-### 4.0 There are two rendering engines
+### 4.0 There are two picture modes
 
-`RenderMode` ([`src/gpu/mod.rs`](../../src/gpu/mod.rs)) selects which one runs. Everything else
-in this section describes **`Fast`**, the default: it draws a whole scanline in one go at the
-mode 3 → 0 transition and gives mode 3 a fixed 172-dot length, so every register is read exactly
-once per line.
+`RenderMode` ([`src/gpu/mod.rs`](../../src/gpu/mod.rs)) selects which one runs — a **user-facing
+mode**, not an internal switch: see [`docs/picture-modes.md`](../picture-modes.md). Everything
+else in this section describes **`standard`** (`RenderMode::Fast`), the default: it draws a whole
+scanline in one go at the mode 3 → 0 transition and gives mode 3 a fixed 172-dot length, so every
+register is read exactly once per line.
 
-**`Accurate`** ([`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) is the real pixel pipeline, stepped
-one dot at a time — BG/window fetcher, 8-pixel FIFO, sprite fetch stalls, `SCX & 7` discard, and
-a mode 3 length derived rather than assumed. Colour indices go into the FIFO and the palette is
-applied at the output, which is what makes a mid-line `BGP` write move a boundary along the
-scanline instead of recolouring what is already drawn. Chosen with `GB_PPU=accurate`, the `ppu`
-config key, or `Gpu::set_render_mode`, and shown in the terminal Status panel's `PPU` row.
+**`identical`** (`RenderMode::Accurate`, [`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) is the real
+pixel pipeline, stepped one dot at a time — BG/window fetcher, 8-pixel FIFO, sprite fetch stalls,
+`SCX & 7` discard, and a mode 3 length derived rather than assumed. Colour indices go into the
+FIFO and the palette is applied at the output, which is what makes a mid-line `BGP` write move a
+boundary along the scanline instead of recolouring what is already drawn. Chosen with the `P` key,
+`GB_PPU=identical`, the `ppu` config key, or `Gpu::set_render_mode`, and shown in the terminal
+Status panel's `PPU` row. The pre-rename spellings `fast`/`accurate` still parse everywhere.
 
 The two are **not** an appearance choice — palettes and upscaling live in `src/screen/`, above
-the PPU, and are identical either way. The axis is accuracy against cost: measured 0.219 vs
-0.463 ms/frame on dmg-acid2, and both are pixel-exact against its reference image. Where the
-accurate engine stands against the suite that motivates it, including the two rows where it is
-currently *behind* the fast one, is [`docs/mealybug.md`](../mealybug.md) §7. Both engines are
-held against each other in CI by [`testharness/ppuengines.rs`](../../testharness/ppuengines.rs).
+the PPU, and are identical either way. The axis is exactness against speed: measured 0.221 vs
+0.461 ms/frame on dmg-acid2, and both are pixel-exact against its reference image. `identical`
+now **loses no row to `standard` on any gate**; what keeps it opt-in is the ~2.1x cost. Where it
+stands against the suite that motivates it is [`docs/mealybug.md`](../mealybug.md) §7. Both modes
+are held against each other in CI by
+[`testharness/ppuengines.rs`](../../testharness/ppuengines.rs).
 
 ### 4.1 The whole-scanline engine
 
@@ -143,11 +146,12 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
 
 ### Honest approximations
 
-> **These describe the default (`fast`) engine.** The per-dot pixel FIFO of §4.0
-> (`GB_PPU=accurate`, [`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) does all three of the first
-> bullets properly — variable mode 3, per-dot stepping, per-pixel output — and is gated in CI
-> by `make test-external-accurate`. It is not the default because it still loses one Mooneye
-> row the fast engine passes; the measured trade is in
+> **These describe the default `standard` picture mode.** The per-dot pixel FIFO of §4.0
+> (`identical`, `GB_PPU=identical`, [`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) does all three of
+> the first bullets properly — variable mode 3, per-dot stepping, per-pixel output — and is gated
+> in CI by `make test-external-accurate`. It is not the default because it costs about 2.1x the
+> CPU, not because it is behind on anything; the measured trade is in
+> [`docs/picture-modes.md`](../picture-modes.md) and
 > [`docs/measured/ppu.md`](../measured/ppu.md). Read what follows as *"what you get by
 > default"*, not *"what this emulator can do"*.
 

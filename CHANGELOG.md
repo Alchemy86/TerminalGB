@@ -14,6 +14,19 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Added
+- **Picture modes — `standard` and `identical`** ([`docs/picture-modes.md`](docs/picture-modes.md)).
+  The two PPU engines are now a named, discoverable, user-facing mode instead of an internal
+  switch: **`P` toggles it live** in the terminal frontend, the Status panel's `PPU` row names
+  the mode *and* its price (`identical ~2.1x`), the toast and the `?` overlay explain the trade,
+  and the Controls list carries the key. `standard` (the default, unchanged) draws a whole
+  scanline at a time; `identical` runs the real per-dot pixel pipeline, so a mid-scanline
+  register write lands where hardware puts it. The cost figure is a **measurement**:
+  `RenderMode::IDENTICAL_COST` is checked against the engines' actual ratio by
+  `cargo test --release --test ppuengines`, which now fails the build if the number shown to
+  users stops being true. Both modes stay gated in CI against their own baselines, and the
+  status page reports **both scores side by side**. Framing corrected while renaming:
+  `identical` no longer loses a row to `standard` on any gate — the two it used to lose are
+  closed — so the default stands on cost alone.
 - **The final TerminalGB logo** (`docs/brand/terminalgb-logo.svg` + `terminalgb-icon.svg`),
   now at the top of the README: the heavy hand-authored wordmark with a solid DMG-green
   terminal **block cursor replacing the I** and a green **full stop** closing the word, over
@@ -46,6 +59,11 @@ history. See [Credits & lineage](README.md#credits--lineage).
     so there is exactly one in the workspace.
 
 ### Changed
+- **The PPU engines are named `standard` and `identical`** in the config, the UI and the docs
+  (was `fast` and `accurate`). **The old spellings still parse everywhere** — `config.toml`,
+  `$GB_PPU`, the `make` targets, `RenderMode::parse` — so nothing written against them breaks;
+  the Rust identifiers `RenderMode::{Fast, Accurate}` are unchanged. Baseline headers now name
+  the mode that scored them in both vocabularies. The default is unchanged: `standard`.
 - **The project is now called TerminalGB.** It was already the name the product used — the
   terminal window title and the virtual camera's idle card both said `TerminalGB` — so this
   makes the codebase match what a user sees. The rename is mechanical and covers the crate

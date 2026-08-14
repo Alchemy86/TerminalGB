@@ -184,6 +184,27 @@ fn main() {
         ));
     }
 
+    // ---- 4. the price we quote the player --------------------------------
+    //
+    // `RenderMode::IDENTICAL_COST` is printed on the Status row, in the toast
+    // when `P` switches mode, and in the `?` overlay — it is the *whole* basis
+    // on which somebody decides to trade speed for exactness, so it must stay a
+    // measurement rather than becoming folklore. (A stale "audio costs 8 ms a
+    // frame" is exactly what this repository has already been bitten by.)
+    //
+    // The band is wide because it is a ratio measured on a shared CI box, but
+    // it is narrow enough to catch the constant being halved or doubled: the
+    // ratio is stable within a run even when the absolute figures are not.
+    let ratio = acc_ms / fast_ms;
+    let quoted = f64::from(RenderMode::IDENTICAL_COST);
+    if !(ratio / 1.5..=ratio * 1.5).contains(&quoted) {
+        failures.push(format!(
+            "RenderMode::IDENTICAL_COST says {quoted:.2}x but the engines measure \
+             {ratio:.2}x ({fast_ms:.4} vs {acc_ms:.4} ms/frame) — re-measure and move \
+             the constant, and the README/status-page figures with it"
+        ));
+    }
+
     if failures.is_empty() {
         println!("\nPASS: both engines agree, and the accurate one is pixel-exact on dmg-acid2");
         return;

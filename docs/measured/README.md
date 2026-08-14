@@ -121,8 +121,9 @@ a home:
 Five rules, each of which this project learned by getting it wrong first. They are the reason
 the numbers on these pages can be trusted.
 
-1. **Say which engine.** The PPU has two (`GB_PPU=fast|accurate`) and they score the same ROMs
-   differently. A figure without an engine is ambiguous — see [ppu.md](ppu.md).
+1. **Say which picture mode.** The PPU has two (`GB_PPU=standard|identical`, formerly
+   `fast`/`accurate`) and they score the same ROMs differently. A figure without a mode is
+   ambiguous — see [ppu.md](ppu.md) and [picture-modes.md](../picture-modes.md).
 2. **Say which population.** "Mooneye acceptance" is 75 rows here, **66** in the community's
    usual denominator, and **66** again in the Shootout's manifest — for two different reasons.
    Comparing across them silently is how a real gain measures as zero.

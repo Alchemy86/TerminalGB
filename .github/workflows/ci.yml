@@ -186,12 +186,13 @@ jobs:
       # Two self-checks run first and abort if the comparison is vacuous. ~4s to run.
       - name: Run test-ROM harness
         run: cargo test --release --test testroms
-      # `testroms` only ever exercises whichever engine is the default. This
-      # asks the *other* one the same questions: pixel-exact on dmg-acid2
-      # against its author's reference, frame-identical to the default engine
-      # on well-behaved ROMs, and still comfortably faster than real time.
-      # See testharness/ppuengines.rs.
-      - name: Run both PPU engines against each other
+      # `testroms` only ever exercises whichever picture mode is the default.
+      # This asks the *other* one the same questions: pixel-exact on dmg-acid2
+      # against its author's reference, frame-identical to the default mode
+      # on well-behaved ROMs, still comfortably faster than real time, and
+      # costing what RenderMode::IDENTICAL_COST tells users it costs.
+      # See testharness/ppuengines.rs and docs/picture-modes.md.
+      - name: Run both picture modes against each other
         run: cargo test --release --test ppuengines
       # On any baseline mismatch the harness dumps the actual frame(s) — keep them.
       - name: Upload frame artifacts on failure
@@ -229,13 +230,13 @@ jobs:
         run: make fetch-test-suites
       - name: Score every external suite against its baseline
         run: make test-external
-      # …and the two PPU-bearing suites again on the OTHER rendering engine.
-      # `test-external` scores whichever engine is the default, so without this
-      # the per-dot pixel FIFO — whose whole purpose is these suites — is
+      # …and the two PPU-bearing suites again in the OTHER picture mode.
+      # `test-external` scores whichever mode is the default, so without this
+      # the per-dot `identical` mode — whose whole purpose is these suites — is
       # gated by nobody, and both its progress and its regressions would be
       # invisible. Its baselines carry their own pixel counts, so a change to
       # the pipeline shows up whether or not it moves a row.
-      - name: Score the accurate PPU engine against its own baseline
+      - name: Score the `identical` picture mode against its own baseline
         run: make test-external-accurate
       # Mealybug writes the frame it produced for every ROM; on a red build
       # those are what tells you *how* the PPU changed.

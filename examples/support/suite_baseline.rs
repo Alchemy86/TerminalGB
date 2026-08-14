@@ -57,13 +57,18 @@ pub fn take_baseline_arg(args: Vec<String>) -> (Option<PathBuf>, Vec<String>) {
     (baseline, rest)
 }
 
-/// The first line of every baseline file: **which PPU engine scored these
+/// The first line of every baseline file: **which picture mode scored these
 /// rows**, and therefore which `make` target re-blesses them.
 ///
 /// There are two renderers and the same suite scores differently on each, so a
 /// baseline that does not say which one produced it is a file nobody can
 /// safely re-bless — the obvious command would silently rewrite it with the
 /// other engine's numbers. See `docs/mealybug.md` §7.
+///
+/// Both spellings are printed. The modes are named `standard`/`identical`; the
+/// `make` targets and every script written before the rename say `fast` and
+/// `accurate`, which still parse — a reader who meets one has to be able to
+/// join it up with the other.
 fn engine_note() -> String {
     let mode = terminalgb::ppu::RenderMode::from_env();
     let target = match mode {
@@ -71,8 +76,9 @@ fn engine_note() -> String {
         terminalgb::ppu::RenderMode::Fast => "make test-external",
     };
     format!(
-        "# SCORED WITH THE `{name}` PPU ENGINE (GB_PPU={name}).\n# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 {target}\n# The other engine produces different numbers for the same ROMs — see\n# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this\n# file with the wrong machine's results.\n#\n",
+        "# SCORED WITH THE `{name}` PICTURE MODE (GB_PPU={name}, alias `{alias}`).\n# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 {target}\n# The other mode produces different numbers for the same ROMs — see\n# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this\n# file with the wrong machine's results.\n#\n",
         name = mode.name(),
+        alias = mode.alias(),
     )
 }
 
