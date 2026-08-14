@@ -1511,10 +1511,11 @@ drives a 160×144 4-shade screen, and has four sound channels. Emulating it is m
 moving a lot of individual bytes: reading joypad state from I/O registers, pushing pixels
 into VRAM, and banking through ROM/RAM.
 
-<img src="resources/internals-cpu-section.gif" alt="Game Boy internals" width="360" />
-
-*(c) Jeff Frohwein — [devrs.com](http://www.devrs.com/gb/hardware.php#hardgb). More
-long-form history and the DMG board schematics live in [`resources/`](resources/).*
+If you want to see that at the gate level, the DMG board schematics — the LR35902 beside its
+video RAM, the cartridge socket, the link port and the four-channel mixer — are Jeff Frohwein's,
+on [devrs.com](http://www.devrs.com/gb/hardware.php#hardgb) and mirrored on the [gbdev
+wiki](https://gbdev.gg8.se/wiki/articles/DMG_Schematics). They are **(c) Jeff Frohwein** and
+carry no licence, so we link them rather than reproduce them here.
 </details>
 
 ## License
