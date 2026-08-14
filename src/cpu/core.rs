@@ -25,7 +25,14 @@ pub struct Cpu<'a> {
     /// CPU does not halt, and the program counter fails to increment when the
     /// next opcode is fetched, so the byte after `HALT` is read twice.
     pub halt_bug: bool,
+    /// Why the CPU is not executing: [`Cpu::STOP_MODE`] (stopped by `STOP`,
+    /// restarted by a selected `P1` line going low) or [`Cpu::STOP_LOCKED`]
+    /// (hung on an undefined opcode, never restarted). 0 = running.
     pub stop: u32,
+    /// T-cycles left of the HALT a CGB speed switch runs the CPU through,
+    /// counted in the *new* clock — see [`Cpu::SPEED_SWITCH_HALT_TICKS`].
+    /// 0 when no switch is in flight.
+    pub speed_switch_halt: u32,
     pub memory: MemoryManagementUnit<'a>,
     /// Attached plugins — see [`crate::plugin`]. Lives here rather than in the
     /// MMU so dispatch can hand a plugin `&mut MemoryManagementUnit` (two
@@ -68,6 +75,7 @@ impl Cpu<'_> {
             halt: 0,
             halt_bug: false,
             stop: 0,
+            speed_switch_halt: 0,
             plugins: crate::plugin::PluginHost::new(),
             _executed_operations: Vec::new(),
         }
@@ -94,7 +102,11 @@ impl Cpu<'_> {
         // on the next opcode fetch, so it can be live at a frame boundary —
         // omitting it would silently desync the instruction after HALT.
         w.bool(self.halt_bug);
+        // STOP mode and the speed-switch HALT both outlive a frame boundary:
+        // a stopped CPU sits there until a button is pressed, and the switch
+        // itself is ~0.93 frames long.
         w.u32(self.stop);
+        w.u32(self.speed_switch_halt);
 
         // Everything the MMU owns (RAM, IO, PPU, APU, timer, serial, MBC…).
         self.memory.save_state(&mut w);
@@ -133,6 +145,7 @@ impl Cpu<'_> {
         self.halt = r.u32()?;
         self.halt_bug = r.bool()?;
         self.stop = r.u32()?;
+        self.speed_switch_halt = r.u32()?;
 
         self.memory.load_state(&mut r)?;
         Ok(())
@@ -173,6 +186,112 @@ impl Cpu<'_> {
             }
             _ => 0,
         };
+    }
+
+    /// [`Cpu::stop`]: stopped by `STOP`, waiting on the joypad.
+    pub const STOP_MODE: u32 = 1;
+    /// [`Cpu::stop`]: locked up by an undefined opcode, as hardware does.
+    pub const STOP_LOCKED: u32 = 2;
+
+    /// How long the CPU sits in HALT while a CGB speed switch completes,
+    /// counted in T-cycles of the **new** clock. Pan Docs' STOP chart: *"HALT
+    /// mode will exit automatically after about 0x20000 T-cycles"*. Switching
+    /// into double speed that is 65536 cycles of the unchanged 4.194304 MHz
+    /// clock the PPU runs on — 143 scanlines and a bit, which is why the
+    /// display visibly collapses across a speed switch.
+    ///
+    /// `0x20000` is also exactly **two wraps of the 16-bit system counter**,
+    /// which is reset on the way in and then runs at the new speed. That is
+    /// what makes `DIV` read back ~0 the instant the CPU resumes, and it is
+    /// what `daid/speed_switch_timing_div` measures: on this machine that ROM
+    /// passes for a duration anywhere in `0x1FFF4..=0x20000`, and the
+    /// documented value is the top of that window. (SameBoy uses a measured
+    /// `0x20008`; the eight cycles between the two are below the resolution of
+    /// this core's per-access cycle accounting.)
+    const SPEED_SWITCH_HALT_TICKS: u32 = 0x0002_0000;
+
+    /// `STOP` (`$10`). The whole of Pan Docs' *"Using the STOP Instruction"*
+    /// decision chart (by Lior Halphon), which the three branch flags below
+    /// index into:
+    ///
+    /// * a **selected button already held** means STOP does not stop at all —
+    ///   `DIV` is not reset and no speed switch happens;
+    /// * a **speed switch requested** (KEY1 bit 0) resets `DIV`, toggles the
+    ///   clock and parks the CPU in HALT for [`SPEED_SWITCH_HALT_TICKS`];
+    /// * otherwise the CPU enters **STOP mode** proper and only a `P1` line
+    ///   going low restarts it;
+    /// * and an **interrupt pending** (`IE & IF != 0`) in any of those makes
+    ///   STOP a one-byte opcode, so the `$00` after it is executed normally.
+    ///
+    /// The one square of the chart that reads "the CPU glitches
+    /// non-deterministically" — a button held *and* a switch requested — is
+    /// resolved here the way SameBoy resolves it: no switch, no stop, no `DIV`
+    /// reset. An emulator has to do something, and hanging or panicking on a
+    /// cartridge-chosen combination is not it.
+    ///
+    /// [`SPEED_SWITCH_HALT_TICKS`]: Cpu::SPEED_SWITCH_HALT_TICKS
+    fn stop_instruction(&mut self) -> u32 {
+        let exit_by_joyp = self.memory.keypad.rb() & 0x0F != 0x0F;
+        let speed_switch = self.memory.speed_switch_requested() && !exit_by_joyp;
+        let interrupt_pending = self.memory.inte & self.memory.intf & 0x1F != 0;
+
+        if !exit_by_joyp {
+            self.enter_stop_mode();
+        }
+
+        // "STOP is normally a 2-byte instruction where the second byte is
+        // ignored" — but with an interrupt pending it becomes a 1-byte opcode
+        // and the next byte is executed as an instruction of its own.
+        let cycles = if interrupt_pending {
+            1
+        } else {
+            self.get_byte();
+            2
+        };
+
+        if speed_switch {
+            self.memory.switch_speed();
+            if !interrupt_pending {
+                self.speed_switch_halt = Self::SPEED_SWITCH_HALT_TICKS;
+            }
+        }
+
+        if speed_switch || exit_by_joyp {
+            self.leave_stop_mode();
+            if !interrupt_pending {
+                self.halt = 1;
+            } else {
+                self.speed_switch_halt = 0;
+            }
+        }
+
+        cycles
+    }
+
+    /// Stop the CPU: reset the system counter and cut the PPU off from VRAM.
+    ///
+    /// Pan Docs: *"On CGB, leaving the LCD enabled when invoking STOP will
+    /// result in a black screen. Except if the LCD is in Mode 3, where it will
+    /// keep drawing the current screen."* Mode 3 is exactly the mode in which
+    /// the PPU already owns VRAM, so the rule is one rule: the PPU keeps
+    /// whatever access it holds at the instant the CPU stops. On a DMG the PPU
+    /// stops outright and the panel goes blank.
+    fn enter_stop_mode(&mut self) {
+        self.stop = Self::STOP_MODE;
+        self.memory.reset_div();
+        let fill = if self.memory.gbmode == crate::mode::GbMode::Classic {
+            Some(255)
+        } else if self.memory.gpu.mode() == 3 {
+            None
+        } else {
+            Some(0)
+        };
+        self.memory.gpu.set_stop_fill(fill);
+    }
+
+    fn leave_stop_mode(&mut self) {
+        self.stop = 0;
+        self.memory.gpu.set_stop_fill(None);
     }
 
     // Interrupt dispatch. See docs/components/cpu.md §"Interrupts" and Pan Docs:
@@ -265,18 +384,28 @@ impl Cpu<'_> {
             self.registers.pc
         ));
         // Locked up: stop fetching, but keep the peripherals running so the
-        // frontend stays alive to show the message.
-        self.stop = 1;
+        // frontend stays alive to show the message. `STOP_LOCKED`, not
+        // `STOP_MODE` — a button press restarts a stopped CPU and must not
+        // restart a hung one.
+        self.stop = Self::STOP_LOCKED;
         1
     }
 
     pub fn exec(&mut self) -> u32 {
-        // Locked up by an undefined opcode. Nothing wakes it — not even an
-        // interrupt — but the rest of the machine keeps running, so the frame
-        // still advances and the frontend stays responsive. See `operation`.
+        // Not executing: either stopped by `STOP` — which is *not* HALT, so an
+        // interrupt does not restart it, only one of the P10-P13 lines going
+        // low does (Pan Docs, "Using the STOP Instruction") — or locked up by
+        // an undefined opcode, which nothing wakes at all. Tested before
+        // interrupt dispatch for that reason. The rest of the machine keeps
+        // running either way, so frames still complete and the frontend stays
+        // responsive.
         if self.stop != 0 {
-            return 1;
+            if self.stop == Self::STOP_LOCKED || self.memory.keypad.rb() & 0x0F == 0x0F {
+                return 1;
+            }
+            self.leave_stop_mode();
         }
+
         self.updateime();
         match self.handleinterrupt() {
             0 => {}
@@ -284,9 +413,20 @@ impl Cpu<'_> {
         };
 
         if self.halt == 1 {
+            // The HALT a CGB speed switch runs through ends by itself after
+            // `SPEED_SWITCH_HALT_TICKS`, with no interrupt involved.
+            if self.speed_switch_halt > 0 {
+                self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4);
+                if self.speed_switch_halt == 0 {
+                    self.halt = 0;
+                }
+            }
             // Emulate an noop instruction
             1
         } else {
+            // An interrupt woke the CPU before the switch countdown expired
+            // ("Unless an interrupt occurs before then…" on the STOP chart).
+            self.speed_switch_halt = 0;
             // Step the timer per memory access for the duration of this
             // instruction so reads/writes land on the correct M-cycle
             // (Blargg mem_timing). See MemoryManagementUnit::bus_tick.
@@ -460,11 +600,7 @@ impl Cpu<'_> {
                 misc::rrca(self);
                 1
             }
-            0x10 => {
-                // stack::djnzn(self);
-                self.memory.switch_speed();
-                1
-            }
+            0x10 => self.stop_instruction(),
             0x11 => {
                 ld::denn(self);
                 3
@@ -1490,5 +1626,277 @@ mod tests {
         cpu.memory.report_fault("first");
         cpu.memory.report_fault("second");
         assert_eq!(cpu.memory.fault(), Some("first"));
+    }
+}
+
+/// `STOP` — the instruction, its four branches, and the display of a stopped
+/// machine. Device-free: each test hand-assembles a 32 KiB cartridge and drives
+/// the core directly, so they run under plain `cargo test`.
+///
+/// The behaviours pinned here are the ones `daid/stop_instr`,
+/// `daid/stop_instr_gbc_mode3` and `daid/speed_switch_timing_div` measure with
+/// a whole ROM; see [`Cpu::stop_instruction`] for the Pan Docs citations.
+#[cfg(test)]
+mod stop_tests {
+    use super::Cpu;
+    use crate::gpu::{HEIGHT, WIDTH};
+    use crate::input::KeypadKey;
+    use crate::mode::Model;
+
+    /// A minimal cartridge whose program starts at `$0150`. `cgb` sets the
+    /// CGB flag, which is what makes `KEY1` respond at all — a Color console
+    /// running a cartridge without it is in compatibility mode, where the CGB
+    /// registers read `$FF` and a speed switch cannot be asked for.
+    fn cart(program: &[u8], cgb: bool) -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        // $0100: NOP; JP $0150 — the entry point every header has.
+        rom[0x0100] = 0x00;
+        rom[0x0101] = 0xC3;
+        rom[0x0102] = 0x50;
+        rom[0x0103] = 0x01;
+        for (i, b) in b"STOPTEST".iter().enumerate() {
+            rom[0x0134 + i] = *b;
+        }
+        rom[0x0143] = if cgb { 0xC0 } else { 0x00 };
+        rom[0x0147] = 0x00; // ROM ONLY
+        rom[0x0148] = 0x00; // 32 KiB
+        rom[0x0149] = 0x00; // no RAM
+        let mut sum: u8 = 0;
+        for b in rom.iter().take(0x014D).skip(0x0134) {
+            sum = sum.wrapping_sub(*b).wrapping_sub(1);
+        }
+        rom[0x014D] = sum;
+        rom[0x0150..0x0150 + program.len()].copy_from_slice(program);
+        rom
+    }
+
+    fn machine(program: &[u8], model: Model) -> Cpu<'static> {
+        Cpu::new_with_model(cart(program, false), None, model)
+    }
+
+    /// A Color console running a Color cartridge — the only machine on which
+    /// `STOP` can switch speed.
+    fn color_machine(program: &[u8]) -> Cpu<'static> {
+        Cpu::new_with_model(cart(program, true), None, Model::Cgb)
+    }
+
+    /// Run until `pc` is reached (or `budget` instructions are spent), and
+    /// report the T-cycles the PPU saw on the way — which is the 4.194304 MHz
+    /// clock, whatever speed the CPU is running at.
+    fn run_to(cpu: &mut Cpu<'_>, pc: u16, budget: u32) -> u32 {
+        let mut ppu_ticks = 0;
+        for _ in 0..budget {
+            if cpu.registers.pc == pc {
+                return ppu_ticks;
+            }
+            ppu_ticks += cpu.do_cycle();
+        }
+        panic!("never reached ${pc:04X}");
+    }
+
+    /// Spin until `DIV` reads `$40`, then arm KEY1 and switch. Waiting on a
+    /// known, *non-zero* `DIV` is `daid/speed_switch_timing_div`'s own trick,
+    /// and it is what makes the counter reset observable: without it the
+    /// switch is a whole number of counter wraps and DIV comes out reading
+    /// whatever it read going in.
+    ///
+    /// `LDH A,($04) / CP $40 / JR NZ,-6 / LD A,$01 / LDH ($4D),A / STOP`
+    const SWITCH: &[u8] = &[
+        0xF0, 0x04, 0xFE, 0x40, 0x20, 0xFA, 0x3E, 0x01, 0xE0, 0x4D, 0x10, 0x00, 0x00,
+    ];
+    const STOP_AT: u16 = 0x0150 + 10;
+
+    #[test]
+    fn a_speed_switch_runs_the_cpu_through_a_halt_two_counter_wraps_long() {
+        let mut cpu = color_machine(SWITCH);
+        // Sanity: single speed, and the request is visible in KEY1.
+        assert_eq!(cpu.memory.rb(0xFF4D) & 0x80, 0x00);
+        run_to(&mut cpu, STOP_AT, 100_000);
+        assert_eq!(cpu.memory.rb(0xFF4D) & 0x01, 0x01, "KEY1 request not armed");
+        assert_eq!(
+            cpu.memory.timer.rb(0xFF04),
+            0x40,
+            "test setup: DIV should be $40"
+        );
+
+        // The STOP itself, then however long the CPU sits in the HALT it puts
+        // us in. PC does not move while halted, so the exit is what is timed.
+        cpu.do_cycle();
+        assert_eq!(cpu.halt, 1, "the switch parks the CPU in HALT mode");
+        let mut ticks = 0;
+        for _ in 0..200_000 {
+            if cpu.halt == 0 {
+                break;
+            }
+            ticks += cpu.do_cycle();
+        }
+
+        // The PPU (and so the LCD) keeps running for the whole switch. The
+        // switch is SPEED_SWITCH_HALT_TICKS of the *new* clock, so half that
+        // many of the PPU's, which never changes speed.
+        let switch_ppu_ticks = Cpu::SPEED_SWITCH_HALT_TICKS / 2;
+        assert!(
+            ticks >= switch_ppu_ticks && ticks < switch_ppu_ticks + 8,
+            "the switch took {ticks} PPU ticks, expected ~{switch_ppu_ticks}"
+        );
+        // 65536 dots is 143.7 scanlines — the "display collapses for a short
+        // moment" Pan Docs warns about.
+        assert_eq!(switch_ppu_ticks / 456, 143);
+
+        // Double speed now, request withdrawn.
+        assert_eq!(cpu.memory.rb(0xFF4D) & 0x81, 0x80);
+        // The counter was reset on the way in and then ran at the new speed for
+        // exactly two wraps, so DIV comes back out at ~0 — this is the whole of
+        // `daid/speed_switch_timing_div`.
+        assert!(
+            cpu.memory.timer.rb(0xFF04) == 0x00,
+            "DIV came out of the switch at {:02X}, not ~0",
+            cpu.memory.timer.rb(0xFF04)
+        );
+        // And the CPU really is executing again.
+        assert_eq!(cpu.stop, 0);
+        assert_eq!(cpu.halt, 0);
+    }
+
+    #[test]
+    fn a_speed_switch_is_a_no_op_without_the_key1_request() {
+        // STOP with no request and no button: STOP mode, not a speed switch.
+        let mut cpu = color_machine(&[0x10, 0x00, 0x00]);
+        run_to(&mut cpu, 0x0150, 100);
+        cpu.do_cycle();
+        assert_eq!(cpu.stop, Cpu::STOP_MODE);
+        assert_eq!(cpu.memory.rb(0xFF4D) & 0x80, 0x00, "speed must not change");
+    }
+
+    #[test]
+    fn stop_mode_ends_only_when_a_selected_button_goes_low() {
+        // LDH ($00),A with A=0 selects both button rows, then STOP.
+        let program = &[0xAF, 0xE0, 0x00, 0x10, 0x00, 0x3C];
+        let mut cpu = machine(program, Model::Cgb);
+        run_to(&mut cpu, 0x0155, 100);
+        let pc = cpu.registers.pc;
+
+        // Thousands of cycles later the CPU has not moved: an interrupt cannot
+        // end STOP mode, only the joypad can.
+        cpu.memory.intf = 0x1F;
+        cpu.memory.inte = 0x1F;
+        cpu.ime = true;
+        for _ in 0..10_000 {
+            cpu.do_cycle();
+        }
+        assert_eq!(cpu.stop, Cpu::STOP_MODE);
+        assert_eq!(cpu.registers.pc, pc, "a stopped CPU must not execute");
+
+        cpu.memory.keypad.keydown(KeypadKey::Start);
+        cpu.do_cycle();
+        assert_eq!(cpu.stop, 0);
+    }
+
+    #[test]
+    fn stop_does_not_stop_when_a_button_is_already_held() {
+        let program = &[0xAF, 0xE0, 0x00, 0x10, 0x00, 0x3C];
+        let mut cpu = machine(program, Model::Cgb);
+        cpu.memory.keypad.keydown(KeypadKey::A);
+        run_to(&mut cpu, 0x0153, 100);
+        // Give DIV a value we would notice being cleared.
+        for _ in 0..200 {
+            cpu.do_cycle();
+        }
+        let div = cpu.memory.timer.rb(0xFF04);
+        assert_ne!(div, 0, "test setup: DIV should be non-zero here");
+
+        cpu.do_cycle(); // the STOP itself
+        assert_eq!(cpu.stop, 0, "a held button means STOP does not stop");
+        // "DIV is not reset" — the one branch of the chart that leaves it alone.
+        assert!(cpu.memory.timer.rb(0xFF04) >= div);
+        assert_eq!(cpu.halt, 1, "HALT mode is entered instead");
+    }
+
+    #[test]
+    fn a_pending_interrupt_makes_stop_a_one_byte_opcode() {
+        // STOP, then $3C (INC A) as the "second byte". With an interrupt
+        // pending STOP is one byte, so that $3C is a real instruction — and
+        // STOP mode is still entered, so it never runs.
+        let program = &[0x10, 0x3C];
+        let mut cpu = machine(program, Model::Cgb);
+        run_to(&mut cpu, 0x0150, 100);
+        cpu.memory.inte = 0x04;
+        cpu.memory.intf = 0x04;
+        cpu.ime = false;
+        cpu.do_cycle();
+        assert_eq!(cpu.stop, Cpu::STOP_MODE);
+        assert_eq!(cpu.registers.pc, 0x0151, "one byte, not two");
+
+        // Without a pending interrupt the same STOP swallows its operand.
+        let mut cpu = machine(program, Model::Cgb);
+        run_to(&mut cpu, 0x0150, 100);
+        cpu.memory.inte = 0;
+        cpu.memory.intf = 0;
+        cpu.do_cycle();
+        assert_eq!(cpu.registers.pc, 0x0152, "two bytes");
+    }
+
+    /// The shade every pixel of the frame holds, or `None` if they differ.
+    fn flat_shade(cpu: &Cpu<'_>) -> Option<u8> {
+        let first = cpu.memory.gpu.data[0];
+        cpu.memory.gpu.data[..WIDTH * HEIGHT * 4]
+            .chunks(4)
+            .all(|px| px[..3].iter().all(|p| *p == first))
+            .then_some(first)
+    }
+
+    /// Turn the LCD on, put something on screen, then STOP — and report what
+    /// the panel shows a frame later.
+    fn stopped_screen(model: Model, wait_for_mode_3: bool) -> Option<u8> {
+        // LD A,$91 / LDH ($40),A   — LCD + BG on
+        // LD A,$1E / LDH ($47),A   — a BGP that is not all-one-shade
+        // (optionally) spin until STAT reports mode 3
+        // STOP
+        let mut program = vec![0x3E, 0x91, 0xE0, 0x40, 0x3E, 0x1E, 0xE0, 0x47];
+        if wait_for_mode_3 {
+            // .wait: LDH A,($41) / AND $03 / CP $03 / JR NZ,.wait
+            program.extend_from_slice(&[0xF0, 0x41, 0xE6, 0x03, 0xFE, 0x03, 0x20, 0xF8]);
+        }
+        program.extend_from_slice(&[0x10, 0x00, 0x00]);
+        let mut cpu = machine(&program, model);
+        // Give the PPU some non-blank tile data to draw, so a frozen screen is
+        // distinguishable from a blanked one.
+        for a in 0x8000u16..0x8010 {
+            cpu.memory.gpu.vram[(a & 0x1FFF) as usize] = 0xA5;
+        }
+        for _ in 0..400_000 {
+            cpu.do_cycle();
+            if cpu.stop == Cpu::STOP_MODE {
+                break;
+            }
+        }
+        assert_eq!(cpu.stop, Cpu::STOP_MODE, "the CPU never stopped");
+        // Two full frames (70224 dots each) of the stopped machine, so every
+        // scanline has been drawn again since the CPU stopped.
+        for _ in 0..40_000 {
+            cpu.do_cycle();
+        }
+        flat_shade(&cpu)
+    }
+
+    #[test]
+    fn a_stopped_dmg_blanks_the_panel_and_a_stopped_color_goes_black() {
+        // Pan Docs: a DMG stops the PPU outright — the panel goes blank.
+        assert_eq!(stopped_screen(Model::Dmg, false), Some(255));
+        // "On CGB, leaving the LCD enabled when invoking STOP will result in a
+        // black screen."
+        assert_eq!(stopped_screen(Model::Cgb, false), Some(0));
+    }
+
+    #[test]
+    fn a_color_stopped_during_mode_3_keeps_drawing_the_screen() {
+        // "…Except if the LCD is in Mode 3, where it will keep drawing the
+        // current screen." So the frame is *not* a flat shade: the PPU kept
+        // the VRAM access it already held and drew the tile data.
+        assert_eq!(
+            stopped_screen(Model::Cgb, true),
+            None,
+            "a mode-3 STOP must leave the picture alone"
+        );
     }
 }

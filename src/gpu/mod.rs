@@ -82,6 +82,13 @@ pub struct Gpu {
     /// mode 2, and the mode-2 STAT source does not strobe. Cleared as soon as
     /// that line reaches mode 3.
     skip_first_oam: bool,
+    /// While the CPU is in STOP mode the PPU loses its access to VRAM, so
+    /// every scanline it draws is a flat shade instead of the tile map:
+    /// `Some(255)` (blank/white) on a DMG, `Some(0)` (black) on a Color.
+    /// `None` is both "not stopped" and the Mode-3 exception, where the PPU
+    /// keeps the access it already holds and carries on drawing normally.
+    /// See [`Gpu::set_stop_fill`].
+    stop_fill: Option<u8>,
 }
 
 impl Default for Gpu {
@@ -139,7 +146,20 @@ impl Gpu {
             stat_line: false,
             lyc_match: false,
             skip_first_oam: false,
+            stop_fill: None,
         }
+    }
+
+    /// The current STAT mode (0 HBlank, 1 VBlank, 2 OAM scan, 3 drawing).
+    pub fn mode(&self) -> u8 {
+        self.mode
+    }
+
+    /// Take away (or give back) the PPU's VRAM access for the duration of
+    /// STOP mode — see the [`Gpu::stop_fill`] field. `None` restores normal
+    /// rendering.
+    pub fn set_stop_fill(&mut self, fill: Option<u8>) {
+        self.stop_fill = fill;
     }
 
     pub fn new_cgb() -> Gpu {
@@ -198,6 +218,10 @@ impl Gpu {
         w.bool(self.stat_line);
         w.bool(self.lyc_match);
         w.bool(self.skip_first_oam);
+        // STOP mode can be live at a frame boundary (the CPU sits there until
+        // a button is pressed), so the blanked display has to survive a state.
+        w.bool(self.stop_fill.is_some());
+        w.u8(self.stop_fill.unwrap_or(0));
     }
 
     fn save_cpal(w: &mut crate::savestate::Writer, pal: &[[[u8; 3]; 4]; 8]) {
@@ -269,6 +293,9 @@ impl Gpu {
         self.stat_line = r.bool()?;
         self.lyc_match = r.bool()?;
         self.skip_first_oam = r.bool()?;
+        let stopped = r.bool()?;
+        let fill = r.u8()?;
+        self.stop_fill = if stopped { Some(fill) } else { None };
         Ok(())
     }
 
@@ -729,6 +756,15 @@ impl Gpu {
     }
 
     fn renderscan(&mut self) {
+        // STOP mode: the PPU has been cut off from VRAM, so it draws a flat
+        // shade rather than the tile map — see `stop_fill`.
+        if let Some(shade) = self.stop_fill {
+            for x in 0..WIDTH {
+                self.setcolor(x, shade);
+                self.bgprio[x] = PrioType::Normal;
+            }
+            return;
+        }
         for x in 0..WIDTH {
             self.setcolor(x, 255);
             self.bgprio[x] = PrioType::Normal;

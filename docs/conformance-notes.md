@@ -17,6 +17,84 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — `STOP` never stopped, and the speed switch took no time
+
+`STOP` (`$10`) was three lines: call `switch_speed()` and carry on. It was a
+one-byte opcode that never stopped the CPU, never reset `DIV`, never blanked the
+screen, and completed the CGB speed switch instantly. Four of the five things
+`STOP` does on hardware were missing.
+
+- **Symptom, in user terms:** a game that puts the console into standby keeps
+  running instead — on a DMG the screen should go blank and on a Color it should
+  go black, and neither happened. More consequentially for games that *do* use
+  `STOP` (which, outside speed switching, is none — Pan Docs: *"No licensed rom
+  makes use of STOP outside of CGB speed switching"*), the CGB speed switch took
+  zero time and left `DIV` running. Real hardware spends **65536 cycles of the
+  4.194304 MHz clock** in the switch — 143.7 scanlines, which is why Pan Docs
+  warns that *"during speed switch, the display collapses for a short moment"* —
+  and comes out of it with `DIV` reset. A game that seeds its RNG from `DIV`
+  after a speed switch gets a different number on us than on hardware, and daid's
+  own description says the rest: *"Not doing this could cause problems with RNG
+  for games, failing this will most certainly desync a TAS."*
+- **Caught by:** `daid/stop_instr.gb` (DMG **and** CGB — two different reference
+  images), `daid/stop_instr_gbc_mode3.gb`, `daid/speed_switch_timing_div.gbc`.
+  All four were red and are now green. Nothing in the in-repo harness
+  (`testharness/`) covers `STOP` at all — Blargg, Mooneye and acid2 between them
+  never execute one. **That is a coverage gap in its own right**, and the daid
+  suite is the only public source of these checks; it is not run in CI either
+  (see the audit's item ⑪).
+- **Hardware behaviour:** Pan Docs, *"Using the STOP Instruction"*, and the
+  decision chart on that page (Lior Halphon). `STOP` has four inputs — a
+  selected button already held, a speed switch requested via `KEY1` bit 0, an
+  interrupt pending (`IE & IF != 0`), and `IME` — and they select between STOP
+  mode, HALT mode, a speed switch and a plain no-op, with the opcode's own
+  *length* (1 or 2 bytes) depending on whether an interrupt is pending. The
+  chart also gives the switch duration: *"HALT mode will exit automatically
+  after about 0x20000 T-cycles"*, counted in the new clock. For the display,
+  same page: *"On CGB, leaving the LCD enabled when invoking STOP will result in
+  a black screen. Except if the LCD is in Mode 3, where it will keep drawing the
+  current screen."*
+- **The one rule worth keeping in mind:** the Mode-3 exception is not a special
+  case. Entering STOP mode takes the PPU's VRAM access away *unless the PPU
+  already holds it* — and Mode 3 is exactly the mode in which it does. One rule
+  covers the black screen and the frozen picture both.
+- **Carries into the tool:** four ROM-level checks (the three `stop_instr`
+  screens and `speed_switch_timing_div`), plus six unit checks in
+  `src/cpu/core.rs` `mod stop_tests` that need no ROM at all: the switch lasts
+  two wraps of the system counter, `DIV` comes out at ~0, STOP mode ignores
+  interrupts and ends only on a `P1` line going low, a held button means `STOP`
+  does not stop, and a pending interrupt makes it a one-byte opcode. The
+  property a foreign emulator can be tested for without any reference image is
+  **"a speed switch advances the PPU by ~143 scanlines"**.
+
+### The two rows that did *not* turn green, and why they are not this bug
+
+`daid/speed_switch_timing_ly` and `_stat` are still red, and the reason is
+measured rather than guessed. Sweeping the switch duration over the three ROMs
+gives three optima on this emulator:
+
+| ROM | passes for a duration of |
+|---|---|
+| `speed_switch_timing_div` | `0x1FFF4 .. 0x20000` |
+| `speed_switch_timing_stat` | `≈ 0x20030` |
+| `speed_switch_timing_ly` | `0x20034 .. 0x20038` |
+
+No single duration satisfies all three: `div` and `ly`/`stat` disagree by about
+**21 dots**. They cannot disagree about the switch itself — the CPU, the system
+counter and the PPU all advance in exact lockstep through it — so the difference
+is a PPU-versus-counter phase error that already exists *before* the `STOP`.
+`div` is immune to it (the counter is reset by the `STOP`, so it measures the
+duration alone) and `ly`/`stat` are not (they measure the duration *plus* where
+the PPU already was). The likeliest source is the phase the PPU starts at when
+`LCDC` bit 7 is set, which is what Mooneye's `ppu/lcdon_timing-GS` and
+`lcdon_write_timing-GS` measure — also red, also unfixed.
+
+So the honest reading is that these two rows belong to the LCD-on/STAT work, not
+to `STOP`. Tuning `SPEED_SWITCH_HALT_TICKS` to `0x20034` would turn them green
+and turn `div` red, and would be a lie about a documented hardware constant.
+
+---
+
 ## 2026-08-14 — the STAT interrupt was four triggers, not one line
 
 `STAT` has four selectable interrupt sources (HBlank, VBlank, OAM, `LY == LYC`).

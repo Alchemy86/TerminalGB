@@ -62,7 +62,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// on" latch (`skip_first_oam`) — all three survive a frame boundary too, so a
 /// state that dropped them would resume with a stale STAT edge (Mooneye
 /// `acceptance/ppu/stat_irq_blocking`, `stat_lyc_onoff`).
-pub const FORMAT_VERSION: u16 = 7;
+/// v8: `STOP` became the real instruction — `Cpu::speed_switch_halt` (the
+/// ~0.93-frame HALT a CGB speed switch runs through) and `Gpu::stop_fill` (the
+/// blanked panel of a stopped CPU), both of which can be live at a frame
+/// boundary (`daid/stop_instr`, `daid/speed_switch_timing_*`).
+pub const FORMAT_VERSION: u16 = 8;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

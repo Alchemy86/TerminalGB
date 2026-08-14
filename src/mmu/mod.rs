@@ -723,11 +723,9 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70 | 0xFF76..=0xFF77
                 if self.gbmode != GbMode::Color => {}
             0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode == GbMode::Classic => {}
-            0xFF4D => {
-                if value & 0x1 == 0x1 {
-                    self.speed_switch_req = true;
-                }
-            }
+            // KEY1 bit 0 is a request, not a trigger: `STOP` performs the
+            // switch. Writing 0 back withdraws it (only bit 0 is writable).
+            0xFF4D => self.speed_switch_req = value & 0x1 == 0x1,
             0xFF40..=0xFF4F => self.gpu.wb(address, value),
             0xFF51..=0xFF55 => self.hdma_write(address, value),
             0xFF68..=0xFF6B => self.gpu.wb(address, value),
@@ -751,6 +749,18 @@ impl<'a> MemoryManagementUnit<'a> {
     pub fn ww(&mut self, address: u16, value: u16) {
         self.wb(address, (value & 0xFF) as u8);
         self.wb(address + 1, (value >> 8) as u8);
+    }
+
+    /// Has the game asked for a speed switch (KEY1 bit 0)? `STOP` reads this
+    /// to decide which branch of the Pan Docs STOP chart it is on.
+    pub fn speed_switch_requested(&self) -> bool {
+        self.speed_switch_req
+    }
+
+    /// Reset the 16-bit system counter, exactly as a write to `DIV` does —
+    /// `STOP` resets it on every branch of the chart that stops the CPU.
+    pub fn reset_div(&mut self) {
+        self.timer.wb(0xFF04, 0);
     }
 
     pub fn switch_speed(&mut self) {

@@ -288,6 +288,53 @@ record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
   runs failed; it passes in isolation on both `main` and this branch).
 
 
+## `STOP`, the CGB speed switch, and undefined opcodes (`src/cpu/core.rs`)
+
+- **`STOP` is the whole Pan Docs decision chart now** (`Cpu::stop_instruction`), not
+  "call `switch_speed()` and carry on". Four inputs select the behaviour: a **selected
+  button already held** (STOP does not stop, `DIV` is not reset, HALT is entered
+  instead), a **speed switch requested** via `KEY1` bit 0, an **interrupt pending**
+  (`IE & IF != 0`, which makes `STOP` a **1-byte** opcode so the `$00` after it executes),
+  and otherwise **STOP mode**. Source: Pan Docs *"Using the STOP Instruction"* + the
+  decision chart (Lior Halphon) at `src/imgs/stop_diagram.svg` in the pandocs repo.
+- **STOP mode is not HALT — an interrupt does not end it**, only one of `P10`-`P13` going
+  low does. It is therefore tested at the top of `Cpu::exec`, *before* interrupt dispatch.
+- **The speed switch is `SPEED_SWITCH_HALT_TICKS` = `0x20000` T-cycles of the NEW clock**,
+  spent in HALT, with `DIV` reset on the way in. Switching into double speed that is
+  65536 cycles of the PPU's unchanged 4.194304 MHz clock = **143.7 scanlines**, i.e. the
+  display collapse Pan Docs warns about. `0x20000` is also exactly two wraps of the 16-bit
+  system counter, which is why `DIV` reads ~0 the moment the CPU resumes
+  (`daid/speed_switch_timing_div`). SameBoy uses a measured `0x20008`; on this core the
+  ROM passes for anything in `0x1FFF4..=0x20000`, so the eight cycles are below our
+  resolution — **do not "correct" the constant to make `_ly`/`_stat` pass** (see below).
+- **`speed_switch_timing_ly` and `_stat` are still red, and it is NOT a STOP bug.** A
+  duration sweep gives three incompatible optima (`div` ≤ `0x20000`, `stat` ≈ `0x20030`,
+  `ly` ≈ `0x20036`): `div` measures the switch alone (the counter is reset by it) while
+  `ly`/`stat` measure the switch *plus* where the PPU already was, and the two disagree by
+  ~21 dots. That is a pre-existing PPU-vs-counter phase error, almost certainly the phase
+  the PPU starts at when `LCDC` bit 7 is set — the thing Mooneye's `ppu/lcdon_timing-GS`
+  measures, also red. Those two rows belong with the STAT/LCD-on work, not here.
+- **A stopped machine's screen** (Pan Docs, same page): DMG → blank/white, Color → black,
+  **except** if the PPU is in mode 3 when the CPU stops, where it keeps drawing. That is
+  one rule, not two: STOP takes the PPU's VRAM access away *unless it already holds it*,
+  and mode 3 is when it holds it. Implemented as `Gpu::stop_fill: Option<u8>` used by
+  `renderscan`. **The PPU keeps counting while stopped even on a DMG (where hardware
+  stops it outright)** — deliberately, so a frame-paced frontend still gets frames instead
+  of spinning forever; the stopped CPU cannot observe the difference.
+- **Writing `0` to `KEY1` withdraws the request** — the old `wb` only ever set the flag.
+- **Save-state `FORMAT_VERSION` is 8** (`Cpu::speed_switch_halt`, `Gpu::stop_fill`; the
+  VRAM-DMA work took it to 6 and the APU corner cases to 7).
+- Score: **daid 1/9 → 5/9** — four rows (`stop_instr` DMG+CGB,
+  `stop_instr_gbc_mode3`, `speed_switch_timing_div`); `rom_and_ram` is the fifth and was
+  already green. Measured against `main` at `c10da12` with the shootout's own ROMs and
+  reference images: Mooneye 53/75, SameSuite 54/76, Mealybug and
+  `testharness/baseline.txt` **byte-identical** before and after, and 1200 frames of
+  Pokémon Blue produce a byte-identical framebuffer. Full record:
+  [`docs/conformance-notes.md`](docs/conformance-notes.md).
+- **Nothing in the in-repo harness executes a `STOP` at all** — Blargg, Mooneye and acid2
+  between them never do. The daid suite is the only public source of these checks and it
+  is not in CI. That gap is a finding, not an aside.
+
 ## PPU: Mealybug Tearoom and the mid-scanline question (`src/gpu/`)
 
 - **Full scoping, with the split of what is winnable now versus what needs the rewrite:

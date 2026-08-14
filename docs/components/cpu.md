@@ -80,7 +80,9 @@ pub struct Cpu<'a> {
     pub ime: bool,        // interrupt master enable
     pub setei: u32,       // EI delay counter (DI is immediate)
     pub halt: u32,
-    pub stop: u32,
+    pub halt_bug: bool,
+    pub stop: u32,              // STOP_MODE, or STOP_LOCKED on an undefined opcode
+    pub speed_switch_halt: u32, // T-cycles left of a CGB speed switch
     pub memory: MemoryManagementUnit<'a>,
     _executed_operations: Vec<u8>,   // debug only
 }
@@ -158,11 +160,10 @@ reads zero, matching hardware.
 
   Blargg `interrupt_time` **runs** (it is `REQUIRE_CGB` and polls `NR52` via
   `sync_apu`/`get_cpu_speed`, so it used to hang on its title screen with no APU; the
-  harness now always installs one) and it now measures the **correct 13 cycles** — its own
-  source says *"Should take 13 cycles at either speed"*. It still prints `Failed`, but for
-  a different bug: its rounds 3 and 4 run after `cpu_fast` and still report speed `00`, so
-  **the CGB double-speed switch is not taking effect**. That is a `STOP`/`KEY1` problem,
-  not a dispatch one.
+  harness now always installs one), measures the **correct 13 cycles** — its own source
+  says *"Should take 13 cycles at either speed"* — and **passes**. Earlier readings of its
+  `Failed` blamed the double-speed switch; the switch was working and the APU clock was
+  not (see `../conformance-notes.md`).
 - **Undefined opcodes lock the CPU up, and no longer abort the process.** `$D3 $DB $DD
   $E3 $E4 $EB $EC $ED $F4 $FC $FD` are not instructions; hardware hangs the CPU until a
   reset (Pan Docs, "Unused opcodes"). We latch `stop` and burn one M-cycle per `exec`, so
@@ -172,8 +173,17 @@ reads zero, matching hardware.
   a runaway `PC` in any game reaches it. `$FC` was separately special-cased as a `NOP`,
   which is neither what hardware does nor what the other ten did. See
   `cpu::core::lockup_tests`.
-- **`STOP` is minimally handled** (the `stop` field exists; double-speed switching is
-  plumbed through the MMU, not a faithful `STOP` model).
+- **`STOP` is the real instruction** — [`Cpu::stop_instruction`](../../src/cpu/core.rs)
+  implements Pan Docs' whole decision chart: STOP mode (ended only by a selected `P1`
+  line going low, never by an interrupt), the CGB speed switch (`DIV` reset, then
+  `0x20000` T-cycles of the *new* clock in HALT — 143.7 scanlines of PPU time, which is
+  the display collapse Pan Docs warns about), the held-button and pending-interrupt
+  branches, and the 1-byte/2-byte opcode length. A stopped machine's panel goes blank on
+  a DMG and black on a Color, *unless* the PPU was in mode 3 when the CPU stopped, in
+  which case it keeps the VRAM access it already had and the picture stays.
+  `daid/stop_instr` (both consoles), `daid/stop_instr_gbc_mode3` and
+  `daid/speed_switch_timing_div` pass; `speed_switch_timing_ly`/`_stat` do not, for a PPU
+  phase reason measured and written up in `../conformance-notes.md`.
 - **~900 lines of legacy interrupt/HALT logic are commented out** below `do_cycle`
   ([`core.rs:222`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L222)) — dead code, not the live path.
 - **`src/cpu/z80`** (461 lines, no extension) is a **non-compiled reference file** — a
