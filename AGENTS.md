@@ -190,9 +190,22 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
 - **Save-state `FORMAT_VERSION` is now 4** (timer became `div`/`prev_div`/reload latches;
   `Cpu::setdi` removed; `OamDma` added).
 - **What is still red is not ours:** 11 PPU tests (mode-3 timing, STAT blocking, LCD-on)
-  and 5 boot-state tests. A **DMG boot mode is the single highest-value remaining item** —
-  the scout report measured it at 9 shootout tests, and it is also the whole 50-vs-32 gap
-  between the two criteria.
+  and 5 boot-state tests.
+- **Trial-merged with the DMG boot mode (`fm/gameboy-harness-dmg-f1`): 52/66 under *both*
+  criteria**, no regressions either way. The two criteria converging is the point — the
+  50-vs-32 gap really was only Mooneye's boot-register dump. The DMG boot flips two of the
+  five boot-state tests (`bits/unused_hwio-GS`, `boot_regs-dmgABC`); `boot_div`/`boot_hwio`
+  need the exact machine state the *boot ROM* leaves at `PC=$0100`, which is a harder claim
+  than the boot registers and is the natural next step.
+- **`blargg/interrupt_time` moves `$0C` → `$0D` and `$0D` is CORRECT** —
+  `tests/interrupt_time/interrupt_time.s` says "Should take 13 cycles at either speed". Any
+  baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. The ROM still
+  says `Failed` for an unrelated reason its own output shows: rounds 3 and 4 print speed
+  `00` after `cpu_fast`, so the **CGB double-speed switch is not taking effect**. That is a
+  separate finding and it also explains `daid/speed_switch_timing_*`.
+- **Do not read wall-clock timings from a run with the `audio` feature enabled** — a crew is
+  fixing a ~62× slowdown there (17.9 ms/frame vs 0.29 ms). The ~6 % figure above was
+  measured with no APU installed, so it isolates this change.
 
 ## Test-ROM correctness harness
 

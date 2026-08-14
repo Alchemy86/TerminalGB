@@ -339,3 +339,52 @@ cycle-stepped PPU) and **5 are boot state** (`boot_div`, `boot_hwio`,
 boot mode this emulator does not have — it always boots the CGB core. Neither is
 a timer, interrupt or MMU defect. **Nothing in the timer, interrupt-dispatch or
 OAM-DMA groups is red.**
+
+### Measured against the DMG boot mode (trial merge, not yet landed)
+
+The DMG boot mode on `fm/gameboy-harness-dmg-f1` was trial-merged with this work
+to check the interaction. Result, on the shootout's 66-test acceptance set:
+
+| | register criterion | screenshot criterion |
+|---|---:|---:|
+| before this work | 13/66 | 6/66 |
+| this work alone | 50/66 | 32/66 |
+| **with the DMG boot mode** | **52/66** | **52/66** |
+
+Two things worth recording:
+
+- **The two criteria converge exactly once we can boot a DMG.** That is the
+  scout report's diagnosis confirmed: the 50-vs-32 gap was never a behaviour
+  difference, only the boot-register dump Mooneye prints beside its verdict.
+- **The DMG boot flips two of the five boot-state tests, not five**:
+  `bits/unused_hwio-GS` and `boot_regs-dmgABC`. `boot_div-dmgABCmgb` and
+  `boot_hwio-dmgABCmgb` need the exact hardware state the *boot ROM* leaves
+  behind (the value of the system counter, and every I/O register, at the moment
+  `PC` reaches `$0100`) — a strictly harder claim than the boot registers, and
+  the natural next step. `serial/boot_sclk_align-dmgABCmgb` needs the serial
+  clock's phase relative to that same counter. No regressions in either
+  direction.
+
+### `blargg/interrupt_time`: 12 → 13 cycles, and the remaining failure is a
+different bug
+
+The 5-M-cycle dispatch fix moves this ROM's measured interrupt time from `$0C`
+to `$0D`. **`$0D` is the correct answer** — `tests/interrupt_time/interrupt_time.s`
+says so in its own header: *"Should take 13 cycles at either speed."* So a
+baseline note reading "16-vs-20 T-cycle interrupt dispatch" is now stale and the
+row should be re-blessed.
+
+The ROM still reports `Failed`, for an unrelated reason that its output makes
+plain. It prints four rounds of `speed, d, cycles`:
+
+```
+00 00 00   00 08 0D   00 00 00   00 08 0D
+```
+
+Rounds 3 and 4 run after `cpu_fast`, so their first column should read `01`, not
+`00` — **the CGB double-speed switch is not taking effect**, or `get_cpu_speed`
+cannot see it. Both cycle counts are already right. That is a speed-switch
+finding, not an interrupt-timing one, and it is a candidate check in its own
+right: *after a `KEY1` bit-0 write followed by `STOP`, `KEY1` bit 7 must read
+set.* It also explains why `daid/speed_switch_timing_*` are red.
+
