@@ -1,6 +1,8 @@
+mod fifo;
 mod oambug;
 
 use crate::mode::GbMode;
+use fifo::Pipeline;
 pub(crate) use oambug::OamBug;
 use std::cmp::Ordering;
 
@@ -164,6 +166,10 @@ pub struct Gpu {
     /// Which rendering engine is running — see [`RenderMode`]. Read once per
     /// `do_cycle`, never per pixel.
     render_mode: RenderMode,
+    /// State of the per-dot pixel pipeline. Only [`RenderMode::Accurate`]
+    /// touches it; the fast renderer leaves it at its default and pays nothing
+    /// for its presence beyond the struct itself.
+    pipe: Pipeline,
 }
 
 impl Default for Gpu {
@@ -223,6 +229,7 @@ impl Gpu {
             skip_first_oam: false,
             stop_fill: None,
             render_mode: RenderMode::from_env(),
+            pipe: Pipeline::default(),
         }
     }
 
@@ -327,6 +334,11 @@ impl Gpu {
         // a button is pressed), so the blanked display has to survive a state.
         w.bool(self.stop_fill.is_some());
         w.u8(self.stop_fill.unwrap_or(0));
+        // The pixel pipeline *is* machine state: a state saved part-way through
+        // mode 3 has to resume the same scanline, mid-tile-fetch and all.
+        // Written unconditionally so a state moves between the two engines —
+        // the fast renderer simply never reads it back.
+        self.pipe.save_state(w);
     }
 
     fn save_cpal(w: &mut crate::savestate::Writer, pal: &[[[u8; 3]; 4]; 8]) {
@@ -401,6 +413,7 @@ impl Gpu {
         let stopped = r.bool()?;
         let fill = r.u8()?;
         self.stop_fill = if stopped { Some(fill) } else { None };
+        self.pipe.load_state(r)?;
         Ok(())
     }
 
@@ -454,7 +467,9 @@ impl Gpu {
         if !self.lcd_on {
             return;
         }
-        self.hblanking = false;
+        if self.render_mode == RenderMode::Accurate {
+            return self.do_cycle_accurate(ticks);
+        }
 
         let mut ticksleft = ticks;
 
@@ -1154,8 +1169,22 @@ impl Gpu {
     }
 
     /// True on the *entry* into HBlank — one HDMA block per scanline.
+    ///
+    /// This is a **latch**, cleared by [`Gpu::clear_hblank_latch`] once the MMU
+    /// has had its look, rather than at the top of every [`Gpu::do_cycle`] as
+    /// it used to be. The accurate engine is stepped several times per CPU
+    /// instruction (once per bus access), so a self-clearing flag could be
+    /// raised and cleared again *between* two of the MMU's HDMA checks and the
+    /// block would silently never move. Same observable behaviour for the fast
+    /// renderer, which is stepped exactly once per instruction.
     pub fn may_hdma(&self) -> bool {
         self.hblanking
+    }
+
+    /// Consume the HBlank-entry latch — see [`Gpu::may_hdma`]. Called by the
+    /// MMU immediately after it has decided whether to move an HDMA block.
+    pub fn clear_hblank_latch(&mut self) {
+        self.hblanking = false;
     }
 
     /// Whether the PPU is in mode 0 as the CPU can see it. With the LCD off

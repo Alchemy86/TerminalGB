@@ -128,6 +128,12 @@ pub struct MemoryManagementUnit<'a> {
     // only while a CPU instruction is executing (not during OAM DMA or setup).
     bus_tick_enabled: bool,
     bus_ticked: u32,
+    /// PPU dots already spent inside this instruction's memory accesses, so
+    /// [`Self::do_cycle`] applies only the instruction's remainder. Counted
+    /// separately from `bus_ticked` because the PPU's clock is the CPU's
+    /// divided by the double-speed multiplier. Only the accurate engine moves
+    /// it; see [`Self::bus_tick`].
+    gpu_bus_ticked: u32,
     /// Set by the CPU immediately before a memory access that shares its
     /// M-cycle with a 16-bit increment/decrement — the DMG OAM-corruption bug
     /// treats that combination as its own pattern. Set and consumed inside a
@@ -197,6 +203,7 @@ impl<'a> MemoryManagementUnit<'a> {
             undocumented_cgb_regs: [0; 3],
             bus_tick_enabled: false,
             bus_ticked: 0,
+            gpu_bus_ticked: 0,
             idu_share: false,
             fault: None,
             cart_rtc,
@@ -332,6 +339,26 @@ impl<'a> MemoryManagementUnit<'a> {
                 sound.do_cycle(4);
             }
             self.oam_dma_tick();
+            // The accurate PPU is a per-dot machine, so it has to advance
+            // per-access too — the whole point of it is that a write to
+            // `BGP`/`SCX`/`LCDC`/`WX` lands on the exact dot the program put it
+            // on, and an instruction-granular PPU cannot see that. The fast
+            // renderer reads each register once per scanline anyway, so it is
+            // left batched and pays nothing.
+            //
+            // In double speed the PPU runs at half the CPU's rate, matching the
+            // `ticks / cpudivider` division in `do_cycle`; 4 / 2 is exact, so
+            // no phase is lost across the split.
+            if self.gpu.render_mode() == crate::gpu::RenderMode::Accurate {
+                let step = match self.gbspeed {
+                    GbSpeed::Single => 4,
+                    GbSpeed::Double => 2,
+                };
+                self.gpu.do_cycle(step);
+                self.intf |= self.gpu.interrupt;
+                self.gpu.interrupt = 0;
+                self.gpu_bus_ticked += step;
+            }
             self.bus_ticked += 4;
         }
     }
@@ -564,6 +591,11 @@ impl<'a> MemoryManagementUnit<'a> {
             GbSpeed::Double => 2,
         };
         let vramticks = self.perform_vramdma();
+        // The HBlank-entry latch has now been seen; consume it. It used to
+        // clear itself at the top of `Gpu::do_cycle`, which is the same thing
+        // for a PPU stepped once per instruction and *wrong* for one stepped
+        // once per bus access — see [`crate::gpu::Gpu::may_hdma`].
+        self.gpu.clear_hblank_latch();
         let gputicks = ticks / cpudivider + vramticks;
         let cputicks = ticks + vramticks * cpudivider;
 
@@ -587,7 +619,11 @@ impl<'a> MemoryManagementUnit<'a> {
         self.intf |= self.keypad.interrupt;
         self.keypad.interrupt = 0;
 
-        self.gpu.do_cycle(gputicks);
+        // Like the timer, the accurate PPU already advanced during this
+        // instruction's memory accesses; apply only the remainder.
+        self.gpu
+            .do_cycle(gputicks.saturating_sub(self.gpu_bus_ticked));
+        self.gpu_bus_ticked = 0;
         self.intf |= self.gpu.interrupt;
         self.gpu.interrupt = 0;
 

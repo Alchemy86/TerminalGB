@@ -82,7 +82,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// those builds would be mis-parsed, so it is refused instead. States written
 /// by the desktop and terminal frontends (which always pass a path) were
 /// unaffected by that fix, but the container version is global.
-pub const FORMAT_VERSION: u16 = 11;
+/// v12: the PPU's pixel pipeline. A state taken part-way through mode 3 has to
+/// resume the same scanline — mid-tile-fetch, with both FIFOs and the sprite
+/// scan list intact — so the whole of it is now in the GPU block. Written
+/// whichever renderer is running, so a state moves freely between the two.
+pub const FORMAT_VERSION: u16 = 12;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
