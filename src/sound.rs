@@ -699,7 +699,14 @@ impl WaveChannel {
 /// at a time; `channel_4_lfsr` then pins the *phase* by reconstructing the
 /// LFSR from 128 consecutive samples, so an error here rotates the whole
 /// reconstructed sequence.
-const NOISE_TRIGGER_DELAY: u32 = 0;
+const NOISE_TRIGGER_DELAY: u32 = 2;
+
+/// Phase, on the APU's 1 MHz grid, that the noise channel's first post-trigger
+/// LFSR step lands on — the same free-running-clock effect as
+/// [`SQUARE_TRIGGER_ALIGN`], and measured the same way by SameSuite's
+/// `channel_4_align` (which shifts the trigger one double-speed M-cycle at a
+/// time and shows the first sample moving in 4 T-cycle steps, not 2).
+const NOISE_TRIGGER_ALIGN: u32 = 0;
 
 struct NoiseChannel {
     enabled: bool,
@@ -790,7 +797,7 @@ impl NoiseChannel {
         }
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, grid_phase: u32) {
         self.enabled = true;
         self.lfsr = 0x7FFF;
         self.calculate_period();
@@ -807,7 +814,8 @@ impl NoiseChannel {
         } else {
             self.divisor as u32 * 16
         };
-        self.delay = divisor + (self.period - divisor) / 2 + NOISE_TRIGGER_DELAY;
+        let pad = NOISE_TRIGGER_ALIGN.wrapping_sub(grid_phase) & 3;
+        self.delay = divisor + (self.period - divisor) / 2 + NOISE_TRIGGER_DELAY + pad;
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {
@@ -1572,7 +1580,7 @@ impl Sound {
                 );
                 self.channel4.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
-                    self.channel4.trigger();
+                    self.channel4.trigger(self.grid_phase);
                     self.channel4.enabled &= self.channel4.dac_enabled;
                 }
             }
