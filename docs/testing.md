@@ -376,7 +376,7 @@ that starts passing is a baseline change too); re-blessing is deliberate
 |---|---|---:|---|
 | Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **86 pass** — acceptance **58/75**, `emulator-only` **28/28** |
 | Mooneye `misc` (`GB_MODEL=cgb`) | `testharness/mooneye_cgb_baseline.txt` | 8 | **4 pass** |
-| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **61 pass** |
+| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **68 pass** |
 | Mealybug Tearoom | `testharness/mealybug_baseline.txt` | 79 | **3 pixel-exact** (DMG 1/24, CGB-C 1/31, CGB-D 1/24) |
 
 Notes worth having before you read a red build:
@@ -523,7 +523,7 @@ Three traps, all of which produced convincing-but-wrong results before they were
 | [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu` (**4/12**, gated); Mealybug Tearoom (**3/79**, gated) | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural — needs a cycle-stepped PPU) |
 | [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug@dmg` (**pass**); Mooneye `acceptance/oam_dma` (**3/3**), `bits` (**3/3**), SameSuite `dma` (**4/4**) — all gated | No VRAM/OAM mode-blocking (structural) |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1`; **`testharness/battery.rs`** (**pass**, battery-save durability + `.sav` interop) | Banking bit maths; the MBC3-for-everything web/FFI bug |
-| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**, `audiocapture`), `cgb_sound` (**12/12 pass**, wired into `testroms` 2026-08-14); SameSuite APU (**56/69**, gated) | 13 SameSuite APU rows still red |
+| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**, `audiocapture`), `cgb_sound` (**12/12 pass**, wired into `testroms` 2026-08-14); SameSuite APU (**63/69**, gated) | 6 SameSuite APU rows still red |
 | [Timer](components/timer.md) | Mooneye `acceptance/timer` (**13/13**, gated); Blargg `interrupt_time` (**pass**) | — one 16-bit system counter with falling-edge detection, since 2026-08-14 |
 | [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` (**1/1**, gated) | Instantaneous transfer; `boot_sclk_align` needs the boot ROM's own clock phase |
 | [Joypad](components/input.md) | Mooneye joypad (limited) | Mostly proven by games booting |

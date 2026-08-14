@@ -28,7 +28,7 @@
 //! player, `Sound::do_cycle` returns immediately and the APU never advances.
 
 use gameboy::cpu::core::Cpu;
-use gameboy::sound::AudioPlayer;
+use gameboy::sound::{AudioPlayer, CgbRevision};
 use std::path::{Path, PathBuf};
 
 #[path = "support/suite_baseline.rs"]
@@ -52,6 +52,14 @@ const BASELINE_HEADER: &str = "\
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 #
 # `HANG` means the ROM never wrote a result code within its frame budget.
+#
+# Five rows are scored on a **specific CPU CGB revision**, named in the ROM's
+# own filename (`-cgb0`, `-cgbB`, `-cgb0B`): the APU's extra-length-clocking
+# rule changed in CPU CGB C, and `-cgb0` and `-cgbB` disagree, so no single
+# machine can satisfy both. The runner reads the revision off the name, the
+# same way it would force `@dmg`/`@cgb` from a cartridge header — see
+# `revision_for` below and `gameboy::sound::CgbRevision`. Everything else runs
+# on the default (CPU CGB C and later), which is what a game gets.
 
 ";
 
@@ -79,10 +87,28 @@ enum Verdict {
     Unfinished,
 }
 
+/// Five APU ROMs name a **CPU CGB revision** in their filename — the APU's
+/// extra-length-clocking rule was changed in CPU CGB C, and CH3 differs again
+/// between CGB 0 and CGB B (`gameboy::sound::CgbRevision`). A single
+/// configuration cannot satisfy `-cgb0` and `-cgbB` at once, so the runner
+/// reads the revision off the name, exactly as it would force `@dmg`/`@cgb`
+/// from a cartridge header. The ROM still judges itself; all this picks is
+/// which machine it is judging.
+fn revision_for(rom: &Path) -> CgbRevision {
+    let stem = rom.file_stem().unwrap_or_default().to_string_lossy();
+    match stem.rsplit_once('-') {
+        Some((_, tag)) => CgbRevision::from_tag(tag).unwrap_or_default(),
+        None => CgbRevision::default(),
+    }
+}
+
 fn run(rom: &Path, frames: u32, dump: bool) -> (Verdict, Vec<u8>) {
     let data = std::fs::read(rom).unwrap_or_else(|e| panic!("{}: {e}", rom.display()));
     let mut cpu = Cpu::new(data, Some(rom.to_path_buf()));
     cpu.memory.enable_audio(Box::new(NullPlayer));
+    if let Some(sound) = cpu.memory.sound.as_mut() {
+        sound.set_cgb_revision(revision_for(rom));
+    }
 
     let mut done = 0u32;
     let mut cycles: u64 = 0;

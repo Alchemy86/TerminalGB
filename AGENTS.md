@@ -992,14 +992,18 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   free-running: a trigger reloads the countdown to its next tick, not the divider.
   `channel_4_lfsr_restart` / `_fast` reconstruct 128 consecutive outputs, so a one-sample
   slip shifts the whole sequence; removing this drops the suite 57 → 55.
-- **Five of the remaining failures are ROMs we should NOT pass.**
+- **Five of the remaining failures are ROMs we should NOT pass.** *(Superseded — all
+  five pass now; see the CH4/CGB-revision section below. The hardware reading here is
+  right, the conclusion was not: the revision is selectable per ROM.)*
   `channel_{1,2,4}_extra_length_clocking-cgb0B`, `channel_3_extra_length_clocking-cgb0` and
   `-cgbB` assert the length behaviour of **CPU CGB revisions ≤ B**, which the ROM source
   itself calls a bug that *"breaks at least one game (Prehistorik Man)"* and that was fixed
   in later revisions. We model CGB-E. `-cgb0` and `-cgbB` also contradict each other, so no
   single machine passes both. Likewise only one of the three
   `channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` variants is winnable at all.
-- **The three remaining CH4 failures have ONE cause, and it is scoped not attempted**: the
+- **The three remaining CH4 failures have ONE cause, and it is scoped not attempted**:
+  *(Superseded — two of the three are green; the cause was the two-stage counter, as
+  described here. See below.)* the
   noise frequency comes from a free-running 14-bit counter clocked every `(NR43 & 7) * 8`
   T-cycles (4 if zero), with the LFSR stepping on the 0→1 edge of bit `NR43 >> 4`. We model
   a per-channel period timer reloaded at trigger — right rate, wrong phase, which is
@@ -1018,6 +1022,76 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   `envelope_clock`/`volume_countdown` split and its free-running noise counter are what
   named the two structures above. Everything here is reimplemented in this codebase's
   idiom, per the licence-hygiene rule in `CONTRIBUTING.md`.
+
+## CH4 noise timing + CGB CPU revisions (SameSuite 61/76 → 68/76)
+
+**Per-fix conformance records: [`docs/conformance-notes.md`](docs/conformance-notes.md)
+§14-16.** Third pass over item ② of the suite audit. Measured with
+`make test-external` (the CI gate) before and after, on the ROMs pinned in
+`tools/fetch-test-suites.sh`: SameSuite **61/76 → 68/76**, its APU half
+**56/69 → 63/69**. Mooneye 86/103 and 4/8, Mealybug 3 pixel-exact, `testroms`
+46/47, `audiocapture` (dmg_sound 12/12 + every hash), `savestate`, `battery` and
+672 library tests all **byte-identical before and after**.
+
+- **Do NOT restate this as a published-shootout gain.** Only two of the seven rows
+  (`channel_4_equivalent_frequencies`, `channel_4_frequency_alignment`) are in the GB
+  Emulator Shootout's 311-row manifest at all — the five `extra_length_clocking-*` ROMs
+  are not in that corpus. The published-264 delta is **at most +2** and is
+  screenshot-judged, which this work did not measure. Check
+  `gameboy-shootout-verify-k5/manifest.json` before quoting a 264 number for any
+  SameSuite row; the CI-gated 76-row count and the published 264 are different
+  populations.
+- **A CH4 trigger reloads NEITHER frequency counter — it halves both.** The noise
+  frequency is NR43's divisor stage feeding a `>> shift` stage, and a trigger leaves
+  both mid-count: the first LFSR step lands at `(period - divisor)/2 + divisor/2`, not
+  at a whole period. The one exception is that **the divisor stage cannot be left holding
+  less than one of its own ticks** (16 T-cycles, or 8 for code 0, itself a half tick), so
+  codes 0 and 1 are floored and code 3 is not. That floor alone is why the four encodings
+  of one 16 M-cycle sample (`$0C`/`$1A`/`$29`/`$38`) start 0/0/+2/+1 M-cycles apart —
+  `channel_4_frequency_alignment` + `channel_4_equivalent_frequencies`, both green now.
+  `NoiseChannel::trigger_divisor`; gated device-free by
+  `sound::tests::the_noise_trigger_delay_matches_samesuite` (eleven `(NR43, delay)` pairs
+  read off the ROMs, **not** off our output — nothing in `cargo test` runs SameSuite).
+- **`Sound::grid_phase` is now 0..=15, not 0..=3.** Bits 0-1 are the 1 MHz phase the
+  square channels align to; **bit 2 is the half-tick the CH4 divisor stage races
+  against**. `SquareChannel::trigger` masks `& 3` itself, so squares are untouched — but
+  anything new reading `grid_phase` must mask deliberately.
+- **THE CGB SHIPPED IN REVISIONS AND ITS APU CHANGED BETWEEN THEM** — `CgbRevision`
+  (`src/sound.rs`), default `CgbC` (= C, D, E, and what every DMG does). On CPU CGB 0 and
+  B, extra length clocking drops the *"and now enabled"* half of its condition: an
+  `NRx4 = $00` write clocks length anyway. That is a silicon bug — it breaks Prehistorik
+  Man — fixed in CPU CGB C. CH3 differs again between 0 and B: on B the clock that reaches
+  zero leaves the channel playing and the *next* one kills it.
+- **Read the machine off the ROM filename — `-cgb0` and `-cgbB` contradict each other, so
+  a runner that ignores it can never score more than four of the five.**
+  `examples/samesuite.rs::revision_for` maps the suffix to a `CgbRevision`, the same move
+  the `testroms` harness makes with `@dmg`/`@cgb`. The ROM still judges itself; the knob
+  only picks which machine it is judging. `$GB_CGB_REVISION=cgb0|cgbB|cgbC` exposes it to
+  a frontend (a typo warns and is ignored). **A DMG is never affected** —
+  `Sound::extra_length_rule` pins the modern rule whenever `dmg_mode` is set, pinned by
+  `the_revision_quirk_never_reaches_a_dmg`.
+- **`CgbRevision` deliberately lumps C/D/E.** That is exactly right for length clocking,
+  but `channel_1_freq_change_timing` ships as `-cgb0BC` / `-cgbDE` / `-A`, which is a
+  *different* revision axis and would need `CgbC` split. Whoever takes those three rows
+  gets the plumbing for free; `from_tag` returning `None` falls back to the default, so
+  adding a tag is additive.
+- **`cgb_revision` is machine configuration, NOT cartridge state, so it is not
+  serialised** — no `savestate::FORMAT_VERSION` bump. A save state restores into whatever
+  machine is running, which is the behaviour you want.
+- **`channel_4_freq_change` is left red on evidence, not fatigue.** SameSuite's own
+  `apu/README.md`: *"SameBoy – when emulating CGB-CPU-E, passes all tests except
+  `channel_4_freq_change` and `channel_1_sweep_restart_2`."* The ROM's own header: *"the
+  logic behind it is still unclear."* A row the suite's author does not pass has no
+  reference implementation. Diagnosis for whoever tries anyway: our single `period`
+  countdown cannot change the *next* step after an NR43 write (it fires ≤16 T later); the
+  ROM measures ~56-70 T, which is a two-stage counter keeping its position `p` and counting
+  on to the new `2^shift`. That means splitting `NoiseChannel`'s countdown, a format bump,
+  and re-calibrating the ten green CH4 rows — for one row nothing passes.
+- **`apu/README.md` inside SameSuite is the first thing to read before grinding a row.**
+  It states which revisions pass what, and that SameBoy fails two named tests. Clone the
+  source (`github.com/LIJI32/SameSuite`) — the shootout ships prebuilt ROMs only, and the
+  `.asm` `CorrectResults` tables plus the header comments are where every expectation in
+  this section came from.
 
 
 ## Terminal frontend (TUI)

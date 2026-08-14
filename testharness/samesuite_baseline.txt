@@ -21,13 +21,21 @@
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 #
 # `HANG` means the ROM never wrote a result code within its frame budget.
+#
+# Five rows are scored on a **specific CPU CGB revision**, named in the ROM's
+# own filename (`-cgb0`, `-cgbB`, `-cgb0B`): the APU's extra-length-clocking
+# rule changed in CPU CGB C, and `-cgb0` and `-cgbB` disagree, so no single
+# machine can satisfy both. The runner reads the revision off the name, the
+# same way it would force `@dmg`/`@cgb` from a cartridge header — see
+# `revision_for` below and `gameboy::sound::CgbRevision`. Everything else runs
+# on the default (CPU CGB C and later), which is what a game gets.
 
 apu/channel_1/channel_1_align = PASS
 apu/channel_1/channel_1_align_cpu = PASS
 apu/channel_1/channel_1_delay = PASS
 apu/channel_1/channel_1_duty = PASS
 apu/channel_1/channel_1_duty_delay = PASS
-apu/channel_1/channel_1_extra_length_clocking-cgb0B = FAIL
+apu/channel_1/channel_1_extra_length_clocking-cgb0B = PASS
 apu/channel_1/channel_1_freq_change = PASS
 apu/channel_1/channel_1_freq_change_timing-A = FAIL
 apu/channel_1/channel_1_freq_change_timing-cgb0BC = FAIL
@@ -48,7 +56,7 @@ apu/channel_2/channel_2_align_cpu = PASS
 apu/channel_2/channel_2_delay = PASS
 apu/channel_2/channel_2_duty = PASS
 apu/channel_2/channel_2_duty_delay = PASS
-apu/channel_2/channel_2_extra_length_clocking-cgb0B = FAIL
+apu/channel_2/channel_2_extra_length_clocking-cgb0B = PASS
 apu/channel_2/channel_2_freq_change = PASS
 apu/channel_2/channel_2_nrx2_glitch = PASS
 apu/channel_2/channel_2_nrx2_speed_change = PASS
@@ -60,8 +68,8 @@ apu/channel_2/channel_2_volume = PASS
 apu/channel_2/channel_2_volume_div = PASS
 apu/channel_3/channel_3_and_glitch = PASS
 apu/channel_3/channel_3_delay = PASS
-apu/channel_3/channel_3_extra_length_clocking-cgb0 = FAIL
-apu/channel_3/channel_3_extra_length_clocking-cgbB = FAIL
+apu/channel_3/channel_3_extra_length_clocking-cgb0 = PASS
+apu/channel_3/channel_3_extra_length_clocking-cgbB = PASS
 apu/channel_3/channel_3_first_sample = PASS
 apu/channel_3/channel_3_freq_change_delay = PASS
 apu/channel_3/channel_3_restart_delay = PASS
@@ -75,10 +83,10 @@ apu/channel_3/channel_3_wave_ram_locked_write = PASS
 apu/channel_3/channel_3_wave_ram_sync = PASS
 apu/channel_4/channel_4_align = PASS
 apu/channel_4/channel_4_delay = PASS
-apu/channel_4/channel_4_equivalent_frequencies = FAIL
-apu/channel_4/channel_4_extra_length_clocking-cgb0B = FAIL
+apu/channel_4/channel_4_equivalent_frequencies = PASS
+apu/channel_4/channel_4_extra_length_clocking-cgb0B = PASS
 apu/channel_4/channel_4_freq_change = FAIL
-apu/channel_4/channel_4_frequency_alignment = FAIL
+apu/channel_4/channel_4_frequency_alignment = PASS
 apu/channel_4/channel_4_lfsr = PASS
 apu/channel_4/channel_4_lfsr15 = PASS
 apu/channel_4/channel_4_lfsr_15_7 = PASS

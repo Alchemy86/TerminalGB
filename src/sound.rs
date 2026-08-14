@@ -876,13 +876,28 @@ impl NoiseChannel {
         }
     }
 
-    fn calculate_period(&mut self) {
-        let divisor = if self.divisor == 0 {
+    /// NR43's divisor stage, in T-cycles: code 0 is half a tick (8), every
+    /// other code is that many 16 T-cycle ticks (Pan Docs, "Audio Registers"
+    /// → NR43).
+    fn divisor_period(&self) -> u32 {
+        if self.divisor == 0 {
             8
         } else {
             self.divisor as u32 * 16
-        };
-        self.period = divisor << self.shift;
+        }
+    }
+
+    /// What the divisor stage is left holding by a trigger — half its period,
+    /// raced against the tick already in flight on the free-running grid.
+    /// See [`NoiseChannel::trigger`].
+    fn trigger_divisor(&self, grid_phase: u32) -> u32 {
+        let tick = if self.divisor == 0 { 8 } else { 16 };
+        let phase = grid_phase & 4;
+        (self.divisor_period() / 2 + phase).max(tick - phase)
+    }
+
+    fn calculate_period(&mut self) {
+        self.period = self.divisor_period() << self.shift;
     }
 
     /// Live 4-bit digital output for PCM34. The LFSR drives the DAC high when
@@ -938,20 +953,27 @@ impl NoiseChannel {
         self.lfsr = 0x7FFF;
         self.calculate_period();
         // The noise frequency is built from two counters — the NR43 divisor
-        // and the shift stage above it — and a trigger reloads only the
-        // divisor, leaving the shift stage half-way through. The first LFSR
-        // step therefore lands at `divisor + (period - divisor)/2`, not at a
-        // full period. SameSuite `channel_4_delay` measures this across three
-        // shift settings at a fixed divisor (2/4/8 M-cycle samples) and the
-        // lateness of a plain full-period reload grows as 0/1/3 M-cycles,
-        // which is exactly that halved shift stage.
-        let divisor = if self.divisor == 0 {
-            8
-        } else {
-            self.divisor as u32 * 16
-        };
+        // and the shift stage above it — and a trigger reloads *neither*: it
+        // leaves both half-way through. So the first LFSR step lands at
+        // `(period - divisor)/2 + divisor/2`, not at a full period.
+        //
+        // The one exception is that the divisor stage cannot be left holding
+        // less than one of its own ticks (16 T-cycles, or 8 for code 0, which
+        // is a half tick to begin with), so for codes 0 and 1 the half-reload
+        // is floored at a whole tick. SameSuite pins the whole shape:
+        // `channel_4_delay` moves the shift only (0/1/3 M-cycles late for a
+        // plain full-period reload), and `channel_4_frequency_alignment`
+        // sweeps the divisor at nine (divisor, shift) pairs — the four
+        // encodings of one 16 M-cycle sample ($0C/$1A/$29/$38) start
+        // 0/0/+2/+1 M-cycles apart, which is this floor and nothing else.
+        // `channel_4_equivalent_frequencies` re-measures the same four over
+        // two whole samples.
+        let divisor = self.trigger_divisor(grid_phase);
         let pad = NOISE_TRIGGER_ALIGN.wrapping_sub(grid_phase) & 3;
-        self.delay = divisor + (self.period - divisor) / 2 + NOISE_TRIGGER_DELAY + pad;
+        self.delay = (self.period - self.divisor_period()) / 2
+            + divisor
+            + NOISE_TRIGGER_DELAY
+            + pad;
         // Re-triggering a *running* channel costs one whole sample more. The
         // divider that clocks the LFSR is free-running — a trigger reloads the
         // countdown to its next tick but not the divider itself, so the first
@@ -1013,6 +1035,111 @@ const NR_READBACK_MASKS: [u8; 23] = [
     0x00, 0x00, 0x70, // NR50, NR51, NR52
 ];
 
+/// Which CGB CPU revision's APU length-counter quirks to model.
+///
+/// The Game Boy Color shipped several CPU steppings and the APU's
+/// **extra length clocking** rule was changed part-way through the run. The
+/// rule everyone means by "extra length clocking" is: writing NRx4 while the
+/// frame sequencer's *next* step is one that does **not** clock length, with
+/// length previously disabled and now enabled and non-zero, decrements the
+/// length counter once.
+///
+/// On CPU CGB revisions 0 and B the "and now enabled" half of that condition
+/// is simply absent — a write that leaves length *disabled* clocks it too.
+/// That is a silicon bug: it breaks Prehistorik Man, and Nintendo fixed it in
+/// CPU CGB C. Every later revision (C, D, E) and every DMG behaves the way
+/// [`CgbRevision::CgbC`] models, which is why it is the default and the only
+/// value a game should ever run under.
+///
+/// Source for both the rule and the revision split: the header comment of
+/// SameSuite's `apu/channel_*/channel_*_extra_length_clocking-cgb0B.asm`
+/// (test written by Matt Currie), which is quoting the gbdev community's
+/// documentation of the behaviour.
+///
+/// This exists so the conformance runner can score the five SameSuite ROMs
+/// whose *filenames* name a revision (`-cgb0B`, `-cgb0`, `-cgbB`); it is not a
+/// console-selection feature. See `examples/samesuite.rs` and
+/// `docs/conformance-notes.md`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CgbRevision {
+    /// CPU CGB 0 — the launch stepping.
+    Cgb0,
+    /// CPU CGB B. As `Cgb0`, plus CH3's own extra-length-clock quirk: the
+    /// clock that takes CH3's counter to zero does not disable the channel;
+    /// the *next* one does. SameSuite ships `channel_3_extra_length_clocking`
+    /// twice for exactly this difference.
+    CgbB,
+    /// CPU CGB C and later (C, D, E) — and the behaviour every DMG has. The
+    /// default, and the only revision a real game should be run under.
+    #[default]
+    CgbC,
+}
+
+impl CgbRevision {
+    /// `true` for the revisions where an NRx4 write clocks length whenever it
+    /// was *previously* disabled, whatever the write leaves it as.
+    fn extra_clock_ignores_new_enable(self) -> bool {
+        matches!(self, CgbRevision::Cgb0 | CgbRevision::CgbB)
+    }
+
+    /// Parse the spelling SameSuite uses in its ROM filenames (`cgb0`,
+    /// `cgbB`, `cgb0B`, `cgb0BC`, `cgbDE`), case-insensitively. A multi-letter
+    /// tag means "these revisions agree here", so it maps to any one of them
+    /// we model.
+    ///
+    /// **Known limit:** `CgbC` lumps C, D and E together, so `cgb0BC` and
+    /// `cgbDE` both land on it. That is fine for everything modelled today —
+    /// C/D/E agree on extra length clocking — but `channel_1_freq_change_timing`
+    /// ships as `-cgb0BC` / `-cgbDE` / `-A`, which is a *different* axis and
+    /// would need `CgbC` split from a `CgbDE`. Unrecognised tags return
+    /// `None`, i.e. the caller's default, so adding one is additive.
+    pub fn from_tag(tag: &str) -> Option<CgbRevision> {
+        match tag.to_ascii_lowercase().as_str() {
+            "cgb0" | "0" | "cgb0b" => Some(CgbRevision::Cgb0),
+            "cgbb" | "b" => Some(CgbRevision::CgbB),
+            "cgbc" | "c" | "cgbd" | "d" | "cgbe" | "e" | "cgb0bc" | "cgbde" => {
+                Some(CgbRevision::CgbC)
+            }
+            _ => None,
+        }
+    }
+
+    /// `$GB_CGB_REVISION`, for A/B-ing the quirk without a rebuild. Unset is
+    /// the default; a typo **warns and is ignored** rather than silently
+    /// running a game on buggy silicon — the same rule `$GB_MODEL` follows.
+    fn from_env() -> CgbRevision {
+        match std::env::var("GB_CGB_REVISION") {
+            Err(_) => CgbRevision::default(),
+            Ok(s) if s.is_empty() => CgbRevision::default(),
+            Ok(s) => CgbRevision::from_tag(&s).unwrap_or_else(|| {
+                eprintln!(
+                    "warning: GB_CGB_REVISION={s:?} is not one of cgb0/cgbB/cgbC — ignoring"
+                );
+                CgbRevision::default()
+            }),
+        }
+    }
+}
+
+/// How an NRx4 write's extra length clock behaves, for one channel on one
+/// revision. Built by [`Sound::extra_length_rule`].
+#[derive(Clone, Copy)]
+struct ExtraLengthRule {
+    /// Clock even when the write leaves length disabled (CPU CGB ≤ B).
+    ignore_new_enable: bool,
+    /// The clock that reaches zero does not disable the channel; the next one
+    /// does (CH3 on CPU CGB B only).
+    disable_one_clock_late: bool,
+}
+
+impl ExtraLengthRule {
+    /// CPU CGB C and later, and every DMG.
+    const MODERN: ExtraLengthRule = ExtraLengthRule {
+        ignore_new_enable: false,
+        disable_one_clock_late: false,
+    };
+}
+
 /// Reusable scratch for one output block. Allocated once; `play_samples` runs
 /// every 5.8 ms of emulated audio and must not allocate.
 struct Mixdown {
@@ -1068,11 +1195,18 @@ pub struct Sound {
     /// Odd CPU T-cycle carried across a `do_cycle` when halving for double
     /// speed.
     cpu_frac: u32,
-    /// Position of the APU clock on its free-running 1 MHz grid (`0..=3` base
-    /// T-cycles). Kept separately from `time`, which `do_output` rebases by
-    /// `output_period` (24344 T at 44.1 kHz — not a multiple of 4, so `time`
-    /// cannot carry the phase). See [`SQUARE_TRIGGER_ALIGN`].
+    /// Position of the APU clock on its free-running grid, in base T-cycles
+    /// (`0..=15`). Bits 0-1 are the 1 MHz phase the square channels' trigger
+    /// alignment keys off ([`SQUARE_TRIGGER_ALIGN`]); bit 2 is the extra
+    /// half-tick the noise channel's divisor stage races against
+    /// ([`NoiseChannel::trigger_divisor`]). Kept separately from `time`, which
+    /// `do_output` rebases by `output_period` (24344 T at 44.1 kHz — not a
+    /// multiple of 4, so `time` cannot carry the phase).
     grid_phase: u32,
+    /// Which CGB CPU revision's APU quirks to model (see [`CgbRevision`]).
+    /// Machine configuration, not cartridge state — deliberately **not**
+    /// serialised, so a save state restores into whatever machine is running.
+    cgb_revision: CgbRevision,
     /// Reusable mixing scratch (see [`Mixdown`]).
     mixdown: Mixdown,
 }
@@ -1119,6 +1253,7 @@ impl Sound {
             double_speed: false,
             cpu_frac: 0,
             grid_phase: 0,
+            cgb_revision: CgbRevision::from_env(),
             mixdown: Mixdown::default(),
         }
     }
@@ -1209,6 +1344,25 @@ impl Sound {
         self.dmg_mode = dmg;
     }
 
+    /// Model a specific CGB CPU revision's APU quirks — see [`CgbRevision`].
+    /// Leave it alone for games: the default is the fixed silicon.
+    pub fn set_cgb_revision(&mut self, rev: CgbRevision) {
+        self.cgb_revision = rev;
+    }
+
+    /// The extra-length-clocking rule in force for one channel. A DMG is
+    /// never affected: the revision split is a CGB CPU stepping difference,
+    /// so `dmg_mode` pins the modern rule whatever the knob says.
+    fn extra_length_rule(&self, wave: bool) -> ExtraLengthRule {
+        if self.dmg_mode {
+            return ExtraLengthRule::MODERN;
+        }
+        ExtraLengthRule {
+            ignore_new_enable: self.cgb_revision.extra_clock_ignores_new_enable(),
+            disable_one_clock_late: wave && self.cgb_revision == CgbRevision::CgbB,
+        }
+    }
+
     /// Put the APU into the state the console's boot ROM leaves behind at
     /// `PC=$0100`, by **replaying the writes the boot ROM actually makes** —
     /// not by stuffing the register shadow with what a read comes back with.
@@ -1256,16 +1410,23 @@ impl Sound {
         channel_enabled: &mut bool,
         first_half: bool,
         v: u8,
+        rule: ExtraLengthRule,
     ) {
         let was_enabled = length.enabled;
         let enable = v & 0x40 == 0x40;
         let trigger = v & 0x80 == 0x80;
         length.enabled = enable;
-        if first_half && !was_enabled && enable && length.value > 0 {
+        let extra_clock =
+            first_half && !was_enabled && (enable || rule.ignore_new_enable);
+        if extra_clock && length.value > 0 {
             length.value -= 1;
-            if length.value == 0 && !trigger {
+            if length.value == 0 && !trigger && !rule.disable_one_clock_late {
                 *channel_enabled = false;
             }
+        } else if extra_clock && !trigger && rule.disable_one_clock_late {
+            // CPU CGB B, CH3 only: the clock that reached zero left the
+            // channel playing, and this is the one that turns it off.
+            *channel_enabled = false;
         }
         if trigger && length.value == 0 {
             length.value = if enable && first_half {
@@ -1324,7 +1485,7 @@ impl Sound {
         // disabled contribute no blip deltas, so an off APU synthesises exact
         // silence at zero extra cost.
         self.time += cycles;
-        self.grid_phase = (self.grid_phase + cycles) & 3;
+        self.grid_phase = (self.grid_phase + cycles) & 15;
 
         if self.time >= self.output_period {
             self.do_output();
@@ -1672,11 +1833,13 @@ impl Sound {
                     (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel1.calculate_period();
                 let fh = self.first_half();
+                let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
                     &mut self.channel1.length,
                     &mut self.channel1.enabled,
                     fh,
                     v,
+                    rule,
                 );
                 self.channel1.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
@@ -1706,11 +1869,13 @@ impl Sound {
                     (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel2.calculate_period();
                 let fh = self.first_half();
+                let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
                     &mut self.channel2.length,
                     &mut self.channel2.enabled,
                     fh,
                     v,
+                    rule,
                 );
                 self.channel2.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
@@ -1735,11 +1900,13 @@ impl Sound {
                     (self.channel3.freq & 0xFF) | (((v & 0x7) as u16) << 8);
                 self.channel3.calculate_period();
                 let fh = self.first_half();
+                let rule = self.extra_length_rule(true);
                 Self::apply_nrx4_length(
                     &mut self.channel3.length,
                     &mut self.channel3.enabled,
                     fh,
                     v,
+                    rule,
                 );
                 if v & 0x80 == 0x80 {
                     // DMG wave-RAM corruption: retriggering CH3 while it is
@@ -1782,11 +1949,13 @@ impl Sound {
             }
             0xFF23 => {
                 let fh = self.first_half();
+                let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
                     &mut self.channel4.length,
                     &mut self.channel4.enabled,
                     fh,
                     v,
+                    rule,
                 );
                 self.channel4.volume.wb(a, v);
                 if v & 0x80 == 0x80 {
@@ -3295,7 +3464,10 @@ mod tests {
     //!   1. the APU emits exactly the reported sample rate per emulated second
     //!      (so wall-clock speed, not resampling, governs perceived tempo), and
     //!   2. a programmed tone comes out at the correct pitch.
-    use super::{AudioPlayer, Sound, CLOCKS_PER_FRAME, CLOCKS_PER_SECOND};
+    use super::{
+        AudioPlayer, CgbRevision, LengthCounter, Sound, CLOCKS_PER_FRAME,
+        CLOCKS_PER_SECOND,
+    };
     use std::sync::{Arc, Mutex};
 
     struct Capture {
@@ -3707,6 +3879,127 @@ mod tests {
             "first envelope step landed at {t} T-cycles, past the 64 Hz \
              boundary at {period}"
         );
+    }
+
+    /// The delay from a CH4 trigger to its first LFSR step, for every
+    /// `(divisor, shift)` pair SameSuite measures. Nothing in CI runs
+    /// SameSuite, so this is the gate on that calibration: the numbers are
+    /// read off `apu/channel_4/channel_4_frequency_alignment.asm` (nine NR43
+    /// encodings, whose `CorrectResults` rows differ by whole M-cycles) and
+    /// `channel_4_delay.asm`, not off our own output.
+    ///
+    /// Read them as `(period - divisor)/2 + max(divisor/2, one tick) + 2`:
+    /// a trigger leaves both counters half-way through, and the divisor stage
+    /// cannot be left holding less than one of its own ticks. The four
+    /// encodings of a single 16 M-cycle sample — $1A, $0C, $29, $38 — are the
+    /// load-bearing rows: they must come out 34/34/42/38, i.e. 0/0/+2/+1
+    /// M-cycles apart, and a `divisor/2` with no floor gets $1A and $0C wrong
+    /// by 4 and 8 M-cycles (`channel_4_equivalent_frequencies` red).
+    #[test]
+    fn the_noise_trigger_delay_matches_samesuite() {
+        // (NR43, expected delay in T-cycles)
+        const CASES: [(u8, u32); 11] = [
+            (0x00, 10), // divisor code 0, shift 0 — channel_4_delay
+            (0x08, 10), //   …and its 7-bit twin
+            (0x09, 18), // code 1, shift 0 — frequency_alignment row 0
+            (0x18, 14), // code 0, shift 1 — row 1 (and channel_4_delay)
+            (0x0A, 18), // code 2, shift 0 — row 2
+            (0x28, 22), // code 0, shift 2 — row 3 (and channel_4_delay)
+            (0x0B, 26), // code 3, shift 0 — row 4: the floor must NOT apply
+            (0x1A, 34), // code 2, shift 1 — row 5
+            (0x0C, 34), // code 4, shift 0 — row 6
+            (0x29, 42), // code 1, shift 2 — row 7: the floor DOES apply
+            (0x38, 38), // code 0, shift 3 — row 8
+        ];
+        for (nr43, want) in CASES {
+            let mut snd = Sound::new();
+            snd.set_player(Box::new(Capture {
+                rate: 44100,
+                samples: Arc::new(Mutex::new(Vec::new())),
+            }));
+            snd.wb(0xFF26, 0x80); // APU on — also zeroes the 1 MHz grid phase
+            snd.wb(0xFF21, 0xF0); // NR42: volume 15, no envelope
+            snd.wb(0xFF22, nr43);
+            snd.wb(0xFF23, 0x80); // NR44: trigger
+            assert_eq!(
+                snd.channel4.delay, want,
+                "NR43=${nr43:02X}: first LFSR step at {} T-cycles, hardware \
+                 says {want}",
+                snd.channel4.delay
+            );
+        }
+    }
+
+    /// Extra length clocking, on each CPU CGB revision we model. Nothing in
+    /// `cargo test` runs SameSuite, so this is the gate on
+    /// [`CgbRevision`]: the expectations are the rule stated in the header of
+    /// `apu/channel_*/channel_*_extra_length_clocking-cgb0B.asm` and the
+    /// `CorrectResults` tables of the two `channel_3_extra_length_clocking`
+    /// variants, not our own output.
+    ///
+    /// Each case is one NRx4 write landing in the extra-clocking half of the
+    /// frame sequencer, on a channel that is playing with length **disabled**
+    /// — the situation the ROMs set up — and the write leaves length disabled
+    /// too (`v = $00`, as the ROMs write). Modern silicon must ignore it
+    /// entirely; CGB ≤ B must clock it; and on CGB B, CH3 must survive the
+    /// clock that reaches zero and die on the next one.
+    #[test]
+    fn extra_length_clocking_follows_the_cgb_revision() {
+        // (revision, wave channel?, starting length, writes, still playing?)
+        const CASES: [(CgbRevision, bool, u16, u32, bool); 9] = [
+            // CPU CGB C and later: a write that leaves length disabled is inert.
+            (CgbRevision::CgbC, false, 1, 1, true),
+            (CgbRevision::CgbC, false, 1, 8, true),
+            // CPU CGB 0: one clock per write, whatever the write leaves behind.
+            (CgbRevision::Cgb0, false, 1, 1, false),
+            (CgbRevision::Cgb0, false, 2, 1, true),
+            (CgbRevision::Cgb0, false, 2, 2, false),
+            (CgbRevision::Cgb0, true, 1, 1, false),
+            // CPU CGB B: as CGB 0, but CH3 needs one write more.
+            (CgbRevision::CgbB, true, 1, 1, true),
+            (CgbRevision::CgbB, true, 1, 2, false),
+            (CgbRevision::CgbB, true, 2, 2, true),
+        ];
+        for (rev, wave, len, writes, want_playing) in CASES {
+            let mut snd = Sound::new();
+            snd.set_mode(false); // a CGB — the split is a CGB CPU stepping
+            snd.set_cgb_revision(rev);
+            let rule = snd.extra_length_rule(wave);
+            let mut length = LengthCounter::new(if wave { 256 } else { 64 });
+            length.value = len;
+            let mut playing = true;
+            for _ in 0..writes {
+                Sound::apply_nrx4_length(&mut length, &mut playing, true, 0x00, rule);
+            }
+            assert_eq!(
+                playing,
+                want_playing,
+                "{rev:?}, {} channel, length {len}, {writes} write(s): \
+                 playing={playing}, hardware says {want_playing}",
+                if wave { "wave" } else { "square/noise" }
+            );
+        }
+    }
+
+    /// A DMG has no CGB CPU stepping, so the knob must not reach it — a
+    /// mis-set `$GB_CGB_REVISION` may not change how a DMG game plays.
+    #[test]
+    fn the_revision_quirk_never_reaches_a_dmg() {
+        let mut snd = Sound::new();
+        snd.set_mode(true);
+        snd.set_cgb_revision(CgbRevision::Cgb0);
+        let mut length = LengthCounter::new(64);
+        length.value = 1;
+        let mut playing = true;
+        Sound::apply_nrx4_length(
+            &mut length,
+            &mut playing,
+            true,
+            0x00,
+            snd.extra_length_rule(false),
+        );
+        assert!(playing, "the CGB 0/B length quirk leaked into DMG mode");
+        assert_eq!(length.value, 1);
     }
 
     /// Cartridge code can put any byte in any APU register in any order, and

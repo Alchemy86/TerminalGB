@@ -813,6 +813,24 @@ different boot registers (`A=0x11 HL=0x007C` rather than `A=0x01 HL=0x014D`) and
 undocumented CGB registers still responding. Nine Mooneye acceptance tests print those
 registers and can tell.
 
+**CGB CPU revision (conformance knob — leave it alone for games)**
+
+The Color shipped in several CPU steppings and its APU changed between them: on CPU CGB 0
+and B, writing `NRx4` with the length counter previously disabled clocks that counter even
+when the write leaves it disabled. That is a silicon bug — it breaks *Prehistorik Man* —
+and Nintendo fixed it in CPU CGB C. The emulator models **CPU CGB C and later**, which is
+what every later console and every DMG does.
+
+```bash
+GB_CGB_REVISION=cgb0 …   # or cgbB — reintroduce the pre-C length-clocking bug
+```
+
+It exists because SameSuite ships five test ROMs that name a revision in their *filename*,
+and `-cgb0` and `-cgbB` contradict each other, so no single machine can pass both; the
+conformance runner reads the revision off the name the way it reads `@dmg`/`@cgb` off a
+cartridge header. A DMG ignores the setting entirely. An unrecognised value warns on
+stderr and is ignored rather than silently switching you onto buggy silicon.
+
 **Multi-game compilation cartridges (MBC1M)**
 
 Carts like *Bomberman Collection* or *Mortal Kombat I & II* hold several games behind one
