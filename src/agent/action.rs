@@ -53,8 +53,15 @@ pub const WALK_GAP: u16 = 14;
 /// reads to the agent as "every direction is blocked" — the single most
 /// misleading thing this layer could tell it.
 pub const WALK_MISSES: u8 = 3;
-/// The same for [`Action::GoTo`], which is also trying to route round things.
-pub const GOTO_MISSES: u8 = 6;
+/// Presses without the player moving before [`Action::GoTo`] gives up. Higher
+/// than [`WALK_MISSES`] because `GoTo` is *supposed* to bump into things — that
+/// is how it discovers the shape of the obstacle.
+pub const GOTO_BARREN: u8 = 8;
+/// Steps a blocked [`Action::GoTo`] commits to along the other axis before
+/// trying the direct route again. Four is a building's width in Pallet Town.
+pub const GOTO_DETOUR: u8 = 4;
+/// Extra presses over the step budget, to pay for detours.
+pub const GOTO_SLACK: u8 = 16;
 /// Frames of quiet after an [`Action::Press`], which is what a driver uses to
 /// work a menu.
 ///
@@ -246,9 +253,17 @@ enum Step {
         y: u8,
         budget: u8,
         taken: u8,
-        misses: u8,
+        /// Presses since the player last actually moved. The termination
+        /// condition, and the thing a detour resets.
+        barren: u8,
         presses: u8,
+        /// A committed sideways run: direction and steps left.
+        detour: Option<(KeypadKey, u8)>,
+        /// How many detours have been started, so successive ones try the
+        /// other way round rather than repeating.
+        flips: u8,
         last: Option<Position>,
+        last_dir: Option<KeypadKey>,
         start: Position,
     },
     Text {
@@ -389,9 +404,12 @@ impl Executor {
                 y,
                 budget: max_steps,
                 taken: 0,
-                misses: 0,
+                barren: 0,
                 presses: 0,
+                detour: None,
+                flips: 0,
                 last: None,
+                last_dir: None,
                 start: obs.read(m).position,
             },
             Action::AdvanceText { max_presses } => {
@@ -502,30 +520,38 @@ impl Executor {
                 y,
                 budget,
                 taken,
-                misses,
+                barren,
                 presses,
+                detour,
+                flips,
                 last,
+                last_dir,
                 start,
             } => {
                 let now = obs.read(m).position;
                 if let Some(prev) = *last {
                     if same_tile(prev, now) {
-                        *misses += 1;
+                        *barren += 1;
                     } else {
                         *taken += 1;
-                        *misses = 0;
+                        *barren = 0;
+                        // A detour spends a step only when it actually moves.
+                        if let Some((d, n)) = *detour {
+                            *detour = (n > 1).then_some((d, n - 1));
+                        }
                     }
                 }
                 let arrived = now.x == *x && now.y == *y;
-                let walled = *misses >= GOTO_MISSES;
-                let spent = *presses >= budget.saturating_add(GOTO_MISSES + 3);
+                let walled = *barren >= GOTO_BARREN;
+                let spent = *presses >= budget.saturating_add(GOTO_SLACK);
                 if arrived || walled || spent {
                     let s = *start;
                     let result = if arrived {
                         format!("arrived at ({},{}) after {taken} step(s)", now.x, now.y)
                     } else if walled {
                         format!(
-                            "stuck at ({},{}) trying to reach ({x},{y}) — walls in the way",
+                            "stuck at ({},{}) trying to reach ({x},{y}) — walls in the \
+                             way. Walk several steps sideways and try again from there",
                             now.x, now.y
                         )
                     } else {
@@ -540,9 +566,7 @@ impl Executor {
                         changed: !same_tile(s, now),
                     });
                 }
-                // Greedy, alternating the axis it prefers whenever it is stuck,
-                // which is enough to get round furniture with no collision map.
-                let prefer_x = (*misses / 2) % 2 == 0;
+
                 let dx = match now.x.cmp(x) {
                     std::cmp::Ordering::Less => Some(KeypadKey::Right),
                     std::cmp::Ordering::Greater => Some(KeypadKey::Left),
@@ -553,9 +577,52 @@ impl Executor {
                     std::cmp::Ordering::Greater => Some(KeypadKey::Up),
                     std::cmp::Ordering::Equal => None,
                 };
-                let key = if prefer_x { dx.or(dy) } else { dy.or(dx) };
-                if let Some(k) = key {
+
+                // **Commit to a sideways run when blocked, do not alternate.**
+                // Single-step alternation gets round a bed and cannot get round
+                // a building: it steps one tile aside, finds the preferred axis
+                // still blocked, steps back, and repeats until it gives up.
+                // Watched exactly that happen in Pallet Town, where the fence
+                // between the player and Oak's lab is four tiles long. So the
+                // first blocked press starts a run of [`GOTO_DETOUR`] steps
+                // along the other axis, and successive detours alternate
+                // direction so a run into a dead end is undone by the next.
+                let dir = if let Some((d, _)) = *detour {
+                    Some(d)
+                } else if *barren > 0 {
+                    let vertical =
+                        matches!(*last_dir, Some(KeypadKey::Up) | Some(KeypadKey::Down));
+                    let toward = if vertical { dx } else { dy };
+                    let fallback = if vertical {
+                        if *flips % 2 == 0 {
+                            KeypadKey::Right
+                        } else {
+                            KeypadKey::Left
+                        }
+                    } else if *flips % 2 == 0 {
+                        KeypadKey::Down
+                    } else {
+                        KeypadKey::Up
+                    };
+                    let d = toward.unwrap_or(fallback);
+                    *flips = flips.saturating_add(1);
+                    *detour = Some((d, GOTO_DETOUR));
+                    Some(d)
+                } else {
+                    // Greedy on the *larger* remaining delta, which reaches a
+                    // diagonal target in fewer direction changes than always
+                    // preferring one axis.
+                    let far_x = now.x.abs_diff(*x) >= now.y.abs_diff(*y);
+                    if far_x {
+                        dx.or(dy)
+                    } else {
+                        dy.or(dx)
+                    }
+                };
+
+                if let Some(k) = dir {
                     *last = Some(now);
+                    *last_dir = Some(k);
                     *presses += 1;
                     m.press(k, WALK_HOLD, WALK_GAP);
                 }
