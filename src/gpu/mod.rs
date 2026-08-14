@@ -637,6 +637,37 @@ impl Gpu {
     ///   the real mode 2 at `LY=0` is blocked and its interrupt arrives a line
     ///   late. `acceptance/ppu/intr_1_2_timing-GS` counts exactly that gap.
     ///
+    /// **And on lines 1-143 it rises one M-cycle before the scanline it
+    /// belongs to** — from dot 452 of the *previous* line, four dots before
+    /// `STAT` starts reading mode 2. Three Mooneye tests measure the gap from
+    /// this interrupt to the next PPU event and all three came out exactly
+    /// 4 T-cycles short without it (`intr_2_0_timing` wants 8 loop iterations
+    /// to the mode-0 interrupt and counted 7; `intr_2_mode0_timing` and
+    /// `intr_2_mode3_timing` want 2 and counted 1). Interrupt *delivery* is
+    /// common to both ends of `intr_2_0_timing`'s measurement, so a constant
+    /// dispatch latency cancels there — what that test reads is the distance
+    /// between the two strobes, which puts the error in this signal rather than
+    /// in the CPU. `intr_2_mode0_timing` goes FAIL → PASS.
+    ///
+    /// Two exclusions, each of which a test insists on:
+    ///
+    /// * **Line 144 keeps its strobe at dot 0**, simultaneous with the VBlank
+    ///   interrupt, which is exactly what `vblank_stat_intr-GS` measures — give
+    ///   the VBlank line the early window too and it goes red.
+    /// * **Line 0 has no early window.** Mealybug's `m3_bgp_change` says so in
+    ///   its own source — *"line 0 timing is different by 4 cycles"* — and pads
+    ///   its handler by one taken `jr` on every line **except** line 0 to make
+    ///   the picture uniform. `intr_1_2_timing-GS`, which times the LY=0
+    ///   mode-2 interrupt against the VBlank one, agrees: it goes red on the
+    ///   fast engine if line 0 is given the early window.
+    ///
+    /// Only the per-dot engine emits it. The whole-scanline renderer changes
+    /// `mode` at instruction granularity, so for it there *is* no "one M-cycle
+    /// before" to represent; asserting a 4-dot signal inside a renderer with no
+    /// sub-instruction phase is mixing resolutions, and it measures as such —
+    /// Mooneye does not move (it cannot resolve it) while Mealybug loses
+    /// `m2_win_en_toggle`, the one row that engine has pixel-exact, and
+    /// `m3_window_timing` goes 1,215 → 21,671 pixels.
     /// **On Color hardware the strobe starts one M-cycle sooner.** Mooneye
     /// ships the measurement twice, and the two ROMs are the same program with
     /// one `nop` moved: `acceptance/ppu/vblank_stat_intr-GS` (DMG, MGB, SGB)
@@ -646,11 +677,20 @@ impl Gpu {
     /// cycle; the VBlank flag itself is untouched and still goes up with the
     /// line, so the two consoles differ in exactly the one place hardware does.
     fn oam_strobe(&self) -> bool {
-        self.mode == 2
+        if self.mode == 2
             || (self.line == VBLANK_LINE && self.modeclock < OAM_DOTS)
             || (!self.gbmode.is_dmg()
                 && self.line == VBLANK_LINE - 1
                 && self.modeclock >= LINE_DOTS - VBLANK_STROBE_LEAD)
+        {
+            return true;
+        }
+        // Lines 1-143 only, so this can never overlap the Color console's
+        // VBlank lead above (which is line 143's tail).
+        self.render_mode == RenderMode::Accurate
+            && self.modeclock >= LINE_DOTS - 4
+            && self.line + 1 < VBLANK_LINE
+            && !self.skip_first_oam
     }
 
     /// Re-latch the `LY == LYC` coincidence flag and follow the STAT line.

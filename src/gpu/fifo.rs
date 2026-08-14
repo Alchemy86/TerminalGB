@@ -309,8 +309,20 @@ impl Gpu {
             // before mode 2 is entered and for the whole of the OAM slot on the
             // line the PPU restarts on after `LCDC.7` goes 0→1 — and skipping
             // there would jump the scanline the pipeline is about to draw.
-            let idle =
-                self.line >= VBLANK || (self.mode == 0 && self.modeclock >= OAM_DOTS);
+            //
+            // `skip_first_oam` has to be excluded outright, and it is not a
+            // refinement: the line the PPU restarts on reads mode 0 *through*
+            // its OAM slot and only leaves it by entering mode 3 at dot 80,
+            // which is the one place that clears the flag. Let this shortcut
+            // fire there and the PPU never reaches dot 80 on that line, so the
+            // flag survives to the next line, and the next — the whole engine
+            // stays parked in mode 0 with `LY` ticking over and **no mode 2, no
+            // mode 3 and no STAT interrupt for the rest of the frame**. Every
+            // Mealybug ROM arms itself off the mode-2 STAT source, so they all
+            // ran their nop-slide off the end into a crash instead. See
+            // `the_ppu_restarts_into_mode_3_after_the_lcd_comes_on`.
+            let idle = self.line >= VBLANK
+                || (self.mode == 0 && self.modeclock >= OAM_DOTS && !self.skip_first_oam);
             if idle {
                 let to_eol = LINE_DOTS - self.modeclock;
                 let step = left.min(to_eol);
@@ -896,5 +908,87 @@ mod mode3_length {
         let mut gpu = engine();
         gpu.wb(0xFF43, 0xF8);
         assert_eq!(mode3_dots(&mut gpu), 172);
+    }
+}
+
+/// What the PPU does on the line the LCD comes up on.
+///
+/// This is its own module because the answer used to be *nothing*, for the
+/// whole rest of the frame, and every Mealybug ROM died of it — see
+/// [`docs/mealybug.md`](../../docs/mealybug.md) §7.6.
+#[cfg(test)]
+mod lcd_restart {
+    use super::super::{Gpu, RenderMode};
+
+    /// A DMG with the accurate engine selected and `LCDC.7` just taken 0→1,
+    /// i.e. parked on the restart line itself — deliberately *not* stepped
+    /// past it, unlike `mode3_length::engine`.
+    fn just_enabled() -> Gpu {
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.wb(0xFF40, 0x91); // LCD on, BG on, tile data $8000
+        gpu
+    }
+
+    /// The restart line has no OAM scan — `STAT` reads mode 0 through the OAM
+    /// slot — but it **does** draw: mode 3 starts at dot 80 of that very line,
+    /// and that transition is the only thing that clears the "no OAM scan"
+    /// latch.
+    ///
+    /// Before the fix the engine's mode-0 fast-forward swallowed dot 80, so the
+    /// latch survived, the next line was skipped the same way, and so was every
+    /// line after it: `LY` ticked over with the PPU parked in mode 0 until the
+    /// VBlank at line 144 finally moved it. A whole frame with no mode 2 and no
+    /// mode 3.
+    #[test]
+    fn the_ppu_restarts_into_mode_3_on_the_line_the_lcd_came_on() {
+        let mut gpu = just_enabled();
+        let mut at = None;
+        for _ in 0..super::LINE_DOTS {
+            gpu.do_cycle(1);
+            if gpu.mode() == 3 {
+                at = Some(gpu.modeclock);
+                break;
+            }
+            assert_eq!(gpu.mode(), 0, "STAT must read mode 0 until mode 3 begins");
+        }
+        assert!(
+            at.is_some(),
+            "the PPU never left mode 0 on the line the LCD came on"
+        );
+        // Dot 80 is the first dot of mode 3; `modeclock` has moved past it by
+        // the time the caller can observe the new mode.
+        assert_eq!(
+            at,
+            Some(super::OAM_DOTS + 1),
+            "and the line is not restarted"
+        );
+        assert_eq!(gpu.rb(0xFF44), 0, "still on the line the LCD came on");
+    }
+
+    /// And the consequence a program can see: with only the mode-2 STAT source
+    /// enabled, the strobe must arrive on the **next** line, not a frame later.
+    ///
+    /// Every Mealybug ROM arms itself exactly this way and then falls through a
+    /// field of `nop`s waiting for it; miss the strobe and the program counter
+    /// runs off the end of the slide and the ROM crashes before it has drawn
+    /// anything. That is what "3/79" was measuring for most of the suite.
+    #[test]
+    fn the_mode_2_strobe_arrives_on_the_line_after_the_lcd_comes_on() {
+        let mut gpu = just_enabled();
+        gpu.wb(0xFF41, 0x20); // STAT: mode-2 source only
+        gpu.interrupt = 0;
+        let mut fired = None;
+        for dot in 0..2 * super::LINE_DOTS {
+            gpu.do_cycle(1);
+            if gpu.interrupt & 0x02 != 0 {
+                fired = Some(dot);
+                break;
+            }
+        }
+        assert!(
+            fired.is_some(),
+            "no mode-2 STAT interrupt in the two scanlines after the LCD came on"
+        );
     }
 }
