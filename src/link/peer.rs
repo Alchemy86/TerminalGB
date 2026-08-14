@@ -457,6 +457,30 @@ impl LinkPeer {
         )
     }
 
+    /// Name this console's cartridge, and the save file it will write.
+    ///
+    /// Discovery happens **before** a ROM is chosen — the port has to be live
+    /// from the first frame of the first game, which is the whole point — so
+    /// the cartridge is not known yet. This fills it in afterwards, and
+    /// re-introduces us if a partner is already on the line.
+    pub fn set_identity(&mut self, title: &str, save_path: Option<&Path>) {
+        let key = save_path.map(fnv64).unwrap_or(0);
+        if self.local_title == title && self.save_key == key {
+            return;
+        }
+        self.local_title = title.to_string();
+        self.save_key = key;
+        self.save_path = save_path.map(|p| p.to_path_buf());
+        if self.stream.is_some() {
+            let t = self.local_title.clone();
+            self.push(Frame {
+                save_key: key,
+                seq: PROTOCOL_VERSION,
+                ..Frame::of(Kind::Hello).with_text(&t)
+            });
+        }
+    }
+
     /// Tell the far end who is playing here. The frontend supplies it (the
     /// trainer plugin can read a Gen 1 player's name); core stays game-agnostic.
     pub fn set_label(&mut self, label: &str) {

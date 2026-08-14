@@ -319,6 +319,28 @@ impl ShinyAlert {
 pub const PROTOCOLS: [&str; 6] =
     ["kitty", "sixel", "iterm2", "iterm", "halfblocks", "blocks"];
 
+/// What the link port is plugged into.
+///
+/// **`Auto` is the default, and that is deliberate.** A cable you have to arm
+/// is not a cable: Gen 1's Cable Club attendant checks the link before she lets
+/// you through, so a link that only wakes up once somebody asks for it is
+/// exactly the link she turns away. With no second instance running, `Auto`
+/// costs one unix socket in the runtime directory and behaves in every
+/// observable way like no cable at all.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LinkSetting {
+    /// Find other instances on this machine and pair with one automatically.
+    #[default]
+    Auto,
+    /// Never link. For somebody running several games who does not want them
+    /// finding each other.
+    Off,
+    /// Boot a **second console in this process** from this ROM and wire the two
+    /// together — the deterministic, scriptable arrangement
+    /// ([`crate::link::LinkCable`]), not the discovery one.
+    Rom(String),
+}
+
 /// The parsed terminal-frontend configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -386,10 +408,9 @@ pub struct Config {
     /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
     /// built-in presets. See [`terminalgb_plugin_battle_control::preset`].
     pub battles: Option<String>,
-    /// A **second cartridge**, joined to the first by a link cable
-    /// ([`crate::link::LinkCable`]). `None` — the default — is one console, as
-    /// it always was. See [`docs/link-cable.md`](../../docs/link-cable.md).
-    pub link: Option<String>,
+    /// What the link port is plugged into. See
+    /// [`docs/link-cable.md`](../../docs/link-cable.md).
+    pub link: LinkSetting,
     /// Open the trainer panel as soon as a game starts, rather than waiting for
     /// `T`. Off by default — the panel is opt-in — but somebody who plays with
     /// it up every session should not have to press a key every session.
@@ -439,7 +460,7 @@ impl Default for Config {
             video: crate::video::RawSettings::default(),
             plugins: Vec::new(),
             gen1_trade: None,
-            link: None,
+            link: LinkSetting::default(),
             battles: None,
             trainer: false,
             agent_command: None,
@@ -795,10 +816,12 @@ impl Config {
         }
         if let Some(v) = get("link") {
             let v = v.trim();
-            cfg.link = if v.is_empty() || v.eq_ignore_ascii_case("off") {
-                None
+            cfg.link = if v.eq_ignore_ascii_case("off") || v.eq_ignore_ascii_case("no") {
+                LinkSetting::Off
+            } else if v.is_empty() || v.eq_ignore_ascii_case("auto") {
+                LinkSetting::Auto
             } else {
-                Some(expand_tilde_str(v))
+                LinkSetting::Rom(expand_tilde_str(v))
             };
         }
         if let Some(v) = get("battles") {
@@ -1142,7 +1165,7 @@ mod tests {
             cfg.gen1_trade.as_deref(),
             Some(want("mewtwo.trade").as_str())
         );
-        assert_eq!(cfg.link.as_deref(), Some(want("roms/gold.gbc").as_str()));
+        assert_eq!(cfg.link, LinkSetting::Rom(want("roms/gold.gbc")));
         assert_eq!(cfg.telemetry.as_deref(), Some(want("gb.ndjson").as_str()));
         assert_eq!(
             cfg.screenshot_dir.as_deref(),

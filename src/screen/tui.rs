@@ -34,7 +34,7 @@ use crate::input::KeypadKey;
 #[cfg(feature = "plugin-agent")]
 use crate::screen::agent_view as av;
 use crate::screen::config::{
-    CellScale, Config, Palette, Recent, RenderPath, ShinyAlert, VolumeState,
+    CellScale, Config, LinkSetting, Palette, Recent, RenderPath, ShinyAlert, VolumeState,
 };
 use crate::screen::frame::FramePrep;
 #[cfg(feature = "music")]
@@ -585,6 +585,15 @@ pub fn run_as(start: Start) -> Result<(), Box<dyn Error>> {
     }
     let res = app.run(&mut terminal);
 
+    // Say goodbye on the wire before the terminal is restored. **Not a `Drop`
+    // impl**: the release profile aborts on panic and this process can be
+    // killed outright, so `Drop` is not a shutdown hook here — the same lesson
+    // battery saves cost this project. Skipping it is survivable (the far end
+    // sweeps a socket that no longer answers, and treats a peer that vanishes
+    // while idle as an unplug rather than a crash), but a clean quit should
+    // look like one, and it should not leave a socket behind.
+    app.unplug_link();
+
     // Restore terminal.
     disable_raw_mode()?;
     if input == InputMode::Enhanced {
@@ -768,6 +777,11 @@ struct Session {
     /// Boxed: a whole `Gameboy` is large, and `Session` is built on the stack
     /// by every render test. Inlining a second one overflows it.
     link: Option<Box<LinkPartner>>,
+    /// The automatically discovered cable to **another process**
+    /// ([`crate::link::peer`]). `None` in the render tests and whenever
+    /// `link = <rom>` put a second console in this process instead — the two
+    /// are alternatives, because a Game Boy has one link port.
+    peer: Option<Box<crate::link::peer::LinkPeer>>,
     /// Palette-mapping stage, owning its buffer so a frame allocates nothing.
     prep: FramePrep,
     /// Fast path: our own capped-resolution encoder. `None` when the protocol
@@ -909,6 +923,7 @@ impl Session {
         gb: Gameboy,
         entry: RomEntry,
         link: Option<Box<LinkPartner>>,
+        peer: Option<Box<crate::link::peer::LinkPeer>>,
         term_image: Option<TermImage>,
         sprite_image: Option<TermImage>,
         team_image: Option<TermImage>,
@@ -923,6 +938,7 @@ impl Session {
             entry,
             paused: false,
             link,
+            peer,
             prep: FramePrep::new(),
             term_image,
             image: None,
@@ -1181,6 +1197,23 @@ struct App {
     /// Complaints from config parsing, shown once so a mistyped key cannot
     /// fail silently.
     config_warnings: Vec<String>,
+    /// Frames left on the "the cable is carrying traffic" indicator.
+    ///
+    /// A byte count alone cannot answer "is a trade happening *now*" — it only
+    /// ever goes up. This is set whenever the count moves and decays over a
+    /// second, so the panel distinguishes a connected-and-idle cable from one
+    /// mid-exchange, which are different answers to "should I walk into the
+    /// Cable Club?".
+    link_busy_frames: u32,
+    /// Transfer count at the previous frame, to notice movement.
+    link_prev_transfers: u64,
+    /// A cable discovered at startup, waiting for a game to attach it to.
+    ///
+    /// Discovery happens in [`run`] and **not** in `App::build`, deliberately:
+    /// the render tests build an `App` per test in parallel, and a cable that
+    /// advertised itself there would let two tests find each other. Same reason
+    /// `App::build` does not apply the saved volume.
+    pending_peer: Option<crate::link::peer::LinkPeer>,
     /// What happened when plugins were attached for the current session —
     /// shown in the help overlay so "is anything modifying my game?" always
     /// has an answer.
@@ -1208,6 +1241,17 @@ impl App {
         output_volume::set_level(vol_level);
         output_volume::set_muted(vol_muted);
 
+        // Plug the cable in here, for the same reason as the volume above: a
+        // cable advertises itself in a directory other processes read, and
+        // `build` is what the render tests construct in parallel — two of them
+        // would find *each other*. This constructor is the production one.
+        //
+        // It happens before any ROM is chosen so the port is live from the
+        // first frame of the first game, which is what the Cable Club attendant
+        // needs (`crate::link::peer`).
+        let pending_peer = matches!(config.link, LinkSetting::Auto)
+            .then(|| crate::link::peer::LinkPeer::discover("TERMINALGB", None));
+
         // Prefer the sharpest protocol the terminal advertises (build_picker),
         // then let an explicit config `protocol` override it.
         let mut app = App::build(
@@ -1219,6 +1263,11 @@ impl App {
             video_template,
         );
         app.video_autostart = video_autostart;
+        app.pending_peer = pending_peer;
+        if let Some(p) = &app.pending_peer {
+            app.config_warnings
+                .push(format!("link: cable {:?}", p.state()));
+        }
         app
     }
 
@@ -1353,6 +1402,9 @@ impl App {
             video_named: false,
             video_template,
             config_warnings: warnings,
+            link_busy_frames: 0,
+            link_prev_transfers: 0,
+            pending_peer: None,
             plugin_notes: Vec::new(),
         };
         app.rescan();
@@ -1396,12 +1448,188 @@ impl App {
     ///
     /// Buttons held on the console being left are released: a key the player
     /// let go of while looking elsewhere would otherwise stay down for ever.
+    /// Tell the far console who is playing here.
+    ///
+    /// The **frontend** supplies the label and core stays game-agnostic: the
+    /// cable relays bytes and has no business knowing what a trainer name is.
+    /// The trainer plugin already identifies the cartridge and owns the Gen 1
+    /// character map, so this reuses both rather than adding a second copy —
+    /// and simply sends nothing for a cartridge it does not recognise.
+    #[cfg(feature = "plugin-trainer")]
+    fn publish_link_label(&mut self) {
+        // `wPlayerName`, pokered `ram/wram.asm`. Already relied on by the
+        // battle-control plugin, whose injected party has to inherit it or the
+        // game treats every Pokémon as traded and disobedient.
+        const W_PLAYER_NAME: u16 = 0xD158;
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let Some(p) = s.peer.as_mut() else { return };
+        if !p.state().is_paired() {
+            return;
+        }
+        let known = terminalgb_plugin_trainer::Game::detect(
+            &s.gb.rom_title(),
+            s.gb.global_checksum(),
+        )
+        .is_some();
+        if !known {
+            return;
+        }
+        let raw = s.gb.peek_range(W_PLAYER_NAME, 11);
+        if terminalgb_plugin_trainer::text::looks_like_a_name(&raw) {
+            p.set_label(&terminalgb_plugin_trainer::text::decode(&raw));
+        }
+    }
+
+    #[cfg(not(feature = "plugin-trainer"))]
+    fn publish_link_label(&mut self) {}
+
+    /// Notice traffic on the wire and keep the indicator lit for a second
+    /// after it stops. Also feeds the far end this player's in-game name, when
+    /// something here can read one — "connected to RED" beats "connected".
+    fn tick_link_activity(&mut self) {
+        self.link_busy_frames = self.link_busy_frames.saturating_sub(1);
+        let now = match self.session.as_ref() {
+            Some(s) => match (s.link.as_ref(), s.peer.as_ref()) {
+                (Some(l), _) => l.cable.stats().transfers,
+                (None, Some(p)) => p.stats().transfers,
+                _ => return,
+            },
+            None => return,
+        };
+        if now != self.link_prev_transfers {
+            self.link_prev_transfers = now;
+            self.link_busy_frames = 60;
+        }
+        self.publish_link_label();
+    }
+
+    /// The one description of the cable, used by the Status row **and** the
+    /// trainer panel. One mechanism, two places — the captain watches the
+    /// trainer panel while playing and the Status row while debugging, and two
+    /// independent renderings of the same fact would drift.
+    ///
+    /// Returns `(short, long)`: `short` fits the 18-column Status row, `long`
+    /// is for the trainer panel, which has more width to spend. Both name the
+    /// three states that actually matter to somebody deciding whether to walk
+    /// into a Cable Club: **nobody there**, **someone there**, and **a trade
+    /// actually happening**.
+    fn link_summary(&self) -> Option<(String, String)> {
+        use crate::link::peer::PeerState;
+        let s = self.session.as_ref()?;
+
+        // The in-process second console: always "connected", by construction.
+        if let Some(l) = s.link.as_ref() {
+            let n = l.cable.stats().transfers;
+            let fault = if l.cable.desynced() { " FAULT" } else { "" };
+            return Some((
+                format!("{} {n}{fault}", truncate(&l.title, 11)),
+                format!("linked to {} · {n} bytes{fault}", l.title),
+            ));
+        }
+
+        let p = s.peer.as_ref()?;
+        let busy = p.stats().transfers;
+        Some(match p.state() {
+            PeerState::Off => ("off".into(), "cable unplugged (W)".into()),
+            PeerState::Waiting => ("waiting".into(), "no one connected".into()),
+            PeerState::Unplugged => ("gone".into(), "the other console left".into()),
+            PeerState::Paired {
+                title,
+                label,
+                same_save,
+            } => {
+                let who = if label.is_empty() {
+                    title.clone()
+                } else {
+                    format!("{label} · {title}")
+                };
+                // "Connected" and "trading right now" are different answers.
+                // `wLinkState` is the game's own view and is what the trainer
+                // panel keys off; here the byte count is enough to separate a
+                // live exchange from an idle cable.
+                let active = self.link_active();
+                let warn = if *same_save { "  SAME SAVE!" } else { "" };
+                (
+                    format!(
+                        "{} {busy}{}",
+                        truncate(title, 10),
+                        if active { "*" } else { "" }
+                    ),
+                    format!(
+                        "connected to {who}{}{warn}",
+                        if active { " — TRADING" } else { "" }
+                    ),
+                )
+            }
+        })
+    }
+
+    /// Is the link carrying traffic *right now*, as opposed to merely being
+    /// plugged in? Read from the game rather than from the cable: Gen 1's
+    /// `wLinkState` says whether the player is in a Cable Club room or actually
+    /// mid-trade, which is the distinction a player cares about.
+    fn link_active(&self) -> bool {
+        self.link_busy_frames > 0
+    }
+
+    /// `W` — the link key. What it does depends on which kind of cable is
+    /// attached, and the two kinds are mutually exclusive (a Game Boy has one
+    /// port), so it can never be ambiguous:
+    ///
+    /// * a discovered peer (`link = auto`, the default) → **unplug / plug in**,
+    ///   which is what somebody running several games needs;
+    /// * a second console in this process (`link = <rom>`) → **swap which one
+    ///   you are playing**.
+    fn link_key(&mut self) {
+        if self.session.as_ref().is_some_and(|s| s.peer.is_some()) {
+            self.toggle_peer_cable();
+        } else {
+            self.swap_link_focus();
+        }
+    }
+
+    /// Take this console off the wire on the way out.
+    fn unplug_link(&mut self) {
+        if let Some(s) = self.session.as_mut() {
+            if let Some(p) = s.peer.as_mut() {
+                p.close();
+            }
+        }
+        if let Some(p) = self.pending_peer.as_mut() {
+            p.close();
+        }
+    }
+
+    /// Unplug the discovered cable, or plug it back in.
+    ///
+    /// Unplugging is a real disconnect — the far console sees a clean goodbye,
+    /// not a crash, so neither save is poisoned. Plugging back in runs
+    /// discovery again, so it finds whoever is available now rather than
+    /// insisting on the console it had before.
+    fn toggle_peer_cable(&mut self) {
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let Some(p) = s.peer.as_mut() else { return };
+        if matches!(p.state(), crate::link::peer::PeerState::Off) {
+            let title = s.gb.rom_title();
+            **p = crate::link::peer::LinkPeer::discover(&title, None);
+            self.set_toast("link: cable plugged in");
+        } else {
+            p.close();
+            **p = crate::link::peer::LinkPeer::off();
+            self.set_toast("link: cable unplugged");
+        }
+    }
+
     fn swap_link_focus(&mut self) {
         let Some(s) = self.session.as_mut() else {
             return;
         };
         let Some(l) = s.link.as_mut() else {
-            self.set_toast("no link cable — set `link = <rom>` in config.toml");
+            self.set_toast("no link cable — `link = auto` or `link = <rom>`");
             return;
         };
         for i in 0..8 {
@@ -1425,7 +1653,10 @@ impl App {
     /// cartridge costs you the cable and nothing else, the same rule the rest of
     /// this frontend follows for an absent capability.
     fn open_link_partner(&mut self) -> Option<Box<LinkPartner>> {
-        let path = PathBuf::from(self.config.link.as_ref()?);
+        let crate::screen::config::LinkSetting::Rom(rom) = &self.config.link else {
+            return None;
+        };
+        let path = PathBuf::from(rom);
         let data = match std::fs::read(&path) {
             Ok(d) if d.len() >= 0x150 => d,
             Ok(_) => {
@@ -1502,10 +1733,28 @@ impl App {
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
                 let link = self.open_link_partner();
+                // One port: an in-process second console and a discovered peer
+                // are alternatives, never both.
+                let peer = if link.is_some() {
+                    None
+                } else {
+                    self.pending_peer.take().map(|mut p| {
+                        // The cable was plugged in before a cartridge was
+                        // chosen; tell the far end what it is now, and which
+                        // save file this console writes, so two copies of one
+                        // game can be flagged.
+                        p.set_identity(
+                            &gb.rom_title(),
+                            Some(&path.with_extension("sav")),
+                        );
+                        Box::new(p)
+                    })
+                };
                 self.session = Some(Session::new(
                     gb,
                     entry,
                     link,
+                    peer,
                     term_image,
                     sprite_image,
                     team_image,
@@ -1767,9 +2016,10 @@ impl App {
             // the only way a byte on the wire lands on the right cycle at both
             // ends. It performs the same per-frame housekeeping `frame` does,
             // for both machines.
-            match s.link.as_mut() {
-                Some(l) => l.cable.run_frame(&mut s.gb, &mut l.gb),
-                None => s.gb.frame(),
+            match (s.link.as_mut(), s.peer.as_mut()) {
+                (Some(l), _) => l.cable.run_frame(&mut s.gb, &mut l.gb),
+                (None, Some(p)) => p.run_frame(&mut s.gb),
+                (None, None) => s.gb.frame(),
             }
             s.t_emulate = telemetry::ms(t.elapsed());
             s.emu_count += 1;
@@ -1795,6 +2045,7 @@ impl App {
                 s.fps_mark = Instant::now();
             }
         }
+        self.tick_link_activity();
         // Feed the video stream from the **emulated** frame, not the displayed
         // one: display frames are deliberately dropped on a large window
         // (see `crate::termimage`) and a video stream may not be.
@@ -2669,7 +2920,7 @@ impl App {
                 // `W` for "which console" — `L` is already the way back to
                 // the picker, and the four game buttons default to a/s/x/z.
                 KeyCode::Char('W') => {
-                    self.swap_link_focus();
+                    self.link_key();
                     return;
                 }
                 KeyCode::Char('R') => {
@@ -3742,6 +3993,9 @@ impl App {
         if area.width < tv::PANEL_MIN_W || area.height < 4 {
             return;
         }
+        // Taken before the plugin borrow below, which holds `&self`.
+        let link_row = self.link_summary().map(|(_, long)| long);
+        let link_busy = self.link_active();
         self.trainer_rect = Some(area);
         // The focus ring gains and loses the opponent as battles start and
         // end, so a selection index that meant "party slot 2" a frame ago can
@@ -3834,7 +4088,12 @@ impl App {
         // block is a dozen rows on its own, and it must never be the reason the
         // party falls off the bottom.
         let width = area.width.saturating_sub(2) as usize;
-        let header = tv::header_lines(plugin.state(), game.label(), width);
+        let mut header = tv::header_lines(plugin.state(), game.label(), width);
+        // The cable, where the player is already looking. Same source as the
+        // Status row's `Link`, so the two cannot drift.
+        if let Some(l) = link_row.as_deref() {
+            header.push(tv::link_line(l, link_busy, width));
+        }
         let lines = tv::body_lines(plugin.state(), focus, detail, width);
         // Laid out against the whole column, then **centred as a block** so the
         // panel sits at the same height as the picture beside it — which
@@ -4518,21 +4777,10 @@ impl App {
             kv("Term", &self.termcost_label()),
         ];
         // A second console must never be running invisibly — the same rule the
-        // plugin row follows. Says which machine is on screen and what the wire
-        // has carried, so a link that is quietly doing nothing is obvious.
-        if let Some(link) = self.session.as_ref().and_then(|s| s.link.as_ref()) {
-            let st = link.cable.stats();
-            status.push(kv(
-                "Link",
-                // Eighteen columns, and the fault marker must survive them —
-                // so the *title* is what gets shortened, never the warning.
-                &format!(
-                    "{} {}{}",
-                    truncate(&link.title, 11),
-                    st.transfers,
-                    if link.cable.desynced() { " FAULT" } else { "" }
-                ),
-            ));
+        // plugin row follows. One mechanism with the trainer panel, so the two
+        // cannot drift (`link_summary`).
+        if let Some((short, _)) = self.link_summary() {
+            status.push(kv("Link", &truncate(&short, 18)));
         }
         // The `!` / `!!` marks travel with the name, so "this one may write my
         // game" survives truncation of the detail text.
@@ -4592,10 +4840,14 @@ impl App {
             Line::from("c shot      C raw shot"),
             Line::from("v stream    V record"),
         ];
-        // Only when there is a second console — a key that does nothing is
-        // worse than no key at all.
-        if self.session.as_ref().is_some_and(|s| s.link.is_some()) {
-            controls.push(Line::from("W other console"));
+        // Only when there is a cable — a key that does nothing is worse than no
+        // key at all — and it says which of the two things it will do.
+        if let Some(s) = self.session.as_ref() {
+            if s.link.is_some() {
+                controls.push(Line::from("W other console"));
+            } else if s.peer.is_some() {
+                controls.push(Line::from("W cable on/off"));
+            }
         }
         f.render_widget(
             Paragraph::new(controls)
@@ -5309,8 +5561,9 @@ impl App {
                 self.session = Some(Session::new(
                     gb,
                     entry,
-                    // No link partner: a music player has no cable, and
-                    // attaching one would be a surprise nobody asked for.
+                    // No link partner and no cable: a music player has neither,
+                    // and attaching one would be a surprise nobody asked for.
+                    None,
                     None,
                     term_image,
                     sprite_image,
@@ -7858,6 +8111,74 @@ mod tests {
         );
     }
 
+    /// The auto-discovered cable must be **visible** and must reach the
+    /// trainer panel, not only the Status row. No sockets and no environment
+    /// variables here: a switched-off cable exercises the same wiring, and the
+    /// transport itself is proved in `crate::link::peer`.
+    #[test]
+    fn a_discovered_cable_is_visible_in_both_panels() {
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.session.as_mut().unwrap().peer =
+            Some(Box::new(crate::link::peer::LinkPeer::off()));
+
+        let (short, long) = app.link_summary().expect("a cable should be described");
+        assert_eq!(short, "off");
+        assert!(long.contains("unplugged"), "{long}");
+        assert!(
+            short.chars().count() <= 18,
+            "the Status row is 18 columns: {short:?}"
+        );
+
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(150, 45)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("Link"),
+            "a cable that nobody can see is a cable nobody can debug\n{text}"
+        );
+    }
+
+    /// The link key does the right thing for whichever kind of cable is
+    /// attached, and says so rather than doing nothing.
+    #[test]
+    fn the_link_key_toggles_a_discovered_cable() {
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.session.as_mut().unwrap().peer =
+            Some(Box::new(crate::link::peer::LinkPeer::off()));
+        assert_eq!(app.link_summary().unwrap().0, "off");
+
+        // Plugging in runs discovery, which needs a rendezvous directory it
+        // cannot share with another test — point it somewhere private.
+        let dir = std::env::temp_dir()
+            .join(format!("terminalgb-linkkey/{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        env::set_var("GB_LINK_DIR", &dir);
+        app.handle_game_key(KeyEvent::from(KeyCode::Char('W')));
+        assert_ne!(
+            app.link_summary().unwrap().0,
+            "off",
+            "W should have plugged the cable back in"
+        );
+        app.handle_game_key(KeyEvent::from(KeyCode::Char('W')));
+        assert_eq!(
+            app.link_summary().unwrap().0,
+            "off",
+            "and unplugged it again"
+        );
+        env::remove_var("GB_LINK_DIR");
+    }
+
     /// An unreadable second cartridge costs you the cable and **nothing else**
     /// — the same rule the frontend follows for every other absent capability.
     #[test]
@@ -7884,7 +8205,7 @@ mod tests {
         let mut picker = Picker::from_fontsize((8, 16));
         picker.set_protocol_type(ProtocolType::Halfblocks);
         let config = Config {
-            link: Some(link.to_string()),
+            link: LinkSetting::Rom(link.to_string()),
             ..Config::default()
         };
         let mut app = App::build(

@@ -449,6 +449,36 @@ pub fn hp_bar(fraction: f32, width: usize) -> String {
 ///
 /// Exactly [`HEADER_ROWS`] lines whatever the width, so the sprite below it
 /// never moves.
+/// The cable, as one line for the top of the trainer panel.
+///
+/// The panel is what a player actually watches, and the question it has to
+/// answer is "is there anybody to trade with?" — so it distinguishes the three
+/// states that change the answer: **nobody connected**, **someone connected**,
+/// and **an exchange happening right now**. Anything more is clutter in a panel
+/// that is already dense.
+///
+/// `summary` comes from the frontend's single `link_summary`, so this and the
+/// Status row cannot disagree. Degrades by the same `clamp_line` every other
+/// row uses, so a narrow split loses the tail of the text and never the label.
+pub fn link_line<'a>(summary: &str, active: bool, width: usize) -> Line<'a> {
+    let style = if active {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else if summary.starts_with("connected") {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    clamp_line(
+        Line::from(vec![
+            Span::styled("LINK ", Style::default().fg(Color::DarkGray)),
+            Span::styled(summary.to_string(), style),
+        ]),
+        width,
+    )
+}
+
 pub fn header_lines<'a>(state: &TrainerState, game: &str, width: usize) -> Vec<Line<'a>> {
     header_rows(state, game, width)
         .into_iter()
@@ -2575,5 +2605,56 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1234), "1,234");
         assert_eq!(thousands(999999), "999,999");
+    }
+}
+
+#[cfg(test)]
+mod link_line_tests {
+    use super::*;
+
+    /// The three states that change a player's answer to "should I walk into
+    /// the Cable Club?" must be distinguishable at a glance.
+    #[test]
+    fn the_link_line_separates_nobody_connected_and_trading() {
+        let none = plain(&[link_line("no one connected", false, 40)])[0].clone();
+        let idle =
+            plain(&[link_line("connected to RED · POKEMON BLUE", false, 40)])[0].clone();
+        let busy = plain(&[link_line("connected to RED — TRADING", true, 40)])[0].clone();
+        assert!(none.contains("LINK") && none.contains("no one"));
+        assert!(idle.contains("RED") && !idle.contains("TRADING"));
+        assert!(busy.contains("TRADING"));
+        assert_ne!(none, idle);
+        assert_ne!(idle, busy);
+    }
+
+    /// The panel is dense and the captain splits it narrow. The row must lose
+    /// its *tail*, never its label — a clipped line that no longer says LINK is
+    /// indistinguishable from some other row.
+    #[test]
+    fn the_link_line_keeps_its_label_at_every_width() {
+        for w in 6..=48usize {
+            let line = plain(&[link_line("connected to RED · POKEMON BLUE", true, w)])[0]
+                .clone();
+            assert!(
+                line.chars().count() <= w,
+                "width {w}: {line:?} overflows the panel"
+            );
+            assert!(
+                line.starts_with("LINK") || line.starts_with("LIN") || w < 5,
+                "width {w}: the label was clipped away: {line:?}"
+            );
+        }
+    }
+
+    /// A cable that is not there costs the panel nothing: the frontend passes
+    /// `None` and no row is produced at all (see `App::render_trainer`).
+    #[test]
+    fn an_unplugged_cable_is_dim_not_loud() {
+        let l = link_line("cable unplugged (W)", false, 40);
+        assert_ne!(
+            l.spans[1].style.fg,
+            Some(Color::Green),
+            "an unplugged cable must not read as connected"
+        );
     }
 }
