@@ -13,6 +13,38 @@ history. See [Credits & lineage](README.md#credits--lineage).
 
 ## [Unreleased]
 
+### Added
+- **An AI agent can play the game, and narrate it for a stream** (`src/agent/`, `A`/`G` in the
+  terminal frontend). Structured observation (map, coordinates, facing, the game's own warp
+  table, the screen decoded as text, party and battle state), a bounded action vocabulary above
+  raw presses (`walk`, `goto`, `advance_text`, `press`, `wait`), and a commentary panel written
+  for a Twitch viewer arriving with no context — a standing goal line first, short history
+  behind it. Full design, the OBS/Twitch recipe and the honest gaps:
+  [`docs/claude-plays.md`](docs/claude-plays.md).
+  - **Plan-then-execute**, because a model takes seconds and the console runs at 59.73 Hz: the
+    agent returns a goal, one line of commentary and ≤12 actions, and local code carries them
+    out over hundreds of frames. Measured: **~1 model call per 1,100 emulated frames.**
+  - **The emulator never blocks on the agent** — drivers are polled, never awaited; the
+    subprocess driver runs its child on another thread. **0.24 ms/frame with a driver that never
+    answers**, asserted in CI.
+  - **Hard caps in the host**: calls, tokens, spend and wall clock, plus a circuit breaker and
+    escalating stuck-detection. A runaway loop is not possible.
+  - **The driver is swappable** — `ScriptedDriver` (deterministic, free, used throughout the
+    tests), `RandomDriver`, and `CommandDriver` (any program: state on stdin, plan on stdout).
+    Two adapters ship in `tools/claude_plays/`; no HTTP client was added to the crate.
+  - **Everything the panel can render is treated as public and permanent**: driver failures reach
+    a viewer as a category, and every line is scrubbed of credentials, paths, URLs and escapes.
+- **`Capability::CONTROL_INPUT` and one shared input mechanism** (`crate::input::InputQueue`).
+  Presses are scheduled in *frames* and applied once per emulated frame before the frame runs, so
+  an AI driver, a scripted test and a battle-control plugin cannot invent three different
+  definitions of "a press". A plugin that may press buttons is marked `>` in the status panel,
+  and `>>` once it has.
+- **`testharness/agent.rs`** — the whole stack proved in CI against a **hand-assembled
+  Gen-1-shaped cartridge** (no commercial ROM, no game data): observation, the executor, the
+  budget cap, the circuit breaker and stuck detection.
+- **`examples/claude_plays.rs`** — headless runner for scripted, random or real-model runs, with
+  screenshots, an NDJSON decision log and a printed run summary.
+
 ### Fixed
 - **APU corner cases: SameSuite 50/76 → 57/76.** Three independent accuracy bugs, none of
   which any Blargg sound test can see (`dmg_sound` was and stayed 12/12 throughout).

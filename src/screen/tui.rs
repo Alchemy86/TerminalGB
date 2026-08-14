@@ -31,6 +31,7 @@
 
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
+use crate::screen::agent_view as av;
 use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath, ShinyAlert};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
@@ -533,7 +534,7 @@ enum Screen {
 
 /// Everything about the UI that can paint over a terminal image, as one
 /// comparable value. See [`App::ui_signature`].
-type UiSignature = (u8, bool, bool, bool, bool, bool, u8);
+type UiSignature = (u8, bool, bool, bool, bool, bool, u8, bool);
 
 #[derive(PartialEq, Eq)]
 enum Overlay {
@@ -740,6 +741,10 @@ struct App {
     /// A terminal bell owed to a shiny-if-traded verdict, written on the next
     /// flush rather than from inside the emulation step.
     pending_bell: bool,
+    /// The AI agent's commentary panel (`A`). On by default whenever an agent
+    /// plugin is attached — the panel *is* the show; see
+    /// [`crate::screen::agent_view`].
+    agent_panel: bool,
     /// Active save-state slot (`1..=NUM_SLOTS`).
     slot: u32,
     /// Transient in-game notice (save/load/speed feedback) with its raise time.
@@ -768,6 +773,8 @@ struct App {
     /// share a cell with the game picture either.
     trainer_rect: Option<Rect>,
     sprite_rect: Option<Rect>,
+    /// Where the commentary panel was last drawn — same invariant again.
+    agent_rect: Option<Rect>,
     /// Signature of everything about the UI that can paint over the picture.
     /// When it changes, the image is retransmitted even if the frame did not,
     /// because the terminal's copy of it may have been partly overwritten.
@@ -935,6 +942,7 @@ impl App {
             shiny_alert,
             last_encounter_seq: 0,
             pending_bell: false,
+            agent_panel: false,
             slot: 1,
             toast: None,
             fault_announced: false,
@@ -948,6 +956,7 @@ impl App {
             dbg_last: None,
             stats_rect: None,
             trainer_rect: None,
+            agent_rect: None,
             sprite_rect: None,
             ui_sig: None,
             telemetry,
@@ -1013,6 +1022,11 @@ impl App {
                     t.set_active(self.trainer);
                 }
                 self.trainer_sel = 0;
+                // If an agent is driving, its commentary is the show — open the
+                // panel without being asked. `A` closes it again.
+                if gb.plugin::<crate::agent::AgentPlugin>().is_some() {
+                    self.agent_panel = true;
+                }
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
                 self.session = Some(Session {
@@ -2144,6 +2158,26 @@ impl App {
                     self.next_battle_preset();
                     return;
                 }
+                // The AI agent's commentary panel, and the switch that hands
+                // the controller back to a human. Both shifted, for the same
+                // reason `T` is: the unshifted letters are game buttons.
+                KeyCode::Char('A') => {
+                    self.agent_panel = !self.agent_panel;
+                    let on = self.agent_panel;
+                    self.set_toast(
+                        if on {
+                            "Commentary panel on"
+                        } else {
+                            "Commentary panel off"
+                        }
+                        .to_string(),
+                    );
+                    return;
+                }
+                KeyCode::Char('G') => {
+                    self.toggle_agent();
+                    return;
+                }
                 // Detail view and party selection only bind while the panel is
                 // up, so they stay free as game buttons the rest of the time.
                 KeyCode::Char('d') if self.trainer => {
@@ -2338,6 +2372,30 @@ impl App {
         }
     }
 
+    /// Hand the controller between the agent and the human (`G`).
+    ///
+    /// The game keeps running either way — switching the agent off does not
+    /// pause anything, it just stops something else pressing the buttons.
+    fn toggle_agent(&mut self) {
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let Some(p) = s.gb.plugin_mut::<crate::agent::AgentPlugin>() else {
+            self.set_toast("No agent is attached".to_string());
+            return;
+        };
+        let on = !p.is_enabled();
+        p.set_enabled(on);
+        self.set_toast(
+            if on {
+                "Agent is playing"
+            } else {
+                "Agent stopped — you have the controller"
+            }
+            .to_string(),
+        );
+    }
+
     /// Walk the focus ring, which during a battle **starts at the opponent**
     /// and then runs through the party — so the opponent's full stat block is
     /// one `Tab` + `d` away, and the team you would switch to is the next few.
@@ -2519,6 +2577,7 @@ impl App {
         self.stats_rect = None;
         self.trainer_rect = None;
         self.sprite_rect = None;
+        self.agent_rect = None;
 
         if self.fullscreen {
             // Even in fullscreen the stats panel and the toast take their own
@@ -2538,6 +2597,16 @@ impl App {
             if self.banner_state() != 0 && rest.height > 1 {
                 self.render_encounter_banner(f, Rect::new(rest.x, rest.y, rest.width, 1));
                 rest = Rect::new(rest.x, rest.y + 1, rest.width, rest.height - 1);
+            }
+            // The commentary panel takes whole rows off the bottom. It must
+            // never be drawn *into* the picture's cells — see agent_view.
+            let mut agent_panel = None;
+            if self.agent_panel {
+                let (game, panel) = av::split(rest, av::PANEL_H);
+                if let Some(p) = panel {
+                    rest = game;
+                    agent_panel = Some(p);
+                }
             }
             let mut trainer_panel = None;
             let panel_w = trainer_panel_width(rest.width);
@@ -2566,6 +2635,9 @@ impl App {
             // into the same flush.
             if let Some(panel) = trainer_panel {
                 self.render_trainer(f, panel);
+            }
+            if let Some(panel) = agent_panel {
+                self.render_agent(f, panel);
             }
             return;
         }
@@ -2597,6 +2669,17 @@ impl App {
         // the Status sidebar is reference information, the party is what is
         // being watched, and splitting the column three ways would make both
         // unreadable.
+        // Commentary sits across the bottom of the body, under both the
+        // picture and the sidebar — the captain asked for "a text window on
+        // the bottom", and full width is also what gives it enough columns to
+        // stay readable at the large font a stream needs. It is taken off
+        // **before** the picture/panel block is composed, so the block is
+        // centred in what is left rather than being pushed off the bottom.
+        let (body_area, agent_panel) = if self.agent_panel {
+            av::split(rows[2], av::PANEL_H)
+        } else {
+            (rows[2], None)
+        };
         // **The picture and the panel are ONE block.** See `compose_block`: the
         // picture column is exactly as wide as the picture, the panel butts
         // straight up against it, the two share a vertical extent, and the
@@ -2604,13 +2687,13 @@ impl App {
         // space lands *between* them, which is what made the two halves read as
         // unrelated.
         let panel_w = if self.trainer {
-            trainer_panel_width(rows[2].width)
+            trainer_panel_width(body_area.width)
         } else {
             0
         };
         let block = (self.trainer && panel_w >= tv::PANEL_MIN_W).then(|| {
             compose_block(
-                rows[2],
+                body_area,
                 panel_w,
                 self.trainer_panel_rows(panel_w),
                 self.picker.font_size(),
@@ -2621,7 +2704,7 @@ impl App {
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(30)])
-            .split(rows[2]);
+            .split(body_area);
         let (game, trainer_panel) = match block {
             Some((g, p)) => (g, Some(p)),
             None => (body[0], None),
@@ -2645,11 +2728,17 @@ impl App {
         if let Some(panel) = trainer_panel {
             self.render_trainer(f, panel);
         }
+        if let Some(panel) = agent_panel {
+            self.render_agent(f, panel);
+        }
 
         // The toast gets the bottom row for as long as it is up — it must not
         // land on the picture (a terminal image owns whole cells).
         if toast_h > 0 {
             self.render_toast(f, rows[3]);
+        }
+        if let Some(panel) = agent_panel {
+            self.render_agent(f, panel);
         }
     }
 
@@ -2671,7 +2760,52 @@ impl App {
             // The encounter banner takes a row, which moves everything below it
             // — including the picture.
             self.banner_state(),
+            self.agent_panel,
         )
+    }
+
+    /// The AI agent's commentary panel — the part that makes this a stream.
+    ///
+    /// Its own rectangle, never over the picture (see
+    /// [`crate::screen::agent_view`]). It draws whatever the plugin has to
+    /// say; with no agent attached it explains that, rather than being an
+    /// empty box nobody can interpret.
+    fn render_agent(&mut self, f: &mut Frame<'_>, area: Rect) {
+        if area.width < av::MIN_W || area.height < av::MIN_H {
+            return;
+        }
+        self.agent_rect = Some(area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta))
+            .title(" Commentary ");
+        let inner_h = area.height.saturating_sub(2);
+        let inner_w = area.width.saturating_sub(2);
+
+        let body: Vec<Line<'static>> = match self
+            .session
+            .as_ref()
+            .and_then(|s| s.gb.plugin::<crate::agent::AgentPlugin>())
+        {
+            Some(p) => match p.refusal() {
+                Some(why) => vec![Line::from(Span::styled(
+                    why,
+                    Style::default().fg(Color::DarkGray),
+                ))],
+                None => av::lines(p.commentary(), inner_w, inner_h),
+            },
+            None => vec![Line::from(Span::styled(
+                "No agent attached. Start with plugins = agent (or GB_PLUGINS=agent) \
+                 and an agent_command to watch Claude play.",
+                Style::default().fg(Color::DarkGray),
+            ))],
+        };
+        f.render_widget(
+            Paragraph::new(body)
+                .wrap(ratatui::widgets::Wrap { trim: true })
+                .block(block),
+            area,
+        );
     }
 
     /// How many rows the trainer panel would like, so `compose_block` can give
@@ -2807,8 +2941,9 @@ impl App {
                 },
             ],
             vec![
-                "? help · T trainer · p pause · F5/F8 save · +/- speed · q quit".into(),
-                "? help · T trainer · p pause · q quit".into(),
+                "? help · T trainer · A commentary · p pause · F5/F8 save · +/- speed · q quit"
+                    .into(),
+                "? help · T trainer · A commentary · p pause · q quit".into(),
                 "? help · T trainer · q quit".into(),
                 "? help".into(),
             ],
@@ -2838,9 +2973,12 @@ impl App {
                 .add_modifier(Modifier::BOLD),
             &mut spans,
         );
-        // A plugin that can write the game is marked on its *name*, so the
-        // warning survives any shortening — see crate::plugin.
-        let wrote = plugins.iter().any(|p| p.name.contains('!'));
+        // A plugin that can write the game — or press its buttons — is marked
+        // on its *name*, so the warning survives any shortening. See
+        // crate::plugin: `!`/`!!` for memory, `>`/`>>` for input.
+        let wrote = plugins
+            .iter()
+            .any(|p| p.name.contains('!') || p.name.contains('>'));
         push(
             &fitted[2],
             Style::default().fg(if wrote { Color::Yellow } else { Color::Cyan }),
@@ -3662,6 +3800,13 @@ impl App {
                 "  V         record a timestamped file instead (see docs/video-out.md)",
             ),
             Line::from("  ?         this help   q       quit"),
+            Line::from(""),
+            Line::from("AI agent (Claude plays Pokémon)"),
+            Line::from("  A         commentary panel   G   agent on/off"),
+            Line::from(Span::styled(
+                "  it presses the buttons; it never writes to the game",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
             Line::from("Trainer view (Pokémon Red/Blue)"),
             Line::from("  T         show/hide   d       detail for the focused one"),
@@ -4799,10 +4944,74 @@ fn attach_plugins(
                     Err(e) => notes.push(format!("plugin gen1-battle: {e}")),
                 }
             }
+            crate::agent::NAME => match build_agent(cfg) {
+                Ok(p) => {
+                    let driver = p.driver_name().to_string();
+                    match gb.add_plugin(Box::new(p)) {
+                        Ok(()) => notes.push(format!(
+                            "plugin agent attached, driven by {driver} — it \
+                                 presses the buttons, and `G` takes the \
+                                 controller back"
+                        )),
+                        Err(e) => notes.push(format!("plugin agent: {e}")),
+                    }
+                }
+                Err(e) => notes.push(format!("plugin agent: {e}")),
+            },
             other => notes.push(format!("unknown plugin '{other}'")),
         }
     }
     notes
+}
+
+/// Build the agent plugin from configuration.
+///
+/// **Nothing is defaulted into existence here.** With no `agent_command` there
+/// is no driver, and rather than attaching an agent that does nothing this
+/// says so — an inert plugin in the status bar is worse than an honest error.
+fn build_agent(
+    cfg: &crate::screen::config::Config,
+) -> Result<crate::agent::AgentPlugin, String> {
+    use crate::agent::{governor::Budget, subprocess::CommandDriver, Config as AgentCfg};
+
+    let command = std::env::var("GB_AGENT_CMD")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| cfg.agent_command.clone())
+        .ok_or_else(|| {
+            "no driver: set agent_command (or GB_AGENT_CMD) to a program that \
+             reads the state on stdin and prints a plan — see docs/claude-plays.md"
+                .to_string()
+        })?;
+    let mut parts = command.split_whitespace();
+    let program = parts
+        .next()
+        .ok_or_else(|| "agent_command is empty".to_string())?;
+    let args: Vec<String> = parts.map(str::to_string).collect();
+
+    let objective = std::env::var("GB_AGENT_OBJECTIVE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| cfg.agent_objective.clone())
+        .unwrap_or_default();
+
+    let log = std::env::var("GB_AGENT_LOG")
+        .ok()
+        .map(std::path::PathBuf::from);
+
+    Ok(crate::agent::AgentPlugin::new(
+        Box::new(CommandDriver::new(program, args)),
+        AgentCfg {
+            budget: Budget {
+                max_calls: cfg.agent_max_calls,
+                max_usd: cfg.agent_max_usd,
+                ..Budget::default()
+            },
+            objective,
+            log,
+            ..AgentCfg::default()
+        },
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -6393,6 +6602,185 @@ mod tests {
                 );
                 assert!(picture.area() > 0, "{cols}x{rows}: no picture drawn at all");
             }
+        }
+    }
+
+    /// The commentary panel is the third thing that can land on the picture,
+    /// and the one most likely to: it is full width and it is on by default
+    /// whenever an agent is attached.
+    ///
+    /// The sizes include the ones an OBS layout actually produces — a 1920x1080
+    /// canvas at a stream-legible font is roughly 100-140 columns by 26-34
+    /// rows — as well as the small windows a developer uses.
+    #[test]
+    fn the_commentary_panel_never_overlaps_the_picture() {
+        use ratatui::backend::TestBackend;
+        let sizes = [
+            (60u16, 20u16),
+            (80, 24),
+            (100, 26),
+            (106, 30),
+            (120, 34),
+            (140, 30),
+            (160, 50),
+            (200, 60),
+            (40, 12),
+        ];
+        for fullscreen in [false, true] {
+            for trainer in [false, true] {
+                for (cols, rows) in sizes {
+                    let mut app =
+                        test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+                    app.agent_panel = true;
+                    app.trainer = trainer;
+                    app.fullscreen = fullscreen;
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                    terminal.draw(|f| app.render(f)).unwrap();
+                    let s = app.session.as_ref().unwrap();
+                    let picture = Rect::new(
+                        s.disp_origin.0,
+                        s.disp_origin.1,
+                        s.disp_cells.0,
+                        s.disp_cells.1,
+                    );
+                    if let Some(panel) = app.agent_rect {
+                        assert_eq!(
+                            picture.intersection(panel).area(),
+                            0,
+                            "{cols}x{rows} fullscreen={fullscreen} trainer={trainer}: \
+                             commentary {panel:?} overlaps picture {picture:?}"
+                        );
+                        if let Some(t) = app.trainer_rect {
+                            assert_eq!(
+                                t.intersection(panel).area(),
+                                0,
+                                "{cols}x{rows}: commentary overlaps the trainer panel"
+                            );
+                        }
+                    }
+                    assert!(
+                        picture.area() > 0,
+                        "{cols}x{rows}: the panel squeezed the picture out entirely"
+                    );
+                }
+            }
+        }
+    }
+
+    /// "A plugin cannot be active and invisible" now has a second thing to be
+    /// visible about: something else is **pressing your buttons**. Asserted in
+    /// rendered output, because the row's text being right is not the bug that
+    /// has bitten this panel three times — the row being clipped away is.
+    #[test]
+    fn a_plugin_that_presses_buttons_is_marked_in_the_rendered_status_panel() {
+        use ratatui::backend::TestBackend;
+
+        struct Presser(bool);
+        impl crate::plugin::Plugin for Presser {
+            fn name(&self) -> &str {
+                "zzdriver"
+            }
+            fn capabilities(&self) -> crate::plugin::Capability {
+                crate::plugin::Capability::OBSERVE
+                    | crate::plugin::Capability::CONTROL_INPUT
+            }
+            fn on_event(
+                &mut self,
+                _e: &crate::plugin::Event,
+                m: &mut crate::plugin::Machine,
+            ) {
+                if !self.0 {
+                    self.0 = true;
+                    m.tap(crate::input::KeypadKey::A);
+                }
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let render = |app: &mut App, w: u16, h: u16| -> String {
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| app.render(f)).unwrap();
+            t.backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect()
+        };
+
+        let s = app.session.as_mut().expect("session");
+        s.gb.add_plugin(Box::new(Presser(false))).expect("attach");
+        // Declared but not yet used: a single `>`.
+        for (w, h) in [(120u16, 40u16), (100, 30)] {
+            let text = render(&mut app, w, h);
+            assert!(
+                text.contains("zzdriver>"),
+                "at {w}x{h} the panel must say a plugin may press buttons:\n{text}"
+            );
+        }
+        // Actually pressed: `>>`, and it stays.
+        app.session.as_mut().unwrap().gb.frame();
+        let text = render(&mut app, 120, 40);
+        assert!(
+            text.contains("zzdriver>>"),
+            "once it has pressed a button the panel must say so:\n{text}"
+        );
+    }
+
+    /// What a Twitch viewer actually reads, rendered at the cell grids an OBS
+    /// layout produces.
+    ///
+    /// A 1920x1080 canvas at a stream-legible terminal font (26-30 px, so a
+    /// glyph survives Twitch's re-encode and a phone viewer's downscale) is
+    /// roughly 100-140 columns by 26-34 rows — see `docs/claude-plays.md`
+    /// §OBS. This asserts the things a cold joiner needs are all on screen at
+    /// those sizes, and with `GB_DUMP_LAYOUT=<file>` it writes the grid out so
+    /// the documented picture is a real render and not a drawing.
+    #[test]
+    fn the_stream_layout_shows_goal_activity_and_game_together() {
+        use ratatui::backend::TestBackend;
+        for (cols, rows) in [(106u16, 30u16), (120, 34), (140, 30)] {
+            let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+            app.agent_panel = true;
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let mut grid = String::new();
+            for y in 0..rows {
+                for x in 0..cols {
+                    grid.push_str(buf[(x, y)].symbol());
+                }
+                grid.push('\n');
+            }
+            if let Ok(path) = std::env::var("GB_DUMP_LAYOUT") {
+                let _ = std::fs::write(format!("{path}.{cols}x{rows}.txt"), &grid);
+            }
+            // With no agent attached the panel explains itself rather than
+            // being an unexplained empty box — that is the state a first-time
+            // user sees, and it must not be a mystery.
+            assert!(
+                grid.contains("Commentary"),
+                "{cols}x{rows}: no commentary panel:\n{grid}"
+            );
+            assert!(
+                grid.contains("No agent attached"),
+                "{cols}x{rows}: the empty panel must say why:\n{grid}"
+            );
+            // And the top bar is still there, i.e. the panel took space from
+            // the layout rather than from the picture or the chrome.
+            assert!(
+                grid.contains("? help"),
+                "{cols}x{rows}: top bar lost:\n{grid}"
+            );
         }
     }
 

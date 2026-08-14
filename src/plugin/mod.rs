@@ -31,7 +31,7 @@
 //!
 //! # What a plugin may do
 //!
-//! Exactly three things, each of which it must **declare up front** via
+//! Exactly these things, each of which it must **declare up front** via
 //! [`Plugin::capabilities`]:
 //!
 //! * [`Capability::OBSERVE`] — receive [`Event`]s (frames, serial transfers).
@@ -40,9 +40,13 @@
 //!   see the honesty rules below.
 //! * [`Capability::SERIAL_LINK`] — be the console on the other end of the link
 //!   cable ([`Plugin::on_serial`]).
-//! * [`Capability::CONTROL_INPUT`] — hold and release the console's buttons
-//!   ([`Machine::set_button`]), which is how a plugin scripts a sequence the
-//!   game plays out itself.
+//! * [`Capability::CONTROL_INPUT`] — drive the console's buttons. Two levels,
+//!   one capability and one latch: [`Machine::set_button`] holds and releases
+//!   directly, and [`Machine::press`] *schedules* a press in frames through
+//!   [`crate::input::InputQueue`], which is what anything reasoning above the
+//!   frame level wants. There is deliberately only the one mechanism, so a
+//!   battle-control script, a scripted test and an AI driver cannot each
+//!   invent their own frame timing and diverge.
 //!
 //! Declaration is enforced, not advisory: [`Machine`] checks the calling plugin's
 //! declared capabilities and refuses (returning `None` / `false`) rather than
@@ -109,9 +113,10 @@ impl Capability {
     pub const WRITE_MEMORY: Capability = Capability(1 << 2);
     /// Drive the serial port as the other end of the link cable.
     pub const SERIAL_LINK: Capability = Capability(1 << 3);
-    /// Hold and release the console's buttons ([`Machine::set_button`]) — the
-    /// *control* face applied to the joypad rather than to memory. A plugin
-    /// with this is playing the game, so the frontend must show it.
+    /// Drive the console's buttons — [`Machine::set_button`] (the raw latch)
+    /// and [`Machine::press`] (a press scheduled in frames). The *control* face
+    /// applied to the joypad rather than to memory. A plugin with this is
+    /// playing the game, so the frontend must show it.
     pub const CONTROL_INPUT: Capability = Capability(1 << 4);
 
     pub const NONE: Capability = Capability(0);
@@ -214,6 +219,9 @@ pub struct Machine<'m, 'a> {
     /// plugin has modified your game" in the status bar rather than only "this
     /// plugin *could*".
     wrote: bool,
+    /// Same, for button presses: "something else is playing my game" must never
+    /// be invisible.
+    pressed: bool,
 }
 
 impl<'m, 'a> Machine<'m, 'a> {
@@ -222,6 +230,7 @@ impl<'m, 'a> Machine<'m, 'a> {
             mem,
             granted,
             wrote: false,
+            pressed: false,
         }
     }
 
@@ -352,7 +361,65 @@ impl<'m, 'a> Machine<'m, 'a> {
         } else {
             self.mem.keypad.keyup(key);
         }
+        self.pressed = true;
         true
+    }
+
+    /// Schedule a button press: hold `key` down for `hold` emulated frames,
+    /// then leave the pad idle for `gap` frames. Returns `false` (and does
+    /// nothing) without [`Capability::CONTROL_INPUT`].
+    ///
+    /// The level above [`Machine::set_button`], and the one to reach for unless
+    /// a plugin is genuinely thinking frame by frame: presses have to be
+    /// *scheduled* in frames, because that is the granularity the game samples
+    /// input at, and every caller keeping its own timer is how one mechanism
+    /// quietly becomes three. Same capability and same latch as `set_button` —
+    /// see [`crate::input::InputQueue`].
+    pub fn press(&mut self, key: crate::input::KeypadKey, hold: u16, gap: u16) -> bool {
+        if !self.granted.contains(Capability::CONTROL_INPUT) {
+            return false;
+        }
+        self.mem.input_queue.push(key, hold, gap);
+        self.pressed = true;
+        true
+    }
+
+    /// Schedule a plain tap with the default hold and gap.
+    pub fn tap(&mut self, key: crate::input::KeypadKey) -> bool {
+        self.press(key, crate::input::DEFAULT_HOLD, crate::input::DEFAULT_GAP)
+    }
+
+    /// True when every scheduled press has been performed and released, i.e.
+    /// the machine has caught up with what was asked of it. Readable without
+    /// [`Capability::CONTROL_INPUT`] — knowing the pad is quiet is an
+    /// observation, not an action.
+    pub fn input_idle(&self) -> bool {
+        self.mem.input_queue.is_idle()
+    }
+
+    /// Abandon every scheduled press, releasing anything held. Refused without
+    /// [`Capability::CONTROL_INPUT`].
+    pub fn clear_input(&mut self) -> bool {
+        if !self.granted.contains(Capability::CONTROL_INPUT) {
+            return false;
+        }
+        let Machine { mem, .. } = self;
+        mem.input_queue.reset(&mut mem.keypad);
+        true
+    }
+
+    /// The picture as the LCD is showing it, RGBA, 160x144. Needs
+    /// [`Capability::OBSERVE`] — it is a look at the machine, and the most
+    /// expensive one available, so a plugin that wants it says so.
+    ///
+    /// Structure beats pixels for almost everything (see
+    /// [`crate::agent::observe`]), but a frame is the only honest answer when
+    /// there is no address for what you need to know.
+    pub fn frame_rgba(&self) -> Option<&[u8]> {
+        if !self.granted.contains(Capability::OBSERVE) {
+            return None;
+        }
+        Some(&self.mem.gpu.data[..])
     }
 
     /// Which capabilities this handle actually carries.
@@ -395,6 +462,8 @@ pub struct PluginStatus {
     pub detail: String,
     /// Whether this plugin has actually written emulated memory.
     pub has_written: bool,
+    /// Whether this plugin has actually pressed a button.
+    pub has_pressed: bool,
 }
 
 /// The thing a plugin implements.
@@ -484,15 +553,23 @@ impl std::fmt::Display for RegisterError {
 }
 
 impl Slot {
-    /// The user-visible write warning: `!` = may write your game, `!!` = has.
-    fn mark(&self) -> &'static str {
+    /// The user-visible warning markers, in severity order: `!` = may write
+    /// your game and `!!` = has, then `>` = may press the buttons and `>>` =
+    /// has. Both are sticky and both live on the *name*, because a frontend
+    /// truncates the detail to fit a panel and the warning must survive that.
+    fn mark(&self) -> String {
+        let mut s = String::new();
         if self.has_written {
-            "!!"
+            s.push_str("!!");
         } else if self.capabilities.contains(Capability::WRITE_MEMORY) {
-            "!"
-        } else {
-            ""
+            s.push('!');
         }
+        if self.has_pressed {
+            s.push_str(">>");
+        } else if self.capabilities.contains(Capability::CONTROL_INPUT) {
+            s.push('>');
+        }
+        s
     }
 }
 
@@ -501,6 +578,8 @@ struct Slot {
     capabilities: Capability,
     /// Sticky: set once this plugin has actually written memory.
     has_written: bool,
+    /// Sticky: set once this plugin has actually pressed a button.
+    has_pressed: bool,
     /// Cleared once [`Plugin::on_attach`] has run. Attachment is completed on
     /// the first dispatch rather than in `register`, because that is the first
     /// moment a [`Machine`] exists to hand it — `register` deliberately does not
@@ -556,6 +635,7 @@ impl PluginHost {
             plugin,
             capabilities: caps,
             has_written: false,
+            has_pressed: false,
             needs_attach: true,
         });
         Ok(())
@@ -618,6 +698,7 @@ impl PluginHost {
                 name: format!("{}{}", s.plugin.name(), s.mark()),
                 detail: s.plugin.status(),
                 has_written: s.has_written,
+                has_pressed: s.has_pressed,
             })
             .collect()
     }
@@ -651,6 +732,12 @@ impl PluginHost {
         self.slots.iter().any(|s| s.has_written)
     }
 
+    /// True if any attached plugin has actually pressed a button. The frontend
+    /// surfaces this so "the game is playing itself" is never a mystery either.
+    pub fn any_pressed_buttons(&self) -> bool {
+        self.slots.iter().any(|s| s.has_pressed)
+    }
+
     fn emit(&mut self, event: &Event) {
         if let Some(t) = self.trace.as_mut() {
             use std::io::Write as _;
@@ -676,6 +763,7 @@ impl PluginHost {
                 let mut machine = Machine::new(mem, slot.capabilities);
                 slot.plugin.on_attach(&mut machine);
                 slot.has_written |= machine.wrote;
+                slot.has_pressed |= machine.pressed;
             }
             if !slot.capabilities.contains(category) {
                 continue;
@@ -683,6 +771,7 @@ impl PluginHost {
             let mut machine = Machine::new(mem, slot.capabilities);
             slot.plugin.on_event(&event, &mut machine);
             slot.has_written |= machine.wrote;
+            slot.has_pressed |= machine.pressed;
         }
     }
 
@@ -719,11 +808,13 @@ impl PluginHost {
                 let mut machine = Machine::new(mem, slot.capabilities);
                 slot.plugin.on_attach(&mut machine);
                 slot.has_written |= machine.wrote;
+                slot.has_pressed |= machine.pressed;
             }
             let slot = &mut self.slots[idx];
             let mut machine = Machine::new(mem, slot.capabilities);
             let r = slot.plugin.on_serial(sent, &mut machine);
             slot.has_written |= machine.wrote;
+            slot.has_pressed |= machine.pressed;
             r
         };
         // Observers see the completed exchange, including what the partner
@@ -947,6 +1038,100 @@ mod tests {
         assert!(host.any_wrote_memory());
         assert!(host.status_line().unwrap().starts_with("writer!!:"));
         assert_eq!(m.debug_peek(0xC001), 0x42);
+    }
+
+    /// The whole point of routing input through the host: a plugin that did
+    /// not declare `CONTROL_INPUT` cannot press one, and one that did is
+    /// flagged in the status line the moment it does.
+    #[test]
+    fn button_presses_are_a_declared_capability_and_are_visible() {
+        struct Presser(Capability);
+        impl Plugin for Presser {
+            fn name(&self) -> &str {
+                "presser"
+            }
+            fn capabilities(&self) -> Capability {
+                self.0
+            }
+            fn on_event(&mut self, _e: &Event, m: &mut Machine) {
+                m.tap(crate::input::KeypadKey::A);
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        // Undeclared: refused, nothing queued, no marker.
+        let mut host = PluginHost::new();
+        host.register(Box::new(Presser(Capability::OBSERVE)))
+            .unwrap();
+        let mut m = mmu();
+        host.on_frame(&mut m);
+        assert_eq!(m.input_queue.pending(), 0);
+        assert!(!host.any_pressed_buttons());
+        assert_eq!(host.status_line().unwrap(), "presser");
+
+        // Declared: queued, and the name carries the `>>` marker.
+        let mut host = PluginHost::new();
+        host.register(Box::new(Presser(
+            Capability::OBSERVE | Capability::CONTROL_INPUT,
+        )))
+        .unwrap();
+        assert!(
+            host.status_line().unwrap().starts_with("presser>"),
+            "a plugin that may press buttons says so before it presses one"
+        );
+        let mut m = mmu();
+        host.on_frame(&mut m);
+        assert_eq!(m.input_queue.pending(), 1);
+        assert!(host.any_pressed_buttons());
+        assert!(host.status_line().unwrap().starts_with("presser>>"));
+        assert!(host.statuses()[0].has_pressed);
+    }
+
+    /// A press scheduled by a plugin has to actually reach the emulated
+    /// joypad register — the seam `PluginHost` alone cannot prove.
+    #[test]
+    fn a_scheduled_press_reaches_the_joypad_register() {
+        struct TapOnce(bool);
+        impl Plugin for TapOnce {
+            fn name(&self) -> &str {
+                "tap"
+            }
+            fn capabilities(&self) -> Capability {
+                Capability::OBSERVE | Capability::CONTROL_INPUT
+            }
+            fn on_event(&mut self, _e: &Event, m: &mut Machine) {
+                if !self.0 {
+                    self.0 = true;
+                    m.press(crate::input::KeypadKey::Start, 4, 4);
+                }
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+        let mut host = PluginHost::new();
+        host.register(Box::new(TapOnce(false))).unwrap();
+        let mut m = mmu();
+        host.on_frame(&mut m);
+        // Nothing is held until the host advances the queue for a frame.
+        m.keypad.wb(0x10);
+        assert_eq!(m.keypad.rb() & 0x08, 0x08);
+        m.advance_input();
+        m.keypad.wb(0x10);
+        assert_eq!(m.keypad.rb() & 0x08, 0, "Start reads low while held");
+        for _ in 0..4 {
+            m.advance_input();
+        }
+        m.keypad.wb(0x10);
+        assert_eq!(m.keypad.rb() & 0x08, 0x08, "and is released again");
     }
 
     #[test]

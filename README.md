@@ -183,6 +183,10 @@ The recognised keys:
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
 | `battles` | a path | Battle-preset file for the `gen1-battle` plugin. Unset uses the built-in presets. See [docs/gen1/battle-control.md](docs/gen1/battle-control.md). |
+| `agent_command` | a program + arguments | What the `agent` plugin runs to decide what to do. Unset means no driver, and the plugin declines to attach rather than sitting there inert. See [Claude plays Pokémon](docs/claude-plays.md). |
+| `agent_objective` | one sentence | What the agent is trying to achieve this session. |
+| `agent_max_calls` | a whole number (default `200`) | Hard ceiling on the agent's decisions. It runs unattended and each call costs money. |
+| `agent_max_usd` | a number (default `5.0`) | Hard ceiling on the agent's reported spend. |
 
 ### 🌐 Web (WebAssembly)
 
@@ -484,6 +488,46 @@ input.
 
 *(Image from [Imran Nazar — GameBoy Emulation in JavaScript](http://imrannazar.com/GameBoy-Emulation-in-JavaScript:-Memory).)*
 </details>
+
+---
+
+## 🤖 Claude plays Pokémon
+
+**An AI agent can watch this emulator and play it, and say what it is thinking while it does** —
+built to be streamed on Twitch, with a commentary panel a viewer can follow.
+
+```bash
+GB_PLUGINS=agent \
+GB_AGENT_CMD=tools/claude_plays/claude_api_adapter.py \
+GB_AGENT_OBJECTIVE="Get out of the house and choose a starter Pokemon" \
+  cargo run --release --example terminal -- ~/roms/blue.gb
+```
+
+`A` shows the commentary panel, `G` hands the controller back to a human.
+
+**The architecture is the interesting part.** A model takes seconds to answer; the Game Boy runs
+at 59.73 frames a second. So the agent does not press buttons — it returns a *goal, one line of
+commentary and up to twelve actions*, and cheap local code carries them out over hundreds of
+frames, coming back only when the plan finishes, fails, or the world does something unexpected.
+One action (`advance_text`) holds a whole conversation down. Measured on Pokémon Blue's opening:
+**about one model call per 1,100 emulated frames.**
+
+* **The emulator never waits.** A driver is polled, never awaited. With a driver that never
+  answers at all, emulation costs **0.24 ms/frame** against a 16.74 ms budget — asserted in CI.
+* **Hard caps live in the host, not the prompt**: calls, tokens, spend *and* wall clock, plus a
+  circuit breaker and escalating stuck-detection. A runaway loop is not possible.
+* **The agent is swappable.** The contract is *"here is the state, give me actions and
+  commentary"*. Claude through either shipped adapter, a scripted policy, a random walker, or
+  you. A deterministic scripted driver goes through the identical code path, which is how all of
+  this is tested for free.
+* **It presses buttons; it cannot write memory.** The plugin does not hold the capability, and
+  the status bar marks it `>>` the moment it presses anything.
+* **Everything the panel shows is treated as public and permanent** — a driver error reaches a
+  viewer as *"The agent hit a problem — trying again"* and never as a path, a key or a stack
+  trace.
+
+Full design, the OBS/Twitch recipe (canvas, bitrate, font size, what to capture) and the honest
+gaps: **[`docs/claude-plays.md`](docs/claude-plays.md)**.
 
 ---
 

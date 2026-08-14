@@ -365,6 +365,18 @@ pub struct Config {
     /// `T`. Off by default — the panel is opt-in — but somebody who plays with
     /// it up every session should not have to press a key every session.
     pub trainer: bool,
+    /// Program the `agent` plugin runs to decide what to do, with arguments,
+    /// space-separated. `None` means the agent plugin has no driver and will
+    /// not attach. See [`crate::agent`] and `docs/claude-plays.md`.
+    pub agent_command: Option<String>,
+    /// One sentence describing what the agent is trying to achieve this
+    /// session, handed to the driver every call.
+    pub agent_objective: Option<String>,
+    /// Hard ceiling on decisions the agent may make in one session. **The cap
+    /// is the point**: this runs unattended and every call costs money.
+    pub agent_max_calls: u32,
+    /// Hard ceiling on reported spend, in US dollars.
+    pub agent_max_usd: f64,
 }
 
 impl Default for Config {
@@ -389,6 +401,10 @@ impl Default for Config {
             gen1_trade: None,
             battles: None,
             trainer: false,
+            agent_command: None,
+            agent_objective: None,
+            agent_max_calls: 200,
+            agent_max_usd: 5.0,
         }
     }
 }
@@ -647,6 +663,35 @@ impl Config {
             } else {
                 Some(v.to_string())
             };
+        }
+
+        if let Some(v) = get("agent_command") {
+            let v = v.trim();
+            cfg.agent_command = if v.is_empty() || v.eq_ignore_ascii_case("off") {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
+        if let Some(v) = get("agent_objective") {
+            let v = v.trim();
+            cfg.agent_objective = if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            };
+        }
+        if let Some(v) = get("agent_max_calls") {
+            match v.trim().parse::<u32>() {
+                Ok(n) => cfg.agent_max_calls = n,
+                Err(_) => warn.push(bad("agent_max_calls", v, "a whole number")),
+            }
+        }
+        if let Some(v) = get("agent_max_usd") {
+            match v.trim().parse::<f64>() {
+                Ok(n) if n >= 0.0 => cfg.agent_max_usd = n,
+                _ => warn.push(bad("agent_max_usd", v, "a non-negative number")),
+            }
         }
 
         let mut unknown: Vec<&String> =

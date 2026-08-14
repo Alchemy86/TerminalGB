@@ -4,6 +4,9 @@ use std::sync::OnceLock;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+/// AI agent substrate — observation, action and commentary. See [`agent`].
+#[cfg(not(target_arch = "wasm32"))]
+pub mod agent;
 pub mod cpu;
 /// Minimal DEFLATE compressor for terminal transmission — see [`deflate`].
 pub mod deflate;

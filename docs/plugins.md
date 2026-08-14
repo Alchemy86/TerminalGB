@@ -50,14 +50,46 @@ cannot write a plugin in Python today.**
 
 ## 3. What a plugin may do
 
-Four capabilities, declared up front by `Plugin::capabilities` and **enforced**, not trusted:
+Five capabilities, declared up front by `Plugin::capabilities` and **enforced**, not trusted:
 
 | Capability | Grants | Notes |
 |---|---|---|
-| `OBSERVE` | receive [`Event`]s | `Frame`, `SerialTransfer` |
-| `READ_MEMORY` | `Machine::peek` / `peek_range` | does not tick the bus, so observing cannot perturb timing |
+| `OBSERVE` | receive [`Event`]s, and `Machine::frame_rgba` | `Frame`, `SerialTransfer` |
+| `READ_MEMORY` | `Machine::peek` / `peek_range` / `peek_bank` | does not tick the bus, so observing cannot perturb timing |
 | `WRITE_MEMORY` | `Machine::poke` | **can corrupt a save** |
 | `SERIAL_LINK` | `Plugin::on_serial` — *be the other Game Boy* | at most one plugin may hold it |
+| `CONTROL_INPUT` | `Machine::set_button` (raw latch) and `Machine::press` / `tap` / `clear_input` (scheduled in frames) — *play the game* | see below |
+
+### `CONTROL_INPUT`, and why there is exactly one input mechanism
+
+A press is not instantaneous. The game samples the joypad once a frame, a menu needs frames to
+settle, and holding a direction walks further than tapping it. So anything driving the game
+programmatically has to schedule presses **in frames** and wait for them to complete — and every
+such caller writing its own timer is how two mechanisms quietly diverge.
+
+There is therefore one latch and two levels onto it, both under `CONTROL_INPUT`:
+
+* `Machine::set_button(key, down)` — the raw hold/release, for a plugin that is genuinely
+  thinking frame by frame (the battle-control cinematic runner is).
+* `Machine::press(key, hold, gap)` — a press **scheduled in frames** through
+  `crate::input::InputQueue`, owned by the MMU and advanced by `Gameboy::frame` exactly once per
+  emulated frame *before* the frame runs, so a press is held for the whole of the frame the game
+  samples it in. A frontend reaches the same queue through `Gameboy::queue_press` / `tap`.
+
+**Use these rather than adding another** — an AI driver, a scripted test and a battle-control
+plugin all want this, and they must all mean the same thing by "a press".
+
+The queue is **not machine state**. It is external intent, exactly like plugin state, so it is
+not serialised and `Gameboy::load_state` clears it (releasing anything held).
+
+`Machine::input_idle()` is readable without the capability — knowing the pad is quiet is an
+observation, not an action. It is also the thing that makes a scheduled press composable: a
+driver waits for the pad to go quiet before reading state, rather than counting frames itself.
+
+One measured caution from the battle-control crew, worth honouring in anything that navigates a
+menu: **Gen 1's `HandleMenuInput` delays several frames after accepting a press**, so two presses
+eight frames apart look from outside exactly like the emulator dropping input. Space menu presses
+by around half a second — see [gen1/sharp-edges.md](gen1/sharp-edges.md#driving-the-game).
 
 `Machine` checks the calling plugin's declared set and refuses — `peek` returns `None`, `poke`
 returns `false` — rather than believing the plugin. A plugin that never declares `WRITE_MEMORY`
@@ -71,6 +103,11 @@ is one of them. A second registration fails with `RegisterError::LinkAlreadyClai
 
 - **Nothing loads implicitly.** `PluginHost` starts empty. A plugin is attached because a name
   appears in `plugins = …` in `config.toml` or in `GB_PLUGINS` — never by scanning a directory.
+- **Two things a plugin can do to your game, two markers, both on the name.** `!` = may write
+  memory, `!!` = has written; `>` = may press buttons, `>>` = has pressed. They sit on the
+  *name* rather than in the detail text precisely because a frontend truncates the detail to fit
+  a panel, and the one thing that must never be truncated away is the warning. See
+  [`claude-plays.md`](claude-plays.md) for the plugin that uses the second pair.
 - **The user can always see it.** The terminal frontend's Status panel gains **one `Plugin` row
   per attached plugin**, showing that plugin's own live status. A plugin holding `WRITE_MEMORY`
   is marked **`!`** ("may write your game") and one that has actually written is marked **`!!`**

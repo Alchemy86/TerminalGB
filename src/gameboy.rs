@@ -412,6 +412,11 @@ impl Gameboy {
     /// `updated` break always comes first. Only the LCD-off case changes, which
     /// is the whole bug.
     pub fn frame(&mut self) {
+        // Externally-scheduled button input is applied *before* the frame runs,
+        // so a press is held for the whole of the frame the game samples it in.
+        // One `Option` test when nothing is driving the game.
+        self.cpu.memory.advance_input();
+
         let waitticks = (4194304f64 / 1000.0 * 16.0).round() as u32;
         let mut ticks = 0;
         let mut total = 0u32;
@@ -530,6 +535,10 @@ impl Gameboy {
         // silently against a restored machine, so it is reset instead.
         if r.is_ok() {
             self.cpu.plugins.reset();
+            // Queued input is external intent aimed at a machine that no longer
+            // exists — the same argument as plugin state. Dropping it also
+            // releases anything the queue was holding down.
+            self.clear_input();
         }
         r
     }
@@ -608,6 +617,39 @@ impl Gameboy {
 
     pub fn keyup(&mut self, key: KeypadKey) {
         self.cpu.memory.keypad.keyup(key);
+    }
+
+    /// Schedule a button press in **emulated frames** — hold `key` down for
+    /// `hold` frames, then leave the pad idle for `gap`.
+    ///
+    /// This is the frontend's door onto the same queue a plugin reaches through
+    /// [`crate::plugin::Machine::press`], and the only supported way to drive
+    /// the game programmatically. See [`crate::input::InputQueue`].
+    pub fn queue_press(&mut self, key: KeypadKey, hold: u16, gap: u16) {
+        self.cpu.memory.input_queue.push(key, hold, gap);
+    }
+
+    /// Schedule a plain tap with the default hold and gap.
+    pub fn tap(&mut self, key: KeypadKey) {
+        self.cpu.memory.input_queue.tap(key);
+    }
+
+    /// Every scheduled press has been performed and released.
+    pub fn input_idle(&self) -> bool {
+        self.cpu.memory.input_queue.is_idle()
+    }
+
+    /// Abandon every scheduled press, releasing anything held.
+    pub fn clear_input(&mut self) {
+        let mem = &mut self.cpu.memory;
+        mem.input_queue.reset(&mut mem.keypad);
+    }
+
+    /// True once any attached plugin has actually pressed a button — the
+    /// frontend surfaces this so "the game is playing itself" is never a
+    /// mystery.
+    pub fn plugin_pressed_buttons(&self) -> bool {
+        self.cpu.plugins.any_pressed_buttons()
     }
 
     #[cfg(not(target_arch = "wasm32"))]

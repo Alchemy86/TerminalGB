@@ -141,3 +141,12 @@ harness = false
 name = "colosseum"
 path = "testharness/colosseum.rs"
 harness = false
+
+# Agent-substrate harness: proves observation, the action executor, the budget
+# cap, the circuit breaker and stuck detection end to end against a
+# hand-assembled Gen-1-shaped cartridge — deterministically, and with no
+# commercial ROM, so it runs in CI. See testharness/agent.rs.
+[[test]]
+name = "agent"
+path = "testharness/agent.rs"
+harness = false

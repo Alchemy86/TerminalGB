@@ -3,7 +3,7 @@ mod serial;
 mod timer;
 
 use crate::gpu::Gpu;
-use crate::input::Keypad;
+use crate::input::{InputQueue, Keypad};
 use crate::mbc;
 use crate::mmu::oamdma::OamDma;
 use crate::mmu::serial::Serial;
@@ -54,6 +54,10 @@ pub struct MemoryManagementUnit<'a> {
     /// OAM DMA ($FF46) — a timed 160 M-cycle transfer, see [`oamdma`].
     oam_dma: OamDma,
     pub keypad: Keypad,
+    /// Scheduled button presses from outside the machine — see
+    /// [`crate::input::InputQueue`]. Empty unless something is driving the
+    /// game programmatically, and **not** part of a save state.
+    pub input_queue: InputQueue,
     pub gpu: Gpu,
     #[cfg(not(target_arch = "wasm32"))]
     pub sound: Option<Sound>,
@@ -132,6 +136,7 @@ impl<'a> MemoryManagementUnit<'a> {
             timer: Timer::default(),
             oam_dma: OamDma::new(),
             keypad: Keypad::default(),
+            input_queue: InputQueue::default(),
             gpu: Gpu::new(),
             #[cfg(not(target_arch = "wasm32"))]
             sound: None,
@@ -661,6 +666,14 @@ impl<'a> MemoryManagementUnit<'a> {
         let prev = self.set_bus_ticking(false);
         self.wb(address, value);
         self.set_bus_ticking(prev);
+    }
+
+    /// Apply one frame's worth of externally-scheduled button input. Called by
+    /// the host **once per emulated frame, before the frame runs** — see
+    /// [`crate::input::InputQueue`]. Costs one `Option` test when nothing is
+    /// driving the game.
+    pub fn advance_input(&mut self) {
+        self.input_queue.advance(&mut self.keypad);
     }
 
     pub fn wb(&mut self, address: u16, value: u8) {

@@ -2279,3 +2279,73 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
 - **`gen1_trade --make-save` does not work on this box** (it stalls in Oak's speech, on the
   default branch too). The fixture at `/tmp/gameboy-gen1-trade/cableclub.sav` was produced
   earlier and is what the harness finds; regenerating it is an open problem.
+
+## AI agent substrate — "Claude plays Pokémon" (`src/agent/`, `src/screen/agent_view.rs`)
+
+- **Full design, OBS/Twitch recipe, honest gaps and the recorded run:
+  [`docs/claude-plays.md`](docs/claude-plays.md).** Read it before touching any of this.
+- **There is ONE way to drive the buttons from outside the machine, and it is
+  `crate::input::InputQueue`** — a plugin reaches it through `Machine::press` under the new
+  `Capability::CONTROL_INPUT`, a frontend through `Gameboy::queue_press`/`tap`. A press is
+  scheduled **in frames** because a frame is the granularity the game samples input at, and
+  `Gameboy::frame` advances the queue exactly once, *before* the frame runs. Anything else that
+  wants to drive the game (a battle-control plugin, a scripted test) uses this; three private
+  frame timers would be three subtly different definitions of "a press". The queue is **not**
+  machine state — same category as plugin state — so it is not serialised and `load_state`
+  clears it (releasing anything held).
+- **A plugin that presses buttons is visible.** `PluginStatus` gained `has_pressed`, and the
+  status-bar marker is now name + `!`/`!!` (may write / has written) + `>`/`>>` (may press / has
+  pressed). The marker lives on the *name* so panel truncation can never eat the warning.
+- **The agent declares `OBSERVE | READ_MEMORY | CONTROL_INPUT` and deliberately NOT
+  `WRITE_MEMORY`.** An agent that can poke RAM is not playing the game, and the host enforces
+  that rather than the author promising it.
+- **The architecture is plan-then-execute, and the numbers are the justification.** The model
+  takes seconds; the game runs at 59.73 Hz. The driver returns a goal, one line of commentary and
+  ≤12 actions; cheap local code carries them out over hundreds of frames and only returns to the
+  driver when the plan finishes, fails, or the world changes unexpectedly (battle started, map
+  changed). Measured on Pokémon Blue's opening: **~1 model call per 1,100 emulated frames**.
+  `advance_text` alone is most of that saving.
+- **The emulator NEVER blocks on the agent.** `Driver::submit`/`poll` must not block;
+  `CommandDriver` runs the child on its own thread and the emulator thread only does a
+  `try_recv`. Gated in CI by `testharness/agent.rs`: **0.24 ms/frame with a driver that never
+  answers**, against a 16.74 ms budget. Never "just await it here" — that is the same mistake as
+  putting a second clock inside the audio loop (see the audio section).
+- **Budget, breaker and stuck detection live in the HOST, never in the driver or the prompt**
+  (`src/agent/governor.rs`). Four independent ceilings — calls, tokens, spend, **wall clock**.
+  The wall clock is the one that matters: token and cost figures are *self-reported by the
+  driver*, so they are only ever a floor. A failure reported with **no call in flight is
+  ignored**, or a driver that misreports one trips the breaker in milliseconds.
+- **Drivers are swappable and the deterministic one came first.** `ScriptedDriver` (canned
+  replies + fake latency in frames) goes through the identical parse/clamp/execute path a real
+  model does, which is what makes every other part testable for free. Also `RandomDriver` and
+  `CommandDriver` (subprocess: state on stdin, plan on stdout). **No HTTP client in the crate** —
+  that would be a large new dependency in every build including wasm and FFI; the network lives
+  in a stdlib-only adapter under `tools/claude_plays/`.
+- **The `claude` CLI adapter is convenient and expensive: ~$0.078 for the first call and
+  ~$0.0086 after** (the 1-hour prompt cache), 9–22 s per call, because the CLI loads a whole
+  coding-agent system prompt every time. `claude_api_adapter.py` sends ~1.5 KB instead of ~18 KB.
+  Use the API adapter for a real broadcast.
+- **The commentary panel is designed for a stranger who arrived nine seconds ago**, not as a
+  log: a standing `GOAL` line, a `NOW` line, then a short dimmed history. Twitch/OBS specifics
+  (1920×1080, 30 fps, 4500 kbps, **terminal font 26–30 px ≈ 106×30 cells**, no mirror) are in
+  `docs/claude-plays.md` §6, and the layout is asserted at exactly those cell grids.
+- **Everything the panel can render is treated as public and permanent.** Two defences: driver
+  errors reach it only as a *category* (never the message, the command, the path or stderr — those
+  go to `GB_AGENT_LOG`), and `commentary::sanitise` scrubs credentials, paths, URLs, emails, IPs,
+  ANSI escapes and bidi overrides, dropping the line entirely if what is left is not prose.
+- **Three Gen-1 facts that cost real model calls to learn, now encoded in the prompt and in host
+  notes:** the naming screen needs **START** (mashing A types `AAAAA` for ever); a door fires its
+  warp when you step **through** it, so standing on the mat and pressing A does nothing; and
+  during the opening cutscene the position reads `(0,0)` with no warp table loaded, so walking in
+  every direction "failing" means *you are not in control*, not that you are walled in.
+- **Testing: `cargo test --release --test agent`** builds a **hand-assembled Gen-1-shaped
+  cartridge** — same RAM layout, a player that walks round a walled 8×8 room, no game data at all
+  — so the whole stack is proved in CI with no commercial ROM. WRAM boots full of noise, so the
+  fixture must zero `wIsInBattle`/`wObtainedBadges`/`wPlayerMoney` or the observer reports a
+  level-201 opponent and four badges. (It did.)
+- **Never point a run at `~/roms`** — `examples/claude_plays.rs` stages the ROM into `target/`
+  first, because the MBC writes a `.sav` beside it.
+- **`examples/claude_plays.rs` gotchas:** `--command` swallows every remaining argument, so it
+  must come last; and a "print what is new" display must key on a **monotonic counter**
+  (`Commentary::accepted()`), never on the length of the bounded history buffer — that bug hid
+  28,000 frames of a real run.
