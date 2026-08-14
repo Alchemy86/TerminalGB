@@ -53,7 +53,8 @@
 //! # Glyphs
 //!
 //! Only characters already used elsewhere in this frontend: box drawing
-//! (`─ │ ┌`), the block elements `█ ▌ ░`, the geometric shapes `● ○ ▸`, and `★`.
+//! (`─ │ ┌`), the block elements `█ ▌ ░`, the geometric shapes `● ○ ▸ ▲ ▼`, and
+//! `★`.
 //! All of them come from fonts a terminal already needs for the rest of the UI
 //! — nothing here wants a Nerd Font, and nothing is double-width.
 //!
@@ -1238,6 +1239,7 @@ pub fn opponent_lines<'a>(
     // what is still in their belt as about what is on the field. When the strip
     // of pictures is drawn above, this is its caption; when it is not, this is
     // the whole report.
+    lines.extend(catch_lines(state, width));
     if state.battle == BattleKind::Trainer {
         let l = team_line(state, width, true);
         if line_width(&l) > 0 {
@@ -1253,6 +1255,81 @@ pub fn opponent_lines<'a>(
         width,
     ) {
         lines.push(l);
+    }
+    lines
+}
+
+/// The live catch chance, one line per encounter, compared across the balls a
+/// player actually chooses between.
+///
+/// **Only for a wild encounter** — a trainer's Pokémon cannot be caught, and a
+/// percentage there would be worse than nothing. The number recomputes on every
+/// sample, so it moves as HP comes off and status lands, and a `▲` / `▼` says
+/// which way it went since the last look, because "watch it go up" was the ask.
+///
+/// The arithmetic is Gen 1's own, disassembled from the cartridge — see
+/// [`crate::trainer::capture`], including why a Great Ball and an Ultra Ball
+/// trade places depending on the target's HP.
+pub fn catch_lines<'a>(state: &TrainerState, width: usize) -> Vec<Line<'a>> {
+    let odds = state.catch_odds();
+    if odds.is_empty() || !state.catchable() {
+        return Vec::new();
+    }
+    let arrow = match state.catch_delta {
+        Some(d) if d > 0.0005 => Some(("▲", Color::Green)),
+        Some(d) if d < -0.0005 => Some(("▼", Color::Red)),
+        _ => None,
+    };
+    // Widest first: every ball with a decimal, then every ball rounded, then
+    // just the best one. The *comparison* is the decision a player is making,
+    // so it is the last thing to go, not the first.
+    let full: Vec<String> = odds
+        .iter()
+        .map(|o| format!("{} {:.1}%", o.ball.short(), o.chance * 100.0))
+        .collect();
+    let terse: Vec<String> = odds
+        .iter()
+        .map(|o| format!("{} {:.0}%", o.ball.short(), o.chance * 100.0))
+        .collect();
+    let best = odds
+        .iter()
+        .max_by(|a, b| a.chance.total_cmp(&b.chance))
+        .expect("odds is non-empty");
+    let tail = if arrow.is_some() { 2 } else { 0 };
+    let body = if full.join("  ").chars().count() + tail <= width {
+        full.join("  ")
+    } else if terse.join("  ").chars().count() + tail <= width {
+        terse.join("  ")
+    } else {
+        // Last resort: the number alone. `clamp_line` would truncate a `%` off
+        // the end, which reads as a different number entirely.
+        let bare = format!("{:.0}%", best.chance * 100.0);
+        let labelled = format!("CATCH {bare}");
+        if labelled.chars().count() + tail <= width {
+            labelled
+        } else {
+            bare
+        }
+    };
+    let mut spans = vec![Span::styled(
+        body,
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if let Some((glyph, colour)) = arrow {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(glyph, Style::default().fg(colour)));
+    }
+    let mut lines = vec![Line::from(spans)];
+    // The one thing worth spelling out: below a quarter of maximum HP the HP
+    // term saturates and no further chip damage helps at all. A player who does
+    // not know that keeps whittling for nothing.
+    if best.hp_maxed && width >= 30 {
+        lines.push(Line::from(Span::styled(
+            "HP is as low as it counts — status next",
+            dim(),
+        )));
     }
     lines
 }
@@ -2289,6 +2366,87 @@ mod tests {
         let text =
             plain(&body_lines(&st, Some(Focus::Party(other)), true, 38)).join("\n");
         assert!(!text.contains("MOD "), "{text}");
+    }
+
+    fn wild(catch_rate: u8, hp: u16, status: u8) -> TrainerState {
+        let mut o = mon(hp, 41);
+        o.name = "PIDGEY".into();
+        o.status = Status(status);
+        TrainerState {
+            in_game: true,
+            battle: BattleKind::Wild,
+            opponent: Some(o),
+            catch_rate: Some(catch_rate),
+            ..Default::default()
+        }
+    }
+
+    /// The catch chance is a wild-encounter thing only. A trainer's Pokémon
+    /// cannot be caught, so a percentage there would be worse than silence.
+    #[test]
+    fn the_catch_chance_is_only_shown_for_wild_encounters() {
+        let text = plain(&body_lines(
+            &wild(45, 41, 0),
+            Some(Focus::Opponent),
+            false,
+            38,
+        ))
+        .join("\n");
+        assert!(text.contains("POKé"), "{text}");
+        assert!(text.contains("GREAT") && text.contains("ULTRA"), "{text}");
+
+        let mut st = battling(); // a trainer battle
+        st.catch_rate = Some(45);
+        assert!(!st.catchable());
+        let text = plain(&body_lines(&st, Some(Focus::Opponent), false, 38)).join("\n");
+        assert!(!text.contains("POKé "), "{text}");
+        // And with no battle at all there is nothing to catch.
+        assert!(catch_lines(&filled_state(), 38).is_empty());
+    }
+
+    /// The number has to be seen to move — that was the request — so the
+    /// direction marker is part of the line and points the right way.
+    #[test]
+    fn the_catch_line_shows_which_way_the_number_moved() {
+        let mut st = wild(45, 41, 0);
+        st.catch_delta = Some(0.05);
+        assert!(plain(&catch_lines(&st, 38))[0].contains('▲'));
+        st.catch_delta = Some(-0.05);
+        assert!(plain(&catch_lines(&st, 38))[0].contains('▼'));
+        // No movement, and the first sample of an encounter, get no marker —
+        // an arrow that means nothing is worse than none.
+        st.catch_delta = Some(0.0);
+        assert!(!plain(&catch_lines(&st, 38))[0].contains('▲'));
+        st.catch_delta = None;
+        let l = plain(&catch_lines(&st, 38))[0].clone();
+        assert!(!l.contains('▲') && !l.contains('▼'), "{l}");
+    }
+
+    /// The comparison across balls is the decision being made, so it survives
+    /// as long as it can; only when it truly cannot fit does it fall back to
+    /// the best single number.
+    #[test]
+    fn the_catch_line_keeps_the_comparison_as_long_as_it_fits() {
+        let st = wild(45, 41, 0);
+        for w in 8usize..=60 {
+            for l in &catch_lines(&st, w) {
+                assert!(line_width(l) <= w, "width {w}: {:?}", plain(&[l.clone()]));
+            }
+        }
+        assert!(plain(&catch_lines(&st, 36))[0].contains("ULTRA"));
+        let narrow = plain(&catch_lines(&st, 16))[0].clone();
+        assert!(narrow.starts_with("CATCH"), "{narrow}");
+    }
+
+    /// Below a quarter of maximum HP the routine's HP term saturates and more
+    /// chip damage does nothing. Saying so is the difference between a number
+    /// and advice.
+    #[test]
+    fn the_panel_says_when_more_damage_will_not_help() {
+        let text = plain(&catch_lines(&wild(45, 1, 0), 38)).join("\n");
+        assert!(text.contains("as low as it counts"), "{text}");
+        let text = plain(&catch_lines(&wild(45, 41, 0), 38)).join("\n");
+        assert!(!text.contains("as low as it counts"), "{text}");
     }
 
     #[test]

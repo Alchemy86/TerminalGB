@@ -109,6 +109,16 @@ pub mod addr {
     /// `wEnemyMons` — six [`PARTY_MON_SIZE`]-byte `party_struct`s, the same
     /// layout as the player's party.
     pub const ENEMY_MONS: u16 = 0xD8A4;
+    /// `wEnemyMonActualCatchRate` — the byte Gen 1's capture routine actually
+    /// compares against.
+    ///
+    /// **Not the species' base catch rate.** It is loaded from the base stats
+    /// for an ordinary wild Pokémon, but bait and rocks move it in the Safari
+    /// Zone, so reading it is the only way to be right in both places. Verified
+    /// by disassembly rather than by symbol table: `ItemUsePokeBall` reads
+    /// exactly this address at `03:5777` and `03:5797` on this cartridge — see
+    /// [`super::capture`].
+    pub const ENEMY_ACTUAL_CATCH_RATE: u16 = 0xD007;
     /// `wEnemyMonStatMods` — in-battle stat stages, `7` is neutral
     /// (attack, defense, speed, special, accuracy, evasion).
     pub const ENEMY_STAT_MODS: u16 = 0xCD2E;

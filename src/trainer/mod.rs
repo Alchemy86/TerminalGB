@@ -45,6 +45,7 @@
 //! display, and the run-tracking (seed counters, "furthest gym") that an Ironmon
 //! run wants. Each is additive on top of this data.
 
+pub mod capture;
 pub mod derived;
 pub mod encounter;
 pub mod gen1;
@@ -161,6 +162,14 @@ pub struct TrainerState {
     /// left and what is coming next. Empty for a wild encounter, and empty
     /// while the enemy block has not yet passed its consistency check.
     pub enemy_team: Vec<TeamMon>,
+    /// `wEnemyMonActualCatchRate` during a **wild** encounter, and `None`
+    /// otherwise: a trainer's Pokémon cannot be caught, so a catch chance there
+    /// is noise at best and a lie at worst. See [`capture`].
+    pub catch_rate: Option<u8>,
+    /// How the best available ball's chance has moved since the last sample,
+    /// so the panel can show which way it is going. `None` on the first sample
+    /// of an encounter, when there is nothing to compare against.
+    pub catch_delta: Option<f64>,
     /// True when a trainer battle is on but the roster did not read back
     /// consistently — so the panel can say "unknown" instead of showing
     /// nothing, which reads as "no team".
@@ -204,6 +213,40 @@ impl TrainerState {
     pub fn badge_count(&self) -> u32 {
         self.badges.count_ones()
     }
+
+    /// Whether this is a wild encounter whose catch chance is worth showing.
+    pub fn catchable(&self) -> bool {
+        self.catch_rate.is_some()
+            && self.battle == BattleKind::Wild
+            && self.opponent.is_some()
+    }
+
+    /// The odds for every ball worth comparing, best last — an empty vector
+    /// when this is not a catchable encounter.
+    pub fn catch_odds(&self) -> Vec<capture::Odds> {
+        let (Some(rate), Some(o)) = (self.catch_rate, self.opponent.as_ref()) else {
+            return Vec::new();
+        };
+        if self.battle != BattleKind::None && self.battle != BattleKind::Wild {
+            return Vec::new();
+        }
+        let t = capture::Target::of(o, rate);
+        capture::ball_set(self.battle_type == gen1::BattleType::Safari)
+            .iter()
+            .map(|&b| capture::odds(t, b))
+            .collect()
+    }
+
+    /// The chance the best of those balls has, which is what the direction
+    /// marker tracks.
+    pub fn best_catch_chance(&self) -> Option<f64> {
+        self.catch_odds()
+            .into_iter()
+            .map(|o| o.chance)
+            .fold(None, |acc: Option<f64>, c| {
+                Some(acc.map_or(c, |a| a.max(c)))
+            })
+    }
 }
 
 /// The plugin.
@@ -228,6 +271,10 @@ pub struct TrainerPlugin {
     /// Set once by [`TrainerPlugin::on_attach`] so the frontend can explain the
     /// refusal instead of showing an empty panel.
     detected_title: String,
+    /// The best ball's chance at the previous sample, so the panel can show the
+    /// direction of travel. Cleared the moment an encounter ends, so a stale
+    /// arrow can never survive into the next one.
+    last_catch: Option<f64>,
 }
 
 impl TrainerPlugin {
@@ -250,6 +297,7 @@ impl TrainerPlugin {
             encounter: None,
             encounter_seq: 0,
             detected_title: String::new(),
+            last_catch: None,
         }
     }
 
@@ -431,6 +479,9 @@ impl TrainerPlugin {
         }
 
         st.battle = BattleKind::from_flag(view.peek(addr::IS_IN_BATTLE));
+        // Read before the battle branch so it is cleared on every sample that
+        // is not a live wild encounter.
+        let mut catch_rate = None;
         st.battle_type = BattleType::from_flag(view.peek(addr::BATTLE_TYPE));
         if st.battle != BattleKind::None {
             let mut nick = [0u8; gen1::NAME_LENGTH as usize];
@@ -451,6 +502,9 @@ impl TrainerPlugin {
                 &nick,
             ));
 
+            if st.battle == BattleKind::Wild {
+                catch_rate = Some(view.peek(addr::ENEMY_ACTUAL_CATCH_RATE));
+            }
             if st.battle == BattleKind::Trainer {
                 let mut tname = [0u8; gen1::NAME_LENGTH as usize];
                 view.peek_into(addr::TRAINER_NAME, &mut tname);
@@ -459,6 +513,17 @@ impl TrainerPlugin {
             }
         }
 
+        st.catch_rate = catch_rate;
+        // The direction of travel, which is the half of this the captain asked
+        // for: a number that moves is only useful if you can see it move.
+        let now = st
+            .best_catch_chance()
+            .filter(|_| st.battle == BattleKind::Wild);
+        st.catch_delta = match (self.last_catch, now) {
+            (Some(prev), Some(c)) => Some(c - prev),
+            _ => None,
+        };
+        self.last_catch = now;
         self.state = st;
     }
 

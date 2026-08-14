@@ -637,6 +637,7 @@ const EVENT_FLAGS: u16 = 0xD747;
 /// loaded by the game itself, exactly as in play.
 fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
     println!("\n[5] a real wild encounter");
+    let tables = gameboy::trainer::rom::RomTables::new(rom.to_vec());
 
     let save_path = rom_path.with_extension("sav");
     for ext in ["sav", "srm", "gbsave"] {
@@ -811,7 +812,19 @@ fn check_a_real_wild_encounter(rom_path: &Path, rom: &[u8]) -> usize {
             break;
         };
         seen += 1;
-        bad += verify_encounter(&mut gb, &enc, steps);
+        // A wild encounter takes a scripted walk to reach, so when one is
+        // wanted for a *screenshot* it is far cheaper to save it here than to
+        // build a second route. `GB_TRAINER_STATE=<path>` writes a save state
+        // at the first encounter and changes nothing else.
+        if seen == 1 {
+            if let Ok(path) = std::env::var("GB_TRAINER_STATE") {
+                match std::fs::write(&path, gb.save_state()) {
+                    Ok(()) => println!("      (save state written to {path})"),
+                    Err(e) => eprintln!("      (could not write {path}: {e})"),
+                }
+            }
+        }
+        bad += verify_encounter(&mut gb, &enc, steps, &tables);
         last = Some(enc);
         // Out of the battle: RUN is the bottom-right entry of the battle menu.
         // Then check the verdict does not outlive the Pokémon it describes.
@@ -903,6 +916,7 @@ fn verify_encounter(
     gb: &mut Gameboy,
     enc: &gameboy::trainer::encounter::WildEncounter,
     step: u32,
+    tables: &gameboy::trainer::rom::RomTables,
 ) -> usize {
     // `wEnemyMonSpecies` $CFE5, `wEnemyMonDVs` $CFF1, `wEnemyMonLevel` $CFF3.
     let species = gb.peek(0xCFE5);
@@ -940,6 +954,65 @@ fn verify_encounter(
     // could actually be thrown; `wBattleType` 0 is an ordinary encounter.
     check("wIsInBattle", "1".to_string(), gb.peek(0xD057).to_string());
     check("wBattleType", "0".to_string(), gb.peek(0xD05A).to_string());
+
+    // The catch chance rests on one address claim — that `$D007` is the byte
+    // `ItemUsePokeBall` compares (`wEnemyMonActualCatchRate`). Check it against
+    // the *cartridge's own* `BaseStats` entry rather than against another copy
+    // of our assumption: offset 8 of a base-stats entry is the catch rate
+    // (`data/pokemon/base_stats/*.asm`). For an ordinary wild encounter the two
+    // must be equal; only bait and rocks in the Safari Zone move it.
+    let live_rate = gb.peek(gameboy::trainer::gen1::addr::ENEMY_ACTUAL_CATCH_RATE);
+    match tables.base_stats(species).map(|e| e[8]) {
+        Some(from_rom) => check(
+            "wEnemyMonActualCatchRate vs BaseStats",
+            live_rate.to_string(),
+            from_rom.to_string(),
+        ),
+        None => {
+            eprintln!("      FAIL no BaseStats entry for species {species:#04X}");
+            bad += 1;
+        }
+    }
+    // …and the odds must be a real probability that moves the way the routine
+    // says: chipping HP and landing sleep can only help.
+    {
+        use gameboy::trainer::capture::{odds, Ball, Target};
+        use gameboy::trainer::gen1::Status;
+        let hp = ((gb.peek(0xCFE6) as u16) << 8) | gb.peek(0xCFE7) as u16;
+        let max_hp = ((gb.peek(0xCFF4) as u16) << 8) | gb.peek(0xCFF5) as u16;
+        let full = Target {
+            catch_rate: live_rate,
+            hp: max_hp,
+            max_hp,
+            status: Status(0),
+        };
+        let hurt = Target { hp: 1, ..full };
+        let asleep = Target {
+            status: Status(0x04),
+            ..hurt
+        };
+        for ball in [Ball::Poke, Ball::Great, Ball::Ultra] {
+            let (a, b, c) = (
+                odds(full, ball).chance,
+                odds(hurt, ball).chance,
+                odds(asleep, ball).chance,
+            );
+            if !((0.0..=1.0).contains(&a) && a <= b && b <= c) {
+                eprintln!(
+                    "      FAIL {ball:?} odds are not monotone: full {a:.4} \
+                     hurt {b:.4} asleep {c:.4}"
+                );
+                bad += 1;
+            }
+        }
+        println!(
+            "      catch rate {live_rate} (matches BaseStats), {hp}/{max_hp} HP: \
+             POKé {:.1}% -> {:.1}% at 1 HP -> {:.1}% asleep",
+            odds(Target { hp, ..full }, Ball::Poke).chance * 100.0,
+            odds(hurt, Ball::Poke).chance * 100.0,
+            odds(asleep, Ball::Poke).chance * 100.0
+        );
+    }
 
     println!(
         "      step {step:>3}: {} L{} wEnemyMonDVs ${hi:02X}{lo:02X} -> DV {} -> {}",

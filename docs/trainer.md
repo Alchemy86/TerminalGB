@@ -53,6 +53,14 @@ which direction and by how many, for the opponent (`MOD`) and for your own activ
 reconstructed "before" value, and for the Gen 1 ratios (`-1` is two thirds, not a half; `+1`
 is 1.5×, so up and down do not cancel).
 
+**Catch chance (wild encounters only).** Live odds for a Poké, Great and Ultra
+Ball, recomputed every sample so they move as HP comes off and status lands, with
+`▲` / `▼` for the direction since the last look. **Only for a wild encounter** —
+a trainer's Pokémon cannot be caught, so a percentage there would be worse than
+nothing. See [Catch chance](#catch-chance) for where the arithmetic came from.
+
+![a wild encounter with the catch chance](trainer-panel/4-wild-catch-chance.png)
+
 **The opposing trainer's team.** In a trainer battle the roster is read from the enemy party
 block and drawn as a row of small sprites in its own band, with a `TEAM ● ○ ?  n left` line in
 the opponent section. Standing, fainted and *unreadable* are three different glyphs — "beaten"
@@ -251,6 +259,63 @@ where it is, the image is flushed after `terminal.draw` and covers the text anyw
 picture that stops being drawn is explicitly deleted (`a=d,d=i`) with a full repaint, because
 a Kitty placement lives until it is deleted and redrawing the cells under it does not remove
 it.
+
+---
+
+## Catch chance
+
+**Disassembled from the cartridge, not taken from a wiki.** Gen 1's capture code
+is unlike every later generation's in ways a modern formula gets confidently
+wrong, so `ItemUsePokeBall` was located in the player's own ROM (bank 3, by its
+`ld a,200` / `ld a,150` threshold pair, which occurs exactly once) and read
+instruction by instruction. [`src/trainer/capture.rs`](../src/trainer/capture.rs)
+carries the listing with the addresses it was read from, cross-referenced to
+`pret/pokered`'s `engine/items/item_effects.asm`.
+
+Three things the disassembly settles, each of which a plausible-looking formula
+gets wrong:
+
+1. **The ball check is a resampling loop, not a rejection.** `jr c, .loop` at
+   `03:570E` jumps *backwards to the `call Random`*. A Great Ball does not fail
+   when the first random byte exceeds 200 — it draws again. The ball's effect
+   there is to make that byte uniform on `0..=200` (Great) or `0..=150` (Ultra
+   and Safari), which makes a low byte likelier and is **help**. Read as a
+   failure it makes every Great and Ultra number too low.
+2. **The status bonus is subtracted, and can win outright.** `sub c` then
+   `jp c` at `03:5729`: a random byte *below* the bonus catches the Pokémon with
+   nothing else checked. Sleep and freeze are worth 25, every other status 12.
+3. **The shake count is cosmetic.** Everything from `03:578D` runs after the
+   outcome is already decided. "Aww! It appeared to be caught!" is three shakes,
+   not a near miss.
+
+Two consequences worth knowing, both of which fall straight out of the routine
+and neither of which is intuitive: a **Great Ball beats an Ultra Ball at full
+health** (its HP divisor is 8 rather than 12), and an **Ultra Ball beats a Great
+Ball once the target is nearly down** (its tighter resampling bound is all that
+is left to matter). At a catch rate of 255 with a Poké Ball, one hit point is a
+**guaranteed** catch — the HP term overflows a byte and `03:5780` jumps straight
+to `.captured`.
+
+The number quoted is **exact, not sampled**: a closed form over the routine's own
+integer arithmetic, assuming the up-to-three bytes from `Random` are independent
+and uniform (which is the only assumption under which a single number can be
+quoted at all, and it is stated in the module). The closed form is checked
+against a literal transcription of the routine by enumerating **every reachable
+random pair** across nine states and five ball types, and the worked cases in
+the tests are derived from the disassembly rather than from the implementation.
+
+**Verified against the running game**, not only in unit tests: harness check [5]
+walks a real cartridge into real wild encounters on Route 1 and asserts that
+`wEnemyMonActualCatchRate` (`$D007`, the byte the routine compares) equals the
+species' catch rate in the cartridge's own `BaseStats` table — the one address
+claim the feature rests on — and that the odds are a real probability that only
+improves as HP falls and status lands. `GB_TRAINER_STATE=<path>` on that harness
+writes a save state at the first encounter, which is how the screenshot above
+was taken.
+
+Below a quarter of maximum HP the HP term saturates and further chip damage does
+nothing at all; the panel says so, because a player who does not know that keeps
+whittling for no gain.
 
 ---
 

@@ -1501,6 +1501,24 @@ another branch; when those land, this belongs beside them.)
   so up and down do not cancel) and the unmodified value is not recoverable by dividing back
   out. Stages are only ever read from the battle structures, never from a party copy — they do
   not survive a switch.
+- **Gen 1 capture odds were DISASSEMBLED from the cartridge, not looked up**
+  (`src/trainer/capture.rs`). `ItemUsePokeBall` sits in bank 3 and is found by its
+  `ld a,200` / `ld a,150` threshold pair, which occurs exactly once in the ROM (`03:570B`).
+  Three things a modern formula gets wrong: (1) **`jr c, .loop` at `03:570E` jumps BACKWARDS
+  to `call Random`** — the ball threshold is a *resampling loop*, not a failure, so a Great
+  Ball makes the first byte uniform on `0..=200` and that is help, not a hurdle; (2) the
+  status bonus is **subtracted** (`sub c` / `jp c` at `03:5729`) and a byte below it catches
+  outright — 25 for sleep/freeze, 12 for anything else; (3) the shake count from `03:578D` is
+  **cosmetic**, computed after the outcome is decided. Consequences: a Great Ball beats an
+  Ultra Ball at full HP (divisor 8 vs 12) and loses to it at low HP (bound 200 vs 150), and
+  catch rate 255 at 1 HP with a Poké Ball is a *guaranteed* catch. The quoted probability is a
+  closed form checked against a literal transcription by enumerating every reachable random
+  pair. `wEnemyMonActualCatchRate` is `$D007` — **not** the species' base catch rate, because
+  Safari bait and rocks move it; harness check [5] asserts the two agree in a real wild
+  encounter, which is the one address claim the feature rests on.
+- **`GB_TRAINER_STATE=<path>` on `cargo test --release --test trainer`** writes a save state at
+  the first real wild encounter. A wild encounter costs a scripted walk to reach, so that is
+  far cheaper than building a second route when one is wanted for a screenshot.
 - **Driving a real cartridge into a real battle, headlessly:**
   `cargo run --release --example trainer_layout -- --rom <rom> --to-battle`. Mashing Start/A
   plays Gen 1's intro on its own; a **per-map-biased** random walk then finds the doorways

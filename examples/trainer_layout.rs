@@ -542,6 +542,126 @@ fn sprites(rom: &str, out_dir: &str) {
     }
 }
 
+/// Walk a real cartridge into a **wild** encounter and check the catch
+/// arithmetic against the game's own data.
+///
+/// Two independent things are checked, and both have to hold:
+///
+/// 1. `wEnemyMonActualCatchRate` (`$D007`, the byte `ItemUsePokeBall` compares)
+///    equals the species' catch rate in the cartridge's `BaseStats` table.
+///    That is the address claim, checked against the ROM rather than against
+///    another copy of our own assumption.
+/// 2. The odds move the way the routine says as the encounter goes on.
+///
+/// ```text
+/// cargo run --release --example trainer_layout -- --rom <rom> --wild
+/// ```
+fn to_wild(rom: &str, seed0: u64) {
+    use gameboy::trainer::capture::{ball_set, odds, Ball, Target};
+    let path = std::path::PathBuf::from(rom);
+    let data = std::fs::read(&path).expect("read the ROM");
+    for ext in ["sav", "srm", "gbsave"] {
+        let _ = std::fs::remove_file(path.with_extension(ext));
+    }
+    let tables = gameboy::trainer::rom::RomTables::new(data.clone());
+    let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
+    let mut plugin = gameboy::trainer::TrainerPlugin::new(data);
+    plugin.set_active(true);
+    gb.add_plugin(Box::new(plugin)).expect("attach");
+
+    let press = |gb: &mut gameboy::gameboy::Gameboy, k: gameboy::KeypadKey, gap: u32| {
+        gb.keydown(k);
+        for _ in 0..4 {
+            gb.frame();
+        }
+        gb.keyup(k);
+        for _ in 0..gap {
+            gb.frame();
+        }
+    };
+    use gameboy::KeypadKey::*;
+    for step in 0..400u32 {
+        press(&mut gb, if step % 2 == 0 { Start } else { A }, 20);
+        if gb.peek(0xDA41) != 0 || gb.peek(0xDA43) != 0 || gb.peek(0xDA44) != 0 {
+            break;
+        }
+    }
+    let mut seed = seed0;
+    for step in 0..30000u32 {
+        if gb.peek(0xD057) == 1 && gb.peek(0xCFE5) != 0 {
+            println!("wild battle after {step} rounds");
+            break;
+        }
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let r = (seed >> 33) % 10;
+        let r = match (gb.peek(0xD35E), r) {
+            (0x25, 0..=3) => 4,
+            (0x26, 4) => 0,
+            (0x28, 9) => 7,
+            _ => r,
+        };
+        match r {
+            0..=3 => press(&mut gb, Up, 16),
+            4 => press(&mut gb, Down, 16),
+            5 => press(&mut gb, Left, 16),
+            6 => press(&mut gb, Right, 16),
+            7 | 8 => press(&mut gb, A, 16),
+            _ => press(&mut gb, B, 16),
+        }
+    }
+    if gb.peek(0xD057) != 1 {
+        println!("never reached a wild battle");
+        return;
+    }
+    let species = gb.peek(0xCFE5);
+    let live = gb.peek(0xD007);
+    // Offset 8 of a `BaseStats` entry is the catch rate
+    // (`data/pokemon/base_stats/*.asm`).
+    let from_rom = tables.base_stats(species).map(|e| e[8]);
+    println!(
+        "species {species:#04X} {}: wEnemyMonActualCatchRate($D007) = {live}, \
+         BaseStats catch rate = {from_rom:?}  {}",
+        tables.species_name(species),
+        if Some(live) == from_rom {
+            "AGREE"
+        } else {
+            "MISMATCH"
+        }
+    );
+    let p = gb.plugin::<gameboy::trainer::TrainerPlugin>().unwrap();
+    let st = p.state();
+    let o = st.opponent.as_ref().unwrap();
+    println!("opponent {} L{} {}/{}", o.name, o.level, o.hp, o.max_hp);
+    for b in ball_set(false) {
+        let full = odds(Target::of(o, live), *b);
+        println!("  {:<6} now {:.2}%", b.short(), full.chance * 100.0);
+    }
+    // The same target at one hit point and asleep — the direction the panel
+    // promises the number moves.
+    let mut hurt = Target::of(o, live);
+    hurt.hp = 1;
+    println!(
+        "  at 1 HP:      POKé {:.2}%",
+        odds(hurt, Ball::Poke).chance * 100.0
+    );
+    hurt.status = gameboy::trainer::gen1::Status(0x04);
+    println!(
+        "  at 1 HP asleep: POKé {:.2}%",
+        odds(hurt, Ball::Poke).chance * 100.0
+    );
+    let inner = 38;
+    println!("┌{}┐", "─".repeat(inner));
+    for l in tv::plain(&tv::header_lines(st, "Pokémon Blue", inner)) {
+        println!("│{l:<inner$}│");
+    }
+    for l in tv::plain(&tv::body_lines(st, tv::focus_at(st, 0), false, inner)) {
+        println!("│{l:<inner$}│");
+    }
+    println!("└{}┘", "─".repeat(inner));
+}
+
 fn key_for(c: char) -> Option<gameboy::KeypadKey> {
     use gameboy::KeypadKey::*;
     Some(match c {
@@ -569,6 +689,15 @@ fn main() {
     if let Some(rom) = flag("--rom") {
         if let Some(dir) = flag("--sprites") {
             sprites(&rom, &dir);
+            return;
+        }
+        if args.iter().any(|a| a == "--wild") {
+            to_wild(
+                &rom,
+                flag("--seed")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0x5EED_1234),
+            );
             return;
         }
         if args.iter().any(|a| a == "--to-battle") {
