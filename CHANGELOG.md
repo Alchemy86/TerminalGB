@@ -34,16 +34,26 @@ history. See [Credits & lineage](README.md#credits--lineage).
     Two adapters ship in `tools/claude_plays/`; no HTTP client was added to the crate.
   - **Everything the panel can render is treated as public and permanent**: driver failures reach
     a viewer as a category, and every line is scrubbed of credentials, paths, URLs and escapes.
-- **`Capability::CONTROL_INPUT` and one shared input mechanism** (`crate::input::InputQueue`).
-  Presses are scheduled in *frames* and applied once per emulated frame before the frame runs, so
-  an AI driver, a scripted test and a battle-control plugin cannot invent three different
-  definitions of "a press". A plugin that may press buttons is marked `>` in the status panel,
-  and `>>` once it has.
+- **`Machine::press`, a scheduled level on the battle crew's `Capability::CONTROL_INPUT`**
+  (`crate::input::InputQueue`). Presses are scheduled in *frames* and applied once per emulated
+  frame before the frame runs, so an AI driver, a scripted test and a battle-control script
+  cannot invent three different definitions of "a press" — same capability and same latch as
+  `set_button`, which stays the raw hold/release for anything genuinely thinking frame by frame.
+  A plugin that may press buttons is marked `>` in the status panel and `>>` once it has, beside
+  the existing `!` / `!!` for memory.
 - **`testharness/agent.rs`** — the whole stack proved in CI against a **hand-assembled
   Gen-1-shaped cartridge** (no commercial ROM, no game data): observation, the executor, the
   budget cap, the circuit breaker and stuck detection.
 - **`examples/claude_plays.rs`** — headless runner for scripted, random or real-model runs, with
   screenshots, an NDJSON decision log and a printed run summary.
+- **`docs/gen1/agent-play.md`** filled in — the page the battle-control crew reserved for this
+  work, answering its seven questions and recording the Gen 1 facts an agent needs that a script
+  does not: the naming screen wants START, a door fires on the step *through* it, and
+  `wCurMapHeight`/`wCurMapWidth` are the real "am I in control?" test because `wCurMap` already
+  reads the bedroom during Oak's speech.
+- **`agent` object in the telemetry record** — phase, decisions, calls, failures, tokens, spend,
+  budget fraction and halt reason, beside `speed_pct` so the invariant that a *thinking* agent
+  costs the emulator nothing is checkable. A field addition, so no `SCHEMA_VERSION` bump.
 
 ### Fixed
 - **APU corner cases: SameSuite 50/76 → 57/76.** Three independent accuracy bugs, none of
