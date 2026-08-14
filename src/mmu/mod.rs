@@ -47,7 +47,6 @@ impl DMAType {
 pub struct MemoryManagementUnit<'a> {
     wram: [u8; WRAM_SIZE],
     zram: [u8; ZRAM_SIZE],
-    hdma: [u8; 4],
     pub inte: u8,
     pub intf: u8,
     pub serial: Serial<'a>,
@@ -59,9 +58,17 @@ pub struct MemoryManagementUnit<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     pub sound: Option<Sound>,
     hdma_status: DMAType,
+    /// HDMA1/2 and HDMA3/4 are not a shadow of the registers — they *are* the
+    /// registers, and the transfer advances them. That is what lets a second
+    /// `$FF55` write with no re-write of HDMA1-4 continue where the last
+    /// transfer stopped (SameSuite `dma/gbc_dma_cont`).
     hdma_src: u16,
     hdma_dst: u16,
     hdma_len: u8,
+    /// One-shot: an HBlank transfer armed while the PPU was already in mode 0
+    /// moves its first block immediately rather than waiting for the *next*
+    /// mode-0 entry (SameSuite `dma/hdma_mode0`, `dma/hdma_lcd_off`).
+    hdma_run_block: bool,
     wrambank: usize,
     pub mbc: Box<dyn mbc::MemoryBankController + 'static>,
     pub gbmode: GbMode,
@@ -113,7 +120,6 @@ impl<'a> MemoryManagementUnit<'a> {
         let mut res = MemoryManagementUnit {
             wram: [0; WRAM_SIZE],
             zram: [0; ZRAM_SIZE],
-            hdma: [0; 4],
             wrambank: 1,
             inte: 0,
             intf: 0,
@@ -132,6 +138,7 @@ impl<'a> MemoryManagementUnit<'a> {
             hdma_dst: 0,
             hdma_status: DMAType::NoDma,
             hdma_len: 0xFF,
+            hdma_run_block: false,
             undocumented_cgb_regs: [0; 3],
             bus_tick_enabled: false,
             bus_ticked: 0,
@@ -312,7 +319,6 @@ impl<'a> MemoryManagementUnit<'a> {
     pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
         w.bytes(&self.wram);
         w.bytes(&self.zram);
-        w.bytes(&self.hdma);
         w.u8(self.inte);
         w.u8(self.intf);
         w.usize(self.wrambank);
@@ -323,6 +329,7 @@ impl<'a> MemoryManagementUnit<'a> {
         w.u16(self.hdma_src);
         w.u16(self.hdma_dst);
         w.u8(self.hdma_len);
+        w.bool(self.hdma_run_block);
         w.bytes(&self.undocumented_cgb_regs);
         // Sub-instruction timer stepping (mem_timing fix). These are reset to
         // false/0 between instructions, so at a normal frame-boundary save they
@@ -367,7 +374,6 @@ impl<'a> MemoryManagementUnit<'a> {
     ) -> Result<(), crate::savestate::StateError> {
         r.fill(&mut self.wram)?;
         r.fill(&mut self.zram)?;
-        r.fill(&mut self.hdma)?;
         self.inte = r.u8()?;
         self.intf = r.u8()?;
         self.wrambank = r.usize()?;
@@ -378,6 +384,7 @@ impl<'a> MemoryManagementUnit<'a> {
         self.hdma_src = r.u16()?;
         self.hdma_dst = r.u16()?;
         self.hdma_len = r.u8()?;
+        self.hdma_run_block = r.bool()?;
         r.fill(&mut self.undocumented_cgb_regs)?;
         self.bus_tick_enabled = r.bool()?;
         self.bus_ticked = r.u32()?;
@@ -704,7 +711,8 @@ impl<'a> MemoryManagementUnit<'a> {
 
     fn hdma_read(&self, a: u16) -> u8 {
         match a {
-            0xFF51..=0xFF54 => self.hdma[(a - 0xFF51) as usize],
+            // HDMA1-4 are write-only (Pan Docs, "VRAM DMA transfers") — the
+            // address counters behind them are not readable.
             0xFF55 => {
                 self.hdma_len
                     | if self.hdma_status == DMAType::NoDma {
@@ -713,40 +721,47 @@ impl<'a> MemoryManagementUnit<'a> {
                         0
                     }
             }
-            _ => panic!("The address {:04X} should not be handled by hdma_read", a),
+            _ => 0xFF,
         }
     }
 
     fn hdma_write(&mut self, a: u16, v: u8) {
         match a {
-            0xFF51 => self.hdma[0] = v,
-            0xFF52 => self.hdma[1] = v & 0xF0,
-            0xFF53 => self.hdma[2] = v & 0x1F,
-            0xFF54 => self.hdma[3] = v & 0xF0,
+            // The low 4 bits of the source and the low 4 bits *and* the top 3
+            // bits of the destination are dropped by the hardware — the
+            // destination is a 13-bit offset into VRAM. Writing them here, into
+            // the live counters, is what SameSuite `dma/gdma_addr_mask` checks.
+            0xFF51 => self.hdma_src = (self.hdma_src & 0x00FF) | ((v as u16) << 8),
+            0xFF52 => self.hdma_src = (self.hdma_src & 0xFF00) | ((v & 0xF0) as u16),
+            0xFF53 => {
+                self.hdma_dst = (self.hdma_dst & 0x00FF) | (((v & 0x1F) as u16) << 8)
+            }
+            0xFF54 => self.hdma_dst = (self.hdma_dst & 0xFF00) | ((v & 0xF0) as u16),
             0xFF55 => {
-                if self.hdma_status == DMAType::Hdma {
-                    if v & 0x80 == 0 {
-                        self.hdma_status = DMAType::NoDma;
-                    };
+                // Bits 0-6 are a real register and are written whatever bit 7
+                // says — including on the write that *cancels* a running
+                // HBlank transfer, which is why SameSuite `dma/hdma_lcd_off`
+                // reads back $80 (not $80 | the blocks that were left) after
+                // stopping one with a `$00` write.
+                self.hdma_len = v & 0x7F;
+                if self.hdma_status == DMAType::Hdma && v & 0x80 == 0 {
+                    self.hdma_status = DMAType::NoDma;
+                    self.hdma_run_block = false;
                     return;
                 }
-                let src = ((self.hdma[0] as u16) << 8) | (self.hdma[1] as u16);
-                let dst = ((self.hdma[2] as u16) << 8) | (self.hdma[3] as u16) | 0x8000;
-                if !(src <= 0x7FF0 || (0xA000..=0xDFF0).contains(&src)) {
-                    panic!("HDMA transfer with illegal start address {:04X}", src);
-                }
-
-                self.hdma_src = src;
-                self.hdma_dst = dst;
-                self.hdma_len = v & 0x7F;
-
-                self.hdma_status = if v & 0x80 == 0x80 {
-                    DMAType::Hdma
+                if v & 0x80 == 0x80 {
+                    self.hdma_status = DMAType::Hdma;
+                    // Armed while the PPU is already in mode 0 — or with the
+                    // LCD off, where the mode reads 0 forever — the first block
+                    // moves at once instead of waiting for the next mode-0
+                    // *entry*, which with the LCD off would never come.
+                    self.hdma_run_block = self.gpu.in_hblank();
                 } else {
-                    DMAType::Gdma
-                };
+                    self.hdma_status = DMAType::Gdma;
+                    self.hdma_run_block = false;
+                }
             }
-            _ => panic!("The address {:04X} should not be handled by hdma_write", a),
+            _ => {}
         };
     }
 
@@ -759,9 +774,10 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     fn perform_hdma(&mut self) -> u32 {
-        if !self.gpu.may_hdma() {
+        if !self.hdma_run_block && !self.gpu.may_hdma() {
             return 0;
         }
+        self.hdma_run_block = false;
 
         self.perform_vramdma_row();
         if self.hdma_len == 0x7F {
@@ -782,13 +798,17 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     fn perform_vramdma_row(&mut self) {
-        let mmu_src = self.hdma_src;
-        for j in 0..0x10 {
-            let b: u8 = self.rb(mmu_src + j);
-            self.gpu.wb(self.hdma_dst + j, b);
+        for _ in 0..0x10 {
+            let b: u8 = self.rb(self.hdma_src);
+            // The destination is 13 bits wide: it wraps *inside* VRAM. Letting
+            // it run on past $9FFF used to walk the write straight into
+            // `Gpu::wb`'s catch-all `panic!` — process death, and with
+            // `panic = 'abort'` a lost battery save, from nothing worse than a
+            // guest pointing a DMA near the end of VRAM.
+            self.gpu.wb(0x8000 | (self.hdma_dst & 0x1FFF), b);
+            self.hdma_src = self.hdma_src.wrapping_add(1);
+            self.hdma_dst = self.hdma_dst.wrapping_add(1);
         }
-        self.hdma_src += 0x10;
-        self.hdma_dst += 0x10;
 
         if self.hdma_len == 0 {
             self.hdma_len = 0x7F;
@@ -816,5 +836,164 @@ impl<'a> MemoryManagementUnit<'a> {
         if let Some(ref mut sound) = self.sound {
             sound.set_fast_forward(enabled);
         }
+    }
+}
+
+#[cfg(test)]
+mod vramdma_tests {
+    use super::*;
+
+    /// A CGB machine with a blank 32 KiB cartridge. Nothing here needs a real
+    /// game: every value the tests below feed the DMA registers is something
+    /// ordinary guest code can write.
+    fn cgb() -> MemoryManagementUnit<'static> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0143] = 0xC0; // CGB-only: the DMA registers exist at all
+        let mut mem = MemoryManagementUnit::new_cgb(rom, None).unwrap();
+        // A recognisable source block in WRAM, and the LCD off — which is where
+        // a game does its bulk VRAM loading, and where three of SameSuite's four
+        // DMA tests run.
+        for i in 0..0x40u16 {
+            mem.wb(0xC000 + i, (i as u8) ^ 0x5A);
+        }
+        mem.wb(0xFF40, 0x00);
+        mem
+    }
+
+    /// Point HDMA1-4 at `src`/`dst`, with junk in every bit the hardware drops.
+    fn arm(mem: &mut MemoryManagementUnit, src: u16, dst: u16) {
+        mem.wb(0xFF51, (src >> 8) as u8);
+        mem.wb(0xFF52, (src as u8) | 0x0F);
+        mem.wb(0xFF53, ((dst >> 8) as u8) | 0xE0);
+        mem.wb(0xFF54, (dst as u8) | 0x0F);
+    }
+
+    fn vram(mem: &mut MemoryManagementUnit, a: u16, n: u16) -> Vec<u8> {
+        (0..n).map(|i| mem.rb(a + i)).collect()
+    }
+
+    #[test]
+    fn an_hdma_source_outside_the_legal_ranges_does_not_kill_the_process() {
+        let mut mem = cgb();
+        // $8000 is VRAM — not a legal HDMA source. Hardware ignores/masks it;
+        // it must not abort us.
+        mem.wb(0xFF51, 0x80);
+        mem.wb(0xFF52, 0x00);
+        mem.wb(0xFF53, 0x00);
+        mem.wb(0xFF54, 0x00);
+        mem.wb(0xFF55, 0x00); // GDMA, one block
+        mem.do_cycle(4);
+    }
+
+    #[test]
+    fn a_vram_dma_running_off_the_end_of_vram_does_not_kill_the_process() {
+        let mut mem = cgb();
+        arm(&mut mem, 0xC000, 0x9FF0);
+        mem.wb(0xFF55, 0x7F); // GDMA, 128 blocks — runs far past $9FFF
+        mem.do_cycle(4);
+        // The destination wrapped back to the start of VRAM rather than
+        // escaping into cartridge RAM.
+        assert_eq!(vram(&mut mem, 0x9FF0, 4), vec![0x5A, 0x5B, 0x58, 0x59]);
+        assert_eq!(vram(&mut mem, 0x8000, 4), vec![0x4A, 0x4B, 0x48, 0x49]);
+    }
+
+    /// SameSuite `dma/gdma_addr_mask`: the low 4 bits of both addresses and the
+    /// top 3 bits of the destination are dropped, so junk in them lands the
+    /// transfer at the aligned address anyway.
+    #[test]
+    fn the_dma_addresses_are_masked() {
+        let mut mem = cgb();
+        arm(&mut mem, 0xC000, 0x8800);
+        mem.wb(0xFF55, 0x00); // GDMA, one block
+        mem.do_cycle(4);
+
+        let want: Vec<u8> = (0..0x10u8).map(|i| i ^ 0x5A).collect();
+        assert_eq!(vram(&mut mem, 0x8800, 0x10), want, "landed at $8800");
+        assert!(
+            vram(&mut mem, 0x8810, 0x10).iter().all(|&b| b == 0),
+            "nothing beyond the one block"
+        );
+    }
+
+    /// SameSuite `dma/gbc_dma_cont`: HDMA1-4 are the transfer's own counters, so
+    /// a second `$FF55` write with no re-write of them continues where the first
+    /// stopped instead of copying the same block again.
+    #[test]
+    fn a_second_transfer_continues_where_the_last_one_stopped() {
+        let mut mem = cgb();
+        arm(&mut mem, 0xC000, 0x8800);
+        mem.wb(0xFF55, 0x00);
+        mem.do_cycle(4);
+        mem.wb(0xFF55, 0x00);
+        mem.do_cycle(4);
+
+        let want: Vec<u8> = (0..0x20u8).map(|i| i ^ 0x5A).collect();
+        assert_eq!(vram(&mut mem, 0x8800, 0x20), want);
+    }
+
+    /// SameSuite `dma/hdma_lcd_off`: with the LCD off the PPU's mode reads 0
+    /// forever, so an HBlank transfer armed then moves exactly one block — and
+    /// then stalls, because there is no *entry* into mode 0 to trigger the next.
+    #[test]
+    fn an_hblank_transfer_started_with_the_lcd_off_moves_one_block_and_stalls() {
+        let mut mem = cgb();
+        arm(&mut mem, 0xC000, 0x8800);
+        mem.wb(0xFF55, 0x83); // HBlank DMA, 4 blocks
+        mem.do_cycle(4);
+
+        assert_eq!(mem.rb(0xFF55), 0x02, "one block done, three left, running");
+        for _ in 0..1000 {
+            mem.do_cycle(4);
+        }
+        assert_eq!(mem.rb(0xFF55), 0x02, "and it never moves another");
+
+        let want: Vec<u8> = (0..0x10u8).map(|i| i ^ 0x5A).collect();
+        assert_eq!(vram(&mut mem, 0x8800, 0x10), want);
+        assert!(vram(&mut mem, 0x8810, 0x10).iter().all(|&b| b == 0));
+
+        // Cancelling writes the length register too, so $FF55 reads back $80 —
+        // not $80 | the blocks that were left.
+        mem.wb(0xFF55, 0x00);
+        assert_eq!(mem.rb(0xFF55), 0x80);
+    }
+
+    /// The same one-shot with the LCD on: armed during mode 0, the first block
+    /// moves at once rather than waiting for the *next* HBlank (SameSuite
+    /// `dma/hdma_mode0`).
+    #[test]
+    fn an_hblank_transfer_armed_during_mode_0_moves_a_block_at_once() {
+        let mut mem = cgb();
+        mem.wb(0xFF40, 0x80); // LCD on — line 0 starts in mode 2
+        mem.do_cycle(4);
+        assert_eq!(mem.rb(0xFF41) & 0x03, 2, "not in HBlank yet");
+        arm(&mut mem, 0xC000, 0x8800);
+        mem.wb(0xFF55, 0x83);
+        mem.do_cycle(4);
+        // Bit 7 reads 0 while a transfer is live, so this is "3 blocks left".
+        assert_eq!(mem.rb(0xFF55), 0x03, "armed in mode 2: nothing moved");
+
+        // Walk into mode 0 and let the HBlank entry move a block.
+        while mem.rb(0xFF41) & 0x03 != 0 {
+            mem.do_cycle(4);
+        }
+        mem.do_cycle(4);
+        assert_eq!(mem.rb(0xFF55), 0x02, "the HBlank entry moved one block");
+
+        // Re-arming while already in mode 0 moves one immediately.
+        mem.wb(0xFF55, 0x00); // cancel
+        mem.wb(0xFF55, 0x83);
+        mem.do_cycle(4);
+        assert_eq!(mem.rb(0xFF55), 0x02);
+    }
+
+    /// HDMA1-4 are write-only (Pan Docs, "VRAM DMA transfers").
+    #[test]
+    fn the_dma_address_registers_read_back_as_open_bus() {
+        let mut mem = cgb();
+        arm(&mut mem, 0xC000, 0x8800);
+        for a in 0xFF51..=0xFF54u16 {
+            assert_eq!(mem.rb(a), 0xFF, "{a:04X}");
+        }
+        assert_eq!(mem.rb(0xFF55), 0xFF, "idle: bit 7 set, length $7F");
     }
 }

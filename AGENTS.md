@@ -204,7 +204,7 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
 - **Cost:** ~6 % on a pure-CPU headless benchmark (0.303 → 0.321 ms/frame, still ~52×
   realtime, 2 % of a 16.74 ms frame). Verified transparent to real games: 2400 frames of
   Pokémon Blue produce byte-identical framebuffers before and after.
-- **Save-state `FORMAT_VERSION` is now 4** (timer became `div`/`prev_div`/reload latches;
+- **Save-state `FORMAT_VERSION` was bumped to 4 here** (timer became `div`/`prev_div`/reload latches;
   `Cpu::setdi` removed; `OamDma` added).
 - **What is still red is not ours:** 11 PPU tests (mode-3 timing, STAT blocking, LCD-on)
   and 5 boot-state tests.
@@ -227,6 +227,66 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
 - **Do not read wall-clock timings from a run with the `audio` feature enabled** — that
   slowdown (17.9 ms/frame vs 0.29 ms) was the *player pacing the emulator*, since fixed;
   the ~6 % figure above was measured with no APU installed, so it isolates this change.
+
+## CGB VRAM DMA (HDMA/GDMA) — and "never panic on guest input" (`src/mmu/mod.rs`)
+
+**SameSuite `dma/` 0/4 → 4/4** (suite 50/76 → 54/76). Re-scored on the audit's full
+311-row shootout manifest: **187 → 191 PASS, zero regressions**; on the published 264,
+**188 → 192**. `testroms` 33/35 matching the baseline, savestate/battery/audiocapture/
+lint/lint-audio/audioperf/docs-check/wasm/conformance-runner all green. Full per-fix
+record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
+
+- **The rule this belongs to, and it is not optional: cartridge-supplied input must never
+  be able to kill the process.** This repo builds `panic = 'abort'`, so a `panic!` is
+  process death *and* the loss of any cartridge RAM not yet written — the worst outcome an
+  emulator has. It was already established when the MBC divide-by-zero crashes were fixed
+  (`src/mbc/battery.rs`); **three more aborts of the same class lived on until now**, two
+  of them reproduced from a blank hand-built CGB cartridge. When you touch code that
+  `panic!`s on a guest-controlled value, fix it to behave as hardware does, whatever else
+  you are doing.
+- **HDMA1-4 ARE the address counters, not a shadow of them.** The old code kept a
+  `hdma: [u8; 4]` register copy and re-latched `hdma_src`/`hdma_dst` from it on every
+  `$FF55` write, so a second transfer repeated the first block instead of continuing
+  (`dma/gbc_dma_cont`). The array is gone; `hdma_src`/`hdma_dst` are written directly by
+  `$FF51-54`, masked on the way in, and advanced by the transfer. **HDMA1-4 are write-only
+  and read back `$FF`** (Pan Docs).
+- **The destination is 13 bits and wraps inside VRAM.** `perform_vramdma_row` used to
+  increment `hdma_dst` unbounded, so a transfer that reached `$9FFF` walked into
+  `Gpu::wb`'s catch-all `panic!` — abort, from nothing worse than a guest pointing a DMA
+  near the end of VRAM. It is `0x8000 | (dst & 0x1FFF)` now, which is also exactly what
+  `dma/gdma_addr_mask` measures. The out-of-range-source `panic!` is gone too: hardware has
+  no such trap, it just reads the bus.
+- **An HBlank transfer moves a block when the PPU IS in mode 0, not only on the transition
+  into it.** `Gpu::may_hdma()` (the `hblanking` edge) is still the per-scanline trigger, but
+  `$FF55` now also arms a one-shot (`hdma_run_block`) if `Gpu::in_hblank()` — which is true
+  with the LCD off, where STAT's mode bits read 0 forever. That is the whole of
+  `dma/hdma_lcd_off` and `dma/hdma_mode0`: **exactly one block moves and then it stalls**,
+  because with the LCD off there is never another mode-0 *entry*. Games do their bulk VRAM
+  loading with the LCD off, so before this such a transfer copied **nothing at all**.
+- **`Gpu::do_cycle` returns early with the LCD off and so never clears `hblanking`.**
+  Turning the LCD off now clears it explicitly — leave it set and a pending HBlank DMA
+  moves a block on *every* `do_cycle`.
+- **Cancelling with a bit-7-clear `$FF55` write also writes the length register**, so
+  `$FF55` reads back `$80`, not `$80 | the blocks that were left`. `dma/hdma_lcd_off`'s
+  expected bytes are `$02, $80` and that second one is the only thing that pins it.
+- **Undefined opcodes lock the CPU up; they no longer abort.** `$D3 $DB $DD $E3 $E4 $EB
+  $EC $ED $F4 $FC $FD` are not instructions — hardware hangs until reset (Pan Docs,
+  "Unused opcodes"). `Cpu::exec` returns 1 M-cycle while `stop != 0`, so the PPU/timer/APU
+  keep running and the frontend stays alive with `PC` parked on the offending byte. A
+  runaway `PC` in any game reaches this. `$FC` had been special-cased as a `NOP`, which is
+  neither hardware's behaviour nor its ten siblings'; it locks up now too.
+- **Save-state `FORMAT_VERSION` is now 6** (the four HDMA1-4 bytes removed, `hdma_run_block`
+  added).
+- **No public suite catches an emulator aborting on legal-but-odd guest input** — the same
+  gap the battery work recorded. That is why the four `mmu::vramdma_tests` crash/behaviour
+  cases and `cpu::core::lockup_tests` are Rust tests, not test-ROM rows.
+- **SameSuite is not in CI** (audit item ⑪). Re-run by hand:
+  `cargo run --release --example samesuite -- <samesuite-testroms-dir>`.
+- **Pre-existing flake, not ours:** `screen::tui::tests::the_stream_survives_ten_on_off_cycles`
+  counts *process-global* file descriptors, so it fails intermittently when the rest of
+  `cargo test --lib` opens files in parallel. Reproduced on unmodified `main` (1 of 2 full
+  runs failed; it passes in isolation on both `main` and this branch).
+
 
 ## PPU: Mealybug Tearoom and the mid-scanline question (`src/gpu/`)
 

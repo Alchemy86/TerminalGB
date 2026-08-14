@@ -241,6 +241,12 @@ impl Cpu<'_> {
     }
 
     pub fn exec(&mut self) -> u32 {
+        // Locked up by an undefined opcode. Nothing wakes it — not even an
+        // interrupt — but the rest of the machine keeps running, so the frame
+        // still advances and the frontend stays responsive. See `operation`.
+        if self.stop != 0 {
+            return 1;
+        }
         self.updateime();
         match self.handleinterrupt() {
             0 => {}
@@ -1274,10 +1280,6 @@ impl Cpu<'_> {
                 }
                 1
             }
-            0xFC => {
-                // Undefined opcode - treat as NOP
-                1
-            }
             0xFE => {
                 data::cpn(self);
                 2
@@ -1286,14 +1288,78 @@ impl Cpu<'_> {
                 stack::rst(self, 0x38);
                 4
             }
+            // $D3 $DB $DD $E3 $E4 $EB $EC $ED $F4 $FC $FD are not instructions.
+            // Hardware does not "not implement" them — the CPU locks up and
+            // only a reset recovers (Pan Docs, "Unused opcodes"). Aborting the
+            // process instead takes any unwritten battery RAM with it under
+            // `panic = 'abort'`, which is the worst outcome an emulator has;
+            // the same rule `src/mbc/battery.rs` already established. A runaway
+            // `PC` in any game reaches this.
             _ => {
-                println!(
-                    "Instruction at {:#01x} | {:#06x} | {} not implemented, stopping.",
-                    op, op, op
-                );
                 self.stop = 1;
-                panic!("{:#06x} not implemented", op);
+                // Leave PC on the offending byte so a debugger shows it.
+                self.registers.pc = self.registers.pc.wrapping_sub(1);
+                1
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod lockup_tests {
+    use super::*;
+
+    /// A 32 KiB cartridge whose entry point is `op`.
+    fn boot(op: u8) -> Cpu<'static> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0100] = op;
+        Cpu::new(rom, None)
+    }
+
+    /// The eleven bytes that are not instructions. Hardware locks the CPU up
+    /// until reset; aborting the process instead takes any unwritten battery
+    /// RAM with it under `panic = 'abort'` — a runaway `PC` in any game gets
+    /// here. See the `_ =>` arm of `Cpu::operation`.
+    #[test]
+    fn an_undefined_opcode_locks_the_cpu_up_instead_of_killing_the_process() {
+        for op in [
+            0xD3u8, 0xDB, 0xDD, 0xE3, 0xE4, 0xEB, 0xEC, 0xED, 0xF4, 0xFC, 0xFD,
+        ] {
+            let mut cpu = boot(op);
+            for _ in 0..1000 {
+                cpu.do_cycle();
+            }
+            assert_eq!(
+                cpu.registers.pc, 0x0100,
+                "{op:#04X} must sit on the offending byte, not run on"
+            );
+            assert_ne!(cpu.stop, 0, "{op:#04X} must be latched as locked up");
+        }
+    }
+
+    /// The rest of the machine keeps running through a lock-up — the PPU still
+    /// produces frames, so the frontend stays responsive rather than freezing.
+    #[test]
+    fn the_ppu_keeps_running_while_the_cpu_is_locked_up() {
+        let mut cpu = boot(0xD3);
+        let mut cycles = 0u32;
+        while cycles < 70224 * 2 {
+            cycles += cpu.do_cycle();
+        }
+        assert!(cpu.memory.gpu.updated, "frames still complete");
+    }
+
+    /// An interrupt does not wake a locked-up CPU (unlike `HALT`).
+    #[test]
+    fn no_interrupt_wakes_a_locked_up_cpu() {
+        let mut cpu = boot(0xD3);
+        cpu.do_cycle();
+        cpu.ime = true;
+        cpu.memory.inte = 0x1F;
+        cpu.memory.intf = 0x1F;
+        for _ in 0..100 {
+            cpu.do_cycle();
+        }
+        assert_eq!(cpu.registers.pc, 0x0100, "no vector was dispatched");
     }
 }

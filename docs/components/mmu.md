@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9362754`](https://github.com/Alchemy86/gameboy/tree/936275439071bdfd2d82bcd09dc6af9eab246630) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -106,7 +106,18 @@ fn oamdma(&mut self, value: u8) {
 }
 ```
 
-**HDMA/GDMA (CGB)** — `hdma_write`/`hdma_read` ([`mod.rs:549`,`534`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L549)),
+**HDMA/GDMA (CGB)** — `HDMA1-4` are **not** a shadow of the registers, they *are* the
+registers: `hdma_src`/`hdma_dst` are the live address counters the transfer advances,
+which is why a second `$FF55` write with no re-write of `HDMA1-4` continues where the
+last transfer stopped rather than repeating it. Both are masked on the way in (the low
+4 bits of each address, and the destination's top 3 bits — it is a 13-bit offset into
+VRAM) and the destination **wraps inside VRAM** rather than running past `$9FFF`.
+`HDMA1-4` are write-only and read back `0xFF`. An HBlank transfer armed while the PPU
+is already in mode 0 — including with the LCD off, where the mode reads 0 forever —
+moves its first block at once instead of waiting for the next mode-0 *entry*;
+`hdma_run_block` is that one-shot. A `$FF55` write with bit 7 clear during a running
+HBlank transfer cancels it *and* writes the length register, so `$FF55` then reads
+`$80`, not `$80 | the blocks that were left`. See `hdma_write`/`hdma_read` ([`mod.rs:549`,`534`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L549)),
 `perform_gdma` (all rows at once, [`mod.rs:603`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L603)) and `perform_hdma`
 (one 16-byte row per HBlank, gated on `gpu.may_hdma()`, [`mod.rs:590`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L590)).
 
@@ -177,10 +188,22 @@ fn oamdma(&mut self, value: u8) {
 7. **CGB WRAM banking.** With `SVBK` selecting bank 3, `0xD000` accesses WRAM bank 3;
    bank 0 selection aliases to bank 1. *(Not covered.)*
 8. **CGB VRAM banking.** `VBK` (`0xFF4F`) switches the `0x8000–0x9FFF` bank. *(Not covered.)*
-9. **GDMA transfers `(len+1)*16` bytes** and reports complete via `HDMA5` bit 7. *(Not
-   covered.)*
+9. **GDMA transfers `(len+1)*16` bytes** and reports complete via `HDMA5` bit 7.
+   *(Covered: SameSuite `dma/gbc_dma_cont`, and `mmu::vramdma_tests`.)*
 10. **HDMA transfers one 16-byte row per HBlank** and stops after the programmed length.
-    *(Not covered.)*
+    *(Covered: SameSuite `dma/hdma_mode0`, and `mmu::vramdma_tests`.)*
+13. **The DMA addresses are masked.** The low 4 bits of source and destination and the
+    destination's top 3 bits are dropped, and the destination wraps inside VRAM.
+    *(Covered: SameSuite `dma/gdma_addr_mask`, and
+    `mmu::vramdma_tests::the_dma_addresses_are_masked`.)*
+14. **A transfer armed during mode 0 moves a block at once**, and with the LCD off it
+    moves exactly one and then stalls — there is no mode-0 *entry* to trigger the next.
+    *(Covered: SameSuite `dma/hdma_lcd_off`, `dma/hdma_mode0`, and
+    `mmu::vramdma_tests`.)*
+15. **`HDMA1-4` are write-only** and read back `0xFF`.
+    *(Covered: `mmu::vramdma_tests::the_dma_address_registers_read_back_as_open_bus`.)*
+16. **No value a guest can put in the DMA registers may abort the process.**
+    *(Covered: the two `..._does_not_kill_the_process` tests in `mmu::vramdma_tests`.)*
 11. **Post-boot register defaults.** After construction, `rb(0xFF40) == 0x91` (LCDC),
     `rb(0xFF47) == 0xFC` (BGP). *(Not covered.)*
 12. **OAM corruption bug.** A qualifying mode-2 OAM access corrupts OAM per the documented
@@ -197,6 +220,7 @@ fn oamdma(&mut self, value: u8) {
 | **Mooneye `acceptance/oam_dma*`** (`basic`, `reg_read`, `sources-GS`, `oam_dma_start`, `oam_dma_timing`, `oam_dma_restart`) | OAM-DMA copy, start delay, duration, restart, legal sources | **6/6 pass.** A failure means the transfer schedule or the OAM guard has moved. |
 | **Mooneye instruction-timing tests** (`rst_timing`, `call_timing*`, `push_timing`, `ret*_timing`, `jp*_timing`, `add_sp_e_timing`, `ld_hl_sp_e_timing`) | Which M-cycle each memory access of an instruction lands on — measured *through* the OAM-DMA guard | **All pass.** They are only measurable because OAM DMA is timed; see [`src/mmu/oamdma.rs`](../../src/mmu/oamdma.rs). |
 | **Mooneye `acceptance/bits/`** (`unused_hwio-GS`, `reg_f`) | Unused-bit read-back behaviour of hardware registers | Bad `\| 0b…` masks in `rb`. Blargg's `bits-unused`/`bits-bank1` are the repo's known failures here. |
+| **SameSuite `dma/`** (`gbc_dma_cont`, `gdma_addr_mask`, `hdma_lcd_off`, `hdma_mode0`) | VRAM-DMA address masking, register continuation, and when an HBlank transfer moves its first block | **4/4 pass.** A failure means the address counters, the mask, or the mode-0 arming one-shot has moved. Not in CI — run `cargo run --release --example samesuite -- <samesuite>`. |
 | **Mooneye `emulator-only/mbcX/`** | (routes into the MBC — see [MBC](mbc.md)) | — |
 
 The declared submodule `retrio/gb-test-roms` (Blargg) is **uninitialised**; Mooneye is a

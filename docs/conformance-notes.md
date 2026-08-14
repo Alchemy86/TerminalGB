@@ -17,6 +17,105 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — CGB VRAM DMA: two aborts a guest can trigger, and four SameSuite rows
+
+SameSuite `dma/` was **0/4**. Reading the code to size the work turned up two `panic!`s
+reachable from ordinary cartridge code — and this project builds with
+`[profile.release] panic = 'abort'`, so a panic is process death *and* whatever cartridge
+RAM had not been written yet. That is the rule `src/mbc/battery.rs` already established
+after the MBC divide-by-zero crashes: **cartridge-supplied input must never be able to
+kill the process.** Both were reproduced with a hand-built CGB cartridge before anything
+was changed (`mmu::vramdma_tests`, the two `..._does_not_kill_the_process` cases).
+
+Fixed together, in `src/mmu/mod.rs` (`hdma_read`/`hdma_write`/`perform_vramdma_row`) and
+`src/gpu/mod.rs` (`in_hblank`, and the write catch-alls). **SameSuite 50/76 → 54/76**;
+the published-264 shootout score **188 → 192**, with the whole 311-row suite re-scored and
+**zero regressions** anywhere.
+
+### 1. `panic!` on an out-of-range HDMA source
+
+**Symptom** — the emulator dies outright (`HDMA transfer with illegal start address 8000`)
+the moment a game points `HDMA1/2` outside `$0000-$7FF0` / `$A000-$DFF0`, taking any
+unsaved in-game progress with it. A player sees the process vanish; there is no error
+screen, because there is no process left to draw one.
+**Caught by** — **nothing in any public suite.** No test ROM tries to crash its host, so
+this whole defect class is invisible to a ROM-driven runner. That gap is the same one the
+battery work recorded, and it is a finding in its own right.
+**Hardware** — the source is a 16-bit address with its low 4 bits dropped; there is no
+"illegal address" trap in the DMA unit. It reads whatever the bus returns, exactly like
+any other read (Pan Docs, [VRAM DMA transfers](https://gbdev.io/pandocs/CGB_Registers.html#lcd-vram-dma-transfers)).
+**Carries into the tool** — *no cartridge-writable register value may terminate the
+emulator.* A fuzz-style check that sweeps `$FF51-$FF55` (and every other I/O register)
+across all 256 values and asserts the process survives.
+
+### 2. The destination ran off the end of VRAM
+
+**Symptom** — a transfer whose destination reaches `$9FFF` writes past it and the
+emulator dies (`Gpu does not handle write A000`). `$8000 | (dst & 0x1FFF)` and a
+guest-chosen length is all it takes.
+**Caught by** — the crash, by nothing; the *masking* it shares a fix with is exactly what
+SameSuite `dma/gdma_addr_mask` measures.
+**Hardware** — the destination is a **13-bit** offset into VRAM: `HDMA3` keeps only bits
+0-4 and `HDMA4` only bits 4-7, and the counter wraps inside VRAM. It cannot address
+cartridge RAM at all (Pan Docs, "LCD VRAM DMA transfers").
+**Carries into the tool** — *a VRAM DMA must never write outside VRAM*, checkable by
+running `gdma_addr_mask` and by asserting no byte outside `$8000-$9FFF` changed.
+
+### 3. An HBlank transfer armed during mode 0 waited for the *next* HBlank
+
+**Symptom** — a game that sets up an HBlank DMA with the LCD off (which is where games do
+their bulk VRAM loading) gets **nothing copied at all**: the tiles never arrive and the
+screen is blank or stale when the LCD comes back on. With the LCD on it loses the first
+block of every transfer it starts inside HBlank.
+**Caught by** — SameSuite `dma/hdma_lcd_off` and `dma/hdma_mode0` (both were FAIL).
+Nothing in Blargg, Mooneye or acid2 covers it.
+**Hardware** — the transfer moves a block whenever the PPU **is** in mode 0, not only on
+the transition into it; with the LCD off `STAT`'s mode bits read 0 permanently, so one
+block moves and then it stalls forever, because there is never a mode-0 *entry* again.
+`hdma_lcd_off`'s own expected output pins this: `$FF55` reads `$02` after arming with
+`$83` — one block gone, three left.
+**Carries into the tool** — *arm an HBlank DMA with the LCD off; exactly one block must
+move and `$FF55` must read `$02`.*
+
+### 4. `HDMA1-4` were a shadow copy, so a transfer could not be continued
+
+**Symptom** — a game that kicks off a second transfer without re-writing the address
+registers copies the **same block again**, over the top of the first: half the tile data
+it asked for never arrives, and the half that does is duplicated.
+**Caught by** — SameSuite `dma/gbc_dma_cont` (was FAIL).
+**Hardware** — `HDMA1-4` are the transfer's own address counters. The DMA advances them,
+so they hold the *next* address when it finishes; they are also write-only, and read back
+`0xFF` (Pan Docs, "LCD VRAM DMA transfers").
+**Carries into the tool** — *two back-to-back `$FF55` writes with no re-write of
+`HDMA1-4` must copy two consecutive blocks to two consecutive destinations.*
+
+### 5. Cancelling an HBlank transfer did not write the length register
+
+**Symptom** — invisible to a player; visible to any program that reads `$FF55` back after
+stopping a transfer, which is how a game decides whether to resume it.
+**Caught by** — SameSuite `dma/hdma_lcd_off`, whose expected bytes are `$02, $80` — the
+second is the read *after* a `$00` write, and `$80` means the length register took the
+written value.
+**Hardware** — bits 0-6 of `$FF55` are a real register and are written whatever bit 7
+says; bit 7 only decides start-HBlank / start-general / stop.
+**Carries into the tool** — *after cancelling with `$00`, `$FF55` reads `$80`.*
+
+### 6. Undefined opcodes aborted the process (the same class, found by reading)
+
+**Symptom** — a runaway `PC` — a corrupt save, a bad bank switch, a genuine game bug —
+reaches one of `$D3 $DB $DD $E3 $E4 $EB $EC $ED $F4 $FC $FD` and the emulator dies. On
+hardware the machine just hangs, and a player power-cycles it with their save intact.
+**Caught by** — **nothing.** Every test ROM executes only valid opcodes.
+**Hardware** — these bytes are not instructions; the CPU locks up and only a reset
+recovers it (Pan Docs, ["Unused opcodes"](https://gbdev.io/pandocs/CPU_Instruction_Set.html)).
+It is a *CPU* lock-up: the PPU, timer and APU keep running, so the screen holds its last
+frame rather than the window disappearing. `$FC` was separately being treated as a `NOP`,
+which is neither behaviour; it now locks up like its ten siblings.
+**Carries into the tool** — *executing any undefined opcode must leave the emulator
+running and the frame clock advancing.* Covered here by `cpu::core::lockup_tests`.
+
+---
+
 ## 2026-08-14 — an unanswered link-close byte: "I cannot leave the trade room"
 
 The Gen 1 link partner answered the trade menu's cancel nybble `$6F` in exactly

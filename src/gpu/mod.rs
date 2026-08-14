@@ -429,16 +429,16 @@ impl Gpu {
         }
     }
 
+    /// VRAM bank 0. The address is masked rather than asserted: every caller
+    /// derives it from guest-supplied tile data, and a 13-bit wrap is what the
+    /// hardware's address lines do anyway.
     fn rbvram0(&self, a: u16) -> u8 {
-        if !(0x8000..0xA000).contains(&a) {
-            panic!("Shouldn't have used rbvram0");
-        }
+        debug_assert!((0x8000..0xA000).contains(&a), "rbvram0 outside VRAM");
         self.vram[a as usize & 0x1FFF]
     }
+    /// VRAM bank 1 — see [`Gpu::rbvram0`].
     fn rbvram1(&self, a: u16) -> u8 {
-        if !(0x8000..0xA000).contains(&a) {
-            panic!("Shouldn't have used rbvram1");
-        }
+        debug_assert!((0x8000..0xA000).contains(&a), "rbvram1 outside VRAM");
         self.vram[0x2000 + (a as usize & 0x1FFF)]
     }
 
@@ -463,6 +463,10 @@ impl Gpu {
                     self.line = 0;
                     self.mode = 0;
                     self.wy_trigger = false;
+                    // `do_cycle` returns early with the LCD off, so it never
+                    // gets to clear this — leave it set and a pending HBlank
+                    // DMA would move a block on every single `do_cycle`.
+                    self.hblanking = false;
                     self.clear_screen();
                 }
                 if !orig_lcd_on && self.lcd_on {
@@ -480,7 +484,8 @@ impl Gpu {
             0xFF43 => self.scx = v,
             0xFF44 => {} // Read-only
             0xFF45 => self.lyc = v,
-            0xFF46 => panic!("0xFF46 should be handled by MMU"),
+            // $FF46 is OAM DMA and never reaches here — the MMU claims it.
+            0xFF46 => {}
             0xFF47 => {
                 self.palbr = v;
                 self.update_pal();
@@ -539,7 +544,10 @@ impl Gpu {
                     self.csprit_ind = (self.csprit_ind + 1) & 0x3F;
                 };
             }
-            _ => panic!("Gpu does not handle write {:04X}", a),
+            // Anything else in this range is unmapped: hardware drops the
+            // write. Aborting instead turned a stray guest DMA into process
+            // death and a lost battery save (see `src/mbc/battery.rs`).
+            _ => {}
         }
     }
 
@@ -799,8 +807,16 @@ impl Gpu {
         }
     }
 
+    /// True on the *entry* into HBlank — one HDMA block per scanline.
     pub fn may_hdma(&self) -> bool {
         self.hblanking
+    }
+
+    /// Whether the PPU is in mode 0 as the CPU can see it. With the LCD off
+    /// STAT's mode bits read 0, and an HBlank DMA armed then moves a block
+    /// straight away (SameSuite `dma/hdma_lcd_off`).
+    pub fn in_hblank(&self) -> bool {
+        !self.lcd_on || self.mode == 0
     }
 }
 

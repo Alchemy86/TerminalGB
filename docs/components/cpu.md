@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9362754`](https://github.com/Alchemy86/gameboy/tree/936275439071bdfd2d82bcd09dc6af9eab246630) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -163,6 +163,15 @@ reads zero, matching hardware.
   a different bug: its rounds 3 and 4 run after `cpu_fast` and still report speed `00`, so
   **the CGB double-speed switch is not taking effect**. That is a `STOP`/`KEY1` problem,
   not a dispatch one.
+- **Undefined opcodes lock the CPU up, and no longer abort the process.** `$D3 $DB $DD
+  $E3 $E4 $EB $EC $ED $F4 $FC $FD` are not instructions; hardware hangs the CPU until a
+  reset (Pan Docs, "Unused opcodes"). We latch `stop` and burn one M-cycle per `exec`, so
+  the PPU/timer/APU keep running and the frontend stays alive — while `PC` sits on the
+  offending byte for a debugger to find. It used to `panic!`, which under
+  `[profile.release] panic = 'abort'` killed the process *and* any unwritten battery RAM;
+  a runaway `PC` in any game reaches it. `$FC` was separately special-cased as a `NOP`,
+  which is neither what hardware does nor what the other ten did. See
+  `cpu::core::lockup_tests`.
 - **`STOP` is minimally handled** (the `stop` field exists; double-speed switching is
   plumbed through the MMU, not a faithful `STOP` model).
 - **~900 lines of legacy interrupt/HALT logic are commented out** below `do_cycle`
@@ -240,6 +249,11 @@ reads zero, matching hardware.
 11. **`CB` bit ops.** `BIT 7,H` on `H=0x80` sets Z=0, H=1, N=0 and leaves C untouched.
     *(Not covered.)*
 12. **`LD (HL+),A` auto-increments HL** by one after the store. *(Not covered.)*
+13. **An undefined opcode locks the CPU up and does not kill the emulator.** After
+    executing any of `$D3 $DB $DD $E3 $E4 $EB $EC $ED $F4 $FC $FD`, `PC` stops advancing,
+    no interrupt wakes it, and the PPU keeps producing frames. *(Covered:
+    `cpu::core::lockup_tests` — no test ROM exercises this, since test ROMs only execute
+    valid opcodes.)*
 
 ## 7. Test ROMs that exercise it
 

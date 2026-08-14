@@ -49,7 +49,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// (`Sound::double_speed`, `cpu_frac`, so CGB double-speed audio does not come
 /// back an octave high), the square duty output latch, the 1 MHz grid phase and
 /// the pending DIV-APU power-on skip (SameSuite `apu/*`).
-pub const FORMAT_VERSION: u16 = 5;
+/// v6: VRAM DMA — the four HDMA1-4 register bytes are gone (they were a shadow
+/// of the address counters, which are the real registers and are what the
+/// transfer advances), and the "move a block now" one-shot an HBlank transfer
+/// armed during mode 0 sets is captured (SameSuite `dma/*`).
+pub const FORMAT_VERSION: u16 = 6;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
