@@ -22,7 +22,19 @@ pub type StrResult<T> = Result<T, &'static str>;
 /// what reconciles the two. Calibrated against Blargg `oam_bug/4-scanline_timing`,
 /// which brackets the 19-M-cycle corruption window to a single M-cycle at both
 /// ends — change it and that test moves.
+///
+/// **It exists only because the PPU is batched.** The whole 12 dots are an
+/// `ldh [LCDC],a` enabling the LCD: the write sets `modeclock = 4` and the
+/// batched renderer then applies the instruction's *entire* twelve dots on top,
+/// parking it three M-cycles past where hardware is. The accurate engine has
+/// already spent those dots access by access, so its remainder is zero and it
+/// lands on 4 — the real figure — which is why [`ACCURATE_OAM_BUG_PHASE`] is 0
+/// rather than a second calibration. Measured, not assumed: with `-12` the
+/// accurate engine fails `oam_bug` 4/5/6/8, and with `0` it passes them.
 const OAM_BUG_PHASE: i32 = -12;
+
+/// The same correction for the per-dot engine: none. See [`OAM_BUG_PHASE`].
+const ACCURATE_OAM_BUG_PHASE: i32 = 0;
 
 /// `$FE00-$FEFF`: OAM proper plus the prohibited region above it. The whole
 /// page shares OAM's bus, which is why the corruption bug does not stop at
@@ -433,7 +445,21 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     fn oam_bug(&mut self, kind: OamBug, dots: u32) {
         if self.bus_tick_enabled {
-            self.gpu.oam_bug(kind, dots as i32 + OAM_BUG_PHASE);
+            // `dots` is measured from the top of the instruction, which is
+            // where the *batched* PPU still stands. The accurate engine has
+            // already been walked forward to this very access, so predicting
+            // the same distance again would look a whole instruction into the
+            // future. Only the dots not yet applied are still ahead of it.
+            let (ahead, phase) =
+                if self.gpu.render_mode() == crate::gpu::RenderMode::Accurate {
+                    (
+                        dots as i32 - self.gpu_bus_ticked as i32,
+                        ACCURATE_OAM_BUG_PHASE,
+                    )
+                } else {
+                    (dots as i32, OAM_BUG_PHASE)
+                };
+            self.gpu.oam_bug(kind, ahead + phase);
         }
     }
 

@@ -641,7 +641,16 @@ impl Gpu {
 
         match self.mode {
             0 => {
-                self.renderscan();
+                // The whole-scanline renderer draws the line it has just
+                // finished. The accurate engine has already painted every
+                // pixel of it, one dot at a time, so calling this there would
+                // overwrite the line with the very approximation the engine
+                // exists to replace — and, worse, silently: `draw_bg`
+                // advances the window's line counter as a side effect, so
+                // running both moved the window down two rows per scanline.
+                if self.render_mode == RenderMode::Fast {
+                    self.renderscan();
+                }
                 self.hblanking = true;
             }
             1 => {
