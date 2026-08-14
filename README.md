@@ -7,7 +7,8 @@
 
 **A Game Boy / Game Boy Color emulator written in Rust — runs on the desktop, in your terminal, and in the browser via WebAssembly.**
 
-<img width="1345" height="387" alt="image" src="https://github.com/user-attachments/assets/a19c215e-ee6c-4443-9e69-6a455f7dd35b" />
+<img width="2152" height="1822" alt="image" src="https://github.com/user-attachments/assets/d7af5464-22c9-4a36-acf2-cf1e8c7b9956" />
+
 
 
 > This project is a fork of **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by
