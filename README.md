@@ -1,5 +1,9 @@
 # TerminalGB
 
+<p align="center">
+  <a href="docs/brand/README.md"><img src="docs/brand/terminalgb-logo.svg" alt="TerminalGB — the wordmark with a green terminal block cursor in place of the I and a green full stop, over the tagline: a Game Boy in your terminal" width="720" /></a>
+</p>
+
 > ### 📊 [Where TerminalGB stands →](docs/status.md)
 > Every public accuracy suite scored from the checked-in baselines, everything the emulator can
 > do, the honest gaps — including the test that must stay failing — and what is coming next.

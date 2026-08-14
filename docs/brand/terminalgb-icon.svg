@@ -1,0 +1,8 @@
+<!-- TerminalGB icon — THE final mark (the block cursor alone)
+     Hand-authored for TerminalGB (MPL-2.0). No font embedded, subset or traced;
+     letterforms are original stroked paths. Regenerate with docs/brand/generate.py -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img">
+<rect x="1" y="1" width="126" height="126" rx="28" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+<rect x="20.0" y="14.0" width="52" height="100" rx="8" fill="#9bbc0f"/>
+<circle cx="97.0" cy="103.0" r="11" fill="#9bbc0f"/>
+</svg>

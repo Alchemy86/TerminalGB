@@ -2648,16 +2648,25 @@ attic, not ours.
 
 ### The brand assets are generated, hand-authored, and font-free (`docs/brand/`)
 
-- **Three logo options + icon lockups live in [`docs/brand/`](docs/brand/README.md)**, all
-  emitted by `docs/brand/generate.py` — **edit the generator, never the SVGs by hand**, and
-  re-render the `preview/` PNGs with `magick` in the same commit. The letterforms are
-  original stroked skeleton paths drawn in that script: **no font is embedded, subset or
-  traced**, so there is no font licence to audit, and nothing borrows a Nintendo motif —
-  the cursor block/underscore and a generic green LCD rectangle are the whole vocabulary.
-  The recommendation (option B, the GB screen tile) and each option's rationale are in that
-  README. Every SVG paints its own dark panel + faint border, so the theme-in-`<img>` trap
-  recorded above cannot bite; check any new lockup on white, black **and** at 16 px before
-  committing — a mark that fails as a favicon has failed.
+- **THE final mark is `docs/brand/terminalgb-logo.svg` + `terminalgb-icon.svg` — captain's
+  choice, no options remain open.** Composition matched to the reference he picked: heavy
+  wordmark, a solid DMG-green **block cursor replacing the I** of TERMINAL, a green **full
+  stop** closing the word, grey wide-tracked tagline. The three exploration options are
+  retired into `docs/brand/exploration/` and must not be shipped anywhere; any other repo
+  (the portal included) should copy the two root files, per
+  [`docs/brand/README.md`](docs/brand/README.md).
+- **The cursor is SOLID on purpose — do not "improve" it back to inverse video.** A
+  knocked-out I inside the green cell was tried at several cell ratios and always read as a
+  zero or an empty box (the original option A's recorded risk, confirmed by rendering);
+  a solid block is also what a terminal actually shows, the glyph hidden beneath.
+- Everything is emitted by `docs/brand/generate.py` — **edit the generator, never the SVGs
+  by hand**, and re-render the `preview/` PNGs with `magick` in the same commit. The
+  letterforms are original stroked skeleton paths drawn in that script: **no font is
+  embedded, subset or traced**, so there is no font licence to audit, and nothing borrows a
+  Nintendo motif — the block cursor and a full stop are the whole vocabulary. Every SVG
+  paints its own dark panel + faint border, so the theme-in-`<img>` trap recorded above
+  cannot bite; check any new lockup on white, black **and** at 16 px before committing — a
+  mark that fails as a favicon has failed.
 
 ### Verifying that a README or doc actually renders
 

@@ -14,6 +14,12 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Added
+- **The final TerminalGB logo** (`docs/brand/terminalgb-logo.svg` + `terminalgb-icon.svg`),
+  now at the top of the README: the heavy hand-authored wordmark with a solid DMG-green
+  terminal **block cursor replacing the I** and a green **full stop** closing the word, over
+  the grey tagline. Captain's chosen composition — the three earlier exploration options are
+  retired into `docs/brand/exploration/` and are not to be shipped. No font embedded, no
+  Nintendo motif; regenerate with `docs/brand/generate.py`.
 - **Music mode — your ROMs as a shelf of albums.** `terminal music` (or `M` from the ROM
   picker) turns the configured `rom_dir` into a library: **cover art taken from each game's
   own title screen**, the cartridge's header title, and its own music playing while you

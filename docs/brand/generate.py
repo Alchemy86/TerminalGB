@@ -4,7 +4,9 @@
 Every letterform is hand-drawn here as a stroked skeleton path — no font is
 embedded, subset or traced, so there is no third-party licence in these files.
 Run from the repo root:  python3 docs/brand/generate.py
-It rewrites the SVGs in docs/brand/ deterministically.
+It rewrites the SVGs deterministically: the FINAL mark into docs/brand/
+(terminalgb-logo.svg + terminalgb-icon.svg — the only files to ship) and the
+three retired exploration options into docs/brand/exploration/.
 """
 
 import os
@@ -151,13 +153,82 @@ def tagline(width, y, scale=0.30, color=GREY):
 
 def write(name, content):
     path = os.path.join(OUT, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(content)
     print(f"wrote {name} ({len(content)} bytes)")
 
 
 # ---------------------------------------------------------------------------
-# Option A — block cursor: TERM[I]NALGB where the I is a phosphor-green block
+# THE FINAL MARK — the one to ship. Composition matched to the captain's
+# chosen reference: one heavy wordmark; the motif REPLACING one letter (a
+# solid DMG-green terminal block cursor stands where the I of TERMINAL would
+# be — a block cursor hides the glyph beneath it, exactly what a terminal
+# shows); a single accent-colour full stop closing the word; the grey
+# wide-tracked tagline underneath. The motif is ours outright — a block
+# cursor, nothing resembling any Nintendo mark. Accent = the DMG LCD lit
+# shade. A knocked-out inverse-video I was tried at several cell ratios and
+# always read as a zero or an empty box; solid is what reads as a cursor.
+CURSOR_W = 48      # the character cell the cursor fills, wider than the I
+CURSOR_RISE = 18   # the cell extends past cap height, top and bottom
+
+
+def draw_cursor_cell(x, y0, scale, accent=DMG_LIGHT):
+    """The solid block cursor filling its cell, ink-left-edge at x."""
+    return (
+        f'<rect x="{x:.1f}" y="{y0 - CURSOR_RISE * scale:.1f}" '
+        f'width="{CURSOR_W * scale:.1f}" '
+        f'height="{(100 + 2 * CURSOR_RISE) * scale:.1f}" '
+        f'rx="{6 * scale:.1f}" fill="{accent}"/>')
+
+
+def final():
+    W, H = 1200, 380
+    text = "TERMINALGB"
+    widths = {'I': CURSOR_W}
+    DOT_R = 16  # full stop, bottom-aligned with the letter ink
+    scale = 1.36
+    total = (word_width(text, widths=widths) + TRACK + 2 * DOT_R) * scale
+    x0 = (W - total) / 2
+    y0 = 96
+    parts = [panel(W, H)]
+    cx = 0.0
+    for ch in text:
+        w = widths.get(ch, GLYPHS[ch][0])
+        if ch == 'I':
+            parts.append(draw_cursor_cell(x0 + cx * scale, y0, scale))
+        else:
+            parts.append(draw_word(ch, x0 + cx * scale, y0, scale, 26, FG))
+        cx += w + TRACK
+    # The single coloured accent: a full stop closing the wordmark.
+    parts.append(
+        f'<circle cx="{x0 + (cx + DOT_R) * scale:.1f}" '
+        f'cy="{y0 + (100 - DOT_R) * scale:.1f}" r="{DOT_R * scale:.1f}" '
+        f'fill="{DMG_LIGHT}"/>')
+    parts.append(tagline(W, 288))
+    write("terminalgb-logo.svg",
+          svg(W, H, "\n".join(parts),
+              "TerminalGB logo — THE final mark (block cursor + full stop)"))
+
+    # Icon: the end of the wordmark distilled — the solid block cursor with
+    # the full stop beside it. Two shapes, both solid, so it survives 16px.
+    IW = 128
+    bw, bh, r = 52, 100, 11          # block ~1:2, a terminal cell's aspect
+    total_w = bw + 14 + 2 * r
+    bx = (IW - total_w) / 2
+    by = (IW - bh) / 2
+    body = [panel(IW, IW, rx=28),
+            f'<rect x="{bx}" y="{by}" width="{bw}" height="{bh}" rx="8" '
+            f'fill="{DMG_LIGHT}"/>',
+            f'<circle cx="{bx + bw + 14 + r}" cy="{by + bh - r}" r="{r}" '
+            f'fill="{DMG_LIGHT}"/>']
+    write("terminalgb-icon.svg",
+          svg(IW, IW, "\n".join(body),
+              "TerminalGB icon — THE final mark (the block cursor alone)"))
+
+
+# ---------------------------------------------------------------------------
+# RETIRED exploration, option A — block cursor: TERM[I]NALGB where the I is a phosphor-green block
 # cursor with the I knocked out in inverse video, exactly as a terminal draws
 # a cursor over a glyph.
 def option_a():
@@ -188,7 +259,7 @@ def option_a():
             parts.append(draw_word(ch, x0 + cx * scale, y0, scale, 26, FG))
         cx += w + TRACK
     parts.append(tagline(W, 288))
-    write("terminalgb-logo-a.svg",
+    write("exploration/terminalgb-logo-a.svg",
           svg(W, H, "\n".join(parts),
               "TerminalGB logo, option A: the block cursor"))
 
@@ -205,12 +276,12 @@ def option_a():
     bx = x0 + gw + 8 * s
     body.append(f'<rect x="{bx:.1f}" y="{y0 - 6 * s:.1f}" width="{cell:.1f}" '
                 f'height="{112 * s:.1f}" rx="5" fill="{GREEN}"/>')
-    write("terminalgb-icon-a.svg",
+    write("exploration/terminalgb-icon-a.svg",
           svg(IW, IW, "\n".join(body), "TerminalGB icon, option A"))
 
 
 # ---------------------------------------------------------------------------
-# Option B — the screen tile: TERMINAL in white, GB set dark-on-green inside a
+# RETIRED exploration, option B — the screen tile: TERMINAL in white, GB set dark-on-green inside a
 # rounded rectangle: a generic dot-matrix LCD tile in the DMG's two end shades.
 def option_b():
     W, H = 1200, 380
@@ -233,7 +304,7 @@ def option_b():
                  f'fill="{DMG_LIGHT}"/>')
     parts.append(draw_word("GB", tx + pad_x, y0, scale, 26, DMG_DARK))
     parts.append(tagline(W, 288))
-    write("terminalgb-logo-b.svg",
+    write("exploration/terminalgb-logo-b.svg",
           svg(W, H, "\n".join(parts),
               "TerminalGB logo, option B: the screen tile"))
 
@@ -246,12 +317,12 @@ def option_b():
     gbw = word_width("GB") * s
     body.append(draw_word("GB", (IW - gbw) / 2, (IW - 100 * s) / 2, s, 26,
                           DMG_DARK))
-    write("terminalgb-icon-b.svg",
+    write("exploration/terminalgb-icon-b.svg",
           svg(IW, IW, "\n".join(body), "TerminalGB icon, option B"))
 
 
 # ---------------------------------------------------------------------------
-# Option C — dot matrix: the wordmark built from screen pixels, with a green
+# RETIRED exploration, option C — dot matrix: the wordmark built from screen pixels, with a green
 # underscore cursor as the single accent.
 def option_c():
     W, H = 1200, 380
@@ -266,7 +337,7 @@ def option_c():
     parts.append(f'<rect x="{ux:.1f}" y="{y0 + 6 * p:.1f}" '
                  f'width="{5 * p:.1f}" height="{p:.1f}" fill="{DMG_LIGHT}"/>')
     parts.append(tagline(W, 288))
-    write("terminalgb-logo-c.svg",
+    write("exploration/terminalgb-logo-c.svg",
           svg(W, H, "\n".join(parts),
               "TerminalGB logo, option C: dot matrix"))
 
@@ -279,11 +350,12 @@ def option_c():
     body.append(draw_pix_word("G", 24, 0, p, FG))
     body.append(f'<rect x="48" y="112" width="48" height="16" '
                 f'fill="{DMG_LIGHT}"/>')
-    write("terminalgb-icon-c.svg",
+    write("exploration/terminalgb-icon-c.svg",
           svg(IW, IW, "\n".join(body), "TerminalGB icon, option C"))
 
 
 if __name__ == "__main__":
+    final()
     option_a()
     option_b()
     option_c()
