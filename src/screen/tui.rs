@@ -6325,6 +6325,54 @@ mod tests {
     /// An `App` with a fixed protocol and cell size, playing the vendored
     /// acid2 ROM. The ROM is committed, so a missing one is a hard failure
     /// rather than a silently-skipped test.
+    /// **"Not built in" is told apart from "unknown".** Two different problems
+    /// with two different fixes, and one message for both sends the user
+    /// hunting for a typo that is not there.
+    ///
+    /// `example-tracer` is the case that makes this testable in every build:
+    /// it is deliberately outside `standard-plugins`, so in a default build it
+    /// is a name we know and a crate we did not link.
+    #[test]
+    fn a_known_but_unbuilt_plugin_says_how_to_build_it_in() {
+        let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb")
+            .expect("vendored acid2 ROM present");
+        let mut gb = Gameboy::new(rom.clone(), None);
+        let cfg = crate::screen::config::Config::default();
+
+        // Known to the registry, so we can name the feature that supplies it.
+        assert!(REGISTRY.iter().any(|(n, _)| *n == "example-tracer"));
+
+        #[cfg(not(feature = "plugin-example-tracer"))]
+        {
+            assert_eq!(attach_named(&mut gb, &cfg, &rom, "example-tracer"), None);
+            let notes = {
+                let mut c = cfg.clone();
+                c.plugins = vec!["example-tracer".to_string()];
+                // GB_PLUGINS would win over the config; this test reads config.
+                std::env::remove_var("GB_PLUGINS");
+                attach_plugins(&mut gb, &c, &rom)
+            };
+            let note = notes
+                .iter()
+                .find(|n| n.contains("example-tracer"))
+                .expect("the attempt must be reported");
+            assert!(note.contains("not built into this binary"), "{note}");
+            assert!(note.contains("--features plugin-example-tracer"), "{note}");
+        }
+
+        // A name nothing knows is a different message entirely.
+        let mut c = cfg.clone();
+        c.plugins = vec!["definitely-not-a-plugin".to_string()];
+        std::env::remove_var("GB_PLUGINS");
+        let notes = attach_plugins(&mut gb, &c, &rom);
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("unknown plugin 'definitely-not-a-plugin'")),
+            "{notes:?}"
+        );
+    }
+
     fn test_app(protocol: ProtocolType, path: RenderPath) -> Option<App> {
         test_app_video(protocol, path, video_for_test())
     }
