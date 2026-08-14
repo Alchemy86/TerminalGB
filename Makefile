@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 
 .PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
-        fetch-test-suites test-external test-external-accurate
+        fetch-test-suites test-external test-external-accurate no-plugins
 
 all: build install
 
@@ -46,7 +46,7 @@ test:
 embed:
 	cargo clippy --release --no-default-features --all-targets -- -D warnings
 	cargo test --release --no-default-features --lib
-	cargo tree --no-default-features --edges normal
+	cargo tree --no-default-features --edges normal   # blip_buf + first-party gameboy-plugin-api
 	env -u HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u DISPLAY -u WAYLAND_DISPLAY \
 	  cargo run --release --no-default-features --example headless -- \
 	  third_party/dmg-acid2/dmg-acid2.gb 240
@@ -99,6 +99,19 @@ test-external-accurate: fetch-test-suites
 	    --baseline testharness/mooneye_accurate_baseline.txt
 	GB_PPU=accurate ./target/release/examples/mealybug --dir $(SUITES)/mealybug \
 	    --baseline testharness/mealybug_accurate_baseline.txt
+
+# THE claim of the plugin system: the emulator is the product and the plugins
+# are optional extras. Builds the whole thing — core, terminal and desktop
+# frontends — with every plugin off, then greps the dependency graph to prove
+# none of them is in it. A `cfg` that silently stopped compiling anything would
+# pass the build and fail this. See docs/writing-a-plugin.md.
+no-plugins:
+	cargo build --no-default-features --features tui,desktop
+	cargo test --no-default-features --lib
+	@if cargo tree --no-default-features --features tui,desktop --edges normal \
+	    | grep -E 'gameboy-plugin-(trainer|gen1-link|battle-control|agent|example-tracer)'; \
+	  then echo "FAIL: a plugin crate is in the no-plugin dependency graph"; exit 1; \
+	  else echo "OK: no plugin crate in the dependency graph"; fi
 
 desktop:
 	cd examples/desktop && cargo run --release

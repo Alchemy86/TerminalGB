@@ -726,6 +726,7 @@ dependencies = [
  "gameboy-plugin-agent",
  "gameboy-plugin-api",
  "gameboy-plugin-battle-control",
+ "gameboy-plugin-example-tracer",
  "gameboy-plugin-gen1-link",
  "gameboy-plugin-trainer",
  "gl",
@@ -762,6 +763,13 @@ dependencies = [
  "gameboy-plugin-api",
  "gameboy-plugin-gen1-link",
  "gameboy-plugin-trainer",
+]
+
+[[package]]
+name = "gameboy-plugin-example-tracer"
+version = "0.1.0"
+dependencies = [
+ "gameboy-plugin-api",
 ]
 
 [[package]]

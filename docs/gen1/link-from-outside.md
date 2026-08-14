@@ -1,7 +1,7 @@
 # Driving the link cable from outside
 
 [← Gen 1 area](README.md) · the journey: [`docs/link-trade.md`](../link-trade.md) ·
-implemented in [`src/plugin/gen1/`](../../src/plugin/gen1/)
+implemented in [`plugins/gen1-link/src/`](../../plugins/gen1-link/src/)
 
 **The emulator can be the Game Boy on the other end of the cable.** A plugin answers the serial
 port, so the game runs its real link protocol against something that does not exist — and a
@@ -192,7 +192,7 @@ observation:
   solved, the party block is already encoded, and the enemy team is the one we sent. What is
   missing is the per-turn exchange and agreeing on `wLinkBattleRandomNumberList`.
 * **A bridge rather than a partner.** `PokemonSource`
-  ([`src/plugin/gen1/spec.rs`](../../src/plugin/gen1/spec.rs)) deliberately separates *where a
+  ([`plugins/gen1-link/src/spec.rs`](../../plugins/gen1-link/src/spec.rs)) deliberately separates *where a
   Pokémon comes from* from *how it is traded*. A file, a converted Generation 3 save, a remote
   peer and a live partner are then interchangeable — which is what would make cross-generation
   and remote trading the same feature rather than two.

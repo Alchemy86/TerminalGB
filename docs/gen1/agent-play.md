@@ -7,7 +7,7 @@ does. **The full design, the OBS/Twitch recipe and the honest gaps are in
 [`docs/claude-plays.md`](../claude-plays.md)**; this page is the Gen 1 half — what it reads, what
 it presses, and the answers to the questions this page was left holding.
 
-The code is [`src/agent/`](../../src/agent/mod.rs), the panel is
+The code is [`plugins/agent/src/`](../../plugins/agent/src/lib.rs), the panel is
 [`src/screen/agent_view.rs`](../../src/screen/agent_view.rs), and the proof is
 [`testharness/agent.rs`](../../testharness/agent.rs).
 
@@ -20,7 +20,7 @@ map ([memory-map.md](memory-map.md)); the screen comes from the tilemap-as-text 
 ([reading the screen](reading-the-screen.md)) — read out of **VRAM** rather than `wTileMap`, so
 what the agent is told cannot disagree with the picture a viewer is looking at, and so the
 window-layer trap is handled in one place. Three addresses were added, each cited to its
-`pret/pokered` symbol in [`src/agent/observe.rs`](../../src/agent/observe.rs):
+`pret/pokered` symbol in [`plugins/agent/src/observe.rs`](../../plugins/agent/src/observe.rs):
 
 | what | address | why it earns its place |
 |---|---|---|
@@ -73,7 +73,7 @@ looks identical to one it opened once.
 ### 3. What does it do about it?
 
 Escalate, because the right answer depends on how stuck you are
-([`governor::Stuck`](../../src/agent/governor.rs)):
+([`governor::Stuck`](../../plugins/agent/src/governor.rs)):
 
 | repeats | response |
 |---|---|

@@ -58,8 +58,10 @@ use gameboy_plugin_trainer::TrainerPlugin;
 /// when its plugin is absent.
 #[cfg(not(feature = "plugin-trainer"))]
 mod tv {
-    /// No panel exists, so no width is ever wide enough for one.
-    pub const PANEL_MIN_W: u16 = u16::MAX;
+    /// Wider than any terminal, so the panel never fits — which is exactly
+    /// true: without the plugin there is no panel. Not `u16::MAX`, only
+    /// because comparing against a type's extreme is a clippy lint.
+    pub const PANEL_MIN_W: u16 = 32_768;
 }
 
 #[cfg(not(feature = "plugin-agent"))]
@@ -5695,6 +5697,7 @@ const REGISTRY: &[(&str, &str)] = &[
     ("gen1-link", "plugin-gen1-link"),
     ("gen1-battle", "plugin-battle-control"),
     ("agent", "plugin-agent"),
+    ("example-tracer", "plugin-example-tracer"),
 ];
 
 /// Build and attach one named plugin.
@@ -5783,6 +5786,23 @@ fn attach_named(
                 }
             }
             Err(e) => format!("plugin agent: {e}"),
+        });
+    }
+
+    // The documentation example, and the shape every third-party arm takes:
+    // one `if`, gated on the feature that brings the crate in. `GB_TRACE_ADDR`
+    // is this plugin's own configuration; a real plugin would more likely read
+    // a key from `config.toml`, as gen1-link does above.
+    #[cfg(feature = "plugin-example-tracer")]
+    if name == gameboy_plugin_example_tracer::NAME {
+        let address = std::env::var("GB_TRACE_ADDR")
+            .ok()
+            .and_then(|v| u16::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0xC000);
+        let p = gameboy_plugin_example_tracer::Tracer::new(address);
+        return Some(match gb.add_plugin(Box::new(p)) {
+            Ok(()) => format!("plugin example-tracer attached, watching ${address:04X}"),
+            Err(e) => format!("plugin example-tracer: {e}"),
         });
     }
 
@@ -7557,6 +7577,7 @@ mod tests {
     /// reaches the party and the sprite follows the focus rather than being
     /// pinned to the opponent.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn the_focus_ring_puts_the_opponent_first_in_a_battle() {
         use gameboy_plugin_trainer::gen1::{BattleKind, Mon};
         use gameboy_plugin_trainer::TrainerState;
@@ -7583,6 +7604,7 @@ mod tests {
     /// space. This is what makes `trainer_view`'s narrow tiers reachable — they
     /// were unreachable while the sidebar was a fixed 40 columns.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn the_trainer_panel_gives_width_back_to_the_game() {
         use ratatui::backend::TestBackend;
         for cols in [40u16, 50, 60, 70, 80, 120, 200] {
@@ -7850,6 +7872,7 @@ mod tests {
     /// header off the ceiling to centre an over-height panel would lose the
     /// part that says whose panel it is.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn an_over_height_panel_keeps_its_head_and_loses_its_tail() {
         let area = Rect::new(0, 0, tv::PANEL_W, 12);
         let l = tv::layout_with_team(area, true, false, 40).centre_in(area, 40);
@@ -8054,6 +8077,9 @@ mod tests {
     /// those sizes, and with `GB_DUMP_LAYOUT=<file>` it writes the grid out so
     /// the documented picture is a real render and not a drawing.
     #[test]
+    // The commentary panel only exists when the agent plugin does — the
+    // stubbed `av::split` in a build without it correctly yields no panel.
+    #[cfg(feature = "plugin-agent")]
     fn the_stream_layout_shows_goal_activity_and_game_together() {
         use ratatui::backend::TestBackend;
         for (cols, rows) in [(106u16, 30u16), (120, 34), (140, 30)] {
@@ -8154,6 +8180,7 @@ mod tests {
     /// picture: a cell an image covers cannot also hold text. It gets its own
     /// row, at every size, in both layouts, for both verdicts.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn the_encounter_banner_never_touches_the_picture_at_any_size() {
         use ratatui::backend::TestBackend;
         let sizes = [
@@ -8203,6 +8230,7 @@ mod tests {
     /// The verdict has to reach someone who never opens the trainer panel —
     /// which is everyone, during an encounter.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn the_banner_and_the_alert_do_not_need_the_trainer_panel_open() {
         use ratatui::backend::TestBackend;
         let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
@@ -8242,6 +8270,7 @@ mod tests {
     /// attached **and** a live wild encounter, which makes the trainer plugin's
     /// row its longest.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn every_status_row_survives_an_audio_row_and_a_live_encounter() {
         use ratatui::backend::TestBackend;
         struct Marker;
@@ -8307,6 +8336,7 @@ mod tests {
     /// trainer plugin's existing `Plugin` row, which is a second place it is
     /// visible when the panel is closed.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn a_live_encounter_rides_in_the_plugin_row_rather_than_adding_one() {
         let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
             return;
@@ -8329,6 +8359,7 @@ mod tests {
     /// `shiny_alert = off` removes the row entirely — and with it the extra
     /// layout row, so the picture goes back to its old size.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn the_alert_can_be_switched_off() {
         let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
         plant_encounter(&mut app, true);
@@ -8348,6 +8379,7 @@ mod tests {
 
     /// Plant a wild encounter on the attached plugin, so the frontend can be
     /// tested without a Pokémon cartridge.
+    #[cfg(feature = "plugin-trainer")]
     fn plant_encounter(app: &mut App, shiny: bool) {
         use gameboy_plugin_trainer::encounter::WildEncounter;
         use gameboy_plugin_trainer::gen1::{BattleType, Dvs};
@@ -8376,6 +8408,7 @@ mod tests {
     /// cartridge is not a game the plugin understands — and the test ROM here
     /// is not one, so the plugin must refuse and say why.
     #[test]
+    #[cfg(feature = "plugin-trainer")]
     fn an_unsupported_cartridge_refuses_the_trainer_panel() {
         use ratatui::backend::TestBackend;
         let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();

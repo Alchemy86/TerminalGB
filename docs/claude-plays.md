@@ -4,7 +4,7 @@
 is thinking while it plays.*
 
 This page is the design, the honest limits, and the OBS recipe for putting it on
-Twitch. The code is [`src/agent/`](../src/agent/mod.rs), the panel is
+Twitch. The code is [`plugins/agent/src/`](../plugins/agent/src/lib.rs), the panel is
 [`src/screen/agent_view.rs`](../src/screen/agent_view.rs), the headless runner is
 [`examples/claude_plays.rs`](../examples/claude_plays.rs), and the proof is
 [`testharness/agent.rs`](../testharness/agent.rs).
@@ -74,7 +74,7 @@ the reported rate holds at **60 emulated fps throughout**.
 Structure is the channel; pixels are the fallback. An agent that has to infer
 everything from an image spends its budget on perception and never gets to play.
 
-[`src/agent/observe.rs`](../src/agent/observe.rs) exposes exactly what a
+[`plugins/agent/src/observe.rs`](../plugins/agent/src/observe.rs) exposes exactly what a
 decision needs, and each field earns its place:
 
 | field | why it is exposed |
@@ -135,7 +135,7 @@ script, a scripted test and an AI agent all drive the game, and three private
 frame timers would be three subtly different definitions of "a press".
 
 On top of that sit the primitives an agent can actually afford
-([`src/agent/action.rs`](../src/agent/action.rs)):
+([`plugins/agent/src/action.rs`](../plugins/agent/src/action.rs)):
 
 ```json
 {"do":"press","button":"a|b|up|down|left|right|start|select","times":1}
@@ -216,7 +216,7 @@ defences, because one is not enough for something that cannot be taken back:
    exception, the command line, the exit status or the subprocess's stderr.
    Those go to the NDJSON log file.
 2. **Everything that does enter is scrubbed.**
-   [`commentary::sanitise`](../src/agent/commentary.rs) strips anything shaped
+   [`commentary::sanitise`](../plugins/agent/src/commentary.rs) strips anything shaped
    like a credential (`sk-…`, `ghp_…`, bearer tokens, long opaque tokens,
    anything containing `api_key`/`secret`/`password`), absolute paths (`/home/…`,
    `~/…`, `C:\…`), source paths, URLs, email addresses and bare IP addresses;
@@ -309,7 +309,7 @@ the host, where editing the adapter cannot bypass them.
 
 ## 4. The safety rails
 
-All in [`src/agent/governor.rs`](../src/agent/governor.rs), all in the host.
+All in [`plugins/agent/src/governor.rs`](../plugins/agent/src/governor.rs), all in the host.
 
 ### Budget: four independent ceilings
 
@@ -543,7 +543,7 @@ nothing.
   [PASS] an agent repeating itself is detected and interrupted
 ```
 
-Plus ~60 unit tests across `src/agent/` and `src/screen/agent_view.rs`, including
+Plus ~60 unit tests across `plugins/agent/src/` and `src/screen/agent_view.rs`, including
 the sanitiser's ten leak shapes and the panel's "goal before history" rule.
 
 ### A real agent playing the opening
@@ -736,7 +736,7 @@ single-step axis alternation, which gets round a bed and cannot get round a
 building: it steps one tile aside, finds the direct route still blocked, steps
 back, and repeats. It now **commits to a four-step run** along the other axis
 before retrying, alternating the side each time. See
-[`GOTO_DETOUR`](../src/agent/action.rs).
+[`GOTO_DETOUR`](../plugins/agent/src/action.rs).
 
 The fix is pinned by a CI case rather than by the next expensive run: the
 synthetic cartridge grew a wall down one column with a single doorway three rows

@@ -78,7 +78,7 @@ they are not interchangeable:
 * **Read out of the cartridge** — a distinctive run of machine code was located in the ROM
   image and the address read straight out of its operand bytes. This is the strongest grade
   because it needs no build, no symbol file and no arithmetic, and it is what
-  `src/plugin/battle/wram.rs` does at attach time for every address it will *write* to.
+  `plugins/battle-control/src/wram.rs` does at attach time for every address it will *write* to.
 
 If something is believed but not checked, say "believed" and say why nobody has checked it.
 An unqualified claim that turns out to be wrong costs more than a gap.
@@ -103,10 +103,10 @@ The techniques here are all implemented in the repository and all runnable:
 
 * [`src/plugin/`](../../src/plugin/) — the plugin contract ([`docs/plugins.md`](../plugins.md)):
   a plugin declares what it may do and the host enforces it.
-* [`src/plugin/battle/`](../../src/plugin/battle/) — battle control.
-* [`src/plugin/gen1/`](../../src/plugin/gen1/) — the link partner, the party encoding and the
+* [`plugins/battle-control/src/`](../../plugins/battle-control/src/) — battle control.
+* [`plugins/gen1-link/src/`](../../plugins/gen1-link/src/) — the link partner, the party encoding and the
   cartridge table reader.
-* [`src/trainer/`](../../src/trainer/) — the read-only live view
+* [`plugins/trainer/src/`](../../plugins/trainer/src/) — the read-only live view
   ([`docs/trainer.md`](../trainer.md)).
 * [`examples/gen1_battle.rs`](../../examples/gen1_battle.rs),
   [`examples/gen1_trade.rs`](../../examples/gen1_trade.rs) — headless drivers that prove all of

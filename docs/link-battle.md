@@ -172,7 +172,7 @@ piece of work and the classic source of desyncs between two real cartridges.
 
 It is also unnecessary. The player's console is the single authority and
 maintains all of it in memory the plugin already declares the capability to read.
-So `src/plugin/gen1/battle.rs` **looks the state up** at `wEnemyMon` — "enemy"
+So `plugins/gen1-link/src/battle.rs` **looks the state up** at `wEnemyMon` — "enemy"
 being us, from the host's point of view — and chooses:
 
 * a move slot that is populated **and has PP**, uniformly at random among those;
@@ -204,7 +204,7 @@ remains impossible.
 
 ### Addresses
 
-Derived the same way as [`../src/trainer/gen1.rs`](../src/trainer/gen1.rs): from
+Derived the same way as [`../plugins/trainer/src/gen1.rs`](../plugins/trainer/src/gen1.rs): from
 `pret/pokered`'s `ram/wram.asm` and `macros/ram.asm`, cross-checked against the
 cartridge. `wEnemyMons` (`$D8A4`) was located by **measurement** rather than
 faith — a WRAM search for a `party_struct` matching the active Pokémon's species,

@@ -1,6 +1,9 @@
 # Plugins — the attach half of the extension surface
 
-> Source: [`src/plugin/`](../src/plugin/) · **User guide:
+> Source: the contract is [`crates/gameboy-plugin-api/`](../crates/gameboy-plugin-api/),
+> the plugins are [`plugins/`](../plugins/), the emulator's side is
+> [`src/plugin.rs`](../src/plugin.rs) ·
+> **Writing your own: [writing-a-plugin.md](writing-a-plugin.md)** · **User guide:
 > [trading over the link cable](link-trade.md)** · [link battles](link-battle.md) ·
 > Related: [debugging](debugging.md) ·
 > [telemetry](telemetry.md) · [serial](components/serial.md) · [conformance](conformance.md)
@@ -26,7 +29,21 @@ them, and an enforced statement of what each one is allowed to do.
 
 ## 2. What a plugin is
 
-**An in-process Rust object implementing [`Plugin`](../src/plugin/mod.rs).**
+**An in-process Rust object implementing
+[`Plugin`](../crates/gameboy-plugin-api/src/host.rs), in its own crate.**
+
+Each plugin is a crate under [`plugins/`](../plugins/) depending on
+[`gameboy-plugin-api`](../crates/gameboy-plugin-api/) — which has no dependencies of its own and
+**does not depend on the emulator**. That direction is load-bearing rather than tidy: this
+crate's terminal frontend *draws panels* for the plugins it ships with, so `gameboy` depends on
+those plugin crates. Had the trait lived in `gameboy`, plugins would have had to depend back on
+it and Cargo would have refused the cycle. An API crate that neither side owns breaks the knot,
+and the side effect is that a plugin author's dependency is ~400 dependency-free lines instead
+of a whole emulator.
+
+The seam that made it possible is `MachineAccess`: the API crate says what a machine must
+provide, `src/plugin.rs` implements it for the memory unit, and `Machine` — the capability-
+checked handle a plugin actually holds — is defined over the trait rather than over the MMU.
 
 That is the answer to "in-process trait, external process over the wire, or both?", and it is a
 narrower answer than "both". The honest reasoning:
@@ -37,7 +54,7 @@ narrower answer than "both". The honest reasoning:
 - **No new dependencies.** A wire protocol worth shipping needs a server, a framing layer and
   ideally `serde`. The repo's standing rule is that new dependencies need justification, and a
   transport nobody is using yet does not clear that bar.
-- **The messages are already wire-shaped.** Every [`Event`](../src/plugin/mod.rs) serialises to
+- **The messages are already wire-shaped.** Every [`Event`](../crates/gameboy-plugin-api/src/lib.rs) serialises to
   one NDJSON record via `Event::write_json`, the same shape telemetry uses, and every reply a
   plugin gives is a small owned value rather than a borrowed pointer. `GB_PLUGIN_TRACE=<path>`
   already writes that stream to a file — *emit over a pipe*, with a file standing in for the
@@ -126,6 +143,19 @@ is one of them. A second registration fails with `RegisterError::LinkAlreadyClai
   written with a plugin attached and loaded without one would otherwise desync silently. Loading
   a state calls `Plugin::reset`, so a link partner holding half a trade starts again rather than
   answering the next byte from a protocol position that no longer exists.
+- **A failing plugin is switched off, not fatal.** Every call into a plugin runs under
+  `catch_unwind`; one that panics is quarantined — never called again, marked `x` on its name,
+  reported once — and the emulator and every other plugin carry on. A link partner that panics
+  becomes an unplugged cable, a state the game already handles. **The honest caveat:** the
+  release profile sets `panic = 'abort'`, and under abort no `catch_unwind` in Rust catches
+  anything, so in the shipped release build a panicking plugin still takes the process. Real in
+  dev and test; do not panic in release.
+- **A plugin from another API revision is refused, not loaded.** `Plugin::api_version` defaults
+  to the `API_VERSION` compiled into the plugin's copy of the contract, and `register` returns
+  `RegisterError::ApiVersionMismatch` with the rebuild instruction. With build-time linking
+  Cargo has already made this impossible; the check is how compatibility is *declared*, and the
+  gate that becomes load-bearing if anything is ever loaded at runtime. See
+  [writing-a-plugin.md §5](writing-a-plugin.md).
 - **Disabled cost.** An empty host is one `is_empty` test per frame and per serial transfer.
   The two *hot* event categories `debugging.md` enumerates — instruction-retired and
   memory-access — are deliberately **not** implemented here, because that page specifies they
@@ -251,7 +281,7 @@ hack class declaring `WRITE_MEMORY` is visible in the status bar from the moment
 
 ## 7. The first plugin: a virtual link-cable partner (Gen 1)
 
-[`src/plugin/gen1/`](../src/plugin/gen1/) emulates the second Game Boy on the serial link so
+[`plugins/gen1-link/src/`](../plugins/gen1-link/src/) emulates the second Game Boy on the serial link so
 Pokémon Red/Blue/Yellow completes a **real trade** at the Cable Club.
 
 It declares `SERIAL_LINK + OBSERVE + READ_MEMORY` and **not** `WRITE_MEMORY`. It does not patch
@@ -339,7 +369,7 @@ Nothing is recomputed. So every field has to be right at the moment it goes on t
 
 **No game data is embedded in this repository.** Base stats, the internal-index↔Pokédex mapping,
 species names and move PP are read out of the player's own cartridge
-([`romdata.rs`](../src/plugin/gen1/romdata.rs)), located by distinctive byte signature and then
+([`romdata.rs`](../plugins/gen1-link/src/romdata.rs)), located by distinctive byte signature and then
 cross-checked against a second known entry, so a mislocated table is an error rather than a
 silently wrong Pokémon. It also means Red, Blue and Yellow are each right by construction — and
 that Mew, whose base stats live *outside* the main table in Red/Blue, is handled rather than

@@ -717,7 +717,7 @@ one of its six phases. Everywhere else the player was sealed in the Cable Club.
 - **New tests — the shape matters more than the cases.** The old test asserted
   the *byte* from one phase. The new ones assert the byte **and the resulting
   phase**, for every phase the machine can be in, plus a repeated cancel, plus a
-  fresh session afterwards (`src/plugin/gen1/protocol.rs`:
+  fresh session afterwards (`plugins/gen1-link/src/protocol.rs`:
   `the_cancel_byte_is_echoed_from_every_phase`,
   `a_whole_cancel_round_is_echoed_from_every_phase`,
   `a_repeated_cancel_keeps_being_answered`, `a_cancel_never_counts_as_a_trade`,

@@ -80,16 +80,27 @@ jobs:
           cargo build --release --no-default-features
           cargo clippy --release --no-default-features --all-targets -- -D warnings
           cargo test  --release --no-default-features --lib
-      # One dependency, and it must stay that way. `blip_buf` is the APU's
-      # resampler; anything else appearing here means a frontend crate has
-      # leaked into the core's default path.
-      - name: The core has exactly one dependency
+      # One THIRD-PARTY dependency, and it must stay that way. `blip_buf` is
+      # the APU's resampler; anything else appearing here means a frontend
+      # crate has leaked into the core's default path.
+      #
+      # `gameboy-plugin-api` is allowed beside it and is not a loosening of
+      # this rule: it is first-party, in this repository, has no dependencies
+      # of its own, and is the code that used to be `src/plugin/mod.rs`. It
+      # became a crate so that plugin crates can depend on the contract without
+      # depending on the emulator — see docs/writing-a-plugin.md §8. An
+      # embedder gains no new third-party code.
+      - name: The core has exactly one third-party dependency
         run: |
           deps=$(cargo tree --no-default-features --edges normal --prefix none \
-                 | sort -u | grep -v '^gameboy ')
+                 | sort -u | grep -v '^gameboy ' | grep -v '^gameboy-plugin-api ')
           echo "$deps"
           test "$deps" = "$(printf '%s' "$deps" | head -1)" || { echo "more than one dependency"; exit 1; }
           case "$deps" in blip_buf*) ;; *) echo "unexpected dependency"; exit 1 ;; esac
+      # No plugin may be reachable from the core, or "the plugins are optional"
+      # is a claim rather than a fact. See `make no-plugins`.
+      - name: No plugin is in the core, or the frontends
+        run: make no-plugins
       # Run a real cartridge with no HOME, no display and no audio device. The
       # example exits non-zero if the save-state round trip diverges.
       - name: Run a ROM headless with no HOME and no display

@@ -7,9 +7,9 @@ second consumer of the plugin surface designed in [`debugging.md`](debugging.md)
 
 Press **`T`** in the terminal frontend.
 
-- Source: [`src/trainer/`](../src/trainer), panel layout in
+- Source: [`plugins/trainer/src/`](../plugins/trainer/src), panel layout in
   [`src/screen/trainer_view.rs`](../src/screen/trainer_view.rs), plugin contract in
-  [`src/plugin/mod.rs`](../src/plugin/mod.rs).
+  [`crates/gameboy-plugin-api/src/lib.rs`](../crates/gameboy-plugin-api/src/lib.rs).
 - Harness: `cargo test --release --test trainer`
   ([`testharness/trainer.rs`](../testharness/trainer.rs)).
 
@@ -49,7 +49,7 @@ trainer's roster.
 Growl visibly takes an Attack of 10 down to 6 — so the panel says which stats are staged, in
 which direction and by how many, for the opponent (`MOD`) and for your own active Pokémon
 (`YOU`). Lowered is red, raised is green. See
-[`derived::StatMods`](../src/trainer/derived.rs) for why the *stage* is shown rather than a
+[`derived::StatMods`](../plugins/trainer/src/derived.rs) for why the *stage* is shown rather than a
 reconstructed "before" value, and for the Gen 1 ratios (`-1` is two thirds, not a half; `+1`
 is 1.5×, so up and down do not cancel).
 
@@ -208,8 +208,8 @@ byte. Every address is therefore the value that build's own symbol file gives fo
 every symbol used here, which is why one table serves both games.
 
 Each constant carries its label in
-[`src/trainer/gen1.rs`](../src/trainer/gen1.rs) and
-[`src/trainer/rom.rs`](../src/trainer/rom.rs); the headline ones:
+[`plugins/trainer/src/gen1.rs`](../plugins/trainer/src/gen1.rs) and
+[`plugins/trainer/src/rom.rs`](../plugins/trainer/src/rom.rs); the headline ones:
 
 | What | Symbol | Address |
 |---|---|---|
@@ -270,7 +270,7 @@ time, which is not the feature that was asked for.
 
 **The cartridge** gives every Pokémon at any moment, in or out of battle, at the cost of
 implementing the compression Gen 1 stores its pictures in. That is what
-[`src/trainer/sprite.rs`](../src/trainer/sprite.rs) does, reimplemented from the format as
+[`plugins/trainer/src/sprite.rs`](../plugins/trainer/src/sprite.rs) does, reimplemented from the format as
 documented by `pokered` (`home/uncompress.asm`, `home/pics.asm`, `tools/pkmncompress.c`):
 a square of up to 7×7 tiles, two bitplanes each run-length coded as 2-bit groups with a
 biased unary length encoding, then delta-decoded ("a bit means *toggle*"), then combined by
@@ -334,7 +334,7 @@ it.
 is unlike every later generation's in ways a modern formula gets confidently
 wrong, so `ItemUsePokeBall` was located in the player's own ROM (bank 3, by its
 `ld a,200` / `ld a,150` threshold pair, which occurs exactly once) and read
-instruction by instruction. [`src/trainer/capture.rs`](../src/trainer/capture.rs)
+instruction by instruction. [`plugins/trainer/src/capture.rs`](../plugins/trainer/src/capture.rs)
 carries the listing with the addresses it was read from, cross-referenced to
 `pret/pokered`'s `engine/items/item_effects.asm`.
 
@@ -426,7 +426,7 @@ prevent. The trainer's **name** is shown instead, on the encounter line.
 
 The layer that makes this a tracker rather than a prettier party menu. Everything here is
 already in memory; the game simply never shows it.
-[`src/trainer/derived.rs`](../src/trainer/derived.rs).
+[`plugins/trainer/src/derived.rs`](../plugins/trainer/src/derived.rs).
 
 **Would it be shiny in Gen 2?** Gen 1 has no shininess, but a Pokémon's DVs travel forward
 through the Time Capsule unchanged and Gen 2 derives shininess *entirely* from them. So this
@@ -501,7 +501,7 @@ is still unspent**, which is the only moment the answer changes a decision.
 ### Why the answer exists that early
 
 Three facts, each from the disassembly, are what make it work
-([`src/trainer/encounter.rs`](../src/trainer/encounter.rs)):
+([`plugins/trainer/src/encounter.rs`](../plugins/trainer/src/encounter.rs)):
 
 1. **A wild Pokémon's DVs are rolled when the battle starts.** `LoadEnemyMonData`
    (`pokered/engine/battle/core.asm`) branches on `wIsInBattle`: a wild Pokémon gets two

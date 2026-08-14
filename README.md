@@ -217,7 +217,7 @@ The recognised keys:
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
 | `video_dir` | a path (`~` expands) | Where **`V`** records. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
 | `video_device` | `/dev/videoN` | A `v4l2loopback` node to *verify*: the emulator warns if its camera label names a different game. |
-| `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. |
+| `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. [Write your own](docs/writing-a-plugin.md); the ones we ship live in [`plugins/`](plugins/) and can all be built out. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
 | `battles` | a path | Battle-preset file for the `gen1-battle` plugin. Unset uses the built-in presets. See [docs/gen1/battle-control.md](docs/gen1/battle-control.md). |
 | `agent_command` | a program + arguments | What the `agent` plugin runs to decide what to do. Unset means no driver, and the plugin declines to attach rather than sitting there inert. See [Claude plays Pokémon](docs/claude-plays.md). |
@@ -587,7 +587,10 @@ breakdown, emulated speed) for automated checks — the
 [video-out guide](docs/video-out.md) — the picture as a raw frame stream for `ffmpeg`/OBS and as
 a virtual webcam, with the exact commands — the
 [plugin contract](docs/plugins.md) — what a plugin may do, how you can tell one is attached,
-and the virtual link-cable partner that completes a real Generation 1 Pokémon trade — or the
+and the virtual link-cable partner that completes a real Generation 1 Pokémon trade — the
+[guide to writing one](docs/writing-a-plugin.md) — zero to a working plugin for someone who has
+never seen this codebase, with the trust model, the version boundary and the install path
+stated plainly — or the
 [display-scaling design](docs/display.md) — how each frontend enlarges the 160×144
 screen today and how to make it crisp (nearest/integer), smooth, or "vector-like",
 or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the

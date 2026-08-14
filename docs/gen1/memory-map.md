@@ -69,7 +69,7 @@ four, most significant first (`CalcStat`, `home/move_mon.asm`). And `Species` is
 index, `BaseStats` by Pokédex number, and `PokedexOrder` converts (as `GetMonHeader` does,
 with Mew special-cased because its base stats live outside the main table in Red/Blue).
 
-Encoder and decoder: [`src/plugin/gen1/party.rs`](../../src/plugin/gen1/party.rs). There is
+Encoder and decoder: [`plugins/gen1-link/src/party.rs`](../../plugins/gen1-link/src/party.rs). There is
 deliberately **one** implementation — the link partner and battle control share it, so a fix
 to either fixes both.
 
@@ -131,7 +131,7 @@ classic way to produce a level 6400 Pokémon.
 ```
 
 29 bytes (`macros/ram.asm`, `battle_struct`). Note that
-[`src/trainer/gen1.rs`](../../src/trainer/gen1.rs) carries a `BATTLE_MON_SIZE` of 28; that
+[`plugins/trainer/src/gen1.rs`](../../plugins/trainer/src/gen1.rs) carries a `BATTLE_MON_SIZE` of 28; that
 constant is only ever used as a stride and there is only ever one enemy Pokémon in battle, so
 it is harmless there — but do not copy it.
 
@@ -193,9 +193,9 @@ decoding `wTileMap` with the Gen 1 charmap prints what a player can see. That si
 underpins menu navigation, headless testing and the Mooneye debugging trick, and it has its
 own page: [reading the screen](reading-the-screen.md).
 
-The character map is in [`src/plugin/gen1/text.rs`](../../src/plugin/gen1/text.rs)
+The character map is in [`plugins/gen1-link/src/text.rs`](../../plugins/gen1-link/src/text.rs)
 (`encode_char`/`decode_char`); the screen decoder that renders unmapped tiles as spaces is
-[`src/trainer/text.rs`](../../src/trainer/text.rs) (`decode_screen`).
+[`plugins/trainer/src/text.rs`](../../plugins/trainer/src/text.rs) (`decode_screen`).
 
 ---
 
@@ -300,7 +300,7 @@ trainer rosters — live in banks the game maps only while it is using them. A p
 once a second would otherwise read whatever happened to be there.
 
 And the tables themselves are located by **byte signature** rather than by hard-coded offset:
-[`src/plugin/gen1/romdata.rs`](../../src/plugin/gen1/romdata.rs) finds `BaseStats` by
+[`plugins/gen1-link/src/romdata.rs`](../../plugins/gen1-link/src/romdata.rs) finds `BaseStats` by
 Bulbasaur's record, `PokedexOrder` by its first six entries, `MonsterNames` by `RHYDON`, and
 then cross-checks a *later* entry so a one-record misalignment fails loudly. That is what
 keeps game data out of this repository: the numbers are read from the player's own cartridge.

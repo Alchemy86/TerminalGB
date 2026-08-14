@@ -1,6 +1,6 @@
 # Trading a Pokémon in over the link cable
 
-> Source: [`src/plugin/gen1/`](../src/plugin/gen1/) · Contract: [plugins](plugins.md) ·
+> Source: [`plugins/gen1-link/src/`](../plugins/gen1-link/src/) · Contract: [plugins](plugins.md) ·
 > Serial: [components/serial](components/serial.md) · [🗺️ Code map](codemap.md)
 
 ---

@@ -32,9 +32,9 @@ composed of background tiles) as a space, so a decoded screen is readable rather
 
 Implementations here:
 
-* [`src/plugin/gen1/text.rs`](../../src/plugin/gen1/text.rs) — `encode_char` / `decode_char` /
+* [`plugins/gen1-link/src/text.rs`](../../plugins/gen1-link/src/text.rs) — `encode_char` / `decode_char` /
   `encode_fixed`, the charmap itself, used for names going onto the link cable.
-* [`src/trainer/text.rs`](../../src/trainer/text.rs) — `decode_screen`, which is the *screen*
+* [`plugins/trainer/src/text.rs`](../../plugins/trainer/src/text.rs) — `decode_screen`, which is the *screen*
   decoder: it does not stop at `$50` and it renders unmapped tiles as spaces.
 
 ---

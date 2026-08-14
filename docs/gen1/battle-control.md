@@ -1,6 +1,6 @@
 # Starting a battle from outside the game
 
-[← Gen 1 area](README.md) · implemented in [`src/plugin/battle/`](../../src/plugin/battle/)
+[← Gen 1 area](README.md) · implemented in [`plugins/battle-control/src/`](../../plugins/battle-control/src/)
 
 **Pokémon Red and Blue decide to start a battle by reading one byte.** Write that byte and the
 engine does everything else: the transition, the sprite, the music, the AI, the animations, the
@@ -86,7 +86,7 @@ part that bites, and it bites in ways that look like emulator bugs rather than l
 
 `AddEnemyMonToPlayerParty` and the battle engine recompute nothing. Stats, experience for the
 level, types, catch rate and PP all have to be right in the bytes you write. Battle control
-delegates all of it to [`party::build_mon`](../../src/plugin/gen1/party.rs) — the *same*
+delegates all of it to [`party::build_mon`](../../plugins/gen1-link/src/party.rs) — the *same*
 function the link partner uses to put a Pokémon on the wire:
 
 * types, catch rate and base stats read from the cartridge's `BaseStats`;
