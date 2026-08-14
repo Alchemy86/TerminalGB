@@ -39,9 +39,15 @@ fn main() {
             eprintln!("usage: terminalgb [ROM.gb | music | login | logout] [--video-out PATH ...]");
             eprintln!("  with a ROM path: launch straight into the game");
             eprintln!("  with no args:    browse the ROM picker (rom_dir from config)");
-            eprintln!("  music:           MUSIC MODE — every ROM in rom_dir as an album, with");
-            eprintln!("                   cover art from its own title screen, its music");
-            eprintln!("                   playing, and `w` to save what you hear as a WAV.");
+            eprintln!(
+                "  music:           MUSIC MODE — every ROM in rom_dir as an album, with"
+            );
+            eprintln!(
+                "                   cover art from its own title screen, its music"
+            );
+            eprintln!(
+                "                   playing, and `w` to save what you hear as a WAV."
+            );
             eprintln!("                   See docs/music-mode.md.");
             eprintln!("video-out (see docs/video-out.md):");
             eprintln!("{}", terminalgb::video::cli_usage());
