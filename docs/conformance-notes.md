@@ -17,6 +17,54 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — MBC1M multicarts were driven as ordinary MBC1 carts
+
+Mooneye `emulator-only/mbc1/multicart_rom_8Mb` was the suite's single MBC failure
+(27/28). Fixed in `src/mbc/mbc1.rs`; **Mooneye `emulator-only` 27/28 → 28/28**, and the
+published-264 shootout row flips too (screenshot-judged, `GB_MODEL=dmg`: FAIL → PASS).
+Mooneye `acceptance` was re-measured before and after on the same build and is unchanged
+at 55/75, and `testroms` still matches its baseline exactly.
+
+**Symptom** — a multi-game compilation cartridge (*Bomberman Collection*, *Mortal Kombat
+I & II*, *Genjin Collection*, *Super Chinese 1・2・3*, …) boots its menu, and picking any
+game but the first runs the wrong one, or garbage: the menu selects a game by writing
+BANK2, and every bank the chosen game then asks for lands 16 banks away from where it
+should. Nothing crashes, which is what makes it hard to recognise — the emulator looks
+like it is running a corrupt ROM.
+
+**Caught by** — Mooneye GB `emulator-only/mbc1/multicart_rom_8Mb`, whose expected-bank
+table was verified by its author against a real MBC1B1 chip. Nothing else in any suite we
+run touches MBC1M. Note the ROM's own readme: *"MBC1 multicarts cannot be detected from
+the header alone … any emulator that wants to pass this test must have either heuristics
+or some configuration to trigger MBC1 multicart mode."* — so the check is as much about
+**cartridge identification** as about banking, and a conformance tool must say which half
+an emulator failed.
+
+**Hardware** — MBC1M wires the mapper differently: the top bit of the 5-bit BANK1 register
+is not connected (a 4-bit register for banking), and the 2-bit BANK2 register drives bits
+**4-5** of the bank number instead of bits 5-6. The `00 → 01` translation still uses all
+five written bits *before* bit 4 is dropped, so writing `$10` selects bank `$00` while
+writing `$00` selects bank `$01`. In mode 1 the `$0000-$3FFF` window therefore shows banks
+`$00/$10/$20/$30` rather than `$00/$20/$40/$60` — which is exactly how a compilation cart
+swaps games while each game believes it is running from a 256 KiB cartridge. Pan Docs,
+["MBC1M": 1 MiB Multi-Game Compilation Carts](https://gbdev.io/pandocs/MBC1.html).
+Identification, from the same section: *"These carts can normally be identified by having
+a Nintendo copyright header in bank $10."* We require the image to be exactly 1 MiB **and**
+to carry the logo at `$40104`; `GB_MBC1_MULTICART=1|0` forces the answer either way, which
+is the "some configuration" half the test ROM asks for.
+
+**Carries into the tool** — the 256-entry expected-bank table is now a unit test
+(`mbc1::tests::multicart_banking_matches_the_mooneye_table`), transcribed from Mooneye's
+`.s` file rather than from our output, so the expectation stays somebody else's. Two
+conformance checks worth publishing: (1) *an MBC1M cart must be recognised as one* — a
+detection check, separable from banking, that a tool can report on its own; (2) *the
+false-positive direction matters more than the false-negative one* — misdetecting an
+ordinary 1 MiB MBC1 game as a multicart makes half its ROM unreachable, so the check
+should be run in both directions (a plain 1 MiB cart must keep bits 5-6). Both directions
+are pinned here (`a_plain_1mb_cart_keeps_the_ordinary_wiring`).
+
+---
+
 ## 2026-08-14 — `STOP` never stopped, and the speed switch took no time
 
 `STOP` (`$10`) was three lines: call `switch_speed()` and carry on. It was a

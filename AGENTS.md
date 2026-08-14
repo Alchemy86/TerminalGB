@@ -929,6 +929,21 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   byte-identical for 0x00 carts, so **no `savestate::FORMAT_VERSION` bump**.
 - **MBC2 stores the low nibble (`v & 0x0F`), reads OR in `0xF0`.** Storing `v | 0xF0` plays
   identically but makes our `.sav` differ byte-for-byte from a hardware dump.
+- **MBC1M multicarts are a different *wiring*, not a different mapper** (`src/mbc/mbc1.rs`).
+  BANK1's top bit is not connected and BANK2 drives bank bits **4-5**, so mode 1 shows
+  `$00/$10/$20/$30` in `$0000-$3FFF` — that is how a compilation cart switches games. The
+  `00 → 01` translation still uses all five *written* bits before bit 4 is dropped, so
+  writing `$10` selects bank `$00` and writing `$00` selects `$01`; that single rule is what
+  Mooneye's expected-bank table turns on. Both differences live in three one-line helpers
+  (`bank2_shift`/`bank1_mask`/`bank2_mask`), so the ordinary path is unchanged and the state
+  layout did not move — **no `savestate::FORMAT_VERSION` bump**. **Detection is a guess and
+  has to be**: such a cart is indistinguishable from a plain MBC1 by its own header, so we
+  require exactly 1 MiB **and** a second Nintendo header at `$40104` (bank `$10`) — Pan Docs'
+  own identification rule — with `GB_MBC1_MULTICART=1|0` to force it either way. **The
+  false-positive direction is the dangerous one**: misreading an ordinary 1 MiB cart as a
+  multicart moves BANK2 down two bits and strands half the ROM, which is why the heuristic is
+  narrow and both directions are unit-tested. **Mooneye `emulator-only` is 28/28**
+  (`cargo run --release --example mooneye_scout -- <suite>/emulator-only`).
 - **A save that cannot be read is never overwritten** (the battery poisons itself on a read
   error). Loading fails loudly instead of silently starting a new game over an existing save.
 - **Loaded saves are normalised to the declared RAM size** (pad/truncate) and every MBC

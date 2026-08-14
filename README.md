@@ -612,6 +612,16 @@ different boot registers (`A=0x11 HL=0x007C` rather than `A=0x01 HL=0x014D`) and
 undocumented CGB registers still responding. Nine Mooneye acceptance tests print those
 registers and can tell.
 
+**Multi-game compilation cartridges (MBC1M)**
+
+Carts like *Bomberman Collection* or *Mortal Kombat I & II* hold several games behind one
+menu and wire their MBC1 differently — and they cannot be told apart from an ordinary
+cartridge by the header, so every emulator guesses. We treat a cartridge as a multicart
+when it is exactly 1 MiB and carries a second Nintendo header in bank `$10`, which is the
+identification Pan Docs documents. If a cart guesses wrong in either direction,
+`GB_MBC1_MULTICART=1` forces multicart wiring and `GB_MBC1_MULTICART=0` forces the
+ordinary wiring.
+
 **Accuracy — hardware test ROMs**
 
 A **headless Blargg/acid2 harness is wired in** ([`testharness/`](testharness/), run

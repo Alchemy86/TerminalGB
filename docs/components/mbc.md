@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`77fd97f`](https://github.com/Alchemy86/gameboy/tree/77fd97f10871686f409fe6b95ef77cac05507583) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -79,7 +79,7 @@ are not supported.
 Each controller: **MBC0** (no banking, optional 8 KB RAM for `0x08`/`0x09`,
 [`mbc0.rs:4`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc0.rs#L4)); **MBC1**
 (5-bit + 2-bit bank registers, mode select, bank-0 remap;
-[`mbc1.rs:99–186`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L99)); **MBC2** (512-byte nibble RAM: the low nibble is
+[`mbc1.rs:164–243`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L164)); **MBC2** (512-byte nibble RAM: the low nibble is
 stored, reads OR in `0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC via the host clock —
 see below; [`mbc3.rs`](../../src/mbc/mbc3.rs)); **MBC5** (9-bit ROM bank split across
 `0x2000` and `0x3000`; [`mbc5.rs:90`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L90)).
@@ -191,21 +191,26 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   real MBC30 cartridge is 2 MiB so this is currently invisible, but 4 MiB MBC30 ROM hacks
   exist and would mis-bank. (64 KiB MBC30 RAM *does* work — the RAM-bank register already
   keeps 3 bits.)
-- **No MBC1M multicart detection** — only the mode-1 `& 0xE0` bank-0 remap
-  ([`mbc1.rs:104`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L104)) is present; true multicart masking (`& 0x30`) is
-  absent. Seven known cartridges declare MBC1 in the header but wire bank2 differently
-  (`MOMOCOL`, `BOMCOL`, `BOMSEL`, `GENCOL`, `SUPERCHINESE 123`, `MORTALKOMBATI&II`,
-  `MORTALKOMBAT DUO`); they can only be told apart by title + header checksum, and they boot
-  into the wrong game after the menu. MMM01 and M161 carts likewise hide behind ordinary
-  MBC3-looking headers.
+- **MMM01 and M161 multicart mappers are still unsupported** — like MBC1M they hide behind
+  ordinary-looking headers, but unlike MBC1M they are different *mappers*, not a different
+  wiring of MBC1, so nothing here drives them. (MBC1M itself is now detected and wired
+  correctly — see §5.)
 
 ## 5. Known quirks and edge cases
 
 - **RAM enable gate.** Cartridge RAM only responds after the game writes `0x0A` to the
   enable range; otherwise reads return open-bus. Modelled per-controller.
 - **MBC1 bank-0 remap.** Writing bank `0` to the low register selects bank `1`
-  ([`mbc1.rs:135`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L135)); in mode 1 the `0x0000–0x3FFF` region can show a
-  non-zero bank ([`mbc1.rs:104`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L104)).
+  ([`mbc1.rs:217`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L217)); in mode 1 the `0x0000–0x3FFF` region can show a
+  non-zero bank ([`mbc1.rs:173`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L173)).
+- **MBC1M multicart wiring.** A 1 MiB multi-game compilation cart ignores the top bit of
+  BANK1 and moves BANK2 to bank bits 4-5, so mode 1 shows banks `$00/$10/$20/$30` in
+  `0x0000–0x3FFF` — that is how its menu switches games. The `00 → 01` translation still
+  looks at all five written bits first, so writing `$10` selects bank `$00`. Such a cart
+  cannot be told from a plain MBC1 by its own header; it is identified by the second
+  cartridge header (Nintendo logo at `$40104`) that the compilation leaves in bank `$10`,
+  and `GB_MBC1_MULTICART=1|0` overrides that heuristic in either direction. Pan Docs,
+  ["MBC1M"](https://gbdev.io/pandocs/MBC1.html).
 - **MBC2's 4-bit RAM.** Only the low nibble of each of 512 bytes is real; reads force the
   high nibble to `1` ([`mbc2.rs:72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L72)).
 - **MBC3 RTC latch.** Writing `0x00` then `0x01` to `0x6000–0x7FFF` latches the current
@@ -273,12 +278,22 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
     48-byte layout, the 44-byte variant, the footer-only-for-clock-carts rule and a
     write/read round trip are unit-tested in [`battery.rs`](../../src/mbc/battery.rs); no
     battery-RTC cartridge is available to the end-to-end harness.)*
+19. **An MBC1M multicart banks by bits 4-5, an ordinary MBC1 by bits 5-6.** Writing `$10`
+    to BANK1 selects bank `$00` on a multicart and bank `$10` on a plain cart, and mode 1
+    shows `$00/$10/$20/$30` versus `$00/$20/$40/$60` in `0x0000–0x3FFF`. ✅ **Covered**
+    (`mbc1::tests::multicart_banking_matches_the_mooneye_table`, the 256-entry expectation
+    transcribed from Mooneye's `multicart_rom_8Mb.s`).
+20. **A cart is only treated as a multicart when it looks like one.** A 1 MiB MBC1 image
+    with no second header in bank `$10` keeps the ordinary wiring; the false-positive
+    direction is the dangerous one, since it strands half the ROM. ✅ **Covered**
+    (`a_plain_1mb_cart_keeps_the_ordinary_wiring`,
+    `multicart_detection_requires_a_1mb_image`).
 
 ## 7. Test ROMs that exercise it
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Mooneye `emulator-only/mbc1/`** (`bits_bank1`, `bits_ramg`, `rom_512kb`, `multicart_rom_8Mb`, …) | Every MBC1 register bit, sizes, multicart | Precisely targets §4/§5 — the multicart test is an expected red. |
+| **Mooneye `emulator-only/mbc1/`** (`bits_bank1`, `bits_ramg`, `rom_512kb`, `multicart_rom_8Mb`, …) | Every MBC1 register bit, sizes, multicart | Precisely targets §4/§5. All green — the whole `emulator-only` suite is **28/28** (`examples/mooneye_scout.rs`). |
 | **Mooneye `emulator-only/mbc2/`, `mbc5/`** | MBC2 nibble RAM + register bits; MBC5 9-bit bank | Banking maths errors. |
 | **Blargg `bits-bank1`** (repo screenshot: *failing*) | ROM-bank register bit behaviour | One of the repo's four known-failing screenshots — a real banking/bit gap. |
 | *(No dedicated MBC3-RTC ROM in the common suites)* | — | RTC accuracy would need a custom test given the wall-clock implementation. |
