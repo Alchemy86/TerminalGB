@@ -266,6 +266,9 @@ impl<'a> Serial<'a> {
     /// `link_hold` field. Releasing does not itself complete the transfer; the
     /// next shift-clock edge does, which keeps the game's timing on the
     /// hardware's own clock rather than on the cable's.
+    // Gated like its one caller, `link::peer` (`#[cfg(unix)]`) — dead code on
+    // wasm and Windows otherwise.
+    #[cfg(unix)]
     pub(crate) fn link_set_hold(&mut self, hold: bool) {
         self.link_hold = hold;
     }

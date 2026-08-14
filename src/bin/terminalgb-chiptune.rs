@@ -11,12 +11,25 @@
 //! a CLI parser would be a third-party crate in a tool whose whole boast is
 //! that the music half has no dependencies at all. See `docs/chiptune.md`.
 
+// The renderer drives the emulated APU, and the whole `sound` module — so
+// `terminalgb::chiptune` with it — is compiled out on `wasm32` (`src/lib.rs`).
+// Cargo can feature-gate a `[[bin]]` but not target-gate one, so on wasm this
+// binary is an empty shell rather than a build error: `cargo build --target
+// wasm32-unknown-unknown` with default features must keep working.
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
+#[cfg(not(target_arch = "wasm32"))]
 use terminalgb::chiptune::{render, RenderOptions};
+#[cfg(not(target_arch = "wasm32"))]
 use terminalgb_chiptune::{compile_auto, track::Model, vgm, wav};
 
+#[cfg(not(target_arch = "wasm32"))]
 const USAGE: &str = "\
 terminalgb-chiptune — render Game Boy sound-chip instructions to audio.
 
@@ -53,9 +66,12 @@ one: SameSuite's APU group 64/69, Blargg dmg_sound 12/12. See docs/chiptune.md.
 
 /// A phrase written here, so the example ships no copyrighted music: a rising
 /// arpeggio over a bass line, a swept "laser", and a noise drum.
+#[cfg(not(target_arch = "wasm32"))]
 const EXAMPLE_SCORE: &str = include_str!("../../docs/chiptune-examples/demo.gbscore");
+#[cfg(not(target_arch = "wasm32"))]
 const EXAMPLE_REGS: &str = include_str!("../../docs/chiptune-examples/tone.gbregs");
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Args {
     input: Option<PathBuf>,
     out: Option<PathBuf>,
@@ -68,6 +84,7 @@ struct Args {
     vgm_out: Option<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     match run() {
         Ok(()) => {}
@@ -78,6 +95,7 @@ fn main() {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run() -> Result<(), String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {

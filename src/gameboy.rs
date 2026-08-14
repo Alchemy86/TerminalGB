@@ -846,6 +846,9 @@ impl Gameboy {
         self.cpu.memory.serial.link_answer_master(received);
     }
 
+    // Only `link::peer` (`#[cfg(unix)]`) drives the hold, so gate to match —
+    // otherwise wasm and Windows builds warn on dead code.
+    #[cfg(unix)]
     pub(crate) fn link_set_hold(&mut self, hold: bool) {
         self.cpu.memory.serial.link_set_hold(hold);
     }
@@ -969,10 +972,19 @@ impl Gameboy {
     }
 
     /// Is an APU installed? False means the machine has **no sound chip**, not
-    /// a quiet one — see [`crate::sound::SilentPlayer`] for why the difference
-    /// is visible to the cartridge.
+    /// a quiet one — see `crate::sound::SilentPlayer` for why the difference
+    /// is visible to the cartridge. The `sound` field itself is compiled out on
+    /// `wasm32` (like the whole `sound` module), so this answers `false` there
+    /// rather than not existing: an embedder may always ask.
     pub fn audio_enabled(&self) -> bool {
-        self.cpu.memory.sound.is_some()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.cpu.memory.sound.is_some()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
     }
 
     /// Frontend hint: emulation is deliberately running faster than real time.

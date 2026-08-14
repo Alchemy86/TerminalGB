@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 
 .PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
-        fetch-test-suites test-external test-external-accurate no-plugins \
+        check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-chiptune chiptune-demo
 
 all: build install
@@ -46,11 +46,23 @@ build-wasm:
 test:
 	cargo test --release
 
+# Type-check both wasm builds: the embedding core and the web frontend
+# (default features). This exists because GitHub CI only runs on push and this
+# project merges into local main first — a wasm break on unpushed commits is
+# invisible to CI for days, so the local gates must cover it. `rustup target
+# add` is idempotent and a no-op once installed.
+check-wasm:
+	rustup target add wasm32-unknown-unknown
+	cargo check --no-default-features --lib --target wasm32-unknown-unknown
+	cargo check --target wasm32-unknown-unknown
+
 # The embedding build: the core with NO features. Proves the crate is usable
 # from someone else's UI or hardware project — no window system, no terminal,
 # no audio device, no image codecs, no $HOME. See README "Embedding the core".
 # The `env -u` is the point: it fails if anything on this path needs a host.
-embed:
+# Includes the wasm cross-check: `wasm32` compiles the `sound` module out, so
+# it is the target most likely to break from a native-only change.
+embed: check-wasm
 	cargo clippy --release --no-default-features --all-targets -- -D warnings
 	cargo test --release --no-default-features --lib
 	cargo tree --no-default-features --edges normal   # blip_buf + first-party terminalgb-plugin-api

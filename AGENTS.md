@@ -3686,6 +3686,16 @@ it. That is now a real, CI-enforced build; it did not compile before.
   than its header used to index out of bounds; `get_mbc` refuses it, and
   `Gameboy::try_new_with_model` / `Cpu::try_new_with_model` return the reason. **Use the
   `try_` form for bytes you did not produce.**
+- **GitHub CI cannot protect the wasm build — `make embed` now does (`make check-wasm`).**
+  CI's wasm jobs are real, but CI runs on *push* and this project merges into local `main`
+  first, so a wasm break on unpushed commits is invisible for days (`c240626` broke
+  `Gameboy::audio_enabled` — an unconditional read of the `#[cfg(not(wasm32))]` `sound`
+  field — and `1b3e3e7`'s `terminalgb-chiptune` bin imported a module wasm compiles out;
+  GitHub CI never saw either, being already red on an *earlier* unpushed-fix breakage, which
+  also skips the embed job's wasm cross-check step). Two standing rules from the fix: a
+  `pub` accessor over a target-gated field needs a wasm arm (return the honest answer, e.g.
+  `audio_enabled() == false`), and **Cargo cannot target-gate a `[[bin]]`** — a bin whose
+  feature is in `default` must carry a `#[cfg(target_arch = "wasm32")] fn main() {}` stub.
 - **Cross-target reality:** `cargo check --no-default-features` is clean for `wasm32`,
   `x86_64-pc-windows-gnu`, `aarch64-unknown-linux-gnu` and `x86_64-apple-darwin` (in CI for
   the first three). Those are **type checks, not linked-and-run** — x86-64 Linux is still the
