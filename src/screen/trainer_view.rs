@@ -103,10 +103,25 @@ pub const PANEL_W: u16 = 40;
 /// the game picture instead.
 pub const PANEL_MIN_W: u16 = 22;
 
-/// Rows reserved for the sprite. A Gen 1 picture is at most 56x56 pixels, and
-/// terminal cells are roughly twice as tall as wide, so eight rows is about
-/// square at any sane font.
-pub const SPRITE_ROWS: u16 = 8;
+/// Rows reserved for the sprite **at the panel's design width**. See
+/// [`sprite_rows`], which scales it.
+pub const SPRITE_ROWS: u16 = 11;
+
+/// Rows the sprite band gets in a panel `inner` columns wide.
+///
+/// The sprite is the one part of the panel that can genuinely *scale*: it is an
+/// image, so a taller band means `fit_metrics` gives it more cells and the
+/// picture inside grows. Text cannot do that — it is bound to the cell grid —
+/// so if the band stayed a constant eight rows the panel would keep the same
+/// visual weight while the game picture beside it grew with the window, which
+/// is exactly the "footnote pinned next to a poster" the captain described.
+///
+/// Three tenths of the width keeps the band close to square at a normal cell
+/// aspect. The floor is what a Pokémon stays recognisable at; the ceiling stops
+/// the sprite eating a tall panel's text.
+pub fn sprite_rows(inner: u16) -> u16 {
+    (inner * 3 / 10).clamp(6, 16)
+}
 
 /// Rows the trainer header always takes: two section rules, two field lines and
 /// the badge row.
@@ -186,8 +201,9 @@ pub fn layout_with_team(
     let rest_h = inner.height.saturating_sub(header_h);
     // The sprite is the first thing to lose when the terminal is short.
     let need = body_rows.max(MIN_BODY_ROWS);
-    let sprite_h = if want_sprite && rest_h >= SPRITE_ROWS + need {
-        SPRITE_ROWS
+    let want_rows = sprite_rows(inner.width);
+    let sprite_h = if want_sprite && rest_h >= want_rows + need {
+        want_rows
     } else {
         0
     };
@@ -209,6 +225,46 @@ pub fn layout_with_team(
             inner.width,
             after_sprite.saturating_sub(team_h),
         ),
+    }
+}
+
+impl PanelLayout {
+    /// Shrink the panel to the rows it actually uses and **centre it
+    /// vertically** in `area`, so it sits at the same height as the game
+    /// picture beside it rather than starting at the ceiling.
+    ///
+    /// `fit_metrics` already centres the picture in its own column, so a
+    /// top-aligned panel is what made the two columns read as unrelated things
+    /// pasted side by side: the picture floating in the middle of one, the
+    /// panel jammed to the top of the other, and a different-sized gap under
+    /// each. Centring both makes them one composition.
+    ///
+    /// **The whole block moves; nothing is re-decided.** The sprite and team
+    /// bands were granted against the full column, so translating the finished
+    /// layout cannot make either of them vanish — which re-running the split on
+    /// a shorter rectangle could.
+    ///
+    /// When the content is taller than the column there is no slack to
+    /// distribute, and the panel stays exactly where it was: full height and
+    /// top-aligned, so what falls off is the **bottom**. Centring an
+    /// over-height panel would push its header off the top, and the header is
+    /// the part that says whose panel this is.
+    pub fn centre_in(self, area: Rect, body_rows: u16) -> PanelLayout {
+        let content = body_rows.min(self.body.height);
+        let used =
+            2 + self.header.height + self.sprite.height + self.team.height + content;
+        if used >= area.height {
+            return self;
+        }
+        let dy = (area.height - used) / 2;
+        let shift = |r: Rect| Rect::new(r.x, r.y + dy, r.width, r.height);
+        PanelLayout {
+            frame: Rect::new(area.x, area.y + dy, area.width, used),
+            header: shift(self.header),
+            sprite: shift(self.sprite),
+            team: shift(self.team),
+            body: Rect::new(self.body.x, self.body.y + dy, self.body.width, content),
+        }
     }
 }
 
@@ -611,6 +667,20 @@ pub struct PartyCols {
 }
 
 pub fn party_cols(width: usize) -> PartyCols {
+    // Above the design width the columns *grow* rather than stranding the extra
+    // space: longer names survive untruncated and the HP bar gains resolution,
+    // which is the only honest way text "scales" on a cell grid. Thirds of the
+    // width, so the three columns stay in proportion to each other and to the
+    // panel however wide it gets.
+    if width >= 44 {
+        let third = width / 3;
+        return PartyCols {
+            nick: third.min(18),
+            bar: third.min(20),
+            status: true,
+            ty: third.min(16),
+        };
+    }
     if width >= 34 {
         PartyCols {
             nick: 10,
@@ -1766,13 +1836,42 @@ mod tests {
 
     #[test]
     fn a_short_panel_drops_the_sprite_before_the_text() {
-        // Border (2) + header (5) + sprite (8) + six rows of text needs 21 rows;
-        // below that the picture goes and the numbers stay.
-        let short = layout(Rect::new(0, 0, PANEL_W, 20), true);
+        // Border (2) + header (5) + the sprite band + six rows of text; below
+        // that the picture goes and the numbers stay.
+        let band = sprite_rows(PANEL_W - 2);
+        let need = 2 + HEADER_ROWS + band + MIN_BODY_ROWS;
+        let short = layout(Rect::new(0, 0, PANEL_W, need - 1), true);
         assert_eq!(short.sprite.height, 0);
         assert!(short.body.height > 0, "the text must survive");
-        let tall = layout(Rect::new(0, 0, PANEL_W, 21), true);
-        assert_eq!(tall.sprite.height, SPRITE_ROWS);
+        let tall = layout(Rect::new(0, 0, PANEL_W, need), true);
+        assert_eq!(tall.sprite.height, band);
+    }
+
+    /// The sprite band is the panel's one genuinely scalable part, so it has to
+    /// actually grow with the panel — and stay bounded at both ends.
+    #[test]
+    fn the_sprite_band_grows_with_the_panel() {
+        assert!(sprite_rows(20) < sprite_rows(40));
+        assert!(sprite_rows(40) < sprite_rows(60));
+        assert_eq!(sprite_rows(4), 6, "a floor a Pokémon is still legible at");
+        assert_eq!(sprite_rows(400), 16, "and a ceiling, so text still fits");
+        for w in 0u16..200 {
+            let r = sprite_rows(w);
+            assert!((6..=16).contains(&r), "{w} -> {r}");
+        }
+    }
+
+    /// …and so do the party columns: above the design width they grow rather
+    /// than stranding the space, which is the only way text scales on a grid.
+    #[test]
+    fn the_party_columns_grow_with_a_wide_panel() {
+        let narrow = party_cols(38);
+        let wide = party_cols(60);
+        assert!(wide.nick > narrow.nick && wide.bar > narrow.bar);
+        // …but not without bound: past a point a longer bar is just a longer
+        // bar, and the columns stay in proportion to one another.
+        let huge = party_cols(200);
+        assert_eq!((huge.nick, huge.bar, huge.ty), (18, 20, 16));
     }
 
     #[test]

@@ -1519,6 +1519,31 @@ another branch; when those land, this belongs beside them.)
 - **`GB_TRAINER_STATE=<path>` on `cargo test --release --test trainer`** writes a save state at
   the first real wild encounter. A wild encounter costs a scripted walk to reach, so that is
   far cheaper than building a second route when one is wanted for a screenshot.
+- **The picture and the trainer panel are ONE composition** (`compose_block`), not two
+  independently-placed columns: adjacent, one shared vertical extent, centred together. Three
+  separate captain reports came from that not holding. `fit_metrics` centres the picture in
+  its own column, so pinning the panel to the window's right edge put *all* the horizontal
+  slack in a band **between** them; and centring only the panel inverted the vertical
+  mismatch rather than fixing it. The block height is the taller of what each half needs, so
+  neither is cropped for the other, and `PanelLayout::centre_in` centres the panel's content
+  in its half exactly as `fit_metrics` centres the picture in its own. **When the panel wants
+  more rows than the pane has it stays top-aligned** — centring an over-height panel pushes
+  its header off the ceiling, and the header is the part that says whose panel it is.
+- **"The panel should scale with the game" — text cannot, so three things do.** The panel
+  takes **two fifths of the width** rather than a fixed `PANEL_W`; `sprite_rows` grows the
+  sprite band with that width (the sprite is an image, so it genuinely scales); and
+  `party_cols` grows the name/bar/type columns above the design width instead of stranding
+  the space. A fixed 40-column panel beside a picture that grows with the window reads as "a
+  footnote pinned next to a poster", which is exactly how it was reported.
+- **`trainer = on` in `config.toml`** opens the panel at startup. Also the only reliable way
+  to get the panel up when screenshotting through `wezterm cli send-text`, which does not
+  deliver every key.
+- **Screenshot geometry is not what you asked for unless you check.** `wezterm-gui --config
+  initial_cols=N --config initial_rows=M` is honoured *intermittently* (the window manager
+  remembers geometry), and a stale window from an earlier run is easy to capture by mistake.
+  Read `term_cells=` back out of `GB_DEBUG_LAYOUT` and retry until it matches; `CSI 8 t` sent
+  through `wezterm cli send-text` does **not** resize, because that writes to the pane's
+  stdin, not to the emulator.
 - **Driving a real cartridge into a real battle, headlessly:**
   `cargo run --release --example trainer_layout -- --rom <rom> --to-battle`. Mashing Start/A
   plays Gen 1's intro on its own; a **per-map-biased** random walk then finds the doorways

@@ -910,6 +910,7 @@ impl App {
             None => Telemetry::disabled(),
         };
 
+        let trainer_open = config.trainer;
         let mut app = App {
             config,
             recent,
@@ -924,7 +925,7 @@ impl App {
             should_quit: false,
             speed: SPEED_NORMAL,
             stats: false,
-            trainer: false,
+            trainer: trainer_open,
             trainer_detail: false,
             trainer_fighting: false,
             full_redraw: false,
@@ -2508,7 +2509,7 @@ impl App {
                 rest = Rect::new(rest.x, rest.y + 1, rest.width, rest.height - 1);
             }
             let mut trainer_panel = None;
-            let panel_w = tv::PANEL_W.min(rest.width.saturating_sub(MIN_GAME_W));
+            let panel_w = trainer_panel_width(rest.width);
             if self.trainer && panel_w >= tv::PANEL_MIN_W {
                 trainer_panel = Some(Rect::new(
                     rest.right() - panel_w,
@@ -2575,26 +2576,38 @@ impl App {
         // the Status sidebar is reference information, the party is what is
         // being watched, and splitting the column three ways would make both
         // unreadable.
-        // **The panel takes what is left, not what it wants.** `PANEL_W` is the
-        // width the party rows are *designed* for; on a narrower terminal the
-        // sections drop their least valuable columns rather than the game being
-        // squeezed to nothing (see `trainer_view::party_cols`). Below
-        // `tv::PANEL_MIN_W` there is no panel worth drawing and
-        // `render_trainer` declines.
-        let side_w = if self.trainer {
-            tv::PANEL_W.min(area.width.saturating_sub(MIN_GAME_W))
+        // **The picture and the panel are ONE block.** See `compose_block`: the
+        // picture column is exactly as wide as the picture, the panel butts
+        // straight up against it, the two share a vertical extent, and the
+        // whole thing is centred in the body. Anything else and the leftover
+        // space lands *between* them, which is what made the two halves read as
+        // unrelated.
+        let panel_w = if self.trainer {
+            trainer_panel_width(rows[2].width)
         } else {
-            30
+            0
         };
+        let block = (self.trainer && panel_w >= tv::PANEL_MIN_W).then(|| {
+            compose_block(
+                rows[2],
+                panel_w,
+                self.trainer_panel_rows(panel_w),
+                self.picker.font_size(),
+            )
+        });
+        // Without the trainer panel nothing changes: the Status sidebar keeps
+        // its own fixed column and the picture keeps the rest.
         let body = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Min(20), Constraint::Length(side_w)])
+            .constraints([Constraint::Min(20), Constraint::Length(30)])
             .split(rows[2]);
+        let (game, trainer_panel) = match block {
+            Some((g, p)) => (g, Some(p)),
+            None => (body[0], None),
+        };
 
         // The stats panel lives in the sidebar, above Status — never over the
         // picture.
-        let game = body[0];
-        let trainer_panel = self.trainer.then(|| body[1]);
         if self.trainer {
             // drawn after render_display, below
         } else if self.stats {
@@ -2649,6 +2662,47 @@ impl App {
             // — including the picture.
             self.banner_state(),
         )
+    }
+
+    /// How many rows the trainer panel would like, so `compose_block` can give
+    /// the block a height that suits both halves.
+    ///
+    /// The body lines are composed here and again in `render_trainer`, which is
+    /// a few dozen small allocations once per **displayed** frame — the price of
+    /// the count being the same thing that is drawn rather than a second
+    /// estimate that can drift from it.
+    fn trainer_panel_rows(&self, panel_w: u16) -> u16 {
+        let Some(p) = self
+            .session
+            .as_ref()
+            .and_then(|s| s.gb.plugin::<TrainerPlugin>())
+        else {
+            return 0;
+        };
+        // The refusal and waiting-for-a-save screens are prose in a box; a few
+        // rows is all they want.
+        if p.game().is_none() || !p.state().in_game {
+            return 8;
+        }
+        let inner = panel_w.saturating_sub(2) as usize;
+        let st = p.state();
+        let focus = tv::focus_at(st, self.trainer_sel);
+        let lines = tv::body_lines(st, focus, self.trainer_detail, inner).len() as u16;
+        // The pictures are *asked for* here rather than decided: `layout_with_team`
+        // still refuses either if the block turns out too short, and asking for
+        // them cannot make the block shorter than the text needs.
+        let sprite = u16::from(
+            !self.trainer_detail
+                && focus
+                    .and_then(|fo| tv::focused_mon(st, fo))
+                    .is_some_and(|m| m.species != 0),
+        ) * tv::sprite_rows(panel_w.saturating_sub(2));
+        let team = u16::from(
+            !self.trainer_detail
+                && !st.enemy_team.is_empty()
+                && panel_w.saturating_sub(2) >= tv::TEAM_MIN_W,
+        ) * tv::TEAM_ROWS;
+        2 + tv::HEADER_ROWS + sprite + team + lines
     }
 
     /// Take the pending full-repaint request, if any. See [`App::full_redraw`].
@@ -2760,7 +2814,15 @@ impl App {
         let width = area.width.saturating_sub(2) as usize;
         let header = tv::header_lines(plugin.state(), game.label(), width);
         let lines = tv::body_lines(plugin.state(), focus, detail, width);
-        let l = tv::layout_with_team(area, want_sprite, want_team, lines.len() as u16);
+        // Laid out against the whole column, then **centred as a block** so the
+        // panel sits at the same height as the picture beside it — which
+        // `fit_metrics` has always centred. See `PanelLayout::centre_in`.
+        let l = tv::layout_with_team(area, want_sprite, want_team, lines.len() as u16)
+            .centre_in(area, lines.len() as u16);
+        // The panel's own rectangle is the frame it actually drew, not the
+        // column it was offered: the "never touches the picture" invariant is
+        // about drawn cells, and after centring those are a subset.
+        self.trainer_rect = Some(l.frame);
         let title = if detail {
             " Trainer · d back · Tab next "
         } else {
@@ -3577,6 +3639,77 @@ fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut 
             255
         };
         out.extend_from_slice(&[r, g, b, a]);
+    }
+}
+
+/// Lay the picture and the trainer panel out as **one block**: adjacent, the
+/// same height, centred together in `body`.
+///
+/// # Why the leftover space must not land between them
+///
+/// `fit_metrics` centres the picture inside whatever column it is given, and
+/// the panel used to be pinned to the window's right edge. In any window wider
+/// than the picture needs — which is every window where the picture is
+/// height-limited — that puts *all* the horizontal slack in a band **between**
+/// the two, so the picture ends well short of the panel and the two halves read
+/// as unrelated things pasted side by side. Centring the block instead moves
+/// that slack to the outside edges, where it is symmetric and reads as margin.
+///
+/// The same argument applies vertically, and is why both pieces get the *same*
+/// rectangle height rather than one being centred and the other anchored: a
+/// composition has one alignment, not two. `block_h` is the taller of what the
+/// picture needs and what the panel needs, so neither is cropped to suit the
+/// other, and `PanelLayout::centre_in` then centres the panel's content inside
+/// its half exactly as `fit_metrics` centres the picture inside its own.
+fn compose_block(
+    body: Rect,
+    panel_w: u16,
+    panel_rows: u16,
+    font: (u16, u16),
+) -> (Rect, Rect) {
+    let column = Rect::new(
+        body.x,
+        body.y,
+        body.width.saturating_sub(panel_w),
+        body.height,
+    );
+    let (pic, _) = fit_metrics(column, 160, 144, font.0, font.1);
+    let block_w = (pic.width + panel_w).min(body.width);
+    let block_h = pic.height.max(panel_rows).min(body.height);
+    let x = body.x + (body.width - block_w) / 2;
+    let y = body.y + (body.height - block_h) / 2;
+    let game_w = block_w.saturating_sub(panel_w);
+    (
+        Rect::new(x, y, game_w, block_h),
+        Rect::new(x + game_w, y, panel_w, block_h),
+    )
+}
+
+/// How many columns the trainer panel gets, given the whole width.
+///
+/// **The panel never takes more than half the window.** It used to take
+/// `PANEL_W` (40) whenever the leftovers cleared `MIN_GAME_W`, which is fine at
+/// 120 columns and ruinous at 62: the panel took 40, the picture was left 22,
+/// and since a Game Boy frame is 2.7× wider than tall in cells, 22 columns is a
+/// picture **eight rows high** in a sixty-row pane. The panel does not get
+/// better above about 34 columns — its widest tier is designed for 38 — whereas
+/// the picture is width-limited in every tall window and can always use more.
+/// So the split is capped at half, which roughly doubles the picture in a
+/// narrow split and changes nothing at 80 columns or above.
+///
+/// `PANEL_MIN_W` is a floor rather than a proportion, because a panel narrower
+/// than that carries less than it costs; below it `render_trainer` declines and
+/// the width goes back to the picture.
+fn trainer_panel_width(total: u16) -> u16 {
+    // Two fifths, so the two halves keep their proportions as the window grows
+    // instead of the panel staying a fixed column count beside a picture that
+    // does not — but never below the width the sections need to say anything.
+    let want = (total * 2 / 5).max(tv::PANEL_MIN_W);
+    let fits = want.min(total.saturating_sub(MIN_GAME_W));
+    if fits >= tv::PANEL_MIN_W {
+        fits
+    } else {
+        0
     }
 }
 
@@ -5788,14 +5921,105 @@ mod tests {
                 s.disp_cells.0
             );
             if let Some(panel) = app.trainer_rect {
-                assert!(panel.width <= tv::PANEL_W, "{cols}: panel too wide");
+                // The panel keeps a proportion of the window rather than a
+                // fixed column count — that is what stops it reading as a
+                // footnote beside a picture that grows.
+                assert!(
+                    panel.width <= cols / 2 || panel.width == tv::PANEL_MIN_W,
+                    "{cols}: panel took {} of {cols}",
+                    panel.width
+                );
                 assert!(
                     panel.width >= tv::PANEL_MIN_W,
                     "{cols}: a panel too narrow to read was drawn"
                 );
                 assert!(panel.right() <= cols, "{cols}: panel escapes the window");
             }
+            // The proportion actually holds: at every size that has room for
+            // both, the panel is between a third and a half of the width.
+            if cols >= 60 {
+                let panel = trainer_panel_width(cols);
+                assert!(
+                    panel * 3 >= cols && panel * 2 <= cols,
+                    "{cols}: panel {panel} is out of proportion"
+                );
+            }
         }
+    }
+
+    /// The picture and the panel are **one composition**: adjacent, sharing a
+    /// vertical extent, centred together. Three separate complaints came from
+    /// this not holding — the picture floating while the panel stuck to the
+    /// ceiling, then the reverse, and a band of dead space between the two.
+    #[test]
+    fn the_picture_and_the_panel_are_one_block() {
+        use ratatui::backend::TestBackend;
+        for (cols, rows) in [
+            (62u16, 48u16),
+            (80, 30),
+            (100, 34),
+            (120, 40),
+            (140, 44),
+            (200, 60),
+            (62, 24),
+        ] {
+            let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+                return;
+            };
+            app.trainer = true;
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let Some(panel) = app.trainer_rect else {
+                continue;
+            };
+            let s = app.session.as_ref().unwrap();
+            let pic = Rect::new(
+                s.disp_origin.0,
+                s.disp_origin.1,
+                s.disp_cells.0,
+                s.disp_cells.1,
+            );
+            // Adjacent: no band of dead space between them. The picture's own
+            // column may be wider than the picture (it is centred inside it),
+            // so the test is that the gap is at most that centring slack.
+            assert!(
+                panel.x >= pic.right() && panel.x - pic.right() <= 1,
+                "{cols}x{rows}: {} columns of dead space between picture {pic:?} \
+                 and panel {panel:?}",
+                panel.x.saturating_sub(pic.right())
+            );
+            // One vertical alignment: the two are centred about the same line.
+            let mid = |r: Rect| r.y as i32 * 2 + r.height as i32;
+            assert!(
+                (mid(pic) - mid(panel)).abs() <= 2,
+                "{cols}x{rows}: picture {pic:?} and panel {panel:?} do not share \
+                 a vertical centre"
+            );
+        }
+    }
+
+    /// Centring only helps while there is slack. When the panel wants more rows
+    /// than the pane has, it must fill the pane from the **top** — pushing the
+    /// header off the ceiling to centre an over-height panel would lose the
+    /// part that says whose panel it is.
+    #[test]
+    fn an_over_height_panel_keeps_its_head_and_loses_its_tail() {
+        let area = Rect::new(0, 0, tv::PANEL_W, 12);
+        let l = tv::layout_with_team(area, true, false, 40).centre_in(area, 40);
+        assert_eq!(l.frame, area, "no slack: the panel fills the column");
+        assert_eq!(l.header.y, area.y + 1, "and the header stays at the top");
+        // With slack it centres instead.
+        let tall = Rect::new(0, 0, tv::PANEL_W, 60);
+        let c = tv::layout_with_team(tall, true, false, 10).centre_in(tall, 10);
+        assert!(
+            c.frame.y > tall.y,
+            "with room to spare the panel is centred"
+        );
+        assert_eq!(
+            c.frame.y - tall.y,
+            tall.bottom() - c.frame.bottom(),
+            "and the slack is even"
+        );
     }
 
     /// The other half of the same bug: the stats panel must not occupy a cell

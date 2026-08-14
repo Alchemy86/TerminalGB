@@ -103,6 +103,39 @@ be open, and it is the only part of this feature that shows up uninvited.
 otherwise. `T` is shifted deliberately: the A/B/Start/Select bindings are configurable
 lowercase letters and an unshifted key could collide with somebody's.
 
+### One composition, not two columns
+
+The picture and the panel are laid out as a **single block**: adjacent, sharing
+one vertical extent, centred together in the body
+([`compose_block`](../src/screen/tui.rs)).
+
+Three separate reports came out of that not holding. `fit_metrics` has always
+centred the picture inside its own column while the panel was pinned to the
+window's right edge, so in any window wider than the picture needs — which is
+every window where the picture is height-limited — **all** the horizontal slack
+landed in a band *between* them and the two halves read as unrelated things
+pasted side by side. Vertically it was worse: the picture floated in the middle
+of its column while the panel started hard at the ceiling and ran out well
+before the bottom. Centring only the panel simply inverted that. A composition
+has one alignment, so both pieces now get the same rectangle — its height is the
+taller of what each needs, so neither is cropped to suit the other — and the
+slack goes to the outside edges where it is symmetric and reads as margin.
+
+![the composition in a wide window](trainer-panel/5-composition-wide.png)
+
+**The panel scales with the picture rather than beside it.** Terminal text is
+bound to the cell grid and cannot be made larger, so "scales" has to mean
+something real: the panel takes **two fifths of the width** rather than a fixed
+column count, the **sprite band grows with that width**
+([`sprite_rows`](../src/screen/trainer_view.rs)) so the one part of the panel
+that genuinely is an image scales like one, and the party columns **grow above
+the design width** ([`party_cols`](../src/screen/trainer_view.rs)) so a wider
+panel spends the space on longer names and more HP-bar resolution instead of
+stranding it. Below the design width the same code shrinks them, which is the
+degradation that was already there.
+
+![the composition in a tall narrow split](trainer-panel/6-composition-tall.png)
+
 ### Narrowing
 
 The panel takes what the window leaves it rather than a fixed 40 columns, and every section

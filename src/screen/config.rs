@@ -361,6 +361,10 @@ pub struct Config {
     /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
     /// built-in presets. See [`crate::plugin::battle::preset`].
     pub battles: Option<String>,
+    /// Open the trainer panel as soon as a game starts, rather than waiting for
+    /// `T`. Off by default — the panel is opt-in — but somebody who plays with
+    /// it up every session should not have to press a key every session.
+    pub trainer: bool,
 }
 
 impl Default for Config {
@@ -384,6 +388,7 @@ impl Default for Config {
             plugins: Vec::new(),
             gen1_trade: None,
             battles: None,
+            trainer: false,
         }
     }
 }
@@ -621,6 +626,12 @@ impl Config {
                     .collect()
             };
         }
+        if let Some(v) = get("trainer") {
+            match parse_bool(v) {
+                Some(b) => cfg.trainer = b,
+                None => warn.push(bad("trainer", v, "on, off")),
+            }
+        }
         if let Some(v) = get("gen1_trade") {
             let v = v.trim();
             cfg.gen1_trade = if v.is_empty() || v.eq_ignore_ascii_case("off") {
@@ -646,6 +657,26 @@ impl Config {
         }
         warn.sort();
         (cfg, warn)
+    }
+}
+
+/// The on/off spelling this config file uses everywhere.
+fn parse_bool(v: &str) -> Option<bool> {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("on")
+        || v.eq_ignore_ascii_case("true")
+        || v.eq_ignore_ascii_case("yes")
+        || v == "1"
+    {
+        Some(true)
+    } else if v.eq_ignore_ascii_case("off")
+        || v.eq_ignore_ascii_case("false")
+        || v.eq_ignore_ascii_case("no")
+        || v == "0"
+    {
+        Some(false)
+    } else {
+        None
     }
 }
 
