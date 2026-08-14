@@ -50,6 +50,7 @@ use crate::video::{self, Source as VideoSource, VideoOut};
 use std::env;
 use std::error::Error;
 use std::io;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -125,10 +126,90 @@ const STATS_W: u16 = 22;
 const MIN_GAME_W: u16 = 20;
 const STATS_H: u16 = 15;
 /// A held Game Boy key auto-releases this long after its last press/repeat.
-/// A safety net (we require the kitty keyboard protocol, so real key-release
-/// events normally arrive first); it must exceed the terminal's key-autorepeat
-/// interval so held keys don't flicker.
+/// In [`InputMode::Enhanced`] this is only a safety net — the kitty keyboard
+/// protocol reports a real release, which normally arrives first — but it must
+/// still exceed the terminal's key-autorepeat interval so held keys don't
+/// flicker.
 const KEY_HOLD: Duration = Duration::from_millis(110);
+
+/// [`InputMode::Basic`] starting hold window, before the terminal's actual
+/// auto-repeat rate has been observed (see [`Session::hold_window`]).
+///
+/// There is no key-release event in a plain terminal, so "still held" can only
+/// be inferred from auto-repeat, and the window is a straight trade: too short
+/// and a held direction flickers, too long and a tap keeps walking after you
+/// let go. 160 ms covers auto-repeat rates down to ~6/s (X11's default is 30/s
+/// = 33 ms) and costs at most ~9 emulated frames of overshoot — under one
+/// walking step in a Gen 1 Pokémon game (16 frames).
+const KEY_HOLD_BASIC: Duration = Duration::from_millis(160);
+/// Bounds on the adaptive hold window. The floor keeps a fast auto-repeat from
+/// shrinking it to nothing; the ceiling bounds how long a tap can over-run.
+const KEY_HOLD_BASIC_MIN: Duration = Duration::from_millis(90);
+const KEY_HOLD_BASIC_MAX: Duration = Duration::from_millis(350);
+/// The largest gap between two presses of the same key that is still believed
+/// to be auto-repeat *rate* rather than the auto-repeat *delay* (typically
+/// 250-600 ms) or a deliberate double tap. Gaps above it teach us nothing.
+const KEY_REPEAT_LEARN_MAX: Duration = Duration::from_millis(400);
+/// In [`InputMode::Basic`], a one-shot control key (`f`, `[`, `]`, `+`, …)
+/// arriving again within this window of the *previous* event for the same key
+/// is the terminal auto-repeating, not the user pressing twice, and is ignored.
+/// Sized above a typical auto-repeat interval and below a human double tap.
+const CONTROL_REPEAT_LOCKOUT: Duration = Duration::from_millis(200);
+
+/// How the terminal delivers key events to the game.
+///
+/// The kitty keyboard protocol is genuinely better — it reports key **release**,
+/// so holding a direction is exact and two buttons can be down at once. Its
+/// absence costs precisely that, and nothing else: see [`input_mode_for`] for
+/// why we no longer refuse to start without it.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+enum InputMode {
+    /// Kitty keyboard protocol: real press *and* release events.
+    #[default]
+    Enhanced,
+    /// An ordinary terminal (GNOME Terminal, xterm, Konsole, tmux without
+    /// passthrough…): presses only. Auto-repeat is the sole evidence that a key
+    /// is still down, so a button is released by timeout.
+    Basic,
+}
+
+impl InputMode {
+    fn label(self) -> &'static str {
+        match self {
+            InputMode::Enhanced => "kitty · press+rel",
+            InputMode::Basic => "basic · autorepeat",
+        }
+    }
+}
+
+/// Decide the input mode from what the terminal reported.
+///
+/// **This is the regression that made the emulator unusable in GNOME Terminal.**
+/// `8357546` turned an `Ok(false)` here into `return Err(…)`, so the frontend
+/// exited having drawn nothing. A missing input *nicety* may not cost the whole
+/// program: every answer other than a clear "yes" degrades to
+/// [`InputMode::Basic`], which is playable.
+///
+/// `Err` (query failed, timed out, not a tty) is treated exactly like
+/// `Ok(false)` — an unanswered question is not a reason to refuse either.
+fn input_mode_for(supported: Result<bool, std::io::Error>) -> InputMode {
+    match supported {
+        Ok(true) => InputMode::Enhanced,
+        Ok(false) | Err(_) => InputMode::Basic,
+    }
+}
+
+/// The one line the user gets when the kitty keyboard protocol is missing:
+/// what is degraded, and how to get the better experience. Said once, in the
+/// scrollback, in the picker footer, as a toast on entering a game and in the
+/// `?` overlay — never every frame, and never as an error.
+const BASIC_INPUT_NOTICE: &str =
+    "input: this terminal does not report key *release* (no kitty keyboard \
+     protocol), so a held button is let go shortly after the terminal stops \
+     auto-repeating it. Everything is playable; holding a direction pauses once \
+     before it walks smoothly, and two buttons at once only overlap briefly. \
+     For exact press/release use Kitty, Ghostty, foot, or WezTerm with \
+     `enable_kitty_keyboard = true`.";
 
 /// Number of save-state slots the terminal exposes (`1`/`2`/`3`).
 const NUM_SLOTS: u32 = 3;
@@ -342,22 +423,22 @@ fn unique_path(dir: &Path, stem: &str) -> PathBuf {
 /// Run the terminal frontend. `initial_rom` launches straight into that game;
 /// `None` opens the ROM picker.
 pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
-    // Fail loudly on a terminal without the kitty keyboard protocol — the
-    // frontend needs it for clean key up/down. (Kept from the dead-code/audio
-    // crew's hardening; error returned *before* touching the terminal.)
-    if let Ok(false) = ratatui::crossterm::terminal::supports_keyboard_enhancement() {
-        return Err(
-            "the terminal reports no support for the kitty keyboard protocol, which the \
-             terminal frontend needs for key input. This is usually the protocol being \
-             disabled in the terminal's config rather than truly missing — e.g. in WezTerm \
-             set `enable_kitty_keyboard = true`. Terminals known to support it: Kitty, \
-             WezTerm (with that setting), Ghostty, foot. Otherwise use the desktop frontend: \
-             `cargo run --example desktop -- <path-to-rom.gb>`."
-                .into(),
-        );
-    }
+    // The *only* legitimate refusal: no screen to draw on and no keyboard to
+    // read. Anything short of that runs, degraded and honest. Checked before
+    // the terminal is touched so the message lands in the shell, not in an
+    // alternate screen we would then have to tear down.
+    no_terminal_at_all()?;
 
-    let (config, warnings) = Config::load_reporting();
+    // Detect, adapt, inform — never refuse. The kitty keyboard protocol gives
+    // real key up/down; without it we fall back to auto-repeat inference (see
+    // `InputMode`) and say so once.
+    let input =
+        input_mode_for(ratatui::crossterm::terminal::supports_keyboard_enhancement());
+
+    let (config, mut warnings) = Config::load_reporting();
+    if input == InputMode::Basic {
+        warnings.push(BASIC_INPUT_NOTICE.to_string());
+    }
     let recent = Recent::load();
 
     // Video-out is resolved *here*, before the terminal is touched, so its
@@ -391,12 +472,15 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     probe_terminal();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    // We required kitty keyboard support above; enable event-type reporting so
-    // key-release events arrive (real up/down instead of just autorepeat).
-    let _ = execute!(
-        stdout,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
-    );
+    // Only ask for event-type reporting where the terminal said it understands
+    // the protocol. Pushing the flags at a terminal that does not is not merely
+    // useless — the matching pop on exit could leave stray bytes behind.
+    if input == InputMode::Enhanced {
+        let _ = execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
+        );
+    }
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -409,6 +493,7 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         video_template,
         video_autostart,
     );
+    app.input = input;
     if let Some(path) = initial_rom {
         app.start_game(&path); // a load error surfaces as a picker message
     }
@@ -416,7 +501,9 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
 
     // Restore terminal.
     disable_raw_mode()?;
-    let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    if input == InputMode::Enhanced {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
@@ -425,6 +512,35 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     res
+}
+
+/// The only condition that justifies refusing to start: nothing to draw on
+/// **and** nothing to read keys from.
+///
+/// One of the two missing is survivable and is not our call to veto — output
+/// redirected to a file still produces a video stream and telemetry, and input
+/// redirected from a file is how a scripted run works. Both missing means there
+/// is no terminal frontend to speak of, and saying so beats painting escape
+/// sequences into a pipe.
+fn no_terminal_at_all() -> Result<(), Box<dyn Error>> {
+    if terminal_is_usable(io::stdout().is_terminal(), io::stdin().is_terminal()) {
+        return Ok(());
+    }
+    Err(refusal_message().into())
+}
+
+/// The decision alone, so it can be tested without a terminal. Deliberately
+/// permissive: **either** half is enough to run.
+fn terminal_is_usable(stdout_tty: bool, stdin_tty: bool) -> bool {
+    stdout_tty || stdin_tty
+}
+
+fn refusal_message() -> String {
+    "neither stdout nor stdin is a terminal, so there is nothing to draw on and no \
+     keys to read. Run this from a terminal, or use the headless routes: \
+     `cargo run --release --example desktop -- <rom.gb>` for a window, or \
+     `cargo run --release --example video_out -- <rom.gb>` to pipe raw frames."
+        .to_string()
 }
 
 /// Resolve the configured raw video stream, if any, into the template `v` will
@@ -641,8 +757,19 @@ struct Session {
     t_encode: f32,
     t_write: f32,
 
-    /// Per-button last press time (index by [`key_index`]); drives auto-release.
+    /// Per-button last press time *while held* (index by [`key_index`]);
+    /// drives auto-release. `None` once the button has been released.
     held: [Option<Instant>; 8],
+    /// Per-button last press time whether or not the button is still held.
+    /// Kept separately from `held` on purpose: the gap we want to learn is
+    /// between two auto-repeats, and on a terminal with a slow repeat rate the
+    /// button has already auto-released by the time the next repeat lands — so
+    /// learning from `held` alone would never converge.
+    last_press: [Option<Instant>; 8],
+    /// Shortest inter-repeat gap observed for this button, i.e. this terminal's
+    /// auto-repeat *rate*. Only [`InputMode::Basic`] uses it; see
+    /// [`Session::hold_window`].
+    repeat_gap: [Option<Duration>; 8],
     /// Read-only handle on the host audio queue, for telemetry. `sound.rs` is
     /// not touched: [`crate::sound::cpal_audio::CpalPlayer::queue_handle`] is
     /// the diagnostic handle it already publishes.
@@ -658,6 +785,29 @@ struct Session {
 }
 
 impl Session {
+    /// How long button `idx` stays down after its last press.
+    ///
+    /// Under the kitty keyboard protocol this is a fixed safety net — a real
+    /// release event normally lands first. Without it there is no release
+    /// event, so the window *is* the release, and it adapts to the terminal:
+    /// three observed auto-repeat intervals, bounded. Three because a single
+    /// dropped repeat (a busy frame, a slow pty) must not read as "let go",
+    /// while a genuine release must still register within a few frames.
+    ///
+    /// Before any repeat has been seen the window is [`KEY_HOLD_BASIC`], which
+    /// is what a tap costs. That is the honest price of the fallback: the first
+    /// ~half-second of holding a direction takes a step, pauses for the
+    /// terminal's auto-repeat *delay*, then walks smoothly.
+    fn hold_window(&self, mode: InputMode, idx: usize) -> Duration {
+        match mode {
+            InputMode::Enhanced => KEY_HOLD,
+            InputMode::Basic => match self.repeat_gap[idx] {
+                Some(g) => (g * 3).clamp(KEY_HOLD_BASIC_MIN, KEY_HOLD_BASIC_MAX),
+                None => KEY_HOLD_BASIC,
+            },
+        }
+    }
+
     /// How this session is getting frames to the terminal, for the status
     /// panel: the transport is chosen at runtime by asking the terminal, so it
     /// has to be *visible* or nobody can tell which one they got.
@@ -713,6 +863,14 @@ struct App {
     fullscreen: bool,
     session: Option<Session>,
     should_quit: bool,
+    /// How this terminal delivers keys. Set once by [`run`] from the kitty
+    /// keyboard handshake; [`InputMode::Enhanced`] by default so the render
+    /// tests (which never touch a terminal) exercise the normal path.
+    input: InputMode,
+    /// [`InputMode::Basic`] only: the last one-shot control key seen and when,
+    /// so the terminal's auto-repeat stream cannot fire it thirty times a
+    /// second. Unused in [`InputMode::Enhanced`], where `Repeat` is explicit.
+    last_control: Option<(KeyCode, Instant)>,
 
     // Emulation controls (see the corresponding key handlers).
     /// Index into [`SPEED_LADDER`].
@@ -947,6 +1105,8 @@ impl App {
             fullscreen: false,
             session: None,
             should_quit: false,
+            input: InputMode::default(),
+            last_control: None,
             speed: SPEED_NORMAL,
             stats: false,
             trainer: trainer_open,
@@ -1088,6 +1248,8 @@ impl App {
                     t_encode: 0.0,
                     t_write: 0.0,
                     held: [None; 8],
+                    last_press: [None; 8],
+                    repeat_gap: [None; 8],
                     #[cfg(feature = "audio")]
                     audio_queue,
                     #[cfg(feature = "audio")]
@@ -1953,12 +2115,23 @@ impl App {
     }
 
     fn release_expired(&mut self) -> bool {
-        let now = Instant::now();
+        self.release_expired_at(Instant::now())
+    }
+
+    /// Auto-release every button whose hold window has run out.
+    ///
+    /// The window is [`KEY_HOLD`] under the kitty keyboard protocol (a safety
+    /// net behind real release events) and [`Session::hold_window`] without it
+    /// (the only thing that ever releases a button). Time is a parameter so the
+    /// fallback can be tested over a virtual clock rather than by sleeping.
+    fn release_expired_at(&mut self, now: Instant) -> bool {
+        let mode = self.input;
         let mut changed = false;
         if let Some(s) = self.session.as_mut() {
             for idx in 0..8 {
+                let window = s.hold_window(mode, idx);
                 if let Some(t) = s.held[idx] {
-                    if now.duration_since(t) >= KEY_HOLD {
+                    if now.duration_since(t) >= window {
                         s.gb.keyup(key_from_index(idx));
                         s.held[idx] = None;
                         changed = true;
@@ -2094,11 +2267,34 @@ impl App {
     }
 
     fn handle_game_key(&mut self, key: KeyEvent) {
+        self.handle_game_key_at(key, Instant::now());
+    }
+
+    fn handle_game_key_at(&mut self, key: KeyEvent, now: Instant) {
         let press = key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat;
         let release = key.kind == KeyEventKind::Release;
 
+        // In basic mode the terminal's auto-repeat is indistinguishable from a
+        // real second press, so a one-shot control key held down would fire ~30
+        // times a second — palette strobing, the video stream flapping on and
+        // off. Suppress a same-key event that lands inside the lockout window.
+        // Enhanced mode is untouched: there `Repeat` is a distinct kind and the
+        // existing behaviour is deliberate.
+        let control_ok = if press && self.input == InputMode::Basic {
+            let repeated = matches!(
+                self.last_control,
+                Some((code, t))
+                    if code == key.code
+                        && now.saturating_duration_since(t) < CONTROL_REPEAT_LOCKOUT
+            );
+            self.last_control = Some((key.code, now));
+            !repeated
+        } else {
+            true
+        };
+
         // Control keys act on press only.
-        if press {
+        if press && control_ok {
             match key.code {
                 KeyCode::Char('q') => {
                     self.overlay = Overlay::Quit;
@@ -2294,10 +2490,12 @@ impl App {
             }
         }
 
-        // Game-button keys (movement + configurable A/B/Start/Select).
+        // Game-button keys (movement + configurable A/B/Start/Select). These
+        // deliberately ignore `control_ok` — a repeat of a *button* is exactly
+        // the evidence that it is still held, which is what basic mode runs on.
         if let Some(button) = self.map_button(&key.code) {
             if press {
-                self.press_button(button);
+                self.press_button_at(button, now);
             } else if release {
                 self.release_button(button);
             }
@@ -2374,10 +2572,25 @@ impl App {
         }
     }
 
-    fn press_button(&mut self, button: KeypadKey) {
+    /// Press a button and refresh its hold window, learning this terminal's
+    /// auto-repeat rate on the way (see [`Session::repeat_gap`]).
+    fn press_button_at(&mut self, button: KeypadKey, now: Instant) {
         if let Some(s) = self.session.as_mut() {
+            let idx = key_index(button);
+            if let Some(prev) = s.last_press[idx] {
+                let gap = now.saturating_duration_since(prev);
+                // Above the cap this is the auto-repeat *delay* or a human
+                // pressing twice, neither of which says anything about the
+                // rate. Below it, keep the shortest — auto-repeat is the
+                // fastest thing that can produce two presses of one key.
+                if !gap.is_zero() && gap <= KEY_REPEAT_LEARN_MAX {
+                    s.repeat_gap[idx] =
+                        Some(s.repeat_gap[idx].map_or(gap, |g| g.min(gap)));
+                }
+            }
+            s.last_press[idx] = Some(now);
             s.gb.keydown(button);
-            s.held[key_index(button)] = Some(Instant::now());
+            s.held[idx] = Some(now);
         }
     }
 
@@ -3748,6 +3961,10 @@ impl App {
                 "Proto",
                 &format!("{} {via}", protocol_name(self.picker.protocol_type())),
             ),
+            // Which input mode is live. Without this the fallback's different
+            // feel — a held direction that pauses before it walks — reads as
+            // the emulator being broken rather than the terminal being basic.
+            kv("Input", self.input.label()),
             kv("Palette", self.palette.name()),
             kv("Upscale", &self.upscale_label()),
             kv("Speed", SPEED_LADDER[self.speed].label),
@@ -3797,7 +4014,8 @@ impl App {
         // rendered_status_panel` failed — a plugin *was* active and invisible,
         // which is exactly what docs/plugins.md §4 promises cannot happen.
         // Adding a status row must not silently cost a plugin its row again —
-        // the `Fault` row above is one such addition and costs nothing.
+        // the `Fault` row above is one such addition and costs nothing, and so
+        // is the `Input` row this fallback added.
         let split = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -3979,6 +4197,22 @@ impl App {
             Line::from(Span::styled(
                 "  Gen 1 has no shiny Pokémon at all; the claim is only what \
                  Gold/Silver would do with the same DVs",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                match self.input {
+                    InputMode::Enhanced => "input: kitty keyboard protocol — exact \
+                         press/release, so hold and diagonals work"
+                        .to_string(),
+                    InputMode::Basic => {
+                        "input: basic terminal — no key-release event, so a \
+                         held button is let go shortly after the terminal stops \
+                         auto-repeating it. Kitty/Ghostty/foot/WezTerm \
+                         (enable_kitty_keyboard) give exact hold."
+                            .to_string()
+                    }
+                },
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
@@ -6275,6 +6509,233 @@ mod tests {
             f.chunks_exact(4).any(|p| p[0] != p[1] || p[1] != p[2]),
             "a palette-mapped stream must not still be greyscale"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Graceful degradation: an ordinary terminal must still run the emulator.
+    //
+    // `8357546` added a hard `return Err` at the top of `run` when the terminal
+    // reported no kitty keyboard protocol, so GNOME Terminal — the captain's
+    // default — printed an error and exited having drawn nothing. These tests
+    // are the ones that would have caught it.
+    // -----------------------------------------------------------------------
+
+    fn key(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
+        use ratatui::crossterm::event::{KeyEventState, KeyModifiers};
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    /// A plain terminal reports every key as `Press` — no `Repeat`, no
+    /// `Release`. That is the whole difference the fallback has to cover.
+    fn basic_press(code: KeyCode) -> KeyEvent {
+        key(code, KeyEventKind::Press)
+    }
+
+    fn is_down(app: &App, button: KeypadKey) -> bool {
+        app.session.as_ref().expect("session").held[key_index(button)].is_some()
+    }
+
+    #[test]
+    fn a_terminal_without_keyboard_enhancement_is_not_a_refusal() {
+        // The regression, stated directly: no answer from this function may be
+        // a refusal, and only a clear "yes" earns the enhanced path.
+        assert_eq!(input_mode_for(Ok(true)), InputMode::Enhanced);
+        assert_eq!(input_mode_for(Ok(false)), InputMode::Basic);
+        assert_eq!(
+            input_mode_for(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "no reply"
+            ))),
+            InputMode::Basic,
+            "an unanswered question is not a reason to refuse either"
+        );
+    }
+
+    #[test]
+    fn refusal_only_when_there_is_neither_a_screen_nor_a_keyboard() {
+        assert!(terminal_is_usable(true, true));
+        assert!(terminal_is_usable(true, false), "output alone is enough");
+        assert!(terminal_is_usable(false, true), "input alone is enough");
+        assert!(!terminal_is_usable(false, false));
+        // And the refusal has to say what to do instead, or it is the old bug
+        // wearing a different message.
+        let msg = refusal_message();
+        assert!(msg.contains("desktop"), "{msg}");
+    }
+
+    #[test]
+    fn the_status_panel_says_which_input_mode_is_live() {
+        use ratatui::backend::TestBackend;
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        for (mode, want) in [(InputMode::Enhanced, "kitty"), (InputMode::Basic, "basic")]
+        {
+            app.input = mode;
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(
+                text.contains("Input") && text.contains(want),
+                "the input mode must be visible on screen; wanted {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_basic_terminal_holds_a_button_across_auto_repeat() {
+        // X11's default auto-repeat: 500 ms delay, then 30/s. Nothing but those
+        // repeats says the key is still down.
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.input = InputMode::Basic;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+
+        app.handle_game_key_at(basic_press(KeyCode::Right), at(0));
+        assert!(is_down(&app, KeypadKey::Right));
+
+        // The auto-repeat *delay* is the honest cost: the button is let go
+        // before the first repeat arrives, so a held direction takes one step
+        // and pauses. Nothing in a plain terminal can distinguish that from a
+        // tap, which is why we do not pretend otherwise.
+        app.release_expired_at(at(300));
+        assert!(!is_down(&app, KeypadKey::Right));
+
+        // From the first repeat on, it must stay down continuously — a button
+        // that flickered between repeats would make walking impossible.
+        for n in 0..30u64 {
+            let t = 500 + n * 33;
+            app.handle_game_key_at(basic_press(KeyCode::Right), at(t));
+            app.release_expired_at(at(t + 16)); // one emulated frame later
+            assert!(
+                is_down(&app, KeypadKey::Right),
+                "released mid-auto-repeat at {t} ms"
+            );
+        }
+        // …and let go promptly once the repeats stop.
+        app.release_expired_at(at(500 + 29 * 33 + 400));
+        assert!(!is_down(&app, KeypadKey::Right));
+    }
+
+    #[test]
+    fn the_hold_window_adapts_to_a_slow_auto_repeat_rate() {
+        // A user with a 5/s repeat rate (200 ms) would flicker on the 160 ms
+        // starting window. One observed gap must fix that permanently.
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.input = InputMode::Basic;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let idx = key_index(KeypadKey::Left);
+        let window = |a: &App| {
+            a.session
+                .as_ref()
+                .unwrap()
+                .hold_window(InputMode::Basic, idx)
+        };
+
+        assert_eq!(window(&app), KEY_HOLD_BASIC);
+        for n in 0..4u64 {
+            app.handle_game_key_at(basic_press(KeyCode::Left), at(500 + n * 200));
+        }
+        let after = window(&app);
+        assert!(
+            after > Duration::from_millis(200),
+            "window {after:?} must now bridge a 200 ms repeat interval"
+        );
+        assert!(after <= KEY_HOLD_BASIC_MAX, "and stay bounded: {after:?}");
+
+        // The auto-repeat *delay* (the 500 ms first gap) must not be mistaken
+        // for the rate — learning it would leave a tap walking for a second.
+        let mut app2 = test_app(ProtocolType::Halfblocks, RenderPath::Fast).unwrap();
+        app2.input = InputMode::Basic;
+        app2.handle_game_key_at(basic_press(KeyCode::Left), at(0));
+        app2.handle_game_key_at(basic_press(KeyCode::Left), at(500));
+        assert_eq!(
+            window(&app2),
+            KEY_HOLD_BASIC,
+            "a 500 ms gap is the repeat delay, not the repeat rate"
+        );
+    }
+
+    #[test]
+    fn auto_repeat_cannot_strobe_a_one_shot_control_key() {
+        // Holding `[` in a plain terminal delivers ~30 presses a second. Each
+        // one used to cycle the palette, which looks like the emulator having a
+        // fit; the same stream on `v` would flap the video stream on and off.
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.input = InputMode::Basic;
+        let t0 = Instant::now();
+        let start = app.palette;
+        // One press, then the auto-repeat stream.
+        app.handle_game_key_at(basic_press(KeyCode::Char('[')), t0);
+        let after_first = app.palette;
+        assert_ne!(after_first, start, "the real press must still act");
+        for n in 1..40u64 {
+            app.handle_game_key_at(
+                basic_press(KeyCode::Char('[')),
+                t0 + Duration::from_millis(500 + n * 33),
+            );
+        }
+        // The 500 ms first repeat is indistinguishable from a deliberate second
+        // press, so it is allowed through; the 30/s stream behind it is not.
+        assert_eq!(
+            app.palette,
+            after_first.next(),
+            "auto-repeat must not strobe the palette"
+        );
+
+        // A genuine second press, well clear of the lockout, still works.
+        app.handle_game_key_at(
+            basic_press(KeyCode::Char('[')),
+            t0 + Duration::from_millis(4000),
+        );
+        assert_eq!(app.palette, after_first.next().next());
+    }
+
+    #[test]
+    fn the_kitty_path_is_unchanged_by_the_fallback() {
+        // WezTerm/Kitty must take exactly the path they took before: `Repeat`
+        // refreshes the hold, `Release` ends it immediately, and no lockout
+        // touches control keys.
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.input = InputMode::Enhanced;
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+
+        app.handle_game_key_at(key(KeyCode::Up, KeyEventKind::Press), at(0));
+        app.handle_game_key_at(key(KeyCode::Up, KeyEventKind::Repeat), at(50));
+        app.release_expired_at(at(60));
+        assert!(is_down(&app, KeypadKey::Up));
+        app.handle_game_key_at(key(KeyCode::Up, KeyEventKind::Release), at(70));
+        assert!(
+            !is_down(&app, KeypadKey::Up),
+            "a real release must be immediate, not a timeout"
+        );
+
+        // Two rapid presses of a control key both act (no lockout here).
+        let start = app.palette;
+        app.handle_game_key_at(key(KeyCode::Char('['), KeyEventKind::Press), at(80));
+        app.handle_game_key_at(key(KeyCode::Char('['), KeyEventKind::Press), at(90));
+        assert_eq!(app.palette, start.next().next());
     }
 
     /// `docs/plugins.md` §4 promises "a plugin cannot be active and invisible".

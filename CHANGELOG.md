@@ -119,6 +119,24 @@ history. See [Credits & lineage](README.md#credits--lineage).
   and `--quick-load` reproduces the original failure by resetting plugin state mid-session the
   way the terminal frontend's F5/F8 keys do. Full record in
   [`docs/conformance-notes.md`](docs/conformance-notes.md).
+- **The terminal frontend runs in ordinary terminals again.** It had started refusing to
+  launch — one error line, exit 1, nothing drawn — on any terminal without the kitty keyboard
+  protocol, which includes GNOME Terminal / Ptyxis, Konsole and xterm. A missing *input
+  nicety* now costs only that nicety: without the protocol the frontend falls back to
+  auto-repeat-driven key holds, prints **one** line saying what is degraded and how to get the
+  better experience, and plays. The `Input` row in the status panel names the live mode. The
+  only refusal left is neither stdout nor stdin being a terminal. Verified in Ptyxis (99.98 %
+  speed, half-blocks) and in WezTerm both with and without `enable_kitty_keyboard`; a tap is
+  still exactly one tile and menus still step once per press, while holding a direction takes
+  one step, pauses for the OS auto-repeat delay, then walks continuously. Diagonals and
+  sustained two-button holds need the protocol and are not claimed without it.
+  **`testharness/basicterm.rs`** is the regression test and closes a real coverage gap: every
+  other harness builds a `Gameboy` directly and never enters the frontend, so nothing in the
+  suite could see the entry path at all. It allocates a pty, *is* the terminal on the far end,
+  and runs two scenarios differing in a single reply — answer the kitty keyboard query and the
+  frontend must report `kitty`, ignore it and it must report `basic` — then checks it draws,
+  takes keys, does not let auto-repeat strobe a one-shot control key, and quits cleanly. No
+  window, no synthetic desktop input; it runs under a plain `cargo test`.
 - **Audio no longer paces the emulator.** With `--features audio` one emulated frame cost
   **17.93 ms** against a 16.743 ms budget (0.29 ms without the feature), so the terminal
   frontend sat permanently in catch-up and displayed **6 fps**. Profiling showed **97.6 % of

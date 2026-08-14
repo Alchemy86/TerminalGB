@@ -972,10 +972,117 @@ and battery harnesses green, and the audio-perf gate is inside its own noise
   single place a `Gameboy` is constructed; it also wires **per-session audio** there
   (`init_audio`, feature-gated on `audio`, silent+graceful with no device) so sound follows
   the active game across in-app ROM switches — the cpal stream lives in `Session` for the
-  session's lifetime. Non-kitty-keyboard terminals **fail loudly** (clear error, exit 1).
+  session's lifetime. Non-kitty-keyboard terminals **degrade, they do not fail** — see
+  "Graceful degradation" below.
   Protocol selection uses `build_picker()` (prefer the advertised protocol, e.g. Kitty over an
   env-guessed iTerm2; never panic on query timeout), then a config `protocol` may override.
   Frame pacing targets **59.7275 Hz** (`FRAME_TIME = 16_743µs`), not a rounded 60.
+
+## Graceful degradation — the frontend runs in ANY terminal (`src/screen/tui.rs`)
+
+- **NEVER refuse to start over a missing capability.** `8357546` added a hard
+  `return Err(…)` at the top of `run()` when `supports_keyboard_enhancement()` reported
+  `Ok(false)`, so on GNOME Terminal / Ptyxis (VTE) — a very common default — the emulator
+  printed an error and exited having drawn nothing. Reproduced here: pre-fix binary in
+  Ptyxis exits **1**; post-fix it runs at **99.98 % speed, 55.7 display fps, halfblocks**.
+  The information was worth having; the *response* was wrong. **Detect, adapt, inform.**
+- **The only legitimate refusal is `terminal_is_usable(stdout_tty, stdin_tty)` = both false**
+  — nothing to draw on *and* no keys to read. Either half alone still runs.
+- **`input_mode_for` maps the handshake to `InputMode::{Enhanced,Basic}`, and `Err` is
+  treated as `Ok(false)`** — an unanswered question is not a reason to refuse. The
+  enhancement flags are pushed (and popped) **only** in `Enhanced`.
+- **Basic mode: auto-repeat *is* the "still held" signal, and that is a hard limit.** A plain
+  terminal sends only presses. `Session::hold_window` releases a button `3 ×` the observed
+  auto-repeat interval after its last press, clamped to 90–350 ms, starting at 160 ms
+  (`KEY_HOLD_BASIC`) before any repeat has been seen. `last_press` is kept **separately from
+  `held`** on purpose: on a slow repeat rate the button has already auto-released when the
+  next repeat lands, so learning from `held` alone never converges. Gaps above
+  `KEY_REPEAT_LEARN_MAX` (400 ms) are the auto-repeat *delay* or a double tap and teach
+  nothing — learn one and a tap walks for a second.
+- **What is honestly lost, measured in a real terminal** (WezTerm with
+  `enable_kitty_keyboard=false`, driven by `wezterm cli send-text`): a *tap* is still exactly
+  one tile and menus still step once per press; *holding* a direction takes one step, pauses
+  for the OS auto-repeat delay (~0.5 s), then walks continuously; **diagonals and sustained
+  two-button holds are not available** because a terminal auto-repeats only the last key
+  held. Say that plainly rather than implying parity.
+- **A one-shot control key must not strobe.** In basic mode the auto-repeat stream would fire
+  `[`/`]`/`v`/`f` ~30×/s. `CONTROL_REPEAT_LOCKOUT` (200 ms, keyed on the *previous event* for
+  the same code, not the previous fire) suppresses it — verified live: 12 `[` presses 52 ms
+  apart moved the palette exactly one step. Game *buttons* deliberately bypass the lockout;
+  a repeat of a button is the evidence the fallback runs on.
+- **Say it once, in the four places `config_warnings` already reaches** (stderr scrollback,
+  picker footer, a toast on entering a game, the `?` overlay) — that is why
+  `BASIC_INPUT_NOTICE` is pushed onto the warnings list rather than printed by hand. Plus an
+  `Input` row in the Status panel, because a mode nobody can see is a mode nobody can debug.
+- **The graphics path already degraded correctly** and still does: `build_picker` falls back
+  to the env-guess query and then to a fixed font size, and `ProtocolType::Halfblocks` is a
+  real answer, not a failure. Nothing needed changing there.
+- **The Status box is now sized to its contents** (`status.len() + 2`). The old fixed
+  `13 + plugins.len()` was two rows short of the twelve rows it already drew, so `Audio` and
+  `FPS` were clipped, and with two plugins attached the second plugin row vanished —
+  observed live, exactly the bug `docs/plugins.md` §4 says must not happen. A hard-coded
+  height beside a `push` is a standing invitation to it.
+- **The regression test is `testharness/basicterm.rs` — a pty, not a window.**
+  `cargo test --release --test basicterm` (19 s, runs under a plain `cargo test`, CI
+  included). It allocates a pty, **is** the terminal on the far end, and runs the real
+  `gameboy::run_terminal` as a child in its own session (`setsid` + `TIOCSCTTY`, so even the
+  child's `/dev/tty` probes land on the pty and nothing can reach the developer's desktop).
+  Two scenarios differing in **one reply**: answer `CSI ? u` and the frontend must report
+  `kitty`, ignore it and it must report `basic`. Teeth proved by restoring the old
+  `return Err` — `basic` goes red with "never drew a Status panel" while `kitty` stays green,
+  which is the bug's exact signature. **Do not replace this with a windowed test**: spawning
+  terminal windows steals desktop focus, and synthetic key injection (`xdotool`/`wezterm cli
+  send-text`) goes to whatever has focus — a `wezterm cli send-text` whose socket had gone
+  stale typed a dozen characters into the captain's own session.
+- **Three things that make a fake terminal faithful, all learned the hard way:**
+  1. **Answer everything a real terminal answers.** Silence is not neutral — every
+     unanswered query costs the frontend a multi-second timeout in a blocking path. Ignoring
+     `CSI 5 n`, `CSI 14 t` and `CSI 16 t` drove the emulator at **1 % of real speed** and made
+     input look lost when it was merely queued behind blocked loop iterations.
+  2. **Never assert on a word in the raw byte stream.** `ratatui` diffs **per cell**, so
+     `grayscale` → `green` puts `een` on the wire and `green` → `amber` puts `amb`, a skip,
+     `r`. Resize the pty (`TIOCSWINSZ`) to force a full repaint, then read.
+  3. **Mind the modulus when counting suppressed repeats.** The palette cycle is three long
+     and the first press of a burst is a legitimate press, so 10 repeats land on the same
+     colour whether the lockout works or not. The harness sends **12**.
+- **Doing it by eye instead (only when a picture is the point):** Ptyxis is VTE and has no
+  kitty keyboard protocol; WezTerm gives a clean A/B on one binary with
+  `--config enable_kitty_keyboard=false|true`. Ptyxis is GTK4 and stays on native Wayland
+  whatever `DISPLAY` says, so it cannot be screenshotted here — use WezTerm on XWayland.
+  Verified this way once: Ptyxis **99.65 % speed, 55.7 display fps, half-blocks**; WezTerm
+  without the protocol plays Pokémon Blue — a tap is one tile, menus step once per press, a
+  held direction walks the map — and with it negotiates `kitty shm` unchanged.
+
+### Conformance record
+
+Per the [standing convention](#standing-convention-every-emulation-fix-feeds-the-conformance-tool),
+and like the three render bugs, this is a **presentation** defect, so point 3 cites a
+protocol/library contract rather than Pan Docs.
+
+*Symptom* — the emulator prints one line and exits 1 in an ordinary terminal; the player sees
+no picture at all and is told to install a different terminal.
+*Caught by* — **no test ROM, and no headless harness either.** Every ROM-driven check runs
+against a `Gameboy` the harness constructs directly and never enters `screen::tui::run`, so
+the whole entry path — capability handshakes, refusals, input mapping — is invisible to them.
+That was a real coverage gap, and `testharness/basicterm.rs` is the answer to it: a pty
+harness that drives `run_terminal` itself and would have caught this on the commit that
+introduced it. `a_terminal_without_keyboard_enhancement_is_not_a_refusal` and
+`refusal_only_when_there_is_neither_a_screen_nor_a_keyboard` pin the same decisions at unit
+speed, where the *why* is legible.
+*Contract violated* — the kitty keyboard protocol is documented as **progressive
+enhancement**: a terminal that does not understand `CSI > 1 u` ignores it and keeps sending
+legacy keys ([kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/)),
+and `crossterm::terminal::supports_keyboard_enhancement` returning `Ok(false)` means exactly
+"you get legacy keys", not "input is impossible".
+*New tests* — `testharness/basicterm.rs`, which closes that gap by driving the real entry
+point over a pty, plus `a_basic_terminal_holds_a_button_across_auto_repeat`,
+`the_hold_window_adapts_to_a_slow_auto_repeat_rate`,
+`auto_repeat_cannot_strobe_a_one_shot_control_key`,
+`the_kitty_path_is_unchanged_by_the_fallback` and
+`the_status_panel_says_which_input_mode_is_live`. Conformance candidate: **an absent optional
+capability must cost only that capability** — the same principle as the adapter contract's
+"declining a capability is `exit 0`, not an error"
+([`docs/conformance-action.md`](docs/conformance-action.md)).
 - **Scaling gotcha (the "limited to small" bug):** `ratatui_image::Resize::Fit` **refuses to
   upscale** an image smaller than the area (it caps the target at the source size), so a
   160×144 source always rendered tiny; the old code faked enlargement with a capped integer

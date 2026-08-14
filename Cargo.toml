@@ -142,6 +142,17 @@ name = "colosseum"
 path = "testharness/colosseum.rs"
 harness = false
 
+# Graceful-degradation harness: allocates a pty, *is* the terminal on the other
+# end of it, and answers the frontend's capability queries the way a chosen
+# terminal would — answering the kitty keyboard query in one run and ignoring it
+# in the other. Proves the frontend runs, draws, takes input and quits in a
+# terminal that has no kitty keyboard protocol. No window, no synthetic desktop
+# input, CI-safe. See testharness/basicterm.rs.
+[[test]]
+name = "basicterm"
+path = "testharness/basicterm.rs"
+harness = false
+
 # Agent-substrate harness: proves observation, the action executor, the budget
 # cap, the circuit breaker and stuck detection end to end against a
 # hand-assembled Gen-1-shaped cartridge — deterministically, and with no

@@ -408,6 +408,47 @@ Run it once with `EXIT=kill` (the emulator dies mid-game, exactly like a closed 
 then again with `PHASE=relaunch` and a script that just boots and presses A — the title
 menu goes from `NEW GAME / OPTION` to `CONTINUE / NEW GAME / OPTION`.
 
+## A second gap no test ROM covers: does the frontend start at all?
+
+Every harness above builds a `Gameboy` directly and drives it. **None of them enters
+`screen::tui::run`**, so the whole entry path — the capability handshakes, what the frontend
+does when a terminal says "no", how a keypress becomes a button — was untested. That is not a
+theoretical gap: a commit that made the frontend `return Err` on any terminal without the
+kitty keyboard protocol left the emulator unable to start in GNOME Terminal, Ptyxis, Konsole
+and xterm, and the whole suite stayed green through it.
+
+[`testharness/basicterm.rs`](../testharness/basicterm.rs)
+(`cargo test --release --test basicterm`, ~19 s) fills it, and the shape is worth copying for
+anything else that has to be judged from the outside:
+
+* It allocates a **pty** and *is* the terminal on the far end. No window is opened and no
+  synthetic input is sent to the desktop, so it runs in CI and cannot disturb whoever is
+  sitting at the machine.
+* The child is the **real** `gameboy::run_terminal`, re-executed from the harness binary
+  itself with an env flag — no separate artifact to build, no nested `cargo` (which would
+  deadlock on the build lock). It gets its own session (`setsid` + `TIOCSCTTY`) so even its
+  `/dev/tty` probes land on the pty.
+* Two scenarios differ by **one reply**. The fake terminal answers `CSI c`, `CSI 5 n`,
+  `CSI 6 n`, `CSI 14 t` and `CSI 16 t` in both, and answers the kitty keyboard query
+  `CSI ? u` in only one. The frontend must report `kitty` in that run and `basic` in the
+  other — which is what makes it a test *of* the fallback rather than an assumption about it.
+* It then checks the things a user would: it drew, the degradation notice appears only where
+  it applies, a keypress reaches the game, a held control key does not strobe, and `q` quits
+  with status 0.
+
+Three traps, all of which produced convincing-but-wrong results before they were understood:
+
+1. **A silent fake terminal is not a neutral one.** Every unanswered query costs the frontend
+   a multi-second timeout in a blocking path; leaving out `CSI 5 n` / `CSI 14 t` / `CSI 16 t`
+   drove the emulator at **1 % of real speed** and made input look lost when it was only
+   queued.
+2. **Never assert on a word in the raw byte stream.** `ratatui` diffs per *cell*, so
+   `grayscale` → `green` transmits `een`, and `green` → `amber` transmits `amb`, a skip, `r`.
+   Resize the pty (`TIOCSWINSZ`) to force a full repaint, then read.
+3. **Mind the modulus.** The palette cycle is three long and the first press of a burst is a
+   real press, so ten suppressed repeats and ten unsuppressed ones land on the same colour.
+   The harness sends twelve.
+
 ## Mapping suites to components
 
 | Component | Primary suites | The approximations they will catch |

@@ -74,11 +74,14 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 ```
 
 > The ROM path is the first argument; run with no argument and it prints a usage line and
-> exits cleanly. Needs a terminal that supports the **kitty keyboard protocol** for input
-> and, ideally, the **kitty graphics protocol** for a crisp picture (kitty, WezTerm,
-> Ghostty, foot). If the kitty keyboard protocol is unavailable it exits with a clear error
-> — often it's just disabled in your terminal config (e.g. WezTerm needs
-> `enable_kitty_keyboard = true`) rather than truly missing
+> exits cleanly. **It runs in any terminal**, and gets better in a capable one. Both the
+> picture and the keyboard degrade rather than refuse: with the **kitty graphics protocol**
+> you get a crisp scaled image, without it Sixel, and without that half-blocks; with the
+> **kitty keyboard protocol** you get exact key press *and* release, and without it a
+> shorter auto-repeat-driven hold (the `Input` row in the status panel says which you got,
+> and one line at startup says what is degraded and how to fix it). Terminals with both:
+> kitty, WezTerm (needs `enable_kitty_keyboard = true` in its config), Ghostty, foot. See
+> [Input modes](#input-modes) below and
 > ([`src/screen/tui.rs`](src/screen/tui.rs)). It opens sized to the terminal, auto-selects the
 > sharpest graphics protocol the terminal advertises, and **auto-fits the picture to the pane**
 > (it re-fits on resize — there is no manual zoom key). Launch with no ROM path and it opens an
@@ -126,6 +129,30 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > Config problems are reported rather than ignored: an unknown key, or a value that cannot be
 > applied, prints a warning at startup and shows in the picker footer and the `?` overlay.
 > Values may be bare, `"double-quoted"` or `'single-quoted'`.
+
+#### Input modes
+
+The kitty keyboard protocol reports a key going **down** and a key coming **up**. A plain
+terminal only ever tells you a key was pressed; if you hold it, all you get is the operating
+system's auto-repeat. So there are two modes, both playable, and the status panel's **`Input`**
+row says which one you are in:
+
+| | `kitty · press+rel` | `basic · autorepeat` |
+|---|---|---|
+| Hold a direction | exact — down until you let go | one step, a pause of the auto-repeat *delay* (~0.5 s), then continuous |
+| Tap a direction | exactly one step | exactly one step |
+| Let go | immediate | ~0.15 s later (adapts to your repeat rate, 0.09–0.35 s) |
+| Two buttons at once | yes, including diagonals | only briefly — a terminal auto-repeats the *last* key held |
+| Hold a control key (`[`, `]`, `v`, `f`) | cycles | fires once, not thirty times a second |
+
+Nothing else differs, and the emulation is identical. The startup line naming the degradation
+is printed once, to the scrollback — never every frame. To get the better mode: **kitty**,
+**Ghostty** and **foot** enable the protocol by default; **WezTerm** needs
+`enable_kitty_keyboard = true` in `~/.config/wezterm/wezterm.lua`. GNOME Terminal / Ptyxis
+(VTE), Konsole and xterm do not implement it, and run in basic mode.
+
+The frontend refuses to start in exactly one case: neither stdout nor stdin is a terminal, so
+there is nothing to draw on *and* no keys to read.
 
 #### 🔴 Live trainer view (Pokémon Red/Blue)
 
