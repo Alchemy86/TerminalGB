@@ -30,8 +30,8 @@
 //! makes a blind agent viable: it cannot see the map, but it is told precisely
 //! what its last intention achieved.
 
-use gameboy_plugin_api::KeypadKey;
-use gameboy_plugin_api::Machine;
+use terminalgb_plugin_api::KeypadKey;
+use terminalgb_plugin_api::Machine;
 
 use super::json::Json;
 use super::observe::{Facing, Gen1Observer, Position, Screen};
@@ -65,7 +65,7 @@ pub const GOTO_SLACK: u8 = 16;
 /// Frames of quiet after an [`Action::Press`], which is what a driver uses to
 /// work a menu.
 ///
-/// Longer than [`gameboy_plugin_api::DEFAULT_GAP`] on purpose. Gen 1's
+/// Longer than [`terminalgb_plugin_api::DEFAULT_GAP`] on purpose. Gen 1's
 /// `HandleMenuInput` **delays several frames after accepting a press**, so two
 /// presses eight frames apart look from outside exactly like the emulator
 /// dropping input — measured and written up by the battle-control crew in
@@ -173,8 +173,8 @@ impl Action {
                 button: button()?,
                 times: num("times", num("count", 1)).clamp(1, lim.max_repeat as u64)
                     as u8,
-                hold: num("hold", gameboy_plugin_api::DEFAULT_HOLD as u64).clamp(1, 120)
-                    as u16,
+                hold: num("hold", terminalgb_plugin_api::DEFAULT_HOLD as u64)
+                    .clamp(1, 120) as u16,
             },
             "wait" => Action::Wait {
                 frames: num("frames", 30).min(lim.max_wait as u64) as u16,
@@ -661,14 +661,14 @@ impl Executor {
                     *left -= 1;
                     *pressed += 1;
                     *quiet = 0;
-                    m.press(KeypadKey::A, gameboy_plugin_api::DEFAULT_HOLD, 10);
+                    m.press(KeypadKey::A, terminalgb_plugin_api::DEFAULT_HOLD, 10);
                     return None;
                 }
                 if screen.waiting && *left > 0 {
                     *left -= 1;
                     *pressed += 1;
                     *quiet = 0;
-                    m.press(KeypadKey::A, gameboy_plugin_api::DEFAULT_HOLD, 10);
+                    m.press(KeypadKey::A, terminalgb_plugin_api::DEFAULT_HOLD, 10);
                     return None;
                 }
                 // Finished when the game has stopped asking for input and the
@@ -752,7 +752,7 @@ mod tests {
             Action::Press {
                 button: KeypadKey::A,
                 times: 1,
-                hold: gameboy_plugin_api::DEFAULT_HOLD
+                hold: terminalgb_plugin_api::DEFAULT_HOLD
             }
         );
         assert_eq!(
@@ -793,7 +793,7 @@ mod tests {
             Action::Press {
                 button: KeypadKey::A,
                 times: lim.max_repeat,
-                hold: gameboy_plugin_api::DEFAULT_HOLD
+                hold: terminalgb_plugin_api::DEFAULT_HOLD
             }
         );
         assert_eq!(

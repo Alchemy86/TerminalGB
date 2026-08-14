@@ -14,7 +14,7 @@
 //! | *is it my turn?* | [`Screen::waiting`] | the difference between "press A" and "wait for the animation" |
 //!
 //! Party, badges, money and the battle opponent come from the existing
-//! read-only trainer plugin's RAM map ([`gameboy_plugin_trainer::gen1`]) rather than
+//! read-only trainer plugin's RAM map ([`terminalgb_plugin_trainer::gen1`]) rather than
 //! being re-derived here.
 //!
 //! **The framebuffer is the fallback, not the channel.** A PNG of the current
@@ -33,12 +33,12 @@
 //! VRAM is what the LCD is showing, so it cannot disagree with the picture a
 //! viewer sees, and it needs no game-specific address.
 
-use gameboy_plugin_api::Machine;
-use gameboy_plugin_trainer::gen1::{addr as tr, BattleKind};
+use terminalgb_plugin_api::Machine;
+use terminalgb_plugin_trainer::gen1::{addr as tr, BattleKind};
 
 /// Gen 1 tile ids that are not text. Sourced from `pret/pokered`'s
 /// `constants/charmap.asm`: the glyphs sit at the top of the font, immediately
-/// below `♂` (`$EF`), which [`gameboy_plugin_gen1_link::text`] already pins.
+/// below `♂` (`$EF`), which [`terminalgb_plugin_gen1_link::text`] already pins.
 pub mod glyph {
     /// `▷` — a menu cursor that is parked (the menu does not have focus).
     pub const CURSOR_IDLE: u8 = 0xEC;
@@ -193,7 +193,9 @@ impl Screen {
                 if t == glyph::MORE_TEXT {
                     waiting = true;
                 }
-                text.push(gameboy_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
+                text.push(
+                    terminalgb_plugin_gen1_link::text::decode_char(t).unwrap_or(' '),
+                );
             }
             text.push('\n');
         }
@@ -281,7 +283,7 @@ pub struct GameState {
 
 /// Reads Gen 1 state through a capability-checked [`Machine`].
 ///
-/// Addresses come from [`gameboy_plugin_trainer::gen1`], which derives them from a
+/// Addresses come from [`terminalgb_plugin_trainer::gen1`], which derives them from a
 /// verified `pret/pokered` build; only the two this module needs and that one
 /// does not carry — the player's map/coordinates and facing — are introduced
 /// here, with their symbols cited.
@@ -335,11 +337,12 @@ impl Gen1Observer {
         let mut name = [0u8; 11];
         m.peek_into(tr::PLAYER_NAME, &mut name);
         let count = m.peek(tr::PARTY_COUNT).unwrap_or(0xFF);
-        st.in_game = gameboy_plugin_trainer::text::looks_like_a_name(&name) && count <= 6;
+        st.in_game =
+            terminalgb_plugin_trainer::text::looks_like_a_name(&name) && count <= 6;
         if !st.in_game {
             return st;
         }
-        st.player_name = gameboy_plugin_trainer::text::decode(&name);
+        st.player_name = terminalgb_plugin_trainer::text::decode(&name);
         st.position = Position {
             map: m.peek(W_CUR_MAP).unwrap_or(0),
             x: m.peek(W_X_COORD).unwrap_or(0),
@@ -348,24 +351,25 @@ impl Gen1Observer {
         };
         st.map_name = map_name(st.position.map);
         st.badges = m.peek(tr::OBTAINED_BADGES).unwrap_or(0);
-        st.money = gameboy_plugin_trainer::text::bcd3([
+        st.money = terminalgb_plugin_trainer::text::bcd3([
             m.peek(tr::PLAYER_MONEY).unwrap_or(0),
             m.peek(tr::PLAYER_MONEY + 1).unwrap_or(0),
             m.peek(tr::PLAYER_MONEY + 2).unwrap_or(0),
         ]);
 
         for i in 0..count as u16 {
-            let base = tr::PARTY_MONS + i * gameboy_plugin_trainer::gen1::PARTY_MON_SIZE;
+            let base =
+                tr::PARTY_MONS + i * terminalgb_plugin_trainer::gen1::PARTY_MON_SIZE;
             let mut nick = [0u8; 11];
             m.peek_into(tr::PARTY_MON_NICKS + i * 11, &mut nick);
-            use gameboy_plugin_trainer::gen1::party as p;
+            use terminalgb_plugin_trainer::gen1::party as p;
             st.party.push(PartyMon {
                 name: String::new(),
-                nickname: gameboy_plugin_trainer::text::decode(&nick),
+                nickname: terminalgb_plugin_trainer::text::decode(&nick),
                 level: m.peek(base + p::LEVEL).unwrap_or(0),
                 hp: m.peek_be16(base + p::HP).unwrap_or(0),
                 max_hp: m.peek_be16(base + p::MAX_HP).unwrap_or(0),
-                status: gameboy_plugin_trainer::gen1::Status(
+                status: terminalgb_plugin_trainer::gen1::Status(
                     m.peek(base + p::STATUS).unwrap_or(0),
                 )
                 .label(),
@@ -403,12 +407,12 @@ impl Gen1Observer {
 
         st.battle = BattleKind::from_flag(m.peek(tr::IS_IN_BATTLE).unwrap_or(0));
         if st.battle != BattleKind::None {
-            use gameboy_plugin_trainer::gen1::battle as b;
+            use terminalgb_plugin_trainer::gen1::battle as b;
             let mut nick = [0u8; 11];
             m.peek_into(tr::ENEMY_MON_NICK, &mut nick);
             st.opponent = Some(PartyMon {
                 name: String::new(),
-                nickname: gameboy_plugin_trainer::text::decode(&nick),
+                nickname: terminalgb_plugin_trainer::text::decode(&nick),
                 level: m.peek(tr::ENEMY_MON + b::LEVEL).unwrap_or(0),
                 hp: m.peek_be16(tr::ENEMY_MON + b::HP).unwrap_or(0),
                 max_hp: m.peek_be16(tr::ENEMY_MON + b::MAX_HP).unwrap_or(0),

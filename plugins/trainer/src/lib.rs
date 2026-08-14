@@ -1,11 +1,11 @@
 //! A live trainer view: the party, the badges and the battle opponent, read out
 //! of a running Gen 1 Pokémon game.
 //!
-//! This is a consumer of the plugin surface in [`gameboy_plugin_api`], and it is
+//! This is a consumer of the plugin surface in [`terminalgb_plugin_api`], and it is
 //! deliberately **read-only**: it declares
-//! [`Capability::OBSERVE`](gameboy_plugin_api::Capability::OBSERVE) and
-//! [`READ_MEMORY`](gameboy_plugin_api::Capability::READ_MEMORY) and nothing else, so
-//! [`Machine::poke`](gameboy_plugin_api::Machine::poke) refuses it outright. A
+//! [`Capability::OBSERVE`](terminalgb_plugin_api::Capability::OBSERVE) and
+//! [`READ_MEMORY`](terminalgb_plugin_api::Capability::READ_MEMORY) and nothing else, so
+//! [`Machine::poke`](terminalgb_plugin_api::Machine::poke) refuses it outright. A
 //! tracker that can corrupt a save is worse than no tracker, and that is
 //! enforced by the host rather than promised in a comment.
 //!
@@ -56,8 +56,8 @@ pub mod text;
 use std::collections::HashMap;
 
 use encounter::WildEncounter;
-use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
 use gen1::{addr, battle, party, BattleKind, BattleType, Dvs, Mon, Status};
+use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 
 /// How often the party is re-read, in emulated frames. Six frames is about
 /// 10 Hz — a tenth of a second behind the game, which no one can see, for a
@@ -281,7 +281,7 @@ impl TrainerPlugin {
     /// Build a plugin against a cartridge image.
     ///
     /// The ROM is passed in whole rather than read through
-    /// [`Machine::peek_bank`](gameboy_plugin_api::Machine::peek_bank) because
+    /// [`Machine::peek_bank`](terminalgb_plugin_api::Machine::peek_bank) because
     /// [`rom::RomTables`] *scans every bank* to locate its tables by signature,
     /// which is a different need from reading a known table out of a known bank
     /// — that is what `peek_bank` is for, and it is what closed the banked-read

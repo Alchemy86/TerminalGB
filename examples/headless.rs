@@ -6,7 +6,7 @@
 //! cargo run --release --no-default-features --example headless -- game.gb 600
 //! ```
 //!
-//! At that feature set the whole dependency tree is `gameboy -> blip_buf`.
+//! At that feature set the whole dependency tree is `terminalgb -> blip_buf`.
 //! There is no window, no terminal, no audio device, no image codec and no
 //! `$HOME` lookup anywhere on this path — which is the claim the README's
 //! "Embedding the core" section makes, made checkable.
@@ -16,8 +16,8 @@
 //! [`Gameboy::keydown`]/[`Gameboy::keyup`], [`Gameboy::rom_title`],
 //! [`Gameboy::save_state`]/[`Gameboy::load_state`].
 
-use gameboy::gameboy::Gameboy;
-use gameboy::KeypadKey;
+use terminalgb::gameboy::Gameboy;
+use terminalgb::KeypadKey;
 
 const WIDTH: usize = 160;
 const HEIGHT: usize = 144;

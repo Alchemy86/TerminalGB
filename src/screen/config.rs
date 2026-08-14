@@ -267,7 +267,7 @@ impl RenderPath {
 /// The banner exists to be impossible to miss, so "on" is the default and
 /// includes the terminal bell — but a bell is exactly the sort of thing a person
 /// wants to be able to switch off, and someone watching a stream may want the
-/// row gone entirely. See [`gameboy_plugin_trainer::encounter`].
+/// row gone entirely. See [`terminalgb_plugin_trainer::encounter`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShinyAlert {
     /// Banner for every catchable wild encounter, plus a toast and the terminal
@@ -354,10 +354,10 @@ pub struct Config {
     /// See [`crate::telemetry`].
     pub telemetry: Option<String>,
     /// Where the `c` key writes PNGs. `None` (the default) means
-    /// `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`.
+    /// `$XDG_PICTURES_DIR/terminalgb`, else `~/Pictures/terminalgb`.
     pub screenshot_dir: Option<String>,
     /// Where the `v` key writes recordings when no `video_out` destination is
-    /// configured. `None` means `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`.
+    /// configured. `None` means `$XDG_VIDEOS_DIR/terminalgb`, else `~/Videos/terminalgb`.
     pub video_dir: Option<String>,
     /// The v4l2loopback node the user is feeding through `ffmpeg`, if any.
     /// Used *only* to check that the camera's label names the running game —
@@ -373,10 +373,10 @@ pub struct Config {
     /// machine. See [`crate::plugin`].
     pub plugins: Vec<String>,
     /// Trade file for the Gen 1 link partner, or `None` for its built-in offer.
-    /// See [`gameboy_plugin_gen1_link::spec`].
+    /// See [`terminalgb_plugin_gen1_link::spec`].
     pub gen1_trade: Option<String>,
     /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
-    /// built-in presets. See [`gameboy_plugin_battle_control::preset`].
+    /// built-in presets. See [`terminalgb_plugin_battle_control::preset`].
     pub battles: Option<String>,
     /// Open the trainer panel as soon as a game starts, rather than waiting for
     /// `T`. Off by default — the panel is opt-in — but somebody who plays with
@@ -384,7 +384,7 @@ pub struct Config {
     pub trainer: bool,
     /// Program the `agent` plugin runs to decide what to do, with arguments,
     /// space-separated. `None` means the agent plugin has no driver and will
-    /// not attach. See [`gameboy_plugin_agent`] and `docs/claude-plays.md`.
+    /// not attach. See [`terminalgb_plugin_agent`] and `docs/claude-plays.md`.
     pub agent_command: Option<String>,
     /// One sentence describing what the agent is trying to achieve this
     /// session, handed to the driver every call.
@@ -444,16 +444,59 @@ pub fn default_rom_dir() -> PathBuf {
     }
 }
 
-/// `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml`.
+/// The directory this project keeps its files in, under an XDG base directory
+/// (`~/.config/terminalgb`, `~/.local/state/terminalgb`, `~/Pictures/terminalgb`…).
+pub const APP_DIR: &str = "terminalgb";
+
+/// What that directory was called before the project was renamed to TerminalGB.
+///
+/// The rename must not cost anybody their settings, their recently-played list,
+/// their save states or their remembered volume. Every lookup therefore prefers
+/// the new name and falls back to the old one **when the old one is what
+/// actually exists on disk** ([`prefer_existing`]). Nothing is moved: a
+/// migration that half-succeeds — or that runs while a second copy of the
+/// emulator is writing — is worse than a fallback that always works and can
+/// never lose anything.
+pub const LEGACY_APP_DIR: &str = "gameboy";
+
+/// `current`, unless it does not exist and `legacy` does.
+///
+/// Used for both files (the config) and directories (state, screenshots,
+/// recordings). A fresh installation gets the new name; an existing one keeps
+/// reading and writing exactly where it always did.
+fn prefer_existing(current: PathBuf, legacy: PathBuf) -> PathBuf {
+    if current.exists() || !legacy.exists() {
+        current
+    } else {
+        legacy
+    }
+}
+
+/// `<base>/terminalgb`, unless that does not exist and `<base>/gameboy` does.
+///
+/// The one place the pre-rename fallback is spelled, so the config file, the
+/// state directory, screenshots and recordings cannot drift apart.
+pub fn app_dir_in(base: &Path) -> PathBuf {
+    prefer_existing(base.join(APP_DIR), base.join(LEGACY_APP_DIR))
+}
+
+/// `${XDG_CONFIG_HOME:-~/.config}/terminalgb/config.toml`, falling back to the
+/// pre-rename `gameboy/config.toml` when that is the file that exists.
 pub fn config_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("gameboy").join("config.toml"))
+    // Checked at file level, not directory level: an empty `terminalgb/`
+    // directory must not hide a real `gameboy/config.toml` beside it.
+    Some(prefer_existing(
+        base.join(APP_DIR).join("config.toml"),
+        base.join(LEGACY_APP_DIR).join("config.toml"),
+    ))
 }
 
-/// `${XDG_STATE_HOME:-~/.local/state}/gameboy`.
+/// `${XDG_STATE_HOME:-~/.local/state}/terminalgb` (or the pre-rename
+/// `gameboy` directory, when that is the one that exists).
 pub fn state_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
@@ -462,10 +505,10 @@ pub fn state_dir() -> Option<PathBuf> {
             std::env::var_os("HOME")
                 .map(|h| PathBuf::from(h).join(".local").join("state"))
         })?;
-    Some(base.join("gameboy"))
+    Some(app_dir_in(&base))
 }
 
-/// `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`.
+/// `<state dir>/recent`.
 pub fn recent_path() -> Option<PathBuf> {
     state_dir().map(|d| d.join("recent"))
 }
@@ -863,7 +906,7 @@ fn expand_tilde(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// `${XDG_STATE_HOME:-~/.local/state}/gameboy/volume`.
+/// `<state dir>/volume`.
 pub fn volume_path() -> Option<PathBuf> {
     state_dir().map(|d| d.join("volume"))
 }
@@ -932,7 +975,7 @@ impl VolumeState {
 
     fn serialize(&self) -> String {
         format!(
-            "# written by gameboy; the in-game volume keys (, . m)\n\
+            "# written by TerminalGB; the in-game volume keys (, . m)\n\
              level = {}\nmuted = {}\nfrom_config = {}\n",
             self.level,
             if self.muted { "on" } else { "off" },
@@ -1535,5 +1578,67 @@ mod tests {
         r.record(Path::new("/roms/a.gb"));
         let text = r.serialize();
         assert_eq!(Recent::parse(&text), r);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "terminalgb-appdir-test/{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("scratch dir");
+        d
+    }
+
+    /// The project was renamed from `gameboy` to TerminalGB. A rename that
+    /// loses somebody's settings, recently-played list, remembered volume or
+    /// save states is a bad rename, so the pre-rename directory keeps being
+    /// used **when it is the one that exists**. Nothing is moved.
+    #[test]
+    fn a_pre_rename_directory_is_still_the_one_used() {
+        let base = scratch("legacy");
+        std::fs::create_dir_all(base.join(LEGACY_APP_DIR)).unwrap();
+        assert_eq!(app_dir_in(&base), base.join(LEGACY_APP_DIR));
+    }
+
+    /// A fresh installation gets the new name, and so does anybody who has
+    /// already moved their directory across.
+    #[test]
+    fn a_fresh_install_and_a_migrated_one_both_get_the_new_name() {
+        let empty = scratch("fresh");
+        assert_eq!(app_dir_in(&empty), empty.join(APP_DIR));
+
+        let moved = scratch("moved");
+        std::fs::create_dir_all(moved.join(APP_DIR)).unwrap();
+        assert_eq!(app_dir_in(&moved), moved.join(APP_DIR));
+    }
+
+    /// The new name wins when both exist — that is what makes moving the
+    /// directory across a complete migration rather than a half one.
+    #[test]
+    fn the_new_name_wins_when_both_directories_exist() {
+        let base = scratch("both");
+        std::fs::create_dir_all(base.join(APP_DIR)).unwrap();
+        std::fs::create_dir_all(base.join(LEGACY_APP_DIR)).unwrap();
+        assert_eq!(app_dir_in(&base), base.join(APP_DIR));
+    }
+
+    /// The config is resolved at **file** level, not directory level: a
+    /// `terminalgb/` directory that some other feature created (a screenshot,
+    /// a save state) must not hide a real `gameboy/config.toml` beside it.
+    #[test]
+    fn an_empty_new_directory_does_not_hide_a_pre_rename_config() {
+        let base = scratch("cfg");
+        std::fs::create_dir_all(base.join(APP_DIR)).unwrap();
+        std::fs::create_dir_all(base.join(LEGACY_APP_DIR)).unwrap();
+        let legacy = base.join(LEGACY_APP_DIR).join("config.toml");
+        std::fs::write(&legacy, "palette = green\n").unwrap();
+        assert_eq!(
+            prefer_existing(
+                base.join(APP_DIR).join("config.toml"),
+                base.join(LEGACY_APP_DIR).join("config.toml"),
+            ),
+            legacy
+        );
     }
 }

@@ -2,13 +2,13 @@
 //!
 //! This lives in the plugin API rather than in the emulator because it is
 //! vocabulary *shared* by both sides: a plugin names a button, the emulator
-//! presses it. The emulator re-exports [`KeypadKey`] as `gameboy::KeypadKey`,
+//! presses it. The emulator re-exports [`KeypadKey`] as `terminalgb::KeypadKey`,
 //! so there is exactly one such type in any build.
 
 /// A button on the console.
 ///
 /// `#[repr(C)]` because this type crosses the emulator's C FFI
-/// (`gameboy.h`'s `keydown`/`keyup`); the discriminants are part of that ABI
+/// (`terminalgb.h`'s `keydown`/`keyup`); the discriminants are part of that ABI
 /// and must not be reordered.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[repr(C)]

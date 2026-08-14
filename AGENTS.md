@@ -939,7 +939,7 @@ FAIL → PASS. Full write-up with citations: `docs/conformance-notes.md`.
   `App::with_warnings`). The TUI tests also point `$XDG_STATE_HOME` at a scratch dir
   (`isolate_state_dir`) — a `cargo test` run must not rewrite the user's saved volume.
 - **The remembered volume carries the config value it was adjusted from**
-  (`VolumeState.from_config`, `${XDG_STATE_HOME}/gameboy/volume`). Without that fingerprint one
+  (`VolumeState.from_config`, `${XDG_STATE_HOME}/terminalgb/volume`). Without that fingerprint one
   of the two intents is always silently ignored: either the live keys never persist, or an
   edited `volume =` in `config.toml` does nothing. The rule is "config unchanged → the level
   you last set wins; config edited → the config wins".
@@ -1235,7 +1235,7 @@ accurate-PPU gate). Full record: [`docs/conformance-notes.md`](docs/conformance-
   `romlib.rs` (cartridge-header title/MBC reading, directory scan, fuzzy filter — pure,
   file-system-only, heavily unit-tested), and `tui.rs` (the App: picker screen + game screen,
   one single-threaded event loop, help/quit overlays, centred display).
-- **Entry point is `gameboy::run_terminal(Option<PathBuf>)`** — `Some(path)` launches straight
+- **Entry point is `terminalgb::run_terminal(Option<PathBuf>)`** — `Some(path)` launches straight
   into the game, `None` opens the ROM picker. The TUI **owns ROM loading** (so the picker and
   in-app ROM switching can build `Gameboy`s); the old `render(Terminal)` on a pre-built
   `Gameboy` is a legacy shim that just opens the picker. `load_session()` in `tui.rs` is the
@@ -1295,7 +1295,7 @@ accurate-PPU gate). Full record: [`docs/conformance-notes.md`](docs/conformance-
 - **The regression test is `testharness/basicterm.rs` — a pty, not a window.**
   `cargo test --release --test basicterm` (19 s, runs under a plain `cargo test`, CI
   included). It allocates a pty, **is** the terminal on the far end, and runs the real
-  `gameboy::run_terminal` as a child in its own session (`setsid` + `TIOCSCTTY`, so even the
+  `terminalgb::run_terminal` as a child in its own session (`setsid` + `TIOCSCTTY`, so even the
   child's `/dev/tty` probes land on the pty and nothing can reach the developer's desktop).
   Two scenarios differing in **one reply**: answer `CSI ? u` and the frontend must report
   `kitty`, ignore it and it must report `basic`. Teeth proved by restoring the old
@@ -1374,7 +1374,7 @@ capability must cost only that capability** — the same principle as the adapte
   the frontend feeds the picker — the picker is *rebuilt* via `Picker::from_fontsize(scaled)`
   (there is no `set_font_size`) so **both** `fit_metrics` and the encoded image become
   physical-pixel sized. `cell_scale = auto` reads `Xft.dpi/96` (via `xrdb`) / `GDK_SCALE`;
-  `$GAMEBOY_CELL_SCALE` overrides for testing. Proven: at `142×46` cells, `disp_px` 784×704 →
+  `$TERMINALGB_CELL_SCALE` (or the pre-rename `$GAMEBOY_CELL_SCALE`) overrides for testing. Proven: at `142×46` cells, `disp_px` 784×704 →
   1568×1408 with `cell_scale=2`, i.e. it now fills the physical window. **Screenshots are blocked
   (GNOME/Wayland denies the D-Bus screenshot and `import -window root` is empty), so this was
   verified by the logged numbers, not by eye** — a human on a HiDPI display must confirm the
@@ -1383,8 +1383,9 @@ capability must cost only that capability** — the same principle as the adapte
 - **Note for HiDPI users:** the correction is **opt-in** (default `1.0` never regresses low-DPI /
   XWayland). A native-Wayland HiDPI user must add `cell_scale = auto` (or an explicit `2.0`) to
   their `config.toml` for the picture to fill.
-- Config lives at `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml`; recents at
-  `${XDG_STATE_HOME:-~/.local/state}/gameboy/recent`. Missing config = defaults, never an
+- Config lives at `${XDG_CONFIG_HOME:-~/.config}/terminalgb/config.toml`; recents at
+  `${XDG_STATE_HOME:-~/.local/state}/terminalgb/recent` (with a pre-rename `gameboy/`
+  fallback — see "The rename to TerminalGB" below). Missing config = defaults, never an
   error. `rom_dir` defaults to `~/roms`. Keys: `rom_dir`, `protocol`, `palette`, `upscale`,
   `upscale_factor`, `cell_scale`, `key_a/b/start/select` — all documented in the README's
   "Terminal config file" table.
@@ -1610,7 +1611,7 @@ capability must cost only that capability** — the same principle as the adapte
   fast-forward **drops samples** rather than pitch-shifting; slow-mo under-runs to brief
   silence. No resampling, by choice.
 - Save states live under `$XDG_STATE_HOME` (or `$HOME/.local/state`, else temp) in
-  `gameboy/states/<sanitised-title>.slot<N>.gbss`.
+  `terminalgb/states/<sanitised-title>.slot<N>.gbss` (pre-rename `gameboy/` fallback).
 - **Save-state capture must track new machine state.** After the accuracy crew's fixes it now
   also covers `Cpu.halt_bug` (HALT-bug latch — can be live at a frame boundary) and the MMU's
   `bus_tick_enabled`/`bus_ticked` (per-access timer stepping; reset between instructions but
@@ -2072,12 +2073,75 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 - When adding a config key, add it to the `get(...)` list in `Config::parse_reporting` — keys
   not read there are reported as unknown.
 
+## The rename to TerminalGB — what moved, and the three things that deliberately did not
+
+The project is **TerminalGB**. The name was already in the product (the terminal window title
+and the virtual camera's idle card) before the codebase used it; the rename made them agree.
+
+- **What is now `terminalgb`:** the crate and its lib (`use terminalgb::…`), the plugin crates
+  (`terminalgb-plugin-*`, and the directory `crates/terminalgb-plugin-api/`), the MCP binary
+  (`terminalgb-mcp`) and the `SERVER_NAME` it reports to a client, the FFI header
+  (`terminalgb.h`) and static lib (`libterminalgb.a`), the wasm module (`terminalgb.wasm`),
+  and the user-visible strings (desktop `with_title`, picker header, quit prompt, the
+  `terminalgb:` prefix on warnings and `report_fault` messages).
+- **`Gameboy` and the `gameboy` module are NOT renamed, on purpose.** The *product* is
+  TerminalGB; the *machine it emulates* is a Game Boy. `src/gameboy.rs`, `crate::gameboy`,
+  the `Gameboy` type and the `GAMEBOY` FFI static all keep their names, so
+  `use terminalgb::gameboy::Gameboy` is the correct spelling and is not a leftover.
+- **The GitHub repo is still `Alchemy86/gameboy`** — not the crew's call, and renaming it
+  would break every clone, remote, badge, permalink and the ~737 generated `path:line` links
+  `docs/tools/codemap_links.py` emits (`CODEMAP_REPO` defaults to that slug). `cd gameboy`
+  after a clone is therefore correct in the README and the MCP docs.
+- **THE USER'S DIRECTORIES ARE NOT MOVED, AND MUST NOT BE.** `screen::config::app_dir_in`
+  (and `prefer_existing` beside it) prefer `terminalgb` and fall back to the pre-rename
+  `gameboy` name **when the old one is what exists on disk** — for the config file, the state
+  directory (recents, remembered volume, save states), screenshots and recordings. The config
+  is resolved at *file* level, not directory level, so a `terminalgb/` directory some other
+  feature created cannot hide a real `gameboy/config.toml` beside it. A migration that
+  half-succeeds — or that runs while a second copy of the emulator is writing — is worse than
+  a fallback that always works. Four tests pin it, teeth proven by making `prefer_existing`
+  return `current` unconditionally (two go red). Anything new that wants a per-user directory
+  goes through `app_dir_in`; do not spell `"terminalgb"` at a call site.
+- **Untouched by design:** `<rom>.sav` / `.gbsave` / `.gbss` filenames and locations (a rename
+  that orphans somebody's saves is a bad rename — verified by booting the captain's real
+  Pokémon Blue battery save through `terminalgb-mcp` and reading MEWTWO lv70 back out); the
+  `palette = gameboy` config alias; `ot_name: "GAMEBOY"` in `plugins/gen1-link/src/spec.rs`
+  (that is a Pokémon's original-trainer name on the wire, i.e. game data); the gg8-wiki
+  citations ("Gameboy sound hardware"); `web/`'s CSS classes and wasm-pack `outDir` (they name
+  the drawn console shell and an unverifiable npm build); and the `/tmp/gameboy-*` scratch
+  paths, including `/tmp/gameboy-gen1-trade/cableclub.sav` — that fixture cannot currently be
+  regenerated, so renaming its path would orphan it.
+- `$TERMINALGB_CELL_SCALE` is the new spelling of `$GAMEBOY_CELL_SCALE`; the old name is still
+  read as a fallback in the same expression. `GB_*` env vars were never renamed — the console
+  really is a GB.
+- **The launcher `~/.local/bin/gameboy` lives outside this repo** and is the command the
+  captain types. Nothing here renames it and nothing here should; if a `terminalgb` command is
+  ever added, `gameboy` must keep working.
+- Sweeping a rename like this: protect the not-ours tokens *first* (`Alchemy86/gameboy`,
+  `raphamorim/gameboy`, `crate::gameboy`, `CableClubLeftGameboy`, the XDG paths), then apply
+  the token rules, then **read every survivor**. Two traps this one hit: a `gameboy.h` rule
+  chewed `gameboy.height`, and a `gameboy::` rule turned `gameboy::gameboy::` into
+  `terminalgb::terminalgb::`. Both compiled-or-not immediately; a prose-only file would not
+  have told you.
+- **A bare `grep gameboy::` over this tree is NOT a stale-rename check, and will read as a
+  regression when it is not.** It matches inside `terminalgb::gameboy::`, which is the
+  *correct* post-rename spelling, and inside the built `docs/*.module.wasm` binaries, which
+  are deliberately not swept. Anchor the pattern (`grep -v 'crate::gameboy::\|terminalgb::gameboy::'`
+  and exclude the wasm) or the answer is ~20 false positives every time. Two crews reached
+  that grep independently within an hour of the rename, which is why it is written down.
+- **Check a cross-branch worry by trial-merging, not by comparing line numbers.** Treehouse
+  worktrees share one object store, so `git merge-tree --write-tree <ours> <theirs>` resolves
+  any other branch by SHA with no fetch, no checkout and no risk to either branch: exit 0 and
+  no conflict markers is the answer, and `git show <tree>:<path>` then says what the merged
+  *content* is. Line distance is silent about content; this is not. Used here to prove the
+  rename survives another crew's edits to the same three files, from both directions.
+
 ## Repo furniture & attribution (fork of raphamorim/gameboy)
 
 - **This is a fork of [raphamorim/gameboy](https://github.com/raphamorim/gameboy)** (itself
   modelled on [rboy](https://github.com/mvdnes/rboy)), now at **Alchemy86/gameboy**, MPL-2.0.
   Attribution is a **standing requirement, not decoration**: keep the original author credited
-  in `Cargo.toml` `authors` (alongside "gameboy contributors") and in the README's
+  in `Cargo.toml` `authors` (alongside "TerminalGB contributors") and in the README's
   **"Credits & lineage"** section + the top-of-README fork note. `repository` points at
   Alchemy86/gameboy. Do not strip upstream copyright or the MPL-2.0 `LICENSE` text.
 - **Versioning:** pre-1.0 SemVer, minor may break. Today's big accuracy/audio/tooling day is
@@ -2610,23 +2674,23 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
 
 ## Plugin system — the workspace layout, and why the API is its own crate
 
-- **Layout.** The contract is [`crates/gameboy-plugin-api/`](crates/gameboy-plugin-api/)
+- **Layout.** The contract is [`crates/terminalgb-plugin-api/`](crates/terminalgb-plugin-api/)
   (no dependencies); each plugin is its own crate under [`plugins/`](plugins/) —
   `trainer`, `gen1-link`, `battle-control`, `agent`, plus `example-tracer`, the one a
   stranger copies. The emulator's side of the contract is `src/plugin.rs`. Stranger-facing
   guide: [`docs/writing-a-plugin.md`](docs/writing-a-plugin.md); design rationale stays in
   [`docs/plugins.md`](docs/plugins.md).
 - **The API crate is NOT tidiness — it is the only acyclic arrangement.** The TUI *draws
-  panels* for the plugins it ships with, so `gameboy` depends on the plugin crates. If the
-  `Plugin` trait lived in `gameboy`, plugins would depend back on it and Cargo would refuse
+  panels* for the plugins it ships with, so `terminalgb` depends on the plugin crates. If the
+  `Plugin` trait lived in `terminalgb`, plugins would depend back on it and Cargo would refuse
   the cycle. `MachineAccess` is the seam that made the split possible: the API crate declares
   what a machine must provide, `src/plugin.rs` implements it for `MemoryManagementUnit`, and
   `Machine` (the capability-checked handle) is defined over the trait, not over the MMU.
-  **Never move the trait back into `gameboy`, and never let a plugin crate depend on
-  `gameboy` outside `[dev-dependencies]`.**
+  **Never move the trait back into `terminalgb`, and never let a plugin crate depend on
+  `terminalgb` outside `[dev-dependencies]`.**
 - **A dev-dependency back-edge IS allowed and we use it.** `battle-control`'s tests need a real
-  MBC, so it dev-depends on `gameboy` with the `testing` feature and uses
-  `gameboy::testing::TestMachine` (`src/testing.rs`) — a real machine exposed only as
+  MBC, so it dev-depends on `terminalgb` with the `testing` feature and uses
+  `terminalgb::testing::TestMachine` (`src/testing.rs`) — a real machine exposed only as
   `MachineAccess`, plus `bus_read`/`bus_write`/`advance_input`. Cargo permits a cycle whose
   back-edge is a dev-dependency; that is the escape hatch, and the only one.
 - **`make no-plugins` is the gate, and it is in CI.** Builds core + both frontends with every
@@ -2645,8 +2709,8 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   beside it so a build without the feature says "not built into this binary — rebuild with
   --features X" rather than "unknown plugin".
 - **CI's "the core has exactly one dependency" gate now reads "one THIRD-PARTY dependency"**
-  and excludes first-party `gameboy-plugin-api`. That is not a loosening: the crate has no
-  dependencies of its own and is the code that used to be `src/plugin/mod.rs` (now `crates/gameboy-plugin-api/`), so an embedder
+  and excludes first-party `terminalgb-plugin-api`. That is not a loosening: the crate has no
+  dependencies of its own and is the code that used to be `src/plugin/mod.rs` (now `crates/terminalgb-plugin-api/`), so an embedder
   gains no new third-party code. Do not let anything else onto that list.
 - **Trust model, decided: plugins are TRUSTED code the user compiled in.** Capabilities are an
   interlock on the *emulated machine* — they make declared intent checkable and keep "which
@@ -3280,7 +3344,7 @@ or hardware project and get the emulator, with nothing about this machine or thi
 it. That is now a real, CI-enforced build; it did not compile before.
 
 - **`--no-default-features` is THE EMBEDDING BUILD, and the dependency count is the contract:
-  `gameboy -> blip_buf`, one crate, against 193 on the default build.** `make embed` and the
+  `terminalgb -> blip_buf`, one crate, against 193 on the default build.** `make embed` and the
   **`embed` CI job** assert exactly that (the job installs no system libraries at all). If a
   frontend crate ever appears in that tree, something has leaked into the core — fix the
   layering, do not relax the check.
@@ -3348,8 +3412,8 @@ it. That is now a real, CI-enforced build; it did not compile before.
   key (env wins), or `Gpu::set_render_mode`, and it is shown in the TUI Status panel's `PPU` row.
   It is deliberately **not** in the save state — it is a property of this session's host, not of
   the emulated machine, so loading someone else's state must not switch their renderer.
-  `Gameboy::set_render_mode` takes `gameboy::ppu::RenderMode`; the `gpu` module itself stays
-  private, and the crate root's `gameboy::RenderMode` is a *different* enum (which frontend).
+  `Gameboy::set_render_mode` takes `terminalgb::ppu::RenderMode`; the `gpu` module itself stays
+  private, and the crate root's `terminalgb::RenderMode` is a *different* enum (which frontend).
 - **`Fast` is still the default and every baseline is measured on it.** The accurate engine is
   behind on exactly two rows — Blargg `oam_bug` #7 and Mooneye `ppu/intr_1_2_timing-GS` — and
   until it strictly dominates, flipping the default would make a published score worse.
@@ -3400,15 +3464,15 @@ it. That is now a real, CI-enforced build; it did not compile before.
   set. `GB_SCOUT_SCREEN=1` prints a failing Mooneye test's own assertion table, which is far
   faster than reading registers.
 
-## MCP server (`src/mcp/`, `gameboy-mcp` binary, `mcp` cargo feature)
+## MCP server (`src/mcp/`, `terminalgb-mcp` binary, `mcp` cargo feature)
 
 - **Full contract, install steps for Claude Desktop and Claude Code, every flag, the measured
   numbers and the honest limitations: [`docs/mcp.md`](docs/mcp.md).** Behind the `mcp` cargo
   feature, adds **no third-party crate**: the JSON codec is the agent plugin's, PNG and
   base64 are `termimage`, and every crate it pulls in is in this repository.
 - **It is a thin wrapper over the agent plugin, and must stay one.** `observe` calls
-  `gameboy_plugin_agent::observe::{Gen1Observer, Screen}`; `run_actions` drives
-  `gameboy_plugin_agent::action::Executor` unchanged; the JSON codec is that crate's too.
+  `terminalgb_plugin_agent::observe::{Gen1Observer, Screen}`; `run_actions` drives
+  `terminalgb_plugin_agent::action::Executor` unchanged; the JSON codec is that crate's too.
   Nothing here reads game state or times a button press. If a change starts re-deriving
   either, it belongs in `plugins/agent/`. That is also why the feature is
   `mcp = ["plugin-agent"]` — all first-party, still no third-party crate.

@@ -36,10 +36,10 @@
 //!     ($A000 = final status once the $DE $B0 $61 signature is present) gives
 //!     an objective pass/fail for the parts of the APU the CPU can observe.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::sound::AudioPlayer;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use terminalgb::cpu::core::Cpu;
+use terminalgb::sound::AudioPlayer;
 
 const CLOCK: u64 = 4_194_304;
 const RATE: u32 = 44_100;

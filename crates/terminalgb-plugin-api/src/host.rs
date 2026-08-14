@@ -42,7 +42,7 @@ pub trait Plugin: Send {
     /// Which revision of this API the plugin was built against.
     ///
     /// **Do not override this.** The default body is compiled into *your*
-    /// crate, so it captures the [`API_VERSION`] of the `gameboy-plugin-api`
+    /// crate, so it captures the [`API_VERSION`] of the `terminalgb-plugin-api`
     /// you linked, and [`PluginHost::register`] refuses anything it does not
     /// recognise. Overriding it is how you lie about compatibility.
     fn api_version(&self) -> u32 {
@@ -121,7 +121,7 @@ impl std::fmt::Display for RegisterError {
                 f,
                 "built against plugin API v{plugin}, but this emulator \
                  implements v{host} — rebuild the plugin against \
-                 gameboy-plugin-api v{host}"
+                 terminalgb-plugin-api v{host}"
             ),
         }
     }

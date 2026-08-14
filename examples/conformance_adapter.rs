@@ -41,10 +41,10 @@
 //!   temporary directory, but the emulator picking its save path from the ROM
 //!   path is a general trap — see `src/mbc/battery.rs`.)
 
-use gameboy::cpu::core::Cpu;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use terminalgb::cpu::core::Cpu;
 
 /// Safety cap so a ROM that never completes a frame cannot spin forever. The
 /// runner also enforces a wall-clock timeout; this one keeps the result

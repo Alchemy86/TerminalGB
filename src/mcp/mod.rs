@@ -6,9 +6,9 @@
 //!
 //! # What this is, and what it is not
 //!
-//! It is a **thin wrapper over [`gameboy_plugin_agent`]**. That module already solved
-//! the hard half — structured perception ([`gameboy_plugin_agent::observe`]) and
-//! bounded, high-level action ([`gameboy_plugin_agent::action`]) — because an agent
+//! It is a **thin wrapper over [`terminalgb_plugin_agent`]**. That module already solved
+//! the hard half — structured perception ([`terminalgb_plugin_agent::observe`]) and
+//! bounded, high-level action ([`terminalgb_plugin_agent::action`]) — because an agent
 //! needed them to play the game. Everything here is transport: JSON-RPC
 //! framing, tool descriptions, and a host that owns the clock. No state
 //! reading and no input handling is re-implemented; if you find yourself
@@ -45,7 +45,7 @@
 //! The whole module is behind the `mcp` cargo feature. Someone embedding this
 //! core in their own tool or in hardware must not inherit an MCP stack, and the
 //! feature adds **no third-party crate** — the JSON is
-//! [`gameboy_plugin_agent::json`], the PNG and base64 are [`crate::termimage`].
+//! [`terminalgb_plugin_agent::json`], the PNG and base64 are [`crate::termimage`].
 
 pub mod config;
 pub mod server;
@@ -56,7 +56,7 @@ pub use server::{serve, PROTOCOL_VERSION, SERVER_NAME};
 pub use session::Host;
 
 /// Start a server on stdin/stdout with the given options. The entry point the
-/// `gameboy-mcp` binary is.
+/// `terminalgb-mcp` binary is.
 pub fn run(options: Options) -> std::io::Result<()> {
     let mut host = Host::new(options);
     // A cartridge named at launch is loaded *before* the first request, so a
@@ -68,12 +68,12 @@ pub fn run(options: Options) -> std::io::Result<()> {
     if let Some(path) = rom {
         match host.load(&path) {
             Ok(notes) => {
-                eprintln!("gameboy-mcp: loaded {}", path.display());
+                eprintln!("terminalgb-mcp: loaded {}", path.display());
                 for n in notes {
-                    eprintln!("gameboy-mcp: {n}");
+                    eprintln!("terminalgb-mcp: {n}");
                 }
             }
-            Err(e) => eprintln!("gameboy-mcp: {e}"),
+            Err(e) => eprintln!("terminalgb-mcp: {e}"),
         }
     }
     let stdin = std::io::stdin();

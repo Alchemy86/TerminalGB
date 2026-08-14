@@ -41,11 +41,11 @@
 //! `--state <file>` loads a save state instead, for driving a battle from a
 //! real game. That reads the file and never writes it.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::video::{Destination, Pace, PixelFormat, Source, VideoOut, VideoSpec};
-use gameboy::KeypadKey;
-use gameboy_plugin_battle_control::preset::PresetFile;
-use gameboy_plugin_battle_control::{wram, BattlePlugin, Phase};
+use terminalgb::gameboy::Gameboy;
+use terminalgb::video::{Destination, Pace, PixelFormat, Source, VideoOut, VideoSpec};
+use terminalgb::KeypadKey;
+use terminalgb_plugin_battle_control::preset::PresetFile;
+use terminalgb_plugin_battle_control::{wram, BattlePlugin, Phase};
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -497,7 +497,7 @@ fn play(
                     .collect();
                 println!(
                     "  |{}|",
-                    gameboy_plugin_trainer::text::decode_screen(&tiles)
+                    terminalgb_plugin_trainer::text::decode_screen(&tiles)
                 );
             }
         }
@@ -678,7 +678,7 @@ fn menu_is_open(gb: &mut Gameboy) -> bool {
     let tiles: Vec<u8> = (0..20 * 18)
         .map(|i| gb.peek(wram::addr::TILE_MAP + i as u16))
         .collect();
-    gameboy_plugin_trainer::text::decode_screen(&tiles).contains("OPTION")
+    terminalgb_plugin_trainer::text::decode_screen(&tiles).contains("OPTION")
 }
 
 fn hold(gb: &mut Gameboy, key: KeypadKey, frames: u32) {

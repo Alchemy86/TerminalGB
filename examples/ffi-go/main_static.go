@@ -4,8 +4,8 @@ package main
 // The -ldl is sometimes necessary to fix linker errors about `dlsym`.
 
 /*
-#cgo LDFLAGS: ./libgameboy.a -ldl
-#include "../../gameboy.h"
+#cgo LDFLAGS: ./libterminalgb.a -ldl
+#include "../../terminalgb.h"
 #include <stdlib.h>
 */
 import "C"

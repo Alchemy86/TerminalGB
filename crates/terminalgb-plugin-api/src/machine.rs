@@ -7,7 +7,7 @@ use crate::{Capability, KeypadKey};
 ///
 /// A plugin never sees this trait's methods directly — it sees [`Machine`],
 /// which wraps one of these and applies the capability checks. The split is
-/// what makes this crate independent of the emulator: `gameboy` implements
+/// what makes this crate independent of the emulator: `terminalgb` implements
 /// `MachineAccess` for its memory unit, and plugin crates depend only on this
 /// crate. Without it the dependency graph would be a cycle, because the
 /// emulator's own frontend draws panels for the plugins it ships with.
@@ -188,7 +188,7 @@ impl<'m> Machine<'m> {
     /// declare [`Capability::WRITE_MEMORY`].
     ///
     /// **This can corrupt a save.** The virtual link partner shipped in
-    /// `gameboy-plugin-gen1-link` deliberately does not declare this
+    /// `terminalgb-plugin-gen1-link` deliberately does not declare this
     /// capability: a traded Pokémon must arrive through the real trade path,
     /// not through a poke.
     pub fn poke(&mut self, address: u16, value: u8) -> bool {

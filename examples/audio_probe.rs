@@ -14,7 +14,7 @@
 #[cfg(feature = "audio")]
 fn main() {
     use cpal::traits::{DeviceTrait, HostTrait};
-    use gameboy::sound::AudioPlayer;
+    use terminalgb::sound::AudioPlayer;
 
     let host = cpal::default_host();
     match host.default_output_device() {
@@ -40,7 +40,7 @@ fn main() {
         None => println!("NO default output device"),
     }
 
-    match gameboy::sound::cpal_audio::CpalPlayer::new() {
+    match terminalgb::sound::cpal_audio::CpalPlayer::new() {
         Some((p, _stream)) => {
             println!(
                 ">>> CpalPlayer negotiated sample_rate = {}",

@@ -29,8 +29,8 @@
 //! `GB_AUDIO_STATS=1` adds the player's five-second queue lines.
 #[cfg(feature = "audio")]
 fn main() {
-    use gameboy::cpu::core::Cpu;
     use std::time::{Duration, Instant};
+    use terminalgb::cpu::core::Cpu;
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let frames: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(600);
@@ -53,7 +53,7 @@ fn main() {
     };
 
     let mut cpu = Cpu::new(rom, Some(path));
-    let (player, _stream) = match gameboy::sound::cpal_audio::CpalPlayer::new() {
+    let (player, _stream) = match terminalgb::sound::cpal_audio::CpalPlayer::new() {
         Some(x) => x,
         None => {
             eprintln!("no audio device — this benchmark needs real hardware");
@@ -61,7 +61,7 @@ fn main() {
         }
     };
     let device_rate = {
-        use gameboy::sound::AudioPlayer;
+        use terminalgb::sound::AudioPlayer;
         player.samples_rate()
     };
     let queue = player.queue_handle();

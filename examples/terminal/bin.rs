@@ -1,7 +1,7 @@
-extern crate gameboy;
+extern crate terminalgb;
 
-use gameboy::gameboy::run_terminal;
 use std::path::PathBuf;
+use terminalgb::gameboy::run_terminal;
 
 /// Terminal frontend.
 ///   `terminal <rom.gb>`  — launch straight into the game (no picker).
@@ -13,7 +13,7 @@ fn main() {
     // Video flags become `GB_VIDEO_*`, so an explicit flag beats the config
     // file and any inherited environment. Everything else is passed through.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let rest = match gameboy::video::apply_cli_flags(args) {
+    let rest = match terminalgb::video::apply_cli_flags(args) {
         Ok(rest) => rest,
         Err(e) => {
             eprintln!("terminal: {e}");
@@ -27,7 +27,7 @@ fn main() {
             eprintln!("  with a ROM path: launch straight into the game");
             eprintln!("  with no args:    browse the ROM picker (rom_dir from config)");
             eprintln!("video-out (see docs/video-out.md):");
-            eprintln!("{}", gameboy::video::cli_usage());
+            eprintln!("{}", terminalgb::video::cli_usage());
         }
         Some(path) => run_terminal(Some(PathBuf::from(path))),
         None => run_terminal(None),

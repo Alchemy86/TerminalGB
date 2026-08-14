@@ -30,11 +30,11 @@
 
 #[cfg(all(feature = "audio", not(target_arch = "wasm32")))]
 fn main() {
-    use gameboy::gameboy::Gameboy;
-    use gameboy::sound::cpal_audio::CpalPlayer;
-    use gameboy::sound::AudioPlayer;
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
+    use terminalgb::gameboy::Gameboy;
+    use terminalgb::sound::cpal_audio::CpalPlayer;
+    use terminalgb::sound::AudioPlayer;
 
     // One emulated frame: 70224 cycles at 4.194304 MHz = 59.7275 Hz.
     const FRAME_TIME: Duration = Duration::from_micros(16_743);

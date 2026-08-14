@@ -77,7 +77,7 @@ one `is_empty` test per frame.
 ## Tests
 
 ```bash
-cargo test -p gameboy-plugin-trainer              # 58 unit tests, no cartridge needed
+cargo test -p terminalgb-plugin-trainer              # 58 unit tests, no cartridge needed
 cargo test --release --test trainer               # the real-cartridge harness (skips without one)
 ```
 

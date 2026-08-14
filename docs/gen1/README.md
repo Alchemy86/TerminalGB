@@ -101,7 +101,7 @@ cartridge at run time. See the licence-boundary section in the repository's `CLA
 
 The techniques here are all implemented in the repository and all runnable:
 
-* [`crates/gameboy-plugin-api/`](../../crates/gameboy-plugin-api/) — the plugin contract ([`docs/plugins.md`](../plugins.md)):
+* [`crates/terminalgb-plugin-api/`](../../crates/terminalgb-plugin-api/) — the plugin contract ([`docs/plugins.md`](../plugins.md)):
   a plugin declares what it may do and the host enforces it.
 * [`plugins/battle-control/src/`](../../plugins/battle-control/src/) — battle control.
 * [`plugins/gen1-link/src/`](../../plugins/gen1-link/src/) — the link partner, the party encoding and the

@@ -374,7 +374,7 @@ calls in exactly these situations:
 ### In the terminal frontend (the streaming setup)
 
 ```toml
-# ~/.config/gameboy/config.toml
+# ~/.config/terminalgb/config.toml
 plugins         = agent
 agent_command   = /path/to/gameboy/tools/claude_plays/claude_api_adapter.py
 agent_objective = Get out of the house and choose a starter Pokemon
@@ -435,7 +435,7 @@ party**. Everything else is for the operator and belongs off-canvas.
 
 ```
 ┌────────────────────────────────────────────────────────────┐ 1920x1080
-│ gameboy · POKEMON BLUE                                     │
+│ TerminalGB · POKEMON BLUE                                     │
 │ ┌──────────────────────────┐ ┌───────────────────────────┐ │
 │ │                          │ │  Trainer / party panel    │ │
 │ │      GAME  PICTURE       │ │  (T)                      │ │

@@ -75,11 +75,11 @@
 //! No external dependencies: the PNG reader, the PNG writer and the hash are
 //! all hand-rolled. For the full rationale see `docs/testing.md`.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::mode::Model;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
 
 #[path = "pngdec.rs"]
 mod pngdec;
@@ -361,7 +361,7 @@ fn models_for(rom: &[u8]) -> &'static [Model] {
 /// without one silently changes what the ROMs report.
 struct SilentPlayer;
 
-impl gameboy::sound::AudioPlayer for SilentPlayer {
+impl terminalgb::sound::AudioPlayer for SilentPlayer {
     fn play(&mut self, _left: &[f32], _right: &[f32]) {}
     fn samples_rate(&self) -> u32 {
         AUDIO_RATE

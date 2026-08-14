@@ -553,7 +553,7 @@ or resumes calling `step_frame`), **step** (instruction / scanline / frame), **r
 is the *transport* over these existing entry points, not a second control model.
 
 > **First consumer, and what it found.** The read-only half of this surface is now
-> implemented in [`crates/gameboy-plugin-api/`](../crates/gameboy-plugin-api/) — `DebugView` (Tier 1) plus the
+> implemented in [`crates/terminalgb-plugin-api/`](../crates/terminalgb-plugin-api/) — `DebugView` (Tier 1) plus the
 > cheap *frame rendered* event — and its first user is the
 > [live trainer view](trainer.md), a Gen 1 Pokémon party/battle tracker. Building a second
 > consumer surfaced two gaps in the sketch above, both worth fixing when the rest lands:

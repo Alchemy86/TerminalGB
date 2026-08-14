@@ -13,7 +13,7 @@
 //! * `legacy` — what the frontend did before: `ratatui-image` with
 //!   `Resize::Scale`, which resizes the source **to the pixel size of the
 //!   display rectangle** and encodes that. Cost grows with the window.
-//! * `capped` — [`gameboy::termimage`]: transmit at the upscaler's own output
+//! * `capped` — [`terminalgb::termimage`]: transmit at the upscaler's own output
 //!   size and let the terminal stretch to the cell rectangle. Cost is constant
 //!   in the window size.
 //!
@@ -53,12 +53,12 @@
 //! the uncompressed Kitty payload, so the two runs differ only in what is on the
 //! wire.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::screen::config::Palette;
-use gameboy::screen::frame::FramePrep;
-use gameboy::telemetry::{self, AudioSample, Context, FrameSample, Telemetry};
-use gameboy::termimage::{CellRect, TermImage, Wire};
-use gameboy::upscale::{Algorithm, Upscaler};
+use terminalgb::gameboy::Gameboy;
+use terminalgb::screen::config::Palette;
+use terminalgb::screen::frame::FramePrep;
+use terminalgb::telemetry::{self, AudioSample, Context, FrameSample, Telemetry};
+use terminalgb::termimage::{CellRect, TermImage, Wire};
+use terminalgb::upscale::{Algorithm, Upscaler};
 
 use std::io::Write;
 use std::time::Instant;
@@ -462,7 +462,7 @@ fn run_case(
 
 fn print_table(rows: &[CaseResult], args: &Args) {
     println!(
-        "gameboy render benchmark — {} frames per case, cell {}x{}px, protocol {:?}",
+        "terminalgb render benchmark — {} frames per case, cell {}x{}px, protocol {:?}",
         args.frames, args.font.0, args.font.1, args.protocol
     );
     println!(
@@ -520,10 +520,10 @@ fn print_table(rows: &[CaseResult], args: &Args) {
 mod tty_bench {
     use super::{apply_state, fit_metrics, walk_input, Args, DMG_HZ, SRC_H, SRC_W};
 
-    use gameboy::gameboy::Gameboy;
-    use gameboy::screen::frame::FramePrep;
-    use gameboy::termimage::{CellRect, TermImage, Wire};
-    use gameboy::upscale::{Algorithm, Upscaler};
+    use terminalgb::gameboy::Gameboy;
+    use terminalgb::screen::frame::FramePrep;
+    use terminalgb::termimage::{CellRect, TermImage, Wire};
+    use terminalgb::upscale::{Algorithm, Upscaler};
 
     use std::fs::File;
     use std::io::{Read, Write};
@@ -783,7 +783,7 @@ mod tty_bench {
         // Kitty a=q handshakes, one per transmission medium.
         let direct = format!("\x1b_Ga=q,i={},f=24,t=d,s=1,v=1;AAAA\x1b\\", 91);
         println!("kitty t=d  : {}", describe(tty.ask(direct.as_bytes()), 91));
-        match gameboy::termimage::shm_query(92) {
+        match terminalgb::termimage::shm_query(92) {
             Some(q) => {
                 let reply = tty.ask(q.seq.as_bytes());
                 println!("kitty t=s  : {}", describe(reply, 92));
@@ -800,7 +800,7 @@ mod tty_bench {
     fn describe(reply: Option<String>, id: u32) -> String {
         match reply {
             None => "no reply (unsupported or swallowed by a multiplexer)".into(),
-            Some(r) if gameboy::termimage::shm_reply_ok(&r, id) => {
+            Some(r) if terminalgb::termimage::shm_reply_ok(&r, id) => {
                 format!("OK  [{}]", escape(&r))
             }
             Some(r) => format!("not OK  [{}]", escape(&r)),
@@ -886,10 +886,10 @@ mod tty_bench {
         let mut shm_asked = false;
         if wire == Wire::Kitty && std::env::var("GB_TERM_KITTY").as_deref() != Ok("noshm")
         {
-            if let Some(q) = gameboy::termimage::shm_query(0x5348) {
+            if let Some(q) = terminalgb::termimage::shm_query(0x5348) {
                 shm_asked = true;
                 let reply = tty.ask(q.seq.as_bytes()).unwrap_or_default();
-                if gameboy::termimage::shm_reply_ok(&reply, 0x5348) {
+                if terminalgb::termimage::shm_reply_ok(&reply, 0x5348) {
                     term.set_kitty_shm(true);
                 }
                 q.finish();
@@ -1094,7 +1094,7 @@ fn apply_state(gb: &mut Gameboy, path: Option<&str>) {
 /// character keeps moving instead of walking into a wall and standing still.
 /// 48 frames is about three tiles at the overworld's walking speed.
 fn walk_input(gb: &mut Gameboy, frame: u32) {
-    use gameboy::KeypadKey;
+    use terminalgb::KeypadKey;
     const LEG: u32 = 48;
     let dirs = [
         KeypadKey::Right,

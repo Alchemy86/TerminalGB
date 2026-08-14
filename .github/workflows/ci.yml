@@ -48,7 +48,7 @@ jobs:
       - name: cargo test
         run: cargo test --release
       # The MCP server, driven the way a client drives it: the harness spawns
-      # the real `gameboy-mcp` binary and speaks JSON-RPC to it. `make lint`
+      # the real `terminalgb-mcp` binary and speaks JSON-RPC to it. `make lint`
       # never compiles the feature, and a protocol bug is invisible to every
       # other test here — a server that starts is not a server that works.
       # Needs only the vendored dmg-acid2 ROM. See docs/mcp.md.
@@ -91,7 +91,7 @@ jobs:
       # the APU's resampler; anything else appearing here means a frontend
       # crate has leaked into the core's default path.
       #
-      # `gameboy-plugin-api` is allowed beside it and is not a loosening of
+      # `terminalgb-plugin-api` is allowed beside it and is not a loosening of
       # this rule: it is first-party, in this repository, has no dependencies
       # of its own, and is the code that used to be `src/plugin/mod.rs`. It
       # became a crate so that plugin crates can depend on the contract without
@@ -100,7 +100,7 @@ jobs:
       - name: The core has exactly one third-party dependency
         run: |
           deps=$(cargo tree --no-default-features --edges normal --prefix none \
-                 | sort -u | grep -v '^gameboy ' | grep -v '^gameboy-plugin-api ')
+                 | sort -u | grep -v '^terminalgb ' | grep -v '^terminalgb-plugin-api ')
           echo "$deps"
           test "$deps" = "$(printf '%s' "$deps" | head -1)" || { echo "more than one dependency"; exit 1; }
           case "$deps" in blip_buf*) ;; *) echo "unexpected dependency"; exit 1 ;; esac

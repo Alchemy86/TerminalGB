@@ -40,8 +40,8 @@
 //!
 //! Run with `cargo test --release --test battery`.
 
-use gameboy::gameboy::Gameboy;
 use std::path::{Path, PathBuf};
+use terminalgb::gameboy::Gameboy;
 
 // ---------------------------------------------------------------------------
 // A minimal MBC3+RAM+BATTERY test cartridge, assembled by hand.

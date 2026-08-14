@@ -220,7 +220,7 @@ impl Gameboy {
         let (video_spec, video_warnings) = crate::video::VideoSpec::resolve(&cfg.video);
         let (video_start, start_warnings) = crate::video::resolve_autostart(&cfg.video);
         for w in video_warnings.iter().chain(start_warnings.iter()) {
-            eprintln!("gameboy: {w}");
+            eprintln!("terminalgb: {w}");
         }
         // This frontend has no key to turn the stream on, so an armed-but-idle
         // stream would be unreachable. Say what to add rather than leaving a
@@ -228,7 +228,7 @@ impl Gameboy {
         let video_spec = match video_spec {
             Some(s) if !video_start => {
                 eprintln!(
-                    "gameboy: video: {} configured but not streaming — add \
+                    "terminalgb: video: {} configured but not streaming — add \
                      --video-start (or video_autostart = true) to go live",
                     s.dest.label()
                 );
@@ -248,10 +248,10 @@ impl Gameboy {
                 s.title = Some(self.rom_title());
                 let (v, err) = crate::video::VideoOut::open(s);
                 if let Some(e) = err {
-                    eprintln!("gameboy: {e}");
+                    eprintln!("terminalgb: {e}");
                 }
                 if v.is_enabled() {
-                    eprintln!("gameboy: {}", v.describe());
+                    eprintln!("terminalgb: {}", v.describe());
                 }
                 v
             }
@@ -299,7 +299,7 @@ impl Gameboy {
             height: out_h as u32,
         };
         let window_builder = glutin::window::WindowBuilder::new()
-            .with_title("Gameboy")
+            .with_title("TerminalGB")
             .with_inner_size(inner_size)
             .with_resizable(true);
         let gl_window = glutin::ContextBuilder::new()
@@ -407,7 +407,7 @@ impl Gameboy {
                                 // a control nobody can see the state of is a
                                 // control nobody trusts.
                                 window.set_title(&format!(
-                                    "Gameboy — {} — vol {}",
+                                    "TerminalGB — {} — vol {}",
                                     upscaler.label(),
                                     output_volume::label()
                                 ));

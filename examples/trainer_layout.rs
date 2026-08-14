@@ -14,10 +14,10 @@
 //! check is the sprite, which is an image and needs a real terminal; see
 //! `docs/trainer.md`.
 
-use gameboy::screen::trainer_view as tv;
-use gameboy_plugin_trainer::derived::StatExp;
-use gameboy_plugin_trainer::gen1::{BattleKind, Dvs, Mon, MoveSlot, Status};
-use gameboy_plugin_trainer::{TeamMon, TrainerState};
+use terminalgb::screen::trainer_view as tv;
+use terminalgb_plugin_trainer::derived::StatExp;
+use terminalgb_plugin_trainer::gen1::{BattleKind, Dvs, Mon, MoveSlot, Status};
+use terminalgb_plugin_trainer::{TeamMon, TrainerState};
 
 fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -> Mon {
     Mon {
@@ -105,14 +105,15 @@ fn state(battle: bool) -> TrainerState {
         st.trainer_name = "JOEY".into();
         let mut o = mon("", "CHARMANDER", 7, 18, 20, ("FIRE", "FIRE"));
         o.moves.truncate(2);
-        o.stat_mods = Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
+        o.stat_mods = Some(terminalgb_plugin_trainer::derived::StatMods::from_bytes([
             6, 7, 9, 7, 5, 7,
         ]));
         st.opponent = Some(o);
         let mut active = st.party[0].clone();
-        active.stat_mods = Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
-            7, 5, 7, 7, 7, 7,
-        ]));
+        active.stat_mods =
+            Some(terminalgb_plugin_trainer::derived::StatMods::from_bytes([
+                7, 5, 7, 7, 7, 7,
+            ]));
         st.active = Some(active);
         st.enemy_team = vec![
             TeamMon {
@@ -180,8 +181,8 @@ fn draw(
 fn live(rom: &str, state: Option<&str>, frames: u64, w: usize, keys: &str) {
     let path = std::path::PathBuf::from(rom);
     let data = std::fs::read(&path).expect("read the ROM");
-    let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
-    let mut plugin = gameboy_plugin_trainer::TrainerPlugin::new(data);
+    let mut gb = terminalgb::gameboy::Gameboy::new(data.clone(), Some(path));
+    let mut plugin = terminalgb_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin))
         .expect("attach the trainer view");
@@ -215,9 +216,9 @@ fn live(rom: &str, state: Option<&str>, frames: u64, w: usize, keys: &str) {
         for (i, t) in tiles.iter_mut().enumerate() {
             *t = gb.peek(0xC3A0 + i as u16);
         }
-        println!("{}", gameboy_plugin_trainer::text::decode_screen(&tiles));
+        println!("{}", terminalgb_plugin_trainer::text::decode_screen(&tiles));
     }
-    let Some(p) = gb.plugin::<gameboy_plugin_trainer::TrainerPlugin>() else {
+    let Some(p) = gb.plugin::<terminalgb_plugin_trainer::TrainerPlugin>() else {
         println!("no trainer plugin");
         return;
     };
@@ -268,22 +269,23 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
     for ext in ["sav", "srm", "gbsave"] {
         let _ = std::fs::remove_file(path.with_extension(ext));
     }
-    let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
-    let mut plugin = gameboy_plugin_trainer::TrainerPlugin::new(data);
+    let mut gb = terminalgb::gameboy::Gameboy::new(data.clone(), Some(path));
+    let mut plugin = terminalgb_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin)).expect("attach");
 
-    let press = |gb: &mut gameboy::gameboy::Gameboy, k: gameboy::KeypadKey, gap: u32| {
-        gb.keydown(k);
-        for _ in 0..4 {
-            gb.frame();
-        }
-        gb.keyup(k);
-        for _ in 0..gap {
-            gb.frame();
-        }
-    };
-    use gameboy::KeypadKey::*;
+    let press =
+        |gb: &mut terminalgb::gameboy::Gameboy, k: terminalgb::KeypadKey, gap: u32| {
+            gb.keydown(k);
+            for _ in 0..4 {
+                gb.frame();
+            }
+            gb.keyup(k);
+            for _ in 0..gap {
+                gb.frame();
+            }
+        };
+    use terminalgb::KeypadKey::*;
     // The intro plays itself if you keep confirming.
     for step in 0..400u32 {
         press(&mut gb, if step % 2 == 0 { Start } else { A }, 20);
@@ -353,7 +355,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
                 .map(|y| {
                     let row: Vec<u8> =
                         (0..20).map(|x| gb.peek(0xC3A0 + y * 20 + x)).collect();
-                    gameboy_plugin_trainer::text::decode_screen(&row)
+                    terminalgb_plugin_trainer::text::decode_screen(&row)
                 })
                 .collect();
             for r in rows.iter().filter(|r| !r.trim().is_empty()) {
@@ -455,7 +457,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
         gb.load_state(&bytes).unwrap();
     }
     let p = gb
-        .plugin::<gameboy_plugin_trainer::TrainerPlugin>()
+        .plugin::<terminalgb_plugin_trainer::TrainerPlugin>()
         .unwrap();
     let st = p.state();
     println!(
@@ -490,7 +492,7 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
 /// the two checked by eye.
 fn sprites(rom: &str, out_dir: &str) {
     let data = std::fs::read(rom).expect("read the ROM");
-    let tables = gameboy_plugin_trainer::rom::RomTables::new(data);
+    let tables = terminalgb_plugin_trainer::rom::RomTables::new(data);
     std::fs::create_dir_all(out_dir).expect("create the output directory");
     for (label, index) in [
         ("bulbasaur", 0x99u8),
@@ -502,7 +504,7 @@ fn sprites(rom: &str, out_dir: &str) {
             println!("{label}: no sprite");
             continue;
         };
-        let bg = gameboy_plugin_trainer::sprite::background_mask(&pixels, w, h);
+        let bg = terminalgb_plugin_trainer::sprite::background_mask(&pixels, w, h);
         let lightest = pixels.iter().filter(|&&p| p == 0).count();
         let outside = bg.iter().filter(|b| **b).count();
         println!(
@@ -511,8 +513,8 @@ fn sprites(rom: &str, out_dir: &str) {
             lightest - outside
         );
         for palette in [
-            gameboy::screen::config::Palette::Grayscale,
-            gameboy::screen::config::Palette::Green,
+            terminalgb::screen::config::Palette::Grayscale,
+            terminalgb::screen::config::Palette::Green,
         ] {
             let mut rgba = Vec::with_capacity(pixels.len() * 4);
             for (i, &px) in pixels.iter().enumerate() {
@@ -559,29 +561,30 @@ fn sprites(rom: &str, out_dir: &str) {
 /// cargo run --release --example trainer_layout -- --rom <rom> --wild
 /// ```
 fn to_wild(rom: &str, seed0: u64) {
-    use gameboy_plugin_trainer::capture::{ball_set, odds, Ball, Target};
+    use terminalgb_plugin_trainer::capture::{ball_set, odds, Ball, Target};
     let path = std::path::PathBuf::from(rom);
     let data = std::fs::read(&path).expect("read the ROM");
     for ext in ["sav", "srm", "gbsave"] {
         let _ = std::fs::remove_file(path.with_extension(ext));
     }
-    let tables = gameboy_plugin_trainer::rom::RomTables::new(data.clone());
-    let mut gb = gameboy::gameboy::Gameboy::new(data.clone(), Some(path));
-    let mut plugin = gameboy_plugin_trainer::TrainerPlugin::new(data);
+    let tables = terminalgb_plugin_trainer::rom::RomTables::new(data.clone());
+    let mut gb = terminalgb::gameboy::Gameboy::new(data.clone(), Some(path));
+    let mut plugin = terminalgb_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin)).expect("attach");
 
-    let press = |gb: &mut gameboy::gameboy::Gameboy, k: gameboy::KeypadKey, gap: u32| {
-        gb.keydown(k);
-        for _ in 0..4 {
-            gb.frame();
-        }
-        gb.keyup(k);
-        for _ in 0..gap {
-            gb.frame();
-        }
-    };
-    use gameboy::KeypadKey::*;
+    let press =
+        |gb: &mut terminalgb::gameboy::Gameboy, k: terminalgb::KeypadKey, gap: u32| {
+            gb.keydown(k);
+            for _ in 0..4 {
+                gb.frame();
+            }
+            gb.keyup(k);
+            for _ in 0..gap {
+                gb.frame();
+            }
+        };
+    use terminalgb::KeypadKey::*;
     for step in 0..400u32 {
         press(&mut gb, if step % 2 == 0 { Start } else { A }, 20);
         if gb.peek(0xDA41) != 0 || gb.peek(0xDA43) != 0 || gb.peek(0xDA44) != 0 {
@@ -633,7 +636,7 @@ fn to_wild(rom: &str, seed0: u64) {
         }
     );
     let p = gb
-        .plugin::<gameboy_plugin_trainer::TrainerPlugin>()
+        .plugin::<terminalgb_plugin_trainer::TrainerPlugin>()
         .unwrap();
     let st = p.state();
     let o = st.opponent.as_ref().unwrap();
@@ -650,7 +653,7 @@ fn to_wild(rom: &str, seed0: u64) {
         "  at 1 HP:      POKé {:.2}%",
         odds(hurt, Ball::Poke).chance * 100.0
     );
-    hurt.status = gameboy_plugin_trainer::gen1::Status(0x04);
+    hurt.status = terminalgb_plugin_trainer::gen1::Status(0x04);
     println!(
         "  at 1 HP asleep: POKé {:.2}%",
         odds(hurt, Ball::Poke).chance * 100.0
@@ -666,8 +669,8 @@ fn to_wild(rom: &str, seed0: u64) {
     println!("└{}┘", "─".repeat(inner));
 }
 
-fn key_for(c: char) -> Option<gameboy::KeypadKey> {
-    use gameboy::KeypadKey::*;
+fn key_for(c: char) -> Option<terminalgb::KeypadKey> {
+    use terminalgb::KeypadKey::*;
     Some(match c {
         'a' => A,
         'b' => B,

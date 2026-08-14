@@ -37,9 +37,9 @@
 //! A worked example (Pokémon Blue: new game, in-game SAVE, then killed) is in
 //! `docs/testing.md`.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::KeypadKey;
 use std::path::{Path, PathBuf};
+use terminalgb::gameboy::Gameboy;
+use terminalgb::KeypadKey;
 
 fn key(name: &str) -> Option<KeypadKey> {
     Some(match name {

@@ -22,11 +22,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gameboy-plugin-api = "0.1"
+terminalgb-plugin-api = "0.1"
 ```
 
 ```rust
-use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
+use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 
 pub const NAME: &str = "frame-counter";
 
@@ -145,13 +145,13 @@ nothing.
 
 ## 5. Compatibility across our refactors
 
-`gameboy-plugin-api` is versioned with ordinary semver, and [`API_VERSION`] names the revision
+`terminalgb-plugin-api` is versioned with ordinary semver, and [`API_VERSION`] names the revision
 of the contract. `Plugin::api_version` has a default body that compiles that constant *from the
 copy of the crate you linked*, and `PluginHost::register` refuses a mismatch:
 
 ```
 plugin foo: built against plugin API v1, but this emulator implements v2 —
-rebuild the plugin against gameboy-plugin-api v2
+rebuild the plugin against terminalgb-plugin-api v2
 ```
 
 **Do not override `api_version`.** Overriding it is how you lie about compatibility.
@@ -173,7 +173,7 @@ What actually protects you across our refactors is two deliberate choices:
 
 Implement `MachineAccess` over anything — an array is fine — and drive `PluginHost` yourself.
 No ROM, no CPU, no display. `plugins/example-tracer/src/lib.rs` has a complete fake in ~40
-lines, and `crates/gameboy-plugin-api/src/tests.rs` has a richer one.
+lines, and `crates/terminalgb-plugin-api/src/tests.rs` has a richer one.
 
 ```rust
 let mut host = PluginHost::new();
@@ -189,11 +189,11 @@ actually switches banks — use the emulator as a **dev**-dependency:
 
 ```toml
 [dev-dependencies]
-gameboy = { version = "0.2", default-features = false, features = ["testing"] }
+terminalgb = { version = "0.2", default-features = false, features = ["testing"] }
 ```
 
 ```rust
-use gameboy::testing::TestMachine;
+use terminalgb::testing::TestMachine;
 let mut machine = TestMachine::new(my_rom)?;
 ```
 
@@ -237,7 +237,7 @@ Optionally add a row to `REGISTRY` beside it, so that a build *without* your fea
 "plugin my-thing is not built into this binary — rebuild with --features plugin-my-thing"
 rather than "unknown plugin".
 
-**3. Build it in, and name it** in `~/.config/gameboy/config.toml`:
+**3. Build it in, and name it** in `~/.config/terminalgb/config.toml`:
 
 ```toml
 plugins = my-thing
@@ -290,7 +290,7 @@ Said plainly so nobody discovers it the hard way: **you cannot write a plugin in
 ## 9. Where things live
 
 ```
-crates/gameboy-plugin-api/   the contract. No dependencies, and it does NOT
+crates/terminalgb-plugin-api/   the contract. No dependencies, and it does NOT
                              depend on the emulator — that is what lets the
                              emulator depend on plugin crates without a cycle.
 plugins/example-tracer/      the one to copy
@@ -302,10 +302,10 @@ src/plugin.rs                the emulator's side: `impl MachineAccess for …`
 ```
 
 ```text
-         gameboy-plugin-api          (the contract; no dependencies)
+         terminalgb-plugin-api          (the contract; no dependencies)
           ^                ^
           |                |
- gameboy (emulator)   gameboy-plugin-*
+ terminalgb (emulator)  terminalgb-plugin-*
           ^                ^
           |                |
           +--- optional ---+          (the frontend draws their panels)

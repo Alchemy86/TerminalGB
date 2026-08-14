@@ -1,17 +1,17 @@
 [package]
-name = "gameboy-plugin-example-tracer"
+name = "terminalgb-plugin-example-tracer"
 version = "0.1.0"
 description = "A complete, minimal example plugin — watches one address and reports what changes it"
-authors = ["gameboy contributors"]
+authors = ["TerminalGB contributors"]
 repository = "https://github.com/Alchemy86/gameboy"
 license = "MPL-2.0"
 edition = "2021"
 rust-version = "1.83"
 
 [lib]
-name = "gameboy_plugin_example_tracer"
+name = "terminalgb_plugin_example_tracer"
 path = "src/lib.rs"
 
 # The only dependency a plugin needs. Note what is NOT here: the emulator.
 [dependencies]
-gameboy-plugin-api = { path = "../../crates/gameboy-plugin-api", version = "0.1.0" }
+terminalgb-plugin-api = { path = "../../crates/terminalgb-plugin-api", version = "0.1.0" }

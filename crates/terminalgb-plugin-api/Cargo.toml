@@ -1,8 +1,8 @@
 [package]
-name = "gameboy-plugin-api"
+name = "terminalgb-plugin-api"
 version = "0.1.0"
-description = "The plugin contract for the gameboy emulator — trait, capabilities, events. No dependencies."
-authors = ["gameboy contributors"]
+description = "The plugin contract for the TerminalGB emulator — trait, capabilities, events. No dependencies."
+authors = ["TerminalGB contributors"]
 repository = "https://github.com/Alchemy86/gameboy"
 license = "MPL-2.0"
 edition = "2021"

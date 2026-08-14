@@ -22,7 +22,7 @@ Note the middle column: **`battle-control` is the crate, `gen1-battle` is the na
 game it does it to.
 
 The contract they all implement is
-[`crates/gameboy-plugin-api`](../crates/gameboy-plugin-api/README.md),
+[`crates/terminalgb-plugin-api`](../crates/terminalgb-plugin-api/README.md),
 which has **no dependencies** and does not depend on the emulator. That direction is what lets
 the emulator depend on plugin crates (its frontend draws their panels) without a dependency
 cycle.

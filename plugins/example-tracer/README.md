@@ -49,10 +49,10 @@ Everything a plugin needs, and nothing else:
 ## Tests, with no emulator at all
 
 The three unit tests implement `MachineAccess` over a flat `[u8; 0x10000]` and drive
-`PluginHost` directly — no ROM, no CPU, no display, no `gameboy` dependency:
+`PluginHost` directly — no ROM, no CPU, no display, no `terminalgb` dependency:
 
 ```bash
-cargo test -p gameboy-plugin-example-tracer
+cargo test -p terminalgb-plugin-example-tracer
 ```
 
 One of them asserts the negative case: a `poke` from a plugin that never declared
@@ -60,7 +60,7 @@ One of them asserts the negative case: a `poke` from a plugin that never declare
 for**, not only the ones you did.
 
 When a plugin genuinely needs a real cartridge — banked ROM tables, an MBC —
-`gameboy::testing::TestMachine` is available as a *dev*-dependency behind the `testing`
+`terminalgb::testing::TestMachine` is available as a *dev*-dependency behind the `testing`
 feature. [`battle-control`](../battle-control/) does exactly that.
 
 ## Next
@@ -69,5 +69,5 @@ feature. [`battle-control`](../battle-control/) does exactly that.
   has never seen this codebase.
 - **[The plugin contract](../../docs/plugins.md)** — the trust model, the version boundary,
   what a plugin may and may not do, and why there is one trait rather than two.
-- **[`crates/gameboy-plugin-api`](../../crates/gameboy-plugin-api/)** — the dependency. It has
+- **[`crates/terminalgb-plugin-api`](../../crates/terminalgb-plugin-api/)** — the dependency. It has
   none of its own and does not depend on the emulator.

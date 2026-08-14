@@ -51,8 +51,8 @@ must respect:
 
 Frontends are an emulator concern, not Game Boy hardware, so there's no DMG/CGB lineage
 here. What's worth recording is **how this project's frontends evolved**: the core began as
-a web/WASM study (the crate is still described as "Gameboy emulator written in Rust and
-WebAssembly"), then grew a native desktop path (glutin + raw OpenGL), a terminal renderer
+a web/WASM study (the example crates are still described as "a Game Boy emulator written in
+Rust and WebAssembly"), then grew a native desktop path (glutin + raw OpenGL), a terminal renderer
 (ratatui + image protocols), and a C FFI. Sound was added last (native only, Aug 2025) and
 never reached the web build.
 
@@ -88,8 +88,8 @@ picker + a Play button that calls `render(rom)`.
 
 **FFI** — [`src/lib.rs`](../../src/lib.rs) exposes `#[no_mangle]` C functions `load`,
 `frame`, `keydown`, `keyup`, `image` over a `OnceLock<Mutex<Option<Gameboy>>>`. The header
-is [`gameboy.h`](../../gameboy.h); [`examples/ffi-go/main_static.go`](../../examples/ffi-go/main_static.go)
-statically links `libgameboy.a` and calls them from Go.
+is [`terminalgb.h`](../../terminalgb.h); [`examples/ffi-go/main_static.go`](../../examples/ffi-go/main_static.go)
+statically links `libterminalgb.a` and calls them from Go.
 
 ### Honest problems & approximations
 

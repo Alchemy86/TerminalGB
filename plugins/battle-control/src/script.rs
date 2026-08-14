@@ -36,7 +36,7 @@
 //! do = await-overworld         # until the battle has ended
 //! ```
 
-use gameboy_plugin_api::KeypadKey;
+use terminalgb_plugin_api::KeypadKey;
 
 /// How long a `press` holds a button, and how long it waits afterwards, when
 /// the script does not say. The game samples the pad once per frame, so one

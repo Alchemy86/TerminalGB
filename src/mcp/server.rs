@@ -28,7 +28,7 @@
 //! go to stderr, which every MCP host collects. That is also why there is no
 //! terminal frontend option here (see [`super::config`]).
 //!
-//! The transport is hand-rolled over [`gameboy_plugin_agent::json`] for the same reason
+//! The transport is hand-rolled over [`terminalgb_plugin_agent::json`] for the same reason
 //! the test harness hand-rolls PNG and the terminal path hand-rolls deflate: a
 //! dependency here is one every embedder inherits. The MCP module is behind the
 //! `mcp` cargo feature precisely so nobody who does not want it pays for it.
@@ -36,7 +36,7 @@
 use std::io::{BufRead, Write};
 
 use crate::input::KeypadKey;
-use gameboy_plugin_agent::json::{self, write_str, Json, Writer};
+use terminalgb_plugin_agent::json::{self, write_str, Json, Writer};
 
 use super::config::Options;
 use super::session::{slot_path, Host};
@@ -45,7 +45,7 @@ use super::session::{slot_path, Host};
 /// `initialize`; we answer with ours, which is what the spec asks for.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
-pub const SERVER_NAME: &str = "gameboy";
+pub const SERVER_NAME: &str = "terminalgb";
 
 /// JSON-RPC error codes used here. `-32602` is the spec's "invalid params",
 /// which is the honest code for "you asked for a tool that needs a cartridge".
@@ -529,7 +529,7 @@ fn run_tool(host: &mut Host, name: &str, args: &Json) -> ToolOut {
                 .clamp(1, 120) as u16;
             let gap = args
                 .u64_field("gap_frames")
-                .unwrap_or(gameboy_plugin_agent::action::MENU_GAP as u64)
+                .unwrap_or(terminalgb_plugin_agent::action::MENU_GAP as u64)
                 .min(240) as u16;
             let o = host.options.clone();
             match host.need() {

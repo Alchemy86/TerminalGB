@@ -47,7 +47,7 @@ The `Makefile` wraps the common flows: `make desktop`, `make terminal`, `make bu
 `make web`, `make ffi-build`.
 
 Terminal configuration (protocol, palette, upscaler, key bindings, HiDPI `cell_scale`) lives
-at `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml` — documented in the README's
+at `${XDG_CONFIG_HOME:-~/.config}/terminalgb/config.toml` — documented in the README's
 "Terminal config file" table.
 
 ## Tests

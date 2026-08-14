@@ -1,25 +1,25 @@
 [package]
-name = "gameboy-plugin-battle-control"
+name = "terminalgb-plugin-battle-control"
 version = "0.1.0"
 description = "Start any Pokémon Generation 1 battle from a preset, and script it as an in-game event"
-authors = ["gameboy contributors"]
+authors = ["TerminalGB contributors"]
 repository = "https://github.com/Alchemy86/gameboy"
 license = "MPL-2.0"
 edition = "2021"
 rust-version = "1.83"
 
 [lib]
-name = "gameboy_plugin_battle_control"
+name = "terminalgb_plugin_battle_control"
 path = "src/lib.rs"
 
 [dependencies]
-gameboy-plugin-api = { path = "../../crates/gameboy-plugin-api", version = "0.1.0" }
-gameboy-plugin-trainer = { path = "../trainer", version = "0.1.0" }
-gameboy-plugin-gen1-link = { path = "../gen1-link", version = "0.1.0" }
+terminalgb-plugin-api = { path = "../../crates/terminalgb-plugin-api", version = "0.1.0" }
+terminalgb-plugin-trainer = { path = "../trainer", version = "0.1.0" }
+terminalgb-plugin-gen1-link = { path = "../gen1-link", version = "0.1.0" }
 
 # The tests drive a real emulator: a synthetic cartridge with real MBC banking
 # is the only honest way to prove this plugin reads and writes the right bytes.
 # Cargo permits this back-edge precisely because it is a dev-dependency — the
 # library itself depends on the API alone. See docs/plugins.md §"Testing".
 [dev-dependencies]
-gameboy = { path = "../..", default-features = false, features = ["testing"] }
+terminalgb = { path = "../..", default-features = false, features = ["testing"] }

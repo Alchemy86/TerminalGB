@@ -924,7 +924,7 @@ impl<'a> MemoryManagementUnit<'a> {
         // user cannot act on — and the action here (restart; the good `.sav` is
         // untouched) is one only they can take.
         eprintln!(
-            "gameboy: FAULT — {reason}. The battery save will NOT be written \
+            "terminalgb: FAULT — {reason}. The battery save will NOT be written \
              again this session; the existing save file is left untouched. \
              Restart the emulator to recover."
         );

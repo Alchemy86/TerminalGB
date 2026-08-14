@@ -41,10 +41,10 @@
 //! The `PINNED` list below is the set that passes today. If one of those stops
 //! being pixel-exact this exits non-zero — the rest are reported, not enforced.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::mode::Model;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
 
 #[path = "support/suite_baseline.rs"]
 mod suite_baseline;

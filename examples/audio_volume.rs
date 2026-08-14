@@ -19,11 +19,11 @@
 //!
 //! **The emulated machine is identical at every rung.** Volume is applied in
 //! the cpal callback, to finished samples — never to NR50, which is emulated
-//! behaviour the accuracy suites measure. See `gameboy::sound::output_volume`.
+//! behaviour the accuracy suites measure. See `terminalgb::sound::output_volume`.
 #[cfg(feature = "audio")]
 fn main() {
-    use gameboy::sound::output_volume;
     use std::time::{Duration, Instant};
+    use terminalgb::sound::output_volume;
 
     // How long each rung plays for.
     const DWELL: Duration = Duration::from_millis(1500);
@@ -49,18 +49,18 @@ fn main() {
     let (cpu, _rom_path) = tone_machine();
     let mut cpu = cpu;
 
-    let (player, _stream) = match gameboy::sound::cpal_audio::CpalPlayer::new() {
+    let (player, _stream) = match terminalgb::sound::cpal_audio::CpalPlayer::new() {
         Some(x) => x,
         None => {
             eprintln!(
                 "no audio device: {}",
-                gameboy::sound::host_status::snapshot().label()
+                terminalgb::sound::host_status::snapshot().label()
             );
             std::process::exit(1);
         }
     };
     let rate = {
-        use gameboy::sound::AudioPlayer;
+        use terminalgb::sound::AudioPlayer;
         player.samples_rate()
     };
     cpu.memory.enable_audio(Box::new(player));
@@ -108,8 +108,8 @@ fn main() {
 /// full envelope volume — the loudest thing the APU can be asked for, so the
 /// top of the ladder is a fair test for clipping.
 #[cfg(feature = "audio")]
-fn tone_machine() -> (gameboy::cpu::core::Cpu<'static>, std::path::PathBuf) {
-    use gameboy::cpu::core::Cpu;
+fn tone_machine() -> (terminalgb::cpu::core::Cpu<'static>, std::path::PathBuf) {
+    use terminalgb::cpu::core::Cpu;
 
     let mut rom = vec![0u8; 0x8000];
     rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]);

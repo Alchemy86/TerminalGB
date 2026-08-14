@@ -7,7 +7,7 @@
 //! Start at [`Plugin`]. The 30-second version:
 //!
 //! ```
-//! use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
+//! use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 //!
 //! struct FrameCounter { frames: u64 }
 //!

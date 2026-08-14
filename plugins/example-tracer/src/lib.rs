@@ -17,7 +17,7 @@
 //! See [`docs/plugins.md`](https://github.com/Alchemy86/gameboy/blob/main/docs/plugins.md)
 //! for how to install it.
 
-use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
+use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 
 /// The name the user puts in `plugins = …`. Keep it short and stable: it is
 /// configuration, and it shows up in the status bar.
@@ -150,14 +150,14 @@ impl Plugin for Tracer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gameboy_plugin_api::{KeypadKey, MachineAccess, PluginHost};
+    use terminalgb_plugin_api::{KeypadKey, MachineAccess, PluginHost};
 
     /// **A plugin is testable without an emulator.** Implement `MachineAccess`
     /// over whatever you like — here, a flat array — and drive `PluginHost`
     /// yourself. No ROM, no CPU, no display.
     ///
     /// When a plugin genuinely needs a real cartridge (banked ROM tables, an
-    /// MBC), use `gameboy::testing::TestMachine` as a **dev**-dependency
+    /// MBC), use `terminalgb::testing::TestMachine` as a **dev**-dependency
     /// instead; `plugins/battle-control` does exactly that.
     struct FakeMachine {
         mem: [u8; 0x10000],

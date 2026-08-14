@@ -31,7 +31,7 @@
 # rule changed in CPU CGB C, and `-cgb0` and `-cgbB` disagree, so no single
 # machine can satisfy both. The runner reads the revision off the name, the
 # same way it would force `@dmg`/`@cgb` from a cartridge header — see
-# `revision_for` below and `gameboy::sound::CgbRevision`. Everything else runs
+# `revision_for` below and `terminalgb::sound::CgbRevision`. Everything else runs
 # on the default (CPU CGB C and later), which is what a game gets.
 
 apu/channel_1/channel_1_align = PASS

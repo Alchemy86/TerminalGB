@@ -1,6 +1,6 @@
 # MCP server — drive the emulator from Claude Desktop, Claude Code, or anything else
 
-This repo ships `gameboy-mcp`, a [Model Context Protocol](https://modelcontextprotocol.io)
+This repo ships `terminalgb-mcp`, a [Model Context Protocol](https://modelcontextprotocol.io)
 server. Point any MCP client at it and it can load a cartridge, press buttons, read the
 game's state and take screenshots.
 
@@ -16,7 +16,7 @@ cd gameboy
 cargo build --release --no-default-features --features mcp
 ```
 
-That produces `target/release/gameboy-mcp`. Copy the absolute path — you will paste it into
+That produces `target/release/terminalgb-mcp`. Copy the absolute path — you will paste it into
 a config file in a moment.
 
 `--no-default-features` is deliberate: it leaves out the desktop window and the terminal
@@ -45,8 +45,8 @@ Edit the config file:
 ```json
 {
   "mcpServers": {
-    "gameboy": {
-      "command": "/absolute/path/to/gameboy/target/release/gameboy-mcp",
+    "terminalgb": {
+      "command": "/absolute/path/to/gameboy/target/release/terminalgb-mcp",
       "args": [
         "--rom", "/absolute/path/to/your/game.gb"
       ]
@@ -55,7 +55,7 @@ Edit the config file:
 }
 ```
 
-Restart Claude Desktop. The tools appear under a `gameboy` server.
+Restart Claude Desktop. The tools appear under a `terminalgb` server.
 
 **Use absolute paths.** Claude Desktop launches the server with an unpredictable working
 directory, so a relative `--rom` will not be found. (`~` *is* expanded by the `load_rom`
@@ -71,7 +71,7 @@ then the first thing you say is *"load the ROM at …"* and the `load_rom` tool 
 One command, from anywhere:
 
 ```sh
-claude mcp add gameboy -- /absolute/path/to/gameboy/target/release/gameboy-mcp \
+claude mcp add terminalgb -- /absolute/path/to/gameboy/target/release/terminalgb-mcp \
   --rom /absolute/path/to/your/game.gb
 ```
 
@@ -80,8 +80,8 @@ Or, if you prefer a file you can commit next to a project, write `mcp.json`:
 ```json
 {
   "mcpServers": {
-    "gameboy": {
-      "command": "/absolute/path/to/gameboy/target/release/gameboy-mcp",
+    "terminalgb": {
+      "command": "/absolute/path/to/gameboy/target/release/terminalgb-mcp",
       "args": ["--rom", "/absolute/path/to/your/game.gb"]
     }
   }
@@ -103,7 +103,7 @@ repo was verified:
 
 ```sh
 claude -p --mcp-config mcp.json \
-  --allowed-tools "mcp__gameboy__observe,mcp__gameboy__step,mcp__gameboy__press_buttons,mcp__gameboy__screenshot" \
+  --allowed-tools "mcp__terminalgb__observe,mcp__terminalgb__step,mcp__terminalgb__press_buttons,mcp__terminalgb__screenshot" \
   'Step 1200 frames, press START, step 700 more, then take a screenshot and tell me what is on screen.'
 ```
 
@@ -203,7 +203,7 @@ DEBUGGING
 paced:
 
 ```sh
-gameboy-mcp --rom game.gb
+terminalgb-mcp --rom game.gb
 ```
 
 **A human is watching.** Pace to real time and open a video stream. `mpv` in another
@@ -211,7 +211,7 @@ terminal, or `ffmpeg` into a file:
 
 ```sh
 mkfifo /tmp/gb.raw
-gameboy-mcp --rom game.gb --speed realtime --video-out /tmp/gb.raw
+terminalgb-mcp --rom game.gb --speed realtime --video-out /tmp/gb.raw
 # elsewhere:
 ffplay -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw
 ```
@@ -226,7 +226,7 @@ overrun and the oldest samples are discarded — the documented fast-forward pol
 something anyone wants to listen to.
 
 ```sh
-gameboy-mcp --rom game.gb --speed realtime --audio
+terminalgb-mcp --rom game.gb --speed realtime --audio
 ```
 
 **Protecting a real save.** `--no-battery` removes the battery *entirely* — the existing
@@ -238,13 +238,13 @@ once already.
 
 ```sh
 mkdir -p /tmp/gb && cp ~/roms/blue.gb ~/roms/blue.sav /tmp/gb/
-gameboy-mcp --rom /tmp/gb/blue.gb
+terminalgb-mcp --rom /tmp/gb/blue.gb
 ```
 
 **Debugging a game's RAM.**
 
 ```sh
-gameboy-mcp --rom game.gb --allow-write-memory --log /tmp/gb-mcp.ndjson
+terminalgb-mcp --rom game.gb --allow-write-memory --log /tmp/gb-mcp.ndjson
 ```
 
 ### There is deliberately no `--tui`
@@ -278,7 +278,7 @@ Reproduce any row:
 time (printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"step","arguments":{"frames":20000}}}' \
-  | ./target/release/gameboy-mcp --rom game.gb --no-battery > /dev/null)
+  | ./target/release/terminalgb-mcp --rom game.gb --no-battery > /dev/null)
 ```
 
 **A correction worth recording:** the brief for this work quoted host audio at ~8 ms/frame
@@ -316,7 +316,7 @@ to run*. That is the wrong shape here in three ways, and each one is a tool a cl
 
 So it *uses* the plugin contract rather than joining it. Every read and every press goes
 through `Gameboy::with_machine` with an explicit
-[`Capability`](../crates/gameboy-plugin-api/src/capability.rs) grant, which is how `write_memory` can be *provably*
+[`Capability`](../crates/terminalgb-plugin-api/src/capability.rs) grant, which is how `write_memory` can be *provably*
 absent unless the operator asked for it — the same enforcement a plugin gets, applied to the
 server's own tool handlers. Plugins can still be attached with `--plugins`.
 

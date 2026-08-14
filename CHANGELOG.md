@@ -13,6 +13,32 @@ history. See [Credits & lineage](README.md#credits--lineage).
 
 ## [Unreleased]
 
+### Changed
+- **The project is now called TerminalGB.** It was already the name the product used — the
+  terminal window title and the virtual camera's idle card both said `TerminalGB` — so this
+  makes the codebase match what a user sees. The rename is mechanical and covers the crate
+  (`gameboy` → `terminalgb`, so `use gameboy::…` becomes `use terminalgb::…`), the plugin
+  crates (`gameboy-plugin-*` → `terminalgb-plugin-*`, and `crates/gameboy-plugin-api/` →
+  `crates/terminalgb-plugin-api/`), the MCP binary (`gameboy-mcp` → `terminalgb-mcp`) and the
+  name that server reports to a client (`gameboy` → `terminalgb`), the generated FFI header
+  (`gameboy.h` → `terminalgb.h`) and static library (`libgameboy.a` → `libterminalgb.a`), the
+  wasm module (`gameboy.wasm` → `terminalgb.wasm`), the docs, and the user-visible strings
+  (the desktop window title, the ROM picker's header, the quit prompt, the `terminalgb:`
+  prefix on warnings and fault messages).
+  - **Nothing you already have moves.** Save files (`<rom>.sav`), save states and the ROM
+    directory are untouched. The XDG directories — `~/.config/gameboy/config.toml`,
+    `~/.local/state/gameboy/` (recents, remembered volume, save states) and
+    `~/Pictures/gameboy` / `~/Videos/gameboy` — are still read *and written* exactly where
+    they are: every lookup prefers the new `terminalgb` name and falls back to the old one
+    when the old one is what exists on disk (`screen::config::app_dir_in`). Move them
+    yourself if you like; move all of them or none.
+  - `$TERMINALGB_CELL_SCALE` is the new spelling of `$GAMEBOY_CELL_SCALE`; the old name is
+    still honoured.
+  - **The repository is still `Alchemy86/gameboy`** — clones, remotes, badges and permalinks
+    all keep working. The emulated machine is still a Game Boy, so the `Gameboy` type and the
+    `gameboy` module inside the crate keep their names.
+  - The `gameboy` value of the `palette` config key (an alias for `green`) is unchanged.
+
 ### Added
 - **Super Game Boy support** (`src/sgb.rs`, `GB_MODEL=sgb` / `sgb2`) — the half of an SGB a
   cartridge can actually observe: the ICD2 command-packet receiver on `$FF00`, `MLT_REQ`

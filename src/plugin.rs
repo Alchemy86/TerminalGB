@@ -1,15 +1,15 @@
 //! Plugins — the *attach* half of the public extension surface.
 //!
-//! **The contract itself lives in the [`gameboy-plugin-api`](gameboy_plugin_api)
+//! **The contract itself lives in the [`terminalgb-plugin-api`](terminalgb_plugin_api)
 //! crate**, which has no dependencies and, crucially, does not depend on this
 //! one. This module is the emulator's *side* of that contract: it re-exports the
-//! whole API (so `gameboy::plugin::Plugin` still names the trait, as it always
+//! whole API (so `terminalgb::plugin::Plugin` still names the trait, as it always
 //! has) and implements [`MachineAccess`] for the memory unit, which is the one
 //! thing only the emulator can provide.
 //!
 //! Why the API is a separate crate rather than a module here: this crate's
-//! terminal frontend *draws panels* for the plugins it ships with, so `gameboy`
-//! depends on those plugin crates. If plugins also depended on `gameboy` for the
+//! terminal frontend *draws panels* for the plugins it ships with, so `terminalgb`
+//! depends on those plugin crates. If plugins also depended on `terminalgb` for the
 //! trait, the dependency graph would be a cycle and Cargo would refuse it. An
 //! API crate that neither side owns breaks the knot, and has the pleasant side
 //! effect that a plugin author's dependency is 400 lines with no build
@@ -17,10 +17,10 @@
 //! [`docs/plugins.md`](../docs/plugins.md).
 //!
 //! ```text
-//!            gameboy-plugin-api          (the contract; no dependencies)
+//!            terminalgb-plugin-api          (the contract; no dependencies)
 //!             ^                ^
 //!             |                |
-//!    gameboy (emulator)   gameboy-plugin-*   (trainer, gen1-link, …)
+//!    terminalgb (emulator)   terminalgb-plugin-*   (trainer, gen1-link, …)
 //!             ^                ^
 //!             |                |
 //!             +--- optional ---+          (the frontend draws their panels)
@@ -32,7 +32,7 @@
 
 use crate::mmu::MemoryManagementUnit;
 
-pub use gameboy_plugin_api::{
+pub use terminalgb_plugin_api::{
     Capability, Event, Machine, MachineAccess, Plugin, PluginHost, PluginStatus,
     RegisterError, API_VERSION,
 };
@@ -40,7 +40,7 @@ pub use gameboy_plugin_api::{
 /// The emulator's implementation of the plugin API's machine seam.
 ///
 /// Everything here is ungated — refusal is
-/// [`Machine`](gameboy_plugin_api::Machine)'s job — and nothing here ticks the
+/// [`Machine`](terminalgb_plugin_api::Machine)'s job — and nothing here ticks the
 /// bus, so a plugin observing memory cannot perturb the run it is watching.
 impl MachineAccess for MemoryManagementUnit<'_> {
     fn peek(&mut self, address: u16) -> u8 {
@@ -128,7 +128,7 @@ mod tests {
     ///
     /// Everything else about the contract — capability enforcement, the version
     /// boundary, panic quarantine — is proved against a fake machine in
-    /// `gameboy-plugin-api`, which is the point of that crate standing alone.
+    /// `terminalgb-plugin-api`, which is the point of that crate standing alone.
     #[test]
     fn a_plugin_answers_a_transfer_the_running_program_started() {
         struct Answer;

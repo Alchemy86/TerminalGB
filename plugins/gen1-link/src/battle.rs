@@ -46,7 +46,7 @@
 //!
 //! It is also unnecessary. The player's console is the single authority and it
 //! maintains all of it in memory this plugin can already read
-//! ([`Capability::READ_MEMORY`](gameboy_plugin_api::Capability::READ_MEMORY)), at
+//! ([`Capability::READ_MEMORY`](terminalgb_plugin_api::Capability::READ_MEMORY)), at
 //! `wEnemyMon` — "enemy" being *us*, from the host's point of view. So the
 //! partner **looks up** the state it needs rather than recomputing it. That is
 //! not a faithful two-console emulation and this module does not claim to be
@@ -56,7 +56,7 @@
 //!
 //! # Where these addresses come from
 //!
-//! The same derivation as [`gameboy_plugin_trainer::gen1`]: `pret/pokered`'s
+//! The same derivation as [`terminalgb_plugin_trainer::gen1`]: `pret/pokered`'s
 //! `ram/wram.asm` and `macros/ram.asm`, cross-checked against this cartridge.
 //! `wEnemyMons` was additionally **located by measurement, not by faith** — the
 //! Colosseum instrument searched WRAM for a `party_struct` matching the active
@@ -64,9 +64,9 @@
 //! `$D8A4`. [`Host::party_hp`] re-checks the species at run time anyway, so a
 //! cartridge that disagrees is declined rather than misread.
 
-use gameboy_plugin_api::Machine;
-use gameboy_plugin_trainer::gen1::addr as trainer_addr;
-use gameboy_plugin_trainer::Game;
+use terminalgb_plugin_api::Machine;
+use terminalgb_plugin_trainer::gen1::addr as trainer_addr;
+use terminalgb_plugin_trainer::Game;
 
 /// `wLinkState` — the game's own statement of what the link is doing.
 ///
@@ -184,7 +184,7 @@ pub struct MachineHost<'x, 'm> {
 }
 
 impl<'x, 'm> MachineHost<'x, 'm> {
-    /// `None` unless this is a cartridge [`gameboy_plugin_trainer::Game::detect`]
+    /// `None` unless this is a cartridge [`terminalgb_plugin_trainer::Game::detect`]
     /// recognises — the addresses above are Red/Blue's and mean nothing
     /// elsewhere.
     pub fn new(

@@ -2,7 +2,7 @@
 #
 # This file is compiled into the binary so that "one keypress" works before
 # anyone has written a preset file of their own. Copy it to
-#   ${XDG_CONFIG_HOME:-~/.config}/gameboy/battles.preset
+#   ${XDG_CONFIG_HOME:-~/.config}/terminalgb/battles.preset
 # and edit freely; a file on disk replaces this list entirely.
 #
 # Format: `[name]` starts a preset. `player =`, `wild =` and `enemy =` each

@@ -9,7 +9,7 @@ Press **`T`** in the terminal frontend.
 
 - Source: [`plugins/trainer/src/`](../plugins/trainer/src), panel layout in
   [`src/screen/trainer_view.rs`](../src/screen/trainer_view.rs), plugin contract in
-  [`crates/gameboy-plugin-api/src/lib.rs`](../crates/gameboy-plugin-api/src/lib.rs).
+  [`crates/terminalgb-plugin-api/src/lib.rs`](../crates/terminalgb-plugin-api/src/lib.rs).
 - Harness: `cargo test --release --test trainer`
   ([`testharness/trainer.rs`](../testharness/trainer.rs)).
 

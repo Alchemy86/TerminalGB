@@ -44,15 +44,15 @@
 //! `high_water()`, or "we stopped waiting" would have been bought by letting
 //! delay grow without limit.
 #[cfg(feature = "audio")]
-use gameboy::gameboy::Gameboy;
-#[cfg(feature = "audio")]
-use gameboy::sound::sample_queue::{self, high_water, SampleQueue};
-#[cfg(feature = "audio")]
-use gameboy::sound::AudioPlayer;
-#[cfg(feature = "audio")]
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "audio")]
 use std::time::{Duration, Instant};
+#[cfg(feature = "audio")]
+use terminalgb::gameboy::Gameboy;
+#[cfg(feature = "audio")]
+use terminalgb::sound::sample_queue::{self, high_water, SampleQueue};
+#[cfg(feature = "audio")]
+use terminalgb::sound::AudioPlayer;
 
 /// One emulated frame: 70224 cycles at 4.194304 MHz.
 #[cfg(feature = "audio")]
@@ -117,7 +117,7 @@ fn main() {
 
     let mut gb = Gameboy::new(data, Some(staged));
     let queue = Arc::new(Mutex::new(SampleQueue::new(
-        gameboy::sound::sample_queue::start_fill(),
+        terminalgb::sound::sample_queue::start_fill(),
         high_water(),
     )));
     gb.enable_audio(Box::new(SaturatedPlayer {

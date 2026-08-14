@@ -95,14 +95,14 @@ machine code** (`wram::verify`) rather than trusted from a table.
 | [`preset.rs`](src/preset.rs) | the preset file format and validation |
 | [`script.rs`](src/script.rs) | the `do = …` script engine, driven by screen text |
 | [`wram.rs`](src/wram.rs) | the writable-address guard and the address re-derivation |
-| [`tests.rs`](src/tests.rs) | 50 unit tests against `gameboy::testing::TestMachine` |
+| [`tests.rs`](src/tests.rs) | 50 unit tests against `terminalgb::testing::TestMachine` |
 
 This crate is also the worked example of a plugin that **needs a real cartridge to test**: it
-takes `gameboy` as a *dev*-dependency with `default-features = false, features = ["testing"]`,
+takes `terminalgb` as a *dev*-dependency with `default-features = false, features = ["testing"]`,
 which gives it `TestMachine` without pulling a frontend into the graph.
 
 ```bash
-cargo test -p gameboy-plugin-battle-control
+cargo test -p terminalgb-plugin-battle-control
 ```
 
 📖 **[How it works, what "reproducible" precisely means, and the traps →

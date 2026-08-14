@@ -1,6 +1,6 @@
 # Plugins — the attach half of the extension surface
 
-> Source: the contract is [`crates/gameboy-plugin-api/`](../crates/gameboy-plugin-api/),
+> Source: the contract is [`crates/terminalgb-plugin-api/`](../crates/terminalgb-plugin-api/),
 > the plugins are [`plugins/`](../plugins/), the emulator's side is
 > [`src/plugin.rs`](../src/plugin.rs) ·
 > **Writing your own: [writing-a-plugin.md](writing-a-plugin.md)** · **User guide:
@@ -30,13 +30,13 @@ them, and an enforced statement of what each one is allowed to do.
 ## 2. What a plugin is
 
 **An in-process Rust object implementing
-[`Plugin`](../crates/gameboy-plugin-api/src/host.rs), in its own crate.**
+[`Plugin`](../crates/terminalgb-plugin-api/src/host.rs), in its own crate.**
 
 Each plugin is a crate under [`plugins/`](../plugins/) depending on
-[`gameboy-plugin-api`](../crates/gameboy-plugin-api/) — which has no dependencies of its own and
+[`terminalgb-plugin-api`](../crates/terminalgb-plugin-api/) — which has no dependencies of its own and
 **does not depend on the emulator**. That direction is load-bearing rather than tidy: this
-crate's terminal frontend *draws panels* for the plugins it ships with, so `gameboy` depends on
-those plugin crates. Had the trait lived in `gameboy`, plugins would have had to depend back on
+crate's terminal frontend *draws panels* for the plugins it ships with, so `terminalgb` depends on
+those plugin crates. Had the trait lived in `terminalgb`, plugins would have had to depend back on
 it and Cargo would have refused the cycle. An API crate that neither side owns breaks the knot,
 and the side effect is that a plugin author's dependency is ~400 dependency-free lines instead
 of a whole emulator.
@@ -54,7 +54,7 @@ narrower answer than "both". The honest reasoning:
 - **No new dependencies.** A wire protocol worth shipping needs a server, a framing layer and
   ideally `serde`. The repo's standing rule is that new dependencies need justification, and a
   transport nobody is using yet does not clear that bar.
-- **The messages are already wire-shaped.** Every [`Event`](../crates/gameboy-plugin-api/src/lib.rs) serialises to
+- **The messages are already wire-shaped.** Every [`Event`](../crates/terminalgb-plugin-api/src/lib.rs) serialises to
   one NDJSON record via `Event::write_json`, the same shape telemetry uses, and every reply a
   plugin gives is a small owned value rather than a borrowed pointer. `GB_PLUGIN_TRACE=<path>`
   already writes that stream to a file — *emit over a pipe*, with a file standing in for the
@@ -456,7 +456,7 @@ something the game does not have.
 GB_PLUGINS=gen1-link GB_GEN1_TRADE=~/mew.trade cargo run --release --example terminal -- <rom>
 ```
 
-or permanently, in `~/.config/gameboy/config.toml`:
+or permanently, in `~/.config/terminalgb/config.toml`:
 
 ```toml
 plugins    = gen1-link

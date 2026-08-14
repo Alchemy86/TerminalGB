@@ -64,13 +64,13 @@
 //! into `target/` first, because the MBC writes `.sav` next to the ROM and this
 //! harness presses buttons at menus.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::plugin::{Capability, Event, Machine, Plugin};
-use gameboy::KeypadKey;
-use gameboy_plugin_gen1_link::{protocol::Phase, spec::TradeSpec, Gen1LinkPartner};
-use gameboy_plugin_trainer::Game;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use terminalgb::gameboy::Gameboy;
+use terminalgb::plugin::{Capability, Event, Machine, Plugin};
+use terminalgb::KeypadKey;
+use terminalgb_plugin_gen1_link::{protocol::Phase, spec::TradeSpec, Gen1LinkPartner};
+use terminalgb_plugin_trainer::Game;
 
 // --- WRAM addresses --------------------------------------------------------
 // The first group is copied from `examples/gen1_trade.rs` / `src/trainer/gen1.rs`,
@@ -848,7 +848,7 @@ fn decode(bytes: &[u8]) -> String {
     bytes
         .iter()
         .take_while(|&&b| b != 0x50)
-        .filter_map(|&b| gameboy_plugin_gen1_link::text::decode_char(b))
+        .filter_map(|&b| terminalgb_plugin_gen1_link::text::decode_char(b))
         .collect()
 }
 
@@ -870,7 +870,7 @@ fn screen_text(gb: &mut Gameboy) -> String {
             let y = (sy + row) % 32;
             let x = (sx + col) % 32;
             let t = gb.peek(map + (y * 32 + x) as u16);
-            out.push(gameboy_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
+            out.push(terminalgb_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
         }
         out.push('\n');
     }

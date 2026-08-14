@@ -35,11 +35,11 @@
 //! submodule happens to be checked out, and skipped with a printed note when
 //! it is not — never silently.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::mode::Model;
-use gameboy::ppu::RenderMode;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
+use terminalgb::ppu::RenderMode;
 
 mod pngdec;
 

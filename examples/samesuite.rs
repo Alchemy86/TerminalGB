@@ -27,10 +27,10 @@
 //! The APU **must** be installed for any of this to mean anything: with no
 //! player, `Sound::do_cycle` returns immediately and the APU never advances.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::mode::Model;
-use gameboy::sound::{AudioPlayer, CgbRevision};
 use std::path::{Path, PathBuf};
+use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
+use terminalgb::sound::{AudioPlayer, CgbRevision};
 
 #[path = "support/suite_baseline.rs"]
 mod suite_baseline;
@@ -63,7 +63,7 @@ const BASELINE_HEADER: &str = "\
 # rule changed in CPU CGB C, and `-cgb0` and `-cgbB` disagree, so no single
 # machine can satisfy both. The runner reads the revision off the name, the
 # same way it would force `@dmg`/`@cgb` from a cartridge header — see
-# `revision_for` below and `gameboy::sound::CgbRevision`. Everything else runs
+# `revision_for` below and `terminalgb::sound::CgbRevision`. Everything else runs
 # on the default (CPU CGB C and later), which is what a game gets.
 
 ";
@@ -94,7 +94,7 @@ enum Verdict {
 
 /// Five APU ROMs name a **CPU CGB revision** in their filename — the APU's
 /// extra-length-clocking rule was changed in CPU CGB C, and CH3 differs again
-/// between CGB 0 and CGB B (`gameboy::sound::CgbRevision`). A single
+/// between CGB 0 and CGB B (`terminalgb::sound::CgbRevision`). A single
 /// configuration cannot satisfy `-cgb0` and `-cgbB` at once, so the runner
 /// reads the revision off the name, exactly as it would force `@dmg`/`@cgb`
 /// from a cartridge header. The ROM still judges itself; all this picks is

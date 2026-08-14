@@ -7,10 +7,10 @@ pub struct Keypad {
 
 // `KeypadKey` is defined by the plugin API rather than here, because it is
 // vocabulary both sides need: a plugin names a button, this emulator presses
-// it. Re-exported so `gameboy::KeypadKey` and `crate::input::KeypadKey` keep
+// it. Re-exported so `terminalgb::KeypadKey` and `crate::input::KeypadKey` keep
 // naming the one and only such type — including across the C FFI, whose
 // `#[repr(C)]` discriminants live with the definition.
-pub use gameboy_plugin_api::KeypadKey;
+pub use terminalgb_plugin_api::KeypadKey;
 
 /// One button action waiting to be performed: hold `key` down for `hold`
 /// emulated frames, then leave every button up for `gap` frames.
@@ -28,7 +28,7 @@ pub struct QueuedPress {
 
 // The tap timings are the API's too: an outside driver has to be able to name
 // the same units the emulator schedules in.
-pub use gameboy_plugin_api::{DEFAULT_GAP, DEFAULT_HOLD};
+pub use terminalgb_plugin_api::{DEFAULT_GAP, DEFAULT_HOLD};
 
 /// The one mechanism for driving the buttons from outside the emulated
 /// machine.

@@ -78,7 +78,7 @@ without touching the protocol.
 ## Tests
 
 ```bash
-cargo test -p gameboy-plugin-gen1-link            # 59 unit tests, no cartridge needed
+cargo test -p terminalgb-plugin-gen1-link            # 59 unit tests, no cartridge needed
 cargo test --release --test colosseum             # link battle against a real cartridge (skips without one)
 cargo run  --release --example gen1_trade         # the whole trade, headless, end to end
 ```

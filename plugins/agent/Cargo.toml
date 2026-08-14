@@ -1,18 +1,18 @@
 [package]
-name = "gameboy-plugin-agent"
+name = "terminalgb-plugin-agent"
 version = "0.1.0"
 description = "AI agent substrate: observe the game, plan, press the buttons, narrate — under a budget"
-authors = ["gameboy contributors"]
+authors = ["TerminalGB contributors"]
 repository = "https://github.com/Alchemy86/gameboy"
 license = "MPL-2.0"
 edition = "2021"
 rust-version = "1.83"
 
 [lib]
-name = "gameboy_plugin_agent"
+name = "terminalgb_plugin_agent"
 path = "src/lib.rs"
 
 [dependencies]
-gameboy-plugin-api = { path = "../../crates/gameboy-plugin-api", version = "0.1.0" }
-gameboy-plugin-trainer = { path = "../trainer", version = "0.1.0" }
-gameboy-plugin-gen1-link = { path = "../gen1-link", version = "0.1.0" }
+terminalgb-plugin-api = { path = "../../crates/terminalgb-plugin-api", version = "0.1.0" }
+terminalgb-plugin-trainer = { path = "../trainer", version = "0.1.0" }
+terminalgb-plugin-gen1-link = { path = "../gen1-link", version = "0.1.0" }

@@ -1,7 +1,7 @@
 //! Contract tests for the plugin API.
 //!
 //! These run against a **fake machine** rather than the emulator, which is the
-//! point: this crate does not depend on `gameboy`, so the guarantees it makes —
+//! point: this crate does not depend on `terminalgb`, so the guarantees it makes —
 //! capability enforcement, version refusal, panic quarantine — are provable on
 //! their own. The tests that need a real CPU (that a plugin's serial reply
 //! actually lands in `SB`) live in the emulator, in `src/plugin.rs`.

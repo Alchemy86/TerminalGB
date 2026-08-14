@@ -9,7 +9,7 @@ Public API:
 
 ```rust
 let bytes: Vec<u8> = gameboy.save_state();
-gameboy.load_state(&bytes)?;   // Result<(), gameboy::savestate::StateError>
+gameboy.load_state(&bytes)?;   // Result<(), terminalgb::savestate::StateError>
 ```
 
 Also available one layer down on `Cpu` (`cpu.save_state()` / `cpu.load_state()`),

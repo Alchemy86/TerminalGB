@@ -43,10 +43,10 @@ pub mod spec;
 pub mod text;
 
 use battle::{MachineHost, NoHost};
-use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
 use protocol::{LinkPartner, Phase};
 use romdata::RomTables;
 use spec::{PokemonSource, SourceError, TradeSpec};
+use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 
 /// The plugin's registered name.
 pub const NAME: &str = "gen1-link";
@@ -74,7 +74,7 @@ pub struct Gen1LinkPartner {
     /// Which Gen 1 game this is, if it is one whose RAM map we know. `None`
     /// means the partner still speaks the protocol but reads nothing from
     /// memory; see [`battle`].
-    game: Option<gameboy_plugin_trainer::Game>,
+    game: Option<terminalgb_plugin_trainer::Game>,
     /// Set once the cartridge has been identified, on the first dispatch.
     identified: bool,
     /// Consecutive frames on which `wLinkState` has held an impossible value.
@@ -187,7 +187,7 @@ impl Gen1LinkPartner {
     }
 
     /// Which Gen 1 game this is, once the cartridge has been identified.
-    pub fn game(&self) -> Option<gameboy_plugin_trainer::Game> {
+    pub fn game(&self) -> Option<terminalgb_plugin_trainer::Game> {
         self.game
     }
 
@@ -199,7 +199,7 @@ impl Gen1LinkPartner {
             return;
         }
         self.identified = true;
-        self.game = gameboy_plugin_trainer::Game::detect(
+        self.game = terminalgb_plugin_trainer::Game::detect(
             &machine.rom_title(),
             machine.global_checksum(),
         );

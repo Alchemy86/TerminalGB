@@ -2,7 +2,7 @@ name: "Game Boy conformance"
 description: >-
   Run Game Boy test ROMs against your emulator through a tiny adapter contract,
   and get a score, a badge and an explanation of every failure.
-author: "gameboy contributors"
+author: "TerminalGB contributors"
 
 # This is the composite action — one step, usable from any workflow. There is
 # also a reusable *workflow* wrapper (.github/workflows/conformance.yml) for

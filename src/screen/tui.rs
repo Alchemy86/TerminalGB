@@ -46,9 +46,9 @@ use crate::sound::output_volume;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
 #[cfg(feature = "plugin-trainer")]
-use gameboy_plugin_trainer::gen1::BattleKind;
+use terminalgb_plugin_trainer::gen1::BattleKind;
 #[cfg(feature = "plugin-trainer")]
-use gameboy_plugin_trainer::TrainerPlugin;
+use terminalgb_plugin_trainer::TrainerPlugin;
 
 /// Stand-ins for the two panel modules when their plugin is not built in.
 ///
@@ -332,8 +332,11 @@ fn state_path(title: &str, slot: u32) -> PathBuf {
     let base = env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .unwrap_or_else(env::temp_dir)
-        .join("gameboy/states");
+        .unwrap_or_else(env::temp_dir);
+    // `config::app_dir_in` keeps the pre-rename `gameboy/` directory in use when
+    // that is the one that exists, so the rename to TerminalGB cannot orphan
+    // anybody's save states. See `config::LEGACY_APP_DIR`.
+    let base = crate::screen::config::app_dir_in(&base).join("states");
     let _ = std::fs::create_dir_all(&base);
     let mut safe: String = title
         .chars()
@@ -346,33 +349,36 @@ fn state_path(title: &str, slot: u32) -> PathBuf {
 }
 
 /// Where recordings land when nothing is configured: the `video_dir` config
-/// key, else `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`.
+/// key, else `$XDG_VIDEOS_DIR/terminalgb`, else `~/Videos/terminalgb` (or the
+/// pre-rename `gameboy` directory, when that is the one that exists).
 fn video_dir(config: &Config) -> PathBuf {
     if let Some(d) = config.video_dir.as_ref() {
         return PathBuf::from(expand_home(d));
     }
-    env::var_os("XDG_VIDEOS_DIR")
+    let base = env::var_os("XDG_VIDEOS_DIR")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join("Videos")))
-        .unwrap_or_else(env::temp_dir)
-        .join("gameboy")
+        .unwrap_or_else(env::temp_dir);
+    crate::screen::config::app_dir_in(&base)
 }
 
 /// Where screenshots land: the `screenshot_dir` config key, else
-/// `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`, else a temp dir.
+/// `$XDG_PICTURES_DIR/terminalgb`, else `~/Pictures/terminalgb` (or the
+/// pre-rename `gameboy` directory, when that is the one that exists), else a
+/// temp dir.
 /// Somewhere a person will actually look — and the toast names the full path
 /// anyway, because a screenshot that lands somewhere unknown is useless.
 fn screenshot_dir(config: &Config) -> PathBuf {
     if let Some(d) = config.screenshot_dir.as_ref() {
         return PathBuf::from(expand_home(d));
     }
-    env::var_os("XDG_PICTURES_DIR")
+    let base = env::var_os("XDG_PICTURES_DIR")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")))
-        .unwrap_or_else(env::temp_dir)
-        .join("gameboy")
+        .unwrap_or_else(env::temp_dir);
+    crate::screen::config::app_dir_in(&base)
 }
 
 /// `~/x` → `$HOME/x`. The config file is hand-written, so a tilde is expected.
@@ -493,7 +499,7 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     // not apply must never fail silently. These stay in the scrollback after
     // exit, and are repeated in the picker footer and the `?` help overlay.
     for w in &warnings {
-        eprintln!("gameboy: {w}");
+        eprintln!("terminalgb: {w}");
     }
 
     // Terminal setup. Restore on panic so a crash doesn't leave the terminal
@@ -1267,7 +1273,10 @@ impl App {
                 // If an agent is driving, its commentary is the show — open the
                 // panel without being asked. `A` closes it again.
                 #[cfg(feature = "plugin-agent")]
-                if gb.plugin::<gameboy_plugin_agent::AgentPlugin>().is_some() {
+                if gb
+                    .plugin::<terminalgb_plugin_agent::AgentPlugin>()
+                    .is_some()
+                {
                     self.agent_panel = true;
                 }
                 #[cfg(feature = "audio")]
@@ -1658,7 +1667,7 @@ impl App {
     #[cfg(feature = "plugin-trainer")]
     fn banner_encounter(
         &self,
-    ) -> Option<&gameboy_plugin_trainer::encounter::WildEncounter> {
+    ) -> Option<&terminalgb_plugin_trainer::encounter::WildEncounter> {
         if !self.shiny_alert.shows_banner() {
             return None;
         }
@@ -2201,24 +2210,25 @@ impl App {
     /// build; only the field's occupancy does.
     #[cfg(feature = "plugin-agent")]
     fn agent_sample(s: &Session) -> Option<telemetry::AgentSample> {
-        s.gb.plugin::<gameboy_plugin_agent::AgentPlugin>().map(|p| {
-            let g = p.governor();
-            telemetry::AgentSample {
-                phase: match p.phase() {
-                    gameboy_plugin_agent::PhaseView::Settling => "settling",
-                    gameboy_plugin_agent::PhaseView::Thinking => "thinking",
-                    gameboy_plugin_agent::PhaseView::Executing => "executing",
-                    gameboy_plugin_agent::PhaseView::Stopped => "stopped",
-                },
-                decisions: p.decisions(),
-                calls: g.calls(),
-                failures: g.failures(),
-                tokens: g.tokens(),
-                usd: g.usd(),
-                budget_used: g.used_fraction(),
-                halted: g.halted().map(|h| h.label()).unwrap_or(""),
-            }
-        })
+        s.gb.plugin::<terminalgb_plugin_agent::AgentPlugin>()
+            .map(|p| {
+                let g = p.governor();
+                telemetry::AgentSample {
+                    phase: match p.phase() {
+                        terminalgb_plugin_agent::PhaseView::Settling => "settling",
+                        terminalgb_plugin_agent::PhaseView::Thinking => "thinking",
+                        terminalgb_plugin_agent::PhaseView::Executing => "executing",
+                        terminalgb_plugin_agent::PhaseView::Stopped => "stopped",
+                    },
+                    decisions: p.decisions(),
+                    calls: g.calls(),
+                    failures: g.failures(),
+                    tokens: g.tokens(),
+                    usd: g.usd(),
+                    budget_used: g.used_fraction(),
+                    halted: g.halted().map(|h| h.label()).unwrap_or(""),
+                }
+            })
     }
 
     #[cfg(not(feature = "plugin-agent"))]
@@ -2626,7 +2636,7 @@ impl App {
             return;
         };
         let Some(p) =
-            s.gb.plugin_mut::<gameboy_plugin_battle_control::BattlePlugin>()
+            s.gb.plugin_mut::<terminalgb_plugin_battle_control::BattlePlugin>()
         else {
             self.set_toast(
                 "no battle plugin — add `plugins = gen1-battle` to config.toml",
@@ -2658,7 +2668,7 @@ impl App {
             return;
         };
         let Some(p) =
-            s.gb.plugin_mut::<gameboy_plugin_battle_control::BattlePlugin>()
+            s.gb.plugin_mut::<terminalgb_plugin_battle_control::BattlePlugin>()
         else {
             self.set_toast(
                 "no battle plugin — add `plugins = gen1-battle` to config.toml",
@@ -2840,7 +2850,7 @@ impl App {
         let Some(s) = self.session.as_mut() else {
             return;
         };
-        let Some(p) = s.gb.plugin_mut::<gameboy_plugin_agent::AgentPlugin>() else {
+        let Some(p) = s.gb.plugin_mut::<terminalgb_plugin_agent::AgentPlugin>() else {
             self.set_toast("No agent is attached".to_string());
             return;
         };
@@ -2966,7 +2976,10 @@ impl App {
             ])
             .split(area);
 
-        let header = format!(" gameboy · pick a ROM — {}", self.config.rom_dir.display());
+        let header = format!(
+            " TerminalGB · pick a ROM — {}",
+            self.config.rom_dir.display()
+        );
         f.render_widget(
             Paragraph::new(header).style(Style::default().add_modifier(Modifier::BOLD)),
             rows[0],
@@ -3255,7 +3268,7 @@ impl App {
         let body: Vec<Line<'static>> = match self
             .session
             .as_ref()
-            .and_then(|s| s.gb.plugin::<gameboy_plugin_agent::AgentPlugin>())
+            .and_then(|s| s.gb.plugin::<terminalgb_plugin_agent::AgentPlugin>())
         {
             Some(p) => match p.refusal() {
                 Some(why) => vec![Line::from(Span::styled(
@@ -3370,7 +3383,7 @@ impl App {
             .session
             .as_ref()
             .map(|s| s.entry.title.clone())
-            .unwrap_or_else(|| "gameboy".to_string());
+            .unwrap_or_else(|| "terminalgb".to_string());
 
         // Anything abnormal. Nothing here appears in the ordinary case, which
         // is the point: the bar should be quiet until something is true.
@@ -3563,7 +3576,7 @@ impl App {
         // with a roster that read back, and granted only if the panel has the
         // width and the spare rows. Where it is refused the roster still shows
         // — as the marker line inside `[ OPPONENT ]`.
-        let team: Vec<gameboy_plugin_trainer::TeamMon> =
+        let team: Vec<terminalgb_plugin_trainer::TeamMon> =
             if plugin.state().battle == BattleKind::Trainer {
                 plugin.state().enemy_team.clone()
             } else {
@@ -4460,7 +4473,7 @@ fn render_quit(f: &mut Frame<'_>) {
     f.render_widget(
         Paragraph::new(vec![
             Line::from(""),
-            Line::from("Quit gameboy?"),
+            Line::from("Quit TerminalGB?"),
             Line::from(""),
             Line::from(Span::styled(
                 "y = yes    any other = no",
@@ -4482,7 +4495,7 @@ fn render_quit(f: &mut Frame<'_>) {
 /// transparent** so the panel shows through instead of a pasted-on white box.
 ///
 /// Which pixels count as the page is
-/// [`sprite::background_mask`](gameboy_plugin_trainer::sprite::background_mask): a
+/// [`sprite::background_mask`](terminalgb_plugin_trainer::sprite::background_mask): a
 /// flood fill from the border, *not* a colour key — Gen 1 art uses the lightest
 /// shade inside the figure too, and keying on it punches holes through the
 /// middle of the Pokémon.
@@ -4493,7 +4506,7 @@ fn render_quit(f: &mut Frame<'_>) {
 /// opaque picture it renders today rather than a hole full of undefined colour.
 #[cfg(feature = "plugin-trainer")]
 fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut Vec<u8>) {
-    let bg = gameboy_plugin_trainer::sprite::background_mask(pixels, w, h);
+    let bg = terminalgb_plugin_trainer::sprite::background_mask(pixels, w, h);
     out.clear();
     out.reserve(pixels.len() * 4);
     for (i, &px) in pixels.iter().enumerate() {
@@ -4730,7 +4743,7 @@ const FAINTED_ALPHA: u8 = 80;
 #[cfg(feature = "plugin-trainer")]
 fn compose_team_strip(
     plugin: &mut TrainerPlugin,
-    team: &[gameboy_plugin_trainer::TeamMon],
+    team: &[terminalgb_plugin_trainer::TeamMon],
     palette: Palette,
     out: &mut Vec<u8>,
 ) -> Option<(u32, u32)> {
@@ -4753,7 +4766,7 @@ fn compose_team_strip(
         if iw == 0 || ih == 0 || iw > TEAM_CELL_PX || ih > TEAM_CELL_PX {
             continue;
         }
-        let bg = gameboy_plugin_trainer::sprite::background_mask(&img.pixels, iw, ih);
+        let bg = terminalgb_plugin_trainer::sprite::background_mask(&img.pixels, iw, ih);
         // Bottom-centred: Gen 1 art is drawn standing on the bottom of its own
         // box, so aligning the *feet* is what makes a row of different-sized
         // pictures look like a line-up rather than a scatter.
@@ -5386,7 +5399,9 @@ fn build_picker() -> Picker {
 /// Resolve a [`CellScale`] to a concrete device-pixels-per-cell multiplier.
 ///
 /// Priority (first hit wins):
-///   1. `$GAMEBOY_CELL_SCALE` — a quick override for testing, beats the config.
+///   1. `$TERMINALGB_CELL_SCALE` — a quick override for testing, beats the
+///      config. `$GAMEBOY_CELL_SCALE` is the pre-rename spelling and is still
+///      honoured, so anybody's existing shell alias keeps working.
 ///   2. an explicit `CellScale::Fixed(x)` from the config.
 ///   3. `CellScale::Auto` → [`detect_display_scale`].
 ///
@@ -5399,7 +5414,8 @@ fn resolve_cell_scale(configured: CellScale) -> f32 {
             1.0
         }
     };
-    if let Some(v) = env::var("GAMEBOY_CELL_SCALE")
+    if let Some(v) = env::var("TERMINALGB_CELL_SCALE")
+        .or_else(|_| env::var("GAMEBOY_CELL_SCALE"))
         .ok()
         .and_then(|s| s.trim().parse::<f32>().ok())
     {
@@ -5717,18 +5733,18 @@ fn attach_named(
 ) -> Option<String> {
     // Already attached above; naming it explicitly is not an error.
     #[cfg(feature = "plugin-trainer")]
-    if name == gameboy_plugin_trainer::NAME {
+    if name == terminalgb_plugin_trainer::NAME {
         return Some(String::new());
     }
 
     #[cfg(feature = "plugin-gen1-link")]
-    if name == gameboy_plugin_gen1_link::NAME {
+    if name == terminalgb_plugin_gen1_link::NAME {
         let trade = std::env::var("GB_GEN1_TRADE")
             .ok()
             .or_else(|| cfg.gen1_trade.clone());
         let path = trade.as_deref().map(std::path::Path::new);
         return Some(
-            match gameboy_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
+            match terminalgb_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
                 rom.to_vec(),
                 path,
             ) {
@@ -5747,13 +5763,13 @@ fn attach_named(
     }
 
     #[cfg(feature = "plugin-battle-control")]
-    if name == gameboy_plugin_battle_control::NAME {
+    if name == terminalgb_plugin_battle_control::NAME {
         let file = std::env::var("GB_BATTLES")
             .ok()
             .or_else(|| cfg.battles.clone());
         let path = file.as_deref().map(std::path::Path::new);
         return Some(
-            match gameboy_plugin_battle_control::BattlePlugin::from_preset_file(
+            match terminalgb_plugin_battle_control::BattlePlugin::from_preset_file(
                 rom.to_vec(),
                 path,
             ) {
@@ -5773,7 +5789,7 @@ fn attach_named(
     }
 
     #[cfg(feature = "plugin-agent")]
-    if name == gameboy_plugin_agent::NAME {
+    if name == terminalgb_plugin_agent::NAME {
         return Some(match build_agent(cfg) {
             Ok(p) => {
                 let driver = p.driver_name().to_string();
@@ -5794,12 +5810,12 @@ fn attach_named(
     // is this plugin's own configuration; a real plugin would more likely read
     // a key from `config.toml`, as gen1-link does above.
     #[cfg(feature = "plugin-example-tracer")]
-    if name == gameboy_plugin_example_tracer::NAME {
+    if name == terminalgb_plugin_example_tracer::NAME {
         let address = std::env::var("GB_TRACE_ADDR")
             .ok()
             .and_then(|v| u16::from_str_radix(v.trim().trim_start_matches("0x"), 16).ok())
             .unwrap_or(0xC000);
-        let p = gameboy_plugin_example_tracer::Tracer::new(address);
+        let p = terminalgb_plugin_example_tracer::Tracer::new(address);
         return Some(match gb.add_plugin(Box::new(p)) {
             Ok(()) => format!("plugin example-tracer attached, watching ${address:04X}"),
             Err(e) => format!("plugin example-tracer: {e}"),
@@ -5819,8 +5835,8 @@ fn attach_named(
 #[cfg(feature = "plugin-agent")]
 fn build_agent(
     cfg: &crate::screen::config::Config,
-) -> Result<gameboy_plugin_agent::AgentPlugin, String> {
-    use gameboy_plugin_agent::{
+) -> Result<terminalgb_plugin_agent::AgentPlugin, String> {
+    use terminalgb_plugin_agent::{
         governor::Budget, subprocess::CommandDriver, Config as AgentCfg,
     };
 
@@ -5849,7 +5865,7 @@ fn build_agent(
         .ok()
         .map(std::path::PathBuf::from);
 
-    Ok(gameboy_plugin_agent::AgentPlugin::new(
+    Ok(terminalgb_plugin_agent::AgentPlugin::new(
         Box::new(CommandDriver::new(program, args)),
         AgentCfg {
             budget: Budget {
@@ -7627,8 +7643,8 @@ mod tests {
     #[test]
     #[cfg(feature = "plugin-trainer")]
     fn the_focus_ring_puts_the_opponent_first_in_a_battle() {
-        use gameboy_plugin_trainer::gen1::{BattleKind, Mon};
-        use gameboy_plugin_trainer::TrainerState;
+        use terminalgb_plugin_trainer::gen1::{BattleKind, Mon};
+        use terminalgb_plugin_trainer::TrainerState;
         let mut st = TrainerState {
             in_game: true,
             ..Default::default()
@@ -8429,8 +8445,8 @@ mod tests {
     /// tested without a Pokémon cartridge.
     #[cfg(feature = "plugin-trainer")]
     fn plant_encounter(app: &mut App, shiny: bool) {
-        use gameboy_plugin_trainer::encounter::WildEncounter;
-        use gameboy_plugin_trainer::gen1::{BattleType, Dvs};
+        use terminalgb_plugin_trainer::encounter::WildEncounter;
+        use terminalgb_plugin_trainer::gen1::{BattleType, Dvs};
         let dvs = if shiny {
             Dvs::from_bytes(0xEA, 0xAA) // ATKDEFDV_SHINY / SPDSPCDV_SHINY
         } else {

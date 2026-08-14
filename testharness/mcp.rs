@@ -1,4 +1,4 @@
-//! **MCP server harness** — drive the real `gameboy-mcp` binary the way a
+//! **MCP server harness** — drive the real `terminalgb-mcp` binary the way a
 //! client does: spawn it, speak JSON-RPC down its stdin, read its stdout.
 //!
 //! # Why a subprocess and not the in-process handler
@@ -81,7 +81,7 @@ fn binary() -> PathBuf {
     if p.ends_with("deps") {
         p.pop();
     }
-    p.join("gameboy-mcp")
+    p.join("terminalgb-mcp")
 }
 
 struct Client {
@@ -178,8 +178,8 @@ impl Client {
     }
 }
 
-fn parse(line: &str) -> Result<gameboy_plugin_agent::json::Json, String> {
-    gameboy_plugin_agent::json::parse(line.trim()).map_err(|e| {
+fn parse(line: &str) -> Result<terminalgb_plugin_agent::json::Json, String> {
+    terminalgb_plugin_agent::json::parse(line.trim()).map_err(|e| {
         format!("the server emitted something that is not JSON: {e}\n{line}")
     })
 }

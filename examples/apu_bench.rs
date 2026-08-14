@@ -8,9 +8,9 @@
 //! ```text
 //! cargo run --release --example apu_bench -- <rom.gb> [frames]
 //! ```
-use gameboy::cpu::core::Cpu;
-use gameboy::sound::AudioPlayer;
 use std::time::Instant;
+use terminalgb::cpu::core::Cpu;
+use terminalgb::sound::AudioPlayer;
 
 struct Sink;
 impl AudioPlayer for Sink {

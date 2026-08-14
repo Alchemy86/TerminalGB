@@ -3,10 +3,10 @@
 //!
 //! # This file re-implements nothing
 //!
-//! Perception is [`gameboy_plugin_agent::observe`] — the same `Gen1Observer` and
+//! Perception is [`terminalgb_plugin_agent::observe`] — the same `Gen1Observer` and
 //! `Screen` reader the Claude-plays substrate uses, reached through the same
 //! capability-checked [`Machine`](crate::plugin::Machine) handle. High-level
-//! movement is [`gameboy_plugin_agent::action::Executor`], unchanged. This module owns
+//! movement is [`terminalgb_plugin_agent::action::Executor`], unchanged. This module owns
 //! the [`Gameboy`], the clock, and the host resources (files, a sound device, a
 //! video sink) — nothing else.
 //!
@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use crate::gameboy::Gameboy;
 use crate::input::KeypadKey;
 use crate::plugin::Capability;
-use gameboy_plugin_agent::action::{plan_from_json, Executor, Limits, Outcome};
-use gameboy_plugin_agent::json::{Json, Writer};
-use gameboy_plugin_agent::observe::{classify, Gen1Observer, Screen};
+use terminalgb_plugin_agent::action::{plan_from_json, Executor, Limits, Outcome};
+use terminalgb_plugin_agent::json::{Json, Writer};
+use terminalgb_plugin_agent::observe::{classify, Gen1Observer, Screen};
 
 use super::config::{Options, Speed};
 
@@ -147,7 +147,7 @@ impl Host {
         // The observer only reports Gen 1 state for a cartridge it recognises
         // by title *and* header checksum — a hack or a translation with a
         // shifted layout is refused rather than reported wrongly.
-        session.supported = gameboy_plugin_trainer::Game::detect(
+        session.supported = terminalgb_plugin_trainer::Game::detect(
             &session.title,
             session.gb.global_checksum(),
         )
@@ -215,8 +215,8 @@ impl Session {
         };
 
         #[cfg(feature = "plugin-trainer")]
-        if name == gameboy_plugin_trainer::NAME {
-            let mut p = gameboy_plugin_trainer::TrainerPlugin::new(rom.to_vec());
+        if name == terminalgb_plugin_trainer::NAME {
+            let mut p = terminalgb_plugin_trainer::TrainerPlugin::new(rom.to_vec());
             // Active from the start, unlike the TUI's: there is no panel to
             // switch on here, so an attached-but-inert plugin would only look
             // broken.
@@ -231,10 +231,10 @@ impl Session {
         }
 
         #[cfg(feature = "plugin-gen1-link")]
-        if name == gameboy_plugin_gen1_link::NAME {
+        if name == terminalgb_plugin_gen1_link::NAME {
             let path = std::env::var("GB_GEN1_TRADE").ok();
             return Some(say(
-                gameboy_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
+                terminalgb_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
                     rom.to_vec(),
                     path.as_deref().map(Path::new),
                 )
@@ -251,10 +251,10 @@ impl Session {
         }
 
         #[cfg(feature = "plugin-battle-control")]
-        if name == gameboy_plugin_battle_control::NAME {
+        if name == terminalgb_plugin_battle_control::NAME {
             let path = std::env::var("GB_BATTLES").ok();
             return Some(say(
-                gameboy_plugin_battle_control::BattlePlugin::from_preset_file(
+                terminalgb_plugin_battle_control::BattlePlugin::from_preset_file(
                     rom.to_vec(),
                     path.as_deref().map(Path::new),
                 )
@@ -275,7 +275,7 @@ impl Session {
         // one too would put two things on the controller, each undoing the
         // other's plan. Saying so beats a silent no-op or a "not built in"
         // message that sends someone off rebuilding.
-        if name == gameboy_plugin_agent::NAME {
+        if name == terminalgb_plugin_agent::NAME {
             let _ = rom;
             return Some(format!(
                 "plugin {name}: not available here — an MCP client is already \
@@ -419,7 +419,7 @@ impl Session {
 
     // -- observation -------------------------------------------------------
 
-    /// The structured snapshot, in the shape [`gameboy_plugin_agent`] already
+    /// The structured snapshot, in the shape [`terminalgb_plugin_agent`] already
     /// established — so a client that has read `docs/gen1/agent-play.md`
     /// already knows this format.
     pub fn observe_json(&mut self, allow_write: bool) -> String {
@@ -465,7 +465,7 @@ impl Session {
                 w.num_field("x", e.x as f64);
                 w.num_field("y", e.y as f64);
                 w.num_field("to_map", e.to_map as f64);
-                let n = gameboy_plugin_agent::observe::map_name(e.to_map);
+                let n = terminalgb_plugin_agent::observe::map_name(e.to_map);
                 if !n.is_empty() {
                     w.str_field("to", n);
                 }
@@ -487,12 +487,12 @@ impl Session {
                 w.end_obj();
             }
             w.end_arr();
-            if game.battle != gameboy_plugin_trainer::gen1::BattleKind::None {
+            if game.battle != terminalgb_plugin_trainer::gen1::BattleKind::None {
                 w.obj_field("battle");
                 w.str_field(
                     "kind",
                     match game.battle {
-                        gameboy_plugin_trainer::gen1::BattleKind::Wild => "wild",
+                        terminalgb_plugin_trainer::gen1::BattleKind::Wild => "wild",
                         _ => "trainer",
                     },
                 );
@@ -706,8 +706,13 @@ pub fn slot_path(dir: Option<&Path>, title: &str, slot: u32) -> PathBuf {
             .or_else(|| {
                 std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state"))
             })
-            .unwrap_or_else(std::env::temp_dir)
-            .join("gameboy/states"),
+            .unwrap_or_else(std::env::temp_dir),
+    };
+    // Same directory the TUI uses, pre-rename fallback and all, so a state
+    // saved here loads there. See `screen::config::LEGACY_APP_DIR`.
+    let base = match dir {
+        Some(_) => base,
+        None => crate::screen::config::app_dir_in(&base).join("states"),
     };
     let mut safe: String = title
         .chars()

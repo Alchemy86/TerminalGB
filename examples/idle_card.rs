@@ -14,10 +14,10 @@
 //!
 //! Pass `--game` for the same geometry with a game frame in it instead. The two
 //! PNGs must have the picture in exactly the same place.
-use gameboy::video::{
+use std::time::Instant;
+use terminalgb::video::{
     Destination, Pace, PixelFormat, Source, VideoOut, VideoSpec, SRC_H, SRC_W,
 };
-use std::time::Instant;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();

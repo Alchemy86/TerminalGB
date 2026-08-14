@@ -360,7 +360,7 @@ citations: [`../conformance-notes.md`](../conformance-notes.md) §10-18.
 filename, and the runner honours it.** The APU's extra-length-clocking rule changed in CPU
 CGB C, and `-cgb0` and `-cgbB` contradict each other, so *no single machine can pass both*
 — a runner that ignores the name can score at most four of the five however accurate it
-is. `gameboy::sound::CgbRevision` (default `CgbC` — C/D/E, and what every DMG does) models
+is. `terminalgb::sound::CgbRevision` (default `CgbC` — C/D/E, and what every DMG does) models
 the difference, `examples/samesuite.rs::revision_for` picks it from the suffix exactly as
 the `testroms` harness picks `@dmg`/`@cgb` from a cartridge header, and
 `$GB_CGB_REVISION=cgb0|cgbB|cgbC` exposes the same knob to a frontend. The ROM still

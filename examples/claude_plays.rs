@@ -23,13 +23,13 @@
 //! * **the caps fire** — `--max-calls`, `--max-usd`, `--timeout` and the
 //!   circuit breaker all end the run with a printed reason.
 
-use gameboy::gameboy::Gameboy;
-use gameboy_plugin_agent::{
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use terminalgb::gameboy::Gameboy;
+use terminalgb_plugin_agent::{
     commentary::Kind, driver::Driver, driver::RandomDriver, driver::ScriptedDriver,
     governor::Budget, subprocess::CommandDriver, AgentPlugin, Config, PhaseView,
 };
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 const FRAME_TIME: Duration = Duration::from_micros(16_743);
 
@@ -492,7 +492,7 @@ fn print_position(gb: &mut Gameboy) {
     let map = gb.peek(0xD35E);
     let (x, y) = (gb.peek(0xD362), gb.peek(0xD361));
     let party = gb.peek(0xD163);
-    let name = gameboy_plugin_agent::observe::map_name(map);
+    let name = terminalgb_plugin_agent::observe::map_name(map);
     println!(
         "final position    : map {map:#04x}{} at ({x},{y}), {} in party",
         if name.is_empty() {

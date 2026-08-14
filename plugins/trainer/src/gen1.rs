@@ -32,7 +32,7 @@
 //! [`super::Game::detect`] refuses them rather than showing plausible garbage.
 
 /// Every address here is `WRAM0`, i.e. it lives at a fixed place on the bus
-/// regardless of banking, so a plain [`gameboy_plugin_api::Machine::peek`] reads it
+/// regardless of banking, so a plain [`terminalgb_plugin_api::Machine::peek`] reads it
 /// correctly at any time.
 pub mod addr {
     /// `wPlayerName` — 11 bytes, terminated by `$50`.

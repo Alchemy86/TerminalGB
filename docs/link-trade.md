@@ -135,7 +135,7 @@ GB_PLUGINS=gen1-link GB_GEN1_TRADE=~/mewtwo.trade \
   cargo run --release --example terminal -- ~/roms/blue.gb
 ```
 
-or permanently, in `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml`:
+or permanently, in `${XDG_CONFIG_HOME:-~/.config}/terminalgb/config.toml`:
 
 ```toml
 plugins    = gen1-link
@@ -276,7 +276,7 @@ without playing to Viridian by hand:
 cargo run --release --example gen1_trade -- --rom <rom> --state ~/atconsole.gbss
 
 # 2. drop it into save slot 1 and start the frontend with the partner armed
-cp ~/atconsole.gbss "${XDG_STATE_HOME:-$HOME/.local/state}/gameboy/states/POKEMON_BLUE.slot1.gbss"
+cp ~/atconsole.gbss "${XDG_STATE_HOME:-$HOME/.local/state}/terminalgb/states/POKEMON_BLUE.slot1.gbss"
 GB_PLUGINS=gen1-link GB_GEN1_TRADE=~/mew.trade \
   cargo run --release --example terminal -- <rom>
 

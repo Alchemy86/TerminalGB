@@ -13,8 +13,8 @@
 //! player's own 5-second stat lines on top.
 #[cfg(feature = "audio")]
 fn main() {
-    use gameboy::cpu::core::Cpu;
     use std::time::{Duration, Instant};
+    use terminalgb::cpu::core::Cpu;
 
     let seconds: u64 = std::env::args()
         .nth(1)
@@ -50,7 +50,7 @@ fn main() {
 
     let mut cpu = Cpu::new(rom, Some(rom_path));
 
-    let (player, _stream) = match gameboy::sound::cpal_audio::CpalPlayer::new() {
+    let (player, _stream) = match terminalgb::sound::cpal_audio::CpalPlayer::new() {
         Some(x) => x,
         None => {
             eprintln!("no audio device — soak test needs real hardware");
@@ -58,7 +58,7 @@ fn main() {
         }
     };
     let device_rate = {
-        use gameboy::sound::AudioPlayer;
+        use terminalgb::sound::AudioPlayer;
         player.samples_rate()
     };
     let queue = player.queue_handle();
@@ -131,8 +131,8 @@ fn main() {
     println!("queue depth:          min {} max {} now {depth_now} (start-fill {}, high-water {})",
         if stats.depth_min == usize::MAX { 0 } else { stats.depth_min },
         stats.depth_max,
-        gameboy::sound::sample_queue::start_fill(),
-        gameboy::sound::sample_queue::high_water());
+        terminalgb::sound::sample_queue::start_fill(),
+        terminalgb::sound::sample_queue::high_water());
     println!("audio callbacks:      {}", stats.callbacks);
 
     let ok = stats.underruns == 0 && stats.dropped == 0;

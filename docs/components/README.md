@@ -1,6 +1,6 @@
 # Component reference
 
-> Per-component deep dives for the [gameboy](../../README.md) emulator. Each page covers, in
+> Per-component deep dives for the [TerminalGB](../../README.md) emulator. Each page covers, in
 > the same order: **what it is** (in plain terms) · **the real hardware** · **history across
 > DMG/MGB/SGB/CGB** (and MBC types) · **how it works here** with `path:line` references and
 > honest approximations · **known quirks** · **expected behaviours phrased as future tests**

@@ -51,10 +51,10 @@
 //! writes a `.sav` next to the ROM path, and a verification run must not touch
 //! the player's save.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::KeypadKey;
-use gameboy_plugin_gen1_link::{party::Party, spec::TradeSpec, Gen1LinkPartner};
 use std::path::{Path, PathBuf};
+use terminalgb::gameboy::Gameboy;
+use terminalgb::KeypadKey;
+use terminalgb_plugin_gen1_link::{party::Party, spec::TradeSpec, Gen1LinkPartner};
 
 // --- Pokémon Red/Blue (US) WRAM addresses ---------------------------------
 // From `pret/pokered`'s `ram/wram.asm`, which reproduces the retail ROM
@@ -273,7 +273,7 @@ fn patch_fixture(sram: &mut [u8], rom: &[u8]) {
     // A party to trade from. Built with the same code the link partner uses, so
     // it is well formed by construction — and giving the player two Pokémon
     // means the trade never empties the party.
-    let tables = gameboy_plugin_gen1_link::romdata::RomTables::locate(rom.to_vec())
+    let tables = terminalgb_plugin_gen1_link::romdata::RomTables::locate(rom.to_vec())
         .expect("gen 1 rom tables");
     let spec = TradeSpec::parse(
         "trainer = RED\n\
@@ -285,7 +285,7 @@ fn patch_fixture(sram: &mut [u8], rom: &[u8]) {
     )
     .expect("fixture party spec");
     let party: Party = {
-        use gameboy_plugin_gen1_link::spec::PokemonSource;
+        use terminalgb_plugin_gen1_link::spec::PokemonSource;
         spec.party(&tables).expect("build fixture party")
     };
     let image = party.to_wram_image();
@@ -1136,7 +1136,7 @@ fn decode(bytes: &[u8]) -> String {
     bytes
         .iter()
         .take_while(|&&b| b != 0x50)
-        .filter_map(|&b| gameboy_plugin_gen1_link::text::decode_char(b))
+        .filter_map(|&b| terminalgb_plugin_gen1_link::text::decode_char(b))
         .collect()
 }
 
@@ -1169,7 +1169,7 @@ fn screen_text(gb: &mut Gameboy) -> String {
             let y = (sy + row) % 32;
             let x = (sx + col) % 32;
             let t = gb.peek(map + (y * 32 + x) as u16);
-            out.push(gameboy_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
+            out.push(terminalgb_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
         }
         out.push('\n');
     }

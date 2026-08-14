@@ -24,9 +24,9 @@
 //! `gbdev/GBEmulatorShootout` at the commit pinned there, which is the same
 //! corpus our published shootout score is measured on.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::mode::Model;
 use std::path::{Path, PathBuf};
+use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
 
 #[path = "support/suite_baseline.rs"]
 mod suite_baseline;

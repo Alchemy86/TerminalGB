@@ -77,17 +77,17 @@
 //! Deliberately different for Gen 1: there are no abilities, natures or held
 //! items to show, "special" is one stat rather than two, and DVs go to 15 rather
 //! than IVs to 31 — so the detail view spends its space on DVs, the invisible
-//! stat experience, and the derived values in [`gameboy_plugin_trainer::derived`].
+//! stat experience, and the derived values in [`terminalgb_plugin_trainer::derived`].
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use gameboy_plugin_trainer::encounter::WildEncounter;
-use gameboy_plugin_trainer::gen1::{BattleKind, BattleType};
-use gameboy_plugin_trainer::gen1::{Mon, BADGE_LEADERS, BADGE_NAMES};
-use gameboy_plugin_trainer::{TeamMon, TrainerState};
+use terminalgb_plugin_trainer::encounter::WildEncounter;
+use terminalgb_plugin_trainer::gen1::{BattleKind, BattleType};
+use terminalgb_plugin_trainer::gen1::{Mon, BADGE_LEADERS, BADGE_NAMES};
+use terminalgb_plugin_trainer::{TeamMon, TrainerState};
 
 /// Shown wherever a value is not known yet, so a blank never reads as a zero.
 pub const UNKNOWN: &str = "?";
@@ -565,7 +565,7 @@ pub fn slot_row<'a>(
     width: usize,
 ) -> Line<'a> {
     let mut spans = Vec::new();
-    let n = gameboy_plugin_trainer::gen1::PARTY_LENGTH;
+    let n = terminalgb_plugin_trainer::gen1::PARTY_LENGTH;
     let text_w = n * 2 - 1;
     let pad = width.saturating_sub(text_w) / 2;
     if width < text_w {
@@ -848,7 +848,7 @@ pub fn party_lines<'a>(
 pub fn detail_lines<'a>(
     m: &Mon,
     opponent: bool,
-    mods: Option<gameboy_plugin_trainer::derived::StatMods>,
+    mods: Option<terminalgb_plugin_trainer::derived::StatMods>,
     width: usize,
 ) -> Vec<Line<'a>> {
     let frac = m.hp_fraction();
@@ -1111,10 +1111,10 @@ fn pick(width: usize, candidates: &[String]) -> String {
 /// Lowered is red, raised is green: direction is readable before the number is.
 ///
 /// Absent outside a battle, and absent for a party copy — see
-/// [`gameboy_plugin_trainer::derived::StatMods`] for why stages must never be shown
+/// [`terminalgb_plugin_trainer::derived::StatMods`] for why stages must never be shown
 /// from stored data.
 pub fn stat_mod_line<'a>(
-    mods: Option<gameboy_plugin_trainer::derived::StatMods>,
+    mods: Option<terminalgb_plugin_trainer::derived::StatMods>,
     label: &str,
     width: usize,
 ) -> Option<Line<'a>> {
@@ -1338,7 +1338,7 @@ pub fn opponent_lines<'a>(
 /// which way it went since the last look, because "watch it go up" was the ask.
 ///
 /// The arithmetic is Gen 1's own, disassembled from the cartridge — see
-/// [`gameboy_plugin_trainer::capture`], including why a Great Ball and an Ultra Ball
+/// [`terminalgb_plugin_trainer::capture`], including why a Great Ball and an Ultra Ball
 /// trade places depending on the target's HP.
 pub fn catch_lines<'a>(state: &TrainerState, width: usize) -> Vec<Line<'a>> {
     let odds = state.catch_odds();
@@ -1711,8 +1711,8 @@ pub fn message<'a>(text: &'a str, title: &'a str) -> Paragraph<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gameboy_plugin_trainer::gen1::{Dvs, MoveSlot, Status};
-    use gameboy_plugin_trainer::TeamMon;
+    use terminalgb_plugin_trainer::gen1::{Dvs, MoveSlot, Status};
+    use terminalgb_plugin_trainer::TeamMon;
 
     fn mon(hp: u16, max: u16) -> Mon {
         Mon {
@@ -1778,7 +1778,7 @@ mod tests {
         o.name = "CHARMANDER".into();
         // One Growl and a Screech landed: exactly the case the panel exists to
         // make legible.
-        o.stat_mods = Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
+        o.stat_mods = Some(terminalgb_plugin_trainer::derived::StatMods::from_bytes([
             6, 7, 7, 7, 7, 7,
         ]));
         o.types = ("FIRE".into(), "FIRE".into());
@@ -1800,9 +1800,10 @@ mod tests {
         ];
         st.opponent = Some(o);
         let mut active = st.party[1].clone();
-        active.stat_mods = Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
-            7, 5, 7, 7, 7, 7,
-        ]));
+        active.stat_mods =
+            Some(terminalgb_plugin_trainer::derived::StatMods::from_bytes([
+                7, 5, 7, 7, 7, 7,
+            ]));
         st.active = Some(active);
         st
     }
@@ -2410,7 +2411,7 @@ mod tests {
             .expect("the entry");
         assert_eq!(down.style.fg, Some(Color::Red), "lowered reads red");
         let up = stat_mod_line(
-            Some(gameboy_plugin_trainer::derived::StatMods::from_bytes([
+            Some(terminalgb_plugin_trainer::derived::StatMods::from_bytes([
                 9, 7, 7, 7, 7, 7,
             ])),
             "MOD",
@@ -2443,7 +2444,7 @@ mod tests {
         assert!(!detail.contains("MOD "), "{detail}");
         // An all-neutral set is nothing to report either.
         assert!(stat_mod_line(
-            Some(gameboy_plugin_trainer::derived::StatMods::from_bytes(
+            Some(terminalgb_plugin_trainer::derived::StatMods::from_bytes(
                 [7; 6]
             )),
             "MOD",

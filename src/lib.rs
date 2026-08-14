@@ -5,15 +5,15 @@
 //! `--no-default-features` gives you the **core alone**: no window system, no
 //! terminal, no image codecs, no host audio. The only third-party crate left
 //! is `blip_buf` (the APU's band-limited resampler). The whole embedding API
-//! is [`gameboy::Gameboy`]:
+//! is [`terminalgb::Gameboy`]:
 //!
 //! ```no_run
 //! let rom: Vec<u8> = std::fs::read("game.gb").unwrap();
 //! // `None` = do not touch the filesystem for battery saves.
-//! let mut gb = gameboy::gameboy::Gameboy::new(rom, None);
+//! let mut gb = terminalgb::gameboy::Gameboy::new(rom, None);
 //! gb.frame();                       // run one ~59.7275 Hz frame
 //! let rgba: &[u8] = gb.image();     // 160 x 144 RGBA
-//! gb.keydown(gameboy::KeypadKey::A);
+//! gb.keydown(terminalgb::KeypadKey::A);
 //! let snapshot = gb.save_state();
 //! ```
 //!
@@ -55,7 +55,7 @@ pub mod mode;
 /// The PPU's public surface: which of the two rendering engines runs.
 ///
 /// The `gpu` module itself stays private — its internals are not an API — but
-/// [`gameboy::Gameboy::set_render_mode`](crate::gameboy::Gameboy::set_render_mode)
+/// [`terminalgb::Gameboy::set_render_mode`](crate::gameboy::Gameboy::set_render_mode)
 /// takes this type, so an embedder has to be able to name it. Deliberately
 /// **not** re-exported at the crate root: [`crate::gameboy::RenderMode`] is a
 /// different enum (which *frontend* to run) and two types of the same name in
@@ -64,7 +64,7 @@ pub mod ppu {
     pub use crate::gpu::RenderMode;
 }
 /// Runtime plugins — the *attach* half of the extension surface. The contract
-/// itself is the dependency-free [`gameboy_plugin_api`] crate; this module
+/// itself is the dependency-free [`terminalgb_plugin_api`] crate; this module
 /// re-exports it and implements the emulator's side. See [`plugin`].
 pub mod plugin;
 pub mod savestate;

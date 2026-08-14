@@ -1,4 +1,4 @@
-# `gameboy-plugin-api` — the plugin contract
+# `terminalgb-plugin-api` — the plugin contract
 
 **Everything a plugin needs, and nothing from the emulator's internals.** This crate has
 **no dependencies at all**, so writing a plugin costs you one `Cargo.toml` line and no build
@@ -6,11 +6,11 @@ system archaeology.
 
 ```toml
 [dependencies]
-gameboy-plugin-api = "0.1"
+terminalgb-plugin-api = "0.1"
 ```
 
 ```rust
-use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
+use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 
 struct FrameCounter { frames: u64 }
 

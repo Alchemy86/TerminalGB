@@ -1,4 +1,4 @@
-# gameboy
+# TerminalGB
 
 [![CI](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml/badge.svg)](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml)
 [![conformance](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Alchemy86/gameboy/main/docs/conformance-badge.json)](docs/conformance-action.md)
@@ -132,7 +132,7 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > cell size in logical pixels but draw inline images in physical pixels, so the picture comes
 > out shrunk by the scale factor. If the game renders far smaller than the window, add
 > `cell_scale = auto` (or an explicit number like `cell_scale = 2.0`) to
-> `~/.config/gameboy/config.toml`. The default is `1.0` (no correction).
+> `~/.config/terminalgb/config.toml`. The default is `1.0` (no correction).
 >
 > **Frame rate is independent of window size, and the picture barely touches the wire.**
 > The frame is transmitted at the resolution the emulator computed (160×144, or the pixel-art
@@ -222,10 +222,18 @@ It has a section of its own below: **[Trade a Pokémon in over the link cable](#
 
 #### Terminal config file
 
-The terminal frontend reads `${XDG_CONFIG_HOME:-~/.config}/gameboy/config.toml` (a small
+The terminal frontend reads `${XDG_CONFIG_HOME:-~/.config}/terminalgb/config.toml` (a small
 `key = value` file — a strict subset of TOML). A missing file just means defaults; unknown or
 malformed keys are ignored, never an error. Values may be **bare or double-quoted** — both
 `palette = green` and `palette = "green"` work (the parser strips optional surrounding quotes).
+
+> **Upgrading from before the rename.** The project used to be called `gameboy` and kept its
+> files in `~/.config/gameboy/`, `~/.local/state/gameboy/` (recents, remembered volume, save
+> states) and `~/Pictures/gameboy` / `~/Videos/gameboy`. **Nothing was moved and nothing needs
+> moving**: each of those is still read and written exactly where it is, because the emulator
+> prefers the new `terminalgb` name and falls back to the old one whenever the old one is what
+> exists on disk. Rename the directories yourself if you want to; do not rename half of them.
+
 The recognised keys:
 
 | Key | Values | Meaning |
@@ -240,14 +248,14 @@ The recognised keys:
 | `volume` | `0`–`100` (a `%` is allowed), or `off` | **Playback volume**, the level a session starts at. Default **`50`** (−12 dB) — deliberately quieter than full scale. `,` / `.` change it in game and `m` mutes; whatever you last set is remembered across sessions, and editing this key overrides that. Attenuation is applied to the audio the *host device* is handed, never to the emulated machine — see below. |
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
-| `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`. |
+| `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/terminalgb`, else `~/Pictures/terminalgb`. |
 | `video_out` | `-` / a file / a **FIFO** / a **`/dev/videoN` camera** / a directory / `off` | **Where `v` sends the stream** (see [video-out.md](docs/video-out.md)). Default `off`. Setting it does *not* start streaming — the emulator always comes up with the feed off. **Safe to set to anything**: nothing is opened, created or claimed until you press `v`. The TUI refuses `-` — it owns stdout. |
 | `video_autostart` | `true` / `false` | Go live at launch instead of waiting for `v`. Default `false`. The separate, explicit way to ask for it, because naming a destination is not the same decision as sending frames to it. |
 | `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`. Ignored for a `/dev/videoN` camera, which negotiates YUYV itself. |
 | `video_size` | `WxH` | Letterbox the stream into this size, e.g. `1280x720`. Default: the source size, or 1280×720 for a camera ([why 16:9](docs/video-out.md#4a-the-camera-is-169--because-the-consumer-crops-and-we-cannot-see-it-happen)). A camera size that is not 16:9 is honoured, with a warning. |
 | `video_source` | `native` / `display` | Stream the raw 160×144 framebuffer, or what you see (palette + upscaler). Default `native`. |
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
-| `video_dir` | a path (`~` expands) | Where **`V`** records. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
+| `video_dir` | a path (`~` expands) | Where **`V`** records. Default `$XDG_VIDEOS_DIR/terminalgb`, else `~/Videos/terminalgb`. |
 | `video_device` | `/dev/videoN` | A `v4l2loopback` node to *verify*: the emulator warns if its camera label names a different game. |
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. [Write your own](docs/writing-a-plugin.md); the ones we ship live in [`plugins/`](plugins/) and can all be built out. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
@@ -287,9 +295,9 @@ copy-pasteable and was run to produce this table.
 | **one plugin** | `cargo build --release --features plugin-trainer` | Pick and choose; the names are in the table below. |
 | **the core, for embedding or an agent** | `cargo build --release --no-default-features` | **One** third-party crate (`blip_buf`). No window, no terminal, no audio device, no image codecs, no `$HOME`. See [Embedding the core](#-embedding-the-core). |
 | **a headless run right now** | `cargo run --release --no-default-features --example headless -- third_party/dmg-acid2/dmg-acid2.gb 240` | Runs a cartridge, round-trips a save state and prints the frame as ASCII. |
-| **any Claude client to drive it** | `cargo build --release --no-default-features --features mcp` | The `gameboy-mcp` [MCP server](#-mcp-server--drive-it-from-claude-desktop-or-claude-code). Adds **no third-party crate**. |
+| **any Claude client to drive it** | `cargo build --release --no-default-features --features mcp` | The `terminalgb-mcp` [MCP server](#-mcp-server--drive-it-from-claude-desktop-or-claude-code). Adds **no third-party crate**. |
 | **the browser build** | `cargo build --release --target wasm32-unknown-unknown` | Audio is compiled out on `wasm32`; `make build-wasm` also runs `wasm-opt`. |
-| **a C / Go static library** | `make ffi-build` | `--no-default-features --features ffi` + `cbindgen` → `libgameboy.a` and `gameboy.h`. |
+| **a C / Go static library** | `make ffi-build` | `--no-default-features --features ffi` + `cbindgen` → `libterminalgb.a` and `terminalgb.h`. |
 
 ### The features
 
@@ -299,14 +307,14 @@ copy-pasteable and was run to produce this table.
 | `desktop` | ✅ | `glutin`, `gl`, `libc`, `image` | a display server (X11 / Wayland / Windows / macOS) |
 | `tui` | ✅ | `ratatui`, `ratatui-image`, `icy_sixel`, `image`, `libc` | a terminal — [any terminal](#which-terminals-give-you-what); it degrades rather than refusing |
 | `audio` | | `cpal` | a sound device (ALSA **dev headers** to *build* on Linux) |
-| `mcp` | | `plugin-agent` — **no third-party crate** | an [MCP](https://modelcontextprotocol.io) client (Claude Desktop, Claude Code, …). Builds the `gameboy-mcp` binary. |
+| `mcp` | | `plugin-agent` — **no third-party crate** | an [MCP](https://modelcontextprotocol.io) client (Claude Desktop, Claude Code, …). Builds the `terminalgb-mcp` binary. |
 | `standard-plugins` | ✅ | the four plugin crates below | nothing; each still has to be named to attach |
-| `plugin-trainer` | ✅ | `gameboy-plugin-trainer` | a Pokémon R/B cartridge, or it declines |
-| `plugin-gen1-link` | ✅ | + `gameboy-plugin-gen1-link` | as above |
-| `plugin-battle-control` | ✅ | + `gameboy-plugin-battle-control` | as above |
-| `plugin-agent` | ✅ | + `gameboy-plugin-agent` | an `agent_command` driver, or it declines |
-| `plugin-example-tracer` | | `gameboy-plugin-example-tracer` | nothing — **[the one to copy](#-plugins-other-people-can-write)** |
-| `testing` | | — | — (`gameboy::testing::TestMachine`, for plugin authors' tests) |
+| `plugin-trainer` | ✅ | `terminalgb-plugin-trainer` | a Pokémon R/B cartridge, or it declines |
+| `plugin-gen1-link` | ✅ | + `terminalgb-plugin-gen1-link` | as above |
+| `plugin-battle-control` | ✅ | + `terminalgb-plugin-battle-control` | as above |
+| `plugin-agent` | ✅ | + `terminalgb-plugin-agent` | an `agent_command` driver, or it declines |
+| `plugin-example-tracer` | | `terminalgb-plugin-example-tracer` | nothing — **[the one to copy](#-plugins-other-people-can-write)** |
+| `testing` | | — | — (`terminalgb::testing::TestMachine`, for plugin authors' tests) |
 | `ffi` | | — | — (drops the Rust frontends; exposes the C ABI) |
 
 `plugin-*` features are additive and imply the plugins they build on
@@ -364,16 +372,16 @@ That is the **whole** dependency tree at that feature set:
 
 ```text
 $ cargo tree --no-default-features --edges normal
-gameboy v0.2.0
+terminalgb v0.2.0
 ├── blip_buf v0.1.5
-└── gameboy-plugin-api v0.1.0 (crates/gameboy-plugin-api)
+└── terminalgb-plugin-api v0.1.0 (crates/terminalgb-plugin-api)
 ```
 
 One crate — `blip_buf`, the APU's band-limited resampler. For comparison, the default
 build (both frontends, four plugins) resolves **193** crates. Everything else is opt-in —
 the full feature list is in [Build modes](#-build-modes--what-you-can-compile-and-why-you-would).
 
-`gameboy-plugin-api` resolves beside `blip_buf` and is not a loosening of that claim: it is
+`terminalgb-plugin-api` resolves beside `blip_buf` and is not a loosening of that claim: it is
 first-party, in this repository, has no dependencies of its own, and is the contract plugin
 crates depend on **instead of** depending on the emulator. An embedder gains no third-party
 code from it. CI enforces the whole paragraph.
@@ -383,8 +391,8 @@ code from it. CI enforces the whole paragraph.
 The whole embedding surface is [`Gameboy`](src/gameboy.rs):
 
 ```rust
-use gameboy::gameboy::Gameboy;
-use gameboy::{mode::Model, KeypadKey};
+use terminalgb::gameboy::Gameboy;
+use terminalgb::{mode::Model, KeypadKey};
 
 // You read the ROM. `None` for the path keeps cartridge RAM in memory and the
 // emulator never touches the filesystem; `Some(p)` opts into `<rom>.sav`.
@@ -408,7 +416,7 @@ Also available without any feature: `save_state()` / `load_state()` (versioned `
 snapshots, [`docs/savestates.md`](docs/savestates.md)), `flush_battery()`, `rom_title()`,
 `global_checksum()`, the debug reads (`peek`, `peek_range`, `debug_pc`,
 `step_instruction`), the [plugin API](docs/plugins.md), the
-[pixel-art upscaler](docs/upscaling.md) (`gameboy::upscale`, pure CPU, no deps), and
+[pixel-art upscaler](docs/upscaling.md) (`terminalgb::upscale`, pure CPU, no deps), and
 `enable_audio(Box<dyn AudioPlayer>)` — implement that one trait and the APU's samples are
 yours, with no `cpal` anywhere in the build.
 
@@ -500,7 +508,7 @@ this tree.
 ### If you want a frontend after all
 
 ```rust
-use gameboy::gameboy::{load_rom, Gameboy, RenderMode};
+use terminalgb::gameboy::{load_rom, Gameboy, RenderMode};
 
 let (rom, path) = load_rom("./game.gb").expect("load ROM");
 let gb = Gameboy::new(rom, Some(path));
@@ -748,7 +756,7 @@ A plugin declares its capabilities — `OBSERVE`, `READ_MEMORY`, `WRITE_MEMORY`,
 guarantee is that refusal, not a borrow checker accident. At most one plugin may hold
 `SERIAL_LINK`; a cable has two ends.
 
-Plugin crates depend on [`crates/gameboy-plugin-api`](crates/gameboy-plugin-api/) — which has
+Plugin crates depend on [`crates/terminalgb-plugin-api`](crates/terminalgb-plugin-api/) — which has
 **no dependencies and does not depend on the emulator**. That direction is what lets the
 emulator depend on plugin crates (its frontend draws their panels) without a cycle, and it is
 why a plugin does not have to be in this repository.
@@ -833,7 +841,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | [the MCP server](docs/mcp.md) | driving the emulator from Claude Desktop / Claude Code: install steps, every flag, the measured numbers, the honest limitations |
 | [writing a plugin](docs/writing-a-plugin.md) | zero to a working plugin for someone who has never seen this codebase |
 | [the plugin contract](docs/plugins.md) | what a plugin may do, how you can tell one is attached, the trust model, the version boundary |
-| [`crates/gameboy-plugin-api`](crates/gameboy-plugin-api/README.md) | the dependency-free contract crate, and why it is separate |
+| [`crates/terminalgb-plugin-api`](crates/terminalgb-plugin-api/README.md) | the dependency-free contract crate, and why it is separate |
 | [`plugins/`](plugins/README.md) | the five that ship, each with its own README |
 | [`testharness/`](testharness/README.md) | the per-ROM scoreboard and how each verdict is obtained |
 
@@ -1013,7 +1021,7 @@ only our own agent loop: Claude Desktop, Claude Code, or anything else that spea
 
 ```bash
 cargo build --release --no-default-features --features mcp
-claude mcp add gameboy -- "$PWD/target/release/gameboy-mcp" --rom ~/roms/blue.gb
+claude mcp add terminalgb -- "$PWD/target/release/terminalgb-mcp" --rom ~/roms/blue.gb
 ```
 
 Ten tools, each answering a different question — `observe` (the structured game state: mode,
@@ -1472,7 +1480,9 @@ Bigger picture:
 
 ## Credits & lineage
 
-This repository ([**Alchemy86/gameboy**](https://github.com/Alchemy86/gameboy)) is a fork of
+The project is called **TerminalGB**; the repository it lives in is still
+[**Alchemy86/gameboy**](https://github.com/Alchemy86/gameboy), so every existing clone,
+remote, badge and permalink keeps working. This repository is a fork of
 **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by Raphael Amorim, which is
 itself closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**. It is licensed
 **[MPL-2.0](LICENSE)**, the same licence as upstream — under which the original authorship

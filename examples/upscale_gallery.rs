@@ -18,10 +18,10 @@
 //! The emulator is deterministic headless (fixed WRAM seed, no audio), so the
 //! same ROM + frame count always reproduces the same images.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::upscale::{Algorithm, Upscaler};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use terminalgb::gameboy::Gameboy;
+use terminalgb::upscale::{Algorithm, Upscaler};
 
 const W: usize = 160;
 const H: usize = 144;

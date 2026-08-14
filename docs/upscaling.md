@@ -99,11 +99,11 @@ pins that behaviour).
 
 ## Integration
 
-* **Core:** `gameboy::upscale::{Algorithm, Upscaler}`. `Upscaler::apply(&rgba,
+* **Core:** `terminalgb::upscale::{Algorithm, Upscaler}`. `Upscaler::apply(&rgba,
   160, 144)` returns the upscaled RGBA slice; factor 1 is a true no-op.
   Runtime-switchable, allocation-free after the first frame, pure `std` —
   builds unchanged on `wasm32` and under `ffi`.
-* **Terminal:** config keys in `~/.config/gameboy/config.toml` —
+* **Terminal:** config keys in `~/.config/terminalgb/config.toml` —
   `upscale = nearest|scale2x|mmpx|lcd` and `upscale_factor = N` (clamped to
   what the algorithm supports; `upscale = scale2x` alone picks ×2). Live keys
   in game: **`]`** cycles the algorithm, **`}`** cycles the factor (paired

@@ -13,9 +13,9 @@
 //!
 //! Run: `cargo test --release --test savestate`
 
-use gameboy::gameboy::Gameboy;
-use gameboy::savestate::{fnv1a64, StateError, FORMAT_VERSION, MAGIC};
 use std::path::PathBuf;
+use terminalgb::gameboy::Gameboy;
+use terminalgb::savestate::{fnv1a64, StateError, FORMAT_VERSION, MAGIC};
 
 // The vendored dmg-acid2 ROM is always present (unlike the gb-test-roms
 // submodule), so this test always has something real to run. It is a full PPU

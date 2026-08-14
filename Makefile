@@ -23,7 +23,7 @@ lint-audio:
 	cargo clippy --all-targets --features audio -- -D warnings
 
 # Same reasoning for the MCP server: it is behind the `mcp` feature, so plain
-# `make lint` never sees `src/mcp/` or `src/bin/gameboy-mcp.rs`. No system
+# `make lint` never sees `src/mcp/` or `src/bin/terminalgb-mcp.rs`. No system
 # library is needed for this one.
 lint-mcp:
 	cargo clippy --all-targets --features mcp -- -D warnings
@@ -41,7 +41,7 @@ docs-check:
 
 build-wasm:
 	cargo build --release --target wasm32-unknown-unknown
-	wasm-opt -O4 ./target/wasm32-unknown-unknown/release/gameboy.wasm -o gameboy.wasm && du -h gameboy.wasm
+	wasm-opt -O4 ./target/wasm32-unknown-unknown/release/terminalgb.wasm -o terminalgb.wasm && du -h terminalgb.wasm
 
 test:
 	cargo test --release
@@ -53,7 +53,7 @@ test:
 embed:
 	cargo clippy --release --no-default-features --all-targets -- -D warnings
 	cargo test --release --no-default-features --lib
-	cargo tree --no-default-features --edges normal   # blip_buf + first-party gameboy-plugin-api
+	cargo tree --no-default-features --edges normal   # blip_buf + first-party terminalgb-plugin-api
 	env -u HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u DISPLAY -u WAYLAND_DISPLAY \
 	  cargo run --release --no-default-features --example headless -- \
 	  third_party/dmg-acid2/dmg-acid2.gb 240
@@ -66,7 +66,7 @@ test-audio-perf:
 	cargo test --release --features audio --test audioperf
 
 # The MCP server, driven the way a client drives it: the harness spawns the real
-# `gameboy-mcp` binary and speaks JSON-RPC down its stdin. Needs only the
+# `terminalgb-mcp` binary and speaks JSON-RPC down its stdin. Needs only the
 # vendored dmg-acid2 ROM — no cartridge, no submodule, no network. See
 # testharness/mcp.rs and docs/mcp.md.
 test-mcp:
@@ -126,7 +126,7 @@ no-plugins:
 	cargo build --no-default-features --features tui,desktop
 	cargo test --no-default-features --lib
 	@if cargo tree --no-default-features --features tui,desktop --edges normal \
-	    | grep -E 'gameboy-plugin-(trainer|gen1-link|battle-control|agent|example-tracer)'; \
+	    | grep -E 'terminalgb-plugin-(trainer|gen1-link|battle-control|agent|example-tracer)'; \
 	  then echo "FAIL: a plugin crate is in the no-plugin dependency graph"; exit 1; \
 	  else echo "OK: no plugin crate in the dependency graph"; fi
 
@@ -157,11 +157,11 @@ web-build:
 ffi-build:
 # 	cargo install cbindgen
 	cargo build --release --no-default-features --features ffi
-	cbindgen . -o gameboy.h --lang c
+	cbindgen . -o terminalgb.h --lang c
 
 ffi-size:
-	du -h ./target/release/libgameboy.a
+	du -h ./target/release/libterminalgb.a
 
 ffi:
-	cp target/release/libgameboy.a examples/ffi-go/
+	cp target/release/libterminalgb.a examples/ffi-go/
 	cd examples/ffi-go && go build main_static.go

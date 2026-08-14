@@ -716,78 +716,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
 
 [[package]]
-name = "gameboy"
-version = "0.2.0"
-dependencies = [
- "base64",
- "blip_buf",
- "console_error_panic_hook",
- "cpal",
- "gameboy-plugin-agent",
- "gameboy-plugin-api",
- "gameboy-plugin-battle-control",
- "gameboy-plugin-example-tracer",
- "gameboy-plugin-gen1-link",
- "gameboy-plugin-trainer",
- "gl",
- "glutin",
- "icy_sixel",
- "image",
- "js-sys",
- "libc",
- "ratatui",
- "ratatui-image",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "gameboy-plugin-agent"
-version = "0.1.0"
-dependencies = [
- "gameboy-plugin-api",
- "gameboy-plugin-gen1-link",
- "gameboy-plugin-trainer",
-]
-
-[[package]]
-name = "gameboy-plugin-api"
-version = "0.1.0"
-
-[[package]]
-name = "gameboy-plugin-battle-control"
-version = "0.1.0"
-dependencies = [
- "gameboy",
- "gameboy-plugin-api",
- "gameboy-plugin-gen1-link",
- "gameboy-plugin-trainer",
-]
-
-[[package]]
-name = "gameboy-plugin-example-tracer"
-version = "0.1.0"
-dependencies = [
- "gameboy-plugin-api",
-]
-
-[[package]]
-name = "gameboy-plugin-gen1-link"
-version = "0.1.0"
-dependencies = [
- "gameboy-plugin-api",
- "gameboy-plugin-trainer",
-]
-
-[[package]]
-name = "gameboy-plugin-trainer"
-version = "0.1.0"
-dependencies = [
- "gameboy-plugin-api",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2146,6 +2074,78 @@ name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
+
+[[package]]
+name = "terminalgb"
+version = "0.2.0"
+dependencies = [
+ "base64",
+ "blip_buf",
+ "console_error_panic_hook",
+ "cpal",
+ "gl",
+ "glutin",
+ "icy_sixel",
+ "image",
+ "js-sys",
+ "libc",
+ "ratatui",
+ "ratatui-image",
+ "terminalgb-plugin-agent",
+ "terminalgb-plugin-api",
+ "terminalgb-plugin-battle-control",
+ "terminalgb-plugin-example-tracer",
+ "terminalgb-plugin-gen1-link",
+ "terminalgb-plugin-trainer",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "terminalgb-plugin-agent"
+version = "0.1.0"
+dependencies = [
+ "terminalgb-plugin-api",
+ "terminalgb-plugin-gen1-link",
+ "terminalgb-plugin-trainer",
+]
+
+[[package]]
+name = "terminalgb-plugin-api"
+version = "0.1.0"
+
+[[package]]
+name = "terminalgb-plugin-battle-control"
+version = "0.1.0"
+dependencies = [
+ "terminalgb",
+ "terminalgb-plugin-api",
+ "terminalgb-plugin-gen1-link",
+ "terminalgb-plugin-trainer",
+]
+
+[[package]]
+name = "terminalgb-plugin-example-tracer"
+version = "0.1.0"
+dependencies = [
+ "terminalgb-plugin-api",
+]
+
+[[package]]
+name = "terminalgb-plugin-gen1-link"
+version = "0.1.0"
+dependencies = [
+ "terminalgb-plugin-api",
+ "terminalgb-plugin-trainer",
+]
+
+[[package]]
+name = "terminalgb-plugin-trainer"
+version = "0.1.0"
+dependencies = [
+ "terminalgb-plugin-api",
+]
 
 [[package]]
 name = "thiserror"

@@ -1,7 +1,7 @@
 //! Test support for plugin authors. Behind the `testing` feature, off by
 //! default.
 //!
-//! A plugin crate depends on `gameboy-plugin-api`, not on this emulator, so its
+//! A plugin crate depends on `terminalgb-plugin-api`, not on this emulator, so its
 //! unit tests normally run against a fake [`MachineAccess`] — see
 //! `plugins/example-tracer`, which needs no emulator at all. But some plugins
 //! read *cartridge* structure: banked ROM tables, cartridge RAM, an MBC that
@@ -15,12 +15,12 @@
 //!
 //! ```toml
 //! [dev-dependencies]
-//! gameboy = { version = "0.2", default-features = false, features = ["testing"] }
+//! terminalgb = { version = "0.2", default-features = false, features = ["testing"] }
 //! ```
 //!
 //! ```no_run
-//! # use gameboy::testing::TestMachine;
-//! # use gameboy_plugin_api::{PluginHost, MachineAccess};
+//! # use terminalgb::testing::TestMachine;
+//! # use terminalgb_plugin_api::{PluginHost, MachineAccess};
 //! let mut machine = TestMachine::new(my_rom()).unwrap();
 //! let mut host = PluginHost::new();
 //! host.register(Box::new(MyPlugin::new())).unwrap();
@@ -30,9 +30,9 @@
 //! assert_eq!(host.statuses()[0].detail, "…");
 //! # fn my_rom() -> Vec<u8> { vec![] }
 //! # struct MyPlugin; impl MyPlugin { fn new() -> Self { MyPlugin } }
-//! # impl gameboy_plugin_api::Plugin for MyPlugin {
+//! # impl terminalgb_plugin_api::Plugin for MyPlugin {
 //! #   fn name(&self) -> &str { "" }
-//! #   fn capabilities(&self) -> gameboy_plugin_api::Capability { Default::default() }
+//! #   fn capabilities(&self) -> terminalgb_plugin_api::Capability { Default::default() }
 //! #   fn as_any(&self) -> &dyn std::any::Any { self }
 //! #   fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self } }
 //! ```
@@ -43,7 +43,7 @@
 //! offer, and that is worth discovering in a test rather than in a refactor.
 
 use crate::mmu::MemoryManagementUnit;
-use gameboy_plugin_api::MachineAccess;
+use terminalgb_plugin_api::MachineAccess;
 
 /// A real emulated machine, borrowable as a [`MachineAccess`].
 ///

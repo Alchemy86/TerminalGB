@@ -71,9 +71,9 @@ mod base {
 /// The cartridge image, with the accessors a tracker needs.
 ///
 /// Held by value (the frontend clones the ROM it already loaded) because
-/// [`gameboy_plugin_api::Machine`] has no banked-ROM read: `peek` only sees the
+/// [`terminalgb_plugin_api::Machine`] has no banked-ROM read: `peek` only sees the
 /// bank the game currently has mapped, and mapping another one would be a
-/// write. See the note at the top of [`gameboy_plugin_api`].
+/// write. See the note at the top of [`terminalgb_plugin_api`].
 pub struct RomTables {
     rom: Vec<u8>,
 }

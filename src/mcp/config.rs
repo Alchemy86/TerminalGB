@@ -95,7 +95,7 @@ pub struct Options {
     /// this repo's harnesses follow.
     pub battery: bool,
     /// Where numbered save-state slots live. Defaults to
-    /// `$XDG_STATE_HOME/gameboy/states`, the same place the terminal frontend
+    /// `$XDG_STATE_HOME/terminalgb/states`, the same place the terminal frontend
     /// uses, so a state saved here loads there.
     pub state_dir: Option<PathBuf>,
     /// Attach a host audio device. Off by default: see the module note.
@@ -149,10 +149,10 @@ impl Default for Options {
 /// The `--help` text. Kept here rather than in the binary so the flags and
 /// their explanations cannot drift from the struct they set.
 pub const USAGE: &str = "\
-gameboy-mcp — drive the Game Boy emulator from any MCP client
+terminalgb-mcp — drive the TerminalGB Game Boy emulator from any MCP client
 
 USAGE:
-    gameboy-mcp [OPTIONS]
+    terminalgb-mcp [OPTIONS]
 
 The server speaks the Model Context Protocol over stdin/stdout. Point a client
 at it; see docs/mcp.md for Claude Desktop and Claude Code config blocks.
@@ -168,7 +168,7 @@ CARTRIDGE
                           file, copy the ROM *and its .sav* somewhere scratch
                           and point --rom there instead.
     --state-dir <DIR>     Where save-state slots live
-                          (default: $XDG_STATE_HOME/gameboy/states)
+                          (default: $XDG_STATE_HOME/terminalgb/states)
 
 SPEED  (the defaults are the fast ones)
     --speed <S>           uncapped | realtime | <N>x   (default: uncapped)
@@ -225,7 +225,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Option<Options>,
                 return Ok(None);
             }
             "-V" | "--version" => {
-                println!("gameboy-mcp {}", env!("CARGO_PKG_VERSION"));
+                println!("terminalgb-mcp {}", env!("CARGO_PKG_VERSION"));
                 return Ok(None);
             }
             "--rom" => o.rom = Some(PathBuf::from(value!("--rom"))),

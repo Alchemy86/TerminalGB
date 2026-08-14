@@ -290,7 +290,7 @@ needs and two of which are already how `tools/conformance/` works:
 
 **A false positive found by running the suite this way.** Three Mooneye tests
 that **pass** — `acceptance/add_sp_e_timing`, `acceptance/ld_hl_sp_e_timing` and
-`acceptance/oam_dma_start` — print `gameboy: FAULT — the CPU is executing from
+`acceptance/oam_dma_start` — print `terminalgb: FAULT — the CPU is executing from
 0xfe00 … the game has crashed` to stderr. They execute code from OAM on purpose,
 and `Cpu::operation`'s runaway-PC heuristic treats any `PC` in `$FE00-$FF7F` as a
 crashed program. The consequence for a player is not cosmetic: `report_fault`
@@ -1939,7 +1939,7 @@ this branch has not measured.
   contradict each other, so **no single machine can pass both** — a runner that
   ignores the filename can score at most four of the five however accurate it
   is. The answer is the one the harness already uses for `@dmg`/`@cgb`: read
-  the machine off the ROM and run *that* machine. `gameboy::sound::CgbRevision`
+  the machine off the ROM and run *that* machine. `terminalgb::sound::CgbRevision`
   defaults to `CgbC` (C, D, E — the fixed silicon, and what every DMG does),
   `examples/samesuite.rs::revision_for` picks the revision from the filename
   suffix, and `$GB_CGB_REVISION` exposes the same knob to a frontend. The ROM

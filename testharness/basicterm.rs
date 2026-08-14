@@ -62,7 +62,7 @@ fn child_main() -> ! {
     // product's own and not a reimplementation of it. `run_terminal` prints a
     // setup error and exits **1** itself — which is precisely how the
     // regression manifested, so the parent can watch for it.
-    gameboy::gameboy::run_terminal(Some(std::path::PathBuf::from(rom)));
+    terminalgb::gameboy::run_terminal(Some(std::path::PathBuf::from(rom)));
     std::process::exit(0)
 }
 

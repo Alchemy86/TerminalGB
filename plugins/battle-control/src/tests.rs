@@ -3,7 +3,7 @@
 //! Everything here runs against a **synthetic cartridge**: a ROM image built in
 //! this file that contains the same tables and the same machine-code shapes a
 //! real Pokémon Blue does, and a header that passes
-//! [`gameboy_plugin_trainer::Game::detect`]. No commercial ROM is needed, and none is
+//! [`terminalgb_plugin_trainer::Game::detect`]. No commercial ROM is needed, and none is
 //! in this repository.
 //!
 //! What a synthetic ROM cannot prove is that the *engine* behaves — that a
@@ -11,10 +11,10 @@
 //! `examples/gen1_battle.rs`, which drives the real cartridge.
 
 use super::*;
-use gameboy::testing::TestMachine;
-use gameboy_plugin_api::MachineAccess;
-use gameboy_plugin_api::PluginHost;
-use gameboy_plugin_gen1_link::text;
+use terminalgb::testing::TestMachine;
+use terminalgb_plugin_api::MachineAccess;
+use terminalgb_plugin_api::PluginHost;
+use terminalgb_plugin_gen1_link::text;
 
 // ---------------------------------------------------------------------------
 // A cartridge to test against
@@ -500,8 +500,8 @@ fn an_injected_party_inherits_the_running_games_trainer_id() {
     let plan = p.build_plan(p.selected().unwrap()).unwrap();
     let mut mem = mmu();
     // wPlayerID is big-endian, like every other multi-byte Pokémon field.
-    mem.poke(gameboy_plugin_trainer::gen1::addr::PLAYER_ID, 0x12);
-    mem.poke(gameboy_plugin_trainer::gen1::addr::PLAYER_ID + 1, 0x34);
+    mem.poke(terminalgb_plugin_trainer::gen1::addr::PLAYER_ID, 0x12);
+    mem.poke(terminalgb_plugin_trainer::gen1::addr::PLAYER_ID + 1, 0x34);
     let blocks = {
         let mut m = Machine::new(&mut mem, p.capabilities());
         p.player_blocks(&plan, &mut m)

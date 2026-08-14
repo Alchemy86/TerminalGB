@@ -18,8 +18,8 @@
 //! forever once a viewer holds an `exclusive_caps` device — needs the kernel
 //! module and a second process. `src/screen/tui.rs` covers the FIFO and file
 //! paths headlessly.
-use gameboy::video::{Destination, VideoOut, VideoSpec};
 use std::time::{Duration, Instant};
+use terminalgb::video::{Destination, VideoOut, VideoSpec};
 
 fn main() {
     let dest = std::env::args()

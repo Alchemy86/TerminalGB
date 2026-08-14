@@ -37,7 +37,7 @@
 //!
 //! Nothing here knows what Claude is. A driver is *"here is the state, give me
 //! actions and commentary"* and nothing more — it never receives a
-//! [`Machine`](gameboy_plugin_api::Machine), so it cannot press a button, read
+//! [`Machine`](terminalgb_plugin_api::Machine), so it cannot press a button, read
 //! memory or write a save. The host parses its reply, clamps every number and
 //! performs the plan. That is what makes
 //! [`driver::ScriptedDriver`] a complete substitute for a model in tests: it
@@ -57,9 +57,9 @@ pub mod subprocess;
 use action::{Action, Executor, Limits, Outcome};
 use commentary::{Activity, Commentary};
 use driver::{Driver, DriverError, Poll};
-use gameboy_plugin_api::{Capability, Event, Machine, Plugin};
 use governor::{Escalation, Gate, Governor, Stuck, Usage};
 use observe::{classify, GameState, Gen1Observer, Screen};
+use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
 
 /// The name this plugin registers under.
 pub const NAME: &str = "agent";
@@ -304,7 +304,7 @@ impl AgentPlugin {
         if let Some(w) = self.watch {
             let map = machine.peek(observe::W_CUR_MAP).unwrap_or(w.map);
             let battling = machine
-                .peek(gameboy_plugin_trainer::gen1::addr::IS_IN_BATTLE)
+                .peek(terminalgb_plugin_trainer::gen1::addr::IS_IN_BATTLE)
                 .unwrap_or(0)
                 != 0;
             if battling && !w.in_battle {
@@ -421,16 +421,16 @@ impl AgentPlugin {
         // B twice backs out of nested menus; then a step away from whatever
         // was being walked into.
         let away = match game.position.facing {
-            Some(observe::Facing::Up) => gameboy_plugin_api::KeypadKey::Down,
-            Some(observe::Facing::Down) => gameboy_plugin_api::KeypadKey::Up,
-            Some(observe::Facing::Left) => gameboy_plugin_api::KeypadKey::Right,
-            _ => gameboy_plugin_api::KeypadKey::Left,
+            Some(observe::Facing::Up) => terminalgb_plugin_api::KeypadKey::Down,
+            Some(observe::Facing::Down) => terminalgb_plugin_api::KeypadKey::Up,
+            Some(observe::Facing::Left) => terminalgb_plugin_api::KeypadKey::Right,
+            _ => terminalgb_plugin_api::KeypadKey::Left,
         };
         self.exec.start(vec![
             Action::Press {
-                button: gameboy_plugin_api::KeypadKey::B,
+                button: terminalgb_plugin_api::KeypadKey::B,
                 times: 2,
-                hold: gameboy_plugin_api::DEFAULT_HOLD,
+                hold: terminalgb_plugin_api::DEFAULT_HOLD,
             },
             Action::Wait { frames: 30 },
             Action::Walk {
@@ -526,7 +526,7 @@ impl AgentPlugin {
         self.watch = Some(Watch {
             map: machine.peek(observe::W_CUR_MAP).unwrap_or(0),
             in_battle: machine
-                .peek(gameboy_plugin_trainer::gen1::addr::IS_IN_BATTLE)
+                .peek(terminalgb_plugin_trainer::gen1::addr::IS_IN_BATTLE)
                 .unwrap_or(0)
                 != 0,
         });
@@ -646,12 +646,12 @@ impl AgentPlugin {
                 w.end_obj();
             }
             w.end_arr();
-            if game.battle != gameboy_plugin_trainer::gen1::BattleKind::None {
+            if game.battle != terminalgb_plugin_trainer::gen1::BattleKind::None {
                 w.obj_field("battle");
                 w.str_field(
                     "kind",
                     match game.battle {
-                        gameboy_plugin_trainer::gen1::BattleKind::Wild => "wild",
+                        terminalgb_plugin_trainer::gen1::BattleKind::Wild => "wild",
                         _ => "trainer",
                     },
                 );
@@ -904,7 +904,7 @@ impl Plugin for AgentPlugin {
 
     fn on_attach(&mut self, machine: &mut Machine) {
         self.detected_title = machine.rom_title();
-        self.supported = gameboy_plugin_trainer::Game::detect(
+        self.supported = terminalgb_plugin_trainer::Game::detect(
             &self.detected_title,
             machine.global_checksum(),
         )

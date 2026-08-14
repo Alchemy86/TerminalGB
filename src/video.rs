@@ -707,7 +707,7 @@ pub fn descriptor(spec: &VideoSpec, geometry: Option<(u32, u32)>) -> String {
     let (w, h) = geometry.or(spec.size).unwrap_or((SRC_W, SRC_H));
     let title = spec.title.as_deref().map(clean_title).unwrap_or_default();
     format!(
-        "# gameboy video-out stream descriptor — written by src/video.rs\n\
+        "# terminalgb video-out stream descriptor — written by src/video.rs\n\
          # `rawvideo` carries no header, so these are the numbers a consumer\n\
          # must be given. Read by tools/virtual-camera.sh.\n\
          path={}\n\

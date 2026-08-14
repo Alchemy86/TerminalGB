@@ -84,7 +84,7 @@ accident of formatting.
 ## Tests
 
 ```bash
-cargo test -p gameboy-plugin-agent         # 50 unit tests
+cargo test -p terminalgb-plugin-agent         # 50 unit tests
 cargo test --release --test agent          # observation, executor, budget cap, breaker, stuck
 ```
 

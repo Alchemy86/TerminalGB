@@ -71,7 +71,7 @@ implemented *as* environment overrides, so there is no third precedence rule to 
 | frame size | `--video-size` | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `1280x720` |
 | picture source | `--video-source` | `GB_VIDEO_SOURCE` | `video_source` | `native` (default), `display` |
 | pacing | `--video-pace` | `GB_VIDEO_PACE` | `video_pace` | `realtime` (default), `emulated` |
-| recordings dir | — | — | `video_dir` | default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy` |
+| recordings dir | — | — | `video_dir` | default `$XDG_VIDEOS_DIR/terminalgb`, else `~/Videos/terminalgb` |
 | camera to verify | — | — | `video_device` | a `/dev/videoN` loopback node (label check only) |
 
 A `/dev/videoN` destination ignores `video_format` and `video_size`: a camera negotiates its own
@@ -239,7 +239,7 @@ is what a consumer receives.
 ### Setup: one command, once, and then never again
 
 ```toml
-# ~/.config/gameboy/config.toml
+# ~/.config/terminalgb/config.toml
 video_out = "/dev/video10"
 ```
 
@@ -637,7 +637,7 @@ This is an output feature, not an emulation fix, but two properties belong in th
 The still-image sibling, same frame source: **`c`** writes a PNG of what you are looking at
 (palette + upscaler), **`C`** the raw 160×144 framebuffer, `F2` is an alias for `c`. No prompt,
 no dialogue; a toast names the full path. Files land in `screenshot_dir`, defaulting to
-`$XDG_PICTURES_DIR/gameboy` (else `~/Pictures/gameboy`), named
+`$XDG_PICTURES_DIR/terminalgb` (else `~/Pictures/terminalgb`), named
 `DMG_ACID2-20260813-142530.png` — cartridge title plus a UTC timestamp, with a `-2`, `-3` …
 suffix so two presses in the same second never overwrite. The upscale factor used is the one
 **you selected**, not the transmission factor, which with `transmit_scale = auto` is

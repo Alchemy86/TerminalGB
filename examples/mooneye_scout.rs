@@ -20,10 +20,10 @@
 //!        "Debugging a Mooneye failure: read the screen"). A failing test names
 //!        the register it disagreed about, which the Fibonacci dump cannot.
 
-use gameboy::cpu::core::Cpu;
-use gameboy::mode::Model;
-use gameboy::sound::AudioPlayer;
 use std::path::{Path, PathBuf};
+use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
+use terminalgb::sound::AudioPlayer;
 
 #[path = "support/suite_baseline.rs"]
 mod suite_baseline;

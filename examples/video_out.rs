@@ -27,11 +27,11 @@
 //! or a demo. To stream a game you are *playing*, use the terminal frontend
 //! with `--video-out <fifo>` or the desktop frontend with `--video-out -`.
 
-use gameboy::gameboy::Gameboy;
-use gameboy::screen::config::Palette;
-use gameboy::screen::frame::FramePrep;
-use gameboy::upscale::{Algorithm, Upscaler};
-use gameboy::video::{
+use terminalgb::gameboy::Gameboy;
+use terminalgb::screen::config::Palette;
+use terminalgb::screen::frame::FramePrep;
+use terminalgb::upscale::{Algorithm, Upscaler};
+use terminalgb::video::{
     Destination, Pace, PixelFormat, Source, VideoOut, VideoSpec, FRAME_PERIOD,
 };
 
@@ -183,7 +183,7 @@ fn parse_args() -> Args {
             "--size" => {
                 let v = next(&mut i, "--size");
                 a.size = Some(
-                    gameboy::video::parse_size(&v)
+                    terminalgb::video::parse_size(&v)
                         .unwrap_or_else(|| die("--size wants WxH, e.g. 640x480")),
                 )
             }

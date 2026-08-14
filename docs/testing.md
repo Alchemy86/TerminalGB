@@ -500,7 +500,7 @@ anything else that has to be judged from the outside:
 * It allocates a **pty** and *is* the terminal on the far end. No window is opened and no
   synthetic input is sent to the desktop, so it runs in CI and cannot disturb whoever is
   sitting at the machine.
-* The child is the **real** `gameboy::run_terminal`, re-executed from the harness binary
+* The child is the **real** `terminalgb::run_terminal`, re-executed from the harness binary
   itself with an env flag — no separate artifact to build, no nested `cargo` (which would
   deadlock on the build lock). It gets its own session (`setsid` + `TIOCSCTTY`) so even its
   `/dev/tty` probes land on the pty.

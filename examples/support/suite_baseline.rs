@@ -65,10 +65,10 @@ pub fn take_baseline_arg(args: Vec<String>) -> (Option<PathBuf>, Vec<String>) {
 /// safely re-bless — the obvious command would silently rewrite it with the
 /// other engine's numbers. See `docs/mealybug.md` §7.
 fn engine_note() -> String {
-    let mode = gameboy::ppu::RenderMode::from_env();
+    let mode = terminalgb::ppu::RenderMode::from_env();
     let target = match mode {
-        gameboy::ppu::RenderMode::Accurate => "make test-external-accurate",
-        gameboy::ppu::RenderMode::Fast => "make test-external",
+        terminalgb::ppu::RenderMode::Accurate => "make test-external-accurate",
+        terminalgb::ppu::RenderMode::Fast => "make test-external",
     };
     format!(
         "# SCORED WITH THE `{name}` PPU ENGINE (GB_PPU={name}).\n# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 {target}\n# The other engine produces different numbers for the same ROMs — see\n# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this\n# file with the wrong machine's results.\n#\n",

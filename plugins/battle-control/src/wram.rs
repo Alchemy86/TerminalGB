@@ -10,7 +10,7 @@
 //!
 //! 1. **The disassembly.** [`pret/pokered`](https://github.com/pret/pokered)'s
 //!    `ram/wram.asm` laid out from a symbol this project has already verified
-//!    (see [`gameboy_plugin_trainer::gen1`], which was produced by building the
+//!    (see [`terminalgb_plugin_trainer::gen1`], which was produced by building the
 //!    disassembly at its pinned RGBDS and matching `roms.sha1`). Each walk below
 //!    *ends* on a second already-verified symbol, so the walk checks itself.
 //! 2. **The cartridge.** [`verify`] finds a short, distinctive run of machine
@@ -21,12 +21,12 @@
 //!
 //! Derivation 2 is the one that survives contact with a ROM nobody has checked:
 //! it needs no symbol file, no build, and no trust in this file's arithmetic.
-//! It is the same idea [`gameboy_plugin_gen1_link::romdata`] uses for *tables*,
+//! It is the same idea [`terminalgb_plugin_gen1_link::romdata`] uses for *tables*,
 //! applied to *addresses*.
 //!
 //! # The walks
 //!
-//! Starting from `wIsInBattle` `$D057`, verified in [`gameboy_plugin_trainer::gen1`]:
+//! Starting from `wIsInBattle` `$D057`, verified in [`terminalgb_plugin_trainer::gen1`]:
 //!
 //! ```text
 //! wIsInBattle           $D057  db                      (verified)
@@ -66,7 +66,7 @@
 //! assumed. `$D89C` and `$D12B` are *also* read out of the cartridge by
 //! [`verify`], so those two are proved twice over.
 
-use gameboy_plugin_api::Machine;
+use terminalgb_plugin_api::Machine;
 
 /// Addresses. All of these live in WRAM bank 0 or in HRAM, so a plain
 /// [`Machine::peek`] reads them correctly whatever the game has banked.
@@ -264,7 +264,7 @@ pub fn verify(rom: &[u8]) -> Result<(), VerifyError> {
     //     ld [wCurPartySpecies], a  EA lo hi
     //     ld [wEnemyMonSpecies2], a EA lo hi
     //     jr InitBattleCommon       18 ..
-    // Anchored on `wCurOpponent`, which `gameboy_plugin_trainer::gen1` already
+    // Anchored on `wCurOpponent`, which `terminalgb_plugin_trainer::gen1` already
     // verified, so this signature *starts* from known ground and reads two
     // unknowns out of it.
     let lo = (addr::CUR_OPPONENT & 0xFF) as u8;
@@ -420,7 +420,7 @@ pub fn is_writable(address: u16) -> bool {
 pub fn read_screen(machine: &mut Machine) -> String {
     let mut tiles = [0u8; addr::TILE_MAP_WIDTH * addr::TILE_MAP_HEIGHT];
     machine.peek_into(addr::TILE_MAP, &mut tiles);
-    gameboy_plugin_trainer::text::decode_screen(&tiles)
+    terminalgb_plugin_trainer::text::decode_screen(&tiles)
 }
 
 #[cfg(test)]
@@ -433,7 +433,7 @@ mod tests {
     /// cheapest possible check that neither walk slipped.
     #[test]
     fn the_shared_addresses_agree_with_the_trainer_views_table() {
-        use gameboy_plugin_trainer::gen1::addr as t;
+        use terminalgb_plugin_trainer::gen1::addr as t;
         assert_eq!(addr::IS_IN_BATTLE, t::IS_IN_BATTLE);
         assert_eq!(addr::CUR_OPPONENT, t::CUR_OPPONENT);
         assert_eq!(addr::BATTLE_TYPE, t::BATTLE_TYPE);
@@ -448,11 +448,11 @@ mod tests {
         // And the struct sizes the two modules use for the same structures.
         assert_eq!(
             PARTY_STRUCT_LENGTH as u16,
-            gameboy_plugin_trainer::gen1::PARTY_MON_SIZE
+            terminalgb_plugin_trainer::gen1::PARTY_MON_SIZE
         );
         assert_eq!(
             NAME_LENGTH as u16,
-            gameboy_plugin_trainer::gen1::NAME_LENGTH
+            terminalgb_plugin_trainer::gen1::NAME_LENGTH
         );
     }
 
