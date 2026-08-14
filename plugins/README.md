@@ -6,15 +6,23 @@ emulator builds and runs with all of it deleted.
 **Writing one: [`docs/writing-a-plugin.md`](../docs/writing-a-plugin.md).** Start by copying
 [`example-tracer/`](example-tracer/).
 
-| directory | crate | what it does | capabilities |
-|---|---|---|---|
-| [`example-tracer/`](example-tracer/) | `gameboy-plugin-example-tracer` | watches one address and reports what changes it — **the one to copy** | observe + read |
-| [`trainer/`](trainer/) | `gameboy-plugin-trainer` | live Pokémon R/B party, badges, catch chance, sprites | observe + read |
-| [`gen1-link/`](gen1-link/) | `gameboy-plugin-gen1-link` | a virtual link-cable partner: real trades and Colosseum battles | serial + read |
-| [`battle-control/`](battle-control/) | `gameboy-plugin-battle-control` | start any Gen 1 battle from a preset | observe + read + write + input |
-| [`agent/`](agent/) | `gameboy-plugin-agent` | an AI that plays the game, under a budget | observe + read + input |
+Each has its own README — what it does, its history, how it is tested, and the traps it cost
+someone to find.
 
-The contract they all implement is [`crates/gameboy-plugin-api`](../crates/gameboy-plugin-api),
+| directory | you type | feature | what it does | capabilities |
+|---|---|---|---|---|
+| [`example-tracer/`](example-tracer/README.md) | `example-tracer` | `plugin-example-tracer` | watches one address and reports what changes it — **the one to copy** | observe + read |
+| [`trainer/`](trainer/README.md) | `trainer` | `plugin-trainer` | live Pokémon R/B party, badges, catch chance, sprites | observe + read |
+| [`gen1-link/`](gen1-link/README.md) | `gen1-link` | `plugin-gen1-link` | a virtual link-cable partner: real trades and Colosseum battles | observe + read + link |
+| [`battle-control/`](battle-control/README.md) | `gen1-battle` | `plugin-battle-control` | start any Gen 1 battle from a preset, and script it | observe + read + write + input |
+| [`agent/`](agent/README.md) | `agent` | `plugin-agent` | an AI that plays the game, under a budget | observe + read + input |
+
+Note the middle column: **`battle-control` is the crate, `gen1-battle` is the name you put in
+`plugins = …`.** The crate is named for what it does to any game; the plugin is named for the
+game it does it to.
+
+The contract they all implement is
+[`crates/gameboy-plugin-api`](../crates/gameboy-plugin-api/README.md),
 which has **no dependencies** and does not depend on the emulator. That direction is what lets
 the emulator depend on plugin crates (its frontend draws their panels) without a dependency
 cycle.

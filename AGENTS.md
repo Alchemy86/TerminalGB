@@ -3332,3 +3332,41 @@ it. That is now a real, CI-enforced build; it did not compile before.
   transition*, so a driver must `step` for the screen to settle after one. Rediscovering this
   as "A does not register" costs an hour — it is real emulation, proved by driving the same
   sequence through the library directly.
+## The README's screenshots — where they come from, and the licence line
+
+- **`docs/shots/` holds the README's own pictures, and they are ours to show.** Every one is
+  either the emulator's own chrome or the output of a ROM we may redistribute or run freely:
+  the MIT dmg-acid2 ROM vendored in `third_party/`, and Blargg's `cpu_instrs` from the `tests/`
+  submodule. **Never commit a screenshot of a commercial game** — that is the same
+  licence-boundary rule as the rest of this file, applied to pixels. The narrow exception
+  already in the tree is `docs/link-trade/`, argued for explicitly in the plugin section above
+  ("our interface, doing something, with the game incidental"); do not widen it casually.
+- **The recipe that produced them** (the screenshot mechanics in the frame-transport section
+  above are the same, this is the README-specific application):
+  ```bash
+  env -u WAYLAND_DISPLAY DISPLAY=:0 wezterm-gui --config enable_wayland=false \
+      --config initial_cols=150 --config initial_rows=45 --config font_size=13 \
+      --config enable_kitty_keyboard=true start -- ./target/release/examples/terminal <rom>
+  WID=$(DISPLAY=:0 xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1)
+  DISPLAY=:0 import -window $WID shot.png
+  magick shot.png -resize 1600x -strip -colors 128 PNG8:docs/shots/<name>.png
+  ```
+  Drive keys with `wezterm cli send-text --no-paste --pane-id 0` against **that instance's**
+  socket (`WEZTERM_UNIX_SOCKET=/run/user/1000/wezterm/gui-sock-<gui-pid>`). Point
+  `XDG_CONFIG_HOME`/`XDG_STATE_HOME`/`XDG_PICTURES_DIR` at a scratch dir so a capture run
+  cannot touch the captain's config, recents or Pictures. **PNG8 with 128 colours is
+  free**: a terminal screenshot quantises to a quarter of the size with no visible loss
+  (382 KB → 105 KB), and a README that costs a megabyte to open is a README nobody scrolls.
+- **`pkill -f '<pattern>'` matches your own shell's command line** and will kill the pipeline
+  you are running it from — the same trap as `pgrep -f` recorded above. Kill by the PID you
+  captured at launch.
+
+## The audio-cost figure: quote the measurement, not the folklore
+
+"Audio costs ~8 ms/frame" and "17.9 ms/frame with sound" are **stale** and keep resurfacing in
+briefs. They describe the blocking cpal player fixed in `8b4207d`. Measured on this box today,
+with a real device attached: **0.256 ms/frame** (`make test-audio-perf`) and **0.267 ms/frame**
+(`cargo run --release --features audio,libc --example audio_frame_cost -- <rom>`), against
+**0.219** for the same run with no audio at all. The single biggest performance lever in the
+emulator today is the **PPU engine** (0.219 → 0.467, 2.13x), not audio. Re-measure before
+repeating either number.

@@ -7,29 +7,32 @@
 
 **A Game Boy / Game Boy Color emulator written in Rust — runs on the desktop, in your terminal, and in the browser via WebAssembly.**
 
-<img width="2152" height="1822" alt="image" src="https://github.com/user-attachments/assets/d7af5464-22c9-4a36-acf2-cf1e8c7b9956" />
+<p align="center">
+  <img src="docs/shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2: the 160x144 picture scaled to fill the pane, with the Status panel reporting ROM, transport, input mode, palette, PPU engine, speed, video, audio and volume, and a Controls panel beside it" width="900" />
+</p>
 
-
+<p align="center"><em>The terminal frontend running
+<a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> — 0 of 23,040 pixels differ from
+the author's reference image. Every screenshot in this README was taken from this emulator, with
+its own <code>c</code> key or a capture of its own window, using only test ROMs we are free to
+show.</em></p>
 
 > This project is a fork of **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by
 > Raphael Amorim, itself closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**.
 > It stands on their work — see **[Credits & lineage](#credits--lineage)**.
 
-<p align="center">
-  <img src="resources/demo-pokemon.gif" alt="Pokémon running in the browser build" width="480" />
-</p>
-
-| Web (WASM) | Desktop | Terminal |
+| Blargg `cpu_instrs`, in the terminal, at `MAX` speed | The desktop window | What the `c` key writes |
 |:---:|:---:|:---:|
-| ![Web](resources/demo-web.png) | ![Desktop](resources/demo-desktop-1.png) | ![Terminal](resources/demo-terminal-1.png) |
+| <img src="docs/shots/tui-blargg-cpu-instrs.png" alt="Blargg cpu_instrs reporting 01:ok through 11:ok and Passed all tests, with the status panel showing 732 emulated frames per second" width="420" /> | <img src="docs/shots/desktop-acid2.png" alt="The OpenGL desktop window showing dmg-acid2" width="200" /> | <img src="docs/shots/screenshot-key-acid2.png" alt="A 160 by 144 PNG of dmg-acid2, written by pressing c in the terminal frontend" width="160" /> |
+| `Passed all tests`, 11/11, **732 emulated fps** | `cargo run --example desktop` | a PNG, straight from the running emulator |
 
-> ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The CPU
-> passes Blargg's `cpu_instrs`, `instr_timing`, `mem_timing` and `halt_bug`; a few
-> edge-cases (parts of CGB sound, variable mode-3 timing) remain known-inaccurate as
-> documented non-goals — see
-> **[Status](#status)**, the [test scoreboard](testharness/README.md), and the honest
-> per-component notes. This project is a study of emulation, not a piracy tool: it ships no
-> ROMs and no BIOS.
+> ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The whole
+> Blargg suite passes on both consoles (46 of 47 ROM/console rows), dmg-acid2 is pixel-exact,
+> and the community timing suites are scored in CI on every push — honestly, including the
+> reds. Today: **Mooneye 86/103, SameSuite 68/76, Mealybug 3/79.** See
+> **[Status & accuracy](#status--accuracy)** for the measured table, the
+> [test scoreboard](testharness/README.md), and the honest per-component notes. This project
+> is a study of emulation, not a piracy tool: it ships no ROMs and no BIOS.
 
 ---
 
@@ -37,6 +40,21 @@
 
 Requires **Rust 1.83+** (pinned via [`rust-toolchain`](rust-toolchain)). Bring your own
 `.gb`/`.gbc` ROM.
+
+```bash
+git clone https://github.com/Alchemy86/gameboy
+cd gameboy
+cargo run --release --example terminal -- third_party/dmg-acid2/dmg-acid2.gb
+```
+
+That is the whole set-up, and it works from a clean clone: **no system libraries, no
+`apt install`, no submodule.** The ROM in that command is the MIT-licensed
+[dmg-acid2](third_party/dmg-acid2/) PPU test that ships with the repository — the one thing
+here you can run without bringing your own cartridge, and what the pictures above are. Swap it
+for your own `.gb`/`.gbc` when you have one.
+
+The `tests/` submodule carries **Blargg's test ROMs** and is needed only by the accuracy
+harness: `git clone --recurse-submodules`, or `git submodule update --init` afterwards.
 
 > **Audio is opt-in.** By default the emulator builds and runs **without** any system
 > audio library — a fresh `cargo build`/`cargo test`/`cargo run` needs no extra packages.
@@ -80,9 +98,10 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > **kitty keyboard protocol** you get exact key press *and* release, and without it a
 > shorter auto-repeat-driven hold (the `Input` row in the status panel says which you got,
 > and one line at startup says what is degraded and how to fix it). Terminals with both:
-> kitty, WezTerm (needs `enable_kitty_keyboard = true` in its config), Ghostty, foot. See
-> [Input modes](#input-modes) below and
-> ([`src/screen/tui.rs`](src/screen/tui.rs)). It opens sized to the terminal, auto-selects the
+> kitty, WezTerm (needs `enable_kitty_keyboard = true` in its config), Ghostty, foot — the
+> full table is in
+> [**Which terminals give you what**](#which-terminals-give-you-what), and the keyboard half in
+> [Input modes](#input-modes) below. It opens sized to the terminal, auto-selects the
 > sharpest graphics protocol the terminal advertises, and **auto-fits the picture to the pane**
 > (it re-fits on resize — there is no manual zoom key). Launch with no ROM path and it opens an
 > in-app **ROM picker**. Press **`?`** in-game for the full, always-current key list; the
@@ -101,9 +120,8 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > accuracy suites measure, so turning it down to quieten the room would change what the
 > emulator models. The machine is bit-identical at every setting.
 >
-> *(The terminal frontend is under active development — the render crew is adding faster
-> rendering and a machine-readable telemetry stream — so treat the exact keys as the `?`
-> overlay reports them.)*
+> *(The terminal frontend moves faster than this README. The `?` overlay is generated from the
+> live key handling, so treat it as the authority for the exact keys.)*
 >
 > **HiDPI displays:** on a *scaled* Wayland session some terminals (e.g. WezTerm) report their
 > cell size in logical pixels but draw inline images in physical pixels, so the picture comes
@@ -129,6 +147,15 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > Config problems are reported rather than ignored: an unknown key, or a value that cannot be
 > applied, prints a warning at startup and shows in the picker footer and the `?` overlay.
 > Values may be bare, `"double-quoted"` or `'single-quoted'`.
+
+<p align="center">
+  <img src="docs/shots/tui-help.png" alt="The ? help overlay listing every picker and in-game key, drawn over the running game without covering the status panel" width="820" />
+</p>
+
+<p align="center"><em>Press <code>?</code>. The overlay is generated from the live key
+handling, so it cannot go stale the way a README table can — and it is drawn in its own
+rectangle, never on top of the picture, because a terminal image owns whole cells and text
+there replaces the image rather than covering it.</em></p>
 
 #### Input modes
 
@@ -235,7 +262,88 @@ npm run serve     # dev server; open the printed localhost URL and choose a ROM
 
 To produce an optimized bundle: `make build-wasm` (requires
 [`wasm-opt`](https://github.com/WebAssembly/binaryen)). The web build has **no audio yet** —
-see [Status](#status).
+see [Status & accuracy](#status--accuracy).
+
+---
+
+## 🧱 Build modes — what you can compile, and why you would
+
+Everything is a cargo feature, and the honest summary is: **the default build is the one you
+want to play on, and every other mode exists to take something away.** Each command below is
+copy-pasteable and was run to produce this table.
+
+| I want… | Command | What you get |
+|---|---|---|
+| **to play a game** | `cargo build --release` | Both frontends + the four standard plugins. Needs no system libraries. |
+| **sound** | `cargo build --release --features audio` | Adds `cpal`. On Linux this is the one mode that needs a package: `libasound2-dev` / `alsa-lib-devel`. |
+| **the terminal only** | `cargo build --release --no-default-features --features tui` | Drops GL, `glutin` and the window system. Right for a server or an SSH session. |
+| **the desktop only** | `cargo build --release --no-default-features --features desktop` | Drops `ratatui`, the terminal image protocols and the plugins' panels. |
+| **the emulator with no plugins** | `cargo build --release --no-default-features --features tui,desktop` | Both frontends, zero plugin crates in the graph — [proved](#-plugins-other-people-can-write), not asserted, by `make no-plugins`. |
+| **one plugin** | `cargo build --release --features plugin-trainer` | Pick and choose; the names are in the table below. |
+| **the core, for embedding or an agent** | `cargo build --release --no-default-features` | **One** third-party crate (`blip_buf`). No window, no terminal, no audio device, no image codecs, no `$HOME`. See [Embedding the core](#-embedding-the-core). |
+| **a headless run right now** | `cargo run --release --no-default-features --example headless -- third_party/dmg-acid2/dmg-acid2.gb 240` | Runs a cartridge, round-trips a save state and prints the frame as ASCII. |
+| **the browser build** | `cargo build --release --target wasm32-unknown-unknown` | Audio is compiled out on `wasm32`; `make build-wasm` also runs `wasm-opt`. |
+| **a C / Go static library** | `make ffi-build` | `--no-default-features --features ffi` + `cbindgen` → `libgameboy.a` and `gameboy.h`. |
+
+### The features
+
+| feature | in `default` | pulls in | needs at run time |
+|---|:---:|---|---|
+| *(none)* | | `blip_buf` | nothing |
+| `desktop` | ✅ | `glutin`, `gl`, `libc`, `image` | a display server (X11 / Wayland / Windows / macOS) |
+| `tui` | ✅ | `ratatui`, `ratatui-image`, `icy_sixel`, `image`, `libc` | a terminal — [any terminal](#which-terminals-give-you-what); it degrades rather than refusing |
+| `audio` | | `cpal` | a sound device (ALSA **dev headers** to *build* on Linux) |
+| `standard-plugins` | ✅ | the four plugin crates below | nothing; each still has to be named to attach |
+| `plugin-trainer` | ✅ | `gameboy-plugin-trainer` | a Pokémon R/B cartridge, or it declines |
+| `plugin-gen1-link` | ✅ | + `gameboy-plugin-gen1-link` | as above |
+| `plugin-battle-control` | ✅ | + `gameboy-plugin-battle-control` | as above |
+| `plugin-agent` | ✅ | + `gameboy-plugin-agent` | an `agent_command` driver, or it declines |
+| `plugin-example-tracer` | | `gameboy-plugin-example-tracer` | nothing — **[the one to copy](#-plugins-other-people-can-write)** |
+| `testing` | | — | — (`gameboy::testing::TestMachine`, for plugin authors' tests) |
+| `ffi` | | — | — (drops the Rust frontends; exposes the C ABI) |
+
+`plugin-*` features are additive and imply the plugins they build on
+(`plugin-battle-control` needs `plugin-gen1-link`, which needs `plugin-trainer`) —
+[`Cargo.toml`](Cargo.toml) is the authority.
+
+### The two run-time switches worth knowing
+
+Neither is a compile flag; both are read once at start-up, and a typo warns on stderr and is
+**ignored** rather than silently changing machine.
+
+```bash
+GB_PPU=accurate   cargo run --release --example terminal -- game.gb   # the per-dot pixel FIFO
+GB_MODEL=dmg      cargo run --release --example terminal -- game.gbc  # force an original Game Boy
+```
+
+`GB_PPU` picks the [rendering engine](#two-ppu-engines--pick-your-tradeoff); `GB_MODEL` picks
+the [console](#console-model--dmg-or-game-boy-color). Both also have a config key (`ppu`,
+and `GB_MODEL` only overrides `Model::Auto`).
+
+### What audio actually costs — measured, not remembered
+
+Audio *used* to be the single biggest performance lever in this project, because the cpal
+player **waited** inside `Cpu::do_cycle` to make the sound card the master clock. That cost
+17.9 ms of a 16.74 ms frame — about 5 displayed frames a second — and it is fixed
+([`docs/audio.md`](docs/audio.md) §4c). Measured today on this machine, with a real device
+attached:
+
+| build | emulated frame cost | budget |
+|---|---:|---:|
+| `--no-default-features`, fast PPU | **0.219 ms** | 16.743 ms |
+| `--features audio`, real device | **0.267 ms** | 16.743 ms |
+| `--no-default-features`, `GB_PPU=accurate` | **0.467 ms** | 16.743 ms |
+
+So **audio is nearly free and the PPU engine is the real lever** (2.13×, and still 35× real
+time). Reproduce these with `cargo test --release --test ppuengines` and
+`cargo run --release --features audio,libc --example audio_frame_cost -- <rom>`; CI holds the
+audio number under 4 ms/frame on every push (`make test-audio-perf`).
+
+### Not yet a build mode
+
+There is **no MCP-server feature in this tree today** — `Cargo.toml` has no such feature and
+nothing under `src/` implements one. A crew is working on it; when it lands it belongs in the
+table above.
 
 ---
 
@@ -255,19 +363,18 @@ That is the **whole** dependency tree at that feature set:
 ```text
 $ cargo tree --no-default-features --edges normal
 gameboy v0.2.0
-└── blip_buf v0.1.5
+├── blip_buf v0.1.5
+└── gameboy-plugin-api v0.1.0 (crates/gameboy-plugin-api)
 ```
 
 One crate — `blip_buf`, the APU's band-limited resampler. For comparison, the default
-build (both frontends) resolves **193** crates. Everything else is opt-in:
+build (both frontends, four plugins) resolves **193** crates. Everything else is opt-in —
+the full feature list is in [Build modes](#-build-modes--what-you-can-compile-and-why-you-would).
 
-| feature   | default | pulls in                                     | needs at run time                    |
-|-----------|:-------:|----------------------------------------------|--------------------------------------|
-| *(none)*  |         | `blip_buf`                                   | nothing                              |
-| `desktop` |   ✅    | `glutin`, `gl`, `libc`, `image`               | a display server (X11/Wayland/Win/macOS) |
-| `tui`     |   ✅    | `ratatui`, `ratatui-image`, `image`, `libc`   | a terminal with the kitty keyboard protocol |
-| `audio`   |         | `cpal`                                        | a sound device (ALSA dev headers to *build* on Linux) |
-| `ffi`     |         | —                                             | — (drops the Rust frontends; exposes the C ABI) |
+`gameboy-plugin-api` resolves beside `blip_buf` and is not a loosening of that claim: it is
+first-party, in this repository, has no dependencies of its own, and is the contract plugin
+crates depend on **instead of** depending on the emulator. An embedder gains no third-party
+code from it. CI enforces the whole paragraph.
 
 ### The API
 
@@ -537,6 +644,120 @@ came from understanding a piece of the engine and asking what else touches it.
 
 ---
 
+## Two PPU engines — pick your tradeoff
+
+There are **two complete rendering engines** in `src/gpu/`, and you choose between them at
+launch. They are not a quality or appearance choice — palette, upscaler and every other visual
+enhancement live above the PPU in `src/screen/` and are byte-identical either way. The only
+axis is **accuracy against cost.**
+
+| | `fast` (default) | `accurate` |
+|---|---|---|
+| **What it is** | draws a whole scanline in one go at the mode 3 → 0 transition; mode 3 has a fixed 172-dot length | the real pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard, and a mode 3 length that falls out of the machine |
+| **A mid-scanline register write** | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read | takes effect exactly where hardware puts it |
+| **Cost** | **0.219 ms/frame** (76.5× real time) | **0.467 ms/frame** (35.8× real time) — **2.13×** |
+| **dmg-acid2 vs the author's reference** | 0 / 23,040 pixels differ | **0 / 23,040** |
+| **Mooneye `acceptance`** | 58/75 | 58/75 — *not the same 58* |
+| **Mealybug Tearoom rows** | 3/79 | 3/79 |
+| **Well-behaved games** | identical output, proved frame-for-frame | identical output |
+
+<p align="center">
+  <img src="docs/shots/tui-status-accurate.png" alt="The terminal Status panel with the PPU row reading accurate" width="240" />
+</p>
+
+<p align="center"><em>The <code>PPU</code> row says which engine is live. A run-time choice
+nobody can see is one nobody can debug.</em></p>
+
+```bash
+GB_PPU=accurate cargo run --release --example terminal -- game.gb   # per-dot pixel FIFO
+GB_PPU=fast     cargo run --release --example terminal -- game.gb   # the default
+```
+
+…or `ppu = accurate` in `config.toml` (the environment variable wins for one run), or
+`Gpu::set_render_mode` if you are embedding.
+
+**Fast is the default deliberately.** For every game that does not write PPU registers
+mid-scanline — which is almost all of them — the two produce byte-identical frames, and fast
+does it at half the cost. Reach for `accurate` when a game has a mid-scanline effect (a split
+status bar, a wobble, a parallax band) that looks wrong, or when you are working on the PPU.
+
+**And the honest part:** `accurate` is *structurally* right and *not yet calibrated*. It wins
+`ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS`; on Mealybug it
+brings the closest tests one to two orders of magnitude nearer (`m3_scx_high_5_bits` 9,766 →
+141 differing pixels) while making the aggregate slightly *worse* (1,212,282 → 1,268,382
+pixels over all 79 rows), because ROMs that synchronise against mode 3 fare worse with a
+variable length that is wrong than with a constant one that is honestly wrong. Both halves are
+informative and neither should be quoted alone. Both engines have **their own baseline** and
+both are scored in CI on every push, so neither can drift unnoticed.
+
+📖 **[The measurement, in full → `docs/mealybug.md` §7](docs/mealybug.md)** · the engine's own
+notes in [`docs/components/ppu.md`](docs/components/ppu.md) · the two held against each other
+in [`testharness/ppuengines.rs`](testharness/ppuengines.rs)
+(`cargo test --release --test ppuengines`).
+
+---
+
+## 🔌 Plugins other people can write
+
+A plugin is an **in-process Rust crate** that gets a controlled view of the running machine.
+Five ship in this repository, in [`plugins/`](plugins/), and the emulator builds and runs with
+**all of them deleted** — that is checked by `make no-plugins`, which greps the dependency
+graph, not by anyone's good intentions.
+
+Each has **its own README** — what it does, its history, how it is tested, and the traps it
+cost someone to find.
+
+| directory | you type | what it does | capabilities |
+|---|---|---|---|
+| **[`example-tracer/`](plugins/example-tracer/README.md)** | `example-tracer` | watches one address and reports what changes it — **[the one to copy](docs/writing-a-plugin.md)** | observe + read |
+| [`trainer/`](plugins/trainer/README.md) | `trainer` | live Pokémon R/B party, badges, sprites, shiny-if-traded verdicts | observe + read |
+| [`gen1-link/`](plugins/gen1-link/README.md) | `gen1-link` | a virtual link-cable partner: [real trades](#-trade-a-pokémon-in-over-the-link-cable) and Colosseum battles | observe + read + link |
+| [`battle-control/`](plugins/battle-control/README.md) | `gen1-battle` | [start any Gen 1 battle](#-start-any-gen-1-battle--and-film-it) from a preset | observe + read + write + input |
+| [`agent/`](plugins/agent/README.md) | `agent` | [an AI that plays the game](#-claude-plays-pokémon), under a budget | observe + read + input |
+
+### Installing one is two lines
+
+There is no plugin directory to drop a `.so` into, and no script runtime — deliberately, because
+neither works on `wasm32`, where there are no sockets and no `dlopen`. A plugin is a **cargo
+dependency**, so installing a third party's is exactly what installing one of ours is:
+
+```toml
+# Cargo.toml
+[dependencies]
+some-cool-plugin = { git = "https://github.com/someone/some-cool-plugin" }
+```
+
+```bash
+cargo build --release --features plugin-example-tracer
+GB_PLUGINS=example-tracer cargo run --release --example terminal -- game.gb
+```
+
+**Nothing loads implicitly.** A plugin attaches only when you name it in `GB_PLUGINS` or the
+`plugins` config key, and anything attached gets its own row in the Status panel — `!` if it
+may write memory, `!!` if it has. `example-tracer` is deliberately left out of the default
+bundle: it is the crate a stranger copies, so it is also the end-to-end proof that the
+documented install path works for a plugin nothing in the emulator special-cases.
+
+### The contract is enforced, not advised
+
+A plugin declares its capabilities — `OBSERVE`, `READ_MEMORY`, `WRITE_MEMORY`,
+`CONTROL_INPUT`, `SERIAL_LINK` — and the **host** refuses the rest: `Machine::peek` returns `None` and
+`Machine::poke` returns `false` for anything undeclared. The trainer view's read-only
+guarantee is that refusal, not a borrow checker accident. At most one plugin may hold
+`SERIAL_LINK`; a cable has two ends.
+
+Plugin crates depend on [`crates/gameboy-plugin-api`](crates/gameboy-plugin-api/) — which has
+**no dependencies and does not depend on the emulator**. That direction is what lets the
+emulator depend on plugin crates (its frontend draws their panels) without a cycle, and it is
+why a plugin does not have to be in this repository.
+
+📖 **[Zero to a working plugin, for someone who has never seen this codebase →
+`docs/writing-a-plugin.md`](docs/writing-a-plugin.md)** · the full contract, the trust model
+and the version boundary in [`docs/plugins.md`](docs/plugins.md) · the directory's own
+[`plugins/README.md`](plugins/README.md).
+
+---
+
 ## What's inside — the components
 
 The core is a library (`src/`) that any frontend drives through a tiny surface:
@@ -550,7 +771,7 @@ behaviours phrased as future tests.**
 | Component | Source | What it does | Deep dive |
 |---|---|---|---|
 | **CPU** | [`src/cpu/`](src/cpu) | Sharp **LR35902 (SM83)** core — registers, flags, full opcode + `CB` tables, interrupts. *It is not a Z80.* | **[docs](docs/components/cpu.md)** |
-| **PPU (GPU)** | [`src/gpu/mod.rs`](src/gpu/mod.rs) | Scanline pixel engine — the mode cycle, background/window/sprites, DMG + CGB palettes, STAT/LYC timing. | **[docs](docs/components/ppu.md)** |
+| **PPU (GPU)** | [`src/gpu/mod.rs`](src/gpu/mod.rs) · [`fifo.rs`](src/gpu/fifo.rs) | **Two engines**, chosen at launch — a whole-scanline renderer and a per-dot pixel FIFO. The mode cycle, background/window/sprites, DMG + CGB palettes, STAT/LYC timing, and the DMG OAM-corruption bug. | **[docs](docs/components/ppu.md)** · **[engines](#two-ppu-engines--pick-your-tradeoff)** |
 | **MMU** | [`src/mmu/mod.rs`](src/mmu/mod.rs) | The 64 KB memory bus — address routing, OAM DMA, CGB HDMA/GDMA, and the `IF`/`IE` interrupt wiring. | **[docs](docs/components/mmu.md)** |
 | **Cartridges (MBC)** | [`src/mbc/`](src/mbc) | Bank switching for MBC0/1/2/3/5, MBC3's real-time clock, battery-backed saves. | **[docs](docs/components/mbc.md)** |
 | **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal`. *Native only.* | **[registers](docs/components/apu.md)** · **[audio pipeline & quality](docs/audio.md)** |
@@ -575,27 +796,60 @@ dispatches them (priority VBlank → STAT → Timer → Serial → Joypad).
 frame through the system, follows a memory access from CPU → MMU → device, and shows where the
 frontends attach, with every reference a clickable link into the source.
 
-👉 **Start at the [component reference index](docs/components/README.md)**, read the
-[accuracy-testing yardstick](docs/testing.md) that every component's test list is built on,
-see [how a frame gets into a terminal](docs/rendering.md) — the transport ladder from
-shared memory (81 bytes/frame) through indexed PNG, how the transport is negotiated, and
-which terminals support what — and the
-[terminal render-performance notes](docs/terminal-render.md) — why a large terminal
-window used to cost frames and what caps the cost now — the
-[telemetry schema](docs/telemetry.md) — machine-readable NDJSON run data (fps, per-stage
-breakdown, emulated speed) for automated checks — the
-[video-out guide](docs/video-out.md) — the picture as a raw frame stream for `ffmpeg`/OBS and as
-a virtual webcam, with the exact commands — the
-[plugin contract](docs/plugins.md) — what a plugin may do, how you can tell one is attached,
-and the virtual link-cable partner that completes a real Generation 1 Pokémon trade — the
-[guide to writing one](docs/writing-a-plugin.md) — zero to a working plugin for someone who has
-never seen this codebase, with the trust model, the version boundary and the install path
-stated plainly — or the
-[display-scaling design](docs/display.md) — how each frontend enlarges the 160×144
-screen today and how to make it crisp (nearest/integer), smooth, or "vector-like",
-or see the [debug-tooling design](docs/debugging.md) — how to inspect, step, and capture the
-running machine (the deterministic frame-hashing that ties into the tests, plus a public
-extension surface external tools can emit from, control, and plug into).
+### Every page, and what it is for
+
+Nothing below is repeated here — this README is the index, those are the sources.
+
+**Start here**
+
+| page | what it answers |
+|---|---|
+| [code map](docs/codemap.md) | traces a frame through the system, follows a memory access CPU → MMU → device, shows where the frontends attach |
+| [component reference index](docs/components/README.md) | one deep-dive page per component: hardware, history, our implementation, honest approximations, and expected behaviours phrased as future tests |
+| [accuracy-testing yardstick](docs/testing.md) | which suites exist, how each is judged, and how our harness detects a verdict |
+
+**Subsystems**
+
+| page | what it answers |
+|---|---|
+| [audio pipeline & quality](docs/audio.md) | APU → `blip_buf` → `cpal` → speaker, the pacing maths, the latency budget, and what is genuine DMG character |
+| [how a frame gets into a terminal](docs/rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, how it is negotiated, which terminals support what |
+| [terminal render performance](docs/terminal-render.md) | why a large terminal window used to cost frames, and what caps the cost now |
+| [Mealybug Tearoom, measured](docs/mealybug.md) | what the PPU actually scores, how hard calibration is, and §7 on the pixel-FIFO engine |
+| [display scaling](docs/display.md) | how each frontend enlarges 160×144, and how to make it crisp, smooth or vector-like |
+| [pixel-art upscaler](docs/upscaling.md) | the four algorithms, their measured costs, and the licensing constraint that shaped them |
+| [save states](docs/savestates.md) | the `GBSS` format, the block layout, and why not BESS |
+| [video out & virtual webcam](docs/video-out.md) | the picture as a raw frame stream and as a V4L2 camera, with the exact commands |
+| [telemetry schema](docs/telemetry.md) | machine-readable NDJSON run data (fps, per-stage breakdown, emulated speed) for automated checks |
+| [debug-tooling design](docs/debugging.md) | how to inspect, step and capture the running machine, and the extension surface external tools emit from |
+
+**Extending it**
+
+| page | what it answers |
+|---|---|
+| [writing a plugin](docs/writing-a-plugin.md) | zero to a working plugin for someone who has never seen this codebase |
+| [the plugin contract](docs/plugins.md) | what a plugin may do, how you can tell one is attached, the trust model, the version boundary |
+| [`crates/gameboy-plugin-api`](crates/gameboy-plugin-api/README.md) | the dependency-free contract crate, and why it is separate |
+| [`plugins/`](plugins/README.md) | the five that ship, each with its own README |
+| [`testharness/`](testharness/README.md) | the per-ROM scoreboard and how each verdict is obtained |
+
+**Pokémon Generation 1**
+
+| page | what it answers |
+|---|---|
+| [the index](docs/gen1/README.md) | memory map, reading the screen as text, driving the link cable, and the sharp edges |
+| [the link trade](docs/link-trade.md) · [the link battle](docs/link-battle.md) | the whole journey, with screenshots, and what to do if it hangs |
+| [starting battles on demand](docs/gen1/battle-control.md) | the one byte the engine reads, and how to script what follows |
+| [the trainer view](docs/trainer.md) | the address table, the derivation, and the verification |
+| [Claude plays Pokémon](docs/claude-plays.md) | the agent architecture, the OBS/Twitch recipe, and the honest gaps |
+
+**Conformance**
+
+| page | what it answers |
+|---|---|
+| [the GitHub Action](docs/conformance-action.md) | scoring *someone else's* emulator: the contract, badges, licensing, honest gaps |
+| [the standalone-tool design](docs/conformance.md) | where this is going and why |
+| [per-fix conformance notes](docs/conformance-notes.md) | every accuracy bug we fixed, with symptom, catching test and hardware citation |
 
 ---
 
@@ -610,24 +864,46 @@ library. What the emulator produces is pitch-accurate: `blip_buf` resamples the
 4.194304 MHz APU to whatever rate the device negotiates, so **a programmed 440 Hz
 tone comes out at 440 Hz** (asserted by `cargo test --lib sound`).
 
-A "rough and slightly fast" report (Pokémon Blue) traced to **three** issues, now
-fixed:
+Four reports, each of which turned out to be something other than the audio, and all
+now fixed:
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Only one channel / odd rates | Device negotiation broke on the *first* `F32` config — often mono, or forced 96–384 kHz | Prefer the device's **stereo default** config; else scan for span-44100 + most channels |
-| "Aged", laggy, skippy | Hand-off queue allowed up to **1 s** of latency before dumping it | A measured queue policy (prime / hold-and-fade / high-watermark wait); end-to-end latency later cut to **~53 ms** (a tighter device buffer + smaller blocks) — see [`docs/audio.md`](docs/audio.md) |
+| "Aged", laggy, skippy | Hand-off queue allowed up to **1 s** of latency before dumping it | A measured queue policy (prime / hold-and-fade / bounded latency); a tighter device buffer and smaller blocks |
 | **Slightly fast + rough** | Desktop paced at **16 ms = 62.5 fps** vs the real **59.73 fps** (**+4.64 %**) — the APU overproduced and the queue overflowed | Pace at the true **16.743 ms** frame period |
+| **~5 fps with sound on** | The cpal player **waited** inside `Cpu::do_cycle` to make the sound card the master clock — **17.93 ms/frame, 97.6 % of it blocked rather than executing** | Never block in the player: push, then bound latency by *discarding*. **0.34 ms/frame** after; end-to-end latency also fell 44.8 → **36.3 ms** |
 
-> The **fast** was the *emulator*, not the audio — audio was a symptom. Both
-> frontends now pace on a **deadline accumulator** at the true 16.743 ms frame
-> period (the terminal's old too-fast ~5 ms tick is fixed too), so the long-run
-> rate is exactly 59.7275 Hz.
+> **The fast, and the slow, were both the *emulator*** — audio was the symptom each time. Both
+> frontends now pace on a **deadline accumulator** at the true 16.743 ms frame period, so the
+> long-run rate is exactly 59.7275 Hz; and **nothing is allowed to put a second clock inside
+> the emulator's inner loop.** That last one was misdiagnosed four times as the cost of the
+> T-cycle-stepped APU, which in fact costs ~0.16 ms/frame. It is now gated in CI by
+> `make test-audio-perf`, which needs the `audio` feature but **no sound card** — it attaches
+> the real producer with no consumer so the queue saturates, and fails above 4 ms/frame.
+> Teeth proven: the old policy measures 29.6 ms and 0.57× real time against it.
 
 📖 **Full breakdown — the signal path, the negotiation logic, the pacing maths,
 what's genuine DMG character, and how to measure it yourself — in
 [`docs/audio.md`](docs/audio.md).** Probe your own machine's negotiated rate with
 `cargo run --features audio --example audio_probe`.
+
+### Volume — `,` `.` and `m`, remembered
+
+**`,`** and **`.`** move the level a rung, **`m`** mutes and unmutes **back to the level you
+were at**, not to full. The level is on the Status panel, mute is called out on the top bar,
+and whatever you last set is remembered across sessions; `volume = 50` in `config.toml` sets
+where a fresh install starts (50 % ≈ −12 dB, deliberately quieter than full scale). `0`–`100`,
+a `%` is allowed, and `off` is accepted.
+
+**The attenuation is applied to the samples handed to the sound card — never to the Game Boy's
+own master volume (`NR50`).** That distinction is the whole design. `NR50` is emulated
+behaviour that the accuracy suites measure, so turning it down to quieten the room would change
+what the emulator models. **The machine is bit-identical at every volume setting**, mute
+included.
+
+If you have bound `m` to a Game Boy button (`key_b = m`), your binding wins — your
+configuration outranks ours, and that is pinned by a unit test.
 
 ### "Is the sound on?" — the emulator now tells you
 
@@ -762,6 +1038,14 @@ middle of a Meet call or a Twitch stream sees the picture change and never loses
 A stopped feed that froze on the last game frame — looking live while being dead — was the thing
 worth fixing; so was a camera that could not be turned back on once released.
 
+<p align="center">
+  <img src="docs/idle-card.png" alt="The idle card: a dark green frame reading TERMINALGB / STREAM PAUSED / PRESS V TO RESUME" width="420" />
+</p>
+
+<p align="center"><em>What the camera sends when the feed is paused. It is drawn by the
+emulator, in its own palette, at whatever size the device negotiated — so "paused" is a state a
+viewer can read, not a frozen frame they have to guess at.</em></p>
+
 The emulator negotiates the V4L2 device itself (`VIDIOC_QUERYCAP` + `VIDIOC_S_FMT`) and writes
 the frames — no `ffmpeg`, no FIFO, no rule about what to start first. Size and pixel format are
 **detected, not configured**: YUYV at 1280×720, with the 160×144 picture scaled by integer
@@ -814,18 +1098,52 @@ consume the same stream. Full guide, measured costs, platform limits and the cap
 
 ---
 
-## Status
+## Status & accuracy
 
-**Platforms**
+### Platforms
 
 | Frontend | State |
 |---|---|
 | Desktop (glutin/GL) | ✅ Working; audio with `--features audio` |
-| Terminal (ratatui) | ✅ Working (kitty-protocol terminals); audio with `--features audio` |
-| Web (WASM) | 🟡 Video + input work; **no audio yet** |
+| Terminal (ratatui) | ✅ Working in **any** terminal — it degrades rather than refusing ([which terminals give you what](#which-terminals-give-you-what)); audio with `--features audio` |
+| Web (WASM) | 🟡 Video + input work; **no audio yet**, and cartridges are still forced to MBC3 |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
 
-**Console model — DMG, Game Boy Color, or Super Game Boy**
+### Which terminals give you what
+
+The terminal frontend **runs everywhere and refuses in exactly one case**: neither stdout nor
+stdin is a terminal, so there is nothing to draw on *and* no keys to read. Everything else
+degrades, says so once at start-up, and reports what you got in the Status panel's `Proto` and
+`Input` rows. Two capabilities are negotiated separately — how the picture gets there, and how
+keys arrive:
+
+| terminal | picture | keyboard |
+|---|---|---|
+| **kitty** | kitty graphics + **shared memory** — ~81 bytes/frame | press **and** release |
+| **WezTerm** | kitty graphics + shared memory (direct placement — it does *not* implement Unicode placeholders, so we do not use them) | press and release, with `enable_kitty_keyboard = true` in `wezterm.lua` |
+| **Ghostty** | kitty graphics | press and release |
+| **foot** | kitty graphics or Sixel | press and release |
+| **iTerm2** | iTerm2 inline images, palette-indexed PNG (~1.4 KB/frame) | presses only |
+| **xterm** (`-ti vt340`), **mlterm**, **Contour** | Sixel — real pixels, but the whole picture every frame | presses only |
+| **GNOME Terminal / Ptyxis (VTE)**, **Konsole** | **half-blocks** — text, two pixels per cell | presses only |
+
+**The honest Fedora note:** GNOME Terminal and Ptyxis fall back to half-blocks there not
+because the frontend gave up but because **Fedora builds VTE without Sixel**. Measured on VTE
+0.84.1 (Fedora 44): `DA1` answers `?61;1;21;22;28` — no `4`, which is the Sixel bit — and
+`vte_get_features()` reports `+BIDI +GNUTLS +ICU +SYSTEMD` with no Sixel. There is nothing to
+negotiate; on a distribution that enables Sixel in VTE, the same binary picks it up.
+
+The ladder is **kitty → Sixel → iTerm2 → half-blocks**, and half-blocks is only ever what you
+get when nothing better exists — never a default for "not kitty". The terminal is *asked*
+(`a=q` handshake for kitty, `DA1` for Sixel), never inferred from `$TERM`, and pinning
+`protocol = …` in `config.toml` **disables** detection, so it can leave you on a worse
+protocol than your terminal can actually do.
+
+**In basic keyboard mode the emulation is identical** — the difference is that a plain terminal
+only ever says a key was pressed, so holding a direction depends on your OS auto-repeat. The
+full comparison is in [Input modes](#input-modes) above.
+
+### Console model — DMG, Game Boy Color, or Super Game Boy
 
 The emulator picks the console from the cartridge header: a cartridge whose CGB flag
 (`0x0143` bit 7) is set boots a **Game Boy Color**, anything else boots an original
@@ -855,7 +1173,7 @@ different boot registers (`A=0x11 HL=0x007C` rather than `A=0x01 HL=0x014D`) and
 undocumented CGB registers still responding. Nine Mooneye acceptance tests print those
 registers and can tell.
 
-**CGB CPU revision (conformance knob — leave it alone for games)**
+### CGB CPU revision (conformance knob — leave it alone for games)
 
 The Color shipped in several CPU steppings and its APU changed between them: on CPU CGB 0
 and B, writing `NRx4` with the length counter previously disabled clocks that counter even
@@ -873,7 +1191,7 @@ conformance runner reads the revision off the name the way it reads `@dmg`/`@cgb
 cartridge header. A DMG ignores the setting entirely. An unrecognised value warns on
 stderr and is ignored rather than silently switching you onto buggy silicon.
 
-**Multi-game compilation cartridges (MBC1M)**
+### Multi-game compilation cartridges (MBC1M)
 
 Carts like *Bomberman Collection* or *Mortal Kombat I & II* hold several games behind one
 menu and wire their MBC1 differently — and they cannot be told apart from an ordinary
@@ -883,7 +1201,7 @@ identification Pan Docs documents. If a cart guesses wrong in either direction,
 `GB_MBC1_MULTICART=1` forces multicart wiring and `GB_MBC1_MULTICART=0` forces the
 ordinary wiring.
 
-**Accuracy — hardware test ROMs**
+### Accuracy — hardware test ROMs
 
 A **headless Blargg/acid2 harness is wired in** ([`testharness/`](testharness/), run
 with `cargo test --release --test testroms`) and gated in CI against a checked-in
@@ -895,35 +1213,80 @@ rationale: **[docs/testing.md](docs/testing.md)**.
 
 | Suite | Result |
 |---|---|
-| Blargg `cpu_instrs` (11) | ✅ 11/11 pass, DMG and CGB |
+| Blargg `cpu_instrs` (11) | ✅ 11/11, DMG and CGB — 22/22 rows |
 | Blargg `instr_timing` | ✅ Pass, DMG and CGB |
 | Blargg `mem_timing` / `mem_timing-2` | ✅ Pass, DMG and CGB (timer stepped per memory access) |
 | Blargg `halt_bug` | ✅ Pass, DMG and CGB (HALT bug modelled) |
-| `dmg-acid2` (PPU) | ✅ 0 of 23,040 pixels differ from the reference image, DMG and CGB |
-| Blargg `dmg_sound` (12) | ✅ 12/12 pass (measured by the audio harness) |
-| Blargg `oam_bug` | ✅ 8/8 sub-tests pass on DMG (the OAM-corruption bug is modelled). Expected to fail on CGB — that silicon has no such defect |
-| Blargg `interrupt_time` | 🚫 Fails — 16- vs 20-T-cycle interrupt dispatch, a documented non-goal |
+| Blargg `interrupt_time` | ✅ Pass, DMG and CGB (dispatch measures the correct 13 cycles) |
+| `dmg-acid2` (PPU) | ✅ 0 of 23,040 pixels differ from the reference image, DMG and CGB — on **both** engines |
+| Blargg `dmg_sound` (12) | ✅ 12/12 (measured by the audio harness) |
+| Blargg `cgb_sound` (12) | ✅ 12/12 |
+| Blargg `oam_bug` | ✅ 8/8 sub-tests on DMG (the OAM-corruption bug is modelled). Expected to fail on CGB — that silicon has no such defect, and that row is the one red |
 
-**32 of 35 ROM/console rows pass.** APU accuracy is measured by a separate offline audio
-harness (`cargo test --release --test audiocapture`) — see [`docs/audio.md`](docs/audio.md).
+**46 of 47 ROM/console rows pass**, and the one red is expected. APU accuracy is also measured
+by a separate offline audio harness (`cargo test --release --test audiocapture`) — see
+[`docs/audio.md`](docs/audio.md).
 
-These numbers cover **18 ROMs**. The wider community suites are a much larger denominator and
-we do far worse on them; the honest scoreboard, measured with the
-[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own ROMs and reference images,
-is Mooneye acceptance 13/66, Mealybug 0/71, SameSuite APU 2/61. Do not read "we pass Blargg" as
-"we are accurate".
+### The community suites — the honest scoreboard
+
+Blargg is a small denominator. The suites that actually stress timing are larger, and we do
+worse on them. **All three are now scored in CI on every push**, against a checked-in baseline
+that is red on any change *in either direction* — a test that starts passing is a baseline
+change too. The ROMs are never vendored; they are fetched at run time from the commits pinned
+in [`tools/fetch-test-suites.sh`](tools/fetch-test-suites.sh).
+
+| Suite | Score | What it measures |
+|---|---:|---|
+| **Mooneye GB** `acceptance` | **58 / 75** | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing |
+| **Mooneye GB** `emulator-only` | **28 / 28** | MBC1/2/5 banking behaviour |
+| **Mooneye GB** `misc` (CGB) | **4 / 8** | Color-specific boot and timing |
+| **SameSuite** | **68 / 76** | APU 63/69 · DMA 4/4 · PPU 1/1 · SGB 0/2 |
+| **Mealybug Tearoom** | **3 / 79** | mid-scanline PPU effects, photographed off real hardware |
+
+```bash
+make fetch-test-suites && make test-external            # the default (fast) engine
+make test-external-accurate                             # the same suites, per-dot PPU
+```
+
+That Mealybug 3/79 is the real remaining gap and it is **not hidden by a pass/fail column**:
+the baseline records *how many of the 23,040 pixels differ* on every row, so progress shows up
+even when no row flips.
+
+**The shootout standing, for scale.** From the
+[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own published per-test data on
+the 24 DMG Mealybug rows:
+
+| emulator | Mealybug (DMG rows) |
+|---|---:|
+| SameBoy | 15 / 24 |
+| bgb | 2 / 24 |
+| **us** | **1 / 24** |
+| PyBoy | 0 / 24 |
+
+This is not a suite where a competent cycle-stepped PPU scores 24/24 — it is the suite that
+separates the two or three most accurate emulators in the world from everyone else, and the
+top scorer on the board still fails nine rows. **We are a long way from the top and one row
+behind bgb**, which is the accurate way to say it. See
+[Two PPU engines](#two-ppu-engines--pick-your-tradeoff) and
+[`docs/mealybug.md`](docs/mealybug.md) for the full calibration argument.
+
+Two figures that used to appear here are **out of date and should not be requoted**: "Mooneye
+acceptance 13/66" and "SameSuite APU 2/61" predate the timer rewrite, the 5-M-cycle interrupt
+dispatch and the timed OAM DMA. Do not read "we pass Blargg" as "we are accurate" — but do
+read the table above, which is measured, not remembered.
 
 **Known limitations** (each is documented honestly on the relevant component page)
-- No boot ROM / logo scroll; the post-boot register state is written directly.
-- The DMG OAM-corruption bug **is** modelled, as is the HALT bug. The PPU is stepped once
-  per instruction, so which OAM row a mid-instruction bus cycle hits is predicted
-  arithmetically rather than observed; one calibrated constant absorbs the phase the
+- No boot ROM / logo scroll; the post-boot register state is written directly. Mooneye's
+  `boot_div` / `boot_hwio` / `boot_regs` variants for the machines we do not model (SGB, MGB,
+  DMG0) are most of the remaining `acceptance` reds.
+- The DMG OAM-corruption bug **is** modelled, as is the HALT bug. In the `fast` engine the PPU
+  is stepped once per instruction, so which OAM row a mid-instruction bus cycle hits is
+  predicted arithmetically rather than observed; one calibrated constant absorbs the phase the
   batched PPU picks up when the LCD is switched on mid-instruction.
-- OAM DMA is instantaneous and does not restrict the bus; PPU mode 3 is fixed-length. Making
-  these cycle-exact needs a cycle-stepped PPU/CPU — the structural step the Mealybug PPU suite
-  (0/71) and SameSuite's DMA tests (0/4) are waiting on.
-- **The timer uses separate DIV/TIMA counters with no falling-edge quirks.** Mooneye's
-  `acceptance/timer/*` tests exactly this and we fail 10 of 13.
+- **Mode 3 is fixed-length in the default engine.** The per-dot engine derives it instead
+  (`GB_PPU=accurate`) and is structurally right but not yet calibrated — the sprite penalty,
+  the window's WX penalty and the exact dot a CPU write becomes visible are the open work.
+  This is what Mealybug is waiting on.
 - Web build has no sound and always treats cartridges as MBC3.
 - Battery saves work only on the native (filepath) path — the web and FFI builds have no
   filesystem, so in-game saves are not persisted there. **Save states are implemented** in the
@@ -949,17 +1312,39 @@ atomically, so closing the window, a crash or a `kill` cannot lose or truncate t
 
 ```bash
 cargo build --release          # native; no ALSA needed (audio is off by default)
-cargo test  --release --lib    # library unit tests (76 today)
-cargo test  --release --test testroms      # headless accuracy harness (see testharness/)
+cargo test  --release --lib    # library unit tests (450 today)
 make lint                      # rustfmt --check + clippy -D warnings
-cargo build --release --target wasm32-unknown-unknown
-cargo build --release --features audio     # host audio (needs ALSA dev headers on Linux)
+make lint-audio                # the same, with the `audio` feature compiled in
 ```
 
+The test harnesses, each of which is its own binary with its own baseline:
+
+| command | what it proves |
+|---|---|
+| `cargo test --release --test testroms` | Blargg + dmg-acid2, **every ROM on both consoles**, judged by the ROM's own verdict — never by a hash of our output |
+| `cargo test --release --test ppuengines` | the two [PPU engines](#two-ppu-engines--pick-your-tradeoff) against each other, against dmg-acid2's reference, and against the clock |
+| `cargo test --release --test savestate` | byte-identical save-state round trip, every frame, plus the negative cases |
+| `cargo test --release --test battery` | an in-game save reaches disk **while the emulator runs** — no destructor involved |
+| `cargo test --release --test audiocapture` | the APU's sample stream with no audio device: rate, pitch, level, continuity, and Blargg `dmg_sound`'s own verdict |
+| `cargo test --release --test basicterm` | the frontend runs, draws, takes input and quits in a terminal with **no** kitty keyboard protocol |
+| `cargo test --release --test agent` | the agent plugin's budget cap, circuit breaker and stuck detection, against a hand-assembled cartridge |
+| `make test-audio-perf` | emulation stays inside the frame budget with a host audio player attached (needs `audio`, **not** a sound card) |
+| `make test-external` / `make test-external-accurate` | Mooneye + SameSuite + Mealybug, both PPU engines, against pinned baselines |
+| `make embed` | the core alone: one third-party dependency, and a ROM runs with `HOME` and `DISPLAY` unset |
+| `make no-plugins` | no plugin crate is reachable from the emulator or either frontend |
+| `make docs-check` | every generated `path:line` doc link still points at a real line |
+
+Everything in that table runs in CI on every push and pull request, across four jobs — lint &
+test, the embeddable core, the test-ROM harness, and the external suites. **The suite baselines
+are red on any change in either direction**: a row that starts *passing* is a baseline change
+too, and has to be re-blessed deliberately
+(`UPDATE_EXTERNAL_BASELINE=1 make test-external`). That is the difference between a gate and a
+scoreboard, and it is why the numbers in this README can be trusted to be today's.
+
 A fresh clone builds and tests with **no system audio library** — `cpal` is an optional
-dependency behind the `audio` feature. CI (GitHub Actions) still installs `libasound2-dev` so
-it can exercise the `audio` path, then runs fmt, clippy, the test build and tests, the
-test-ROM harness, and a desktop build on every push/PR.
+dependency behind the `audio` feature. CI still installs `libasound2-dev` so it can lint,
+build and time the `audio` path, which is how four unused-variable warnings — each swallowing
+a real audio-device error — once lived in the tree unnoticed.
 
 ---
 
@@ -1015,13 +1400,21 @@ account of what is *not* covered: [`docs/conformance-action.md`](docs/conformanc
 
 Near-term, in priority order:
 
-- **A cycle-stepped PPU/CPU** — the largest single accuracy gap. Mealybug Tearoom (0/71),
-  SameSuite DMA (0/4) and Mooneye's PPU and OAM-DMA tests all need it. The APU already reached
-  `dmg_sound` 12/12 with per-access stepping; the same structure is what the rest is waiting on.
-  See [`docs/components/apu.md`](docs/components/apu.md).
-- **Wire Mooneye GB** into the harness — the fine-grained timing suite that will turn our current
-  approximations into visible, trackable reds. See [`docs/testing.md`](docs/testing.md).
+- **Calibrate the per-dot PPU engine.** The pixel FIFO exists and is structurally right
+  ([`GB_PPU=accurate`](#two-ppu-engines--pick-your-tradeoff)); what is left is the sprite
+  penalty, the window's WX penalty, and the exact dot on which a CPU write becomes visible to
+  the fetcher. There is no single constant left to find — there are many, and they constrain
+  each other. Mealybug 3/79 is the number that moves when this lands.
+  See [`docs/mealybug.md`](docs/mealybug.md) §7.
+- **The remaining Mooneye reds are mostly machines we do not model** — SGB, MGB and DMG0 boot
+  state — rather than timing we get wrong. Deciding whether to model them is a scope question,
+  not an accuracy one.
 - **Web audio** and correct **web/FFI MBC detection** (both currently forced to MBC3).
+
+Done since this list was last written, and now gated in CI rather than promised: the timer as
+the real hardware circuit, 5-M-cycle interrupt dispatch, timed OAM DMA, the DMG OAM-corruption
+bug, the MBC3 clock on emulated time, and all three community suites
+([Status & accuracy](#status--accuracy)).
 
 Bigger picture:
 
@@ -1046,17 +1439,28 @@ stays credited. The lineage:
 > **[mvdnes/rboy](https://github.com/mvdnes/rboy)** (core emulation model)
 > → **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** (Raphael Amorim — Rust +
 > WebAssembly + FFI + terminal frontends)
-> → **this fork** (accuracy work, save states, upscaler, audio pipeline, telemetry, terminal
-> render path, test-ROM harness, and the per-component docs — see the
-> [`CHANGELOG`](CHANGELOG.md)).
+> → **this fork** (accuracy work across the timer, interrupt dispatch, OAM DMA, the APU and
+> the OAM-corruption bug; a second per-dot PPU engine; save states; battery saves; the
+> upscaler; the audio pipeline; telemetry; the terminal render path and frame transport;
+> video out; the plugin system; the test-ROM harness and the external-suite gates; and the
+> per-component docs — see the [`CHANGELOG`](CHANGELOG.md)).
+
+The upstream author's credit is a **standing requirement, not decoration**: Raphael Amorim
+stays in [`Cargo.toml`](Cargo.toml)'s `authors`, in the note at the top of this README, and
+here. The MPL-2.0 `LICENSE` text and every upstream copyright notice stay as they are.
 
 **References.** Hardware behaviour is grounded in [Pan Docs](https://gbdev.io/pandocs/),
 [gbdev/awesome-gbdev](https://github.com/gbdev/awesome-gbdev), and
 [rylev/DMG-01](https://rylev.github.io/DMG-01/); [alexcrichton/jba](https://github.com/alexcrichton/jba/tree/rust)
-was a further emulation reference. The accuracy suites are Blargg, Gekkio's
-[Mooneye GB](https://github.com/Gekkio/mooneye-gb), and Matt Currie's
-[dmg-acid2/cgb-acid2](https://github.com/mattcurrie/dmg-acid2). Web CSS from
-[Daniel Snow's Game Boy CSS](https://codepen.io/daniel-snows).
+was a further emulation reference. The accuracy suites are Blargg's, Gekkio's
+[Mooneye GB](https://github.com/Gekkio/mooneye-gb), LIJI32's
+[SameSuite](https://github.com/LIJI32/SameSuite), and Matt Currie's
+[dmg-acid2](https://github.com/mattcurrie/dmg-acid2) and
+[Mealybug Tearoom Tests](https://github.com/mattcurrie/mealybug-tearoom-tests) — **none of them
+vendored here** except the MIT-licensed dmg-acid2 ROM, and the rest fetched at run time from
+their authors' own upstreams at pinned commits. Gen 1 game internals come from the
+[`pret/pokered`](https://github.com/pret/pokered) disassembly, cited by symbol name at every
+address. Web CSS from [Daniel Snow's Game Boy CSS](https://codepen.io/daniel-snows).
 
 Want to help? See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
