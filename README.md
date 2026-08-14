@@ -7,6 +7,11 @@
 
 **A Game Boy / Game Boy Color emulator written in Rust — runs on the desktop, in your terminal, and in the browser via WebAssembly.**
 
+<img width="2152" height="1822" alt="The terminal frontend running Pokémon Blue with the live trainer panel beside it: TRAINER, BADGES, a decompressed SQUIRTLE sprite, and the battle opponent's stats, moves and hidden values" src="https://github.com/user-attachments/assets/d7af5464-22c9-4a36-acf2-cf1e8c7b9956" />
+
+<p align="center"><em>The whole thing in a terminal: the game on the left, the read-only
+<a href="docs/trainer.md">live trainer view</a> on the right, reading the running cartridge.</em></p>
+
 <p align="center">
   <img src="docs/shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2: the 160x144 picture scaled to fill the pane, with the Status panel reporting ROM, transport, input mode, palette, PPU engine, speed, video, audio and volume, and a Controls panel beside it" width="900" />
 </p>
@@ -14,8 +19,8 @@
 <p align="center"><em>The terminal frontend running
 <a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> — 0 of 23,040 pixels differ from
 the author's reference image. Every screenshot in this README was taken from this emulator, with
-its own <code>c</code> key or a capture of its own window, using only test ROMs we are free to
-show.</em></p>
+its own <code>c</code> key or a capture of its own window; apart from the trainer-view picture
+above, they use only test ROMs the repository is free to show.</em></p>
 
 > This project is a fork of **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by
 > Raphael Amorim, itself closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**.

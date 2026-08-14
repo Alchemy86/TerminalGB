@@ -2348,6 +2348,35 @@ gh api -X POST /markdown --input /tmp/md.json > /tmp/body.html
 - Delete the preview artefacts before committing (`.preview/`, `readme-*.html`,
   `*.preview.html`) — none of them belong in the repo.
 
+### The captain edits `README.md` directly on GitHub — expect `origin/main` to diverge
+
+Two commits (`7855b0f`, `c746217`) were made in the GitHub web editor while 74 commits of local
+work were unpushed, so both sides had touched the same file. Things worth knowing next time:
+
+- **Reconcile with a MERGE, not a rebase.** At any given moment ~9 crew branches in the
+  treehouse pool are based on local `main`'s commits; rebasing `main` rewrites every one of
+  their bases. A merge also keeps the branch a fast-forward from local `main`, which is what
+  firstmate needs to land it, and needs no force-push in either direction.
+- **A web-editor image is a hot-link, not a repo file.** GitHub's editor uploads to
+  `https://github.com/user-attachments/assets/<uuid>` and inserts
+  `<img width= height= alt="image" src=…>`. Nothing lands in the tree, so `docs-check` and a
+  broken-image sweep of relative paths will both pass while saying nothing about it — fetch the
+  URL and *look* at it. `curl` it and read the PNG `tEXt` chunks: these carry
+  `Software: gnome-screenshot` and a creation time, which is how the provenance was settled.
+- **The provenance question is not the same one as for `resources/`.** These are the captain's
+  own captures of *our* frontend, so the [licence
+  boundary](#licence-boundary-format-knowledge-is-ours-game-assets-are-not) rule applies as
+  written: our interface doing something, with the game incidental, is fine — the same test that
+  lets `docs/link-trade/` commit its screenshots. That is a different finding from the inherited
+  third-party figures above, and the two must not be conflated.
+- **A commercial-game screenshot at the top invalidates the README's own caption.** The caption
+  under the acid2 hero claimed *"using only test ROMs we are free to show"*; it now excepts the
+  trainer picture explicitly. If a picture is added, re-read what the surrounding prose promises.
+- **A superseded upload can leak a path.** The first attempt (`a19c215e…`, replaced an hour
+  later) is a mis-cropped capture whose status bar reads `/home/aaron/Videos/gameboy/…`. It is
+  not referenced any more, but it is still live on GitHub's CDN — worth remembering next to the
+  personal-identifier scrub.
+
 ## Live trainer view — the read-only plugin (`plugins/trainer/src/`)
 
 - **Full design, address table, verification and follow-ups: [`docs/trainer.md`](docs/trainer.md).**
