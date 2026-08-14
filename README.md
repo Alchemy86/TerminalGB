@@ -29,7 +29,7 @@ show.</em></p>
 > ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The whole
 > Blargg suite passes on both consoles (46 of 47 ROM/console rows), dmg-acid2 is pixel-exact,
 > and the community timing suites are scored in CI on every push — honestly, including the
-> reds. Today: **Mooneye 86/103, SameSuite 68/76, Mealybug 3/79.** See
+> reds. Today: **Mooneye 88/103, SameSuite 71/76, `cpp` 4/4, Mealybug 3/79.** See
 > **[Status & accuracy](#status--accuracy)** for the measured table, the
 > [test scoreboard](testharness/README.md), and the honest per-component notes. This project
 > is a study of emulation, not a piracy tool: it ships no ROMs and no BIOS.
@@ -282,6 +282,7 @@ copy-pasteable and was run to produce this table.
 | **one plugin** | `cargo build --release --features plugin-trainer` | Pick and choose; the names are in the table below. |
 | **the core, for embedding or an agent** | `cargo build --release --no-default-features` | **One** third-party crate (`blip_buf`). No window, no terminal, no audio device, no image codecs, no `$HOME`. See [Embedding the core](#-embedding-the-core). |
 | **a headless run right now** | `cargo run --release --no-default-features --example headless -- third_party/dmg-acid2/dmg-acid2.gb 240` | Runs a cartridge, round-trips a save state and prints the frame as ASCII. |
+| **any Claude client to drive it** | `cargo build --release --no-default-features --features mcp` | The `gameboy-mcp` [MCP server](#-mcp-server--drive-it-from-claude-desktop-or-claude-code). Adds **no third-party crate**. |
 | **the browser build** | `cargo build --release --target wasm32-unknown-unknown` | Audio is compiled out on `wasm32`; `make build-wasm` also runs `wasm-opt`. |
 | **a C / Go static library** | `make ffi-build` | `--no-default-features --features ffi` + `cbindgen` → `libgameboy.a` and `gameboy.h`. |
 
@@ -293,6 +294,7 @@ copy-pasteable and was run to produce this table.
 | `desktop` | ✅ | `glutin`, `gl`, `libc`, `image` | a display server (X11 / Wayland / Windows / macOS) |
 | `tui` | ✅ | `ratatui`, `ratatui-image`, `icy_sixel`, `image`, `libc` | a terminal — [any terminal](#which-terminals-give-you-what); it degrades rather than refusing |
 | `audio` | | `cpal` | a sound device (ALSA **dev headers** to *build* on Linux) |
+| `mcp` | | `plugin-agent` — **no third-party crate** | an [MCP](https://modelcontextprotocol.io) client (Claude Desktop, Claude Code, …). Builds the `gameboy-mcp` binary. |
 | `standard-plugins` | ✅ | the four plugin crates below | nothing; each still has to be named to attach |
 | `plugin-trainer` | ✅ | `gameboy-plugin-trainer` | a Pokémon R/B cartridge, or it declines |
 | `plugin-gen1-link` | ✅ | + `gameboy-plugin-gen1-link` | as above |
@@ -317,7 +319,7 @@ GB_MODEL=dmg      cargo run --release --example terminal -- game.gbc  # force an
 ```
 
 `GB_PPU` picks the [rendering engine](#two-ppu-engines--pick-your-tradeoff); `GB_MODEL` picks
-the [console](#console-model--dmg-or-game-boy-color). Both also have a config key (`ppu`,
+the [console](#console-model--dmg-game-boy-color-or-super-game-boy). Both also have a config key (`ppu`,
 and `GB_MODEL` only overrides `Model::Auto`).
 
 ### What audio actually costs — measured, not remembered
@@ -339,11 +341,6 @@ time). Reproduce these with `cargo test --release --test ppuengines` and
 `cargo run --release --features audio,libc --example audio_frame_cost -- <rom>`; CI holds the
 audio number under 4 ms/frame on every push (`make test-audio-perf`).
 
-### Not yet a build mode
-
-There is **no MCP-server feature in this tree today** — `Cargo.toml` has no such feature and
-nothing under `src/` implements one. A crew is working on it; when it lands it belongs in the
-table above.
 
 ---
 
@@ -657,7 +654,7 @@ axis is **accuracy against cost.**
 | **A mid-scanline register write** | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read | takes effect exactly where hardware puts it |
 | **Cost** | **0.219 ms/frame** (76.5× real time) | **0.467 ms/frame** (35.8× real time) — **2.13×** |
 | **dmg-acid2 vs the author's reference** | 0 / 23,040 pixels differ | **0 / 23,040** |
-| **Mooneye `acceptance`** | 58/75 | 58/75 — *not the same 58* |
+| **Mooneye `acceptance`** | the baseline total | **the same total — but not the same rows.** The variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS` |
 | **Mealybug Tearoom rows** | 3/79 | 3/79 |
 | **Well-behaved games** | identical output, proved frame-for-frame | identical output |
 
@@ -777,6 +774,7 @@ behaviours phrased as future tests.**
 | **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal`. *Native only.* | **[registers](docs/components/apu.md)** · **[audio pipeline & quality](docs/audio.md)** |
 | **Timer & Divider** | [`src/mmu/timer.rs`](src/mmu/timer.rs) | `DIV`/`TIMA`/`TMA`/`TAC` — the programmable interrupt heartbeat. | **[docs](docs/components/timer.md)** |
 | **Serial** | [`src/mmu/serial.rs`](src/mmu/serial.rs) | The link cable — and the channel Blargg test ROMs report results through. | **[docs](docs/components/serial.md)** |
+| **Super Game Boy** | [`src/sgb.rs`](src/sgb.rs) | The ICD2 command-packet receiver on `$FF00` and the `MLT_REQ` multiplayer joypad index — everything of an SGB a cartridge can observe. | **[docs](docs/components/sgb.md)** |
 | **Joypad (Input)** | [`src/input.rs`](src/input.rs) | The 2×4 button matrix at `0xFF00` and the joypad interrupt. | **[docs](docs/components/input.md)** |
 | **Frontends** | [`src/screen/`](src/screen) | Desktop (OpenGL), terminal (ratatui), web (canvas), and the C/Go FFI. | **[docs](docs/components/frontends.md)** |
 
@@ -827,6 +825,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 
 | page | what it answers |
 |---|---|
+| [the MCP server](docs/mcp.md) | driving the emulator from Claude Desktop / Claude Code: install steps, every flag, the measured numbers, the honest limitations |
 | [writing a plugin](docs/writing-a-plugin.md) | zero to a working plugin for someone who has never seen this codebase |
 | [the plugin contract](docs/plugins.md) | what a plugin may do, how you can tell one is attached, the trust model, the version boundary |
 | [`crates/gameboy-plugin-api`](crates/gameboy-plugin-api/README.md) | the dependency-free contract crate, and why it is separate |
@@ -1108,6 +1107,14 @@ consume the same stream. Full guide, measured costs, platform limits and the cap
 | Terminal (ratatui) | ✅ Working in **any** terminal — it degrades rather than refusing ([which terminals give you what](#which-terminals-give-you-what)); audio with `--features audio` |
 | Web (WASM) | 🟡 Video + input work; **no audio yet**, and cartridges are still forced to MBC3 |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
+| [MCP server](#-mcp-server--drive-it-from-claude-desktop-or-claude-code) | ✅ Working; `--features mcp`, driven end to end from a real MCP client |
+
+| Console | State |
+|---|---|
+| DMG (original Game Boy) | ✅ Modelled, and the default for a non-CGB cartridge |
+| Game Boy Color | ✅ Modelled, including the CGB-in-DMG compatibility mode and CPU revisions |
+| Super Game Boy / SGB2 | 🟡 `GB_MODEL=sgb`: the **ICD2 command receiver and `MLT_REQ`** — everything a cartridge can read back, and [all three published SGB test rows](#what-the-super-game-boy-support-actually-scores). Border, palettes and SGB sound are a documented non-goal |
+| MGB / DMG0 | 🚫 Not modelled; their Mooneye `boot_*` rows are among the remaining reds |
 
 ### Which terminals give you what
 
@@ -1173,6 +1180,26 @@ different boot registers (`A=0x11 HL=0x007C` rather than `A=0x01 HL=0x014D`) and
 undocumented CGB registers still responding. Nine Mooneye acceptance tests print those
 registers and can tell.
 
+### What the Super Game Boy support actually scores
+
+**All three of the shootout's published SGB rows pass, 0 of 23,040 pixels different** from
+their authors' references: `cpp/sgb-ext-test`, `samesuite/sgb/command_mlt_req` and
+`samesuite/sgb/command_mlt_req_1_incrementing`. Of the eighteen emulators in the shootout's
+own published table, only GSE passes all three — SameBoy passes one, bgb one, mGBA two, and
+six decline the SGB model entirely.
+
+**Read that precisely, because it is a narrower claim than it sounds.** It does not mean this
+is a good Super Game Boy. All three of those ROMs are plain 160×144 DMG-grey screens — no
+border, no palette, no SNES side is involved in any of them — because each measures the same
+thing: the ICD2 command-packet receiver and the `MLT_REQ` joypad index, which is the *only*
+part of an SGB a Game Boy program can read back. Everything else an SGB does is one-way
+traffic to a screen the cartridge cannot see, so no test ROM can assert it and this emulator
+has nowhere to put it. The score is real and so is the limit; neither should be quoted without
+the other.
+
+It brings **+2 Mooneye `acceptance` rows** (`boot_regs-sgb`, `boot_regs-sgb2`) and **+2
+SameSuite rows** (both `sgb/`), and moves nothing else.
+
 ### CGB CPU revision (conformance knob — leave it alone for games)
 
 The Color shipped in several CPU steppings and its APU changed between them: on CPU CGB 0
@@ -1237,10 +1264,11 @@ in [`tools/fetch-test-suites.sh`](tools/fetch-test-suites.sh).
 
 | Suite | Score | What it measures |
 |---|---:|---|
-| **Mooneye GB** `acceptance` | **58 / 75** | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing |
+| **Mooneye GB** `acceptance` | **60 / 75** | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing, boot state |
 | **Mooneye GB** `emulator-only` | **28 / 28** | MBC1/2/5 banking behaviour |
 | **Mooneye GB** `misc` (CGB) | **4 / 8** | Color-specific boot and timing |
-| **SameSuite** | **68 / 76** | APU 63/69 · DMA 4/4 · PPU 1/1 · SGB 0/2 |
+| **SameSuite** | **71 / 76** | APU 64/69 · DMA 4/4 · PPU 1/1 · **SGB 2/2** |
+| **CasualPokePlayer** (`cpp`) | **4 / 4** | MBC3 RTC edge cases, and [`sgb-ext-test`](#what-the-super-game-boy-support-actually-scores) |
 | **Mealybug Tearoom** | **3 / 79** | mid-scanline PPU effects, photographed off real hardware |
 
 ```bash
@@ -1312,7 +1340,7 @@ atomically, so closing the window, a crash or a `kill` cannot lose or truncate t
 
 ```bash
 cargo build --release          # native; no ALSA needed (audio is off by default)
-cargo test  --release --lib    # library unit tests (450 today)
+cargo test  --release --lib    # library unit tests (466 today)
 make lint                      # rustfmt --check + clippy -D warnings
 make lint-audio                # the same, with the `audio` feature compiled in
 ```

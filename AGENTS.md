@@ -3361,6 +3361,32 @@ it. That is now a real, CI-enforced build; it did not compile before.
   you are running it from — the same trap as `pgrep -f` recorded above. Kill by the PID you
   captured at launch.
 
+## Re-measure the suite scores before quoting them — they move most days
+
+Several crews landing APU, PPU and SGB work in the same week means any absolute suite number
+in a brief is probably a few days stale. In one afternoon SameSuite moved 68 → 69 (the CH1
+sweep-shadow fix `52d98f5`) → 71 (SGB), and Mooneye 86 → 88. **Measured on `main` at
+`8747e7d`:** testroms **46/47**, Mooneye **88/103** (acceptance 60/75, emulator-only 28/28),
+Mooneye CGB misc **4/8**, SameSuite **71/76** (apu 64/69, dma 4/4, ppu 1/1, sgb 2/2),
+`cpp` **4/4**, Mealybug **3/79**. The one-liner that produces all of them without a full run:
+
+```python
+# python3, from the repo root — reads the checked-in baselines, which ARE the expectations
+import collections
+for f in ['mooneye','mooneye_cgb','samesuite','mealybug']:
+    rows=[l.split('=') for l in open(f'testharness/{f}_baseline.txt')
+          if l.strip() and not l.startswith('#')]
+    print(f, sum(v.strip().startswith('PASS') for _,v in rows), '/', len(rows))
+```
+
+**Both engines' baselines must move together when a non-PPU change flips a row.** Boot
+registers, the timer and the APU do not depend on `GB_PPU`, so a change that flips a Mooneye
+row flips it under *both* engines and **both** `mooneye_baseline.txt` and
+`mooneye_accurate_baseline.txt` need re-blessing in the same commit — otherwise
+`make test-external-accurate` goes red on merge while `make test-external` is green, which
+reads as a PPU regression and is not one. The SGB work is the worked example: +2 acceptance
+rows (`boot_regs-sgb`, `-sgb2`) under both engines, both files updated, both gates green.
+
 ## The audio-cost figure: quote the measurement, not the folklore
 
 "Audio costs ~8 ms/frame" and "17.9 ms/frame with sound" are **stale** and keep resurfacing in
