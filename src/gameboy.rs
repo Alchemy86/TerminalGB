@@ -575,6 +575,32 @@ impl Gameboy {
         self.cpu.memory.report_fault(reason);
     }
 
+    /// Borrow the running machine through the same capability-checked
+    /// [`Machine`](crate::plugin::Machine) handle a plugin is given.
+    ///
+    /// This exists because the *perception* code in [`crate::agent::observe`]
+    /// and the executor in [`crate::agent::action`] are written against
+    /// `Machine`, not against `Gameboy` — deliberately, so that they cannot
+    /// reach past what was granted. A host that wants to reuse them (the MCP
+    /// server in [`crate::mcp`] is the first) would otherwise have to
+    /// re-implement state reading against `Gameboy::peek`, which is exactly the
+    /// duplication the plugin contract exists to prevent.
+    ///
+    /// The grant is the caller's own choice here, and that is honest rather
+    /// than a hole: an embedder already owns the `Gameboy` and could call
+    /// [`Gameboy::debug_write`] directly. Passing a narrow grant is how a host
+    /// makes a *sub-component* — a tool handler, say — provably read-only.
+    ///
+    /// The handle borrows the MMU for the call and cannot be stashed.
+    pub fn with_machine<R>(
+        &mut self,
+        granted: crate::plugin::Capability,
+        f: impl FnOnce(&mut crate::plugin::Machine<'_>) -> R,
+    ) -> R {
+        let mut machine = crate::plugin::Machine::new(&mut self.cpu.memory, granted);
+        f(&mut machine)
+    }
+
     /// Attach a plugin. See [`crate::plugin`] for the contract; the frontend is
     /// responsible for telling the user one is active.
     pub fn add_plugin(
@@ -856,6 +882,46 @@ mod tests {
              ({FRAME_TICKS} cycles) — one frame's worth, not several",
             iters * LOOP_TICKS
         );
+    }
+
+    /// The grant handed to [`Gameboy::with_machine`] is **enforced**, not
+    /// decorative. That is the whole reason a host reaches the machine this way
+    /// instead of through `debug_read`/`debug_write`: it lets a host make one of
+    /// its own sub-components — an MCP tool handler, a scripted driver —
+    /// provably unable to write, rather than unable by convention. If this ever
+    /// stops holding, `--allow-write-memory` becomes a comment.
+    #[test]
+    fn a_machine_handed_out_by_the_host_still_enforces_its_grant() {
+        use crate::plugin::Capability;
+        let mut gb = Gameboy::new(rom_only_cart(), None);
+        let read_only = Capability::OBSERVE.union(Capability::READ_MEMORY);
+        // WRAM is seeded with a fixed value so a run reproduces exactly — read
+        // what is there rather than assuming zero, and write something that
+        // differs from it, or "refused" and "landed" look identical.
+        let seeded = gb.peek(0xC000);
+        let other = seeded.wrapping_add(1);
+        gb.with_machine(read_only, |m| {
+            assert_eq!(m.peek(0xC000), Some(seeded), "reading was granted");
+            assert!(!m.poke(0xC000, other), "writing was NOT granted");
+            assert!(m.frame_rgba().is_some(), "observing was granted");
+        });
+        assert_eq!(
+            gb.peek(0xC000),
+            seeded,
+            "the refused write must not have landed"
+        );
+
+        gb.with_machine(read_only.union(Capability::WRITE_MEMORY), |m| {
+            assert!(m.poke(0xC000, other), "writing was granted this time");
+        });
+        assert_eq!(gb.peek(0xC000), other);
+
+        // A grant of nothing reaches nothing at all.
+        gb.with_machine(Capability::NONE, |m| {
+            assert_eq!(m.peek(0xC000), None);
+            assert!(m.frame_rgba().is_none());
+            assert!(!m.set_button(crate::KeypadKey::A, true));
+        });
     }
 
     /// A minimal ROM-only cartridge: header type `0x00`, 32 KiB, `NOP`s.

@@ -717,6 +717,36 @@ gaps: **[`docs/claude-plays.md`](docs/claude-plays.md)**.
 
 ---
 
+## 🔌 MCP server — drive it from Claude Desktop or Claude Code
+
+**Any [Model Context Protocol](https://modelcontextprotocol.io) client can play the game.** Not
+only our own agent loop: Claude Desktop, Claude Code, or anything else that speaks MCP.
+
+```bash
+cargo build --release --no-default-features --features mcp
+claude mcp add gameboy -- "$PWD/target/release/gameboy-mcp" --rom ~/roms/blue.gb
+```
+
+Ten tools, each answering a different question — `observe` (the structured game state: mode,
+on-screen text, map, coordinates, party, battle), `screenshot`, `read_memory`, `press_buttons`
+(frame-accurate), `run_actions` (`walk` / `goto` / `advance_text` — one call covering hundreds
+of frames), `step`, `load_rom`, `reset`, `save_state`, `load_state`.
+
+* **It is a thin wrapper over the [agent plugin](plugins/agent/), not a new subsystem.** `observe` *is*
+  the agent's `Gen1Observer`; `run_actions` *is* its `Executor`. Nothing was re-implemented.
+* **Everything optional is off, so it runs lean.** Measured headless with no audio, no video and
+  no plugins: **0.238 ms/frame — 70x real time**. `--speed realtime`, `--audio` and
+  `--video-out` are there for when a human is watching.
+* **It cannot write memory** unless you pass `--allow-write-memory` — and then the tool is not
+  merely refused, it is not *listed*, so a client is never shown a tool that will say no.
+* **Optional at build time.** Behind the `mcp` cargo feature and it adds **no third-party
+  crate**, so embedding the core does not drag in an MCP stack.
+
+Install steps for both clients, the config blocks, every flag, the measured numbers and the
+honest limitations: **[`docs/mcp.md`](docs/mcp.md)**.
+
+---
+
 ## 🎥 Video out & virtual webcam
 
 **The Game Boy as a webcam, with no bridge.** Put one line in `config.toml`, run the game,

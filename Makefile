@@ -1,7 +1,8 @@
 .DEFAULT_GOAL := build
 
 .PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
-        fetch-test-suites test-external test-external-accurate no-plugins
+        fetch-test-suites test-external test-external-accurate no-plugins \
+        test-mcp lint-mcp
 
 all: build install
 
@@ -20,6 +21,12 @@ lint:
 # `make lint` deliberately does not. CI runs both.
 lint-audio:
 	cargo clippy --all-targets --features audio -- -D warnings
+
+# Same reasoning for the MCP server: it is behind the `mcp` feature, so plain
+# `make lint` never sees `src/mcp/` or `src/bin/gameboy-mcp.rs`. No system
+# library is needed for this one.
+lint-mcp:
+	cargo clippy --all-targets --features mcp -- -D warnings
 
 # Code map (docs/codemap.md + docs/components/): rewrite every `path:line`
 # reference into a fresh blob/main GitHub link and restamp the per-page
@@ -57,6 +64,13 @@ embed:
 # testharness/audioperf.rs and docs/audio.md.
 test-audio-perf:
 	cargo test --release --features audio --test audioperf
+
+# The MCP server, driven the way a client drives it: the harness spawns the real
+# `gameboy-mcp` binary and speaks JSON-RPC down its stdin. Needs only the
+# vendored dmg-acid2 ROM — no cartridge, no submodule, no network. See
+# testharness/mcp.rs and docs/mcp.md.
+test-mcp:
+	cargo test --release --features mcp --test mcp
 
 # The external suites (Mooneye GB, SameSuite, Mealybug Tearoom) are not
 # vendored — they are other people's ROMs under other people's licences, so

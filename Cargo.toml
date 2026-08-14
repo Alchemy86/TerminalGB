@@ -42,6 +42,16 @@ tui = ["libc", "ratatui", "ratatui-image", "icy_sixel", "image"]
 # fail to build. Enable with `--features audio` once ALSA dev headers are
 # installed. The APU is always emulated; only speaker playback is gated.
 audio = ["cpal"]
+# MCP server (`gameboy-mcp` binary, `gameboy::mcp`) — drive the emulator from
+# Claude Desktop, Claude Code or any other Model Context Protocol client. OFF by
+# default so that embedding the core does not drag in a protocol nobody asked
+# for; it adds **no third-party crate** (the JSON codec is the agent plugin's,
+# PNG and base64 are `termimage`).
+#
+# It depends on `plugin-agent` because that crate is where structured perception
+# and the bounded action executor already live — the MCP surface is a wrapper
+# over them, not a second implementation. See docs/mcp.md §7.
+mcp = ["plugin-agent"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`gameboy::testing::TestMachine`). Off by
@@ -144,6 +154,13 @@ web-sys = {version = "0.3.4", features = [
 #'WebGlProgram',
 #'WebGlShader',
 
+# The MCP server. A `[[bin]]` rather than an example so that `cargo install`
+# and a Claude Desktop `command:` line have a real, stable executable name.
+[[bin]]
+name = "gameboy-mcp"
+path = "src/bin/gameboy-mcp.rs"
+required-features = ["mcp"]
+
 [[example]]
 name = "desktop"
 path = "examples/desktop/bin.rs"
@@ -227,6 +244,16 @@ harness = false
 name = "ppuengines"
 path = "testharness/ppuengines.rs"
 harness = false
+
+# MCP server harness: spawns the real `gameboy-mcp` binary and speaks JSON-RPC
+# to it, so the transport, the argument parsing and the tool replies are all
+# exercised as a client sees them. Needs only the vendored dmg-acid2 ROM.
+# See testharness/mcp.rs and docs/mcp.md.
+[[test]]
+name = "mcp"
+path = "testharness/mcp.rs"
+harness = false
+required-features = ["mcp"]
 
 # Save-state round-trip proof. `harness = false` so it can print progress and
 # control the exit code. See testharness/savestate.rs.

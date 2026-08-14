@@ -3201,3 +3201,72 @@ it. That is now a real, CI-enforced build; it did not compile before.
   `cargo run --release --example mooneye_scout -- <checkout>/acceptance`, both with `GB_PPU`
   set. `GB_SCOUT_SCREEN=1` prints a failing Mooneye test's own assertion table, which is far
   faster than reading registers.
+
+## MCP server (`src/mcp/`, `gameboy-mcp` binary, `mcp` cargo feature)
+
+- **Full contract, install steps for Claude Desktop and Claude Code, every flag, the measured
+  numbers and the honest limitations: [`docs/mcp.md`](docs/mcp.md).** Behind the `mcp` cargo
+  feature, adds **no third-party crate**: the JSON codec is the agent plugin's, PNG and
+  base64 are `termimage`, and every crate it pulls in is in this repository.
+- **It is a thin wrapper over the agent plugin, and must stay one.** `observe` calls
+  `gameboy_plugin_agent::observe::{Gen1Observer, Screen}`; `run_actions` drives
+  `gameboy_plugin_agent::action::Executor` unchanged; the JSON codec is that crate's too.
+  Nothing here reads game state or times a button press. If a change starts re-deriving
+  either, it belongs in `plugins/agent/`. That is also why the feature is
+  `mcp = ["plugin-agent"]` — all first-party, still no third-party crate.
+- **A frontend, NOT a plugin — decided deliberately, and here is the argument.** A `Plugin` is
+  handed a `Machine` *during a frame the emulator has already decided to run*. Three tools
+  cannot be expressed that way: the server must **drive** the clock (`step`, `press_buttons`,
+  `run_actions` decide how many frames run and when the call returns); half the surface is
+  **above** the machine (`load_rom` replaces the cartridge, `reset` rebuilds it, `load_state`
+  swaps its contents); and it owns host resources (stdio, a sound device, a video sink), which
+  is where `screen::tui` sits. It *uses* the plugin contract instead of joining it.
+- **`Gameboy::with_machine(caps, f)` is the new core hook** (`src/gameboy.rs`), giving a host
+  the same capability-checked `Machine` a plugin gets; `Machine::new` became `pub(crate)`.
+  That is what lets `write_memory` be *provably* absent without `--allow-write-memory`
+  rather than absent by convention — and `read_memory`/`write_memory` go through it rather
+  than through `Gameboy::peek_range`/`debug_write`, even though the server owns the
+  `Gameboy` and could reach either. Filtering the tool out of `tools/list` is what a
+  *client* sees; the grant is what makes the write impossible. Pinned twice:
+  `a_machine_handed_out_by_the_host_still_enforces_its_grant` (core) and
+  `a_write_without_the_grant_does_not_land_and_says_so` (server).
+- **The agent plugin is refused with an explanation, not attached.** An MCP client already *is*
+  the agent; two of them share one controller and each undoes the other's plan.
+- **`write_memory` is filtered out of `tools/list`, not merely refused when called.** A client
+  must never be shown a tool that will say no. Pinned by
+  `write_memory_is_absent_from_the_listing_unless_it_was_enabled`.
+- **A failing tool is a *successful* JSON-RPC call carrying `isError`**, per the MCP spec — a
+  transport-level error is a fault most clients never show the model, so it cannot adapt.
+  Likewise a **notification (no `id`) gets no reply**; answering `notifications/initialized`
+  is the classic way to break a client.
+- **There is no `--tui`, and that is the honest answer.** The MCP transport *is* stdin/stdout;
+  a terminal frontend owns both. `--video-out` is the way a human watches. `--video-out` to a
+  **FIFO** needs the `libc` feature (`--features mcp,libc`); a plain file works everywhere.
+- **Measured, through the protocol, on a real Pokémon Blue save:** headless / no audio /
+  uncapped (the default) **0.238 ms/frame = 70x real time**; `--plugins trainer` 0.239;
+  `--video-out` 0.238; `--audio` **0.264** (~11%); `--speed realtime` 16.74 exactly.
+  **The "~8 ms/frame with audio" figure in circulation is STALE** — it predates the audio
+  crew's non-blocking hand-off (`docs/audio.md` §4c). Audio stays off by default because
+  nobody is listening at 70x, not because it is ruinous.
+- **Harness: `make test-mcp`** (`testharness/mcp.rs`, `harness = false`, in CI) spawns the
+  **real binary** and speaks JSON-RPC down its stdin — a server that starts is not a server
+  that works. Needs only the vendored dmg-acid2 ROM. `make lint-mcp` exists for the same
+  reason `make lint-audio` does: plain `make lint` never compiles the feature.
+- **A trap this harness fell into and now documents: dmg-acid2 draws a STATIC picture.** The
+  first save-state round-trip check compared `observe` output before and after, which is
+  byte-identical at any two frames — so a `load_state` that did nothing passed. Proved by
+  making it a no-op and watching the check stay green. It now probes `$FF04` (DIV), which
+  advances ~274 counts every frame. **Never build a "did the state change?" check on a still
+  screen.**
+- **Verified with a real client**, not only the harness: Claude Code via
+  `claude -p --mcp-config` loaded a save state, and `observe` returned Viridian Pokémon
+  Center at (11,3) with SPARK lv12 / MEWTWO lv70; `read_memory` at `$D35E` independently
+  returned map 41; `run_actions` walked and `observe` confirmed y 3→4; `goto (3,7)` routed
+  round the room's furniture; and the model described the screenshot as the Center's lobby
+  with a nurse and potted plants.
+- **Gen 1 menu timing is the game's, not the server's.** `press_buttons` defaults to a
+  24-frame gap (`agent::action::MENU_GAP`) because `HandleMenuInput` delays several frames
+  after accepting a press. Several presses in one call still land faster than a *screen
+  transition*, so a driver must `step` for the screen to settle after one. Rediscovering this
+  as "A does not register" costs an hour — it is real emulation, proved by driving the same
+  sequence through the library directly.

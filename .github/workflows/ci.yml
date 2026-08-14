@@ -47,6 +47,13 @@ jobs:
         run: cargo build --tests --release
       - name: cargo test
         run: cargo test --release
+      # The MCP server, driven the way a client drives it: the harness spawns
+      # the real `gameboy-mcp` binary and speaks JSON-RPC to it. `make lint`
+      # never compiles the feature, and a protocol bug is invisible to every
+      # other test here — a server that starts is not a server that works.
+      # Needs only the vendored dmg-acid2 ROM. See docs/mcp.md.
+      - name: MCP server
+        run: make test-mcp
       - name: Make desktop build
         run: cd ./examples/desktop && cargo build
       # The web build. Audio is compiled out on wasm; a fresh clone must keep building it.

@@ -24,6 +24,7 @@
 //! | `desktop` | `glutin`, `gl`, `libc`, `image`        | a display server      |
 //! | `tui`     | `ratatui`, `ratatui-image`, `image`    | a kitty-protocol term |
 //! | `audio`   | `cpal`                                 | a sound device        |
+//! | `mcp`     | — (nothing)                            | an MCP client         |
 //! | `ffi`     | —                                      | —                     |
 //!
 //! The core reads no environment variables, opens no device and assumes no
@@ -45,6 +46,10 @@ pub mod gameboy;
 mod gpu;
 mod input;
 mod mbc;
+/// Model Context Protocol server — drive the emulator from any MCP client.
+/// See [`mcp`]. Behind the `mcp` feature and adds no third-party crate.
+#[cfg(all(feature = "mcp", not(target_arch = "wasm32")))]
+pub mod mcp;
 mod mmu;
 pub mod mode;
 /// The PPU's public surface: which of the two rendering engines runs.
