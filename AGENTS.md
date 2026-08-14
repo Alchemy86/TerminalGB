@@ -4996,3 +4996,60 @@ captain's call**. What is now load-bearing:
 - **Still open for an actual publish** (see the scout report §3/§7, outside this repo):
   eight crates publish in dependency order, version bump + tag, GitHub topics/homepage/
   Pages are repo *settings* no commit can change.
+
+## The World Trade Centre — a shared Gen 1 room (`plugins/gen1-lobby/`, `src/lobby.rs`)
+
+**Full report, screenshots and the exact commands: [`docs/worldlobby.md`](docs/worldlobby.md).**
+A 40x28 Cable Club room built at run time in unsaved WRAM, several independent emulator
+processes in it at once, each walking under its own control and seeing the others. A real
+trade and a real link battle both completed **inside** it.
+
+- **The room is a BLOCK MAP, not the screen buffer.** Writing `wOverworldMap` does not race
+  the engine's scroll redraw; `RedrawRowOrColumn` then draws every row and column that
+  scrolls in out of our blocks, so walking, collision, the walk cycle, the bump sound and
+  the camera are all the cartridge's. The earlier per-frame `wTileMap` paint is the thing
+  this replaces.
+- **The cartridge's own Trade Center stays at block (0,0).** The consoles are hidden events
+  at walk tiles (4,4)/(5,4), keyed to the map id in ROM, and cannot be moved. Keeping
+  `maps/TradeCenter.blk` in the corner also means the first frame after install is already
+  correct.
+- **`wCurMap = $F0` (COLOSSEUM) starting a link battle is now MEASURED, not inferred** — the
+  scout report listed it as explicitly unmeasured. `wLinkState` reaches `$03`/`$04`, 36,700
+  transfers, HP visibly falling. One byte.
+- **THE SCREEN ANCHOR IS MEASURED, NOT DERIVED.** The player's walk tile's top-left screen
+  cell is (8, **8**); the cell its own collision test reads is (8,9), the *bottom* left.
+  `screen::calibrate` reproduces all 360 cells from the cartridge's own block map for each
+  candidate before the plugin paints anything: row 8 scores 360/360, row 9 scores 133/360.
+  If neither matched it declines to paint at all.
+- **`Gameboy::clear_input` does NOT release a key pressed with `keydown`** — it resets the
+  scheduled-press *queue*. Handing over from one driver to another without releasing leaves
+  a direction physically down for the rest of the run and pins the player against a wall,
+  which reads exactly like a broken route. General fact; cost hours here.
+- **A plugin's `Event::Frame` is dispatched from `Gameboy::end_frame`, i.e. AFTER the
+  picture is drawn.** So anything written in `on_event` is seen on the *next* frame — and a
+  write-then-undo pair inside one tick brackets the render exactly and is never visible.
+  Draw first, hand back only what is no longer wanted. General fact.
+- **A fixed key-hold is 1.5 Gen 1 steps**, and the game commits to a step once begun, so a
+  walker aiming at an exact square overshoots and oscillates for ever. Release the key the
+  instant the coordinate moves.
+- **Both ends of a cable must run at the same speed AND start together.** One console
+  reaching its seat first and running unpaced while its partner still walked produced
+  **33,697 unanswered master transfers**, and `.establishConnectionLoop` gives up after 90
+  iterations and sits on `PLEASE WAIT!` for ever. The relay reports how many players are at
+  a console; both ends start on that.
+- **Remote avatars are SOLID** (`CollisionCheckOnLand` calls `IsSpriteInFrontOfPlayer`
+  before it looks at a tile), so a crowd converging on two consoles blocks itself — which is
+  correct, and why a trade/battle marks you `away`.
+- **`IMAGEBASEOFFSET` stays 0** so `_UpdateSprites` skips the slot (no movement AI) while
+  `PrepareOAMData` still draws it. The cost is that the engine's cull is skipped too, so
+  `avatar::visible` reimplements `CheckSpriteAvailability`'s window. Cap at **9** remote
+  avatars: `wShadowOAMEnd` *is* `wTileMap`, so the eleventh drawn character corrupts the
+  screen — nine makes that impossible by construction.
+- **The network is NOT in the plugin.** A `Plugin` is handed a machine during a frame the
+  emulator decided to run; a socket is not that. `plugins/gen1-lobby` is pure memory work
+  with no dependency but the plugin API; `src/lobby.rs` is the frontend's socket. Same
+  layering reason as `MachineAccess`.
+- **Save safety:** everything is below `wMainDataStart` except five header bytes, and those
+  are gated on `wLinkState == LINK_STATE_IN_CABLE_CLUB`, where `LinkMenu` has set
+  `BIT_LINK_CONNECTED` so `DrawStartMenu` prints RESET and `SaveMainData` cannot run. Every
+  ROM and save is staged into `target/` — including the human's.
