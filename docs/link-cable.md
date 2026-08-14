@@ -520,13 +520,110 @@ naming the other's cartridge (`POKEMON BLUE` / `POKEMON_GLD`), with Gold reachin
 Time Capsule protocol really is Gen 1's protocol, and the relaying cable carries
 it with nothing added — which was the design claim.
 
-**The trade itself does not complete yet, and the reason is orchestration rather
-than the wire.** Blue's bot walks through its Cable Club into the Trade Center in
-about 2,000 frames while Gold is still at the receptionist, so the two sides are
-out of phase in the *protocol* even though the cable is fine. Blue then trips the
-save guard when Gold stops answering — which is the guard doing its job. Closing
-that gap is bot choreography: both sides have to arrive at their link
-receptionists together and stay in step through the save-and-wait.
+**The trade itself then completed end to end — see the next section.** The
+cross-process attempt recorded here first is still worth keeping as a finding:
+Blue's bot walks through its Cable Club into the Trade Center in about 2,000
+frames while Gold is still at the receptionist, so the two sides go out of phase
+in the *protocol* even though the cable is fine, and Blue trips the save guard
+when Gold stops answering — the guard doing its job. Two separate processes
+cannot see each other's game state, so they cannot wait for each other; the
+completed run below is one process holding Blue back until Gold is ready.
+
+### The trade, completed end to end — and the shiny prediction verified in game
+
+`--capsule-trade` runs the whole chain in **one process**: Gold and Blue as two
+cores on `LinkCable`, each driven by its own bot, with one line of coordination
+between them. Run it against the captain's real Gold save (any Gold save works —
+the two Time Capsule gates are patched idempotently and the party is replaced on
+the **staged copy only**):
+
+```
+cargo run --release --features image,plugin-gen1-link,plugin-trainer \
+    --example gen2_timecapsule -- --rom <gold.gbc> \
+    --capsule-trade <gold.sav> --blue-rom <blue.gb> --blue-save <blue.sav> \
+    --shots target/capsule-shots
+```
+
+**Measured result (the captain's real Gold save, 2026-08-14):** Blue's GLIMMER —
+an Abra given the shiny DV spread `14/10/10/10` (`$EA$AA`), the verdict printed
+by the trainer plugin's `derived::shiny_if_traded` — crossed the Time Capsule in
+3,700 frames of linked protocol (2,580 transfers, 181 unanswered during
+receptionist retries, **0 torn**, no fault) and arrived in Gold as:
+
+```
+[gold]  slot 1: GLIMMER  species 63 Lv10 OT id 4242 DVs 14/10/10/10 ($EA$AA) -> Gold says SHINY
+```
+
+with the species index converted (Gen 1 internal `$94` → dex 63,
+`ConvertMon_1to2`), nickname, OT id and **DVs byte-identical**. The reverse
+direction worked in the same run: Mattia's Pidgey arrived in Blue as internal
+species `$24` with its OT name intact. Gold **quick-saved the result itself**
+(`TryQuickSave` → `Link_SaveGame`), so the staged `.sav` on disk afterwards
+holds GLIMMER with a valid `sGameData` checksum — the trade survived into the
+battery file, not just WRAM.
+
+**The shiny claim is closed by Gold's own renderer, not only by our reading of
+DVs.** After the trade the bot opens GLIMMER's stats screen (cursor lands on the
+only party slot; the per-Pokémon menu opens on STATS) and the screenshot shows
+the Abra drawn in **pink**. Checked to the byte: `PokemonPalettes`
+(`data/pokemon/palettes.asm`, species-indexed, 8 bytes each: two normal then two
+shiny colours) gives Abra normal `(28,19,3)/(12,8,10)` and shiny
+`(28,24,10)/(20,9,19)` in RGB555; through this emulator's Gambatte colour
+correction (`Gpu::setrgb`) the shiny pair lands on RGB `(211,164,121)` and
+`(148,92,143)` — and those two values, **exactly**, are the Abra's colours in
+the captured frame, while neither normal-palette colour appears anywhere on
+screen. `CheckShininess` ran inside the cartridge and picked the shiny half of
+the table.
+
+Four things the completed run needed, each measured the hard way:
+
+1. **Hold Blue until Gold reaches its receptionist — the window is 767 frames.**
+   `LinkReceptionistScript_TimeCapsule` runs `WaitForLinkedFriend` *before* the
+   save prompt, and that special (`engine/link/link.asm`) arms Gold as an
+   externally clocked slave with `SB = USING_INTERNAL_CLOCK ($02)` for
+   `wLinkTimeoutFrames = $2FF` frames — and `$02` is exactly the byte Gen 1's
+   master handshake wants. Blue's whole receptionist sequence fits inside that
+   ~13 s window, and both sides retry on a miss, so one gate ("Blue may not
+   initiate until Gold's bot is at its desk") is the entire choreography.
+   Without the gate, Blue completes its handshake against Gold's **overworld**
+   serial handler and walks into the Trade Center alone — the cross-process
+   failure above.
+2. **A real save fails Gold's RTC consistency check, and the recovery flow eats
+   the joypad.** On continue, the captain's save produced "The clock's time may
+   be wrong." and then the whole clock-set screen ("Set with the Control Pad.",
+   `engine/rtc/restart_clock.asm`) — three screens in a row that a word-list
+   "am I in the overworld yet?" test missed, while `wMapGroup`/`wMapNumber`
+   already read plausible (they are loaded before the continue panel is
+   dismissed). Each escaped word cost a full run walking at nothing. The robust
+   test: the Gen 2 overworld renders **no font glyphs at all** (map tiles are
+   ids below `$80`, which decode to spaces), so *any letter on the decoded
+   tilemap means a menu or dialog still owns the joypad* — dismiss with A.
+   Never B: measured, B backs out through the continue menu to the title screen
+   and the run is over.
+3. **Which Time Capsule seat is ours is not geometry.** The partner's avatar (a
+   `SPRITE_CHRIS` object) stands on one of the two seat tiles;
+   `TimeCapsuleSetWhichChrisCallback` picks it via `CableClubCheckWhichChris`
+   (`engine/link/link.asm`), which reads `hSerialConnectionStatus` — at
+   **`$FFCD`** on Gen 2, not Gen 1's `$FFAA` — and shows Chris on the LEFT seat
+   `(3,4)` when this console took the external clock. Guessing the seat from
+   the arrival x walked the bot into the NPC, where it stood blocked for a full
+   60,000-frame run while Blue's screen said "PLEASE WAIT!". Read the byte and
+   sit on the other side.
+4. **The trade UI is Gen 1's, redrawn by Gen 2, so one bot shape drives both.**
+   pokegold carries the literal `db "STATS     TRADE@"` and
+   `db "Trade completed!@"` (`engine/link/link.asm`), and while the selection
+   screen is up a direction key moves the *cursor* — the seat-facing logic must
+   stop the moment "CANCEL" is on screen, or it walks the selection onto the
+   wrong Pokémon.
+
+Two quirks worth knowing that the run surfaced but did not need fixed:
+GLIMMER arrived in Gold **holding item 200** — Gen 2 reads the Gen 1
+`party_struct`'s catch-rate byte as a held item (Abra's Gen 1 catch rate is
+200), the documented Time Capsule item mechanic — and the captain's real save
+turned out to have **both Time Capsule gates already open** (`EVENT_MET_BILL`
+clear, `DAILYFLAGS1_TIME_CAPSULE_F` clear) but a party of six Johto species,
+which `CheckTimeCapsuleCompatibility` rejects wholesale; the staged-copy party
+patch is what actually made it usable, not the gate edits.
 
 ### The shiny rule, verified against Gold itself
 

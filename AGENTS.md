@@ -3647,12 +3647,13 @@ third-party dependency.
 - **Verified end to end, Blue to Blue:** 1552 transfers, 0 unanswered, 0 torn, each console
   holding the other's Pokémon with DVs intact, and both `.sav` files passing the game's own
   `CalcCheckSum`.
-- **Gen 1 ↔ Gen 2 needs a Gold save nobody has yet.** The cable itself needs *nothing* added —
-  in Time Capsule mode Gen 2 speaks Gen 1's protocol byte for byte
-  (`Link_PrepPartyData_Gen1`, `ConvertMon_2to1`). What is missing is the in-game state: meet
-  Bill in Ecruteak City's Pokémon Center, wait a day (`ENGINE_TIME_CAPSULE` is a *daily* flag
-  and the receptionist is shut while it is set), and carry a party with no species `>= #152`,
-  no move `> STRUGGLE` and no mail — which rules out all three Johto starters.
+- **Gen 1 ↔ Gen 2 is DONE — the Time Capsule trade completed both ways** (see the Gen 2
+  section below and `docs/link-cable.md` §8). The cable itself needed *nothing* added — in Time
+  Capsule mode Gen 2 speaks Gen 1's protocol byte for byte (`Link_PrepPartyData_Gen1`,
+  `ConvertMon_2to1`). The in-game state (Bill met in Ecruteak, a day elapsed, a party with no
+  species `>= #152`, no move `> STRUGGLE`, no mail — all three Johto starters excluded) came
+  from the captain's real Gold save; its gates were already open, and only the six-Johto party
+  had to be patched on the staged copy.
 
 ## The cable is live by default, and Gen 2 (`src/link/peer.rs`, `examples/gen2_timecapsule.rs`)
 
@@ -3727,10 +3728,26 @@ third-party dependency.
   `SHINY_ATK_MASK EQU %0010`, `SHINY_DEF_DV`/`SHINY_SPD_DV`/`SHINY_SPC_DV` all `10` — exactly
   what `plugins/trainer`'s `derived::shiny_if_traded` implements. Reading the rule out of the
   cartridge covers all 65,536 DV pairs; a trade samples one. **Do not re-litigate this.**
-- **Still open:** the Gen1↔Gen2 trade itself. Gold and Blue link and exchange 1635 bytes
-  (Gold reaches "Welcome to CABLE CLUB"), but the two bots go out of phase in the *protocol* —
-  Blue reaches its Trade Center in ~2000 frames while Gold is still at the receptionist. That
-  is bot choreography, not the wire.
+- **CLOSED: the Gen1↔Gen2 trade completed end to end and verified the shiny prediction in
+  game** (`gen2_timecapsule --capsule-trade`, one process, both cores on `LinkCable`; full
+  record `docs/link-cable.md` §8). GLIMMER the Abra, DVs `$EA$AA`, crossed into the captain's
+  real Gold save and arrived species 63, DVs byte-identical, **drawn in the ROM's own shiny
+  palette** (`PokemonPalettes` shiny pair through `Gpu::setrgb`, matched to the pixel) and
+  quick-saved by Gold itself; Mattia's Pidgey arrived in Blue with OT intact. 2,580 transfers,
+  0 torn. The choreography that closed the old phase gap, each learned the hard way:
+  (1) hold Blue until Gold's bot is at its receptionist — `WaitForLinkedFriend` arms Gold as a
+  `$02`-answering slave for `wLinkTimeoutFrames = $2FF` = 767 frames, which is the whole
+  window, and an ungated Blue handshakes against Gold's *overworld* serial handler and enters
+  the Trade Center alone; (2) a real save fails Gold's RTC check and puts up the clock-set
+  screen — in the Gen 2 overworld the decoded tilemap contains **no letters at all**, so "any
+  letter visible = a dialog owns the joypad, press A (never B — B backs out to the title
+  screen)"; (3) the free Time Capsule seat is decided by `hSerialConnectionStatus` — **`$FFCD`
+  on Gen 2, not Gen 1's `$FFAA`** — because the partner's `SPRITE_CHRIS` avatar occupies one
+  seat tile (`CableClubCheckWhichChris`); guessing from geometry parks the bot against the NPC
+  for ever; (4) Gen 2's trade UI is Gen 1's redrawn (`db "STATS     TRADE@"`,
+  `db "Trade completed!@"` in pokegold `engine/link/link.asm`), so one bot shape drives both
+  ends. Bonus quirk observed: the arrival holds **item 200** — Gen 2 reads the Gen 1
+  catch-rate byte (Abra's is 200) as a held item.
 
 ## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
