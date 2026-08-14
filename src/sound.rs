@@ -106,7 +106,7 @@ impl VolumeEnvelope {
             // OLD direction, because the direction latch has not caught up.
             // Writing an envelope that is off in both senses (counting down
             // with period 0) restarts nothing.
-            if self.period == 0 && !(!new_up && new_period == 0) {
+            if self.period == 0 && (new_up || new_period != 0) {
                 vol += if self.goes_up { 1 } else { -1 };
             }
             // Switching the envelope from decrement to increment adds two.
