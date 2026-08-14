@@ -83,7 +83,7 @@ maps the cartridge and `fill_random`s the WRAM but does *not* choose a console; 
 ([`mod.rs:180`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L180)) to write the post-boot I/O defaults — this is the
 **boot-ROM handoff** (see §5). Sharing `raw` is deliberate: the DMG and CGB paths used to be
 two copies of the same struct literal and could drift apart. `new_with_model` takes a
-[`Model`](../../src/mode.rs) (`Auto`/`Dmg`/`Cgb`) and is what `Cpu::new` calls.
+[`Model`](../../src/mode.rs) — nine consoles, `Model::NAMES` — and is what `Cpu::new` calls.
 
 **The dispatch** — `rb` ([`mod.rs:391`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L391)) / `wb`
 ([`mod.rs:450`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L450)) are the address `match`. Echo RAM is folded into the
@@ -177,12 +177,23 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
   boot ROM would have left, and the CPU starts at `PC=0x0100` with the boot registers (see
   [CPU](cpu.md)). The Nintendo logo scroll and the header checksum lock are therefore
   skipped. That state is **per console** and larger than the handful of values usually
-  quoted: the I/O page (`P1=$CF` on a DMG but `$FF` on a Color console, `IF=$E1`,
-  `LCDC=$91`, `BGP=$FC`, …), the 16-bit system counter's exact value *and phase*
-  (`$ABCC`/`$2678` — see [Timer](timer.md)), and, in compatibility mode, the palette-index
-  registers the CGB boot ROM leaves pointing past the compatibility palettes
-  (`BCPS=$C8`, `OCPS=$D0`). Mooneye's `boot_hwio` ROMs walk the whole page byte by byte and
-  both pass.
+  quoted: the I/O page (`P1=$CF` on a DMG but `$FF` on a Color console *and on an SGB*,
+  `IF=$E1`, `LCDC=$91`, `BGP=$FC`, …), the 16-bit system counter's exact value *and phase*
+  (`$ABCC`/`$2678` — see [Timer](timer.md)), where the PPU sits in its frame
+  (`Gpu::set_boot_position` — see [PPU](ppu.md)), and, in compatibility mode, the
+  palette-index registers the CGB boot ROM leaves pointing past the compatibility palettes
+  (`BCPS=$C8`, `OCPS=$D0`). Mooneye's four `boot_hwio` ROMs walk the whole page byte by byte
+  and all four pass.
+  - **"Per console" means per *revision*, not per `GbMode`.** A boot ROM is part of the
+    silicon, so a DMG 0, a DMG ABC and an MGB are three machines that present identical
+    hardware from `PC=$0100` and arrive there differently; `MemoryManagementUnit::console`
+    keeps the resolved [`Model`](../../src/mode.rs) for exactly this and is deliberately not
+    serialised. See AGENTS.md, "Console revisions".
+  - **A Super Game Boy's boot ROM does not take a fixed time.** It clocks the cartridge
+    header to the SNES bit by bit through an unbalanced loop, so a zero bit costs one
+    M-cycle more than a one bit and the counter the cartridge inherits is a function of the
+    header — which is what `acceptance/boot_div-S` and `boot_div2-S`, identical but for two
+    bytes, exist to catch. `mmu::sgb_boot_system_counter`.
   - The APU's share of it is **not** written here — the sound chip is installed later by
     `enable_audio` (a headless machine may never get one), so it lives in
     `Sound::set_post_boot_state`. Writing it in `set_initial` was dead code for as long as
@@ -237,10 +248,16 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
 16. **No value a guest can put in the DMA registers may abort the process.**
     *(Covered: the two `..._does_not_kill_the_process` tests in `mmu::vramdma_tests`.)*
 11. **Post-boot register defaults.** After construction the whole I/O page reads back what
-    the console's boot ROM leaves, per console. *(Covered:
-    `mmu::boot_state_tests::a_dmg_boots_into_the_state_its_boot_rom_leaves` and
-    `a_color_console_boots_into_a_different_state`, which transcribe Mooneye's own tables;
-    `acceptance/boot_hwio-dmgABCmgb` and `misc/boot_hwio-C` both pass.)*
+    the console's boot ROM leaves, per console *revision*. *(Covered:
+    `mmu::boot_state_tests::a_dmg_boots_into_the_state_its_boot_rom_leaves`,
+    `a_color_console_boots_into_a_different_state` and
+    `each_console_revision_boots_into_its_own_state`, which transcribe Mooneye's own tables;
+    all four `boot_hwio` ROMs pass — `-dmgABCmgb`, `-dmg0`, `-S` and `misc/-C`.)*
+17. **A Super Game Boy's boot duration follows the cartridge header.** Two ROMs differing
+    only in their global checksum must hand over with *different* system counters.
+    *(Covered: `mmu::boot_state_tests::an_sgb_boot_takes_longer_for_a_header_full_of_zero_bits`,
+    and `acceptance/boot_div-S` + `boot_div2-S`, which cannot both be passed by a
+    hard-coded duration.)*
 12. **OAM corruption bug.** A qualifying mode-2 OAM bus cycle corrupts OAM per the
     documented pattern, on a DMG only. *(Covered: Blargg `oam_bug` passes 8/8 on `@dmg`
     and is pinned PASS in `baseline.txt`; the patterns themselves by `gpu::oambug::tests`.)*

@@ -63,6 +63,114 @@ const DMG_BOOT_SYSTEM_COUNTER: u16 = 0xABCC;
 /// documented approximation for `Color`.
 const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
 
+/// The first DMG revision, from `acceptance/boot_div-dmg0`. Its boot ROM is a
+/// shorter program than the later revisions', so it hands over with the counter
+/// nearly `$9400` earlier.
+const DMG0_BOOT_SYSTEM_COUNTER: u16 = 0x1830;
+
+/// Where the first DMG's boot ROM leaves the PPU — see [`boot_ppu_dot`].
+///
+/// `145 * 456 + 180`: early in the second VBlank line. **Calibrated, with the
+/// window stated:** `acceptance/boot_hwio-dmg0` passes for a hand-off anywhere
+/// in `66216..=66380` (line 145, dots 96 to 260) and fails on both sides, so
+/// this is the centre of a 168-dot band, not a fitted number. Neither edge is
+/// hardware: the low one is where our fixed 172-dot mode 3 ends and the ROM's
+/// `STAT` read stops seeing mode 3, and the high one is where its `LY` read
+/// rolls to the next line.
+///
+/// **Why line 145 is the right neighbourhood, independently of the ROM.** Both
+/// DMG boot ROMs end their logo animation on a delay loop synchronised to
+/// `LY == 144` ([ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms)
+/// `src/dmg.asm`). The later revisions then run `CheckLogo` — the 48-byte logo
+/// comparison and the header checksum — before handing over; the first revision
+/// has no such code and jumps straight to `Done`. So DMG 0 hands the cartridge
+/// a PPU that is still in VBlank, and DMG ABC one that has had nine more
+/// scanlines to run. That is precisely the nine-line gap between
+/// `boot_hwio-dmg0`'s `LY = $01` and `boot_hwio-dmgABCmgb`'s `LY = $0A`.
+const DMG0_BOOT_PPU_DOT: u32 = 145 * 456 + 180;
+
+/// The first CGB revision, from `misc/boot_div-cgb0`.
+const CGB0_BOOT_SYSTEM_COUNTER: u16 = 0x2884;
+
+/// A Game Boy Advance, from `misc/boot_div-A`. Four T-cycles longer than a
+/// CGB's — the same `inc b` that shows up in `misc/boot_regs-A`'s `B` and `F`.
+const AGB_BOOT_SYSTEM_COUNTER: u16 = 0x267C;
+
+/// The Super Game Boy's boot ROM does not take a fixed time: it hands the
+/// cartridge header to the SNES over the link port before starting the game,
+/// and how long that takes depends on the header bytes. This is the duration
+/// with **every transmitted bit set**; [`sgb_boot_system_counter`] adds the
+/// cost of the zero bits.
+///
+/// Derived from `acceptance/boot_div-S`, whose comment states the dependency
+/// outright ("Bootrom duration on real SGB/SGB2 depends on the header bytes,
+/// including the global checksum") and whose sibling `boot_div2-S` exists to
+/// catch an emulator that hard-codes one number. The two ROMs differ only in
+/// their global checksum and yield the *same* value for this constant, which is
+/// the check that the model below is the right shape.
+const SGB_BOOT_SYSTEM_COUNTER_ALL_ONES: u16 = 0xD174;
+
+/// How long a Super Game Boy's boot ROM takes, in system-counter ticks, for
+/// this cartridge — see [`SGB_BOOT_SYSTEM_COUNTER_ALL_ONES`].
+///
+/// **The mechanism, from the boot ROM itself.** Before it hands over, an SGB
+/// packs the cartridge header (`$0104-$014F`, 76 bytes) into six 16-byte
+/// packets — each carrying a packet id and a checksum over its own share of the
+/// header, with the last packet zero-padded — and clocks all 96 bytes to the
+/// SNES one bit at a time over `P1`. The bit loop is *not* balanced: a set bit
+/// takes a taken `jr`, a clear bit takes the fall-through **plus** a second
+/// `ld a`, so **a zero bit costs one M-cycle more than a one bit**. The
+/// disassembly's own comment on that instruction is "Both code paths aren't
+/// equal CPU time" ([ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms)
+/// `src/sgb.asm`, `.sendBit`).
+///
+/// That is the whole of the data dependency, and it is why `boot_div-S` and
+/// `boot_div2-S` — identical ROMs but for two header bytes — expect the same
+/// six `DIV` readings at read points four M-cycles apart.
+/// Where the PPU sits in its 70224-dot frame when the boot ROM hands over, or
+/// `None` to leave it where the `LCDC` write in
+/// [`MemoryManagementUnit::set_initial`] puts it (the start of line 0).
+///
+/// See [`crate::gpu::Gpu::set_boot_position`]. Only the first DMG needs one:
+/// every other console this emulator models either measures line 0 (`DMG ABC`,
+/// via `boot_hwio-dmgABCmgb`'s `LY = $0A`) or does not measure `LY`/`STAT` at
+/// all (`boot_hwio-S` and `misc/boot_hwio-C` both skip `$FF40`, `$FF41` and
+/// `$FF44` — see their own masks). Guessing a position no ROM checks would be
+/// inventing state, so those are left alone.
+fn boot_ppu_dot(console: crate::mode::Model) -> Option<u32> {
+    match console {
+        crate::mode::Model::Dmg0 => Some(DMG0_BOOT_PPU_DOT),
+        _ => None,
+    }
+}
+
+fn sgb_boot_system_counter(header: &dyn Fn(u16) -> u8) -> u16 {
+    // The six packets, as `.copyHeader` builds them: the first carries the six
+    // bytes from `$014F` downwards, the rest fourteen each.
+    let mut zero_bits: u32 = 0;
+    let mut count = |byte: u8| zero_bits += byte.count_zeros();
+    let mut addr: u16 = 0x014F;
+    for (i, id) in [0xFBu8, 0xF9, 0xF7, 0xF5, 0xF3, 0xF1]
+        .into_iter()
+        .enumerate()
+    {
+        let len = if i == 0 { 6 } else { 14 };
+        let mut checksum: u8 = 0;
+        count(id);
+        for _ in 0..len {
+            let byte = header(addr);
+            addr = addr.wrapping_sub(1);
+            checksum = checksum.wrapping_add(byte);
+            count(byte);
+        }
+        count(checksum);
+    }
+    // `.clearBuffer` zeroes the eight bytes the header does not fill, and they
+    // are clocked out with everything else — 64 bits, all of them slow ones.
+    zero_bits += 64;
+    SGB_BOOT_SYSTEM_COUNTER_ALL_ONES.wrapping_add(4 * zero_bits as u16)
+}
+
 #[derive(PartialEq)]
 enum DMAType {
     NoDma,
@@ -125,6 +233,16 @@ pub struct MemoryManagementUnit<'a> {
     wrambank: usize,
     pub mbc: Box<dyn mbc::MemoryBankController + 'static>,
     pub gbmode: GbMode,
+    /// Which physical console this is, with [`Model::Auto`] already resolved.
+    ///
+    /// [`GbMode`] is what the *cartridge* sees and is enough for everything
+    /// after `PC=$0100`; this is the console **revision**, and it exists because
+    /// boot state is not a function of `GbMode` — a DMG0, a DMG and an MGB are
+    /// all `GbMode::Classic` and hand over three different machines. Consumed
+    /// by [`Self::set_initial`] and by `Registers::boot`, and deliberately
+    /// **not** serialised: like `Sound::cgb_revision` it is a property of the
+    /// machine a state is loaded *into*, not of the state.
+    pub console: crate::mode::Model,
     gbspeed: GbSpeed,
     speed_switch_req: bool,
     undocumented_cgb_regs: [u8; 3], // 0xFF72, 0xFF73, 0xFF75
@@ -150,6 +268,10 @@ pub struct MemoryManagementUnit<'a> {
     /// divided by the double-speed multiplier. Only the accurate engine moves
     /// it; see [`Self::bus_tick`].
     gpu_bus_ticked: u32,
+    /// Force the **batched** PPU to advance with the bus, as the per-dot one
+    /// always does. Set only for the five M-cycles of interrupt dispatch — see
+    /// [`Self::set_ppu_bus_ticking`].
+    ppu_ticks_with_the_bus: bool,
     /// Set by the CPU immediately before a memory access that shares its
     /// M-cycle with a 16-bit increment/decrement — the DMG OAM-corruption bug
     /// treats that combination as its own pattern. Set and consumed inside a
@@ -210,6 +332,7 @@ impl<'a> MemoryManagementUnit<'a> {
             sound: None,
             mbc: mmu_mbc,
             gbmode: GbMode::Classic,
+            console: crate::mode::Model::Dmg,
             gbspeed: GbSpeed::Single,
             speed_switch_req: false,
             hdma_src: 0,
@@ -221,6 +344,7 @@ impl<'a> MemoryManagementUnit<'a> {
             bus_tick_enabled: false,
             bus_ticked: 0,
             gpu_bus_ticked: 0,
+            ppu_ticks_with_the_bus: false,
             idu_share: false,
             fault: None,
             cart_rtc,
@@ -265,8 +389,10 @@ impl<'a> MemoryManagementUnit<'a> {
         model: crate::mode::Model,
     ) -> StrResult<MemoryManagementUnit<'a>> {
         let mut res = Self::raw(data, file)?;
-        let mode = model.resolve(res.rb(0x0143));
-        res.set_mode(mode);
+        let cgb_flag = res.rb(0x0143);
+        let console = model.console(cgb_flag);
+        res.set_mode(console.mode(cgb_flag));
+        res.console = console;
         res.set_initial();
         Ok(res)
     }
@@ -288,20 +414,34 @@ impl<'a> MemoryManagementUnit<'a> {
     /// dead code — `self.sound` is `None` at this point and every one of those
     /// writes was silently dropped.
     fn set_initial(&mut self) {
+        use crate::mode::Model;
         // The system counter is running long before the cartridge sees its
-        // first instruction. `$ABCC`/`$2674` are the values a CPU read observes
-        // on the first M-cycle — see `Timer::set_boot_counter`.
-        self.timer.set_boot_counter(if self.gbmode.is_dmg() {
-            DMG_BOOT_SYSTEM_COUNTER
-        } else {
-            CGB_BOOT_SYSTEM_COUNTER
-        });
+        // first instruction. These are the values a CPU read observes on the
+        // first M-cycle — see `Timer::set_boot_counter`. Every one of them is a
+        // `boot_div` ROM's measurement of a *different boot program*, which is
+        // why they are per console revision and not per `GbMode`.
+        let counter = match self.console {
+            Model::Dmg0 => DMG0_BOOT_SYSTEM_COUNTER,
+            Model::Cgb0 => CGB0_BOOT_SYSTEM_COUNTER,
+            Model::Agb => AGB_BOOT_SYSTEM_COUNTER,
+            // The only console whose boot ROM does not take a fixed time.
+            Model::Sgb | Model::Sgb2 => {
+                let rom = &*self.mbc;
+                sgb_boot_system_counter(&|addr| rom.readrom(addr))
+            }
+            _ if self.gbmode.is_dmg() => DMG_BOOT_SYSTEM_COUNTER,
+            _ => CGB_BOOT_SYSTEM_COUNTER,
+        };
+        self.timer.set_boot_counter(counter);
         // The boot ROM ran through at least one VBlank, so its flag is still
         // pending. `IE` is 0, so nothing is dispatched until the game asks.
         self.intf = 0x01;
-        // `P1`: the DMG boot ROM leaves both select lines pulled low (`$CF`);
-        // the CGB boot ROM leaves them released (`$FF`).
-        if self.gbmode.is_dmg() {
+        // `P1`: the DMG boot ROM leaves both select lines pulled low (`$CF`).
+        // The CGB's leaves them released (`$FF`), and so does the SGB's — its
+        // last use of the port is clocking packets to the SNES, which ends with
+        // a write of `$30` (`boot_hwio-S` expects `$FF`, `boot_hwio-dmgABCmgb`
+        // `$CF`). This is therefore *not* a `GbMode::is_dmg()` question.
+        if self.gbmode == GbMode::Classic {
             self.keypad.wb(0x00);
         }
         self.wb(0xFF05, 0);
@@ -320,6 +460,10 @@ impl<'a> MemoryManagementUnit<'a> {
         self.wb(0xFF49, 0xFF);
         self.wb(0xFF4A, 0);
         self.wb(0xFF4B, 0);
+        // Where the PPU is in its frame at hand-off — see `Gpu::set_boot_position`.
+        if let Some(dot) = boot_ppu_dot(self.console) {
+            self.gpu.set_boot_position(dot);
+        }
         if self.gbmode == GbMode::ColorAsClassic {
             // A CGB running a DMG cartridge has just loaded the compatibility
             // palettes through `BCPS`/`OCPS`, which are left pointing past the
@@ -384,6 +528,14 @@ impl<'a> MemoryManagementUnit<'a> {
 
     fn set_mode(&mut self, mode: GbMode) {
         self.gbmode = mode;
+        // Keep the console consistent for callers that set a mode directly
+        // (`new`/`new_cgb`), so `console` is never a lie about `gbmode`.
+        self.console = match mode {
+            GbMode::Classic => crate::mode::Model::Dmg,
+            GbMode::Super => crate::mode::Model::Sgb,
+            GbMode::Super2 => crate::mode::Model::Sgb2,
+            GbMode::Color | GbMode::ColorAsClassic => crate::mode::Model::Cgb,
+        };
         self.gpu.gbmode = mode;
         // The ICD2 exists only on an SGB, so a machine that is not one pays
         // nothing: `Option::is_some` on the `$FF00` path and no state to
@@ -424,7 +576,9 @@ impl<'a> MemoryManagementUnit<'a> {
             // In double speed the PPU runs at half the CPU's rate, matching the
             // `ticks / cpudivider` division in `do_cycle`; 4 / 2 is exact, so
             // no phase is lost across the split.
-            if self.gpu.render_mode() == crate::gpu::RenderMode::Accurate {
+            if self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
+                || self.ppu_ticks_with_the_bus
+            {
                 let step = match self.gbspeed {
                     GbSpeed::Single => 4,
                     GbSpeed::Double => 2,
@@ -559,6 +713,30 @@ impl<'a> MemoryManagementUnit<'a> {
     pub fn set_bus_ticking(&mut self, on: bool) -> bool {
         let prev = self.bus_tick_enabled;
         self.bus_tick_enabled = on;
+        prev
+    }
+
+    /// Make the **batched** PPU advance one M-cycle per bus tick, the way the
+    /// per-dot one already does, and return the previous setting.
+    ///
+    /// Used for exactly one thing: the five M-cycles of interrupt dispatch.
+    /// The PPU is running during them on hardware, and `Cpu::handleinterrupt`
+    /// decides the vector *in the middle* of them from `IE & IF` as they stand
+    /// at M4 — so an interrupt raised by the PPU while the CPU is pushing `PC`
+    /// can redirect the dispatch it is already inside. With the PPU frozen
+    /// until the end of the dispatch it cannot, and that is observable:
+    /// `mealybug/m2_win_en_toggle` enables VBlank *and* mode-2 STAT and toggles
+    /// `LCDC.5` in one handler while the other sets it, so which of the two
+    /// runs first inverts the whole frame's window pattern. Real DMG and real
+    /// CGB photograph identically there, even though `misc/ppu/vblank_stat_intr-C`
+    /// shows the CGB raising STAT one M-cycle *before* VBlank — the redirect is
+    /// what reconciles the two, and it needs the PPU to be running.
+    ///
+    /// The dots are counted into `gpu_bus_ticked`, so the lump `do_cycle` at
+    /// the end of the dispatch subtracts them and total PPU time is unchanged.
+    pub(crate) fn set_ppu_bus_ticking(&mut self, on: bool) -> bool {
+        let prev = self.ppu_ticks_with_the_bus;
+        self.ppu_ticks_with_the_bus = on;
         prev
     }
 
@@ -1211,7 +1389,7 @@ impl<'a> MemoryManagementUnit<'a> {
             // state is applied here — see `Sound::set_post_boot_state`. Only on
             // a *fresh* chip: re-attaching a player mid-run must not rewind the
             // sound chip to its boot state.
-            sound.set_post_boot_state();
+            sound.set_post_boot_state(self.gbmode.is_sgb());
         }
         sound.set_player(player);
     }
@@ -1802,5 +1980,125 @@ mod boot_state_tests {
             "SC's start bit clears on completion"
         );
         assert_ne!(mem.intf & 0x08, 0, "and the serial interrupt is requested");
+    }
+
+    /// The three consoles whose `boot_hwio` differs from a DMG's, each pinned
+    /// against the ROM that measures it. These are *whole machines*, not
+    /// variations on a theme: get any one of these wrong and its ROM says so.
+    #[test]
+    fn each_console_revision_boots_into_its_own_state() {
+        use crate::mode::Model;
+
+        // `acceptance/boot_hwio-S`. A Super Game Boy's boot ROM ends by
+        // clocking packets out of `P1`, so it leaves the select lines released
+        // like a CGB's rather than pulled low like a DMG's — and it sets
+        // channel 1 up without ever triggering it, so `NR52` reads `$F0`.
+        let mut sgb = machine(Model::Sgb);
+        assert_eq!(sgb.rb(0xFF00), 0xFF, "P1 released on an SGB");
+        assert_eq!(sgb.rb(0xFF26), 0xF0, "no start-up beep on an SGB");
+        // Everything else it checks is the DMG's.
+        for &(a, want) in DMG_HWIO {
+            if matches!(a, 0xFF00 | 0xFF26) {
+                continue;
+            }
+            assert_eq!(sgb.rb(a), want, "SGB ${a:04X}");
+        }
+
+        // An MGB is a DMG in every byte of I/O; only `A` differs, which is the
+        // CPU's business (`Registers::boot`).
+        let mut mgb = machine(Model::Mgb);
+        for &(a, want) in DMG_HWIO {
+            assert_eq!(mgb.rb(a), want, "MGB ${a:04X}");
+        }
+
+        // `acceptance/boot_hwio-dmg0`: a shorter boot ROM, so a much smaller
+        // system counter and a PPU that has not reached line 0 yet.
+        let mut dmg0 = machine(Model::Dmg0);
+        assert_eq!(dmg0.rb(0xFF04), 0x18, "DIV on a DMG 0");
+        assert_eq!(dmg0.rb(0xFF44), 145, "LY: still in VBlank at hand-off");
+        for &(a, want) in DMG_HWIO {
+            // The three the ROM's own mask skips or expects differently.
+            if matches!(a, 0xFF04 | 0xFF41 | 0xFF44) {
+                continue;
+            }
+            assert_eq!(dmg0.rb(a), want, "DMG0 ${a:04X}");
+        }
+    }
+
+    /// A Super Game Boy's boot ROM clocks the cartridge header to the SNES one
+    /// bit at a time through an **unbalanced** loop, so how long it takes — and
+    /// therefore the system counter the cartridge inherits — is a function of
+    /// the header bytes. Mooneye ships `boot_div-S` and `boot_div2-S`, the same
+    /// program with a different global checksum, precisely to catch an emulator
+    /// that hard-codes one duration.
+    #[test]
+    fn an_sgb_boot_takes_longer_for_a_header_full_of_zero_bits() {
+        /// The 96-byte packet buffer, built the long way round so the packing
+        /// in `sgb_boot_system_counter` is checked against something other than
+        /// itself — the 6/14 split, the six packet ids, the per-packet checksum
+        /// and the eight bytes `.clearBuffer` zeroes are all load-bearing, and
+        /// an off-by-one in any of them is worth several M-cycles.
+        fn buffer(header: &dyn Fn(u16) -> u8) -> Vec<u8> {
+            let mut out = vec![0u8; 8]; // the zeroed tail
+            let mut addr = 0x014Fu16;
+            for (i, id) in [0xFBu8, 0xF9, 0xF7, 0xF5, 0xF3, 0xF1]
+                .into_iter()
+                .enumerate()
+            {
+                let mut bytes = Vec::new();
+                for _ in 0..if i == 0 { 6 } else { 14 } {
+                    bytes.push(header(addr));
+                    addr = addr.wrapping_sub(1);
+                }
+                let cks = bytes.iter().fold(0u8, |a, b| a.wrapping_add(*b));
+                out.push(id);
+                out.push(cks);
+                out.extend_from_slice(&bytes);
+            }
+            assert_eq!(out.len(), 96, "six packets of sixteen bytes");
+            assert_eq!(addr, 0x0103, "the whole header $0104-$014F, and no more");
+            out
+        }
+        let expect = |h: &dyn Fn(u16) -> u8| {
+            let zeros: u32 = buffer(h).iter().map(|b| b.count_zeros()).sum();
+            SGB_BOOT_SYSTEM_COUNTER_ALL_ONES.wrapping_add(4 * zeros as u16)
+        };
+
+        for h in [
+            &(|_: u16| 0xFFu8) as &dyn Fn(u16) -> u8,
+            &|_| 0x00,
+            &|a| (a & 0xFF) as u8,
+            &|a| if a == 0x014E { 0x12 } else { 0xFF },
+        ] {
+            assert_eq!(sgb_boot_system_counter(h), expect(h));
+        }
+
+        // The property `boot_div2-S` exists to enforce: two cartridges that
+        // differ only in their global checksum do **not** boot in the same time.
+        let a = sgb_boot_system_counter(&|a| if a == 0x014E { 0x12 } else { 0xFF });
+        let b = sgb_boot_system_counter(&|a| if a == 0x014E { 0xA7 } else { 0xFF });
+        assert_ne!(a, b, "the boot duration must follow the header");
+        // And a header of zero bits is the slowest one there is.
+        assert!(sgb_boot_system_counter(&|_| 0x00) > sgb_boot_system_counter(&|_| 0xFF));
+    }
+
+    /// Only the first DMG needs its PPU parked away from line 0; guessing a
+    /// position for a console whose `boot_hwio` ROM does not measure `LY`
+    /// would be inventing state.
+    #[test]
+    fn only_the_console_whose_rom_measures_it_gets_a_ppu_boot_position() {
+        use crate::mode::Model;
+        assert_eq!(boot_ppu_dot(Model::Dmg0), Some(DMG0_BOOT_PPU_DOT));
+        for m in [
+            Model::Dmg,
+            Model::Mgb,
+            Model::Sgb,
+            Model::Sgb2,
+            Model::Cgb,
+            Model::Cgb0,
+            Model::Agb,
+        ] {
+            assert_eq!(boot_ppu_dot(m), None, "{m:?}");
+        }
     }
 }

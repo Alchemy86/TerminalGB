@@ -58,15 +58,49 @@ impl GbMode {
 /// [`Model::Auto`] does what a person with both consoles would do: a cartridge
 /// whose CGB flag (`0x0143` bit 7) is set goes in the Color, everything else
 /// goes in the DMG.
+///
+/// Every value except [`Model::Auto`] names one physical console **revision**.
+/// The revisions matter because a boot ROM is part of the silicon: `Dmg0` and
+/// `Dmg` are the same hardware running different boot code, so they present an
+/// identical machine to a cartridge from `PC=$0100` onwards and differ only in
+/// the state they arrive there with. That is why the revisions are *not* part
+/// of [`GbMode`] and are not serialised into a save state — they are consumed
+/// once, at construction, by [`crate::mmu::MemoryManagementUnit::set_initial`]
+/// and [`crate::cpu::registers::Registers::boot`].
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
 pub enum Model {
     /// Pick from the cartridge header. This is the default.
     #[default]
     Auto,
-    /// Force an original Game Boy (DMG), whatever the header says.
+    /// Force an original Game Boy (DMG revisions A, B and C — the ones that
+    /// shipped in quantity), whatever the header says.
     Dmg,
-    /// Force a Game Boy Color, whatever the header says.
+    /// The **first** DMG revision, whose boot ROM is a different program: it
+    /// has no header-checksum lock-up, so it leaves different registers, a
+    /// different system counter and the PPU at a different point in its frame.
+    /// Mooneye's `boot_regs-dmg0`, `boot_div-dmg0` and `boot_hwio-dmg0` are the
+    /// three ROMs that tell it apart from [`Model::Dmg`], and each of the three
+    /// fails on the other machine.
+    Dmg0,
+    /// The Game Boy Pocket (MGB). Same boot ROM as [`Model::Dmg`] but for one
+    /// byte: it hands over `A = $FF` instead of `$01`, which is how a cartridge
+    /// detects the smaller console. `boot_regs-mgb`.
+    Mgb,
+    /// Force a Game Boy Color (CPU CGB revisions A-E), whatever the header
+    /// says.
     Cgb,
+    /// The **first** CGB revision. Identical to [`Model::Cgb`] except that its
+    /// boot ROM is a few M-cycles shorter, which `misc/boot_div-cgb0` measures
+    /// through the system counter. (The APU also differs between CGB
+    /// revisions — that axis is [`crate::sound::CgbRevision`], selected
+    /// separately, because SameSuite splits the revisions differently again.)
+    Cgb0,
+    /// A Game Boy Advance (or AGS) running a Game Boy cartridge. It is CGB
+    /// hardware with a third boot ROM: `B` arrives holding `$01` rather than
+    /// `$00` — the bit a cartridge tests to offer AGB-specific colours — and
+    /// the flags register carries the result of the `inc b` that put it there.
+    /// `misc/boot_regs-A`, `misc/boot_div-A`.
+    Agb,
     /// Force a Super Game Boy. Never chosen by [`Model::Auto`]: an SGB is a
     /// peripheral a player opts into, and this emulator shows the Game Boy
     /// screen rather than the SNES's border and palettes, so booting one by
@@ -86,15 +120,44 @@ pub const MODEL_ENV: &str = "GB_MODEL";
 
 impl Model {
     /// Parse a user-supplied model name. Accepts the names the community uses:
-    /// `auto`, `dmg`/`gb`/`classic`, `cgb`/`gbc`/`color`. Case-insensitive.
+    /// `auto`, `dmg`/`gb`/`classic`, `cgb`/`gbc`/`color`, and the revision
+    /// names the accuracy suites use (`dmg0`, `mgb`, `cgb0`, `agb`/`ags`).
+    /// Case-insensitive.
     pub fn parse(s: &str) -> Option<Model> {
         match s.trim().to_ascii_lowercase().as_str() {
             "auto" | "" => Some(Model::Auto),
             "dmg" | "gb" | "classic" => Some(Model::Dmg),
+            "dmg0" => Some(Model::Dmg0),
+            "mgb" | "pocket" => Some(Model::Mgb),
             "cgb" | "gbc" | "color" | "colour" => Some(Model::Cgb),
+            "cgb0" => Some(Model::Cgb0),
+            // AGS is the backlit Game Boy Advance SP; Mooneye verifies the same
+            // boot state on both, so they are one machine here.
+            "agb" | "ags" | "gba" => Some(Model::Agb),
             "sgb" | "super" => Some(Model::Sgb),
             "sgb2" | "super2" => Some(Model::Sgb2),
             _ => None,
+        }
+    }
+
+    /// The names [`Model::parse`] accepts, for the warning a typo produces and
+    /// for any frontend that wants to list them.
+    pub const NAMES: &'static str = "auto/dmg/dmg0/mgb/cgb/cgb0/agb/sgb/sgb2";
+
+    /// The canonical name of this console — the one [`Model::parse`] round
+    /// trips. Test harnesses label their rows with it, so it lives here rather
+    /// than in each of them, where a new console would silently be missed.
+    pub fn name(self) -> &'static str {
+        match self {
+            Model::Auto => "auto",
+            Model::Dmg => "dmg",
+            Model::Dmg0 => "dmg0",
+            Model::Mgb => "mgb",
+            Model::Cgb => "cgb",
+            Model::Cgb0 => "cgb0",
+            Model::Agb => "agb",
+            Model::Sgb => "sgb",
+            Model::Sgb2 => "sgb2",
         }
     }
 
@@ -105,8 +168,8 @@ impl Model {
             let m = Model::parse(&v);
             if m.is_none() {
                 eprintln!(
-                    "warning: {MODEL_ENV}={v:?} is not one of auto/dmg/cgb/sgb/sgb2 \
-                     — ignoring"
+                    "warning: {MODEL_ENV}={v:?} is not one of {} — ignoring",
+                    Model::NAMES
                 );
             }
             m
@@ -124,13 +187,23 @@ impl Model {
     /// 0xC0`). That is deliberate: forcing means forcing, and what such a
     /// cartridge does on a DMG is exactly what a test would want to observe.
     pub fn resolve(self, cgb_flag: u8) -> GbMode {
-        self.resolve_with(cgb_flag, Model::from_env())
+        self.console(cgb_flag).mode(cgb_flag)
     }
 
-    /// The whole of [`resolve`](Self::resolve) with the environment passed in,
+    /// Which console this actually is, with [`Model::Auto`] resolved away.
+    ///
+    /// Boot state is a property of the *console revision*, not of the resolved
+    /// [`GbMode`] — a DMG0 and a DMG are both `GbMode::Classic` and hand the
+    /// cartridge different registers — so construction keeps this value and
+    /// [`GbMode`] both.
+    pub fn console(self, cgb_flag: u8) -> Model {
+        self.console_with(cgb_flag, Model::from_env())
+    }
+
+    /// The whole of [`console`](Self::console) with the environment passed in,
     /// so it can be tested without mutating process-global state.
-    fn resolve_with(self, cgb_flag: u8, env: Option<Model>) -> GbMode {
-        let chosen = match self {
+    fn console_with(self, cgb_flag: u8, env: Option<Model>) -> Model {
+        match self {
             Model::Auto => {
                 env.filter(|m| *m != Model::Auto)
                     .unwrap_or(if cgb_flag & 0x80 != 0 {
@@ -140,14 +213,22 @@ impl Model {
                     })
             }
             explicit => explicit,
-        };
-        match chosen {
-            Model::Dmg => GbMode::Classic,
+        }
+    }
+
+    /// The hardware mode a *concrete* console presents to a cartridge whose
+    /// header byte `0x0143` is `cgb_flag`. Panics-free on [`Model::Auto`], which
+    /// is treated as a Color console for backwards compatibility; callers should
+    /// resolve with [`Model::console`] first.
+    pub fn mode(self, cgb_flag: u8) -> GbMode {
+        match self {
+            Model::Dmg | Model::Dmg0 | Model::Mgb => GbMode::Classic,
             Model::Sgb => GbMode::Super,
             Model::Sgb2 => GbMode::Super2,
             // A Color console running a cartridge that does not advertise CGB
-            // support runs in compatibility mode.
-            Model::Cgb | Model::Auto => {
+            // support runs in compatibility mode. An AGB is Color hardware, so
+            // it takes the same branch.
+            Model::Cgb | Model::Cgb0 | Model::Agb | Model::Auto => {
                 if cgb_flag & 0x80 != 0 {
                     GbMode::Color
                 } else {
@@ -155,6 +236,12 @@ impl Model {
                 }
             }
         }
+    }
+
+    /// The whole of [`resolve`](Self::resolve) with the environment passed in.
+    #[cfg(test)]
+    fn resolve_with(self, cgb_flag: u8, env: Option<Model>) -> GbMode {
+        self.console_with(cgb_flag, env).mode(cgb_flag)
     }
 }
 
@@ -236,6 +323,68 @@ mod tests {
         // A typo must be rejected, not silently treated as a console.
         assert_eq!(Model::parse("dgm"), None);
         assert_eq!(Model::parse("sgb3"), None);
+    }
+
+    /// Every console must survive `name` → `parse`, and every name `NAMES`
+    /// advertises must be one a user can actually type — a console reachable
+    /// only from Rust is a console nobody can select.
+    #[test]
+    fn every_console_has_a_name_that_round_trips() {
+        for m in [
+            Model::Auto,
+            Model::Dmg,
+            Model::Dmg0,
+            Model::Mgb,
+            Model::Cgb,
+            Model::Cgb0,
+            Model::Agb,
+            Model::Sgb,
+            Model::Sgb2,
+        ] {
+            assert_eq!(Model::parse(m.name()), Some(m), "{m:?}");
+            assert!(
+                Model::NAMES.split('/').any(|n| n == m.name()),
+                "{m:?} is missing from Model::NAMES"
+            );
+        }
+        for n in Model::NAMES.split('/') {
+            assert!(Model::parse(n).is_some(), "{n} is advertised but unparsed");
+        }
+    }
+
+    /// The revisions are boot state only — after `PC=$0100` they present the
+    /// same machine as the console they are a revision of, which is why they
+    /// share a [`GbMode`] and are not serialised into a save state.
+    #[test]
+    fn a_revision_presents_the_same_hardware_as_its_console() {
+        for m in [Model::Dmg, Model::Dmg0, Model::Mgb] {
+            assert_eq!(m.mode(DMG_ONLY), GbMode::Classic, "{m:?}");
+        }
+        for m in [Model::Cgb, Model::Cgb0, Model::Agb] {
+            assert_eq!(m.mode(CGB_ENHANCED), GbMode::Color, "{m:?}");
+            assert_eq!(m.mode(DMG_ONLY), GbMode::ColorAsClassic, "{m:?}");
+        }
+    }
+
+    /// `Auto` picks only the two consoles a person is likely to own. A
+    /// revision — a pre-release DMG, a Game Boy Pocket, an AGB — is something
+    /// you ask for by name; inferring one would silently change every game's
+    /// boot registers.
+    #[test]
+    fn auto_never_infers_a_revision() {
+        for flag in [DMG_ONLY, CGB_ENHANCED, CGB_ONLY] {
+            let picked = Model::Auto.console_with(flag, None);
+            assert!(
+                matches!(picked, Model::Dmg | Model::Cgb),
+                "auto picked {picked:?} for flag {flag:#04x}"
+            );
+        }
+        // But naming one explicitly, or through the environment, is honoured.
+        assert_eq!(Model::Agb.console_with(DMG_ONLY, None), Model::Agb);
+        assert_eq!(
+            Model::Auto.console_with(DMG_ONLY, Some(Model::Mgb)),
+            Model::Mgb
+        );
     }
 
     /// An SGB is never inferred. A cartridge's SGB flag (`$0146 == 0x03`) says

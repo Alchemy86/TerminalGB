@@ -20,20 +20,25 @@
 #
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 #
-# The `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` rows in `acceptance` are ROMs
-# for a *named machine*, and this runner boots the one each names where it can:
-# `-sgb`/`-sgb2` get a Super Game Boy (see src/sgb.rs) and pass. The remaining
-# seven name machines still not modelled here — the SGB's SNES side (`-S`), an
-# original MGB, a revision-0 DMG — and are pinned FAIL on purpose: they are not
-# evidence of a bug, and the community's 66-row denominator excludes them.
+# Rows whose name ends in a machine — `-dmg0`, `-mgb`, `-sgb`, `-sgb2`, `-cgb0`
+# or a single Gekkio compatibility letter (`-S`, `-A`, `-C`, `-G`, `-M`) — are
+# written for that console and cannot pass on another, so this runner boots the
+# one each names (see `model_for`, and `src/mode.rs` for the consoles). A suffix
+# naming *several* machines (`-GS`, `-cgbABCDE`) is left on whatever GB_MODEL
+# asked for.
+#
+# All nine are green now. The remaining reds are the mid-scanline PPU rows, which
+# need the cycle-stepped renderer (docs/mealybug.md §7) and are red under both
+# engines. Note the community's often-quoted 66-row denominator DROPS the
+# named-machine ROMs; this file scores all 75.
 #
 # Measured with GB_MODEL=cgb.
 
 misc/bits/unused_hwio-C = PASS
-misc/boot_div-A = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
-misc/boot_div-cgb0 = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+misc/boot_div-A = PASS
+misc/boot_div-cgb0 = PASS
 misc/boot_div-cgbABCDE = PASS
 misc/boot_hwio-C = PASS
-misc/boot_regs-A = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+misc/boot_regs-A = PASS
 misc/boot_regs-cgb = PASS
-misc/ppu/vblank_stat_intr-C = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+misc/ppu/vblank_stat_intr-C = PASS

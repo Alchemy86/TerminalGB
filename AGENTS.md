@@ -730,6 +730,91 @@ FAIL → PASS. Full write-up with citations: `docs/conformance-notes.md`.
   model variants (other consoles we do not emulate — 9 rows in `acceptance`, 2 in `misc`)
   and the PPU mid-scanline tests.
 
+## Console revisions — nine machines, not four (`src/mode.rs`, `Registers::boot`)
+
+**Mooneye `acceptance` 60/75 → 67/75, `misc` (CGB) 4/8 → 8/8**, measured before and after
+with `make test-external`; everything else byte-identical, including Mealybug's per-row
+pixel counts, on **both** PPU engines. Full per-fix record with citations:
+[`docs/conformance-notes.md`](docs/conformance-notes.md) (newest entry).
+
+- **A boot ROM is part of the silicon, so a revision is a machine.** Mooneye ships a
+  `boot_regs`/`boot_div`/`boot_hwio` ROM per console and **no two consoles hand the
+  cartridge the same state** — passing one is failing the others. `Model` now carries
+  `Dmg0`, `Mgb`, `Cgb0` and `Agb` beside `Dmg`/`Cgb`/`Sgb`/`Sgb2`; ten of the eleven rows
+  this work turned green were one cause, "we only modelled four of the nine".
+- **The revisions are boot state ONLY and are deliberately not in `GbMode`.** From
+  `PC=$0100` a DMG0 and a DMG are identical silicon, so `GbMode` still has its five values,
+  **`savestate::FORMAT_VERSION` did not move**, and `MemoryManagementUnit::console` is not
+  serialised — same call as `Sound::cgb_revision`: a property of the machine a state is
+  loaded *into*. `Model::console(cgb_flag)` resolves `Auto` away; `Model::mode(cgb_flag)`
+  turns a concrete console into a `GbMode`.
+- **`Model::Auto` must never infer a revision** (`auto_never_infers_a_revision`). A
+  pre-release DMG, a Pocket or an AGB is something you ask for by name — `GB_MODEL=dmg0|
+  mgb|cgb0|agb`; inferring one would silently change every game's boot registers.
+- **`A = $FF` is how a cartridge detects an MGB and `B` bit 0 is how it detects an AGB**, so
+  these are not trivia. An AGB's boot ROM ends with an `inc b`, which is both why `B` holds
+  `$01` and why `F` reads `$00` instead of the CGB's `Z` — one instruction explains both.
+- **DMG 0's boot ROM is a different program, not a variation.** It has no header-checksum
+  lock-up, so it never runs the code that leaves the registers tidy (`F=$00 B=$FF DE=$00C1
+  HL=$8403`), hands over with the system counter nearly `$9400` lower, and — because it
+  skips `CheckLogo` — leaves the **PPU nine scanlines earlier**, still in VBlank.
+- **The PPU's position at hand-off is a per-console constant** (`Gpu::set_boot_position`,
+  `mmu::boot_ppu_dot`). Only DMG 0 gets one: `boot_hwio-S` and `misc/boot_hwio-C` **skip**
+  `$FF40`/`$FF41`/`$FF44` in their own masks, so no ROM measures it on those machines and
+  none is invented. `DMG0_BOOT_PPU_DOT` is calibrated **with its window stated** — line 145
+  dots 96..260 all pass, so it is the centre of a 168-dot band, and neither edge is hardware
+  (one is our fixed 172-dot mode 3, the other is the ROM's `LY` read rolling over).
+- **An SGB's boot ROM does NOT take a fixed time, and `boot_div2-S` exists to catch you
+  hard-coding one.** It clocks the 76-byte cartridge header to the SNES as six 16-byte
+  packets (id + checksum + data, eight zero bytes of padding = 96 bytes, 768 bits) through
+  an **unbalanced** bit loop: a set bit takes a taken `jr`, a clear bit falls through *and*
+  runs a second `ld a`, so **a zero bit costs one M-cycle more**. The disassembly says so
+  itself — "Both code paths aren't equal CPU time … NINTENDOOOOO"
+  ([ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms) `src/sgb.asm`).
+  `mmu::sgb_boot_system_counter` is that model; the two ROMs independently give the same
+  all-ones base `$D174`, which is what says the shape is right rather than fitted.
+- **`P1 = $CF` is a `GbMode::Classic` fact, not a `GbMode::is_dmg()` one.** An SGB's last
+  use of the port is clocking packets, ending on `$30`, so it leaves the lines **released**
+  (`$FF`) like a CGB. Its last audio write is `NR14 = $07`, not `$87` — channel 1 is set up
+  and never triggered, so **`NR52` reads `$F0` and an SGB has no start-up ding**.
+- **The scouts must boot the machine the filename names, or the row is a runner bug, not an
+  emulator one** (`examples/mooneye_scout.rs::model_for`). Two conventions: spelled-out
+  (`-dmg0`, `-mgb`, `-sgb`, `-sgb2`, `-cgb0`) and Gekkio's single compatibility letters
+  (`G`=DMG, `M`=MGB, `S`=SGB, `C`=CGB, `A`=AGB). **A suffix naming *several* machines
+  (`-GS`, `-cgbABCDE`) must be left alone** — forcing one of them boots the wrong console
+  for the rest.
+- **Do not quote the community's 66-row denominator as if it were the whole suite.** It
+  drops the nine named-machine ROMs precisely because most emulators cannot run them; our
+  baselines score all 75 and all nine are green.
+
+### The CGB strobes STAT one M-cycle before VBlank — and it must NOT reorder the two
+
+- `misc/ppu/vblank_stat_intr-C` and `acceptance/ppu/vblank_stat_intr-GS` are the same
+  program with one `nop` moved: on Color hardware the line-144 OAM strobe is one M-cycle
+  **before** the VBlank flag, on a DMG they are simultaneous (`VBLANK_STROBE_LEAD`,
+  `Gpu::oam_strobe`).
+- **Implementing that alone cost two hardware-photographed Mealybug rows, and that was the
+  real finding.** `mealybug/m2_win_en_toggle` enables both interrupts, *sets* `LCDC.5` in
+  one handler and *toggles* it in the other, so the dispatch order inverts the window on
+  every scanline — 18,060 of 23,040 pixels. Its `CPU CGB C`, `CPU CGB D` and `DMG-blob`
+  reference photographs are **identical in shade rank** (checked, 0 pixels differ), so real
+  Color hardware does *not* reorder them.
+- **What reconciles the two: interrupt dispatch decides its vector in the middle of
+  itself.** The vector is taken from `IE & IF` at M4, so VBlank's flag going up one M-cycle
+  into STAT's dispatch **redirects it** to the higher-priority vector. The gap is still
+  measurable when only one of the two is enabled, which is exactly how `vblank_stat_intr`
+  enables them.
+- **The defect that hid it was the batched PPU standing still for the whole dispatch.** The
+  per-dot engine already advanced per bus access and got this right; the fast one applied
+  all 20 T afterwards, so no PPU interrupt could ever redirect anything.
+  `MemoryManagementUnit::set_ppu_bus_ticking` now runs the batched PPU with the bus for the
+  five M-cycles of a dispatch (and *only* those — the dots are counted into
+  `gpu_bus_ticked`, so total PPU time is unchanged). Both engines agree, Mealybug is
+  byte-identical, and `Gameboy::frame` cost is unmoved (0.219 ms/frame fast).
+- **Two verdict methods disagreeing is the finding** — the same rule as the boot-tilemap
+  entry. A ROM's own report said the change was right and a hardware photograph said it was
+  wrong; taking the flattering one would have shipped a regression as a win.
+
 ## Console model — DMG vs CGB (`src/mode.rs`, `Cpu::new_with_model`)
 
 - **There are three machines, not two.** `GbMode::Classic` (a DMG), `GbMode::Color` (a CGB
@@ -737,10 +822,12 @@ FAIL → PASS. Full write-up with citations: `docs/conformance-notes.md`.
   The last two are what this emulator has always booted: `Cpu::new` called
   `MemoryManagementUnit::new_cgb` unconditionally, so a DMG-only cartridge got compat mode.
   `MemoryManagementUnit::new` (Classic) existed but **nothing in the product ever called it**.
-- **`Model { Auto, Dmg, Cgb }`** is the user-facing choice, resolved to a `GbMode` by
+- **`Model`** is the user-facing choice, resolved to a `GbMode` by
   `Model::resolve(cgb_flag)`. `Cpu::new` = `Model::Auto` = "CGB flag bit 7 set → Color, else
   DMG", i.e. what a person with both consoles would do. `Cpu::new_with_model` forces one.
-  `$GB_MODEL=auto|dmg|cgb` overrides `Auto` only (an explicit caller choice always wins), so
+  (It has since grown the console *revisions* — `Dmg0`, `Mgb`, `Cgb0`, `Agb` — see "Console
+  revisions" above; `Model::NAMES` is the authoritative list.)
+  `$GB_MODEL` overrides `Auto` only (an explicit caller choice always wins), so
   every frontend honours it without growing a flag; a typo warns and is ignored rather than
   silently switching console. `Model::Dmg` is honoured even for a `0x143 == 0xC0` cartridge —
   forcing means forcing — whereas `MemoryManagementUnit::new` still refuses one.
@@ -3622,9 +3709,9 @@ it. That is now a real, CI-enforced build; it did not compile before.
 Several crews landing APU, PPU and SGB work in the same week means any absolute suite number
 in a brief is probably a few days stale. In one afternoon SameSuite moved 68 → 69 (the CH1
 sweep-shadow fix `52d98f5`) → 71 (SGB) → 72 (the square frequency-reload latch), and
-Mooneye 86 → 88. **Measured on `43f8fdb` plus the reload latch:** testroms **46/47**,
-Mooneye **88/103** (acceptance 60/75, emulator-only 28/28), Mooneye CGB misc **4/8**,
-SameSuite **72/76** (apu 65/69, dma 4/4, ppu 1/1, sgb 2/2), `cpp` **4/4**, Mealybug
+Mooneye 86 → 88 → 95 (the console revisions). **Measured on `main` plus both:** testroms
+**46/47**, Mooneye **95/103** (acceptance 67/75, emulator-only 28/28), Mooneye CGB misc
+**8/8**, SameSuite **72/76** (apu 65/69, dma 4/4, ppu 1/1, sgb 2/2), `cpp` **4/4**, Mealybug
 **3/79**. The one-liner that produces all of them without a full run:
 
 ```python

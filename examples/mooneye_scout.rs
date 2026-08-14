@@ -45,12 +45,17 @@ const BASELINE_HEADER: &str = "\
 #
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 #
-# The `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` rows in `acceptance` are ROMs
-# for a *named machine*, and this runner boots the one each names where it can:
-# `-sgb`/`-sgb2` get a Super Game Boy (see src/sgb.rs) and pass. The remaining
-# seven name machines still not modelled here — the SGB's SNES side (`-S`), an
-# original MGB, a revision-0 DMG — and are pinned FAIL on purpose: they are not
-# evidence of a bug, and the community's 66-row denominator excludes them.
+# Rows whose name ends in a machine — `-dmg0`, `-mgb`, `-sgb`, `-sgb2`, `-cgb0`
+# or a single Gekkio compatibility letter (`-S`, `-A`, `-C`, `-G`, `-M`) — are
+# written for that console and cannot pass on another, so this runner boots the
+# one each names (see `model_for`, and `src/mode.rs` for the consoles). A suffix
+# naming *several* machines (`-GS`, `-cgbABCDE`) is left on whatever GB_MODEL
+# asked for.
+#
+# All nine are green now. The remaining reds are the mid-scanline PPU rows, which
+# need the cycle-stepped renderer (docs/mealybug.md §7) and are red under both
+# engines. Note the community's often-quoted 66-row denominator DROPS the
+# named-machine ROMs; this file scores all 75.
 #
 ";
 
@@ -111,17 +116,38 @@ fn screen_text(cpu: &mut Cpu<'static>) -> String {
 
 /// Mooneye names each ROM after the machines it is written for, and a ROM for
 /// one machine cannot pass on another — `boot_regs-sgb` asserts the Super Game
-/// Boy's boot registers and is *expected* to fail on a DMG. Where this
-/// emulator has the machine, run it: the `-sgb` and `-sgb2` suffixes select a
-/// Super Game Boy. Everything else keeps whatever the caller asked for, which
-/// is `$GB_MODEL` or [`Model::Auto`] — the `-S`, `-mgb` and `-dmg0` ROMs name
-/// machines this emulator still does not model, and they stay red on purpose.
+/// Boy's boot registers and is *expected* to fail on a DMG. So boot the machine
+/// the filename names, exactly as the `testroms` harness reads `@dmg`/`@cgb`:
+/// the ROM still judges itself, the suffix only picks which console it is
+/// judging.
+///
+/// Two suffix conventions are in play and both are handled. Lower-case names
+/// (`-dmg0`, `-mgb`, `-sgb`, `-sgb2`, `-cgb0`) are a machine spelled out;
+/// single upper-case letters are Gekkio's compatibility codes, where each
+/// letter is a machine the ROM passes on — `G`=DMG, `M`=MGB, `S`=SGB, `C`=CGB,
+/// `A`=AGB. A code naming **several** machines (`-GS`, `-cgbABCDE`) is happy on
+/// whatever the caller asked for and is left alone; only a code naming exactly
+/// one gets that one forced.
 fn model_for(rom: &Path) -> Model {
     let name = rom.file_stem().unwrap_or_default().to_string_lossy();
-    match name.rsplit('-').next() {
-        Some("sgb") => Model::Sgb,
-        Some("sgb2") => Model::Sgb2,
-        _ => Model::from_env().unwrap_or_default(),
+    let default = || Model::from_env().unwrap_or_default();
+    let Some(suffix) = name.rsplit('-').next().filter(|s| *s != name) else {
+        return default();
+    };
+    match suffix {
+        "dmg0" => Model::Dmg0,
+        "mgb" => Model::Mgb,
+        "sgb" => Model::Sgb,
+        "sgb2" => Model::Sgb2,
+        "cgb0" => Model::Cgb0,
+        // A single compatibility letter names one machine, so run that one.
+        // `-GS`, `-cgbABCDE` and friends name a set and are not forced.
+        "G" => Model::Dmg,
+        "M" => Model::Mgb,
+        "S" => Model::Sgb,
+        "C" => Model::Cgb,
+        "A" => Model::Agb,
+        _ => default(),
     }
 }
 
@@ -270,6 +296,60 @@ fn main() {
         rows.sort_by(|a, b| a.key.cmp(&b.key));
         if !suite_baseline::gate("mooneye", &path, &baseline_header(), &rows) {
             std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every named-machine ROM in the suite, and the console it must be booted
+    /// on. Getting one of these wrong does not produce a *wrong* score — it
+    /// produces a confidently red row that is really a runner bug.
+    #[test]
+    fn each_rom_is_run_on_the_machine_its_name_asks_for() {
+        for (name, want) in [
+            ("boot_regs-dmg0", Model::Dmg0),
+            ("boot_div-dmg0", Model::Dmg0),
+            ("boot_hwio-dmg0", Model::Dmg0),
+            ("boot_regs-mgb", Model::Mgb),
+            ("boot_regs-sgb", Model::Sgb),
+            ("boot_regs-sgb2", Model::Sgb2),
+            ("boot_div-S", Model::Sgb),
+            ("boot_div2-S", Model::Sgb),
+            ("boot_hwio-S", Model::Sgb),
+            ("boot_div-cgb0", Model::Cgb0),
+            ("boot_div-A", Model::Agb),
+            ("boot_regs-A", Model::Agb),
+            ("boot_hwio-C", Model::Cgb),
+        ] {
+            assert_eq!(model_for(Path::new(&format!("{name}.gb"))), want, "{name}");
+        }
+    }
+
+    /// A suffix naming *several* machines is not a machine to force. `-GS`
+    /// says "DMG and SGB", `-cgbABCDE` says five CGB revisions; each is happy
+    /// on whatever the caller asked for, and forcing one of them would boot the
+    /// wrong console for the rest.
+    #[test]
+    fn a_multi_machine_suffix_is_left_to_the_caller() {
+        let default = Model::from_env().unwrap_or_default();
+        for name in [
+            "di_timing-GS",
+            "hblank_ly_scx_timing-GS",
+            "boot_div-cgbABCDE",
+            "boot_div-dmgABCmgb",
+            "boot_hwio-dmgABCmgb",
+            // No suffix at all.
+            "intr_timing",
+            "daa",
+        ] {
+            assert_eq!(
+                model_for(Path::new(&format!("{name}.gb"))),
+                default,
+                "{name}"
+            );
         }
     }
 }

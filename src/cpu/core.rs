@@ -81,7 +81,7 @@ impl Cpu<'_> {
         model: Model,
     ) -> Result<Self, &'static str> {
         let memory = MemoryManagementUnit::new_with_model(data, file, model)?;
-        let registers = Registers::new(memory.gbmode);
+        let registers = Registers::boot(memory.console, memory.gbmode);
 
         Ok(Cpu {
             registers,
@@ -338,6 +338,10 @@ impl Cpu<'_> {
         // timer/APU phase right through dispatch instead of applying 20 T in
         // one lump afterwards.
         let prev = self.memory.set_bus_ticking(true);
+        // The PPU runs during the dispatch too, and it has to be *seen* to:
+        // the vector is chosen at M4 and a PPU interrupt raised before then can
+        // redirect it. See `MemoryManagementUnit::set_ppu_bus_ticking`.
+        let prev_ppu = self.memory.set_ppu_bus_ticking(true);
         self.memory.internal_tick();
         self.memory.internal_tick();
 
@@ -359,6 +363,7 @@ impl Cpu<'_> {
         self.memory.wb(self.registers.sp, pc as u8);
         self.memory.internal_tick();
         self.memory.set_bus_ticking(prev);
+        self.memory.set_ppu_bus_ticking(prev_ppu);
 
         // Priority = lowest set bit wins, so the fixed order is
         // VBlank(0) > STAT(1) > Timer(2) > Serial(3) > Joypad(4). Only that one

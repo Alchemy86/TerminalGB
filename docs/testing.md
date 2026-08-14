@@ -377,24 +377,29 @@ that starts passing is a baseline change too); re-blessing is deliberate
 
 | group | file | rows | measured 2026-08-14 |
 |---|---|---:|---|
-| Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **88 pass** — acceptance **60/75**, `emulator-only` **28/28** |
-| Mooneye `misc` (`GB_MODEL=cgb`) | `testharness/mooneye_cgb_baseline.txt` | 8 | **4 pass** |
-| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **71 pass** |
+| Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **95 pass** — acceptance **67/75**, `emulator-only` **28/28** |
+| Mooneye `misc` (`GB_MODEL=cgb`) | `testharness/mooneye_cgb_baseline.txt` | 8 | **8 pass** |
+| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **72 pass** |
 | Mealybug Tearoom | `testharness/mealybug_baseline.txt` | 79 | **3 pixel-exact** (DMG 1/24, CGB-C 1/31, CGB-D 1/24) |
 | shootout `cpp` | `testharness/cpp_baseline.txt` | 4 | **4 pixel-exact** |
 
 Notes worth having before you read a red build:
 
-* **Every ROM runs on the console it names.** Mooneye names each ROM after the machines it
-  is written for, so `mooneye_scout` boots the one each names where we have it: `-sgb` and
-  `-sgb2` get a Super Game Boy ([`components/sgb.md`](components/sgb.md)) and pass. The two
-  SameSuite `sgb/` tests set the cartridge SGB flag (`$0146 == 0x03`) and get one too, which
-  is what the shootout's own manifest gives them. `Model::Auto` never picks an SGB by itself.
-* **Mooneye's 66-row denominator excludes nine ROMs**, and so should any comparison against
-  other emulators: `acceptance` ships `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` variants for
-  named machines. Seven of them — the SNES-side `-S` ROMs, an original MGB, a revision-0
-  DMG — are still machines this emulator does not model and are pinned FAIL on purpose. On
-  the community's 66 rows we are **58/66**.
+* **Every ROM runs on the console it names, and this is not optional.** Mooneye names each
+  ROM after the machines it is written for and each one *fails on the others*, so
+  `mooneye_scout::model_for` boots the machine the filename asks for — spelled out
+  (`-dmg0`, `-mgb`, `-sgb`, `-sgb2`, `-cgb0`) or as one of Gekkio's compatibility letters
+  (`-G` DMG, `-M` MGB, `-S` SGB, `-C` CGB, `-A` AGB). A suffix naming **several** machines
+  (`-GS`, `-cgbABCDE`) is left on whatever `GB_MODEL` asked for; forcing one of those would
+  boot the wrong console for the rest. A row that is red because the runner picked the wrong
+  machine is a runner bug wearing an emulator bug's clothes.
+  The two SameSuite `sgb/` tests set the cartridge SGB flag (`$0146 == 0x03`) and get an SGB
+  too, which is what the shootout's own manifest gives them; `Model::Auto` never picks one
+  by itself, and never picks a revision (see AGENTS.md, "Console revisions").
+* **Mooneye's 66-row denominator excludes nine ROMs, and we no longer need it to.** Those
+  nine are the named-machine variants; all nine pass now, so quote **67/75** rather than the
+  community figure — the smaller denominator exists because most emulators model one or two
+  consoles, not because the ROMs are unfair.
 * **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At 3/79 the count is
   the only number that can show a PPU rewrite making progress instead of a flat wall of red —
   so an intermediate PPU change *will* turn that file red. Read the diff, then re-bless with

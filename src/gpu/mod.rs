@@ -89,6 +89,10 @@ const DRAW_DOTS: u32 = 172;
 const LINE_DOTS: u32 = 456;
 /// The first VBlank line.
 const VBLANK_LINE: u8 = 144;
+/// How far ahead of the VBlank interrupt the line-144 OAM strobe starts on
+/// **Color hardware**: one M-cycle, i.e. the last four dots of line 143. Zero
+/// on a DMG, where the two are simultaneous. See [`Gpu::oam_strobe`].
+const VBLANK_STROBE_LEAD: u32 = 4;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum PrioType {
@@ -461,6 +465,37 @@ impl Gpu {
         }
     }
 
+    /// Park the PPU `dot` dots into its 70224-dot frame, as the *boot ROM*
+    /// left it.
+    ///
+    /// The LCD is switched on by the boot ROM, not by the cartridge, so at
+    /// `PC=$0100` the PPU is already free-running somewhere in a frame — and
+    /// **where** is a property of the boot program, not of the hardware. This
+    /// emulator's `LCDC` write in `set_initial` restarts it at line 0, which is
+    /// right for the consoles whose `boot_hwio` ROM measures line 0 and wrong
+    /// for the ones that measure something else; see
+    /// [`crate::mmu::MemoryManagementUnit::set_initial`].
+    ///
+    /// Deliberately does **not** set `skip_first_oam`: that models the PPU
+    /// restarting on an `LCDC` write, and this PPU has been running for frames.
+    pub(crate) fn set_boot_position(&mut self, dot: u32) {
+        let dot = dot % (LINE_DOTS * 154);
+        self.line = (dot / LINE_DOTS) as u8;
+        self.modeclock = dot % LINE_DOTS;
+        self.mode = if self.line >= VBLANK_LINE {
+            1
+        } else if self.modeclock <= OAM_DOTS {
+            2
+        } else if self.modeclock <= OAM_DOTS + DRAW_DOTS {
+            3
+        } else {
+            0
+        };
+        self.skip_first_oam = false;
+        self.lyc_match = self.line == self.lyc;
+        self.refresh_stat_line();
+    }
+
     // The PPU mode cycle. See docs/components/ppu.md §"The mode cycle" and Pan Docs:
     // https://gbdev.io/pandocs/Rendering.html  (STAT modes: https://gbdev.io/pandocs/STAT.html)
     pub fn do_cycle(&mut self, ticks: u32) {
@@ -601,8 +636,21 @@ impl Gpu {
     ///   whole of VBlank *holds the STAT line high* across lines 145-153, so
     ///   the real mode 2 at `LY=0` is blocked and its interrupt arrives a line
     ///   late. `acceptance/ppu/intr_1_2_timing-GS` counts exactly that gap.
+    ///
+    /// **On Color hardware the strobe starts one M-cycle sooner.** Mooneye
+    /// ships the measurement twice, and the two ROMs are the same program with
+    /// one `nop` moved: `acceptance/ppu/vblank_stat_intr-GS` (DMG, MGB, SGB)
+    /// finds the STAT and VBlank interrupts simultaneous, while
+    /// `misc/ppu/vblank_stat_intr-C` (CGB, AGB, AGS) finds STAT **one cycle
+    /// before** VBlank — its own header says so. `VBLANK_STROBE_LEAD` is that
+    /// cycle; the VBlank flag itself is untouched and still goes up with the
+    /// line, so the two consoles differ in exactly the one place hardware does.
     fn oam_strobe(&self) -> bool {
-        self.mode == 2 || (self.line == VBLANK_LINE && self.modeclock < OAM_DOTS)
+        self.mode == 2
+            || (self.line == VBLANK_LINE && self.modeclock < OAM_DOTS)
+            || (!self.gbmode.is_dmg()
+                && self.line == VBLANK_LINE - 1
+                && self.modeclock >= LINE_DOTS - VBLANK_STROBE_LEAD)
     }
 
     /// Re-latch the `LY == LYC` coincidence flag and follow the STAT line.
@@ -1491,5 +1539,66 @@ mod tests {
         // And the first real OAM scan of the next frame is not blocked by it.
         assert_eq!(count_stat_raises(&mut gpu, DOTS_PER_LINE), 1);
         assert_eq!(gpu.line, 0);
+    }
+
+    /// Color hardware starts that strobe one M-cycle sooner than a DMG does.
+    /// Mooneye ships the same program twice with one `nop` moved —
+    /// `acceptance/ppu/vblank_stat_intr-GS` (DMG/MGB/SGB) and
+    /// `misc/ppu/vblank_stat_intr-C` (CGB/AGB/AGS) — and each fails on the
+    /// other machine, so the gap is a two-sided constraint: exactly one
+    /// M-cycle on Color, exactly zero on a DMG.
+    #[test]
+    fn a_colour_console_strobes_one_m_cycle_before_the_vblank_flag() {
+        for (mode, want_lead) in [
+            (GbMode::Classic, false),
+            (GbMode::Super, false),
+            (GbMode::Color, true),
+            (GbMode::ColorAsClassic, true),
+        ] {
+            let mut gpu = lcd_on(0x20, 0xFF); // only the mode-2 source
+            gpu.gbmode = mode;
+            advance_lines(&mut gpu, 143);
+            // `lcd_on` restarts the PPU four dots into line 0, so line 143 is
+            // reached at `modeclock == 4`; stop four dots short of its end.
+            assert_eq!((gpu.line, gpu.modeclock), (143, 4), "{mode:?}");
+            gpu.interrupt = 0;
+            gpu.do_cycle(DOTS_PER_LINE - 8);
+            assert_eq!(gpu.line, 143, "{mode:?}");
+            assert_eq!(
+                gpu.interrupt & 0x02 != 0,
+                want_lead,
+                "{mode:?}: STAT one M-cycle early"
+            );
+            assert_eq!(gpu.interrupt & 0x01, 0, "{mode:?}: VBlank is not early");
+
+            // The remaining M-cycle brings VBlank, and the STAT line is
+            // already high so there is no second edge.
+            gpu.interrupt = 0;
+            gpu.do_cycle(4);
+            assert_eq!(gpu.line, 144, "{mode:?}");
+            assert_eq!(gpu.interrupt & 0x01, 0x01, "{mode:?}: VBlank now");
+            assert_eq!(
+                gpu.interrupt & 0x02 != 0,
+                !want_lead,
+                "{mode:?}: one STAT edge in total, not two"
+            );
+        }
+    }
+
+    /// `set_boot_position` parks the PPU where a boot ROM left it, which is not
+    /// the same thing as an `LCDC` write restarting it: the PPU has been
+    /// free-running for frames, so the line it lands on has a normal OAM scan.
+    #[test]
+    fn a_booted_ppu_is_parked_mid_frame_and_not_restarted() {
+        let mut gpu = lcd_on(0x00, 0xFF);
+        gpu.set_boot_position(145 * DOTS_PER_LINE + 180);
+        assert_eq!(gpu.line, 145);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 1, "VBlank");
+        assert!(!gpu.skip_first_oam, "not an LCD-enable restart");
+
+        // Somewhere in the middle of a visible line: mode follows the dot.
+        gpu.set_boot_position(10 * DOTS_PER_LINE + 100);
+        assert_eq!(gpu.line, 10);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 3, "dot 100 is pixel transfer");
     }
 }

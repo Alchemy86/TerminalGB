@@ -1540,14 +1540,20 @@ impl Sound {
     /// inventing audio the machine never produced — the envelope is left at
     /// zero, i.e. fully decayed. Every register, including the channel-enable
     /// flip-flop `NR52` reports, matches hardware.
-    pub fn set_post_boot_state(&mut self) {
+    /// `sgb` selects the Super Game Boy's boot ROM, which sets channel 1 up in
+    /// exactly the same way and then **does not trigger it** — its last audio
+    /// write is `NR14 = $07`, not `$87`, so there is no start-up beep and the
+    /// channel-enable flip-flop is still clear at hand-off. That single bit is
+    /// the whole difference between `boot_hwio-dmgABCmgb` (`NR52 = $F1`) and
+    /// `boot_hwio-S` (`NR52 = $F0`).
+    pub fn set_post_boot_state(&mut self, sgb: bool) {
         self.wb(0xFF26, 0x80); // power on
         self.wb(0xFF11, 0x80); // CH1 duty 2, length load 0 (counter = 64)
         self.wb(0xFF12, 0xF3); // CH1 envelope: 15, decreasing, period 3
         self.wb(0xFF25, 0xF3); // NR51: all four left, CH1+CH2 right
         self.wb(0xFF24, 0x77); // NR50: both sides at volume 7
         self.wb(0xFF13, 0xC1); // CH1 frequency low
-        self.wb(0xFF14, 0x87); // CH1 trigger, length counter left disabled
+        self.wb(0xFF14, if sgb { 0x07 } else { 0x87 }); // trigger — except on an SGB
         self.channel1.volume.volume = 0;
     }
 

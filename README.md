@@ -34,7 +34,7 @@ above, they use only test ROMs the repository is free to show.</em></p>
 > ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The whole
 > Blargg suite passes on both consoles (46 of 47 ROM/console rows), dmg-acid2 is pixel-exact,
 > and the community timing suites are scored in CI on every push — honestly, including the
-> reds. Today: **Mooneye 88/103, SameSuite 71/76, `cpp` 4/4, Mealybug 3/79.** See
+> reds. Today: **Mooneye 95/103, SameSuite 72/76, `cpp` 4/4, Mealybug 3/79.** See
 > **[Status & accuracy](#status--accuracy)** for the measured table, the
 > [test scoreboard](testharness/README.md), and the honest per-component notes. This project
 > is a study of emulation, not a piracy tool: it ships no ROMs and no BIOS.
@@ -1137,7 +1137,7 @@ consume the same stream. Full guide, measured costs, platform limits and the cap
 | DMG (original Game Boy) | ✅ Modelled, and the default for a non-CGB cartridge |
 | Game Boy Color | ✅ Modelled, including the CGB-in-DMG compatibility mode and CPU revisions |
 | Super Game Boy / SGB2 | 🟡 `GB_MODEL=sgb`: the **ICD2 command receiver and `MLT_REQ`** — everything a cartridge can read back, and [all three published SGB test rows](#what-the-super-game-boy-support-actually-scores). Border, palettes and SGB sound are a documented non-goal |
-| MGB / DMG0 | 🚫 Not modelled; their Mooneye `boot_*` rows are among the remaining reds |
+| MGB / DMG0 / CGB0 / AGB | ✅ `GB_MODEL=mgb\|dmg0\|cgb0\|agb`. A boot ROM is part of the silicon, so these are separate machines: all eleven of their Mooneye `boot_*` rows pass |
 
 ### Which terminals give you what
 
@@ -1184,7 +1184,18 @@ The emulator picks the console from the cartridge header: a cartridge whose CGB 
 GB_MODEL=dmg  cargo run --release --example desktop -- game.gbc  # force an original Game Boy
 GB_MODEL=cgb  cargo run --release --example desktop -- game.gb   # force the Color's DMG-compat mode
 GB_MODEL=sgb  cargo run --release --example desktop -- game.gb   # a Super Game Boy (sgb2 also works)
+GB_MODEL=agb  cargo run --release --example desktop -- game.gbc  # a Game Boy Advance running a GB cartridge
 ```
+
+The full list is `auto`, `dmg`, `dmg0`, `mgb`, `cgb`, `cgb0`, `agb`, `sgb`, `sgb2` — **nine
+consoles, because a boot ROM is part of the silicon.** A DMG 0 (the earliest revision), a
+Game Boy Pocket, a CGB 0 and a Game Boy Advance present the same hardware to a cartridge from
+`PC=$0100` onwards, and hand it a different machine to start from: `A = $FF` is how a game
+detects a Pocket, and `B` bit 0 is how it detects an AGB and offers the brighter palette that
+screen needs. Mooneye ships a `boot_regs` / `boot_div` / `boot_hwio` ROM per machine, no two
+of which can pass at once, and all of them are green. A typo is warned about and ignored
+rather than silently booting the wrong console, and **`auto` never picks a revision** —
+inferring one would change every game's boot registers for no benefit.
 
 A **Super Game Boy** is never chosen automatically. A cartridge's SGB flag (`0x0146 == 0x03`)
 says the game *offers* a border and a palette, not that you own the peripheral — and this
@@ -1287,10 +1298,10 @@ in [`tools/fetch-test-suites.sh`](tools/fetch-test-suites.sh).
 
 | Suite | Score | What it measures |
 |---|---:|---|
-| **Mooneye GB** `acceptance` | **60 / 75** | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing, boot state |
+| **Mooneye GB** `acceptance` | **67 / 75** | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing, boot state |
 | **Mooneye GB** `emulator-only` | **28 / 28** | MBC1/2/5 banking behaviour |
-| **Mooneye GB** `misc` (CGB) | **4 / 8** | Color-specific boot and timing |
-| **SameSuite** | **71 / 76** | APU 64/69 · DMA 4/4 · PPU 1/1 · **SGB 2/2** |
+| **Mooneye GB** `misc` (CGB) | **8 / 8** | Color-specific boot and timing |
+| **SameSuite** | **72 / 76** | APU 65/69 · DMA 4/4 · PPU 1/1 · **SGB 2/2** |
 | **CasualPokePlayer** (`cpp`) | **4 / 4** | MBC3 RTC edge cases, and [`sgb-ext-test`](#what-the-super-game-boy-support-actually-scores) |
 | **Mealybug Tearoom** | **3 / 79** | mid-scanline PPU effects, photographed off real hardware |
 
@@ -1327,9 +1338,11 @@ dispatch and the timed OAM DMA. Do not read "we pass Blargg" as "we are accurate
 read the table above, which is measured, not remembered.
 
 **Known limitations** (each is documented honestly on the relevant component page)
-- No boot ROM / logo scroll; the post-boot register state is written directly. Mooneye's
-  `boot_div` / `boot_hwio` / `boot_regs` variants for the machines we do not model (SGB, MGB,
-  DMG0) are most of the remaining `acceptance` reds.
+- No boot ROM / logo scroll; the post-boot state is written directly, per console *revision*
+  — Mooneye ships a `boot_div` / `boot_hwio` / `boot_regs` ROM for each machine and all
+  eleven now pass. What is still not reproduced is the logo animation itself, the
+  header-checksum lock-up, and the boot ROM's beep (its envelope volume is not readable from
+  any register, so how far it has decayed cannot be derived).
 - The DMG OAM-corruption bug **is** modelled, as is the HALT bug. In the `fast` engine the PPU
   is stepped once per instruction, so which OAM row a mid-instruction bus cycle hits is
   predicted arithmetically rather than observed; one calibrated constant absorbs the phase the
@@ -1457,9 +1470,9 @@ Near-term, in priority order:
   the fetcher. There is no single constant left to find — there are many, and they constrain
   each other. Mealybug 3/79 is the number that moves when this lands.
   See [`docs/mealybug.md`](docs/mealybug.md) §7.
-- **The remaining Mooneye reds are mostly machines we do not model** — SGB, MGB and DMG0 boot
-  state — rather than timing we get wrong. Deciding whether to model them is a scope question,
-  not an accuracy one.
+- **Every remaining Mooneye red is a mid-scanline PPU row** and belongs with the pixel FIFO
+  above. The named-machine rows that used to sit here — SGB, MGB, DMG0, CGB0, AGB boot state —
+  are all green: see [Platforms](#platforms).
 - **Web audio** and correct **web/FFI MBC detection** (both currently forced to MBC3).
 
 Done since this list was last written, and now gated in CI rather than promised: the timer as

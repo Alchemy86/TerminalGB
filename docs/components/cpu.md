@@ -109,15 +109,35 @@ unconditionally and the classic path was unreachable from the main entry point �
 DMG-only cartridge always ran in the Color console's **compatibility mode**, which is a
 third machine and not a DMG (see the table: `ColorAsClassic` boots `A=0x11 HL=0x007C`,
 `Classic` boots `A=0x01 HL=0x014D`). Nine Mooneye acceptance tests print those registers
-and changed verdict when the DMG mode landed. Boot register values branch on the resolved
-mode in `Registers::new`
-([`src/cpu/registers.rs:52`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/registers.rs#L52)):
+and changed verdict when the DMG mode landed.
 
-| Mode | A | F | BC | DE | HL | SP | PC |
-|---|---|---|---|---|---|---|---|
-| `Classic` | `0x01` | `0xB0` | `0x0013` | `0x00D8` | `0x014D` | `0xFFFE` | `0x0100` |
-| `ColorAsClassic` | `0x11` | `0x80` | `0x0000` | `0x0008` | `0x007C` | `0xFFFE` | `0x0100` |
-| `Color` | `0x11` | `0x80` | `0x0000` | `0xFF56` | `0x000D` | `0xFFFE` | `0x0100` |
+Boot register values come from `Registers::boot`
+([`src/cpu/registers.rs`](../../src/cpu/registers.rs)), which branches on **both** the
+console and the resolved mode. Both arguments are load-bearing: the mode says what the
+cartridge sees (a Color console runs a DMG-only game in compatibility mode and hands over a
+different `DE`/`HL` from a Color game), and the console says which machine it is — a boot
+ROM is part of the silicon, so a DMG 0, a DMG ABC and an MGB are three machines that share
+`GbMode::Classic` and hand over three different states.
+
+| Console | Mode | A | F | BC | DE | HL |
+|---|---|---|---|---|---|---|
+| `Dmg` | `Classic` | `0x01` | `0xB0` | `0x0013` | `0x00D8` | `0x014D` |
+| `Dmg0` | `Classic` | `0x01` | `0x00` | `0xFF13` | `0x00C1` | `0x8403` |
+| `Mgb` | `Classic` | `0xFF` | `0xB0` | `0x0013` | `0x00D8` | `0x014D` |
+| `Sgb` | `Super` | `0x01` | `0x00` | `0x0014` | `0x0000` | `0xC060` |
+| `Sgb2` | `Super2` | `0xFF` | `0x00` | `0x0014` | `0x0000` | `0xC060` |
+| `Cgb`/`Cgb0` | `ColorAsClassic` | `0x11` | `0x80` | `0x0000` | `0x0008` | `0x007C` |
+| `Cgb`/`Cgb0` | `Color` | `0x11` | `0x80` | `0x0000` | `0xFF56` | `0x000D` |
+| `Agb` | `ColorAsClassic` | `0x11` | `0x00` | `0x0100` | `0x0008` | `0x007C` |
+
+`SP = 0xFFFE` and `PC = 0x0100` on every machine — every `boot_regs` ROM checks `SP` first
+and quits with "INVALID SP VALUE" if it is wrong.
+
+Two rows are worth understanding rather than copying. The first DMG's boot ROM has no
+header-checksum lock-up, so it never runs the code that leaves the registers tidy and
+arrives with a completely different set, flags included. And an AGB's ends with an `inc b`,
+which is *both* why `B` holds `0x01` — the bit an AGB-aware cartridge tests to offer the
+brighter palette its screen needs — and why `F` reads `0x00` rather than the CGB's `Z`.
 
 **The main loop.** `do_cycle` ([`src/cpu/core.rs:218`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L218)) is thin —
 it runs `exec()` and then advances the rest of the machine by that many T-cycles:
@@ -239,10 +259,14 @@ reads zero, matching hardware.
 > it could become an assertion. **Coverage today: none of these have a Rust test** — the
 > only CPU-adjacent tests in the tree are the input/MBC checksum ones.
 
-1. **Boot register state (CGB).** After `Cpu::new` on a Color cartridge, `A=0x11`,
-   `F=0x80`, `SP=0xFFFE`, `PC=0x0100`. *(Not covered.)*
-2. **Boot register state (DMG/Classic).** In Classic mode: `A=0x01`, `F=0xB0`,
-   `BC=0x0013`, `DE=0x00D8`, `HL=0x014D`. *(Not covered.)*
+1. **Boot register state, per console.** Every machine hands the cartridge the state its
+   own boot ROM leaves. *(Covered:
+   `cpu::registers::tests::every_console_hands_over_the_registers_its_own_rom_asserts`,
+   which transcribes Mooneye's seven `boot_regs-*` tables; all seven ROMs pass.)*
+2. **No two consoles are indistinguishable.** The suite ships one mutually exclusive ROM
+   per machine, so an emulator that satisfies two at once cannot tell them apart — and a
+   pass/fail runner cannot see the difference between that and failing both. *(Covered:
+   `cpu::registers::tests::no_two_consoles_hand_over_the_same_registers`.)*
 3. **`F` low nibble is always zero.** After any ALU op, `registers.f & 0x0F == 0`.
    *(Not covered.)*
 4. **Flag correctness for `ADD`/`SUB`/`CP`/`DAA`.** Z/N/H/C match hardware for boundary

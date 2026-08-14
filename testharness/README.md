@@ -41,9 +41,9 @@ PPU acid2       █████████████████████�
 > **Read this next to the wider suites.** 30 ROMs is still a narrow slice, and the wider
 > suites are now gated too — `make test-external` scores Mooneye GB, SameSuite and the
 > Mealybug Tearoom tests against their own baselines on every push. Measured 2026-08-14:
-> Mooneye acceptance **58/75** (**58/66** on the community's denominator, which drops nine
-> ROMs for machines we do not model), Mooneye `emulator-only` **28/28**, Mooneye `misc`
-> **4/8**, SameSuite **61/76**, Mealybug **3/79**. See
+> Mooneye acceptance **67/75** (the community's 66-row denominator drops the nine
+> named-machine ROMs; all nine pass here, so quote 67/75), Mooneye `emulator-only` **28/28**,
+> Mooneye `misc` **8/8**, SameSuite **72/76**, Mealybug **3/79**. See
 > [docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom).
 
 ## Compatibility matrix

@@ -17,6 +17,201 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the Game Boy is nine machines, and eleven ROMs could tell
+
+Mooneye `acceptance` **60/75 → 67/75** and `misc` (`GB_MODEL=cgb`) **4/8 → 8/8**,
+measured before and after on the ROMs pinned in `tools/fetch-test-suites.sh`.
+Every other gate is byte-identical: `testroms` 46/47, SameSuite 72/76, Mealybug
+**3/79 with every pixel count unchanged**, `cpp` 4/4, `audiocapture`,
+`savestate`, `battery`, `ppuengines`, and the same numbers again under
+`GB_PPU=accurate`.
+
+Ten of the eleven rows had one cause. This emulator modelled four consoles
+(DMG, CGB, SGB, SGB2) and Mooneye ships boot ROMs for **nine**: the first DMG
+revision, the Game Boy Pocket, the first CGB revision and the Game Boy Advance
+are separate machines whose boot ROMs are separate programs, and the suite has
+a ROM per machine precisely because no two hand the cartridge the same state.
+They were pinned FAIL as "machines we do not model"; they are `Model::Dmg0`,
+`Mgb`, `Cgb0` and `Agb` now (`src/mode.rs`).
+
+The revisions are **boot state only** — from `PC=$0100` a DMG0 and a DMG are the
+same silicon — so they are not part of `GbMode` and are not serialised. That is
+the same call `Sound::cgb_revision` made: a property of the machine a state is
+loaded *into*, not of the state.
+
+### 1. Boot registers, per console
+
+**Symptom.** A cartridge cannot tell which Game Boy it is in. That is not
+cosmetic: `A = $FF` is how a game detects a Pocket, and `B` bit 0 is how it
+detects a Game Boy Advance and offers the brighter palette an AGB screen needs.
+
+**Caught by.** `acceptance/boot_regs-dmg0`, `-mgb`, `misc/boot_regs-A`
+(`boot_regs-dmgABC`, `-sgb`, `-sgb2` and `misc/boot_regs-cgb` already passed).
+Each asserts all eight registers plus `SP`, and each **fails on every other
+machine** — the suite ships seven mutually exclusive ROMs.
+
+**Hardware behaviour.** Pan Docs, ["Console state after boot
+ROM"](https://gbdev.io/pandocs/Power_Up_Sequence.html), and the ROMs' own
+tables. Two are worth understanding rather than copying: the first DMG's boot
+ROM has no header-checksum lock-up, so it never runs the code that leaves
+`BC/DE/HL` tidy and arrives with `F = $00, B = $FF, DE = $00C1, HL = $8403`
+instead; and an AGB's ends with an `inc b`, which is *both* why `B` holds `$01`
+and why `F` reads `$00` rather than the CGB's `Z`.
+
+**Carries into the tool.** `Registers::boot` and the table in
+`cpu::registers::tests` — including
+`no_two_consoles_hand_over_the_same_registers`, which asserts the property that
+makes the suite work at all: an emulator that satisfies two of these ROMs at
+once cannot tell those consoles apart.
+
+### 2. The system counter, per console
+
+**Symptom.** Anything a game times off `DIV` starts from the wrong phase.
+`boot_div` is much stronger than "`DIV` reads `$AB`": it reads `DIV` six times at
+offsets chosen to fall either side of an increment, so it pins the counter's low
+bits too.
+
+**Caught by.** `acceptance/boot_div-dmg0`, `misc/boot_div-cgb0`,
+`misc/boot_div-A`.
+
+**Hardware behaviour.** The counter is free-running from power-on, so its value
+at hand-off *is* the boot ROM's duration. The three constants are derived
+arithmetically from the already-passing `boot_div-dmgABCmgb` /
+`misc/boot_div-cgbABCDE` and the new ROMs' own expected bytes: the read points
+differ by a known number of `nop`s and the expected `DIV` values by a known
+number of increments, which fixes each counter exactly.
+
+### 3. An SGB's boot time depends on the cartridge
+
+**Symptom.** The same as (2), but no single constant can be right — and this is
+the one an emulator is most likely to get *silently* half-right, because
+`boot_div-S` alone can be passed by hard-coding a number.
+
+**Caught by.** `acceptance/boot_div-S` **and** `acceptance/boot_div2-S`, which
+are the same program with a different global checksum and expect the same six
+readings at read points four M-cycles apart. Gekkio's own comment says why:
+*"Bootrom duration on real SGB/SGB2 depends on the header bytes, including the
+global checksum, which in turn depends on every byte in the ROM."*
+
+**Hardware behaviour.** Before it hands over, an SGB packs the cartridge header
+(`$0104-$014F`, 76 bytes) into six 16-byte packets — a packet id, a checksum
+over that packet's share of the header, and eight zero-padding bytes at the end
+— and clocks all 96 bytes to the SNES one bit at a time through `P1`. The bit
+loop is **not balanced**: a set bit takes a taken `jr`, a clear bit takes the
+fall-through *plus* a second `ld a`, so a zero bit costs one M-cycle more than a
+one bit. The disassembly's own comment on that instruction is *"Both code paths
+aren't equal CPU time, if you had used `add a, a` we wouldn't have so many
+headaches"* ([ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms),
+`src/sgb.asm`, `.sendBit`).
+
+`mmu::sgb_boot_system_counter` is that model. The check that it is the right
+*shape* and not a fit: computing the all-ones base from `boot_div-S` and from
+`boot_div2-S` independently gives the same `$D174`.
+
+### 4. An SGB leaves `P1` released and never plays its beep
+
+**Symptom.** A game that reads `$FF00` before writing it sees the wrong idle
+state, and `NR52` claims channel 1 is enabled when it is not.
+
+**Caught by.** `acceptance/boot_hwio-S`, which walks `$FF00-$FF7F` plus `IE`.
+
+**Hardware behaviour.** Both from the same boot ROM. Its last use of `P1` is
+clocking packets, which ends on a write of `$30`, so the select lines are
+**released** (`$FF`) like a CGB's rather than pulled low (`$CF`) like a DMG's —
+so this is *not* a "is this DMG hardware" question, which is how we had it. And
+its last audio write is `NR14 = $07`, not the DMG boot ROM's `$87`: channel 1 is
+configured and never triggered, so `NR52` reads `$F0` and there is no start-up
+ding on a Super Game Boy.
+
+### 5. The PPU is somewhere in a frame when the boot ROM lets go
+
+**Symptom.** `LY` and `STAT` read the wrong thing for the first frame after
+power-on — nine scanlines wrong on a DMG 0.
+
+**Caught by.** `acceptance/boot_hwio-dmg0` (`STAT = $83`, `LY = $01`, against
+`boot_hwio-dmgABCmgb`'s `$80`/`$0A`). Note `boot_hwio-S` and `misc/boot_hwio-C`
+**skip** `$FF40`, `$FF41` and `$FF44` in their own masks, so no ROM measures the
+position on those machines and none is invented for them.
+
+**Hardware behaviour.** The LCD is switched on by the boot ROM, not by the
+cartridge, so at `PC=$0100` the PPU is already free-running somewhere. Both DMG
+boot ROMs end their logo animation on a delay loop synchronised to `LY == 144`;
+the later revisions then run `CheckLogo` — the 48-byte logo comparison and the
+header checksum — before handing over, and the first revision has no such code
+and jumps straight to `Done` (`gb-bootroms`, `src/dmg.asm`). So a DMG 0 hands
+the cartridge a PPU still in VBlank and a DMG ABC one that has had nine more
+scanlines to run. That is exactly the nine-line gap the two ROMs measure.
+
+`DMG0_BOOT_PPU_DOT` is **calibrated with its window stated**: the row passes for
+a hand-off anywhere in line 145 dots 96..260 and fails on both sides, so the
+constant is the centre of a 168-dot band. Neither edge is hardware — the low one
+is where our fixed 172-dot mode 3 ends, the high one is where the ROM's `LY`
+read rolls over.
+
+### 6. A Color console strobes STAT one M-cycle before VBlank — and that must not reorder the two
+
+This is the one row that was **not** boot state, and it is the interesting one.
+
+**Symptom.** A program that enables both the VBlank interrupt and the mode-2
+STAT source gets them in the wrong order at `LY = 144`, so whichever handler
+runs second wins. In `mealybug/m2_win_en_toggle` one handler *sets* `LCDC.5` and
+the other *toggles* it, and the order inverts the window on every scanline of
+the frame — 18,060 of 23,040 pixels.
+
+**Caught by.** `misc/ppu/vblank_stat_intr-C` and
+`acceptance/ppu/vblank_stat_intr-GS`: the same program with one `nop` moved, one
+verified on CGB/AGB/AGS and one on DMG/MGB/SGB, each failing on the other
+machine. **And**, in the opposite direction, by Mealybug's `m2_win_en_toggle`,
+whose `CPU CGB C`, `CPU CGB D` and `DMG-blob` reference photographs are
+**identical in shade rank** — checked byte for byte, 0 differing pixels.
+
+**Hardware behaviour.** Two measurements that look contradictory and are not.
+The strobe really is one M-cycle early on Color hardware; what reconciles them is
+that interrupt dispatch **decides its vector in the middle of itself**. Dispatch
+is five M-cycles and the vector is taken from `IE & IF` as they stand at M4, so
+an interrupt raised while the CPU is pushing `PC` can redirect the dispatch it is
+already inside (Gekkio, *Complete Technical Reference* §"Interrupts"; the same
+rule `acceptance/interrupts/ie_push` pins). The STAT interrupt starts a dispatch;
+VBlank's flag goes up one M-cycle into it; VBlank is the higher priority, so it
+is the vector that is fetched. Order preserved, gap still measurable when only
+one of the two is enabled — which is exactly how `vblank_stat_intr` enables them.
+
+**The defect that hid it** was ours and had nothing to do with the CGB: the
+*batched* PPU does not advance during those five M-cycles at all, so no PPU
+interrupt could ever redirect a dispatch. The per-dot engine already advanced
+per bus access and got this right — implementing the strobe lead cost the fast
+engine two hardware-photographed Mealybug rows and cost the accurate engine
+nothing, which is what located the bug. `MemoryManagementUnit::set_ppu_bus_ticking`
+now runs the batched PPU with the bus for the duration of a dispatch, and both
+engines agree.
+
+**Two verdict methods disagreeing is the finding.** A test ROM's own report said
+the change was right and a hardware photograph said it was wrong; taking the
+flattering one would have shipped a real regression as a win.
+
+**Carries into the tool.** `gpu::tests::a_colour_console_strobes_one_m_cycle_before_the_vblank_flag`
+pins both directions. The general check, which is not Game Boy specific: **an
+interrupt that arrives during dispatch must be able to redirect it** — an
+emulator that applies a whole instruction's peripheral time in one lump after the
+fact cannot express that, and the symptom is a *reordered* pair of interrupts
+rather than a mistimed one.
+
+### Coverage gaps this work found
+
+- **No public suite runs a console other than the one it was compiled for.**
+  Every one of the eleven rows above is a ROM that must be *told* which machine
+  to boot; a runner that ignores the filename cannot score them however accurate
+  the emulator is. `examples/mooneye_scout.rs::model_for` reads it, the same
+  move `testroms` makes with `@dmg`/`@cgb`, and
+  `each_rom_is_run_on_the_machine_its_name_asks_for` pins the mapping.
+- **Nothing checks that an emulator's consoles are *distinguishable*.** Passing
+  `boot_regs-dmgABC` and `boot_regs-mgb` from one shared table is impossible,
+  but passing neither and passing one look the same in a pass/fail runner. The
+  tool should report "these N machines are indistinguishable in your emulator"
+  as its own finding.
+
+---
+
 ## 2026-08-14 — the link port's slave half, and what a torn byte carries
 
 **Symptom.** Two consoles cannot be linked at all, and nothing about it looks

@@ -206,6 +206,26 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
   which is exactly the gap `acceptance/ppu/intr_1_2_timing-GS` counts. Modelled in
   `oam_strobe`; pinned by `gpu::tests::the_vblank_oam_strobe_is_line_144_only` and
   `entering_vblank_raises_stat_for_the_mode_2_source_too`.
+- **On Color hardware that strobe starts one M-cycle earlier** (`VBLANK_STROBE_LEAD`).
+  Mooneye ships the same program twice with one `nop` moved —
+  `acceptance/ppu/vblank_stat_intr-GS` (DMG/MGB/SGB, coincident) and
+  `misc/ppu/vblank_stat_intr-C` (CGB/AGB/AGS, STAT one cycle first) — and each fails on the
+  other machine, so the gap is pinned in both directions.
+  **It must not reorder the two interrupts when both are enabled**, and that is not a
+  contradiction: interrupt dispatch takes its vector from `IE & IF` at M4, so VBlank's flag
+  going up one M-cycle into STAT's dispatch *redirects* it to the higher-priority vector.
+  Mealybug's `m2_win_en_toggle` is the check — its DMG and CGB reference photographs are
+  identical in shade rank — and satisfying it needs the batched PPU to keep running through
+  a dispatch (`MemoryManagementUnit::set_ppu_bus_ticking`; the per-dot engine already did).
+  Pinned by `gpu::tests::a_colour_console_strobes_one_m_cycle_before_the_vblank_flag`.
+- **Where the PPU is when the boot ROM hands over is a per-console constant**
+  (`Gpu::set_boot_position`). The LCD is switched on by the boot ROM, not the cartridge, so
+  the PPU is already free-running at `PC=$0100`; a DMG ABC arrives at line 0 and a DMG 0 —
+  which skips the later revisions' `CheckLogo` — arrives nine scanlines earlier, still in
+  VBlank. `acceptance/boot_hwio-dmg0` reads `STAT = $83` and `LY = $01` where
+  `boot_hwio-dmgABCmgb` reads `$80`/`$0A`. Only DMG 0 gets a position: `boot_hwio-S` and
+  `misc/boot_hwio-C` skip `$FF40`/`$FF41`/`$FF44` in their own masks, so nothing measures it
+  on those machines and nothing is invented for them.
 - **The line the PPU restarts on has no OAM scan.** After `LCDC` bit 7 goes 0→1, `STAT`
   reads mode 0 through what would be the OAM slot and then goes straight to mode 3
   (`acceptance/ppu/lcdon_timing-GS`: "line 0 starts with mode 0 and goes straight to

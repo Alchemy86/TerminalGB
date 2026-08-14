@@ -333,13 +333,7 @@ const ROMS: &[RomSpec] = &[
 // ---------------------------------------------------------------------------
 
 fn model_tag(m: Model) -> &'static str {
-    match m {
-        Model::Dmg => "dmg",
-        Model::Cgb => "cgb",
-        Model::Sgb => "sgb",
-        Model::Sgb2 => "sgb2",
-        Model::Auto => "auto",
-    }
+    m.name()
 }
 
 /// Which consoles this cartridge is run on. Both, unless its own header says it
