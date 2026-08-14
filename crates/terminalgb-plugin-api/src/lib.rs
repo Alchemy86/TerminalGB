@@ -25,7 +25,7 @@
 //!
 //! `plugins/example-tracer` is the same idea with tests and a README; copy that
 //! directory to start. The full guide is
-//! [`docs/plugins.md`](https://github.com/Alchemy86/gameboy/blob/main/docs/plugins.md).
+//! [`docs/plugins.md`](https://github.com/Alchemy86/TerminalGB/blob/main/docs/plugins.md).
 //!
 //! # What a plugin is
 //!

@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -78,11 +78,11 @@ The same SM83 core shipped in every model, at the same 4.19 MHz base clock:
 ## 4. How it works here
 
 The core is a faithful **rboy-lineage** interpreter (the only literal `rboy` credit in the
-tree is the frame-timing note at [`src/gameboy.rs:50`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L50), but the CPU
+tree is the frame-timing note at [`src/gameboy.rs:50`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L50), but the CPU
 structure mirrors it closely). It is a plain decode-and-execute loop, not a JIT or a
 micro-op pipeline.
 
-**The `Cpu` struct** — [`src/cpu/core.rs:15`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L15):
+**The `Cpu` struct** — [`src/cpu/core.rs:15`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L15):
 
 ```rust
 pub struct Cpu<'a> {
@@ -99,10 +99,10 @@ pub struct Cpu<'a> {
 ```
 
 **Boots the console the cartridge asks for.** `Cpu::new`
-([`src/cpu/core.rs:48`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L48)) resolves a
+([`src/cpu/core.rs:48`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L48)) resolves a
 [`Model`](../../src/mode.rs): a cartridge whose CGB flag (`0x0143` bit 7) is set boots a
 Game Boy Color, anything else boots a DMG, and `$GB_MODEL=dmg|cgb` overrides that.
-`Cpu::new_with_model` ([`src/cpu/core.rs:53`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L53)) forces one.
+`Cpu::new_with_model` ([`src/cpu/core.rs:53`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L53)) forces one.
 
 *This is new.* Until it existed, `Cpu::new` called `MemoryManagementUnit::new_cgb`
 unconditionally and the classic path was unreachable from the main entry point — so a
@@ -139,7 +139,7 @@ arrives with a completely different set, flags included. And an AGB's ends with 
 which is *both* why `B` holds `0x01` — the bit an AGB-aware cartridge tests to offer the
 brighter palette its screen needs — and why `F` reads `0x00` rather than the CGB's `Z`.
 
-**The main loop.** `do_cycle` ([`src/cpu/core.rs:218`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L218)) is thin —
+**The main loop.** `do_cycle` ([`src/cpu/core.rs:218`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L218)) is thin —
 it runs `exec()` and then advances the rest of the machine by that many T-cycles:
 
 ```rust
@@ -149,7 +149,7 @@ pub fn do_cycle(&mut self) -> u32 {
 }
 ```
 
-`exec()` ([`src/cpu/core.rs:197`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L197)) does three things in order:
+`exec()` ([`src/cpu/core.rs:197`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L197)) does three things in order:
 `updateime()` (advance EI/DI scheduling), `handleinterrupt()` (maybe service an
 interrupt and return early), then either emulate a NOP if halted or run `operation()`.
 
@@ -162,19 +162,19 @@ enabled at all (Mooneye `acceptance/ei_sequence`). `DI` sets `IME = false` and c
 with no delay.
 
 **Opcode tables.** The main 256-entry `match` is `operation()`
-([`src/cpu/core.rs:291`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L291)); the `0xCB`-prefixed table is
-`misc::cbmap` ([`src/cpu/misc.rs:108`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/misc.rs#L108)). Load/arithmetic/stack
+([`src/cpu/core.rs:291`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L291)); the `0xCB`-prefixed table is
+`misc::cbmap` ([`src/cpu/misc.rs:108`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/misc.rs#L108)). Load/arithmetic/stack
 helpers live in `ld.rs`, `data.rs`, `stack.rs`.
 
 **Flags.** `Registers::flag` masks `F &= 0xF0` on every write
-([`src/cpu/registers.rs:101`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/registers.rs#L101)), so the low nibble always
+([`src/cpu/registers.rs:101`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/registers.rs#L101)), so the low nibble always
 reads zero, matching hardware.
 
 ### Honest approximations
 
 - **Instruction-granular for the PPU/APU; per-access for the timer.** The CPU executes a
   whole opcode and *then* ticks the MMU/PPU/APU by the full instruction's cycles
-  ([`core.rs:218`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L218)). The **timer**, however, is now advanced one
+  ([`core.rs:218`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L218)). The **timer**, however, is now advanced one
   M-cycle at each CPU memory access, *before* the access is performed (see
   `MemoryManagementUnit::bus_tick`), so a read/write of `TIMA`/`DIV` lands on the correct
   M-cycle. This is why Blargg **`mem_timing` and `mem_timing-2` PASS** (covered). The
@@ -215,10 +215,12 @@ reads zero, matching hardware.
   `daid/speed_switch_timing_div` pass; `speed_switch_timing_ly`/`_stat` do not, for a PPU
   phase reason measured and written up in `../conformance-notes.md`.
 - **~900 lines of legacy interrupt/HALT logic are commented out** below `do_cycle`
-  ([`core.rs:222`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L222)) — dead code, not the live path.
-- **`src/cpu/z80`** (461 lines, no extension) is a **non-compiled reference file** — a
-  commented port of Imran Nazar's JavaScript jsgb interpreter that early handlers were
-  derived from. It is not a module.
+  ([`core.rs:222`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L222)) — dead code, not the live path.
+- **`src/cpu/z80` is gone** (deleted 2026-08-14). It was a non-compiled, fully
+  commented-out port of Imran Nazar's JavaScript jsgb interpreter that early handlers
+  were derived from — dead code, and Nazar's site states no licence, the same
+  provenance question that removed `resources/jsgb-mmu-map.png`. Read his article
+  series online if the lineage is ever needed; do not restore the file.
 
 ## 5. Known quirks and edge cases
 
@@ -244,14 +246,14 @@ reads zero, matching hardware.
   The order is observable both through the OAM-DMA guard and at `SP = $0000`, where the
   first push wraps onto `IE`.
 - **Interrupt priority.** Lowest bit wins: `handleinterrupt` uses
-  `triggered.trailing_zeros()` ([`core.rs:182`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L182)), giving VBlank
+  `triggered.trailing_zeros()` ([`core.rs:182`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L182)), giving VBlank
   (bit 0) highest priority through Joypad (bit 4). Vector = `0x40 | (n << 3)`.
 - **HALT wake without dispatch.** If `IME=0` but an interrupt becomes pending while
   halted, the CPU wakes and continues *without* jumping to the vector — modelled at
-  [`core.rs:173`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L173) (`halt = 0` is set before the `!ime` early
+  [`core.rs:173`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L173) (`halt = 0` is set before the `!ime` early
   return).
 - **`n >= 5` panics.** A sixth interrupt bit triggers `panic!("Invalid interrupt
-  triggered")` ([`core.rs:184`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L184)) — defensive, not hardware.
+  triggered")` ([`core.rs:184`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L184)) — defensive, not hardware.
 
 ## 6. Expected behaviours as tests
 

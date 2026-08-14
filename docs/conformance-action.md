@@ -13,7 +13,7 @@ other projects can point at their own emulator.
 ```yaml
 jobs:
   conformance:
-    uses: Alchemy86/gameboy/.github/workflows/conformance.yml@main
+    uses: Alchemy86/TerminalGB/.github/workflows/conformance.yml@main
     with:
       build: cargo build --release
       adapter: ./ci/gbconform-adapter.sh
@@ -213,7 +213,7 @@ Both routes still need the file published somewhere. The usual recipe is an
 orphan `badges` branch:
 
 ```yaml
-      - uses: Alchemy86/gameboy/.github/actions/conformance@main
+      - uses: Alchemy86/TerminalGB/.github/actions/conformance@main
         id: conformance
         with: { adapter: ./ci/gbconform-adapter.sh }
       - if: github.ref == 'refs/heads/main'

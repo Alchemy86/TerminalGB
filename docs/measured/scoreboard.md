@@ -5,7 +5,7 @@
 What this emulator scores, group by group, **and why each remaining failure is still there**.
 A total on its own is not evidence; a named reason per red row is.
 
-> Measured on `main` at [`4807f86`](https://github.com/Alchemy86/gameboy/tree/4807f86), on the
+> Measured on `main` at [`4807f86`](https://github.com/Alchemy86/TerminalGB/tree/4807f86), on the
 > ROM versions pinned in [`tools/fetch-test-suites.sh`](../../tools/fetch-test-suites.sh),
 > with the **default (`fast`) PPU engine** unless a row says otherwise.
 

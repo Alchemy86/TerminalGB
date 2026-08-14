@@ -9,7 +9,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The one-paragraph model
 
@@ -57,20 +57,20 @@ flowchart LR
 One call to [`Gameboy::frame`](../src/gameboy.rs) drives the machine forward until the PPU
 signals a completed frame, then the frontend blits the framebuffer.
 
-1. The frontend calls `frame()` ([`src/gameboy.rs:230`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L230)). It loops,
+1. The frontend calls `frame()` ([`src/gameboy.rs:230`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L230)). It loops,
    accumulating cycles, until the PPU's `updated` flag flips.
-2. Each iteration calls `cpu.do_cycle()` ([`src/cpu/core.rs:218`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L218)), which
+2. Each iteration calls `cpu.do_cycle()` ([`src/cpu/core.rs:218`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L218)), which
    runs **exactly one instruction** (or services a pending interrupt) via `exec`
-   ([`src/cpu/core.rs:197`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L197)) and returns its M-cycle count.
+   ([`src/cpu/core.rs:197`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L197)) and returns its M-cycle count.
 3. `do_cycle` hands those cycles (×4 T-cycles) to `mmu.do_cycle`
-   ([`src/mmu/mod.rs:347`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L347)), which advances the **timer**, **APU**,
+   ([`src/mmu/mod.rs:347`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L347)), which advances the **timer**, **APU**,
    **serial**, and **PPU** by the elapsed time, folding any interrupts they raise into `IF`.
-4. The PPU steps its mode clock ([`src/gpu/mod.rs:244`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L244)); when line 144 is
+4. The PPU steps its mode clock ([`src/gpu/mod.rs:244`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L244)); when line 144 is
    reached it enters VBlank, raises the VBlank interrupt, and sets `updated = true`
-   ([`src/gpu/mod.rs:314`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L314)).
+   ([`src/gpu/mod.rs:314`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L314)).
 5. `frame()` sees `updated` via `check_and_reset_gpu_updated`
-   ([`src/gameboy.rs:224`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L224)), breaks the loop, and the frontend reads the
-   pixels with `image()` ([`src/gameboy.rs:290`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L290)).
+   ([`src/gameboy.rs:224`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L224)), breaks the loop, and the frontend reads the
+   pixels with `image()` ([`src/gameboy.rs:290`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L290)).
 
 ```mermaid
 sequenceDiagram
@@ -96,15 +96,15 @@ The CPU has no wires to the devices; it calls `rb` (read byte) / `wb` (write byt
 MMU, and the MMU's address `match` routes the access. This is the single most important
 control-flow fact in the tree.
 
-- **Read:** `mmu.rb` ([`src/mmu/mod.rs:391`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L391)) matches the address to a
+- **Read:** `mmu.rb` ([`src/mmu/mod.rs:391`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L391)) matches the address to a
   region or device — e.g. `0x8000–0x9FFF` → `gpu.rb`, `0xA000–0xBFFF` → `mbc.readram`,
   `0xFF10–0xFF3F` → `sound.rb`, `0xFF00` → `keypad`.
-- **Write:** `mmu.wb` ([`src/mmu/mod.rs:450`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L450)) mirrors it, plus the side
-  effects — writing `0xFF46` triggers OAM DMA ([`src/mmu/mod.rs:521`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L521)).
+- **Write:** `mmu.wb` ([`src/mmu/mod.rs:450`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L450)) mirrors it, plus the side
+  effects — writing `0xFF46` triggers OAM DMA ([`src/mmu/mod.rs:521`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L521)).
 - **Quirks that live in this match:** echo RAM mirrors WRAM via `& 0x0FFF`
-  ([`src/mmu/mod.rs:399`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L399)); `IF` reads back with its top three bits set
-  ([`src/mmu/mod.rs:409`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L409)); the prohibited region and unmapped I/O read
-  `0xFF` ([`src/mmu/mod.rs:442`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L442)). See [MMU](components/mmu.md) for the
+  ([`src/mmu/mod.rs:399`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L399)); `IF` reads back with its top three bits set
+  ([`src/mmu/mod.rs:409`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L409)); the prohibited region and unmapped I/O read
+  `0xFF` ([`src/mmu/mod.rs:442`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L442)). See [MMU](components/mmu.md) for the
   full map and the honest approximations (instantaneous OAM DMA, no mode-based bus blocking).
 
 ```mermaid
@@ -130,10 +130,10 @@ folds those into the `IF` register during `do_cycle`; the CPU checks `IF & IE` b
 next instruction and dispatches the **lowest set bit first**.
 
 1. A device raises its flag — e.g. the PPU ORs `0x01` for VBlank
-   ([`src/gpu/mod.rs:313`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L313)); the timer ORs `0x04` on overflow.
+   ([`src/gpu/mod.rs:313`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L313)); the timer ORs `0x04` on overflow.
 2. `mmu.do_cycle` folds each device's `interrupt` byte into `intf` (`IF`).
 3. Before executing, the CPU runs `handleinterrupt`
-   ([`src/cpu/core.rs:161`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L161)): it takes `triggered.trailing_zeros()` so the
+   ([`src/cpu/core.rs:161`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L161)): it takes `triggered.trailing_zeros()` so the
    fixed priority is **VBlank → STAT → Timer → Serial → Joypad**, pushes `PC`, and jumps to
    the vector `0x40 | (n << 3)`.
 
@@ -145,12 +145,12 @@ Docs: [Interrupts](https://gbdev.io/pandocs/Interrupts.html).
 Every frontend drives the **same tiny surface** — construct, step, read pixels, feed keys —
 so the core stays frontend-agnostic ([`src/gameboy.rs`](../src/gameboy.rs)):
 
-- `Gameboy::new(rom, filepath)` ([`src/gameboy.rs:68`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L68))
-- `frame()` ([`src/gameboy.rs:230`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L230)) → `image()` ([`src/gameboy.rs:290`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L290))
-- `keydown` / `keyup` ([`src/gameboy.rs:298`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L298))
+- `Gameboy::new(rom, filepath)` ([`src/gameboy.rs:68`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L68))
+- `frame()` ([`src/gameboy.rs:230`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L230)) → `image()` ([`src/gameboy.rs:290`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L290))
+- `keydown` / `keyup` ([`src/gameboy.rs:298`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L298))
 
 The attach points: **desktop** owns an OpenGL window and the event loop in
-`render_desktop` ([`src/gameboy.rs:98`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L98)); **terminal** and **web** live in
+`render_desktop` ([`src/gameboy.rs:98`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L98)); **terminal** and **web** live in
 [`src/screen/`](../src/screen); the **C FFI** re-exports the surface as `#[no_mangle]`
 functions in [`src/lib.rs`](../src/lib.rs). Full detail: [Frontends](components/frontends.md).
 
@@ -160,7 +160,7 @@ Every `path:line` reference on these pages is a real GitHub link, generated — 
 hand-typed — from a small tool so the map cannot silently rot.
 
 - **Branch links, not permalinks.** Line references point at
-  [`blob/main`](https://github.com/Alchemy86/gameboy/tree/main), so they track the code as it
+  [`blob/main`](https://github.com/Alchemy86/TerminalGB/tree/main), so they track the code as it
   moves rather than freezing at one revision. The known trade-off — a line number can drift —
   is covered by the two mechanisms below.
 - **A "documented as of `<sha>`" marker** sits at the top of every deep-dive page (and just

@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -59,7 +59,7 @@ The link *protocol* is unchanged across models; a DMG and a CGB can link for DMG
 
 ## 4. How it works here
 
-**The `Serial` struct** — [`src/mmu/serial.rs:7`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L7): `data` (SB),
+**The `Serial` struct** — [`src/mmu/serial.rs:7`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/serial.rs#L7): `data` (SB),
 `control` (SC), a `callback`, and `interrupt`.
 
 **Registers** — `wb`/`rb` ([`serial.rs`](../../src/mmu/serial.rs)). Writing `SC`
@@ -96,7 +96,7 @@ field because this core's per-access tick advances the counter before the access
 from the raw field and the serial interrupt arrives one instruction late.
 
 `SC` reads back with the unused bits set (`control | 0b01111110`,
-[`serial.rs:43`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L43)).
+[`serial.rs:43`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/serial.rs#L43)).
 
 **The capture hook is now used — and there is a second seam beside it.** A
 [plugin](../plugins.md) holding `SERIAL_LINK` can *be the console on the other end of the
@@ -107,9 +107,9 @@ trade (see [plugins.md](../plugins.md) §7). Historically, though:
 
 **The capture hook existed but was unused.** There is a `SerialCallback` type, a
 `new_with_callback`, and `set_callback`/`unset_callback`
-([`serial.rs:1`,`15`,`66`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L1)) — exactly the seam a Blargg harness
+([`serial.rs:1`,`15`,`66`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/serial.rs#L1)) — exactly the seam a Blargg harness
 needs. But both MMU constructors install `Serial::default()`, whose callback is a `noop`
-returning `None` ([`serial.rs:3`,`75`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L3)), and **nothing in the repo
+returning `None` ([`serial.rs:3`,`75`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/serial.rs#L3)), and **nothing in the repo
 ever calls `set_callback`**. So today serial output is silently dropped.
 
 ### Honest approximations

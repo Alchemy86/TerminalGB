@@ -66,7 +66,8 @@ history. See [Credits & lineage](README.md#credits--lineage).
     yourself if you like; move all of them or none.
   - `$TERMINALGB_CELL_SCALE` is the new spelling of `$GAMEBOY_CELL_SCALE`; the old name is
     still honoured.
-  - **The repository is still `Alchemy86/gameboy`** — clones, remotes, badges and permalinks
+  - **The repository was still `Alchemy86/gameboy` at the time** (since renamed to
+    `Alchemy86/TerminalGB`; GitHub redirects) — clones, remotes, badges and permalinks
     all keep working. The emulated machine is still a Game Boy, so the `Gameboy` type and the
     `gameboy` module inside the crate keep their names.
   - The `gameboy` value of the `palette` config key (an alias for `green`) is unchanged.
@@ -500,5 +501,5 @@ A large accuracy, audio, rendering, and tooling pass on top of the fork baseline
   `cell_scale` configuration key.
 - **MBC**: three crashes fixed alongside adopting the ecosystem `.sav` format.
 
-[Unreleased]: https://github.com/Alchemy86/gameboy/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/Alchemy86/gameboy/releases/tag/v0.2.0
+[Unreleased]: https://github.com/Alchemy86/TerminalGB/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Alchemy86/TerminalGB/releases/tag/v0.2.0

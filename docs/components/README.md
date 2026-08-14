@@ -18,7 +18,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The components
 
@@ -79,7 +79,7 @@ dispatches them (priority: VBlank → STAT → Timer → Serial → Joypad).
 ## Provenance & honesty
 
 The emulation core is closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**
-(the one literal `rboy` credit in the tree is [`src/gameboy.rs:50`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L50),
+(the one literal `rboy` credit in the tree is [`src/gameboy.rs:50`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L50),
 but the structure runs throughout). Every page's **"honest approximations"** section names
 where this emulator is *not* cycle-perfect — the fixed PPU mode-3 length, instantaneous
 unguarded OAM DMA, separate timer counters, the unmodelled HALT and OAM-corruption bugs, the

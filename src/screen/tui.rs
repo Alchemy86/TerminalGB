@@ -259,6 +259,17 @@ const BASIC_INPUT_NOTICE: &str =
      For exact press/release use Kitty, Ghostty, foot, or WezTerm with \
      `enable_kitty_keyboard = true`.";
 
+/// What a build without the `audio` feature says about its own silence. The
+/// sound chip is still fully emulated — only speaker output is missing — and
+/// the fix is a rebuild, not a mixer setting, so the message has to carry the
+/// exact command.
+#[cfg(not(feature = "audio"))]
+const NO_AUDIO_NOTICE: &str =
+    "audio: this build has no speaker output (the sound chip is still \
+     emulated). Reinstall with `cargo install terminalgb --features audio` — \
+     on Linux that needs ALSA headers (libasound2-dev / alsa-lib-devel) — or \
+     use a prebuilt release binary, which ships with sound.";
+
 /// Number of save-state slots the terminal exposes (`1`/`2`/`3`).
 const NUM_SLOTS: u32 = 3;
 
@@ -514,6 +525,14 @@ pub fn run_as(start: Start) -> Result<(), Box<dyn Error>> {
     if input == InputMode::Basic {
         warnings.push(BASIC_INPUT_NOTICE.to_string());
     }
+    // A build without the `audio` feature — what a plain `cargo install
+    // terminalgb` produces, since the feature is off by default so a fresh
+    // build never needs ALSA headers — is silent. Silence with no explanation
+    // reads as "my sound is broken", so say it once, through the same four
+    // surfaces every config warning reaches (stderr scrollback, picker
+    // footer, a toast, the `?` overlay).
+    #[cfg(not(feature = "audio"))]
+    warnings.push(NO_AUDIO_NOTICE.to_string());
     let recent = Recent::load();
 
     // Video-out is resolved *here*, before the terminal is touched, so its
@@ -2624,7 +2643,16 @@ impl App {
     ///
     /// Without the `audio` feature this is always `off`, which is the truth —
     /// that build has no host player at all.
+    /// The Status panel's `Audio` row. A build without the `audio` feature is
+    /// not "off" — off implies it could be on. `cargo install terminalgb`
+    /// gives exactly that build (the feature is off by default so a fresh
+    /// build never needs ALSA headers), so the row has to explain the silence
+    /// rather than let it read as a broken sound card. The `?` overlay carries
+    /// the full instruction.
     fn audio_status(&self) -> String {
+        #[cfg(not(feature = "audio"))]
+        return "not built in (?)".to_string();
+        #[cfg(feature = "audio")]
         crate::sound::host_status::snapshot().label()
     }
 
@@ -3699,11 +3727,26 @@ impl App {
             .title(format!(" ROMs ({}) ", self.visible.len()));
 
         if self.entries.is_empty() {
+            // The first-run screen for most strangers: no games ship with the
+            // emulator (deliberately — see the licence boundary in the docs),
+            // so this message has to carry the whole "where do my ROMs go?"
+            // answer, not just report an empty directory.
             let msg = self.message.clone().unwrap_or_else(|| {
+                let dir = self.config.rom_dir.display();
+                let missing = if self.config.rom_dir.is_dir() {
+                    ""
+                } else {
+                    " (the directory does not exist yet — create it)"
+                };
                 format!(
-                    "No .gb/.gbc ROMs found in {}.\n\nSet `rom_dir` in {} or pass a ROM path on the command line.",
-                    self.config.rom_dir.display(),
-                    crate::screen::config::config_path()
+                    "No .gb/.gbc ROMs found in {dir}{missing}.\n\n\
+                     TerminalGB ships no game content: bring your own cartridge dumps. \
+                     Put .gb/.gbc files in {dir}, set `rom_dir` in {cfg}, or pass a ROM \
+                     path on the command line.\n\n\
+                     Everything stays on this machine: ROMs are read from your disk, \
+                     in-game saves are written beside them, and nothing you load is \
+                     ever uploaded anywhere.",
+                    cfg = crate::screen::config::config_path()
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "the config file".into()),
                 )
@@ -5234,6 +5277,19 @@ impl App {
             Line::from(Span::styled(
                 "  volume is playback only — the emulated machine is untouched; \
                  `volume = 50` in config.toml sets the starting level",
+                Style::default().fg(Color::DarkGray),
+            )),
+            // A build without the `audio` feature — which is what a plain
+            // `cargo install terminalgb` produces — is silent by design, and
+            // the silence must explain itself. The sound chip IS emulated;
+            // only speaker output is missing.
+            #[cfg(not(feature = "audio"))]
+            Line::from(Span::styled(
+                "  THIS BUILD HAS NO SPEAKER OUTPUT (the sound chip is still \
+                 emulated). Reinstall with: cargo install terminalgb --features \
+                 audio — on Linux that needs the ALSA headers (libasound2-dev / \
+                 alsa-lib-devel) — or use a prebuilt release binary, which has \
+                 sound",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from("  1-3       save slot    F5/F8   save / load"),
@@ -8582,6 +8638,67 @@ mod tests {
     ///
     /// Asserted on **rendered output**, not on the `skip` flags: `skip` lives
     /// in ratatui's buffer and what a reader sees is the backend's.
+    /// The first-run screen: a stranger who installed the emulator and has no
+    /// ROMs yet must be told, in the picker itself, that no games ship with
+    /// it, where to put their own, and that nothing they load leaves the
+    /// machine — not shown a bare "0 ROMs" list. Asserted against rendered
+    /// output, because a message nobody can see is a message nobody got.
+    #[test]
+    fn an_empty_rom_dir_renders_first_run_guidance() {
+        use ratatui::backend::TestBackend;
+        isolate_state_dir();
+        // A directory that does not exist, so the "create it" hint shows too.
+        let dir = std::env::temp_dir().join(format!(
+            "gameboy-firstrun-test/{}-does-not-exist",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut picker = Picker::from_fontsize((8, 16));
+        picker.set_protocol_type(ProtocolType::Halfblocks);
+        let config = Config {
+            rom_dir: dir.clone(),
+            ..Config::default()
+        };
+        let mut app = App::build(
+            config,
+            Recent::default(),
+            Vec::new(),
+            picker,
+            video_for_test(),
+            None,
+        );
+        let (cols, rows) = (100u16, 30u16);
+        let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let screen: String = (0..rows)
+            .map(|y| {
+                (0..cols)
+                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Wrapping breaks phrases across lines and the list border interrupts
+        // them, so compare against a whitespace-collapsed, borderless copy.
+        let flat: String = screen
+            .replace(['│', '─', '┌', '┐', '└', '┘'], " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for want in [
+            "ships no game content",
+            "does not exist yet",
+            "rom_dir",
+            "stays on this machine",
+        ] {
+            assert!(
+                flat.contains(want),
+                "first-run picker must say {want:?}\n{screen}"
+            );
+        }
+    }
+
     #[cfg(feature = "music")]
     #[test]
     fn the_help_overlay_is_not_eaten_by_the_cover() {

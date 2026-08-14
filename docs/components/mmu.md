@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -69,28 +69,28 @@ registers behind mode checks, returning `0xFF`/no-op in Classic mode.
 Mirrors rboy's MMU: components expose `rb`/`wb`/`do_cycle` and raise interrupts by ORing a
 per-device `interrupt` byte, which the MMU folds into `IF`.
 
-**The struct** — [`src/mmu/mod.rs:45`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L45). Owns `wram` (`0x8000` = 8
+**The struct** — [`src/mmu/mod.rs:45`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L45). Owns `wram` (`0x8000` = 8
 banks), `zram` (HRAM, note it's named `zram`), `gpu`, `timer`, `serial`, `keypad`,
 `Option<Sound>`, `mbc`, the interrupt bytes `inte` (IE) and `intf` (IF), the HDMA state,
 `wrambank`, and mode/speed fields.
 
-**Three constructors over one builder.** `raw` ([`mod.rs:103`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L103))
+**Three constructors over one builder.** `raw` ([`mod.rs:103`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L103))
 maps the cartridge and `fill_random`s the WRAM but does *not* choose a console; `new`
-([`mod.rs:144`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L144), DMG, rejects CGB-only carts), `new_cgb`
-([`mod.rs:159`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L159)) and `new_with_model`
-([`mod.rs:168`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L168)) then commit a mode via `set_mode`
-([`mod.rs:216`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L216)) and run `set_initial`
-([`mod.rs:180`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L180)) to write the post-boot I/O defaults — this is the
+([`mod.rs:144`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L144), DMG, rejects CGB-only carts), `new_cgb`
+([`mod.rs:159`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L159)) and `new_with_model`
+([`mod.rs:168`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L168)) then commit a mode via `set_mode`
+([`mod.rs:216`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L216)) and run `set_initial`
+([`mod.rs:180`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L180)) to write the post-boot I/O defaults — this is the
 **boot-ROM handoff** (see §5). Sharing `raw` is deliberate: the DMG and CGB paths used to be
 two copies of the same struct literal and could drift apart. `new_with_model` takes a
 [`Model`](../../src/mode.rs) — nine consoles, `Model::NAMES` — and is what `Cpu::new` calls.
 
-**The dispatch** — `rb` ([`mod.rs:391`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L391)) / `wb`
-([`mod.rs:450`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L450)) are the address `match`. Echo RAM is folded into the
-WRAM arms with `& 0x0FFF` masking ([`mod.rs:399–400`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L399)). `IF` reads
-back with the top three bits set (`intf | 0b11100000`, [`mod.rs:409`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L409)).
+**The dispatch** — `rb` ([`mod.rs:391`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L391)) / `wb`
+([`mod.rs:450`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L450)) are the address `match`. Echo RAM is folded into the
+WRAM arms with `& 0x0FFF` masking ([`mod.rs:399–400`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L399)). `IF` reads
+back with the top three bits set (`intf | 0b11100000`, [`mod.rs:409`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L409)).
 
-**`do_cycle`** ([`mod.rs:347`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L347)) ticks the sub-components and folds
+**`do_cycle`** ([`mod.rs:347`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L347)) ticks the sub-components and folds
 their interrupts into `intf`: it runs VRAM DMA first, then `timer` and `sound` on
 double-speed-aware `cputicks`, and `gpu`/VRAM-DMA on `gputicks`. **The timer, however, is
 advanced per memory access, not just here.** While a CPU instruction executes, every
@@ -101,7 +101,7 @@ total is unchanged. `bus_tick` is a no-op unless a CPU instruction is executing,
 DMA (which re-uses `rb`/`wb`) and boot-time setup do not double-count — `oamdma` toggles
 the flag off around its copy.
 
-**OAM DMA** — `oamdma` ([`mod.rs:521`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L521)):
+**OAM DMA** — `oamdma` ([`mod.rs:521`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L521)):
 
 ```rust
 fn oamdma(&mut self, value: u8) {
@@ -126,9 +126,9 @@ is already in mode 0 — including with the LCD off, where the mode reads 0 fore
 moves its first block at once instead of waiting for the next mode-0 *entry*;
 `hdma_run_block` is that one-shot. A `$FF55` write with bit 7 clear during a running
 HBlank transfer cancels it *and* writes the length register, so `$FF55` then reads
-`$80`, not `$80 | the blocks that were left`. See `hdma_write`/`hdma_read` ([`mod.rs:549`,`534`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L549)),
-`perform_gdma` (all rows at once, [`mod.rs:603`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L603)) and `perform_hdma`
-(one 16-byte row per HBlank, gated on `gpu.may_hdma()`, [`mod.rs:590`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L590)).
+`$80`, not `$80 | the blocks that were left`. See `hdma_write`/`hdma_read` ([`mod.rs:549`,`534`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L549)),
+`perform_gdma` (all rows at once, [`mod.rs:603`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L603)) and `perform_hdma`
+(one 16-byte row per HBlank, gated on `gpu.may_hdma()`, [`mod.rs:590`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L590)).
 
 ### Honest approximations
 
@@ -144,10 +144,10 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
   any mode; hardware returns `0xFF` during modes 2/3. This interacts with the OAM
   corruption bug (see §5).
 - **GDMA/HDMA cycle costs are approximate** (`len*8` / `8` ticks;
-  [`mod.rs:610`,`593`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L610)) and GDMA does not stall the CPU for its full
+  [`mod.rs:610`,`593`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L610)) and GDMA does not stall the CPU for its full
   duration.
 - **Prohibited region `0xFEA0–0xFEFF`** is not given the documented OAM-block-dependent
-  read behaviour; unmapped reads return `0xFF` ([`mod.rs:442`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L442)).
+  read behaviour; unmapped reads return `0xFF` ([`mod.rs:442`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L442)).
 
 ## 5. Known quirks and edge cases
 
@@ -205,7 +205,7 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
     hardware has it, but the envelope is left fully decayed.
 - **Echo RAM** is faithfully mirrored (writes to `0xE000+` change `0xC000+`).
 - **CGB double-speed** halves per-cycle divisions for timer/sound and doubles DMA cost via
-  `cpudivider` ([`mod.rs:348`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L348)), but `STOP`-based speed switching
+  `cpudivider` ([`mod.rs:348`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L348)), but `STOP`-based speed switching
   itself is only plumbed, not cycle-accurate.
 
 ## 6. Expected behaviours as tests

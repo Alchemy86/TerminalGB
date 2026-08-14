@@ -17,7 +17,7 @@ Hardware reference, not restated here:
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Persistence: never in a `Drop` impl
 
@@ -30,9 +30,9 @@ Cartridge RAM used to be written **only** in `impl Drop for MBCx`. That is why i
 vanished.
 
 How it works now: a RAM write marks the battery dirty; `Gameboy::frame` calls `autosave`
-([`src/mbc/mod.rs:80`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L80)) once per frame, which writes out after 60 quiet
+([`src/mbc/mod.rs:80`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L80)) once per frame, which writes out after 60 quiet
 frames (~1 s) or 600 dirty ones. `Gameboy::flush_battery`
-([`src/gameboy.rs:696`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L696)) forces it. `Drop` still flushes as a last chance
+([`src/gameboy.rs:696`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L696)) forces it. `Drop` still flushes as a last chance
 only.
 
 Two further rules, both learned the expensive way:
@@ -81,7 +81,7 @@ written. **Cartridge-supplied input must never be able to kill the process.**
 | Defect | What triggers it |
 |---|---|
 | `% rambanks` divide-by-zero | a RAM-less MBC5+RUMBLE cart (types `0x19`/`0x1C`). **Bit 3 of the bank register is the rumble motor**, so every rumble game hits it on its first motor poke |
-| `% rombanks` divide-by-zero | `rom_banks()` returning 0 for unofficial `0x148` codes — `0x52`/`0x53`/`0x54` are real. It falls back to `rom.len()/0x4000`, minimum 2 ([`src/mbc/mod.rs:206`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L206)) |
+| `% rombanks` divide-by-zero | `rom_banks()` returning 0 for unofficial `0x148` codes — `0x52`/`0x53`/`0x54` are real. It falls back to `rom.len()/0x4000`, minimum 2 ([`src/mbc/mod.rs:206`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L206)) |
 | unchecked RAM indexing | a short or foreign `.sav`. Loaded saves are normalised to the declared RAM size and every access is bounds-checked |
 | out-of-range VRAM-DMA destination | a CGB game pointing an HDMA near `$9FFF`; the counter walked into the PPU's catch-all `panic!`. It is `0x8000 \| (dst & 0x1FFF)` now, which is also exactly what SameSuite `dma/gdma_addr_mask` measures |
 
@@ -105,9 +105,9 @@ executing and reliably *stores bytes into cartridge RAM*. Measured on a real car
 out of a Cable Club link battle: **4,378 bytes of cartridge RAM changed within six frames**,
 all of which the autosave would have persisted over a real save.
 
-`MemoryManagementUnit::report_fault` ([`src/mmu/mod.rs:1182`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L1182)) does
+`MemoryManagementUnit::report_fault` ([`src/mmu/mod.rs:1182`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L1182)) does
 exactly one thing: **it withdraws the emulator's right to write the save file**
-([`src/mbc/battery.rs:181`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/battery.rs#L181)). Sticky for the
+([`src/mbc/battery.rs:181`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/battery.rs#L181)). Sticky for the
 session, first reason kept, loud on stderr, and a `Fault: SAVE NOT WRITTEN` row in the UI. It
 deliberately does *not* stop, reset or "fix" the machine — detectors are heuristics, so only
 the irreversible act is taken away.
@@ -163,7 +163,7 @@ runs the wrong one or garbage.
 
 ## The MBC3 clock runs on **emulated** time
 
-`Rtc::tick` ([`src/mbc/rtc.rs:138`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/rtc.rs#L138)) counts T-cycles of *console* time
+`Rtc::tick` ([`src/mbc/rtc.rs:138`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/rtc.rs#L138)) counts T-cycles of *console* time
 into a sub-second divider and ticks once every `CYCLES_PER_SECOND` (4,194,304) of them — fed
 from a figure already divided by the CGB speed multiplier, because **the crystal is on the
 cartridge and does not know the console changed gear**.
@@ -182,7 +182,7 @@ Three behaviours that only a counter model can express, each an ax6 `rtc3test` s
 | **`DH` bit 6 (HALT) freezes the sub-second divider too**, so a clock stopped 600 ms into a second and restarted later ticks 400 ms after the restart, not a full second. | "RTC off/400" |
 | **Writing the seconds register restarts the divider; writing any other RTC register does not.** | "Sub-second writes", measured to 1.5 ms |
 
-One helper (`advance_counter`, [`src/mbc/rtc.rs:75`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/rtc.rs#L75)) implements the
+One helper (`advance_counter`, [`src/mbc/rtc.rs:75`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/rtc.rs#L75)) implements the
 carry rule for both the per-second tick and the shutdown catch-up, so the two cannot disagree.
 
 ### A withdrawn "deviation": any single write to `$6000-$7FFF` latches

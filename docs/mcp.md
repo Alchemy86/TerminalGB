@@ -11,8 +11,8 @@ You do not need to have seen this repo before. Everything you need is below.
 ## 1. Build it
 
 ```sh
-git clone https://github.com/Alchemy86/gameboy
-cd gameboy
+git clone https://github.com/Alchemy86/TerminalGB
+cd TerminalGB
 cargo build --release --no-default-features --features mcp
 ```
 

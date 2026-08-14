@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """gbconform — run Game Boy conformance ROMs against ANY emulator.
 
-This is the runner behind `Alchemy86/gameboy`'s reusable conformance action.
+This is the runner behind `Alchemy86/TerminalGB`'s reusable conformance action.
 It knows nothing about the emulator under test: it talks to an **adapter**, a
 command the emulator's author supplies, through the smallest contract we could
 make work (see `docs/conformance-action.md`, and `--contract` below).

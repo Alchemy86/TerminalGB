@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -62,10 +62,10 @@ are not supported.
 ## 4. How it works here
 
 **The trait** — `MemoryBankController`
-([`src/mbc/mod.rs:11`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L11)): `readrom`, `readram`, `writerom`,
+([`src/mbc/mod.rs:11`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L11)): `readrom`, `readram`, `writerom`,
 `writeram`, plus a default `romname` that reads the title bytes at `0x134`.
 
-**Type dispatch** — `get_mbc` ([`src/mbc/mod.rs:64`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L64)) reads
+**Type dispatch** — `get_mbc` ([`src/mbc/mod.rs:64`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L64)) reads
 `data[0x147]` and constructs the right controller:
 
 ```
@@ -77,13 +77,13 @@ are not supported.
 ```
 
 Each controller: **MBC0** (no banking, optional 8 KB RAM for `0x08`/`0x09`,
-[`mbc0.rs:4`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc0.rs#L4)); **MBC1**
+[`mbc0.rs:4`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc0.rs#L4)); **MBC1**
 (5-bit + 2-bit bank registers, mode select, bank-0 remap;
-[`mbc1.rs:164–243`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L164)); **MBC2** (512-byte nibble RAM: the low nibble is
-stored, reads OR in `0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC clocked by
+[`mbc1.rs:164–243`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc1.rs#L164)); **MBC2** (512-byte nibble RAM: the low nibble is
+stored, reads OR in `0xF0`; [`mbc2.rs:27`,`72`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc2.rs#L27)); **MBC3** (RTC clocked by
 emulated time — see below; [`mbc3.rs`](../../src/mbc/mbc3.rs) +
 [`rtc.rs`](../../src/mbc/rtc.rs)); **MBC5** (9-bit ROM bank split across
-`0x2000` and `0x3000`; [`mbc5.rs:90`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L90)).
+`0x2000` and `0x3000`; [`mbc5.rs:90`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc5.rs#L90)).
 
 **Battery saves** live in [`src/mbc/battery.rs`](../../src/mbc/battery.rs), shared by every controller. A `Battery`
 exists only for a battery cart subtype *with* a real filepath and either some declared RAM or
@@ -142,9 +142,9 @@ an RTC; otherwise it is `Battery::none()` and persists nothing (the web and FFI 
   story: [`../link-battle.md`](../link-battle.md).
 
 **The header checksum** — `check_checksum`
-([`src/mbc/mod.rs:116`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L116), `#[allow(dead_code)]`) sums `0x134..0x14D`
+([`src/mbc/mod.rs:116`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L116), `#[allow(dead_code)]`) sums `0x134..0x14D`
 and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
-[`mod.rs:130`,`137`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L130)) are **2 of the 4 tests in the whole repo**.
+[`mod.rs:130`,`137`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L130)) are **2 of the 4 tests in the whole repo**.
 
 ### Honest approximations & known bugs
 
@@ -172,7 +172,7 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   emulator was running at, and panicked outright if the host clock predated the UNIX epoch.
   ax6 `rtc3test` 0/3 → 3/3.)*
 - **MBC5 rumble is not implemented** — the motor-control range is an explicit no-op
-  (`0x6000..=0x7FFF => { /* ? */ }`, [`mbc5.rs:101`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L101)); rumble carts
+  (`0x6000..=0x7FFF => { /* ? */ }`, [`mbc5.rs:101`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc5.rs#L101)); rumble carts
   still load (RAM/battery handled) but never rumble.
 - **`Drop` is not a shutdown hook — do not persist anything in one.** The desktop
   frontend's `glutin`/`winit` `event_loop.run()` **never returns**: winit 0.26 calls
@@ -213,8 +213,8 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 - **RAM enable gate.** Cartridge RAM only responds after the game writes `0x0A` to the
   enable range; otherwise reads return open-bus. Modelled per-controller.
 - **MBC1 bank-0 remap.** Writing bank `0` to the low register selects bank `1`
-  ([`mbc1.rs:217`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L217)); in mode 1 the `0x0000–0x3FFF` region can show a
-  non-zero bank ([`mbc1.rs:173`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc1.rs#L173)).
+  ([`mbc1.rs:217`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc1.rs#L217)); in mode 1 the `0x0000–0x3FFF` region can show a
+  non-zero bank ([`mbc1.rs:173`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc1.rs#L173)).
 - **MBC1M multicart wiring.** A 1 MiB multi-game compilation cart ignores the top bit of
   BANK1 and moves BANK2 to bank bits 4-5, so mode 1 shows banks `$00/$10/$20/$30` in
   `0x0000–0x3FFF` — that is how its menu switches games. The `00 → 01` translation still
@@ -224,7 +224,7 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
   and `GB_MBC1_MULTICART=1|0` overrides that heuristic in either direction. Pan Docs,
   ["MBC1M"](https://gbdev.io/pandocs/MBC1.html).
 - **MBC2's 4-bit RAM.** Only the low nibble of each of 512 bytes is real; reads force the
-  high nibble to `1` ([`mbc2.rs:72`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc2.rs#L72)).
+  high nibble to `1` ([`mbc2.rs:72`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc2.rs#L72)).
 - **MBC3 RTC latch.** Any write to `0x6000–0x7FFF` snapshots the counters into the registers
   the game reads (`Rtc::write_latch`, [`rtc.rs`](../../src/mbc/rtc.rs)); games write `0x00`
   then `0x01`. The day counter's sticky carry bit sets past 511 days (`Rtc::advance_day`).
@@ -238,7 +238,7 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 - **Writing the seconds register restarts the sub-second divider**; writing any other RTC
   register leaves it running.
 - **MBC5 9-bit bank.** `0x2000–0x2FFF` sets the low 8 bits, `0x3000–0x3FFF` bit 0 is the
-  9th ([`mbc5.rs:93–98`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mbc5.rs#L93)).
+  9th ([`mbc5.rs:93–98`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mbc5.rs#L93)).
 
 ## 6. Expected behaviours as tests
 
@@ -248,7 +248,7 @@ and compares `0x14D`. Its two tests (`checksum_zero`, `checksum_ones`,
 
 1. **Header checksum.** `check_checksum` accepts a header whose `0x14D` matches the
    computed sum and rejects one that doesn't. ✅ **Covered** (`checksum_zero`,
-   `checksum_ones`, [`mbc/mod.rs:130`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L130)).
+   `checksum_ones`, [`mbc/mod.rs:130`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mbc/mod.rs#L130)).
 2. **Type dispatch honours `0x0147`.** A ROM with `0x0147 = 0x01` loads as MBC1, `0x19` as
    MBC5, etc. — **when a filepath is given**. *(Not covered.)*
 3. **The no-filepath path mis-selects MBC3.** With `filepath = None`, an MBC1 ROM is

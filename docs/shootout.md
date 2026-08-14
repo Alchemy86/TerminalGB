@@ -267,8 +267,9 @@ it: the submission files say `TerminalGB` throughout, and so does
 
 Two things stay `gameboy` on purpose, and both are load-bearing:
 
-* **The repository slug is still `Alchemy86/gameboy`** — the rename commit says
-  so explicitly, and `downloadGithubRelease` takes the slug, not the name.
+* **The repository slug is `Alchemy86/TerminalGB`** (renamed from
+  `Alchemy86/gameboy`; GitHub redirects the old slug). `downloadGithubRelease`
+  takes the slug, not the name — `docs/shootout/terminalgb.py` carries the new one.
 * **The window title and the board entry are separate strings.** The adapter's
   `title_check` matches `WINDOW_TITLE`; the entry's display name is the `name`
   in the spec. Changing either later does not force the other.

@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -62,13 +62,13 @@ The renderers live in `src/screen/`; the `examples/` binaries are thin `main()`s
 a `RenderMode`; `web/` is the JS/webpack shell around the WASM build.
 
 **Desktop** — [`src/screen/desktop.rs`](../../src/screen/desktop.rs). `Glcx`
-([`desktop.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L17)) sets up a textured quad and uploads each
-frame via `gl::TexImage2D` in `draw()` ([`desktop.rs:351`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L351)).
-The event loop lives in `Gameboy::render_desktop` ([`src/gameboy.rs:98`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L98)),
+([`desktop.rs:17`](https://github.com/Alchemy86/TerminalGB/blob/main/src/screen/desktop.rs#L17)) sets up a textured quad and uploads each
+frame via `gl::TexImage2D` in `draw()` ([`desktop.rs:351`](https://github.com/Alchemy86/TerminalGB/blob/main/src/screen/desktop.rs#L351)).
+The event loop lives in `Gameboy::render_desktop` ([`src/gameboy.rs:98`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L98)),
 which also initialises `cpal` audio. Key mapping is in `process_window`
-([`desktop.rs:81`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/desktop.rs#L81)): **Z→Select, X→Start, A→A, B→B**, arrows →
+([`desktop.rs:81`](https://github.com/Alchemy86/TerminalGB/blob/main/src/screen/desktop.rs#L81)): **Z→Select, X→Start, A→A, B→B**, arrows →
 D-pad. The loop now paces to a real **59.73 Hz** frame clock
-([`gameboy.rs:147`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L147)) rather than free-running.
+([`gameboy.rs:147`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L147)) rather than free-running.
 
 **Terminal** — [`src/screen/tui.rs`](../../src/screen/tui.rs). A full ratatui application
 (recently rebuilt): `run` ([`tui.rs:194`](../../src/screen/tui.rs)) sets up an in-app **ROM
@@ -80,9 +80,9 @@ picker**, a centred game pane, a status panel, and a **help overlay** (`?`); `q`
 > the current tree, but treat the terminal-specific narrative as provisional.
 
 **Web** — [`src/screen/web.rs`](../../src/screen/web.rs). `#[wasm_bindgen] render(rom)`
-([`web.rs:44`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/web.rs#L44)) creates a 160×144 `<canvas>`, builds
+([`web.rs:44`](https://github.com/Alchemy86/TerminalGB/blob/main/src/screen/web.rs#L44)) creates a 160×144 `<canvas>`, builds
 `Gameboy::new(rom, None)`, and in a `requestAnimationFrame` loop calls `frame()` and blits
-via `put_image_data` ([`web.rs:123`](https://github.com/Alchemy86/gameboy/blob/main/src/screen/web.rs#L123)). Keys are read from a shared
+via `put_image_data` ([`web.rs:123`](https://github.com/Alchemy86/TerminalGB/blob/main/src/screen/web.rs#L123)). Keys are read from a shared
 `Rc<RefCell<i32>>` keycode. The JS shell ([`web/index.js`](../../web/index.js)) is a file
 picker + a Play button that calls `render(rom)`.
 
@@ -95,17 +95,18 @@ statically links `libterminalgb.a` and calls them from Go.
 
 These are the frontends' rough edges (from the scout report, confirmed in code):
 
-- **The examples now take a ROM path** (previously hard-coded). Both read
-  `std::env::args().nth(1)` ([`examples/desktop/bin.rs:6`](https://github.com/Alchemy86/gameboy/blob/main/examples/desktop/bin.rs#L6),
-  [`examples/terminal/bin.rs:10`](https://github.com/Alchemy86/gameboy/blob/main/examples/terminal/bin.rs#L10)); desktop prints a usage
+- **The frontends take a ROM path** (previously hard-coded). Both read their first
+  argument ([`examples/desktop/bin.rs:6`](https://github.com/Alchemy86/TerminalGB/blob/main/examples/desktop/bin.rs#L6),
+  [`src/bin/terminalgb.rs`](../../src/bin/terminalgb.rs) — the installable `terminalgb`
+  binary, which the `terminal` example `include!`s); desktop prints a usage
   line with no argument, terminal falls back to the in-app ROM picker.
 - **Terminal needs a kitty-keyboard-protocol terminal.** `run` **fails loudly** with a clear
   error if `supports_keyboard_enhancement()` is false
   ([`tui.rs:198`](../../src/screen/tui.rs)) — works in kitty/WezTerm/Ghostty/foot; elsewhere it
   exits with instructions rather than silently misbehaving.
-- **No web audio.** The `sound` module is compiled out on wasm ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)).
+- **No web audio.** The `sound` module is compiled out on wasm ([`src/lib.rs:17`](https://github.com/Alchemy86/TerminalGB/blob/main/src/lib.rs#L17)).
 - **Web mis-detects cartridges.** The FFI/web path always builds MBC3 (see [MBC](mbc.md) §4).
-- **`RenderMode::WebAssembly` is a no-op arm** ([`src/gameboy.rs:87`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L87))
+- **`RenderMode::WebAssembly` is a no-op arm** ([`src/gameboy.rs:87`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L87))
   and `lib.rs::start()` is a TODO stub — the real web path enters through
   `#[wasm_bindgen] render()`, bypassing `render()`.
 - **Key mapping differs per frontend.** The desktop/web builds map B to a specific host key,
@@ -123,7 +124,7 @@ These are the frontends' rough edges (from the scout report, confirmed in code):
 Frontends don't emulate hardware quirks, but they must respect these console realities:
 
 - **Frame pacing.** The desktop loop now sleeps to a fixed **59.73 Hz** frame clock
-  ([`gameboy.rs:178`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L178)); each step runs `Gameboy::frame` (≈`CYCLES`
+  ([`gameboy.rs:178`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L178)); each step runs `Gameboy::frame` (≈`CYCLES`
   worth of work or until the PPU signals a finished frame). Audio is still drained separately
   by the `cpal` callback, so there is no single A/V clock.
 - **Colour resolution happens in the core**, so a frontend must not re-gamma the RGBA it

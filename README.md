@@ -8,8 +8,8 @@
 > Every public accuracy suite scored from the checked-in baselines, everything the emulator can
 > do, the honest gaps — including the test that must stay failing — and what is coming next.
 
-[![CI](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml/badge.svg)](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml)
-[![conformance](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Alchemy86/gameboy/main/docs/conformance-badge.json)](docs/conformance-action.md)
+[![CI](https://github.com/Alchemy86/TerminalGB/actions/workflows/ci.yml/badge.svg)](https://github.com/Alchemy86/TerminalGB/actions/workflows/ci.yml)
+[![conformance](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Alchemy86/TerminalGB/main/docs/conformance-badge.json)](docs/conformance-action.md)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
 [![Rust 1.83+](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](rust-toolchain)
 
@@ -49,14 +49,47 @@ above, they use only test ROMs the repository is free to show.</em></p>
 
 ---
 
+## Your ROMs stay yours — and stay local
+
+**TerminalGB ships no game content, ever** — no ROMs, no BIOS, no extracted assets. You point
+it at your own cartridge dumps: put `.gb`/`.gbc` files in `~/roms` (or set `rom_dir` in the
+[config file](#terminal-config-file)), or pass a path on the command line. Start it with no
+ROMs at all and the picker tells you exactly this instead of failing.
+
+Everything you load stays on your machine. ROMs are read from your disk; in-game saves are
+written **beside the ROM** (`<rom>.sav`, the same format other emulators and cartridge dumpers
+use, so your saves are portable); save states and config live under your own
+`~/.config`/`~/.local/state`. Nothing is uploaded anywhere: there is no telemetry unless you
+point the opt-in local [telemetry file](docs/telemetry.md) somewhere, and the only network
+features — the [link cable over TCP](docs/bgb-link.md) and the [trade portal](docs/portal.md)
+— are off until you configure them yourself.
+
 ## Quick start
 
-Requires **Rust 1.83+** (pinned via [`rust-toolchain`](rust-toolchain)). Bring your own
-`.gb`/`.gbc` ROM.
+Requires **Rust 1.83+**. Bring your own `.gb`/`.gbc` ROM.
+
+**Install the terminal emulator** (the flagship frontend — real pixels in a kitty/WezTerm/
+Ghostty terminal, graceful fallback elsewhere):
 
 ```bash
-git clone https://github.com/Alchemy86/gameboy
-cd gameboy
+cargo install terminalgb          # then: terminalgb path/to/game.gb, or just terminalgb
+```
+
+> **The default install is silent on purpose.** It needs no system libraries — but the
+> `audio` feature is off by default, so speaker output is not built in (the sound chip is
+> still fully emulated, and the emulator says so in its status panel rather than leaving you
+> to suspect your sound card). For sound:
+> ```bash
+> cargo install terminalgb --features audio   # Linux: needs libasound2-dev / alsa-lib-devel first
+> ```
+> or grab a [prebuilt release binary](https://github.com/Alchemy86/TerminalGB/releases),
+> which is built with audio.
+
+**Or run from a clone** (this also gets you the desktop window and every example):
+
+```bash
+git clone https://github.com/Alchemy86/TerminalGB
+cd TerminalGB
 cargo run --release --example terminal -- third_party/dmg-acid2/dmg-acid2.gb
 ```
 
@@ -112,6 +145,8 @@ clip, scripting a run, or being driven by a conformance runner
 ### ⌨️ Terminal
 
 ```bash
+terminalgb path/to/game.gb        # the installed binary (see Quick start)
+# or, from a clone (the `terminal` example is the same source as the binary):
 cargo run --release --example terminal -- path/to/game.gb          # no sound
 cargo run --release --features audio --example terminal -- path/to/game.gb   # with sound
 ```
@@ -394,7 +429,7 @@ no window system, no terminal, no audio device, no image codecs.
 
 ```toml
 [dependencies]
-gameboy = { git = "https://github.com/Alchemy86/gameboy", default-features = false }
+terminalgb = { git = "https://github.com/Alchemy86/TerminalGB", default-features = false }
 ```
 
 That is the **whole** dependency tree at that feature set:
@@ -1648,7 +1683,7 @@ gives it a score, a badge, and an explanation of every failure.** Add one job:
 ```yaml
 jobs:
   conformance:
-    uses: Alchemy86/gameboy/.github/workflows/conformance.yml@main
+    uses: Alchemy86/TerminalGB/.github/workflows/conformance.yml@main
     with:
       build: cargo build --release          # optional: build your emulator first
       adapter: ./ci/gbconform-adapter.sh    # the only thing you have to write
@@ -1722,9 +1757,10 @@ Bigger picture:
 
 ## Credits & lineage
 
-The project is called **TerminalGB**; the repository it lives in is still
-[**Alchemy86/gameboy**](https://github.com/Alchemy86/gameboy), so every existing clone,
-remote, badge and permalink keeps working. This repository is a fork of
+The project is called **TerminalGB** and lives at
+[**Alchemy86/TerminalGB**](https://github.com/Alchemy86/TerminalGB) (formerly
+`Alchemy86/gameboy` — GitHub redirects the old slug, so existing clones, remotes and
+permalinks keep working). This repository is a fork of
 **[raphamorim/gameboy](https://github.com/raphamorim/gameboy)** by Raphael Amorim, which is
 itself closely modelled on **[mvdnes/rboy](https://github.com/mvdnes/rboy)**. It is licensed
 **[MPL-2.0](LICENSE)**, the same licence as upstream — under which the original authorship

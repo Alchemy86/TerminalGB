@@ -10,7 +10,7 @@ cannot scroll to a line. This tool rewrites the *target* (never the visible
 text) of every reference that carries a ``:line`` into a GitHub blob link with a
 line anchor, so the reference actually navigates:
 
-    [`src/cpu/core.rs:128`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L128)
+    [`src/cpu/core.rs:128`](https://github.com/Alchemy86/TerminalGB/blob/main/src/cpu/core.rs#L128)
 
 Design decisions (see docs/codemap.md §"How the links stay honest"):
 
@@ -39,7 +39,7 @@ import re
 import subprocess
 import sys
 
-REPO = os.environ.get("CODEMAP_REPO", "Alchemy86/gameboy")
+REPO = os.environ.get("CODEMAP_REPO", "Alchemy86/TerminalGB")
 REF = os.environ.get("CODEMAP_REF", "main")
 
 HERE = os.path.dirname(os.path.abspath(__file__))

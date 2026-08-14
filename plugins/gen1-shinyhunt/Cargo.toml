@@ -2,8 +2,8 @@
 name = "terminalgb-plugin-gen1-shinyhunt"
 version = "0.1.0"
 description = "Gen 1 shiny hunting: many headless emulators rolling encounters in parallel, stopping on a DV spread"
-authors = ["gameboy contributors"]
-repository = "https://github.com/Alchemy86/gameboy"
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/TerminalGB"
 license = "MPL-2.0"
 edition = "2021"
 rust-version = "1.83"

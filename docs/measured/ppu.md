@@ -21,11 +21,11 @@ directly relevant to the STAT section below. Component page:
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Two engines
 
-`RenderMode` ([`src/gpu/mod.rs:29`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L29)) picks which one runs — `GB_PPU=fast`
+`RenderMode` ([`src/gpu/mod.rs:29`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L29)) picks which one runs — `GB_PPU=fast`
 or `GB_PPU=accurate`, the `ppu` config key (the environment variable wins), or
 `Gameboy::set_render_mode`. It is deliberately **not** in the save state: it is a property of
 this session's host, not of the emulated machine, so loading somebody else's state must not
@@ -33,7 +33,7 @@ switch their renderer.
 
 | | `Fast` (default) | `Accurate` |
 |---|---|---|
-| Source | [`src/gpu/mod.rs:1027`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L1027) `renderscan` | [`src/gpu/fifo.rs:317`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/fifo.rs#L317) `do_cycle_accurate` |
+| Source | [`src/gpu/mod.rs:1027`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1027) `renderscan` | [`src/gpu/fifo.rs:317`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/fifo.rs#L317) `do_cycle_accurate` |
 | Granularity | one whole scanline at the mode 3 → 0 transition | one dot at a time |
 | Mode 3 length | fixed 172 dots | variable, from the fetcher |
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
@@ -67,7 +67,7 @@ per scanline.
 Pan Docs' [Rendering § OBJ penalty algorithm](https://gbdev.io/pandocs/Rendering.html) gives
 it as six dots per object, plus `max(0, 5 - ((X + SCX) % 8))` for the **first** object landing
 on each background tile. We charge that formula literally
-([`src/gpu/fifo.rs:715`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/fifo.rs#L715)) rather than letting it emerge from the
+([`src/gpu/fifo.rs:715`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/fifo.rs#L715)) rather than letting it emerge from the
 fetcher's phase — and the reason is measured.
 
 Deriving it from the pipeline's own phase **reproduced only the maximum**: ten objects at
@@ -101,8 +101,8 @@ that started after. Ours put the boundary at the same pixel for every `WX`. Pinn
 The single most consequential PPU fix for real games, and the thing gbdev's
 [LYC/STAT timing guide](https://gbdev.io/guides/lyc_timing.html) is about.
 
-`stat_signal` ([`src/gpu/mod.rs:611`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L611)) ORs the enabled sources;
-`refresh_stat_line` ([`src/gpu/mod.rs:719`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L719)) raises `IF.1` on the **0→1
+`stat_signal` ([`src/gpu/mod.rs:611`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L611)) ORs the enabled sources;
+`refresh_stat_line` ([`src/gpu/mod.rs:719`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L719)) raises `IF.1` on the **0→1
 transition only**. Every path that can move a term must call it: a mode change, an `LY`
 increment, and writes to `STAT`, `LYC` and `LCDC`.
 
@@ -113,12 +113,12 @@ Three further facts, each with the ROM that pins it:
 
 | Behaviour | Pinned by |
 |---|---|
-| **`STAT` bit 2 is a latched flip-flop** (`lyc_match`, [`src/gpu/mod.rs:157`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L157)), not `line == lyc` computed on read. With the LCD off the comparison clock stops: the flag freezes, a write to `LYC` is invisible, and enabling the LCD re-latches it against the `LY` the PPU restarts from. | `acceptance/ppu/stat_lyc_onoff` |
+| **`STAT` bit 2 is a latched flip-flop** (`lyc_match`, [`src/gpu/mod.rs:157`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L157)), not `line == lyc` computed on read. With the LCD off the comparison clock stops: the flag freezes, a write to `LYC` is invisible, and enabling the LCD re-latches it against the `LY` the PPU restarts from. | `acceptance/ppu/stat_lyc_onoff` |
 | **Switching the LCD off must not force the STAT line low.** The coincidence flag keeps feeding the OR gate, so off-then-on with the flag already set produces no edge and no interrupt. Forcing it low *manufactures* one. | `stat_lyc_onoff` round 2 |
-| **The line-144 OAM strobe is line 144 only** ([`src/gpu/mod.rs:679`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L679)), not "mode 1 honours the mode-2 bit". Held across all of VBlank it keeps the line high through lines 145–153, blocking the real mode 2 at `LY = 0` and delivering its interrupt a scanline late. | `intr_1_2_timing-GS` (reads `$31` instead of `$14`/`$15`) — **both the presence and the narrowness are wired** |
+| **The line-144 OAM strobe is line 144 only** ([`src/gpu/mod.rs:679`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L679)), not "mode 1 honours the mode-2 bit". Held across all of VBlank it keeps the line high through lines 145–153, blocking the real mode 2 at `LY = 0` and delivering its interrupt a scanline late. | `intr_1_2_timing-GS` (reads `$31` instead of `$14`/`$15`) — **both the presence and the narrowness are wired** |
 
 **The line the PPU restarts on has no OAM scan** (`skip_first_oam`,
-[`src/gpu/mod.rs:162`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L162)): `STAT` reads mode 0 through the OAM slot and
+[`src/gpu/mod.rs:162`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L162)): `STAT` reads mode 0 through the OAM slot and
 goes straight to mode 3.
 
 ### The mode-2 STAT strobe rises one M-cycle *before* its scanline
@@ -141,7 +141,7 @@ unmoved, Mealybug *loses* `m2_win_en_toggle`.
 `misc/ppu/vblank_stat_intr-C` and `acceptance/ppu/vblank_stat_intr-GS` are the same program
 with one `nop` moved: on Color hardware the line-144 OAM strobe is one M-cycle **before** the
 VBlank flag; on a DMG they are simultaneous (`VBLANK_STROBE_LEAD = 4`,
-[`src/gpu/mod.rs:95`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L95)).
+[`src/gpu/mod.rs:95`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L95)).
 
 **Implementing that alone cost two hardware-photographed Mealybug rows, and that was the real
 finding.** `m2_win_en_toggle` enables both interrupts, *sets* `LCDC.5` in one handler and
@@ -195,11 +195,11 @@ Blargg `oam_bug@dmg` went **3/8 sub-tests → 8/8**. It is DMG/MGB/SGB silicon o
 unit is wired to the address bus and asserts its operand even with no read or write behind it.
 So `inc de` with `DE = $FE00` corrupts OAM and `add hl,bc` with the same value does not.
 Hooking only `rb`/`wb` gets `2-causes` and `3-non_causes` wrong; the IDU hook
-([`src/mmu/mod.rs:763`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L763)) is the load-bearing half.
+([`src/mmu/mod.rs:763`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L763)) is the load-bearing half.
 
 ### `OAM_BUG_PHASE = -12` is a calibration of *our* batching, not physics
 
-[`src/mmu/mod.rs:34`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L34). The whole 12 dots are one `ldh [rLCDC],a`
+[`src/mmu/mod.rs:34`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L34). The whole 12 dots are one `ldh [rLCDC],a`
 enabling the LCD: the write sets `modeclock = 4` and the batched renderer then applies the
 instruction's *entire* twelve dots on top, parking it three M-cycles past where hardware is.
 
@@ -208,7 +208,7 @@ window; only the 4-dot band containing −12 passes. It also assumes the 3-M-cyc
 `ldh [rLCDC],a` every test ROM uses — a 4-M-cycle `ld [$FF40],a` would land one row off.
 
 The accurate engine needs **no correction at all** (`ACCURATE_OAM_BUG_PHASE = 0`,
-[`src/mmu/mod.rs:37`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L37)): it has already spent those dots access by
+[`src/mmu/mod.rs:37`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L37)): it has already spent those dots access by
 access, so its remainder is zero and it lands on the real 4. Measured both ways — with −12 the
 accurate engine fails `oam_bug` 4/5/6/8; with 0 it passes them. Swept −12..+12; nothing
 recovers sub-test 7, so that is a real finding and not a tuning knob.

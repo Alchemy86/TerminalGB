@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -101,13 +101,13 @@ held against each other in CI by [`testharness/ppuengines.rs`](../../testharness
 Structure closely follows rboy's PPU (per-pixel `PrioType` priority tracking, the Gambatte
 RGB-correction curve, `dmg_sprite_order`/`cgb_sprite_order`).
 
-**The `Gpu` struct** — [`src/gpu/mod.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L17). Key fields: `mode`,
+**The `Gpu` struct** — [`src/gpu/mod.rs:17`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L17). Key fields: `mode`,
 `modeclock`, `line` (LY), `lyc`, the RGBA framebuffer `data`
-([`mod.rs:55`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L55), `160*144*4` bytes), the `updated` flag the frame
+([`mod.rs:55`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L55), `160*144*4` bytes), the `updated` flag the frame
 loop polls, `vram` (`0x4000` = two banks), `voam` (OAM), DMG palettes `palb/pal0/pal1`,
 CGB palette RAM `cbgpal`/`csprit`, and per-pixel `bgprio` for BG-over-sprite priority.
 
-**The mode cycle** — `do_cycle` ([`src/gpu/mod.rs:244`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L244)) accumulates
+**The mode cycle** — `do_cycle` ([`src/gpu/mod.rs:244`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L244)) accumulates
 ticks into `modeclock` and steps modes with these thresholds:
 
 ```
@@ -118,28 +118,28 @@ mode 0 (HBlank): remaining 204                    (mod.rs:286-287)
 line >= 144  → mode 1 (VBlank)                    (mod.rs:267)
 ```
 
-`renderscan` ([`mod.rs:570`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L570)) runs when the line's drawing completes;
-it calls `draw_bg` ([`mod.rs:600`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L600), window folded in) then
-`draw_sprites` ([`mod.rs:702`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L702)). VBlank sets the `0x01` interrupt and
-`updated = true` ([`mod.rs:323`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L323)).
+`renderscan` ([`mod.rs:570`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L570)) runs when the line's drawing completes;
+it calls `draw_bg` ([`mod.rs:600`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L600), window folded in) then
+`draw_sprites` ([`mod.rs:702`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L702)). VBlank sets the `0x01` interrupt and
+`updated = true` ([`mod.rs:323`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L323)).
 
 **The 10-sprite limit IS modelled** — `draw_sprites` collects into a 10-slot array and
-breaks once full ([`mod.rs:710`,`721`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L710)). 8×16 mode masks the tile
-LSB ([`mod.rs:737`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L737)).
+breaks once full ([`mod.rs:710`,`721`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L710)). 8×16 mode masks the tile
+LSB ([`mod.rs:737`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L737)).
 
 **STAT/LYC** — there is **one interrupt line**, not four triggers. `stat_signal`
-([`mod.rs:344`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L344)) ORs the enabled sources together and
-`refresh_stat_line` ([`mod.rs:400`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L400)) raises `IF.1` on its
+([`mod.rs:344`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L344)) ORs the enabled sources together and
+`refresh_stat_line` ([`mod.rs:400`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L400)) raises `IF.1` on its
 **0→1 transition only**; every path that can move a term (mode change, `LY` increment,
 writes to `STAT`/`LYC`/`LCDC`) calls it. `STAT` bit 2 is a **latched** coincidence
 flip-flop (`lyc_match`), not a live `line == lyc` comparison — with the LCD off the
 comparison clock stops, so the flag freezes and a new `LYC` is invisible until the PPU
-runs again ([`mod.rs:410`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L410)).
+runs again ([`mod.rs:410`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L410)).
 
 **Palettes** — DMG `get_monochrome_pal_val` maps to greys 255/192/96/0
-([`mod.rs:561`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L561)); CGB packs 5-bit RGB in `BCPD`/`OCPD` writes
-([`mod.rs:502`,`522`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L502)) and outputs via `setrgb` with a Gambatte-style
-colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L585)).
+([`mod.rs:561`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L561)); CGB packs 5-bit RGB in `BCPD`/`OCPD` writes
+([`mod.rs:502`,`522`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L502)) and outputs via `setrgb` with a Gambatte-style
+colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L585)).
 
 ### Honest approximations
 
@@ -154,13 +154,13 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
 - **Mode 3 is fixed at 172 dots.** Real mode 3 is **variable (172–289)** — it lengthens with
   `SCX` fine-scroll, window activation, and sprite count, stealing time from HBlank. The fast
   engine uses a flat `80 / 172 / 204` split
-  ([`mod.rs:276–286`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L276)) with no penalty model, so games that time raster
+  ([`mod.rs:276–286`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L276)) with no penalty model, so games that time raster
   effects to mode-3 length will drift. *(No longer a non-goal: the accurate engine derives it
   from the fetcher and charges Pan Docs' OBJ penalty explicitly. dmg-acid2 cannot prove either
   way — it is a static single-frame composition and **already renders pixel-correct** on both
   engines, see §6.12 — which is why Mealybug Tearoom is wired as the yardstick instead.)*
 - **Line stepping is coarse (≤80-tick chunks), not per-dot.** `do_cycle` consumes ticks in
-  blocks ([`mod.rs:255`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L255)); a mid-scanline register read may see a
+  blocks ([`mod.rs:255`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L255)); a mid-scanline register read may see a
   slightly stale mode/`LY`.
 - **The whole scanline is rendered in one shot** at the end of mode 3, so a mid-line write
   to `SCX`/palette during mode 3 is not reflected within that line (no per-pixel FIFO).
@@ -175,7 +175,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
   HBlank could land in our approximate mode 3 and be silently dropped.
 - The old `// Full line takes 114 ticks` comment (a stale M-cycle count that predated the
   456-dot loop) has been corrected in place to an accurate 456-dot note
-  ([`mod.rs:259`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L259)), which links back to this page.
+  ([`mod.rs:259`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L259)), which links back to this page.
 
 ## 5. Known quirks and edge cases
 
@@ -201,7 +201,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
   `check_wy_trigger`; cleared on VBlank. *Not* modelled: Pan Docs' GBC-only note that
   clearing `LCDC` bit 5 resets the condition.
 - **The window's internal line counter** only advances on lines where the window is
-  visible — modelled via `wy_pos` ([`mod.rs:605`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L605)).
+  visible — modelled via `wy_pos` ([`mod.rs:605`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L605)).
 - **The OAM strobe also happens on line 144 — and *only* on line 144.** A program that
   enables only the mode-2 source still takes a STAT interrupt at `LY = 144`, simultaneous
   with the VBlank interrupt (Mooneye `acceptance/ppu/vblank_stat_intr-GS` measures the two

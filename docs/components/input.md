@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -40,19 +40,19 @@ same eight buttons.
 
 ## 4. How it works here
 
-**The `Keypad` struct** — [`src/input.rs:1`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L1): `row0` (direction
+**The `Keypad` struct** — [`src/input.rs:1`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L1): `row0` (direction
 nibble), `row1` (button nibble), `data` (the byte visible at `0xFF00`), and `interrupt`.
 Default is all-released, active-low: `row0 = row1 = 0x0F`, `data = 0xFF`
-([`input.rs:21`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L21)).
+([`input.rs:21`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L21)).
 
-**The `KeypadKey` enum** — [`input.rs:8`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L8), `#[repr(C)]` so the FFI
+**The `KeypadKey` enum** — [`input.rs:8`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L8), `#[repr(C)]` so the FFI
 frontends can pass it across the C ABI.
 
 **The matrix** — `wb` only lets the CPU change bits 4–5
-(`data = (data & 0xCF) | (value & 0x30)`, [`input.rs:37`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L37)) and then
-`update()` ([`input.rs:42`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L42)) ANDs in `row0` when `P14` is low and
+(`data = (data & 0xCF) | (value & 0x30)`, [`input.rs:37`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L37)) and then
+`update()` ([`input.rs:42`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L42)) ANDs in `row0` when `P14` is low and
 `row1` when `P15` is low. `keydown`/`keyup` clear/set the matching row bit
-([`input.rs:78`,`92`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L78)).
+([`input.rs:78`,`92`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L78)).
 
 **Interrupt** — raised inside `update()` on a high→low transition of the selected nibble:
 
@@ -63,7 +63,7 @@ if old_values == 0xF && new_values != 0xF {   // input.rs:53
 ```
 
 **Tests** — `keys_buttons` and `keys_direction`
-([`input.rs:111`,`140`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L111)) are **2 of the 4 tests in the whole repo**;
+([`input.rs:111`,`140`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L111)) are **2 of the 4 tests in the whole repo**;
 they check that each button appears in the right nibble under the right select line.
 
 ### Honest approximations
@@ -81,7 +81,7 @@ they check that each button appears in the right nibble under the right select l
   source of emulator bugs. Modelled correctly (masks and AND logic in `update()`).
 - **Both rows selected at once** (`P14` and `P15` both low): hardware ANDs both rows
   together onto bits 0–3. This emulator ANDs `row0` then `row1` sequentially, matching that
-  behaviour ([`input.rs:46–58`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L46)).
+  behaviour ([`input.rs:46–58`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L46)).
 - **Neither row selected**: bits 0–3 read as `1` (nothing pressed appears) — the default
   `new_values = 0xF`.
 - **Frontend key mapping is inconsistent** between frontends — see [Frontends](frontends.md)
@@ -93,9 +93,9 @@ they check that each button appears in the right nibble under the right select l
 > **Coverage today: the two matrix tests** (#1/#2); interrupt behaviour untested.
 
 1. **Direction row.** With `P14` selected (`wb(0xFF00, 0x10)`... low bit), pressing Right
-   clears bit 0. ✅ **Covered** (`keys_direction`, [`input.rs:140`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L140)).
+   clears bit 0. ✅ **Covered** (`keys_direction`, [`input.rs:140`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L140)).
 2. **Button row.** With `P15` selected, pressing A clears bit 0. ✅ **Covered**
-   (`keys_buttons`, [`input.rs:111`](https://github.com/Alchemy86/gameboy/blob/main/src/input.rs#L111)).
+   (`keys_buttons`, [`input.rs:111`](https://github.com/Alchemy86/TerminalGB/blob/main/src/input.rs#L111)).
 3. **Active-low released state.** With nothing pressed, `rb(0xFF00)` low nibble reads
    `0xF`. *(Not covered.)*
 4. **Only bits 4–5 are writable.** Writing `0xFF` to `0xFF00` leaves bits 0–3 and 6–7

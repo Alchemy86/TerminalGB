@@ -1,7 +1,7 @@
 //! The link cable: **two whole emulated consoles joined by one wire**.
 //!
 //! This is the other way to be the far end of a Game Boy's link port. The first
-//! is [`plugins/gen1-link`](https://github.com/Alchemy86/gameboy/tree/main/plugins/gen1-link),
+//! is [`plugins/gen1-link`](https://github.com/Alchemy86/TerminalGB/tree/main/plugins/gen1-link),
 //! which *impersonates* a second console by speaking Pokémon Red/Blue's trade
 //! protocol from Rust. It works, and it is the only option when you have one
 //! cartridge. But it can only ever know the protocols someone wrote down.

@@ -5,7 +5,7 @@ name: Game Boy conformance
 #
 #   jobs:
 #     conformance:
-#       uses: Alchemy86/gameboy/.github/workflows/conformance.yml@main
+#       uses: Alchemy86/TerminalGB/.github/workflows/conformance.yml@main
 #       with:
 #         build: cargo build --release
 #         adapter: ./ci/gbconform-adapter.sh
@@ -16,7 +16,7 @@ name: Game Boy conformance
 # If you would rather own the job (matrix, containers, caching, extra steps),
 # use the composite action directly instead — it is one step:
 #
-#   - uses: Alchemy86/gameboy/.github/actions/conformance@main
+#   - uses: Alchemy86/TerminalGB/.github/actions/conformance@main
 #     with: { adapter: ./ci/gbconform-adapter.sh }
 #
 # Contract, adapter examples and the badge recipes: docs/conformance-action.md.
@@ -72,7 +72,7 @@ on:
         default: ubuntu-latest
       tool-ref:
         description: >-
-          Ref of Alchemy86/gameboy to take the runner and check registry from.
+          Ref of Alchemy86/TerminalGB to take the runner and check registry from.
           Pin it to a tag if you want a score that cannot move under you.
         required: false
         type: string
@@ -118,7 +118,7 @@ jobs:
       - name: Check out the conformance tool
         uses: actions/checkout@v4
         with:
-          repository: Alchemy86/gameboy
+          repository: Alchemy86/TerminalGB
           ref: ${{ inputs.tool-ref }}
           path: .gbconform-tool
 

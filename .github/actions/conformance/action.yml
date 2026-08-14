@@ -9,7 +9,7 @@ author: "TerminalGB contributors"
 # callers who would rather hand over a whole job.
 #
 # GitHub checks this repository out for us when the action is referenced as
-# `Alchemy86/gameboy/.github/actions/conformance@<ref>`, so `github.action_path`
+# `Alchemy86/TerminalGB/.github/actions/conformance@<ref>`, so `github.action_path`
 # gives us the runner, the check registry AND the vendored, MIT-licensed
 # dmg-acid2 ROM with its reference image. Nothing else is downloaded except the
 # Blargg suite, which is fetched from its own upstream mirror at a pinned

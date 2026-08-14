@@ -19,7 +19,7 @@ Hardware reference, not restated here:
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## What the numbers were
 
@@ -61,9 +61,9 @@ sixteen bits — not just the visible eight. And `TIMA` counts **falling edges**
 div[TAP[tac & 3]]  AND  (tac & 4)
 ```
 
-with `TAP = [9, 3, 5, 7]` ([`src/mmu/timer.rs:75`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L75)). Every path that
+with `TAP = [9, 3, 5, 7]` ([`src/mmu/timer.rs:75`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/timer.rs#L75)). Every path that
 can move that expression — the clock, a `DIV` write, a `TAC` write — goes through one
-`set_div` ([`src/mmu/timer.rs:88`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L88)), so the glitches are not
+`set_div` ([`src/mmu/timer.rs:88`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/timer.rs#L88)), so the glitches are not
 special-cased anywhere; there is nowhere for them to be special-cased.
 
 What that single expression buys, each of which Pan Docs documents separately as a quirk:
@@ -85,7 +85,7 @@ is worth stating because the obvious simplification is wrong.
 
 Our bus applies the M-cycle counter increment *before* the access
 ([`MemoryManagementUnit::bus_tick`](../../src/mmu/mod.rs), `src/mmu/mod.rs:620`), so a `TAC`
-write arrives one increment "late". `Timer::wb` ([`src/mmu/timer.rs:142`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L142))
+write arrives one increment "late". `Timer::wb` ([`src/mmu/timer.rs:142`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/timer.rs#L142))
 therefore re-runs the edge across that increment with the newly latched `TAC`, using the
 previous counter value.
 
@@ -102,7 +102,7 @@ Pan Docs' [Interrupts](https://gbdev.io/pandocs/Interrupts.html) gives the dispa
 M-cycles. Laid out as hardware does it
 ([`Cpu::handleinterrupt`](../../src/cpu/core.rs), `src/cpu/core.rs:346`): two idle cycles,
 `PC`-high push, `PC`-low push, vector fetch — each ticking the bus
-([`src/mmu/mod.rs:724`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L724)) so the timer keeps phase *through* the dispatch.
+([`src/mmu/mod.rs:724`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L724)) so the timer keeps phase *through* the dispatch.
 
 **The vector is decided between the two pushes**, from `IE & IF` as they stand at the start of
 M4. Consequences a ROM can measure:
@@ -129,7 +129,7 @@ instructions re-arms the counter every cycle and interrupts are *never* enabled 
 
 ## OAM DMA is a timed 160 M-cycle transfer
 
-Not an instantaneous `memcpy` ([`src/mmu/oamdma.rs:94`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/oamdma.rs#L94)):
+Not an instantaneous `memcpy` ([`src/mmu/oamdma.rs:94`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/oamdma.rs#L94)):
 
 - write at M=0, transfer starts at **M=2**, one byte per M-cycle;
 - while it runs, CPU reads of OAM return `$FF` and writes are **dropped**;
@@ -137,7 +137,7 @@ Not an instantaneous `memcpy` ([`src/mmu/oamdma.rs:94`](https://github.com/Alche
 - a restart lets the previous transfer run through M=1.
 
 **`OamDma::pos` is advanced at the top of `step()`, not after the copy.** That is what keeps
-`active()` ([`src/mmu/oamdma.rs:80`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/oamdma.rs#L80)) true for the CPU access sharing
+`active()` ([`src/mmu/oamdma.rs:80`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/oamdma.rs#L80)) true for the CPU access sharing
 the M-cycle with the last byte — the single cycle `acceptance/oam_dma_timing` measures.
 
 ### The lesson worth keeping: an unmodelled peripheral hid a whole dimension of CPU accuracy
@@ -167,7 +167,7 @@ reported a CGB double-speed failure that was really the APU's base clock, and `i
 
 Both the timer and the APU are stepped once per CPU bus access, before the access, with the
 instruction's remaining internal cycles applied at the end
-([`src/mmu/mod.rs:620`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L620)). That is what puts reads and writes on the
+([`src/mmu/mod.rs:620`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L620)). That is what puts reads and writes on the
 correct *sub-instruction* cycle.
 
 | Result | |

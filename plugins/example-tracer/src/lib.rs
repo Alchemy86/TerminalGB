@@ -14,7 +14,7 @@
 //! * it drops its state when a save state is loaded ([`Plugin::reset`]);
 //! * it is tested with no emulator at all, against a fake machine.
 //!
-//! See [`docs/plugins.md`](https://github.com/Alchemy86/gameboy/blob/main/docs/plugins.md)
+//! See [`docs/plugins.md`](https://github.com/Alchemy86/TerminalGB/blob/main/docs/plugins.md)
 //! for how to install it.
 
 use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};

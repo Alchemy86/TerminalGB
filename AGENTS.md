@@ -4647,3 +4647,54 @@ sprite**. The DVs come out of `wEnemyMonDVs` the instant `LoadEnemyMonData` roll
 - The Markdown table edits happen between `<!-- suite-scores:begin/end -->` markers; the HTML
   rows are matched by their `.name` text, so renaming a suite row in the HTML must be mirrored
   in `HTML_ROWS` in the script.
+
+## Publishing readiness — the `terminalgb` binary, the package whitelist, the renamed repo
+
+The publishing scout's blockers are fixed (2026-08-14); **nothing is published — that is the
+captain's call**. What is now load-bearing:
+
+- **`cargo install terminalgb` installs the emulator.** `src/bin/terminalgb.rs` is the
+  terminal frontend's real source (`[[bin]] terminalgb`, `required-features = ["tui"]`);
+  `examples/terminal/bin.rs` is a one-line `include!` of it so
+  `cargo build --release --example terminal` — and the captain's `~/.local/bin/gameboy`
+  launcher, which lives outside this repo and builds exactly that path — keeps working.
+  **Edit the bin, never the example shim.** The bin carries the wasm stub `main()` (Cargo
+  cannot target-gate a `[[bin]]` — the standing embeddability rule; `make embed` runs
+  `check-wasm` and catches it).
+- **The published crate is a WHITELIST** (`include = [...]` in the root `Cargo.toml`):
+  source + testharness + the root files, nothing else. Verified by *reading*
+  `cargo package --list -p terminalgb` — 141 files, 3.4 MiB: no ROM, no `tests/` submodule,
+  no `resources/`, no `docs/`, no `AGENTS.md`, no local path. **Re-read the list whenever
+  the manifest or the tree layout changes**; the test is the list's contents, not its size.
+  Cargo also **excludes any subdirectory containing its own `Cargo.toml`** — the vestigial
+  `examples/{terminal,desktop}/Cargo.toml` files were deleted for exactly that reason
+  (they would have silently stripped the declared example paths from the package).
+- **`src/cpu/z80` is deleted, do not restore it** — a dead, commented-out port of Imran
+  Nazar's jsGB (his site states no licence; same provenance call as the removed
+  `resources/jsgb-mmu-map.png`).
+- **The repo slug is `Alchemy86/TerminalGB` everywhere now**: all 8 manifests
+  (`repository`), README badges/clone lines, the conformance workflow/action, the shootout
+  submission, and `docs/tools/codemap_links.py`'s `CODEMAP_REPO` default (docs links
+  regenerated with `make docs-links`). GitHub redirects the old `Alchemy86/gameboy` slug.
+  The root manifest also carries `rust-version`, `keywords`, `categories`, `homepage`,
+  `documentation`, `readme` — crates.io resolves the README's ~111 relative links through
+  `repository`, so that field staying correct is a discoverability feature, not decoration.
+- **A NAMING COLLISION TO KEEP STRAIGHT: the release zip's `terminalgb(.exe)` is the
+  DESKTOP frontend; `cargo install`'s `terminalgb` is the TUI.** The zip naming is
+  load-bearing for the GB Emulator Shootout (`docs/shootout/terminalgb.py` launches
+  `terminalgb.exe` and screenshots its window) and was left untouched on purpose. If the
+  zips are ever renamed, the shootout adapter must move in the same commit.
+- **The silent default build explains itself** — the `audio` feature stays off by default
+  (ALSA-free fresh build, the standing choice), so: the Status `Audio` row reads
+  `not built in (?)` on such a build, `NO_AUDIO_NOTICE` rides the `config_warnings`
+  channel (stderr, picker footer, toast, `?` overlay — the `BASIC_INPUT_NOTICE` pattern),
+  and the README's install line carries the caveat beside it.
+- **The first-run picker is the "where do my ROMs go?" answer** — with no ROMs it says the
+  emulator ships no game content, names `rom_dir` and the config path, and states the
+  local-only position (ROMs read from disk, saves beside the ROM, nothing uploaded).
+  Pinned by `an_empty_rom_dir_renders_first_run_guidance` against rendered output. The
+  README section "Your ROMs stay yours — and stay local" is the prose version; keep the
+  two telling the same story.
+- **Still open for an actual publish** (see the scout report §3/§7, outside this repo):
+  eight crates publish in dependency order, version bump + tag, GitHub topics/homepage/
+  Pages are repo *settings* no commit can change.

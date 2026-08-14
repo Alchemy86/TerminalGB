@@ -17,14 +17,14 @@ and they were verified by their author on real DMG, MGB and CGB units.
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## A boot ROM is part of the silicon, so a revision is a machine
 
 Mooneye ships a `boot_regs` / `boot_div` / `boot_hwio` ROM **per console**, and no two consoles
 hand the cartridge the same state — so passing one is failing the others.
 
-`Model` ([`src/mode.rs:71`](https://github.com/Alchemy86/gameboy/blob/main/src/mode.rs#L71)) now carries nine values:
+`Model` ([`src/mode.rs:71`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mode.rs#L71)) now carries nine values:
 
 ```
 auto / dmg / dmg0 / mgb / cgb / cgb0 / agb / sgb / sgb2
@@ -53,11 +53,11 @@ zeroed counter the seed is the same every launch, and it is a value hardware nev
 | AGB | `$267C` |
 | SGB / SGB 2 | `$D174` **+ 4 × (zero bits in the cartridge header)** — see below |
 
-Constants at [`src/mmu/mod.rs:56`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L56) onwards.
+Constants at [`src/mmu/mod.rs:56`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L56) onwards.
 
 **`boot_div` is much stronger than "`DIV` reads `$AB`".** It reads `DIV` six times at
 instruction offsets chosen to fall either side of an increment, so the counter's **low bits**
-are pinned too. `Timer::set_boot_counter` ([`src/mmu/timer.rs:116`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L116))
+are pinned too. `Timer::set_boot_counter` ([`src/mmu/timer.rs:116`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/timer.rs#L116))
 stores the value 4 T lower than the hardware number, because the bus advances the counter
 *before* the access that observes it — the constant in the source stays the hardware figure
 and the adjustment happens in exactly one place.
@@ -74,7 +74,7 @@ cartridge in the slot.
 
 The disassembly says so in its own comment — *"Both code paths aren't equal CPU time …
 NINTENDOOOOO"* ([ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms), `src/sgb.asm`).
-`sgb_boot_system_counter` ([`src/mmu/mod.rs:147`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L147)) is that model, and the
+`sgb_boot_system_counter` ([`src/mmu/mod.rs:147`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L147)) is that model, and the
 two ROMs independently give the same all-ones base `$D174` — which is what says the *shape* is
 right rather than merely fitted.
 
@@ -154,7 +154,7 @@ exposes it.
 
 ### 3. The boot ROM leaves a tilemap behind, and it matters far more than it sounds
 
-`set_boot_logo_tilemap` ([`src/mmu/mod.rs:589`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L589)) writes `$01`–`$0C` to
+`set_boot_logo_tilemap` ([`src/mmu/mod.rs:589`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L589)) writes `$01`–`$0C` to
 `$9904`–`$990F`, `$0D`–`$18` to `$9924`–`$992F` and `$19` (the `®`) to `$9910`, for every
 DMG-class machine, **before** `LCDC` is enabled so the write cannot land in a blocked PPU mode.
 
@@ -168,7 +168,7 @@ The tile **pixels** are still not written; on hardware they are the logo decompr
 the cartridge header, and every ROM has replaced them by the time anything looks.
 
 **Where the PPU is at hand-off is a per-console constant**, and only DMG 0 gets one
-(`boot_ppu_dot`, [`src/mmu/mod.rs:140`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L140)): `boot_hwio-S` and
+(`boot_ppu_dot`, [`src/mmu/mod.rs:140`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L140)): `boot_hwio-S` and
 `misc/boot_hwio-C` **skip** `$FF40`/`$FF41`/`$FF44` in their own masks, so no ROM measures it
 on those machines and none is invented. The DMG 0 constant is calibrated **with its window
 stated** — line 145 dots 96..260 all pass, so it is the centre of a 168-dot band, and neither

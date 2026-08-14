@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 > ⚠️ **`src/sound.rs` is being rewritten right now** (two audio crews). To avoid minting
 > line links that break every rebase, this page's `sound.rs` references are **file-level
@@ -97,12 +97,12 @@ sweep with overflow-disable ([`sound.rs:234`](../../src/sound.rs)) are present.
 **Playback** — the `AudioPlayer` trait ([`sound.rs:16`](../../src/sound.rs)) is implemented
 by `CpalPlayer` ([`sound.rs:922`](../../src/sound.rs)), which opens a 44.1 kHz `cpal`
 output stream. The desktop frontend wires it up in `render_desktop`
-([`src/gameboy.rs:103`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L103)).
+([`src/gameboy.rs:103`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L103)).
 
 ### Honest approximations & caveats
 
 - **No sound on web.** The whole module is `#[cfg(not(target_arch = "wasm32"))]`
-  ([`src/lib.rs:17`](https://github.com/Alchemy86/gameboy/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
+  ([`src/lib.rs:17`](https://github.com/Alchemy86/TerminalGB/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
   `0xFF` and is silent. The terminal frontend also runs without audio.
 - **Register accuracy is measured: Blargg `dmg_sound` passes 12 of 12 subtests**,
   per the offline audio harness

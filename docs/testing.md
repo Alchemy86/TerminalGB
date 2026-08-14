@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -138,7 +138,7 @@ This is documentation, not code — but the shape the roadmap (Phase 1) should b
 1. **Feature-gate audio off** so a headless runner needs no sound card (the whole native
    build currently requires ALSA — see the top-level README). Mooneye/Blargg need no audio.
 2. **Wire the serial capture hook.** Install a [`Serial`](components/serial.md) callback
-   (`set_callback`, [`src/mmu/serial.rs:66`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L66)) that appends each byte
+   (`set_callback`, [`src/mmu/serial.rs:66`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/serial.rs#L66)) that appends each byte
    to a string. Today the default is a no-op, so **no Blargg result is readable** until
    this is done — it is the first prerequisite.
 3. **Blargg harness:** load ROM → run frames until the serial string contains `Passed`/
@@ -146,7 +146,7 @@ This is documentation, not code — but the shape the roadmap (Phase 1) should b
 4. **Mooneye harness:** run until opcode `0x40` (`LD B,B`) executes or a cycle budget
    expires → assert registers `B,C,D,E,H,L == 3,5,8,13,21,34`.
 5. **acid2 harness:** run ~1 frame → hash/compare the framebuffer (`Gameboy::image()`,
-   [`src/gameboy.rs:290`](https://github.com/Alchemy86/gameboy/blob/main/src/gameboy.rs#L290)) against the reference PNG.
+   [`src/gameboy.rs:290`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gameboy.rs#L290)) against the reference PNG.
 6. **Report a pass count** (`Blargg cpu_instrs: 11/11`, `Mooneye timer: 6/13`, …). Start
    from an **allow-list of currently-passing ROMs** so CI is green from day one; a
    regression that breaks a listed ROM turns CI red.

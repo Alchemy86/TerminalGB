@@ -14,9 +14,34 @@ authors = [
     "Raphael Amorim <rapha850@gmail.com>",
     "TerminalGB contributors",
 ]
-repository = "https://github.com/Alchemy86/gameboy"
+repository = "https://github.com/Alchemy86/TerminalGB"
+homepage = "https://github.com/Alchemy86/TerminalGB"
+documentation = "https://docs.rs/terminalgb"
+readme = "README.md"
+keywords = ["gameboy", "emulator", "terminal", "tui", "game-boy"]
+categories = ["emulators", "command-line-utilities", "games"]
 license = "MPL-2.0"
 edition = "2021"
+rust-version = "1.83"
+
+# The published crate is SOURCE ONLY — a whitelist, not an exclude list,
+# because what must never ship is unambiguous: no test ROM (the `tests/`
+# submodule is other people's unlicensed ROMs), no game footage or third-party
+# scans (`resources/`, parts of `docs/`), no internal notes (`AGENTS.md`).
+# Every ROM a user plays comes from their own disk at run time and stays
+# there. `testharness/**` and `examples/**` stay in because every declared
+# `[[test]]`/`[[example]]` path must exist in the package; root files carry a
+# leading `/` so `README.md` does not also match `docs/**/README.md`.
+include = [
+    "src/**",
+    "examples/**",
+    "testharness/**",
+    "/Cargo.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/terminalgb.h",
+]
 
 [lib]
 name = "terminalgb"
@@ -220,6 +245,17 @@ web-sys = {version = "0.3.4", features = [
 #'ImageBitmap',
 #'WebGlProgram',
 #'WebGlShader',
+
+# THE emulator: the terminal frontend, under the product's own name. This is
+# what `cargo install terminalgb` puts on a stranger's PATH — before it existed
+# the one-liner installed only the chiptune CLI and no Game Boy at all. The
+# same source still builds as `--example terminal` (the example `include!`s
+# this file), so scripts built on `target/release/examples/terminal` keep
+# working.
+[[bin]]
+name = "terminalgb"
+path = "src/bin/terminalgb.rs"
+required-features = ["tui"]
 
 # The MCP server. A `[[bin]]` rather than an example so that `cargo install`
 # and a Claude Desktop `command:` line have a real, stable executable name.

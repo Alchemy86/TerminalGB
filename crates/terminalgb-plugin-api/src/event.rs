@@ -1,7 +1,7 @@
 //! Something the machine did.
 
 /// Something the machine did. The categories and their rough rates are the ones
-/// [`docs/debugging.md`](https://github.com/Alchemy86/gameboy/blob/main/docs/debugging.md)
+/// [`docs/debugging.md`](https://github.com/Alchemy86/TerminalGB/blob/main/docs/debugging.md)
 /// enumerates; only the two *cheap* ones are implemented here, because the hot
 /// ones (instruction-retired, memory-access) are explicitly specified there as
 /// ring-buffered and behind the `debug` cargo feature. Adding them later does

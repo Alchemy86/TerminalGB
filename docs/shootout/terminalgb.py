@@ -17,9 +17,7 @@ class TerminalGB(Emulator):
     def __init__(self):
         super().__init__(
             "TerminalGB",
-            # The repository slug is deliberately still `gameboy`; only the
-            # product was renamed. See docs/shootout.md.
-            "https://github.com/Alchemy86/gameboy",
+            "https://github.com/Alchemy86/TerminalGB",
             startup_time=1.0,
             # PCM12/PCM34 ($FF76/$FF77) are implemented, so the 57 SameSuite
             # APU ROMs that read them back are run rather than skipped. We pass
@@ -38,7 +36,7 @@ class TerminalGB(Emulator):
 
     def setup(self):
         downloadGithubRelease(
-            "Alchemy86/gameboy",
+            "Alchemy86/TerminalGB",
             "downloads/terminalgb.zip",
             filter=lambda n: "win" in n and n.endswith(".zip"),
             require_asset=True,
