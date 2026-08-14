@@ -522,6 +522,18 @@ impl Gpu {
         if self.pipe.window || !self.win_on || !self.wy_trigger {
             return;
         }
+        // The comparison is made **at the output**, against the pixel about to
+        // be shifted out — so it cannot happen before there is one. Checking it
+        // during the head-of-line fetch, where `lx` is already 0 and the FIFO is
+        // still empty, let a window with `WX <= 7` take over a fetcher that had
+        // nothing to throw away and so cost nothing: `m3_window_timing` sets
+        // `WX = LY` on every line and photographs the difference between a
+        // window that started before the palette write and one that started
+        // after, which is exactly the six dots of the window's own startup
+        // fetch. Without this the boundary sat at the same pixel for every `WX`.
+        if self.pipe.bg_len == 0 {
+            return;
+        }
         if self.winx > 166 {
             return;
         }
@@ -1000,6 +1012,35 @@ mod mode3_length {
     /// | 10 at X=5..7 | 60+0 = 60 → 15 | 15 |
     /// | 5 at X=0 and 5 at X=160 | 60+5+5 = 70 → 17 | 17 |
     /// | 5 at X=4 and 5 at X=164 | 60+1+1 = 62 → 15 | 15 |
+    /// **The window costs six dots wherever it starts, including at the very
+    /// left edge.** Pan Docs, [Rendering § mode 3
+    /// length](https://gbdev.io/pandocs/Rendering.html): "if the window is
+    /// enabled and the current scanline reaches it, mode 3 is 6 dots longer".
+    ///
+    /// `WX <= 7` used to be free, because the window comparison ran during the
+    /// head-of-line fetch — `lx` is already 0 there and the FIFO is still empty,
+    /// so the takeover had nothing to throw away. Mealybug's `m3_window_timing`
+    /// is built entirely out of the difference between a window that started
+    /// before a mid-line `BGP` write and one that started after, and with the
+    /// startup free the boundary sat at the same pixel for every `WX`.
+    #[test]
+    fn the_window_costs_six_dots_wherever_it_starts() {
+        for wx in [0u8, 1, 7, 8, 20, 80, 166] {
+            let mut gpu = engine();
+            gpu.wb(0xFF4A, 0); // WY = 0, so the Y condition latches at once
+            gpu.wb(0xFF4B, wx);
+            gpu.wb(0xFF40, 0xB1); // + LCDC.5
+            assert_eq!(mode3_dots(&mut gpu), 178, "WX={wx}");
+        }
+        // `WX > 166` puts the window entirely off the right edge, so it never
+        // takes over and costs nothing.
+        let mut gpu = engine();
+        gpu.wb(0xFF4A, 0);
+        gpu.wb(0xFF4B, 167);
+        gpu.wb(0xFF40, 0xB1);
+        assert_eq!(mode3_dots(&mut gpu), 172);
+    }
+
     #[test]
     fn the_obj_penalty_matches_mooneyes_table() {
         // n sprites all on one background tile: one tile penalty, n fetches.
