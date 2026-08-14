@@ -92,11 +92,86 @@ And the offer spec carries the contract's fields only: stat experience does
 not cross (the receiving side rebuilds the Pokémon from species, level,
 moves and DVs, as every `PokemonSource` trade always has).
 
+### The offer card — sprite, types and DV detail travel with the offer
+
+An offer is a card, not a one-line text pill. Beside the trade spec (`mon`),
+the POST carries a **`card`** object with everything a person needs to judge
+the trade at a glance, every field read or derived from the offering
+player's own cartridge at the moment of the offer (`src/portal/card.rs`):
+
+- **The sprite.** The species' front picture, decompressed from the *user's
+  own cartridge* at offer time by the trainer panel's decoder
+  (`plugins/trainer/src/sprite.rs`, proven byte-identical to the
+  disassembly's 2bpp output), page made transparent by the same edge flood
+  fill the panel uses, encoded as a palette PNG with `tRNS` and base64'd.
+  Measured on the real Blue save: Pikachu 40×40 at **680 bytes**, Mewtwo
+  56×56 at 1,075 — a Gen 1 sprite, not a photograph. **The sprite rule is
+  unchanged and non-negotiable**: game artwork is never shipped, vendored or
+  served from this repository; the only way it reaches the portal is that
+  its owner's emulator sends it with their own offer. A species whose
+  picture does not decode sends **no** sprite — an honest absence, never a
+  placeholder.
+- **Types**, from the cartridge's own base-stats and `TypeNames` tables.
+- **DV detail** the trainer panel already computes: `dvTotal` (all five,
+  derived HP DV included) and `hiddenPowerIfTradedToGen2` — the same
+  wording discipline as the shiny flag, because Hidden Power does not exist
+  in Gen 1. (The moves were **already travelling** inside `mon.moves` before
+  the card existed; the portal simply was not displaying them.)
+
+The `mon` object itself is untouched — every trade route keeps its exact
+shape; the card rides beside it, and a portal that predates it ignores it.
+
+### Offers track the live game
+
+While the emulator runs with the same save loaded, a posted offer reflects
+reality (`App::offer_watch_tick`, polled every 10 s, one network call in
+flight at most, never a stalled frame): the Pokémon **levelled, learned a
+move, evolved or was renamed** → the offer is reposted
+(`POST /api/offers/<id>/update`, same body as create); it **left the save**
+(traded away, released), can **no longer legally trade** (a new name carrying
+the `8` digit), or its identity became **ambiguous** → the offer is withdrawn
+(`POST /api/offers/<id>/cancel`). Loading a *different* save suspends the
+watch — it never withdraws offers belonging to a save that simply is not
+loaded right now.
+
+**Identity is a heuristic, and its failure mode is stated.** Gen 1 has no
+per-Pokémon id, so the key (`offer::identity_for`) is built from the only
+fields that never change — **OT id + OT name + DVs**, each claim verified
+against `pret/pokered` (DVs copied verbatim at capture by `_AddPartyMon` and
+never rewritten; OT written from `wPlayerID`/`wPlayerName` at capture).
+Species is excluded (evolution changes it — the flagship case), and so is
+the nickname: it is **not** permanent in Gen 1 — `RenameEvolvedMon` rewrites
+an unnicknamed Pokémon's name on evolution, and the Lavender Town Name Rater
+(`scripts/NameRatersHouse.asm`) renames any own-OT Pokémon. Two Pokémon
+caught by the same trainer with identical DVs therefore collide, and the
+fail-safe is **withdraw, never guess** — an ambiguous identity is never
+updated from (or left standing to be traded from) the wrong twin. A Pokémon
+that is ambiguous already at offer time posts untracked, with a note.
+
+Honest limits: only offers posted **this session** are tracked (the ids come
+from the POST replies; resuming across sessions needs a `GET
+/api/offers/mine` route — proposed below, not built). Maintenance that keeps
+failing gives up loudly after 3 tries, naming the website as the manual path.
+
+### Offers group by game and player
+
+Every offer names the save it came from — `game.title` ("Pokémon Blue"),
+`game.player` (the save's player name) and `game.playerId` (the 16-bit
+trainer id) — so a player who connects with Blue and then Gold sees **two
+collections, not one muddled list**. `(game.playerId, game.player, title)`
+is the grouping key; `identity` is unique within one save, and the portal
+should enforce **at most one open offer per (game, identity)** server-side —
+an already-offered Pokémon cannot be offered again (the client refuses it
+too, for offers it knows about this session).
+
 Evidence tool (also the end-to-end proof — run against a staged copy of a
-real Blue save, it listed the party and a checksummed SRAM box exactly):
+real Blue save, it listed the party and a checksummed SRAM box exactly, and
+now prints each entry's card: types, sprite geometry and PNG size, Hidden
+Power, identity; `--sprites <dir>` dumps the PNGs somewhere *outside the
+tree* for eyeballing):
 
 ```bash
-cargo run --release --example offer_list -- <rom.gb> [--save <file.sav>]
+cargo run --release --example offer_list -- <rom.gb> [--save <file.sav>] [--sprites <dir>]
 ```
 
 ### What the portal must change (spec for the portal crew — not done here)
@@ -140,10 +215,15 @@ agreement — this is a proposal to move it, not a unilateral move):
 
 ## What never happens
 
-- **No save, no ROM, no game bytes are ever uploaded.** The only thing on the
-  wire is a ~250-byte *specification* of one Pokémon (the JSON spelling of
-  `MonSpec`, `plugins/gen1-link/src/spec.rs`), resolved against the receiving
-  player's own cartridge tables like every other `PokemonSource`.
+- **No save and no ROM is ever uploaded.** What crosses the wire is a
+  ~250-byte *specification* of one Pokémon (the JSON spelling of `MonSpec`,
+  `plugins/gen1-link/src/spec.rs`), resolved against the receiving player's
+  own cartridge tables like every other `PokemonSource` — plus, on an offer,
+  the ~1 KB card (sprite, types, DV detail; see "The offer card" above). The
+  sprite is the one piece of game artwork on the wire, and it travels **from
+  its owner's cartridge only**: this repository ships, vendors and serves
+  none, and the receiving side of a *trade* still rebuilds everything from
+  its own cartridge.
 - **A failure never falls back silently.** If the portal is configured but
   signed out, unreachable, or serving something malformed, the gen1-link
   partner is **not armed at all** — not even from a local trade file — because
@@ -205,7 +285,14 @@ GET  /api/trades/mine                                (Bearer auth from here on)
 
 POST /api/trades/<id>/done   {}          → 200 {}
 
-POST /api/offers             {"mon": <mon>}      → 200 {"offer":{"id"}|"id"}
+POST /api/offers             {"mon": <mon>,      → 200 {"offer":{"id"}|"id"}
+                              "card"?: <card>,
+                              "game"?: <game>,
+                              "identity"?: str}
+POST /api/offers/<id>/update (same body as create; PROPOSED — replace what
+                              the offer shows)   → 200
+POST /api/offers/<id>/cancel {}                  → 200   (the website's own
+                              cancel route, now also called by the emulator)
 GET  /api/friends/<user>/offers
   → 200 {"offers":[{"id","summary"?}]}
 POST /api/offers/<id>/accept {"mon": <mon>}   → 200 {"trade":{"id"}
@@ -213,6 +300,34 @@ POST /api/offers/<id>/accept {"mon": <mon>}   → 200 {"trade":{"id"}
 
 401/403 on any authed route → "run terminal login again", never a retry loop.
 ```
+
+The offer extras, all optional (an older client or portal interoperates by
+ignoring them):
+
+```text
+<card> = {"sprite"?: {"png": <base64 PNG, palette + tRNS transparency,
+                              owner-extracted at offer time>,
+                      "width": px, "height": px},
+          "types": ["ELECTRIC", ...],           (1 or 2, cartridge's names)
+          "dvTotal": 0..75,
+          "hiddenPowerIfTradedToGen2": {"type": str, "power": 31..70}}
+<game> = {"title": "Pokémon Blue", "player": "BLUE", "playerId": u16}
+identity = "<otid hex4>:<atk><def><spd><spc hex>:<OT name>"  e.g. "04d2:ffff:RED"
+```
+
+Proposed portal-side behaviour riding on these (coordination items, not
+unilateral moves — the emulator already sends everything above):
+
+- render the offer as a **card** (sprite, name/species/level, types, moves —
+  `mon.moves` was always there — DV detail, the shiny wording);
+- group offer lists by `game` (`playerId` + `player` + `title`), one
+  collection per connected save;
+- enforce **at most one open offer per (game, identity)**, and accept
+  `update`/`cancel` from the device-token session that created the offer so
+  live tracking works;
+- a `GET /api/offers/mine` route (id + identity + game per open offer) would
+  let a future session resume tracking offers it did not post — until then
+  only same-session offers self-maintain.
 
 Notes for the portal crew, from the client's behaviour:
 
@@ -250,7 +365,7 @@ escapes exactly those and refuses control characters, and
 
 ## What is measured, what is inferred, what is unverified
 
-**Measured against a local stub** (`testharness/portal.rs`, 16 checks — a real
+**Measured against a local stub** (`testharness/portal.rs`, 29 checks — a real
 `TcpListener` speaking the bodies above through the real curl transport; plus
 the `terminal login`/`logout` CLI and `examples/portal_trade.rs` run by hand
 against a Python stub with a real Pokémon Blue cartridge, where trade #71
@@ -264,11 +379,24 @@ and the `/done` POST landed with the bearer token):
   field**, empty-list ⇒ `Ok(None)`, `401` ⇒ an auth error naming
   `terminal login`;
 - completion confirm reaching `/api/trades/71/done` authenticated;
+- the offer card riding the POST — sprite as base64 PNG with its geometry,
+  types, `dvTotal`, Hidden Power, `game` and `identity` — with the `mon`
+  object byte-identical to the cardless shape, and `offer_update`/
+  `offer_cancel` reaching their routes authenticated (the sprite-from-a-real-
+  cartridge half is `examples/offer_list`, run by hand: Pikachu 40×40/680 B
+  with a `tRNS` chunk, decoded and looked at);
+- the watch planner's whole decision table, device-free
+  (`portal::offer::tests`): update on change, withdraw on gone/ambiguous/
+  newly-refused, suspend on a different save, identity surviving evolution
+  and renames;
 - an unreachable portal failing in bounded time (the curl timeouts).
 
 **Unverified until the real portal is live:** that the portal serves these
 exact field names (the harness is this client talking to itself, honestly
-labelled); HTTPS specifically (the stub is plain HTTP — the TLS half of curl
+labelled); the whole offer-extras surface on the portal's side — `card`/
+`game`/`identity` rendering, the per-(game, identity) dedupe, and the
+`update` route, which does not exist there yet (a portal without it answers
+404; the watch gives up loudly after 3 tries per offer); HTTPS specifically (the stub is plain HTTP — the TLS half of curl
 is curl's, but no request in this repo has crossed a TLS boundary);
 `verification_uri_complete` and `slow_down` (accepted by code, never served
 by the stub — unit-level only); token refresh (`POST /api/token/refresh` is

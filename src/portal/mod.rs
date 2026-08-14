@@ -41,6 +41,7 @@
 
 pub mod auth;
 pub mod browser;
+pub mod card;
 pub mod client;
 pub mod http;
 pub mod login;

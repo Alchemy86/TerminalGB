@@ -306,7 +306,7 @@ required-features = ["image"]
 [[example]]
 name = "offer_list"
 path = "examples/offer_list.rs"
-required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+required-features = ["image", "plugin-gen1-link", "plugin-trainer", "portal"]
 
 [[example]]
 name = "gen2_timecapsule"

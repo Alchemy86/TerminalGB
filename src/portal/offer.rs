@@ -30,6 +30,9 @@ pub struct OfferPicker {
     pub notes: Vec<String>,
     /// The player whose save this is, for the header.
     pub player: String,
+    /// The save's 16-bit trainer id — with the name, the natural key for
+    /// "which account is this offer from" ([`super::card::OfferGame`]).
+    pub player_id: u16,
     /// Live filter text; empty shows everything.
     pub filter: String,
     /// Indices into `entries` that match the filter.
@@ -47,6 +50,7 @@ impl OfferPicker {
             entries: c.entries,
             notes: c.notes,
             player: c.player_name,
+            player_id: c.player_id,
             filter: String::new(),
             visible: Vec::new(),
             selected: 0,
@@ -151,6 +155,157 @@ pub fn spec_for(e: &Offerable) -> MonSpec {
         moves: e.moves.clone(),
         dvs: (e.dvs.attack, e.dvs.defense, e.dvs.speed, e.dvs.special),
     }
+}
+
+/// The per-save identity heuristic for one Pokémon — the key the live-offer
+/// watch uses to find "the same Pokémon" again in a later read of the save.
+///
+/// **Gen 1 has no unique per-Pokémon id**, so this is built from the only
+/// fields that never change over a Pokémon's life in one save — each claim
+/// verified against `pret/pokered`, not quoted from memory:
+///
+/// * **DVs** — rolled once and copied verbatim at capture (`_AddPartyMon`,
+///   `engine/pokemon/add_mon.asm`: "copy IVs from cur enemy mon"); nothing
+///   in the engine rewrites them afterwards, and the Time Capsule work
+///   proved they survive even a trade byte-identical.
+/// * **OT id and OT name** — written from `wPlayerID`/`wPlayerName` at
+///   capture (same file), never rewritten.
+///
+/// Everything else is deliberately excluded, each for a cited reason:
+/// **species** changes on evolution (the exact case live tracking exists
+/// for); **nickname** is NOT permanent in Gen 1, despite the folklore —
+/// `RenameEvolvedMon` (`engine/pokemon/evos_moves.asm`) rewrites an
+/// unnicknamed Pokémon's name field to the evolved species' name, and the
+/// Lavender Town Name Rater (`scripts/NameRatersHouse.asm`) renames any
+/// Pokémon whose OT matches the player — precisely the Pokémon a player can
+/// offer (`NameRatersHouseCheckMonOTScript` refuses only traded ones);
+/// **level, experience, moves and stats** change constantly.
+///
+/// **It is a heuristic, not a guarantee.** Two Pokémon caught by the same
+/// trainer with identical DV spreads collide (1 in 65,536 per pair — but
+/// wild DVs are not uniform, see `docs/shiny-hunt.md`, so it is reachable).
+/// The fail-safe is the caller's, and it is *withdraw, never guess*: an
+/// offer whose identity matches two Pokémon is withdrawn rather than risk
+/// updating it from — or ultimately trading — the wrong one. A trade is
+/// irreversible.
+pub fn identity_for(e: &Offerable) -> String {
+    format!(
+        "{:04x}:{:x}{:x}{:x}{:x}:{}",
+        e.ot_id, e.dvs.attack, e.dvs.defense, e.dvs.speed, e.dvs.special, e.ot_name
+    )
+}
+
+/// True when exactly one entry in the collection carries this identity — the
+/// precondition for tracking an offer against it.
+pub fn identity_is_unique(entries: &[Offerable], key: &str) -> bool {
+    entries.iter().filter(|e| identity_for(e) == key).count() == 1
+}
+
+/// What of a Pokémon's *changeable* state the offer reflects. When this
+/// moves — a level gained, a move learned, an evolution, a rename, a newly
+/// refused name — the posted offer no longer matches the save and must be
+/// updated (or withdrawn, when the change is a refusal).
+pub fn fingerprint_for(e: &Offerable) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        e.species_name,
+        e.level,
+        e.nickname,
+        e.moves.join(",")
+    )
+}
+
+/// One offer posted this session, tracked against the live save.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedOffer {
+    /// The portal's offer id, from the POST reply.
+    pub id: String,
+    /// [`identity_for`] of the Pokémon at post time.
+    pub identity: String,
+    /// Which save the offer belongs to — the watch only acts while the SAME
+    /// save is loaded. Loading a different game (or a different player's
+    /// save) suspends tracking; it must never withdraw offers that belong to
+    /// a save that is simply not loaded right now.
+    pub game: String,
+    pub player: String,
+    pub player_id: u16,
+    /// [`fingerprint_for`] as last posted.
+    pub fingerprint: String,
+    /// Consecutive maintenance failures; the caller gives up loudly after a
+    /// few rather than hammering a portal that keeps refusing.
+    pub failures: u8,
+}
+
+/// What the watch decided one offer needs. Pure data — the caller owns the
+/// network.
+#[derive(Debug, Clone)]
+pub enum WatchAction {
+    /// The offer no longer reflects anything offerable: withdraw it
+    /// (`POST /api/offers/<id>/cancel`). The reason is user-facing.
+    Withdraw { id: String, reason: String },
+    /// The Pokémon is still there and still offerable but has changed:
+    /// repost the offer's contents (`POST /api/offers/<id>/update`) from
+    /// this entry.
+    Update { id: String, entry: Offerable },
+}
+
+/// Compare the watched offers against a fresh read of the loaded save and
+/// say what each needs. At most the caller performs one action per poll;
+/// the rest keep coming up until acted on.
+///
+/// The rules, in order:
+/// * a different save is loaded (game title or player differ) → **nothing**
+///   — tracking is suspended, not failed;
+/// * the identity matches no entry → withdraw ("left the save");
+/// * the identity matches two or more → withdraw (ambiguous — fail safe,
+///   see [`identity_for`]);
+/// * the match now carries a refusal → withdraw, naming it;
+/// * the fingerprint moved → update from the live entry.
+pub fn plan(
+    watch: &[WatchedOffer],
+    col: &Collection,
+    game_title: &str,
+) -> Vec<WatchAction> {
+    let mut actions = Vec::new();
+    for w in watch {
+        if w.game != game_title
+            || w.player != col.player_name
+            || w.player_id != col.player_id
+        {
+            continue;
+        }
+        let matches: Vec<&Offerable> = col
+            .entries
+            .iter()
+            .filter(|e| identity_for(e) == w.identity)
+            .collect();
+        match matches.as_slice() {
+            [] => actions.push(WatchAction::Withdraw {
+                id: w.id.clone(),
+                reason: "it left the save".into(),
+            }),
+            [one] => {
+                if let Some(why) = &one.refusal {
+                    actions.push(WatchAction::Withdraw {
+                        id: w.id.clone(),
+                        reason: format!("it can no longer be traded — {why}"),
+                    });
+                } else if fingerprint_for(one) != w.fingerprint {
+                    actions.push(WatchAction::Update {
+                        id: w.id.clone(),
+                        entry: (*one).clone(),
+                    });
+                }
+            }
+            _ => actions.push(WatchAction::Withdraw {
+                id: w.id.clone(),
+                reason: "two identical Pokémon in the save — cannot tell which \
+                         was offered"
+                    .into(),
+            }),
+        }
+    }
+    actions
 }
 
 /// One line describing an entry, for toasts and confirmations.
@@ -266,6 +421,110 @@ mod tests {
         p.confirm();
         p.type_char('a');
         assert!(!p.armed, "filtering must disarm too");
+    }
+
+    fn watched(e: &Offerable) -> WatchedOffer {
+        WatchedOffer {
+            id: "81".into(),
+            identity: identity_for(e),
+            game: "Pokémon Blue".into(),
+            player: "RED".into(),
+            player_id: 1,
+            fingerprint: fingerprint_for(e),
+            failures: 0,
+        }
+    }
+
+    fn collection(entries: Vec<Offerable>) -> Collection {
+        Collection {
+            player_name: "RED".into(),
+            player_id: 1,
+            entries,
+            notes: Vec::new(),
+        }
+    }
+
+    /// The identity key survives exactly the changes live tracking exists
+    /// for — evolution (species), the Name Rater (nickname), levelling — and
+    /// the fingerprint moves on each of them so the offer reposts.
+    #[test]
+    fn the_identity_survives_evolution_and_renames_and_the_fingerprint_does_not() {
+        let before = entry("EVEE", "EEVEE", 24, false);
+        let mut after = before.clone();
+        after.species_name = "VAPOREON".into();
+        after.nickname = "SOGGY".into(); // renamed at the Name Rater too
+        after.level = 25;
+        after.moves.push("WATER GUN".into());
+        assert_eq!(identity_for(&before), identity_for(&after));
+        assert_ne!(fingerprint_for(&before), fingerprint_for(&after));
+    }
+
+    #[test]
+    fn a_changed_pokemon_is_updated_and_a_missing_one_withdrawn() {
+        let e = entry("BULBA", "BULBASAUR", 14, false);
+        let w = vec![watched(&e)];
+        // Unchanged → nothing to do.
+        assert!(plan(&w, &collection(vec![e.clone()]), "Pokémon Blue").is_empty());
+        // Evolved → update, carrying the live entry.
+        let mut evolved = e.clone();
+        evolved.species_name = "IVYSAUR".into();
+        evolved.level = 16;
+        match &plan(&w, &collection(vec![evolved]), "Pokémon Blue")[..] {
+            [WatchAction::Update { id, entry }] => {
+                assert_eq!(id, "81");
+                assert_eq!(entry.species_name, "IVYSAUR");
+            }
+            other => panic!("expected an update, got {other:?}"),
+        }
+        // Gone from the save → withdraw.
+        match &plan(&w, &collection(vec![]), "Pokémon Blue")[..] {
+            [WatchAction::Withdraw { id, reason }] => {
+                assert_eq!(id, "81");
+                assert!(reason.contains("left the save"), "{reason}");
+            }
+            other => panic!("expected a withdraw, got {other:?}"),
+        }
+    }
+
+    /// The fail-safe: an identity matching two Pokémon withdraws rather than
+    /// guessing which one was offered — a trade is irreversible. And a newly
+    /// refused name (the Name Rater writing an `8`) withdraws with the
+    /// reason, because the wire can no longer carry it.
+    #[test]
+    fn ambiguity_and_a_new_refusal_both_withdraw_never_guess() {
+        let e = entry("BULBA", "BULBASAUR", 14, false);
+        let w = vec![watched(&e)];
+        let twin = e.clone(); // same OT, same DVs — indistinguishable
+        match &plan(&w, &collection(vec![e.clone(), twin]), "Pokémon Blue")[..] {
+            [WatchAction::Withdraw { reason, .. }] => {
+                assert!(reason.contains("identical"), "{reason}");
+            }
+            other => panic!("expected a withdraw, got {other:?}"),
+        }
+        let mut refused = e.clone();
+        refused.nickname = "BULBA8".into();
+        refused.refusal = Some("the name carries the digit 8".into());
+        match &plan(&w, &collection(vec![refused]), "Pokémon Blue")[..] {
+            [WatchAction::Withdraw { reason, .. }] => {
+                assert!(reason.contains("digit 8"), "{reason}");
+            }
+            other => panic!("expected a withdraw, got {other:?}"),
+        }
+    }
+
+    /// Loading a different save (another game, or another player's save of
+    /// the same game) suspends tracking — it must never withdraw offers that
+    /// belong to a save that is simply not loaded right now.
+    #[test]
+    fn a_different_save_suspends_the_watch_instead_of_withdrawing() {
+        let e = entry("BULBA", "BULBASAUR", 14, false);
+        let w = vec![watched(&e)];
+        // Same player name and id, different game title.
+        assert!(plan(&w, &collection(vec![]), "Pokémon Red").is_empty());
+        // Same game, different player.
+        let mut other = collection(vec![]);
+        other.player_id = 2;
+        assert!(plan(&w, &other, "Pokémon Blue").is_empty());
     }
 
     #[test]

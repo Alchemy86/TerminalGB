@@ -27,10 +27,25 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let mut rom_path = None;
     let mut save_path = None;
+    let mut sprites_dir = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--save" => save_path = args.next(),
+            "--sprites" => sprites_dir = args.next().map(std::path::PathBuf::from),
             other => rom_path = Some(other.to_string()),
+        }
+    }
+    // Game artwork is never committed: the dump is for looking at, outside
+    // the tree (same refusal as `music_probe`'s `--covers`).
+    if let Some(d) = &sprites_dir {
+        let here = std::env::current_dir().unwrap_or_default();
+        let abs = here.join(d);
+        if abs.starts_with(&here) && !abs.starts_with(here.join("target")) {
+            eprintln!(
+                "--sprites must point outside the working tree (or under \
+                 target/) — game artwork is never committed"
+            );
+            std::process::exit(2);
         }
     }
     let Some(rom_path) = rom_path else {
@@ -113,6 +128,28 @@ fn main() {
             e.ot_name,
             e.ot_id,
         );
+        // The card an offer would carry — sprite decompressed from THIS
+        // cartridge, types from its own tables, the identity key the live
+        // watch tracks by. Printed so a run against a real ROM is the
+        // end-to-end proof of the card path (the harness has no cartridge).
+        let card = terminalgb::portal::card::card_for(e, plugin.tables());
+        let sprite = match &card.sprite {
+            Some(s) => format!("{}x{} png {}B", s.width, s.height, s.png.len()),
+            None => "none (picture did not decode)".into(),
+        };
+        println!(
+            "       card: [{}]  sprite {}  HP-if-Gen-2 {} {}  id {}",
+            card.types.join("/"),
+            sprite,
+            card.hidden_power_type,
+            card.hidden_power_power,
+            terminalgb::portal::offer::identity_for(e),
+        );
+        if let (Some(dir), Some(s)) = (&sprites_dir, &card.sprite) {
+            let _ = std::fs::create_dir_all(dir);
+            let name = format!("{}-{}.png", e.location.label(), e.species_name);
+            let _ = std::fs::write(dir.join(&name), &s.png);
+        }
     }
     for n in &col.notes {
         println!("  note: {n}");

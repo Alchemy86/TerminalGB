@@ -134,14 +134,17 @@ impl Portal {
 
     /// `POST /api/offers` — put one Pokémon up for a named friend to see.
     /// Returns the offer id.
-    pub fn offer(&self, mon: &MonSpec) -> Result<String, PortalError> {
-        let mut w = Writer::new();
-        w.begin_obj();
-        w.obj_field("mon");
-        mon_to_json(&mut w, mon);
-        w.end_obj();
-        w.end_obj();
-        let resp = self.post("/api/offers", &w.finish())?;
+    ///
+    /// `extras` is the card material beside the trade spec — the
+    /// owner-extracted sprite, types, DV detail, which save the offer belongs
+    /// to, and the identity key the live watch tracks it by. Every part is
+    /// optional on the wire; a portal that predates them ignores them.
+    pub fn offer(
+        &self,
+        mon: &MonSpec,
+        extras: Option<&super::card::OfferExtras>,
+    ) -> Result<String, PortalError> {
+        let resp = self.post("/api/offers", &offer_body(mon, extras))?;
         let j = json::parse(&resp.body).map_err(|e| {
             PortalError::Contract(format!("offers reply is not JSON: {e}"))
         })?;
@@ -151,6 +154,32 @@ impl Portal {
             .and_then(|o| id_field(o, "id"))
             .or_else(|| id_field(&j, "id"))
             .ok_or_else(|| PortalError::Contract("offers reply carries no 'id'".into()))
+    }
+
+    /// `POST /api/offers/<id>/update` — repost an open offer's contents
+    /// because the Pokémon changed in the save (levelled, learned a move,
+    /// evolved, was renamed). Same body as [`Portal::offer`]; the portal
+    /// replaces what the card shows. Proposed route — see `docs/portal.md`.
+    pub fn offer_update(
+        &self,
+        offer_id: &str,
+        mon: &MonSpec,
+        extras: Option<&super::card::OfferExtras>,
+    ) -> Result<(), PortalError> {
+        self.post(
+            &format!("/api/offers/{offer_id}/update"),
+            &offer_body(mon, extras),
+        )?;
+        Ok(())
+    }
+
+    /// `POST /api/offers/<id>/cancel` — withdraw an open offer (the same
+    /// route the website's own cancel button uses). Called when the offered
+    /// Pokémon is gone from the save, can no longer legally trade, or its
+    /// identity has become ambiguous.
+    pub fn offer_cancel(&self, offer_id: &str) -> Result<(), PortalError> {
+        self.post(&format!("/api/offers/{offer_id}/cancel"), "{}")?;
+        Ok(())
     }
 
     /// `GET /api/friends/<user>/offers` — what a friend is offering, as
@@ -204,6 +233,67 @@ impl Portal {
             .ok_or_else(|| {
                 PortalError::Contract("accept reply carries no trade id".into())
             })
+    }
+}
+
+/// The shared body of `POST /api/offers` and `POST /api/offers/<id>/update`:
+/// the trade spec under `mon`, and beside it — never inside it, `mon` stays
+/// exactly the shape every trade route speaks — the card material.
+fn offer_body(mon: &MonSpec, extras: Option<&super::card::OfferExtras>) -> String {
+    let mut w = Writer::new();
+    w.begin_obj();
+    w.obj_field("mon");
+    mon_to_json(&mut w, mon);
+    w.end_obj();
+    if let Some(x) = extras {
+        extras_to_json(&mut w, x);
+    }
+    w.end_obj();
+    w.finish()
+}
+
+/// The wire spellings of the card material (`docs/portal.md`, "The offer
+/// card"). Everything is optional: an absent sprite means the cartridge's
+/// picture did not decode — an honest absence the portal renders as no image,
+/// never a placeholder we invented.
+fn extras_to_json(w: &mut Writer, x: &super::card::OfferExtras) {
+    if let Some(card) = &x.card {
+        w.obj_field("card");
+        if let Some(s) = &card.sprite {
+            // The user's own cartridge's front sprite, decompressed at offer
+            // time, PNG with transparency, base64 — the only way game
+            // artwork may ever reach the portal (from its owner).
+            let mut b64 = String::new();
+            crate::termimage::base64_into(&s.png, &mut b64);
+            w.obj_field("sprite");
+            w.str_field("png", &b64);
+            w.num_field("width", s.width as f64);
+            w.num_field("height", s.height as f64);
+            w.end_obj();
+        }
+        w.arr_field("types");
+        for t in &card.types {
+            w.str_item(t);
+        }
+        w.end_arr();
+        w.num_field("dvTotal", card.dv_total as f64);
+        // Same wording discipline as shinyIfTradedToGen2: Hidden Power does
+        // not exist in Gen 1, this is what it would be after a trade on.
+        w.obj_field("hiddenPowerIfTradedToGen2");
+        w.str_field("type", &card.hidden_power_type);
+        w.num_field("power", card.hidden_power_power as f64);
+        w.end_obj();
+        w.end_obj();
+    }
+    if let Some(g) = &x.game {
+        w.obj_field("game");
+        w.str_field("title", &g.title);
+        w.str_field("player", &g.player);
+        w.num_field("playerId", g.player_id as f64);
+        w.end_obj();
+    }
+    if let Some(id) = &x.identity {
+        w.str_field("identity", id);
     }
 }
 

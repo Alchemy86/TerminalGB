@@ -1338,9 +1338,28 @@ struct App {
     #[cfg(feature = "portal")]
     offer: Option<crate::portal::offer::OfferPicker>,
     /// An offer submission in flight, on its own thread; polled by
-    /// [`App::portal_tick`]. The message is ready-made toast text.
+    /// [`App::portal_tick`]. Carries the created offer's id (for the live
+    /// watch) and ready-made toast text.
     #[cfg(feature = "portal")]
-    offer_inflight: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    offer_inflight: Option<std::sync::mpsc::Receiver<Result<(String, String), String>>>,
+    /// Offers posted this session, tracked against the live save so the
+    /// portal reflects reality: gone → withdrawn, changed (levelled, learned
+    /// a move, evolved, renamed) → updated. See [`crate::portal::offer::plan`]
+    /// and docs/portal.md "Offers track the live game".
+    #[cfg(feature = "portal")]
+    offer_watch: Vec<crate::portal::offer::WatchedOffer>,
+    /// The watch entry the in-flight offer POST will create once the portal
+    /// answers with the id; `None` when the offer cannot be tracked (its
+    /// identity matched two Pokémon in the save — the fail-safe).
+    #[cfg(feature = "portal")]
+    offer_pending_watch: Option<crate::portal::offer::WatchedOffer>,
+    /// One watch maintenance call (update or cancel) in flight, on its own
+    /// thread; polled, never waited on.
+    #[cfg(feature = "portal")]
+    offer_watch_inflight: Option<OfferWatchInflight>,
+    /// When the live save was last compared against the posted offers.
+    #[cfg(feature = "portal")]
+    offer_watch_at: Option<std::time::Instant>,
 }
 
 impl App {
@@ -1542,6 +1561,14 @@ impl App {
             offer: None,
             #[cfg(feature = "portal")]
             offer_inflight: None,
+            #[cfg(feature = "portal")]
+            offer_watch: Vec::new(),
+            #[cfg(feature = "portal")]
+            offer_pending_watch: None,
+            #[cfg(feature = "portal")]
+            offer_watch_inflight: None,
+            #[cfg(feature = "portal")]
+            offer_watch_at: None,
         };
         // Read-only: resolves the sign-in state from the stored token file.
         // Safe in `build` (unlike the volume or the cable) because it writes
@@ -7788,6 +7815,35 @@ const PORTAL_DONE_RETRY_EVERY: Duration = Duration::from_secs(30);
 #[cfg(feature = "portal")]
 const PORTAL_DONE_RETRY_CAP: u32 = 10;
 
+/// How often the live save is compared against the posted offers. Reading
+/// the collection is a few memory peeks plus a decode — cheap — but there is
+/// no reason to do it per frame; a level-up reaching the portal ten seconds
+/// later is plenty live.
+#[cfg(feature = "portal")]
+const OFFER_WATCH_EVERY: Duration = Duration::from_secs(10);
+/// Consecutive failures on one offer's maintenance before giving up loudly —
+/// a portal that keeps refusing (or predates the update/cancel routes) must
+/// not be hammered forever.
+#[cfg(feature = "portal")]
+const OFFER_WATCH_GIVE_UP: u8 = 3;
+
+/// One offer-watch maintenance call in flight: which offer, what the call
+/// will mean when it lands, and the thread's channel.
+#[cfg(feature = "portal")]
+struct OfferWatchInflight {
+    offer_id: String,
+    intent: OfferWatchIntent,
+    rx: std::sync::mpsc::Receiver<Result<(), String>>,
+}
+
+#[cfg(feature = "portal")]
+enum OfferWatchIntent {
+    /// On success the offer leaves the watch; the reason is toast text.
+    Withdraw { reason: String },
+    /// On success the watch entry records what was posted.
+    Update { fingerprint: String, desc: String },
+}
+
 #[cfg(feature = "portal")]
 impl App {
     /// A transient notice on whichever screen is up — toast in game, footer
@@ -7859,6 +7915,9 @@ impl App {
             dirty = true;
         }
         if self.offer_tick() {
+            dirty = true;
+        }
+        if self.offer_watch_tick() {
             dirty = true;
         }
         dirty
@@ -8132,13 +8191,42 @@ impl App {
                     return;
                 }
                 if let Some(spec) = picker.confirm() {
-                    let desc = picker
-                        .current()
-                        .map(crate::portal::offer::describe)
+                    use crate::portal::offer as po;
+                    // `confirm` only returns for an offerable current entry.
+                    let entry = picker.current().cloned();
+                    let desc = entry
+                        .as_ref()
+                        .map(po::describe)
                         .unwrap_or_else(|| spec.species.clone());
+                    let player = picker.player.clone();
+                    let player_id = picker.player_id;
+                    // Unique within the whole save right now — the
+                    // precondition for live tracking (fail safe: ambiguous
+                    // means untracked, and the portal-side dedupe cannot
+                    // tell twins apart either).
+                    let unique = entry.as_ref().is_some_and(|e| {
+                        po::identity_is_unique(&picker.entries, &po::identity_for(e))
+                    });
+                    // An already-offered Pokémon cannot be offered again.
+                    // The portal enforces this server-side on the identity
+                    // key; refusing here too saves a round trip and says why.
+                    if let Some(e) = &entry {
+                        let key = po::identity_for(e);
+                        if self.offer_watch.iter().any(|w| {
+                            w.identity == key
+                                && w.player == player
+                                && w.player_id == player_id
+                        }) {
+                            self.set_toast(format!(
+                                "offer: {desc} is already offered — cancel it \
+                                 on the website first"
+                            ));
+                            return;
+                        }
+                    }
                     self.offer = None;
                     self.overlay = Overlay::None;
-                    self.offer_submit(spec, desc);
+                    self.offer_submit(spec, desc, entry, player, player_id, unique);
                 }
             }
             KeyCode::Char(c) => picker.type_char(c),
@@ -8148,24 +8236,84 @@ impl App {
 
     /// Post the offer on its own thread — the portal call has 5 s/15 s curl
     /// timeouts and nothing may stall a frame (the audio hand-off rule).
+    ///
+    /// Beside the trade spec, the POST carries the **card**: the sprite
+    /// decompressed from the player's own cartridge at this moment, the
+    /// types from its own tables, the DV detail, and which save (game +
+    /// player) the offer belongs to — see [`crate::portal::card`] and
+    /// docs/portal.md "The offer card".
     fn offer_submit(
         &mut self,
         spec: terminalgb_plugin_gen1_link::spec::MonSpec,
         desc: String,
+        entry: Option<crate::portal::offer::Offerable>,
+        player: String,
+        player_id: u16,
+        unique: bool,
     ) {
+        use crate::portal::{card, offer as po};
         let Some(url) = crate::portal::portal_url(self.config.portal.as_deref()) else {
             return;
         };
+        // Everything read or derived from the loaded cartridge, while it is
+        // still in hand. `entry` is `Some` on every real path; the guards
+        // only make an impossible gap honest (no card, not a wrong one).
+        let mut extras = card::OfferExtras::default();
+        let mut game_title = String::new();
+        if let (Some(session), Some(e)) = (self.session.as_ref(), entry.as_ref()) {
+            if let Some(tp) = session.gb.plugin::<TrainerPlugin>() {
+                extras.card = Some(card::card_for(e, tp.tables()));
+                if let Some(g) = tp.game() {
+                    game_title = g.label().to_string();
+                    extras.game = Some(card::OfferGame {
+                        title: game_title.clone(),
+                        player: player.clone(),
+                        player_id,
+                    });
+                }
+            }
+        }
+        extras.identity = entry.as_ref().map(po::identity_for);
+
+        // Arm the live watch — but only when this Pokémon is the ONLY one in
+        // the save with its identity, and the save itself is identified. An
+        // ambiguous identity is posted untracked (fail safe: never risk
+        // updating or withdrawing from the wrong twin).
+        self.offer_pending_watch = match (&entry, &extras.identity) {
+            (Some(e), Some(key)) if unique && !game_title.is_empty() => {
+                Some(po::WatchedOffer {
+                    id: String::new(), // filled in by offer_tick from the reply
+                    identity: key.clone(),
+                    game: game_title,
+                    player,
+                    player_id,
+                    fingerprint: po::fingerprint_for(e),
+                    failures: 0,
+                })
+            }
+            _ => {
+                if entry.is_some() && !unique {
+                    self.portal_announce(
+                        "note: two identical Pokémon in this save — this \
+                         offer won't auto-update or auto-withdraw"
+                            .into(),
+                    );
+                }
+                None
+            }
+        };
+
         let (tx, rx) = std::sync::mpsc::channel();
         self.portal_announce(format!("portal: posting {} …", spec.species));
         std::thread::spawn(move || {
             let res = crate::portal::client::Portal::connect(&url)
-                .and_then(|p| p.offer(&spec))
+                .and_then(|p| p.offer(&spec, Some(&extras)))
                 .map(|id| {
-                    format!(
+                    let msg = format!(
                         "portal: offered {desc} — offer #{id} is up for your \
                          friends (cancel it on the website)"
-                    )
+                    );
+                    (id, msg)
                 })
                 .map_err(|e| format!("portal: the offer was NOT posted — {e}"));
             let _ = tx.send(res);
@@ -8181,14 +8329,28 @@ impl App {
         match rx.try_recv() {
             Ok(res) => {
                 self.offer_inflight = None;
-                self.portal_announce(match res {
-                    Ok(msg) | Err(msg) => msg,
-                });
+                let msg = match res {
+                    Ok((id, msg)) => {
+                        // The offer is up: start tracking it against the
+                        // live save, if the submit deemed it trackable.
+                        if let Some(mut w) = self.offer_pending_watch.take() {
+                            w.id = id;
+                            self.offer_watch.push(w);
+                        }
+                        msg
+                    }
+                    Err(msg) => {
+                        self.offer_pending_watch = None;
+                        msg
+                    }
+                };
+                self.portal_announce(msg);
                 true
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => false,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.offer_inflight = None;
+                self.offer_pending_watch = None;
                 self.portal_announce(
                     "portal: the offer thread died — the offer was NOT posted"
                         .to_string(),
@@ -8196,6 +8358,168 @@ impl App {
                 true
             }
         }
+    }
+
+    /// Keep posted offers matching the live save: withdrawn when the Pokémon
+    /// is gone (or its identity turned ambiguous, or it can no longer legally
+    /// trade), updated when it changed — levelled, learned a move, evolved,
+    /// was renamed. Loading a *different* save suspends the watch; it never
+    /// withdraws offers belonging to a save that simply is not loaded.
+    ///
+    /// Runs at [`OFFER_WATCH_EVERY`], one network call in flight at most,
+    /// everything on threads — a frame is never stalled.
+    fn offer_watch_tick(&mut self) -> bool {
+        use crate::plugin::Capability;
+        use crate::portal::{card, offer as po};
+        use terminalgb_plugin_trainer::collection;
+
+        // First land any in-flight maintenance call.
+        if let Some(inflight) = &self.offer_watch_inflight {
+            match inflight.rx.try_recv() {
+                Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+                other => {
+                    let OfferWatchInflight {
+                        offer_id, intent, ..
+                    } = self.offer_watch_inflight.take().expect("checked above");
+                    let outcome = match other {
+                        Ok(r) => r,
+                        Err(_) => Err("the maintenance thread died".into()),
+                    };
+                    match outcome {
+                        Ok(()) => match intent {
+                            OfferWatchIntent::Withdraw { reason } => {
+                                self.offer_watch.retain(|w| w.id != offer_id);
+                                self.portal_announce(format!(
+                                    "portal: offer #{offer_id} withdrawn — {reason}"
+                                ));
+                            }
+                            OfferWatchIntent::Update { fingerprint, desc } => {
+                                if let Some(w) =
+                                    self.offer_watch.iter_mut().find(|w| w.id == offer_id)
+                                {
+                                    w.fingerprint = fingerprint;
+                                    w.failures = 0;
+                                }
+                                self.portal_announce(format!(
+                                    "portal: offer #{offer_id} updated — {desc}"
+                                ));
+                            }
+                        },
+                        Err(e) => {
+                            let mut gone = false;
+                            if let Some(w) =
+                                self.offer_watch.iter_mut().find(|w| w.id == offer_id)
+                            {
+                                w.failures += 1;
+                                gone = w.failures >= OFFER_WATCH_GIVE_UP;
+                            }
+                            if gone {
+                                self.offer_watch.retain(|w| w.id != offer_id);
+                                self.portal_announce(format!(
+                                    "portal: offer #{offer_id} may be STALE on \
+                                     the portal ({e}) — check or cancel it on \
+                                     the website"
+                                ));
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+
+        if self.offer_watch.is_empty() {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .offer_watch_at
+            .is_some_and(|at| now.duration_since(at) < OFFER_WATCH_EVERY)
+        {
+            return false;
+        }
+        self.offer_watch_at = Some(now);
+
+        // Read the live save through exactly the path the `O` key uses. Any
+        // missing piece — no session, no identified cartridge — suspends the
+        // watch quietly: a save that is not loaded is not a save that
+        // changed.
+        let Some(url) = crate::portal::portal_url(self.config.portal.as_deref()) else {
+            return false;
+        };
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        let Some(tp) = session.gb.plugin::<TrainerPlugin>() else {
+            return false;
+        };
+        let Some(game) = tp.game() else {
+            return false;
+        };
+        let game_title = game.label().to_string();
+        let Ok(raw) = session.gb.with_machine(
+            Capability::OBSERVE.union(Capability::READ_MEMORY),
+            collection::read_raw,
+        ) else {
+            return false;
+        };
+        let Some(tp) = session.gb.plugin::<TrainerPlugin>() else {
+            return false;
+        };
+        let col = collection::decode(&raw, tp.tables());
+
+        // One action per pass; the rest keep coming up until acted on.
+        let Some(action) = po::plan(&self.offer_watch, &col, &game_title)
+            .into_iter()
+            .next()
+        else {
+            return false;
+        };
+        match action {
+            po::WatchAction::Withdraw { id, reason } => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let offer_id = id.clone();
+                std::thread::spawn(move || {
+                    let res = crate::portal::client::Portal::connect(&url)
+                        .and_then(|p| p.offer_cancel(&id))
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(res);
+                });
+                self.offer_watch_inflight = Some(OfferWatchInflight {
+                    offer_id,
+                    intent: OfferWatchIntent::Withdraw { reason },
+                    rx,
+                });
+            }
+            po::WatchAction::Update { id, entry } => {
+                let spec = po::spec_for(&entry);
+                let desc = po::describe(&entry);
+                let extras = card::OfferExtras {
+                    card: Some(card::card_for(&entry, tp.tables())),
+                    game: Some(card::OfferGame {
+                        title: game_title,
+                        player: col.player_name.clone(),
+                        player_id: col.player_id,
+                    }),
+                    identity: Some(po::identity_for(&entry)),
+                };
+                let fingerprint = po::fingerprint_for(&entry);
+                let (tx, rx) = std::sync::mpsc::channel();
+                let offer_id = id.clone();
+                std::thread::spawn(move || {
+                    let res = crate::portal::client::Portal::connect(&url)
+                        .and_then(|p| p.offer_update(&id, &spec, Some(&extras)))
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(res);
+                });
+                self.offer_watch_inflight = Some(OfferWatchInflight {
+                    offer_id,
+                    intent: OfferWatchIntent::Update { fingerprint, desc },
+                    rx,
+                });
+            }
+        }
+        false
     }
 
     /// Draw the picker. Everything on it came out of the save; a row the

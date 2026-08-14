@@ -3926,7 +3926,37 @@ SRAM box entry both read back (`cargo run --release --example offer_list -- <rom
   harness reaches trainer types **only through `terminalgb::portal::offer` re-exports**
   (the two-rlib trap again — never add a plugin crate to a `harness = false` target).
 
-## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
+### The offer CARD, live offers, and the Gen 1 identity heuristic (`src/portal/card.rs`)
+
+Full contract + proposal to the portal crew: `docs/portal.md` ("The offer card", "Offers
+track the live game", "Offers group by game and player"). What is durable:
+
+- **The offer POST carries `card` + `game` + `identity` beside `mon`, and `mon` itself is
+  untouched** — every trade route keeps its exact shape; the extras ride at the offer level
+  only and are all optional on the wire. The sprite is the offered species' front picture
+  **decompressed from the offering player's own cartridge at offer time** (the trainer
+  panel's decoder + edge-flood-fill transparency), palette PNG with `tRNS`, base64 —
+  measured 680 B for Pikachu, 1,075 B for Mewtwo against the captain's real save. **The
+  sprite rule is unchanged**: no artwork is shipped, vendored or served from this repo;
+  a picture that does not decode sends *no* sprite, never a placeholder. `moves` were
+  already travelling inside `mon` before any of this — the portal just wasn't showing them.
+- **The Gen 1 identity key is OT id + OT name + DVs, and NOTHING else — the nickname is a
+  trap.** Verified against `pret/pokered` before relying on it (a brief claimed "Gen 1 has
+  no Name Rater" — it does: `scripts/NameRatersHouse.asm`, Lavender Town, renames any
+  own-OT Pokémon, which is exactly the Pokémon a player can offer; and `RenameEvolvedMon`
+  rewrites an unnicknamed Pokémon's name on evolution). DVs and OT are written once at
+  capture (`_AddPartyMon`) and never rewritten. Species changes on evolution — the exact
+  case live tracking exists for. **Fail-safe direction: ambiguous identity (same-OT
+  identical-DV twins) is withdraw/untracked, never guess** — a trade is irreversible.
+- **The live watch's suspend-vs-withdraw split is load-bearing** (`portal::offer::plan`,
+  pure + unit-tested): a *different save loaded* (game title or player mismatch) means
+  **do nothing** — withdrawing there would nuke Blue's offers the moment Gold boots; only
+  the same save answering "gone / refused / ambiguous" withdraws. Only offers posted this
+  session are tracked (ids come from POST replies); resuming needs the proposed
+  `GET /api/offers/mine`.
+- The update/cancel routes (`POST /api/offers/<id>/update|cancel`) are **proposed** —
+  unverified against the real portal; the watch gives up loudly per offer after 3 failures,
+  so a portal without them degrades to stale-offer warnings, not a hammer loop. — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:
   [`docs/claude-plays.md`](docs/claude-plays.md).** Read it before touching any of this.

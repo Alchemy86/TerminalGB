@@ -36,6 +36,8 @@ struct Stub {
     done_hits: Mutex<Vec<(String, Option<String>)>>,
     /// Every posted offer: (body, bearer token presented).
     offer_hits: Mutex<Vec<(String, Option<String>)>>,
+    /// Every offer maintenance call — update or cancel: (path, body, bearer).
+    maint_hits: Mutex<Vec<(String, String, Option<String>)>>,
 }
 
 const ACCESS: &str = "tok-abc";
@@ -163,6 +165,23 @@ fn handle(mut stream: TcpStream, stub: &Stub) {
                 r#"{"offer":{"id":81,"status":"open"}}"#,
             );
         }
+        ("POST", p)
+            if p.starts_with("/api/offers/")
+                && (p.ends_with("/update") || p.ends_with("/cancel")) =>
+        {
+            if bearer.as_deref() != Some(ACCESS) {
+                return respond(
+                    &mut stream,
+                    "401 Unauthorized",
+                    r#"{"error":"unauthorized"}"#,
+                );
+            }
+            stub.maint_hits
+                .lock()
+                .unwrap()
+                .push((p.to_string(), body.clone(), bearer));
+            respond(&mut stream, "200 OK", "{}");
+        }
         ("POST", p) if p.starts_with("/api/trades/") && p.ends_with("/done") => {
             if bearer.as_deref() != Some(ACCESS) {
                 return respond(
@@ -234,6 +253,7 @@ fn main() {
         trades_body: Mutex::new(ONE_TRADE.to_string()),
         done_hits: Mutex::new(Vec::new()),
         offer_hits: Mutex::new(Vec::new()),
+        maint_hits: Mutex::new(Vec::new()),
     });
     let base = start_stub(stub.clone());
 
@@ -479,28 +499,142 @@ fn main() {
             refusal: None,
         };
         let spec = offer::spec_for(&entry);
-        let id = portal.offer(&spec).expect("offer");
+        let id = portal.offer(&spec, None).expect("offer");
         check("the offer reply's id is read back", id == "81", &id);
-        let hits = stub.offer_hits.lock().unwrap();
-        let (body, bearer) = &hits[0];
-        check(
-            "the offer POST is authenticated and carries the save's own fields",
-            hits.len() == 1
-                && bearer.as_deref() == Some(ACCESS)
-                && body.contains(r#""species":"ABRA""#)
-                && body.contains(r#""nickname":"GLIMMER""#)
-                && body.contains(r#""level":9"#)
-                && body.contains(r#""otName":"RED""#)
-                && body.contains(r#""otId":43981"#)
-                && body.contains(r#""attack":14"#),
-            body,
-        );
-        check(
-            "the shiny-if-traded-to-Gen-2 flag rides the offer for the \
-             portal's lists",
-            body.contains(r#""shinyIfTradedToGen2":true"#),
-            body,
-        );
+        {
+            let hits = stub.offer_hits.lock().unwrap();
+            let (body, bearer) = &hits[0];
+            check(
+                "the offer POST is authenticated and carries the save's own fields",
+                hits.len() == 1
+                    && bearer.as_deref() == Some(ACCESS)
+                    && body.contains(r#""species":"ABRA""#)
+                    && body.contains(r#""nickname":"GLIMMER""#)
+                    && body.contains(r#""level":9"#)
+                    && body.contains(r#""otName":"RED""#)
+                    && body.contains(r#""otId":43981"#)
+                    && body.contains(r#""attack":14"#),
+                body,
+            );
+            check(
+                "the shiny-if-traded-to-Gen-2 flag rides the offer for the \
+                 portal's lists",
+                body.contains(r#""shinyIfTradedToGen2":true"#),
+                body,
+            );
+        }
+
+        // [6c] The offer CARD: sprite (owner-extracted, base64 PNG with
+        // transparency), types, DV detail, which save the offer belongs to,
+        // and the identity key — the payload the portal renders a real card
+        // from instead of a one-line text pill. The extras here are built by
+        // hand only because this harness has no cartridge; in the product
+        // the only constructor is `card::card_for` over the loaded ROM's own
+        // tables (proven against a real cartridge by `examples/offer_list`).
+        {
+            use terminalgb::portal::card::{
+                CardSprite, OfferCard, OfferExtras, OfferGame,
+            };
+            // A real PNG through the product's own encoder: 2×2, one
+            // transparent corner — enough to prove the bytes travel intact.
+            let rgba: &[u8] = &[
+                0xff, 0xff, 0xff, 0x00, // transparent page
+                0x60, 0x60, 0x60, 0xff, //
+                0x00, 0x00, 0x00, 0xff, //
+                0xc0, 0xc0, 0xc0, 0xff, //
+            ];
+            let mut png = Vec::new();
+            terminalgb::termimage::png_into(rgba, 2, 2, &mut png);
+            let extras = OfferExtras {
+                card: Some(OfferCard {
+                    sprite: Some(CardSprite {
+                        png: png.clone(),
+                        width: 2,
+                        height: 2,
+                    }),
+                    types: vec!["PSYCHIC".into()],
+                    dv_total: 44,
+                    hidden_power_type: "ICE".into(),
+                    hidden_power_power: 63,
+                }),
+                game: Some(OfferGame {
+                    title: "Pokémon Blue".into(),
+                    player: "RED".into(),
+                    player_id: 43981,
+                }),
+                identity: Some(offer::identity_for(&entry)),
+            };
+            let id = portal.offer(&spec, Some(&extras)).expect("offer with card");
+            check("the card offer posts too", id == "81", &id);
+            let hits = stub.offer_hits.lock().unwrap();
+            let (body, _) = &hits[1];
+            let mut b64 = String::new();
+            terminalgb::termimage::base64_into(&png, &mut b64);
+            check(
+                "the sprite rides the offer as base64 PNG with its geometry",
+                body.contains(&format!(r#""sprite":{{"png":"{b64}""#))
+                    && body.contains(r#""width":2"#)
+                    && body.contains(r#""height":2"#),
+                body,
+            );
+            check(
+                "types, DV total and the Gen-2 Hidden Power ride the card",
+                body.contains(r#""types":["PSYCHIC"]"#)
+                    && body.contains(r#""dvTotal":44"#)
+                    && body.contains(
+                        r#""hiddenPowerIfTradedToGen2":{"type":"ICE","power":63}"#,
+                    ),
+                body,
+            );
+            check(
+                "the offer names its save — game title + player name + id — \
+                 so two connected games list as two collections",
+                body.contains(
+                    r#""game":{"title":"Pokémon Blue","player":"RED","playerId":43981}"#,
+                ),
+                body,
+            );
+            check(
+                "the identity key rides the offer (OT + DVs, hex; see \
+                 offer::identity_for)",
+                body.contains(r#""identity":"abcd:eaaa:RED""#),
+                body,
+            );
+            check(
+                "the mon object itself is unchanged by the card (trade routes \
+                 keep their exact shape)",
+                body.contains(r#""mon":{"species":"ABRA""#),
+                body,
+            );
+        }
+
+        // [6d] Live-offer maintenance: update reposts the offer's contents to
+        // /api/offers/<id>/update with the same body shape; cancel withdraws
+        // it. Both authenticated. These are the routes the TUI's watch calls
+        // when the offered Pokémon changes or leaves the save.
+        {
+            portal
+                .offer_update("81", &spec, None)
+                .expect("offer_update");
+            portal.offer_cancel("81").expect("offer_cancel");
+            let hits = stub.maint_hits.lock().unwrap();
+            check(
+                "offer_update POSTs the offer body to /api/offers/81/update, \
+                 authenticated",
+                hits.len() == 2
+                    && hits[0].0 == "/api/offers/81/update"
+                    && hits[0].1.contains(r#""species":"ABRA""#)
+                    && hits[0].2.as_deref() == Some(ACCESS),
+                &format!("{hits:?}"),
+            );
+            check(
+                "offer_cancel POSTs to /api/offers/81/cancel, authenticated",
+                hits.len() == 2
+                    && hits[1].0 == "/api/offers/81/cancel"
+                    && hits[1].2.as_deref() == Some(ACCESS),
+                &format!("{hits:?}"),
+            );
+        }
     }
 
     // [7] A dead portal is a loud transport error, not a hang: the client's
