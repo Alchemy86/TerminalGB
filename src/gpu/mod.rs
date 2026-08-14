@@ -292,6 +292,15 @@ impl Gpu {
         }
     }
 
+    /// Latch the window's frame-long "Y condition" if this scanline's `LY`
+    /// matches `WY`. Independent of LCDC bit 5 — see `change_mode`.
+    fn check_wy_trigger(&mut self) {
+        if !self.wy_trigger && self.line == self.winy {
+            self.wy_trigger = true;
+            self.wy_pos = -1;
+        }
+    }
+
     fn check_interrupt_lyc(&mut self) {
         if self.lyc_inte && self.line == self.lyc {
             self.interrupt |= 0x02;
@@ -312,16 +321,42 @@ impl Gpu {
                 self.wy_trigger = false;
                 self.interrupt |= 0x01;
                 self.updated = true;
-                self.m1_inte
+                // Entering mode 1 raises the STAT line for the mode-1 *or* the
+                // mode-2 select bit. From AntonioND's TCAGBD §8.7 "STAT
+                // Interrupt", the internal signal is set by
+                //   ((ScreenMode = 1) AND (STAT.ENABLE_VBL || STAT.ENABLE_OAM))
+                // — "Not only VBL!!". So a program that enables only the mode-2
+                // source still gets a STAT interrupt at LY=144, one line before
+                // the first real OAM scan of the frame. Mealybug's
+                // `m2_win_en_toggle` depends on it: its handler toggles LCDC.5
+                // once per fire, and without the LY=144 fire the whole frame's
+                // window/no-window pattern lands on the wrong parity of lines.
+                self.m1_inte || self.m2_inte
             }
-            2 => self.m2_inte,
-            3 => {
-                if self.win_on && !self.wy_trigger && self.line == self.winy {
-                    self.wy_trigger = true;
-                    self.wy_pos = -1;
-                }
-                false
+            2 => {
+                // The window's "Y condition" (Pan Docs, "Window mid-frame
+                // behavior" → "Window rendering criteria"): *at the beginning
+                // of each scanline*, if WY == LY the condition becomes true and
+                // stays true for the rest of the frame; it is cleared on
+                // VBlank (see mode 1 above).
+                //
+                // Crucially it does **not** depend on LCDC bit 5. A game may
+                // latch the condition on a line where the window is disabled
+                // and enable the window later in the same frame — Pan Docs
+                // illustrates exactly that with Mealybug's `m2_win_en_toggle`.
+                // Testing `win_on` here (as this used to) meant the condition
+                // could never latch for such a game and the window never
+                // appeared at all. See docs/components/ppu.md.
+                //
+                // Not modelled: Pan Docs' GBC-only note that *clearing* LCDC.5
+                // resets the condition. It does not change `m2_win_en_toggle`
+                // (whose CGB references are shade-identical to its DMG one),
+                // and modelling it would need the mid-mode-3 PPU this scanline
+                // renderer does not have — see docs/mealybug.md.
+                self.check_wy_trigger();
+                self.m2_inte
             }
+            3 => false,
             _ => false,
         } {
             self.interrupt |= 0x02;
@@ -782,4 +817,88 @@ fn dmg_sprite_order(a: &(i32, i32, u8), b: &(i32, i32, u8)) -> Ordering {
 fn cgb_sprite_order(a: &(i32, i32, u8), b: &(i32, i32, u8)) -> Ordering {
     // CGB order: only prioritize based on OAM position.
     b.2.cmp(&a.2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOTS_PER_LINE: u32 = 456;
+
+    /// A PPU with the LCD on, sitting at the start of line 0.
+    fn lcd_on(stat: u8, wy: u8) -> Gpu {
+        let mut gpu = Gpu::new();
+        gpu.wb(0xFF41, stat);
+        gpu.wb(0xFF4A, wy);
+        gpu.wb(0xFF40, 0x80); // LCD on; enters mode 2 on line 0
+        gpu
+    }
+
+    fn advance_lines(gpu: &mut Gpu, n: u32) {
+        for _ in 0..n {
+            gpu.do_cycle(DOTS_PER_LINE);
+        }
+    }
+
+    /// The window's frame-long "Y condition" is latched by WY == LY *at the
+    /// start of a scanline* and does not consult LCDC bit 5 (Pan Docs, "Window
+    /// rendering criteria"). Requiring the window to be enabled at latch time
+    /// meant a game that turned the window on later in the frame never saw it
+    /// at all — the failure Mealybug's `m2_win_en_toggle` renders as a blank
+    /// screen.
+    #[test]
+    fn the_wy_condition_latches_while_the_window_is_disabled() {
+        let mut gpu = lcd_on(0x00, 5);
+        assert!(
+            !gpu.win_on,
+            "the window must be off for this to prove anything"
+        );
+
+        advance_lines(&mut gpu, 4);
+        assert_eq!(gpu.line, 4);
+        assert!(!gpu.wy_trigger, "WY(5) != LY(4), nothing to latch yet");
+
+        advance_lines(&mut gpu, 1);
+        assert_eq!(gpu.line, 5);
+        assert!(
+            gpu.wy_trigger,
+            "WY == LY must latch the Y condition even with LCDC bit 5 clear"
+        );
+
+        // ...and it survives to the end of the frame, then clears on VBlank.
+        advance_lines(&mut gpu, 100);
+        assert!(
+            gpu.wy_trigger,
+            "the Y condition is latched for the whole frame"
+        );
+        advance_lines(&mut gpu, 39);
+        assert!(gpu.line >= 144, "should be in VBlank by now");
+        assert!(!gpu.wy_trigger, "VBlank clears the Y condition");
+    }
+
+    /// Entering mode 1 raises the STAT line for the mode-1 *or* the mode-2
+    /// select bit — AntonioND's TCAGBD §8.7: `(ScreenMode = 1) AND
+    /// (STAT.ENABLE_VBL || STAT.ENABLE_OAM)`, "Not only VBL!!".
+    #[test]
+    fn entering_vblank_raises_stat_for_the_mode_2_source_too() {
+        for (stat, want_stat_at_144) in [(0x20u8, true), (0x00u8, false)] {
+            let mut gpu = lcd_on(stat, 0xFF);
+            advance_lines(&mut gpu, 143);
+            assert_eq!(gpu.line, 143);
+
+            gpu.interrupt = 0;
+            advance_lines(&mut gpu, 1);
+            assert_eq!(gpu.line, 144, "should have just entered VBlank");
+            assert_eq!(
+                gpu.interrupt & 0x01,
+                0x01,
+                "VBlank interrupt is unconditional"
+            );
+            assert_eq!(
+                gpu.interrupt & 0x02 != 0,
+                want_stat_at_144,
+                "STAT=${stat:02X}: mode-2 select must raise STAT on entering mode 1"
+            );
+        }
+    }
 }

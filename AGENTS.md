@@ -220,6 +220,53 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
 - **Do not read wall-clock timings from a run with the `audio` feature enabled** — a crew is
   fixing a ~62× slowdown there (17.9 ms/frame vs 0.29 ms). The ~6 % figure above was
   measured with no APU installed, so it isolates this change.
+## PPU: Mealybug Tearoom and the mid-scanline question (`src/gpu/`)
+
+- **Full scoping, with the split of what is winnable now versus what needs the rewrite:
+  [`docs/mealybug.md`](docs/mealybug.md).** Score today **1 of 31 ROMs** pixel-exact against
+  all three hardware reference sets (was 0). Measure it with
+  `cargo run --release --example mealybug -- --dir <mealybug checkout>` — ROMs and reference
+  screenshots are **not vendored**, they come from a run-time path like `POKERED_GFX` does.
+- **Score each column on the machine its reference was photographed on.** These cartridges have
+  no CGB flag, so `Model::Auto` gives a DMG — right for `DMG-blob`, wrong for `CPU CGB C`/`CPU
+  CGB D`, which are a Color console running the same DMG cartridge in compat mode.
+  `examples/mealybug` runs both and compares each column to its own frame. They render
+  identically *today* (`GbMode::Classic` and `ColorAsClassic` share the renderer) — that must
+  stop being true once mode 3 is modelled, which is exactly why the suite ships three sets.
+- **Three independent blockers stood between us and the remaining rows, and all three must be
+  true at once for ANY row to pass. One is now closed:**
+  1. **Whole-line rendering.** `renderscan` runs once at the mode 3 → 0 transition. Open; this
+     is the structural one.
+  2. ~~Interrupt dispatch 16 vs 20 T-cycles~~ — **closed** by the core-timing work. *Measured*
+     on both sides: tracing every `BGP` write on line 1 of `m3_bgp_change` gave dots
+     76/92/104/164/176/236/248 before and **80/96/108/168/180/240/252 now**, which is exactly
+     what the ROM's own cycle comments intend. **Mid-mode-3 writes now land on the right dot to
+     the cycle** — the substrate a fetcher-accurate PPU needs is already correct.
+  3. **VRAM starts zeroed; hardware hands over the boot ROM's logo tiles + the `®` at tile
+     `$19`.** 18 of the 31 ROMs depend on it (12 write no tile data of their own at all), so
+     their frames are wrong before timing is considered. **Do this before the FIFO**, or every
+     failure after the rewrite has two candidate causes. Shipping the `®` glyph is a
+     licence/policy call — flagged, not taken.
+- **Two real PPU bugs that only a Mealybug ROM caught** (both fixed, both with unit tests in
+  `src/gpu/mod.rs` proven to fail when reverted):
+  - **The window "Y condition" must latch independent of LCDC bit 5.** Pan Docs, "Window
+    rendering criteria": at the start of each scanline, `WY == LY` latches it for the frame;
+    nothing about the enable bit. We tested `win_on` first, so a game that sets `WY` while the
+    window is off and enables it later in the frame **never showed the window at all**.
+  - **Entering mode 1 raises STAT for the mode-1 *or* the mode-2 select bit.** AntonioND
+    TCAGBD §8.7: `(ScreenMode = 1) AND (STAT.ENABLE_VBL || STAT.ENABLE_OAM)` — "Not only
+    VBL!!". Missing the `LY=144` fire loses one STAT interrupt per frame and puts everything
+    the handler toggles on the wrong parity of scanlines. Also flips
+    `mooneye/acceptance/ppu/vblank_stat_intr-GS` FAIL → PASS (**acceptance 52 → 53**, PPU reds
+    11 → 10). **A PPU test ROM caught an interrupt bug** — an argument for scoring screens, not
+    only serial verdicts.
+- **Calibration before anyone promises a number:** on the shootout's 24 published Mealybug
+  rows, SameBoy scores 15, **bgb scores 2**, PyBoy 0. This is not a suite a competent
+  cycle-stepped PPU sweeps.
+- **After editing `src/gpu/mod.rs`, re-anchor `docs/components/ppu.md` by content.**
+  `make docs-links` reported "rewrote 0 references" for a change that shifted every line after
+  295 by +9 and after 535 by +35 — `docs-check` only catches out-of-range rot. Fix the
+  `path:line` spans by hand, then re-run `make docs-check`.
 
 ## Test-ROM correctness harness
 
