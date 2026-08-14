@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed
+.PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
+        fetch-test-suites test-external
 
 all: build install
 
@@ -56,6 +57,32 @@ embed:
 # testharness/audioperf.rs and docs/audio.md.
 test-audio-perf:
 	cargo test --release --features audio --test audioperf
+
+# The external suites (Mooneye GB, SameSuite, Mealybug Tearoom) are not
+# vendored — they are other people's ROMs under other people's licences, so
+# they are fetched at run time from the versions pinned in the script. See
+# docs/testing.md, "Gating the external suites".
+SUITES ?= target/test-suites
+
+fetch-test-suites:
+	./tools/fetch-test-suites.sh $(SUITES)
+
+# Score every external suite and fail on ANY change from the checked-in
+# expectations, in either direction — a test that starts passing is a baseline
+# change too. Whole thing runs in about a second once the ROMs are on disk.
+# Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external`.
+test-external: fetch-test-suites
+	cargo build --release --example mooneye_scout --example samesuite --example mealybug
+	./target/release/examples/mooneye_scout \
+	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
+	    --baseline testharness/mooneye_baseline.txt
+	GB_MODEL=cgb ./target/release/examples/mooneye_scout \
+	    $(SUITES)/mooneye/misc \
+	    --baseline testharness/mooneye_cgb_baseline.txt
+	./target/release/examples/samesuite $(SUITES)/samesuite \
+	    --baseline testharness/samesuite_baseline.txt
+	./target/release/examples/mealybug --dir $(SUITES)/mealybug \
+	    --baseline testharness/mealybug_baseline.txt
 
 desktop:
 	cd examples/desktop && cargo run --release

@@ -40,13 +40,19 @@
 //! not run on a DMG (`0x0143 == 0xC0`) is only run as CGB. Baseline keys carry
 //! the model: `<rom>@dmg`, `<rom>@cgb`.
 //!
-//! Be honest about what that buys *today*: no ROM wired here currently reports a
-//! different verdict on the two consoles, so the second column is a regression
-//! net rather than new coverage. The ROMs that do distinguish them are Mooneye's,
-//! which print their boot registers — nine of those change verdict with a DMG
-//! mode, and they are not wired here yet. `self_check_models_differ` asserts the
-//! two columns really are two machines so the split cannot quietly become
-//! cosmetic.
+//! Be honest about what that buys *today*: `oam_bug` is the only ROM here whose
+//! verdict differs between the two consoles (and that difference is a DMG
+//! silicon defect a real CGB does not have), so for everything else the second
+//! column is a regression net rather than new coverage. The ROMs that really
+//! distinguish the machines are Mooneye's, which print their boot registers —
+//! those are gated separately by `make test-external`.
+//! `self_check_models_differ` asserts the two columns really are two machines so
+//! the split cannot quietly become cosmetic.
+//!
+//! The twelve `cgb_sound` singles are the other kind of single-column row: their
+//! headers say `0x0143 == 0xC0`, so they only *have* a `@cgb` row. They are the
+//! Color half of Blargg's APU suite; the DMG half (`dmg_sound`) is scored by
+//! `testharness/audiocapture.rs`, which also listens to the samples.
 //!
 //! This also settles the "which binary are we testing?" question. The
 //! `retrio/gb-test-roms` submodule ships `cpu_instrs`, `instr_timing`,
@@ -230,6 +236,86 @@ const ROMS: &[RomSpec] = &[
         path: "tests/oam_bug/oam_bug.gb",
         kind: Kind::Verdict,
         note: "DMG OAM-corruption bug not modelled (documented non-goal)",
+    },
+    // --- Blargg cgb_sound: the APU suite for Color hardware ---
+    //
+    // Every one of these cartridges says `0x0143 == 0xC0` ("CGB only"), so
+    // `models_for` gives each a single `@cgb` row — 12 rows, not 24. They print
+    // their verdict into cartridge RAM exactly as `dmg_sound` does; the DMG
+    // half of the same suite is scored by `testharness/audiocapture.rs`, which
+    // also listens to the samples, so wiring the Color half here is the cheapest
+    // way to stop 12 currently-green rows from being able to regress unseen.
+    RomSpec {
+        id: "blargg/cgb_sound/01-registers",
+        path: "tests/cgb_sound/rom_singles/01-registers.gb",
+        kind: Kind::Verdict,
+        note: "APU register read-back masks",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/02-len-ctr",
+        path: "tests/cgb_sound/rom_singles/02-len ctr.gb",
+        kind: Kind::Verdict,
+        note: "length counters",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/03-trigger",
+        path: "tests/cgb_sound/rom_singles/03-trigger.gb",
+        kind: Kind::Verdict,
+        note: "channel trigger",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/04-sweep",
+        path: "tests/cgb_sound/rom_singles/04-sweep.gb",
+        kind: Kind::Verdict,
+        note: "CH1 sweep",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/05-sweep-details",
+        path: "tests/cgb_sound/rom_singles/05-sweep details.gb",
+        kind: Kind::Verdict,
+        note: "CH1 sweep quirks",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/06-overflow-on-trigger",
+        path: "tests/cgb_sound/rom_singles/06-overflow on trigger.gb",
+        kind: Kind::Verdict,
+        note: "sweep overflow disables the channel",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/07-len-sweep-period-sync",
+        path: "tests/cgb_sound/rom_singles/07-len sweep period sync.gb",
+        kind: Kind::Verdict,
+        note: "frame-sequencer phase",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/08-len-ctr-during-power",
+        path: "tests/cgb_sound/rom_singles/08-len ctr during power.gb",
+        kind: Kind::Verdict,
+        note: "length counters across APU power (CGB clears them, DMG does not)",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/09-wave-read-while-on",
+        path: "tests/cgb_sound/rom_singles/09-wave read while on.gb",
+        kind: Kind::Verdict,
+        note: "wave-RAM access window (CGB reads the current byte)",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/10-wave-trigger-while-on",
+        path: "tests/cgb_sound/rom_singles/10-wave trigger while on.gb",
+        kind: Kind::Verdict,
+        note: "wave-RAM corruption on trigger (DMG only)",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/11-regs-after-power",
+        path: "tests/cgb_sound/rom_singles/11-regs after power.gb",
+        kind: Kind::Verdict,
+        note: "register state after APU power cycle",
+    },
+    RomSpec {
+        id: "blargg/cgb_sound/12-wave",
+        path: "tests/cgb_sound/rom_singles/12-wave.gb",
+        kind: Kind::Verdict,
+        note: "CH3 wave playback",
     },
     // --- Pixel test judged against its author's reference image ---
     RomSpec {
@@ -980,6 +1066,7 @@ fn main() {
     println!("\n{pass}/{total} ROM/model rows passing");
     for (label, prefix) in [
         ("Blargg cpu_instrs", "blargg/cpu_instrs/"),
+        ("Blargg cgb_sound", "blargg/cgb_sound/"),
         ("Blargg (all)", "blargg/"),
         ("acid2", "acid2/"),
     ] {

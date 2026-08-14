@@ -6,6 +6,12 @@
 //! MEALYBUG_DIR=<mealybug-checkout> cargo run --release --example mealybug
 //! ```
 //!
+//! `--baseline <file>` gates the run against a checked-in expectation file and
+//! exits non-zero on **any** change, in either direction — including a change
+//! in how many pixels a *failing* test gets wrong, which is the only number
+//! that makes progress on a cycle-stepped-PPU rewrite visible. See
+//! `examples/support/suite_baseline.rs` and `docs/testing.md`.
+//!
 //! The ROMs and their reference screenshots are **not vendored**: like
 //! `POKERED_GFX` in `testharness/trainer.rs`, the assets come from a path the
 //! user supplies at run time. Point `--dir` at a checkout of the suite (the
@@ -40,6 +46,37 @@ use gameboy::mode::Model;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[path = "support/suite_baseline.rs"]
+mod suite_baseline;
+
+const BASELINE_HEADER: &str = "\
+# Mealybug Tearoom baseline — the EXPECTED result of every ROM against every
+# reference set, judged as the suite's own README asks: run to the `LD B,B`
+# software breakpoint and compare the frame with the author's reference
+# screenshot, pixel for pixel, by shade rank. Nothing here is a hash of our own
+# output — the reference frames are Matt Currie's, photographed off real
+# hardware.
+#
+# Key is `<rom>@<reference set>`; the value is PASS/FAIL plus **how many of the
+# 23040 pixels differ**. The pixel count is part of the expectation on purpose:
+# this suite is 3/79 today and a cycle-stepped PPU rewrite is the only thing
+# that will move it, so the count is the one number that shows the rewrite
+# making progress instead of a flat wall of FAIL. It also means an intermediate
+# PPU change WILL turn this file red — read the diff, and re-bless with the new
+# counts in the same commit as the change that caused them.
+#
+# The ROMs and reference PNGs are NOT vendored — they are fetched at run time
+# from the author's own repository at the commit pinned in
+# tools/fetch-test-suites.sh (the ROMs come from the prebuilt
+# `mealybug-tearoom-tests.zip` he ships there).
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+
+";
+
 const W: usize = 160;
 const H: usize = 144;
 const CYCLE_CAP: u64 = 250_000_000;
@@ -66,9 +103,11 @@ const PINNED: [(&str, &str); 3] = [
 ];
 
 fn main() {
+    let (baseline, argv) =
+        suite_baseline::take_baseline_arg(std::env::args().skip(1).collect());
     let mut dir = std::env::var_os("MEALYBUG_DIR").map(PathBuf::from);
     let mut filters: Vec<String> = Vec::new();
-    let mut args = std::env::args().skip(1);
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dir" => dir = args.next().map(PathBuf::from),
@@ -100,6 +139,7 @@ fn main() {
     let mut exact: BTreeMap<&str, (u32, u32)> =
         REFS.iter().map(|(l, ..)| (*l, (0, 0))).collect();
     let mut regressions = Vec::new();
+    let mut rows = Vec::new();
 
     for rom in &roms {
         let name = rom.file_stem().unwrap().to_string_lossy().to_string();
@@ -122,6 +162,14 @@ fn main() {
                 Some(reference) => {
                     let diff = shade_diff(frame, &reference);
                     cells.push_str(&format!("{diff:>7} "));
+                    rows.push(suite_baseline::Row::new(
+                        format!("{name}@{label}"),
+                        format!(
+                            "{} | {diff}/{} pixels differ",
+                            if diff == 0 { "PASS" } else { "FAIL" },
+                            W * H
+                        ),
+                    ));
                     let slot = exact.get_mut(label).unwrap();
                     slot.1 += 1;
                     if diff == 0 {
@@ -151,6 +199,20 @@ fn main() {
             eprintln!("  {r}");
         }
         std::process::exit(1);
+    }
+
+    if let Some(path) = baseline {
+        if !filters.is_empty() {
+            eprintln!(
+                "\nrefusing to gate a filtered run — a subset would look like every \
+                 other ROM disappearing"
+            );
+            std::process::exit(2);
+        }
+        rows.sort_by(|a, b| a.key.cmp(&b.key));
+        if !suite_baseline::gate("mealybug", &path, BASELINE_HEADER, &rows) {
+            std::process::exit(1);
+        }
     }
 }
 

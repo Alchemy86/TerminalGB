@@ -1,0 +1,126 @@
+# Mooneye GB baseline — the EXPECTED verdict of every ROM in the groups listed
+# below, judged by **Mooneye's own criterion**: run to the `LD B,B` software
+# breakpoint, then require the Fibonacci registers B=3 C=5 D=8 E=13 H=21 L=34.
+# Nothing here is a hash of our own output; the value on a failing row is the
+# register dump the ROM itself left behind.
+#
+# The ROMs are NOT vendored — they are Gekkio's, fetched at run time from the
+# author's own prebuilt archive at the build id pinned in
+# tools/fetch-test-suites.sh. `make test-external` fetches them and runs this
+# gate (see docs/testing.md, "Gating the external suites").
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction — a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+#
+# The nine `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` rows in `acceptance` are
+# ROMs for machines this emulator does not model (SGB, an original MGB, a
+# revision-0 DMG). They are pinned FAIL on purpose: they are not evidence of a
+# bug, and the community's 66-row denominator excludes them.
+#
+# Measured with GB_MODEL=unset (Model::Auto).
+
+acceptance/add_sp_e_timing = PASS
+acceptance/bits/mem_oam = PASS
+acceptance/bits/reg_f = PASS
+acceptance/bits/unused_hwio-GS = PASS
+acceptance/boot_div-S = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_div-dmg0 = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_div-dmgABCmgb = PASS
+acceptance/boot_div2-S = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_hwio-S = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_hwio-dmg0 = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_hwio-dmgABCmgb = PASS
+acceptance/boot_regs-dmg0 = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_regs-dmgABC = PASS
+acceptance/boot_regs-mgb = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_regs-sgb = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/boot_regs-sgb2 = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/call_cc_timing = PASS
+acceptance/call_cc_timing2 = PASS
+acceptance/call_timing = PASS
+acceptance/call_timing2 = PASS
+acceptance/di_timing-GS = PASS
+acceptance/div_timing = PASS
+acceptance/ei_sequence = PASS
+acceptance/ei_timing = PASS
+acceptance/halt_ime0_ei = PASS
+acceptance/halt_ime0_nointr_timing = PASS
+acceptance/halt_ime1_timing = PASS
+acceptance/halt_ime1_timing2-GS = PASS
+acceptance/if_ie_registers = PASS
+acceptance/instr/daa = PASS
+acceptance/interrupts/ie_push = PASS
+acceptance/intr_timing = PASS
+acceptance/jp_cc_timing = PASS
+acceptance/jp_timing = PASS
+acceptance/ld_hl_sp_e_timing = PASS
+acceptance/oam_dma/basic = PASS
+acceptance/oam_dma/reg_read = PASS
+acceptance/oam_dma/sources-GS = PASS
+acceptance/oam_dma_restart = PASS
+acceptance/oam_dma_start = PASS
+acceptance/oam_dma_timing = PASS
+acceptance/pop_timing = PASS
+acceptance/ppu/hblank_ly_scx_timing-GS = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/intr_1_2_timing-GS = PASS
+acceptance/ppu/intr_2_0_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/intr_2_mode0_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/intr_2_mode0_timing_sprites = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/intr_2_mode3_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/intr_2_oam_ok_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/lcdon_timing-GS = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/lcdon_write_timing-GS = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/stat_irq_blocking = PASS
+acceptance/ppu/stat_lyc_onoff = PASS
+acceptance/ppu/vblank_stat_intr-GS = PASS
+acceptance/push_timing = PASS
+acceptance/rapid_di_ei = PASS
+acceptance/ret_cc_timing = PASS
+acceptance/ret_timing = PASS
+acceptance/reti_intr_timing = PASS
+acceptance/reti_timing = PASS
+acceptance/rst_timing = PASS
+acceptance/serial/boot_sclk_align-dmgABCmgb = PASS
+acceptance/timer/div_write = PASS
+acceptance/timer/rapid_toggle = PASS
+acceptance/timer/tim00 = PASS
+acceptance/timer/tim00_div_trigger = PASS
+acceptance/timer/tim01 = PASS
+acceptance/timer/tim01_div_trigger = PASS
+acceptance/timer/tim10 = PASS
+acceptance/timer/tim10_div_trigger = PASS
+acceptance/timer/tim11 = PASS
+acceptance/timer/tim11_div_trigger = PASS
+acceptance/timer/tima_reload = PASS
+acceptance/timer/tima_write_reloading = PASS
+acceptance/timer/tma_write_reloading = PASS
+emulator-only/mbc1/bits_bank1 = PASS
+emulator-only/mbc1/bits_bank2 = PASS
+emulator-only/mbc1/bits_mode = PASS
+emulator-only/mbc1/bits_ramg = PASS
+emulator-only/mbc1/multicart_rom_8Mb = PASS
+emulator-only/mbc1/ram_256kb = PASS
+emulator-only/mbc1/ram_64kb = PASS
+emulator-only/mbc1/rom_16Mb = PASS
+emulator-only/mbc1/rom_1Mb = PASS
+emulator-only/mbc1/rom_2Mb = PASS
+emulator-only/mbc1/rom_4Mb = PASS
+emulator-only/mbc1/rom_512kb = PASS
+emulator-only/mbc1/rom_8Mb = PASS
+emulator-only/mbc2/bits_ramg = PASS
+emulator-only/mbc2/bits_romb = PASS
+emulator-only/mbc2/bits_unused = PASS
+emulator-only/mbc2/ram = PASS
+emulator-only/mbc2/rom_1Mb = PASS
+emulator-only/mbc2/rom_2Mb = PASS
+emulator-only/mbc2/rom_512kb = PASS
+emulator-only/mbc5/rom_16Mb = PASS
+emulator-only/mbc5/rom_1Mb = PASS
+emulator-only/mbc5/rom_2Mb = PASS
+emulator-only/mbc5/rom_32Mb = PASS
+emulator-only/mbc5/rom_4Mb = PASS
+emulator-only/mbc5/rom_512kb = PASS
+emulator-only/mbc5/rom_64Mb = PASS
+emulator-only/mbc5/rom_8Mb = PASS

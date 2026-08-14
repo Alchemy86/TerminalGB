@@ -1,0 +1,104 @@
+# Mealybug Tearoom baseline — the EXPECTED result of every ROM against every
+# reference set, judged as the suite's own README asks: run to the `LD B,B`
+# software breakpoint and compare the frame with the author's reference
+# screenshot, pixel for pixel, by shade rank. Nothing here is a hash of our own
+# output — the reference frames are Matt Currie's, photographed off real
+# hardware.
+#
+# Key is `<rom>@<reference set>`; the value is PASS/FAIL plus **how many of the
+# 23040 pixels differ**. The pixel count is part of the expectation on purpose:
+# this suite is 3/79 today and a cycle-stepped PPU rewrite is the only thing
+# that will move it, so the count is the one number that shows the rewrite
+# making progress instead of a flat wall of FAIL. It also means an intermediate
+# PPU change WILL turn this file red — read the diff, and re-bless with the new
+# counts in the same commit as the change that caused them.
+#
+# The ROMs and reference PNGs are NOT vendored — they are fetched at run time
+# from the author's own repository at the commit pinned in
+# tools/fetch-test-suites.sh (the ROMs come from the prebuilt
+# `mealybug-tearoom-tests.zip` he ships there).
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+
+m2_win_en_toggle@CGB-C = PASS | 0/23040 pixels differ
+m2_win_en_toggle@CGB-D = PASS | 0/23040 pixels differ
+m2_win_en_toggle@DMG = PASS | 0/23040 pixels differ
+m3_bgp_change@CGB-C = FAIL | 5184/23040 pixels differ
+m3_bgp_change@CGB-D = FAIL | 5184/23040 pixels differ
+m3_bgp_change@DMG = FAIL | 5296/23040 pixels differ
+m3_bgp_change_sprites@CGB-C = FAIL | 20518/23040 pixels differ
+m3_bgp_change_sprites@CGB-D = FAIL | 20578/23040 pixels differ
+m3_bgp_change_sprites@DMG = FAIL | 20334/23040 pixels differ
+m3_lcdc_bg_en_change2@CGB-C = FAIL | 18117/23040 pixels differ
+m3_lcdc_bg_en_change@CGB-C = FAIL | 2250/23040 pixels differ
+m3_lcdc_bg_en_change@CGB-D = FAIL | 2250/23040 pixels differ
+m3_lcdc_bg_en_change@DMG = FAIL | 2189/23040 pixels differ
+m3_lcdc_bg_map_change2@CGB-C = FAIL | 18108/23040 pixels differ
+m3_lcdc_bg_map_change@CGB-C = FAIL | 21678/23040 pixels differ
+m3_lcdc_bg_map_change@CGB-D = FAIL | 21678/23040 pixels differ
+m3_lcdc_bg_map_change@DMG = FAIL | 21806/23040 pixels differ
+m3_lcdc_obj_en_change@CGB-C = FAIL | 22834/23040 pixels differ
+m3_lcdc_obj_en_change@CGB-D = FAIL | 22834/23040 pixels differ
+m3_lcdc_obj_en_change@DMG = FAIL | 22894/23040 pixels differ
+m3_lcdc_obj_en_change_variant@CGB-C = FAIL | 21694/23040 pixels differ
+m3_lcdc_obj_en_change_variant@CGB-D = FAIL | 21550/23040 pixels differ
+m3_lcdc_obj_en_change_variant@DMG = FAIL | 21706/23040 pixels differ
+m3_lcdc_obj_size_change@CGB-C = FAIL | 21881/23040 pixels differ
+m3_lcdc_obj_size_change@CGB-D = FAIL | 21881/23040 pixels differ
+m3_lcdc_obj_size_change@DMG = FAIL | 21867/23040 pixels differ
+m3_lcdc_obj_size_change_scx@CGB-C = FAIL | 140/23040 pixels differ
+m3_lcdc_obj_size_change_scx@CGB-D = FAIL | 140/23040 pixels differ
+m3_lcdc_obj_size_change_scx@DMG = FAIL | 190/23040 pixels differ
+m3_lcdc_tile_sel_change2@CGB-C = FAIL | 22459/23040 pixels differ
+m3_lcdc_tile_sel_change@CGB-C = FAIL | 22438/23040 pixels differ
+m3_lcdc_tile_sel_change@CGB-D = FAIL | 22438/23040 pixels differ
+m3_lcdc_tile_sel_change@DMG = FAIL | 22194/23040 pixels differ
+m3_lcdc_tile_sel_win_change2@CGB-C = FAIL | 22475/23040 pixels differ
+m3_lcdc_tile_sel_win_change@CGB-C = FAIL | 22200/23040 pixels differ
+m3_lcdc_tile_sel_win_change@CGB-D = FAIL | 22200/23040 pixels differ
+m3_lcdc_tile_sel_win_change@DMG = FAIL | 22160/23040 pixels differ
+m3_lcdc_win_en_change_multiple@CGB-C = FAIL | 8982/23040 pixels differ
+m3_lcdc_win_en_change_multiple@CGB-D = FAIL | 8982/23040 pixels differ
+m3_lcdc_win_en_change_multiple@DMG = FAIL | 8982/23040 pixels differ
+m3_lcdc_win_en_change_multiple_wx@CGB-C = FAIL | 22834/23040 pixels differ
+m3_lcdc_win_en_change_multiple_wx@CGB-D = FAIL | 22834/23040 pixels differ
+m3_lcdc_win_en_change_multiple_wx@DMG = FAIL | 6003/23040 pixels differ
+m3_lcdc_win_map_change2@CGB-C = FAIL | 18220/23040 pixels differ
+m3_lcdc_win_map_change@CGB-C = FAIL | 21938/23040 pixels differ
+m3_lcdc_win_map_change@CGB-D = FAIL | 21938/23040 pixels differ
+m3_lcdc_win_map_change@DMG = FAIL | 21884/23040 pixels differ
+m3_obp0_change@CGB-C = FAIL | 22792/23040 pixels differ
+m3_obp0_change@CGB-D = FAIL | 22750/23040 pixels differ
+m3_obp0_change@DMG = FAIL | 22750/23040 pixels differ
+m3_scx_high_5_bits@CGB-C = FAIL | 9782/23040 pixels differ
+m3_scx_high_5_bits@CGB-D = FAIL | 9782/23040 pixels differ
+m3_scx_high_5_bits@DMG = FAIL | 9766/23040 pixels differ
+m3_scx_high_5_bits_change2@CGB-C = FAIL | 17911/23040 pixels differ
+m3_scx_low_3_bits@CGB-C = FAIL | 22500/23040 pixels differ
+m3_scx_low_3_bits@CGB-D = FAIL | 22500/23040 pixels differ
+m3_scx_low_3_bits@DMG = FAIL | 22500/23040 pixels differ
+m3_scy_change2@CGB-C = FAIL | 18139/23040 pixels differ
+m3_scy_change@CGB-C = FAIL | 15697/23040 pixels differ
+m3_scy_change@CGB-D = FAIL | 8967/23040 pixels differ
+m3_scy_change@DMG = FAIL | 15879/23040 pixels differ
+m3_window_timing@CGB-C = FAIL | 1353/23040 pixels differ
+m3_window_timing@CGB-D = FAIL | 1215/23040 pixels differ
+m3_window_timing@DMG = FAIL | 1215/23040 pixels differ
+m3_window_timing_wx_0@CGB-C = FAIL | 1098/23040 pixels differ
+m3_window_timing_wx_0@CGB-D = FAIL | 954/23040 pixels differ
+m3_window_timing_wx_0@DMG = FAIL | 954/23040 pixels differ
+m3_wx_4_change@CGB-C = FAIL | 22805/23040 pixels differ
+m3_wx_4_change@CGB-D = FAIL | 22805/23040 pixels differ
+m3_wx_4_change@DMG = FAIL | 11888/23040 pixels differ
+m3_wx_4_change_sprites@CGB-C = FAIL | 23039/23040 pixels differ
+m3_wx_4_change_sprites@CGB-D = FAIL | 23039/23040 pixels differ
+m3_wx_4_change_sprites@DMG = FAIL | 23039/23040 pixels differ
+m3_wx_5_change@CGB-C = FAIL | 22800/23040 pixels differ
+m3_wx_5_change@CGB-D = FAIL | 22800/23040 pixels differ
+m3_wx_5_change@DMG = FAIL | 11471/23040 pixels differ
+m3_wx_6_change@CGB-C = FAIL | 22800/23040 pixels differ
+m3_wx_6_change@CGB-D = FAIL | 22800/23040 pixels differ
+m3_wx_6_change@DMG = FAIL | 8550/23040 pixels differ

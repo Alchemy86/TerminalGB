@@ -107,7 +107,8 @@ lines per fix, not a process document.
   (headless still ~60× realtime). The **HALT bug IS modelled** now (`halt_bug` flag; PC
   rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
 - Known-inaccurate **on purpose (documented non-goals — see component pages)**: PPU mode 3
-  fixed-length (needs a cycle-stepped PPU — it costs us Mealybug 0/71). *(The "CGB double-speed switch does not take effect" entry that
+  fixed-length (needs a cycle-stepped PPU — it costs us Mealybug, **3/79** measured and gated,
+  see "Gating the EXTERNAL suites" below). *(The "CGB double-speed switch does not take effect" entry that
   used to sit here was a misdiagnosis and is gone — the switch was working; the APU was
   clocked at CPU speed, so a ROM that synchronises through the APU could not see it. See
   the SameSuite APU section.)*
@@ -533,6 +534,67 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
 - `src/cpu/z80` is a non-compiled reference file, not a module. (`src/gpu/old_gpu.rs`,
   961 lines of dead/unreferenced code, was deleted — no `mod old_gpu` ever existed.)
 - The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
+
+## Gating the EXTERNAL suites — Mooneye / SameSuite / Mealybug (`make test-external`)
+
+- **The problem this solves: 266 rows that CI never looked at.** Mooneye GB, SameSuite and
+  the Mealybug Tearoom tests were scored only when somebody ran a scout by hand. In the
+  twenty-four hours before this landed those suites moved **+96 rows**, and every one of them
+  could have been lost again to an unrelated commit with nobody the wiser. `make test-external`
+  fetches all three at pinned versions and scores **266 rows in ~1.5 s**; CI job
+  `external-suites` in `.github/workflows/ci.yml`.
+- **Fetch at run time, NEVER vendor — and pin in exactly one place.** These are other people's
+  ROMs under other people's licences, the same reason `conformance.yml` downloads Blargg's.
+  Every pin lives in `tools/fetch-test-suites.sh` and nowhere else, so a laptop, a CI job and a
+  published score measure identical bytes: Mooneye from Gekkio's own prebuilt archive
+  (sha256-checked), Mealybug from the author's repo at a pinned commit (his prebuilt zip **and**
+  his hardware-photographed reference PNGs), SameSuite from the copies vendored by
+  GBEmulatorShootout at a pinned commit — LIJI32 ships source only, and that is also the exact
+  corpus our published 264-row score is measured on. Bumping a pin will move baselines; the two
+  must land in the same commit.
+- **Baselines are `testharness/{mooneye,mooneye_cgb,samesuite,mealybug}_baseline.txt`**, under
+  `testharness/baseline.txt`'s rules: every value is the ROM's **own** judgement (Mooneye's
+  Fibonacci registers, SameSuite's `RESULT_CODE` at `$CFFE`, Mealybug's author-photographed
+  frame), never a hash of our output; **any change is red in either direction** — a row that
+  starts *passing* is a baseline change too; re-bless deliberately with
+  `UPDATE_EXTERNAL_BASELINE=1 make test-external`. Shared gating code:
+  `examples/support/suite_baseline.rs`, included by all three scouts with `#[path]`.
+- **The Mealybug baseline pins the PIXEL COUNT, not just PASS/FAIL.** At 3/79 a PASS/FAIL file
+  is a flat wall that cannot show a cycle-stepped-PPU rewrite getting closer, so each row
+  records *how many of the 23040 pixels differ*. Consequence the PPU crew must expect: **any**
+  PPU change turns that file red. Read the diff, re-bless with the new counts in the same
+  commit. That is the point — progress and regression both become visible from commit one.
+- **Measured on `main` @ `b51ce9f`, 2026-08-14** (measure, never estimate): Mooneye
+  `acceptance` **58/75** (**58/66** on the community denominator, which drops nine `-S`/`-sgb`/
+  `-sgb2`/`-mgb`/`-dmg0` ROMs for machines we do not model — pinned FAIL on purpose),
+  `emulator-only` **28/28**, `misc` (`GB_MODEL=cgb`) **4/8**, SameSuite **61/76**, Mealybug
+  **3/79** (DMG 1/24, CGB-C 1/31, CGB-D 1/24). These are **above** the suite-audit report's
+  figures (53/66, 50/76) because `main` advanced past the commit it measured — always
+  re-measure rather than copying a report's numbers into a baseline.
+- **A missing baseline file is not a silent pass**, and a ROM present in the baseline but
+  absent from the run is a failure too (it means the fetched suite is not the pinned one).
+- **Teeth proven, not assumed:** a deliberate one-line timer break (`TAP[3] 7→6`) turns the
+  Mooneye gate red, and a one-line BG-scroll break moves 26 Mealybug rows. Re-run those two if
+  you ever doubt the gate. **Sharp edge that cost real time here: the scouts are `cargo build`
+  targets, so after breaking source for a teeth test you MUST rebuild before trusting any
+  later measurement** — a stale binary reported `timer 11/13` and looked exactly like a
+  regression on `main`.
+- **`cgb_sound` is wired into `testharness/testroms.rs`** (12 CGB-only cartridges, `0x0143 ==
+  0xC0`, so one row each, all green) — the in-repo harness is **46/47 rows**, ~3.6 s. The one
+  red is `oam_bug@cgb` and it must stay red: Color silicon has no OAM-corruption defect, so a
+  real CGB fails that ROM too.
+- **Wiring the suite immediately found a save-destroying bug — that is the argument for doing
+  it.** Three Mooneye ROMs that **pass** (`add_sp_e_timing`, `ld_hl_sp_e_timing`,
+  `oam_dma_start`) execute code from OAM on purpose to time an access onto a known byte.
+  `Cpu::operation`'s runaway-PC heuristic covered `$FE00-$FF7F`, so it called that a crash and
+  `report_fault` **poisoned the battery — a game legitimately running a routine out of OAM
+  silently stopped saving for the rest of the session.** OAM is real RAM the CPU may read
+  outside PPU modes 2 and 3 (Pan Docs, "VRAM/OAM accessibility"). The window is now
+  **`$FEA0-$FF7F`** — the unusable block and I/O, which genuinely cannot hold code. A runaway
+  PC that walks *into* OAM still faults: it keeps walking and reaches `$FEA0`. Pinned by
+  `running_from_oam_is_not_a_fault` beside the existing `running_from_hram_is_not_a_fault`, and
+  `testharness/battery.rs`'s crash cartridge now ends with `JP $FEA0` instead of spinning in
+  OAM (that test's premise — "PC in OAM means crashed" — was the same wrong belief).
 
 ## Exact post-boot machine state (`MemoryManagementUnit::set_initial`, `Sound::set_post_boot_state`)
 

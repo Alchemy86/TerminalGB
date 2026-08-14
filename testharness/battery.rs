@@ -120,11 +120,19 @@ fn build_battery_rom() -> Vec<u8> {
 /// program counter leaves its own code, the CPU keeps executing whatever it
 /// finds, and within a handful of frames thousands of bytes of cartridge RAM
 /// have changed. Modelled faithfully: the LCD is switched off (as the real
-/// crash does), a small routine is copied into **OAM** — memory no program can
-/// live in — and control is handed to it. The runaway routine fills RAM bank 0
-/// with `$5A`.
+/// crash does), a small routine is copied into OAM and control is handed to it;
+/// it fills RAM bank 0 with `$5A` and then walks off the end of OAM into the
+/// **unusable block** at `$FEA0`, which is where the emulator notices.
+///
+/// **Running from OAM is not itself the crash signal, and must not be.** OAM is
+/// real RAM the CPU may read outside PPU modes 2 and 3, and three Mooneye
+/// acceptance ROMs that pass execute from it on purpose — so the runaway-PC
+/// heuristic covers `$FEA0-$FF7F` only (`Cpu::operation`; see
+/// `docs/conformance-notes.md`). This cartridge therefore ends by jumping into
+/// the unusable block rather than spinning inside OAM, which is also what a real
+/// runaway program counter does: it keeps walking.
 fn build_crash_rom() -> Vec<u8> {
-    // The runaway routine, assembled to run at $FE00 (OAM).
+    // The runaway routine, copied into OAM at $FE00 and run from there.
     #[rustfmt::skip]
     let runaway: &[u8] = &[
         0x3E, 0x0A,             // LD A,$0A
@@ -137,7 +145,9 @@ fn build_crash_rom() -> Vec<u8> {
         0x7C,                   // LD A,H
         0xFE, 0xC0,             // CP $C0
         0x20, 0xF8,             // JR NZ,.loop
-        0x18, 0xFE,             // JR -2          ; spin, still inside OAM
+        0xC3, 0xA0, 0xFE,       // JP $FEA0       ; walk off the end of OAM into
+                                //                ; the unusable block — memory
+                                //                ; that really cannot hold code
     ];
 
     let mut rom = build_battery_rom();
@@ -150,7 +160,7 @@ fn build_crash_rom() -> Vec<u8> {
         0xE0, 0x40,             // LDH ($40),A    ; LCD off, as the real crash does
         0x21, 0x00, 0x02,       // LD HL,$0200
         0x11, 0x00, 0xFE,       // LD DE,$FE00
-        0x06, 22,               // LD B,<len>
+        0x06, 23,               // LD B,<len>
         0x2A,                   // .copy LD A,(HL+)
         0x12,                   // LD (DE),A
         0x13,                   // INC DE
@@ -671,7 +681,7 @@ fn case_a_crashed_game_cannot_overwrite_a_save() -> Case {
     if gb.fault().is_none() {
         problems.push(
             "the emulator did not notice the crash at all: a program counter that has \
-             walked into OAM is executing bytes that are not a program"
+             walked into the unusable block is executing bytes that are not a program"
                 .to_string(),
         );
     }

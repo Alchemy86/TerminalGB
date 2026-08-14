@@ -17,7 +17,12 @@
 //!
 //! ```text
 //! cargo run --release --example samesuite -- <dir-or-rom> [--dump] [--frames N]
+//!                                             [--baseline <file>]
 //! ```
+//!
+//! `--baseline <file>` gates the run against a checked-in expectation file and
+//! exits non-zero on **any** change, in either direction — see
+//! `examples/support/suite_baseline.rs` and `docs/testing.md`.
 //!
 //! The APU **must** be installed for any of this to mean anything: with no
 //! player, `Sound::do_cycle` returns immediately and the APU never advances.
@@ -25,6 +30,30 @@
 use gameboy::cpu::core::Cpu;
 use gameboy::sound::AudioPlayer;
 use std::path::{Path, PathBuf};
+
+#[path = "support/suite_baseline.rs"]
+mod suite_baseline;
+
+const BASELINE_HEADER: &str = "\
+# SameSuite baseline — the EXPECTED verdict of every ROM, judged by **the
+# ROM's own** `RESULT_CODE` byte at $CFFE ('P' or 'F'), written by its
+# `PrintResults` after comparing its measurements against the `CorrectResults`
+# table assembled into it. Nothing here is a hash of our output, and the
+# emulator has no way to influence what counts as a pass.
+#
+# The ROMs are NOT vendored — they are LIJI32's, under his licence. SameSuite
+# ships source only, so CI fetches the prebuilt copies vendored by
+# gbdev/GBEmulatorShootout at the commit pinned in tools/fetch-test-suites.sh
+# (that is also the corpus our published 264-row score is measured on).
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction — a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+#
+# `HANG` means the ROM never wrote a result code within its frame budget.
+
+";
 
 /// Device-free sink. SameSuite never listens to the output — it reads PCM12 /
 /// PCM34 and NR52 — but the APU only runs when a player is installed.
@@ -105,8 +134,26 @@ fn collect(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The baseline key: the ROM's path relative to the suite root, without the
+/// extension (`apu/channel_1/channel_1_align`). Stable across machines, which
+/// an absolute path is not, and it keeps the sub-suite (`apu`/`dma`/`ppu`/
+/// `sgb`) visible in the file.
+fn key_for(rom: &Path, root: &Path) -> String {
+    let base = if root.is_dir() {
+        root
+    } else {
+        root.parent().unwrap_or(root)
+    };
+    match rom.strip_prefix(base) {
+        Ok(rel) => rel.with_extension("").to_string_lossy().replace('\\', "/"),
+        Err(_) => rom.file_stem().unwrap().to_string_lossy().to_string(),
+    }
+}
+
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let (baseline, argv) =
+        suite_baseline::take_baseline_arg(std::env::args().skip(1).collect());
+    let mut args = argv.into_iter();
     let mut target: Option<PathBuf> = None;
     let mut frames = 900u32;
     let mut dump = false;
@@ -117,30 +164,37 @@ fn main() {
             _ => target = Some(PathBuf::from(a)),
         }
     }
-    let target = target.expect("usage: samesuite <dir-or-rom> [--dump] [--frames N]");
+    let target = target.expect(
+        "usage: samesuite <dir-or-rom> [--dump] [--frames N] [--baseline <file>]",
+    );
 
     let mut roms = Vec::new();
     collect(&target, &mut roms);
     roms.sort();
 
     let (mut pass, mut fail, mut unfinished) = (0, 0, 0);
+    let mut rows = Vec::new();
     for rom in &roms {
         let (v, table) = run(rom, frames, dump);
         let name = rom.file_stem().unwrap().to_string_lossy();
-        match v {
+        let tag = match v {
             Verdict::Pass => {
                 pass += 1;
                 println!("PASS  {name}");
+                "PASS"
             }
             Verdict::Fail => {
                 fail += 1;
                 println!("FAIL  {name}");
+                "FAIL"
             }
             Verdict::Unfinished => {
                 unfinished += 1;
                 println!("HANG  {name}");
+                "HANG"
             }
-        }
+        };
+        rows.push(suite_baseline::Row::new(key_for(rom, &target), tag));
         if dump && v != Verdict::Pass {
             for row in table.chunks(8) {
                 println!(
@@ -157,4 +211,10 @@ fn main() {
         "\n{pass}/{} pass ({fail} fail, {unfinished} unfinished)",
         roms.len()
     );
+    if let Some(path) = baseline {
+        rows.sort_by(|a, b| a.key.cmp(&b.key));
+        if !suite_baseline::gate("samesuite", &path, BASELINE_HEADER, &rows) {
+            std::process::exit(1);
+        }
+    }
 }

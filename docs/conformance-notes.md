@@ -17,6 +17,71 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — 266 external rows were measured by hand and gated by nothing
+
+Not a bug fix, and it is here because the standing convention's second point —
+*"if nothing in the suite catches it, say so explicitly; a coverage gap is itself
+a finding"* — applies to the harness as much as to the emulator.
+
+**Symptom.** None a player can see, and that is the point. Mooneye GB, SameSuite
+and the Mealybug Tearoom tests were scored only when somebody ran a scout by
+hand. In the twenty-four hours before this was written those three suites moved
+by **+96 rows**; every one of those rows could have been lost again to an
+unrelated commit and nobody would have known until the next manual sweep. The
+same is true of any project that publishes a conformance score it does not
+re-measure on every push: the number on the README is a claim about a commit
+nobody can name.
+
+**Caught by.** Nothing, until now. `make test-external` fetches the three suites
+at pinned versions and scores all 266 rows in about two seconds, against
+checked-in expectations that are the ROMs' own verdicts
+(`testharness/{mooneye,mooneye_cgb,samesuite,mealybug}_baseline.txt`), red on any
+change in either direction. Blargg's `cgb_sound` — twelve rows we had measured
+12/12 externally and never wired — is now in `testharness/testroms.rs`, taking
+the in-repo harness from 35 to 47 rows.
+
+**Hardware behaviour.** Not applicable; this is a harness property. The
+behavioural claim it protects is every claim the other entries on this page
+make.
+
+**Carries into the tool.** Three design rules, all of which the standalone tool
+needs and two of which are already how `tools/conformance/` works:
+
+1. **Fetch the corpus, never vendor it, and pin it.** These ROMs are their
+   authors' work under their authors' licences. One file holds every pin
+   (`tools/fetch-test-suites.sh`), so a laptop, a CI job and a published score
+   are measuring identical bytes — a conformance number whose ROM set is
+   unstated is not a number.
+2. **A pass that appears is a change too.** Both directions are red. An
+   improvement nobody wrote down is indistinguishable from a measurement error,
+   and re-blessing is where a suite quietly stops being an expectation.
+3. **For a suite you fail almost completely, pin the distance, not the
+   verdict.** Mealybug is 3/79; a PASS/FAIL baseline over it is a flat wall that
+   cannot show a cycle-stepped-PPU rewrite getting closer. The baseline records
+   *how many of the 23040 pixels differ*, so progress and regression are both
+   visible from the first commit of the rewrite.
+
+**A false positive found by running the suite this way.** Three Mooneye tests
+that **pass** — `acceptance/add_sp_e_timing`, `acceptance/ld_hl_sp_e_timing` and
+`acceptance/oam_dma_start` — print `gameboy: FAULT — the CPU is executing from
+0xfe00 … the game has crashed` to stderr. They execute code from OAM on purpose,
+and `Cpu::operation`'s runaway-PC heuristic treats any `PC` in `$FE00-$FF7F` as a
+crashed program. The consequence for a player is not cosmetic: `report_fault`
+poisons the battery, so a game that legitimately runs a routine out of OAM
+**silently stops saving for the rest of the session**. Executing from OAM is
+unusual but legal — the CPU can read OAM outside PPU modes 2 and 3 (Pan Docs,
+"VRAM/OAM accessibility"), which is precisely why Mooneye uses it to time an
+access onto a known byte. **Fixed in the same change**: the heuristic now covers
+`$FEA0-$FF7F` — the unusable block and the I/O registers, neither of which can
+ever hold code — and OAM is out of it (`src/cpu/core.rs`, `Cpu::operation`).
+The three ROMs still pass, no other row moved, and
+`running_from_oam_is_not_a_fault` pins it beside the existing
+`running_from_hram_is_not_a_fault`. **Conformance candidate: a crash heuristic
+must not fire on any ROM in a passing suite** — which is only checkable once the
+suite is wired, and is the second thing wiring it bought.
+
+---
+
 ## 2026-08-14 — the DMG OAM-corruption bug: a defect that had to be *added*
 
 Blargg `oam_bug` went **3 of 8 sub-tests → 8 of 8** on a DMG (`blargg/oam_bug@dmg`

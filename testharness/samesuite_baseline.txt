@@ -1,0 +1,94 @@
+# SameSuite baseline — the EXPECTED verdict of every ROM, judged by **the
+# ROM's own** `RESULT_CODE` byte at $CFFE ('P' or 'F'), written by its
+# `PrintResults` after comparing its measurements against the `CorrectResults`
+# table assembled into it. Nothing here is a hash of our output, and the
+# emulator has no way to influence what counts as a pass.
+#
+# The ROMs are NOT vendored — they are LIJI32's, under his licence. SameSuite
+# ships source only, so CI fetches the prebuilt copies vendored by
+# gbdev/GBEmulatorShootout at the commit pinned in tools/fetch-test-suites.sh
+# (that is also the corpus our published 264-row score is measured on).
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction — a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+#
+# `HANG` means the ROM never wrote a result code within its frame budget.
+
+apu/channel_1/channel_1_align = PASS
+apu/channel_1/channel_1_align_cpu = PASS
+apu/channel_1/channel_1_delay = PASS
+apu/channel_1/channel_1_duty = PASS
+apu/channel_1/channel_1_duty_delay = PASS
+apu/channel_1/channel_1_extra_length_clocking-cgb0B = FAIL
+apu/channel_1/channel_1_freq_change = PASS
+apu/channel_1/channel_1_freq_change_timing-A = FAIL
+apu/channel_1/channel_1_freq_change_timing-cgb0BC = FAIL
+apu/channel_1/channel_1_freq_change_timing-cgbDE = FAIL
+apu/channel_1/channel_1_nrx2_glitch = PASS
+apu/channel_1/channel_1_nrx2_speed_change = PASS
+apu/channel_1/channel_1_restart = PASS
+apu/channel_1/channel_1_restart_nrx2_glitch = PASS
+apu/channel_1/channel_1_stop_div = PASS
+apu/channel_1/channel_1_stop_restart = PASS
+apu/channel_1/channel_1_sweep = PASS
+apu/channel_1/channel_1_sweep_restart = FAIL
+apu/channel_1/channel_1_sweep_restart_2 = FAIL
+apu/channel_1/channel_1_volume = PASS
+apu/channel_1/channel_1_volume_div = PASS
+apu/channel_2/channel_2_align = PASS
+apu/channel_2/channel_2_align_cpu = PASS
+apu/channel_2/channel_2_delay = PASS
+apu/channel_2/channel_2_duty = PASS
+apu/channel_2/channel_2_duty_delay = PASS
+apu/channel_2/channel_2_extra_length_clocking-cgb0B = FAIL
+apu/channel_2/channel_2_freq_change = PASS
+apu/channel_2/channel_2_nrx2_glitch = PASS
+apu/channel_2/channel_2_nrx2_speed_change = PASS
+apu/channel_2/channel_2_restart = PASS
+apu/channel_2/channel_2_restart_nrx2_glitch = PASS
+apu/channel_2/channel_2_stop_div = PASS
+apu/channel_2/channel_2_stop_restart = PASS
+apu/channel_2/channel_2_volume = PASS
+apu/channel_2/channel_2_volume_div = PASS
+apu/channel_3/channel_3_and_glitch = PASS
+apu/channel_3/channel_3_delay = PASS
+apu/channel_3/channel_3_extra_length_clocking-cgb0 = FAIL
+apu/channel_3/channel_3_extra_length_clocking-cgbB = FAIL
+apu/channel_3/channel_3_first_sample = PASS
+apu/channel_3/channel_3_freq_change_delay = PASS
+apu/channel_3/channel_3_restart_delay = PASS
+apu/channel_3/channel_3_restart_during_delay = PASS
+apu/channel_3/channel_3_restart_stop_delay = PASS
+apu/channel_3/channel_3_shift_delay = PASS
+apu/channel_3/channel_3_shift_skip_delay = PASS
+apu/channel_3/channel_3_stop_delay = PASS
+apu/channel_3/channel_3_stop_div = PASS
+apu/channel_3/channel_3_wave_ram_locked_write = PASS
+apu/channel_3/channel_3_wave_ram_sync = PASS
+apu/channel_4/channel_4_align = PASS
+apu/channel_4/channel_4_delay = PASS
+apu/channel_4/channel_4_equivalent_frequencies = FAIL
+apu/channel_4/channel_4_extra_length_clocking-cgb0B = FAIL
+apu/channel_4/channel_4_freq_change = FAIL
+apu/channel_4/channel_4_frequency_alignment = FAIL
+apu/channel_4/channel_4_lfsr = PASS
+apu/channel_4/channel_4_lfsr15 = PASS
+apu/channel_4/channel_4_lfsr_15_7 = PASS
+apu/channel_4/channel_4_lfsr_7_15 = PASS
+apu/channel_4/channel_4_lfsr_restart = PASS
+apu/channel_4/channel_4_lfsr_restart_fast = PASS
+apu/channel_4/channel_4_volume_div = PASS
+apu/div_trigger_volume_10 = PASS
+apu/div_write_trigger = PASS
+apu/div_write_trigger_10 = PASS
+apu/div_write_trigger_volume = PASS
+apu/div_write_trigger_volume_10 = PASS
+dma/gbc_dma_cont = PASS
+dma/gdma_addr_mask = PASS
+dma/hdma_lcd_off = PASS
+dma/hdma_mode0 = PASS
+ppu/blocking_bgpi_increase = PASS
+sgb/command_mlt_req = FAIL
+sgb/command_mlt_req_1_incrementing = FAIL

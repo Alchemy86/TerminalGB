@@ -8,7 +8,11 @@
 //! instead screenshot-compares, which additionally fails us on boot-register
 //! differences that have nothing to do with the behaviour under test.
 //!
-//! usage: `mooneye_scout <dir-or-rom>...`
+//! usage: `mooneye_scout <dir-or-rom>... [--baseline <file>]`
+//!        `--baseline <file>` gates the run against a checked-in expectation
+//!        file and exits non-zero on **any** change, in either direction —
+//!        see `examples/support/suite_baseline.rs` and `docs/testing.md`.
+//!        `GB_MODEL=cgb` forces a Color console (the `misc/` group needs it).
 //!        `GB_SCOUT_TRACE=1` prints the register dump for every ROM.
 //!        `GB_SCOUT_SCREEN=1` also prints the ROM's own assertion table, read
 //!        back out of the BG tilemap (the suite loads its font so a tile id
@@ -19,6 +23,43 @@
 use gameboy::cpu::core::Cpu;
 use gameboy::sound::AudioPlayer;
 use std::path::{Path, PathBuf};
+
+#[path = "support/suite_baseline.rs"]
+mod suite_baseline;
+
+const BASELINE_HEADER: &str = "\
+# Mooneye GB baseline — the EXPECTED verdict of every ROM in the groups listed
+# below, judged by **Mooneye's own criterion**: run to the `LD B,B` software
+# breakpoint, then require the Fibonacci registers B=3 C=5 D=8 E=13 H=21 L=34.
+# Nothing here is a hash of our own output; the value on a failing row is the
+# register dump the ROM itself left behind.
+#
+# The ROMs are NOT vendored — they are Gekkio's, fetched at run time from the
+# author's own prebuilt archive at the build id pinned in
+# tools/fetch-test-suites.sh. `make test-external` fetches them and runs this
+# gate (see docs/testing.md, \"Gating the external suites\").
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction — a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+#
+# The nine `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` rows in `acceptance` are
+# ROMs for machines this emulator does not model (SGB, an original MGB, a
+# revision-0 DMG). They are pinned FAIL on purpose: they are not evidence of a
+# bug, and the community's 66-row denominator excludes them.
+#
+";
+
+/// The console matters — `misc/` is a Color-only group and scores differently
+/// on a DMG — so the file records which one produced it rather than leaving the
+/// reader to guess from the filename.
+fn baseline_header() -> String {
+    format!(
+        "{BASELINE_HEADER}# Measured with GB_MODEL={}.\n\n",
+        std::env::var("GB_MODEL").unwrap_or_else(|_| "unset (Model::Auto)".into())
+    )
+}
 
 /// Device-free sink. A real machine always has an APU installed; running
 /// without one silently changes what some ROMs observe.
@@ -119,10 +160,32 @@ fn collect(p: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The baseline key for a ROM: its path relative to the suite root it was
+/// found under, without the extension (`acceptance/timer/tma_write_reloading`).
+/// Stable across machines and checkout locations, which an absolute path is
+/// not.
+fn key_for(rom: &Path, roots: &[String]) -> String {
+    for r in roots {
+        let root = Path::new(r);
+        // Relativise against the root's *parent* when the root is itself the
+        // group directory, so the group name survives in the key.
+        let base = if root.is_dir() {
+            root.parent().unwrap_or(root)
+        } else {
+            root
+        };
+        if let Ok(rel) = rom.strip_prefix(base) {
+            return rel.with_extension("").to_string_lossy().replace('\\', "/");
+        }
+    }
+    rom.file_stem().unwrap().to_string_lossy().to_string()
+}
+
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (baseline, args) =
+        suite_baseline::take_baseline_arg(std::env::args().skip(1).collect());
     if args.is_empty() {
-        eprintln!("usage: mooneye_scout <dir-or-rom>...");
+        eprintln!("usage: mooneye_scout <dir-or-rom>... [--baseline <file>]");
         std::process::exit(2);
     }
     let trace = std::env::var("GB_SCOUT_TRACE").is_ok();
@@ -139,6 +202,7 @@ fn main() {
 
     let (mut pass, mut fail, mut timeout) = (0, 0, 0);
     let mut failed = Vec::new();
+    let mut rows = Vec::new();
     for rom in &roms {
         let staged = stage.join(rom.file_name().unwrap());
         std::fs::copy(rom, &staged).unwrap();
@@ -160,6 +224,18 @@ fn main() {
         if tag != "PASS" {
             failed.push(rom.display().to_string());
         }
+        // The baseline value is the ROM's own report: `PASS`, or the verdict
+        // plus the register dump it left behind. First line only — the
+        // `GB_SCOUT_SCREEN` assertion table is multi-line and is a debugging
+        // aid, not an expectation.
+        rows.push(suite_baseline::Row::new(
+            key_for(rom, &args),
+            if tag == "PASS" {
+                String::from("PASS")
+            } else {
+                format!("{tag} | {}", dump.lines().next().unwrap_or_default())
+            },
+        ));
         if trace || tag != "PASS" {
             println!("{tag:7} {}  {dump}", rom.display());
         } else {
@@ -171,4 +247,10 @@ fn main() {
         "\n{pass} pass, {fail} fail, {timeout} timeout  ({} total)",
         roms.len()
     );
+    if let Some(path) = baseline {
+        rows.sort_by(|a, b| a.key.cmp(&b.key));
+        if !suite_baseline::gate("mooneye", &path, &baseline_header(), &rows) {
+            std::process::exit(1);
+        }
+    }
 }

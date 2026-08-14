@@ -23,22 +23,28 @@ changed hash was to re-bless it.
 | Category | Passing | Notes |
 |---|---:|---|
 | **Blargg serial (link-port PASS/FAIL)** | **26 / 26** | 13 ROMs × 2 consoles |
-| **Blargg printed verdict** | **4 / 7** | `mem_timing-2` + `halt_bug` pass on both; `interrupt_time` (CGB-only) and `oam_bug` are documented non-goals |
+| **Blargg printed verdict** | **6 / 7** | `mem_timing-2` + `halt_bug` on both, `interrupt_time` (CGB-only), `oam_bug@dmg` **8 of 8 sub-tests**; `oam_bug@cgb` is the one deliberate red |
+| **Blargg `cgb_sound`** | **12 / 12** | CGB-only cartridges, so one row each |
 | **PPU reference image** | **2 / 2** | `dmg-acid2`: 0 of 23,040 pixels differ, on both consoles |
 
-**Overall: 32 of 35 rows pass; the 3 that don't are deliberate, reasoned non-goals (not open
-bugs).**
+**Overall: 46 of 47 rows pass.** The one red row — `oam_bug@cgb` — is deliberate and must
+stay red: the OAM-corruption bug is DMG/MGB/SGB silicon only, so a real Game Boy Color fails
+that ROM too.
 
 ```
 Blargg serial   ██████████████████████  26/26  ✅
-Printed verdict ████████████░░░░░░░░░░   4/7   (3 non-goals)
+Printed verdict ███████████████████░░░   6/7   (1 by design)
+cgb_sound       ██████████████████████  12/12  ✅
 PPU acid2       ██████████████████████   2/2   ✅
 ```
 
-> **Read this next to the wider suites.** 18 ROMs is a narrow slice. Measured against the
-> [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s 264 tests, with their ROMs and
-> reference images, this emulator scores **92** — Mooneye acceptance 13/66, Mealybug 0/71,
-> SameSuite APU 2/61, SameSuite DMA 0/4, MBC3 RTC 0/3.
+> **Read this next to the wider suites.** 30 ROMs is still a narrow slice, and the wider
+> suites are now gated too — `make test-external` scores Mooneye GB, SameSuite and the
+> Mealybug Tearoom tests against their own baselines on every push. Measured 2026-08-14:
+> Mooneye acceptance **58/75** (**58/66** on the community's denominator, which drops nine
+> ROMs for machines we do not model), Mooneye `emulator-only` **28/28**, Mooneye `misc`
+> **4/8**, SameSuite **61/76**, Mealybug **3/79**. See
+> [docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom).
 
 ## Compatibility matrix
 
@@ -71,43 +77,69 @@ All pass on **both** consoles.
 | `mem_timing` | serial | ✅ | ✅ | *which* M-cycle a memory read/write occurs on — fixed by stepping the timer per memory access (`MemoryManagementUnit::bus_tick`); [CPU §4](../docs/components/cpu.md), [Timer §4](../docs/components/timer.md) |
 | `mem_timing-2` | cart RAM `$A000` | 🟩 | 🟩 | same, prints `01:ok 02:ok 03:ok Passed` |
 | `halt_bug` | screen | 🟩 | 🟩 | `HALT` with IME=0 + pending IRQ re-reads the next byte — HALT bug modelled (`halt_bug` flag + PC rewind); [CPU §5](../docs/components/cpu.md) |
-| `interrupt_time` | screen | — | 🚫 | 16-vs-20 T-cycle interrupt dispatch. Prints `Failed`. CGB-only cartridge (`0x143 == 0xC0`), so no DMG row |
+| `interrupt_time` | screen | — | 🟩 | interrupt dispatch time at both CPU speeds. Prints `… 08 0D 01 … Passed` — 13 cycles, the ROM's own stated answer. CGB-only cartridge (`0x143 == 0xC0`), so no DMG row |
 
 ### PPU / MMU
 
 | ROM | Verdict from | DMG | CGB | What it checks |
 |---|---|:--:|:--:|---|
 | `dmg-acid2` | reference image | 🟩 | 🟩 | BG/window/sprite composition (the "face" test) — **0 of 23,040** pixels differ from `third_party/dmg-acid2/reference-dmg.png`, compared by shade rank |
-| `oam_bug` | cart RAM `$A000` | 🚫 | 🚫 | DMG OAM-corruption hardware defect. Prints `01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 … Failed #2` — **3 of 8 sub-tests pass** |
+| `oam_bug` | cart RAM `$A000` | 🟩 | 🚫 | DMG OAM-corruption hardware defect — modelled, so `@dmg` prints `01:ok … 08:ok Passed`, **8 of 8**. `@cgb` is pinned red on purpose: Color silicon has no such defect, so a real CGB fails this ROM too |
+
+### Sound — Blargg `cgb_sound` (printed verdict, CGB-only cartridges)
+
+Wired 2026-08-14. All twelve pass. Every one of these cartridges says `0x0143 == 0xC0`, so
+each is one row, not two. The DMG half of Blargg's APU suite (`dmg_sound`, also 12/12) is
+scored by [`audiocapture.rs`](audiocapture.rs), which additionally listens to the samples the
+APU produces; wiring the Color half here is what stops those twelve from regressing unseen.
+
+| ROM | CGB | What it checks |
+|---|:--:|---|
+| `01-registers` | 🟩 | register read-back masks |
+| `02-len ctr` | 🟩 | length counters |
+| `03-trigger` | 🟩 | channel trigger |
+| `04-sweep` | 🟩 | CH1 sweep |
+| `05-sweep details` | 🟩 | CH1 sweep quirks |
+| `06-overflow on trigger` | 🟩 | sweep overflow disables the channel |
+| `07-len sweep period sync` | 🟩 | frame-sequencer phase |
+| `08-len ctr during power` | 🟩 | length counters across APU power — a CGB clears them, a DMG does not |
+| `09-wave read while on` | 🟩 | wave-RAM access window (a CGB reads the current byte) |
+| `10-wave trigger while on` | 🟩 | wave-RAM corruption on trigger (DMG only) |
+| `11-regs after power` | 🟩 | register state after an APU power cycle |
+| `12-wave` | 🟩 | CH3 wave playback |
+
+## The external suites live beside this one
+
+Mooneye GB, SameSuite and the Mealybug Tearoom tests are **not** in this harness — their
+ROMs are not ours to vendor, so they are fetched at run time and gated separately by
+`make test-external`, against `mooneye_baseline.txt`, `mooneye_cgb_baseline.txt`,
+`samesuite_baseline.txt` and `mealybug_baseline.txt` in this directory. Same rules: the
+ROM's own verdict, red on any change in either direction, deliberate re-blessing
+(`UPDATE_EXTERNAL_BASELINE=1`). See
+[docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom).
 
 ## Documented non-goals (pinned red on purpose)
 
 These stay red in `baseline.txt` by intent, so a *change* still trips CI, but they are not
 counted as open defects. Each is recorded on its component page.
 
-- **`interrupt_time`** — it runs to completion and prints **`Failed`**. (It used to be
-  recorded as "cannot run headless"; the real cause was that the harness installed **no APU**,
-  and the ROM's `sync_apu` / `get_cpu_speed` poll `NR52`. Every machine the harness boots now
-  has an APU, so this is a measured failure.) Passing needs cycle-accurate interrupt dispatch
-  at *both* speeds — the 16→20 T-cycle change — which is a structural cycle-accuracy
-  commitment. ([CPU §4/§7](../docs/components/cpu.md).)
-- **`oam_bug`** — the DMG OAM-corruption bug is a hardware *defect*; essentially no commercial
-  game relies on it, and modelling it needs mode-2 OAM bus tracking for ~zero practical gain.
-  Now quantified rather than opaque: sub-tests 1, 3 and 6 pass; 2, 4, 5, 7 and 8 fail.
+- **`oam_bug@cgb`** — the DMG OAM-corruption bug is a defect of DMG/MGB/SGB silicon that
+  Game Boy Color hardware does not have, even running a monochrome cartridge (Pan Docs, "OAM
+  Corruption Bug"). A real CGB fails this ROM, so turning the row green would mean emulating
+  a machine nobody has. The `@dmg` row passes all eight sub-tests.
   ([MMU §5](../docs/components/mmu.md).)
 
-Related structural approximations: PPU **mode-3 length is fixed** and **OAM DMA is
-instant/unguarded** — both need a cycle-stepped PPU/CPU sharing the bus dot-by-dot. There
-*are* wired tests for these outside this suite (Mealybug Tearoom 0/71, SameSuite DMA 0/4,
-Mooneye `acceptance/ppu` and `oam_dma`); they are simply not in this harness yet. The timer's
-separate DIV/TIMA counters are likewise tested by Mooneye `acceptance/timer`, 10 of 13 red.
-See [PPU](../docs/components/ppu.md), [MMU](../docs/components/mmu.md) and
-[Timer](../docs/components/timer.md).
+The remaining structural approximation is the PPU's **fixed mode-3 length**, which needs a
+cycle-stepped PPU sharing the bus dot by dot. Its tests live outside this harness and are
+gated by `make test-external` — Mealybug Tearoom **3/79** and Mooneye `acceptance/ppu`, both
+pinned so a rewrite's progress *and* its regressions are visible. See
+[PPU](../docs/components/ppu.md) and [MMU](../docs/components/mmu.md).
 
 ## Running it
 
 ```sh
-# Run the whole matrix (release; 2.9 s measured). Audio is off by default, so no ALSA
+# Run the whole matrix (release; 3.6 s measured, of which the twelve cgb_sound rows are
+# ~0.8 s). Audio is off by default, so no ALSA
 # needed — the harness installs a device-free APU itself, which costs +0.02 ms per
 # emulated frame (1.1x) against a 16.743 ms budget. That is NOT the ~17.9 ms/frame the
 # `audio` cargo feature currently costs: cpal and the producer-side queue throttle are

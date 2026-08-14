@@ -124,7 +124,7 @@ jobs:
       # testharness/baseline.txt; red on any change from it, in either direction.
       # Verdicts are the ROM's own (serial string / cartridge RAM / the reference image
       # shipped with dmg-acid2) — never a hash of our own output, which cannot fail.
-      # Two self-checks run first and abort if the comparison is vacuous. ~3s to run.
+      # Two self-checks run first and abort if the comparison is vacuous. ~4s to run.
       - name: Run test-ROM harness
         run: cargo test --release --test testroms
       # On any baseline mismatch the harness dumps the actual frame(s) — keep them.
@@ -134,4 +134,41 @@ jobs:
         with:
           name: testrom-frames
           path: target/testrom-artifacts/*.png
+          if-no-files-found: ignore
+
+  # The external suites: Mooneye GB, SameSuite and Mealybug Tearoom — 266 rows
+  # that nothing in CI used to look at. Every point those suites measure was
+  # protected by somebody remembering to re-run a scout by hand, which is how a
+  # night that gained +96 rows could have lost them again unnoticed.
+  #
+  # The ROMs are NOT vendored: they are other people's work under other people's
+  # licences, so they are fetched at run time from the versions pinned in
+  # tools/fetch-test-suites.sh — the same "fetch, never vendor" pattern
+  # conformance.yml uses for Blargg's ROMs, for the same reason.
+  #
+  # The expectations (testharness/*_baseline.txt) are the ROMs' own verdicts,
+  # never a hash of our output, and the job is red on ANY change in either
+  # direction. ~20s to fetch, ~2s to run all four groups.
+  external-suites:
+    name: External suites (Mooneye / SameSuite / Mealybug)
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: full
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v3       # no submodules: none of these live here
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
+      - name: Fetch the suites (pinned; never vendored)
+        run: make fetch-test-suites
+      - name: Score every external suite against its baseline
+        run: make test-external
+      # Mealybug writes the frame it produced for every ROM; on a red build
+      # those are what tells you *how* the PPU changed.
+      - name: Upload Mealybug frames on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mealybug-frames
+          path: target/mealybug/*.png
           if-no-files-found: ignore

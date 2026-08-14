@@ -86,7 +86,9 @@ interrupt dispatch, OAM DMA, per-model DMG/MGB/SGB/CGB behaviour) and `emulator-
   signals **pass by loading the Fibonacci sequence into registers: B=3, C=5, D=8, E=13,
   H=21, L=34** (`03 05 08 0D 15 22`). Any other register values = fail. No serial or LCD
   needed.
-- **This repo:** **not** the declared submodule; a separate suite, not wired.
+- **This repo:** not the declared submodule — a separate suite, **fetched at run time and
+  gated in CI** since 2026-08-14 (`make test-external`; see
+  [Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom)).
 - Sources: [mooneye-gb](https://github.com/Gekkio/mooneye-gb) ·
   [Gekkio — test ROM dos & don'ts](https://gekkio.fi/blog/2016/game-boy-test-rom-dos-and-donts/).
 
@@ -121,8 +123,10 @@ trustworthy.
   a precise failure location, no LCD/serial required.
 - Source: [gameboy-doctor](https://github.com/robert/gameboy-doctor).
 
-**Deep-cut suites** (adopt later): **Mealybug Tearoom** (mid-scanline PPU writes — exactly
-our whole-line-render approximation) and **SameSuite** (APU + CGB corners). Reference
+**Deep-cut suites** (both now fetched and gated, see
+[Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom)):
+**Mealybug Tearoom** (mid-scanline PPU writes — exactly our whole-line-render
+approximation) and **SameSuite** (APU + CGB corners). Reference
 emulators to diff behaviour against: **SameBoy** ("over 99.9%" accuracy, passes Mooneye +
 Blargg + Wilbert Pol — [features](https://sameboy.github.io/features/)), **BGB**,
 **Gambatte**, **mGBA**.
@@ -294,7 +298,8 @@ expected-results file, [`testharness/baseline.txt`](../testharness/baseline.txt)
 > compatibility & progress scoreboard** (every ROM, its status, and the documented
 > non-goals). The summary below is the same data at suite granularity.
 
-Rows are ROM x console, so 18 ROMs give 35 rows (`interrupt_time` is CGB-only).
+Rows are ROM x console, so 30 ROMs give 47 rows (`interrupt_time` and the twelve
+`cgb_sound` singles are CGB-only cartridges — `0x0143 == 0xC0` — so they have no `@dmg` row).
 
 | Suite | DMG | CGB | Notes |
 |---|---|---|---|
@@ -303,32 +308,82 @@ Rows are ROM x console, so 18 ROMs give 35 rows (`interrupt_time` is CGB-only).
 | Blargg `mem_timing` | **PASS** | **PASS** | timer stepped per memory access |
 | Blargg `mem_timing-2` | **PASS** | **PASS** | prints `01:ok 02:ok 03:ok Passed` |
 | Blargg `halt_bug` | **PASS** | **PASS** | prints `Passed` — HALT bug modelled |
-| Blargg `interrupt_time` | — (CGB-only ROM) | FAIL — **documented non-goal** | prints `Failed`; 16-vs-20 T-cycle interrupt dispatch |
+| Blargg `interrupt_time` | — (CGB-only ROM) | **PASS** | prints `… 08 0D 01 … Passed` — 13 cycles at either speed, which is the ROM's own stated answer |
 | Blargg `oam_bug` | **PASS** | FAIL — **expected** | `@dmg` prints `01:ok … 08:ok Passed`, i.e. **8 of 8 sub-tests**. `@cgb` is expected to fail: the OAM-corruption bug is DMG/MGB/SGB silicon only, so a real CGB fails this ROM too |
+| Blargg `cgb_sound` (01–12) | — (CGB-only ROMs) | **12/12 PASS** | the Color half of the APU suite; the DMG half is scored by `audiocapture` |
 | dmg-acid2 | **PASS** | **PASS** | **0 of 23,040** pixels differ from `reference-dmg.png` |
 
-**34 of 35 rows pass**, measured. The one remaining red — `oam_bug@cgb` — is *supposed*
+**46 of 47 rows pass**, measured. The one remaining red — `oam_bug@cgb` — is *supposed*
 to be red: the OAM-corruption bug is a defect of DMG/MGB/SGB silicon that Game Boy Color
 hardware does not have, even running a monochrome cartridge, so a real CGB fails this ROM
 too. Turning that row green would mean emulating a machine nobody has. Every row here is
 measured rather than pinned as a hash, so `oam_bug` reports which of its eight sub-tests
 pass rather than an opaque number. The mode-3-length approximation still needs a
 cycle-stepped PPU (a structural commitment the project has not made). The whole suite runs
-in **~2.8 s**.
+in **~3.6 s** (the twelve `cgb_sound` rows cost about 0.8 s of that).
 
 acid2 rendering correctly is a genuinely good result — the PPU composites background, window
 and objects correctly enough to match the reference exactly, despite the fixed mode-3 /
 whole-line-render approximations. It is now **asserted in CI**; before, the reference PNG was
 checked in and never actually compared.
 
-### These numbers are 18 ROMs, not a suite total
+### These numbers are 30 ROMs, not a suite total
 
-Measured against the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264
-tests, with their ROMs, their reference images and their comparison method, this emulator
-scores **92/264**. Mooneye acceptance is **13/66**, Mealybug **0/71**, SameSuite APU **2/61**,
-SameSuite DMA **0/4**, MBC3 RTC **3/3** (was 0/3 — fixed 2026-08-14, see
-[`docs/conformance-notes.md`](conformance-notes.md); the rest of this paragraph is stale in
-our favour and is being corrected separately). "We pass Blargg" is true and is a narrow slice.
+"We pass Blargg" is true and is a narrow slice. The wider community suites are scored — and,
+since 2026-08-14, **gated** — separately; see the next section for the measured figures.
+
+## Gating the external suites — Mooneye GB, SameSuite, Mealybug Tearoom
+
+Everything above is the *in-repo* harness. The three big community suites are 266 further
+rows, and until now **nothing in CI looked at any of them**: every point they measure was
+protected only by somebody remembering to re-run a scout by hand. A night that gained +96
+rows could have lost them again silently, and a cycle-stepped-PPU rewrite would have had no
+way to show either its progress or its regressions.
+
+```text
+make test-external          # fetches the suites if needed, then gates all four groups
+make fetch-test-suites      # just the download (~20 s, cached in target/test-suites)
+```
+
+**The ROMs are fetched, never vendored.** They are other people's work under other people's
+licences — the same reason [`conformance.yml`](../.github/workflows/conformance.yml)
+downloads Blargg's ROMs instead of committing them. Every version is pinned in
+[`tools/fetch-test-suites.sh`](../tools/fetch-test-suites.sh) and nowhere else, so CI, the
+Makefile and a laptop all measure the same bytes: Mooneye from Gekkio's own prebuilt archive
+(checksummed), Mealybug from the author's repository at a pinned commit (his prebuilt zip and
+his hardware-photographed reference PNGs), SameSuite from the copies vendored by the GB
+Emulator Shootout at a pinned commit — LIJI32 ships source only and there is no upstream
+binary release, and that is also the exact corpus our published 264-row score is measured on.
+
+**What is checked in is the expectations**, one file per group, under the same rules as
+[`testharness/baseline.txt`](../testharness/baseline.txt): every value is the ROM's *own*
+judgement, never a hash of our output; **any** change is red, in either direction (a test
+that starts passing is a baseline change too); re-blessing is deliberate
+(`UPDATE_EXTERNAL_BASELINE=1 make test-external`) and the diff is what the reviewer reads.
+
+| group | file | rows | measured 2026-08-14 |
+|---|---|---:|---|
+| Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **86 pass** — acceptance **58/75**, `emulator-only` **28/28** |
+| Mooneye `misc` (`GB_MODEL=cgb`) | `testharness/mooneye_cgb_baseline.txt` | 8 | **4 pass** |
+| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **61 pass** |
+| Mealybug Tearoom | `testharness/mealybug_baseline.txt` | 79 | **3 pixel-exact** (DMG 1/24, CGB-C 1/31, CGB-D 1/24) |
+
+Notes worth having before you read a red build:
+
+* **Mooneye's 66-row denominator excludes nine ROMs**, and so should any comparison against
+  other emulators: `acceptance` ships `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` variants for
+  machines this emulator does not model. They are pinned FAIL on purpose. On the community's
+  66 rows we are **58/66**.
+* **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At 3/79 the count is
+  the only number that can show a PPU rewrite making progress instead of a flat wall of red —
+  so an intermediate PPU change *will* turn that file red. Read the diff, then re-bless with
+  the new counts in the same commit as the change that caused them.
+* **Wiring the suite immediately found a real bug.** Three Mooneye tests that *pass*
+  (`add_sp_e_timing`, `ld_hl_sp_e_timing`, `oam_dma_start`) execute code from OAM on
+  purpose, which tripped the runaway-PC heuristic in `Cpu::operation` — and that heuristic
+  poisons the battery, so a game legitimately running a routine out of OAM silently stopped
+  saving for the rest of the session. The heuristic now covers `$FEA0-$FF7F` only; see
+  [`docs/conformance-notes.md`](conformance-notes.md).
 
 ## A suite no public test ROM covers: battery-save durability
 
@@ -453,13 +508,13 @@ Three traps, all of which produced convincing-but-wrong results before they were
 
 | Component | Primary suites | The approximations they will catch |
 |---|---|---|
-| [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (non-goal, **prints `Failed`**); Mooneye `acceptance/interrupts`, `instr`; Game Boy Doctor | 16-vs-20 T-cycle interrupt dispatch (`interrupt_time` runs and fails) |
-| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu`; Mealybug Tearoom | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural non-goals) |
-| [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug` (non-goal); Mooneye `acceptance/oam_dma`, `bits` | Instant/unguarded OAM DMA, no VRAM/OAM mode-blocking, OAM bug (structural / non-goals) |
+| [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (**pass**); Mooneye `acceptance/interrupts`, `instr` (gated) | — |
+| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu` (**4/12**, gated); Mealybug Tearoom (**3/79**, gated) | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural — needs a cycle-stepped PPU) |
+| [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug@dmg` (**pass**); Mooneye `acceptance/oam_dma` (**3/3**), `bits` (**3/3**), SameSuite `dma` (**4/4**) — all gated | No VRAM/OAM mode-blocking (structural) |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1`; **`testharness/battery.rs`** (**pass**, battery-save durability + `.sav` interop) | Banking bit maths; the MBC3-for-everything web/FFI bug |
-| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**), `cgb_sound` (unwired — measured 12/12 externally, worth wiring); SameSuite APU (**2/61** — 57 need the CGB PCM12/PCM34 registers, which are unimplemented) | PCM12/PCM34 read-back; the CGB sound suite is unwired |
-| [Timer](components/timer.md) | Mooneye `acceptance/timer` (**10 of 13 fail** — this is a wired test, contrary to what the non-goal used to claim); Blargg `interrupt_time` | Separate DIV/TIMA counters, no falling-edge quirks: `div_write`, `rapid_toggle`, `tim00/10/11`, `tim01_div_trigger`, `tim10_div_trigger`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading` |
-| [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` | Instantaneous transfer; the capture hook must be wired first |
+| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**, `audiocapture`), `cgb_sound` (**12/12 pass**, wired into `testroms` 2026-08-14); SameSuite APU (**56/69**, gated) | 13 SameSuite APU rows still red |
+| [Timer](components/timer.md) | Mooneye `acceptance/timer` (**13/13**, gated); Blargg `interrupt_time` (**pass**) | — one 16-bit system counter with falling-edge detection, since 2026-08-14 |
+| [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` (**1/1**, gated) | Instantaneous transfer; `boot_sclk_align` needs the boot ROM's own clock phase |
 | [Joypad](components/input.md) | Mooneye joypad (limited) | Mostly proven by games booting |
 
 ## Sources

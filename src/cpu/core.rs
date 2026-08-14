@@ -528,19 +528,28 @@ impl Cpu<'_> {
     fn operation(&mut self) -> u32 {
         // Cheap, general "the program counter has left the program" test: one
         // subtract and one compare per instruction, on a branch that is never
-        // taken by a working game. $FE00-$FF7F is OAM, the unusable block and
-        // the I/O registers — three regions that cannot hold code, so fetching
-        // an opcode from any of them means the CPU is executing something that
-        // is not a program. Unlike an undefined opcode this is a *heuristic*
-        // about where PC is rather than a hardware lock-up, so it reports the
-        // fault (which only withdraws the right to write the save file) and
-        // lets the machine run on.
-        if self.registers.pc.wrapping_sub(0xFE00) < 0x0180
+        // taken by a working game. $FEA0-$FF7F is the unusable block and the
+        // I/O registers — two regions that cannot hold code, so fetching an
+        // opcode from either means the CPU is executing something that is not a
+        // program. Unlike an undefined opcode this is a *heuristic* about where
+        // PC is rather than a hardware lock-up, so it reports the fault (which
+        // only withdraws the right to write the save file) and lets the machine
+        // run on.
+        //
+        // **OAM ($FE00-$FE9F) is deliberately NOT in that window.** It is real
+        // RAM the CPU may read whenever the PPU is not in mode 2 or 3 (Pan Docs,
+        // "VRAM/OAM accessibility"), so a program *can* legally execute from it
+        // — and three Mooneye ROMs that PASS do exactly that to time an access
+        // onto a known byte (`acceptance/add_sp_e_timing`, `ld_hl_sp_e_timing`,
+        // `oam_dma_start`). Including OAM made every one of them print a crash
+        // report and, far worse for a player, silently stop writing the battery
+        // save for the rest of the session. See docs/conformance-notes.md.
+        if self.registers.pc.wrapping_sub(0xFEA0) < 0x00E0
             && self.memory.fault().is_none()
         {
             self.memory.report_fault(&format!(
                 "the CPU is executing from {:#06x}, which is not memory a program \
-                 can live in (OAM / unusable / I-O) — the game has crashed",
+                 can live in (unusable block / I-O) — the game has crashed",
                 self.registers.pc
             ));
         }
@@ -1604,12 +1613,12 @@ mod tests {
         assert!(run(&[0xFC], 4).memory.fault().is_some());
     }
 
-    /// The general detector: OAM, the unusable block and the I/O registers
-    /// cannot hold a program, so fetching an opcode there means the program
-    /// counter has walked off the program.
+    /// The general detector: the unusable block and the I/O registers cannot
+    /// hold a program, so fetching an opcode there means the program counter has
+    /// walked off the program.
     #[test]
     fn executing_from_memory_that_cannot_hold_code_is_a_fault() {
-        for target in [0xFE00u16, 0xFEA0, 0xFF10] {
+        for target in [0xFEA0u16, 0xFF10, 0xFF7F] {
             // JP <target>
             let cpu = run(&[0xC3, target as u8, (target >> 8) as u8], 6);
             assert!(
@@ -1617,6 +1626,23 @@ mod tests {
                 "executing from {target:#06x} must be reported"
             );
         }
+    }
+
+    /// ...but OAM is not one of them. It is real RAM the CPU may read outside
+    /// PPU modes 2 and 3, and three Mooneye acceptance ROMs that PASS execute
+    /// from it on purpose. Treating that as a crash poisoned the battery, so a
+    /// game legitimately running a routine out of OAM silently stopped saving.
+    #[test]
+    fn running_from_oam_is_not_a_fault() {
+        // JP $FE00, with a `JR -2` spin planted there first.
+        let mut cpu = Cpu::new(rom_running(&[0xC3, 0x00, 0xFE]), None);
+        cpu.memory.wb(0xFE00, 0x18);
+        cpu.memory.wb(0xFE01, 0xFE);
+        for _ in 0..16 {
+            cpu.do_cycle();
+        }
+        assert_eq!(cpu.registers.pc, 0xFE00);
+        assert_eq!(cpu.memory.fault(), None);
     }
 
     /// ...and the branch must be genuinely never-taken for a working game: HRAM
