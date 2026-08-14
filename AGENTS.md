@@ -2292,6 +2292,62 @@ price.** Concretely, for anything that reads or decodes a commercial cartridge:
 (The FlashGBX GPL note and the licence-hygiene section in `CONTRIBUTING.md` are being added on
 another branch; when those land, this belongs beside them.)
 
+### Inherited pictures in `resources/` are third-party and mostly unlicensed
+
+The same rule applies to **images we inherited with the fork**, and it caught two that were
+being embedded in the README. Both are gone; the finding is that `resources/` is upstream's
+attic, not ours.
+
+- **`jsgb-mmu-map.png`** (removed) — the memory-map figure from [Imran Nazar's *GameBoy
+  Emulation in JavaScript*](http://imrannazar.com/GameBoy-Emulation-in-JavaScript:-Memory).
+  That page's footer reads *"Content and design by Imran Nazar, 2006 – 2026"* and states no
+  licence. Replaced by **[`docs/diagrams/memory-map.svg`](docs/diagrams/memory-map.svg)**, ours,
+  used by the README and [`docs/components/mmu.md`](docs/components/mmu.md).
+- **`internals-cpu-section.gif`** (removed) — Jeff Frohwein's DMG schematic sheet from
+  [devrs.com](http://www.devrs.com/gb/hardware.php#hardgb), credit burned into the image, no
+  licence stated. Now a link, beside the [gbdev wiki
+  mirror](https://gbdev.gg8.se/wiki/articles/DMG_Schematics).
+- **Still in the tree, unreferenced by anything, same question unanswered:**
+  `dmg-main-board-schematic-circuit.png`, `zilog-Z80.jpg` (same provenance) and upstream's own
+  screenshots `demo-pokemon.gif` (2.5 MB of Pokémon gameplay), `demo-web.png`, `demo-*.png`,
+  `gbproject.png`, `resources/tests/*.png`. Deleting upstream's assets is the captain's call,
+  not a side effect of a README change — but **do not embed any of them** without settling it.
+- **Attribution is not a licence.** The README already carried "(c) Jeff Frohwein" *as the
+  caption of the image it was reproducing*. Naming the owner is not permission from them.
+  A **link** has never needed a licence; an embedded copy does.
+
+### Verifying that a README or doc actually renders
+
+**Render it through GitHub's own renderer and look at it** — this is how the wrong caption in
+`docs/components/frontends.md` was caught, and a unit test on prose could not have.
+
+```bash
+python3 -c "import json;print(json.dumps({'mode':'gfm','context':'Alchemy86/gameboy','text':open('README.md').read()}))" > /tmp/md.json
+gh api -X POST /markdown --input /tmp/md.json > /tmp/body.html
+# wrap in <article class="markdown-body">, stylesheet from
+# cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown-{light,dark}.css
+# serve from the REPO ROOT so relative image paths resolve as they do on GitHub,
+# then screenshot with chrome-devtools-axi and read the picture.
+```
+
+- Put the preview HTML at the **same directory depth** as the doc, or `../shots/` hops resolve
+  against the wrong directory and everything looks fine when it is not.
+- Count broken images programmatically as well as looking:
+  `[...document.images].filter(x => x.naturalWidth === 0)`.
+- **Caveat: `mode=gfm` renders the input as a GitHub *comment*, so newlines become `<br>`.**
+  Paragraphs look hard-broken in the preview and reflow on the real README. `mode=markdown`
+  reflows correctly but drops tables, which this README needs. Judge images and layout from the
+  preview, not line wrapping.
+- **Theme:** a `prefers-color-scheme` media query *inside* an SVG loaded via `<img>` resolves
+  against the **OS**, not GitHub's theme setting — except that GitHub's dark stylesheet sets
+  `color-scheme: dark`, which Chrome propagates into the embedded SVG. So both paths happen in
+  the wild. `memory-map.svg` is therefore drawn on its **own explicit panel** with a light
+  default plus a dark override, and all three combinations (light/light, light/dark,
+  dark/dark) were rendered and confirmed legible. Never leave an SVG's background transparent
+  and its text black.
+- Delete the preview artefacts before committing (`.preview/`, `readme-*.html`,
+  `*.preview.html`) — none of them belong in the repo.
+
 ## Live trainer view — the read-only plugin (`plugins/trainer/src/`)
 
 - **Full design, address table, verification and follow-ups: [`docs/trainer.md`](docs/trainer.md).**
