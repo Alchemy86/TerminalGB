@@ -1,5 +1,5 @@
 mod oamdma;
-mod serial;
+pub(crate) mod serial;
 mod timer;
 
 use crate::gpu::{Gpu, OamBug};

@@ -45,6 +45,8 @@ pub mod deflate;
 pub mod gameboy;
 mod gpu;
 mod input;
+/// Two consoles, one wire — see [`link::LinkCable`].
+pub mod link;
 mod mbc;
 /// Model Context Protocol server — drive the emulator from any MCP client.
 /// See [`mcp`]. Behind the `mcp` feature and adds no third-party crate.

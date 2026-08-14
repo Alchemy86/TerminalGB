@@ -513,10 +513,7 @@ impl Gameboy {
     /// `updated` break always comes first. Only the LCD-off case changes, which
     /// is the whole bug.
     pub fn frame(&mut self) {
-        // Externally-scheduled button input is applied *before* the frame runs,
-        // so a press is held for the whole of the frame the game samples it in.
-        // One `Option` test when nothing is driving the game.
-        self.cpu.memory.advance_input();
+        self.begin_frame();
 
         let waitticks = (4194304f64 / 1000.0 * 16.0).round() as u32;
         let mut ticks = 0;
@@ -538,6 +535,25 @@ impl Gameboy {
             ticks -= waitticks;
         }
 
+        self.end_frame();
+    }
+
+    /// The housekeeping [`Gameboy::frame`] does *before* the frame's cycles.
+    ///
+    /// Split out so a driver that owns the stepping loop — the two-console
+    /// [`crate::link::LinkCable`], which has to interleave two cores instead of
+    /// running one to its own frame boundary — still performs it, rather than
+    /// silently skipping input, autosave and plugin dispatch.
+    pub fn begin_frame(&mut self) {
+        // Externally-scheduled button input is applied *before* the frame runs,
+        // so a press is held for the whole of the frame the game samples it in.
+        // One `Option` test when nothing is driving the game.
+        self.cpu.memory.advance_input();
+    }
+
+    /// The housekeeping [`Gameboy::frame`] does *after* the frame's cycles.
+    /// See [`Gameboy::begin_frame`].
+    pub fn end_frame(&mut self) {
         // Battery-backed cartridge RAM is written out here, once the game has
         // left it alone for a moment — NOT in `Drop`, which the frontends
         // cannot guarantee runs (winit's event loop calls `process::exit`, the
@@ -675,11 +691,40 @@ impl Gameboy {
         self.cpu.memory.mbc.romname()
     }
 
-    /// Advance exactly one CPU instruction (`Cpu::do_cycle` executes one). For
-    /// the debug surface and fine-grained tests that need to land on
-    /// instruction boundaries a whole-frame step would skip past.
-    pub fn step_instruction(&mut self) {
-        self.cpu.do_cycle();
+    /// Advance exactly one CPU instruction (`Cpu::do_cycle` executes one),
+    /// returning the T-cycles it took. For the debug surface, fine-grained
+    /// tests that need to land on instruction boundaries a whole-frame step
+    /// would skip past, and the link cable — which pays out cycles to two cores
+    /// alternately and needs to know how many it just spent.
+    pub fn step_instruction(&mut self) -> u32 {
+        self.cpu.do_cycle()
+    }
+
+    // ---------------------------------------------------------------------
+    // The link port, as a cable sees it. Crate-private on purpose: the public
+    // way to join two consoles is [`crate::link::LinkCable`], which owns the
+    // pairing rules. Handing out the raw wire would let a caller deliver a
+    // slave byte for a transfer that was never clocked.
+    // ---------------------------------------------------------------------
+
+    pub(crate) fn link_role(&self) -> crate::mmu::serial::LinkRole {
+        self.cpu.memory.serial.link_role()
+    }
+
+    pub(crate) fn link_out(&self) -> u8 {
+        self.cpu.memory.serial.link_out()
+    }
+
+    pub(crate) fn link_seq(&self) -> u32 {
+        self.cpu.memory.serial.link_seq()
+    }
+
+    pub(crate) fn link_answer_master(&mut self, received: u8) {
+        self.cpu.memory.serial.link_answer_master(received);
+    }
+
+    pub(crate) fn link_clock_slave(&mut self, received: u8) -> bool {
+        self.cpu.memory.serial.link_clock_slave(received)
     }
 
     /// Whether the DMG/CGB HALT-bug latch is currently set — a briefly-live bit

@@ -4,6 +4,27 @@ fn noop(_: u8) -> Option<u8> {
     None
 }
 
+/// What the link port is doing, seen from the wire rather than from the game.
+///
+/// This is the whole of what a cable joining two emulated consoles needs to
+/// know, and it is derived from `SC` exactly as the hardware's own decode is
+/// (Pan Docs, *Serial Data Transfer*: bit 7 is the transfer-start flag, bit 0
+/// selects the shift clock — 1 internal, 0 external).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkRole {
+    /// Nothing armed. An incoming clock is ignored.
+    Idle,
+    /// `SC = $81`: this console is driving the shift clock and a transfer is in
+    /// flight. It will finish on its own eight edges whether or not anything
+    /// answers.
+    Master,
+    /// `SC = $80`: armed with the *external* clock selected. Nothing happens
+    /// until the other console clocks it — with no cable this state persists
+    /// for ever, which is exactly what the hardware does and why a lone
+    /// emulator has never needed to model it.
+    Slave,
+}
+
 pub struct Serial<'a> {
     data: u8,
     control: u8,
@@ -38,6 +59,18 @@ pub struct Serial<'a> {
     /// `$FF` — an unplugged cable's idle-high data line — unless something
     /// answered.
     incoming: u8,
+    /// Bumped every time an internally-clocked transfer *starts*.
+    ///
+    /// A [`crate::link::LinkCable`] pairs the two consoles once per transfer and
+    /// must be able to tell "still the same transfer I answered" from "a second
+    /// transfer that happens to look identical". Role and byte cannot
+    /// distinguish those; a sequence number can, and it costs one wrapping add
+    /// per `SC` write.
+    ///
+    /// Deliberately **not** serialised, for the same reason `pending` is not: it
+    /// is meaningful only within one live link session, and a save state does
+    /// not carry the other console.
+    link_seq: u32,
 }
 
 impl<'a> Serial<'a> {
@@ -50,6 +83,7 @@ impl<'a> Serial<'a> {
             pending: None,
             bits_left: 0,
             incoming: 0xFF,
+            link_seq: 0,
         }
     }
 
@@ -76,6 +110,7 @@ impl<'a> Serial<'a> {
                         }
                     };
                     self.bits_left = 8;
+                    self.link_seq = self.link_seq.wrapping_add(1);
                 } else if v & 0x80 == 0 {
                     // Clearing the start bit aborts a transfer in flight.
                     self.bits_left = 0;
@@ -158,6 +193,68 @@ impl<'a> Serial<'a> {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // The wire. Everything below exists for `crate::link::LinkCable`, which
+    // joins two whole cores rather than impersonating one, and therefore needs
+    // to see the port as the *cable* sees it rather than as the game does.
+    // ---------------------------------------------------------------------
+
+    /// What this console's link port is doing right now — see [`LinkRole`].
+    ///
+    /// `Master` is derived from the shift register having bits left rather than
+    /// from `SC`, because those are the same thing for an internally-clocked
+    /// transfer and the register is the thing that actually finishes.
+    pub(crate) fn link_role(&self) -> LinkRole {
+        if self.bits_left > 0 {
+            LinkRole::Master
+        } else if self.control & 0x81 == 0x80 {
+            LinkRole::Slave
+        } else {
+            LinkRole::Idle
+        }
+    }
+
+    /// The byte this console is holding in its shift register, i.e. the one it
+    /// will put on the wire. Both sides load `SB` *before* arming `SC`, so this
+    /// is stable for the whole of a transfer.
+    pub(crate) fn link_out(&self) -> u8 {
+        self.data
+    }
+
+    /// Which internally-clocked transfer this is, counting from power-on. The
+    /// cable uses it to avoid answering one transfer twice, or mistaking a
+    /// second identical-looking transfer for the one it already paired.
+    pub(crate) fn link_seq(&self) -> u32 {
+        self.link_seq
+    }
+
+    /// Tell a master-side transfer which byte the other console is shifting
+    /// back. It replaces the idle-high `$FF` the transfer started with; the
+    /// transfer still finishes on its own eight shift clocks, so the game sees
+    /// hardware timing rather than an instantaneous exchange.
+    pub(crate) fn link_answer_master(&mut self, received: u8) {
+        self.incoming = received;
+    }
+
+    /// Clock a *slave*: the other console has driven eight edges, so this one's
+    /// shift register has been emptied onto the wire and refilled with
+    /// `received`. Lands the byte, clears the transfer-start flag and requests
+    /// the serial interrupt — the same three effects the master sees, which is
+    /// what makes the two consoles agree.
+    ///
+    /// Returns `false` if this console is not in fact armed for an external
+    /// clock. That is a **dropped byte**: the two byte streams no longer agree
+    /// and the cable must treat it as a desync rather than carry on.
+    pub(crate) fn link_clock_slave(&mut self, received: u8) -> bool {
+        if self.control & 0x81 != 0x80 {
+            return false;
+        }
+        self.data = received;
+        self.control &= 0x7F;
+        self.interrupt = 0x8;
+        true
+    }
+
     pub fn set_callback(&mut self, cb: SerialCallback<'static>) {
         self.callback = cb;
     }
@@ -177,6 +274,7 @@ impl Default for Serial<'static> {
             pending: None,
             bits_left: 0,
             incoming: 0xFF,
+            link_seq: 0,
         }
     }
 }
