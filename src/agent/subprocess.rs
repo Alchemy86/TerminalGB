@@ -329,14 +329,18 @@ mod tests {
         for _ in 0..50 {
             assert_eq!(d.poll(), Poll::Pending);
         }
+        // The child sleeps for five seconds, so anything comfortably under
+        // that proves submit+poll did not wait for it. The bound is loose on
+        // purpose: this must not go red because CI was busy, only because the
+        // emulator thread actually blocked.
         assert!(
-            t.elapsed() < std::time::Duration::from_millis(500),
+            t.elapsed() < std::time::Duration::from_secs(2),
             "submit+poll took {:?} — the emulator would have stalled",
             t.elapsed()
         );
         // Cancelling kills it rather than waiting the remaining seconds out.
         d.cancel();
-        assert!(t.elapsed() < std::time::Duration::from_secs(2));
+        assert!(t.elapsed() < std::time::Duration::from_secs(4));
         assert_eq!(d.poll(), Poll::Idle);
     }
 

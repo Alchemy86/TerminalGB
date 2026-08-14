@@ -2333,11 +2333,22 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   errors reach it only as a *category* (never the message, the command, the path or stderr — those
   go to `GB_AGENT_LOG`), and `commentary::sanitise` scrubs credentials, paths, URLs, emails, IPs,
   ANSI escapes and bidi overrides, dropping the line entirely if what is left is not prose.
-- **Three Gen-1 facts that cost real model calls to learn, now encoded in the prompt and in host
-  notes:** the naming screen needs **START** (mashing A types `AAAAA` for ever); a door fires its
-  warp when you step **through** it, so standing on the mat and pressing A does nothing; and
-  during the opening cutscene the position reads `(0,0)` with no warp table loaded, so walking in
-  every direction "failing" means *you are not in control*, not that you are walled in.
+- **Gen-1 facts that cost real model calls to learn, now encoded in the prompt and in host
+  notes** (also written up in [`docs/gen1/agent-play.md`](docs/gen1/agent-play.md), the page the
+  battle-control crew reserved for this work): the naming screen needs **START** (mashing A types
+  `AAAAA` for ever); a door fires its warp when you step **through** it, so standing on the mat
+  and pressing A does nothing; during the opening cutscene `wCurMap` already reads the *bedroom*
+  with plausible coordinates while no map header is loaded, so **`wCurMapHeight`/`wCurMapWidth`
+  (`$D368`/`$D369`) are the real "am I in control?" test** — `0` until `LoadMapHeader` runs, and
+  no real map is 0x0.
+- **A map's width/height are in 32x32 BLOCKS; `wXCoord`/`wYCoord` and every warp coordinate are
+  in 16x16 tiles — two per block.** Report the raw numbers to an agent and it is told Pallet
+  Town is 10 wide while its x runs 0..19, so it decides it is standing outside the map. Doubled
+  on the way out; checked against the two maps whose exits are known (Red's house 2F 4x4 with a
+  staircase at x=7; Pallet Town 10x9 with Oak's Lab at (12,11)).
+- **`Machine::press` is the level above the battle crew's `Machine::set_button`, on the same
+  capability and the same latch.** `set_button` is the raw hold/release for something thinking
+  frame by frame; `press` schedules in frames. Do not add a third.
 - **Testing: `cargo test --release --test agent`** builds a **hand-assembled Gen-1-shaped
   cartridge** — same RAM layout, a player that walks round a walled 8×8 room, no game data at all
   — so the whole stack is proved in CI with no commercial ROM. WRAM boots full of noise, so the

@@ -35,8 +35,9 @@ the map changes). **So plan big.** One `advance_text` replaces thirty A presses.
 - `screen.text` — what is literally on the screen. Menus and dialogue are here.
 - `screen.waiting_for_input` — the game is showing the ▼ arrow and wants A.
 - `game.map` — where you are: map id, name, `x`, `y`, which way you face, and
-  the map's `width`/`height` in tiles (so `x` runs `0..width-1`). If it says
-  `"loaded": false` instead, there is no map: you are in a cutscene.
+  the map's `width`/`height` **in the same units as `x` and `y`**, so `x` runs
+  `0..width-1` and `y` runs `0..height-1`. If it says `"loaded": false`
+  instead, there is no map: you are in a cutscene.
 - `game.exits` — the doors and staircases on this map and where each one leads.
   To leave a room, `goto` an exit's `x`/`y` and then `wait`.
 - `last_actions` — what your previous plan actually did. **Read this.** It tells
@@ -54,6 +55,10 @@ the map changes). **So plan big.** One `advance_text` replaces thirty A presses.
   `down`. Standing on a door does nothing on its own, and **A does not open
   doors**. A staircase warps as soon as you step on it.
 - To talk to someone or read a sign, face it and press A.
+- Towns and routes are much bigger than rooms and the direct line is usually
+  blocked by a building or a fence. If `goto` reports "walls in the way", walk
+  a few steps *sideways* first and then `goto` again — do not keep asking for
+  the same destination from the same spot.
 - If `last_actions` says "blocked", that direction is a wall. Try another route
   — do not repeat the same walk.
 - **If walking in every direction fails, you are not in control.** That is a

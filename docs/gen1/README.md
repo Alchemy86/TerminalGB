@@ -24,7 +24,7 @@ Anything unproven says so.
 | [Reading the screen](reading-the-screen.md) | Why `wTileMap` reads back as text, and why that is the right way to drive the game | **verified on the retail ROM** |
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost somebody hours | **verified the hard way** |
-| [Agent play](agent-play.md) | An agent that reads game state and presses buttons | **placeholder — awaiting the agent crew** |
+| [Agent play](agent-play.md) | An AI agent that reads game state and presses buttons, with commentary for a stream | **plays the opening on the retail ROM** |
 
 ---
 
@@ -39,13 +39,12 @@ Two investigations are live as this area is created, and each has a home waiting
   page. If it turns out to be a *timing* fact rather than a protocol one, it also earns a line
   in [`sharp-edges.md`](sharp-edges.md).
 
-* **An agent that reads game state and presses buttons.**
-  → [`agent-play.md`](agent-play.md), which is a stub with the questions it should answer.
-  The mechanism it will use — read the screen, decide, press — is already documented in
-  [`reading-the-screen.md`](reading-the-screen.md) and the input half in
-  [`battle-control.md`](battle-control.md#the-cinematic-layer); that page should *link* to
-  them rather than restate them, and spend its own words on what an agent needs that a script
-  does not: goals, failure recovery, and how it knows it is stuck.
+* **An agent that reads game state and presses buttons.** Landed:
+  → [`agent-play.md`](agent-play.md) answers the seven questions this section left it, and
+  [`../claude-plays.md`](../claude-plays.md) is the full design, including the OBS recipe for
+  streaming it. New *Gen 1* findings from agent work belong on this area's pages as usual —
+  three already went into [`sharp-edges.md`](sharp-edges.md)'s territory and are listed at the
+  bottom of `agent-play.md`.
 
 Anything else: put it on the page whose *mechanism* it belongs to. A new page is warranted
 when there is a mechanism nobody has written down yet, not when there is a new trick built on

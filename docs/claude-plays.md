@@ -117,16 +117,22 @@ add next; see [§8](#8-what-is-missing).
 
 ### 2.2 Action — how the agent drives
 
-One mechanism drives the buttons from outside the machine, and it is shared:
-[`crate::input::InputQueue`](../src/input.rs), reached by a plugin through
-`Machine::press` under the new `Capability::CONTROL_INPUT`, and by a frontend
-through `Gameboy::queue_press`. **A press is scheduled in frames**, because a
-frame is the granularity the game samples input at, and the host advances the
-queue exactly once per emulated frame.
+One mechanism drives the buttons from outside the machine, and it is shared
+with the battle-control crew, who defined the capability:
+`Capability::CONTROL_INPUT`. Two levels onto one latch —
 
-There is deliberately exactly one such mechanism. A battle-control plugin, a
-scripted test and an AI agent all want to drive the game; three private frame
-timers would be three subtly different definitions of "a press".
+* `Machine::set_button(key, down)`, the raw hold/release, for a plugin that
+  really is thinking frame by frame (their cinematic runner is);
+* `Machine::press(key, hold, gap)`, a press **scheduled in frames** through
+  [`crate::input::InputQueue`](../src/input.rs), advanced by the host exactly
+  once per emulated frame *before* the frame runs. A frontend reaches the same
+  queue through `Gameboy::queue_press`.
+
+The agent uses the second, because a frame is the granularity the game samples
+input at and anything reasoning above that level needs presses scheduled rather
+than timed by hand. There is deliberately no third mechanism: a battle-control
+script, a scripted test and an AI agent all drive the game, and three private
+frame timers would be three subtly different definitions of "a press".
 
 On top of that sit the primitives an agent can actually afford
 ([`src/agent/action.rs`](../src/agent/action.rs)):
@@ -555,6 +561,12 @@ Stated plainly, because "it works" would be an overclaim:
   data — *derived*, not guessed, because a wrong one is worse than none.
 * **A partial map-name table.** Only the maps the early game passes through are
   named; everything else reports its number rather than a guess.
+* **Navigating a *town* is much weaker than navigating a room.** `goto` is
+  greedy with axis alternation, which is enough to get round a bed but not
+  round a building: in Pallet Town the agent reached the right column and then
+  spent several calls being told "walls in the way" by the fence between it and
+  Oak's lab. This is the same gap as the point above — it is what a walkability
+  grid would fix.
 * **Red/Blue only.** Yellow is the same structures at different addresses (a
   table swap); Gen 2 needs a second decoder. Anything else is refused with an
   explanation rather than shown wrong.

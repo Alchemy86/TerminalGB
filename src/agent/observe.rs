@@ -273,9 +273,9 @@ pub struct GameState {
     pub opponent: Option<PartyMon>,
     /// Doors and staircases on this map, from its warp table.
     pub exits: Vec<Exit>,
-    /// The current map's size in tiles, or `None` when no map header is
-    /// loaded — which means the player is not in control. See
-    /// [`W_CUR_MAP_HEIGHT`].
+    /// The current map's size **in the same units as `x` and `y`**, or `None`
+    /// when no map header is loaded — which means the player is not in
+    /// control. See [`W_CUR_MAP_HEIGHT`].
     pub map_size: Option<(u8, u8)>,
 }
 
@@ -311,7 +311,7 @@ pub const W_NUMBER_OF_WARPS: u16 = 0xD3AE;
 pub const W_WARP_ENTRIES: u16 = 0xD3AF;
 /// The engine's own cap (`constants/map_data_constants.asm`, `MAX_WARPS`).
 pub const MAX_WARPS: usize = 32;
-/// `wCurMapHeight` / `wCurMapWidth`, in 16x16 blocks.
+/// `wCurMapHeight` / `wCurMapWidth`, **in 32x32 blocks**.
 ///
 /// These are the cleanest "am I actually standing on a map?" test there is.
 /// `LoadMapHeader` fills them, and Pokémon Blue's opening runs for thousands of
@@ -376,7 +376,20 @@ impl Gen1Observer {
             m.peek(W_CUR_MAP_HEIGHT).unwrap_or(0),
             m.peek(W_CUR_MAP_WIDTH).unwrap_or(0),
         );
-        st.map_size = if h > 0 && w > 0 { Some((w, h)) } else { None };
+        // **Doubled, and that is not a fudge.** A Gen 1 map's width and height
+        // are counted in 32x32-pixel *blocks*, while `wXCoord`/`wYCoord` — and
+        // every warp coordinate — are in 16x16 tiles, two per block. Reporting
+        // the raw numbers tells an agent that Pallet Town is 10 wide when its
+        // x runs 0..19, so it concludes it is standing outside the map and
+        // stops trusting its own position. Checked against the two maps whose
+        // exits are known on a real cartridge: Red's house 2F is 4x4 blocks
+        // with its staircase at x=7, and Pallet Town is 10x9 with Oak's Lab
+        // at (12,11).
+        st.map_size = if h > 0 && w > 0 {
+            Some((w.saturating_mul(2), h.saturating_mul(2)))
+        } else {
+            None
+        };
 
         let warps = m.peek(W_NUMBER_OF_WARPS).unwrap_or(0) as usize;
         for i in 0..warps.min(MAX_WARPS) {
@@ -485,6 +498,22 @@ mod tests {
         // A byte read mid-update is reported as unknown, not as "down".
         assert_eq!(Facing::from_byte(0x02), None);
         assert_eq!(Facing::from_byte(0xFF), None);
+    }
+
+    /// A map's width and height are in 32x32 blocks; `x`, `y` and every warp
+    /// coordinate are in 16x16 tiles. The two known-good data points, from a
+    /// real cartridge: Red's house 2F is 4x4 blocks and its staircase is at
+    /// x=7; Pallet Town is 10x9 and Oak's Lab is at (12,11). Both are only in
+    /// range once the size is doubled.
+    #[test]
+    fn the_map_size_is_reported_in_the_units_the_coordinates_use() {
+        let doubled = |w: u8, h: u8| (w.saturating_mul(2), h.saturating_mul(2));
+        let (w, h) = doubled(4, 4);
+        assert!(7 < w, "the bedroom staircase at x=7 must be inside {w}");
+        let (w, h2) = doubled(10, 9);
+        assert!(12 < w, "Oak's Lab at x=12 must be inside {w}");
+        assert!(11 < h2, "Oak's Lab at y=11 must be inside {h2}");
+        let _ = h;
     }
 
     #[test]
