@@ -15,7 +15,9 @@ pub enum Interrupt {
 pub struct Cpu<'a> {
     pub registers: Registers,
     pub ime: bool,
-    pub setdi: u32,
+    /// `EI` delay counter: 2 = armed by this instruction, 1 = IME is set at
+    /// the start of the next one, 0 = idle. `DI` has no counter — it is
+    /// immediate (see [`Cpu::updateime`]).
     pub setei: u32,
     pub halt: u32,
     /// Set when `HALT` is executed with IME=0 while an interrupt is pending
@@ -62,7 +64,6 @@ impl Cpu<'_> {
             registers,
             memory,
             ime: false,
-            setdi: 0,
             setei: 0,
             halt: 0,
             halt_bug: false,
@@ -87,7 +88,6 @@ impl Cpu<'_> {
         // CPU core.
         self.registers.save_state(&mut w);
         w.bool(self.ime);
-        w.u32(self.setdi);
         w.u32(self.setei);
         w.u32(self.halt);
         // HALT-bug latch: set by a `HALT` that trips the DMG/CGB bug and cleared
@@ -129,7 +129,6 @@ impl Cpu<'_> {
 
         self.registers.load_state(&mut r)?;
         self.ime = r.bool()?;
-        self.setdi = r.u32()?;
         self.setei = r.u32()?;
         self.halt = r.u32()?;
         self.halt_bug = r.bool()?;
@@ -162,15 +161,10 @@ impl Cpu<'_> {
         self.registers.pc += 2;
         w
     }
+    /// Advance the one-instruction `EI` delay. `DI` has no delay on DMG/CGB
+    /// (Mooneye `acceptance/di_timing-GS`: "DI is expected to disable
+    /// interrupts immediately"), so it is applied by the opcode itself.
     fn updateime(&mut self) {
-        self.setdi = match self.setdi {
-            2 => 1,
-            1 => {
-                self.ime = false;
-                0
-            }
-            _ => 0,
-        };
         self.setei = match self.setei {
             2 => 1,
             1 => {
@@ -190,8 +184,7 @@ impl Cpu<'_> {
             return 0;
         }
 
-        let triggered = self.memory.inte & self.memory.intf;
-        if triggered == 0 {
+        if self.memory.inte & self.memory.intf & 0x1F == 0 {
             return 0;
         }
 
@@ -201,22 +194,50 @@ impl Cpu<'_> {
         }
         self.ime = false;
 
+        // Dispatch is **5 M-cycles**, and where the two PC pushes fall inside
+        // them is observable: Mooneye `acceptance/intr_timing` states "serving
+        // an interrupt is supposed to take 5 M-cycles" and measures it against
+        // DIV. Hardware spends M1/M2 idle, pushes PC-high on M3 and PC-low on
+        // M4, and fetches from the vector on M5 (Gekkio, *Complete Technical
+        // Reference* §"Interrupts"). Ticking the bus across all five keeps the
+        // timer/APU phase right through dispatch instead of applying 20 T in
+        // one lump afterwards.
+        let prev = self.memory.set_bus_ticking(true);
+        self.memory.internal_tick();
+        self.memory.internal_tick();
+
+        let pc = self.registers.pc;
+        // M3: push PC high. With SP = $0000 this lands *on IE* — see below.
+        self.registers.sp = self.registers.sp.wrapping_sub(1);
+        self.memory.wb(self.registers.sp, (pc >> 8) as u8);
+
+        // The vector is decided here, from `IE & IF` as they stand at the start
+        // of M4: a write to IE by the high-byte push can still cancel the
+        // dispatch (PC becomes $0000 and *no* IF bit is acknowledged) or
+        // redirect it to a different vector, while the low-byte push's own
+        // write to IE is too late to matter
+        // (Mooneye `acceptance/interrupts/ie_push`).
+        let triggered = self.memory.inte & self.memory.intf & 0x1F;
+
+        // M4: push PC low.
+        self.registers.sp = self.registers.sp.wrapping_sub(1);
+        self.memory.wb(self.registers.sp, pc as u8);
+        self.memory.internal_tick();
+        self.memory.set_bus_ticking(prev);
+
         // Priority = lowest set bit wins, so the fixed order is
         // VBlank(0) > STAT(1) > Timer(2) > Serial(3) > Joypad(4). Only that one
         // bit is acknowledged/cleared; the others stay pending in IF.
-        let n = triggered.trailing_zeros();
-        if n >= 5 {
-            panic!("Invalid interrupt triggered");
-        }
-        self.memory.intf &= !(1 << n);
-        let pc = self.registers.pc;
-        stack::pushstack(self, pc);
         // Vector = 0x40, 0x48, 0x50, 0x58, 0x60 (0x0040 | n<<3).
-        self.registers.pc = 0x0040 | ((n as u16) << 3);
+        self.registers.pc = if triggered == 0 {
+            0x0000
+        } else {
+            let n = triggered.trailing_zeros();
+            self.memory.intf &= !(1 << n);
+            0x0040 | ((n as u16) << 3)
+        };
 
-        // 4 M-cycles here; real hardware spends 5 (20 T-cycles) — see cpu.md
-        // "honest approximations".
-        4
+        5
     }
 
     pub fn exec(&mut self) -> u32 {
@@ -1138,8 +1159,10 @@ impl Cpu<'_> {
             }
             0xD8 => stack::retc(self),
             0xD9 => {
+                // RETI re-enables interrupts with no delay, unlike EI.
                 stack::reti(self);
-                self.setei = 1;
+                self.ime = true;
+                self.setei = 0;
                 4
             }
             0xDA => stack::jpcnn(self),
@@ -1209,7 +1232,10 @@ impl Cpu<'_> {
                 2
             }
             0xF3 => {
-                self.setdi = 2;
+                // DI is immediate on DMG/MGB/SGB, and it cancels a pending EI
+                // (Mooneye `acceptance/di_timing-GS`, `acceptance/rapid_di_ei`).
+                self.ime = false;
+                self.setei = 0;
                 1
             }
             0xF5 => {
@@ -1239,7 +1265,13 @@ impl Cpu<'_> {
                 4
             }
             0xFB => {
-                self.setei = 2;
+                // IME is set after the instruction *following* EI. A second EI
+                // while the delay is already running does not restart it —
+                // otherwise a run of EIs never enables interrupts at all
+                // (Mooneye `acceptance/ei_sequence`).
+                if self.setei == 0 {
+                    self.setei = 2;
+                }
                 1
             }
             0xFC => {

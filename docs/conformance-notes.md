@@ -215,3 +215,127 @@ broken**, and that is the finding.
   rather than polling `SC` — but a game that polls bit 7 would hang for ever.
   That is a real divergence with **no ROM coverage**, and a good check for the
   tool: *after an internal-clock transfer, `SC` bit 7 must read back clear.*
+
+---
+
+## 2026-08-14 — Mooneye acceptance 13/66 → 50/66: five core-timing defects
+
+Recorded per the standing convention. All five were found the same way: run
+Mooneye's `acceptance` suite under **its own** criterion (`LD B,B` breakpoint +
+Fibonacci registers `B=3 C=5 D=8 E=13 H=21 L=34`, per the suite's README), read
+the failing test's source to learn what it asserts, then fix. The runner is
+[`examples/mooneye_scout.rs`](../examples/mooneye_scout.rs); it never looks at a
+reference image, so its verdict cannot drift with our own rendering.
+
+**Note the two criteria differ and both are honest.** The GBEmulatorShootout
+screenshot-compares Mooneye's output, and Mooneye prints a boot-register dump
+alongside its verdict — so a test we genuinely pass still fails the screenshot
+when our CGB boot state differs from the DMG reference. Under that criterion the
+same work moved us **6/66 → 32/66**. The register criterion is the one that
+measures the behaviour under test, so it is the one these fixes were driven by;
+the 18-test gap between them is entirely the missing DMG boot model.
+
+### 1. The timer was two counters, not one
+
+- **Symptom:** anything that reads `DIV` and `TIMA` together drifts. Music tempo
+  and any `DIV`-seeded randomness are subtly wrong, and a game that resets `DIV`
+  in a loop (a common idiom) never sees the timer interrupt hardware would give
+  it.
+- **Caught by:** Mooneye `acceptance/timer/*` — **10 of 13 failed**. (Our own
+  docs previously claimed this divergence had "no wired test". It does.)
+- **Hardware:** there is one 16-bit system counter. `DIV` is its top byte, a
+  `DIV` write clears all sixteen bits, and `TIMA` counts **falling edges** of
+  `counter[tap] AND TAC.enable` with `tap ∈ {9,3,5,7}` selected by `TAC & 3`.
+  Pan Docs, ["Timer and Divider Registers"](https://gbdev.io/pandocs/Timer_and_Divider_Registers.html);
+  Gekkio, *Game Boy: Complete Technical Reference* §Timer.
+- **New tests:** six unit tests in `src/mmu/timer.rs`, one per behaviour, so a
+  regression is named rather than being a count that moved. **Conformance
+  candidates:** *writing `DIV` while the tap bit is high must increment `TIMA`*;
+  *stopping the timer while the tap bit is high must increment `TIMA`*;
+  *`TIMA`'s phase is absolute — it steps 1024 T after a `DIV` write, not after
+  the `TAC` write*.
+
+### 2. `TIMA` overflow reloaded instantly
+
+- **Symptom:** a timer interrupt handler that reads `TIMA` to decide how much
+  time it lost sees `TMA` where hardware shows `$00`, so it mis-corrects.
+- **Caught by:** Mooneye `acceptance/timer/tima_reload`,
+  `tima_write_reloading`, `tma_write_reloading`.
+- **Hardware:** on overflow `TIMA` reads `$00` for 4 T-cycles; only then is `TMA`
+  copied in and `IF` bit 2 set. A `TIMA` write inside that window cancels both;
+  a `TIMA` write *on* the reload cycle is ignored; a `TMA` write on the reload
+  cycle is picked up by that very reload (Pan Docs, "Timer Obscure Behaviour").
+- **New tests:** `tima_reads_zero_for_four_cycles_before_tma_is_loaded`,
+  `a_tima_write_in_the_overflow_window_cancels_the_reload`,
+  `the_reload_cycle_beats_a_tima_write_and_honours_a_tma_write`.
+
+### 3. Interrupt dispatch charged 16 T-cycles instead of 20, and latched the
+vector too early
+
+- **Symptom:** everything an interrupt handler measures against `DIV` is one
+  M-cycle out; a raster or audio routine timed from an interrupt drifts.
+- **Caught by:** Mooneye `acceptance/intr_timing` (which states the claim
+  outright: "serving an interrupt is supposed to take 5 M-cycles") and
+  `acceptance/interrupts/ie_push`. Blargg `interrupt_time` would also catch it
+  but cannot run headless — it polls `NR52` and needs an APU.
+- **Hardware:** dispatch is 5 M-cycles — two idle, `PC`-high pushed on M3,
+  `PC`-low on M4, vector fetch on M5 — and the vector is decided from `IE & IF`
+  at the start of M4. So a high-byte push that lands on `IE` (`SP = $0000`) can
+  cancel the dispatch entirely (`PC` becomes `$0000`, **no** `IF` bit is
+  acknowledged, `IME` is still cleared) or redirect it to another vector, while
+  the low-byte push's own write to `IE` is too late. Gekkio, *CTR* §Interrupts.
+- **Conformance candidate:** *an interrupt whose `PC`-high push overwrites `IE`
+  with a value that masks it must jump to `$0000` and leave `IF` untouched.*
+
+### 4. `DI` was delayed and repeated `EI`s never enabled interrupts
+
+- **Symptom:** a `DI` in a tight critical section does not actually close the
+  window, so an interrupt fires inside it. And any routine that writes `EI`
+  twice in a row — or `EI` inside a loop with no other instruction between —
+  runs with interrupts permanently off.
+- **Caught by:** Mooneye `acceptance/ei_sequence` (18 consecutive `EI`s),
+  `acceptance/rapid_di_ei`, `acceptance/di_timing-GS`.
+- **Hardware:** `EI` sets `IME` after the instruction *following* it, and the
+  delay is a latch, not a restartable counter — a second `EI` does not push it
+  back. `DI` clears `IME` immediately on DMG/MGB/SGB (Pan Docs, "Interrupts";
+  `di_timing-GS` says so in its own header, and notes CGB/AGB differ).
+- **Conformance candidate:** *a run of N `EI` instructions must service a pending
+  interrupt after the second one.*
+
+### 5. OAM DMA was instantaneous — which made a whole class of tests
+unmeasurable
+
+- **Symptom on its own:** a game that starts a DMA and then reads OAM before it
+  finishes sees the new data early. In practice benign, since real code waits.
+- **The real cost:** Mooneye measures *instruction* timing by DMAing a known
+  byte into OAM, pointing `SP` there, and seeing which of an instruction's
+  pushes survive. With an instantaneous DMA there is nothing to measure against,
+  so **14 instruction-timing tests could not pass no matter how correct the CPU
+  was**. That is the finding worth carrying: an unmodelled *peripheral* can hide
+  a whole dimension of *core* accuracy.
+- **Caught by:** `acceptance/oam_dma_start`, `oam_dma_timing`, `oam_dma_restart`,
+  `oam_dma/reg_read`, `oam_dma/sources-GS`, plus `rst_timing`, `call_timing`,
+  `call_timing2`, `call_cc_timing`, `call_cc_timing2`, `push_timing`,
+  `ret_timing`, `ret_cc_timing`, `reti_timing`, `jp_timing`, `jp_cc_timing`,
+  `add_sp_e_timing`, `ld_hl_sp_e_timing`, `pop_timing`.
+- **Hardware:** the write to `$FF46` is M=0, the transfer begins at M=2 and
+  copies one byte per M-cycle for 160 M-cycles; OAM reads return `$FF` and
+  writes are dropped meanwhile. A restart lets the previous transfer run through
+  M=1 (Pan Docs, ["OAM DMA Transfer"](https://gbdev.io/pandocs/OAM_DMA_Transfer.html);
+  the M=0/1/2 schedule is stated verbatim in `oam_dma_start`'s header).
+- **Fixing those 14 also required two CPU corrections**, both about *where in an
+  instruction* a bus access falls: a 16-bit push writes the **high** byte first,
+  and the internal (non-bus) M-cycles of `PUSH`/`RST`/`CALL`/`RET cc` sit
+  *before* their memory accesses, not as slack at the end of the instruction.
+- **Conformance candidate:** *`LD A,(OAM)` 161 M-cycles after a write to `$FF46`
+  must read `$FF`, and 162 M-cycles after it must read the copied byte.*
+
+### What is still red, and why
+
+Of the 16 remaining acceptance failures: **11 are the PPU** (mode-3 timing, STAT
+IRQ blocking, LCD-on timing — a documented structural non-goal needing a
+cycle-stepped PPU) and **5 are boot state** (`boot_div`, `boot_hwio`,
+`boot_regs`, `bits/unused_hwio-GS`, `serial/boot_sclk_align`), which need a DMG
+boot mode this emulator does not have — it always boots the CGB core. Neither is
+a timer, interrupt or MMU defect. **Nothing in the timer, interrupt-dispatch or
+OAM-DMA groups is red.**

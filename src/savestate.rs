@@ -41,7 +41,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// state written by a different version is rejected rather than mis-parsed.
 /// v2: APU register shadow (`Sound::regs`, 22 bytes) + `dmg_mode` flag added
 /// for hardware-accurate NRxx read-back (dmg_sound 01-registers).
-pub const FORMAT_VERSION: u16 = 3;
+/// v3: `WaveChannel::since_fetch` (DMG wave-RAM access window).
+/// v4: the timer became the hardware's single 16-bit system counter — `div`
+/// (u16) plus the TIMA-overflow reload latches — instead of two independent
+/// divisors (Mooneye `acceptance/timer/*`).
+pub const FORMAT_VERSION: u16 = 4;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

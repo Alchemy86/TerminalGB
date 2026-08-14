@@ -108,21 +108,91 @@ lines per fix, not a process document.
   rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
 - Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
   OAM-corruption bug not modelled (`oam_bug` red-by-design — 3 of its 8 sub-tests pass; it
-  is a DMG hardware *defect*); OAM DMA instantaneous/unguarded and PPU mode 3 fixed-length
-  (both need a cycle-stepped PPU/CPU — they cost us Mealybug 0/71 and SameSuite DMA 0/4);
-  timer uses separate DIV/TIMA counters with no falling-edge quirks — **there IS a wired
-  test for this and we fail it: Mooneye `acceptance/timer/*`, 10 of 13 red** (`div_write`,
-  `rapid_toggle`, `tim00`, `tim10`, `tim11`, `tim01_div_trigger`, `tim10_div_trigger`,
-  `tima_reload`, `tima_write_reloading`, `tma_write_reloading`); interrupt dispatch charges
-  16 T-cycles vs hardware's 20 (`interrupt_time` prints **Failed** — it needs an APU
-  installed, since `sync_apu` spins on `NR52`, and the harness now always installs one, so
-  this is a measured failure and not the "can't run headless" it used to be recorded as).
+  is a DMG hardware *defect*); PPU mode 3 fixed-length (needs a cycle-stepped PPU — it
+  costs us Mealybug 0/71); the CGB double-speed switch does not take effect (see the
+  `interrupt_time` note below).
+- **The timer, interrupt dispatch and OAM DMA are no longer non-goals** — all three are
+  modelled now; see the "Core timing" section below. Two claims that used to live in this
+  list are gone for good: the timer divergence did *not* have "no wired test" (Mooneye
+  `acceptance/timer/*` wires it, and we were failing 10 of 13 — now 13/13), and OAM DMA
+  being instantaneous was not merely a DMA inaccuracy, it made 14 Mooneye *instruction*-
+  timing tests unmeasurable. `interrupt_time` still prints **Failed**, but no longer for
+  the dispatch-timing reason recorded here before: it now measures the correct 13 cycles
+  and fails on the double-speed switch instead.
 - `get_mbc` (`src/mbc/mod.rs`) returns MBC3 for **any** cartridge when built without a
   filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled
   reference file, not a module.
 - The `retrio/gb-test-roms` submodule (`.gitmodules`) holds the Blargg ROMs; it is now
   initialised and wired into CI (see the test-ROM harness below).
+
+## Core timing: timer, interrupt dispatch, OAM DMA — measured against Mooneye
+
+**Mooneye `acceptance`: 13/66 → 50/66** by Mooneye's own criterion (`LD B,B` + Fibonacci
+registers), **6/66 → 32/66** by the GBEmulatorShootout's screenshot criterion. Both numbers
+are honest and they differ for one reason: Mooneye prints a *boot-register dump* next to
+its verdict, so a test we genuinely pass still fails a screenshot compare against a DMG
+reference. **Quote the register number for accuracy claims and say which criterion it is.**
+Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md).
+
+- **Runner: `cargo run --release --example mooneye_scout -- <mooneye-test-suite>/acceptance`**
+  (`examples/mooneye_scout.rs`). Dependency-free, stages each ROM into a temp dir (the MBC
+  writes `.sav` next to the ROM), never looks at a reference image. Mooneye is **not**
+  vendored — clone [Gekkio/mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite)
+  or use the shootout's `testroms/mooneye/`.
+- **Debugging a Mooneye failure: read the screen.** The suite loads its font so
+  `tile id == ASCII code` and `print_string` writes char codes straight into the BG tilemap,
+  so decoding `$9800` as 20×18 ASCII prints the assertion table (`C: FF!` etc.) — far
+  faster than guessing from registers. Same trick as the Gen 1 trainer's `wTileMap` reader.
+- **Timer is the hardware circuit now** (`src/mmu/timer.rs`): ONE 16-bit system counter,
+  `DIV` = its top byte, a `DIV` write clears all 16 bits, and `TIMA` counts **falling
+  edges** of `div[TAP[tac & 3]] AND (tac & 4)` with `TAP = [9,3,5,7]`. Every path that can
+  move that expression (clock, `DIV` write, `TAC` write) goes through one `set_div`, so the
+  glitches fall out instead of being special-cased. `TIMA` overflow reads `$00` for 4
+  T-cycles before `TMA` lands, with the write-cancel / write-on-reload rules. **13/13
+  `acceptance/timer/*`.**
+- **The one genuinely subtle bit — `TAC` latches BEFORE the counter's increment.** Our
+  `bus_tick` applies the M-cycle increment *before* the access, so a `TAC` write arrives
+  "late" by one increment. `Timer::wb` therefore re-runs the edge across that increment
+  with the newly latched `TAC` (using `prev_div`). Only `timer/rapid_toggle` detects it,
+  and only via one enable landing exactly on the tap's own 1→0 boundary; without it the
+  test overflows one loop iteration late (`BC = $FFD8` instead of `$FFD9`). **Do not
+  "simplify" this away.**
+- **Interrupt dispatch is 5 M-cycles laid out as hardware does it** (`Cpu::handleinterrupt`):
+  two idle cycles, `PC`-high push, `PC`-low push, vector fetch — all ticking the bus
+  (`MemoryManagementUnit::internal_tick`) so the timer keeps phase through dispatch. **The
+  vector is decided between the two pushes**, from `IE & IF` as they stand at the start of
+  M4: a high-byte push onto `IE` (`SP = $0000`) can cancel the dispatch (`PC = $0000`, no
+  `IF` bit acknowledged, `IME` still cleared) or redirect it; the low-byte push's own write
+  to `IE` is too late. `acceptance/intr_timing` + `interrupts/ie_push`.
+- **`DI` is immediate and cancels a pending `EI`; `EI`'s delay is a latch, not a
+  restartable counter.** `0xFB` seeds `setei = 2` *only when it is 0* — otherwise a run of
+  `EI`s never enables interrupts at all (`acceptance/ei_sequence`, 18 in a row). `RETI`
+  enables `IME` with no delay. The old `setdi` counter is gone.
+- **OAM DMA is a timed 160 M-cycle transfer** (`src/mmu/oamdma.rs`): write at M=0, transfer
+  starts at M=2, one byte per M-cycle; while it runs CPU reads of OAM return `$FF` and
+  writes are dropped. `$FF46` reads back the last page written. A restart lets the previous
+  transfer run through M=1. **`OamDma::pos` is advanced at the TOP of `step()`, not after
+  the copy** — that is what keeps `active()` true for the CPU access sharing the M-cycle
+  with the last byte, which is the single cycle `oam_dma_timing` measures.
+- **The lesson worth keeping: an unmodelled peripheral hid a whole dimension of CPU
+  accuracy.** 14 Mooneye *instruction-timing* tests measure which M-cycle an access lands
+  on by DMAing a known byte into OAM and pointing `SP` there. With an instantaneous DMA
+  none of them could pass however correct the CPU was.
+- **Two CPU corrections fell out of that** (`src/cpu/stack.rs`): a 16-bit push writes the
+  **high** byte first at `SP-1`, and the *internal* M-cycles of `PUSH`/`RST`/`CALL`/`RET cc`
+  sit **before** their memory accesses, not as end-of-instruction slack. `CALL` also has to
+  fetch its operand before pushing the return address. Conditional `JP`/`JR`/`CALL` fetch
+  their operand even when not taken.
+- **Cost:** ~6 % on a pure-CPU headless benchmark (0.303 → 0.321 ms/frame, still ~52×
+  realtime, 2 % of a 16.74 ms frame). Verified transparent to real games: 2400 frames of
+  Pokémon Blue produce byte-identical framebuffers before and after.
+- **Save-state `FORMAT_VERSION` is now 4** (timer became `div`/`prev_div`/reload latches;
+  `Cpu::setdi` removed; `OamDma` added).
+- **What is still red is not ours:** 11 PPU tests (mode-3 timing, STAT blocking, LCD-on)
+  and 5 boot-state tests. A **DMG boot mode is the single highest-value remaining item** —
+  the scout report measured it at 9 shootout tests, and it is also the whole 50-vs-32 gap
+  between the two criteria.
 
 ## Test-ROM correctness harness
 

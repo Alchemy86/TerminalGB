@@ -1,9 +1,11 @@
+mod oamdma;
 mod serial;
 mod timer;
 
 use crate::gpu::Gpu;
 use crate::input::Keypad;
 use crate::mbc;
+use crate::mmu::oamdma::OamDma;
 use crate::mmu::serial::Serial;
 use crate::mmu::timer::Timer;
 use crate::mode::{GbMode, GbSpeed};
@@ -50,6 +52,8 @@ pub struct MemoryManagementUnit<'a> {
     pub intf: u8,
     pub serial: Serial<'a>,
     pub timer: Timer,
+    /// OAM DMA ($FF46) — a timed 160 M-cycle transfer, see [`oamdma`].
+    oam_dma: OamDma,
     pub keypad: Keypad,
     pub gpu: Gpu,
     #[cfg(not(target_arch = "wasm32"))]
@@ -115,6 +119,7 @@ impl<'a> MemoryManagementUnit<'a> {
             intf: 0,
             serial,
             timer: Timer::default(),
+            oam_dma: OamDma::new(),
             keypad: Keypad::default(),
             gpu: Gpu::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -235,8 +240,60 @@ impl<'a> MemoryManagementUnit<'a> {
             if let Some(ref mut sound) = self.sound {
                 sound.do_cycle(4);
             }
+            self.oam_dma_tick();
             self.bus_ticked += 4;
         }
+    }
+
+    /// Advance OAM DMA by one M-cycle, moving at most one byte. Called from
+    /// every path that consumes an M-cycle, so a transfer takes the same 160
+    /// M-cycles whether the CPU is busy with memory accesses or idling.
+    #[inline]
+    fn oam_dma_tick(&mut self) {
+        if self.oam_dma.idle() {
+            return;
+        }
+        if let Some((page, i)) = self.oam_dma.step() {
+            let b = self.oam_dma_source(page, i);
+            // Straight to the PPU: `wb` would refuse it, since OAM belongs to
+            // the DMA while it runs.
+            self.gpu.wb(0xFE00 + i as u16, b);
+        }
+    }
+
+    /// Read one source byte for OAM DMA. This is *not* a CPU access: it must
+    /// not tick the bus or trip a register side-effect. Pages `$E0-$FF` read
+    /// echo RAM, as the transfer sits on the external bus.
+    fn oam_dma_source(&self, page: u8, index: u8) -> u8 {
+        let mut address = ((page as u16) << 8) | index as u16;
+        if address >= 0xE000 {
+            address -= 0x2000;
+        }
+        match address {
+            0x0000..=0x7FFF => self.mbc.readrom(address),
+            0x8000..=0x9FFF => self.gpu.rb(address),
+            0xA000..=0xBFFF => self.mbc.readram(address),
+            0xC000..=0xCFFF => self.wram[address as usize & 0x0FFF],
+            _ => self.wram[(self.wrambank * 0x1000) | (address as usize & 0x0FFF)],
+        }
+    }
+
+    /// Advance OAM DMA over the instruction's remaining internal cycles.
+    #[inline]
+    fn oam_dma_cycles(&mut self, ticks: u32) {
+        if self.oam_dma.idle() {
+            return;
+        }
+        for _ in 0..ticks / 4 {
+            self.oam_dma_tick();
+        }
+    }
+
+    /// Advance one M-cycle that carries no bus access — the idle cycles of
+    /// interrupt dispatch. Same accounting as [`Self::bus_tick`], so the
+    /// instruction's remainder in [`Self::do_cycle`] stays correct.
+    pub(crate) fn internal_tick(&mut self) {
+        self.bus_tick();
     }
 
     /// Enable per-access timer stepping for the duration of one CPU
@@ -276,6 +333,7 @@ impl<'a> MemoryManagementUnit<'a> {
 
         self.serial.save_state(w);
         self.timer.save_state(w);
+        self.oam_dma.save_state(w);
         self.keypad.save_state(w);
         self.gpu.save_state(w);
 
@@ -326,6 +384,7 @@ impl<'a> MemoryManagementUnit<'a> {
 
         self.serial.load_state(r)?;
         self.timer.load_state(r)?;
+        self.oam_dma.load_state(r)?;
         self.keypad.load_state(r)?;
         self.gpu.load_state(r)?;
 
@@ -379,6 +438,7 @@ impl<'a> MemoryManagementUnit<'a> {
         let timerticks = cputicks.saturating_sub(self.bus_ticked);
         self.bus_ticked = 0;
         self.timer.do_cycle(timerticks);
+        self.oam_dma_cycles(timerticks);
         self.intf |= self.timer.interrupt;
         self.timer.interrupt = 0;
 
@@ -446,7 +506,15 @@ impl<'a> MemoryManagementUnit<'a> {
             0xD000..=0xDFFF | 0xF000..=0xFDFF => {
                 self.wram[(self.wrambank * 0x1000) | address as usize & 0x0FFF]
             }
-            0xFE00..=0xFE9F => self.gpu.rb(address),
+            // OAM belongs to the DMA while a transfer runs: the CPU reads
+            // $FF and its writes are dropped (Pan Docs, "OAM DMA Transfer").
+            0xFE00..=0xFE9F => {
+                if self.oam_dma.active() {
+                    0xFF
+                } else {
+                    self.gpu.rb(address)
+                }
+            }
             0xFF00 => self.keypad.rb(),
             0xFF01..=0xFF02 => self.serial.rb(address),
             0xFF04..=0xFF07 => self.timer.rb(address),
@@ -480,6 +548,9 @@ impl<'a> MemoryManagementUnit<'a> {
                     })
                     | (if self.speed_switch_req { 1 } else { 0 })
             }
+            // $FF46 reads back the last page written, transfer running or not
+            // (Mooneye `acceptance/oam_dma/reg_read`).
+            0xFF46 => self.oam_dma.read_reg(),
             0xFF40..=0xFF4F => self.gpu.rb(address),
             0xFF51..=0xFF55 => self.hdma_read(address),
             0xFF68..=0xFF6B => self.gpu.rb(address),
@@ -537,7 +608,11 @@ impl<'a> MemoryManagementUnit<'a> {
             0xD000..=0xDFFF | 0xF000..=0xFDFF => {
                 self.wram[(self.wrambank * 0x1000) | (address as usize & 0x0FFF)] = value
             }
-            0xFE00..=0xFE9F => self.gpu.wb(address, value),
+            0xFE00..=0xFE9F => {
+                if !self.oam_dma.active() {
+                    self.gpu.wb(address, value)
+                }
+            }
             0xFF00 => self.keypad.wb(value),
             0xFF01..=0xFF02 => self.serial.wb(address, value),
             0xFF04..=0xFF07 => self.timer.wb(address, value),
@@ -550,7 +625,7 @@ impl<'a> MemoryManagementUnit<'a> {
                     sound.wb(address, value);
                 }
             }
-            0xFF46 => self.oamdma(value),
+            0xFF46 => self.oam_dma.request(value),
             0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70 | 0xFF76..=0xFF77
                 if self.gbmode != GbMode::Color => {}
             0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode == GbMode::Classic => {}
@@ -593,22 +668,6 @@ impl<'a> MemoryManagementUnit<'a> {
             }
         }
         self.speed_switch_req = false;
-    }
-
-    // OAM DMA (FF46): copy 0xA0 bytes from XX00-XX9F into OAM. Deliberately
-    // instantaneous and unguarded here; hardware takes 160 M-cycles and restricts
-    // the CPU to HRAM meanwhile — see mmu.md and https://gbdev.io/pandocs/OAM_DMA_Transfer.html
-    fn oamdma(&mut self, value: u8) {
-        // OAM DMA re-uses rb/wb internally; it is a single (instantaneous, in
-        // this model) transfer, not 160 CPU memory accesses, so suppress the
-        // per-access timer stepping while it runs.
-        let prev = self.set_bus_ticking(false);
-        let base = (value as u16) << 8;
-        for i in 0..0xA0 {
-            let b = self.rb(base + i);
-            self.wb(0xFE00 + i, b);
-        }
-        self.set_bus_ticking(prev);
     }
 
     fn hdma_read(&self, a: u16) -> u8 {

@@ -54,30 +54,28 @@ variation:
 
 ## 4. How it works here
 
-**The `Timer` struct** — [`src/mmu/timer.rs:1`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L1): `divider` (DIV),
-`counter` (TIMA), `modulo` (TMA), `enabled`, `step` (T-cycles per TIMA tick), two internal
-accumulators `internaldiv`/`internalcnt`, and `interrupt`.
+**The `Timer` struct** — [`src/mmu/timer.rs`](../../src/mmu/timer.rs): `div` (the shared
+16-bit system counter — `DIV` is its top byte), `tima`, `tma`, `tac`, the two latches that
+carry the overflow window (`reload_pending`, `reloading`), `prev_div` (the counter as it
+stood at the start of the current M-cycle, needed for the `TAC` latch rule below) and
+`interrupt`.
 
-**Registers** — `rb`/`wb` ([`timer.rs:28`,`46`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L28)): writing `DIV`
-resets it to 0 ([`timer.rs:48`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L48)); writing `TAC` sets `step` to
-`16 / 64 / 256 / 1024` T-cycles ([`timer.rs:59–67`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L59)), i.e.
-262144 / 65536 / 16384 / 4096 Hz.
+**The tap table.** `TIMA` counts falling edges of `div[TAP[tac & 3]] AND (tac & 4)`, where
+`TAP = [9, 3, 5, 7]` — i.e. 4096 / 262144 / 65536 / 16384 Hz. Every path that can change
+that expression (the clock, a `DIV` write, a `TAC` write) runs the same edge check, which
+is why the DIV-write and TAC-stop glitches fall out rather than being special-cased.
 
-**Counting** — `do_cycle` ([`timer.rs:96`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L96)) accumulates ticks:
-every 256 ticks bumps `DIV`; when enabled, every `step` ticks bumps `TIMA`, and on overflow
-reloads from `TMA` and sets the interrupt:
+**Registers** — `rb`/`wb`: `DIV` reads `(div >> 8)` and a write clears **all sixteen bits**;
+`TAC` reads back `0xF8 | (tac & 7)`. `TIMA`/`TMA` writes have the reload-window rules
+described in §5.
 
-```rust
-if self.counter == 0 {              // timer.rs:82
-    self.counter = self.modulo;
-    self.interrupt |= 0x04;
-}
-```
+**Counting** — `do_cycle` advances in 4 T-cycle (M-cycle) steps. Each step first retires a
+pending overflow reload (`TIMA = TMA`, `IF` bit 2 set — 4 T-cycles after the overflow
+itself), then advances the counter and re-checks the tap edge.
 
 ### Sub-instruction access timing (why `mem_timing` passes)
 
-Although the timer still uses two accumulators (below), the *phase* at which an
-instruction's memory access samples the timer is now correct. `MemoryManagementUnit`
+The *phase* at which an instruction's memory access samples the timer is correct. `MemoryManagementUnit`
 advances the timer by one M-cycle at **each** CPU memory access, *before* the access is
 performed (`bus_tick`), and applies the instruction's remaining internal cycles
 afterward. So an instruction that reads `TIMA` reads it on its **last** M-cycle (and a
@@ -87,63 +85,73 @@ stepped per-access; the PPU/APU remain batched (see [CPU §4](cpu.md)).
 
 ### Honest approximations
 
-The emulator uses **two independent accumulators** (`internaldiv`, `internalcnt`) rather
-than one shared 16-bit system counter. Several documented quirks therefore **do not
-occur**. This used to be filed as "no wired test exists"; that is wrong and worth
-correcting. **Mooneye's `acceptance/timer/*` tests exactly this and we fail 10 of 13** —
-`div_write`, `rapid_toggle`, `tim00`, `tim10`, `tim11`, `tim01_div_trigger`,
-`tim10_div_trigger`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`. The
-suite is simply not wired into our harness yet, which is a coverage gap on our side, not
-an absence of tests:
+The timer is now the hardware circuit: one shared 16-bit system counter (`div`), `DIV` as
+its top byte, and `TIMA` counting **falling edges** of `div[tap] AND TAC.enable`
+([`src/mmu/timer.rs`](../../src/mmu/timer.rs)). The `TIMA` overflow window (4 T-cycles of
+`$00` before `TMA` lands, with its write-cancel and write-on-reload rules) is modelled too.
+What remains approximate:
 
-- **DIV-write does not glitch `TIMA`.** On hardware, resetting `DIV` can produce a spurious
-  `TIMA` increment (a falling edge on the selected bit). Here `DIV` and `TIMA` are separate
-  counters, so writing `DIV` never touches `TIMA` ([`timer.rs:48`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L48)).
-- **Changing `TAC` mid-count doesn't glitch.** Hardware can generate an extra increment
-  when the selected bit changes; not modelled.
-- **`TIMA` overflow reload is instantaneous.** Real hardware has a **4-cycle window**
-  between overflow and reload during which `TIMA` reads `0x00`, and writes to `TIMA`/`TMA`
-  in that window have special effects (the "TMA write on the reload cycle" behaviour).
-  Here reload happens immediately in the same tick ([`timer.rs:108`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/timer.rs#L108)).
+- **The counter advances one M-cycle at a time, not one T-cycle.** Every tap is bit 3 or
+  above (period ≥ 16 T), so no edge can be skipped, and the overflow window is exactly one
+  M-cycle — but *sub*-M-cycle ordering between a CPU register write and the counter's own
+  increment is not directly representable. One case needed an explicit rule: `TAC` is
+  latched *before* the increment, whereas `bus_tick` applies the increment before the
+  write, so `Timer::wb` re-runs the edge across that increment with the newly latched
+  `TAC`. Mooneye `timer/rapid_toggle` is what pins that; without it the test overflows one
+  loop iteration late (`BC = $FFD8` instead of `$FFD9`).
+- **Double-speed mode is not special-cased.** `DIV` advances with the CPU clock either way.
+  No wired test covers it.
 
 ## 5. Known quirks and edge cases
 
-- **DIV reset falling-edge increment — NOT modelled** (§4).
-- **TIMA reload delay & the write window — NOT modelled** (§4). This is precisely what
-  Mooneye's `tima_reload`, `tima_write_reloading`, and `tma_write_reloading` probe.
-- **`TAC` glitch on frequency change — NOT modelled.**
-- **`DIV` keeps counting regardless of `TAC` enable** — correctly modelled (`internaldiv`
-  is always advanced).
+- **DIV-write falling-edge increment — modelled.** Clearing `div` while the tap bit is high
+  is a falling edge and increments `TIMA` (Mooneye `timer/div_write`).
+- **`TAC` glitch on stop / frequency change — modelled**, including the early-latch case
+  above (Mooneye `timer/rapid_toggle`).
+- **`TIMA` reload delay and its write window — modelled.** `TIMA` reads `$00` for 4
+  T-cycles; a `TIMA` write in the window cancels reload *and* interrupt; a `TIMA` write on
+  the reload cycle loses to `TMA`; a `TMA` write on the reload cycle is picked up by it
+  (Mooneye `timer/tima_reload`, `tima_write_reloading`, `tma_write_reloading`).
+- **`DIV` keeps counting regardless of `TAC` enable** — correct: `TAC` only gates the tap.
 - **Overflow requests the interrupt but doesn't dispatch it** — the MMU folds
-  `timer.interrupt` into `IF` and clears it ([`src/mmu/mod.rs:368`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L368));
-  the CPU dispatches (see [CPU](cpu.md)).
+  `timer.interrupt` into `IF` and clears it; the CPU dispatches (see [CPU](cpu.md)).
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: none.**
+> **Coverage today: Mooneye `acceptance/timer/*` — 13 of 13 pass** (measured with
+> `cargo run --release --example mooneye_scout -- <mooneye>/acceptance/timer`, which uses
+> Mooneye's own `LD B,B` + Fibonacci-register criterion). The unit tests in
+> `src/mmu/timer.rs` pin each behaviour individually so a regression is named, not just a
+> count.
 
-1. **`DIV` rate.** `DIV` increments once per 256 T-cycles (16384 Hz). *(Not covered.)*
-2. **`DIV` write resets to 0.** Any `wb(0xFF04, x)` makes `rb(0xFF04) == 0`. *(Not
-   covered.)*
-3. **`TIMA` rate follows `TAC`.** With `TAC = 0b101` (enabled, `01`), `TIMA` increments
-   every 4 M-cycles. *(Not covered.)*
-4. **Overflow reloads from `TMA` and sets `IF` bit 2.** With `TMA = 0xFC`, after `TIMA`
-   passes `0xFF` it becomes `0xFC` and `IF` bit 2 is set. *(Not covered.)*
-5. **`TAC` disable freezes `TIMA` but not `DIV`.** Clearing `TAC` bit 2 stops `TIMA`;
-   `DIV` keeps counting. *(Not covered.)*
-6. **`TAC` read-back.** `rb(0xFF07)` ORs the unused bits (`| 0xF8`). *(Not covered.)*
-7. **DIV-reset falling-edge increment.** Resetting `DIV` at the wrong moment increments
-   `TIMA`. **Expected to FAIL — separate counters.** *(Not covered; known-divergent.)*
-8. **`TIMA` reload delay.** `TIMA` reads `0x00` for one M-cycle after overflow before the
-   `TMA` reload. **Expected to FAIL — instantaneous.** *(Not covered; known-divergent.)*
-9. **`TMA` write during the reload cycle** takes effect on that same reload. **Expected to
-   FAIL — not modelled.** *(Not covered; known-divergent.)*
+1. **`DIV` rate.** `DIV` increments once per 256 T-cycles (16384 Hz). *(Covered:
+   `div_write_clears_the_whole_system_counter`.)*
+2. **`DIV` write clears the whole 16-bit counter**, not just the visible byte — so the
+   timer's phase restarts with it. *(Covered: same test, and Mooneye `timer/tim00`.)*
+3. **`TIMA` rate follows `TAC`.** *(Covered: Mooneye `timer/tim00`, `tim01`, `tim10`,
+   `tim11`.)*
+4. **Overflow reloads from `TMA` and sets `IF` bit 2 — four T-cycles later.** *(Covered:
+   `tima_reads_zero_for_four_cycles_before_tma_is_loaded`, Mooneye `timer/tima_reload`.)*
+5. **`TAC` disable freezes `TIMA` but not `DIV`, and does not reset the phase.**
+   *(Covered: `stopping_the_timer_with_the_tap_bit_high_increments_tima`.)*
+6. **`TAC` read-back** ORs the unused bits (`| 0xF8`). *(Covered:
+   `tac_reads_back_with_unused_bits_high`.)*
+7. **DIV-reset falling-edge increment.** *(Covered:
+   `a_div_write_with_the_tap_bit_high_increments_tima`, Mooneye `timer/div_write`.)*
+8. **A `TIMA` write inside the overflow window cancels the reload and the interrupt.**
+   *(Covered: `a_tima_write_in_the_overflow_window_cancels_the_reload`.)*
+9. **A `TMA` write during the reload cycle** takes effect on that same reload, and a `TIMA`
+   write on that cycle does not. *(Covered:
+   `the_reload_cycle_beats_a_tima_write_and_honours_a_tma_write`.)*
+10. **Enabling the timer on the M-cycle the tap itself falls still increments.** *(Covered:
+    `enabling_on_the_taps_own_falling_edge_still_increments`, Mooneye
+    `timer/rapid_toggle`.)*
 
 ## 7. Test ROMs that exercise it
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite; §4/§5 approximations are the expected reds. **Measured: 3 of 13 pass** (`tim00_div_trigger`, `tim01`, `tim11_div_trigger`). Not vendored and not wired into our harness — that is the gap to close. |
+| **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite. **13/13 pass.** Not a vendored submodule — run it with `examples/mooneye_scout.rs` against a local checkout of [mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite). |
 | **Blargg `instr_timing`** | Indirectly leans on timer/interrupt timing | A gross cycle-count error. |
 | **Blargg `interrupt_time`** | Timing of the timer/serial interrupts relative to instructions | Would catch dispatch-timing gaps. |
 

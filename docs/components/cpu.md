@@ -78,8 +78,7 @@ micro-op pipeline.
 pub struct Cpu<'a> {
     pub registers: Registers,
     pub ime: bool,        // interrupt master enable
-    pub setdi: u32,       // DI delay counter
-    pub setei: u32,       // EI delay counter
+    pub setei: u32,       // EI delay counter (DI is immediate)
     pub halt: u32,
     pub stop: u32,
     pub memory: MemoryManagementUnit<'a>,
@@ -122,9 +121,13 @@ pub fn do_cycle(&mut self) -> u32 {
 `updateime()` (advance EI/DI scheduling), `handleinterrupt()` (maybe service an
 interrupt and return early), then either emulate a NOP if halted or run `operation()`.
 
-**EI/DI are delayed by one instruction.** `updateime`
-([`src/cpu/core.rs:140`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L140)) counts `setei`/`setdi` down `2 → 1 →
-applied`. `DI` seeds `setdi = 2`, `EI` seeds `setei = 2`, `RETI` seeds `setei = 1`.
+**`EI` is delayed by one instruction; `DI` is immediate.** `updateime` counts `setei`
+down `2 → 1 → IME = true`, and `EI` seeds `setei = 2` **only if the counter is idle** — a
+run of consecutive `EI`s must not keep restarting the delay, or interrupts are never
+enabled at all (Mooneye `acceptance/ei_sequence`). `DI` sets `IME = false` and clears
+`setei` on the spot, which is DMG/MGB/SGB behaviour and what Mooneye
+`acceptance/di_timing-GS` and `acceptance/rapid_di_ei` require. `RETI` also enables `IME`
+with no delay.
 
 **Opcode tables.** The main 256-entry `match` is `operation()`
 ([`src/cpu/core.rs:291`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L291)); the `0xCB`-prefixed table is
@@ -145,16 +148,21 @@ reads zero, matching hardware.
   M-cycle. This is why Blargg **`mem_timing` and `mem_timing-2` PASS** (covered). The
   PPU is still batched — invisible to `mem_timing` (which only samples the timer) but is
   what sub-instruction *rendering* tests (mode-3 length) would probe.
-- **Interrupt dispatch costs 16 T-cycles**, not the hardware's 20 — *still divergent, but
-  not test-driven-fixable in this repo yet.* `handleinterrupt` returns `4`
-  ([`src/cpu/core.rs`](../../src/cpu/core.rs)), ×4 in `do_cycle` = 16 T-cycles. Real
-  dispatch is **5 M-cycles / 20 T-cycles** (Pan Docs). The ROM that proves it, Blargg
-  `interrupt_time`, **runs and prints `Failed`** — that is a red test waiting for a fix.
-  It used to be recorded as "cannot run headless": it is `REQUIRE_CGB`, switches to double
-  speed, and calls `sync_apu`/`get_cpu_speed` which poll `NR52`, and the harness installed
-  **no APU**, so those polls never terminated and it hung on its title screen. The harness
-  now always installs one. Changing 16→20 still needs care (it must be right at both
-  speeds), but there is now a failing test to validate against; see §7.
+- **Interrupt dispatch costs the hardware's 5 M-cycles / 20 T-cycles** and lays them out
+  as hardware does: two idle cycles, the `PC`-high push, the `PC`-low push, then the vector
+  fetch — with the bus ticked across all five, so the timer keeps its phase through
+  dispatch. The vector itself is decided *between* the two pushes, which is why a push
+  that lands on `IE` (`SP = $0000`) can cancel or redirect the interrupt. Mooneye
+  `acceptance/intr_timing` pins the 5 cycles and `acceptance/interrupts/ie_push` pins the
+  sampling point; both pass.
+
+  Blargg `interrupt_time` **runs** (it is `REQUIRE_CGB` and polls `NR52` via
+  `sync_apu`/`get_cpu_speed`, so it used to hang on its title screen with no APU; the
+  harness now always installs one) and it now measures the **correct 13 cycles** — its own
+  source says *"Should take 13 cycles at either speed"*. It still prints `Failed`, but for
+  a different bug: its rounds 3 and 4 run after `cpu_fast` and still report speed `00`, so
+  **the CGB double-speed switch is not taking effect**. That is a `STOP`/`KEY1` problem,
+  not a dispatch one.
 - **`STOP` is minimally handled** (the `stop` field exists; double-speed switching is
   plumbed through the MMU, not a faithful `STOP` model).
 - **~900 lines of legacy interrupt/HALT logic are commented out** below `do_cycle`
@@ -173,7 +181,19 @@ reads zero, matching hardware.
   any operands, shifted one byte early) is re-read. **Blargg's `halt_bug` ROM now renders
   `Passed`.** (Pan Docs — [halt](https://gbdev.io/pandocs/halt.html).)
 - **EI timing.** `EI` enables interrupts *after the following instruction*, so
-  `EI; DI` never services an interrupt in between. Modelled via the `setei` delay.
+  `EI; DI` never services an interrupt in between. Modelled via the `setei` delay; `DI`
+  cancels it immediately.
+- **Where an instruction's internal cycles fall is observable.** `PUSH`/`RST` spend their
+  idle M-cycle *before* the two writes, `CALL` spends it after the operand fetch and before
+  the pushes, and `RET cc` spends one evaluating the condition *before* the two reads.
+  Leaving those as end-of-instruction slack — which is what happens when only bus accesses
+  advance the clock — moves every one of those accesses an M-cycle early. Mooneye measures
+  it directly through the OAM-DMA guard (`rst_timing`, `call_timing*`, `push_timing`,
+  `ret_cc_timing`, …); see [`src/cpu/stack.rs`](../../src/cpu/stack.rs) and
+  [MMU](mmu.md).
+- **A 16-bit push writes the high byte first**, at `SP-1`, then the low byte at `SP-2`.
+  The order is observable both through the OAM-DMA guard and at `SP = $0000`, where the
+  first push wraps onto `IE`.
 - **Interrupt priority.** Lowest bit wins: `handleinterrupt` uses
   `triggered.trailing_zeros()` ([`core.rs:182`](https://github.com/Alchemy86/gameboy/blob/main/src/cpu/core.rs#L182)), giving VBlank
   (bit 0) highest priority through Joypad (bit 4). Vector = `0x40 | (n << 3)`.
@@ -199,16 +219,17 @@ reads zero, matching hardware.
 4. **Flag correctness for `ADD`/`SUB`/`CP`/`DAA`.** Z/N/H/C match hardware for boundary
    inputs (e.g. `0x0F + 0x01` sets H; `0xFF + 0x01` sets Z and C). *(Not covered — this
    is exactly what Blargg `cpu_instrs` verifies.)*
-5. **`EI` is delayed one instruction.** `DI; EI; DI` with a pending interrupt never
-   dispatches. *(Not covered.)*
+5. **`EI` is delayed one instruction, `DI` is not, and repeated `EI`s do not restart the
+   delay.** *(Covered: Mooneye `acceptance/ei_timing`, `ei_sequence`, `di_timing-GS`,
+   `rapid_di_ei`.)*
 6. **Interrupt dispatch pushes `PC` and jumps to the vector.** After a VBlank interrupt
    with `IME=1`, `SP` has decreased by 2, `[SP]` holds the old `PC`, and `PC == 0x0040`;
-   `IF` bit 0 is cleared and `IME` is now false. *(Not covered.)*
-7. **Interrupt dispatch timing = 20 T-cycles.** Servicing an interrupt should advance the
-   machine clock by 5 M-cycles. **This emulator charges 16 T-cycles.** *(Covered and
-   **red**: Blargg `interrupt_time` prints `Failed`, pinned in `testharness/baseline.txt`,
-   and several Mooneye `acceptance/*_timing` tests fail for the same reason. Still a
-   documented non-goal, but no longer an unmeasurable one. See §4 and `testing.md`.)*
+   `IF` bit 0 is cleared and `IME` is now false. *(Covered: Mooneye
+   `acceptance/interrupts/ie_push`.)*
+7. **Interrupt dispatch timing = 20 T-cycles**, with `PC`-high pushed before `PC`-low and
+   the vector latched between the two pushes. *(Covered: Mooneye
+   `acceptance/intr_timing`, `acceptance/interrupts/ie_push`, `acceptance/reti_intr_timing`,
+   `acceptance/halt_ime1_timing*`; and Blargg `interrupt_time` now prints the correct 13.)*
 8. **Interrupt priority.** With `IF` and `IE` both `0x1F`, VBlank (vector `0x40`) is
    serviced first. *(Not covered.)*
 9. **HALT with `IME=1` and pending interrupt** wakes, services the interrupt, and returns
@@ -233,8 +254,8 @@ OpenEmu screenshots, not an automated harness.
 | **Blargg `instr_timing`** | Per-instruction M-cycle counts | Wrong cycle table entry (affects everything downstream). |
 | **Blargg `mem_timing` / `mem_timing-2`** | *When* within an instruction memory is touched | **PASS** — timer stepped per memory access (§4). |
 | **Blargg `halt_bug`** | The HALT bug | **PASS** — modelled (quirk §5). |
-| **Blargg `interrupt_time`** | Interrupt dispatch timing | **Documented non-goal, and now measured: prints `Failed`.** Catches the 16-vs-20 T-cycle gap (test #7). Needs an APU installed or it hangs on its title screen. |
-| **Mooneye `acceptance/interrupts/`, `acceptance/instr/`, `acceptance/timer/`** | Interrupt edge timing (`ie_push`, `halt_ime*`) | The gold standard for the corners above. **Mooneye is not the declared submodule** and is not wired. |
+| **Blargg `interrupt_time`** | Interrupt dispatch timing | **Runs and prints `Failed`** — but the dispatch time it measures is now correct (13). The remaining failure is the CGB double-speed switch (§4). Needs an APU installed or it hangs on its title screen. |
+| **Mooneye `acceptance/`** (66 tests) | Interrupt edge timing, instruction M-cycle placement, timer, OAM DMA | The gold standard for the corners above. Run it with `cargo run --release --example mooneye_scout -- <mooneye-test-suite>/acceptance`; Mooneye is **not** a vendored submodule. |
 
 Blargg ROMs report pass/fail over the **serial port** — see [Serial](serial.md) for the
 capture plumbing that a harness would use.

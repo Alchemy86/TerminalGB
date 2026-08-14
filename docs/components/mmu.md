@@ -112,11 +112,14 @@ fn oamdma(&mut self, value: u8) {
 
 ### Honest approximations
 
-- **OAM DMA is instantaneous and unguarded.** `oamdma` copies all 160 bytes synchronously
-  the instant `0xFF46` is written ([`mod.rs:521`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L521)). Real hardware
-  takes **160 M-cycles (640 dots)**, during which **the CPU may access only HRAM**. Here
-  the transfer takes zero emulated time and the bus is never restricted, so DMA-timing
-  tricks (and the standard HRAM DMA-wait routine's *timing*) are not reproduced.
+- **OAM DMA is timed but only *OAM* is guarded.** [`src/mmu/oamdma.rs`](../../src/mmu/oamdma.rs)
+  models the real schedule — the write to `$FF46` is M=0, the transfer starts at M=2, and
+  it copies one byte per M-cycle for 160 M-cycles — and while it runs the CPU reads `$FF`
+  from OAM and its writes there are dropped. What is **not** modelled is the rest of the
+  bus restriction: hardware also stops the CPU seeing ROM/RAM during the transfer (which is
+  why DMA-wait routines must run from HRAM), and a CPU read that collides with the
+  transfer's own bus returns the byte the DMA is moving. Programs that run their wait loop
+  from HRAM — i.e. all of them — see no difference.
 - **VRAM/OAM access is never blocked by PPU mode.** The CPU can read/write VRAM and OAM in
   any mode; hardware returns `0xFF` during modes 2/3. This interacts with the OAM
   corruption bug (see §5).
@@ -161,12 +164,13 @@ fn oamdma(&mut self, value: u8) {
    *(Not covered.)*
 3. **`IF` read-back.** After `wb(0xFF0F, 0x00)`, `rb(0xFF0F) == 0xE0` (top three bits
    read as 1). *(Not covered.)*
-4. **OAM DMA copies 160 bytes.** After `wb(0xFF46, 0xC0)`, OAM `0xFE00–0xFE9F` equals
-   `0xC000–0xC09F`. *(Not covered.)*
-5. **OAM DMA takes 160 M-cycles and locks the bus to HRAM.** **Documented non-goal —
-   instantaneous, unguarded.** Faithful DMA bus-locking needs a cycle-stepped CPU (the PPU
-   and CPU sharing the bus dot-by-dot); the project has not committed to that restructure,
-   and no wired ROM proves it. *(Not covered; structural non-goal.)*
+4. **OAM DMA copies 160 bytes.** After `wb(0xFF46, 0xC0)` and 162 M-cycles, OAM
+   `0xFE00–0xFE9F` equals `0xC000–0xC09F`. *(Covered: Mooneye `acceptance/oam_dma/basic`.)*
+5. **OAM DMA takes 160 M-cycles, starting two M-cycles after the write, and OAM is the
+   DMA's for the duration.** *(Covered: `src/mmu/oamdma.rs` unit tests, and Mooneye
+   `acceptance/oam_dma_start`, `oam_dma_timing`, `oam_dma_restart`, `oam_dma/basic`,
+   `oam_dma/reg_read`, `oam_dma/sources-GS` — all pass.)* Restricting the **rest** of the
+   bus is still not modelled and would need a cycle-stepped CPU. *(Partially covered.)*
 6. **VRAM is unreadable during mode 3** (returns `0xFF`). **Documented non-goal — not
    enforced.** Same structural dependency as #5 (needs cycle-accurate PPU/CPU bus
    arbitration). *(Not covered; structural non-goal.)*
@@ -190,7 +194,8 @@ fn oamdma(&mut self, value: u8) {
 |---|---|---|
 | **Blargg `oam_bug`** | The DMG OAM corruption bug | **Documented non-goal** — bug not modelled (§5); pinned red in `baseline.txt`. |
 | **Blargg `mem_timing` / `mem_timing-2`** | Cycle-exact timing of memory reads/writes | **PASS** — timer stepped per memory access (see [CPU §4](cpu.md), [Timer §4](timer.md)). |
-| **Mooneye `acceptance/oam_dma/`** (`basic`, `reg_read`, `sources-GS`) | OAM-DMA copy + timing + which sources are legal | Expected reds against the instant-DMA approximation. |
+| **Mooneye `acceptance/oam_dma*`** (`basic`, `reg_read`, `sources-GS`, `oam_dma_start`, `oam_dma_timing`, `oam_dma_restart`) | OAM-DMA copy, start delay, duration, restart, legal sources | **6/6 pass.** A failure means the transfer schedule or the OAM guard has moved. |
+| **Mooneye instruction-timing tests** (`rst_timing`, `call_timing*`, `push_timing`, `ret*_timing`, `jp*_timing`, `add_sp_e_timing`, `ld_hl_sp_e_timing`) | Which M-cycle each memory access of an instruction lands on — measured *through* the OAM-DMA guard | **All pass.** They are only measurable because OAM DMA is timed; see [`src/mmu/oamdma.rs`](../../src/mmu/oamdma.rs). |
 | **Mooneye `acceptance/bits/`** (`unused_hwio-GS`, `reg_f`) | Unused-bit read-back behaviour of hardware registers | Bad `\| 0b…` masks in `rb`. Blargg's `bits-unused`/`bits-bank1` are the repo's known failures here. |
 | **Mooneye `emulator-only/mbcX/`** | (routes into the MBC — see [MBC](mbc.md)) | — |
 
