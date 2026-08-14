@@ -865,6 +865,51 @@ mod tests {
         assert!(!host.any_wrote_memory());
     }
 
+    /// **A plugin may always stop the emulator writing the save file.**
+    ///
+    /// Every other entry point on `Machine` is gated, because every other one
+    /// lets a plugin *do* something to the machine. This one only takes a right
+    /// away, so the fail-safe direction is to allow it — and it matters,
+    /// because a game-specific plugin recognises a crash the CPU-level
+    /// detectors cannot. The Gen 1 link partner sees `wLinkState` hold a value
+    /// Pokémon never writes, while the runaway code stays in executable memory
+    /// and never reaches an undefined opcode.
+    #[test]
+    fn any_plugin_can_stop_the_emulator_writing_the_save() {
+        struct Alarm;
+        impl Plugin for Alarm {
+            fn name(&self) -> &str {
+                "alarm"
+            }
+            fn capabilities(&self) -> Capability {
+                // The weakest possible plugin: observe, nothing else.
+                Capability::OBSERVE
+            }
+            fn on_event(&mut self, _e: &Event, m: &mut Machine) {
+                m.report_fault("the game has left the rails");
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+
+        let mut mem = mmu();
+        assert_eq!(mem.fault(), None);
+        let mut host = PluginHost::new();
+        host.register(Box::new(Alarm)).unwrap();
+        host.on_frame(&mut mem);
+
+        assert_eq!(mem.fault(), Some("the game has left the rails"));
+        assert_eq!(
+            mem.mbc.battery_poisoned(),
+            Some("the game has left the rails"),
+            "the fault must reach the battery, or the save is still at risk"
+        );
+    }
+
     #[test]
     fn capabilities_are_enforced_not_trusted() {
         let mut host = PluginHost::new();

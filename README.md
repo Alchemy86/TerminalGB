@@ -278,7 +278,9 @@ is validated against your own cartridge's tables, and a misspelled key refuses t
 than quietly handing over something else.
 
 📖 **[The full story, the step-by-step journey, and what to do if it hangs →
-docs/link-trade.md](docs/link-trade.md)** · the [plugin contract](docs/plugins.md) it is built on.
+docs/link-trade.md](docs/link-trade.md)** · the [plugin contract](docs/plugins.md) it is built on
+· the Cable Club's **other** room, the Colosseum, and the crash that used to eat save files →
+**[docs/link-battle.md](docs/link-battle.md)**.
 
 ---
 

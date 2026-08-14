@@ -2065,3 +2065,102 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   rest of the run. That failure is invisible unless the check is strict about how many
   encounters it wanted — **it is** (`seen < want` is a FAIL), and the pacing loop nudges itself
   free after eight motionless steps and reports how often it had to.
+
+## The save guard: a crashed game must never reach the battery file
+
+**Full story, with the crash that motivated it: [`docs/link-battle.md`](docs/link-battle.md).**
+
+- **`MemoryManagementUnit::report_fault(reason)` is the one entry point, and it does exactly
+  one thing: it withdraws the emulator's right to write the save file.** It poisons the
+  battery (`MemoryBankController::poison_battery` → `Battery::poison`), records why, warns
+  loudly on stderr, and is sticky for the session with the *first* reason kept. It
+  deliberately does **not** stop, reset or "fix" the machine — detectors are heuristics, and
+  only the irreversible act is taken away. `Gameboy::fault()` exposes it; the TUI shows a
+  `Fault: SAVE NOT WRITTEN` row and toasts once.
+- **Why it exists:** a Game Boy has no fault handler, so a program counter that walks off its
+  own code keeps executing and reliably stores bytes into cartridge RAM. Measured on Pokémon
+  Blue crashing out of a Cable Club link battle: **4,378 bytes of cartridge RAM changed within
+  six frames**, all persisted by the autosave over a real save. The game is recoverable; the
+  file is not.
+- **Three detectors, and the third is the reason plugins may report faults at all:**
+  (1) an **undefined opcode** — this used to `panic!` (an abort, under `panic = 'abort'`);
+  hardware *locks the CPU up*, so it now does that and faults. `$FC` was silently a NOP.
+  (The lock-up half also arrived independently on the CGB-DMA/abort branch; the two were
+  merged, and `illegal_opcode` keeps that branch's PC rewind so a debugger shows the
+  offending byte.)
+  (2) **fetching an opcode from `$FE00-$FF7F`** (OAM / unusable / I-O) — one subtract and one
+  compare per instruction; HRAM is deliberately excluded, real games run OAM DMA code there.
+  (3) **`Machine::report_fault`, which needs NO capability** — every other call there lets a
+  plugin *do* something, this one only takes a right away, so fail-safe is to allow it.
+  **Neither CPU-level detector fires on the Colosseum crash** (measured over 600 post-crash
+  frames: the runaway code stays in executable memory), which is the whole argument for (3).
+- **`Gameboy::frame` is bounded by `FRAME_TICKS_CAP`.** It looped until the PPU produced a
+  frame and `Gpu::do_cycle` returns immediately with the LCD off, so a crashed game that
+  switches the LCD off made it **unbounded** — six post-crash frames took a minute, forty
+  never finished; 600 of them now take four seconds. (Two crews landed this cap
+  independently, from opposite ends — the CGB-DMA/abort work and this one. `FRAME_TICKS + 64`
+  is the tighter and better-reasoned of the two and is what survived.)
+- **Test with teeth:** `testharness/battery.rs` case 8 boots a hand-assembled cartridge that
+  switches the LCD off, copies a routine into **OAM** and jumps to it, then fills cartridge
+  RAM with `$5A`. It asserts the crash was detected, that cartridge RAM really was rewritten
+  (so the case is not vacuous), and that the save file is byte-identical. Disable the poison
+  call and 8,192 of 32,768 bytes change.
+- **Sizing a TUI panel from a hard-coded row count drifts.** The Status box was `Length(13)`,
+  one short of its twelve fixed rows plus borders, so the last plugin row was clipped whenever
+  a plugin was attached — the exact bug that box's own comment says was fixed, reintroduced
+  when a row was added without moving the constant. Two crews found and fixed it the same way
+  in the same week; it is derived from the content now, and the `Fault` row is a live example
+  of the addition that used to cost a plugin its row.
+
+## Cable Club Colosseum — the link partner takes part in battles (`src/plugin/gen1/battle.rs`)
+
+- **One function drives both Cable Club rooms.** `CableClub_DoBattleOrTrade` exchanges the
+  identical 644 transfers for a trade and for a battle and diverges only afterwards, on
+  `wLinkState` — which **never crosses the cable**. `LinkBattleExchangeData` and
+  `Serial_SyncAndExchangeNybble` also share one encoding (`$60 | n`). So the trade-only
+  partner answered battle turns with trade answers; "confirm" reads as *move slot 2*, an
+  offered Pokémon with fewer than three moves has nothing there, and `GetCurrentMove` +
+  `_JumpMoveEffect` `jp hl` out of the program. **The shipped default offer (level 5 Mew, one
+  move) crashed deterministically at frame 4038.**
+- **Declining the Colosseum is not available**, and it is worth knowing why before anyone
+  proposes it again: `LinkMenu` resolves a disagreement in favour of whoever drives the clock,
+  and this partner deliberately makes the *game* the clock master. When the player presses A
+  on COLOSSEUM the game wins whatever we send; refusing to answer hangs it at "PLEASE WAIT!".
+- **The wire carries four bits per turn and nothing else** (`constants/serial_constants.asm`):
+  `0-3` move slot, `4+n` send out party slot n, `$D` cannot act, `$E` Struggle, `$F` run. No
+  result ever crosses — the player's console computes everything.
+- **The partner reads the host's battle state rather than simulating one.** `wEnemyMon` is
+  *us* from the host's point of view, so moves, PP, HP and party position are a lookup, not a
+  battle-engine reimplementation (which is the classic source of link desyncs). Honest label:
+  not a faithful second console, but a real opponent choosing real actions through the genuine
+  link path. `Host` is a **trait** so nothing is read during the 644-transfer exchange and the
+  protocol stays testable without a ROM (`NoHost`).
+- **`wEnemyMons = $D8A4`, located by measurement** — a WRAM search for a `party_struct`
+  matching the active Pokémon's species, level and max HP returned exactly one candidate.
+  `Host::party_hp` re-checks the species at run time, so a cartridge that disagrees is
+  declined rather than misread. `battle_struct` is **29 bytes**, not 28
+  (`src/trainer/gen1.rs`'s `BATTLE_MON_SIZE` is wrong, but it is only used in a doc comment).
+- **Without a recognised cartridge the partner is blind but still safe:** it names a move slot
+  that is populated in the party *it* sent. That floor is what makes the crash impossible on
+  any cartridge; the host reads only make it a good opponent.
+- **`seen_party()` had never once worked against a real cartridge.** It indexed the received
+  stream at fixed offsets, and no fixed offset can be right — `Serial_ExchangeBytes` re-sends
+  its block's first byte until it *receives* a preamble and then once more, so the leading
+  copy count depends on the other console. It now finds each block the way the hardware does
+  (skip to the `$FD` run, skip all of it, take the length) and tolerates the last block
+  arriving one byte short, which it always does. **The old unit test missed it because it fed
+  the partner our own framing back** — the regression test now builds the stream the way
+  `Serial_ExchangeBytes` does.
+- **A link battle is not a trade and must not be reported as one.** `trades_completed` used to
+  increment during every battle because turn 2 landed on `Phase::Confirm`.
+- **Harness:** `POKE_ROM=<blue.gb> cargo test --release --test colosseum`
+  (`testharness/colosseum.rs`, `harness = false`). Skips with exit 0 without a cartridge and a
+  cable-club save (`GB_CABLECLUB_SAVE`, or `gen1_trade --make-save`'s fixture). Two cases: the
+  shipped default offer, and a two-Pokémon party for the faint/replacement rendezvous — which
+  reads the answer off **the game's own screen** (the second Pokémon must come out by name; a
+  glitch Pokémon never is). Asserts `wLinkState` stays valid, no fault, no phantom trade, and
+  that **SRAM banks 1-3 are byte-identical** — not the whole file: bank 0 is `layout.link`'s
+  "Sprite Buffers", scratch the game legitimately rewrites all through a battle's animations.
+- **`gen1_trade --make-save` does not work on this box** (it stalls in Oak's speech, on the
+  default branch too). The fixture at `/tmp/gameboy-gen1-trade/cableclub.sav` was produced
+  earlier and is what the harness finds; regenerating it is an open problem.

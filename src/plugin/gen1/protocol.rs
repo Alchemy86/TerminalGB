@@ -52,6 +52,9 @@
 //! one shifts the entire party block and the game receives garbage — it is the
 //! single easiest thing to get wrong here.
 
+#[cfg(test)]
+use super::battle::NoHost;
+use super::battle::{self, Action, Host};
 use super::party::{
     self, Mon, Party, PARTY_BLOCK_LEN, PARTY_PREAMBLE, PATCH_BLOCK_LEN, PATCH_PREAMBLE,
     PREAMBLE_BYTE, RANDOM_BLOCK_LEN, RANDOM_PREAMBLE,
@@ -82,11 +85,6 @@ pub const SECTION_STREAM_LEN: usize = (1 + RANDOM_PREAMBLE + RANDOM_BLOCK_LEN)
     + (1 + PARTY_PREAMBLE + PARTY_BLOCK_LEN)
     + (1 + PATCH_PREAMBLE + PATCH_BLOCK_LEN);
 
-/// Where in the received stream each block's data lands. Derived in the module
-/// docs; pinned by a unit test so an off-by-one cannot creep back.
-const RX_PARTY: usize = 1 + (1 + RANDOM_PREAMBLE + RANDOM_BLOCK_LEN);
-const RX_PATCH: usize = RX_PARTY + 1 + (PARTY_PREAMBLE + PARTY_BLOCK_LEN);
-
 /// Where the exchange currently is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -103,6 +101,9 @@ pub enum Phase {
     Confirm,
     /// The trade happened; one more sync round follows.
     PostTrade,
+    /// **A link battle is running** and each nybble round is a battle turn.
+    /// Reached only in the Colosseum; see [`super::battle`].
+    Battling,
 }
 
 impl Phase {
@@ -114,8 +115,30 @@ impl Phase {
             Phase::SelectMon => "choosing Pokémon",
             Phase::Confirm => "confirming trade",
             Phase::PostTrade => "trade complete",
+            Phase::Battling => "link battle",
         }
     }
+}
+
+/// Which Cable Club room the player chose, as far as the partner can tell from
+/// the link menu.
+///
+/// This is only a *fallback*: `wLinkState` is what the game itself acts on and
+/// is preferred wherever it can be read. It is worth keeping because the link
+/// menu is the one place the room crosses the cable at all — the game otherwise
+/// never tells its partner which room it is in, which is exactly how a
+/// trade-only partner ended up in a battle.
+///
+/// `LinkMenu` (`engine/menus/main_menu.asm`) exchanges `$D0 | item |
+/// (button << 2)`; item 0 is TRADE CENTER, 1 COLOSSEUM, 2 CANCEL. When both
+/// consoles press a button the one driving the clock wins, and that is the
+/// game, so the item the player chose is always the item that happens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Room {
+    Unknown,
+    TradeCenter,
+    Colosseum,
+    Cancelled,
 }
 
 /// The virtual second Game Boy.
@@ -146,6 +169,15 @@ pub struct LinkPartner {
     traded_away: Option<Mon>,
     trades_completed: u32,
     exchanges_completed: u32,
+    /// Which room the link menu selected, as a fallback for `wLinkState`.
+    room: Room,
+    /// The action taken on the most recent battle turn, for the status bar.
+    last_action: Option<Action>,
+    battle_turns: u32,
+    /// Move choice is deliberately unpredictable — the opponent's behaviour
+    /// used to be a pure function of the player's own button presses. Seeded
+    /// from the offered party so a run is still reproducible.
+    rng: u32,
 }
 
 impl LinkPartner {
@@ -153,7 +185,18 @@ impl LinkPartner {
         let (block, patch) = party.to_blocks()?;
         let stream = build_stream(&block, &patch);
         debug_assert_eq!(stream.len(), SECTION_STREAM_LEN);
+        let seed = party
+            .mons
+            .iter()
+            .fold(0x9E37_79B9u32, |acc, m| {
+                acc.rotate_left(7) ^ u32::from(m.species) ^ (u32::from(m.ot_id) << 8)
+            })
+            .max(1);
         Ok(LinkPartner {
+            room: Room::Unknown,
+            last_action: None,
+            battle_turns: 0,
+            rng: seed,
             phase: Phase::Handshake,
             stream,
             stream_pos: 0,
@@ -199,6 +242,21 @@ impl LinkPartner {
         self.party.mons.get(self.offer_index as usize)
     }
 
+    /// Which Cable Club room the link menu chose.
+    pub fn room(&self) -> Room {
+        self.room
+    }
+
+    /// How many battle turns this partner has answered.
+    pub fn battle_turns(&self) -> u32 {
+        self.battle_turns
+    }
+
+    /// What it did on the most recent one.
+    pub fn last_action(&self) -> Option<Action> {
+        self.last_action
+    }
+
     /// Drop all protocol state and go back to waiting for a handshake.
     pub fn reset(&mut self) {
         self.clear_scratch();
@@ -215,16 +273,31 @@ impl LinkPartner {
         self.received.clear();
         self.in_nybble_round = false;
         self.nybble_reply = NYBBLE_BASE;
+        self.room = Room::Unknown;
+        self.last_action = None;
+    }
+
+    /// One byte of the clocked exchange with no view of the running game — the
+    /// pure-protocol entry point used by the tests.
+    #[cfg(test)]
+    pub fn feed_blind(&mut self, sent: u8) -> u8 {
+        self.feed(sent, &mut NoHost)
     }
 
     /// One byte of the clocked exchange: the game sent `sent`, we shift back the
     /// return value.
-    pub fn feed(&mut self, sent: u8) -> u8 {
+    ///
+    /// `host` is how the partner finds out **which room it is in**. Nothing on
+    /// the wire says: `CableClub_DoBattleOrTrade` runs the identical byte
+    /// sequence for a trade and for a battle, so a partner that guesses answers
+    /// battle turns with trade answers — which is what crashed the game. See
+    /// [`super::battle`].
+    pub fn feed(&mut self, sent: u8, host: &mut dyn Host) -> u8 {
         if self.phase == Phase::Exchanging {
             // Deliberately *before* the cancel check below: inside a block, $6F
             // is ordinary party data (a stat, a name character, a patch offset)
             // and must be answered from our stream, not treated as a cancel.
-            return self.feed_exchanging(sent);
+            return self.feed_exchanging(sent, host);
         }
 
         // "Let me out." Handled here rather than inside one phase's branch,
@@ -240,7 +313,7 @@ impl LinkPartner {
             self.phase = Phase::Exchanging;
             self.stream_pos = 0;
             self.received.clear();
-            return self.feed_exchanging(sent);
+            return self.feed_exchanging(sent, host);
         }
 
         // (Re-)handshake. Safe to accept at any non-exchanging moment: the game
@@ -260,7 +333,7 @@ impl LinkPartner {
         }
 
         if sent & 0xF0 == NYBBLE_BASE {
-            return self.feed_nybble(sent & 0x0F);
+            return self.feed_nybble(sent & 0x0F, host);
         }
 
         if sent & 0xF0 == MENU_BASE {
@@ -268,6 +341,17 @@ impl LinkPartner {
             // that always agrees is exactly what a cooperative second player
             // does, and it means "TRADE CENTER" is entered on the player's
             // button press rather than on ours.
+            //
+            // Note the room, because it is the only moment it crosses the
+            // cable. A selection only counts once a button is pressed (bits
+            // 2-3); before that the byte just follows the moving cursor.
+            if sent & 0x0C != 0 {
+                self.room = match sent & 0x03 {
+                    0 => Room::TradeCenter,
+                    1 => Room::Colosseum,
+                    _ => Room::Cancelled,
+                };
+            }
             return sent;
         }
 
@@ -313,14 +397,47 @@ impl LinkPartner {
         CANCEL_BYTE
     }
 
-    fn feed_nybble(&mut self, nybble: u8) -> u8 {
+    fn feed_nybble(&mut self, nybble: u8, host: &mut dyn Host) -> u8 {
         if !self.in_nybble_round {
             self.in_nybble_round = true;
-            let (reply, next) = self.decide_round(nybble);
+            let (reply, next) = self.decide_round(nybble, host);
             self.nybble_reply = reply;
             self.phase = next;
         }
         self.nybble_reply
+    }
+
+    /// One step of a 32-bit xorshift. Not cryptography — the requirement is
+    /// only that the opponent's choice is not a function of the player's own
+    /// button presses, which is what it used to be.
+    fn roll(&mut self) -> u32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        self.rng
+    }
+
+    /// Answer one battle turn.
+    fn decide_battle(&mut self, host: &mut dyn Host) -> (u8, Phase) {
+        // The battle is over as soon as the game leaves `LINK_STATE_BATTLING`;
+        // from there the Cable Club's own rendezvous sync resumes and must be
+        // answered with nybble 0, not with a battle action.
+        if let Some(state) = host.link_state() {
+            if state != battle::LINK_STATE_BATTLING {
+                return (NYBBLE_BASE, Phase::Connected);
+            }
+        }
+        let fallback = self
+            .party
+            .mons
+            .first()
+            .map(|m| m.moves)
+            .unwrap_or([0, 0, 0, 0]);
+        let roll = self.roll();
+        let action = battle::choose(host, fallback, roll);
+        self.last_action = Some(action);
+        self.battle_turns += 1;
+        (NYBBLE_BASE | action.nybble(), Phase::Battling)
     }
 
     /// Choose this round's answer and the phase the *next* round will be in.
@@ -329,8 +446,11 @@ impl LinkPartner {
     /// for [`Self::feed_cancel`] in *every* phase, which is the point: a cancel
     /// answered by only one of these arms is a cancel that stops working as
     /// soon as the phase moves on.
-    fn decide_round(&mut self, nybble: u8) -> (u8, Phase) {
+    fn decide_round(&mut self, nybble: u8, host: &mut dyn Host) -> (u8, Phase) {
         debug_assert_ne!(nybble, NYBBLE_CANCEL, "$6F is handled by feed_cancel");
+        if self.phase == Phase::Battling {
+            return self.decide_battle(host);
+        }
         match self.phase {
             Phase::SelectMon => (NYBBLE_BASE | (self.offer_index & 0x0F), Phase::Confirm),
             Phase::Confirm => match nybble {
@@ -348,7 +468,7 @@ impl LinkPartner {
         }
     }
 
-    fn feed_exchanging(&mut self, sent: u8) -> u8 {
+    fn feed_exchanging(&mut self, sent: u8, host: &mut dyn Host) -> u8 {
         self.received.push(sent);
         let reply = self
             .stream
@@ -357,15 +477,28 @@ impl LinkPartner {
             .unwrap_or(party::NO_DATA_BYTE);
         self.stream_pos += 1;
         if self.stream_pos >= self.stream.len() {
-            self.finish_exchange();
+            self.finish_exchange(host);
         }
         reply
     }
 
-    fn finish_exchange(&mut self) {
+    fn finish_exchange(&mut self, host: &mut dyn Host) {
         self.exchanges_completed += 1;
         self.seen_party = decode_received_party(&self.received);
-        self.phase = Phase::SelectMon;
+        // **The one place the two rooms diverge.** Both send the identical 644
+        // bytes; what follows is a trade selection in one room and a battle
+        // turn in the other. `wLinkState` is `LINK_STATE_START_BATTLE` at this
+        // exact moment — `cable_club.asm` promotes it to `LINK_STATE_BATTLING`
+        // immediately afterwards — so the game has already told us, if we can
+        // read it. Otherwise fall back to the link-menu selection.
+        self.phase = match host.link_state() {
+            Some(battle::LINK_STATE_START_BATTLE) | Some(battle::LINK_STATE_BATTLING) => {
+                Phase::Battling
+            }
+            Some(_) => Phase::SelectMon,
+            None if self.room == Room::Colosseum => Phase::Battling,
+            None => Phase::SelectMon,
+        };
         self.in_nybble_round = false;
         self.stream_pos = 0;
     }
@@ -380,17 +513,23 @@ impl LinkPartner {
     }
 }
 
-/// Concatenate the three blocks into the stream we clock back, leading each with
-/// one extra preamble byte for the receiver's re-sync read.
-fn build_stream(party_block: &[u8], patch_block: &[u8]) -> Vec<u8> {
-    // Random numbers: the game ignores ours when it is the clock master (it uses
-    // its own list), but they must still be well formed — strictly below the
-    // preamble byte, and never zero or the no-data byte, because the receiver's
-    // "find the start of the list" loop skips exactly those.
+/// The random-number list we clock back. The game ignores ours when it is the
+/// clock master (it uses its own), but they must still be well formed —
+/// strictly below the preamble byte, and never zero or the no-data byte,
+/// because the receiver's "find the start of the list" loop skips exactly
+/// those.
+fn make_random() -> [u8; RANDOM_BLOCK_LEN] {
     let mut random = [0u8; RANDOM_BLOCK_LEN];
     for (i, r) in random.iter_mut().enumerate() {
         *r = 1 + (i as u8).wrapping_mul(23) % 0xFB;
     }
+    random
+}
+
+/// Concatenate the three blocks into the stream we clock back, leading each with
+/// one extra preamble byte for the receiver's re-sync read.
+fn build_stream(party_block: &[u8], patch_block: &[u8]) -> Vec<u8> {
+    let random = make_random();
 
     let mut s = Vec::with_capacity(SECTION_STREAM_LEN);
     s.extend(std::iter::repeat(PREAMBLE_BYTE).take(1 + RANDOM_PREAMBLE));
@@ -402,19 +541,63 @@ fn build_stream(party_block: &[u8], patch_block: &[u8]) -> Vec<u8> {
     s
 }
 
+/// Split a received stream into its three blocks the way the *receiver* does.
+///
+/// The old version indexed at fixed offsets, and it was wrong against a real
+/// cartridge — `seen_party()` returned `None` after every genuine exchange, in
+/// both Cable Club rooms, and had never once worked. The reason is in
+/// `Serial_ExchangeBytes` (`home/serial.asm`): while `hSerialIgnoringInitialData`
+/// is set the sender **re-sends its block's first byte** and stores nothing,
+/// and it only starts storing once it has *received* a preamble byte. So how
+/// many leading copies arrive depends on when the other console's preamble
+/// turns up, and no fixed offset can be right. (The unit tests missed it
+/// because they fed the partner our own framing back.)
+///
+/// The fix is to find each block the way the hardware does: skip to the run of
+/// `$FD`, skip the whole run however long it is, then take exactly the block's
+/// length. Safe because none of the three block bodies can begin with `$FD` —
+/// the random list is generated strictly below it, the party block begins with
+/// a trainer name in the game's own character encoding, and the patch list
+/// holds 1-based offsets no greater than 252.
+fn split_blocks(rx: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let mut i = 0usize;
+    // Skip to the next run of `$FD` and past all of it; the data starts after.
+    let skip_preamble = |i: &mut usize| -> Option<()> {
+        while *rx.get(*i)? != PREAMBLE_BYTE {
+            *i += 1;
+        }
+        while *rx.get(*i)? == PREAMBLE_BYTE {
+            *i += 1;
+        }
+        Some(())
+    };
+
+    skip_preamble(&mut i)?;
+    let random = rx.get(i..i + RANDOM_BLOCK_LEN)?;
+    i += RANDOM_BLOCK_LEN;
+
+    skip_preamble(&mut i)?;
+    let party = rx.get(i..i + PARTY_BLOCK_LEN)?;
+    i += PARTY_BLOCK_LEN;
+
+    // The patch list is allowed to arrive short, and against a real cartridge
+    // it always does — by exactly one byte. Our own stream leads each block
+    // with one re-sync copy; the game re-sends its first byte until it sees our
+    // preamble and then once more, so its stream is one transfer longer than
+    // ours and we stop clocking before its final byte. That byte is the patch
+    // list's trailing padding — the list is self-terminating with `$FF`, so
+    // nothing is lost. Requiring the full 197 here is a decode failure on every
+    // genuine exchange.
+    skip_preamble(&mut i)?;
+    let patch = rx.get(i..(i + PATCH_BLOCK_LEN).min(rx.len()))?;
+    Some((random, party, patch))
+}
+
 /// Decode the party the game sent us out of the captured stream.
 fn decode_received_party(rx: &[u8]) -> Option<Party> {
-    if rx.len() < SECTION_STREAM_LEN {
-        return None;
-    }
-    let party_total = PARTY_PREAMBLE + PARTY_BLOCK_LEN;
-    let patch_total = PATCH_PREAMBLE + PATCH_BLOCK_LEN;
-    let mut block = rx.get(RX_PARTY..RX_PARTY + party_total)?.to_vec();
-    let patch = rx.get(RX_PATCH..RX_PATCH + patch_total)?.to_vec();
-    // Drop each block's own preamble to get at the data.
-    let data = block.split_off(PARTY_PREAMBLE);
-    let mut data = data;
-    party::unpatch(&mut data, &patch[PATCH_PREAMBLE..]);
+    let (_random, party_block, patch) = split_blocks(rx)?;
+    let mut data = party_block.to_vec();
+    party::unpatch(&mut data, patch);
 
     let trainer_name = text::decode(&data[..NAME_LENGTH]);
     let count = *data.get(party::OFF_PARTY_COUNT)? as usize;
@@ -493,38 +676,38 @@ mod tests {
         assert_eq!(p.phase(), Phase::Handshake);
         // The game offers to take the clock with $01; answering $02 is what
         // sets its hSerialConnectionStatus to USING_INTERNAL_CLOCK.
-        assert_eq!(p.feed(ESTABLISH_INTERNAL), ESTABLISH_EXTERNAL);
+        assert_eq!(p.feed_blind(ESTABLISH_INTERNAL), ESTABLISH_EXTERNAL);
         assert_eq!(p.phase(), Phase::Connected);
     }
 
     #[test]
     fn the_rendezvous_sync_answers_nybble_zero() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
-        assert_eq!(p.feed(0x60), 0x60);
-        assert_eq!(p.feed(0x60), 0x60);
-        assert_eq!(p.feed(0x00), 0x00);
+        p.feed_blind(ESTABLISH_INTERNAL);
+        assert_eq!(p.feed_blind(0x60), 0x60);
+        assert_eq!(p.feed_blind(0x60), 0x60);
+        assert_eq!(p.feed_blind(0x00), 0x00);
     }
 
     #[test]
     fn the_link_menu_agrees_with_the_player() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         // $D4 = A pressed on TRADE CENTER (item 0, button A -> +4).
-        assert_eq!(p.feed(0xD4), 0xD4);
+        assert_eq!(p.feed_blind(0xD4), 0xD4);
         // ...and cancel is agreed with too, rather than forced through.
-        assert_eq!(p.feed(0xDA), 0xDA);
+        assert_eq!(p.feed_blind(0xDA), 0xDA);
     }
 
     /// Drive a whole section exchange and check both directions.
     fn run_exchange(p: &mut LinkPartner, their_stream: &[u8]) -> Vec<u8> {
-        their_stream.iter().map(|&b| p.feed(b)).collect()
+        their_stream.iter().map(|&b| p.feed_blind(b)).collect()
     }
 
     #[test]
     fn a_full_exchange_delivers_our_party_where_the_game_will_look_for_it() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
 
         // Model the receiver: it re-sends its first byte until it sees a
         // preamble, then stores the next N bytes. Build the game's side of the
@@ -541,13 +724,10 @@ mod tests {
         assert_eq!(p.phase(), Phase::SelectMon);
         assert_eq!(p.exchanges_completed(), 1);
 
-        // What the game stores for each block is our stream with each block's
-        // leading re-sync byte dropped.
-        let stored_party = &ours[RX_PARTY..RX_PARTY + PARTY_PREAMBLE + PARTY_BLOCK_LEN];
-        assert!(stored_party[..PARTY_PREAMBLE]
-            .iter()
-            .all(|&b| b == PREAMBLE_BYTE));
-        let data = &stored_party[PARTY_PREAMBLE..];
+        // Find the party block in our own outgoing stream the way the receiver
+        // finds it, rather than at an offset we chose — the fixed offsets are
+        // exactly what was wrong on the receive side.
+        let (_r, data, _p) = split_blocks(&ours).expect("our stream is well formed");
         assert_eq!(text::decode(&data[..NAME_LENGTH]), "AI");
         assert_eq!(data[party::OFF_PARTY_COUNT], 1);
         assert_eq!(data[party::OFF_MONS], 21);
@@ -556,7 +736,7 @@ mod tests {
     #[test]
     fn we_decode_the_party_the_game_offered_us() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         let other = Party {
             trainer_name: "ASH".into(),
             mons: vec![test_mon(0x99), test_mon(0x54)],
@@ -577,7 +757,7 @@ mod tests {
     #[test]
     fn selection_then_confirmation_completes_a_trade() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         let other = Party {
             trainer_name: "ASH".into(),
             mons: vec![test_mon(0x99)],
@@ -587,38 +767,38 @@ mod tests {
         assert_eq!(p.phase(), Phase::SelectMon);
 
         // Player picks their slot 0; we answer with our own offered slot.
-        assert_eq!(p.feed(0x60), 0x60);
-        assert_eq!(p.feed(0x60), 0x60);
-        p.feed(0x00); // round separator
+        assert_eq!(p.feed_blind(0x60), 0x60);
+        assert_eq!(p.feed_blind(0x60), 0x60);
+        p.feed_blind(0x00); // round separator
         assert_eq!(p.phase(), Phase::Confirm);
 
         // Player confirms (nybble 2); so do we.
-        assert_eq!(p.feed(0x62), 0x62);
-        p.feed(0x00);
+        assert_eq!(p.feed_blind(0x62), 0x62);
+        p.feed_blind(0x00);
         assert_eq!(p.trades_completed(), 1);
         assert_eq!(p.phase(), Phase::PostTrade);
 
         // Post-trade sync, then back to waiting for the next exchange.
-        p.feed(0x62);
-        p.feed(0x00);
+        p.feed_blind(0x62);
+        p.feed_blind(0x00);
         assert_eq!(p.phase(), Phase::Connected);
     }
 
     #[test]
     fn a_cancelled_confirmation_returns_to_selection_without_trading() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         let other = Party {
             trainer_name: "ASH".into(),
             mons: vec![test_mon(0x99)],
         };
         let (b, patch) = other.to_blocks().unwrap();
         run_exchange(&mut p, &build_stream(&b, &patch));
-        p.feed(0x60);
-        p.feed(0x00);
+        p.feed_blind(0x60);
+        p.feed_blind(0x00);
         // Nybble 1 = "no trade".
-        assert_eq!(p.feed(0x61), 0x61);
-        p.feed(0x00);
+        assert_eq!(p.feed_blind(0x61), 0x61);
+        p.feed_blind(0x00);
         assert_eq!(p.trades_completed(), 0);
         assert_eq!(p.phase(), Phase::SelectMon);
     }
@@ -626,15 +806,15 @@ mod tests {
     #[test]
     fn cancelling_the_selection_screen_is_agreed_with() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         let other = Party {
             trainer_name: "ASH".into(),
             mons: vec![test_mon(0x99)],
         };
         let (b, patch) = other.to_blocks().unwrap();
         run_exchange(&mut p, &build_stream(&b, &patch));
-        assert_eq!(p.feed(0x6F), 0x6F);
-        p.feed(0x00);
+        assert_eq!(p.feed_blind(0x6F), 0x6F);
+        p.feed_blind(0x00);
         assert_eq!(p.phase(), Phase::Connected);
         assert_eq!(p.trades_completed(), 0);
     }
@@ -666,26 +846,30 @@ mod tests {
         if phase == Phase::Handshake {
             return p;
         }
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         match phase {
             Phase::Connected => {}
             Phase::Exchanging => {
-                p.feed(PREAMBLE_BYTE);
+                p.feed_blind(PREAMBLE_BYTE);
             }
             Phase::SelectMon => {
                 run_exchange(&mut p, &their_stream());
             }
             Phase::Confirm => {
                 run_exchange(&mut p, &their_stream());
-                p.feed(0x60); // the player picked party slot 0
-                p.feed(0x00);
+                p.feed_blind(0x60); // the player picked party slot 0
+                p.feed_blind(0x00);
             }
             Phase::PostTrade => {
                 run_exchange(&mut p, &their_stream());
-                p.feed(0x60);
-                p.feed(0x00);
-                p.feed(0x62); // ...and confirmed it
-                p.feed(0x00);
+                p.feed_blind(0x60);
+                p.feed_blind(0x00);
+                p.feed_blind(0x62); // ...and confirmed it
+                p.feed_blind(0x00);
+            }
+            Phase::Battling => {
+                p.feed_blind(0xD5); // A on COLOSSEUM, so the room is known
+                run_exchange(&mut p, &their_stream());
             }
             Phase::Handshake => unreachable!(),
         }
@@ -709,8 +893,8 @@ mod tests {
     /// bytes in `.loop3`. The game keeps the **last** `$6x` it saw, so every
     /// byte of the run has to come back the same.
     fn nybble_round(p: &mut LinkPartner, byte: u8) -> Vec<u8> {
-        let mut out: Vec<u8> = (0..12).map(|_| p.feed(byte)).collect();
-        out.extend((0..10).map(|_| p.feed(0x00)));
+        let mut out: Vec<u8> = (0..12).map(|_| p.feed_blind(byte)).collect();
+        out.extend((0..10).map(|_| p.feed_blind(0x00)));
         out
     }
 
@@ -719,7 +903,7 @@ mod tests {
         for phase in CANCELLABLE {
             let mut p = partner_in(phase);
             assert_eq!(
-                p.feed(CANCEL_BYTE),
+                p.feed_blind(CANCEL_BYTE),
                 CANCEL_BYTE,
                 "$6F sent from {phase:?} was not echoed — the game would sit on \
                  the trade screen for ever"
@@ -786,7 +970,7 @@ mod tests {
     fn the_cancel_byte_is_data_inside_an_exchange() {
         let mut p = partner_in(Phase::Exchanging);
         let expected = p.stream[p.stream_pos];
-        assert_eq!(p.feed(CANCEL_BYTE), expected);
+        assert_eq!(p.feed_blind(CANCEL_BYTE), expected);
         assert_eq!(p.phase(), Phase::Exchanging);
         assert_eq!(p.received.last(), Some(&CANCEL_BYTE));
     }
@@ -833,7 +1017,7 @@ mod tests {
     #[test]
     fn a_second_exchange_starts_cleanly_after_a_trade() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
+        p.feed_blind(ESTABLISH_INTERNAL);
         let other = Party {
             trainer_name: "ASH".into(),
             mons: vec![test_mon(0x99)],
@@ -841,12 +1025,12 @@ mod tests {
         let (b, patch) = other.to_blocks().unwrap();
         let stream = build_stream(&b, &patch);
         run_exchange(&mut p, &stream);
-        p.feed(0x60);
-        p.feed(0x00);
-        p.feed(0x62);
-        p.feed(0x00);
-        p.feed(0x62);
-        p.feed(0x00);
+        p.feed_blind(0x60);
+        p.feed_blind(0x00);
+        p.feed_blind(0x62);
+        p.feed_blind(0x00);
+        p.feed_blind(0x62);
+        p.feed_blind(0x00);
         // Straight back into another full exchange.
         let ours = run_exchange(&mut p, &stream);
         assert_eq!(ours.len(), SECTION_STREAM_LEN);
@@ -854,14 +1038,186 @@ mod tests {
         assert_eq!(p.phase(), Phase::SelectMon);
     }
 
+    /// A host that says what room it is in, so the Colosseum path can be driven
+    /// without booting a ROM.
+    struct FakeHost {
+        state: u8,
+        active: Option<super::battle::ActiveMon>,
+    }
+    impl Host for FakeHost {
+        fn link_state(&mut self) -> Option<u8> {
+            Some(self.state)
+        }
+        fn active(&mut self) -> Option<super::battle::ActiveMon> {
+            self.active
+        }
+    }
+
+    fn colosseum_host() -> FakeHost {
+        FakeHost {
+            state: super::battle::LINK_STATE_START_BATTLE,
+            active: Some(super::battle::ActiveMon {
+                species: 21,
+                hp: 40,
+                party_pos: 0,
+                moves: [1, 2, 0, 0],
+                pp: [10, 10, 0, 0],
+            }),
+        }
+    }
+
+    fn other_party() -> Party {
+        Party {
+            trainer_name: "ASH".into(),
+            mons: vec![test_mon(0x99), test_mon(0x54)],
+        }
+    }
+
+    /// **The bug.** A Colosseum session runs the identical 644-byte exchange a
+    /// trade does and then asks a question with the identical encoding — and
+    /// the trade state machine used to answer it, sending "confirm" (nybble 2)
+    /// as move slot 2. A Pokémon with two moves has nothing in slot 2, and the
+    /// game jumps out of its own program.
+    #[test]
+    fn a_colosseum_round_is_answered_as_a_battle_action_not_a_trade_phase() {
+        let mut p = partner();
+        let mut host = colosseum_host();
+        p.feed(ESTABLISH_INTERNAL, &mut host);
+        p.feed(0xD5, &mut host); // A on COLOSSEUM
+        let (b, patch) = other_party().to_blocks().unwrap();
+        for byte in build_stream(&b, &patch) {
+            p.feed(byte, &mut host);
+        }
+        assert_eq!(p.phase(), Phase::Battling);
+        assert_eq!(p.room(), Room::Colosseum);
+
+        host.state = super::battle::LINK_STATE_BATTLING;
+        // Twenty turns, each answered as an action the receiver bounds-checks.
+        for _ in 0..20 {
+            let reply = p.feed(0x60, &mut host);
+            assert_eq!(reply & 0xF0, NYBBLE_BASE);
+            let nybble = reply & 0x0F;
+            // Only ever a populated move slot, or one of the three defined
+            // special actions. The partner's Pokémon has moves in slots 0 and 1.
+            assert!(
+                nybble < 2 || (0x0D..=0x0F).contains(&nybble),
+                "answered {nybble:#x}, which is neither a populated move slot nor a \
+                 defined action"
+            );
+            p.feed(0x00, &mut host);
+        }
+        assert_eq!(p.battle_turns(), 20);
+        // ...and it is a battle, not a trade. This used to count one per fight.
+        assert_eq!(p.trades_completed(), 0);
+    }
+
+    /// The trade path is untouched by all of that.
+    #[test]
+    fn a_trade_session_still_reaches_the_selection_round() {
+        let mut p = partner();
+        let mut host = FakeHost {
+            state: super::battle::LINK_STATE_START_TRADE,
+            active: None,
+        };
+        p.feed(ESTABLISH_INTERNAL, &mut host);
+        p.feed(0xD4, &mut host); // A on TRADE CENTER
+        let (b, patch) = other_party().to_blocks().unwrap();
+        for byte in build_stream(&b, &patch) {
+            p.feed(byte, &mut host);
+        }
+        assert_eq!(p.room(), Room::TradeCenter);
+        assert_eq!(p.phase(), Phase::SelectMon);
+    }
+
+    /// The game is the authority on which room it is in, not the menu byte we
+    /// echoed: `LinkMenu` resolves a disagreement in favour of whoever drives
+    /// the clock, which is always the game.
+    #[test]
+    fn the_games_link_state_beats_the_link_menu() {
+        let mut p = partner();
+        let mut host = FakeHost {
+            state: super::battle::LINK_STATE_START_TRADE,
+            active: None,
+        };
+        p.feed(ESTABLISH_INTERNAL, &mut host);
+        p.feed(0xD5, &mut host); // the menu said COLOSSEUM...
+        let (b, patch) = other_party().to_blocks().unwrap();
+        for byte in build_stream(&b, &patch) {
+            p.feed(byte, &mut host);
+        }
+        // ...but the game says it is trading, so it is trading.
+        assert_eq!(p.room(), Room::Colosseum);
+        assert_eq!(p.phase(), Phase::SelectMon);
+    }
+
+    /// With no view of the machine at all, the link-menu byte is all there is —
+    /// and it is enough to stop a trade answer reaching a battle turn.
+    #[test]
+    fn the_link_menu_alone_still_identifies_the_colosseum() {
+        let mut p = partner();
+        p.feed_blind(ESTABLISH_INTERNAL);
+        p.feed_blind(0xD5);
+        let (b, patch) = other_party().to_blocks().unwrap();
+        for byte in build_stream(&b, &patch) {
+            p.feed_blind(byte);
+        }
+        assert_eq!(p.phase(), Phase::Battling);
+    }
+
+    /// **The receive-side framing.** The old decoder indexed at fixed offsets
+    /// and was wrong against every real cartridge; the test that was supposed to
+    /// catch it fed the partner *our own* framing back. So this one builds the
+    /// stream the way `Serial_ExchangeBytes` (`home/serial.asm`) does: the
+    /// sender re-sends its block's first byte until it receives a preamble and
+    /// then once more, so the number of leading copies is not ours to choose —
+    /// and its stream ends up one transfer longer than ours, so we never clock
+    /// its final byte.
+    #[test]
+    fn a_party_is_decoded_from_the_framing_a_cartridge_actually_sends() {
+        // At least one: `Serial_ExchangeBytes` re-sends its first byte until it
+        // *receives* a preamble and then once more, so a real stream never
+        // carries fewer than one extra copy — and may carry several, which is
+        // exactly why no fixed offset works.
+        for extra_resync in 1..5usize {
+            let mut p = partner();
+            let (block, patch) = other_party().to_blocks().unwrap();
+            let mut wire = Vec::new();
+            for (preamble, body) in [
+                (RANDOM_PREAMBLE, &make_random()[..]),
+                (PARTY_PREAMBLE, &block[..]),
+                (PATCH_PREAMBLE, &patch[..]),
+            ] {
+                wire.extend(
+                    std::iter::repeat(PREAMBLE_BYTE).take(preamble + extra_resync),
+                );
+                wire.extend_from_slice(body);
+            }
+            // We stop clocking after our own stream length, whatever the game
+            // still had to send.
+            wire.truncate(SECTION_STREAM_LEN.min(wire.len()));
+
+            p.feed_blind(ESTABLISH_INTERNAL);
+            for b in &wire {
+                p.feed_blind(*b);
+            }
+            let seen = p.seen_party().unwrap_or_else(|| {
+                panic!("decode failed with {extra_resync} extra re-sync bytes")
+            });
+            assert_eq!(seen.trainer_name, "ASH");
+            assert_eq!(seen.mons.len(), 2);
+            assert_eq!(seen.mons[0].species, 0x99);
+            assert_eq!(seen.mons[1].species, 0x54);
+        }
+    }
+
     #[test]
     fn reset_returns_to_waiting_for_a_handshake() {
         let mut p = partner();
-        p.feed(ESTABLISH_INTERNAL);
-        p.feed(PREAMBLE_BYTE);
+        p.feed_blind(ESTABLISH_INTERNAL);
+        p.feed_blind(PREAMBLE_BYTE);
         assert_eq!(p.phase(), Phase::Exchanging);
         p.reset();
         assert_eq!(p.phase(), Phase::Handshake);
-        assert_eq!(p.feed(ESTABLISH_INTERNAL), ESTABLISH_EXTERNAL);
+        assert_eq!(p.feed_blind(ESTABLISH_INTERNAL), ESTABLISH_EXTERNAL);
     }
 }

@@ -1,7 +1,8 @@
 # Plugins — the attach half of the extension surface
 
 > Source: [`src/plugin/`](../src/plugin/) · **User guide:
-> [trading over the link cable](link-trade.md)** · Related: [debugging](debugging.md) ·
+> [trading over the link cable](link-trade.md)** · [link battles](link-battle.md) ·
+> Related: [debugging](debugging.md) ·
 > [telemetry](telemetry.md) · [serial](components/serial.md) · [conformance](conformance.md)
 > · [🗺️ Code map](codemap.md)
 

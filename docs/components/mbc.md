@@ -129,6 +129,14 @@ an RTC; otherwise it is `Battery::none()` and persists nothing (the web and FFI 
 - **A save that cannot be read is never overwritten.** A read error poisons the battery so
   later writes are refused, and construction fails loudly rather than silently starting a
   new game on top of an existing save.
+- **A save written by a crashed game is never written at all.** `Battery::poison` is the same
+  rule pointed the other way, and any part of the emulator can invoke it through
+  `MemoryManagementUnit::report_fault`: once something establishes that the CPU is no longer
+  executing the program, the bytes in cartridge RAM are not a save, and the autosave would
+  carry them straight over the real one. Measured on a real crash: **4,378 bytes of cartridge
+  RAM changed within six frames.** The latch covers `tick`, `flush` and the last-chance
+  `Drop`, is sticky for the session, and the user is told rather than silently robbed. Full
+  story: [`../link-battle.md`](../link-battle.md).
 
 **The header checksum** — `check_checksum`
 ([`src/mbc/mod.rs:116`](https://github.com/Alchemy86/gameboy/blob/main/src/mbc/mod.rs#L116), `#[allow(dead_code)]`) sums `0x134..0x14D`

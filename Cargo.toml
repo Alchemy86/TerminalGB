@@ -131,3 +131,13 @@ harness = false
 name = "trainer"
 path = "testharness/trainer.rs"
 harness = false
+
+# Cable Club Colosseum harness: drives a real Pokémon Red/Blue cartridge into a
+# **link battle** against the virtual partner and asserts the game never leaves
+# its own code and the save file is never touched. This is the regression for
+# the crash that scribbled 4,378 bytes over a battery save. Skips (exit 0)
+# without a cartridge and a cable-club save. See testharness/colosseum.rs.
+[[test]]
+name = "colosseum"
+path = "testharness/colosseum.rs"
+harness = false

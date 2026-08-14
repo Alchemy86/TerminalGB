@@ -35,6 +35,7 @@
 //! * [`spec`] — [`PokemonSource`](spec::PokemonSource): *where the Pokémon comes
 //!   from*, kept separate from how it is traded.
 
+pub mod battle;
 pub mod party;
 pub mod protocol;
 pub mod romdata;
@@ -42,7 +43,8 @@ pub mod spec;
 pub mod text;
 
 use super::{Capability, Event, Machine, Plugin};
-use protocol::LinkPartner;
+use battle::{MachineHost, NoHost};
+use protocol::{LinkPartner, Phase};
 use romdata::RomTables;
 use spec::{PokemonSource, SourceError, TradeSpec};
 
@@ -66,6 +68,20 @@ pub struct Gen1LinkPartner {
     /// at the wire. Keeping the tail is enough: the close sequence, the
     /// selection round and the post-trade sync all sit at the end of a run.
     trace: Option<std::collections::VecDeque<(u8, u8, protocol::Phase)>>,
+    /// Species of each Pokémon we put on the wire, in party order — used to
+    /// confirm the host's copy of our party before its HP is trusted.
+    offered_species: Vec<u8>,
+    /// Which Gen 1 game this is, if it is one whose RAM map we know. `None`
+    /// means the partner still speaks the protocol but reads nothing from
+    /// memory; see [`battle`].
+    game: Option<crate::trainer::Game>,
+    /// Set once the cartridge has been identified, on the first dispatch.
+    identified: bool,
+    /// Consecutive frames on which `wLinkState` has held an impossible value.
+    /// One frame is not enough — see [`Gen1LinkPartner::watch_for_crash`].
+    bad_link_state: u32,
+    /// The crash has been reported; do not report it again.
+    crash_reported: bool,
 }
 
 /// How many wire bytes the optional trace retains.
@@ -84,6 +100,7 @@ impl Gen1LinkPartner {
         let tables = RomTables::locate(rom)?;
         let party = source.party(&tables)?;
         let offer = describe_party(&party, &tables);
+        let offered_species = party.mons.iter().map(|m| m.species).collect();
         let partner = LinkPartner::new(party)?;
         Ok(Gen1LinkPartner {
             partner,
@@ -94,6 +111,11 @@ impl Gen1LinkPartner {
             trace: std::env::var("GB_GEN1_LINK_TRACE")
                 .is_ok_and(|v| v != "0")
                 .then(|| std::collections::VecDeque::with_capacity(TRACE_LEN)),
+            offered_species,
+            game: None,
+            identified: false,
+            bad_link_state: 0,
+            crash_reported: false,
         })
     }
 
@@ -153,6 +175,91 @@ impl Gen1LinkPartner {
     pub fn origin(&self) -> &str {
         &self.origin
     }
+
+    /// How many battle turns this partner has taken part in.
+    pub fn battle_turns(&self) -> u32 {
+        self.partner.battle_turns()
+    }
+
+    /// Which Cable Club room the link menu chose.
+    pub fn room(&self) -> protocol::Room {
+        self.partner.room()
+    }
+
+    /// Which Gen 1 game this is, once the cartridge has been identified.
+    pub fn game(&self) -> Option<crate::trainer::Game> {
+        self.game
+    }
+
+    /// Identify the cartridge, once. Title *and* header checksum, the same test
+    /// the trainer view uses: a hack or a translation with a shifted RAM layout
+    /// must be declined rather than read wrongly.
+    fn identify(&mut self, machine: &mut Machine) {
+        if self.identified {
+            return;
+        }
+        self.identified = true;
+        self.game =
+            crate::trainer::Game::detect(&machine.rom_title(), machine.global_checksum());
+        if self.game.is_none() {
+            self.events.push(
+                "cartridge not recognised: trading works, but battle turns are \
+                 answered without reading the game's own battle state"
+                    .into(),
+            );
+        }
+    }
+
+    /// **Watch for the game crashing, and stop the emulator saving over the
+    /// player's file when it does.**
+    ///
+    /// `wLinkState` is only ever one of seven values, all of them written by
+    /// the game itself. Anything else means the CPU is no longer executing the
+    /// program — and within six frames of that happening, the reproduction this
+    /// was written against had rewritten 4,378 bytes of cartridge RAM, which
+    /// the autosave then carried to disk over a real save.
+    ///
+    /// This is the case for a plugin being allowed to report a fault at all:
+    /// the CPU-level detectors
+    /// ([`crate::mmu::MemoryManagementUnit::report_fault`]) never fire on this
+    /// crash, because the runaway code stays in executable memory and never
+    /// reaches an undefined opcode. A plugin that knows the game recognises it
+    /// immediately.
+    ///
+    /// Two guards against a false alarm, which would stop a *healthy* game
+    /// saving:
+    ///
+    /// * only while a link session is actually in progress, so the random WRAM
+    ///   this emulator boots with is never read as a link state;
+    /// * only after two consecutive frames, so a value sampled mid-write cannot
+    ///   trip it.
+    fn watch_for_crash(&mut self, machine: &mut Machine) {
+        if self.crash_reported || self.game.is_none() {
+            return;
+        }
+        if self.partner.phase() == Phase::Handshake {
+            self.bad_link_state = 0;
+            return;
+        }
+        let Some(state) = machine.peek(battle::LINK_STATE) else {
+            return;
+        };
+        if battle::is_valid_link_state(state) {
+            self.bad_link_state = 0;
+            return;
+        }
+        self.bad_link_state += 1;
+        if self.bad_link_state < 2 {
+            return;
+        }
+        self.crash_reported = true;
+        let reason = format!(
+            "the game's link state is {state:#04x}, which is not a value Pokémon \
+             ever writes there — the game has crashed during a link session"
+        );
+        self.events.push(reason.clone());
+        machine.report_fault(&reason);
+    }
 }
 
 fn describe_party(p: &party::Party, tables: &RomTables) -> String {
@@ -184,6 +291,23 @@ impl Plugin for Gen1LinkPartner {
     }
 
     fn status(&self) -> String {
+        // A link battle is not a trade and must not be described as one. The
+        // status bar used to announce "1 traded" during every Colosseum battle,
+        // because the trade state machine was answering the battle's nybble
+        // rounds — a lie in the UI, and a lie any bridge trusting
+        // `trades_completed` would have propagated.
+        if self.partner.phase() == Phase::Battling {
+            let action = self
+                .partner
+                .last_action()
+                .map(|a| a.label())
+                .unwrap_or_else(|| "starting".into());
+            return format!(
+                "battling with {} — turn {}, {action}",
+                self.offer,
+                self.partner.battle_turns()
+            );
+        }
         let n = self.partner.trades_completed();
         if n > 0 {
             format!("offering {} — {n} traded", self.offer)
@@ -192,9 +316,20 @@ impl Plugin for Gen1LinkPartner {
         }
     }
 
-    fn on_serial(&mut self, sent: u8, _machine: &mut Machine) -> Option<u8> {
+    fn on_attach(&mut self, machine: &mut Machine) {
+        self.identify(machine);
+    }
+
+    fn on_serial(&mut self, sent: u8, machine: &mut Machine) -> Option<u8> {
+        self.identify(machine);
         let before = self.partner.phase();
-        let reply = self.partner.feed(sent);
+        // Hand the protocol a view of the running game, so it can tell a
+        // Colosseum battle turn from a trade round. They are the same bytes on
+        // the wire; only `wLinkState` distinguishes them.
+        let reply = match MachineHost::new(machine, self.game, &self.offered_species) {
+            Some(mut host) => self.partner.feed(sent, &mut host),
+            None => self.partner.feed(sent, &mut NoHost),
+        };
         let after = self.partner.phase();
         if let Some(t) = self.trace.as_mut() {
             if t.len() == TRACE_LEN {
@@ -216,10 +351,15 @@ impl Plugin for Gen1LinkPartner {
         Some(reply)
     }
 
-    fn on_event(&mut self, _event: &Event, _machine: &mut Machine) {}
+    fn on_event(&mut self, event: &Event, machine: &mut Machine) {
+        if matches!(event, Event::Frame { .. }) {
+            self.watch_for_crash(machine);
+        }
+    }
 
     fn reset(&mut self) {
         self.partner.reset();
+        self.bad_link_state = 0;
         self.events.push("reset (save state loaded)".into());
     }
 
