@@ -359,6 +359,14 @@ pub struct Config {
     /// Where the `v` key writes recordings when no `video_out` destination is
     /// configured. `None` means `$XDG_VIDEOS_DIR/terminalgb`, else `~/Videos/terminalgb`.
     pub video_dir: Option<String>,
+    /// Where music mode's `w` key writes WAVs. `None` means
+    /// `$XDG_MUSIC_DIR/gameboy`, else `~/Music/gameboy`. **Never beside the
+    /// ROM.** See [`crate::music`].
+    pub music_dir: Option<String>,
+    /// How many seconds of a cartridge's own audio one export renders. A
+    /// minute is long enough for a title theme to loop at least once and costs
+    /// about a second of CPU.
+    pub music_export_seconds: f64,
     /// The v4l2loopback node the user is feeding through `ffmpeg`, if any.
     /// Used *only* to check that the camera's label names the running game —
     /// the emulator never writes to a V4L2 node itself. See
@@ -425,6 +433,8 @@ impl Default for Config {
             telemetry: None,
             screenshot_dir: None,
             video_dir: None,
+            music_dir: None,
+            music_export_seconds: 60.0,
             video_device: None,
             video: crate::video::RawSettings::default(),
             plugins: Vec::new(),
@@ -668,12 +678,13 @@ impl Config {
             };
         }
 
-        for key in ["screenshot_dir", "video_dir", "video_device"] {
+        for key in ["screenshot_dir", "video_dir", "music_dir", "video_device"] {
             let Some(v) = get(key) else { continue };
             let v = v.trim();
             let slot = match key {
                 "screenshot_dir" => &mut cfg.screenshot_dir,
                 "video_dir" => &mut cfg.video_dir,
+                "music_dir" => &mut cfg.music_dir,
                 _ => &mut cfg.video_device,
             };
             *slot = if v.is_empty() {
@@ -759,6 +770,19 @@ impl Config {
                     }
                     _ => warn.push(bad("volume", v, "a number 0-100, or off")),
                 }
+            }
+        }
+        // How long an exported WAV is. Bounded because the export runs the
+        // machine for that long: five seconds is not a track and an hour is a
+        // 600 MB file nobody asked for.
+        if let Some(v) = get("music_export_seconds") {
+            match v.trim().parse::<f64>() {
+                Ok(n) if (5.0..=600.0).contains(&n) => cfg.music_export_seconds = n,
+                _ => warn.push(bad(
+                    "music_export_seconds",
+                    v,
+                    "a number of seconds, 5-600",
+                )),
             }
         }
         if let Some(v) = get("gen1_trade") {

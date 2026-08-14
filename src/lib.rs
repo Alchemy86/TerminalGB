@@ -60,6 +60,11 @@ mod mbc;
 pub mod mcp;
 mod mmu;
 pub mod mode;
+/// **Music mode** — cartridges as albums, with cover art and audio taken from
+/// the game itself at run time. See [`music`]. A feature, not core emulation:
+/// behind the `music` cargo feature, so an embedding build carries none of it.
+#[cfg(all(feature = "music", not(target_arch = "wasm32")))]
+pub mod music;
 /// The PPU's public surface: which of the two rendering engines runs.
 ///
 /// The `gpu` module itself stays private — its internals are not an API — but

@@ -2223,6 +2223,87 @@ and the virtual camera's idle card) before the codebase used it; the rename made
   *content* is. Line distance is silent about content; this is not. Used here to prove the
   rename survives another crew's edits to the same three files, from both directions.
 
+## Music mode — cartridges as albums (`src/music/`, `src/screen/music_view.rs`)
+
+**Full write-up: [`docs/music-mode.md`](docs/music-mode.md).** Behind the `music` cargo
+feature (in `default`); `terminal music` or `M` from the picker. Read that page before
+touching the cover picker — every constant in it is measured against real cartridges.
+
+- **Track selection has no general solution and the UI must SAY which one it got.** A Game Boy
+  cartridge exposes no "play track 5" interface — no sound-driver entry point, no track table.
+  Booting it and listening always works and gets the **title theme**; a game's own **sound
+  test** or its **sound driver** would get whole soundtracks and need per-game knowledge, which
+  belongs in a plugin. `library::TrackSource` exists as a *type* rather than a comment so the
+  claim is checkable, and `the_shelf_never_claims_a_soundtrack_it_did_not_get` /
+  `the_panel_never_promises_more_than_a_title_theme` render the strings and grep them. **Do not
+  soften those words without moving the tests.**
+- **Cover art: score SCENES, not frames.** Scoring each sampled frame on its own picks whatever
+  looks busiest, and measured on real cartridges that is *a fade for Pokémon Blue and the sea
+  behind Pokémon Gold's intro*. The property that identifies a title screen is that it **stays
+  there**, so `cover::Picker` groups samples into scenes and scores `duration × detail`. Three
+  parts are load-bearing: **a cut is measured against the frame that OPENED the scene, never
+  against the previous sample** (a slow pan moves a fraction of a per cent per sample, so
+  neighbour comparison swallowed a whole 60-second intro into one "scene"); **detail is the
+  count of distinct 8×8 blocks**, not edge density, because a dithered sky is a couple of tiles
+  repeated and edge density rates it as the most detailed thing on screen; and both terms are
+  needed, since duration alone is a black screen.
+- **The probe window is 75 s and that is measured, not chosen.** Blue reaches its title screen
+  at ~25 s, Gold/Silver at ~55–65 s after a long intro. At 26 s Gold offered the sea. ~2–4 s of
+  CPU per cartridge, on a **worker thread** — the shelf is browsable from the first frame with
+  every album's header title, and albums fill in.
+- **A cover candidate is a MOMENT, not a picture: it carries a save state of the machine at its
+  scene's first frame.** Playing and exporting both resume from it, which is the only way the
+  picture and the sound agree on a game with a minute of intro. Cycling covers with `c`
+  re-drops the needle for the same reason. Consequence: an album does not start until its probe
+  lands (~2 s, header says `listening…`). Starting at reset and seeking later was tried and is
+  worse — the first seconds are a silent logo, so it buys no music and then jumps.
+- **The sleeve is a STILL, deliberately** — it was written live first. A title screen is not
+  where a game *stays*: Pokémon Blue rolls into an attract demo after ~20 s, so a live sleeve
+  quietly becomes gameplay footage. `g` is how you get the live picture.
+- **MUSIC MODE MUST NEVER OPEN A SAVE FILE.** Every machine it builds passes `filepath = None`,
+  so the MBC has nowhere to write; the mapper still comes from header `$0147`. It boots every
+  cartridge on the shelf, and overwriting a real save with the pristine RAM of a
+  thirty-second listen is the bug `src/mbc/battery.rs` exists because of. Pinned on **both**
+  paths (`probing_a_battery_cartridge_writes_nothing_beside_it`,
+  `playing_an_album_never_writes_a_save_beside_the_rom`), both proven to fail when the path is
+  put back. **The fixture must WRITE to cartridge RAM** (`testrom::battery_rom`) — one that
+  merely declares RAM passes either way, because the battery layer writes nothing for a session
+  that never touched it. That trap cost a first version of the test its teeth.
+- **No plugins are attached.** A trainer panel or link partner appearing because you opened a
+  music player would be a surprise.
+- **The WAV encoder is `terminalgb_chiptune::wav`, shared with the chiptune renderer and
+  `testharness/audiocapture.rs`.** There is one in the workspace, agreed before either crew
+  wrote a line. Do not add a second.
+- **Export re-boots the cartridge rather than tapping the live stream** (deterministic, starts
+  at the beginning of the theme, does not perturb playback) and runs **on its own thread** — a
+  minute of audio is ~1 s of CPU and the audio queue's cushion is ~41 ms.
+- **`AudioVerdict` has four states because "silent" and "the sound chip never ran" look
+  identical from outside and mean opposite things.** `Sound::do_cycle` returns immediately with
+  no `AudioPlayer` installed, so a capture harness without one has *no APU at all*. The
+  recorder counts its own calls; the panel says a missing APU is a fault in the emulator.
+- **Fixtures are hand-assembled (`src/music/testrom.rs`), so nothing here needs a game.** The
+  same licence boundary as everywhere else, applied to pixels and samples: art and audio are
+  rendered from the user's ROM at run time and **never written into this repository**.
+  `examples/music_probe.rs` refuses a `--covers`/`--wav` destination inside the working tree.
+- **Evidence tool: `cargo run --release --example music_probe -- <dir> [--covers D] [--wav D]
+  [--timeline]`.** `--demo` uses the built-in fixtures and needs no ROM at all. Measured on the
+  three cartridges here: **3/3 usable covers, 3/3 audible title themes**.
+- **A still picture's cells are `skip`ped, so a popup drawn across them is
+  clipped.** The help overlay rendered with the right half of every line missing,
+  cut at the cover's edge; `render_cover` now erases the cover while a popup is up
+  and *invalidates* it so it re-transmits when the popup closes (a still cover
+  would otherwise deduplicate to "unchanged" and never come back). The game
+  picture never hit this because a running game changes every frame. **Found and
+  verified by screenshot, and no unit test can catch it**: `ratatui`'s `Clear`
+  calls `Cell::reset`, which clears `skip` over the popup's own rectangle, so a
+  `TestBackend` always flushes the popup and the test stays green with the fix
+  removed. Say that rather than claiming teeth.
+- **A cover letterboxed with black bands is NOT a music-mode bug.** The terminal letterboxes a
+  placed image when the cell rectangle's aspect does not match 160:144, and the *game* picture
+  has identical bands on the same display. `music_view::fit_cover` deliberately uses the same
+  arithmetic as `fit_metrics` so the two cannot diverge; fixing the bands belongs with the
+  render path.
+
 ## Repo furniture & attribution (fork of raphamorim/gameboy)
 
 - **This is a fork of [raphamorim/gameboy](https://github.com/raphamorim/gameboy)** (itself

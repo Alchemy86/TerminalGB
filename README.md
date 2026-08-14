@@ -269,6 +269,8 @@ The recognised keys:
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
 | `video_dir` | a path (`~` expands) | Where **`V`** records. Default `$XDG_VIDEOS_DIR/terminalgb`, else `~/Videos/terminalgb`. |
 | `video_device` | `/dev/videoN` | A `v4l2loopback` node to *verify*: the emulator warns if its camera label names a different game. |
+| `music_dir` | a path (`~` expands) | Where **music mode's `w`** writes WAVs. Default `$XDG_MUSIC_DIR/terminalgb`, else `~/Music/terminalgb`. Never beside the ROM. |
+| `music_export_seconds` | `5`–`600` (default `60`) | How long one exported track is. |
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. [Write your own](docs/writing-a-plugin.md); the ones we ship live in [`plugins/`](plugins/) and can all be built out. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
 | `battles` | a path | Battle-preset file for the `gen1-battle` plugin. Unset uses the built-in presets. See [docs/gen1/battle-control.md](docs/gen1/battle-control.md). |
@@ -743,6 +745,46 @@ notes in [`docs/components/ppu.md`](docs/components/ppu.md) · the two held agai
 in [`testharness/ppuengines.rs`](testharness/ppuengines.rs)
 (`cargo test --release --test ppuengines`) · the boot ROM's own contract in
 [`src/boot.rs`](src/boot.rs) and [`testharness/bootrom.rs`](testharness/bootrom.rs).
+
+---
+
+## 💿 Music mode — your ROMs as a record shelf
+
+```bash
+cargo run --release --example terminal -- music     # …or press M in the ROM picker
+```
+
+Every cartridge in `rom_dir` becomes an album: **cover art taken from the game's own title
+screen**, its header title, and its own music playing while you browse. `w` saves what you are
+hearing as a WAV.
+
+| key | does |
+|---|---|
+| `←` `→` | browse — the music keeps playing |
+| `⏎` | play the selected album |
+| `w` | save it as a WAV (to `music_dir`) |
+| `c` | next cover candidate — titles animate in, so several are kept |
+| `g` | leave the shelf and play the game properly |
+
+**It says which mode it got, and that matters.** A Game Boy cartridge has no "play track 5"
+interface — no standard sound-driver entry point, no track table. What always works is
+*booting it and listening*, which gets you the **title theme**, and the panel says exactly
+that. Driving a game's own sound test, or its sound driver, would get whole soundtracks and
+needs per-game knowledge — that is what a [plugin](docs/plugins.md) is for, and music mode
+does not pretend to have it.
+
+The cover is found by looking for the part of the boot that **stays** — a title screen is
+where a game waits for you — rather than for the frame that looks busiest, which picks a fade
+for one game and the sea behind another's intro. Playback and export both start at the moment
+the cover was taken, so the picture and the sound agree even for a game with a minute of intro.
+
+**Music mode never opens a save file**: every machine it builds is constructed with no
+cartridge path, so browsing a shelf cannot touch your `.sav`. Nothing derived from a
+commercial cartridge is ever written into this repository.
+
+Measured on the three cartridges here: **3/3 usable covers, 3/3 audible title themes.**
+Full write-up, including how the cover picker works and what it got wrong first:
+**[`docs/music-mode.md`](docs/music-mode.md)**.
 
 ---
 

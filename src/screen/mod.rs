@@ -39,6 +39,11 @@ pub mod tui;
 #[cfg(feature = "plugin-trainer")]
 pub mod trainer_view;
 
+/// Layout and wording of the music-mode shelf — see [`music_view`].
+/// Requires the `tui` feature: it renders ratatui widgets.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui", feature = "music"))]
+pub mod music_view;
+
 /// Layout of the AI agent's commentary panel — see [`agent_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]

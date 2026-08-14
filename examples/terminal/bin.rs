@@ -6,6 +6,7 @@ use terminalgb::gameboy::run_terminal;
 /// Terminal frontend.
 ///   `terminal <rom.gb>`  — launch straight into the game (no picker).
 ///   `terminal`           — open the ROM picker.
+///   `terminal music`     — open MUSIC MODE: the shelf of cartridges as albums.
 ///
 /// `--video-*` flags stream the picture to a file or FIFO for `ffmpeg`/OBS to
 /// pick up (see `docs/video-out.md`). Not stdout here: the TUI owns stdout.
@@ -23,13 +24,42 @@ fn main() {
 
     match rest.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
-            eprintln!("usage: terminal [ROM.gb] [--video-out PATH ...]");
+            eprintln!("usage: terminal [ROM.gb | music] [--video-out PATH ...]");
             eprintln!("  with a ROM path: launch straight into the game");
             eprintln!("  with no args:    browse the ROM picker (rom_dir from config)");
+            eprintln!(
+                "  music:           MUSIC MODE — every ROM in rom_dir as an album, with"
+            );
+            eprintln!(
+                "                   cover art from its own title screen, its music"
+            );
+            eprintln!(
+                "                   playing, and `w` to save what you hear as a WAV."
+            );
+            eprintln!("                   See docs/music-mode.md.");
             eprintln!("video-out (see docs/video-out.md):");
             eprintln!("{}", terminalgb::video::cli_usage());
         }
+        // The run command the captain asked for. `--music` too, because a
+        // person who types one will type the other.
+        Some("music") | Some("--music") | Some("-m") => run_music(),
         Some(path) => run_terminal(Some(PathBuf::from(path))),
         None => run_terminal(None),
     }
+}
+
+#[cfg(feature = "music")]
+fn run_music() {
+    terminalgb::gameboy::run_music();
+}
+
+/// Built without the `music` feature: say how to get it, rather than silently
+/// opening the picker as though `music` were a ROM that could not be found.
+#[cfg(not(feature = "music"))]
+fn run_music() {
+    eprintln!(
+        "terminal: music mode is not built into this binary — rebuild with \
+         `--features music`"
+    );
+    std::process::exit(2);
 }

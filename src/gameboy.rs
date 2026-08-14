@@ -82,6 +82,20 @@ pub fn run_terminal(initial_rom: Option<std::path::PathBuf>) {
     }
 }
 
+/// Open the terminal frontend straight into **music mode** — the shelf of
+/// cartridges-as-albums. See [`crate::music`] and `docs/music-mode.md`.
+#[cfg(all(
+    feature = "music",
+    feature = "tui",
+    not(any(target_arch = "wasm32", feature = "ffi"))
+))]
+pub fn run_music() {
+    if let Err(e) = crate::screen::tui::run_as(crate::screen::tui::Start::Music) {
+        eprintln!("terminal frontend error: {e}");
+        std::process::exit(1);
+    }
+}
+
 impl Gameboy {
     /// Build a machine from a cartridge image.
     ///

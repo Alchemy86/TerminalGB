@@ -13,6 +13,32 @@ history. See [Credits & lineage](README.md#credits--lineage).
 
 ## [Unreleased]
 
+### Added
+- **Music mode — your ROMs as a shelf of albums.** `terminal music` (or `M` from the ROM
+  picker) turns the configured `rom_dir` into a library: **cover art taken from each game's
+  own title screen**, the cartridge's header title, and its own music playing while you
+  browse. `w` saves what you are hearing as a WAV, `c` cycles cover candidates, `g` leaves the
+  shelf and plays the game properly. Behind the `music` cargo feature, so the embedding build
+  (`--no-default-features`) carries none of it. Full write-up:
+  [`docs/music-mode.md`](docs/music-mode.md).
+  - **It says which mode it got.** A Game Boy cartridge has no "play track 5" interface, so
+    what music mode does is boot it and listen — which gets the **title theme**, and the panel
+    says exactly that. Whole soundtracks need a game's own sound test or its sound driver, and
+    that per-game knowledge belongs in a plugin; music mode does not pretend to have it. The
+    wording is a tested property, not a convention.
+  - The cover is found by looking for the part of the boot that **stays** — a title screen is
+    where a game waits for you — rather than the frame that looks busiest, which picked a fade
+    for one game and the sea behind another's intro. Several candidates are kept because titles
+    animate in, and each candidate carries the machine state at its own start, so playback and
+    export begin where the picture does even for a game with a minute of intro.
+  - **Music mode never opens a save file.** Every machine it builds is constructed with no
+    cartridge path, so browsing a shelf cannot touch a `.sav`; pinned on both the probe and the
+    playback path, and both proven to fail when the path is put back. No plugins are attached.
+  - New config keys `music_dir` and `music_export_seconds`; new headless evidence tool
+    `cargo run --release --example music_probe` (with `--demo`, which needs no ROM at all).
+  - The WAV encoder is the chiptune renderer's `terminalgb_chiptune::wav`, deliberately shared
+    so there is exactly one in the workspace.
+
 ### Changed
 - **The project is now called TerminalGB.** It was already the name the product used — the
   terminal window title and the virtual camera's idle card both said `TerminalGB` — so this

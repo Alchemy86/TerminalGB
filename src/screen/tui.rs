@@ -37,6 +37,8 @@ use crate::screen::config::{
     CellScale, Config, Palette, Recent, RenderPath, ShinyAlert, VolumeState,
 };
 use crate::screen::frame::FramePrep;
+#[cfg(feature = "music")]
+use crate::screen::music_view as mv;
 use crate::screen::romlib::{self, RomEntry};
 use crate::screen::termcaps;
 use crate::screen::termcost;
@@ -472,9 +474,30 @@ fn unique_path(dir: &Path, stem: &str) -> PathBuf {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Which screen the frontend opens on.
+#[derive(Clone, Debug, Default)]
+pub enum Start {
+    /// The ROM picker.
+    #[default]
+    Picker,
+    /// Straight into a game.
+    Rom(PathBuf),
+    /// Music mode's shelf — see [`crate::music`].
+    #[cfg(feature = "music")]
+    Music,
+}
+
 /// Run the terminal frontend. `initial_rom` launches straight into that game;
 /// `None` opens the ROM picker.
 pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
+    run_as(match initial_rom {
+        Some(p) => Start::Rom(p),
+        None => Start::Picker,
+    })
+}
+
+/// [`run`], choosing which screen to open on.
+pub fn run_as(start: Start) -> Result<(), Box<dyn Error>> {
     // The *only* legitimate refusal: no screen to draw on and no keyboard to
     // read. Anything short of that runs, degraded and honest. Checked before
     // the terminal is touched so the message lands in the shell, not in an
@@ -554,8 +577,11 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         video_autostart,
     );
     app.input = input;
-    if let Some(path) = initial_rom {
-        app.start_game(&path); // a load error surfaces as a picker message
+    match start {
+        Start::Picker => {}
+        Start::Rom(path) => app.start_game(&path), // a load error shows in the picker
+        #[cfg(feature = "music")]
+        Start::Music => app.enter_music(),
     }
     let res = app.run(&mut terminal);
 
@@ -709,6 +735,10 @@ fn needs_title(dest: &video::Destination) -> bool {
 enum Screen {
     Picker,
     Playing,
+    /// Music mode: the same live machine, presented as a shelf of albums. See
+    /// [`crate::music`] and [`crate::screen::music_view`].
+    #[cfg(feature = "music")]
+    Shelf,
 }
 
 /// Everything about the UI that can paint over a terminal image, as one
@@ -869,6 +899,81 @@ struct LinkPartner {
 }
 
 impl Session {
+    /// Assemble a session from a loaded machine and its terminal-image slots.
+    ///
+    /// One constructor because there are two callers — the game screen and
+    /// music mode — and a second copy of forty field initialisers is how the
+    /// two quietly stop agreeing about what a fresh session is.
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        gb: Gameboy,
+        entry: RomEntry,
+        link: Option<Box<LinkPartner>>,
+        term_image: Option<TermImage>,
+        sprite_image: Option<TermImage>,
+        team_image: Option<TermImage>,
+        #[cfg(feature = "audio")] audio_queue: Option<
+            std::sync::Arc<std::sync::Mutex<crate::sound::sample_queue::SampleQueue>>,
+        >,
+        #[cfg(feature = "audio")] audio_rate: u32,
+        audio: AudioStream,
+    ) -> Session {
+        Session {
+            gb,
+            entry,
+            paused: false,
+            link,
+            prep: FramePrep::new(),
+            term_image,
+            image: None,
+            sprite_image,
+            sprite_key: None,
+            sprite_rgba: Vec::new(),
+            sprite_dims: (0, 0),
+            team_image,
+            team_key: None,
+            team_rgba: Vec::new(),
+            team_dims: (0, 0),
+            sprite_shown: false,
+            team_shown: false,
+            legacy_hash: 0,
+            scale: 1.0,
+            disp_cells: (0, 0),
+            disp_origin: (0, 0),
+            disp_px: (0, 0),
+            tx_px: (160, 144),
+            tx_bytes: 0,
+            tx_window: 0,
+            tx_per_frame: 0.0,
+            wrote_mark: wrote_total(),
+            pending_wire: String::new(),
+            fps: 0.0,
+            emu_fps: 0.0,
+            disp_count: 0,
+            emu_count: 0,
+            fps_mark: Instant::now(),
+            emu_frames: 0,
+            disp_frames: 0,
+            frames_identical: 0,
+            frames_dropped: 0,
+            skipped_since_display: 0,
+            frames_issued: 0,
+            t_emulate: 0.0,
+            t_palette: 0.0,
+            t_upscale: 0.0,
+            t_encode: 0.0,
+            t_write: 0.0,
+            held: [None; 8],
+            last_press: [None; 8],
+            repeat_gap: [None; 8],
+            #[cfg(feature = "audio")]
+            audio_queue,
+            #[cfg(feature = "audio")]
+            audio_rate,
+            _audio: audio,
+        }
+    }
+
     /// How long button `idx` stays down after its last press.
     ///
     /// Under the kitty keyboard protocol this is a fixed safety net — a real
@@ -958,6 +1063,10 @@ struct App {
     overlay: Overlay,
     fullscreen: bool,
     session: Option<Session>,
+    /// Music mode's own state, present only once the shelf has been opened.
+    /// See [`crate::screen::music_view::MusicState`].
+    #[cfg(feature = "music")]
+    music: Option<mv::MusicState>,
     should_quit: bool,
     /// How this terminal delivers keys. Set once by [`run`] from the kitty
     /// keyboard handshake; [`InputMode::Enhanced`] by default so the render
@@ -1200,6 +1309,8 @@ impl App {
             overlay: Overlay::None,
             fullscreen: false,
             session: None,
+            #[cfg(feature = "music")]
+            music: None,
             should_quit: false,
             input: InputMode::default(),
             last_control: None,
@@ -1391,63 +1502,22 @@ impl App {
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
                 let link = self.open_link_partner();
-                self.session = Some(Session {
+                self.session = Some(Session::new(
                     gb,
                     entry,
-                    paused: false,
                     link,
-                    prep: FramePrep::new(),
                     term_image,
-                    image: None,
                     sprite_image,
-                    sprite_key: None,
-                    sprite_rgba: Vec::new(),
-                    sprite_dims: (0, 0),
                     team_image,
-                    team_key: None,
-                    team_rgba: Vec::new(),
-                    team_dims: (0, 0),
-                    sprite_shown: false,
-                    team_shown: false,
-                    legacy_hash: 0,
-                    scale: 1.0,
-                    disp_cells: (0, 0),
-                    disp_origin: (0, 0),
-                    disp_px: (0, 0),
-                    tx_px: (160, 144),
-                    tx_bytes: 0,
-                    tx_window: 0,
-                    tx_per_frame: 0.0,
-                    wrote_mark: wrote_total(),
-                    pending_wire: String::new(),
-                    fps: 0.0,
-                    emu_fps: 0.0,
-                    disp_count: 0,
-                    emu_count: 0,
-                    fps_mark: Instant::now(),
-                    emu_frames: 0,
-                    disp_frames: 0,
-                    frames_identical: 0,
-                    frames_dropped: 0,
-                    skipped_since_display: 0,
-                    frames_issued: 0,
-                    t_emulate: 0.0,
-                    t_palette: 0.0,
-                    t_upscale: 0.0,
-                    t_encode: 0.0,
-                    t_write: 0.0,
-                    held: [None; 8],
-                    last_press: [None; 8],
-                    repeat_gap: [None; 8],
                     #[cfg(feature = "audio")]
                     audio_queue,
                     #[cfg(feature = "audio")]
                     audio_rate,
                     #[cfg(feature = "audio")]
-                    _audio: audio.stream,
+                    audio.stream,
                     #[cfg(not(feature = "audio"))]
-                    _audio: audio,
-                });
+                    audio,
+                ));
                 self.screen = Screen::Playing;
                 self.overlay = Overlay::None;
                 self.fullscreen = false;
@@ -1525,7 +1595,27 @@ impl App {
         while !self.should_quit {
             // 1. Advance emulation, paced to the selected speed (1x = real
             //    time; faster rungs shorten the interval; MAX runs a burst).
-            if let Screen::Playing = self.screen {
+            #[cfg(feature = "music")]
+            let on_a_machine = matches!(self.screen, Screen::Playing | Screen::Shelf);
+            #[cfg(not(feature = "music"))]
+            let on_a_machine = matches!(self.screen, Screen::Playing);
+            if on_a_machine {
+                // Music mode's shelf is filled by a worker thread; take what it
+                // has finished without ever waiting for it.
+                #[cfg(feature = "music")]
+                if let Some(m) = self.music.as_mut() {
+                    if m.lib.poll() {
+                        dirty = true;
+                    }
+                }
+                #[cfg(feature = "music")]
+                if self.autoplay_when_ready() {
+                    dirty = true;
+                }
+                #[cfg(feature = "music")]
+                if self.collect_export() {
+                    dirty = true;
+                }
                 let running = self
                     .session
                     .as_ref()
@@ -1630,6 +1720,10 @@ impl App {
             let timeout = match self.screen {
                 // Nothing is due on a clock: wait on input alone.
                 Screen::Picker => IDLE_POLL,
+                // The shelf runs a real machine so the music plays, so it is
+                // paced exactly like the game screen.
+                #[cfg(feature = "music")]
+                Screen::Shelf => Duration::from_millis(4),
                 Screen::Playing => {
                     let deadline = if dirty {
                         next_frame.min(next_draw)
@@ -2243,6 +2337,19 @@ impl App {
             out.write_all(b"\x07")?;
             out.flush()?;
         }
+        // Music mode's cover is a picture of its own, in its own rectangle
+        // with its own image id, and it is flushed by the same rule: after the
+        // text frame, never into a cell symbol. See `crate::termimage`.
+        #[cfg(feature = "music")]
+        if let Some(m) = self.music.as_mut() {
+            if !m.pending_wire.is_empty() {
+                use std::io::Write as _;
+                let mut out = io::stdout().lock();
+                out.write_all(m.pending_wire.as_bytes())?;
+                out.flush()?;
+                m.pending_wire.clear();
+            }
+        }
         let Some(s) = self.session.as_mut() else {
             return Ok(false);
         };
@@ -2412,6 +2519,8 @@ impl App {
         match self.screen {
             Screen::Picker => self.handle_picker_key(key),
             Screen::Playing => self.handle_game_key(key),
+            #[cfg(feature = "music")]
+            Screen::Shelf => self.handle_shelf_key(key),
         }
     }
 
@@ -2453,6 +2562,11 @@ impl App {
             KeyCode::Char('?') => self.overlay = Overlay::Help,
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('r') => self.rescan(),
+            // Music mode. Upper case because `m` is the mute key everywhere
+            // else in this frontend and a picker that mutes on one screen and
+            // changes screen on another would be a trap.
+            #[cfg(feature = "music")]
+            KeyCode::Char('M') => self.enter_music(),
             // Resume the most-recently-played ROM directly, even if it lives
             // outside the current `rom_dir` (so it isn't in the list).
             KeyCode::Char('.') => self.resume_last(),
@@ -3082,6 +3196,8 @@ impl App {
         match self.screen {
             Screen::Picker => self.render_picker(f),
             Screen::Playing => self.render_game(f),
+            #[cfg(feature = "music")]
+            Screen::Shelf => self.render_shelf(f),
         }
         match self.overlay {
             Overlay::Help => self.render_help(f),
@@ -3898,6 +4014,77 @@ impl App {
     /// Transient save/load/speed notice. Drawn into a row of its own (the
     /// footer, or a reserved row in fullscreen) — never over the picture, for
     /// the reason given on [`App::render_stats`].
+    /// Music mode's own help. Short on purpose: the footer already lists the
+    /// keys, so what this adds is the *promise* — what "title theme" means, and
+    /// why it is not a soundtrack.
+    #[cfg(feature = "music")]
+    fn render_music_help(&self, f: &mut Frame<'_>) {
+        let area = popup_area(f.area(), 66, 66);
+        f.render_widget(Clear, area);
+        let d = Style::default().fg(Color::DarkGray);
+        let dir = music_dir(&self.config);
+        let text = vec![
+            Line::from(Span::styled(
+                "Music mode",
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("  ←/→ ↑/↓   browse — the music keeps playing"),
+            Line::from("  ⏎         play the selected album"),
+            Line::from("  w         save what you are hearing as a WAV"),
+            Line::from("  c         next cover candidate"),
+            Line::from("  space     pause          g   play the game properly"),
+            Line::from("  , / . m   volume / mute   r   rescan"),
+            Line::from("  q / esc   back to the ROM picker"),
+            Line::from(""),
+            Line::from(Span::styled("What you are hearing", d)),
+            Line::from(Span::styled(
+                "  the TITLE THEME — what the cartridge plays when it boots.",
+                d,
+            )),
+            Line::from(Span::styled(
+                "  A Game Boy has no \"play track 5\" interface, so a whole",
+                d,
+            )),
+            Line::from(Span::styled(
+                "  soundtrack needs per-game knowledge (a sound test, or the",
+                d,
+            )),
+            Line::from(Span::styled(
+                "  game's sound driver). This does not claim it.",
+                d,
+            )),
+            Line::from(""),
+            Line::from(Span::styled("The cover", d)),
+            Line::from(Span::styled(
+                "  a frame from the game's own title screen, found in one",
+                d,
+            )),
+            Line::from(Span::styled(
+                "  headless boot. Titles animate in, so several candidates are",
+                d,
+            )),
+            Line::from(Span::styled(
+                "  kept — `c` cycles them, and each starts the music at its own",
+                d,
+            )),
+            Line::from(Span::styled("  moment.", d)),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Nothing is written beside your ROM: no save file is opened.",
+                Style::default().fg(Color::Indexed(120)),
+            )),
+            Line::from(Span::styled(format!("  WAVs go to {}", dir.display()), d)),
+            Line::from(Span::styled("  docs/music-mode.md", d)),
+        ];
+        f.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::ALL).title(" ? ")),
+            area,
+        );
+    }
+
     fn render_toast(&self, f: &mut Frame<'_>, area: Rect) {
         let Some(msg) = self.toast_text() else { return };
         let text = format!(" {msg} ");
@@ -4496,6 +4683,16 @@ impl App {
     }
 
     fn render_help(&self, f: &mut Frame<'_>) {
+        // On the shelf, show the shelf's help. The full overlay is longer than
+        // the popup and does not scroll, so a music section appended to the end
+        // of it is a section nobody can read — which is exactly the
+        // "discoverable only in the docs" failure the plugin list was added to
+        // fix.
+        #[cfg(feature = "music")]
+        if matches!(self.screen, Screen::Shelf) {
+            self.render_music_help(f);
+            return;
+        }
         let area = popup_area(f.area(), 60, 60);
         f.render_widget(Clear, area);
         let mut text = vec![
@@ -4508,7 +4705,7 @@ impl App {
             Line::from("  ↑/↓ j/k   move        enter   play"),
             Line::from("  /         filter      r       rescan"),
             Line::from("  .         resume last g/G     top/bottom"),
-            Line::from("  q/esc     quit"),
+            Line::from("  M         music mode  q/esc   quit"),
             Line::from(""),
             Line::from("Game"),
             Line::from("  arrows    move        a/s     A / B"),
@@ -4572,6 +4769,32 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
         ];
+        // Music mode is a whole screen, so it gets its own section — and the
+        // section is where the promise is written down: what it plays is the
+        // *title theme*, because booting a cartridge is the only way to get
+        // audio out of one without per-game knowledge. Saying so here is the
+        // difference between an honest feature and an overclaim.
+        #[cfg(feature = "music")]
+        text.extend([
+            Line::from(""),
+            Line::from("Music mode  (M from the picker, or `terminal music`)"),
+            Line::from("  ←/→       browse      ⏎       play this album"),
+            Line::from("  w         save what you are hearing as a WAV"),
+            Line::from("  c         next cover  space   pause"),
+            Line::from("  g         play the game properly   q/esc   leave"),
+            Line::from(Span::styled(
+                "  cover art is a frame from the game's own title screen, picked                  from one headless boot; several candidates are kept because                  titles animate in, which is what `c` cycles",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  what you hear is the TITLE THEME — what the cartridge plays                  when it boots. There is no \"play track 5\" interface on a Game                  Boy, so a full soundtrack needs per-game knowledge (a sound                  test, or the game's sound driver) and this does not claim it",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  nothing is written beside your ROM: no save file is opened,                  and WAVs go to music_dir (docs/music-mode.md)",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]);
         // **Plugins have to be discoverable from inside the emulator.** They
         // are opt-in by design — nothing loads unless it is named — but that
         // only works if the names are somewhere a player will find them, and
@@ -4897,6 +5120,752 @@ fn place_panel_image(
         }
     }
     Some(rect)
+}
+
+// ---------------------------------------------------------------------------
+// Music mode
+// ---------------------------------------------------------------------------
+
+/// Where exported WAVs land: the `music_dir` config key, else
+/// `$XDG_MUSIC_DIR/gameboy`, else `~/Music/gameboy`, else a temp dir.
+///
+/// Never beside the ROM. An export belongs in the user's music folder; writing
+/// it next to a cartridge is how a directory of games turns into a directory of
+/// games and mystery files.
+#[cfg(feature = "music")]
+fn music_dir(config: &Config) -> PathBuf {
+    if let Some(d) = config.music_dir.as_ref() {
+        return PathBuf::from(expand_home(d));
+    }
+    let base = env::var_os("XDG_MUSIC_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join("Music")))
+        .unwrap_or_else(env::temp_dir);
+    // Same rule as screenshots and recordings: the new name, unless the old
+    // one is what already exists on disk. See `config::app_dir_in`.
+    crate::screen::config::app_dir_in(&base)
+}
+
+/// Load a cartridge **for listening**: no save file, no plugins.
+///
+/// Two deliberate differences from [`load_session`], and both are the point:
+///
+/// * `Gameboy::new(data, None)` — **music mode never touches a save.** The
+///   mapper still comes from header byte `0x147` (`get_mbc` takes the path only
+///   for persistence), so nothing about the machine is less accurate; there is
+///   simply nowhere for cartridge RAM to be written. Browsing a shelf must not
+///   be able to overwrite somebody's Pokémon save with the pristine RAM of a
+///   thirty-second listen.
+/// * No plugins. A trainer panel or a link partner attaching itself because you
+///   opened a music player would be a surprise, and nothing here needs one.
+#[cfg(feature = "music")]
+#[cfg_attr(not(feature = "audio"), allow(clippy::let_unit_value))]
+fn load_music_session(
+    path: &Path,
+    cfg: &crate::screen::config::Config,
+) -> Result<(Gameboy, RomEntry, AudioHold), String> {
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    if data.len() < 0x150 {
+        return Err("file is too small to be a Game Boy ROM".to_string());
+    }
+    let entry = romlib::entry_from_bytes(path, &data);
+    let mut gb = Gameboy::try_new_with_model(data, None, crate::mode::Model::Auto)
+        .map_err(|e| e.to_string())?;
+    if std::env::var_os(crate::gpu::PPU_ENV).is_none() {
+        if let Some(mode) = cfg.ppu {
+            gb.set_render_mode(mode);
+        }
+    }
+    let audio = init_audio(&mut gb);
+    Ok((gb, entry, audio))
+}
+
+#[cfg(feature = "music")]
+impl App {
+    /// Open the shelf. Scanning is instant (headers only); the covers and the
+    /// verdicts arrive from a worker thread, so the library is browsable from
+    /// the first frame.
+    fn enter_music(&mut self) {
+        let dir = music_dir(&self.config);
+        let seconds = self.config.music_export_seconds;
+        let opts = crate::music::library::ProbeOptions::default();
+        let lib = crate::music::Library::scan(&self.config.rom_dir, opts);
+        let empty = lib.is_empty();
+        let mut state = mv::MusicState::new(lib, dir, seconds);
+        state.image = self.new_cover_image();
+        self.music = Some(state);
+        self.screen = Screen::Shelf;
+        self.overlay = Overlay::None;
+        self.full_redraw = true;
+        set_window_title(Some("Music"));
+        if empty {
+            self.set_toast(format!(
+                "No .gb/.gbc ROMs in {} — set rom_dir in your config",
+                self.config.rom_dir.display()
+            ));
+        }
+        // Nothing is started here on purpose. An album's music begins at the
+        // moment its cover was taken (see `Album::start`), and that moment is
+        // not known until the worker has listened to it — a second or two. So
+        // the needle drops in `autoplay_when_ready` instead, rather than
+        // starting at the publisher logo and jumping a second later.
+    }
+
+    /// Leave music mode, stopping the music and putting the cover away.
+    fn leave_music(&mut self) {
+        self.erase_cover();
+        self.music = None;
+        self.session = None;
+        self.screen = Screen::Picker;
+        self.overlay = Overlay::None;
+        self.full_redraw = true;
+        set_window_title(None);
+        self.recent = Recent::load();
+        self.rescan();
+    }
+
+    /// The cover's terminal image — a **fourth** id, distinct from the game
+    /// picture and the two trainer panels, for the reason in
+    /// [`App::new_sprite_image`]: Kitty stores images by id and sharing one
+    /// makes two pictures overwrite each other.
+    fn new_cover_image(&self) -> Option<TermImage> {
+        self.new_term_image()
+            .map(|t| TermImage::new(t.wire(), 0x0067_6204))
+    }
+
+    /// Take the cover off the terminal.
+    ///
+    /// A Kitty placement lives until it is **deleted** — redrawing the cells
+    /// under it does not remove it — and the image is also *invalidated* so the
+    /// next placement re-transmits. Without that second half a still cover
+    /// coming back after an overlay would deduplicate to "unchanged" and never
+    /// reappear.
+    fn erase_cover(&mut self) {
+        let Some(m) = self.music.as_mut() else {
+            return;
+        };
+        if let Some(img) = m.image.as_mut() {
+            img.invalidate();
+            if m.cover_shown {
+                let seq = img.erase().to_string();
+                m.pending_wire.push_str(&seq);
+            }
+        }
+        if m.cover_shown {
+            self.full_redraw = true;
+        }
+        m.cover_shown = false;
+    }
+
+    /// Drop the needle on the selected album as soon as the worker has listened
+    /// to it, and not before.
+    ///
+    /// The alternative — start at reset and seek when the probe lands — was
+    /// tried and is worse: the first seconds of most cartridges are a silent
+    /// publisher logo, so it buys no music and then jumps. Waiting costs about
+    /// two seconds, and the header says `listening…` while it does.
+    fn autoplay_when_ready(&mut self) -> bool {
+        let Some(m) = self.music.as_ref() else {
+            return false;
+        };
+        if m.playing.is_some() || self.session.is_some() {
+            return false;
+        }
+        let sel = m.sel;
+        if !m.lib.get(sel).map(|a| a.probed).unwrap_or(false) {
+            return false;
+        }
+        self.play_album(sel);
+        true
+    }
+
+    /// Put album `idx` on: build a listening machine for it and start it.
+    fn play_album(&mut self, idx: usize) {
+        let Some((path, start)) = self
+            .music
+            .as_ref()
+            .and_then(|m| m.lib.get(idx))
+            .map(|a| (a.entry.path.clone(), a.start()))
+        else {
+            return;
+        };
+        let term_image = self.new_term_image();
+        let sprite_image = self.new_sprite_image();
+        let team_image = self.new_team_image();
+        match load_music_session(&path, &self.config) {
+            Ok((mut gb, entry, audio)) => {
+                let title = entry.title.clone();
+                // Skip the boot and start where the cover was taken. Without
+                // this, selecting Pokémon Gold shows its title screen and plays
+                // a minute of intro underneath it. A state that will not load
+                // (a cartridge changed on disk since the probe) is not fatal —
+                // the album simply starts from reset, which is still music.
+                if let Some(bytes) = start.state.as_deref() {
+                    let _ = gb.load_state(bytes);
+                }
+                #[cfg(feature = "audio")]
+                let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
+                self.session = Some(Session::new(
+                    gb,
+                    entry,
+                    // No link partner: a music player has no cable, and
+                    // attaching one would be a surprise nobody asked for.
+                    None,
+                    term_image,
+                    sprite_image,
+                    team_image,
+                    #[cfg(feature = "audio")]
+                    audio_queue,
+                    #[cfg(feature = "audio")]
+                    audio_rate,
+                    #[cfg(feature = "audio")]
+                    audio.stream,
+                    #[cfg(not(feature = "audio"))]
+                    audio,
+                ));
+                if let Some(m) = self.music.as_mut() {
+                    m.playing = Some(idx);
+                    m.started = Some(Instant::now());
+                    m.play_offset = start.seconds();
+                }
+                set_window_title(Some(&format!("Music · {title}")));
+            }
+            Err(e) => {
+                self.session = None;
+                if let Some(m) = self.music.as_mut() {
+                    m.playing = None;
+                    m.started = None;
+                    m.notice = Some(format!("cannot play {}: {e}", path.display()));
+                }
+            }
+        }
+    }
+
+    /// Render `music_export_seconds` of the selected album's own audio to a WAV,
+    /// **on its own thread**.
+    ///
+    /// A minute of audio renders in about a second of CPU. Doing that on the
+    /// loop thread would drain the audio queue's ~41 ms cushion and be heard as
+    /// a gap — the same rule as everywhere else in this frontend: nothing
+    /// blocks the machine. See `docs/audio.md` §4c.
+    fn export_selected(&mut self) {
+        let Some(m) = self.music.as_mut() else {
+            return;
+        };
+        if m.exporting.is_some() {
+            m.notice = Some("still rendering the last one…".to_string());
+            return;
+        }
+        let Some(album) = m.lib.get(m.sel) else {
+            return;
+        };
+        if album.verdict == crate::music::AudioVerdict::Failed {
+            m.notice = Some("this cartridge does not boot — nothing to save".to_string());
+            return;
+        }
+        let title = album.entry.title.clone();
+        let path = album.entry.path.clone();
+        // The take starts where the cover does — see `Album::start`.
+        let start = album.start().state;
+        let seconds = m.export_seconds;
+        let dest = crate::music::library::unique_export_path(
+            &m.export_dir,
+            &crate::music::library::export_name(&title, seconds),
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let out = std::fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|rom| {
+                    crate::music::library::export_wav(
+                        &rom,
+                        &dest,
+                        seconds,
+                        start.as_deref(),
+                    )
+                });
+            let _ = tx.send(out);
+        });
+        m.export_rx = Some(rx);
+        m.exporting = Some(title.clone());
+        m.notice = Some(format!("saving {seconds:.0}s of {title}…"));
+    }
+
+    /// Collect a finished export. Never blocks. Returns `true` if anything
+    /// changed on screen.
+    fn collect_export(&mut self) -> bool {
+        let Some(m) = self.music.as_mut() else {
+            return false;
+        };
+        let Some(rx) = m.export_rx.as_ref() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                m.export_rx = None;
+                m.exporting = None;
+                m.notice = Some(match result {
+                    Ok(ex) => {
+                        let kib = ex.bytes / 1024;
+                        match ex.verdict {
+                            crate::music::AudioVerdict::Audible => format!(
+                                "saved {} ({}s, {kib} KiB)",
+                                ex.path.display(),
+                                ex.seconds.round()
+                            ),
+                            // A WAV of silence is a real file and a real
+                            // disappointment; say so rather than reporting
+                            // success and letting the player find out.
+                            other => format!(
+                                "saved {} — but {} ({}s)",
+                                ex.path.display(),
+                                other.label(),
+                                ex.seconds.round()
+                            ),
+                        }
+                    }
+                    Err(e) => format!("save failed: {e}"),
+                });
+                let notice = m.notice.clone();
+                if let Some(n) = notice {
+                    self.set_toast(n);
+                }
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                m.export_rx = None;
+                m.exporting = None;
+                m.notice = Some("save failed: the renderer stopped".to_string());
+                true
+            }
+        }
+    }
+
+    fn handle_shelf_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => self.leave_music(),
+            KeyCode::Char('?') => {
+                self.overlay = Overlay::Help;
+                self.full_redraw = true;
+            }
+            KeyCode::Left | KeyCode::Up | KeyCode::Char('h') | KeyCode::Char('k') => {
+                if self.music.as_mut().map(|m| m.move_selection(-1)) == Some(true) {
+                    self.on_selection_moved();
+                }
+            }
+            KeyCode::Right | KeyCode::Down | KeyCode::Char('l') | KeyCode::Char('j') => {
+                if self.music.as_mut().map(|m| m.move_selection(1)) == Some(true) {
+                    self.on_selection_moved();
+                }
+            }
+            KeyCode::Home => {
+                if self
+                    .music
+                    .as_mut()
+                    .map(|m| m.move_selection(isize::MIN / 2))
+                    == Some(true)
+                {
+                    self.on_selection_moved();
+                }
+            }
+            KeyCode::End => {
+                if self
+                    .music
+                    .as_mut()
+                    .map(|m| m.move_selection(isize::MAX / 2))
+                    == Some(true)
+                {
+                    self.on_selection_moved();
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(sel) = self.music.as_ref().map(|m| m.sel) {
+                    self.erase_cover();
+                    self.play_album(sel);
+                }
+            }
+            // Play it properly: leave the shelf and start the game, with a save
+            // file this time. The library is a place to browse from.
+            KeyCode::Char('g') => {
+                let path = self
+                    .music
+                    .as_ref()
+                    .and_then(|m| m.lib.get(m.sel))
+                    .map(|a| a.entry.path.clone());
+                if let Some(p) = path {
+                    self.erase_cover();
+                    self.music = None;
+                    self.session = None;
+                    self.full_redraw = true;
+                    self.start_game(&p);
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(s) = self.session.as_mut() {
+                    s.paused = !s.paused;
+                    let paused = s.paused;
+                    self.set_toast(if paused { "paused" } else { "playing" });
+                }
+            }
+            KeyCode::Char('c') => {
+                let (n, sel, playing) = match self.music.as_mut() {
+                    Some(m) => {
+                        let sel = m.sel;
+                        let playing = m.selection_is_playing();
+                        let n = match m.lib.get_mut(sel) {
+                            Some(a) => {
+                                a.cycle_cover();
+                                a.covers.len()
+                            }
+                            None => 0,
+                        };
+                        (n, sel, playing)
+                    }
+                    None => (0, 0, false),
+                };
+                if n <= 1 {
+                    self.set_toast("only one cover for this album");
+                } else {
+                    self.on_selection_moved();
+                    // A candidate is a *moment*, not just a picture: it carries
+                    // where the music starts. Choosing a different sleeve
+                    // therefore moves the needle too, or the panel would claim
+                    // a start time the sound does not match.
+                    if playing {
+                        self.play_album(sel);
+                    }
+                }
+            }
+            KeyCode::Char('w') | KeyCode::Char('W') => self.export_selected(),
+            KeyCode::Char('r') => {
+                // Rescan: the worker for the old library is dropped with it.
+                self.erase_cover();
+                self.enter_music();
+            }
+            KeyCode::Char(',') => self.bump_volume(false),
+            KeyCode::Char('.') => self.bump_volume(true),
+            KeyCode::Char('m') => self.toggle_mute(),
+            _ => {}
+        }
+    }
+
+    /// Moving the cursor changes the picture, so the cover must be
+    /// retransmitted; and a shelf that keeps playing while you browse is the
+    /// whole feel of a library, so the music is deliberately *not* touched.
+    fn on_selection_moved(&mut self) {
+        if let Some(m) = self.music.as_mut() {
+            if let Some(img) = m.image.as_mut() {
+                img.invalidate();
+            }
+        }
+    }
+
+    /// `NR52`'s low nibble: which sound channels are on, right now, on the
+    /// machine that is playing. Read from the emulator, so the meter is evidence
+    /// rather than decoration.
+    fn live_channels(&mut self) -> Option<u8> {
+        let s = self.session.as_mut()?;
+        Some(s.gb.peek(0xFF26))
+    }
+
+    fn render_shelf(&mut self, f: &mut Frame<'_>) {
+        let area = f.area();
+        self.stats_rect = None;
+        self.trainer_rect = None;
+        self.sprite_rect = None;
+        self.agent_rect = None;
+
+        // The toast takes its own row rather than sitting on the picture — a
+        // terminal image owns whole cells.
+        let mut body = area;
+        if self.toast_text().is_some() && body.height > 2 {
+            body.height -= 1;
+        }
+        let (font_w, font_h) = self.picker.font_size();
+        let l = mv::layout(body, font_w, font_h);
+
+        let (count, ready, total, sel) = match self.music.as_ref() {
+            Some(m) => {
+                let (d, t) = m.lib.progress();
+                (m.lib.len(), d, t, m.sel)
+            }
+            None => (0, 0, 0, 0),
+        };
+        let header = if ready < total {
+            format!(" MUSIC MODE · {count} albums · listening… {ready}/{total}")
+        } else {
+            format!(" MUSIC MODE · {count} albums")
+        };
+        f.render_widget(
+            Paragraph::new(header).style(
+                Style::default()
+                    .fg(Color::Indexed(213))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            l.header,
+        );
+
+        let channels = self.live_channels();
+        self.render_album_panel(f, l.panel, channels);
+        self.render_shelf_strip(f, l.strip, sel);
+
+        let footer = " ←/→ browse · ⏎ play · w save WAV · c cover · space pause · \
+                      g play the game · ? help · q leave";
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                truncate(footer, l.footer.width as usize),
+                Style::default().fg(Color::DarkGray),
+            ))),
+            l.footer,
+        );
+
+        self.render_cover(f, l.cover);
+        if let Some(t) = self.toast_text().map(str::to_string) {
+            let row = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
+            f.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    truncate(&format!(" {t}"), area.width as usize),
+                    Style::default().fg(Color::Yellow),
+                ))),
+                row,
+            );
+        }
+    }
+
+    /// The cover art: the still frame chosen from that cartridge's own boot.
+    ///
+    /// **Deliberately not the live picture**, though the machine is running
+    /// right there and it was written that way first. A record sleeve does not
+    /// animate; `c` would have nothing to cycle if the picture were live; and —
+    /// the deciding reason — a title screen is not where a game *stays*.
+    /// Pokémon Blue rolls into an attract demo after about twenty seconds, so a
+    /// shelf showing the live frame quietly turns into gameplay footage of a
+    /// game nobody is playing. `g` is how you get the live picture.
+    fn render_cover(&mut self, f: &mut Frame<'_>, area: Rect) {
+        let rect =
+            mv::fit_cover(area, self.picker.font_size().0, self.picker.font_size().1);
+        if rect.width == 0 || rect.height == 0 {
+            self.erase_cover();
+            return;
+        }
+        // **A modal overlay must be able to paint where the cover is.** The
+        // cover is a *still*, so its placement is deduplicated to "unchanged"
+        // every frame and its cells are therefore marked `skip` — which tells
+        // ratatui's diff to leave them alone, and the help overlay then draws
+        // only the part of itself that misses the picture. The game picture
+        // never hit this because a running game changes every frame.
+        //
+        // So while a popup is up the cover is taken off the terminal entirely
+        // and put back (re-transmitted, see `erase_cover`) when it closes.
+        if self.overlay != Overlay::None {
+            self.erase_cover();
+            return;
+        }
+        let palette = self.palette;
+        let raw = self
+            .music
+            .as_ref()
+            .and_then(|m| m.lib.get(m.sel))
+            .and_then(|a| a.cover())
+            .map(|c| c.rgba.clone());
+        // Palette-mapped through the session's reusable buffer when there is
+        // one, so the shelf honours the same palette the game view does.
+        let mapped: Option<Vec<u8>> = match (raw, self.session.as_mut()) {
+            (Some(r), Some(s)) => Some(s.prep.map(&r, palette).to_vec()),
+            (Some(r), None) => Some(r),
+            (None, _) => None,
+        };
+        let Some(rgba) = mapped else {
+            // No picture for this album. Say so in its own rectangle rather
+            // than leaving a stale cover from the last one on screen.
+            self.erase_cover();
+            let msg = Paragraph::new(Line::from(Span::styled(
+                "no cover",
+                Style::default().fg(Color::DarkGray),
+            )))
+            .alignment(ratatui::layout::Alignment::Center);
+            if rect.height > 0 {
+                f.render_widget(
+                    msg,
+                    Rect::new(rect.x, rect.y + rect.height / 2, rect.width, 1),
+                );
+            }
+            return;
+        };
+
+        let Some(m) = self.music.as_mut() else {
+            return;
+        };
+        let mut wire = std::mem::take(&mut m.pending_wire);
+        let drawn = place_panel_image(
+            f,
+            m.image.as_mut(),
+            &rgba,
+            (crate::gpu::WIDTH as u32, crate::gpu::HEIGHT as u32),
+            rect,
+            false,
+            // Never "modal": the popup path returned above, so if we are here
+            // there is nothing drawn on top of the cover.
+            false,
+            &mut wire,
+        );
+        m.pending_wire = wire;
+        m.cover_shown = drawn.is_some();
+    }
+
+    fn render_album_panel(
+        &mut self,
+        f: &mut Frame<'_>,
+        area: Rect,
+        channels: Option<u8>,
+    ) {
+        if area.width < 4 || area.height < 2 {
+            return;
+        }
+        let inner = Rect::new(
+            area.x + 1,
+            area.y,
+            area.width.saturating_sub(2),
+            area.height,
+        );
+        let w = inner.width as usize;
+        let mut lines: Vec<Line> = Vec::new();
+
+        let Some(m) = self.music.as_ref() else {
+            return;
+        };
+        let playing = m.selection_is_playing();
+        let Some(album) = m.selected() else {
+            f.render_widget(
+                Paragraph::new("Nothing on the shelf.").wrap(Wrap { trim: true }),
+                inner,
+            );
+            return;
+        };
+
+        lines.push(Line::from(Span::styled(
+            truncate(&album.entry.title, w),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            truncate(
+                &format!("{} · {} KiB", album.entry.mbc, album.entry.size / 1024),
+                w,
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
+
+        for (i, s) in mv::source_lines(album, playing).into_iter().enumerate() {
+            let style = match (i, album.verdict) {
+                (0, crate::music::AudioVerdict::Audible) => {
+                    Style::default().fg(Color::Indexed(120))
+                }
+                (0, crate::music::AudioVerdict::Silent) => {
+                    Style::default().fg(Color::DarkGray)
+                }
+                (0, _) => Style::default().fg(Color::Red),
+                _ if s.starts_with('▶') => Style::default()
+                    .fg(Color::Indexed(213))
+                    .add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::DarkGray),
+            };
+            lines.push(Line::from(Span::styled(truncate(&s, w), style)));
+        }
+
+        if playing {
+            let meter = mv::channel_meter(channels.unwrap_or(0));
+            lines.push(Line::from(Span::styled(
+                truncate(&format!("  {}  {} ch1-4", mv::mmss(m.elapsed()), meter), w),
+                Style::default().fg(Color::Indexed(120)),
+            )));
+        }
+
+        lines.push(Line::from(""));
+        match album.covers.len() {
+            0 => lines.push(Line::from(Span::styled(
+                truncate("▦ no cover — the game drew nothing usable", w),
+                Style::default().fg(Color::DarkGray),
+            ))),
+            n => {
+                // The scene's *start*, not the frame the cover was taken from:
+                // that is where the music begins, so it is the number that
+                // agrees with the clock above.
+                let at = mv::mmss(album.start().seconds());
+                lines.push(Line::from(Span::styled(
+                    truncate(
+                        &format!(
+                            "▦ cover {}/{n} · from {at} into the boot{}",
+                            album.cover_idx + 1,
+                            if n > 1 { " · c to change" } else { "" }
+                        ),
+                        w,
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        if let Some(n) = m.notice.as_ref() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                truncate(n, w),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    }
+
+    /// The row of other albums. Scrolls around the selection so a long shelf
+    /// never overflows its rectangle.
+    fn render_shelf_strip(&mut self, f: &mut Frame<'_>, area: Rect, sel: usize) {
+        if area.height < 2 || area.width < 4 {
+            return;
+        }
+        let rule = Rect::new(area.x, area.y, area.width, 1);
+        f.render_widget(
+            Paragraph::new("─".repeat(area.width as usize))
+                .style(Style::default().fg(Color::Indexed(238))),
+            rule,
+        );
+        let Some(m) = self.music.as_ref() else {
+            return;
+        };
+        const CELL: usize = 22;
+        let (from, to) = mv::strip_window(m.lib.len(), sel, area.width, CELL);
+        let mut spans: Vec<Span> = Vec::new();
+        for i in from..to {
+            let Some(a) = m.lib.get(i) else { continue };
+            let mark = if m.playing == Some(i) { "▶ " } else { "  " };
+            let text = format!(
+                "{mark}{:<width$}",
+                truncate(&a.entry.title, CELL - 4),
+                width = CELL - 4
+            );
+            let style = if i == sel {
+                Style::default()
+                    .bg(Color::Indexed(24))
+                    .add_modifier(Modifier::BOLD)
+            } else if m.playing == Some(i) {
+                Style::default().fg(Color::Indexed(120))
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            spans.push(Span::styled(text, style));
+        }
+        f.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(area.x, area.y + 1, area.width, 1),
+        );
+    }
 }
 
 /// One cell of the team strip, in pixels. The largest Gen 1 picture is 56×56,
@@ -6592,8 +7561,188 @@ mod tests {
         );
     }
 
+    /// A shelf with one album, without touching a ROM directory or the probing
+    /// worker: [`Library::from_roms`] over a hand-assembled cartridge.
+    #[cfg(feature = "music")]
+    fn shelf_app() -> Option<App> {
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast)?;
+        let rom = crate::music::testrom::tone_rom();
+        let entry = romlib::entry_from_bytes(Path::new("/x/tone.gb"), &rom);
+        let lib = crate::music::Library::from_roms(
+            vec![(entry, rom)],
+            crate::music::library::ProbeOptions {
+                seconds: 1.5,
+                cover: crate::music::cover::Options {
+                    sample_every: 4,
+                    warmup: 4,
+                    keep: 4,
+                    keep_states: false,
+                },
+            },
+        );
+        assert!(
+            lib.get(0).map(|a| !a.covers.is_empty()).unwrap_or(false),
+            "the fixture must produce a cover for this test to mean anything"
+        );
+        let mut state = mv::MusicState::new(lib, std::env::temp_dir(), 30.0);
+        state.image = app.new_cover_image();
+        app.music = Some(state);
+        app.screen = Screen::Shelf;
+        Some(app)
+    }
+
+    /// The help overlay renders **whole** on the shelf.
+    ///
+    /// Observed live before [`App::render_cover`] learned to take the cover off
+    /// the terminal for a popup: the box drew with the right-hand half of every
+    /// line missing, cut at exactly the cover's edge.
+    ///
+    /// **Honest limitation: this test did not catch that, and cannot.** It was
+    /// found by screenshotting a real terminal, and it is fixed and verified the
+    /// same way (same window size, before and after). Removing the fix leaves
+    /// this test green, because `ratatui`'s `Clear` widget calls `Cell::reset`,
+    /// which clears `skip` over the popup's own rectangle — so in a
+    /// `TestBackend` the popup always flushes. What this test *is* worth is a
+    /// regression guard on the overlay's content and box integrity, which is
+    /// cheap and which nothing else covers. Do not read it as proof of the
+    /// clipping fix; the screenshots are that.
+    ///
+    /// Asserted on **rendered output**, not on the `skip` flags: `skip` lives
+    /// in ratatui's buffer and what a reader sees is the backend's.
+    #[cfg(feature = "music")]
+    #[test]
+    fn the_help_overlay_is_not_eaten_by_the_cover() {
+        use ratatui::backend::TestBackend;
+        // Lines that must survive whole, and that fit inside the popup even
+        // at the smallest size below. Each is long enough to cross the cover's
+        // rectangle, which is what the bug truncated.
+        const WANT: [&str; 2] = [
+            "save what you are hearing as a WAV",
+            "play the selected album",
+        ];
+        for (cols, rows) in [(80u16, 24u16), (120, 40), (150, 45), (200, 60)] {
+            let Some(mut app) = shelf_app() else { return };
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            // Twice: a cell is only marked `skip` on a frame where the picture
+            // is NOT being re-sent, so the first draw cannot show the bug.
+            terminal.draw(|f| app.render(f)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+
+            app.overlay = Overlay::Help;
+            terminal.draw(|f| app.render(f)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let screen: String = (0..rows)
+                .map(|y| {
+                    (0..cols)
+                        .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for want in WANT {
+                assert!(
+                    screen.contains(want),
+                    "{cols}x{rows}: the help overlay lost {want:?} — the cover \
+                     ate it\n{screen}"
+                );
+            }
+            // And the box itself is whole: the bug clipped horizontally, so a
+            // top border that reaches its own right corner is the tightest
+            // single check there is.
+            let top = screen
+                .lines()
+                .find(|l| l.contains("┌ ? "))
+                .unwrap_or_else(|| panic!("{cols}x{rows}: no help box\n{screen}"));
+            assert!(
+                top.trim_end().ends_with('┐'),
+                "{cols}x{rows}: the help box was clipped: {top:?}"
+            );
+        }
+    }
+
+    /// The shelf's layout rule, asserted against **rendered output**: nothing is
+    /// written into the rectangle the cover owns.
+    #[cfg(feature = "music")]
+    #[test]
+    fn nothing_is_written_over_the_cover_on_the_shelf() {
+        use ratatui::backend::TestBackend;
+        for (cols, rows) in [(60u16, 18u16), (100, 30), (150, 45), (213, 55)] {
+            let Some(mut app) = shelf_app() else { return };
+            let (fw, fh) = app.picker.font_size();
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let cover = mv::fit_cover(
+                mv::layout(Rect::new(0, 0, cols, rows), fw, fh).cover,
+                fw,
+                fh,
+            );
+            if cover.width == 0 {
+                continue;
+            }
+            let buf = terminal.backend().buffer().clone();
+            for y in cover.y..cover.bottom() {
+                for x in cover.x..cover.right() {
+                    let sym = buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ");
+                    assert_eq!(
+                        sym, " ",
+                        "{cols}x{rows}: {sym:?} written at ({x},{y}), inside the \
+                         cover's rectangle {cover:?}"
+                    );
+                }
+            }
+        }
+    }
+
     fn test_app(protocol: ProtocolType, path: RenderPath) -> Option<App> {
         test_app_video(protocol, path, video_for_test())
+    }
+
+    /// **Music mode must never write a save file.** This is the property the
+    /// whole feature rests on: it boots every cartridge on the shelf, and a
+    /// music player that quietly overwrote a real Pokémon save with the
+    /// pristine RAM of a thirty-second listen would be the worst bug this
+    /// repository has shipped (see `src/mbc/battery.rs`, which was written
+    /// after exactly that happened).
+    ///
+    /// It is guaranteed structurally — [`load_music_session`] passes `None` as
+    /// the cartridge path, so the MBC has nowhere to write — and this drives
+    /// the real function to prove it, on a cartridge whose header says
+    /// MBC3+RAM+BATTERY.
+    #[cfg(feature = "music")]
+    #[test]
+    fn playing_an_album_never_writes_a_save_beside_the_rom() {
+        let dir =
+            std::env::temp_dir().join(format!("gb-music-tui-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        // A cartridge that *writes* to its battery-backed RAM — see
+        // `testrom::battery_rom`. One that merely declares RAM proves nothing.
+        let rom = crate::music::testrom::battery_rom();
+        let path = dir.join("battery.gb");
+        std::fs::write(&path, &rom).unwrap();
+
+        let cfg = Config::default();
+        let (mut gb, entry, _audio) =
+            load_music_session(&path, &cfg).expect("the fixture is a valid cartridge");
+        assert_eq!(entry.title, "GB BATTERY");
+        // Long enough for the autosave's quiet-frame timer to fire twice over.
+        for _ in 0..200 {
+            gb.frame();
+        }
+        gb.flush_battery();
+        drop(gb);
+
+        let leftovers: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|f| f.ok())
+            .map(|f| f.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "battery.gb")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "music mode must not write save files: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A second console must actually run, be swappable, and be **visible** —

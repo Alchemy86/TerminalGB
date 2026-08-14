@@ -29,7 +29,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # audio. See README "Embedding the core". Zero third-party crates besides
 # `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
 # belongs behind `desktop`/`tui`/`audio`, not in the core.
-default = ["desktop", "tui", "standard-plugins", "chiptune"]
+default = ["desktop", "tui", "standard-plugins", "chiptune", "music"]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
 # Needs a display server at run time.
@@ -64,6 +64,17 @@ mcp = ["plugin-agent", "chiptune"]
 # someone putting the core in hardware should not get one. It adds **no
 # third-party crate**: `terminalgb-chiptune` is first-party and dependency-free.
 chiptune = ["terminalgb-chiptune"]
+# MUSIC MODE (`terminalgb::music`, and the shelf screen in the terminal
+# frontend). A library view where cartridges appear like albums: cover art
+# harvested from the game's own title screen, its header title, its own music
+# playing, and a key that writes what you are hearing to a WAV. See
+# docs/music-mode.md.
+#
+# A **feature, not core emulation** — an embedder taking the machine must not
+# inherit a music player. The shelf UI needs `tui`; the WAV encoder is
+# `terminalgb-chiptune`'s, deliberately shared with the chiptune renderer so
+# there is exactly one of them.
+music = ["tui", "terminalgb-chiptune"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
@@ -126,9 +137,13 @@ terminalgb-plugin-api = { path = "crates/terminalgb-plugin-api", version = "0.1.
 
 # The chiptune renderer's music half: score/`.vgm`/register-script parsing, the
 # `Apu` trait and the WAV encoder. Dependency-free, and it deliberately does
-# **not** depend on `gameboy` — the emulated sound chip reaches it through the
+# **not** depend on `terminalgb` — the emulated sound chip reaches it through the
 # trait, which is what keeps this edge acyclic. Same arrangement, same reason,
-# as `gameboy-plugin-api`.
+# as `terminalgb-plugin-api`.
+#
+# Music mode uses exactly one thing from it: `wav`, the RIFF/PCM encoder. That
+# encoder must not exist twice — it is also what `testharness/audiocapture.rs`
+# hashes into `audio_baseline.txt`.
 terminalgb-chiptune = { path = "crates/terminalgb-chiptune", version = "0.1.0", optional = true }
 
 # Our own plugins. Optional, and the frontend's panels for them are `cfg`-gated
@@ -240,6 +255,13 @@ required-features = ["image", "plugin-agent"]
 name = "gen1_battle"
 path = "examples/gen1_battle.rs"
 required-features = ["image", "plugin-battle-control"]
+
+# Music mode, headless: what the shelf would show, as text. The evidence tool
+# for a feature whose output is a picture and a sound.
+[[example]]
+name = "music_probe"
+path = "examples/music_probe.rs"
+required-features = ["music", "image"]
 
 [[example]]
 name = "idle_card"
