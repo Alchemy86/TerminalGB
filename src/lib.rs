@@ -50,6 +50,17 @@ mod input;
 mod mbc;
 mod mmu;
 pub mod mode;
+/// The PPU's public surface: which of the two rendering engines runs.
+///
+/// The `gpu` module itself stays private — its internals are not an API — but
+/// [`gameboy::Gameboy::set_render_mode`](crate::gameboy::Gameboy::set_render_mode)
+/// takes this type, so an embedder has to be able to name it. Deliberately
+/// **not** re-exported at the crate root: [`crate::gameboy::RenderMode`] is a
+/// different enum (which *frontend* to run) and two types of the same name in
+/// one namespace would be a trap.
+pub mod ppu {
+    pub use crate::gpu::RenderMode;
+}
 /// Runtime plugins — the *attach* half of the extension surface. See [`plugin`].
 pub mod plugin;
 pub mod savestate;

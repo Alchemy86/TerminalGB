@@ -127,6 +127,13 @@ jobs:
       # Two self-checks run first and abort if the comparison is vacuous. ~4s to run.
       - name: Run test-ROM harness
         run: cargo test --release --test testroms
+      # `testroms` only ever exercises whichever engine is the default. This
+      # asks the *other* one the same questions: pixel-exact on dmg-acid2
+      # against its author's reference, frame-identical to the default engine
+      # on well-behaved ROMs, and still comfortably faster than real time.
+      # See testharness/ppuengines.rs.
+      - name: Run both PPU engines against each other
+        run: cargo test --release --test ppuengines
       # On any baseline mismatch the harness dumps the actual frame(s) — keep them.
       - name: Upload frame artifacts on failure
         if: failure()

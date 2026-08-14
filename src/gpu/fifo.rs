@@ -328,10 +328,18 @@ impl Gpu {
     }
 
     /// One dot of a visible scanline in mode 2 or mode 3.
+    ///
+    /// `modeclock` is the **0-based index of the dot about to be run**, so the
+    /// work happens first and the counter moves afterwards: dot 0 is the first
+    /// dot of mode 2 and dot 80 the first of mode 3, which is how Pan Docs
+    /// numbers them and how every figure in this file is stated. Incrementing
+    /// first made every mode boundary land a dot later than its documented
+    /// number, so `start_mode3` and `oam_scan_dot` each carried a compensating
+    /// `- 1`. It moved no test either way — it is a change of units, not of
+    /// behaviour — but every dot count here can now be read against the
+    /// documentation without a mental offset.
     fn accurate_dot(&mut self) {
-        self.modeclock += 1;
-
-        if self.modeclock <= OAM_DOTS {
+        if self.modeclock < OAM_DOTS {
             // The line the PPU restarts on after `LCDC` bit 7 goes 0→1 has no
             // OAM scan at all: `STAT` reads mode 0 and the mode-2 source does
             // not strobe (`acceptance/ppu/lcdon_timing-GS`).
@@ -344,7 +352,7 @@ impl Gpu {
                 }
                 self.oam_scan_dot();
             }
-            if self.modeclock == OAM_DOTS {
+            if self.modeclock + 1 == OAM_DOTS {
                 // Mode 3 begins on the *next* dot; set the pipeline up now so
                 // its first fetch happens on that dot rather than a dot late.
                 self.start_mode3();
@@ -360,6 +368,7 @@ impl Gpu {
             }
         }
 
+        self.modeclock += 1;
         if self.modeclock >= LINE_DOTS {
             self.next_line();
         }
@@ -388,11 +397,11 @@ impl Gpu {
     /// forty of them fill the 80-dot mode; `LCDC.2` is read live, which is what
     /// `m3_lcdc_obj_size_change` changes underneath it.
     fn oam_scan_dot(&mut self) {
-        // Dots 1..80 -> entries 0..39, one per two dots.
+        // Dots 0..79 -> entries 0..39, one per two dots.
         if self.modeclock % 2 != 0 {
             return;
         }
-        let index = ((self.modeclock / 2) - 1) as usize;
+        let index = (self.modeclock / 2) as usize;
         if index >= 40 || self.pipe.nscan >= 10 {
             return;
         }
@@ -811,3 +820,81 @@ impl Gpu {
 const OAM_DOTS: u32 = super::OAM_DOTS;
 const LINE_DOTS: u32 = super::LINE_DOTS;
 const VBLANK: u8 = super::VBLANK_LINE;
+
+/// Mode 3's length is the engine's headline observable — it is what the
+/// mid-scanline Mooneye tests measure directly and what every Mealybug ROM
+/// depends on to land its write on the right dot. The fast renderer answers a
+/// flat 172 to all of these; nothing below would be true of it.
+///
+/// Figures are Pan Docs, [Rendering § mode 3
+/// length](https://gbdev.io/pandocs/Rendering.html) and the "OBJ penalty
+/// algorithm" section beside it.
+#[cfg(test)]
+mod mode3_length {
+    use super::super::{Gpu, RenderMode};
+
+    /// A DMG with the LCD on, the accurate engine selected, parked at the top
+    /// of a fresh scanline.
+    fn engine() -> Gpu {
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.wb(0xFF40, 0x91); // LCD on, BG on, tile data $8000
+                              // The line the LCD comes up on has no OAM scan; step past it so every
+                              // measurement is of an ordinary scanline.
+        gpu.do_cycle(super::LINE_DOTS);
+        gpu
+    }
+
+    /// Dots spent in mode 3 on the next scanline, measured one dot at a time.
+    ///
+    /// Counted off `modeclock` rather than by tallying steps: the dot that
+    /// paints pixel 160 is itself a mode-3 dot *and* the one that flips STAT to
+    /// mode 0, so a step-tallying loop is short by exactly one.
+    fn mode3_dots(gpu: &mut Gpu) -> u32 {
+        while gpu.mode() != 2 {
+            gpu.do_cycle(1);
+        }
+        while gpu.mode() != 3 {
+            gpu.do_cycle(1);
+        }
+        while gpu.mode() == 3 {
+            gpu.do_cycle(1);
+        }
+        gpu.modeclock - super::OAM_DOTS
+    }
+
+    /// The floor: 160 pixels plus the 12 dots of the discarded first fetch.
+    #[test]
+    fn a_plain_background_line_is_172_dots() {
+        let mut gpu = engine();
+        assert_eq!(mode3_dots(&mut gpu), 172);
+    }
+
+    /// `SCX & 7` pixels are shifted out and thrown away at the head of the
+    /// line, and each still costs its dot. This is the whole of the
+    /// "mode 3 is longer when SCX is not a multiple of 8" rule, and it is a
+    /// *consequence* here rather than a special case.
+    #[test]
+    fn scx_and_7_adds_one_dot_per_discarded_pixel() {
+        for scx in 0..16u8 {
+            let mut gpu = engine();
+            gpu.wb(0xFF43, scx);
+            assert_eq!(
+                mode3_dots(&mut gpu),
+                172 + (scx & 7) as u32,
+                "SCX={scx}: only the low three bits may lengthen mode 3"
+            );
+        }
+    }
+
+    /// Only `SCX`'s low three bits are latched for the line. The high five
+    /// select which tile the fetcher starts from and cost nothing — Mealybug
+    /// splits exactly this one register into `m3_scx_low_3_bits` and
+    /// `m3_scx_high_5_bits`.
+    #[test]
+    fn the_high_bits_of_scx_cost_nothing() {
+        let mut gpu = engine();
+        gpu.wb(0xFF43, 0xF8);
+        assert_eq!(mode3_dots(&mut gpu), 172);
+    }
+}

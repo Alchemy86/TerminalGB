@@ -163,6 +163,14 @@ name = "testroms"
 path = "testharness/testroms.rs"
 harness = false
 
+# The two rendering engines held against each other, against dmg-acid2's
+# reference image and against the clock — the accurate engine is not the
+# default, so nothing else in CI runs it. See testharness/ppuengines.rs.
+[[test]]
+name = "ppuengines"
+path = "testharness/ppuengines.rs"
+harness = false
+
 # Save-state round-trip proof. `harness = false` so it can print progress and
 # control the exit code. See testharness/savestate.rs.
 [[test]]
