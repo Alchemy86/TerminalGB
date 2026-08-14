@@ -37,6 +37,7 @@
 use std::path::{Path, PathBuf};
 
 use terminalgb::gameboy::Gameboy;
+use terminalgb::link::peer::{LinkPeer, PeerState};
 use terminalgb::link::LinkCable;
 use terminalgb::KeypadKey;
 
@@ -127,6 +128,9 @@ fn main() {
     let mut trade = false;
     let mut verbose = false;
     let mut skew: u32 = 0;
+    // Which half of the pair this *process* is, when the two consoles are two
+    // separate programs joined by `LinkPeer` rather than two cores in one.
+    let mut peer_side: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -140,6 +144,7 @@ fn main() {
                 frames = args.next().and_then(|s| s.parse().ok()).unwrap_or(frames)
             }
             "--skew" => skew = args.next().and_then(|s| s.parse().ok()).unwrap_or(0),
+            "--peer" => peer_side = args.next(),
             "--trade" => trade = true,
             "--verbose" => verbose = true,
             other => {
@@ -194,6 +199,13 @@ fn main() {
              species = Pidgey\nlevel = 7\nnickname = FLAP\not_name = BLUE\not_id = 1717\n\
              moves = Gust\n",
         );
+    }
+
+    // --- one process, one console, an automatically discovered partner -----
+    if let Some(side) = peer_side {
+        let me = if side == "b" { &b } else { &a };
+        run_as_peer(me, &side, trade, frames, shots.as_deref(), verbose);
+        return;
     }
 
     let mut gb_a =
@@ -814,5 +826,140 @@ fn write_pair(path: &Path, a: &mut Gameboy, b: &mut Gameboy) {
     }
     if let Err(e) = out.save(path) {
         eprintln!("screenshot {}: {e}", path.display());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Peer mode: this process is ONE console, and the other one is another
+// process. Same bot, same reporting — only the transport differs, which is the
+// point: if the trade completes over both, the bot is not the thing making it
+// work.
+// ---------------------------------------------------------------------------
+
+fn run_as_peer(
+    me: &Staged,
+    side: &str,
+    trade: bool,
+    frames: u32,
+    shots: Option<&Path>,
+    verbose: bool,
+) {
+    let mut gb = Gameboy::new(std::fs::read(&me.rom).expect("rom"), Some(me.rom.clone()));
+    let title = gb.rom_title();
+    let sav = me.rom.with_extension("sav");
+    let mut peer = LinkPeer::discover(&title, Some(&sav));
+    println!("[{side}] {title} — {:?}", peer.state());
+
+    if let Some(dir) = shots {
+        std::fs::create_dir_all(dir).expect("shots dir");
+    }
+    let mut bot = trade.then(TradeBot::default);
+    let mut last = String::new();
+    let mut last_peer = format!("{:?}", peer.state());
+
+    for frame in 0..frames {
+        if let Some(b) = &mut bot {
+            b.act(&mut gb, verbose, side);
+        }
+        peer.run_frame(&mut gb);
+
+        let now_peer = format!("{:?}", peer.state());
+        if now_peer != last_peer {
+            println!("[{side}][{frame:6}] cable: {now_peer}");
+            last_peer = now_peer;
+        }
+        if let Some(b) = &bot {
+            let label = b.stage_label().to_string();
+            if label != last {
+                println!(
+                    "[{side}][{frame:6}] {label:<14} transfers {:<5} clock {:#04x}",
+                    peer.stats().transfers,
+                    gb.peek(H_SERIAL_CONNECTION_STATUS),
+                );
+                if let Some(dir) = shots {
+                    write_one(&dir.join(format!("{side}-{label}.png")), &mut gb);
+                }
+                last = label;
+            }
+            if b.finished() {
+                println!("[{side}] bot finished at frame {frame}");
+                break;
+            }
+        }
+        if gb.fault().is_some() {
+            eprintln!("[{side}] FAULT: {:?}", gb.fault());
+            break;
+        }
+    }
+
+    let st = peer.stats();
+    println!(
+        "[{side}] cable: {} transfers, {} unanswered, {} torn",
+        st.transfers, st.unanswered, st.torn
+    );
+    if let PeerState::Paired {
+        title,
+        label,
+        same_save,
+    } = peer.state()
+    {
+        println!(
+            "[{side}] partner: {title}{}{}",
+            if label.is_empty() {
+                String::new()
+            } else {
+                format!(" ({label})")
+            },
+            if *same_save { "  [SAME SAVE FILE]" } else { "" }
+        );
+    }
+    println!("[{side}] party:");
+    for m in read_party(&mut gb) {
+        println!("[{side}]   {}", m.describe());
+    }
+    // Persist whatever the game wrote, so the checksum can be verified from
+    // outside the process.
+    gb.flush_battery();
+    peer.close();
+
+    if !trade {
+        return;
+    }
+    // **Check the bytes, not just that something arrived.** A lost byte on the
+    // wire shows up as `$FF` inside a name, and `$FF` is not a character — so a
+    // decoder that skips unknown bytes turns a corrupt "GLIMMER" into a
+    // plausible "MMER" and a corrupt "RED" into "D". That is exactly how the
+    // first cross-process run looked fine and was not, so the expected
+    // Pokémon is named here and compared in full.
+    let want = if side == "b" {
+        ("GLIMMER", "RED", 0x94u8, 10u8)
+    } else {
+        ("ROCKY", "BLUE", 0x6au8, 11u8)
+    };
+    let party = read_party(&mut gb);
+    let Some(got) = party.iter().find(|m| m.species == want.2) else {
+        eprintln!("[{side}] NO TRADED POKEMON IN THE PARTY");
+        std::process::exit(1);
+    };
+    let ok = got.nickname == want.0 && got.ot_name == want.1 && got.level == want.3;
+    println!(
+        "[{side}] traded Pokemon: {} (OT {}) Lv{} — {}",
+        got.nickname,
+        got.ot_name,
+        got.level,
+        if ok { "INTACT" } else { "CORRUPT" }
+    );
+    if !ok {
+        eprintln!(
+            "[{side}] EXPECTED {} (OT {}) Lv{} — the wire lost bytes",
+            want.0, want.1, want.3
+        );
+        std::process::exit(1);
+    }
+}
+
+fn write_one(path: &Path, gb: &mut Gameboy) {
+    if let Some(img) = image::RgbaImage::from_raw(160, 144, gb.image().to_vec()) {
+        let _ = img.save(path);
     }
 }

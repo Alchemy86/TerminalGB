@@ -846,6 +846,10 @@ impl Gameboy {
         self.cpu.memory.serial.link_answer_master(received);
     }
 
+    pub(crate) fn link_set_hold(&mut self, hold: bool) {
+        self.cpu.memory.serial.link_set_hold(hold);
+    }
+
     pub(crate) fn link_clock_slave(&mut self, received: u8) -> bool {
         self.cpu.memory.serial.link_clock_slave(received)
     }

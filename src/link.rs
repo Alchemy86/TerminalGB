@@ -100,6 +100,10 @@
 //! desync detectors, and Gen 1's is a good one (`Serial_ExchangeBytes` re-sends
 //! its first byte until it sees the `$FD` preamble come back).
 
+/// Two *processes* on one machine, joined automatically — see [`peer`].
+#[cfg(unix)]
+pub mod peer;
+
 use crate::gameboy::{Gameboy, FRAME_TICKS};
 use crate::mmu::serial::LinkRole;
 
@@ -141,7 +145,8 @@ pub struct LinkStats {
     /// Transfers where a master shifted in `$FF` because the other console was
     /// not armed. This is **normal**: it is what a real cable does whenever one
     /// side is not listening, and Gen 1's handshake spends its whole idle time
-    /// here.
+    /// here — a completed Blue-to-Blue trade over
+    /// [`peer`] logs around 450 of them.
     pub unanswered: u64,
     /// Transfers where the other console armed its port and then disarmed it
     /// before the eighth edge. The master **keeps** the byte that was latched;

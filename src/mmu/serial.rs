@@ -71,6 +71,24 @@ pub struct Serial<'a> {
     /// is meaningful only within one live link session, and a save state does
     /// not carry the other console.
     link_seq: u32,
+    /// While set, an internally clocked transfer **will not finish**.
+    ///
+    /// A cable joining two separate processes cannot promise that the far
+    /// console is even executing when our shift register runs out: both
+    /// emulators pace themselves to 59.7275 Hz, and each one emulates a whole
+    /// frame in a fraction of a millisecond and then sleeps for the rest of it.
+    /// Two such bursts need not overlap at all, so a transfer that completed on
+    /// schedule would shift in `$FF` every time and no link would ever work.
+    ///
+    /// Holding costs the game nothing it can observe: a program waiting on a
+    /// transfer is *already* spinning on `SC` bit 7 or on the serial interrupt
+    /// (`Serial_ExchangeByte`, pokered `home/serial.asm`), and the timer, the
+    /// PPU and the APU all keep running underneath it. See
+    /// [`crate::link::peer`].
+    ///
+    /// Not serialised: it is meaningful only while a peer is attached, and a
+    /// save state does not carry the other console.
+    link_hold: bool,
 }
 
 impl<'a> Serial<'a> {
@@ -84,6 +102,7 @@ impl<'a> Serial<'a> {
             bits_left: 0,
             incoming: 0xFF,
             link_seq: 0,
+            link_hold: false,
         }
     }
 
@@ -129,6 +148,13 @@ impl<'a> Serial<'a> {
             return;
         }
         if self.bits_left <= edges {
+            if self.link_hold {
+                // Park one bit short. The register stays "in flight", so
+                // `link_role` still reports `Master` and the cable can still
+                // answer it.
+                self.bits_left = 1;
+                return;
+            }
             self.bits_left = 0;
             self.data = self.incoming;
             self.control &= 0x7F;
@@ -236,6 +262,14 @@ impl<'a> Serial<'a> {
         self.incoming = received;
     }
 
+    /// Stop (or allow) an internally clocked transfer finishing — see the
+    /// `link_hold` field. Releasing does not itself complete the transfer; the
+    /// next shift-clock edge does, which keeps the game's timing on the
+    /// hardware's own clock rather than on the cable's.
+    pub(crate) fn link_set_hold(&mut self, hold: bool) {
+        self.link_hold = hold;
+    }
+
     /// Clock a *slave*: the other console has driven eight edges, so this one's
     /// shift register has been emptied onto the wire and refilled with
     /// `received`. Lands the byte, clears the transfer-start flag and requests
@@ -275,6 +309,7 @@ impl Default for Serial<'static> {
             bits_left: 0,
             incoming: 0xFF,
             link_seq: 0,
+            link_hold: false,
         }
     }
 }
