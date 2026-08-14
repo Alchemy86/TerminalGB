@@ -38,6 +38,7 @@ use crate::screen::termcost;
 use crate::screen::trainer_view as tv;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
+use crate::trainer::gen1::BattleKind;
 use crate::trainer::TrainerPlugin;
 use crate::upscale::Upscaler;
 use crate::video::{self, Source as VideoSource, VideoOut};
@@ -114,6 +115,10 @@ const IDLE_POLL: Duration = Duration::from_millis(50);
 /// Width and height of the live stats panel, which gets a rectangle of its own
 /// so it never lands on top of the game picture (see [`App::render_stats`]).
 const STATS_W: u16 = 22;
+
+/// Cells the game picture keeps whatever else is on screen. The trainer panel
+/// shrinks below its design width rather than take these.
+const MIN_GAME_W: u16 = 20;
 const STATS_H: u16 = 15;
 /// A held Game Boy key auto-releases this long after its last press/repeat.
 /// A safety net (we require the kitty keyboard protocol, so real key-release
@@ -561,6 +566,20 @@ struct Session {
     /// RGBA scratch for the sprite, reused so drawing it allocates nothing.
     sprite_rgba: Vec<u8>,
     sprite_dims: (u32, u32),
+    /// The opposing trainer's roster, composed into ONE wide strip rather than
+    /// six images. Six images means six ids, six placements and six PNGs a
+    /// frame; one strip with transparent gutters looks identical and costs what
+    /// a single sprite costs. See `compose_team_strip`.
+    team_image: Option<TermImage>,
+    /// Species + fainted flags + palette, so an unchanged roster is not
+    /// recomposed.
+    team_key: Option<(Vec<(u8, bool)>, Palette)>,
+    team_rgba: Vec<u8>,
+    team_dims: (u32, u32),
+    /// Whether each panel picture was on screen last frame, so one that has
+    /// stopped being drawn can be explicitly taken off the terminal.
+    sprite_shown: bool,
+    team_shown: bool,
     /// Hash of the last frame encoded on the legacy path.
     legacy_hash: u64,
     /// Last computed effective scale (for the status panel).
@@ -701,6 +720,15 @@ struct App {
     trainer: bool,
     /// Per-Pokémon detail view inside the trainer panel (`d`).
     trainer_detail: bool,
+    /// Whether a battle was on at the last draw, so the focus ring can be
+    /// re-pointed at the opponent the moment one starts (and back at the party
+    /// when it ends) instead of leaving a stale index meaning something else.
+    trainer_fighting: bool,
+    /// Set when something has happened that ratatui's cell diff cannot see —
+    /// specifically a terminal image being taken off the screen, which leaves
+    /// cells whose real contents no longer match the previous buffer. Consumed
+    /// by the run loop, which clears the terminal before the next draw.
+    full_redraw: bool,
     /// Selected party slot, cycled with Tab.
     trainer_sel: usize,
     /// How loudly a wild encounter's shiny-if-traded verdict is announced.
@@ -898,6 +926,8 @@ impl App {
             stats: false,
             trainer: false,
             trainer_detail: false,
+            trainer_fighting: false,
+            full_redraw: false,
             trainer_sel: 0,
             shiny_alert,
             last_encounter_seq: 0,
@@ -964,6 +994,7 @@ impl App {
     fn start_game(&mut self, path: &Path) {
         let term_image = self.new_term_image();
         let sprite_image = self.new_sprite_image();
+        let team_image = self.new_team_image();
         match load_session(path, &self.config) {
             Ok((mut gb, entry, audio, plugin_notes)) => {
                 self.recent.record(path);
@@ -991,6 +1022,12 @@ impl App {
                     sprite_key: None,
                     sprite_rgba: Vec::new(),
                     sprite_dims: (0, 0),
+                    team_image,
+                    team_key: None,
+                    team_rgba: Vec::new(),
+                    team_dims: (0, 0),
+                    sprite_shown: false,
+                    team_shown: false,
                     legacy_hash: 0,
                     scale: 1.0,
                     disp_cells: (0, 0),
@@ -1158,6 +1195,14 @@ impl App {
             let now = Instant::now();
             if dirty && now >= next_draw {
                 let t = Instant::now();
+                // A picture that has just been taken off the screen leaves
+                // cells whose *terminal* contents no longer match ratatui's
+                // idea of them, and the diff will not repaint a cell it thinks
+                // is already right. One full repaint costs a frame's worth of
+                // text and happens only on the transition.
+                if self.take_full_redraw() {
+                    terminal.clear()?;
+                }
                 terminal.draw(|f| self.render(f))?;
                 // The picture goes out *after* the text frame has been
                 // flushed, so it is never clipped, re-diffed or overwritten by
@@ -2261,12 +2306,17 @@ impl App {
         }
     }
 
+    /// Walk the focus ring, which during a battle **starts at the opponent**
+    /// and then runs through the party — so the opponent's full stat block is
+    /// one `Tab` + `d` away, and the team you would switch to is the next few.
+    /// Before this the ring was the party alone and the opponent's numbers were
+    /// unreachable, which is most of what a tracker is for.
     fn cycle_trainer_selection(&mut self, delta: isize) {
         let n = self
             .session
             .as_ref()
             .and_then(|s| s.gb.plugin::<TrainerPlugin>())
-            .map(|p| p.state().party.len())
+            .map(|p| tv::focus_ring(p.state()).len())
             .unwrap_or(0);
         if n == 0 {
             return;
@@ -2458,14 +2508,15 @@ impl App {
                 rest = Rect::new(rest.x, rest.y + 1, rest.width, rest.height - 1);
             }
             let mut trainer_panel = None;
-            if self.trainer && rest.width > tv::PANEL_W + 8 {
+            let panel_w = tv::PANEL_W.min(rest.width.saturating_sub(MIN_GAME_W));
+            if self.trainer && panel_w >= tv::PANEL_MIN_W {
                 trainer_panel = Some(Rect::new(
-                    rest.right() - tv::PANEL_W,
+                    rest.right() - panel_w,
                     rest.y,
-                    tv::PANEL_W,
+                    panel_w,
                     rest.height,
                 ));
-                rest = Rect::new(rest.x, rest.y, rest.width - tv::PANEL_W, rest.height);
+                rest = Rect::new(rest.x, rest.y, rest.width - panel_w, rest.height);
             }
             if self.stats && rest.width > STATS_W + 8 {
                 let panel = Rect::new(rest.x, rest.y, STATS_W, rest.height);
@@ -2524,7 +2575,17 @@ impl App {
         // the Status sidebar is reference information, the party is what is
         // being watched, and splitting the column three ways would make both
         // unreadable.
-        let side_w = if self.trainer { tv::PANEL_W } else { 30 };
+        // **The panel takes what is left, not what it wants.** `PANEL_W` is the
+        // width the party rows are *designed* for; on a narrower terminal the
+        // sections drop their least valuable columns rather than the game being
+        // squeezed to nothing (see `trainer_view::party_cols`). Below
+        // `tv::PANEL_MIN_W` there is no panel worth drawing and
+        // `render_trainer` declines.
+        let side_w = if self.trainer {
+            tv::PANEL_W.min(area.width.saturating_sub(MIN_GAME_W))
+        } else {
+            30
+        };
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Min(20), Constraint::Length(side_w)])
@@ -2590,6 +2651,11 @@ impl App {
         )
     }
 
+    /// Take the pending full-repaint request, if any. See [`App::full_redraw`].
+    fn take_full_redraw(&mut self) -> bool {
+        std::mem::replace(&mut self.full_redraw, false)
+    }
+
     /// The live trainer panel.
     ///
     /// Three rectangles, none of which overlap the game picture or each other
@@ -2597,10 +2663,28 @@ impl App {
     /// focused Pokémon's sprite — a **second terminal image**, with its own id —
     /// and the party list or detail view.
     fn render_trainer(&mut self, f: &mut Frame<'_>, area: Rect) {
-        if area.width < 24 || area.height < 4 {
+        if area.width < tv::PANEL_MIN_W || area.height < 4 {
             return;
         }
         self.trainer_rect = Some(area);
+        // The focus ring gains and loses the opponent as battles start and
+        // end, so a selection index that meant "party slot 2" a frame ago can
+        // mean something else now. Snap to the front of the ring on the
+        // transition — which in a battle is the opponent, the thing you opened
+        // the panel to look at.
+        let fighting = self
+            .session
+            .as_ref()
+            .and_then(|s| s.gb.plugin::<TrainerPlugin>())
+            .map(|p| {
+                let st = p.state();
+                st.opponent.is_some() && st.battle != BattleKind::None
+            })
+            .unwrap_or(false);
+        if fighting != self.trainer_fighting {
+            self.trainer_fighting = fighting;
+            self.trainer_sel = 0;
+        }
         // Split borrows: pull everything needed out of `self` before `session`.
         let detail = self.trainer_detail;
         let selected = self.trainer_sel;
@@ -2644,49 +2728,58 @@ impl App {
             return;
         }
 
-        // The focused Pokémon: the opponent while a battle is on (that is what
-        // is being watched), otherwise the selected party member.
-        let focus = plugin
-            .state()
-            .opponent
-            .as_ref()
-            .map(|o| o.species)
-            .or_else(|| plugin.state().party.get(selected).map(|m| m.species));
+        // **One focus drives the picture and the numbers.** The sprite used to
+        // switch to the opponent on its own while the stat block kept showing
+        // the player's party, so during a battle the panel showed one
+        // Pokémon's face over another's statistics. `Tab` walks the ring, which
+        // in a battle starts at the opponent.
+        let focus = tv::focus_at(plugin.state(), selected);
+        let species =
+            focus.and_then(|fo| tv::focused_mon(plugin.state(), fo).map(|m| m.species));
 
-        let want_sprite = focus.is_some() && session.sprite_image.is_some();
-        let l = tv::layout(area, want_sprite);
-
-        let mut lines = if detail {
-            match plugin.state().party.get(selected) {
-                Some(m) => tv::detail_lines(m),
-                None => Vec::new(),
-            }
-        } else {
-            tv::party_lines(plugin.state(), selected)
-        };
-        lines.extend(tv::battle_lines(plugin.state()));
-        if !detail {
-            lines.extend(tv::badge_lines(plugin.state()));
-        }
+        let want_sprite = species.is_some() && session.sprite_image.is_some();
+        // The team strip is progressive: asked for only in a trainer battle
+        // with a roster that read back, and granted only if the panel has the
+        // width and the spare rows. Where it is refused the roster still shows
+        // — as the marker line inside `[ OPPONENT ]`.
+        let team: Vec<crate::trainer::TeamMon> =
+            if plugin.state().battle == BattleKind::Trainer {
+                plugin.state().enemy_team.clone()
+            } else {
+                Vec::new()
+            };
+        // Not in the detail view: that is a request for a page of numbers, and
+        // three rows of pictures there costs the bottom of the stat block. The
+        // roster is still reported, as a caption under the numbers.
+        let want_team = !team.is_empty() && !detail && session.team_image.is_some();
+        // Compose the text FIRST and tell the layout how many rows it wants:
+        // the width does not depend on the pictures, and the pictures must only
+        // be granted space the numbers do not need. A battle's `[ OPPONENT ]`
+        // block is a dozen rows on its own, and it must never be the reason the
+        // party falls off the bottom.
+        let width = area.width.saturating_sub(2) as usize;
+        let header = tv::header_lines(plugin.state(), game.label(), width);
+        let lines = tv::body_lines(plugin.state(), focus, detail, width);
+        let l = tv::layout_with_team(area, want_sprite, want_team, lines.len() as u16);
         let title = if detail {
-            " Pokémon (d: party) "
+            " Trainer · d back · Tab next "
         } else {
-            " Party (d: detail) "
+            " Trainer · d detail · Tab next "
         };
-        let header = tv::header(plugin.state(), game.label());
 
-        // Encode the sprite before dropping the plugin borrow.
+        // Encode both pictures before dropping the plugin borrow.
         let mut sprite_ready = false;
         if l.sprite.height > 0 {
-            if let Some(species) = focus {
+            if let Some(species) = species {
                 if session.sprite_key != Some((species, palette)) {
                     if let Some(img) = plugin.sprite(species) {
-                        session.sprite_rgba.clear();
-                        session.sprite_rgba.reserve(img.pixels.len() * 4);
-                        for &px in &img.pixels {
-                            let [r, g, b] = palette.shade(px);
-                            session.sprite_rgba.extend_from_slice(&[r, g, b, 255]);
-                        }
+                        encode_sprite(
+                            &img.pixels,
+                            img.width,
+                            img.height,
+                            palette,
+                            &mut session.sprite_rgba,
+                        );
                         session.sprite_dims = (img.width as u32, img.height as u32);
                         session.sprite_key = Some((species, palette));
                     } else {
@@ -2698,51 +2791,78 @@ impl App {
                 sprite_ready = session.sprite_dims.0 > 0;
             }
         }
-
-        f.render_widget(header, l.header);
-        f.render_widget(Paragraph::new(lines).block(tv::body_block(title)), l.body);
-
-        if !sprite_ready || l.sprite.height == 0 {
-            return;
+        if l.team.height > 0 {
+            // Keyed on species *and* whether each is standing, so the strip is
+            // recomposed exactly when one of them faints and not once a frame.
+            let key: Vec<(u8, bool)> =
+                team.iter().map(|m| (m.species, m.is_fainted())).collect();
+            if session.team_key.as_ref().map(|(k, p)| (k, *p)) != Some((&key, palette)) {
+                session.team_dims =
+                    compose_team_strip(plugin, &team, palette, &mut session.team_rgba)
+                        .unwrap_or((0, 0));
+                session.team_key = Some((key, palette));
+            }
         }
-        // Fit the picture inside its rectangle, aspect-correct for the cell
-        // shape, and centre it — the same arithmetic the game picture uses.
-        let (sw, sh) = session.sprite_dims;
-        let (rect, _) = fit_metrics(l.sprite, sw, sh, font_w, font_h);
-        if rect.width == 0 || rect.height == 0 {
-            return;
-        }
+
+        f.render_widget(tv::panel_block(title), l.frame);
+        f.render_widget(Paragraph::new(header), l.header);
+        f.render_widget(Paragraph::new(lines), l.body);
+
         // The panel is drawn *before* the game picture, so `ui_sig` still holds
         // the previous frame's signature here — comparing against it is exactly
         // the "something may have painted over the image" test.
         let ui_changed = self.ui_sig != Some(sig);
-        self.sprite_rect = Some(rect);
-        if let Some(img) = session.sprite_image.as_mut() {
-            if ui_changed {
-                img.invalidate();
+        // A picture that stops being drawn does not stop being displayed: a
+        // Kitty placement lives until it is deleted. Opening the detail view
+        // retires the team strip and a battle ending retires the sprite, and
+        // without this the retired picture hangs over whatever replaced it.
+        let show_sprite = sprite_ready && l.sprite.height > 0;
+        let show_team = l.team.height > 0 && session.team_dims.0 > 0;
+        let mut retired = false;
+        if session.sprite_shown && !show_sprite {
+            if let Some(img) = session.sprite_image.as_mut() {
+                let seq = img.erase().to_string();
+                session.pending_wire.push_str(&seq);
+                retired = true;
             }
-            let placement = img.place(
+        }
+        if session.team_shown && !show_team {
+            if let Some(img) = session.team_image.as_mut() {
+                let seq = img.erase().to_string();
+                session.pending_wire.push_str(&seq);
+                retired = true;
+            }
+        }
+        session.sprite_shown = show_sprite;
+        session.team_shown = show_team;
+        self.full_redraw |= retired;
+        if show_sprite {
+            let (sw, sh) = session.sprite_dims;
+            let (rect, _) = fit_metrics(l.sprite, sw, sh, font_w, font_h);
+            self.sprite_rect = place_panel_image(
+                f,
+                session.sprite_image.as_mut(),
                 &session.sprite_rgba,
-                sw,
-                sh,
-                CellRect::new(rect.x, rect.y, rect.width, rect.height),
+                (sw, sh),
+                rect,
+                ui_changed,
+                modal,
+                &mut session.pending_wire,
             );
-            // While a modal popup is up nothing is retransmitted, for the same
-            // reason the game picture is not: the popup is drawn over it.
-            if placement.changed && !modal {
-                session.pending_wire.push_str(placement.seq);
-            }
-            // The cells the sprite covers are marked `skip`, exactly as the
-            // game picture's are: text drawn into them would replace part of
-            // the image and, on Kitty, stop it updating.
-            let buf = f.buffer_mut();
-            for y in 0..rect.height {
-                for x in 0..rect.width {
-                    if let Some(cell) = buf.cell_mut((rect.x + x, rect.y + y)) {
-                        cell.set_skip(true);
-                    }
-                }
-            }
+        }
+        if show_team {
+            let (tw, th) = session.team_dims;
+            let (rect, _) = fit_metrics(l.team, tw, th, font_w, font_h);
+            place_panel_image(
+                f,
+                session.team_image.as_mut(),
+                &session.team_rgba,
+                (tw, th),
+                rect,
+                ui_changed,
+                modal,
+                &mut session.pending_wire,
+            );
         }
     }
 
@@ -2871,6 +2991,15 @@ impl App {
     fn new_sprite_image(&self) -> Option<TermImage> {
         self.new_term_image()
             .map(|t| TermImage::new(t.wire(), 0x0067_6202))
+    }
+
+    /// The opposing trainer's team strip — a **third** terminal image, so a
+    /// third id. All three rules from `docs/terminal-render.md` apply to it:
+    /// its own id (never a fresh one per frame), its own cell rectangle, and
+    /// the cells it covers marked `skip`.
+    fn new_team_image(&self) -> Option<TermImage> {
+        self.new_term_image()
+            .map(|t| TermImage::new(t.wire(), 0x0067_6203))
     }
 
     /// The upscale factor actually applied before transmission (see
@@ -3242,10 +3371,59 @@ impl App {
         );
     }
 
+    /// The Plugins section of the help overlay: what exists, how to arm it, and
+    /// what is attached right now.
+    ///
+    /// Plugins are deliberately opt-in — an unmodified `config.toml` runs an
+    /// unmodified machine — but "opt-in" is only a feature if the options are
+    /// findable. Before this the link partner was documented in
+    /// `docs/plugins.md` and nowhere the player could see, so the only way to
+    /// learn it existed was to read the repository.
+    fn plugin_help(&self) -> Vec<Line<'static>> {
+        let d = Style::default().fg(Color::DarkGray);
+        let attached: Vec<crate::plugin::PluginStatus> = self
+            .session
+            .as_ref()
+            .map(|s| s.gb.plugin_statuses())
+            .unwrap_or_default();
+        let mut out = vec![
+            Line::from(""),
+            Line::from("Plugins — nothing loads unless you name it"),
+            Line::from(Span::styled(
+                "  config.toml:  plugins = gen1-link      (or GB_PLUGINS=…)",
+                d,
+            )),
+            Line::from(vec![
+                Span::styled("  trainer    ", Style::default().fg(Color::Cyan)),
+                Span::raw("this panel · always on · read-only"),
+            ]),
+            Line::from(vec![
+                Span::styled("  gen1-link  ", Style::default().fg(Color::Cyan)),
+                Span::raw("answers the link cable and trades a Pokémon in"),
+            ]),
+            Line::from(Span::styled(
+                "             gen1_trade = ~/mewtwo.trade, else a built-in offer",
+                d,
+            )),
+            Line::from(Span::styled(
+                "             it CAN write your game — marked ! in Status",
+                Style::default().fg(Color::Yellow),
+            )),
+        ];
+        if !attached.is_empty() {
+            let names: Vec<String> = attached.iter().map(|p| p.name.clone()).collect();
+            out.push(Line::from(Span::styled(
+                format!("  attached now: {}", names.join(", ")),
+                d,
+            )));
+        }
+        out
+    }
+
     fn render_help(&self, f: &mut Frame<'_>) {
         let area = popup_area(f.area(), 60, 60);
         f.render_widget(Clear, area);
-        let text = vec![
+        let mut text = vec![
             Line::from(Span::styled(
                 "Help",
                 Style::default().add_modifier(Modifier::BOLD),
@@ -3276,12 +3454,23 @@ impl App {
             Line::from("  ?         this help   q       quit"),
             Line::from(""),
             Line::from("Trainer view (Pokémon Red/Blue)"),
-            Line::from("  T         show/hide   d       detail for one Pokémon"),
-            Line::from("  tab       next party member   shift-tab  previous"),
+            Line::from("  T         show/hide   d       detail for the focused one"),
+            Line::from("  tab       next        shift-tab  previous"),
+            Line::from(Span::styled(
+                "  in a battle tab starts at the opponent, then your party",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(Span::styled(
                 "  read-only: it never writes to the game",
                 Style::default().fg(Color::DarkGray),
             )),
+        ];
+        // **Plugins have to be discoverable from inside the emulator.** They
+        // are opt-in by design — nothing loads unless it is named — but that
+        // only works if the names are somewhere a player will find them, and
+        // until now the only place was `docs/plugins.md`.
+        text.extend(self.plugin_help());
+        text.extend([
             Line::from(""),
             Line::from("Battle control (Pokémon Red/Blue, plugins = gen1-battle)"),
             Line::from("  B         start the selected battle   N   next preset"),
@@ -3317,11 +3506,10 @@ impl App {
                 "press any key to close",
                 Style::default().fg(Color::DarkGray),
             )),
-        ];
+        ]);
         // A config key that did not apply is repeated here, so it cannot be
         // missed by someone who started the emulator from a launcher and never
         // saw the startup stderr.
-        let mut text = text;
         if !self.config_warnings.is_empty() {
             text.push(Line::from(""));
             for w in &self.config_warnings {
@@ -3362,6 +3550,177 @@ fn render_quit(f: &mut Frame<'_>) {
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
+
+/// Turn a decoded Gen 1 picture — one palette index per pixel — into the RGBA
+/// the terminal image path takes, **with the page behind the Pokémon made
+/// transparent** so the panel shows through instead of a pasted-on white box.
+///
+/// Which pixels count as the page is
+/// [`sprite::background_mask`](crate::trainer::sprite::background_mask): a
+/// flood fill from the border, *not* a colour key — Gen 1 art uses the lightest
+/// shade inside the figure too, and keying on it punches holes through the
+/// middle of the Pokémon.
+///
+/// Transparent pixels keep their opaque colour in RGB and only carry `A = 0`.
+/// That is what makes the fallback safe: a transport that drops alpha (the
+/// `GB_TERM_IMAGE=rgb` escape hatch, or a truecolour PNG) renders exactly the
+/// opaque picture it renders today rather than a hole full of undefined colour.
+fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut Vec<u8>) {
+    let bg = crate::trainer::sprite::background_mask(pixels, w, h);
+    out.clear();
+    out.reserve(pixels.len() * 4);
+    for (i, &px) in pixels.iter().enumerate() {
+        let [r, g, b] = palette.shade(px);
+        let a = if bg.get(i).copied().unwrap_or(false) {
+            0
+        } else {
+            255
+        };
+        out.extend_from_slice(&[r, g, b, a]);
+    }
+}
+
+/// Place one of the trainer panel's images over a cell rectangle and mark the
+/// cells it covers `skip`, returning the rectangle it actually took.
+///
+/// Shared by the focused Pokémon's sprite and the opposing trainer's team
+/// strip because the three rules from `docs/terminal-render.md` apply
+/// identically to both, and having them written twice is how one of them ends
+/// up with only two: reuse the image's own id (never a fresh one per frame),
+/// re-transmit when the UI may have painted over it, and never let text share a
+/// cell with a picture.
+#[allow(clippy::too_many_arguments)]
+fn place_panel_image(
+    f: &mut Frame<'_>,
+    image: Option<&mut TermImage>,
+    rgba: &[u8],
+    dims: (u32, u32),
+    rect: Rect,
+    ui_changed: bool,
+    modal: bool,
+    wire: &mut String,
+) -> Option<Rect> {
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    let img = image?;
+    if ui_changed {
+        img.invalidate();
+    }
+    let placement = img.place(
+        rgba,
+        dims.0,
+        dims.1,
+        CellRect::new(rect.x, rect.y, rect.width, rect.height),
+    );
+    // While a modal popup is up nothing is retransmitted, for the same reason
+    // the game picture is not: the popup is drawn over it.
+    if placement.changed && !modal {
+        wire.push_str(placement.seq);
+    }
+    // **Skip only the cells of a picture that is NOT being retransmitted.**
+    //
+    // `skip` tells ratatui's diff to leave a cell alone, which is right for a
+    // static image: text drawn into it would replace part of the picture, and
+    // on Kitty it removes the placeholders that make the picture update at all.
+    // But it also means the cell is never *erased*, so when the layout moves an
+    // image the text that used to be underneath is still on the terminal — and
+    // with a transparent sprite background it shows straight through the
+    // picture as half-eaten words. (An opaque picture hid this for as long as
+    // the sprites had a white box behind them.)
+    //
+    // On a frame where the picture is transmitted anyway there is nothing to
+    // protect: `pending_wire` is flushed *after* `terminal.draw`, so the text
+    // ratatui paints into these cells is immediately covered by the image in
+    // the same write burst. Letting the diff run on those frames is what erases
+    // the ghost.
+    if !placement.changed {
+        let buf = f.buffer_mut();
+        for y in 0..rect.height {
+            for x in 0..rect.width {
+                if let Some(cell) = buf.cell_mut((rect.x + x, rect.y + y)) {
+                    cell.set_skip(true);
+                }
+            }
+        }
+    }
+    Some(rect)
+}
+
+/// One cell of the team strip, in pixels. The largest Gen 1 picture is 56×56,
+/// so every roster slot gets the same box whatever its occupant's size and the
+/// row does not jitter as the trainer's team changes.
+const TEAM_CELL_PX: usize = 56;
+
+/// Alpha applied to a fainted team member, so it reads as *out* rather than as
+/// missing. Both protocols alpha-blend, so this is a ghost over the panel
+/// rather than a colour we had to guess at.
+const FAINTED_ALPHA: u8 = 80;
+
+/// Compose the opposing trainer's roster into **one** wide RGBA strip:
+/// `n × 56` by `56`, each Pokémon bottom-centred in its own cell, background
+/// transparent, fainted members ghosted, unreadable slots left empty.
+///
+/// One image rather than six is the whole design. Six would mean six terminal
+/// image ids, six placements and six PNG encodes every time the strip changed,
+/// in a panel that is 38 cells wide — where each would land under six cells
+/// anyway. A single strip is transmitted once, scaled by the terminal to the
+/// team rectangle, and deduplicated by the same whole-image hash the game
+/// picture uses, so a roster that has not changed costs nothing at all.
+///
+/// Returns `None` when nothing could be drawn, which the caller reports as the
+/// marker line rather than as an empty band.
+fn compose_team_strip(
+    plugin: &mut TrainerPlugin,
+    team: &[crate::trainer::TeamMon],
+    palette: Palette,
+    out: &mut Vec<u8>,
+) -> Option<(u32, u32)> {
+    if team.is_empty() {
+        return None;
+    }
+    let w = team.len() * TEAM_CELL_PX;
+    let h = TEAM_CELL_PX;
+    out.clear();
+    out.resize(w * h * 4, 0);
+    let mut drew = false;
+    for (slot, m) in team.iter().enumerate() {
+        if !m.known || m.species == 0 {
+            continue;
+        }
+        let Some(img) = plugin.sprite(m.species) else {
+            continue;
+        };
+        let (iw, ih) = (img.width, img.height);
+        if iw == 0 || ih == 0 || iw > TEAM_CELL_PX || ih > TEAM_CELL_PX {
+            continue;
+        }
+        let bg = crate::trainer::sprite::background_mask(&img.pixels, iw, ih);
+        // Bottom-centred: Gen 1 art is drawn standing on the bottom of its own
+        // box, so aligning the *feet* is what makes a row of different-sized
+        // pictures look like a line-up rather than a scatter.
+        let ox = slot * TEAM_CELL_PX + (TEAM_CELL_PX - iw) / 2;
+        let oy = TEAM_CELL_PX - ih;
+        let alpha = if m.is_fainted() { FAINTED_ALPHA } else { 255 };
+        for y in 0..ih {
+            for x in 0..iw {
+                let src = y * iw + x;
+                if bg.get(src).copied().unwrap_or(false) {
+                    continue;
+                }
+                let [r, g, b] = palette.shade(img.pixels[src]);
+                let dst = ((oy + y) * w + ox + x) * 4;
+                out[dst..dst + 4].copy_from_slice(&[r, g, b, alpha]);
+            }
+        }
+        drew = true;
+    }
+    if !drew {
+        out.clear();
+        return None;
+    }
+    Some((w as u32, h as u32))
+}
 
 /// Largest centred rectangle inside `area` whose footprint matches the game
 /// image at the terminal's pixel-per-cell `font` size, plus the effective
@@ -5345,6 +5704,98 @@ mod tests {
         // The reported scale doubles — that is the *only* thing it moves, and
         // it is a number on a panel, not bytes or pixels.
         assert!((s2 - s1 * 2.0).abs() < 0.01, "{s1} {s2}");
+    }
+
+    /// The trainer panel's own keys, driven through the real dispatcher.
+    ///
+    /// `d` and `Tab` are guarded on the panel being up (`if self.trainer`) so
+    /// they stay free as game buttons the rest of the time, and that guard is
+    /// exactly the kind of thing that silently stops working. **In a battle Tab
+    /// starts at the opponent**, which is the whole point of the ring.
+    #[test]
+    fn the_trainer_keys_toggle_detail_and_walk_the_focus_ring() {
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let press = |app: &mut App, code: KeyCode| {
+            app.handle_key(KeyEvent::new(code, event::KeyModifiers::NONE));
+        };
+        // With the panel down, `d` is not the panel's key.
+        app.trainer = false;
+        app.trainer_detail = false;
+        press(&mut app, KeyCode::Char('d'));
+        assert!(
+            !app.trainer_detail,
+            "`d` must not bind while the panel is down"
+        );
+        app.trainer = true;
+        press(&mut app, KeyCode::Char('d'));
+        assert!(app.trainer_detail, "`d` opens the detail view");
+        press(&mut app, KeyCode::Char('d'));
+        assert!(!app.trainer_detail, "and closes it again");
+
+        // The ring: with no trainer data the selection cannot move, and with a
+        // ring of N it wraps rather than running off the end.
+        app.trainer_sel = 0;
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.trainer_sel, 0, "an empty ring does not move");
+    }
+
+    /// The ring itself, over states rather than over a running cartridge: in a
+    /// battle position 0 is the opponent, so one `Tab` from a fresh battle
+    /// reaches the party and the sprite follows the focus rather than being
+    /// pinned to the opponent.
+    #[test]
+    fn the_focus_ring_puts_the_opponent_first_in_a_battle() {
+        use crate::trainer::gen1::{BattleKind, Mon};
+        use crate::trainer::TrainerState;
+        let mut st = TrainerState {
+            in_game: true,
+            ..Default::default()
+        };
+        st.party.push(Mon::default());
+        st.party.push(Mon::default());
+        // Out of battle the ring is the party alone.
+        assert_eq!(tv::focus_ring(&st).len(), 2);
+        assert_eq!(tv::focus_at(&st, 0), Some(tv::Focus::Party(0)));
+        st.battle = BattleKind::Wild;
+        st.opponent = Some(Mon::default());
+        assert_eq!(tv::focus_ring(&st).len(), 3);
+        assert_eq!(tv::focus_at(&st, 0), Some(tv::Focus::Opponent));
+        assert_eq!(tv::focus_at(&st, 1), Some(tv::Focus::Party(0)));
+        // A stale index from a longer ring clamps rather than vanishing.
+        assert_eq!(tv::focus_at(&st, 99), Some(tv::Focus::Party(1)));
+    }
+
+    /// The panel shrinks with the window instead of squeezing the game out,
+    /// and stands down entirely when there is not enough left to be worth the
+    /// space. This is what makes `trainer_view`'s narrow tiers reachable — they
+    /// were unreachable while the sidebar was a fixed 40 columns.
+    #[test]
+    fn the_trainer_panel_gives_width_back_to_the_game() {
+        use ratatui::backend::TestBackend;
+        for cols in [40u16, 50, 60, 70, 80, 120, 200] {
+            let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+                return;
+            };
+            app.trainer = true;
+            let mut terminal = Terminal::new(TestBackend::new(cols, 40)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let s = app.session.as_ref().unwrap();
+            assert!(
+                s.disp_cells.0 >= MIN_GAME_W.min(cols),
+                "{cols}: the picture was squeezed to {} cells",
+                s.disp_cells.0
+            );
+            if let Some(panel) = app.trainer_rect {
+                assert!(panel.width <= tv::PANEL_W, "{cols}: panel too wide");
+                assert!(
+                    panel.width >= tv::PANEL_MIN_W,
+                    "{cols}: a panel too narrow to read was drawn"
+                );
+                assert!(panel.right() <= cols, "{cols}: panel escapes the window");
+            }
+        }
     }
 
     /// The other half of the same bug: the stats panel must not occupy a cell

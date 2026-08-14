@@ -1168,6 +1168,13 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 
 ## Config parsing — fail loudly
 
+- **Every path-valued key must expand `~`.** There is no shell between `config.toml` and the
+  program, so a `~` a user types is a literal. Only `rom_dir` expanded it, which is why the
+  `gen1_trade = ~/mewtwo.trade` in `docs/plugins.md` failed with "cannot read
+  ~/mewtwo.trade". `expand_tilde_str` now covers `gen1_trade`, `telemetry`, `screenshot_dir`,
+  `video_dir`, `video_device` and `video_out`; `every_path_key_expands_a_leading_tilde` pins
+  the lot. Add a new path key to that test as well as to the `get(...)` list.
+
 - `config.toml` invites TOML syntax and TOML has **two** string forms. Single-quoted values
   (`palette = 'green'`) used to be dropped silently while a numeric key beside them applied —
   which reads exactly like "the feature is broken". `unquote` now strips both, and
@@ -1444,10 +1451,69 @@ another branch; when those land, this belongs beside them.)
   party panel would be blank in the overworld. `src/trainer/sprite.rs` implements Gen 1's
   picture compression from the format documented in `pokered`. Proven **byte-identical** to
   `pokered`'s own 2bpp output for 13 species covering every "Pics" bank and both special cases.
-- **The sprite is a SECOND terminal image.** It has its own Kitty image id (`0x00676202` vs the
-  game's `0x00676201`), its own cell rectangle, and its cells marked `skip`. All three rules
-  from `docs/terminal-render.md` apply to it. It is also drawn **after** `render_display`,
-  because `render_display` clears `pending_wire` for the frame.
+- **The sprite is a SECOND terminal image, and the enemy team strip is a THIRD.** Ids
+  `0x00676202` and `0x00676203` against the game's `0x00676201`; each has its own cell
+  rectangle and its cells marked `skip`. All three rules from `docs/terminal-render.md` apply
+  to both. They are drawn **after** `render_display`, because `render_display` clears
+  `pending_wire` for the frame.
+- **ONE focus drives the picture and the numbers** (`trainer_view::Focus`, `focus_ring`,
+  `focus_at`). The sprite used to switch to the opponent on its own while the stat block kept
+  rendering the player's party, so during a battle the panel showed one Pokémon's face over
+  another's statistics — and the opponent's own stats were unreachable, which is most of what a
+  tracker is for. `Tab` walks a ring that **starts at the opponent in a battle**;
+  `App::trainer_sel` indexes the ring, not the party, and snaps to 0 on a battle transition
+  (`App::trainer_fighting`) because the ring changes length underneath a stale index.
+- **`skip` cells are never ERASED, which is a ghosting trap.** A cell marked `skip` is left
+  alone by ratatui's diff, so when a layout moves an image the text that used to be underneath
+  is still on the terminal. An opaque sprite hid this; a **transparent** one shows it straight
+  through as half-eaten words. Rule: mark `skip` only on frames where the picture is *not*
+  being retransmitted (`!placement.changed`) — on a frame where it is, `pending_wire` is
+  flushed after `terminal.draw` and covers the text anyway. And a picture that stops being
+  drawn must be explicitly deleted (`TermImage::erase`, Kitty `a=d,d=i`) plus a full repaint:
+  **a Kitty placement lives until it is deleted** and redrawing the cells under it does not
+  remove it.
+- **Sprite backgrounds are transparent via a FLOOD FILL FROM THE EDGES, never a colour key**
+  (`sprite::background_mask`). Gen 1 art uses the lightest shade *inside* the figure — eyes,
+  teeth, Charmander's belly, the core of its flame — so keying on the colour punches holes
+  through the middle of the Pokémon. Measured: Charmander keeps 98 interior lightest-shade
+  pixels, Squirtle 100, Pikachu 281. Four-connected, not eight, or the fill leaks diagonally
+  between touching outline pixels. Alpha reaches the terminal as `f=32` RGBA on the shm path
+  and as a **`tRNS` chunk** on both PNG paths; `PngEncoder` keys its palette on RGBA now, and
+  an all-opaque frame emits no `tRNS` so the game picture's bytes on the wire are unchanged.
+  Transparent pixels keep their opaque RGB and only carry `A = 0`, so a transport that drops
+  alpha degrades to today's opaque box rather than to garbage.
+- **The opposing trainer's roster** is read from the enemy party block, which mirrors the
+  player's byte for byte (`ENEMY_PARTY_COUNT` `$D89C` / `ENEMY_PARTY_SPECIES` `$D89D` /
+  `ENEMY_MONS` `$D8A4`, the same `+1` / `+8` offsets — pinned by
+  `the_enemy_block_mirrors_the_player_block`). **Nothing is displayed unless the block is
+  self-consistent**: the species list must agree with the `party_struct` species beside it, two
+  independent copies the game writes at different times. Verified live against the captain's
+  cartridge in the Oak's-Lab rival battle. Drawn as **one** wide strip image, not six — six ids
+  and six PNG encodes for six-cell-wide pictures is not a trade worth making. The trainer's own
+  *portrait* is deliberately NOT shipped: `TrainerPicAndMoneyPointers` is not among the derived
+  symbols and guessing an address is exactly what the refusal machinery exists to prevent.
+- **Stat stages: 7 is neutral, and an all-zero block is NOT "-6 on everything".** The block is
+  zeroed WRAM until `InitBattleVariables` writes the 7s, so a sample on the first frames of a
+  battle reads `0` everywhere — observed live printing `YOU ATK-6 DEF-6 SPD-6 SPC-6` for a
+  Pokémon nothing had touched. `StatMods::is_valid` refuses anything outside
+  `MIN_STAT_MOD..=MAX_STAT_MOD` (1..=13). The panel shows the **stage**, not a reconstructed
+  "before" value: the multipliers are truncating integer ratios (`-1` is 66/100, `+1` is 15/10,
+  so up and down do not cancel) and the unmodified value is not recoverable by dividing back
+  out. Stages are only ever read from the battle structures, never from a party copy — they do
+  not survive a switch.
+- **Driving a real cartridge into a real battle, headlessly:**
+  `cargo run --release --example trainer_layout -- --rom <rom> --to-battle`. Mashing Start/A
+  plays Gen 1's intro on its own; a **per-map-biased** random walk then finds the doorways
+  (Red's house 2F wants Up for the stairs, 1F wants Down for the door, outside wants Up), and
+  in Oak's Lab **never press B** — it answers NO to "do you want it?" and loops the scene
+  forever. That reaches the rival's trainer battle in ~760 rounds. The same example renders the
+  panel from a fixture at any width (`-- 40 34 28 24`) and dumps the sprites with their alpha
+  plus an ASCII mask (`--sprites <dir>`).
+- **`wezterm cli send-text` does not deliver every key** to a TUI that has pushed the kitty
+  keyboard-enhancement flags — `T`, digits, `Tab` and `F8` arrive, `d` and `t` do not. That is
+  the injection method, not the product: `the_trainer_keys_toggle_detail_and_walk_the_focus_ring`
+  drives the real dispatcher and passes. Verify key handling in-process; use the terminal for
+  what only it can show (images, colour, alignment).
 - **Cost discipline:** nothing is read per frame — the plugin samples every 6 emulated frames
   (~10 Hz) and **only while its panel is visible** (`set_active`). Sprites decompress once per
   species and cache. A session with no plugin attached pays one `is_empty` test per frame.
@@ -1490,6 +1556,9 @@ another branch; when those land, this belongs beside them.)
   cable has two ends). Nothing loads implicitly — only `plugins = …` / `GB_PLUGINS`.
 - **The user must be able to see it.** The TUI Status panel gains a `Plugin` row whenever one is
   attached; `!` = may write memory, `!!` = has written (sticky). Attaching also raises a toast.
+  The `?` help overlay lists **what plugins exist and how to arm them** — opt-in is only a
+  feature if the options are findable, and before that the only place `gen1-link` was named was
+  `docs/plugins.md`.
 - **ONE contract, two very different plugins — do not add a second trait.** The trainer view is
   read-only and the link partner answers the cable, and both implement the same `Plugin`. The
   read-only guarantee is the *host's* (an undeclared `poke` returns `false`), not a

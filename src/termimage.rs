@@ -240,6 +240,32 @@ impl TermImage {
         self.force = true;
     }
 
+    /// Take this image off the screen, returning the bytes that do it.
+    ///
+    /// **A picture that stops being drawn does not stop being displayed.** A
+    /// Kitty placement lives until it is deleted — redrawing the cells under it
+    /// with text does not remove it — so a panel that shows a sprite in one
+    /// state and not in the next leaves the old sprite hanging over whatever
+    /// replaced it. `a=d,d=i` deletes the image and every placement of it
+    /// (kitty graphics protocol, "Deleting images").
+    ///
+    /// iTerm2 needs nothing here: its inline images *are* cell content, so the
+    /// text redraw that follows removes them. Returning an empty string for it
+    /// is correct, not a gap.
+    ///
+    /// The cache is dropped too, so the next [`TermImage::place`] transmits in
+    /// full rather than assuming the terminal still has the picture.
+    pub fn erase(&mut self) -> &str {
+        self.force = true;
+        self.key = None;
+        self.seq.clear();
+        if self.wire == Wire::Kitty {
+            let id = self.id;
+            let _ = write!(self.seq, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\");
+        }
+        &self.seq
+    }
+
     /// Encode `rgba` (`w`×`h`, 4 bytes per pixel) for display over the
     /// `cols`×`rows` cell rectangle whose top-left cell is `(x, y)`
     /// (zero-based), reusing the previous encoding when nothing changed.
@@ -695,7 +721,12 @@ const MAX_PALETTE: usize = 64;
 /// Both protocols we speak accept PNG (Kitty `f=100`, iTerm2 natively), so one
 /// encoder serves both.
 pub struct PngEncoder {
-    /// Distinct colours seen, packed `0x00RRGGBB`, in index order.
+    /// Distinct colours seen, packed `0xAARRGGBB`, in index order.
+    ///
+    /// Alpha is part of the key so a **transparent** entry is a distinct
+    /// palette slot rather than being merged with the opaque colour beside it.
+    /// A frame that is entirely opaque keys identically to the RGB-only scheme
+    /// this replaced, so the game picture's bytes on the wire are unchanged.
     palette: Vec<u32>,
     /// One palette index per pixel.
     index: Vec<u8>,
@@ -747,8 +778,15 @@ impl PngEncoder {
         self.uncompressed = on;
     }
 
-    /// Encode `rgba` (`width`×`height`, 4 bytes per pixel, alpha ignored) into
-    /// `out`, which is cleared first.
+    /// Encode `rgba` (`width`×`height`, 4 bytes per pixel) into `out`, which is
+    /// cleared first.
+    ///
+    /// Alpha is **carried** on the palette-indexed path, as a `tRNS` chunk —
+    /// that is what lets the trainer view's sprites sit on the panel instead of
+    /// in a white box. It is *dropped* on the truecolour fallback (a frame with
+    /// more than [`MAX_PALETTE`] colours), which is the honest degradation: an
+    /// opaque picture rather than a wrong one. Game Boy content never reaches
+    /// that path.
     pub fn encode(&mut self, rgba: &[u8], width: u32, height: u32, out: &mut Vec<u8>) {
         debug_assert_eq!(rgba.len(), (width as usize) * (height as usize) * 4);
         if !self.uncompressed && self.build_palette(rgba) {
@@ -769,7 +807,10 @@ impl PngEncoder {
         let mut last_key = u32::MAX;
         let mut last_idx = 0u8;
         for px in rgba.chunks_exact(4) {
-            let key = ((px[0] as u32) << 16) | ((px[1] as u32) << 8) | px[2] as u32;
+            let key = ((px[3] as u32) << 24)
+                | ((px[0] as u32) << 16)
+                | ((px[1] as u32) << 8)
+                | px[2] as u32;
             if key == last_key {
                 self.index.push(last_idx);
                 continue;
@@ -826,7 +867,12 @@ impl PngEncoder {
             std::mem::swap(&mut self.prev, &mut self.cur);
         }
 
-        // Palette entries are RGB triples in index order.
+        // Palette entries are RGB triples in index order, with the alpha
+        // channel — if any entry has one — split out into `tRNS`, which for a
+        // colour-type-3 image is one byte per palette entry. Entries after the
+        // last non-opaque one may be omitted, so a fully opaque frame writes no
+        // `tRNS` at all and is byte-identical to what it was before alpha was
+        // carried here.
         let mut plte = Vec::with_capacity(n * 3);
         for &c in &self.palette {
             plte.extend_from_slice(&[(c >> 16) as u8, (c >> 8) as u8, c as u8]);
@@ -834,8 +880,24 @@ impl PngEncoder {
         if plte.is_empty() {
             plte.extend_from_slice(&[0, 0, 0]);
         }
+        let last_alpha = self.palette.iter().rposition(|&c| (c >> 24) as u8 != 0xFF);
+        let trns: Option<Vec<u8>> = last_alpha.map(|i| {
+            self.palette[..=i]
+                .iter()
+                .map(|&c| (c >> 24) as u8)
+                .collect()
+        });
         self.compress();
-        write_png(out, width, height, depth, 3, Some(&plte), &self.zlib);
+        write_png(
+            out,
+            width,
+            height,
+            depth,
+            3,
+            Some(&plte),
+            trns.as_deref(),
+            &self.zlib,
+        );
     }
 
     fn encode_rgb(&mut self, rgba: &[u8], width: u32, height: u32, out: &mut Vec<u8>) {
@@ -858,7 +920,7 @@ impl PngEncoder {
             std::mem::swap(&mut self.prev, &mut self.cur);
         }
         self.compress();
-        write_png(out, width, height, 8, 2, None, &self.zlib);
+        write_png(out, width, height, 8, 2, None, None, &self.zlib);
     }
 
     /// Deflate `raw` into `zlib` — or, in `uncompressed` mode, wrap it in zlib
@@ -928,6 +990,8 @@ fn filter_row(
     out.extend_from_slice(&cand[best]);
 }
 
+#[allow(clippy::too_many_arguments)] // a PNG header is what it is: the chunk
+                                     // order and every field of IHDR are the format's, not a design choice.
 fn write_png(
     out: &mut Vec<u8>,
     width: u32,
@@ -935,6 +999,7 @@ fn write_png(
     depth: u8,
     colour_type: u8,
     plte: Option<&[u8]>,
+    trns: Option<&[u8]>,
     idat: &[u8],
 ) {
     out.clear();
@@ -946,6 +1011,10 @@ fn write_png(
     png_chunk(out, b"IHDR", &ihdr);
     if let Some(p) = plte {
         png_chunk(out, b"PLTE", p);
+    }
+    // `tRNS` must follow `PLTE` and precede `IDAT` (PNG spec §4.2.1.1).
+    if let Some(t) = trns {
+        png_chunk(out, b"tRNS", t);
     }
     png_chunk(out, b"IDAT", idat);
     png_chunk(out, b"IEND", &[]);
@@ -1038,6 +1107,56 @@ mod tests {
         (0..w * h * 4)
             .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
             .collect()
+    }
+
+    /// Find a PNG chunk of the given type in an encoded image.
+    fn chunk<'a>(png: &'a [u8], want: &[u8; 4]) -> Option<&'a [u8]> {
+        let mut at = 8; // past the signature
+        while at + 12 <= png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().ok()?) as usize;
+            let kind = &png[at + 4..at + 8];
+            if kind == want {
+                return png.get(at + 8..at + 8 + len);
+            }
+            at += 12 + len;
+        }
+        None
+    }
+
+    /// A transparent pixel has to survive as far as the terminal, which for the
+    /// PNG transports means a `tRNS` chunk — the trainer sprite's background
+    /// is the only thing in this emulator that is not opaque.
+    #[test]
+    fn a_transparent_pixel_becomes_a_trns_entry() {
+        // Two pixels: opaque black, transparent white.
+        let px = [0, 0, 0, 255, 255, 255, 255, 0];
+        let mut out = Vec::new();
+        PngEncoder::new().encode(&px, 2, 1, &mut out);
+        let plte = chunk(&out, b"PLTE").expect("an indexed image");
+        assert_eq!(plte.len(), 6, "two palette entries");
+        let trns = chunk(&out, b"tRNS").expect("alpha is carried");
+        assert_eq!(trns, &[255, 0], "the second entry is transparent");
+        // `tRNS` must sit between PLTE and IDAT.
+        let pos = |k: &[u8]| out.windows(4).position(|w| w == k).unwrap();
+        assert!(pos(b"PLTE") < pos(b"tRNS") && pos(b"tRNS") < pos(b"IDAT"));
+    }
+
+    /// …and an opaque frame — every frame the *game* produces — must be
+    /// byte-identical to what it was before alpha was carried, so this cannot
+    /// have cost the render path anything.
+    #[test]
+    fn an_opaque_frame_carries_no_trns_at_all() {
+        let mut px = frame(16, 16, 3);
+        for p in px.chunks_exact_mut(4) {
+            p[0] &= 0xC0; // four colours, so it stays on the indexed path
+            p[1] = p[0];
+            p[2] = p[0];
+            p[3] = 255;
+        }
+        let mut out = Vec::new();
+        PngEncoder::new().encode(&px, 16, 16, &mut out);
+        assert!(chunk(&out, b"PLTE").is_some(), "still indexed");
+        assert!(chunk(&out, b"tRNS").is_none(), "no alpha chunk when opaque");
     }
 
     #[test]

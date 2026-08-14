@@ -17,18 +17,68 @@ Press **`T`** in the terminal frontend.
 
 ## What it shows
 
-**Compact (default).** Every party member on two lines: nickname, status, level, an HP bar
-coloured by fraction, then species, `cur/max` and types. A `★` marks a Pokémon that would be
-shiny in Gen 2. Below that, the badges held and which gym leader is next. During a battle the
-opponent gets its own block: species, level, HP bar, types, status, all four stats and its
-moves with PP.
+The panel is one bordered frame of **bracketed sections** — `[ TRAINER ]`, `[ BADGES ]`,
+`[ OPPONENT ]`, `[ PARTY ]` — separated by centred rules. Everything inside a section is
+aligned to fixed columns, so a value changing never shifts the one beside it.
 
-**Detail (`d`).** One Pokémon at a time — `Tab`/`Shift-Tab` cycles the party — with the four
-moves and their PP (including PP Ups), the DVs and their total out of 75, the invisible stat
-experience, Hidden Power's type and base power, and the shiny-if-traded verdict.
+![the panel during a trainer battle](trainer-panel/1-battle-40col.png)
 
-**Sprite.** The focused Pokémon's front picture, decompressed from the cartridge. During a
-battle the focus is the opponent, because that is what is being watched.
+**Header.** Name, ID and money on one packed line; play time and the cartridge on the next;
+then eight discrete badge markers in two groups of four with the count. Held and missing
+differ in **both** glyph and colour (`●` yellow against `○` dark grey) so the count survives a
+monochrome or colour-blind read.
+
+**Party slots.** Six markers under the sprite: filled and coloured by remaining HP, hollow and
+dim for an empty slot, hollow and red for a fainted one. This is the only place an *empty*
+slot is visible at all — the list below only lists what exists. The Pokémon currently in a
+fight is underlined.
+
+**Party.** Two lines each out of battle: marker, index, nickname, level, HP bar and status on
+the first; species, `cur/max` and types on the second. `★` marks a Pokémon that would be shiny
+in Gen 2. A gutter cell carries `▸` for the focus and `▌` for the Pokémon in the fight.
+
+**Opponent (`[ OPPONENT ]`).** In a battle this section comes **first**, right under the
+sprite, and the party below it collapses to one line each so all six still fit. Species,
+level, HP bar and status; the encounter (`wild` / `safari` / `wild (demo)` / `trainer NAME`);
+`cur/max` and types; all four battle stats; any stat stages on either side; the opponent's
+DVs (the numbers behind the encounter banner's verdict — a trainer's Pokémon shows the fixed
+`$98/$88` pair every time, which is itself worth seeing); the moves with PP; and the opposing
+trainer's roster.
+
+**Stat stages (`MOD` / `YOU`).** The stat numbers in a battle are the *modified* ones — a
+Growl visibly takes an Attack of 10 down to 6 — so the panel says which stats are staged, in
+which direction and by how many, for the opponent (`MOD`) and for your own active Pokémon
+(`YOU`). Lowered is red, raised is green. See
+[`derived::StatMods`](../src/trainer/derived.rs) for why the *stage* is shown rather than a
+reconstructed "before" value, and for the Gen 1 ratios (`-1` is two thirds, not a half; `+1`
+is 1.5×, so up and down do not cancel).
+
+**The opposing trainer's team.** In a trainer battle the roster is read from the enemy party
+block and drawn as a row of small sprites in its own band, with a `TEAM ● ○ ?  n left` line in
+the opponent section. Standing, fainted and *unreadable* are three different glyphs — "beaten"
+and "not yet legible" are opposite facts. The strip is **progressive**: it needs 30 columns
+and six spare rows, and where it does not fit the marker line carries the same information.
+
+**Detail (`d`).** One Pokémon at a time, headed `[ OPPONENT ]` or `[ YOUR POKéMON ]` so whose
+numbers these are is never left to be inferred from the picture. Four moves with PP (including
+PP Ups), the DVs and their total out of 75, the invisible stat experience, Hidden Power's type
+and base power, and the shiny-if-traded verdict.
+
+**Sprite.** The focused Pokémon's front picture, decompressed from the cartridge, with its
+background made transparent so it sits on the panel instead of in a white box (see
+[Sprites](#sprites-from-the-rom-not-from-vram)).
+
+### Focus: one ring drives the picture and the numbers
+
+`Tab` walks a **focus ring**, and in a battle that ring **starts at the opponent**. Whatever
+is focused is what the sprite shows and what `d` opens.
+
+This used to be two different things. The sprite switched to the opponent on its own while the
+stat block kept showing the player's party, so during a battle the panel put one Pokémon's
+face over another's statistics — and there was no way to reach the opponent's own stat block
+at all, which is most of what a tracker is for. The ring fixed both: `Tab` from a fresh battle
+is the opponent, `Tab` again is your first party member, and the opponent's `[ OPPONENT ]`
+section is on screen the whole time regardless.
 
 **Wild-encounter banner.** The moment a catchable wild Pokémon appears, a row across the top
 of the terminal names it, prints its DVs, and says whether it **would be shiny if traded to
@@ -38,12 +88,32 @@ be open, and it is the only part of this feature that shows up uninvited.
 | Key | |
 |---|---|
 | `T` | show / hide the panel |
-| `d` | detail view for one Pokémon |
-| `Tab` / `Shift-Tab` | next / previous party member |
+| `d` | detail view for the focused Pokémon |
+| `Tab` / `Shift-Tab` | next / previous in the focus ring |
 
 `d` and `Tab` only bind while the panel is up, so they stay available as game buttons
 otherwise. `T` is shifted deliberately: the A/B/Start/Select bindings are configurable
 lowercase letters and an unshifted key could collide with somebody's.
+
+### Narrowing
+
+The panel takes what the window leaves it rather than a fixed 40 columns, and every section
+**drops its least valuable column first** instead of wrapping. Below `PANEL_MIN_W` (22) there
+is no panel worth drawing and the width goes back to the game picture.
+
+![the same battle in a 30-column panel](trainer-panel/2-battle-30col.png)
+
+At 30 columns: the badge brackets go, the stat line compacts to `A6 D12 S10 C10`, the moves go
+one to a row, the team strip stands down to its marker line, and long names truncate with `…`.
+Everything still reads. `no_line_overflows_at_any_width` renders every section at every width
+from 8 to 60 and asserts nothing exceeds it, so the guarantee is a test rather than arithmetic
+in a comment.
+
+Out of battle the panel closes with a plain separator and the badge summary:
+
+![out of battle](trainer-panel/3-out-of-battle.png)
+
+---
 
 ---
 
@@ -115,7 +185,7 @@ declines.
 
 ---
 
-## Sprites: from the ROM, not from VRAM
+## Sprites: from the ROM, not from VRAM, and on the panel rather than in a box
 
 There were two honest options.
 
@@ -146,6 +216,80 @@ overwrite each other; sharing cells with text would blank the picture and, on Ki
 it.
 
 ---
+
+### Transparent backgrounds — a flood fill, not a colour key
+
+A Gen 1 picture is four palette indices and index 0 is the page the artwork sits on. Mapping
+"every lightest pixel → transparent" is the obvious implementation and it is wrong in a way
+that looks broken rather than subtly off: Gen 1 art uses the lightest shade **inside** the
+figure for eyes, teeth, highlights, Charmander's belly and the core of its flame. A colour key
+punches holes straight through the middle of the Pokémon.
+
+`sprite::background_mask` is therefore a four-way flood fill from the border over
+lightest-shade pixels only. Anything the fill reaches is page; a light region enclosed by
+darker pixels is never reached and stays opaque. Four-connected rather than eight, so the fill
+cannot squeeze diagonally between two touching outline pixels and eat the artwork behind them.
+Measured on the starters: Charmander has **98** lightest-shade pixels inside its artwork,
+Squirtle 100, Pikachu 281 — every one of which a colour key would have erased.
+
+The alpha reaches the terminal two ways. Kitty's shared-memory path is `f=32` RGBA and carries
+it already; the PNG paths (Kitty `f=100`, iTerm2) carry it as a `tRNS` chunk, which
+`PngEncoder` now emits whenever a frame has a non-opaque palette entry. **A fully opaque frame
+writes no `tRNS` at all and is byte-identical to what it was before**, so the game picture's
+bytes on the wire did not move. Transparent pixels keep their opaque colour in RGB and only
+carry `A = 0`, which is what makes the fallback safe: a transport that drops alpha (the
+`GB_TERM_IMAGE=rgb` escape hatch, or the truecolour PNG path) renders exactly the opaque
+picture it rendered before rather than a hole full of undefined colour.
+
+**This exposed a latent bug worth remembering.** Cells covered by a terminal image are marked
+`skip` so ratatui's diff leaves them alone — which also means they are never *erased*, so when
+the layout moved an image the text that used to be underneath was still on the terminal.
+An opaque sprite hid that for as long as the sprites had a white box behind them; a
+transparent one showed it straight through as half-eaten words. Two fixes:
+`skip` is now only set on frames where the picture is **not** being retransmitted (on a frame
+where it is, the image is flushed after `terminal.draw` and covers the text anyway), and a
+picture that stops being drawn is explicitly deleted (`a=d,d=i`) with a full repaint, because
+a Kitty placement lives until it is deleted and redrawing the cells under it does not remove
+it.
+
+---
+
+## The opposing trainer's roster
+
+In a **trainer** battle (never a wild encounter) the panel reads the whole enemy party. The
+addresses mirror the player's block byte for byte — count, a species list with an `$FF`
+terminator, then the `party_struct`s, at the same `+1` / `+8` offsets — and
+`the_enemy_block_mirrors_the_player_block` holds that relationship so the two cannot drift.
+
+**An address is only a claim until something checks it**, so nothing is displayed unless the
+block is self-consistent: the count is in range, every listed species is non-zero, and the
+species list agrees with the species field of the `party_struct` beside it — two independent
+copies of the same fact, written by the game at different times. A slot that fails is `known:
+false` and draws as `?`; a block that fails wholesale sets `enemy_team_unknown` and the panel
+says `TEAM ?`. That also covers the real transient: the first frames of a trainer battle,
+before `LoadEnemyMonData` has run, where the block still holds the previous battle's contents.
+
+Verified against the captain's own cartridge by playing a new game headlessly into the rival
+battle in Oak's Lab (`cargo run --release --example trainer_layout -- --rom <rom>
+--to-battle`): `wIsInBattle = 2`, `wEnemyPartyCount = 1`, and the species list, the
+`party_struct` copy and `wEnemyMonSpecies` all read `$B1` — SQUIRTLE, which is what the rival
+takes when you pick BULBASAUR.
+
+The roster is drawn as **one** wide strip image, `n × 56` by `56` pixels, each Pokémon
+bottom-centred in its own cell with transparent gutters and fainted members ghosted to
+`A = 80`. One image rather than six is the whole design: six would mean six terminal image
+ids, six placements and six PNG encodes every time the strip changed, in a panel 38 cells
+wide where each would land under six cells anyway.
+
+**What is not here: the trainer's own portrait.** The captain asked for the opposing trainer's
+picture beside their team. `wTrainerClass` is available, but the pic pointers
+(`TrainerPicAndMoneyPointers`) and the bank the trainer pictures live in are not among the
+symbols derived in [Where every address came from](#where-every-address-came-from), and this
+project's standing rule is that addresses are derived from a verified build rather than
+guessed. Locating the table by signature is a plausible follow-up — the cross-check is strong
+(every entry must decompress to a square picture) — but it is a separate piece of work and
+inventing an address to ship a picture sooner is exactly what the refusal machinery exists to
+prevent. The trainer's **name** is shown instead, on the encounter line.
 
 ## Derived values — what the game hides
 
@@ -353,8 +497,27 @@ Five checks, in increasing order of what they prove
    `<rom>.sav`, raw cartridge RAM with no header, so SRAM bank 1 begins at file offset
    `0x2000`; see [`src/mbc/battery.rs`](../src/mbc/battery.rs).)
 
-That last one is the real proof, because it checks the addresses against the game rather than
-against another copy of our own assumptions:
+**A fifth, for everything a battle adds.** The four above cannot reach a battle, so
+`examples/trainer_layout.rs --to-battle` plays a **new game** on the real cartridge into the
+rival battle in Oak's Lab — mashing A plays Gen 1's intro on its own, and a per-map-biased
+random walk finds the doorways — then dumps the raw enemy block beside what the plugin made of
+it, and the panel beside both. That run is what verified the enemy-roster addresses, the
+opponent's stats being the opponent's, and the stat-stage line: one GROWL lands, the enemy's
+stat-mod byte reads `6`, and the panel prints `ATK 6` with `MOD ATK-1` under it.
+
+It also caught a bug nothing else would have: the stat-mod block is **zeroed WRAM** until
+`InitBattleVariables` writes the neutral 7s, so for the first frames of a battle every byte
+reads `0` — which taken at face value is `-6` on every stat. `StatMods::is_valid` refuses
+anything outside `MIN_STAT_MOD..=MAX_STAT_MOD` for exactly that reason.
+
+The same example renders the panel from a fixture at any width
+(`cargo run --release --example trainer_layout -- 40 34 28 24`), which is how a layout change
+is *looked at* rather than reasoned about, and writes the sprites with their alpha to PNGs
+(`--sprites <dir>`) plus an ASCII map of the flood-fill mask, which is how the
+"does the belly survive" question is answered by eye on the two species that matter.
+
+That fourth one is the real proof of the *addresses*, because it checks them against the game
+rather than against another copy of our own assumptions:
 
 ```
     the game's own party menu:

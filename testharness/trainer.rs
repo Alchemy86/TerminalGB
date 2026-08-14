@@ -1379,23 +1379,22 @@ fn print_panel(st: &gameboy::trainer::TrainerState) {
     use ratatui::Terminal;
 
     for (title, detail) in [(" compact ", false), (" detail ", true)] {
-        let mut term = Terminal::new(TestBackend::new(tv::PANEL_W, 26)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(tv::PANEL_W, 30)).unwrap();
         term.draw(|f| {
-            let area = Rect::new(0, 0, tv::PANEL_W, 26);
+            let area = Rect::new(0, 0, tv::PANEL_W, 30);
             // No sprite here: a terminal image is not text and cannot be shown
             // in a text dump. It is drawn by the TUI into `layout().sprite`.
             let l = tv::layout(area, false);
-            f.render_widget(tv::header(st, "Pokémon Blue"), l.header);
-            let mut lines = if detail {
-                st.party.first().map(tv::detail_lines).unwrap_or_default()
-            } else {
-                tv::party_lines(st, 0)
-            };
-            lines.extend(tv::battle_lines(st));
-            if !detail {
-                lines.extend(tv::badge_lines(st));
-            }
-            f.render_widget(Paragraph::new(lines).block(tv::body_block(title)), l.body);
+            let w = l.body.width as usize;
+            f.render_widget(tv::panel_block(title), l.frame);
+            f.render_widget(
+                Paragraph::new(tv::header_lines(st, "Pokémon Blue", w)),
+                l.header,
+            );
+            // Position 0 of the ring: the opponent in a battle, the first party
+            // member otherwise — the same focus the frontend starts on.
+            let focus = tv::focus_at(st, 0);
+            f.render_widget(Paragraph::new(tv::body_lines(st, focus, detail, w)), l.body);
         })
         .unwrap();
         println!("\n    panel{title}");

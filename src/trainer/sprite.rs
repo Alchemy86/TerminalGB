@@ -280,9 +280,148 @@ pub fn tiles_to_indices(pic: &Pic) -> (Vec<u8>, usize, usize) {
     (out, w, h)
 }
 
+/// The palette index Gen 1 art uses for the page the Pokémon is drawn on: 0,
+/// the lightest of the four shades.
+pub const BACKGROUND_INDEX: u8 = 0;
+
+/// Which pixels are *background* — the sheet the artwork sits on — rather than
+/// part of the Pokémon.
+///
+/// # Why this is a flood fill and not a colour key
+///
+/// The obvious implementation is "every lightest-shade pixel is background",
+/// and it is wrong in a way that looks broken rather than subtly off: Gen 1 art
+/// uses the lightest shade *inside* the figure for eyes, teeth, highlights,
+/// Charmander's belly and the core of its flame. Keying on the colour punches
+/// holes straight through the middle of the Pokémon.
+///
+/// So: a four-way flood fill from the border over lightest-shade pixels only.
+/// Anything the fill reaches is outside the artwork; a light region enclosed by
+/// darker pixels is never reached and stays opaque. This is the same reasoning
+/// a paint program's "magic wand" uses, and it is the only rule that is right
+/// for both a Pokémon standing on its baseline and one whose outline touches
+/// several edges of the frame.
+///
+/// Costs one pass over `w * h` bytes — about 3 KB for the largest Gen 1 pic —
+/// and runs once per species, behind the same cache the decompression is.
+pub fn background_mask(pixels: &[u8], w: usize, h: usize) -> Vec<bool> {
+    let mut bg = vec![false; w * h];
+    if w == 0 || h == 0 || pixels.len() < w * h {
+        return bg;
+    }
+    let mut stack: Vec<usize> = Vec::with_capacity(w * 2 + h * 2);
+    let seed = |i: usize, stack: &mut Vec<usize>, bg: &mut Vec<bool>| {
+        if pixels[i] == BACKGROUND_INDEX && !bg[i] {
+            bg[i] = true;
+            stack.push(i);
+        }
+    };
+    for x in 0..w {
+        seed(x, &mut stack, &mut bg);
+        seed((h - 1) * w + x, &mut stack, &mut bg);
+    }
+    for y in 0..h {
+        seed(y * w, &mut stack, &mut bg);
+        seed(y * w + w - 1, &mut stack, &mut bg);
+    }
+    while let Some(i) = stack.pop() {
+        let (x, y) = (i % w, i / w);
+        // Four-connected, not eight: a diagonal leak would let the fill squeeze
+        // between two touching outline pixels and eat the artwork behind them.
+        let visit = |nx: usize, ny: usize, stack: &mut Vec<usize>, bg: &mut Vec<bool>| {
+            let j = ny * w + nx;
+            if pixels[j] == BACKGROUND_INDEX && !bg[j] {
+                bg[j] = true;
+                stack.push(j);
+            }
+        };
+        if x > 0 {
+            visit(x - 1, y, &mut stack, &mut bg);
+        }
+        if x + 1 < w {
+            visit(x + 1, y, &mut stack, &mut bg);
+        }
+        if y > 0 {
+            visit(x, y - 1, &mut stack, &mut bg);
+        }
+        if y + 1 < h {
+            visit(x, y + 1, &mut stack, &mut bg);
+        }
+    }
+    bg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole point of the flood fill: a light region *inside* the figure is
+    /// artwork, not background. Charmander's belly and the core of its flame
+    /// are exactly this shape, and a colour key erases both.
+    #[test]
+    fn an_enclosed_light_region_is_artwork_not_background() {
+        // A 7x7 dark ring with a light hole in the middle, on a light page.
+        let (w, h) = (7usize, 7usize);
+        let mut px = vec![0u8; w * h];
+        for y in 1..6 {
+            for x in 1..6 {
+                px[y * w + x] = 3;
+            }
+        }
+        px[3 * w + 3] = 0; // the enclosed highlight
+        let bg = background_mask(&px, w, h);
+        assert!(bg[0], "the corner of the page is background");
+        assert!(bg[w - 1] && bg[(h - 1) * w]);
+        assert!(
+            !bg[3 * w + 3],
+            "an enclosed lightest-shade pixel must stay opaque"
+        );
+        assert!(!bg[2 * w + 2], "the figure itself is opaque");
+        // Exactly the ring of page around the 5x5 block.
+        assert_eq!(bg.iter().filter(|b| **b).count(), w * h - 25);
+    }
+
+    /// A figure that touches the frame must not let the fill in behind it, and
+    /// a light area connected to the edge by a one-pixel channel *is* page.
+    #[test]
+    fn the_fill_is_four_connected_and_follows_channels() {
+        let (w, h) = (5usize, 5usize);
+        // Column of dark down the middle, open at the top row.
+        let mut px = vec![0u8; w * h];
+        for y in 1..5 {
+            px[y * w + 2] = 3;
+        }
+        let bg = background_mask(&px, w, h);
+        // Everything light is reachable — the dark column does not seal
+        // anything off, because the top row is open.
+        assert_eq!(bg.iter().filter(|b| **b).count(), w * h - 4);
+        // Now seal it: dark all the way across the bottom-left quadrant.
+        let mut px = vec![0u8; w * h];
+        for x in 0..w {
+            px[3 * w + x] = 3;
+        }
+        let bg = background_mask(&px, w, h);
+        assert!(bg[0], "above the wall is open to the top edge");
+        assert!(bg[4 * w], "below it is open to the bottom edge");
+        let mut px = vec![0u8; w * h];
+        for x in 0..w {
+            px[3 * w + x] = 3;
+            px[4 * w + x] = 3;
+        }
+        // With the bottom two rows solid, nothing below the wall is light at
+        // all, so the count is just the light rows above it.
+        let bg = background_mask(&px, w, h);
+        assert_eq!(bg.iter().filter(|b| **b).count(), 3 * w);
+    }
+
+    #[test]
+    fn an_all_dark_or_empty_picture_does_not_panic() {
+        assert!(background_mask(&[], 0, 0).is_empty());
+        assert!(background_mask(&[3; 16], 4, 4).iter().all(|b| !*b));
+        assert!(background_mask(&[0; 16], 4, 4).iter().all(|b| *b));
+        // Short buffers are refused rather than indexed past the end.
+        assert!(background_mask(&[0; 4], 4, 4).iter().all(|b| !*b));
+    }
 
     #[test]
     fn a_non_square_header_is_not_picture_data() {

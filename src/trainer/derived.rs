@@ -251,3 +251,183 @@ mod tests {
         assert!(!StatExp::default().is_maxed());
     }
 }
+
+/// The six in-battle stat stages, as the panel reports them.
+///
+/// # What Gen 1 stores, and why the panel shows the *stage* rather than a
+/// "before" value
+///
+/// `wPlayerMonStatMods` / `wEnemyMonStatMods` are six bytes — attack, defense,
+/// speed, special, then accuracy and evasion (`wPlayerMonAccuracyMod`,
+/// `wPlayerMonEvasionMod` follow the four in `ram/wram.asm`). Each holds the
+/// stage **biased by 7**, so `7` is neutral and the range `1..=13` is `-6..=+6`
+/// (`MIN_STAT_MOD = 1`, `MAX_STAT_MOD = 13`,
+/// `constants/battle_constants.asm`).
+///
+/// The stat *values* in the battle struct are already modified: `wEnemyMonAttack`
+/// is what the damage formula will use, which is why a Growl visibly moves the
+/// number the panel prints. What Gen 1 does **not** give us cheaply is the
+/// unmodified value — it lives in a separate `wEnemyMonUnmodifiedAttack` block,
+/// and the multipliers are integer ratios applied with truncation
+/// (`StatModifierRatios`, `data/battle/stat_modifiers.asm`:
+/// 25/100, 28/100, 33/100, 40/100, 50/100, 66/100, 1/1, 15/10, 2/1, 25/10,
+/// 3/1, 35/10, 4/1) so the original cannot be recovered by dividing back out.
+///
+/// So the panel shows the **stage**, which is exact, unambiguous, and the number
+/// a player actually reasons with ("that drop has landed twice"). It is also the
+/// only way to report accuracy and evasion at all — neither has a value column,
+/// because neither is a stat the game stores a number for.
+///
+/// Two Gen 1 details worth not tripping over: badge boosts are applied to the
+/// *player's* battle stats as well (`BadgeStatBoosts`,
+/// `engine/battle/core.asm`), so the player's printed value already includes
+/// them and the stage is still the honest delta; and stages do not survive a
+/// switch or the end of a battle, which is why this is only ever read from the
+/// battle structures and never from the party copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StatMods {
+    /// Raw bytes as the game stores them, biased by [`STAT_MOD_NEUTRAL`].
+    pub raw: [u8; 6],
+}
+
+/// The value a byte in `wPlayerMonStatMods` holds when the stat is unmodified.
+pub const STAT_MOD_NEUTRAL: u8 = 7;
+
+/// Labels for the six entries, in the order the game stores them.
+pub const STAT_MOD_NAMES: [&str; 6] = ["ATK", "DEF", "SPD", "SPC", "ACC", "EVA"];
+
+/// The narrowest and widest a stored stat-mod byte can legally be:
+/// `MIN_STAT_MOD` / `MAX_STAT_MOD`, `constants/battle_constants.asm`.
+pub const STAT_MOD_MIN: u8 = 1;
+pub const STAT_MOD_MAX: u8 = 13;
+
+impl StatMods {
+    pub fn from_bytes(raw: [u8; 6]) -> StatMods {
+        StatMods { raw }
+    }
+
+    /// Whether this block is one the battle engine has actually initialised.
+    ///
+    /// **This is not paranoia, it is a bug that was observed.** The block is
+    /// zeroed WRAM until `InitBattleVariables` writes the neutral 7s, and for
+    /// those first frames of a battle every byte reads `0` — which, taken at
+    /// face value, is a stage of **-6 on every stat**, i.e. the panel
+    /// announcing a catastrophic debuff that has not happened. Anything outside
+    /// `MIN_STAT_MOD..=MAX_STAT_MOD` therefore means "not yet", and the caller
+    /// shows nothing rather than a number it cannot stand behind.
+    pub fn is_valid(self) -> bool {
+        self.raw
+            .iter()
+            .all(|&v| (STAT_MOD_MIN..=STAT_MOD_MAX).contains(&v))
+    }
+
+    /// The stage for one entry, `-6..=6`. Out-of-range bytes (a structure read
+    /// mid-update) clamp rather than wrapping into nonsense.
+    pub fn stage(self, i: usize) -> i8 {
+        let v = self.raw.get(i).copied().unwrap_or(STAT_MOD_NEUTRAL);
+        (v as i16 - STAT_MOD_NEUTRAL as i16).clamp(-6, 6) as i8
+    }
+
+    /// Every entry that is not neutral, as `(name, stage)`.
+    pub fn changed(self) -> Vec<(&'static str, i8)> {
+        if !self.is_valid() {
+            return Vec::new();
+        }
+        (0..6)
+            .filter(|&i| self.stage(i) != 0)
+            .map(|i| (STAT_MOD_NAMES[i], self.stage(i)))
+            .collect()
+    }
+
+    pub fn any(self) -> bool {
+        self.is_valid() && (0..6).any(|i| self.stage(i) != 0)
+    }
+}
+
+/// The multiplier Gen 1 applies at a given stage, as the numerator and
+/// denominator it stores.
+///
+/// `StatModifierRatios`, `data/battle/stat_modifiers.asm`. Present so the
+/// non-linearity is stated in code rather than in a comment — a reader who
+/// assumes "-1 is half" is wrong, and so is one who assumes the steps are even.
+pub fn stat_stage_ratio(stage: i8) -> (u16, u16) {
+    const RATIOS: [(u16, u16); 13] = [
+        (25, 100),
+        (28, 100),
+        (33, 100),
+        (40, 100),
+        (50, 100),
+        (66, 100),
+        (1, 1),
+        (15, 10),
+        (2, 1),
+        (25, 10),
+        (3, 1),
+        (35, 10),
+        (4, 1),
+    ];
+    RATIOS[(stage.clamp(-6, 6) + 6) as usize]
+}
+
+#[cfg(test)]
+mod stat_mod_tests {
+    use super::*;
+
+    #[test]
+    fn seven_is_neutral_and_the_range_is_minus_six_to_six() {
+        let m = StatMods::from_bytes([7, 6, 8, 7, 1, 13]);
+        assert_eq!(m.stage(0), 0);
+        assert_eq!(m.stage(1), -1);
+        assert_eq!(m.stage(2), 1);
+        assert_eq!(m.stage(4), -6);
+        assert_eq!(m.stage(5), 6);
+        assert!(m.any());
+        assert_eq!(
+            m.changed(),
+            vec![("DEF", -1), ("SPD", 1), ("ACC", -6), ("EVA", 6)]
+        );
+        // All neutral is genuinely nothing to report.
+        assert!(!StatMods::from_bytes([7; 6]).any());
+        assert!(StatMods::from_bytes([7; 6]).changed().is_empty());
+        // A byte read mid-update cannot produce a stage outside the range.
+        assert_eq!(StatMods::from_bytes([0, 255, 7, 7, 7, 7]).stage(0), -6);
+        assert_eq!(StatMods::from_bytes([0, 255, 7, 7, 7, 7]).stage(1), 6);
+    }
+
+    /// The block is zeroed WRAM until the battle engine initialises it, and a
+    /// zero is "-6 on everything". Observed live: a run that sampled on the
+    /// first frames of a trainer battle printed `YOU ATK-6 DEF-6 SPD-6 SPC-6`
+    /// for a Pokémon nothing had touched.
+    #[test]
+    fn an_uninitialised_block_reports_nothing_rather_than_minus_six() {
+        let zeroed = StatMods::from_bytes([0; 6]);
+        assert!(!zeroed.is_valid());
+        assert!(!zeroed.any());
+        assert!(zeroed.changed().is_empty());
+        // One byte out of range poisons the whole block: a half-written
+        // structure is not a set of stages, it is a structure being written.
+        assert!(!StatMods::from_bytes([7, 7, 7, 7, 7, 14]).is_valid());
+        assert!(StatMods::from_bytes([1, 13, 7, 7, 7, 7]).is_valid());
+    }
+
+    /// The captain's own observation is the test: one Growl took an attack of
+    /// 10 down to 6. That is `-1`, and `-1` is **two thirds**, not a half —
+    /// which is exactly the assumption this table exists to stop.
+    #[test]
+    fn one_growl_takes_ten_to_six() {
+        let (n, d) = stat_stage_ratio(-1);
+        assert_eq!((n, d), (66, 100));
+        assert_eq!(10u32 * n as u32 / d as u32, 6);
+        assert_eq!(stat_stage_ratio(0), (1, 1));
+        assert_eq!(stat_stage_ratio(1), (15, 10), "+1 is 1.5x, not 2x");
+        assert_eq!(stat_stage_ratio(6), (4, 1));
+        assert_eq!(stat_stage_ratio(-6), (25, 100));
+        // Up and down are NOT reciprocals: -1 is 66/100 while +1 is 15/10, so
+        // 0.66 against 1.5 — a debuff and a buff of the same magnitude do not
+        // cancel to 1. That asymmetry is why the panel reports the stage rather
+        // than trying to reconstruct the unmodified value.
+        let (dn, dd) = stat_stage_ratio(-1);
+        let (un, ud) = stat_stage_ratio(1);
+        assert_ne!(dn as u32 * un as u32, dd as u32 * ud as u32);
+    }
+}

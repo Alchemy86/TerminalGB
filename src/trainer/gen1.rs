@@ -93,6 +93,22 @@ pub mod addr {
     pub const BATTLE_MON_NICK: u16 = 0xD009;
     /// `wBattleMon` — the player's active Pokémon, same `battle_struct`.
     pub const BATTLE_MON: u16 = 0xD014;
+    /// `wEnemyPartyCount` — how many Pokémon the opposing trainer brought.
+    ///
+    /// The enemy block mirrors the player's byte for byte: count, then a
+    /// species list with an `$FF` terminator, then the `party_struct`s — the
+    /// same `+1` / `+8` offsets as [`PARTY_COUNT`] / [`PARTY_SPECIES`] /
+    /// [`PARTY_MONS`], which `the_enemy_block_mirrors_the_player_block` pins.
+    /// The values are only *used* after
+    /// [`TrainerState::enemy_team`](crate::trainer::TrainerState::enemy_team)'s
+    /// consistency check passes, so a wrong address shows `?` rather than a
+    /// confident lie.
+    pub const ENEMY_PARTY_COUNT: u16 = 0xD89C;
+    /// `wEnemyPartyMons` — six internal index numbers plus an `$FF` terminator.
+    pub const ENEMY_PARTY_SPECIES: u16 = 0xD89D;
+    /// `wEnemyMons` — six [`PARTY_MON_SIZE`]-byte `party_struct`s, the same
+    /// layout as the player's party.
+    pub const ENEMY_MONS: u16 = 0xD8A4;
     /// `wEnemyMonStatMods` — in-battle stat stages, `7` is neutral
     /// (attack, defense, speed, special, accuracy, evasion).
     pub const ENEMY_STAT_MODS: u16 = 0xCD2E;
@@ -238,6 +254,11 @@ pub struct Mon {
     /// Stat experience, present only for a party Pokémon — the in-battle
     /// structure does not carry it. See [`super::derived::StatExp`].
     pub stat_exp: Option<super::derived::StatExp>,
+    /// In-battle stat stages, present only for the two Pokémon actually in a
+    /// battle. **Never carried on a party copy**: stages do not survive a
+    /// switch or the end of a fight, and a stale `-1` shown in the overworld
+    /// would be worse than showing nothing. See [`super::derived::StatMods`].
+    pub stat_mods: Option<super::derived::StatMods>,
 }
 
 impl Mon {
@@ -391,6 +412,30 @@ impl BattleType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The opposing trainer's roster is read out of a block laid out exactly
+    /// like the player's — count, species list with terminator, then the
+    /// structs. Holding that relationship here means the two cannot drift apart
+    /// silently, and it is the structural half of the argument that the enemy
+    /// addresses are right (the other half is the runtime cross-check in
+    /// `TrainerPlugin::sample`).
+    #[test]
+    fn the_enemy_block_mirrors_the_player_block() {
+        let d = |a: u16, b: u16| a - b;
+        assert_eq!(
+            d(addr::PARTY_SPECIES, addr::PARTY_COUNT),
+            d(addr::ENEMY_PARTY_SPECIES, addr::ENEMY_PARTY_COUNT)
+        );
+        assert_eq!(
+            d(addr::PARTY_MONS, addr::PARTY_COUNT),
+            d(addr::ENEMY_MONS, addr::ENEMY_PARTY_COUNT)
+        );
+        // The species list is PARTY_LENGTH entries plus an $FF terminator.
+        assert_eq!(
+            addr::ENEMY_PARTY_SPECIES + PARTY_LENGTH as u16 + 1,
+            addr::ENEMY_MONS
+        );
+    }
 
     #[test]
     fn party_struct_stride_matches_the_symbol_file() {

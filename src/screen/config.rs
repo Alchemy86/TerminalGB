@@ -549,7 +549,7 @@ impl Config {
             {
                 None
             } else {
-                Some(v.to_string())
+                Some(expand_tilde_str(v))
             };
         }
 
@@ -564,7 +564,7 @@ impl Config {
             *slot = if v.is_empty() {
                 None
             } else {
-                Some(v.to_string())
+                Some(expand_tilde_str(v))
             };
         }
 
@@ -594,10 +594,12 @@ impl Config {
                 "video_autostart" => &mut cfg.video.autostart,
                 _ => &mut cfg.video.pace,
             };
+            // `video_out` is a path (or `-`, or `off`); the rest are keywords,
+            // and a keyword never starts with `~`, so one rule covers both.
             *slot = if v.is_empty() {
                 None
             } else {
-                Some(v.to_string())
+                Some(expand_tilde_str(v))
             };
         }
 
@@ -624,7 +626,7 @@ impl Config {
             cfg.gen1_trade = if v.is_empty() || v.eq_ignore_ascii_case("off") {
                 None
             } else {
-                Some(v.to_string())
+                Some(expand_tilde_str(v))
             };
         }
         if let Some(v) = get("battles") {
@@ -691,6 +693,17 @@ fn unquote(value: &str) -> &str {
 
 fn first_char(s: &str) -> Option<char> {
     s.trim().chars().next()
+}
+
+/// [`expand_tilde`] for the keys carried as strings rather than as `PathBuf`.
+///
+/// **Every path-valued key goes through one of these two.** `rom_dir` was
+/// expanded and nothing else was, so the `~/mewtwo.trade` written in
+/// `docs/plugins.md` failed with "cannot read ~/mewtwo.trade" — a shell expands
+/// `~` before the program ever sees it, so a path from a *config file* has to be
+/// expanded by the program or it silently only works when typed at a prompt.
+fn expand_tilde_str(s: &str) -> String {
+    expand_tilde(s).to_string_lossy().into_owned()
 }
 
 /// Expand a leading `~` or `~/` to `$HOME`.
@@ -787,6 +800,46 @@ mod tests {
     fn empty_document_is_defaults() {
         assert_eq!(Config::parse(""), Config::default());
         assert_eq!(Config::parse("\n\n   \n"), Config::default());
+    }
+
+    /// `~` in a config file is not expanded by anything else — there is no
+    /// shell between the file and the program — so **every** path-valued key
+    /// has to expand it. Only `rom_dir` did, which is why the `~/mewtwo.trade`
+    /// in `docs/plugins.md` failed with "cannot read ~/mewtwo.trade".
+    #[test]
+    fn every_path_key_expands_a_leading_tilde() {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return; // no HOME on this box; the expansion is a no-op by design
+        };
+        let cfg = Config::parse(
+            "rom_dir = ~/roms\n\
+             gen1_trade = ~/mewtwo.trade\n\
+             telemetry = ~/gb.ndjson\n\
+             screenshot_dir = ~/Pictures/gb\n\
+             video_dir = ~/Videos/gb\n\
+             video_out = ~/out.raw\n",
+        );
+        let want = |rel: &str| home.join(rel).to_string_lossy().into_owned();
+        assert_eq!(cfg.rom_dir, home.join("roms"));
+        assert_eq!(
+            cfg.gen1_trade.as_deref(),
+            Some(want("mewtwo.trade").as_str())
+        );
+        assert_eq!(cfg.telemetry.as_deref(), Some(want("gb.ndjson").as_str()));
+        assert_eq!(
+            cfg.screenshot_dir.as_deref(),
+            Some(want("Pictures/gb").as_str())
+        );
+        assert_eq!(cfg.video_dir.as_deref(), Some(want("Videos/gb").as_str()));
+        assert_eq!(cfg.video.out.as_deref(), Some(want("out.raw").as_str()));
+        // A keyword value is not a path and must come through untouched.
+        assert_eq!(
+            Config::parse("video_out = -\nvideo_pace = realtime")
+                .video
+                .out
+                .as_deref(),
+            Some("-")
+        );
     }
 
     #[test]

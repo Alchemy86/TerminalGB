@@ -156,6 +156,39 @@ pub struct TrainerState {
     pub active: Option<Mon>,
     /// The opposing trainer's name, in a trainer battle.
     pub trainer_name: String,
+    /// The opposing trainer's whole roster, in a trainer battle — the thing an
+    /// Ironmon run wants most after the active opponent's stats: how many are
+    /// left and what is coming next. Empty for a wild encounter, and empty
+    /// while the enemy block has not yet passed its consistency check.
+    pub enemy_team: Vec<TeamMon>,
+    /// True when a trainer battle is on but the roster did not read back
+    /// consistently — so the panel can say "unknown" instead of showing
+    /// nothing, which reads as "no team".
+    pub enemy_team_unknown: bool,
+}
+
+/// One member of the opposing trainer's roster, as the team strip shows it.
+///
+/// Deliberately much less than a [`Mon`]: the strip is a picture, a name and
+/// whether it is still standing. The *active* opponent gets the full treatment
+/// through [`TrainerState::opponent`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TeamMon {
+    /// Internal index number, 0 when the slot is not readable.
+    pub species: u8,
+    pub name: String,
+    pub level: u8,
+    pub hp: u16,
+    pub max_hp: u16,
+    /// False when this slot's data did not read back consistently — shown as
+    /// `?` rather than guessed at.
+    pub known: bool,
+}
+
+impl TeamMon {
+    pub fn is_fainted(&self) -> bool {
+        self.known && self.max_hp > 0 && self.hp == 0
+    }
 }
 
 impl TrainerState {
@@ -402,20 +435,81 @@ impl TrainerPlugin {
         if st.battle != BattleKind::None {
             let mut nick = [0u8; gen1::NAME_LENGTH as usize];
             view.peek_into(addr::ENEMY_MON_NICK, &mut nick);
-            st.opponent = Some(self.read_battle_mon(view, addr::ENEMY_MON, &nick));
+            st.opponent = Some(self.read_battle_mon(
+                view,
+                addr::ENEMY_MON,
+                addr::ENEMY_STAT_MODS,
+                &nick,
+            ));
 
             let mut nick = [0u8; gen1::NAME_LENGTH as usize];
             view.peek_into(addr::BATTLE_MON_NICK, &mut nick);
-            st.active = Some(self.read_battle_mon(view, addr::BATTLE_MON, &nick));
+            st.active = Some(self.read_battle_mon(
+                view,
+                addr::BATTLE_MON,
+                addr::PLAYER_STAT_MODS,
+                &nick,
+            ));
 
             if st.battle == BattleKind::Trainer {
                 let mut tname = [0u8; gen1::NAME_LENGTH as usize];
                 view.peek_into(addr::TRAINER_NAME, &mut tname);
                 st.trainer_name = text::decode(&tname);
+                self.read_enemy_team(view, &mut st);
             }
         }
 
         self.state = st;
+    }
+
+    /// Read the opposing trainer's roster — and **refuse it unless it is
+    /// self-consistent**.
+    ///
+    /// The enemy block is documented in [`gen1::addr`] as mirroring the
+    /// player's, but an address is only a claim until something checks it, and
+    /// the cost of being wrong here is a panel confidently showing a team that
+    /// is not there. So three things must hold before any of it is displayed:
+    /// the count is in range; every listed species is non-zero; and the species
+    /// list agrees with the species field of the `party_struct` beside it —
+    /// two independent copies of the same fact, written by the game at
+    /// different times. A slot that fails is marked `known: false` and drawn as
+    /// `?`; a block that fails wholesale sets
+    /// [`TrainerState::enemy_team_unknown`].
+    ///
+    /// This also covers the real transient: the first frames of a trainer
+    /// battle, before `LoadEnemyMonData` has run, where the block still holds
+    /// the previous battle's contents.
+    fn read_enemy_team(&self, view: &mut Reads<'_, '_, '_>, st: &mut TrainerState) {
+        let count = view.peek(addr::ENEMY_PARTY_COUNT) as usize;
+        if count == 0 || count > gen1::PARTY_LENGTH {
+            st.enemy_team_unknown = true;
+            return;
+        }
+        let mut team = Vec::with_capacity(count);
+        let mut any_known = false;
+        for i in 0..count as u16 {
+            let listed = view.peek(addr::ENEMY_PARTY_SPECIES + i);
+            let base = addr::ENEMY_MONS + i * gen1::PARTY_MON_SIZE;
+            let stored = view.peek(base + party::SPECIES);
+            if listed == 0 || listed != stored {
+                team.push(TeamMon::default());
+                continue;
+            }
+            any_known = true;
+            team.push(TeamMon {
+                species: listed,
+                name: self.tables.species_name(listed),
+                level: view.peek(base + party::LEVEL),
+                hp: view.peek_be16(base + party::HP),
+                max_hp: view.peek_be16(base + party::MAX_HP),
+                known: true,
+            });
+        }
+        if !any_known {
+            st.enemy_team_unknown = true;
+            return;
+        }
+        st.enemy_team = team;
     }
 
     /// Decode one 44-byte `party_struct`.
@@ -473,6 +567,7 @@ impl TrainerPlugin {
         &self,
         view: &mut Reads<'_, '_, '_>,
         base: u16,
+        mods: u16,
         nick: &[u8],
     ) -> Mon {
         let species = view.peek(base + battle::SPECIES);
@@ -482,7 +577,9 @@ impl TrainerPlugin {
         let pp: Vec<u8> = (0..gen1::NUM_MOVES as u16)
             .map(|i| view.peek(base + battle::PP + i))
             .collect();
-        self.finish(
+        let mut raw = [0u8; 6];
+        view.peek_into(mods, &mut raw);
+        let mut mon = self.finish(
             species,
             nick,
             view.peek(base + battle::LEVEL),
@@ -505,7 +602,9 @@ impl TrainerPlugin {
             ),
             &moves,
             &pp,
-        )
+        );
+        mon.stat_mods = Some(super::trainer::derived::StatMods::from_bytes(raw));
+        mon
     }
 
     /// Everything both struct forms share: resolving ids to names through the
@@ -545,6 +644,7 @@ impl TrainerPlugin {
             moves: self.tables.move_slots(moves, pp),
             dvs,
             stat_exp: None,
+            stat_mods: None,
         }
     }
 }
