@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" role="img"
+     aria-label="Game Boy 64 KiB address space. A proportional bar shows ROM bank 0 at 0000-3FFF, switchable ROM bank N at 4000-7FFF, video RAM at 8000-9FFF, cartridge RAM at A000-BFFF, work RAM at C000-DFFF and echo RAM at E000-FDFF. A second bar magnifies the last 512 bytes, FE00 to FFFF, showing OAM, the unusable region, the I/O registers, high RAM and the interrupt-enable byte.">
+  <style>
+    .panel { fill: #ffffff; stroke: #d0d7de; }
+    .title { fill: #1f2328; font: 600 15px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .sub   { fill: #59636e; font: 400 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .lbl   { fill: #1f2328; font: 600 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .lbl2  { fill: #1f2328; font: 400 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .addr  { fill: #59636e; font: 400 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .edge  { stroke: #7d8590; fill: none; }
+    .rom   { fill: #dbeafe; }
+    .vram  { fill: #dcfce7; }
+    .cram  { fill: #fef3c7; }
+    .wram  { fill: #ede9fe; }
+    .echo  { fill: #eaeef2; }
+    .oam   { fill: #fce7f3; }
+    .none  { fill: #eaeef2; }
+    .io    { fill: #ffe4e6; }
+    .hram  { fill: #cffafe; }
+    .ie    { fill: #fecdd3; }
+    @media (prefers-color-scheme: dark) {
+      .panel { fill: #0d1117; stroke: #30363d; }
+      .title { fill: #e6edf3; }
+      .sub   { fill: #9198a1; }
+      .lbl   { fill: #0d1117; }
+      .lbl2  { fill: #0d1117; }
+      .addr  { fill: #9198a1; }
+      .edge  { stroke: #6e7681; }
+      .rom   { fill: #a5c8f5; }
+      .vram  { fill: #a3dcbb; }
+      .cram  { fill: #e8ce8a; }
+      .wram  { fill: #c4b8f0; }
+      .echo  { fill: #8b949e; }
+      .oam   { fill: #eeb0cf; }
+      .none  { fill: #8b949e; }
+      .io    { fill: #f0aeb6; }
+      .hram  { fill: #93d8e2; }
+      .ie    { fill: #eda3ab; }
+    }
+  </style>
+
+  <rect class="panel" x="0.5" y="0.5" width="959" height="329" rx="8"/>
+
+  <text class="title" x="40" y="34">The 64 KiB address space</text>
+  <text class="sub"   x="40" y="54">Everything the CPU can address. Widths are to scale.</text>
+
+  <!-- ================= main bar: 0000-FFFF, 880px over 65536 bytes ================= -->
+  <g>
+    <rect class="rom"  x="40"  y="76" width="220"  height="72"/>
+    <rect class="rom"  x="260" y="76" width="220"  height="72"/>
+    <rect class="vram" x="480" y="76" width="110"  height="72"/>
+    <rect class="cram" x="590" y="76" width="110"  height="72"/>
+    <rect class="wram" x="700" y="76" width="110"  height="72"/>
+    <rect class="echo" x="810" y="76" width="103"  height="72"/>
+    <rect class="none" x="913" y="76" width="7"    height="72"/>
+
+    <g class="edge" stroke-width="1">
+      <path d="M40 76 H920 V148 H40 Z"/>
+      <path d="M260 76 V148 M480 76 V148 M590 76 V148 M700 76 V148 M810 76 V148 M913 76 V148"/>
+    </g>
+
+    <g class="lbl" text-anchor="middle">
+      <text x="150" y="108">ROM bank 0</text>
+      <text x="370" y="108">ROM bank N</text>
+      <text x="535" y="108">VRAM</text>
+      <text x="645" y="108">Cart RAM</text>
+      <text x="755" y="108">Work RAM</text>
+      <text x="861" y="108">Echo</text>
+    </g>
+    <g class="lbl2" text-anchor="middle" opacity="0.8">
+      <text x="150" y="126">fixed, 16 KiB</text>
+      <text x="370" y="126">switchable, 16 KiB</text>
+      <text x="535" y="126">8 KiB</text>
+      <text x="645" y="126">8 KiB, battery</text>
+      <text x="755" y="126">8 KiB</text>
+      <text x="861" y="126">mirror of C000</text>
+    </g>
+
+    <g class="addr" text-anchor="middle">
+      <text x="40"  y="166">0000</text>
+      <text x="260" y="166">4000</text>
+      <text x="480" y="166">8000</text>
+      <text x="590" y="166">A000</text>
+      <text x="700" y="166">C000</text>
+      <text x="810" y="166">E000</text>
+    </g>
+  </g>
+
+  <!-- ================= magnifier link =================
+       A short local bracket under the sliver, not a long diagonal fan: a fan
+       from a 7px sliver to a full-width bar sweeps across the whole picture and
+       strikes through the address row and the caption. -->
+  <g class="edge" stroke-width="1" stroke-dasharray="3 3">
+    <path d="M913 148 V186"/>
+    <path d="M920 148 V186"/>
+  </g>
+  <path class="edge" stroke-width="1" fill="none" d="M912 186 L916.5 194 L921 186"/>
+  <text class="sub" x="40" y="196">FE00–FFFF magnified — the sliver at the far right above</text>
+
+  <!-- ================= zoom bar: FE00-FFFF, 880px over 512 bytes ================= -->
+  <g>
+    <rect class="oam"  x="40"  y="216" width="275"   height="60"/>
+    <rect class="none" x="315" y="216" width="165"   height="60"/>
+    <rect class="io"   x="480" y="216" width="220"   height="60"/>
+    <rect class="hram" x="700" y="216" width="218.3" height="60"/>
+    <rect class="ie"   x="918.3" y="216" width="1.7" height="60"/>
+
+    <g class="edge" stroke-width="1">
+      <path d="M40 216 H920 V276 H40 Z"/>
+      <path d="M315 216 V276 M480 216 V276 M700 216 V276 M918.3 216 V276"/>
+    </g>
+
+    <g class="lbl" text-anchor="middle">
+      <text x="177" y="244">OAM</text>
+      <text x="397" y="244">Unusable</text>
+      <text x="590" y="244">I/O registers</text>
+      <text x="809" y="244">High RAM</text>
+    </g>
+    <g class="lbl2" text-anchor="middle" opacity="0.8">
+      <text x="177" y="262">40 sprites, 160 B</text>
+      <text x="397" y="262">96 B</text>
+      <text x="590" y="262">128 B</text>
+      <text x="809" y="262">127 B, zero-page</text>
+    </g>
+
+    <g class="addr" text-anchor="middle">
+      <text x="40"  y="294">FE00</text>
+      <text x="315" y="294">FEA0</text>
+      <text x="480" y="294">FF00</text>
+      <text x="700" y="294">FF80</text>
+    </g>
+
+    <!-- IE is one byte: too thin to label in place -->
+    <g class="edge" stroke-width="1"><path d="M919 276 L919 300 L862 300"/></g>
+    <text class="addr" x="856" y="304" text-anchor="end">FFFF = IE, 1 byte</text>
+  </g>
+</svg>

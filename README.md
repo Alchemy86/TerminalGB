@@ -945,9 +945,18 @@ input.
 0xA000–0xBFFF  Cartridge RAM     0xFF80–0xFFFE  High RAM
 0xC000–0xDFFF  Work RAM          0xFFFF         Interrupt Enable
 ```
-![MMU map](resources/jsgb-mmu-map.png)
+<p align="center">
+  <img src="docs/diagrams/memory-map.svg" alt="The 64 KiB address space drawn to scale: ROM bank 0 at 0000-3FFF, switchable ROM bank N at 4000-7FFF, VRAM at 8000-9FFF, cartridge RAM at A000-BFFF, work RAM at C000-DFFF and echo RAM at E000-FDFF, with the last 512 bytes magnified below into OAM, the unusable region, the I/O registers, high RAM and the interrupt-enable byte" width="900" />
+</p>
 
-*(Image from [Imran Nazar — GameBoy Emulation in JavaScript](http://imrannazar.com/GameBoy-Emulation-in-JavaScript:-Memory).)*
+<p align="center"><em>The same table drawn to scale. The top bar is the whole address space, so
+the five regions the CPU talks to most — OAM, I/O, HRAM and <code>IE</code> — are the sliver at
+the far right; the second bar magnifies it. Our own diagram
+(<a href="docs/diagrams/memory-map.svg"><code>docs/diagrams/memory-map.svg</code></a>, MPL-2.0).</em></p>
+
+For the prose version, [Imran Nazar's *GameBoy Emulation in
+JavaScript*](http://imrannazar.com/GameBoy-Emulation-in-JavaScript:-Memory) is the classic
+introduction, and [Pan Docs](https://gbdev.io/pandocs/Memory_Map.html) is the reference.
 </details>
 
 ---
