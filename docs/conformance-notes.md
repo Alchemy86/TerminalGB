@@ -17,6 +17,89 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — an unanswered link-close byte: "I cannot leave the trade room"
+
+The Gen 1 link partner answered the trade menu's cancel nybble `$6F` in exactly
+one of its six phases. Everywhere else the player was sealed in the Cable Club.
+
+- **Symptom, in user terms:** after a link trade the player picks CANCEL on the
+  trade-selection screen and presses A, the screen says `Waiting!`, and nothing
+  happens. Press A again, and again — the game keeps rendering, music plays, the
+  clock runs, buttons respond. It is not a hang; the exit simply never happens.
+  And the Trade Center has **no warp events at all**
+  ([`data/maps/objects/TradeCenter.asm`](https://github.com/pret/pokered/tree/master/data/maps/objects/TradeCenter.asm)
+  — confirmed at run time: `wNumberOfWarps` reads 0), so that screen is the only
+  way out of the room. Measured on the retail cartridge: **2,475 CANCEL presses,
+  `wLinkState` stuck at `$32` (`LINK_STATE_TRADING`), never left.**
+- **Caught by:** **no test ROM, and none can** — the same blind spot as the
+  terminal-render bugs and the `wIsInBattle` sentinel above. The cartridge was
+  entirely correct; the defect was in a *consumer* of emulated state, in this
+  case one that answers the wire. The suite's own unit test for this byte passed
+  throughout, because it only ever drove `$6F` from the one phase that worked.
+- **Hardware / cartridge behaviour:** `.cancelMenuItem_APressed`
+  ([`engine/link/cable_club.asm`](https://github.com/pret/pokered/tree/master/engine/link/cable_club.asm))
+  writes `$F` to `wSerialExchangeNybbleSendData`, runs one
+  `Serial_SyncAndExchangeNybble` round, and falls through to
+  `ReturnToCableClubRoom` **only** if the round comes back `$F`
+  (`cp $f / jr nz, .cancelMenuItem_Loop`). Three properties of that make it a
+  whole-state-machine obligation rather than one branch:
+  1. `wSerialExchangeNybbleSendData` is a **latch** — every later sync round
+     keeps sending `$6F` until `TradeCenter_SelectMon` resets it to `1`;
+  2. a round is 11–12 transfers of the same byte (`.loop1` plus ten `.loop2`
+     iterations, [`home/serial.asm`](https://github.com/pret/pokered/tree/master/home/serial.asm))
+     and the game keeps the **last** `$6x` it saw, so the whole run must be
+     answered identically;
+  3. a wrongly-answered round is simply **retried**, from whatever state the
+     partner has since moved into — so answering it in one phase only makes the
+     *second* attempt unanswerable. That is the trap: the first cancel appears to
+     work, and every one after it is refused.
+  Note also what `CloseLinkConnection`
+  ([`engine/link/cable_club_npc.asm`](https://github.com/pret/pokered/tree/master/engine/link/cable_club_npc.asm))
+  actually does, because it is easy to blame: it puts `$02` in `SB` and starts an
+  **externally** clocked transfer (`SC = $80`). Our `Serial::wb` only offers a
+  transfer to a plugin when `SC & $81 == $81`, so that byte never reaches the
+  partner at all — exactly like a real second console that is not clocking. It is
+  not part of this path.
+- **How it was reached in a real session:** the partner's phase only has to be
+  out of step with the game once. The terminal frontend's **F5 / F8 quick-save
+  and quick-load** do it by design — plugin state is deliberately not in a save
+  state, so a load calls `PluginHost::reset` and the partner drops to
+  `Phase::Handshake` mid-session (`docs/plugins.md`). Backing out of the trade
+  screen is precisely the escape hatch from that situation, which is why it has
+  to work from a phase the partner did not expect. `examples/gen1_trade.rs
+  --quick-load` reproduces it end to end on the retail cartridge.
+- **The fix:** `LinkPartner::feed_cancel` answers `$6F` with `$6F` in **every**
+  phase except `Exchanging` (inside a block that byte is party data — a stat, a
+  name character, a patch offset — and must still come from our stream), clears
+  the per-exchange scratch so nothing from the abandoned trade leaks into the
+  next session, and lands in `Phase::Connected`, which is where the game is: the
+  link is still up and the player can walk back onto the console. A cancel is
+  also no longer counted as a trade — arriving in `Phase::Confirm` it used to
+  fall into the "accept" arm, answer `$62`, and increment `trades_completed`.
+- **New tests — the shape matters more than the cases.** The old test asserted
+  the *byte* from one phase. The new ones assert the byte **and the resulting
+  phase**, for every phase the machine can be in, plus a repeated cancel, plus a
+  fresh session afterwards (`src/plugin/gen1/protocol.rs`:
+  `the_cancel_byte_is_echoed_from_every_phase`,
+  `a_whole_cancel_round_is_echoed_from_every_phase`,
+  `a_repeated_cancel_keeps_being_answered`, `a_cancel_never_counts_as_a_trade`,
+  `the_cancel_byte_is_data_inside_an_exchange`,
+  `a_new_session_works_after_a_cancel_from_any_phase`,
+  `the_player_can_leave_after_a_completed_trade`). Five of the seven go red when
+  the fix is reverted — verified, not assumed.
+- **Carries into the tool.** Two checks, both generalisable well beyond Pokémon:
+  1. **A protocol's escape byte must be answered from every state.** Whenever one
+     side of a conversation will retry a request until it is answered, answering
+     it in only the state you expected turns a recoverable desync into a
+     permanent one. Probe it by driving the peer into each of its states and
+     sending the escape.
+  2. **State-machine coverage is per-(input × state), not per-input.** A test
+     that exercises a byte in one state and asserts only the reply is the exact
+     shape of test that shipped this bug. A conformance report for a link
+     adapter should say *which states* a message was accepted in.
+
+---
+
 ## 2026-08-14 — the audio player paced the emulator (host-integration, not hardware)
 
 **Symptom.** With sound enabled the game runs at a fraction of speed and the

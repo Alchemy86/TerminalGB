@@ -14,6 +14,20 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Fixed
+- **You can leave the Cable Club again.** The Gen 1 link partner answered the trade menu's
+  cancel nybble `$6F` in only one of its six protocol phases. In every other phase it replied
+  `$60` (or, from the confirmation phase, `$62` — silently counting a trade that never
+  happened), and since `pokered`'s `.cancelMenuItem_APressed` only returns the player to the
+  room when that round comes back `$F`, the player was sealed in the Trade Center: the game kept
+  rendering and the clock kept running, but pressing A on CANCEL did nothing, for ever
+  (measured on the retail cartridge: 2,475 presses). The Trade Center has no warp events at
+  all, so that screen is the room's only exit. `$6F` is now first-class in every phase except
+  the middle of a section exchange, where it is party data, and it returns the partner to
+  "connected" with the exchange scratch cleared so a second trade — or simply going back in —
+  works. `examples/gen1_trade.rs` now drives three console visits (trade, cancel-only, trade)
+  and `--quick-load` reproduces the original failure by resetting plugin state mid-session the
+  way the terminal frontend's F5/F8 keys do. Full record in
+  [`docs/conformance-notes.md`](docs/conformance-notes.md).
 - **Audio no longer paces the emulator.** With `--features audio` one emulated frame cost
   **17.93 ms** against a 16.743 ms budget (0.29 ms without the feature), so the terminal
   frontend sat permanently in catch-up and displayed **6 fps**. Profiling showed **97.6 % of

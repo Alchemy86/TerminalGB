@@ -1465,6 +1465,37 @@ another branch; when those land, this belongs beside them.)
 - **`PokemonSource` keeps the *source* of the Pokémon separate from the protocol.** That is the
   load-bearing abstraction: a file, a converter, a remote peer and a live partner all become
   interchangeable, which is what makes cross-generation and remote trading possible later.
+- **`$6F` — the cancel nybble — MUST be echoed from EVERY phase, and it is the only way out of
+  the Cable Club.** The Trade Center has **no warp events at all**
+  (`data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads 0 at run time), so backing out of
+  the trade-selection screen *is* leaving the room. `.cancelMenuItem_APressed`
+  (`engine/link/cable_club.asm`) only reaches `ReturnToCableClubRoom` when the round comes back
+  `$F`, and three things make this a whole-state-machine obligation rather than one branch of
+  the selection round: `wSerialExchangeNybbleSendData` is a **latch** (later syncs keep sending
+  `$6F` until `TradeCenter_SelectMon` resets it to `1`); a round is **11–12 transfers of the same
+  byte** and the game keeps the *last* one; and a wrongly-answered round is **retried from
+  whatever phase the partner has since moved into** — so answering it in one phase only makes the
+  *second* attempt unanswerable. Symptom of getting it wrong: the player presses A on CANCEL for
+  ever (measured: 2,475 presses, `wLinkState` pinned at `$32`), game rendering and clock running.
+  `LinkPartner::feed_cancel` handles it uniformly; **`Exchanging` is the one exclusion** — inside
+  a block `$6F` is party data and must come from our stream. A cancel also must **not** count as
+  a trade (in `Confirm` it used to fall into the accept arm and answer `$62`).
+- **`CloseLinkConnection` never reaches the plugin — do not go looking for it there.** It puts
+  `$02` in `SB` and starts an **externally** clocked transfer (`SC = $80`), and `Serial::wb`
+  only offers a byte to a plugin when `SC & $81 == $81`. That is correct: a real partner that is
+  not clocking transfers nothing, and the game's status stays `CONNECTION_NOT_ESTABLISHED`.
+- **`GB_GEN1_LINK_TRACE=1` records the tail of the wire** (`Gen1LinkPartner::trace()`, last 4096
+  `(sent, replied, phase)` triples). Every interesting link failure is a *reply to one byte*, so
+  reason from the trace, not from the state diagram.
+- **A quick-load is a legitimate mid-session desync, and the cancel is the escape from it.**
+  F5/F8 in the TUI call `PluginHost::reset`, dropping the partner to `Phase::Handshake` while the
+  game is still linked (by design — plugin state is not machine state). That is exactly why the
+  cancel must work from an unexpected phase. Reproduce with
+  `examples/gen1_trade.rs --quick-load`.
+- **A player who is stuck in the Cable Club can safely reset.** `TradeCenter_Trade` calls
+  `predef SavePartyAndDexData` right after "Trade completed!" — pokered's own comment is *"this
+  allows reset into Pokecenter"* — so the received Pokémon is already in SRAM and a reset returns
+  the player to the Pokémon Center with it.
 
 ### Verifying a trade (`examples/gen1_trade.rs`) — hard-won gotchas
 
