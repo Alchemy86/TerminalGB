@@ -159,7 +159,14 @@ real run waste decisions on it. They belong beside the ones in
 
 * **The naming screen is the one place mashing A does not work.** `YOUR NAME?` / `RIVAL NAME?`
   over a grid of letters is the on-screen keyboard: A types another letter, for ever. **START
-  confirms.** A run spent eleven calls typing `AAAAA` before this went into the prompt.
+  confirms.** A run spent eleven calls typing `AAAAA` before this went into the prompt — and a
+  *later* run typed A's anyway, with the fact sitting in the prompt the whole time, because the
+  presses came from the host's own `advance_text` loop and the model never got a say. A fact
+  the model may not consult has to be enforced where the presses happen: `advance_text` now
+  refuses to press on the naming keyboard (`Screen::naming_keyboard`), the snapshot carries a
+  situational note, and `testharness/agent.rs` pins both. That promotion — prompt fact →
+  host-enforced rule, earned by being walked into live — is the same one the
+  standing-on-an-exit note went through.
 * **`wCurMap` is set during the opening cutscene** — this page already says it cannot mean "we
   are in the game", and it is worse than that: during Oak's speech it reads the *bedroom*, with
   plausible coordinates, while the map header has not been loaded. So position, map name and
@@ -186,3 +193,17 @@ real run waste decisions on it. They belong beside the ones in
 * **A map's width and height are in 32×32 blocks and its coordinates are in 16×16 tiles**, two
   per block — see the table at the top. Reporting the raw header values told the agent Pallet
   Town was 10 wide when its `x` runs 0..19, so it decided it was standing outside the map.
+* **A Poké Ball on a table is a sprite, not a warp, and an agent that only sees warps is blind
+  to it.** Two runs ended at "which POKéMON do you want?" circling Oak's Lab one tile from a
+  ball nothing in the state pointed at. The sprite table is the generic answer, and its layout
+  is derived and checked: `wSpriteStateData1 + slot*$10` holds each slot's picture id (`0` =
+  empty, `SPRITE_POKE_BALL` = `$3D`), `wSpriteStateData2 + slot*$10 + 4/5` its map Y/X — "in
+  2x2 tile grid steps, topmost 2x2 tile has value 4" (`ram/wram.asm`), i.e. the same tile grid
+  as `wYCoord`/`wXCoord` offset by 4. **But do NOT gate it on the player's own slot:** an
+  implementation that required sprite 0's map coordinates to read `wYCoord+4`/`wXCoord+4`
+  measured that condition **never true** across twenty live decisions on four maps, and was
+  withdrawn rather than shipped inert. The engine does not maintain the player slot's map
+  coordinates during ordinary play — grep `pokered` for writes to `StateData2MapY` and only
+  map scripts (`ViridianCity.asm`, `TradeCenter.asm`) appear; boulders and NPC slots are
+  maintained, the player's is not. A future consistency gate has to be per-NPC-slot (bounds
+  against the map size) and verified against a live game before it ships.

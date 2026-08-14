@@ -561,14 +561,23 @@ did not finish, and where the recording is.
 Stated plainly, because "it works" would be an overclaim:
 
 * **No spatial sense — this is the one that matters.** The agent has
-  coordinates, exits and blocked/moved feedback, and nothing else. It cannot see
-  a table, an NPC or a path, and both places the recorded runs stalled are that:
-  a fence in Pallet Town, and a Poké Ball on a table in Oak's Lab that nothing
-  in the state points at. The right next step is a walkability grid **derived**
-  from the game's own tileset collision data plus the sprite table for the
-  people and objects in the room — derived, not guessed, because a wrong map is
-  worse than none. Everything else in this milestone is finished; this is the
-  next milestone.
+  coordinates, exits and blocked/moved feedback, and nothing else. It cannot
+  see a table, an NPC or a path, and three runs have now stalled on exactly
+  that — twice circling Oak's Lab one tile from a Poké Ball nothing in the
+  state pointed at. A `game.sprites` observation was **built and withdrawn**
+  during the third session: the sprite table's layout is derived and correct
+  (`wSpriteStateData1`/`2`, map Y/X at `+4`/`+5` in the player's tile grid
+  offset by 4), but the "is this table in a consistent state?" gate was wrong
+  — it anchored on the player's own slot-0 map coordinates matching
+  `wYCoord`/`wXCoord`+4, and a live run measured that anchor **never true**
+  across twenty decisions on four maps, so the feature silently reported
+  nothing. The engine does not maintain slot 0's map coordinates during
+  ordinary play (grep `pokered` for writes to `StateData2MapY`: only map
+  *scripts* touch it). The next attempt needs a different consistency gate —
+  per-slot bounds against the map size, verified against a live game before
+  it ships — plus the walkability grid **derived** from the game's own
+  tileset collision data. Derived, not guessed, because a wrong map is worse
+  than none.
 * **A partial map-name table.** Only the maps the early game passes through are
   named; everything else reports its number rather than a guess.
 * **Navigating a *town* is much weaker than navigating a room.** `goto` is
@@ -812,3 +821,68 @@ repository's licence boundary allows screenshots of *our own interface* with a
 game incidental in them (as `docs/link-trade/` has), not a gallery of the game
 itself. The panel render in §2.3 is committed because it is our chrome and
 nothing else.
+
+## 11. The third session — watched live, stopped on purpose
+
+Two runs from power-on with no save, **in the TUI in a visible window with the
+captain watching** — which is itself why this session produced more fixes than
+the first two: a watching human reads stalls, wasted presses and blindness off
+the screen faster than any log.
+
+**Run 1 — Claude Haiku, the shipped configuration.** Through the title,
+`NEW GAME`, Oak's speech, **both naming screens**, down the stairs, out of the
+house, wandered into the empty lab, left it, **found the north-edge trigger**
+(Oak's escort), and was walked to the lab with the starter selection live. It
+then circled the room — at one point standing at (5,3), one tile left of the
+first Poké Ball, being told "but you can have one! Choose!" — until stopped.
+33 decisions (3 host-timeout failures), reached frame 59,183 (~16.5 min of
+game time), **$0.58 reported**, call latency median 14 s / max 60 s (the 60 s
+ones were the TUI's own too-tight timeout, fixed below).
+
+**Run 2 — Claude Sonnet, after the fixes.** Same route in a third of the game
+time: overworld by frame ~6,800, lab at frame ~12,700, at the table when the
+captain called the demo. 25 decisions, **0 timeouts**, median 5.1 s / max
+8.7 s per call, **$1.22 reported**. Sonnet's play was visibly sharper (it
+announced START on the naming screen unprompted, with the enforced rule as a
+backstop) — and it was exactly as blind at the table, because the blindness is
+observational, not a model property.
+
+**Host-side facts this session produced** (each enforced or fixed, not just
+written down): `advance_text` refuses the naming keyboard — the A's typed on
+screen came from the *host's* text loop, not the model; the TUI's per-call
+timeout was 60 s against an adapter that legitimately needs up to 150 s;
+`GB_AGENT_WALL` now sets the one budget ceiling that is not self-reported; and
+the sprite-table observation was built, measured inert on the live game, and
+withdrawn (see §8 — the layout is right, the consistency gate was wrong).
+
+### Where the agent was flying blind — the list that feeds the screen-text work
+
+Every entry names something a human at the same screen used instantly and the
+agent could not, with the cause. `screen.text` itself worked throughout — it
+read `YOUR NAME?`, menus and Oak's dialogue correctly. The gaps are everything
+that is **not** background-tilemap text:
+
+1. **Sprites are invisible, and the Poké Balls are sprites.** `screen.text`
+   decodes the BG/window tilemap; people and objects are OAM sprites, drawn
+   over it. So the three balls at (6,3)-(8,3) in Oak's Lab, Oak himself, Mom,
+   the rival — none exist in the state. This ended both runs of the previous
+   session and both of this one. It is *the* blocker.
+2. **The naming keyboard's cursor column is unknown.** `menu_cursor_row` is
+   row-only. On the letter grid the agent cannot know which letter the cursor
+   sits on, so it cannot type a chosen name — it types blind and confirms.
+   (A name of A's or J's is playable; the point is it *cannot do better*.)
+3. **A menu's selected item is not decoded.** The `▶` cursor's row is
+   reported, but not what text sits on that row, so "is NEW GAME or OPTION
+   selected?" takes model inference over raw rows rather than being a fact.
+4. **Mid-redraw screens are fed as if they were stable.** Run 1's decision 22
+   got `screen.text` of `KU:N:` — a half-drawn transition — and spent a call
+   reasoning about noise. Nothing marks a screen as still settling; a
+   "same text on two consecutive reads" gate before snapshotting would do.
+5. **Furniture and terrain exist only as `blocked` outcomes.** The lab's
+   table, Pallet Town's fences: the agent discovers each wall by walking into
+   it, one failed plan at a time. The tileset collision data could say it up
+   front (§8's walkability grid).
+6. **A YES/NO box looks like flowing text.** `advance_text` presses A through
+   everything, which answers any confirmation prompt with its default before
+   the model ever sees the question. It happened to be harmless this session;
+   it will not always be.

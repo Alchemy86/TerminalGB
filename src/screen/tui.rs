@@ -8378,14 +8378,37 @@ fn build_agent(
         .ok()
         .map(std::path::PathBuf::from);
 
+    // The wall clock is the host budget that actually bounds a run (tokens and
+    // spend are self-reported by the driver), and it was the one ceiling this
+    // frontend could not set. Seconds; a value that does not parse warns and
+    // is ignored, the `protocol` key's rule.
+    let mut budget = Budget {
+        max_calls: cfg.agent_max_calls,
+        max_usd: cfg.agent_max_usd,
+        // `Budget::default()` allows a call 60 s; the shipped CLI adapter
+        // legitimately retries up to 2 x 60 s and its own header comments
+        // assume "the host's own per-call timeout (150 s by default)". Left
+        // at 60 s, a slow call is killed mid-retry and the captain watches
+        // the game sit on a menu doing nothing — observed live on the
+        // naming screen. 150 s matches the documented `claude_plays` runs.
+        call_timeout: std::time::Duration::from_secs(150),
+        ..Budget::default()
+    };
+    if let Ok(v) = std::env::var("GB_AGENT_WALL") {
+        match v.trim().parse::<u64>() {
+            Ok(secs) if secs > 0 => {
+                budget.max_wall = std::time::Duration::from_secs(secs)
+            }
+            _ => eprintln!(
+                "terminalgb: GB_AGENT_WALL wants whole seconds, not {v:?} — ignored"
+            ),
+        }
+    }
+
     Ok(terminalgb_plugin_agent::AgentPlugin::new(
         Box::new(CommandDriver::new(program, args)),
         AgentCfg {
-            budget: Budget {
-                max_calls: cfg.agent_max_calls,
-                max_usd: cfg.agent_max_usd,
-                ..Budget::default()
-            },
+            budget,
             objective,
             log,
             ..AgentCfg::default()

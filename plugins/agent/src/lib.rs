@@ -732,6 +732,18 @@ impl AgentPlugin {
                  instead of walking.",
             );
         }
+        // The naming keyboard, said by the host at the moment it is on screen
+        // rather than only in the standing instructions: a fact recorded in a
+        // document was still walked into on a live run, which is the test for
+        // promoting it to an enforced, situational note (the same promotion
+        // the standing-on-an-exit note earned).
+        if screen.naming_keyboard() {
+            w.str_item(
+                "You are on the NAMING KEYBOARD. A types another letter and \
+                 advance_text will refuse to run here. The name typed so far \
+                 is fine — press START to finish it and move on.",
+            );
+        }
         match escalation {
             Escalation::Nudge => w.str_item(
                 "Nothing has changed for a few decisions — what you are trying is \

@@ -207,6 +207,24 @@ const DOOR_Y: u8 = 8;
 
 /// A 32 KiB cartridge that walks a player round a walled room.
 fn build_fake_gen1() -> Vec<u8> {
+    build_fake_gen1_with(&[])
+}
+
+/// Gen 1 character code for the few glyphs the fixtures draw. The game loads
+/// its font so a tile id *is* a character code; these are the same values
+/// `plugins/gen1-link/src/text.rs` decodes back.
+fn charcode(c: u8) -> u8 {
+    match c {
+        b'A'..=b'Z' => 0x80 + (c - b'A'),
+        b'?' => 0xE6,
+        _ => 0x7F, // space
+    }
+}
+
+/// The same cartridge, with extra text rows drawn into the background tilemap
+/// at boot — enough to put any screen the observer must recognise (the naming
+/// keyboard, say) in front of a real `Screen::read`.
+fn build_fake_gen1_with(extra_rows: &[(u16, &str)]) -> Vec<u8> {
     let mut rom = vec![0u8; 0x8000];
 
     // Entry: NOP; JP $0150.
@@ -281,6 +299,15 @@ fn build_fake_gen1() -> Vec<u8> {
     for t in 0x01u8..0x10 {
         a.ld_a(t);
         a.st_hli();
+    }
+    // Extra rows a case asked for, drawn as character codes like the ROOM
+    // text above. Row-major on the visible 20x18 grid (SCX/SCY are 0 here).
+    for (row, text) in extra_rows {
+        a.ld_hl(0x9800 + row * 32);
+        for &c in text.as_bytes() {
+            a.ld_a(charcode(c));
+            a.st_hli();
+        }
     }
 
     a.xor_a();
@@ -439,6 +466,19 @@ fn machine(tag: &str) -> (Gameboy, PathBuf) {
 
 fn reply(say: &str, plan: &str) -> String {
     format!("{{\"say\":\"{say}\",\"plan\":[{plan}]}}")
+}
+
+/// A machine whose screen is showing the Gen 1 naming keyboard.
+fn machine_on_the_naming_screen(tag: &str) -> (Gameboy, PathBuf) {
+    let d = dir(tag);
+    let p = d.join("fake-gen1.gb");
+    std::fs::write(
+        &p,
+        build_fake_gen1_with(&[(0, "YOUR NAME?"), (2, "A B C D E F G H I")]),
+    )
+    .expect("write fixture");
+    let data = std::fs::read(&p).unwrap();
+    (Gameboy::new(data, Some(p.clone())), p)
 }
 
 /// Run until the agent stops or the frame budget runs out.
@@ -945,9 +985,48 @@ fn case_the_fixture_is_not_inert() -> Case {
     }
 }
 
+/// The naming keyboard is the one screen where A types a letter instead of
+/// advancing, and a real run typed a name of A's **from the host's own
+/// `advance_text` loop** — the model never got a say. The rule is therefore
+/// enforced where the presses happen: `advance_text` must refuse to press
+/// anything there, tell the driver why, and the snapshot must carry the
+/// situational note.
+fn case_advance_text_refuses_the_naming_keyboard() -> Case {
+    let (mut gb, rom) = machine_on_the_naming_screen("naming");
+    let log = rom.parent().unwrap().join("log.ndjson");
+    let script = vec![
+        reply("Reading on.", r#"{"do":"advance_text"}"#),
+        reply("Waiting.", r#"{"do":"wait","frames":1}"#),
+    ];
+    attach(
+        &mut gb,
+        Box::new(ScriptedDriver::new(script)),
+        Config {
+            log: Some(log.clone()),
+            ..Config::default()
+        },
+    );
+    run(&mut gb, 20_000);
+
+    let a_presses = gb.peek(A_PRESSES);
+    let logged = std::fs::read_to_string(&log).unwrap_or_default();
+    let refused = logged.contains("naming keyboard is up");
+    let noted = logged.contains("NAMING KEYBOARD");
+    let ok = a_presses == 0 && refused && noted;
+    Case {
+        name: "advance_text refuses to type on the naming keyboard",
+        ok,
+        detail: format!(
+            "{a_presses} A press(es), wanted 0; outcome told the driver: \
+             {refused}; snapshot note present: {noted}"
+        ),
+    }
+}
+
 fn main() {
     let cases = vec![
         case_the_fixture_is_not_inert(),
+        case_advance_text_refuses_the_naming_keyboard(),
         case_scripted_sequence_drives_the_game(),
         case_a_wall_is_only_reported_after_repeated_failures(),
         case_goto_routes_around_a_wall(),

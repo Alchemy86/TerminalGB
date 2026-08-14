@@ -643,6 +643,24 @@ impl Executor {
                 primed,
             } => {
                 let screen = Screen::read(m);
+                // The naming keyboard is the one screen where A is not
+                // "advance": it types another letter. A real run typed a name
+                // of A's *from this very loop* — the model never got a say —
+                // so the stop is enforced here, before any press. What was
+                // typed so far is left alone (a name of A's is playable; a
+                // half-erased one is another stuck state).
+                if screen.naming_keyboard() {
+                    let p = *pressed;
+                    return Some(Outcome {
+                        action: label,
+                        result: format!(
+                            "stopped after {p} press(es): the naming keyboard \
+                             is up, and A here TYPES A LETTER instead of \
+                             advancing. Press START to finish the name."
+                        ),
+                        changed: screen.hash != *first_hash,
+                    });
+                }
                 if screen.hash != *last_hash {
                     *last_hash = screen.hash;
                     *quiet = 0;

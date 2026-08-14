@@ -4007,6 +4007,49 @@ SRAM box entry both read back (`cargo run --release --example offer_list -- <rom
   (`Commentary::accepted()`), never on the length of the bounded history buffer — that bug hid
   28,000 frames of a real run.
 
+### Live-run findings, third session (the captain watching in a wezterm window)
+
+- **A fact the model may not consult is not a rule — the naming keyboard proved it.** The
+  "press START, A types letters for ever" fact had been in the prompt AND in two docs since
+  the first recorded run, and a live run typed a name of A's anyway, in front of the captain.
+  Cause: the presses came from **the host's own `advance_text` loop** — the naming keyboard
+  reads as "text box wants A", and no model call was in flight at all. Enforced host-side
+  now: `Screen::naming_keyboard()` (`plugins/agent/src/observe.rs`), an early-out in
+  `advance_text` that names START, and a situational snapshot note; pinned by two
+  `testharness/agent.rs` cases (teeth proven by reverting the guard: 12/13). **When a
+  documented fact is walked into live, promote it to an enforced rule where the buttons are
+  pressed** — the same promotion the standing-on-an-exit note earned.
+- **A `game.sprites` observation was built and WITHDRAWN — ship nothing gated on the player's
+  sprite slot.** The sprite-table layout is right (`wSpriteStateData1`/`2`, map Y/X at
+  `+4`/`+5` in `wXCoord`'s tile grid offset by 4, `SPRITE_POKE_BALL = $3D`), and it is the
+  generic answer to the balls-on-the-table blindness — but the consistency gate "sprite 0's
+  map coordinates == `wYCoord+4`/`wXCoord+4`" measured **never true** in twenty live
+  decisions across four maps, so the feature reported nothing and was pulled rather than
+  committed inert. The engine does not maintain the player slot's map coordinates in
+  ordinary play (only map scripts write `StateData2MapY`). A future gate must be
+  per-NPC-slot bounds against the map size, **verified against a live game first** — the
+  harness fixture passing is not that proof; it encodes whatever the author believed.
+- **The TUI's agent path had two budget gaps, both now closed:** `build_agent` left
+  `call_timeout` at `Budget::default()`'s 60 s while the shipped CLI adapter legitimately
+  retries up to 2 x 60 s (its header assumes "150 s by default") — every slow call was
+  killed mid-retry, seen live as the game sitting on a menu with "the agent took too long to
+  answer" — now 150 s; and the wall clock (the one host ceiling that is not self-reported)
+  was not settable at all — now `GB_AGENT_WALL` seconds, typo warns and is ignored.
+- **What a viewer sees is think-time, and it clusters at map changes.** Every map change
+  interrupts the plan and forces a decision; via the `claude` CLI a decision is a fresh
+  session — measured this session at 8-25 s (haiku) and ~4-8 s (sonnet), plus occasional
+  60 s+ stalls under rate limiting. The captain reads that as "it sits on the steps after
+  every doorway". The CLI adapter is the convenient path, not the watchable one; the API
+  adapter (`ANTHROPIC_API_KEY`, not present on this box) is the fix, not more prompt.
+- **The screen text was never the problem.** `screen.text` (VRAM-decoded) is in every
+  snapshot — the runs read "YOUR NAME?" and "but you can have one! Choose!" fine. When a
+  watching human says "it cannot read the screen", check what is NOT text first: the balls
+  are sprites, NPCs are sprites, terrain is collision data.
+- **Watching a TUI agent run headlessly:** `GB_AGENT_LOG=<path>` NDJSON plus `tail -F` (the
+  file is recreated per launch — `-f` follows a deleted inode and goes silent forever).
+  Milestones and failures both appear as `decision` events; `error:"timeout"` with an empty
+  reply is the host killing a call.
+
 ## Embeddability — the core stands alone (`--no-default-features`)
 
 The captain's requirement: someone must be able to pull this crate into their own UI, tool

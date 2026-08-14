@@ -231,6 +231,24 @@ impl Screen {
     pub fn looks_like_a_map(&self) -> bool {
         self.distinct > 6
     }
+
+    /// Is the Gen 1 on-screen naming keyboard up? This is the one screen where
+    /// pressing A does the opposite of advancing: it types another letter, for
+    /// ever. The prompt has documented that fact since the first recorded run
+    /// and a later run *still* typed a name of A's — because the presses came
+    /// from the host's own `advance_text`, which never asked the model at all.
+    /// So the rule is enforced here, where the presses happen, not only in a
+    /// document the model may not consult.
+    ///
+    /// The signature is the question (`NAME?` — covers `YOUR NAME?`,
+    /// `RIVAL's NAME?` and a Pokémon's `NICKNAME?`) together with the top row
+    /// of the letter grid, in either case (`lower case` is a mode of the same
+    /// keyboard).
+    pub fn naming_keyboard(&self) -> bool {
+        self.text.contains("NAME?")
+            && (self.text.contains("A B C D E F G H I")
+                || self.text.contains("a b c d e f g h i"))
+    }
 }
 
 /// One party member, trimmed to what a decision needs.
@@ -518,6 +536,29 @@ mod tests {
         assert!(12 < w, "Oak's Lab at x=12 must be inside {w}");
         assert!(11 < h2, "Oak's Lab at y=11 must be inside {h2}");
         let _ = h;
+    }
+
+    /// The naming keyboard must be recognised in every form the game shows it
+    /// — player, rival, nickname, and the lower-case mode of the same grid —
+    /// and never on ordinary dialogue that happens to mention a name.
+    #[test]
+    fn the_naming_keyboard_is_recognised_and_dialogue_is_not() {
+        let with_text = |t: &str| Screen {
+            text: t.to_string(),
+            ..Default::default()
+        };
+        // Transcribed from a real run's snapshot at the player naming screen.
+        let player = "YOUR NAME?\nA B C D E F G H I\nJ K L M N O P Q R\n\
+                      S T U V W X Y Z\nlower case";
+        assert!(with_text(player).naming_keyboard());
+        assert!(with_text("RIVAL's NAME?\nA B C D E F G H I").naming_keyboard());
+        assert!(with_text("NICKNAME?\nA B C D E F G H I").naming_keyboard());
+        assert!(with_text("YOUR NAME?\na b c d e f g h i").naming_keyboard());
+        // Dialogue mentioning a name, no grid: not the keyboard.
+        assert!(!with_text("what is your NAME? said OAK").naming_keyboard());
+        // The grid alone (mid-transition garbage): not the keyboard.
+        assert!(!with_text("A B C D E F G H I").naming_keyboard());
+        assert!(!with_text("").naming_keyboard());
     }
 
     #[test]
