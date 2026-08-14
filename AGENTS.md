@@ -2646,6 +2646,19 @@ attic, not ours.
   caption of the image it was reproducing*. Naming the owner is not permission from them.
   A **link** has never needed a licence; an embedded copy does.
 
+### The brand assets are generated, hand-authored, and font-free (`docs/brand/`)
+
+- **Three logo options + icon lockups live in [`docs/brand/`](docs/brand/README.md)**, all
+  emitted by `docs/brand/generate.py` — **edit the generator, never the SVGs by hand**, and
+  re-render the `preview/` PNGs with `magick` in the same commit. The letterforms are
+  original stroked skeleton paths drawn in that script: **no font is embedded, subset or
+  traced**, so there is no font licence to audit, and nothing borrows a Nintendo motif —
+  the cursor block/underscore and a generic green LCD rectangle are the whole vocabulary.
+  The recommendation (option B, the GB screen tile) and each option's rationale are in that
+  README. Every SVG paints its own dark panel + faint border, so the theme-in-`<img>` trap
+  recorded above cannot bite; check any new lockup on white, black **and** at 16 px before
+  committing — a mark that fails as a favicon has failed.
+
 ### Verifying that a README or doc actually renders
 
 **Render it through GitHub's own renderer and look at it** — this is how the wrong caption in

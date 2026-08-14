@@ -1,0 +1,8 @@
+<!-- TerminalGB icon, option A
+     Hand-authored for TerminalGB (MPL-2.0). No font embedded, subset or traced;
+     letterforms are original stroked paths. Regenerate with docs/brand/generate.py -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img">
+<rect x="1" y="1" width="126" height="126" rx="28" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+<path transform="translate(18.0 25.0) scale(0.7800)" d="M57 13 H13 V87 H57 V56 H42" fill="none" stroke="#f0f3f6" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="78.8" y="20.3" width="31.2" height="87.4" rx="5" fill="#32d46d"/>
+</svg>
