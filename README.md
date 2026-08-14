@@ -82,7 +82,8 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > highlights are save-state slots (**`1`**–**`3`**, **`F5`** save / **`F8`** load), a speed
 > ladder (**`+`**/**`-`**), a stats overlay (**`t`**), palette cycling (**`[`**), pixel-art
 > upscaler cycling (**`]`** algorithm / **`}`** factor), **screenshots** (**`c`** what you see,
-> **`C`** the raw 160×144 frame) and the **video stream** on/off (**`v`**). Audio works here too
+> **`C`** the raw 160×144 frame), the **video stream / webcam** on/off (**`v`**) and a
+> timestamped **recording** (**`V`**). Audio works here too
 > with `--features audio` (see the ALSA note above).
 >
 > *(The terminal frontend is under active development — the render crew is adding faster
@@ -167,9 +168,9 @@ The recognised keys:
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
 | `screenshot_dir` | a path (`~` expands) | Where **`c`** writes PNGs. Default `$XDG_PICTURES_DIR/gameboy`, else `~/Pictures/gameboy`. |
-| `video_out` | `-` / a file / a FIFO / a directory / `off` | Stream raw frames out (see [video-out.md](docs/video-out.md)). Default `off`. The TUI refuses `-` — it owns stdout. |
-| `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`; `yuyv` for the virtual-webcam route. |
-| `video_size` | `WxH` | Letterbox the stream into this size, e.g. `640x480`. Default: the source size. |
+| `video_out` | `-` / a file / a **FIFO** / a **`/dev/videoN` camera** / a directory / `off` | Stream raw frames out (see [video-out.md](docs/video-out.md)). Default `off`. **Safe to set to anything** — a FIFO with no reader, or a camera that does not exist, leaves the *stream* waiting and never blocks the emulator. The TUI refuses `-` — it owns stdout. |
+| `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`. Ignored for a `/dev/videoN` camera, which negotiates YUYV itself. |
+| `video_size` | `WxH` | Letterbox the stream into this size, e.g. `640x480`. Default: the source size, or 640×480 for a camera. |
 | `video_source` | `native` / `display` | Stream the raw 160×144 framebuffer, or what you see (palette + upscaler). Default `native`. |
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
 | `video_dir` | a path (`~` expands) | Where **`v`** records when no `video_out` is set. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
@@ -414,8 +415,21 @@ input.
 
 ## 🎥 Video out & virtual webcam
 
-The picture can leave the emulator as a **raw frame stream** that any standard tool consumes —
-`ffmpeg`, OBS, a v4l2 virtual camera. **Off by default**, and free when off.
+**The Game Boy as a webcam, with no bridge.** Put one line in `config.toml`, run the game,
+press `v`, and pick the camera in Chrome, Meet, Discord or OBS:
+
+```toml
+video_out = "/dev/video10"
+```
+
+The emulator negotiates the V4L2 device itself (`VIDIOC_QUERYCAP` + `VIDIOC_S_FMT`) and writes
+the frames — no `ffmpeg`, no FIFO, no rule about what to start first. Size and pixel format are
+**detected, not configured**: YUYV at 640×480, with the 160×144 picture scaled by integer
+nearest-neighbour and letterboxed, never stretched. Linux only, and it needs the `v4l2loopback`
+kernel module once (root); the emulator prints the exact install commands if it is missing.
+
+The picture can also leave as a **raw frame stream** any standard tool consumes. **Off by
+default**, and free when off.
 
 ```bash
 # record a headless run straight into an MP4
@@ -426,21 +440,22 @@ cargo run --release --example video_out -- --rom game.gb --frames 600 \
 mkfifo /tmp/gb.raw
 ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw gb.mp4 &
 cargo run --release --example terminal -- game.gb --video-out /tmp/gb.raw
-
-# a virtual webcam OBS/Zoom/a browser can pick up (needs the v4l2loopback module)
-tools/virtual-camera.sh --name "POKEMON BLUE" --size 640x480
 ```
+
+**No video destination can stop the emulator from starting.** A FIFO with nothing reading it, a
+camera that is missing or busy — the *stream* waits and attaches by itself the moment the far
+end appears, and a consumer that quits mid-stream drops it back to waiting rather than killing
+or stalling anything. A slow consumer costs dropped frames, never frame time.
 
 The emulator prints the exact consuming command for whatever settings are in force, so it is
 never guesswork. Native 160×144 or the upscaled/palette-mapped picture, `rgba`/`rgb24`/`yuyv`,
-letterboxed (never stretched) into any size, paced to wall clock so fast-forward drops frames
-instead of producing a 4× speed video. **`v`** toggles it live and the Status panel says
-`● LIVE`, so you always know whether you are streaming.
+letterboxed into any size, paced to wall clock so fast-forward drops frames instead of producing
+a 4× speed video. **`v`** streams and **`V`** records a timestamped file — two different jobs,
+two different keys — and the Status panel says which and where (`◌ wait`, `● LIVE`, `● REC`).
 
-The virtual camera is **Linux-only** and needs the `v4l2loopback` kernel module, which needs
-root to install; the emulator detects it and prints the exact install command rather than
-failing obscurely, and `ffmpeg` is what feeds the device. Full guide, measured costs, platform
-limits and the captured proof: **[`docs/video-out.md`](docs/video-out.md)**.
+macOS and Windows have no v4l2; there, `tools/virtual-camera.sh` and OBS's own virtual camera
+consume the same stream. Full guide, measured costs, platform limits and the captured proof:
+**[`docs/video-out.md`](docs/video-out.md)**.
 
 ---
 

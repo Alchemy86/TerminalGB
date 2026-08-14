@@ -157,6 +157,9 @@ impl Gameboy {
                 if s.source == crate::video::Source::Display && s.size.is_none() {
                     s.size = Some((out_w as u32, out_h as u32));
                 }
+                // The game's name travels with the stream, so a FIFO's sidecar
+                // descriptor can label the virtual camera after the cartridge.
+                s.title = Some(self.rom_title());
                 let (v, err) = crate::video::VideoOut::open(s);
                 if let Some(e) = err {
                     eprintln!("gameboy: {e}");

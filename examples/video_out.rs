@@ -100,13 +100,24 @@ fn main() {
             Source::Display => Some((up_w as u32, up_h as u32)),
         }),
         pace: args.pace,
+        // Names the sidecar descriptor beside a FIFO, and through it the
+        // virtual camera — see `video::descriptor`.
+        title: Some(gb.rom_title()),
     };
-    if !args.quiet {
-        eprintln!("video_out: {}", spec.describe(None));
-    }
-    let (mut video, err) = VideoOut::open(spec);
-    if let Some(e) = err {
+    let (mut video, note) = VideoOut::open(spec);
+    if let Some(e) = note {
         eprintln!("video_out: {e}");
+    }
+    // Described *after* opening, not before: a camera negotiates its own
+    // geometry and format, so announcing the requested numbers would print
+    // 160x144 for a stream that is about to be 640x480.
+    if !args.quiet {
+        eprintln!("video_out: {}", video.describe());
+    }
+    // A note is not a failure: a FIFO with no consumer yet, or a camera whose
+    // device has not appeared, both come back armed *and* explained. Only an
+    // emitter that could not be armed at all is fatal.
+    if !video.is_enabled() {
         std::process::exit(1);
     }
 

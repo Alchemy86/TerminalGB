@@ -1226,29 +1226,101 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 - **The TUI cannot stream to stdout** — `ratatui` owns it. It refuses with a pointer to a FIFO
   or to `examples/video_out.rs`. The **desktop** frontend can (`--video-out -`), and that is the
   headline pipe command.
-- **The emulator never writes to `/dev/videoN`.** A V4L2 output device needs `VIDIOC_S_FMT`
-  before the first write, and that cannot be tested without the kernel module (root to install)
-  — so `video_out = /dev/video*` is refused with the exact `ffmpeg -f v4l2` recipe.
-  `tools/virtual-camera.sh` is the supported route. This box has **no v4l2loopback** (only a
-  real UVC webcam on video0/1), so the camera end has never been run here; everything up to the
-  device has (YUYV 640×480 bytes decoded by ffmpeg).
-- **A v4l2loopback device cannot be renamed while it exists** (upstream `v4l2loopback-ctl` has
-  `add`/`delete`/`set-fps`/`set-caps`/`set-timeout-image` and no rename) — the label comes from
-  `card_label` at modprobe time or `v4l2loopback-ctl add -n`. So `video_device = /dev/videoN`
-  only *verifies*: sysfs label vs cartridge title, with the delete+add commands if they differ.
+- **The emulator DRIVES `/dev/videoN` natively now** (`video::v4l2::sink`) — the old "we refuse
+  a V4L2 node and hand you an `ffmpeg` recipe" note is dead. `video_out = "/dev/video10"`, press
+  `v`, pick the camera in Chrome/Meet/Discord/OBS. `tools/virtual-camera.sh` still works and is
+  still the answer on macOS/Windows or a box with no v4l2loopback, but it is not the Linux route.
+  **This box DOES have v4l2loopback** (`/dev/video10`, `card_label="Game Boy"`, `exclusive_caps=1`,
+  made permanent via `/etc/modules-load.d` + `/etc/modprobe.d`); the old "no v4l2loopback here"
+  note was stale. `/dev/video1` and `/dev/video2` are a real UVC webcam.
+- **A write that returns success proves NOTHING on a V4L2 node.** An un-negotiated `write(2)` is
+  accepted and produces nothing a consumer can read — this exact mistake was made and reported
+  as a working camera. The only acceptable proof is *a consumer decoding the device*
+  (`ffplay -f v4l2 -i /dev/video10`, or `ffmpeg -f v4l2 -i … -frames:v N out_%02d.png` and
+  actually looking at the PNGs). Same discipline as the terminal-render screenshots.
+- **The sequence is QUERYCAP → S_FMT → write**, and **what `S_FMT` returns is authoritative**:
+  the driver may change the geometry, and `bytesperline` is the row stride which is *not*
+  necessarily `width * 2` (frames are re-strided if it differs), `sizeimage` is the exact
+  write length.
+- **Raw `ioctl`s through the existing `libc` feature, no new crate — deliberate.** `v` and
+  `v4l2-sys-mit` are permissive but link **libv4l2**, a *system* library: precisely the
+  fresh-clone-fails trap that ALSA/`cpal` already cost this repo. Hand-written UAPI structs are
+  made safe by a **compile-time** check: an `ioctl` number encodes `sizeof` its struct, so
+  `VIDIOC_QUERYCAP`/`VIDIOC_S_FMT` are computed from our definitions and `const`-asserted
+  against the kernel's published `0x80685600`/`0xc0d05605`. Get a field wrong and the build
+  stops. Gated `#[cfg(all(target_os = "linux", feature = "libc"))]`.
+- **`exclusive_caps=1` makes a loopback node report CAPTURE while a producer is attached.** So
+  "this is a capture device" means two different things and must not be one error: on a *real*
+  webcam it is permanent (wrong node); on a loopback node it means **someone else is already
+  streaming to it** and clears on its own. Told apart via sysfs — a loopback node canonicalises
+  under `/sys/devices/virtual/`, a USB/PCI camera never does (`v4l2::is_loopback`). The same
+  sysfs fact fixed `tools/virtual-camera.sh`, whose device search checked `device/driver` — a
+  symlink loopback nodes do not have, so it reported "no loopback device" on a box that had one.
+- **A v4l2loopback device cannot be renamed while it exists, and this is now checked, not
+  assumed**: `/sys/class/video4linux/videoN/name` is `-r--r--r--` root-owned, the only writable
+  sysfs attributes are `dev_debug`/`format`/`max_openers`, `modinfo` lists no other route, and
+  upstream `v4l2loopback-ctl` has `add`/`delete`/`set-fps`/`set-caps`/`set-timeout-image` and no
+  rename. `VIDIOC_S_FMT` negotiates a format, never an identity. **So the camera cannot be named
+  after the game from inside the emulator** — it needs delete+add as root, which drops every
+  consumer, and a per-launch privilege escalation is not something to ship. Pick a static
+  `card_label` at setup; `video_device = /dev/videoN` still *verifies* label vs cartridge title.
 - **Naming:** `clean_title` (human/device label) and `file_safe_title` (filename) live in
   `video.rs` — cartridge titles are 16 padded bytes and can hold anything. A recording is named
   `TITLE-stamp-WxH-fmt.raw` so the consuming `ffmpeg` arguments can be read off the filename;
   `%t`/`%s` expand in any configured path; a directory destination gets the same treatment.
-- **`v` toggles the stream live**, `c`/`C` (and `F2`) take screenshots — displayed look and raw
+- **`v` toggles the stream/camera live, `V` records a timestamped file**, `c`/`C` (and `F2`) take screenshots — displayed look and raw
   framebuffer. Screenshots use the **selected** upscale factor, not `transmit_factor` (with
   `transmit_scale = auto` those differ on purpose), and go through the `image` crate, not
   `termimage::png_rgb_into` — the latter is *stored*-deflate (uncompressed), right for a 60 Hz
   wire and wrong for a file someone keeps.
 - Costs measured over 3000 frames (emulation alone 0.216 ms/frame): rgba 160×144 **+0.007 ms**,
   yuyv 640×480 +0.55 ms, yuyv 640×480 with the LCD upscaler +1.58 ms — all inside 16.74 ms.
-  Writes are **blocking**: a stalled consumer back-pressures the emulator, a closed pipe
-  disables the sink permanently rather than erroring every frame.
+
+### NO MEDIA SINK MAY EVER BLOCK THE EMULATOR (the defect this cost us)
+
+- **`video_out` pointing at a FIFO hung the emulator at startup**, in `open(2)`, *before the
+  terminal UI existed* — one line of output and a process only `kill` could end (`wchan` =
+  `wait_for_partner`). It was configured exactly as our own docs told people to. The old note
+  here said writes are "blocking: a stalled consumer back-pressures the emulator" as if that
+  were a design; it is the same mistake the audio player made (`docs/audio.md` §4c), and it is
+  now forbidden for every sink.
+- **Three rules, all enforced in `src/video.rs`:** (1) the open never blocks — a FIFO is
+  `O_NONBLOCK` and `ENXIO` is the *state* `StreamState::Waiting`, and a camera's
+  open/`S_FMT` are bounded driver calls; (2) it is **retried every `RETRY_EVERY` (250 ms)**
+  while armed, so emulator-first and consumer-first are equally fine, and a consumer that quits
+  (`EPIPE`) drops back to `Waiting` and the next one is picked up; (3) writes are non-blocking
+  and a slow consumer **loses frames** (`VideoStats::stalled`), never frame time.
+- **`SIGPIPE` is set to `SIG_IGN` before the first byte.** Rust's runtime does this for `bin`
+  targets but the FFI build is a `cdylib` where it has not run, and a consumer quitting is a
+  *routine* event here.
+- **`rawvideo` is positional, so a partial write must be finished before the next frame starts**
+  — otherwise a consumer that got 40 % of frame N and then frame N+1 is desynchronised for the
+  rest of the run. `Fifo::tail` holds the remainder; `VideoOut::idle` drains it whatever the
+  pacing mode.
+- **Chosen non-blocking over "defer the open until `v` is pressed"** because deferring only
+  moves the hang: a configured stream auto-arms at startup, and pressing `v` inside the
+  alternate screen would hang with the UI up and no way to cancel. Non-blocking also makes late
+  attach fall out for free.
+- **`Intent` (`Stream` vs `Record`) is derived from what the destination *is*** — a FIFO or a
+  V4L2 node is a stream, a regular file is a recording — and the Status row now says **which**
+  and **where** (`off` · `◌ wait video10` · `● LIVE 12M video10` · `● REC 12M …raw`). The row
+  used to say `LIVE` for a recording, which is how "the camera is broken" turned out to be
+  "frames were going to `~/Videos` in the wrong format all along". **`v` streams, `V` records** —
+  two jobs, two keys.
+- **A FIFO stream publishes a sidecar descriptor `<fifo>.gbvideo`** (`video::descriptor`) with
+  width/height/format/fps/title, because `rawvideo` carries none of it in-band and the numbers
+  were otherwise configured twice in two programs and silently decoded as garbage when they
+  drifted. `tools/virtual-camera.sh` reads it. A V4L2 destination needs none of this: it
+  negotiates, and it **ignores `video_format`/`video_size`** (YUYV, 640×480 default) rather than
+  keeping a default that cannot work.
+- Regression tests to keep: `a_configured_fifo_with_no_consumer_does_not_stop_the_emulator_starting`
+  (tui), `a_fifo_with_no_reader_does_not_block_startup`,
+  `a_consumer_that_arrives_late_is_picked_up`,
+  `a_consumer_that_leaves_drops_back_to_waiting_and_can_be_replaced`,
+  `a_stalled_consumer_costs_frames_never_emulation_time`,
+  `a_partial_write_is_finished_before_the_next_frame_starts`,
+  `a_missing_camera_does_not_stop_the_emulator_and_says_what_to_install`,
+  `the_v4l2_ioctl_numbers_match_the_kernel_headers`.
 - Telemetry gained a `"video"` object (`frames`/`duplicated`/`dropped`/`bytes`/`ms`) — an
   addition, so no `SCHEMA_VERSION` bump. The invariant to assert: `video.frames ≈ elapsed ×
   59.7275` under `realtime` pacing, whatever `fps` does.

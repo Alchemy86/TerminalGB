@@ -28,6 +28,49 @@
 //!
 //! The environment wins over the config file, as with telemetry.
 //!
+//! **Every one of these is safe to set.** A destination that cannot be written
+//! to right now — most obviously a FIFO with no consumer on the other end —
+//! parks the *stream* in [`StreamState::Waiting`] and never the emulator. See
+//! "A FIFO needs a consumer" below.
+//!
+//! # Two intents: recording, and feeding something live
+//!
+//! Writing a file you keep and feeding a live consumer are different jobs, and
+//! [`Intent`] names which one is happening so a frontend can say so rather than
+//! showing one ambiguous `LIVE`:
+//!
+//! * [`Intent::Record`] — a regular file. Every byte is kept, nothing is
+//!   dropped for being late, and the file grows until the stream stops.
+//! * [`Intent::Stream`] — stdout, or a **FIFO**. Something is reading at the far
+//!   end, so the stream has the two states a consumer implies (`Waiting`,
+//!   `Live`) and frames are dropped rather than made to wait.
+//!
+//! The intent is *derived from the destination*, never guessed: a path that
+//! `stat`s as a named pipe is a stream, anything else is a recording.
+//!
+//! # A FIFO needs a consumer — and must never hold up the emulator
+//!
+//! `open(2)` on a FIFO for writing **blocks until a reader attaches**. Opening
+//! one during startup therefore hung the whole emulator before any UI existed,
+//! with nothing the user could do but kill it. That is fixed three ways, and
+//! all three matter:
+//!
+//! 1. **The open is non-blocking** (`O_NONBLOCK`). "No reader yet" comes back
+//!    as `ENXIO`, which is a *state* ([`StreamState::Waiting`]), not a wait.
+//! 2. **The open is retried** every [`RETRY_EVERY`] while the stream is armed,
+//!    so starting the emulator *before* the consumer works exactly as well as
+//!    the other order. A consumer that goes away (`EPIPE`) drops the stream
+//!    back to `Waiting`, where the next one is picked up the same way.
+//! 3. **The writes are non-blocking too.** A stalled or slow consumer fills the
+//!    pipe buffer; `write(2)` then returns `EAGAIN` and the frame is
+//!    **dropped** ([`VideoStats::stalled`]). Emulation is never charged for a
+//!    consumer's speed. `rawvideo` is positional, so a frame written only in
+//!    part is finished before the next one starts — the consumer sees whole
+//!    frames or nothing.
+//!
+//! `SIGPIPE` is set to `SIG_IGN` before the first byte is written, so a
+//! consumer quitting delivers `EPIPE` to us instead of killing the process.
+//!
 //! # Consuming it
 //!
 //! [`VideoOut::ffmpeg_hint`] prints the exact command for the *current*
@@ -38,6 +81,14 @@
 //! ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw -pix_fmt yuv420p gb.mp4
 //! GB_VIDEO_OUT=/tmp/gb.raw cargo run --release --example terminal -- game.gb
 //! ```
+//!
+//! …and it need not be read off a screen either: while a FIFO stream is armed
+//! the emulator keeps a **sidecar descriptor** beside it, `<fifo>.gbvideo`,
+//! naming the geometry, pixel format, frame rate and game. `rawvideo` carries
+//! none of that in-band, so without it the consumer has to be told the same
+//! numbers a second time and silently produces garbage when the two disagree —
+//! which is exactly how a 160×144 `rgba` stream ended up pointed at a bridge
+//! expecting 640×480 `yuyv`. `tools/virtual-camera.sh` reads it.
 //!
 //! # Geometry is fixed for the life of the stream
 //!
@@ -72,7 +123,7 @@
 
 use std::fs::File;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Native Game Boy picture size.
@@ -91,6 +142,13 @@ const SLACK: Duration = Duration::from_millis(2);
 /// Most duplicate frames emitted from one pump. Bounds the burst after a stall
 /// (suspend, a long modal pause) instead of dumping seconds of video at once.
 const MAX_BURST: u32 = 4;
+
+/// How often an armed FIFO retries its `open` while no consumer is attached.
+///
+/// A failed non-blocking open is one cheap syscall, but doing it 60 times a
+/// second for an hour is noise in `strace` for no gain; a quarter of a second
+/// is far below what anyone notices when they start the bridge by hand.
+pub const RETRY_EVERY: Duration = Duration::from_millis(250);
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -128,6 +186,88 @@ impl Destination {
             Destination::Path(p) => p.display().to_string(),
         }
     }
+
+    /// Short form for a status row: the path, or `stdout`.
+    pub fn label(&self) -> String {
+        self.ffmpeg_input()
+    }
+
+    /// Is this a live consumer or a file being kept? Derived from what the
+    /// destination *is* — see the module docs on the two intents.
+    pub fn intent(&self) -> Intent {
+        match self {
+            Destination::Stdout => Intent::Stream,
+            Destination::Path(p) if is_fifo(p) || v4l2::is_video_device(p) => {
+                Intent::Stream
+            }
+            Destination::Path(_) => Intent::Record,
+        }
+    }
+}
+
+/// What the user is actually doing with the stream. See the module docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Intent {
+    /// A live consumer at the far end (a FIFO, or stdout in a pipe).
+    Stream,
+    /// A file being written and kept.
+    Record,
+}
+
+impl Intent {
+    /// The word a frontend puts in front of the destination. Deliberately not
+    /// interchangeable: `REC` cannot be mistaken for a camera feed, and `LIVE`
+    /// cannot be mistaken for a file on disk.
+    pub fn word(self) -> &'static str {
+        match self {
+            Intent::Stream => "LIVE",
+            Intent::Record => "REC",
+        }
+    }
+}
+
+/// Whether frames are reaching anything, right now.
+///
+/// The middle state is the whole point of this enum: an armed FIFO with no
+/// consumer is neither off nor live, and calling it either one is what made a
+/// misconfigured camera bridge look like a working one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamState {
+    /// Nothing configured, or the stream was stopped.
+    Off,
+    /// Armed, but nothing is reading yet — the `open` is retried every
+    /// [`RETRY_EVERY`], so this becomes `Live` the moment a consumer appears.
+    Waiting,
+    /// Frames are being written.
+    Live,
+}
+
+impl StreamState {
+    pub fn name(self) -> &'static str {
+        match self {
+            StreamState::Off => "off",
+            StreamState::Waiting => "waiting",
+            StreamState::Live => "live",
+        }
+    }
+}
+
+/// Is this path a named pipe?
+///
+/// Load-bearing: it is what tells a *stream* from a *recording*, and what
+/// selects the non-blocking open. A path that does not exist yet is not a
+/// FIFO — it will be created as a regular file, i.e. a recording.
+#[cfg(unix)]
+pub fn is_fifo(p: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    std::fs::metadata(p)
+        .map(|m| m.file_type().is_fifo())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+pub fn is_fifo(_p: &Path) -> bool {
+    false
 }
 
 /// Wire pixel format. All are uncompressed and fixed-size, so a consumer needs
@@ -250,6 +390,10 @@ pub struct VideoSpec {
     /// Fixed output geometry. `None` means "whatever the first frame is".
     pub size: Option<(u32, u32)>,
     pub pace: Pace,
+    /// The cartridge title, when the frontend knows it. Carried only so the
+    /// sidecar descriptor can name the game — which is how the virtual camera
+    /// ends up labelled `POKEMON BLUE` instead of `Dummy video device`.
+    pub title: Option<String>,
 }
 
 impl VideoSpec {
@@ -261,6 +405,7 @@ impl VideoSpec {
             source: Source::Native,
             size: None,
             pace: Pace::Realtime,
+            title: None,
         }
     }
 
@@ -325,8 +470,27 @@ impl VideoSpec {
     }
 
     /// One line describing the stream, for a frontend to show the user.
+    ///
+    /// A camera gets different words: there is no command to consume it with,
+    /// and telling someone to run `ffmpeg` at the thing already appearing in
+    /// their camera picker is how the bridge got mistaken for the product.
     pub fn describe(&self, geometry: Option<(u32, u32)>) -> String {
         let (w, h) = geometry.or(self.size).unwrap_or((SRC_W, SRC_H));
+        if let Destination::Path(p) = &self.dest {
+            if v4l2::is_video_device(p) && v4l2::NATIVE_OUTPUT {
+                let label = v4l2::device_label(p).unwrap_or_default();
+                return format!(
+                    "video: {w}x{h} yuyv422 -> {} — pick {} in any camera picker \
+                     (Chrome, Meet, Discord, OBS)",
+                    p.display(),
+                    if label.is_empty() {
+                        "the camera".to_string()
+                    } else {
+                        format!("\"{label}\"")
+                    },
+                );
+            }
+        }
         format!(
             "video: {w}x{h} {} ({}, {}) -> {} | consume with: {}",
             self.format.ffmpeg_name(),
@@ -447,6 +611,57 @@ pub fn expand_placeholders(path: &str, title: &str, stamp: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// The sidecar descriptor
+// ---------------------------------------------------------------------------
+
+/// Suffix of the descriptor written beside a FIFO: `/tmp/gb.raw.gbvideo`.
+pub const DESCRIPTOR_SUFFIX: &str = ".gbvideo";
+
+/// Where the descriptor for `fifo` lives.
+pub fn descriptor_path(fifo: &Path) -> PathBuf {
+    let mut s = fifo.as_os_str().to_os_string();
+    s.push(DESCRIPTOR_SUFFIX);
+    PathBuf::from(s)
+}
+
+/// The descriptor's contents: what `rawvideo` cannot say about itself.
+///
+/// The problem this solves is concrete. A raw stream is a headerless run of
+/// bytes; geometry, pixel format and frame rate live *only* in the consumer's
+/// command line. So the same three numbers are configured twice, in two
+/// different programs, and when they drift the consumer does not fail — it
+/// happily decodes garbage. That is how a 160×144 `rgba` stream came to be fed
+/// to a bridge expecting 640×480 `yuyv`, with the emulator's own banner saying
+/// everything was fine.
+///
+/// Deliberately a flat `key=value` file with no quoting and no nesting: the
+/// consumer is a shell script, and anything richer would need a parser on the
+/// far end. Same reasoning as the frontend's config parser.
+///
+/// It describes the **shape** of the stream, not its liveness — a bridge that
+/// starts before the emulator can read last session's descriptor and be right,
+/// which is exactly what makes the start-in-either-order promise work.
+pub fn descriptor(spec: &VideoSpec, geometry: Option<(u32, u32)>) -> String {
+    let (w, h) = geometry.or(spec.size).unwrap_or((SRC_W, SRC_H));
+    let title = spec.title.as_deref().map(clean_title).unwrap_or_default();
+    format!(
+        "# gameboy video-out stream descriptor — written by src/video.rs\n\
+         # `rawvideo` carries no header, so these are the numbers a consumer\n\
+         # must be given. Read by tools/virtual-camera.sh.\n\
+         path={}\n\
+         width={w}\n\
+         height={h}\n\
+         format={}\n\
+         fps={DMG_HZ}\n\
+         title={title}\n\
+         ffmpeg={}\n",
+        spec.dest.ffmpeg_input(),
+        spec.format.ffmpeg_name(),
+        spec.ffmpeg_hint(geometry),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Command-line flags
 // ---------------------------------------------------------------------------
 
@@ -515,12 +730,261 @@ pub fn cli_usage() -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// A FIFO that never blocks the emulator
+// ---------------------------------------------------------------------------
+
+/// Non-blocking `open`/`write` on a named pipe.
+///
+/// Both halves are gated on `libc`, which is a default feature and non-`wasm32`
+/// only — the same shape [`crate::shmframe`] uses. Without it there is no way
+/// to ask for `O_NONBLOCK`, and a *blocking* open is exactly the defect this
+/// module exists to remove, so the FIFO is refused with an explanation instead.
+#[cfg(all(unix, feature = "libc", not(target_arch = "wasm32")))]
+mod pipe {
+    use std::fs::File;
+    use std::io;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::Path;
+
+    pub const SUPPORTED: bool = true;
+
+    /// `open(path, O_WRONLY | O_NONBLOCK)`.
+    ///
+    /// The error that matters is **`ENXIO`**: on a FIFO it means "no reader has
+    /// this open", which is the one case that is not a failure at all — it is
+    /// the normal state before the consumer starts.
+    pub fn open_write(path: &Path) -> io::Result<File> {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+    }
+
+    /// Is this error "nobody is reading yet"?
+    pub fn is_no_reader(e: &io::Error) -> bool {
+        e.raw_os_error() == Some(libc::ENXIO)
+    }
+
+    /// Stop a consumer's exit from killing us.
+    ///
+    /// Rust's own runtime already does this for `bin` targets, but the FFI
+    /// build is a `cdylib` loaded into somebody else's process, where it has
+    /// not run. Writing to a pipe whose reader has gone is a *routine* event
+    /// here — it must arrive as `EPIPE`, never as a signal.
+    pub fn ignore_sigpipe() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        });
+    }
+}
+
+#[cfg(not(all(unix, feature = "libc", not(target_arch = "wasm32"))))]
+mod pipe {
+    use std::fs::File;
+    use std::io;
+    use std::path::Path;
+
+    pub const SUPPORTED: bool = false;
+
+    pub fn open_write(_path: &Path) -> io::Result<File> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "no non-blocking open on this build",
+        ))
+    }
+
+    pub fn is_no_reader(_e: &io::Error) -> bool {
+        false
+    }
+
+    pub fn ignore_sigpipe() {}
+}
+
+/// What one attempt to put a frame down a pipe achieved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Push {
+    /// The whole frame is on the wire.
+    Wrote,
+    /// Nothing is reading; the frame went nowhere and nothing was lost.
+    NoConsumer,
+    /// A consumer is attached but is not keeping up — frame dropped.
+    Stalled,
+    /// The consumer went away mid-stream (`EPIPE`) — back to waiting.
+    Disconnected,
+}
+
+/// A named pipe, held across the life of the stream.
+///
+/// Everything here is arranged around one rule: **the emulator's thread must
+/// leave this function in bounded time, whatever the consumer is doing.**
+struct Fifo {
+    path: PathBuf,
+    /// `None` = no consumer attached right now.
+    file: Option<File>,
+    /// Earliest instant the next `open` may be attempted.
+    retry_at: Option<Instant>,
+    /// Bytes of the frame in flight that the pipe would not take yet.
+    ///
+    /// `rawvideo` is positional — a consumer that receives 40 % of a frame and
+    /// then the *next* frame is desynchronised for the rest of the run. So a
+    /// partial write is finished before any new frame is offered, and frames
+    /// that arrive while it is outstanding are dropped instead.
+    tail: Vec<u8>,
+    tail_at: usize,
+}
+
+impl Fifo {
+    fn new(path: PathBuf) -> Fifo {
+        Fifo {
+            path,
+            file: None,
+            retry_at: None,
+            tail: Vec::new(),
+            tail_at: 0,
+        }
+    }
+
+    fn live(&self) -> bool {
+        self.file.is_some()
+    }
+
+    /// Try to attach to a consumer, at most once per [`RETRY_EVERY`].
+    fn reconnect(&mut self, now: Instant) {
+        if self.file.is_some() {
+            return;
+        }
+        if let Some(t) = self.retry_at {
+            if now < t {
+                return;
+            }
+        }
+        match pipe::open_write(&self.path) {
+            Ok(f) => {
+                self.file = Some(f);
+                self.tail.clear();
+                self.tail_at = 0;
+                self.retry_at = None;
+            }
+            // `ENXIO` is the expected answer while nobody is reading; try again
+            // shortly. Anything else (the FIFO deleted, permissions changed) is
+            // a condition that will not clear itself four times a second, so
+            // back off hard rather than burning a syscall per retry forever.
+            Err(e) => {
+                self.retry_at = Some(
+                    now + if pipe::is_no_reader(&e) {
+                        RETRY_EVERY
+                    } else {
+                        RETRY_EVERY * 20
+                    },
+                )
+            }
+        }
+    }
+
+    /// The consumer is gone. Drop the half-written frame with it: the next one
+    /// to attach must start on a frame boundary.
+    fn detach(&mut self) {
+        self.file = None;
+        self.tail.clear();
+        self.tail_at = 0;
+        self.retry_at = None; // a fresh consumer may already be waiting
+    }
+
+    /// Write as much of `buf` as the pipe will take without blocking.
+    /// `Ok(n)` is how many bytes went; `Err` is a real failure (`EPIPE`).
+    fn drain(f: &mut File, buf: &[u8]) -> std::io::Result<usize> {
+        let mut n = 0;
+        while n < buf.len() {
+            match f.write(&buf[n..]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(n)
+    }
+
+    /// Is part of a frame still owed to the consumer?
+    fn owes_tail(&self) -> bool {
+        self.tail_at < self.tail.len()
+    }
+
+    /// Push what is still owed from the frame in flight, and nothing else.
+    ///
+    /// Called from [`VideoOut::idle`] so an outstanding tail drains whatever
+    /// the pacing mode is: a consumer that unfreezes must never be left holding
+    /// a partial frame just because the emulator happened to stop producing.
+    fn service(&mut self) -> Push {
+        let Some(f) = self.file.as_mut() else {
+            return Push::NoConsumer;
+        };
+        match Fifo::drain(f, &self.tail[self.tail_at..]) {
+            Ok(n) => self.tail_at += n,
+            Err(_) => {
+                self.detach();
+                return Push::Disconnected;
+            }
+        }
+        if self.owes_tail() {
+            Push::Stalled
+        } else {
+            self.tail.clear();
+            self.tail_at = 0;
+            Push::Wrote
+        }
+    }
+
+    /// Offer one whole frame. Never blocks, never partially advances the
+    /// consumer's frame clock.
+    fn push(&mut self, frame: &[u8], now: Instant) -> Push {
+        self.reconnect(now);
+        if self.file.is_none() {
+            return Push::NoConsumer;
+        }
+        // Finish the frame already in flight before starting another.
+        if self.owes_tail() {
+            match self.service() {
+                Push::Wrote => {}
+                other => return other,
+            }
+        }
+        let Some(f) = self.file.as_mut() else {
+            return Push::NoConsumer;
+        };
+        match Fifo::drain(f, frame) {
+            Ok(n) if n == frame.len() => Push::Wrote,
+            Ok(n) => {
+                self.tail.clear();
+                self.tail.extend_from_slice(&frame[n..]);
+                self.tail_at = 0;
+                // The frame IS on the wire, just not all of it yet; the next
+                // call finishes it. Counted as written, because it will be.
+                Push::Wrote
+            }
+            Err(_) => {
+                self.detach();
+                Push::Disconnected
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The stream
 // ---------------------------------------------------------------------------
 
 enum Sink {
     Stdout(std::io::Stdout),
     File(File),
+    /// A named pipe: opened and written non-blocking, so a missing or slow
+    /// consumer costs frames rather than the emulator's frame time.
+    Fifo(Fifo),
+    /// A V4L2 output node — the virtual camera, driven directly.
+    #[cfg(all(target_os = "linux", feature = "libc"))]
+    V4l2(v4l2::sink::V4l2Sink),
     /// In-memory, for tests.
     Memory(Vec<u8>),
 }
@@ -545,6 +1009,18 @@ pub struct VideoStats {
     pub last_ms: f32,
     /// Writes that failed (a consumer that closed the pipe disables the sink).
     pub write_errors: u64,
+    /// Frames thrown away because the consumer was not draining fast enough.
+    /// Non-zero here is the honest symptom of "ffmpeg cannot keep up" — the
+    /// emulator does not slow down to help it.
+    pub stalled: u64,
+    /// Times a consumer attached to the FIFO (the first is the stream going
+    /// live; later ones are a bridge being restarted).
+    pub attaches: u64,
+    /// Times a consumer went away mid-stream.
+    pub detaches: u64,
+    /// Frames offered while nothing was reading. Not a fault — a stream can be
+    /// armed long before its bridge starts.
+    pub unconsumed: u64,
 }
 
 /// The emitter. Cheap to hold; does nothing until a sink is attached.
@@ -598,28 +1074,150 @@ impl VideoOut {
         }
     }
 
-    /// Open `spec`. Never takes a run down with it: a destination that cannot
-    /// be opened yields a disabled emitter and an explanation.
+    /// Open `spec`. **Never blocks, and never takes a run down with it**: a
+    /// destination that cannot be written to right now yields an armed-but-
+    /// waiting emitter or a disabled one plus an explanation, never a wait.
     ///
-    /// Two destinations get a *specific* explanation rather than a bare OS
-    /// error, because both are things a user will reasonably try:
+    /// Two destinations get a *specific* answer rather than a bare OS error,
+    /// because both are things a user will reasonably try:
     ///
     /// * a `/dev/video*` node — writing raw bytes at a V4L2 device does not
     ///   work until its format has been negotiated; the supported route is
     ///   `ffmpeg -f v4l2` (see [`v4l2`]).
-    /// * a FIFO — opening one for writing blocks until a reader appears, which
-    ///   otherwise looks exactly like the emulator hanging on startup.
+    /// * a **FIFO** — `open` for writing blocks until a reader appears, which
+    ///   is why this one is opened `O_NONBLOCK` and left in
+    ///   [`StreamState::Waiting`] until a consumer turns up. That used to be a
+    ///   hang at startup with no UI and no way out but `kill`.
     pub fn open(spec: VideoSpec) -> (VideoOut, Option<String>) {
-        if let Destination::Path(p) = &spec.dest {
-            if v4l2::is_video_device(p) {
-                return (
-                    VideoOut::disabled(),
-                    Some(v4l2::direct_write_refusal(p, &spec)),
-                );
+        let mut spec = spec;
+        let mut note = None;
+        if let Destination::Path(p) = spec.dest.clone() {
+            if v4l2::is_video_device(&p) {
+                if !v4l2::NATIVE_OUTPUT {
+                    return (
+                        VideoOut::disabled(),
+                        Some(v4l2::direct_write_refusal(&p, &spec)),
+                    );
+                }
+                #[cfg(all(target_os = "linux", feature = "libc"))]
+                {
+                    // **Detection over configuration.** A camera has exactly one
+                    // useful shape, and the user should not have to know it:
+                    // anything but YUYV is not what the device negotiates, and
+                    // 160x144 is legal V4L2 that consumers reject. So both are
+                    // set here rather than left as a default that cannot work —
+                    // which is precisely the failure mode that fed a 160x144
+                    // rgba stream to a bridge expecting 640x480 yuyv.
+                    // Both of the notes below matter and neither may swallow
+                    // the other: "your format was overridden" and "the device
+                    // is not here yet" are different things to fix.
+                    let mut notes: Vec<String> = Vec::new();
+                    // Only worth saying when the user asked for something a
+                    // camera cannot be: RGBA is merely the module default, and
+                    // complaining about a value nobody typed is how a useful
+                    // warning becomes noise people stop reading.
+                    if !matches!(spec.format, PixelFormat::Yuyv422 | PixelFormat::Rgba) {
+                        notes.push(format!(
+                            "video: {} is a camera, so the stream is YUYV — \
+                             `video_format = {}` does not apply to a V4L2 device",
+                            p.display(),
+                            spec.format.ffmpeg_name(),
+                        ));
+                    }
+                    // Whatever was asked for, a V4L2 node gets YUYV — that is
+                    // what the driver negotiates and the only thing the
+                    // converter emits for it.
+                    spec.format = PixelFormat::Yuyv422;
+                    if spec.size.is_none() {
+                        spec.size = Some(v4l2::DEFAULT_SIZE);
+                    }
+                    let mut d = v4l2::sink::V4l2Sink::new(p.clone());
+                    d.attach(
+                        spec.size.unwrap_or(v4l2::DEFAULT_SIZE),
+                        Instant::now(),
+                        RETRY_EVERY,
+                    );
+                    if let Some(n) = d.format() {
+                        spec.size = Some((n.width, n.height));
+                    } else {
+                        // Not usable *yet*. The emulator still starts, and the
+                        // camera is picked up if it appears — but if the module
+                        // is simply not installed, that is the one remaining
+                        // setup step and it has to be actionable.
+                        let why = d.last_error.clone().unwrap_or_else(|| {
+                            format!("{} is not available", p.display())
+                        });
+                        notes.push(if !d.last_error_transient {
+                            // Cannot ever succeed as configured (a real webcam).
+                            // The message already names the alternatives; do not
+                            // also promise a retry that can never work.
+                            format!("video: {why}")
+                        } else if !v4l2::module_loaded() {
+                            format!("video: {why}\n{}", v4l2::install_hint_for_missing())
+                        } else {
+                            // Naming the device the user already asked for is
+                            // not help; list the alternatives only.
+                            let others: Vec<_> = v4l2::loopback_devices()
+                                .into_iter()
+                                .filter(|(n, _)| Path::new(n) != p)
+                                .collect();
+                            let known = if others.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    " Cameras on this machine: {}",
+                                    others
+                                        .iter()
+                                        .map(|(n, l)| format!("{n} (\"{l}\")"))
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                )
+                            };
+                            format!(
+                                "video: {why} — retrying while the stream is on.{known}"
+                            )
+                        });
+                    }
+                    let mut v = VideoOut::disabled();
+                    if d.live() {
+                        v.stats.attaches = 1;
+                        v.out = spec.size;
+                    }
+                    v.spec = spec;
+                    v.sink = Some(Sink::V4l2(d));
+                    let note = (!notes.is_empty()).then(|| notes.join("\n"));
+                    return (v, note);
+                }
             }
         }
         let sink = match &spec.dest {
-            Destination::Stdout => Ok(Sink::Stdout(std::io::stdout())),
+            Destination::Stdout => {
+                pipe::ignore_sigpipe();
+                Ok(Sink::Stdout(std::io::stdout()))
+            }
+            Destination::Path(p) if is_fifo(p) => {
+                if !pipe::SUPPORTED {
+                    Err(format!(
+                        "video: {} is a FIFO, and this build cannot open one without \
+                         blocking until a consumer attaches (no `libc` feature). Stream \
+                         to a file instead, or build with the default features.",
+                        p.display()
+                    ))
+                } else {
+                    pipe::ignore_sigpipe();
+                    let mut f = Fifo::new(p.clone());
+                    f.reconnect(Instant::now());
+                    if !f.live() {
+                        note = Some(format!(
+                            "video: armed on {} — waiting for a consumer, streaming \
+                             starts the moment one attaches:\n  {}",
+                            p.display(),
+                            spec.ffmpeg_hint(None),
+                        ));
+                    }
+                    Ok(Sink::Fifo(f))
+                }
+            }
             Destination::Path(p) => std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -631,9 +1229,15 @@ impl VideoOut {
         match sink {
             Ok(s) => {
                 let mut v = VideoOut::disabled();
+                if let Sink::Fifo(f) = &s {
+                    if f.live() {
+                        v.stats.attaches = 1;
+                    }
+                }
                 v.spec = spec;
                 v.sink = Some(s);
-                (v, None)
+                v.write_descriptor();
+                (v, note)
             }
             Err(e) => (VideoOut::disabled(), Some(e)),
         }
@@ -647,10 +1251,65 @@ impl VideoOut {
         v
     }
 
-    /// `true` when frames are actually going somewhere. Callers check this
-    /// before doing any work that is not free — including reading the clock.
+    /// `true` when the stream is **armed** — configured, opened and being fed.
+    /// Callers check this before doing any work that is not free, including
+    /// reading the clock.
+    ///
+    /// Armed is not the same as reaching a consumer: a FIFO with nothing on the
+    /// far end is armed and [`StreamState::Waiting`], because it must keep
+    /// being offered frames to notice a consumer arriving. Ask [`VideoOut::state`]
+    /// for the thing a user cares about.
     pub fn is_enabled(&self) -> bool {
         self.sink.is_some()
+    }
+
+    /// Off, waiting for a consumer, or live. The answer a status row shows.
+    pub fn state(&self) -> StreamState {
+        match &self.sink {
+            None => StreamState::Off,
+            Some(Sink::Fifo(f)) if !f.live() => StreamState::Waiting,
+            #[cfg(all(target_os = "linux", feature = "libc"))]
+            Some(Sink::V4l2(d)) if !d.live() => StreamState::Waiting,
+            Some(_) => StreamState::Live,
+        }
+    }
+
+    /// Recording a file, or feeding a live consumer. See the module docs.
+    pub fn intent(&self) -> Intent {
+        match &self.sink {
+            Some(Sink::Fifo(_)) | Some(Sink::Stdout(_)) => Intent::Stream,
+            #[cfg(all(target_os = "linux", feature = "libc"))]
+            Some(Sink::V4l2(_)) => Intent::Stream,
+            _ => self.spec.dest.intent(),
+        }
+    }
+
+    /// Is this stream a camera the operating system is publishing?
+    ///
+    /// Worth its own question because it changes what "live" *means*: a camera
+    /// is being fed whether or not anyone has opened it, so there is no third
+    /// party to wait for once the device is negotiated.
+    pub fn is_camera(&self) -> bool {
+        #[cfg(all(target_os = "linux", feature = "libc"))]
+        {
+            matches!(self.sink, Some(Sink::V4l2(_)))
+        }
+        #[cfg(not(all(target_os = "linux", feature = "libc")))]
+        false
+    }
+
+    /// Why a camera is not live yet, if it is not.
+    pub fn device_error(&self) -> Option<String> {
+        #[cfg(all(target_os = "linux", feature = "libc"))]
+        if let Some(Sink::V4l2(d)) = &self.sink {
+            return d.last_error.clone();
+        }
+        None
+    }
+
+    /// Where the frames are going, for a status row or a toast.
+    pub fn destination(&self) -> String {
+        self.spec.dest.label()
     }
 
     pub fn spec(&self) -> &VideoSpec {
@@ -688,7 +1347,23 @@ impl VideoOut {
     /// picture — a consumer that stops receiving bytes stalls, and a recording
     /// made across a pause would otherwise be shorter than the pause.
     pub fn idle(&mut self, now: Instant) {
-        if self.sink.is_none() || self.staged.is_empty() {
+        if self.sink.is_none() {
+            return;
+        }
+        // A FIFO may still owe a consumer the rest of a frame. Push it here
+        // whatever the pacing mode: `Pace::Emulated` writes only on a fresh
+        // frame, so without this a consumer that resumed after a stall would
+        // sit on a partial frame until the emulator produced another one.
+        if let Some(Sink::Fifo(p)) = self.sink.as_mut() {
+            if p.owes_tail() {
+                match p.service() {
+                    Push::Stalled => self.stats.stalled += 1,
+                    Push::Disconnected => self.stats.detaches += 1,
+                    _ => {}
+                }
+            }
+        }
+        if self.staged.is_empty() {
             return;
         }
         self.pump(now, false);
@@ -707,7 +1382,7 @@ impl VideoOut {
         match self.spec.pace {
             Pace::Emulated => {
                 if fresh {
-                    self.emit();
+                    self.emit(now);
                 }
             }
             Pace::Realtime => {
@@ -737,19 +1412,81 @@ impl VideoOut {
                     if i > 0 || !fresh {
                         self.stats.duplicated += 1;
                     }
-                    self.emit();
+                    self.emit(now);
                 }
             }
         }
     }
 
     /// Convert the staged frame (once) and write it.
-    fn emit(&mut self) {
+    ///
+    /// The one hard rule: this returns in bounded time no matter what the
+    /// consumer is doing. It is called from inside the emulated frame, so a
+    /// blocking write here *is* frame time — the same mistake the audio player
+    /// made (see `docs/audio.md` §4c).
+    fn emit(&mut self, now: Instant) {
         let t = Instant::now();
+        // Waiting for a consumer: try to attach, but do not pay for a pixel
+        // conversion nobody is going to read. This is the common case for a
+        // stream armed from `config.toml` before the bridge is started.
+        if let Some(Sink::Fifo(p)) = self.sink.as_mut() {
+            if !p.live() {
+                p.reconnect(now);
+                if !p.live() {
+                    self.stats.unconsumed += 1;
+                    self.stats.last_ms = t.elapsed().as_secs_f32() * 1000.0;
+                    return;
+                }
+                self.stats.attaches += 1;
+            }
+        }
+        // The camera is the same shape of problem — the device may be missing
+        // (v4l2loopback not loaded yet) or busy (another producer holds it),
+        // and both must be a state rather than a failure. The difference is
+        // that the *driver* decides the geometry, so it is adopted here rather
+        // than fixed by the first frame.
+        #[cfg(all(target_os = "linux", feature = "libc"))]
+        {
+            let want = self.spec.size.unwrap_or(v4l2::DEFAULT_SIZE);
+            let mut adopt = None;
+            if let Some(Sink::V4l2(d)) = self.sink.as_mut() {
+                let was = d.live();
+                if !was {
+                    d.attach(want, now, RETRY_EVERY);
+                    if !d.live() {
+                        self.stats.unconsumed += 1;
+                        self.stats.last_ms = t.elapsed().as_secs_f32() * 1000.0;
+                        return;
+                    }
+                    self.stats.attaches += 1;
+                }
+                adopt = d.format().map(|n| (n.width, n.height));
+            }
+            if let Some(geo) = adopt {
+                if self.out != Some(geo) {
+                    // The driver adjusted the format (or this is the first
+                    // attach). What it said is what the frames must be — asking
+                    // for 640x480 and writing 640x480 when it answered
+                    // something else is how a camera shows torn diagonal mush.
+                    self.out = Some(geo);
+                    self.spec.size = Some(geo);
+                    self.xmap.clear();
+                    self.ymap.clear();
+                    self.wire_valid = false;
+                }
+            }
+        }
         if !self.wire_valid {
+            let unknown_geometry = self.out.is_none();
             self.convert();
             self.wire_valid = true;
+            // The first frame fixes the geometry for the life of the stream, so
+            // that is the moment the descriptor becomes exact. One extra write.
+            if unknown_geometry {
+                self.write_descriptor();
+            }
         }
+        let mut wrote = true;
         let ok = match self.sink.as_mut() {
             Some(Sink::Stdout(o)) => {
                 let mut lock = o.lock();
@@ -758,20 +1495,70 @@ impl VideoOut {
                     .is_ok()
             }
             Some(Sink::File(f)) => f.write_all(&self.wire).is_ok(),
+            Some(Sink::Fifo(p)) => {
+                match p.push(&self.wire, now) {
+                    Push::Wrote => {}
+                    Push::NoConsumer => {
+                        self.stats.unconsumed += 1;
+                        wrote = false;
+                    }
+                    Push::Stalled => {
+                        self.stats.stalled += 1;
+                        wrote = false;
+                    }
+                    Push::Disconnected => {
+                        self.stats.detaches += 1;
+                        wrote = false;
+                    }
+                }
+                // A FIFO is never switched off by any of these: every one of
+                // them is recoverable, and the next consumer must be picked up.
+                true
+            }
+            #[cfg(all(target_os = "linux", feature = "libc"))]
+            Some(Sink::V4l2(d)) => {
+                match d.put(&self.wire) {
+                    v4l2::sink::Put::Wrote => {}
+                    // The driver's buffers are full: whatever is watching the
+                    // camera is not draining them. Drop the frame.
+                    v4l2::sink::Put::Busy => {
+                        self.stats.stalled += 1;
+                        wrote = false;
+                    }
+                    v4l2::sink::Put::Lost => {
+                        self.stats.detaches += 1;
+                        wrote = false;
+                    }
+                    v4l2::sink::Put::NoDevice => {
+                        self.stats.unconsumed += 1;
+                        wrote = false;
+                    }
+                    // Our frame does not match what the driver negotiated. Not
+                    // a device condition — a bug on our side, so it is counted
+                    // as a write error rather than swallowed as "slow".
+                    v4l2::sink::Put::WrongSize => {
+                        self.stats.write_errors += 1;
+                        wrote = false;
+                    }
+                }
+                // Never switched off: a device that goes away can come back,
+                // exactly like a FIFO's consumer.
+                true
+            }
             Some(Sink::Memory(v)) => {
                 v.extend_from_slice(&self.wire);
                 true
             }
             None => true,
         };
-        if ok {
-            self.stats.frames += 1;
-            self.stats.bytes += self.wire.len() as u64;
-        } else {
+        if !ok {
             // A closed pipe (the consumer quit) must not take the game down and
             // must not cost a syscall per frame for the rest of the run.
             self.stats.write_errors += 1;
             self.sink = None;
+        } else if wrote {
+            self.stats.frames += 1;
+            self.stats.bytes += self.wire.len() as u64;
         }
         self.stats.last_ms = t.elapsed().as_secs_f32() * 1000.0;
     }
@@ -822,6 +1609,22 @@ impl VideoOut {
         }
     }
 
+    /// Publish the sidecar descriptor beside a FIFO destination, so the
+    /// consumer is configured from the stream rather than from a second copy of
+    /// the same numbers. See [`descriptor`].
+    ///
+    /// Best-effort by design: an unwritable directory costs the convenience,
+    /// never the stream. Nothing is written beside a *recording* — a file
+    /// already carries its geometry and format in its name
+    /// ([`recording_name`]).
+    fn write_descriptor(&self) {
+        let Some(Sink::Fifo(f)) = self.sink.as_ref() else {
+            return;
+        };
+        let _ =
+            std::fs::write(descriptor_path(&f.path), descriptor(&self.spec, self.out));
+    }
+
     /// The exact command that consumes this stream. Printed at startup so the
     /// answer to "how do I read this?" ships with the stream itself.
     pub fn ffmpeg_hint(&self) -> String {
@@ -829,7 +1632,19 @@ impl VideoOut {
     }
 
     /// One line describing the live stream, for the frontend to show.
+    ///
+    /// A camera that has not attached must not be described as pickable — the
+    /// whole failure this work exists to remove is a banner that reads like
+    /// everything is fine while nothing is being delivered.
     pub fn describe(&self) -> String {
+        if self.is_camera() && self.state() != StreamState::Live {
+            return match self.device_error() {
+                Some(why) => format!("video: camera not available — {why}"),
+                None => {
+                    format!("video: camera {} not available yet", self.spec.dest.label())
+                }
+            };
+        }
         self.spec.describe(self.out)
     }
 
@@ -841,6 +1656,9 @@ impl VideoOut {
             Some(Sink::File(f)) => {
                 let _ = f.flush();
             }
+            // A FIFO is written unbuffered and non-blocking; there is nothing
+            // held back here, and blocking to push a tail out would reintroduce
+            // exactly the stall this sink exists to avoid.
             _ => {}
         }
     }
@@ -1000,26 +1818,73 @@ fn chroma_r(r: i32, g: i32, b: i32) -> u8 {
 // v4l2loopback — detection and guidance, not an implementation
 // ---------------------------------------------------------------------------
 
-/// Virtual-camera support: **detect and explain**, deliberately not implement.
+/// Virtual-camera support: **the emulator writes the camera itself**.
 ///
-/// Feeding a `v4l2loopback` node from inside the emulator means negotiating a
-/// format over `VIDIOC_S_FMT` before the first `write()`. That is not hard, but
-/// it is *untestable without the kernel module installed*, and the module needs
-/// root to install — so shipping hand-written `ioctl` bindings that no test has
-/// ever exercised would be worse than shipping nothing.
+/// Run the game, press `v`, pick "Game Boy" in Chrome / Meet / Discord / OBS.
+/// No bridge, no `ffmpeg`, no FIFO, no rule about which order to start things
+/// in. That is the whole point, and everything below exists to make the one
+/// keypress enough.
 ///
-/// The supported route is one extra process, and it is strictly more capable
-/// (it gets scaling, format conversion and MJPEG for free):
+/// # What a V4L2 output node actually needs
 ///
-/// ```text
-/// ffmpeg -f rawvideo -pix_fmt yuyv422 -s 640x480 -framerate 59.7275 -i /tmp/gb.raw \
-///        -f v4l2 -pix_fmt yuyv422 /dev/video10
-/// ```
+/// Writing raw bytes at `/dev/videoN` and getting no error means **nothing** —
+/// an un-negotiated write is accepted and produces nothing a consumer can
+/// read. The device has to be told what the bytes are first:
 ///
-/// `tools/virtual-camera.sh` does exactly this, including the detection below.
+/// 1. `VIDIOC_QUERYCAP`, to check the node really is a video *output*.
+/// 2. `VIDIOC_S_FMT` with `V4L2_BUF_TYPE_VIDEO_OUTPUT` and
+///    `V4L2_PIX_FMT_YUYV` at the wanted size. **The driver may change any of
+///    it** and what comes back is authoritative — in particular
+///    `bytesperline` (the row stride, which is *not* necessarily `width * 2`)
+///    and `sizeimage` (how many bytes one `write` must carry).
+/// 3. `write(2)` one frame at a time, in exactly that layout.
+///
+/// # Why raw `ioctl`s and no new dependency
+///
+/// The maintained V4L2 crates (`v4l`, `v4l2-sys-mit`) are permissively licensed
+/// but link **libv4l2**, a *system* library. This repo has been bitten by
+/// exactly that before — `cpal` pulling in ALSA made a fresh clone fail to
+/// build until audio was feature-gated (see `CLAUDE.md`) — and the whole point
+/// here is that a new user has *fewer* setup steps, not another `-devel`
+/// package. So this speaks the kernel UAPI directly through the `libc`
+/// dependency that is already here, the same way [`crate::shmframe`] speaks
+/// POSIX shared memory.
+///
+/// Hand-writing UAPI structs is the risk that buys, and it is bounded by making
+/// it a **compile error** to get one wrong: the `ioctl` request numbers encode
+/// `sizeof` the struct they carry, so [`sink::VIDIOC_S_FMT`] is computed from
+/// our own definition and then `const`-asserted against the value the kernel
+/// headers publish. A layout mistake cannot reach a running program.
+///
+/// # Naming the camera after the game — what is actually possible
+///
+/// **It cannot be done from the emulator, and this is settled, not assumed.**
+/// A v4l2loopback device's label is the `card_label` module parameter fixed
+/// when the device is *created*; `/sys/class/video4linux/videoN/name` is
+/// `-r--r--r--` and root-owned (checked on a live device), `modinfo` lists no
+/// other route, and upstream's `v4l2loopback-ctl` has `add`/`delete`/`set-fps`/
+/// `set-caps`/`set-timeout-image` and no rename. `VIDIOC_S_FMT` negotiates a
+/// format, never an identity. Changing it means deleting and re-adding the
+/// device as root, which drops every consumer — a one-off setup command we
+/// document ([`install_hint_for`]), never a privilege escalation at `v` time.
+/// So the honest answer is a *static* label chosen once, and
+/// [`check_label`] tells the user when it does not match what they are
+/// playing.
+///
+/// The `ffmpeg` bridge (`tools/virtual-camera.sh`) still exists and still
+/// works — it is the route on a box with no v4l2loopback, and the only route
+/// on macOS/Windows — but it is no longer the *supported* one.
 pub mod v4l2 {
     use super::VideoSpec;
     use std::path::Path;
+
+    /// The size a V4L2 node gets when the user has not asked for one.
+    ///
+    /// Not a guess: 640×480 is the size every webcam consumer accepts, and the
+    /// user should not have to know that a device needs a particular geometry
+    /// to be useful. 160×144 is legal V4L2 and is rejected or letterboxed
+    /// badly by most consumers.
+    pub const DEFAULT_SIZE: (u32, u32) = (640, 480);
 
     /// Is this path a V4L2 node? Writing raw frames at one silently fails
     /// (or errors obscurely) until its format is negotiated, so the caller
@@ -1031,6 +1896,42 @@ pub mod v4l2 {
     /// Is the loopback kernel module loaded?
     pub fn module_loaded() -> bool {
         Path::new("/sys/module/v4l2loopback").exists()
+    }
+
+    /// Is this node a **virtual** (loopback) device rather than a real camera?
+    ///
+    /// This distinction is load-bearing and not cosmetic. With
+    /// `exclusive_caps=1` — the setting every guide recommends, because it is
+    /// what makes browsers accept the device — a loopback node reports
+    /// `V4L2_CAP_VIDEO_CAPTURE` **while another producer is feeding it**, and
+    /// `V4L2_CAP_VIDEO_OUTPUT` only when it is free. So "this is a capture
+    /// device" means two completely different things:
+    ///
+    /// * on a real webcam — permanent, and the user pointed at the wrong node;
+    /// * on a loopback node — *someone else is already streaming to it*, which
+    ///   clears on its own and must be retried, not given up on.
+    ///
+    /// Told apart through sysfs, because a v4l2loopback node is a virtual
+    /// device (`/sys/devices/virtual/…`) and a USB or PCI camera never is.
+    /// No `ioctl`, no root, no extra dependency.
+    pub fn is_loopback(dev: &Path) -> bool {
+        let Some(node) = dev.file_name() else {
+            return false;
+        };
+        let sys = Path::new("/sys/class/video4linux").join(node);
+        match std::fs::canonicalize(&sys) {
+            Ok(real) => real.to_string_lossy().contains("/devices/virtual/"),
+            Err(_) => false,
+        }
+    }
+
+    /// The loopback nodes on this machine, for an error message that names the
+    /// thing the user probably meant.
+    pub fn loopback_devices() -> Vec<(String, String)> {
+        devices()
+            .into_iter()
+            .filter(|(node, _)| is_loopback(Path::new(node)))
+            .collect()
     }
 
     /// V4L2 devices present, as `(node, name)` — read from sysfs, so it needs
@@ -1117,6 +2018,30 @@ pub mod v4l2 {
         install_hint_for("Game Boy")
     }
 
+    /// What to do when there is no virtual camera on this machine at all.
+    ///
+    /// This is now the **only** setup step between a fresh install and a
+    /// working camera, so it has to be something a person can paste, and it has
+    /// to survive a reboot — a device created by hand with `modprobe`
+    /// disappears on the next one, which reads as "it broke again".
+    pub fn install_hint_for_missing() -> String {
+        String::from(
+            "there is no virtual camera on this machine yet. One-off setup, needs \
+             root once:\n  \
+             Fedora:  sudo dnf install akmod-v4l2loopback v4l2loopback-utils\n  \
+             Debian:  sudo apt install v4l2loopback-dkms v4l-utils\n  \
+             Arch:    sudo pacman -S v4l2loopback-dkms v4l-utils\n\
+             then make one that survives a reboot:\n  \
+             echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf\n  \
+             echo 'options v4l2loopback devices=1 video_nr=10 card_label=\"Game Boy\" \
+             exclusive_caps=1' | sudo tee /etc/modprobe.d/v4l2loopback.conf\n  \
+             sudo modprobe -r v4l2loopback; sudo modprobe v4l2loopback\n\
+             then set `video_out = \"/dev/video10\"` and press v. \
+             The camera's NAME is fixed when the device is created (card_label above) \
+             — it cannot be changed while the device exists, so pick one you like.",
+        )
+    }
+
     /// [`install_hint`], with the camera named after the game — because
     /// "POKEMON BLUE" in a camera picker is worth far more than "Dummy video
     /// device (0x0000)", and the label can only be chosen **when the device is
@@ -1139,7 +2064,451 @@ pub mod v4l2 {
         )
     }
 
+    // -----------------------------------------------------------------------
+    // Native output: the kernel UAPI, spoken directly
+    // -----------------------------------------------------------------------
+
+    /// `VIDIOC_QUERYCAP` / `VIDIOC_S_FMT` / `write(2)` against a V4L2 output
+    /// node. Linux + `libc` only; every other target keeps the old refusal.
+    #[cfg(all(target_os = "linux", feature = "libc"))]
+    pub mod sink {
+        use std::ffi::CString;
+        use std::path::{Path, PathBuf};
+        use std::time::Instant;
+
+        /// `_IOC(dir, type, nr, size)` — the kernel's `ioctl` request encoding.
+        ///
+        /// Computed rather than pasted **on purpose**: `size` is `sizeof` the
+        /// struct the call carries, so a request number derived from our own
+        /// definitions and then checked against the published constant proves
+        /// the definitions match the kernel's. That is the whole safety net for
+        /// hand-written UAPI structs, and it is a compile-time one.
+        const fn ioc(dir: u32, ty: u32, nr: u32, size: usize) -> libc::c_ulong {
+            ((dir << 30) | ((size as u32) << 16) | (ty << 8) | nr) as libc::c_ulong
+        }
+        const READ: u32 = 2;
+        const WRITE: u32 = 1;
+        const V: u32 = b'V' as u32;
+
+        /// `struct v4l2_capability` (linux/videodev2.h).
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        pub struct Capability {
+            pub driver: [u8; 16],
+            pub card: [u8; 32],
+            pub bus_info: [u8; 32],
+            pub version: u32,
+            pub capabilities: u32,
+            pub device_caps: u32,
+            pub reserved: [u32; 3],
+        }
+
+        /// `struct v4l2_pix_format`.
+        #[repr(C)]
+        #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+        pub struct PixFormat {
+            pub width: u32,
+            pub height: u32,
+            pub pixelformat: u32,
+            pub field: u32,
+            pub bytesperline: u32,
+            pub sizeimage: u32,
+            pub colorspace: u32,
+            pub private: u32,
+            pub flags: u32,
+            /// `ycbcr_enc` / `hsv_enc`, a union in the header.
+            pub enc: u32,
+            pub quantization: u32,
+            pub xfer_func: u32,
+        }
+
+        /// `struct v4l2_format`. The payload is a 200-byte union aligned to 8,
+        /// of which `pix` is the first member.
+        #[repr(C, align(8))]
+        #[derive(Clone, Copy)]
+        pub struct Format {
+            pub kind: u32,
+            _pad: u32,
+            pub pix: PixFormat,
+            _rest: [u8; 200 - core::mem::size_of::<PixFormat>()],
+        }
+
+        pub const VIDIOC_QUERYCAP: libc::c_ulong =
+            ioc(READ, V, 0, core::mem::size_of::<Capability>());
+        pub const VIDIOC_S_FMT: libc::c_ulong =
+            ioc(READ | WRITE, V, 5, core::mem::size_of::<Format>());
+
+        // If any struct above is laid out differently from the kernel's, these
+        // request numbers change and the build stops here — long before a wrong
+        // `ioctl` can be issued against a real device.
+        const _: () = assert!(core::mem::size_of::<Capability>() == 104);
+        const _: () = assert!(core::mem::size_of::<PixFormat>() == 48);
+        const _: () = assert!(core::mem::size_of::<Format>() == 208);
+        const _: () = assert!(VIDIOC_QUERYCAP == 0x8068_5600);
+        const _: () = assert!(VIDIOC_S_FMT == 0xc0d0_5605);
+
+        pub const BUF_TYPE_VIDEO_OUTPUT: u32 = 2;
+        pub const CAP_VIDEO_OUTPUT: u32 = 0x0000_0002;
+        pub const CAP_DEVICE_CAPS: u32 = 0x8000_0000;
+        pub const FIELD_NONE: u32 = 1;
+        /// BT.601, which is what [`super::super::rgba_to_yuyv422`] emits.
+        pub const COLORSPACE_SMPTE170M: u32 = 1;
+        /// `V4L2_PIX_FMT_YUYV`, fourcc `'Y' 'U' 'Y' 'V'`.
+        pub const PIX_FMT_YUYV: u32 = fourcc(b"YUYV");
+
+        pub const fn fourcc(c: &[u8; 4]) -> u32 {
+            (c[0] as u32)
+                | ((c[1] as u32) << 8)
+                | ((c[2] as u32) << 16)
+                | ((c[3] as u32) << 24)
+        }
+
+        /// What the driver agreed to. Authoritative — the numbers we *asked*
+        /// for are not what the frames must be written as.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub struct Negotiated {
+            pub width: u32,
+            pub height: u32,
+            /// Row stride in bytes. **Not** necessarily `width * 2`.
+            pub bytesperline: u32,
+            /// Exact byte count of one `write`.
+            pub sizeimage: u32,
+        }
+
+        impl Negotiated {
+            /// Bytes of real pixel data per row, before any stride padding.
+            pub fn row_bytes(&self) -> usize {
+                self.width as usize * 2
+            }
+        }
+
+        /// An owned file descriptor. Closed on drop — which is fine here,
+        /// because this is a resource with no persistence semantics, unlike the
+        /// battery saves and shm objects `Drop` must not be trusted with.
+        struct Fd(libc::c_int);
+
+        impl Drop for Fd {
+            fn drop(&mut self) {
+                unsafe { libc::close(self.0) };
+            }
+        }
+
+        /// Why a device could not be used, in words a user can act on.
+        pub enum OpenError {
+            /// No such node. Almost always "v4l2loopback is not installed".
+            Missing(String),
+            /// It exists but is not usable right now (busy, permissions).
+            Unavailable(String),
+            /// It exists and is not an output device (a real webcam).
+            NotAnOutput(String),
+        }
+
+        impl OpenError {
+            pub fn message(&self) -> &str {
+                match self {
+                    OpenError::Missing(s)
+                    | OpenError::Unavailable(s)
+                    | OpenError::NotAnOutput(s) => s,
+                }
+            }
+            /// Is this worth retrying *soon*? A busy device frees up in
+            /// seconds; a missing one waits for a `modprobe`, so it is retried
+            /// far more slowly rather than not at all.
+            pub fn transient(&self) -> bool {
+                matches!(self, OpenError::Unavailable(_))
+            }
+
+            /// Can this ever clear without the user changing the config?
+            ///
+            /// A real webcam will never become writable however long we wait,
+            /// so promising to "keep retrying" would be a lie.
+            pub fn recoverable(&self) -> bool {
+                !matches!(self, OpenError::NotAnOutput(_))
+            }
+        }
+
+        /// Open `path` as a video output and negotiate `w`×`h` YUYV.
+        ///
+        /// Never blocks: the node is opened `O_NONBLOCK`, and the two `ioctl`s
+        /// are bounded driver calls.
+        fn negotiate(path: &Path, w: u32, h: u32) -> Result<(Fd, Negotiated), OpenError> {
+            let c = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| {
+                OpenError::Missing(format!("{}: not a path", path.display()))
+            })?;
+            let fd = unsafe { libc::open(c.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK) };
+            if fd < 0 {
+                let e = std::io::Error::last_os_error();
+                return Err(match e.raw_os_error() {
+                    Some(libc::ENOENT) | Some(libc::ENODEV) => {
+                        OpenError::Missing(format!("{} does not exist", path.display()))
+                    }
+                    _ => OpenError::Unavailable(format!("{}: {e}", path.display())),
+                });
+            }
+            let fd = Fd(fd);
+
+            // 1. Is it an output at all? A real webcam is a capture device and
+            //    writing at it can only ever fail; say which it is rather than
+            //    letting S_FMT return a bare EINVAL.
+            let mut cap: Capability = unsafe { core::mem::zeroed() };
+            if unsafe { libc::ioctl(fd.0, VIDIOC_QUERYCAP, &mut cap) } < 0 {
+                let e = std::io::Error::last_os_error();
+                return Err(OpenError::NotAnOutput(format!(
+                    "{} is not a V4L2 device ({e})",
+                    path.display()
+                )));
+            }
+            let caps = if cap.capabilities & CAP_DEVICE_CAPS != 0 {
+                cap.device_caps
+            } else {
+                cap.capabilities
+            };
+            if caps & CAP_VIDEO_OUTPUT == 0 {
+                // A loopback node reports CAPTURE precisely *because* something
+                // else is already feeding it (`exclusive_caps=1`). That is a
+                // transient condition, not the wrong device — see
+                // [`super::is_loopback`].
+                return Err(if super::is_loopback(path) {
+                    OpenError::Unavailable(format!(
+                        "{} (\"{}\") is already being fed by another program — \
+                         a camera has one producer at a time",
+                        path.display(),
+                        cstr(&cap.card),
+                    ))
+                } else {
+                    OpenError::NotAnOutput(format!(
+                        "{} is \"{}\" — a real camera, which can only be read from. \
+                         Point video_out at a v4l2loopback node instead{}",
+                        path.display(),
+                        cstr(&cap.card),
+                        match super::loopback_devices().first() {
+                            Some((n, l)) => format!(" (this machine has {n}, \"{l}\")"),
+                            None => String::new(),
+                        },
+                    ))
+                });
+            }
+
+            // 2. Negotiate. What comes back is what the frames must be.
+            let mut fmt: Format = unsafe { core::mem::zeroed() };
+            fmt.kind = BUF_TYPE_VIDEO_OUTPUT;
+            fmt.pix = PixFormat {
+                width: w,
+                height: h,
+                pixelformat: PIX_FMT_YUYV,
+                field: FIELD_NONE,
+                colorspace: COLORSPACE_SMPTE170M,
+                // Leave stride and size at 0: this is the driver's to fill in,
+                // and passing a guess is how a wrong stride gets accepted.
+                ..PixFormat::default()
+            };
+            if unsafe { libc::ioctl(fd.0, VIDIOC_S_FMT, &mut fmt) } < 0 {
+                let e = std::io::Error::last_os_error();
+                return Err(OpenError::Unavailable(format!(
+                    "{}: the driver would not accept {w}x{h} YUYV ({e})",
+                    path.display()
+                )));
+            }
+            if fmt.pix.pixelformat != PIX_FMT_YUYV {
+                return Err(OpenError::Unavailable(format!(
+                    "{} answered with pixel format {} instead of YUYV",
+                    path.display(),
+                    fourcc_name(fmt.pix.pixelformat),
+                )));
+            }
+            let mut n = Negotiated {
+                width: fmt.pix.width,
+                height: fmt.pix.height,
+                bytesperline: fmt.pix.bytesperline,
+                sizeimage: fmt.pix.sizeimage,
+            };
+            // A driver is allowed to leave these at 0; fall back to the packed
+            // layout rather than writing a zero-length frame forever.
+            if n.bytesperline == 0 {
+                n.bytesperline = n.width * 2;
+            }
+            if n.sizeimage == 0 {
+                n.sizeimage = n.bytesperline * n.height;
+            }
+            Ok((fd, n))
+        }
+
+        /// A NUL-padded fixed-size C string as a `String`.
+        fn cstr(b: &[u8]) -> String {
+            let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+            String::from_utf8_lossy(&b[..end]).into_owned()
+        }
+
+        /// A fourcc back as its four characters, for an error message.
+        pub fn fourcc_name(v: u32) -> String {
+            (0..4)
+                .map(|i| ((v >> (i * 8)) & 0xFF) as u8 as char)
+                .collect()
+        }
+
+        /// The camera, from the emulator's side.
+        ///
+        /// Holds the same three promises as every other sink here: never blocks
+        /// startup, survives the device coming and going, and never turns a
+        /// consumer's speed into frame time.
+        pub struct V4l2Sink {
+            path: PathBuf,
+            fd: Option<Fd>,
+            format: Option<Negotiated>,
+            retry_at: Option<Instant>,
+            /// Last reason the device could not be opened, for the status row.
+            pub last_error: Option<String>,
+            /// …and whether that reason can clear on its own. A busy device
+            /// will; a real webcam will not, and telling the user we are
+            /// "retrying" something that can never succeed is noise.
+            pub last_error_transient: bool,
+            /// Scratch: the frame re-laid-out at the negotiated stride. Only
+            /// used when `bytesperline != width * 2`.
+            strided: Vec<u8>,
+        }
+
+        /// What one attempt to put a frame on the device achieved.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Put {
+            Wrote,
+            /// Not attached; nothing was lost.
+            NoDevice,
+            /// The driver would not take it right now — frame dropped.
+            Busy,
+            /// The device went away.
+            Lost,
+            /// Our frame is not the size the driver negotiated. A bug, not a
+            /// condition — reported rather than written as garbage.
+            WrongSize,
+        }
+
+        impl V4l2Sink {
+            pub fn new(path: PathBuf) -> V4l2Sink {
+                V4l2Sink {
+                    path,
+                    fd: None,
+                    format: None,
+                    retry_at: None,
+                    last_error: None,
+                    last_error_transient: true,
+                    strided: Vec::new(),
+                }
+            }
+
+            pub fn live(&self) -> bool {
+                self.fd.is_some()
+            }
+
+            pub fn format(&self) -> Option<Negotiated> {
+                self.format
+            }
+
+            pub fn path(&self) -> &Path {
+                &self.path
+            }
+
+            /// Attempt to (re)attach, at most once per `every`.
+            ///
+            /// `want` is the size asked for; what comes back may differ and is
+            /// what the caller must then produce.
+            pub fn attach(
+                &mut self,
+                want: (u32, u32),
+                now: Instant,
+                every: std::time::Duration,
+            ) {
+                if self.fd.is_some() {
+                    return;
+                }
+                if let Some(t) = self.retry_at {
+                    if now < t {
+                        return;
+                    }
+                }
+                match negotiate(&self.path, want.0, want.1) {
+                    Ok((fd, n)) => {
+                        self.fd = Some(fd);
+                        self.format = Some(n);
+                        self.last_error = None;
+                        self.last_error_transient = true;
+                        self.retry_at = None;
+                    }
+                    Err(e) => {
+                        // A missing device will not appear four times a second;
+                        // a busy one will free up.
+                        let back = if e.transient() { every } else { every * 20 };
+                        self.last_error = Some(e.message().to_string());
+                        self.last_error_transient = e.recoverable();
+                        self.retry_at = Some(now + back);
+                    }
+                }
+            }
+
+            pub fn detach(&mut self) {
+                self.fd = None;
+                self.format = None;
+                self.retry_at = None;
+            }
+
+            /// Write one frame of packed YUYV (`width * 2` bytes per row, no
+            /// padding). Re-strides it if the driver asked for padding.
+            pub fn put(&mut self, packed: &[u8]) -> Put {
+                let (Some(fd), Some(n)) = (self.fd.as_ref(), self.format) else {
+                    return Put::NoDevice;
+                };
+                let row = n.row_bytes();
+                if packed.len() != row * n.height as usize {
+                    return Put::WrongSize;
+                }
+                let buf: &[u8] = if n.bytesperline as usize == row
+                    && n.sizeimage as usize == packed.len()
+                {
+                    packed
+                } else {
+                    // The driver wants padded rows, or a longer buffer than the
+                    // pixels occupy. Both are legal and both corrupt the picture
+                    // if ignored — this is why `bytesperline` is read back at
+                    // all rather than assumed to be `width * 2`.
+                    let stride = n.bytesperline as usize;
+                    let total = (n.sizeimage as usize).max(stride * n.height as usize);
+                    if self.strided.len() != total {
+                        self.strided.resize(total, 0);
+                    }
+                    for y in 0..n.height as usize {
+                        let s = y * row;
+                        let d = y * stride;
+                        self.strided[d..d + row].copy_from_slice(&packed[s..s + row]);
+                    }
+                    &self.strided
+                };
+                let wrote = unsafe {
+                    libc::write(fd.0, buf.as_ptr() as *const libc::c_void, buf.len())
+                };
+                if wrote >= 0 {
+                    return Put::Wrote;
+                }
+                let e = std::io::Error::last_os_error();
+                match e.raw_os_error() {
+                    // The driver's buffers are full: the consumer is not
+                    // keeping up. Drop the frame — never wait for it.
+                    Some(libc::EAGAIN) | Some(libc::EBUSY) => Put::Busy,
+                    Some(libc::EINTR) => Put::Busy,
+                    _ => {
+                        self.detach();
+                        Put::Lost
+                    }
+                }
+            }
+        }
+    }
+
+    /// Native V4L2 output is a Linux-with-`libc` capability.
+    pub const NATIVE_OUTPUT: bool = cfg!(all(target_os = "linux", feature = "libc"));
+
     /// Why we will not write straight at `/dev/videoN`, and what to do instead.
+    ///
+    /// Only reached on a build with no native V4L2 output (not Linux, or no
+    /// `libc` feature). On Linux the device is driven directly — see [`sink`].
     pub fn direct_write_refusal(p: &Path, spec: &VideoSpec) -> String {
         let (w, h) = spec.size.unwrap_or((super::SRC_W, super::SRC_H));
         let fifo = "/tmp/gb.raw";
@@ -1182,6 +2551,7 @@ mod tests {
             source: Source::Native,
             size,
             pace,
+            title: None,
         }
     }
 
@@ -1528,17 +2898,73 @@ mod tests {
         assert_eq!(v.stats().write_errors, 1, "and must not retry every frame");
     }
 
+    /// A V4L2 node that is not there — the common case on a machine with no
+    /// v4l2loopback — must arm and wait, never block and never fail the run.
+    /// And the message has to be the one remaining setup step, actionable.
     #[test]
-    fn a_v4l2_node_is_refused_with_the_ffmpeg_recipe() {
-        let (v, err) = VideoOut::open(VideoSpec {
-            dest: Destination::Path(PathBuf::from("/dev/video10")),
+    #[cfg(all(target_os = "linux", feature = "libc"))]
+    fn a_missing_camera_does_not_stop_the_emulator_and_says_what_to_install() {
+        // A number no machine has, so this is deterministic everywhere.
+        let t = Instant::now();
+        let (v, note) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(PathBuf::from("/dev/video233")),
             ..spec(PixelFormat::Yuyv422, Pace::Realtime, Some((640, 480)))
         });
-        assert!(!v.is_enabled());
-        let err = err.expect("must explain rather than fail obscurely");
-        assert!(err.contains("-f v4l2"), "{err}");
-        assert!(err.contains("mkfifo"), "{err}");
-        assert!(err.contains("640x480"), "{err}");
+        assert!(
+            t.elapsed() < Duration::from_secs(1),
+            "opening a missing camera took {:?}",
+            t.elapsed()
+        );
+        assert!(v.is_enabled(), "armed: the device may yet appear");
+        assert_eq!(v.state(), StreamState::Waiting);
+        assert!(v.is_camera());
+        assert_eq!(v.intent(), Intent::Stream);
+        let note = note.expect("must say why, not fail silently");
+        if !v4l2::module_loaded() {
+            assert!(note.contains("v4l2loopback"), "{note}");
+            assert!(note.contains("modprobe"), "{note}");
+        }
+    }
+
+    /// **Detection over configuration.** A camera has one shape that works;
+    /// the user must not have to know it, and a default that cannot work must
+    /// not be kept silently.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "libc"))]
+    fn a_camera_gets_yuyv_and_a_size_consumers_accept_without_being_asked() {
+        let (v, note) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(PathBuf::from("/dev/video233")),
+            // Deliberately the defaults that cannot drive a camera.
+            ..spec(PixelFormat::Rgba, Pace::Realtime, None)
+        });
+        assert_eq!(v.spec().format, PixelFormat::Yuyv422, "forced to YUYV");
+        assert_eq!(v.spec().size, Some(v4l2::DEFAULT_SIZE));
+        assert_eq!(v4l2::DEFAULT_SIZE, (640, 480));
+        // The default format is silently corrected — nobody typed it. A format
+        // the user *did* choose is not silently corrected.
+        let quiet = note.unwrap_or_default();
+        assert!(!quiet.contains("does not apply"), "{quiet}");
+        let (v, note) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(PathBuf::from("/dev/video233")),
+            ..spec(PixelFormat::Rgb24, Pace::Realtime, None)
+        });
+        assert_eq!(v.spec().format, PixelFormat::Yuyv422);
+        let note = note.unwrap_or_default();
+        assert!(note.contains("does not apply"), "{note}");
+        assert!(note.contains("rgb24"), "{note}");
+    }
+
+    /// The struct layouts are hand-written from the kernel UAPI, so the request
+    /// numbers they generate are the proof they are right. (Also `const`-
+    /// asserted at compile time — this fails the *test* run too, so a reader
+    /// grepping for the numbers finds them.)
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "libc"))]
+    fn the_v4l2_ioctl_numbers_match_the_kernel_headers() {
+        assert_eq!(v4l2::sink::VIDIOC_QUERYCAP, 0x8068_5600);
+        assert_eq!(v4l2::sink::VIDIOC_S_FMT, 0xc0d0_5605);
+        assert_eq!(v4l2::sink::PIX_FMT_YUYV, 0x5659_5559);
+        assert_eq!(v4l2::sink::fourcc_name(v4l2::sink::PIX_FMT_YUYV), "YUYV");
     }
 
     #[test]
@@ -1555,6 +2981,307 @@ mod tests {
         assert!(hint.contains("-framerate 59.7275"), "{hint}");
         // The claim in the hint is the truth about the bytes.
         assert_eq!(v.captured().len(), 640 * 480 * 2);
+    }
+
+    // ---- FIFO destinations -------------------------------------------------
+    //
+    // The defect these pin: `video_out` pointing at a FIFO with no reader made
+    // the emulator hang in `open(2)` before any UI existed, so the only thing
+    // the user could do was kill it. A media sink must never be able to stop
+    // the emulator from starting.
+
+    /// A FIFO in a private directory, plus its cleanup. `None` on a platform
+    /// (or a build) that cannot make one, so the whole group skips rather than
+    /// failing for the wrong reason.
+    #[cfg(all(unix, feature = "libc"))]
+    fn temp_fifo(tag: &str) -> Option<PathBuf> {
+        use std::ffi::CString;
+        let dir =
+            std::env::temp_dir().join(format!("gbvideo-{}-{tag}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("gb.raw");
+        let _ = std::fs::remove_file(&path);
+        let c = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+        if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
+            return None;
+        }
+        Some(path)
+    }
+
+    #[cfg(all(unix, feature = "libc"))]
+    fn scrub(path: &Path) {
+        if let Some(d) = path.parent() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// Open the reading end without blocking on the writer.
+    #[cfg(all(unix, feature = "libc"))]
+    fn reader(path: &Path) -> File {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .expect("a FIFO always opens for reading")
+    }
+
+    /// **The regression test.** Opening a FIFO that nobody is reading must
+    /// return, promptly, with the stream armed and waiting — not park the
+    /// process in `open(2)` forever.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_fifo_with_no_reader_does_not_block_startup() {
+        let Some(path) = temp_fifo("noreader") else {
+            return;
+        };
+        let t = Instant::now();
+        let (v, note) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            ..spec(PixelFormat::Rgba, Pace::Emulated, None)
+        });
+        let took = t.elapsed();
+        assert!(
+            took < Duration::from_secs(1),
+            "opening an unread FIFO took {took:?} — it must not wait for a reader"
+        );
+        assert_eq!(v.state(), StreamState::Waiting);
+        assert!(v.is_enabled(), "the stream is armed, just not live yet");
+        assert_eq!(v.intent(), Intent::Stream);
+        let note = note.expect("the user must be told it is waiting, not stuck");
+        assert!(note.contains("waiting for a consumer"), "{note}");
+        scrub(&path);
+    }
+
+    /// Frames offered while nobody is reading must also return promptly, and
+    /// must not be counted as delivered.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn frames_offered_to_an_unread_fifo_are_free_and_not_counted() {
+        let Some(path) = temp_fifo("unread") else {
+            return;
+        };
+        let (mut v, _) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            ..spec(PixelFormat::Rgba, Pace::Emulated, None)
+        });
+        let f = solid(160, 144, [1, 2, 3, 255]);
+        let t = Instant::now();
+        for _ in 0..120 {
+            v.frame(&f, 160, 144, Instant::now());
+        }
+        assert!(
+            t.elapsed() < Duration::from_secs(1),
+            "120 frames at an unread FIFO took {:?}",
+            t.elapsed()
+        );
+        let s = v.stats();
+        assert_eq!(s.frames, 0, "nothing was delivered");
+        assert_eq!(s.bytes, 0);
+        assert!(s.unconsumed > 0, "and it is visible that nothing was");
+        assert_eq!(v.state(), StreamState::Waiting);
+        scrub(&path);
+    }
+
+    /// The captain's order of operations: emulator first, bridge second. The
+    /// stream must go live on its own when the consumer turns up.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_consumer_that_arrives_late_is_picked_up() {
+        let Some(path) = temp_fifo("late") else {
+            return;
+        };
+        let (mut v, _) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            ..spec(PixelFormat::Rgba, Pace::Emulated, Some((16, 16)))
+        });
+        let f = solid(16, 16, [9, 8, 7, 255]);
+        v.frame(&f, 16, 16, Instant::now());
+        assert_eq!(v.state(), StreamState::Waiting);
+
+        // ffmpeg starts.
+        let mut r = reader(&path);
+        // The retry is rate-limited, so hand it an instant past the backoff
+        // rather than sleeping.
+        v.frame(&f, 16, 16, Instant::now() + RETRY_EVERY);
+        assert_eq!(v.state(), StreamState::Live, "a late consumer must attach");
+        assert_eq!(v.stats().frames, 1);
+        assert_eq!(v.stats().attaches, 1);
+
+        let mut buf = vec![0u8; 16 * 16 * 4];
+        use std::io::Read as _;
+        assert_eq!(
+            r.read(&mut buf).unwrap(),
+            16 * 16 * 4,
+            "the consumer sees a whole frame"
+        );
+        assert_eq!(&buf[..4], &[9, 8, 7, 255]);
+        scrub(&path);
+    }
+
+    /// And the consumer leaving must cost the stream nothing but its `Live`
+    /// state — no crash, no permanent disable, and the next one is picked up.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_consumer_that_leaves_drops_back_to_waiting_and_can_be_replaced() {
+        let Some(path) = temp_fifo("leave") else {
+            return;
+        };
+        let (mut v, _) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            ..spec(PixelFormat::Rgba, Pace::Emulated, Some((16, 16)))
+        });
+        let f = solid(16, 16, [1, 1, 1, 255]);
+        let mut r = reader(&path);
+        v.frame(&f, 16, 16, Instant::now() + RETRY_EVERY);
+        assert_eq!(v.state(), StreamState::Live);
+
+        // The bridge is killed. Writing at a pipe with no reader raises
+        // SIGPIPE unless it is ignored — if this test dies rather than fails,
+        // `pipe::ignore_sigpipe` stopped working.
+        drop(r);
+        for _ in 0..3 {
+            v.frame(&f, 16, 16, Instant::now());
+        }
+        assert!(v.is_enabled(), "the stream must survive its consumer");
+        assert_eq!(v.state(), StreamState::Waiting);
+        assert_eq!(v.stats().detaches, 1);
+
+        // A new bridge starts.
+        r = reader(&path);
+        v.frame(&f, 16, 16, Instant::now() + RETRY_EVERY * 40);
+        assert_eq!(v.state(), StreamState::Live, "and pick up the next one");
+        assert_eq!(v.stats().attaches, 2);
+        drop(r);
+        scrub(&path);
+    }
+
+    /// A consumer that stops draining fills the pipe buffer. That must cost
+    /// frames, not frame time: the emulator is not allowed to wait for ffmpeg.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_stalled_consumer_costs_frames_never_emulation_time() {
+        let Some(path) = temp_fifo("stall") else {
+            return;
+        };
+        let (mut v, _) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            ..spec(PixelFormat::Rgba, Pace::Emulated, Some((320, 288)))
+        });
+        // A reader that attaches and then never reads a byte — the pipe buffer
+        // (64 KiB by default) fills after the first frame or two.
+        let r = reader(&path);
+        let f = solid(320, 288, [4, 4, 4, 255]);
+        v.frame(&f, 320, 288, Instant::now() + RETRY_EVERY);
+        assert_eq!(v.state(), StreamState::Live);
+
+        let t = Instant::now();
+        for _ in 0..200 {
+            v.frame(&f, 320, 288, Instant::now());
+        }
+        let took = t.elapsed();
+        assert!(
+            took < Duration::from_millis(500),
+            "200 frames at a stalled consumer took {took:?} — emulation was blocked"
+        );
+        let s = v.stats();
+        assert!(s.stalled > 0, "frames must be dropped: {s:?}");
+        assert!(
+            s.frames < 201,
+            "a stalled consumer cannot have received everything"
+        );
+        // Still live, still armed: a consumer that resumes keeps its stream.
+        assert_eq!(v.state(), StreamState::Live);
+        drop(r);
+        scrub(&path);
+    }
+
+    /// The consumer must never be handed a frame boundary that is not one:
+    /// `rawvideo` is positional, so half of frame N followed by frame N+1
+    /// desynchronises everything after it.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_partial_write_is_finished_before_the_next_frame_starts() {
+        let Some(path) = temp_fifo("align") else {
+            return;
+        };
+        let (mut v, _) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            ..spec(PixelFormat::Rgba, Pace::Emulated, Some((160, 144)))
+        });
+        let bytes = 160 * 144 * 4; // 92 KiB — larger than a 64 KiB pipe buffer
+        let mut r = reader(&path);
+        // Distinct frames, so a desynchronised stream is visible in the data.
+        let a = solid(160, 144, [0xA1, 0xA2, 0xA3, 255]);
+        let b = solid(160, 144, [0xB1, 0xB2, 0xB3, 255]);
+        v.frame(&a, 160, 144, Instant::now() + RETRY_EVERY);
+        // The pipe took part of `a`; offering `b` now must not interleave.
+        v.frame(&b, 160, 144, Instant::now());
+
+        use std::io::Read as _;
+        let mut got = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        for _ in 0..40 {
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+                Err(_) => {}
+            }
+            // Draining lets the writer make progress on the outstanding tail.
+            v.idle(Instant::now());
+            if got.len() >= bytes {
+                break;
+            }
+        }
+        assert!(got.len() >= bytes, "read {} of {bytes}", got.len());
+        assert!(
+            got[..bytes]
+                .chunks_exact(4)
+                .all(|p| p == [0xA1, 0xA2, 0xA3, 255]),
+            "the first frame must arrive whole and unmixed"
+        );
+        drop(r);
+        scrub(&path);
+    }
+
+    /// The sidecar is what stops the consumer being configured from a second,
+    /// drifting copy of the same numbers.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_fifo_publishes_a_descriptor_the_bridge_can_read() {
+        let Some(path) = temp_fifo("descriptor") else {
+            return;
+        };
+        let (_v, _) = VideoOut::open(VideoSpec {
+            dest: Destination::Path(path.clone()),
+            title: Some("POKEMON BLUE\0\0\0".to_string()),
+            ..spec(PixelFormat::Yuyv422, Pace::Realtime, Some((640, 480)))
+        });
+        let text = std::fs::read_to_string(descriptor_path(&path))
+            .expect("a FIFO stream must publish its shape");
+        for line in [
+            "width=640",
+            "height=480",
+            "format=yuyv422",
+            "title=POKEMON BLUE",
+        ] {
+            assert!(text.lines().any(|l| l == line), "missing {line:?}:\n{text}");
+        }
+        assert!(text.contains(&format!("fps={DMG_HZ}")), "{text}");
+        scrub(&path);
+    }
+
+    #[test]
+    fn a_recording_and_a_live_stream_are_different_intents() {
+        // Derived from what the destination is, never guessed.
+        assert_eq!(Destination::Stdout.intent(), Intent::Stream);
+        assert_eq!(
+            Destination::Path(PathBuf::from("/tmp/does-not-exist.raw")).intent(),
+            Intent::Record
+        );
+        assert_eq!(Intent::Stream.word(), "LIVE");
+        assert_eq!(Intent::Record.word(), "REC");
+        assert_ne!(Intent::Stream.word(), Intent::Record.word());
     }
 
     #[test]

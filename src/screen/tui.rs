@@ -260,6 +260,19 @@ fn safe_title(title: &str) -> String {
     video::file_safe_title(title)
 }
 
+/// The last component of a path, for a status row that is ~18 columns wide.
+///
+/// A truncated *head* (`/home/aaron/Videos/game…`) tells the reader nothing;
+/// the leaf is the part that distinguishes `gb.raw` from
+/// `POKEMON_BLUE-…-160x144-rgba.raw`, which is exactly the distinction that was
+/// missed. The full path is always in the `?` overlay's notices.
+fn tail_of(dest: &str) -> String {
+    Path::new(dest)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dest.to_string())
+}
+
 /// `YYYYMMDD-HHMMSS` for right now, UTC — see [`utc_stamp`].
 fn now_stamp() -> String {
     utc_stamp(
@@ -402,9 +415,13 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
 /// notice worth showing the user.
 ///
 /// Called from [`run`] **before** the terminal is put into the alternate
-/// screen, because two things here are visible-side-effect-shaped: opening a
-/// FIFO blocks until a reader attaches, and the `ffmpeg` command that consumes
-/// the stream is the single most useful thing to leave in the scrollback.
+/// screen, so the `ffmpeg` command that consumes the stream — the single most
+/// useful thing to leave in the scrollback — is not swallowed by it.
+///
+/// It is safe to call before the UI exists: a FIFO destination is opened
+/// non-blocking and parks in [`video::StreamState::Waiting`] rather than
+/// stopping the emulator from starting (see [`crate::video`]). It used to hang
+/// here, before any UI, with nothing to do but kill the process.
 ///
 /// Stdout is refused for the same reason telemetry refuses it, only harder:
 /// `ratatui` writes the whole UI to stdout, so a raw frame stream there would
@@ -445,16 +462,6 @@ fn open_video(
                 let (w, h) = up.output_size(160, 144);
                 s.size = Some((w as u32, h as u32));
             }
-            if let video::Destination::Path(p) = &s.dest {
-                if is_fifo(p) {
-                    eprintln!(
-                        "gameboy: video: waiting for a reader on {} — start the \
-                         consumer first, e.g.\n  {}",
-                        p.display(),
-                        s.ffmpeg_hint(None)
-                    );
-                }
-            }
             let (v, err) = VideoOut::open(s);
             if let Some(e) = err {
                 warnings.push(e);
@@ -478,21 +485,6 @@ fn needs_title(dest: &video::Destination) -> bool {
             s.contains("%t") || s.contains("%s") || s.ends_with('/') || p.is_dir()
         }
     }
-}
-
-/// Is this path a named pipe? Opening one for writing blocks until a reader
-/// attaches, which deserves a word of warning rather than a silent hang.
-#[cfg(unix)]
-fn is_fifo(p: &Path) -> bool {
-    use std::os::unix::fs::FileTypeExt;
-    std::fs::metadata(p)
-        .map(|m| m.file_type().is_fifo())
-        .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_fifo(_p: &Path) -> bool {
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1326,27 +1318,58 @@ impl App {
     ///
     /// The captain's rule: *never be unsure whether you are live*. So the
     /// Status panel carries a `Video` row, the toggle raises a toast, and the
-    /// full `ffmpeg` command lands in the `?` overlay's notices.
+    /// full `ffmpeg` command lands in the `?` overlay's notices — and all three
+    /// name the **intent** (`LIVE` for a consumer, `REC` for a file) and the
+    /// destination, because "recording to ~/Videos" and "feeding the camera"
+    /// looked identical before and one of them was silently the wrong one.
     ///
     /// With a `video_out` destination configured this simply arms and disarms
     /// it. With none, it records to a file named after the game in
-    /// [`video_dir`] — that is what "start streaming when I decide to" means
-    /// when no consumer is waiting on a FIFO.
+    /// [`video_dir`] — which is what `V` does explicitly, whatever is
+    /// configured.
     fn toggle_video(&mut self) {
-        if self.video.is_enabled() {
-            let s = self.video.stats();
-            self.video.flush();
-            self.video = VideoOut::disabled();
-            self.video_autostart = false;
-            self.set_toast(format!(
-                "Video stream stopped — {} frames, {:.1} MB",
-                s.frames,
-                s.bytes as f64 / 1_048_576.0
-            ));
+        if self.stop_video() {
             return;
         }
         self.start_video();
         self.video_autostart = self.video.is_enabled();
+    }
+
+    /// Record to a timestamped file in [`video_dir`], regardless of any
+    /// `video_out` destination (`V`).
+    ///
+    /// Deliberately its own key. Recording something to keep and feeding a live
+    /// consumer are different jobs with different destinations and different
+    /// formats, and sharing one key meant a configured camera bridge made
+    /// "record a clip" unreachable — and, before that, made "feed the camera"
+    /// silently write a 160×144 file nobody was reading.
+    fn toggle_recording(&mut self) {
+        if self.stop_video() {
+            return;
+        }
+        let template = self.video_template.take();
+        self.start_video();
+        self.video_template = template;
+        self.video_autostart = false;
+    }
+
+    /// Stop whatever is running. `true` if there was something to stop.
+    fn stop_video(&mut self) -> bool {
+        if !self.video.is_enabled() {
+            return false;
+        }
+        let s = self.video.stats();
+        let what = self.video.intent().word();
+        let dest = self.video.destination();
+        self.video.flush();
+        self.video = VideoOut::disabled();
+        self.video_autostart = false;
+        self.set_toast(format!(
+            "{what} stopped: {} frames, {:.1} MB → {dest}",
+            s.frames,
+            s.bytes as f64 / 1_048_576.0
+        ));
+        true
     }
 
     fn start_video(&mut self) {
@@ -1383,29 +1406,39 @@ impl App {
                 return;
             }
         };
+        // The game's name travels with the stream: it is what names the
+        // sidecar's `title=`, and through that the virtual camera's label.
+        spec.title = Some(title.clone());
         let short = match &spec.dest {
             video::Destination::Stdout => "stdout".to_string(),
             video::Destination::Path(p) => p.display().to_string(),
         };
-        let (v, err) = VideoOut::open(spec);
-        match err {
-            Some(e) => {
-                // The V4L2 refusal is several lines of instructions; the toast
-                // gets the headline and the `?` overlay gets all of it.
-                self.set_toast(format!(
-                    "Video failed: {}",
-                    e.lines().next().unwrap_or("see ? for details")
-                ));
-                self.config_warnings.push(e);
-                return;
-            }
-            None => {
-                self.set_toast(format!("● LIVE → {short}"));
-                self.config_warnings.push(v.describe());
-                self.video = v;
-                self.video_named = named;
-            }
+        let (v, note) = VideoOut::open(spec);
+        // A note is not necessarily a failure any more: an armed FIFO with no
+        // consumer yet returns one *and* a working stream.
+        if !v.is_enabled() {
+            let e = note.unwrap_or_else(|| "video: could not start".to_string());
+            // The V4L2 refusal is several lines of instructions; the toast gets
+            // the headline and the `?` overlay gets all of it.
+            self.set_toast(format!(
+                "Video failed: {}",
+                e.lines().next().unwrap_or("see ? for details")
+            ));
+            self.config_warnings.push(e);
+            return;
         }
+        self.set_toast(match v.state() {
+            video::StreamState::Waiting => {
+                format!("◌ waiting for a consumer on {short}")
+            }
+            _ => format!("● {} → {short}", v.intent().word()),
+        });
+        if let Some(n) = note {
+            self.config_warnings.push(n);
+        }
+        self.config_warnings.push(v.describe());
+        self.video = v;
+        self.video_named = named;
         // The camera the user says they are feeding must name the game — see
         // `video::v4l2::check_label` for why this can only be checked, not
         // fixed.
@@ -1461,12 +1494,30 @@ impl App {
         crate::sound::host_status::snapshot().label()
     }
 
+    /// The Status panel's `Video` row: **off**, **waiting for a consumer**, or
+    /// **live** — and which of the two jobs it is doing.
+    ///
+    /// The three states are not decoration. A FIFO with nothing reading it is
+    /// armed but delivering nothing, and calling that `LIVE` is precisely what
+    /// let a camera bridge look like it was working while the frames went into
+    /// a file somewhere else entirely. The destination is in the row for the
+    /// same reason: `REC` and `LIVE` answer *what*, the path answers *where*.
     fn video_status(&self) -> String {
-        if !self.video.is_enabled() {
-            return "off".to_string();
+        match self.video.state() {
+            video::StreamState::Off => "off".to_string(),
+            video::StreamState::Waiting => {
+                format!("◌ wait {}", tail_of(&self.video.destination()))
+            }
+            video::StreamState::Live => {
+                let s = self.video.stats();
+                format!(
+                    "● {} {:.0}M {}",
+                    self.video.intent().word(),
+                    s.bytes as f64 / 1_048_576.0,
+                    tail_of(&self.video.destination()),
+                )
+            }
         }
-        let s = self.video.stats();
-        format!("● LIVE {:.0}M", s.bytes as f64 / 1_048_576.0)
     }
 
     /// Write the current frame to a PNG and say where it went.
@@ -1867,9 +1918,15 @@ impl App {
                     return;
                 }
                 // Video stream on/off. `v` for video — free, and the one key
-                // nobody has to look up.
+                // nobody has to look up. `V` records a file instead, so the two
+                // intents are separately reachable however `video_out` is set
+                // (see `App::toggle_recording`).
                 KeyCode::Char('v') => {
                     self.toggle_video();
+                    return;
+                }
+                KeyCode::Char('V') => {
+                    self.toggle_recording();
                     return;
                 }
                 // Screenshot: `c` captures what you see (palette + upscaler),
@@ -3017,7 +3074,7 @@ impl App {
             Line::from("[ palette   ? help"),
             Line::from("] upscale   } factor"),
             Line::from("c shot      C raw shot"),
-            Line::from("v video out"),
+            Line::from("v stream    V record"),
         ];
         f.render_widget(
             Paragraph::new(controls)
@@ -3050,7 +3107,13 @@ impl App {
             Line::from("  f         fullscreen  [       palette"),
             Line::from("  ]         upscaler    }       upscale factor"),
             Line::from("  c         screenshot  C       screenshot (raw 160x144)"),
-            Line::from("  v         video stream on/off (see docs/video-out.md)"),
+            Line::from(
+                "  v         stream to `video_out` on/off — a FIFO waits for its \
+                 consumer, it never blocks",
+            ),
+            Line::from(
+                "  V         record a timestamped file instead (see docs/video-out.md)",
+            ),
             Line::from("  ?         this help   q       quit"),
             Line::from(""),
             Line::from("Trainer view (Pokémon Red/Blue)"),
@@ -4502,6 +4565,48 @@ mod tests {
         assert_eq!(app.video.stats().frames, 0);
     }
 
+    /// **The regression test for the whole task.** `video_out` pointing at a
+    /// FIFO with no consumer used to park the process in `open(2)` inside
+    /// [`open_video`] — before the terminal was even touched, so there was no
+    /// UI, no message after the first line, and nothing to do but `kill`.
+    /// A media sink must never be able to stop the emulator from starting.
+    #[test]
+    #[cfg(all(unix, feature = "libc"))]
+    fn a_configured_fifo_with_no_consumer_does_not_stop_the_emulator_starting() {
+        use std::ffi::CString;
+        let dir = std::env::temp_dir()
+            .join(format!("gameboy-vid-test/{}-startup", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let fifo = dir.join("gb.raw");
+        let _ = std::fs::remove_file(&fifo);
+        let c = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
+            return; // cannot make a FIFO here; nothing to prove
+        }
+
+        let mut config = Config::default();
+        config.video.out = Some(fifo.to_string_lossy().into_owned());
+        config.video.format = Some("yuyv".to_string());
+        config.video.size = Some("640x480".to_string());
+
+        let t = Instant::now();
+        let (video, _template, warnings) = open_video(&config, Vec::new());
+        let took = t.elapsed();
+        assert!(
+            took < Duration::from_secs(2),
+            "startup waited {took:?} on an unread FIFO"
+        );
+        assert_eq!(video.state(), video::StreamState::Waiting);
+        assert!(video.is_enabled(), "armed, ready for the bridge to start");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("waiting for a consumer")),
+            "the user must be told what it is waiting for: {warnings:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The stream is driven by **emulated** frames, not displayed ones. This
     /// is the whole reason it is fed from `step_frame`: the terminal drops
     /// display frames on a large window (deliberately — see `crate::termimage`)
@@ -4532,7 +4637,9 @@ mod tests {
     }
 
     /// The `v` key must arm and disarm the stream mid-game, name the file
-    /// after the cartridge, and leave no doubt about whether it is live.
+    /// after the cartridge, and leave no doubt about **which of the two jobs**
+    /// it is doing: with nothing configured it is a *recording*, and it must
+    /// not present itself as a live feed.
     #[test]
     fn the_v_key_toggles_the_stream_and_names_it_after_the_game() {
         let dir = std::env::temp_dir()
@@ -4548,8 +4655,23 @@ mod tests {
         app.toggle_video();
         assert!(app.video.is_enabled(), "toast: {:?}", app.toast);
         let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
-        assert!(toast.starts_with("● LIVE → "), "{toast}");
-        assert!(app.video_status().starts_with("● LIVE"));
+        assert!(toast.starts_with("● REC → "), "{toast}");
+        assert!(
+            app.video_status().starts_with("● REC"),
+            "{}",
+            app.video_status()
+        );
+        assert!(
+            !app.video_status().contains("LIVE"),
+            "a file on disk is not a live feed: {}",
+            app.video_status()
+        );
+        // …and the row says *where*, which is the other half of the confusion.
+        assert!(
+            app.video_status().contains("DMG_ACID2"),
+            "{}",
+            app.video_status()
+        );
 
         for _ in 0..5 {
             app.step_frame();
