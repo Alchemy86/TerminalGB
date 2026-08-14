@@ -22,7 +22,7 @@
 //! |---|---|---|---|
 //! | destination | `GB_VIDEO_OUT` | `video_out` | `-`/`stdout`, a file, a FIFO, `off` |
 //! | pixel format | `GB_VIDEO_FORMAT` | `video_format` | `rgba` (default), `rgb24`, `yuyv` |
-//! | frame size | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `640x480` |
+//! | frame size | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `1280x720` |
 //! | picture source | `GB_VIDEO_SOURCE` | `video_source` | `native` (default), `display` |
 //! | pacing | `GB_VIDEO_PACE` | `video_pace` | `realtime` (default), `emulated` |
 //!
@@ -1132,6 +1132,9 @@ pub struct VideoOut {
     card_dims: (u32, u32),
     /// Is `staged` currently holding the card rather than a game frame?
     card_staged: bool,
+    /// Size of the last *game* frame staged, so the idle card can be drawn into
+    /// the same rectangle the game occupies. See [`VideoOut::card_size`].
+    game_fit: Option<(u32, u32)>,
     /// Next wall-clock instant the idle card is due.
     idle_next: Option<Instant>,
     /// Source size the `xmap`/`ymap` tables were built for. The output size
@@ -1168,6 +1171,7 @@ impl VideoOut {
             card: Vec::new(),
             card_dims: (0, 0),
             card_staged: false,
+            game_fit: None,
             idle_next: None,
             map_src: (0, 0),
             stats: VideoStats::default(),
@@ -1245,7 +1249,15 @@ impl VideoOut {
                     );
                     if let Some(n) = d.format() {
                         spec.size = Some((n.width, n.height));
+                        // Checked against what the *driver* answered, not what
+                        // was asked for: v4l2loopback can be created with fixed
+                        // caps, so the geometry that reaches the consumer is
+                        // not always the one in the config file.
+                        notes.extend(v4l2::aspect_warning(n.width, n.height));
                     } else {
+                        notes.extend(
+                            spec.size.and_then(|(w, h)| v4l2::aspect_warning(w, h)),
+                        );
                         // Not usable *yet*. The emulator still starts, and the
                         // camera is picked up if it appears — but if the module
                         // is simply not installed, that is the one remaining
@@ -1542,19 +1554,29 @@ impl VideoOut {
 
     /// Keep an idling destination alive with the card, at [`IDLE_PERIOD`].
     ///
-    /// Drawn at the frame's own geometry, so the text is crisp at whatever the
-    /// device negotiated rather than a 160×144 card magnified into blocks —
-    /// this is the picture strangers see mid-stream. Converted once and then
-    /// re-written unchanged, so a tick costs one `write(2)`.
+    /// Drawn at native resolution into **the rectangle the game occupies**, not
+    /// edge to edge. A full-bleed card and a letterboxed game are two different
+    /// pictures at two different sizes, and switching between them made the
+    /// feed jump — the frame appeared to grow and shrink every time `v` was
+    /// pressed. Same box, same bars, so only the content changes.
+    ///
+    /// Still drawn at the *fitted* size rather than 160×144 magnified, so the
+    /// text is crisp at whatever the device negotiated — this is the picture
+    /// strangers see mid-stream. Converted once and then re-written unchanged,
+    /// so a tick costs one `write(2)`.
     fn tick_idle_card(&mut self, now: Instant) {
         let due = *self.idle_next.get_or_insert(now);
         if now < due {
             return;
         }
         self.idle_next = Some(now + IDLE_PERIOD);
-        if !self.card_staged {
-            let (w, h) = self.out.or(self.spec.size).unwrap_or((SRC_W, SRC_H));
-            if self.card_dims != (w, h) {
+        let (w, h) = self.card_size();
+        // Re-stage on a size change as well as on a switch from the game: the
+        // driver can adjust the format on a re-attach while the stream is
+        // idling, and a card left at the old size would be letterboxed inside
+        // the new one — bars inside bars.
+        if !self.card_staged || self.card_dims != (w, h) {
+            if self.card_dims != (w, h) || self.card.is_empty() {
                 self.card.clear();
                 self.card.resize(w as usize * h as usize * 4, 0);
                 card::draw_idle(&mut self.card, w, h);
@@ -1569,6 +1591,25 @@ impl VideoOut {
         self.emit(now);
     }
 
+    /// The rectangle the idle card is drawn at: exactly the one the game lands
+    /// in, so the two are interchangeable inside the frame.
+    ///
+    /// `game_fit` is the last game frame's fitted rectangle when there has been
+    /// one; before that, the size a 160×144 frame would fit at. Both go through
+    /// [`fit_size`], so the card can never be the thing that crops.
+    fn card_size(&self) -> (u32, u32) {
+        let Some((ow, oh)) = self.out.or(self.spec.size) else {
+            return (SRC_W, SRC_H);
+        };
+        let (sw, sh) = self.game_fit.unwrap_or((SRC_W, SRC_H));
+        let (tw, th) = fit_size(sw, sh, ow, oh);
+        if tw == 0 || th == 0 {
+            (SRC_W, SRC_H)
+        } else {
+            (tw, th)
+        }
+    }
+
     fn stage(&mut self, rgba: &[u8], w: u32, h: u32) {
         // A game frame after an idle card (or vice versa) is a different
         // picture at a possibly different size; the cached wire bytes and the
@@ -1579,6 +1620,11 @@ impl VideoOut {
         }
         self.staged.copy_from_slice(rgba);
         self.staged_dims = (w, h);
+        // Remembered so the idle card lands in the same rectangle. It is the
+        // *source* size, not the fitted one: the output geometry can still
+        // change under it (the driver adjusts the format on a re-attach), and
+        // `card_size` re-fits from this every time.
+        self.game_fit = Some((w, h));
         self.wire_valid = false;
     }
 
@@ -2120,36 +2166,65 @@ pub mod card {
 /// Integer magnification is preferred whenever it fits: pixel art scaled by a
 /// non-integer factor gets uneven pixel widths, which shimmers. The remainder
 /// becomes black bars (letterbox/pillarbox) — the aspect ratio is never
-/// stretched, because 160×144 is 10:9 and every conventional camera size is
-/// 4:3 or 16:9.
+/// stretched and the picture is never cropped, because 160×144 is 10:9 and
+/// every conventional camera size is 4:3 or 16:9.
 pub fn fit_maps(sw: u32, sh: u32, dw: u32, dh: u32) -> (Vec<u32>, Vec<u32>) {
     let (tw, th) = fit_size(sw, sh, dw, dh);
-    let ox = (dw - tw) / 2;
-    let oy = (dh - th) / 2;
+    let (ox, oy) = fit_origin(tw, th, dw, dh);
     // `u32::MAX` marks a bar pixel (no source).
     let mut xmap = vec![u32::MAX; dw as usize];
     let mut ymap = vec![u32::MAX; dh as usize];
+    // Sampled at the CENTRE of each output pixel, not its left edge:
+    // `(2x+1)*s / 2t` rather than `x*s / t`. For an integer magnification the
+    // two are identical, so the crisp x3/x5 path is untouched — but when the
+    // frame is smaller than the source, edge sampling never reaches the last
+    // source column or row (160 columns into 100 stops at 158), which quietly
+    // shaves the outermost pixels off a picture that is supposed to be whole.
+    let sample = |i: u32, s: u32, t: u32| -> u32 {
+        (((2 * i as u64 + 1) * s as u64) / (2 * t as u64)).min(s as u64 - 1) as u32
+    };
     for x in 0..tw {
-        xmap[(ox + x) as usize] = x * sw / tw;
+        xmap[(ox + x) as usize] = sample(x, sw, tw);
     }
     for y in 0..th {
-        ymap[(oy + y) as usize] = y * sh / th;
+        ymap[(oy + y) as usize] = sample(y, sh, th);
     }
     (xmap, ymap)
 }
 
+/// Where the fitted picture's top-left corner sits inside `dw×dh`.
+///
+/// Pixels are whole, so an odd leftover cannot be split evenly: the extra
+/// column/row goes to the right and bottom bar. That is a half-pixel bias, the
+/// smallest possible, and it is *fixed* — the alternative, rounding up, moves
+/// the picture by a pixel whenever the geometry changes parity, which reads as
+/// a jitter on a live feed.
+fn fit_origin(tw: u32, th: u32, dw: u32, dh: u32) -> (u32, u32) {
+    (dw.saturating_sub(tw) / 2, dh.saturating_sub(th) / 2)
+}
+
 /// The size the picture is drawn at inside `dw×dh`.
+///
+/// Never larger than `dw×dh` in either axis — this function is the whole of the
+/// "fit, never crop" promise, so every branch is bounded by the destination.
 pub fn fit_size(sw: u32, sh: u32, dw: u32, dh: u32) -> (u32, u32) {
+    if sw == 0 || sh == 0 || dw == 0 || dh == 0 {
+        return (0, 0);
+    }
     let k = (dw / sw).min(dh / sh);
     if k >= 1 {
         return (sw * k, sh * k);
     }
     // Smaller than the source: fall back to an aspect-preserving fractional
-    // fit (uneven pixels, but a legible picture beats a cropped one).
-    if dw * sh <= dh * sw {
-        (dw, (dw * sh / sw).max(1))
+    // fit (uneven pixels, but a legible picture beats a cropped one). 64-bit
+    // arithmetic because `dw * sh` overflows a `u32` past about 65k×65k, and a
+    // wrapped comparison here would pick the wrong axis and crop.
+    let (sw64, sh64) = (sw as u64, sh as u64);
+    let (dw64, dh64) = (dw as u64, dh as u64);
+    if dw64 * sh64 <= dh64 * sw64 {
+        (dw, ((dw64 * sh64 / sw64) as u32).clamp(1, dh))
     } else {
-        ((dh * sw / sh).max(1), dh)
+        (((dh64 * sw64 / sh64) as u32).clamp(1, dw), dh)
     }
 }
 
@@ -2327,11 +2402,70 @@ pub mod v4l2 {
 
     /// The size a V4L2 node gets when the user has not asked for one.
     ///
-    /// Not a guess: 640×480 is the size every webcam consumer accepts, and the
-    /// user should not have to know that a device needs a particular geometry
-    /// to be useful. 160×144 is legal V4L2 and is rejected or letterboxed
-    /// badly by most consumers.
-    pub const DEFAULT_SIZE: (u32, u32) = (640, 480);
+    /// **16:9, and that is the whole point.** This used to be 640×480 on the
+    /// reasoning that 4:3 is the size every webcam consumer accepts — which is
+    /// true of *accepting* it and false of *showing* it. A video-call client
+    /// lays its camera out in a 16:9 tile and fills that tile, so a 4:3 camera
+    /// is centre-cropped on the way to the screen: 25 % of the height gone,
+    /// 12.5 % off the top and 12.5 % off the bottom. On a face that is
+    /// unremarkable. On a Game Boy screen it slices the dialogue box in half,
+    /// which is exactly the report this default answers.
+    ///
+    /// Measured rather than assumed, because the mechanism is not the obvious
+    /// one: Chrome hands the page the whole 640×480 frame (`getUserMedia`
+    /// reports `resizeMode: "none"` against a v4l2loopback node — it does *not*
+    /// crop the track), and the loss happens at the tile. Which means nothing
+    /// on our side can detect it, and letterboxing correctly into a 4:3 frame
+    /// does not help either: the consumer crops the bars *and* the picture with
+    /// them. The only fix available to a camera is to be the shape the tile is.
+    ///
+    /// 1280×720 also happens to be the one size where the fit is perfect:
+    /// 144 × 5 = 720, so the game fills the full height at an exact ×5 nearest
+    /// magnification and only the pillarbox is bars. Measured cost of the
+    /// larger frame: 1.83 ms/frame against 0.77 ms at 640×480 (`video_out
+    /// --frames 3000`, YUYV), inside a 16.74 ms budget and paid only while a
+    /// stream is live. See [`aspect_warning`] for what happens when a user
+    /// pins something else.
+    pub const DEFAULT_SIZE: (u32, u32) = (1280, 720);
+
+    /// The aspect every video-call client crops to, as `(w, h)`.
+    pub const TILE_ASPECT: (u32, u32) = (16, 9);
+
+    /// A warning when a camera's configured geometry is not 16:9.
+    ///
+    /// Honouring an explicit `video_size` matters more than being right about
+    /// it — forcing the geometry would be the emulator overruling a value the
+    /// user typed. So the size stands and the consequence is named instead,
+    /// with the number to change it to. Returns `None` for 16:9 (within a
+    /// pixel, so 854×480 and friends pass).
+    ///
+    /// This is the *only* place the crop can be caught: by the time the frame
+    /// is on the wire it is a correctly letterboxed 4:3 picture, and nothing on
+    /// our side can tell that the consumer is about to cut the top and bottom
+    /// off it.
+    pub fn aspect_warning(w: u32, h: u32) -> Option<String> {
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let (aw, ah) = TILE_ASPECT;
+        // 16:9 to within one pixel of width at this height.
+        let want = h as u64 * aw as u64 / ah as u64;
+        if (w as i64 - want as i64).abs() <= 1 {
+            return None;
+        }
+        let (dw, dh) = DEFAULT_SIZE;
+        // First line stands alone: it is what a toast shows, and the callers
+        // that only have one line of room already take `.lines().next()`.
+        Some(format!(
+            "video: {w}x{h} is not 16:9 — a video call will crop the top and \
+             bottom off the game.\n\
+             Meet, Zoom and Discord show a camera in a 16:9 tile and fill it. \
+             The picture is letterboxed correctly into the frame and then the \
+             app crops the frame, so nothing this end can rescue it. Use \
+             `video_size = \"{dw}x{dh}\"` (the game lands at an exact x5) unless \
+             the consumer shows the whole frame, like ffmpeg or OBS."
+        ))
+    }
 
     /// Is this path a V4L2 node? Writing raw frames at one silently fails
     /// (or errors obscurely) until its format is negotiated, so the caller
@@ -3287,6 +3421,222 @@ mod tests {
         assert_eq!(px(2, 1), &[200, 100, 50, 255], "picture is intact");
     }
 
+    /// The bounding box of everything that is not an opaque-black bar, as
+    /// `(x0, y0, x1, y1)` half-open — i.e. where the picture actually landed.
+    fn content_box(f: &[u8], w: u32, h: u32) -> (u32, u32, u32, u32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0u32, 0u32);
+        for y in 0..h {
+            for x in 0..w {
+                let p = ((y * w + x) * 4) as usize;
+                if f[p..p + 3] != [0, 0, 0] {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        (x0, y0, x1, y1)
+    }
+
+    /// The whole game picture must survive every geometry, which is the one
+    /// promise a camera feed makes. Swept rather than spot-checked because the
+    /// reported failure was at a size nobody had tried.
+    #[test]
+    fn fit_never_crops_at_any_size_or_aspect() {
+        let sources = [(160u32, 144u32), (320, 288), (640, 576), (480, 432)];
+        let dests = [
+            (640, 480),   // 4:3
+            (1280, 720),  // 16:9
+            (1920, 1080), // 16:9, larger
+            (854, 480),   // 16:9, odd width
+            (641, 481),   // odd both ways
+            (100, 100),   // square, smaller than the source
+            (17, 300),    // absurdly tall
+            (300, 17),    // absurdly wide
+            (1, 1),       // degenerate
+            (160, 144),   // exact
+        ];
+        for (sw, sh) in sources {
+            for (dw, dh) in dests {
+                let (tw, th) = fit_size(sw, sh, dw, dh);
+                assert!(
+                    tw <= dw && th <= dh,
+                    "{sw}x{sh} into {dw}x{dh} produced {tw}x{th} — larger than \
+                     the frame is a crop"
+                );
+                assert!(tw > 0 && th > 0, "{sw}x{sh} into {dw}x{dh} vanished");
+                // Aspect is preserved to within the rounding of one pixel on
+                // the shorter axis; never stretched to fill.
+                // |th - tw*sh/sw| <= 1, rearranged to stay in integers.
+                let err = (tw as i64 * sh as i64 - th as i64 * sw as i64).abs();
+                assert!(
+                    err <= sw.max(sh) as i64,
+                    "{sw}x{sh} into {dw}x{dh} -> {tw}x{th} is stretched"
+                );
+                // Centred, with the odd leftover pixel never more than one.
+                let (ox, oy) = fit_origin(tw, th, dw, dh);
+                assert!(
+                    (dw - tw - ox) as i64 - ox as i64 <= 1
+                        && (dh - th - oy) as i64 - oy as i64 <= 1,
+                    "{sw}x{sh} into {dw}x{dh} is off-centre by more than a pixel"
+                );
+                // And every source row and column is represented somewhere,
+                // i.e. nothing was dropped off an edge.
+                let (xm, ym) = fit_maps(sw, sh, dw, dh);
+                let seen = |m: &[u32]| -> (u32, u32) {
+                    let live: Vec<u32> =
+                        m.iter().copied().filter(|&v| v != u32::MAX).collect();
+                    (*live.first().unwrap(), *live.last().unwrap())
+                };
+                // Point sampling drops source pixels when it shrinks — that is
+                // what nearest-neighbour is. What it must never do is stop
+                // short of an edge: the first and last samples have to fall in
+                // the first and last *band* of source pixels one output pixel
+                // covers. At 1:1 or magnified a band is one pixel, so this is
+                // exactly "column 0 and column sw-1 are shown".
+                let band = |s: u32, t: u32| s.div_ceil(t);
+                let (bx, by) = (band(sw, tw), band(sh, th));
+                let (fx, lx) = seen(&xm);
+                let (fy, ly) = seen(&ym);
+                assert!(fx < bx, "{sw}x{sh} into {dw}x{dh}: left edge lost ({fx})");
+                assert!(fy < by, "{sw}x{sh} into {dw}x{dh}: top edge lost ({fy})");
+                assert!(
+                    lx + bx >= sw,
+                    "{sw}x{sh} into {dw}x{dh}: right edge lost ({lx})"
+                );
+                assert!(
+                    ly + by >= sh,
+                    "{sw}x{sh} into {dw}x{dh}: BOTTOM edge lost ({ly}) — this is \
+                     the dialogue-box crop"
+                );
+                // Sampling is unbiased: mirroring the output mirrors the
+                // source, to within the one pixel integers cost. Sampling at
+                // each output pixel's left edge instead of its centre passes
+                // every check above and still leans the whole picture towards
+                // the top-left, which on a shrunk frame loses the bottom row.
+                let live = |m: &[u32]| -> Vec<u32> {
+                    m.iter().copied().filter(|&v| v != u32::MAX).collect()
+                };
+                for (m, s) in [(live(&xm), sw), (live(&ym), sh)] {
+                    let n = m.len();
+                    for i in 0..n {
+                        let sum = m[i] as i64 + m[n - 1 - i] as i64;
+                        assert!(
+                            (sum - (s as i64 - 1)).abs() <= 1,
+                            "{sw}x{sh} into {dw}x{dh}: sampling is lopsided at \
+                             {i} ({} + {} != {})",
+                            m[i],
+                            m[n - 1 - i],
+                            s - 1
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Integer magnification wherever it divides, because a fractional one
+    /// gives pixel art uneven pixel widths and the crisp look is the point.
+    #[test]
+    fn fit_uses_whole_pixels_whenever_the_frame_allows_it() {
+        for (dw, dh, want) in [
+            (640u32, 480u32, (480u32, 432u32)), // x3
+            (1280, 720, (800, 720)),            // x5, exactly full height
+            (1024, 576, (640, 576)),            // x4, exactly full height
+            (768, 432, (480, 432)),             // x3, exactly full height
+            (1920, 1080, (1120, 1008)),         // x7 — 1080/144 is 7.5, so x7
+        ] {
+            let (tw, th) = fit_size(160, 144, dw, dh);
+            assert_eq!((tw, th), want, "160x144 into {dw}x{dh}");
+            assert_eq!(tw % 160, 0, "width is a whole multiple");
+            assert_eq!(th % 144, 0, "height is a whole multiple");
+            // Nearest-neighbour with no resampling: every output column maps to
+            // a source column, in runs of exactly `k`.
+            let (xm, _) = fit_maps(160, 144, dw, dh);
+            let k = tw / 160;
+            let (ox, _) = fit_origin(tw, th, dw, dh);
+            for x in 0..tw {
+                assert_eq!(xm[(ox + x) as usize], x / k, "column {x} of {dw}x{dh}");
+            }
+        }
+    }
+
+    /// The card and the game are two pictures in the same frame, so they must
+    /// occupy the same rectangle. They did not: the card was drawn edge to edge
+    /// while the game was letterboxed, so pressing `v` made the feed jump.
+    #[test]
+    fn the_idle_card_lands_in_the_same_rectangle_as_the_game() {
+        for (dw, dh) in [(640u32, 480u32), (1280, 720), (854, 480), (641, 481)] {
+            for (sw, sh) in [(160u32, 144u32), (320, 288)] {
+                let mut v = VideoOut::in_memory(spec(
+                    PixelFormat::Rgba,
+                    Pace::Emulated,
+                    Some((dw, dh)),
+                ));
+                let t = Instant::now();
+                // A game frame that is white everywhere, so "not a bar" is
+                // exactly "the picture".
+                v.frame(&solid(sw, sh, [255, 255, 255, 255]), sw, sh, t);
+                let frame_px = (dw * dh * 4) as usize;
+                let game = content_box(&v.captured()[..frame_px], dw, dh);
+
+                v.go_idle();
+                v.idle(t);
+                let card = content_box(&v.captured()[frame_px..frame_px * 2], dw, dh);
+
+                assert_eq!(
+                    game, card,
+                    "{sw}x{sh} in {dw}x{dh}: the card sits in a different box \
+                     from the game, so switching jumps"
+                );
+                let (x0, y0, x1, y1) = card;
+                assert_eq!(
+                    (x1 - x0, y1 - y0),
+                    fit_size(sw, sh, dw, dh),
+                    "and that box is the fitted one"
+                );
+            }
+        }
+    }
+
+    /// The crop the captain saw is the *consumer's*, and this warning is the
+    /// only place it can be caught — the frame on the wire is already correct.
+    #[test]
+    fn a_camera_that_is_not_sixteen_by_nine_is_warned_about() {
+        assert!(v4l2::aspect_warning(640, 480).is_some(), "4:3 is cropped");
+        assert!(v4l2::aspect_warning(320, 288).is_some(), "10:9 is cropped");
+        assert!(v4l2::aspect_warning(480, 480).is_some(), "1:1 is cropped");
+        assert_eq!(v4l2::aspect_warning(1280, 720), None);
+        assert_eq!(v4l2::aspect_warning(1920, 1080), None);
+        assert_eq!(
+            v4l2::aspect_warning(854, 480),
+            None,
+            "16:9 to within a pixel"
+        );
+        assert_eq!(v4l2::aspect_warning(0, 0), None, "no geometry, no claim");
+        let w = v4l2::aspect_warning(640, 480).unwrap();
+        assert!(w.contains("1280x720"), "names the size to use: {w}");
+        // The first line has to stand on its own — it is the whole of the
+        // toast, and a toast that stops mid-sentence teaches nobody anything.
+        let head = w.lines().next().unwrap();
+        assert!(
+            head.len() <= 100,
+            "toast line is {} chars: {head}",
+            head.len()
+        );
+        assert!(
+            head.contains("crop"),
+            "the toast line names the symptom: {head}"
+        );
+        // The default must be the thing the warning recommends, or the advice
+        // and the product disagree.
+        assert_eq!(
+            v4l2::aspect_warning(v4l2::DEFAULT_SIZE.0, v4l2::DEFAULT_SIZE.1),
+            None
+        );
+    }
+
     #[test]
     fn geometry_is_fixed_by_the_first_frame_and_survives_a_size_change() {
         let mut v = VideoOut::in_memory(spec(
@@ -3386,7 +3736,7 @@ mod tests {
         });
         assert_eq!(v.spec().format, PixelFormat::Yuyv422, "forced to YUYV");
         assert_eq!(v.spec().size, Some(v4l2::DEFAULT_SIZE));
-        assert_eq!(v4l2::DEFAULT_SIZE, (640, 480));
+        assert_eq!(v4l2::DEFAULT_SIZE, (1280, 720));
         // The default format is silently corrected — nobody typed it. A format
         // the user *did* choose is not silently corrected.
         let quiet = note.unwrap_or_default();

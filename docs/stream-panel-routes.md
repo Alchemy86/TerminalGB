@@ -11,6 +11,58 @@ page evaluates the three routes so the choice is made before any of them is buil
 renderer yet.** It costs nothing to build, it is strictly more capable than anything we would write,
 and he already runs OBS for Twitch. Reasons, and the cases where it is the wrong answer, below.
 
+> **Re-checked 2026-08-14, and it stands.** Nothing has changed that weakens it: routes 2 and 3
+> cost the same as they did, and route 3 in particular is still a day of work to get *less* than
+> OBS gives for free. What *had* gone wrong is that the recommendation lived only on this page —
+> the product itself never said the feed was game-only, so the question read as an unanswered
+> feature request rather than a settled decision. That is fixed rather than the renderer built:
+> the `?` overlay says it, [`docs/video-out.md`](video-out.md) says it in its opening lines, and
+> the terminal window is now **titled `TerminalGB`** so an OBS source can find it. The recipe is
+> below — it did not exist before, which is most of why "just use OBS" was not actually usable
+> advice.
+
+---
+
+## The recipe — OBS scene, once
+
+Five minutes, and then it is a saved scene you switch to.
+
+1. **Name the window.** Nothing to do: the terminal frontend sets the window title to
+   `TerminalGB`, plus the cartridge (`TerminalGB — POKEMON BLUE`) once a game is loaded. The
+   prefix never changes, so a scene survives switching ROMs.
+2. **New scene**, call it `Game Boy`.
+3. **Add → Window Capture.**
+   * *Wayland* (PipeWire): OBS shows the desktop portal's window picker — choose the terminal
+     window once; OBS remembers it via a restore token.
+   * *X11/XWayland* (`Window Capture (Xcomposite)`): pick the window whose title starts with
+     `TerminalGB`, and set **Window Match Priority** to *Match title, otherwise find window of
+     same type*.
+4. **Crop to what you want in frame.** Hold <kbd>Alt</kbd> and drag the source's edges. Two
+   layouts worth knowing:
+   * *everything* — leave it uncropped; the game sits left, the Status/Controls and any plugin
+     panel sit right, which is already close to a stream layout.
+   * *game + one panel* — crop the Controls box away and keep the game plus the trainer/stats
+     panel. Press <kbd>f</kbd> in the emulator first if you want the game alone with no chrome.
+5. **Make the text survive the encode.** The panel is rasterised by the terminal at whatever size
+   its window is, so legibility is a matter of the *terminal's* font size, not OBS's scaling.
+   Make the terminal window big and the font large enough to read at your output resolution, then
+   scale the whole source down in OBS if you need to. Scaling *up* a small terminal is what makes
+   panel text mushy.
+6. **Filters → Scaling/Aspect Ratio → Nearest** on the source, if OBS is resizing it at all. The
+   default bilinear filter smears the pixel art; this is the same reason the camera path scales
+   by whole pixels.
+7. **Start Virtual Camera** (bottom right). Meet, Zoom and Discord now list **OBS Virtual
+   Camera** as a camera.
+
+Two things to expect, neither of them a fault:
+
+* **There are now two cameras** — ours (`Game Boy`, the game picture only) and OBS's (whatever
+  the scene shows). Pick the right one in the meeting; ours is the one named after the cartridge.
+* **Our camera does not need to be running for this.** OBS is capturing the *window*, not the
+  feed. Leave `v` off entirely if the OBS route is the one you are using.
+
+For Twitch, skip the virtual camera and hit **Start Streaming** — same scene.
+
 ---
 
 ## What is actually hard here
@@ -113,3 +165,10 @@ directly:
 
 If none of those hold, route 1 covers it and the renderer should stay unbuilt. The font is not wasted
 either way: it is what draws the idle card.
+
+**One thing that would change the estimate**, noted while fixing the camera's aspect ratio: the
+canvas question is now settled. The camera is 16:9 (`1280x720`) by default, and at that geometry
+the game occupies an exact ×5 at 800×720, leaving **two 240 px columns** either side. A panel
+column is therefore no longer "a 16:9 canvas mode to build" — it is a rectangle that already
+exists and is currently black. That takes maybe an hour off the estimate. It does not change the
+recommendation: the remaining ~7 hours still buys less than OBS gives for nothing.

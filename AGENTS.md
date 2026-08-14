@@ -1836,6 +1836,49 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 - **The TUI cannot stream to stdout** — `ratatui` owns it. It refuses with a pointer to a FIFO
   or to `examples/video_out.rs`. The **desktop** frontend can (`--video-out -`), and that is the
   headline pipe command.
+- **THE CAMERA IS 16:9 (`v4l2::DEFAULT_SIZE = 1280x720`) AND THAT IS LOAD-BEARING.** Reported as
+  "the feed crops the game — the dialogue box is cut mid-line", and diagnosed on arrival as our
+  scaler filling instead of fitting. **It is not.** `fit_size`/`fit_maps` have letterboxed
+  correctly since the first video commit; at 640×480 they put the game at exactly 480×432 with
+  80/24 bars — pixel for pixel the `scale=480:432,pad=640:480:80:24` the old ffmpeg bridge did,
+  and an `ffmpeg -f v4l2` grab off the device shows the whole picture. **The crop is the
+  consumer's**: a video-call client lays the camera out in a 16:9 tile and fills it, losing
+  12.5 % off the top and 12.5 % off the bottom. Measured in real Chrome against the real device:
+  `getUserMedia` reports **`resizeMode: "none"`** and hands the page the whole 640×480 frame, so
+  it is not a track-level crop and *nothing this end can detect it*. Letterboxing "better"
+  cannot help either — the consumer crops the bars and the picture with them. **The only fix a
+  camera has is to be the shape of the tile.** 1280×720 is also the exact fit: 144 × 5 = 720.
+  Cost 1.83 ms/frame vs 0.77 at 640×480, paid only while live; `768x432` (×3) is the cheap 16:9
+  fallback. An explicit `video_size` is still honoured — `v4l2::aspect_warning` names the
+  consequence instead of overruling it, on the `v` toast and in `?`.
+  **Do not "restore" 640×480 as the default, and do not go looking for a fill-vs-fit bug in
+  `fit_size` — it is not there.** Reproduce either direction with the two `video_out` commands
+  in `docs/video-out.md` §4a.
+- **`fit_maps` samples at pixel CENTRES** (`(2i+1)*s / 2t`), not left edges. Identical for
+  integer magnification, so the crisp ×3/×5 path is untouched; it matters when the frame is
+  *smaller* than the source, where edge sampling never reaches the last source column/row and
+  leans the whole picture towards the top-left. `fit_never_crops_at_any_size_or_aspect` pins it
+  by symmetry (mirroring the output must mirror the source) across sixteen size combinations —
+  a band/extent check alone cannot tell edge from centre sampling and gives a test with no teeth.
+- **The idle card is drawn into the game's rectangle, not edge to edge.** It used to fill the
+  frame while the game was letterboxed, so pressing `v` made the picture appear to grow and
+  shrink. `VideoOut::card_size` re-fits from `game_fit` (the last game frame's *source* size, so
+  a driver re-negotiating the geometry is picked up), and the ordinary letterbox path centres it
+  — `fit_size` applied to an already-fitted size is always ×1, so it lands in exactly the same
+  box. Pinned by `the_idle_card_lands_in_the_same_rectangle_as_the_game`.
+- **`examples/idle_card.rs` renders through the real stream path** (`VideoOut::in_memory`), with
+  `--game` for the comparison frame. It used to call `card::draw_idle` into a full-size buffer
+  directly, which is *not* what ships and is exactly why the full-bleed card went unnoticed.
+- **The feed is the game picture only, and the product now says so.** No panels, by design —
+  they are text the terminal rasterises and the terminal is not in this pipeline. The `?`
+  overlay says it, `docs/video-out.md` opens with it, and the TUI sets the window title to
+  **`TerminalGB`** (`window_title`, stable prefix + cartridge) so an OBS Window Capture source
+  can find it. Route decision and the scene recipe: `docs/stream-panel-routes.md` — re-checked
+  and still OBS window capture → OBS Virtual Camera, **do not build the text compositor**.
+- **Careful when inserting a function above another one in `tui.rs`:** `load_session` carries a
+  `#[cfg_attr(not(feature = "audio"), allow(clippy::let_unit_value))]`, and an item dropped
+  between the attribute and `fn load_session` silently moves the allow onto the new function.
+  `cargo clippy --all-targets` (no audio) is what catches it.
 - **The emulator DRIVES `/dev/videoN` natively now** (`video::v4l2::sink`) — the old "we refuse
   a V4L2 node and hand you an `ffmpeg` recipe" note is dead. `video_out = "/dev/video10"`, press
   `v`, pick the camera in Chrome/Meet/Discord/OBS. `tools/virtual-camera.sh` still works and is

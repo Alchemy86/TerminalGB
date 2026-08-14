@@ -85,6 +85,28 @@ history. See [Credits & lineage](README.md#credits--lineage).
   [`docs/audio.md`](docs/audio.md) §6b.
 
 ### Fixed
+- **The virtual camera is 16:9, so a video call stops slicing the top and bottom off the game.**
+  Reported as a crop and diagnosed as our scaler filling instead of fitting; it is neither.
+  `fit_size`/`fit_maps` have letterboxed correctly since the feature landed — at 640×480 they
+  put the game at exactly 480×432 with 80/24 bars, and an `ffmpeg -f v4l2` grab off the device
+  shows the whole picture. **The crop happens in the consumer**: a video-call client lays a
+  camera out in a 16:9 tile and fills it, losing 12.5 % off the top and 12.5 % off the bottom.
+  Measured in real Chrome against the real device, `getUserMedia` reports `resizeMode: "none"`
+  and delivers the whole frame, so nothing at this end can detect it and no amount of better
+  letterboxing helps — the consumer crops the bars *and* the picture. A camera's only lever is
+  to be the shape of the tile, so `v4l2::DEFAULT_SIZE` is now **1280×720**, where the game
+  happens to land at an exact ×5 filling the full height. An explicit `video_size` is still
+  honoured, with a warning naming the consequence. Cost 1.83 ms/frame against 0.77 at 640×480,
+  paid only while a stream is live; `768x432` is the cheap 16:9 fallback. Reasoning, both
+  reproductions and the conformance record:
+  [`docs/video-out.md`](docs/video-out.md) §4a.
+- **The idle card no longer makes the feed jump.** It was drawn edge to edge while the game was
+  letterboxed, so pressing `v` appeared to grow and shrink the picture. It is now drawn into
+  the game's own rectangle. `examples/idle_card.rs` renders through the real stream path
+  (`--game` for the comparison), rather than drawing the card into a buffer nothing ships.
+- **Nearest-neighbour fitting samples pixel centres, not left edges.** Identical for integer
+  magnification — the ×3/×5 camera path is unchanged — but a frame *smaller* than the source
+  used to lose its last row and column and sit half a pixel up and left.
 - **The mapper is chosen from the cartridge header again, with or without a save path.**
   `get_mbc` short-circuited to an **MBC3 for every cartridge** whenever no filepath was
   given — which is *always* the case for the WebAssembly build, the FFI build, and any
@@ -166,6 +188,13 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ### Changed
 - Save-state `FORMAT_VERSION` is now **7** (the sweep unit's pending-calculation timer and
   the volume envelope's pending-step latch are machine state and are serialised).
+- **The terminal window is titled `TerminalGB`** (plus the cartridge once one is loaded, with
+  the prefix held stable). This is the emulator-side half of the supported route for getting
+  the side panels into a stream — an OBS Window Capture source finds its window by title. The
+  `?` overlay now also states plainly that the camera feed is the game picture only, and points
+  at [`docs/stream-panel-routes.md`](docs/stream-panel-routes.md), which gained a scene recipe.
+  The recommendation there (OBS window capture → OBS Virtual Camera, rather than building a
+  text compositor) was re-checked and stands.
 
 ### Added
 - **The emulator core is genuinely embeddable — `--no-default-features` is now a real build.**

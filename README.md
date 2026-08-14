@@ -211,7 +211,7 @@ The recognised keys:
 | `video_out` | `-` / a file / a **FIFO** / a **`/dev/videoN` camera** / a directory / `off` | **Where `v` sends the stream** (see [video-out.md](docs/video-out.md)). Default `off`. Setting it does *not* start streaming — the emulator always comes up with the feed off. **Safe to set to anything**: nothing is opened, created or claimed until you press `v`. The TUI refuses `-` — it owns stdout. |
 | `video_autostart` | `true` / `false` | Go live at launch instead of waiting for `v`. Default `false`. The separate, explicit way to ask for it, because naming a destination is not the same decision as sending frames to it. |
 | `video_format` | `rgba` / `rgb24` / `yuyv` | Wire pixel format. Default `rgba`. Ignored for a `/dev/videoN` camera, which negotiates YUYV itself. |
-| `video_size` | `WxH` | Letterbox the stream into this size, e.g. `640x480`. Default: the source size, or 640×480 for a camera. |
+| `video_size` | `WxH` | Letterbox the stream into this size, e.g. `1280x720`. Default: the source size, or 1280×720 for a camera ([why 16:9](docs/video-out.md#4a-the-camera-is-169--because-the-consumer-crops-and-we-cannot-see-it-happen)). A camera size that is not 16:9 is honoured, with a warning. |
 | `video_source` | `native` / `display` | Stream the raw 160×144 framebuffer, or what you see (palette + upscaler). Default `native`. |
 | `video_pace` | `realtime` / `emulated` | One frame per 1/59.7275 s of wall clock (fast-forward drops frames), or one per emulated frame. Default `realtime`. |
 | `video_dir` | a path (`~` expands) | Where **`V`** records. Default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy`. |
@@ -730,9 +730,24 @@ worth fixing; so was a camera that could not be turned back on once released.
 
 The emulator negotiates the V4L2 device itself (`VIDIOC_QUERYCAP` + `VIDIOC_S_FMT`) and writes
 the frames — no `ffmpeg`, no FIFO, no rule about what to start first. Size and pixel format are
-**detected, not configured**: YUYV at 640×480, with the 160×144 picture scaled by integer
-nearest-neighbour and letterboxed, never stretched. Linux only, and it needs the `v4l2loopback`
-kernel module once (root); the emulator prints the exact install commands if it is missing.
+**detected, not configured**: YUYV at 1280×720, with the 160×144 picture scaled by integer
+nearest-neighbour (an exact ×5, filling the height) and letterboxed, never stretched. Linux only,
+and it needs the `v4l2loopback` kernel module once (root); the emulator prints the exact install
+commands if it is missing.
+
+**16:9 is not a stylistic choice.** A video-call client shows a camera in a 16:9 tile and fills
+it, so a 4:3 feed is centre-cropped on the way to the screen — 12.5 % off the top and 12.5 % off
+the bottom, which slices a Game Boy dialogue box mid-line. It happens entirely inside the
+consumer (Chrome hands the page the whole frame, `resizeMode: "none"`), so no amount of correct
+letterboxing at this end can prevent it; the only fix a camera has is to be the shape of the
+tile. An explicit `video_size` is still honoured, with a warning if it is not 16:9.
+[Details and how to reproduce it.](docs/video-out.md#4a-the-camera-is-169--because-the-consumer-crops-and-we-cannot-see-it-happen)
+
+**The feed is the game picture only** — no status panel, no trainer view. Those are text the
+*terminal* draws, and the terminal is not in this pipeline. To stream them too, capture the
+window (it is titled `TerminalGB`) in OBS and use OBS Virtual Camera: scene recipe and the
+routes that were rejected are in
+[`docs/stream-panel-routes.md`](docs/stream-panel-routes.md).
 
 The picture can also leave as a **raw frame stream** any standard tool consumes. **Off by
 default**, and free when off.

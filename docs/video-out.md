@@ -17,6 +17,14 @@ still the route on macOS/Windows, but it is no longer the one you are meant to u
 launch). No destination can stop the emulator from starting either: not a FIFO with nothing
 reading it, not a camera that does not exist. See §5a.
 
+**The feed carries the game picture and nothing else — no status panel, no trainer view, no
+stats overlay.** That is deliberate, not missing: those are *text the terminal rasterises*, and
+the terminal is not in this pipeline. To stream them too, capture the terminal window in OBS and
+use OBS Virtual Camera — the reasoning, the alternatives that were rejected, and a scene you can
+set up in about two minutes are in
+[`docs/stream-panel-routes.md`](stream-panel-routes.md). The window is titled `TerminalGB` so a
+scene can find it.
+
 This is the **pixels** half of the emit surface in [`docs/debugging.md`](debugging.md).
 [`docs/telemetry.md`](telemetry.md) publishes the *numbers* of every frame as NDJSON; this
 publishes the frame.
@@ -60,7 +68,7 @@ implemented *as* environment overrides, so there is no third precedence rule to 
 | destination | `--video-out` | `GB_VIDEO_OUT` | `video_out` | `-`/`stdout`, a file, a **FIFO**, a **`/dev/videoN` camera**, a directory, `off` |
 | live at launch | `--video-start` | `GB_VIDEO_START` | `video_autostart` | `false` (**default** — press `v`), `true` |
 | pixel format | `--video-format` | `GB_VIDEO_FORMAT` | `video_format` | `rgba` (default), `rgb24`, `yuyv` |
-| frame size | `--video-size` | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `640x480` |
+| frame size | `--video-size` | `GB_VIDEO_SIZE` | `video_size` | `WxH`, e.g. `1280x720` |
 | picture source | `--video-source` | `GB_VIDEO_SOURCE` | `video_source` | `native` (default), `display` |
 | pacing | `--video-pace` | `GB_VIDEO_PACE` | `video_pace` | `realtime` (default), `emulated` |
 | recordings dir | — | — | `video_dir` | default `$XDG_VIDEOS_DIR/gameboy`, else `~/Videos/gameboy` |
@@ -132,7 +140,99 @@ never changes; a frame of any other size is **letterboxed** into it:
   be worse.
 
 `160x144` is an unusual camera resolution and some consumers reject it, which is why
-`--video-size 640x480` exists and is what `tools/virtual-camera.sh` uses.
+`--video-size` exists and why a camera node gets a real one by default.
+
+### 4a. The camera is 16:9 — because the *consumer* crops, and we cannot see it happen
+
+**The default camera geometry is `1280x720`, and the reason is the one bug in this whole
+pipeline that a correct emulator cannot detect.**
+
+The report was: *presenting the feed in a Google Meet, and the bottom of the game is sliced off —
+the dialogue box is cut mid-line.* The obvious reading is that something here scales to **fill**
+instead of to **fit**. It does not: at 640×480 the stream put the game at exactly 480×432 with
+80 px pillarbox and 24 px letterbox — pixel for pixel the `scale=480:432,pad=640:480:80:24` the
+original ffmpeg bridge did. A frame grabbed off `/dev/video10` with `ffmpeg` shows the whole
+picture, centred, uncropped.
+
+The loss happens **after** the frame leaves us. A video-call client lays its camera out in a
+16:9 tile and fills that tile, so a 4:3 camera is centre-cropped on the way to the screen: 25 %
+of the height, 12.5 % off the top and 12.5 % off the bottom. On a 640×480 feed that is 60 px
+each way — and the game's own bottom edge sat 24 px from the frame's, so 36 px of *picture* went,
+which at ×3 is 12 source rows: the bottom two-thirds of a Game Boy text line. Exactly the report.
+
+Measured rather than assumed, because the mechanism is not the obvious one. Against a real
+v4l2loopback node, Chrome's `getUserMedia` reports `resizeMode: "none"` and hands the page the
+whole 640×480 frame — **it does not crop the track**. The crop is the tile. Which means:
+
+* nothing on our side can detect it — the frame on the wire is already correct;
+* letterboxing "better" cannot fix it — the consumer crops the bars *and* the picture with them;
+* **the only fix available to a camera is to be the shape the tile is.**
+
+1280×720 also happens to be the perfect fit: 144 × 5 = 720, so the game fills the full height at
+an exact ×5 nearest magnification and only the pillarbox is bars. Measured cost of the larger
+frame, `video_out --frames 3000` at YUYV: **1.83 ms/frame against 0.77 ms at 640×480**, inside a
+16.74 ms budget and paid only while a stream is live. Other exact-integer 16:9 sizes if that
+matters: `768x432` (×3, 0.83 ms) and `1024x576` (×4, 1.26 ms).
+
+An explicit `video_size` is still honoured — forcing the geometry would be the emulator
+overruling a value someone typed. What happens instead is a warning, on the toast when you press
+`v` and in the `?` overlay:
+
+```
+⚠ video: 640x480 is not 16:9 — a video call will crop the top and bottom off the game.
+```
+
+**Reproduce it, both ways.** Feed the loopback and look at the result in a 16:9 tile:
+
+```bash
+cargo run --release --example video_out -- --rom third_party/dmg-acid2/dmg-acid2.gb \
+    --frames 100000 --pace realtime --out /dev/video10 --size 640x480   # the bug
+cargo run --release --example video_out -- --rom third_party/dmg-acid2/dmg-acid2.gb \
+    --frames 100000 --pace realtime --out /dev/video10                  # the fix
+
+# what a consumer's tile does to it, without needing a consumer
+ffmpeg -f v4l2 -i /dev/video10 -frames:v 1 -update 1 /tmp/feed.png
+ffmpeg -i /tmp/feed.png -vf crop=iw:iw*9/16 -update 1 /tmp/tile.png
+```
+
+At 640×480 `/tmp/tile.png` has lost "HELLO WORLD!" and the credit line; at the default it has
+lost nothing. `fit_never_crops_at_any_size_or_aspect` in `src/video.rs` pins the frame half of
+that across sixteen source/destination combinations, including odd sizes and frames smaller than
+the source.
+
+#### Conformance record
+
+Per the standing convention in [`AGENTS.md`](../AGENTS.md). Like the three render bugs in
+[`docs/terminal-render.md`](terminal-render.md), these are **presentation** bugs, so the citation
+is a protocol/consumer contract rather than Pan Docs — and point 2 is the same for all of them,
+which is the finding: **no test ROM catches any of this.** A ROM-driven suite compares
+framebuffers, and every frame here is perfectly correct while the player sees a sliced picture.
+
+1. **A 4:3 camera into a 16:9 consumer.** *Symptom* — the top and bottom of the game are missing
+   in a video call; a dialogue box is cut mid-line. *Caught by* — nothing automatic, and nothing
+   can be: the loss is inside the consumer. The nearest check is the crop simulation above.
+   *Contract* — a camera has no say in how a client frames it, and the client fills its tile
+   ([`MediaTrackSettings.resizeMode`](https://www.w3.org/TR/mediacapture-streams/) is `"none"`
+   here, so the whole frame *is* delivered — it is the layout that crops). *New test* —
+   `a_camera_that_is_not_sixteen_by_nine_is_warned_about`.
+2. **Point sampling at pixel edges.** *Symptom* — a feed smaller than the source loses its
+   outermost row and column and sits half a pixel up and left. *Caught by* — nothing before;
+   now the symmetry assertion in `fit_never_crops_at_any_size_or_aspect`. *Contract* —
+   nearest-neighbour resampling samples the *centre* of the destination pixel.
+3. **A full-bleed idle card beside a letterboxed game.** *Symptom* — the picture appears to grow
+   and shrink whenever the stream is paused or resumed. *Caught by* — nothing before; now
+   `the_idle_card_lands_in_the_same_rectangle_as_the_game`. *Contract* — a stream's geometry is
+   fixed for its lifetime (§4), and that has to mean the *picture's* geometry, not just the
+   frame's.
+
+### 4b. The idle card sits in the same box as the game
+
+The card ([§6](#6-toggling-it-live-terminal-frontend)) used to be drawn edge to edge while the
+game was letterboxed, so pressing `v` made the picture appear to grow and shrink. It is now
+drawn at the game's fitted size and placed at the same offset: same rectangle, same bars, only
+the content changes. `cargo run --release --example idle_card -- 1280 720 /tmp/card.png` and
+`--game` for the comparison — both render through the real stream path, so what lands in the PNG
+is what a consumer receives.
 
 ## 5. The virtual webcam — run the game, press `v`, done
 
@@ -144,9 +244,9 @@ video_out = "/dev/video10"
 ```
 
 That is the whole emulator-side configuration. Size and pixel format are **detected, not
-configured**: a V4L2 node is negotiated as YUYV at 640×480 (the size every consumer accepts),
-whatever `video_format` / `video_size` say, and whatever the driver answers with is what gets
-written. There is nothing to keep in sync between two programs any more, which is exactly the
+configured**: a V4L2 node is negotiated as YUYV at 1280×720 ([§4a](#4a-the-camera-is-169--because-the-consumer-crops-and-we-cannot-see-it-happen)
+for why 16:9 and not 4:3), whatever `video_format` says, and whatever the driver answers with is
+what gets written. An explicit `video_size` is honoured, with a warning if it is not 16:9. There is nothing to keep in sync between two programs any more, which is exactly the
 class of mistake that used to send a 160×144 RGBA stream at a bridge expecting 640×480 YUYV.
 
 The one remaining setup step is the kernel module, which needs root **once**:
@@ -176,13 +276,13 @@ emulator therefore does what `ffmpeg -f v4l2` does:
 1. `VIDIOC_QUERYCAP` — confirm the node is a video *output*. A real webcam is a capture device
    and is refused by name (`/dev/video1 is "Full HD webcam" — a real camera, which can only be
    read from`), with the loopback nodes on the machine listed as the thing you probably meant.
-2. `VIDIOC_S_FMT` with `V4L2_BUF_TYPE_VIDEO_OUTPUT` + `V4L2_PIX_FMT_YUYV` at 640×480. **What
+2. `VIDIOC_S_FMT` with `V4L2_BUF_TYPE_VIDEO_OUTPUT` + `V4L2_PIX_FMT_YUYV` at 1280×720. **What
    comes back is authoritative** — the driver may adjust the geometry, and `bytesperline` is
    the row stride, which is not necessarily `width * 2`. Frames are re-strided if it asks.
 3. `write(2)` one `sizeimage` frame at a time, non-blocking.
 
 The picture is scaled by the same integer-nearest path everything else uses and letterboxed, not
-stretched (§4): 160×144 → 480×432 centred in 640×480 with black bars.
+stretched (§4): 160×144 → 800×720 centred in 1280×720 with black pillarbox bars.
 
 ### No new dependency, and why
 
@@ -437,7 +537,7 @@ Run on this box, with the vendored MIT `dmg-acid2` ROM:
 | `video_out --frames 300 \| ffmpeg -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i - -pix_fmt yuv420p acid2.mp4` | 160×144, **300 frames, 23891/400 = 59.7275 fps**, 137 KB. Extracted frame 300 is the acid2 face, "HELLO WORLD!" and all. |
 | `video_out --frames 240 --format yuyv --size 640x480 --source display --palette green --upscale lcd --factor 3 \| ffmpeg -f rawvideo -pix_fmt yuyv422 …` | 640×480, 240 frames, 59.7275 fps. Decoded frame: green palette, LCD grid, **pillar/letterboxed with black bars, not stretched**. |
 | `video_out --frames 120 --pace realtime --out /tmp/gb.raw` with `ffmpeg` reading the FIFO | 120 frames, **duration 2.009 s** (120 / 59.7275 = 2.009). 0 duplicated, 0 dropped. |
-| `video_out --out /dev/video10` | **Negotiated 640×480 YUYV and wrote frames.** See the camera row below. |
+| `video_out --out /dev/video10` | **Negotiated 1280×720 YUYV and wrote frames.** See the camera row below. |
 | `tools/virtual-camera.sh` | Found `/dev/video10` labelled "Game Boy", read the sidecar descriptor, bridged the FIFO. |
 
 Artefacts land in `target/video-proof/` (gitignored). Reproduce all of it with the commands
@@ -450,7 +550,7 @@ accepted and produces nothing. Every claim below is a *consumer decoding the dev
 
 | Step | Consumer | What was observed |
 |---|---|---|
-| Terminal frontend with `video_out = "/dev/video10"`, no bridge anywhere | `ffmpeg -f v4l2 -i /dev/video10 → PNG` | The game, 640×480, right way up, correct shades, pillar/letterboxed. Status row `● LIVE … video10`, device `state` = `capture`. |
+| Terminal frontend with `video_out = "/dev/video10"`, no bridge anywhere | `ffmpeg -f v4l2 -i /dev/video10 → PNG` | The game, 1280×720, right way up, correct shades, pillarboxed at an exact ×5. Status row `● LIVE … video10`, device `state` = `capture`. |
 | Same, while `cpu_instrs` ran | same, 1 fps for 8 s | Frame 1 showed `10` in progress, frame 8 showed `10:ok 11` — **the picture moves**. |
 | Same, Pokémon Blue intro | same, 6 fps for 2 s | 5 distinct frames of 12: the Gengar/Nidorino animation, mid-motion. |
 | Same | **`ffplay -f v4l2 -i /dev/video10`**, window screenshotted | A real media player window displaying the game, live. |
@@ -472,6 +572,15 @@ is 0.216 ms/frame on this box):
 | `rgb24` 160×144 | 0.227 | ~0.011 | 0.07 % |
 | `yuyv` 640×480 | 0.770 | ~0.55 | 3.3 % |
 | `yuyv` 640×480, `display` + LCD ×3 | 1.79 | ~1.58 | 9.4 % |
+| `yuyv` 768×432 (16:9, ×3) | 0.830 | ~0.61 | 3.6 % |
+| `yuyv` 1024×576 (16:9, ×4) | 1.26 | ~1.05 | 6.3 % |
+| **`yuyv` 1280×720 (16:9, ×5 — the camera default)** | **1.83** | **~1.61** | **11 %** |
+
+The camera's default is the most expensive row here and that is a deliberate trade: it is the
+only geometry a video call will not crop ([§4a](#4a-the-camera-is-169--because-the-consumer-crops-and-we-cannot-see-it-happen)),
+it is paid only while a stream is actually live, and 1.83 ms of a 16.74 ms frame leaves the
+emulator running at more than 9× real time. `video_size = "768x432"` is the cheap 16:9 fallback
+if that ever matters — same ×3 picture as the old 4:3 default, for 0.06 ms more than it cost.
 
 The frame rate rescued in [`docs/terminal-render.md`](terminal-render.md) is not disturbed: the
 conversion is one pass over the frame with precomputed nearest-neighbour index tables, every

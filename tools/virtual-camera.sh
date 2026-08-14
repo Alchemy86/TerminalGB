@@ -3,7 +3,7 @@
 # browser — anything that lists cameras — sees the Game Boy as a webcam.
 #
 #   tools/virtual-camera.sh [--device /dev/videoN] [--name "POKEMON BLUE"]
-#                           [--size 640x480] [--format yuyv422] [--fifo /tmp/gb.raw]
+#                           [--size 1280x720] [--format yuyv422] [--fifo /tmp/gb.raw]
 #                           [--create] [--relabel] [--once] [--check]
 #
 # Start it in either order with the emulator: the FIFO's writer end is opened
@@ -11,11 +11,14 @@
 # the emulator, and neither one hangs the other. By default it keeps the camera
 # alive across the emulator stopping and starting (`--once` to exit instead).
 #
-# The emulator deliberately does NOT write to /dev/videoN itself: a V4L2 output
-# device needs its format negotiated (VIDIOC_S_FMT) before the first write, and
-# shipping ioctl code that no test can exercise (the kernel module needs root to
-# install) would be worse than shipping nothing. ffmpeg does it properly, and
-# throws in format conversion and scaling for free. See docs/video-out.md.
+# The emulator can now drive /dev/videoN itself (it negotiates VIDIOC_S_FMT —
+# see `mod v4l2` in src/video.rs), so this bridge is no longer the only route:
+# point `video_out` straight at the loopback node and skip it. It stays because
+# it is still the way to CREATE and LABEL a device (only root can, and only at
+# creation), and the way to get a feed off a build without the `libc` feature
+# or off a non-Linux box. Note it does no scaling: the emulator letterboxes
+# into the configured size and this passes the bytes through unchanged.
+# See docs/video-out.md.
 #
 # Linux only. macOS has no v4l2 — use OBS's built-in virtual camera and point
 # OBS at the same stream. Windows likewise (DirectShow).
@@ -32,7 +35,11 @@ RELABEL=0
 ONCE=0
 FPS="59.7275"
 # Defaults, used only when the emulator has published nothing to go on.
-DEFAULT_SIZE="640x480"
+# 16:9, matching the emulator's own default: a video-call client asks for a
+# 16:9 camera and centre-crops anything else, which slices the top and bottom
+# off the game however correctly the frame was letterboxed. See DEFAULT_SIZE in
+# src/video.rs and docs/video-out.md.
+DEFAULT_SIZE="1280x720"
 DEFAULT_FORMAT="yuyv422"
 
 die() { echo "virtual-camera: $*" >&2; exit 1; }

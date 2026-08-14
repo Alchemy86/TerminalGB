@@ -65,7 +65,8 @@ use ratatui::{
         },
         execute,
         terminal::{
-            disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+            disable_raw_mode, enable_raw_mode, EnterAlternateScreen,
+            LeaveAlternateScreen, SetTitle,
         },
     },
     layout::{Constraint, Direction, Layout, Rect},
@@ -107,6 +108,17 @@ fn debug_layout(msg: &str) {
 const FRAME_TIME: Duration = Duration::from_micros(16_743);
 /// The DMG refresh rate as a number, for "% of real hardware" reporting.
 const DMG_HZ: f32 = 59.7275;
+/// What this program calls its terminal window.
+///
+/// A **stable prefix**, deliberately. The camera carries the game picture and
+/// nothing else (`docs/video-out.md`), so the documented way to stream the side
+/// panel too is OBS window capture — and an OBS source finds its window by
+/// title. The cartridge name is appended when one is loaded, because that is
+/// genuinely useful in a taskbar, but the prefix never moves: an OBS Window
+/// Capture set to *Match title, otherwise find window of same type* keeps
+/// working across ROM switches, and on Wayland the portal picker makes the
+/// title advisory anyway. See `docs/stream-panel-routes.md`.
+const TERM_TITLE: &str = "TerminalGB";
 /// Most emulated frames one loop iteration will run to catch up after a slow
 /// draw. At the 16.743 ms frame period this absorbs a ~200 ms stall (a huge
 /// terminal repaint, a window resize, the machine swapping) without the
@@ -472,6 +484,14 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     probe_terminal();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // Name the window. This is not decoration: the supported way to get the
+    // side panel into a stream is OBS window capture (docs/stream-panel-routes.md),
+    // and an OBS source matches a window by its title. A terminal's default
+    // title is the shell's idea of the command line, which changes on every
+    // launch — `TERM_TITLE` is stable, so a scene set up once keeps working.
+    // See `set_window_title` for why the prefix, not the whole string, is the
+    // part to match on.
+    let _ = execute!(stdout, SetTitle(TERM_TITLE));
     // Only ask for event-type reporting where the terminal said it understands
     // the protocol. Pushing the flags at a terminal that does not is not merely
     // useless — the matching pop on exit could leave stray bytes behind.
@@ -1263,6 +1283,7 @@ impl App {
                 self.overlay = Overlay::None;
                 self.fullscreen = false;
                 self.message = None;
+                set_window_title(self.session.as_ref().map(|s| s.entry.title.as_str()));
                 // A stream named after the game it carries must restart under
                 // the new name rather than appending a second game to the
                 // first one's file. A user-chosen path is left alone.
@@ -1777,6 +1798,15 @@ impl App {
         let t = waiting_toast(&v, &short);
         self.set_toast(t);
         if let Some(n) = note {
+            // A note on a stream that *did* open is a quality warning about the
+            // live feed — "this camera is the wrong shape for a video call", say
+            // — and burying it in `?` is no use to somebody who just pressed
+            // `v`. It replaces the status toast, because a warning outranks a
+            // restatement of the destination they just chose.
+            self.set_toast(format!(
+                "⚠ {}",
+                n.lines().next().unwrap_or("see ? for details")
+            ));
             self.config_warnings.push(n);
         }
         self.config_warnings.push(v.describe());
@@ -4147,6 +4177,16 @@ impl App {
             Line::from(
                 "  V         record a timestamped file instead (see docs/video-out.md)",
             ),
+            // The one question this help could not answer. Nothing told anyone
+            // the feed is the game and only the game, so "how do I put the
+            // panel in it?" had no shortcut and no explanation either.
+            Line::from(Span::styled(
+                "  the feed carries the GAME PICTURE ONLY — no panels, by design. \
+                 To stream the panels too, capture this window in OBS and use \
+                 OBS Virtual Camera (docs/stream-panel-routes.md); this window is \
+                 titled \"TerminalGB\" so a scene can find it",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from("  ?         this help   q       quit"),
             Line::from(""),
             Line::from("AI agent (Claude plays Pokémon)"),
@@ -5205,6 +5245,26 @@ fn init_audio(gb: &mut Gameboy) -> AudioHold {
 }
 #[cfg(not(feature = "audio"))]
 fn init_audio(_gb: &mut Gameboy) -> AudioHold {}
+
+/// Set the terminal window's title to `TERM_TITLE`, plus the cartridge when
+/// there is one.
+///
+/// Best-effort and unconditional: a terminal that does not understand OSC 2
+/// ignores it, and one that does gains a window an OBS scene can find. Written
+/// straight to stdout for the same reason the image sequences are — this runs
+/// while `ratatui` owns the screen, and a title escape is not a cell.
+fn set_window_title(game: Option<&str>) {
+    let _ = execute!(io::stdout(), SetTitle(window_title(game)));
+}
+
+/// `TERM_TITLE`, plus the cartridge when there is a readable one. Split out so
+/// the stable-prefix promise is testable without a terminal.
+fn window_title(game: Option<&str>) -> String {
+    match game.map(str::trim).filter(|g| !g.is_empty()) {
+        Some(g) => format!("{TERM_TITLE} — {g}"),
+        None => TERM_TITLE.to_string(),
+    }
+}
 
 /// Build a [`Gameboy`], its [`RomEntry`] and its audio hold from a ROM on disk.
 ///
@@ -7066,6 +7126,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// "What's the shortcut for putting the side panel in the stream?" had no
+    /// answer anywhere in the product — not that it was unsupported, not where
+    /// to go instead. Asserted against **rendered** output, because a line in
+    /// the source that the overlay clips away helps nobody.
+    #[test]
+    fn the_help_says_the_feed_is_game_only_and_where_to_go_instead() {
+        use ratatui::backend::TestBackend;
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.overlay = Overlay::Help;
+        let (cols, rows) = (140u16, 60u16);
+        let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let screen: String = (0..rows)
+            .map(|y| {
+                (0..cols)
+                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Newlines are wrapping points, so match on words rather than phrases.
+        let flat: String = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+        for want in ["GAME PICTURE ONLY", "OBS", "TerminalGB"] {
+            assert!(
+                flat.contains(want),
+                "the help overlay never says {want:?}:\n{screen}"
+            );
+        }
+    }
+
+    /// The window is named so an OBS scene can find it — the emulator-side half
+    /// of the window-capture route.
+    #[test]
+    fn the_window_title_keeps_a_stable_prefix() {
+        assert_eq!(TERM_TITLE, "TerminalGB");
+        // A title with a game in it must still start with the prefix an OBS
+        // source matches on, or a scene breaks on every ROM switch.
+        for game in [None, Some("POKEMON BLUE"), Some("  "), Some("")] {
+            let t = window_title(game);
+            assert!(t.starts_with(TERM_TITLE), "{t}");
+        }
+        assert_eq!(window_title(None), TERM_TITLE);
+        assert_eq!(window_title(Some("  ")), TERM_TITLE, "a blank header title");
+        assert_eq!(
+            window_title(Some("POKEMON BLUE")),
+            "TerminalGB — POKEMON BLUE"
+        );
     }
 
     /// The bar is one row, never wraps, never clips, and **never loses the
