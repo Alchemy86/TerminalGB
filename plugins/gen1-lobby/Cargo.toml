@@ -1,0 +1,19 @@
+[package]
+name = "terminalgb-plugin-gen1-lobby"
+version = "0.1.0"
+description = "The World Trade Centre — a shared Gen 1 room many players walk about in, built at run time in unsaved WRAM"
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/TerminalGB"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+[lib]
+name = "terminalgb_plugin_gen1_lobby"
+path = "src/lib.rs"
+
+# The only dependency. The relay lives in the frontend, not here: a plugin is
+# handed a machine during a frame the emulator decided to run, and a socket is
+# not that. See `docs/worldlobby.md` §"Where the network lives".
+[dependencies]
+terminalgb-plugin-api = { path = "../../crates/terminalgb-plugin-api", version = "0.1.0" }

@@ -2097,6 +2097,7 @@ dependencies = [
  "terminalgb-plugin-battle-control",
  "terminalgb-plugin-example-tracer",
  "terminalgb-plugin-gen1-link",
+ "terminalgb-plugin-gen1-lobby",
  "terminalgb-plugin-gen1-shinyhunt",
  "terminalgb-plugin-trainer",
  "wasm-bindgen",
@@ -2144,6 +2145,13 @@ version = "0.1.0"
 dependencies = [
  "terminalgb-plugin-api",
  "terminalgb-plugin-trainer",
+]
+
+[[package]]
+name = "terminalgb-plugin-gen1-lobby"
+version = "0.1.0"
+dependencies = [
+ "terminalgb-plugin-api",
 ]
 
 [[package]]

@@ -219,6 +219,27 @@ impl TradeBot {
         self.stage == Stage::Finished
     }
 
+    /// A bot that starts already standing in the Trade Center at `spawn`, so a
+    /// caller that drove the consoles into the room itself — because it wanted
+    /// to do something to the room first — can take the trade half only.
+    pub fn in_trade_room(spawn: (u8, u8)) -> Self {
+        Self {
+            stage: Stage::InTradeRoom,
+            spawn: Some(spawn),
+            ..Self::default()
+        }
+    }
+
+    /// Where the bot is up to, for a caller driving several stages by hand.
+    pub fn stage(&self) -> Stage {
+        self.stage
+    }
+
+    /// Did the trade actually complete, as opposed to the bot merely finishing?
+    pub fn traded(&self) -> bool {
+        self.traded
+    }
+
     pub fn press(&mut self, gb: &mut Gameboy, key: KeypadKey, hold: u32) {
         gb.keydown(key);
         self.hold = Some((key, hold));

@@ -153,6 +153,12 @@ plugin-agent = ["terminalgb-plugin-agent", "plugin-trainer", "plugin-gen1-link"]
 # stopping on a DV spread. Depends on `plugin-trainer` because the ONE
 # implementation of the Gen 2 shiny rule lives there and is shared, not copied.
 plugin-gen1-shinyhunt = ["terminalgb-plugin-gen1-shinyhunt", "plugin-trainer"]
+# The World Trade Centre: a shared Cable Club room many players walk about in,
+# built at run time in unsaved WRAM. Presence only — it declares no
+# SERIAL_LINK, because the cable belongs to whoever the player is trading with.
+# The relay client is the frontend's, not the plugin's (docs/worldlobby.md
+# §"Where the network lives"), so this adds no third-party crate.
+plugin-gen1-lobby = ["terminalgb-plugin-gen1-lobby"]
 # The documentation example, kept out of `standard-plugins` on purpose: it is
 # the thing a stranger copies, and it is also the end-to-end proof that the
 # documented install path works for a plugin nothing in the emulator special-
@@ -167,6 +173,7 @@ standard-plugins = [
     "plugin-battle-control",
     "plugin-agent",
     "plugin-gen1-shinyhunt",
+    "plugin-gen1-lobby",
 ]
 
 [profile.release]
@@ -211,6 +218,7 @@ terminalgb-plugin-gen1-link = { path = "plugins/gen1-link", version = "0.1.0", o
 terminalgb-plugin-battle-control = { path = "plugins/battle-control", version = "0.1.0", optional = true }
 terminalgb-plugin-agent = { path = "plugins/agent", version = "0.1.0", optional = true }
 terminalgb-plugin-gen1-shinyhunt = { path = "plugins/gen1-shinyhunt", version = "0.1.0", optional = true }
+terminalgb-plugin-gen1-lobby = { path = "plugins/gen1-lobby", version = "0.1.0", optional = true }
 terminalgb-plugin-example-tracer = { path = "plugins/example-tracer", version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -312,6 +320,16 @@ required-features = ["image", "plugin-gen1-link", "plugin-trainer", "portal"]
 name = "gen2_timecapsule"
 path = "examples/gen2_timecapsule.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
+[[example]]
+name = "worldlobby"
+path = "examples/worldlobby.rs"
+required-features = [
+    "image",
+    "plugin-gen1-lobby",
+    "plugin-gen1-link",
+    "plugin-trainer",
+]
 
 [[example]]
 name = "link_two"
