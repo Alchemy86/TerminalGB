@@ -14,6 +14,174 @@ use std::str;
 use gl::types::*;
 use glutin::event::{ElementState, VirtualKeyCode};
 
+/// The window title's **stable prefix**.
+///
+/// Automated runners find the window by title — the GB Emulator Shootout's
+/// default check is `title.startswith(<emulator name>)` — so the prefix is a
+/// published fact, not decoration. Everything the frontend appends (the
+/// upscaler's name, the volume) comes after it, and this is the one place it
+/// is written down.
+pub const WINDOW_TITLE: &str = "TerminalGB";
+
+/// Command-line options for the OpenGL window frontend.
+///
+/// These exist because an *automated* runner needs the three things a human
+/// never asks for: a specific console, a window of a known size showing the
+/// raw frame, and a way to run faster than real time. The GB Emulator
+/// Shootout's runner is the concrete case — it screenshots the client area and
+/// compares it against a 160×144 reference — but the same three answer
+/// "record a clip", "script a run" and "compare two builds by eye", so they
+/// are ordinary flags rather than a special mode. See `docs/shootout.md`.
+///
+/// Defaults reproduce the frontend's historical behaviour exactly: model from
+/// the cartridge header, window sized to the configured upscaler's output,
+/// real time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesktopOptions {
+    /// Which console to boot. Applied by the caller at construction time
+    /// (`Gameboy::new_with_model`), not by the window.
+    pub model: crate::mode::Model,
+    /// Client area, in whole multiples of the native 160×144 frame. `None`
+    /// keeps the historical behaviour: the window is sized to the upscaler's
+    /// output and stays resizable. `Some(n)` fixes it at `n*160 × n*144` and
+    /// makes it non-resizable, so nothing — a window manager, a tiling rule,
+    /// a stray drag — can change what a screenshot captures.
+    pub window_scale: Option<u32>,
+    /// Override the config file's `upscale` key. `--upscale none` is what
+    /// puts the untouched 160×144 frame on screen whatever the user's
+    /// `config.toml` says.
+    pub upscale: Option<crate::upscale::Algorithm>,
+    /// Override the config file's `upscale_factor` key.
+    pub upscale_factor: Option<u8>,
+    /// Emulation speed as a multiple of real time. 1.0 is a true DMG's
+    /// 59.7275 Hz. Above 1 the *emulator* runs faster; the window still draws
+    /// at most 59.7275 times a second, so the extra frames are emulated in a
+    /// burst rather than drawn (the same trade the terminal frontend's speed
+    /// ladder makes).
+    pub speed: f64,
+    /// Keep emulating while the window does not have keyboard focus.
+    ///
+    /// The frontend's default is to pause — reasonable for a person, and
+    /// **fatal for anything automated**: a runner that launches the emulator
+    /// from a script may never hand it focus (Windows refuses focus changes
+    /// requested by a background process), and a screenshot of a paused window
+    /// is a screenshot of the title screen. The pause is not observable from
+    /// the outside, so the failure looks like an emulation bug.
+    pub run_unfocused: bool,
+}
+
+impl Default for DesktopOptions {
+    fn default() -> Self {
+        DesktopOptions {
+            model: crate::mode::Model::Auto,
+            window_scale: None,
+            upscale: None,
+            upscale_factor: None,
+            speed: 1.0,
+            run_unfocused: false,
+        }
+    }
+}
+
+/// The most the emulator will run faster than real time. Not a policy so much
+/// as a guard: `--speed` multiplies how many frames one draw may emulate, and
+/// an unbounded value would let a typo park the process in a loop that never
+/// returns to the event queue.
+pub const MAX_SPEED: f64 = 100.0;
+
+impl DesktopOptions {
+    /// Pull the frontend's flags out of `args`, returning them and whatever is
+    /// left (the ROM path, and anything a caller parses itself).
+    ///
+    /// Unknown `--flags` are **left in the remainder** rather than rejected:
+    /// this parser runs after `crate::video::apply_cli_flags`, and a caller may
+    /// well have flags of its own. The ROM path is whatever survives.
+    pub fn parse<I: IntoIterator<Item = String>>(
+        args: I,
+    ) -> Result<(DesktopOptions, Vec<String>), String> {
+        let mut opts = DesktopOptions::default();
+        let mut rest = Vec::new();
+        let mut it = args.into_iter().peekable();
+        while let Some(arg) = it.next() {
+            // `--flag=value` and `--flag value` are both accepted; a runner's
+            // argv is generated, and both shapes are generated in the wild.
+            let (name, inline) = match arg.split_once('=') {
+                Some((n, v)) => (n.to_string(), Some(v.to_string())),
+                None => (arg.clone(), None),
+            };
+            let mut take = |what: &str| -> Result<String, String> {
+                match inline.clone().or_else(|| it.next()) {
+                    Some(v) => Ok(v),
+                    None => Err(format!("{name} needs a {what}")),
+                }
+            };
+            match name.as_str() {
+                "--model" => {
+                    let v = take("console (auto|dmg|cgb|sgb|sgb2)")?;
+                    opts.model = crate::mode::Model::parse(&v).ok_or_else(|| {
+                        format!("--model {v:?} is not one of auto/dmg/cgb/sgb/sgb2")
+                    })?;
+                }
+                "--scale" | "--window-scale" => {
+                    let v = take("whole number")?;
+                    let n: u32 = v
+                        .parse()
+                        .map_err(|_| format!("--scale {v:?} is not a number"))?;
+                    if n == 0 || n > 16 {
+                        return Err(format!("--scale {n} is outside 1..=16"));
+                    }
+                    opts.window_scale = Some(n);
+                }
+                "--upscale" => {
+                    let v = take("algorithm")?;
+                    opts.upscale = Some(
+                        crate::upscale::Algorithm::from_str(&v).ok_or_else(|| {
+                            format!(
+                                "--upscale {v:?} is not one of \
+                                     none/nearest/scale2x/mmpx/lcd"
+                            )
+                        })?,
+                    );
+                }
+                "--upscale-factor" => {
+                    let v = take("whole number")?;
+                    let n: u8 = v
+                        .parse()
+                        .map_err(|_| format!("--upscale-factor {v:?} is not a number"))?;
+                    opts.upscale_factor = Some(n);
+                }
+                "--speed" => {
+                    let v = take("multiplier")?;
+                    let s: f64 = v
+                        .parse()
+                        .map_err(|_| format!("--speed {v:?} is not a number"))?;
+                    if !(s.is_finite() && s > 0.0 && s <= MAX_SPEED) {
+                        return Err(format!("--speed {v} is outside 0..{MAX_SPEED}"));
+                    }
+                    opts.speed = s;
+                }
+                "--run-unfocused" => opts.run_unfocused = true,
+                _ => rest.push(arg),
+            }
+        }
+        Ok((opts, rest))
+    }
+
+    /// `--help` text for the flags this struct owns.
+    pub fn usage() -> &'static str {
+        "  --model <console>         auto (default), dmg, cgb, sgb, sgb2\n  \
+         --scale <N>               fixed client area of N x 160 x N x 144 \
+         (default: fit the upscaler)\n  \
+         --upscale <algo>          none, scale2x, mmpx, lcd — overrides the \
+         config file\n  \
+         --upscale-factor <N>      overrides the config file\n  \
+         --speed <N>               emulation speed, 1 = real time (e.g. 15 for \
+         turbo)\n  \
+         --run-unfocused           keep emulating when the window is not \
+         focused (default: pause)"
+    }
+}
+
 pub struct Glcx {
     #[allow(unused)]
     tex: GLuint,
@@ -392,6 +560,104 @@ impl Glcx {
 
             gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use crate::mode::Model;
+    use crate::upscale::Algorithm;
+
+    fn parse(s: &str) -> Result<(DesktopOptions, Vec<String>), String> {
+        DesktopOptions::parse(s.split_whitespace().map(str::to_string))
+    }
+
+    /// No flags must mean exactly what the frontend did before they existed:
+    /// console from the header, window sized to the upscaler, real time.
+    #[test]
+    fn the_defaults_are_the_old_behaviour() {
+        let (opts, rest) = parse("game.gb").unwrap();
+        assert_eq!(opts, DesktopOptions::default());
+        assert_eq!(opts.model, Model::Auto);
+        assert_eq!(opts.window_scale, None);
+        assert_eq!(opts.upscale, None);
+        assert_eq!(opts.speed, 1.0);
+        assert_eq!(rest, vec!["game.gb"]);
+    }
+
+    /// The combination a screenshot-comparing conformance runner passes: a
+    /// known console, a client area of exactly 160x144, the untouched frame in
+    /// it, and enough speed that a few hundred test ROMs finish in CI.
+    #[test]
+    fn a_conformance_runner_gets_a_known_picture_of_a_known_machine() {
+        let (opts, rest) =
+            parse("--model dmg --scale 1 --upscale none --speed 15 rom.gb").unwrap();
+        assert_eq!(opts.model, Model::Dmg);
+        assert_eq!(opts.window_scale, Some(1));
+        // `none` is the config file's own spelling of "do not upscale", and it
+        // has to override a `config.toml` that says otherwise — that file is
+        // the reason a flag is needed at all.
+        assert_eq!(opts.upscale, Some(Algorithm::Nearest));
+        assert_eq!(opts.speed, 15.0);
+        assert_eq!(rest, vec!["rom.gb"]);
+    }
+
+    /// Every console the shootout's manifest asks for is reachable by name.
+    #[test]
+    fn every_model_the_runner_asks_for_can_be_selected() {
+        for (flag, want) in [
+            ("dmg", Model::Dmg),
+            ("cgb", Model::Cgb),
+            ("sgb", Model::Sgb),
+            ("sgb2", Model::Sgb2),
+            ("auto", Model::Auto),
+        ] {
+            let (opts, _) = parse(&format!("--model {flag} r.gb")).unwrap();
+            assert_eq!(opts.model, want, "--model {flag}");
+        }
+    }
+
+    /// A generated argv may use either shape; both are accepted.
+    #[test]
+    fn inline_and_separated_values_both_parse() {
+        let a = parse("--scale=2 --speed=4 r.gb").unwrap().0;
+        let b = parse("--scale 2 --speed 4 r.gb").unwrap().0;
+        assert_eq!(a, b);
+        assert_eq!(a.window_scale, Some(2));
+    }
+
+    /// A typo must be refused, never silently ignored: a run that quietly
+    /// booted the wrong console would produce a wrong score with no sign of it.
+    #[test]
+    fn a_bad_value_is_refused_rather_than_ignored() {
+        assert!(parse("--model dgm r.gb").is_err());
+        assert!(parse("--scale 0 r.gb").is_err());
+        assert!(parse("--scale 99 r.gb").is_err());
+        assert!(parse("--speed 0 r.gb").is_err());
+        assert!(parse("--speed -1 r.gb").is_err());
+        assert!(parse("--speed nan r.gb").is_err());
+        assert!(parse("--upscale sparkle r.gb").is_err());
+        assert!(parse("--model").is_err());
+    }
+
+    /// This parser runs after `video::apply_cli_flags` and before the caller
+    /// picks the ROM path, so anything it does not own must survive untouched.
+    #[test]
+    fn flags_this_parser_does_not_own_are_passed_through() {
+        let (opts, rest) = parse("--scale 3 --something-else r.gb").unwrap();
+        assert_eq!(opts.window_scale, Some(3));
+        assert_eq!(rest, vec!["--something-else", "r.gb"]);
+    }
+
+    /// The window title's prefix is what an automated runner matches on, so it
+    /// is a published fact — pinned here so a rename is a deliberate act.
+    #[test]
+    fn the_window_title_prefix_is_stable() {
+        assert_eq!(WINDOW_TITLE, "TerminalGB");
+        // Whatever the frontend appends still starts with the prefix.
+        let live = format!("{WINDOW_TITLE} — nearest x1 — vol 50%");
+        assert!(live.starts_with(WINDOW_TITLE));
     }
 }
 

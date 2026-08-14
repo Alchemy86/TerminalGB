@@ -1,0 +1,24 @@
+# Copy to `.github/workflows/ci-terminalgb.yml` in a GBEmulatorShootout
+# checkout. Identical in shape to `ci-gameroy.yml`; only the name differs.
+name: CI - TerminalGB
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    uses: ./.github/workflows/emulator-runner.yml
+    with:
+      emulator: TerminalGB
+      # Scream (the virtual audio driver the runner installs) gives cpal a
+      # device to open. The emulator survives without one — it falls back to a
+      # silent sink so the APU is still emulated — but running it with real
+      # audio output is the configuration a user gets.
+      needs_audio: true
+
+  deploy-pages:
+    needs: run
+    uses: ./.github/workflows/deploy-pages.yml

@@ -166,7 +166,18 @@ impl Gameboy {
     }
 
     #[cfg(all(feature = "desktop", not(any(target_arch = "wasm32", feature = "ffi"))))]
-    pub fn render_desktop(mut self) {
+    pub fn render_desktop(self) {
+        self.render_desktop_with(crate::screen::desktop::DesktopOptions::default())
+    }
+
+    /// [`render_desktop`](Self::render_desktop) with the window and pacing
+    /// chosen explicitly — see [`crate::screen::desktop::DesktopOptions`].
+    ///
+    /// `opts.model` is *not* read here: the console is decided when the machine
+    /// is built (`Gameboy::new_with_model`), long before a window exists. It
+    /// rides along in the struct so one parse produces every frontend option.
+    #[cfg(all(feature = "desktop", not(any(target_arch = "wasm32", feature = "ffi"))))]
+    pub fn render_desktop_with(mut self, opts: crate::screen::desktop::DesktopOptions) {
         use crate::screen::desktop::*;
 
         // Initialize audio (only when the `audio` feature is enabled; cpal pulls
@@ -188,6 +199,18 @@ impl Gameboy {
         #[cfg(any(target_arch = "wasm32", not(feature = "audio")))]
         let _audio_stream: Option<()> = None;
 
+        // **A machine always has an APU, sound card or not.** `Sound::do_cycle`
+        // returns immediately while no player is installed, so a build without
+        // the `audio` feature — or a host where cpal found no device — was not
+        // running a silent Game Boy but one with no APU at all: `NR52` reads
+        // back powered off, the frame sequencer never advances, and PCM12/PCM34
+        // report nothing. Cartridges can see that (`interrupt_time` spins on
+        // `NR52`), so install a sink that throws the samples away rather than
+        // leaving the chip out of the machine. See `crate::sound::SilentPlayer`.
+        if !self.audio_enabled() {
+            self.enable_audio(Box::new(crate::sound::SilentPlayer));
+        }
+
         // Pixel-art upscaler (see crate::upscale): a CPU pre-pass on the
         // 160x144 frame before the texture upload. Chosen over a GL shader
         // because the same code then serves every frontend (terminal, wasm)
@@ -206,7 +229,13 @@ impl Gameboy {
             crate::sound::output_volume::set_level(level);
             crate::sound::output_volume::set_muted(muted);
         }
-        let mut upscaler = crate::upscale::Upscaler::new(cfg.upscale, cfg.upscale_factor);
+        // The command line beats the config file, so a caller that needs a
+        // known picture gets one whatever is in the user's `config.toml`.
+        // `--upscale none` is the pairing with `--scale 1` that puts the
+        // untouched 160x144 frame in a 160x144 client area.
+        let algo = opts.upscale.unwrap_or(cfg.upscale);
+        let factor = opts.upscale_factor.unwrap_or(cfg.upscale_factor);
+        let mut upscaler = crate::upscale::Upscaler::new(algo, factor);
         let (mut out_w, mut out_h) =
             upscaler.output_size(self.width as usize, self.height as usize);
 
@@ -294,14 +323,27 @@ impl Gameboy {
 
         let event_loop: glutin::event_loop::EventLoop<()> =
             glutin::event_loop::EventLoop::with_user_event();
-        let inner_size = glutin::dpi::LogicalSize {
-            width: out_w as u32,
-            height: out_h as u32,
-        };
+        // `--scale N` fixes the client area at N x the *native* 160x144 frame,
+        // in **device** pixels, and locks it. A screenshot-comparing runner
+        // measures the client rect, so a logical size would be silently
+        // multiplied by the display's scale factor, and a resizable window is
+        // one a window manager may resize for its own reasons. Without the
+        // flag this is exactly the old behaviour: a logical box the size of the
+        // upscaler's output, resizable.
+        let fixed = opts.window_scale;
         let window_builder = glutin::window::WindowBuilder::new()
-            .with_title("TerminalGB")
-            .with_inner_size(inner_size)
-            .with_resizable(true);
+            .with_title(WINDOW_TITLE)
+            .with_resizable(fixed.is_none());
+        let window_builder = match fixed {
+            Some(n) => window_builder.with_inner_size(glutin::dpi::PhysicalSize {
+                width: n * self.width,
+                height: n * self.height,
+            }),
+            None => window_builder.with_inner_size(glutin::dpi::LogicalSize {
+                width: out_w as u32,
+                height: out_h as u32,
+            }),
+        };
         let gl_window = glutin::ContextBuilder::new()
             .build_windowed(window_builder, &event_loop)
             .unwrap();
@@ -311,6 +353,10 @@ impl Gameboy {
 
         let cx = Glcx::new();
         let mut focused = true;
+        // `--run-unfocused` (see `DesktopOptions::run_unfocused`): an
+        // automated runner may never be given focus at all, and a paused
+        // emulator looks exactly like a broken one from the outside.
+        let run_unfocused = opts.run_unfocused;
         // The DMG refreshes every 70224 CPU cycles at 4.194304 MHz = 59.7275 Hz,
         // i.e. one frame every 16.7427 ms. The old value (16 ms = 62.5 fps) paced
         // the whole emulator ~4.64% fast, which the player hears as the game (and
@@ -318,7 +364,27 @@ impl Gameboy {
         // produces ~4.6% more samples per wall-second than the sound card drains,
         // so the output queue overflows and drops samples periodically. Pacing at
         // the true frame period fixes both — see docs/audio.md.
-        let frame_duration = std::time::Duration::from_micros(16_743); // 59.73 FPS (true DMG)
+        //
+        // `--speed N` shortens the *emulated* frame period; the window still
+        // draws at most 59.7275 times a second, so above 1x the extra frames
+        // are emulated in a burst inside one draw rather than drawn. Drawing at
+        // 15x would mean 900 texture uploads and buffer swaps a second, which
+        // on a software OpenGL stack (the only kind a CI runner has) is what
+        // would actually limit the speed. Same trade the terminal frontend's
+        // ladder makes: emulated frames are never dropped, displayed ones are.
+        const REAL_FRAME_US: f64 = 16_743.0; // 59.7275 Hz, a true DMG
+        let frame_duration =
+            std::time::Duration::from_micros((REAL_FRAME_US / opts.speed) as u64);
+        // How many emulated frames one draw may run. At 1x this is the
+        // historical 3 (absorbing OS jitter); above it, enough that a 59.73 Hz
+        // draw loop can still keep the deadline — plus the same slack.
+        let max_catchup = 3 + opts.speed.ceil() as u32;
+        // Fast-forward tells the audio player to drop its overflow rather than
+        // pace the emulator against the sound card (`docs/audio.md` §4c).
+        if opts.speed > 1.0 {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.set_audio_fast_forward(true);
+        }
 
         // Deadline accumulator, NOT `last = Instant::now()` after each frame.
         // Resetting to `now` adds the draw/scheduling overhead to every period,
@@ -328,6 +394,13 @@ impl Gameboy {
         // deadline by exactly one period keeps the long-run average at
         // 59.7275 Hz; a bounded catch-up absorbs late wakeups.
         let mut next_frame_time = std::time::Instant::now() + frame_duration;
+        // The display's own deadline. At 1x it is the emulated frame period, so
+        // the loop below is byte-for-byte the old one; above 1x it stays at
+        // 59.7275 Hz while `frame_duration` shortens, which is what turns extra
+        // speed into extra *emulated* frames instead of extra draws.
+        let draw_interval =
+            frame_duration.max(std::time::Duration::from_micros(REAL_FRAME_US as u64));
+        let mut next_draw_time = std::time::Instant::now() + draw_interval;
 
         event_loop.run(move |event, _, control_flow| {
             let window = gl_window.window();
@@ -407,7 +480,7 @@ impl Gameboy {
                                 // a control nobody can see the state of is a
                                 // control nobody trusts.
                                 window.set_title(&format!(
-                                    "TerminalGB — {} — vol {}",
+                                    "{WINDOW_TITLE} — {} — vol {}",
                                     upscaler.label(),
                                     output_volume::label()
                                 ));
@@ -419,13 +492,15 @@ impl Gameboy {
                         process_window(window, &wevent, &mut self, &mut focused)
                 }
                 glutin::event::Event::MainEventsCleared => {
-                    // Only request redraw if the frame deadline has passed
-                    if std::time::Instant::now() >= next_frame_time {
+                    // Only request redraw if the display deadline has passed.
+                    // (At 1x that is the frame deadline; above 1x the frames
+                    // due in between are run inside the draw.)
+                    if std::time::Instant::now() >= next_draw_time {
                         window.request_redraw();
                     }
                 }
                 glutin::event::Event::RedrawRequested(_) => {
-                    if focused {
+                    if focused || run_unfocused {
                         self.frame();
                         feed_video(&self, &mut upscaler, &mut video, video_source);
                         next_frame_time += frame_duration;
@@ -436,7 +511,7 @@ impl Gameboy {
                         let now = std::time::Instant::now();
                         if now > next_frame_time {
                             let mut extra = 0;
-                            while now > next_frame_time && extra < 3 {
+                            while now > next_frame_time && extra < max_catchup {
                                 self.frame();
                                 feed_video(
                                     &self,
@@ -464,9 +539,17 @@ impl Gameboy {
                         video.idle(std::time::Instant::now());
                     }
 
-                    // Schedule next frame
+                    // Schedule the next draw. Late draws advance the deadline by
+                    // whole periods for the same reason the frame deadline does
+                    // — never reset it to `now` (see `docs/audio.md`) — but a
+                    // hopeless backlog resyncs rather than drawing in a burst.
+                    let now = std::time::Instant::now();
+                    next_draw_time += draw_interval;
+                    if now > next_draw_time {
+                        next_draw_time = now + draw_interval;
+                    }
                     *control_flow =
-                        glutin::event_loop::ControlFlow::WaitUntil(next_frame_time);
+                        glutin::event_loop::ControlFlow::WaitUntil(next_draw_time);
                 }
                 _ => {
                     // Keep the current control flow
@@ -839,6 +922,13 @@ impl Gameboy {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn enable_audio(&mut self, player: Box<dyn crate::sound::AudioPlayer>) {
         self.cpu.memory.enable_audio(player);
+    }
+
+    /// Is an APU installed? False means the machine has **no sound chip**, not
+    /// a quiet one — see [`crate::sound::SilentPlayer`] for why the difference
+    /// is visible to the cartridge.
+    pub fn audio_enabled(&self) -> bool {
+        self.cpu.memory.sound.is_some()
     }
 
     /// Frontend hint: emulation is deliberately running faster than real time.

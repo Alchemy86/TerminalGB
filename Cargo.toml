@@ -251,6 +251,14 @@ name = "mealybug"
 path = "examples/mealybug.rs"
 required-features = ["image"]
 
+# Scores this emulator the way the GB Emulator Shootout does, against its own
+# ROMs and reference screenshots (fetched at run time, never vendored). See
+# docs/shootout.md.
+[[example]]
+name = "shootout_scout"
+path = "examples/shootout_scout.rs"
+required-features = ["image"]
+
 [[example]]
 name = "trainer_layout"
 path = "examples/trainer_layout.rs"

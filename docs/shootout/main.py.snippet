@@ -1,0 +1,30 @@
+Two edits in a GBEmulatorShootout checkout, both additive.
+
+1) `main.py` — append to `EMULATOR_SPECS` (the list is in no particular order;
+   the published table sorts by score):
+
+    {
+        'factory': lambda: _new_instance("emulators.terminalgb", "TerminalGB"),
+        'keywords': ["TerminalGB", "terminalgb", "terminal-gb"],
+        'name': "TerminalGB",
+        'url': "https://github.com/Alchemy86/gameboy",
+    },
+
+2) `.github/workflows/ci-all.yml` — append to the `matrix.include` list:
+
+          - emulator: TerminalGB
+            needs_chromedriver: false
+            needs_audio: true
+            extra_requirements: ''
+
+Notes:
+
+* `keywords` are matched with `_normalize_emulator_keyword`, which lowercases
+  and strips non-alphanumerics, so all three collapse to `terminalgb`. They are
+  listed separately only so a reader can see which spellings are intended.
+* The **repository slug is still `Alchemy86/gameboy`** — the product was
+  renamed, the repo was not, and `downloadGithubRelease` takes the slug.
+* The `title_check` in `emulators/terminalgb.py` matches the emulator's own
+  window-title constant (`screen::desktop::WINDOW_TITLE`), which is a separate
+  decision from this entry's display name. Changing one does not require
+  changing the other.

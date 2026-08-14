@@ -1,0 +1,135 @@
+# Publish binaries as GitHub release assets.
+#
+# The immediate reason this exists is the GB Emulator Shootout: its runner
+# fetches an emulator with `downloadGithubRelease(repo, …, filter=lambda n:
+# "win" in n)`, so *the only* way onto that board is a release whose asset name
+# contains "win" (see `docs/shootout.md`). The general reason is better: a
+# project with no releases asks every user to install Rust first.
+#
+# Triggered by a `v*` tag, or by hand from the Actions tab. A manual run
+# publishes a **draft**, so nothing outward-facing happens without a decision.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name to publish the draft under (e.g. v0.3.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # "win" is load-bearing in this asset name — see the header.
+          - name: windows-x64
+            os: windows-latest
+            asset: terminalgb-windows-x64
+          - name: linux-x64
+            os: ubuntu-latest
+            asset: terminalgb-linux-x64
+
+    steps:
+      # The test-ROM submodule is not needed to build the frontends.
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      # Each runner builds for its own host, so the `rust-toolchain` file's
+      # pinned 1.83.0 applies without a cross-target install to keep in step
+      # with it.
+      - run: rustup show
+
+      # cpal needs ALSA headers on Linux and nothing at all on Windows.
+      - name: Install ALSA development libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      # The `audio` feature is NOT optional for a release build, and that is an
+      # accuracy point rather than a comfort one. `Sound::do_cycle` returns
+      # immediately when no player is installed, so a build that could not open
+      # a device used to run with **no APU at all** — `NR52` reads back powered
+      # off and every APU test ROM fails. `sound::SilentPlayer` closes that hole
+      # whatever the build, but shipping the real thing is what a user wants and
+      # what the sound tests measure end to end.
+      - name: Build the frontends
+        run: |
+          cargo build --release --features audio --example desktop
+          cargo build --release --features audio --example terminal
+
+      - name: Stage the archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item "target/release/examples/desktop.exe" "staging/terminalgb.exe"
+          Copy-Item "target/release/examples/terminal.exe" "staging/terminalgb-terminal.exe"
+          Copy-Item "README.md","LICENSE" staging/
+          Compress-Archive -Path staging/* -DestinationPath "${{ matrix.asset }}.zip"
+
+      - name: Stage the archive (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          cp target/release/examples/desktop staging/terminalgb
+          cp target/release/examples/terminal staging/terminalgb-terminal
+          cp README.md LICENSE staging/
+          (cd staging && zip -r "../${{ matrix.asset }}.zip" .)
+
+      # A release asset nobody has run is a promise, not a binary. This is the
+      # cheapest check that answers "does it start, and does it draw the right
+      # picture": the vendored MIT dmg-acid2 ROM, headless, on the runner that
+      # produced the archive. It needs no display, so it works on both.
+      - name: Smoke-test the build
+        run: cargo run --release --example headless -- third_party/dmg-acid2/dmg-acid2.gb 120
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # `gh` is preinstalled on GitHub runners, so publishing needs no
+      # third-party action — the same reason `tools/conformance/` is stdlib
+      # only. A hand-triggered run is a dry run: the assets land on a **draft**
+      # somebody publishes (or deletes) deliberately. A tag push is itself the
+      # deliberate act, so that one publishes.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          DRAFT: ${{ github.event_name == 'workflow_dispatch' && '--draft' || '' }}
+        run: |
+          set -euo pipefail
+          ls -l dist
+          # Fail rather than publish an incomplete release: the shootout's
+          # runner matches assets by name, so a missing zip is a silent
+          # non-entry rather than an error anyone would see.
+          test -f dist/terminalgb-windows-x64.zip
+          test -f dist/terminalgb-linux-x64.zip
+          gh release create "$TAG" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes \
+            $DRAFT

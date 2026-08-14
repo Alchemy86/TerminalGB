@@ -3825,3 +3825,75 @@ than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o 
   chiptune output, expect it to be *confined to what the fix is about*, and treat a diff that
   is not so confined as a finding. Nothing in `testharness/chiptune.rs` pins a hash of our
   own audio, which is why an accuracy fix does not turn it red.
+
+## The GB Emulator Shootout entry (`docs/shootout.md`, `examples/shootout_scout.rs`)
+
+- **We score 223/264 = 84.5 %, which is 5th of 19 on the published board** (measured on
+  `main` at `1b3e3e7`) — behind docboy, Emulicious, SameBoy and Beaten Dying Moon;
+  ahead of GSE (218), bgb (205), mGBA (150) and
+  everything below. Re-derive it in seventeen seconds:
+  `python3 tools/shootout/manifest.py <checkout> > m.tsv && cargo run --release --features
+  image --example shootout_scout -- m.tsv`. An older report's **92/264** is stale by a wide
+  margin — the DMG boot mode, the core-timing work, the APU campaign and the OAM-bug fix all
+  land on rows nobody was scoring.
+- **THE SHOOTOUT'S MOONEYE POPULATION IS 97 ROWS, NOT OUR 103** — `acceptance` 66 (not 75)
+  and `misc` 2 (not 8). Its `testroms/mooneye.py` comments out **all fifteen** model-variant
+  ROMs: nine `acceptance` (`boot_div-dmg0`, `-S`, `boot_div2-S`, `boot_hwio-dmg0`, `-S`,
+  `boot_regs-dmg0`, `-mgb`, `-sgb`, `-sgb2`) and six `misc` (`bits/unused_hwio-C`,
+  `boot_div-A`, `boot_div-cgb0`, `boot_hwio-C`, `boot_regs-A`, `ppu/vblank_stat_intr-C`).
+  **That is exactly the population `0e099b0` fixed**, which is why eleven rows of real
+  accuracy moved our own gates and moved the shootout number by **zero** — verified by
+  re-scoring all 264 after the rebase and diffing: no row changed in either direction. Same
+  trap the SameSuite notes record: *check which population a number belongs to before
+  comparing two of them.*
+- **THE SUITE IS 264 ROWS, NOT 311.** `testroms/mealybug.py` builds three lists and ends with
+  `all = dmgs # + cgbcs + cgbds`, so 47 of the `Test(...)` objects it constructs are never
+  run. A manifest generator that collects *constructions* instead of each module's `all` gives
+  311 and quietly buries a DMG-only score under CGB rows nobody is graded on. Ours reproduces
+  the published row set exactly, name for name — that equality is the check to keep.
+- **They screenshot a Windows GUI window's client area; there is no serial capture anywhere in
+  their project.** So the whole screen counts, boot-register dumps and palette included, and
+  our `000000/606060/c0c0c0/ffffff` DMG palette passes only because `compareImage` allows a
+  **50/255 greyscale** difference (measured against their dmg-acid2 reference: max diff **22**).
+- **Two frontend defects that no test ROM can catch, both fixed here, both fatal to any
+  automated runner:**
+  1. **The desktop frontend paused when its window lost focus.** A runner started from a script
+     may never be given focus at all (Windows refuses focus changes requested by a background
+     process). Measured over ~11 s with two instances racing, counting frames through
+     `--video-out`: **653 emulated frames with `--run-unfocused`, 29 without.** The pause is
+     invisible from outside, so it reads as a catastrophic emulation failure.
+  2. **A build with no sound device had no APU at all**, not a quiet one: `Sound::do_cycle`
+     returns immediately while `player` is `None`, so `NR52` reads back powered off and
+     PCM12/PCM34 report nothing. Worth ~85 shootout rows (`dmg_sound` 12, `cgb_sound` 12,
+     `interrupt_time`, 57 SameSuite APU). `sound::SilentPlayer` is the fix and
+     `render_desktop_with` installs it whenever no real player was attached. **Never ship a
+     frontend that only emulates the APU when a sound card exists.**
+- **New desktop flags, all ordinary user-facing flags — nothing is special-cased for their
+  runner** (`screen::desktop::DesktopOptions`): `--model`, `--scale`, `--upscale`,
+  `--upscale-factor`, `--speed`, `--run-unfocused`. Defaults reproduce the old behaviour
+  exactly. `--scale N` sizes the client area in **device** pixels (a logical size would be
+  multiplied by the display scale factor, and the runner measures `GetClientRect`) and makes
+  the window non-resizable. `--scale` and `--upscale` are a pair: the first sizes the window,
+  the second decides what is drawn into it, so `--scale 1 --upscale none --upscale-factor 1` is
+  what pins a 160×144 picture whatever a user's `config.toml` says.
+- **`--speed` shortens the emulated frame period, not the draw period.** Above 1× the extra
+  frames are emulated in a burst inside one draw. Drawing at 15× would be 900 texture uploads
+  and buffer swaps a second, and on the software OpenGL stack a CI runner has (`setupMesa`)
+  *that* would be the limit, not the emulator.
+- **`screen::desktop::WINDOW_TITLE` is a published constant**, pinned by a unit test, because
+  the runner finds the window with `title.startswith(...)`. The board entry's display name is a
+  separate string — renaming the project need not change the title, and vice versa. Both read
+  `TerminalGB` today; **the repository slug stays `Alchemy86/gameboy`**, and that is what
+  `downloadGithubRelease` takes.
+- **Verified end to end on the real frontend, not only in a parser**: an X11 capture of the
+  window is exactly 160×144, titled `TerminalGB`, and passes their dmg-acid2 comparison;
+  `blargg/cpu_instrs` (≈31 s at 1×) finished in under 10 s at `--speed 15`. **Nobody has run
+  the Windows binary on Windows** — the cross-target check is clean and the release workflow
+  smoke-tests each build, but say that plainly rather than implying otherwise.
+- **`.github/workflows/release.yml` exists because of this**: their `downloadGithubRelease`
+  filters assets on `"win" in name`, so the asset must stay `terminalgb-windows-x64.zip`. A tag
+  push publishes; a manual run produces a **draft**. It builds with `--features audio` on
+  purpose (see the APU point above).
+- **Re-scoring the board is one `workflow_dispatch`, not a new PR** — each emulator has its own
+  `ci-<name>.yml`. That is the argument for submitting before the Mealybug campaign finishes
+  rather than after: the gains land whenever we ask for them.

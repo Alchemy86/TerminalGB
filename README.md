@@ -89,6 +89,18 @@ scales crisply (nearest-neighbour, integer-letterboxed 10:9).
 > The ROM path is the first argument; run with no argument and it prints a usage line and
 > exits cleanly. Add `--features audio` for sound (see the ALSA note above).
 
+Flags, for when the window has to be a known thing rather than a comfortable one — recording a
+clip, scripting a run, or being driven by a conformance runner
+([`docs/shootout.md`](docs/shootout.md)):
+
+| flag | what it does |
+|---|---|
+| `--model <auto\|dmg\|cgb\|sgb\|sgb2>` | which console to boot; beats both the cartridge header and `$GB_MODEL` |
+| `--scale <N>` | client area of exactly `N×160 × N×144` **device** pixels, non-resizable |
+| `--upscale <algo>` / `--upscale-factor <N>` | override `config.toml`; `--upscale none` draws the untouched frame |
+| `--speed <N>` | emulation speed, `1` = real time. Above 1 the extra frames are emulated inside one draw, not drawn |
+| `--run-unfocused` | keep emulating when the window loses focus (default: pause) |
+
 ### ⌨️ Terminal
 
 ```bash
@@ -862,6 +874,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 
 | page | what it answers |
 |---|---|
+| [the GB Emulator Shootout submission](docs/shootout.md) | what we would score on the public board (223/264), what their runner requires, and the prepared entry |
 | [the GitHub Action](docs/conformance-action.md) | scoring *someone else's* emulator: the contract, badges, licensing, honest gaps |
 | [the standalone-tool design](docs/conformance.md) | where this is going and why |
 | [per-fix conformance notes](docs/conformance-notes.md) | every accuracy bug we fixed, with symptom, catching test and hardware citation |
@@ -1350,6 +1363,28 @@ make test-external-accurate                             # the same suites, per-d
 That Mealybug 3/79 is the real remaining gap and it is **not hidden by a pass/fail column**:
 the baseline records *how many of the 23,040 pixels differ* on every row, so progress shows up
 even when no row flips.
+
+### What we would score on the GB Emulator Shootout
+
+The [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/) is the community's public
+board: 264 ROMs, 18 emulators, every verdict a screenshot comparison. Scored against **its**
+ROMs, **its** reference images and **its** pass criterion:
+
+> **223 / 264 — 84.5 %**, which is 5th of 19 by pass count: behind docboy (258), Emulicious
+> (254), SameBoy (253) and Beaten Dying Moon (247), ahead of GSE (218), bgb (205),
+> GambatteSpeedrun (169), mGBA (150) and everything below.
+
+All 41 failures are documented open areas, and 36 of them are the PPU. Re-derive the number in
+under a minute — no Windows, no display:
+
+```bash
+git clone https://github.com/gbdev/GBEmulatorShootout
+python3 tools/shootout/manifest.py GBEmulatorShootout > manifest.tsv
+cargo run --release --features image --example shootout_scout -- manifest.tsv
+```
+
+We are **not listed on the board yet**; [`docs/shootout.md`](docs/shootout.md) is the prepared
+submission, the per-suite breakdown and what remains.
 
 **The shootout standing, for scale.** From the
 [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own published per-test data on

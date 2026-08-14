@@ -52,6 +52,37 @@ pub trait AudioPlayer: Send {
     fn set_fast_forward(&mut self, _enabled: bool) {}
 }
 
+/// An [`AudioPlayer`] that throws the samples away.
+///
+/// **A machine always has an APU, whether or not the host has a sound card.**
+/// [`Sound::do_cycle`] returns immediately while no player is installed, so a
+/// frontend that only calls `enable_audio` when it found a device is not
+/// running a quiet Game Boy — it is running one with *no APU at all*. That is
+/// observable from the cartridge: `NR52` reads back as powered off, the length
+/// counters and frame sequencer never advance, and the CGB PCM12/PCM34
+/// registers report nothing. Test ROMs notice (Blargg `dmg_sound`,
+/// `interrupt_time` — which spins on `NR52` — and 61 SameSuite APU ROMs), and
+/// so does any game that synchronises through the APU.
+///
+/// So this is what a frontend installs when there is no device, and it is what
+/// the whole product does on a build without the `audio` feature. The cost is
+/// the APU's own ~30 µs/frame plus a mixdown into a discarded buffer, measured
+/// at +0.02 ms/frame against a 16.743 ms budget.
+///
+/// It reports the same 44.1 kHz the cpal player negotiates by default, so the
+/// resampler runs at the rate it normally would.
+pub struct SilentPlayer;
+
+impl AudioPlayer for SilentPlayer {
+    fn play(&mut self, _left_channel: &[f32], _right_channel: &[f32]) {}
+    fn samples_rate(&self) -> u32 {
+        SAMPLE_RATE
+    }
+    fn underflowed(&self) -> bool {
+        false
+    }
+}
+
 struct VolumeEnvelope {
     period: u8,
     goes_up: bool,
