@@ -137,6 +137,48 @@ fn main() {
         }
     }
 
+    // `--command` deliberately swallows the rest of the command line, which is
+    // the usual convention and is also a quiet footgun: put `--shots` after it
+    // and the runner silently passes `--shots` to the adapter instead of taking
+    // any screenshots. It cost one wasted run here, so it is now an error
+    // rather than a surprise.
+    const FLAGS: [&str; 22] = [
+        "--rom",
+        "--driver",
+        "--script",
+        "--command",
+        "--frames",
+        "--objective",
+        "--log",
+        "--frame-capture",
+        "--shots",
+        "--shot-every",
+        "--max-calls",
+        "--max-usd",
+        "--timeout",
+        "--wall",
+        "--pace",
+        "--report",
+        "--quiet",
+        "--seed",
+        "--latency",
+        "--state",
+        "--state-out",
+        "--stop-on",
+    ];
+    if let Some(stray) = a
+        .command
+        .iter()
+        .skip(1)
+        .find(|v| FLAGS.contains(&v.as_str()))
+    {
+        eprintln!(
+            "'{stray}' came after --command, so it was passed to the adapter \
+             rather than read as an option. --command must be LAST."
+        );
+        std::process::exit(2);
+    }
+
     let Some(rom_path) = a.rom.clone() else {
         eprintln!("--rom is required");
         usage();
