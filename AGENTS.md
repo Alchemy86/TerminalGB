@@ -4071,14 +4071,77 @@ track the live game", "Offers group by game and player"). What is durable:
   60 s+ stalls under rate limiting. The captain reads that as "it sits on the steps after
   every doorway". The CLI adapter is the convenient path, not the watchable one; the API
   adapter (`ANTHROPIC_API_KEY`, not present on this box) is the fix, not more prompt.
-- **The screen text was never the problem.** `screen.text` (VRAM-decoded) is in every
-  snapshot — the runs read "YOUR NAME?" and "but you can have one! Choose!" fine. When a
-  watching human says "it cannot read the screen", check what is NOT text first: the balls
-  are sprites, NPCs are sprites, terrain is collision data.
+- **The screen text was not the problem *on the screens this session saw*.** `screen.text`
+  (VRAM-decoded) is in every snapshot — the runs read "YOUR NAME?" and "but you can have
+  one! Choose!" fine. When a watching human says "it cannot read the screen", check what is
+  NOT text first: the balls are sprites, NPCs are sprites, terrain is collision data.
+  **Narrowed by measurement afterwards** (next section): on screens this session never
+  reached — the battle menu, the intro, any two-column menu — the decode *was* wrong, and
+  silently. "It read the overworld fine" is not "the decode is right".
 - **Watching a TUI agent run headlessly:** `GB_AGENT_LOG=<path>` NDJSON plus `tail -F` (the
   file is recreated per launch — `-f` follows a deleted inode and goes silent forever).
   Milestones and failures both appear as `decision` events; `error:"timeout"` with an empty
   reply is the host killing a call.
+
+### The screen text channel — a decode that lies is worse than one that is missing
+
+**Full write-up + the fourteen-screen evidence table: [`docs/claude-plays.md`](docs/claude-plays.md) §12.**
+Evidence tool: `cargo run --release --features plugin-agent --example screen_text -- --rom
+<blue.gb> [--save <sav>] (--tour | --menu-tour | --stability | --state <gbss>)`.
+
+- **The channel already existed and already worked — the defects were in what it omitted,
+  invented and never admitted.** `screen.text` has been in every snapshot since the plugin's
+  first commit and the live-run list says it read menus and dialogue correctly. Check that
+  before rebuilding a pipe: the finding was that four of §11's six blind spots were *decode*
+  gaps, not plumbing.
+- **A TILE ID IS A VRAM INDEX, NOT A CHARACTER — and Gen 1 reloads different pictures into
+  the same slots.** `pret/pokered`'s `constants/charmap.asm` lists `$6E`-`$75` **twice**:
+  once in the main font (quotes, unused hiragana) and again under *"Actual characters (from
+  `gfx/font/font_battle_extra.png`)"*, plus overlays for the status screen (`<BOLD_P>` at
+  `$72`) and the Pokédex (`$60`/`$61`). Decoding `$70`-`$75` as quotes put `”’` on a line of
+  its own and `153/153”` on the HP row of **every** battle screen. They are left blank.
+  `$6E` is the opposite and *is* decoded (`Lv`): its main-font meaning is a hiragana no
+  English screen ever places, so only one picture can be on screen. `$F0` is `¥` normally
+  and the `ED` key on the naming screen — the one ambiguity resolvable, because that screen
+  announces itself, and `Screen::from_tiles` renders twice there for exactly that.
+- **The battle menu's `PKMN` was invisible** — `<PK><MN>` (`$E1 $E2`) both decoded to
+  spaces, so a model was shown `FIGHT / ITEM RUN` and could not know switching exists.
+  Contractions (`'s`, `'t`) and `<LV>` were the same omission.
+- **`Screen::selected` needs a column rule, and both halves are load-bearing.** A menu item
+  may contain a blank (`NEW GAME`); a two-column menu may separate its columns with only one
+  (`▶FIGHT PKMN`, measured — `FIGHT` ends at column 14, `PKMN` starts at 16). The rule is
+  that a menu's columns line up across **its own rows**, i.e. rows that begin an item in the
+  same column as this one. Using *every* row instead truncated `NEW NAME` to `NEW`, because
+  the question printed under the list begins a word where `NAME` does. On the naming
+  keyboard the same rule yields the single letter under the cursor for free.
+- **Withheld beats confidently wrong.** `Screen::trust` is `graphics-not-text` when artwork
+  laid out as sequential font-range tiles decodes to alphabet salad (the Game Freak intro
+  really does read `ABCDEFGHIJKLMNOP`), `still-redrawing` when the tilemap was still moving,
+  `screen-off` with the LCD off. In those cases `screen.text` is sent **empty** and a note
+  says why. `screen.kind` (`no-text`/`text`/`dialogue`/`menu`/`yes-no`/`naming-keyboard`) is
+  sent regardless, because it comes from the cursor and arrow glyphs, not from words — and
+  `no-text` is what makes an empty overworld screen a *fact* rather than a failed read.
+- **Bound a "wait for it to settle" gate with a measurement.** `--stability` on a real
+  cartridge: main menu / overworld / START menu identical for all 240 frames; a dialogue box
+  waiting on the blinking `▼` changes 6 times in 240 frames with a **longest identical run of
+  42 frames**, against a 4-frame gate. Without that number the gate is a guess that could
+  blind the agent on every dialogue box. The wait is capped at 120 extra frames anyway.
+- **Sprites are not in the screen text and never can be** — people, Poké Balls and objects
+  are OAM, drawn *over* the tilemap. That is §11's blind spot 1, still open, and the prompt
+  now says so explicitly so an empty screen does not read as an empty room.
+- **Conformance record** (per the standing convention; this is a *consumer of emulated
+  state* defect, like the `wIsInBattle == $FF` one, so point 3 cites the disassembly rather
+  than Pan Docs): *symptom* — an agent is shown menu options that do not exist and shown
+  quote marks where a health bar is, with the same confidence as good data. *Caught by* —
+  **no test ROM, and none can**: the emulator was entirely correct; every one of these is a
+  reader bug, which is the same blind spot as the render defects. Now
+  `observe::tests::{the_battle_menus_pkmn_option_is_visible,
+  the_ambiguous_battle_font_slots_stay_blank, the_naming_screens_end_key_is_not_a_yen_sign,
+  text_below_a_menu_does_not_cut_an_item_in_half}` and two end-to-end cases in
+  `testharness/agent.rs`, all teeth-proven by reverting the fix. *Contract violated* —
+  `constants/charmap.asm`, which states the overlays in its own section headings.
+  *Conformance candidate*: **a decode that cannot be sure must say so, not guess** — the same
+  principle as "a missing optional report must degrade only the thing it reports".
 
 ## Embeddability — the core stands alone (`--no-default-features`)
 

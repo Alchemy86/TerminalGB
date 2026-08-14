@@ -359,6 +359,26 @@ fn the_working_loop() -> Result<String, String> {
         ));
     }
 
+    // The screen block must carry its *honesty* fields, not only text: a
+    // client cannot tell "there is nothing written on this screen" from "the
+    // decode failed" without them, and this cartridge is not Gen 1, so the
+    // text is the only game state there is. Parity with the agent plugin's
+    // snapshot is the point — two agent-facing surfaces disagreeing about how
+    // much to believe the same decode is exactly the trap being closed.
+    let obs = c.call("observe", "{}")?;
+    let v = parse(&obs)?;
+    let scr = v.get("screen").ok_or("observe returned no screen block")?;
+    for f in ["trust", "kind", "text"] {
+        if scr.str_field(f).is_none() {
+            return Err(format!("the screen block has no {f}: {obs}"));
+        }
+    }
+    let trust = scr.str_field("trust").unwrap_or("");
+    // Withheld text must come with a reason, never as a bare empty string.
+    if trust != "ok" && scr.str_field("note").is_none() {
+        return Err(format!("text withheld as {trust} with no note: {obs}"));
+    }
+
     // Reading memory must return the machine's real bytes. `$FF44` is LY, the
     // LCD's current line — always in range, and it is not something a stub
     // could plausibly fake.

@@ -119,7 +119,7 @@ request and invites the wrong call.
 |---|---|
 | `load_rom` | Load a cartridge from a path and start it from cold. |
 | `reset` | Reboot the current cartridge. Battery saves survive. |
-| `observe` | **Start here.** The game's state as structured data: what it is doing (title / overworld / dialogue / menu / battle / cutscene), the text on screen, whether it is waiting for a button — and for Pokémon Red/Blue the map, coordinates, facing, exits, party, badges, money and battle opponent. A few hundred bytes, and the only way to tell whether an action worked. |
+| `observe` | **Start here.** The game's state as structured data: what it is doing (title / overworld / dialogue / menu / battle / cutscene), the **screen** block (below), whether it is waiting for a button — and for Pokémon Red/Blue the map, coordinates, facing, exits, party, badges, money and battle opponent. A few hundred bytes, and the only way to tell whether an action worked. |
 | `screenshot` | The current frame as a PNG. The fallback for when there is no field or address for what you need. Does not advance time. |
 | `read_memory` | Bytes of the Game Boy's address space, read exactly as the CPU sees them and **without perturbing timing**. This is what makes an agent fast instead of squinting at pixels. |
 | `press_buttons` | Press buttons with exact frame timing, running the machine until the press has finished. Works on any cartridge. |
@@ -128,6 +128,33 @@ request and invites the wrong call.
 | `save_state` / `load_state` | Snapshot and restore the whole machine, to a numbered slot or a named file. |
 | `render_audio` | Render Game Boy sound-chip instructions to a WAV through the emulated APU — notes, a register script, or a `.vgm` log. The one tool here that needs **no cartridge**. See [`docs/chiptune.md`](chiptune.md). |
 | `write_memory` | Only when the server was started with `--allow-write-memory`. Otherwise it is not even listed. |
+
+### The `screen` block, and when not to believe it
+
+Gen 1 loads its font so a tile id **is** a character code, which is why the screen reads
+back as text at all. `observe` returns it as:
+
+| field | what it promises |
+|---|---|
+| `text` | the visible text, blank lines dropped, indentation kept down to the common margin so a two-column menu still reads as two columns |
+| `kind` | what shape of screen it is, and so what `A` does: `no-text`, `text`, `dialogue`, `menu`, `yes-no`, `naming-keyboard` |
+| `selected` | the item the `▶` cursor points at — on the naming keyboard, the single letter `A` would type |
+| `trust` | `ok`, or the reason the text was **withheld**: `graphics-not-text`, `still-redrawing`, `screen-off` |
+| `waiting_for_input` | the `▼` "press A" arrow is showing |
+| `menu_cursor_row` / `menu_cursor_col` | where the cursor is |
+
+Two of those need saying plainly.
+
+**`trust` is not advisory.** When it is anything but `ok`, `text` is the empty string and a
+`note` says why — a decode of artwork whose tiles happen to fall in the font range is
+alphabet salad delivered with a straight face, and salad in the same field as good data gets
+the same trust. Use `screenshot`, or `step` a few frames and observe again. (This server
+answers one call at a time and does not drive the clock between reads, so its `trust` is the
+single-read verdict; the agent plugin's snapshot additionally reports `still-redrawing`.)
+
+**Sprites are not in `screen.text`, at any trust level.** People, Poké Balls and every other
+object are OAM sprites drawn *over* the tilemap. `kind: no-text` on the overworld means
+there is no text on that screen — it does not mean the room is empty.
 
 ### Why `run_actions` matters
 

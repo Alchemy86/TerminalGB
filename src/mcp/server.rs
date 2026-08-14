@@ -87,7 +87,13 @@ const TOOLS: &[Tool] = &[
         name: "observe",
         description: "Read the game's state as structured data: what the game is doing \
              (title/overworld/dialogue/menu/battle/cutscene), the text \
-             currently on screen, and whether it is waiting for a button. For \
+             currently on screen with what shape of screen it is \
+             (screen.kind: no-text/text/dialogue/menu/yes-no/naming-keyboard), \
+             the item the menu cursor points at (screen.selected), whether the \
+             decode can be trusted (screen.trust — anything but 'ok' means \
+             screen.text was withheld rather than guessed), and whether it is \
+             waiting for a button. Sprites — people and objects — are drawn \
+             over the tilemap and are NOT in screen.text. For \
              Pokémon Red/Blue it also returns the player's map, coordinates and \
              facing, the map's exits, party, badges, money and the battle \
              opponent. Prefer this over screenshot: it is a few hundred bytes \

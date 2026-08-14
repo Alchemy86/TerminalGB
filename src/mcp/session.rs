@@ -21,7 +21,7 @@ use crate::input::KeypadKey;
 use crate::plugin::Capability;
 use terminalgb_plugin_agent::action::{plan_from_json, Executor, Limits, Outcome};
 use terminalgb_plugin_agent::json::{Json, Writer};
-use terminalgb_plugin_agent::observe::{classify, Gen1Observer, Screen};
+use terminalgb_plugin_agent::observe::{classify, Gen1Observer, Screen, Trust};
 
 use super::config::{Options, Speed};
 
@@ -516,11 +516,37 @@ impl Session {
             );
         }
         w.obj_field("screen");
-        w.str_field("text", &screen.compact_text());
+        // The same contract the agent plugin's snapshot offers, and for the
+        // same reason: a decode of artwork that happens to sit in the font
+        // range is nonsense, and nonsense in the same field as good data gets
+        // the same trust. `trust` here is the **single-read** verdict only —
+        // this server answers one call at a time and does not drive the clock
+        // between reads, so it cannot judge "still redrawing"; a client that
+        // cares should `step` and observe again.
+        let trust = screen.trust();
+        w.str_field("trust", trust.label());
+        w.str_field("kind", screen.kind().name());
+        if trust == Trust::Ok {
+            w.str_field("text", &screen.compact_text());
+            if let Some(sel) = screen.selected() {
+                w.str_field("selected", &sel);
+            }
+        } else {
+            w.str_field("text", "");
+            w.str_field(
+                "note",
+                "screen.text was withheld: the tilemap is not showing readable \
+                 text right now. Use screenshot, or step a few frames and \
+                 observe again.",
+            );
+        }
         w.bool_field("waiting_for_input", screen.waiting);
         match screen.cursor_row {
             Some(r) => w.num_field("menu_cursor_row", r as f64),
             None => w.null_field("menu_cursor_row"),
+        }
+        if let Some(c) = screen.cursor_col {
+            w.num_field("menu_cursor_col", c as f64);
         }
         w.end_obj();
         if let Some(fault) = self.gb.fault() {

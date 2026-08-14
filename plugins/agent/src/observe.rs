@@ -11,7 +11,18 @@
 //! | *where am I?* | [`Position`] — map id + name, x, y, facing | the only thing that makes "did that work?" answerable |
 //! | *what is the game doing?* | [`Mode`] | pressing A in a menu and in a battle are different acts |
 //! | *what is it telling me?* | [`Screen::text`] | Gen 1 writes character codes into the tilemap, so the screen **is** text — an agent that reads dialogue can follow the game's own instructions instead of guessing |
+//! | *what does A do here?* | [`Screen::kind`] | a move list, a YES/NO box and a letter grid are all "a menu"; A does something different, and irreversible, on each |
+//! | *what would A choose?* | [`Screen::selected`] | the item under the `▶` cursor as a **fact**, so a driver need not infer it from raw rows |
 //! | *is it my turn?* | [`Screen::waiting`] | the difference between "press A" and "wait for the animation" |
+//! | *can I believe any of it?* | [`Screen::trust`] | a half-drawn screen and artwork-in-the-font-range both decode to confident nonsense; better to withhold and say so |
+//!
+//! # What the screen channel does NOT cover
+//!
+//! **Sprites.** People, Poké Balls and every other object are OAM sprites drawn
+//! *over* the tilemap; none of them is in [`Screen::text`], at any trust level.
+//! A live run stalled in Oak's Lab standing one tile from a Poké Ball it had no
+//! way to know existed. That is a separate channel, not a decoding bug, and the
+//! prompt says so rather than letting an empty screen imply an empty room.
 //!
 //! Party, badges, money and the battle opponent come from the existing
 //! read-only trainer plugin's RAM map ([`terminalgb_plugin_trainer::gen1`]) rather than
@@ -125,15 +136,213 @@ pub struct Position {
     pub facing: Option<Facing>,
 }
 
+/// Decode one on-screen tile to text, or `None` for a graphics tile.
+///
+/// This is the **screen** decode, layered over the name-field decode in
+/// [`terminalgb_plugin_gen1_link::text::decode_char`], which deliberately covers only
+/// what may appear in a name. A screen shows more: contraction ligatures
+/// (`'s`, `'t`, …) that dialogue uses constantly, the `<PK><MN>` pair the
+/// battle menu spells "PKMN" with, the `<LV>` glyph in every battle HUD, and
+/// the cursor/arrow glyphs a driver steers by. All from `pret/pokered`'s
+/// `constants/charmap.asm`; several expand to more than one character, so a
+/// decoded row can be longer than its 20 tiles.
+///
+/// Leaving these out is not a cosmetic loss. Measured on a real Blue
+/// cartridge: the battle menu decoded as `FIGHT / ITEM RUN` — the
+/// switch-Pokémon option was **invisible**, because "PKMN" is two ligature
+/// tiles and both decoded to spaces.
+///
+/// # What is deliberately NOT decoded, and why
+///
+/// A tile id is an index into VRAM, and Gen 1 **reloads different pictures
+/// into the same slots**. `charmap.asm` says so itself: after the main font it
+/// lists a second block headed *"Actual characters (from
+/// `gfx/font/font_battle_extra.png`)"* which re-uses `$6E`-`$75`, and further
+/// overlays for the status screen (`<BOLD_P>` at `$72`) and the Pokédex
+/// (`$60`/`$61`). So `$70`-`$75` are quotes **outside** battle and HP-bar /
+/// `<to>` / `<ID>` graphics **inside** it, and no function of the tile id
+/// alone can tell them apart.
+///
+/// They are left as blanks. Measured on a real battle screen, decoding them as
+/// quotes put `”’` on a line of its own under the opponent's name and `153/153”`
+/// on the player's HP row — noise on the one screen an agent most needs to read
+/// cleanly, in exchange for decorative quotes it would never act on.
+///
+/// `$6E` is the opposite case and *is* decoded: its main-font meaning is an
+/// unused hiragana that no English screen ever places, so `<LV>` is the only
+/// picture it can actually be showing.
+pub fn decode_tile(t: u8) -> Option<&'static str> {
+    Some(match t {
+        // Contractions — real tiles, used by ordinary dialogue ("that's").
+        0xBB => "'d",
+        0xBC => "'l",
+        0xBD => "'s",
+        0xBE => "'t",
+        0xBF => "'v",
+        0xE4 => "'r",
+        0xE5 => "'m",
+        // The battle menu's "PKMN" is these two tiles and nothing else.
+        0xE1 => "PK",
+        0xE2 => "MN",
+        // The battle HUD's level glyph ("PIDGEY <LV>3").
+        0x6E => "Lv",
+        // Money and the item-count separator ("×5"). On the naming screen
+        // `$F0` is instead the `ED` key (`gfx/font/ED.1bpp`, loaded by
+        // `PrintAlphabet`) — see [`Screen::from_tiles`], which is the one
+        // place that has enough context to tell.
+        0xF0 => "\u{00A5}",
+        0xF1 => "\u{00D7}",
+        // The glyphs a driver steers by — a menu whose cursor decodes to a
+        // space is a menu where "which item is selected?" is unanswerable.
+        0xEC => "\u{25B7}", // ▷ parked cursor
+        0xED => "\u{25B6}", // ▶ active cursor
+        0xEE => "\u{25BC}", // ▼ "press A"
+        _ => return None,
+    })
+}
+
+/// Append one tile's text to `out`: a ligature, a plain character, or a space
+/// for anything that is not text. The single place the two charmaps are
+/// combined, so nothing can decode a tile two different ways.
+fn push_piece(out: &mut String, t: u8, naming: bool) {
+    // On the naming screen `$F0` is the `ED` ("end") key, not `¥` — the one
+    // button on that screen a driver might want and the only tile whose two
+    // meanings can be told apart, because the keyboard announces itself.
+    if naming && t == 0xF0 {
+        out.push_str("ED");
+        return;
+    }
+    match decode_tile(t) {
+        Some(s) => out.push_str(s),
+        None => {
+            out.push(terminalgb_plugin_gen1_link::text::decode_char(t).unwrap_or(' '))
+        }
+    }
+}
+
+/// Does this tile contribute anything visible to the text? Box borders, map
+/// tiles and sprite tiles all decode to blanks, which is what makes a blank run
+/// a reliable column separator.
+fn tile_is_blank(t: u8) -> bool {
+    let mut s = String::new();
+    push_piece(&mut s, t, false);
+    s.trim().is_empty()
+}
+
+/// Render a 20x18 grid as 18 newline-terminated lines.
+fn render(tiles: &[u8], naming: bool) -> String {
+    let mut text = String::with_capacity(18 * 22);
+    for (i, &t) in tiles.iter().enumerate() {
+        push_piece(&mut text, t, naming);
+        if i % 20 == 19 {
+            text.push('\n');
+        }
+    }
+    text
+}
+
+/// The naming-keyboard signature, over already-decoded text. A free function
+/// because [`Screen::from_tiles`] needs the answer *while* deciding how to
+/// decode. See [`Screen::naming_keyboard`] for what it means.
+fn looks_like_naming_keyboard(text: &str) -> bool {
+    let flat: String = text
+        .chars()
+        .map(|c| {
+            if c == '\u{25B6}' || c == '\u{25B7}' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    flat.contains("NAME?")
+        && (flat.contains("A B C D E F G H I") || flat.contains("a b c d e f g h i"))
+}
+
+/// What shape of screen this is, judged from the screen alone.
+///
+/// This is **not** a duplicate of [`Mode`], which is read out of the game's RAM
+/// (am I in a battle? is a map loaded?). A screen kind answers the different
+/// question *what does pressing A do here*, and it separates cases `Mode`
+/// cannot: a YES/NO box and a move list are both `Mode::Battle`, and the
+/// overworld and the title screen are both "no text on screen".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenKind {
+    /// Nothing on the tilemap decodes to text — the overworld, the title
+    /// screen, a fade. An empty `text` is then a *fact*, not a failure.
+    #[default]
+    NoText,
+    /// Text, but nothing asking for a button: a HUD, a sign, a battle in the
+    /// middle of an animation.
+    Text,
+    /// The `▼` arrow is up: the game is waiting for A to continue.
+    Dialogue,
+    /// A `▶` cursor is up: A chooses whatever it points at.
+    Menu,
+    /// A YES/NO confirmation. A here *answers a question*.
+    YesNo,
+    /// The on-screen letter grid. A types a letter; START finishes the name.
+    NamingKeyboard,
+}
+
+impl ScreenKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            ScreenKind::NoText => "no-text",
+            ScreenKind::Text => "text",
+            ScreenKind::Dialogue => "dialogue",
+            ScreenKind::Menu => "menu",
+            ScreenKind::YesNo => "yes-no",
+            ScreenKind::NamingKeyboard => "naming-keyboard",
+        }
+    }
+}
+
+/// How much the decoded text can be trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Trust {
+    /// The decode is honest: what the text says is what the screen shows.
+    #[default]
+    Ok,
+    /// The tilemap is showing **graphics whose tile ids fall in the font
+    /// range**, so the decode is letter salad delivered with a straight face.
+    /// Measured on a real cartridge: the Game Freak intro decodes as
+    /// `ABCDEFGHIJKLMNOP…` — sequential tiles through the font. Ignore the
+    /// text; nothing on this screen is words.
+    Graphics,
+    /// The screen was still being redrawn when it was read — a scroll, a fade,
+    /// a text box mid-print. A real run spent a model call reasoning about
+    /// `KU:N:`, half of two different screens.
+    Settling,
+    /// The LCD is off. There is nothing on screen at all.
+    Off,
+}
+
+impl Trust {
+    pub fn label(self) -> &'static str {
+        match self {
+            Trust::Ok => "ok",
+            Trust::Graphics => "graphics-not-text",
+            Trust::Settling => "still-redrawing",
+            Trust::Off => "screen-off",
+        }
+    }
+}
+
 /// The 20x18 tile grid the LCD is showing, and what can be read off it.
 #[derive(Debug, Clone, Default)]
 pub struct Screen {
     /// Raw tile ids, row-major.
     pub tiles: Vec<u8>,
-    /// Decoded text, 18 lines of 20 characters. Non-text tiles become spaces.
+    /// Decoded text, 18 lines of (nominally) 20 tiles each. Non-text tiles
+    /// become spaces; ligature tiles (`PKMN`, `'s`, `Lv`) expand to their
+    /// letters, so a line can run a few characters past 20.
     pub text: String,
     /// Row of the active menu cursor, if one is on screen.
     pub cursor_row: Option<u8>,
+    /// Column of that cursor — on a grid like the naming keyboard the row
+    /// alone cannot say which letter is under the cursor.
+    pub cursor_col: Option<u8>,
     /// The `▼` "press A for more" arrow is showing.
     pub waiting: bool,
     /// How many distinct tile ids are on screen. A drawn map has many; a menu,
@@ -141,16 +350,21 @@ pub struct Screen {
     pub distinct: u16,
     /// FNV-1a over the tile ids. Cheap "did anything change?".
     pub hash: u64,
+    /// False only when the LCD was off at the read — see [`Screen::trust`].
+    pub lcd_on: bool,
 }
 
 impl Screen {
-    /// Read the active tilemap out of VRAM.
-    pub fn read(m: &mut Machine) -> Screen {
+    /// The 20x18 tile grid the LCD is showing, or `None` with the LCD off.
+    ///
+    /// Split out from [`Screen::read`] so "has anything changed?" can be asked
+    /// every frame without paying for the decode — see [`Screen::tilemap_hash`].
+    fn tilemap(m: &mut Machine) -> Option<Vec<u8>> {
         let lcdc = m.peek(0xFF40).unwrap_or(0);
         if lcdc & 0x80 == 0 {
             // LCD off: there is nothing on screen, and reading the map would
             // report whatever was last drawn.
-            return Screen::default();
+            return None;
         }
         let window_on = lcdc & 0x20 != 0 && m.peek(0xFF4A).unwrap_or(255) < 144;
         let (base, sy, sx) = if window_on {
@@ -168,62 +382,273 @@ impl Screen {
         };
 
         let mut tiles = Vec::with_capacity(20 * 18);
-        let mut text = String::with_capacity(18 * 21);
-        let mut seen = [false; 256];
-        let mut distinct = 0u16;
-        let mut cursor_row = None;
-        let mut waiting = false;
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-
         for row in 0..18usize {
             for col in 0..20usize {
                 let y = (sy + row) % 32;
                 let x = (sx + col) % 32;
-                let t = m.peek(base + (y * 32 + x) as u16).unwrap_or(0);
-                tiles.push(t);
-                hash ^= t as u64;
-                hash = hash.wrapping_mul(0x1000_0000_01b3);
-                if !seen[t as usize] {
-                    seen[t as usize] = true;
-                    distinct += 1;
-                }
-                if t == glyph::CURSOR && cursor_row.is_none() {
-                    cursor_row = Some(row as u8);
-                }
-                if t == glyph::MORE_TEXT {
-                    waiting = true;
-                }
-                text.push(
-                    terminalgb_plugin_gen1_link::text::decode_char(t).unwrap_or(' '),
-                );
+                tiles.push(m.peek(base + (y * 32 + x) as u16).unwrap_or(0));
             }
-            text.push('\n');
+        }
+        Some(tiles)
+    }
+
+    /// Read the active tilemap out of VRAM.
+    pub fn read(m: &mut Machine) -> Screen {
+        match Screen::tilemap(m) {
+            Some(tiles) => Screen::from_tiles(tiles),
+            None => Screen::default(),
+        }
+    }
+
+    /// Just the change-detection hash, with no decode. The caller that asks
+    /// "is the screen still moving?" does so on **every** frame, and paying for
+    /// eighteen lines of text rendering to answer it would be waste.
+    pub fn tilemap_hash(m: &mut Machine) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for t in Screen::tilemap(m).unwrap_or_default() {
+            hash ^= t as u64;
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+        hash
+    }
+
+    /// Build a screen from a 20x18 tile grid. Pure — this is the whole decode,
+    /// separated from the VRAM read so it can be tested against literal tiles.
+    ///
+    /// The text is rendered twice on the naming screen and once everywhere
+    /// else: `$F0` means `¥` in the main font and `ED` under the naming
+    /// screen's own overlay, and the only way to know which is to read the
+    /// screen first. Nothing else in the charmap is disambiguated this way —
+    /// see [`decode_tile`] for the tiles that are simply left blank.
+    pub fn from_tiles(tiles: Vec<u8>) -> Screen {
+        debug_assert_eq!(tiles.len(), 20 * 18);
+        let mut seen = [false; 256];
+        let mut distinct = 0u16;
+        let mut cursor_row = None;
+        let mut cursor_col = None;
+        let mut waiting = false;
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+
+        for (i, &t) in tiles.iter().enumerate() {
+            let (row, col) = (i / 20, i % 20);
+            hash ^= t as u64;
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+            if !seen[t as usize] {
+                seen[t as usize] = true;
+                distinct += 1;
+            }
+            if t == glyph::CURSOR && cursor_row.is_none() {
+                cursor_row = Some(row as u8);
+                cursor_col = Some(col as u8);
+            }
+            if t == glyph::MORE_TEXT {
+                waiting = true;
+            }
+        }
+
+        let mut text = render(&tiles, false);
+        if looks_like_naming_keyboard(&text) {
+            text = render(&tiles, true);
         }
 
         Screen {
             tiles,
             text,
             cursor_row,
+            cursor_col,
             waiting,
             distinct,
             hash,
+            lcd_on: true,
         }
     }
 
     /// The text with trailing blanks stripped and empty lines dropped — what
     /// goes to a model, where every wasted token is paid for.
+    ///
+    /// Indentation is dropped only down to the **common margin**, never per
+    /// line: relative layout is meaning on this console — the battle HUD puts
+    /// the opponent top-left and your Pokémon bottom-right, and a menu's
+    /// column says which box it lives in. Trimming each line flattened all of
+    /// that into one left-aligned list.
     pub fn compact_text(&self) -> String {
+        let lines: Vec<&str> = self
+            .text
+            .lines()
+            .map(|l| l.trim_end())
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        let margin = lines
+            .iter()
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
         let mut out = String::new();
-        for line in self.text.lines() {
-            let t = line.trim_end();
-            if t.trim().is_empty() {
-                continue;
-            }
-            out.push_str(t.trim_start());
+        for line in &lines {
+            out.push_str(&line[margin.min(line.len())..]);
             out.push('\n');
         }
         out.pop();
         out
+    }
+
+    /// The text the `▶` cursor is pointing at — the item A would choose.
+    ///
+    /// Answering "is `NEW GAME` or `OPTION` selected?" as a *fact* was blind
+    /// spot 3 of the live-run list; getting it right needs one non-obvious
+    /// rule, because a Gen 1 menu item may contain a space (`NEW GAME`) and a
+    /// two-column menu may separate its columns with only one (`▶FIGHT PKMN`,
+    /// measured on a real battle screen — the naive "split on two blanks"
+    /// answer was `"FIGHT PKMN"`, which is not an option the player has).
+    ///
+    /// The rule that separates them: **a menu's columns line up across its
+    /// rows.** So an item ends at a blank run that is followed by a column
+    /// where another row *of the same menu* also starts a word. `ITEM`/`RUN` on
+    /// the row below puts a column start at `RUN`'s column, so `FIGHT` ends
+    /// there; nothing else on the main menu starts where `GAME` does, so
+    /// `NEW GAME` stays whole. On the naming keyboard every other row starts a
+    /// word at every other column, so this yields the single letter under the
+    /// cursor — which is blind spot 2, closed by the same rule rather than a
+    /// special case.
+    ///
+    /// **"Of the same menu" is load-bearing, and was found by running it.** A
+    /// menu's rows are the ones that begin an item in the same column as this
+    /// one. Taking column starts from every row instead truncated `NEW NAME` on
+    /// the name-prompt screen to `NEW`, because the question printed under the
+    /// list (`your name?`) happens to begin a word in the column where `NAME`
+    /// begins — dialogue that has nothing to do with the menu.
+    pub fn selected(&self) -> Option<String> {
+        let (row, col) = (self.cursor_row? as usize, self.cursor_col? as usize);
+        if self.tiles.len() != 20 * 18 {
+            return None;
+        }
+        let at = |r: usize, c: usize| self.tiles[r * 20 + c];
+        let starts_at = |r: usize, c: usize| {
+            !tile_is_blank(at(r, c)) && (c == 0 || tile_is_blank(at(r, c - 1)))
+        };
+
+        let start = col + 1;
+        // Columns where another row of *this* menu begins a word.
+        let mut col_start = [false; 20];
+        for r in 0..18 {
+            if r == row || !starts_at(r, start) {
+                continue;
+            }
+            for (c, mark) in col_start.iter_mut().enumerate() {
+                *mark |= starts_at(r, c);
+            }
+        }
+
+        let naming = self.naming_keyboard();
+        let mut out = String::new();
+        let mut c = start;
+        while c < 20 {
+            if tile_is_blank(at(row, c)) {
+                let mut n = c;
+                while n < 20 && tile_is_blank(at(row, n)) {
+                    n += 1;
+                }
+                // Trailing blanks, a gap of two or more, or the next column of
+                // this menu: the item ended.
+                if n >= 20 || n - c >= 2 || (n > start && col_start[n]) {
+                    break;
+                }
+                out.push(' ');
+                c += 1;
+                continue;
+            }
+            push_piece(&mut out, at(row, c), naming);
+            c += 1;
+        }
+        let out = out.trim().to_string();
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    /// What shape of screen this is — see [`ScreenKind`]. Precedence is by how
+    /// much a wrong guess costs: the naming keyboard and a YES/NO box are the
+    /// two screens where "press A to continue" does something irreversible and
+    /// unasked-for, so they are decided first.
+    pub fn kind(&self) -> ScreenKind {
+        if self.naming_keyboard() {
+            ScreenKind::NamingKeyboard
+        } else if self.yes_no_prompt() {
+            ScreenKind::YesNo
+        } else if self.cursor_row.is_some() {
+            ScreenKind::Menu
+        } else if self.waiting {
+            ScreenKind::Dialogue
+        } else if self.text.trim().is_empty() {
+            ScreenKind::NoText
+        } else {
+            ScreenKind::Text
+        }
+    }
+
+    /// How much [`Screen::text`] deserves to be believed. This only covers
+    /// what a single read can know (the LCD, graphics-as-text); the *settling*
+    /// verdict needs two reads and is the caller's — see
+    /// [`Screen::graphics_as_text`] and the snapshot's stability gate.
+    pub fn trust(&self) -> Trust {
+        if !self.lcd_on {
+            Trust::Off
+        } else if self.graphics_as_text() {
+            Trust::Graphics
+        } else {
+            Trust::Ok
+        }
+    }
+
+    /// Is the tilemap showing graphics whose ids run through the font range,
+    /// so the decode is alphabet salad? The signature is **consecutive tile
+    /// ids side by side**: artwork is laid out as sequential tiles, so it
+    /// decodes to runs like `ABCDEFGH`, which no English text contains. Real
+    /// text never trips this — even the naming keyboard's `A B C D…` grid has
+    /// a space tile between every letter.
+    pub fn graphics_as_text(&self) -> bool {
+        let letter = |t: u8| (0x80..=0x99).contains(&t) || (0xA0..=0xB9).contains(&t);
+        for row in self.tiles.chunks(20) {
+            let mut run = 1u8;
+            for w in row.windows(2) {
+                if letter(w[0]) && w[1] == w[0] + 1 && letter(w[1]) {
+                    run += 1;
+                    if run >= 6 {
+                        return true;
+                    }
+                } else {
+                    run = 1;
+                }
+            }
+        }
+        false
+    }
+
+    /// Is a YES/NO confirmation box up? The one shape of screen where pressing
+    /// A "to advance" is actually *answering a question* with whatever the
+    /// cursor happens to rest on. `advance_text` stops here for the same
+    /// reason it stops on the naming keyboard: the decision belongs to the
+    /// model, not to a host loop that never asked it.
+    pub fn yes_no_prompt(&self) -> bool {
+        if self.cursor_row.is_none() {
+            return false;
+        }
+        let mut yes = false;
+        let mut no = false;
+        for line in self.text.lines() {
+            match line
+                .trim()
+                .trim_start_matches(['\u{25B6}', '\u{25B7}'])
+                .trim()
+            {
+                "YES" => yes = true,
+                "NO" => no = true,
+                _ => {}
+            }
+        }
+        yes && no
     }
 
     /// Is a real map drawn, as opposed to a menu or a mid-warp blank? Menus and
@@ -243,11 +668,11 @@ impl Screen {
     /// The signature is the question (`NAME?` — covers `YOUR NAME?`,
     /// `RIVAL's NAME?` and a Pokémon's `NICKNAME?`) together with the top row
     /// of the letter grid, in either case (`lower case` is a mode of the same
-    /// keyboard).
+    /// keyboard). The cursor glyphs are normalised back to the spaces they sit
+    /// on first — the cursor lives *inside* the letter grid, and `A▶B C…`
+    /// must still read as the keyboard.
     pub fn naming_keyboard(&self) -> bool {
-        self.text.contains("NAME?")
-            && (self.text.contains("A B C D E F G H I")
-                || self.text.contains("a b c d e f g h i"))
+        looks_like_naming_keyboard(&self.text)
     }
 }
 
@@ -510,6 +935,338 @@ pub fn map_name(id: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blank 20x18 grid with byte runs placed at (row, col) — the tile-level
+    /// counterpart of `screen_with`, for exercising the real decode.
+    fn grid(rows: &[(usize, usize, &[u8])]) -> Vec<u8> {
+        let mut tiles = vec![0x7Fu8; 20 * 18];
+        for &(row, col, bytes) in rows {
+            for (i, &b) in bytes.iter().enumerate() {
+                tiles[row * 20 + col + i] = b;
+            }
+        }
+        tiles
+    }
+
+    fn enc(s: &str) -> Vec<u8> {
+        s.chars()
+            .map(|c| terminalgb_plugin_gen1_link::text::encode_char(c).unwrap())
+            .collect()
+    }
+
+    /// The battle menu spells "PKMN" with the two ligature tiles `<PK><MN>`
+    /// ($E1 $E2, `constants/charmap.asm`) — decode them to spaces and the
+    /// switch-Pokémon option is invisible. Measured on a real Blue cartridge
+    /// before the fix: the menu read `FIGHT / ITEM RUN`, and a model told
+    /// that has no way to know switching exists.
+    #[test]
+    fn the_battle_menus_pkmn_option_is_visible() {
+        let mut rows = vec![(14usize, 10usize, enc("FIGHT"))];
+        rows.push((14, 17, vec![0xE1, 0xE2]));
+        let refs: Vec<(usize, usize, &[u8])> = rows
+            .iter()
+            .map(|(r, c, v)| (*r, *c, v.as_slice()))
+            .collect();
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.text.contains("FIGHT"), "{}", s.text);
+        assert!(s.text.contains("PKMN"), "PKMN missing from: {}", s.text);
+    }
+
+    /// Dialogue leans on contraction ligatures ('s, 't, …) and the battle HUD
+    /// on the `<LV>` glyph; all were spaces before.
+    #[test]
+    fn contractions_and_the_level_glyph_decode() {
+        let mut cant = enc("can");
+        cant.push(0xBE); // 't
+        let mut lv3 = vec![0x6E]; // <LV>
+        lv3.extend(enc("3"));
+        let refs: Vec<(usize, usize, &[u8])> =
+            vec![(1, 1, cant.as_slice()), (3, 1, lv3.as_slice())];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.text.contains("can't"), "{}", s.text);
+        assert!(s.text.contains("Lv3"), "{}", s.text);
+    }
+
+    /// The ▶ cursor is rendered into the text (a menu whose cursor decodes to
+    /// a space cannot say what is selected), located by row AND column, and
+    /// `selected()` names the item it points at.
+    ///
+    /// The two cases pull in opposite directions and are the whole reason for
+    /// the column rule: `NEW GAME` contains a blank that must NOT end the item,
+    /// and the battle menu separates its two columns with exactly one blank
+    /// that must. Both grids are the real ones, transcribed off a Blue
+    /// cartridge (`examples/screen_text --tour` / `--state`).
+    #[test]
+    fn the_cursor_is_visible_and_the_selected_item_is_named() {
+        let menu = {
+            let new_game = enc("NEW GAME");
+            let option = enc("OPTION");
+            let refs: Vec<(usize, usize, &[u8])> = vec![
+                (2, 1, &[glyph::CURSOR]),
+                (2, 2, new_game.as_slice()),
+                (4, 2, option.as_slice()),
+            ];
+            Screen::from_tiles(grid(&refs))
+        };
+        assert!(menu.text.contains("\u{25B6}NEW GAME"), "{}", menu.text);
+        assert_eq!(menu.cursor_row, Some(2));
+        assert_eq!(menu.cursor_col, Some(1));
+        assert_eq!(menu.selected().as_deref(), Some("NEW GAME"));
+        assert_eq!(menu.kind(), ScreenKind::Menu);
+
+        // The real battle menu: FIGHT at col 10 runs to col 14 and PKMN starts
+        // at 16, so exactly ONE blank separates the columns — the naive
+        // two-blank rule answered "FIGHT PKMN", which is not an option the
+        // player has. ITEM/RUN on the row below is what marks column 16.
+        let battle = {
+            let fight = enc("FIGHT");
+            let item = enc("ITEM");
+            let run = enc("RUN");
+            let refs: Vec<(usize, usize, &[u8])> = vec![
+                (14, 9, &[glyph::CURSOR]),
+                (14, 10, fight.as_slice()),
+                (14, 16, &[0xE1, 0xE2]),
+                (16, 10, item.as_slice()),
+                (16, 16, run.as_slice()),
+            ];
+            Screen::from_tiles(grid(&refs))
+        };
+        assert!(battle.text.contains("FIGHT PKMN"), "{}", battle.text);
+        assert_eq!(battle.selected().as_deref(), Some("FIGHT"));
+
+        // Cursor moved to the right-hand column names the other item.
+        let battle_right = {
+            let fight = enc("FIGHT");
+            let item = enc("ITEM");
+            let run = enc("RUN");
+            let refs: Vec<(usize, usize, &[u8])> = vec![
+                (14, 10, fight.as_slice()),
+                (14, 15, &[glyph::CURSOR]),
+                (14, 16, &[0xE1, 0xE2]),
+                (16, 10, item.as_slice()),
+                (16, 16, run.as_slice()),
+            ];
+            Screen::from_tiles(grid(&refs))
+        };
+        assert_eq!(battle_right.selected().as_deref(), Some("PKMN"));
+    }
+
+    /// Column starts must be taken from the menu's own rows and no others.
+    /// This is the real name-prompt screen: the question printed underneath
+    /// (`your name?`) begins a word in the same column as `NAME` does, and
+    /// reading starts from every row truncated the item to `NEW`.
+    #[test]
+    fn text_below_a_menu_does_not_cut_an_item_in_half() {
+        let new_name = enc("NEW NAME");
+        let blue = enc("BLUE");
+        let gary = enc("GARY");
+        let q1 = enc("First, what is");
+        let q2 = enc("your name?");
+        let refs: Vec<(usize, usize, &[u8])> = vec![
+            (2, 1, &[glyph::CURSOR]),
+            (2, 2, new_name.as_slice()),
+            (4, 2, blue.as_slice()),
+            (6, 2, gary.as_slice()),
+            (14, 1, q1.as_slice()),
+            (16, 1, q2.as_slice()),
+        ];
+        let s = Screen::from_tiles(grid(&refs));
+        // `name?` starts at column 6, exactly where `NAME` does.
+        assert!(s.text.contains("your name?"), "{}", s.text);
+        assert_eq!(s.selected().as_deref(), Some("NEW NAME"));
+    }
+
+    /// The `$70`-`$75` slots hold quotes in the main font and HP-bar / `<to>`
+    /// graphics under `font_battle_extra` (`constants/charmap.asm` lists both),
+    /// so nothing can tell them apart from the tile id. Decoding them as quotes
+    /// put `”’` on a line of its own and `153/153”` on the HP row of a real
+    /// battle screen; they stay blank.
+    #[test]
+    fn the_ambiguous_battle_font_slots_stay_blank() {
+        let hp = {
+            let mut v = enc("153/153");
+            v.push(0x73); // the tile that rendered as ”
+            v
+        };
+        let refs: Vec<(usize, usize, &[u8])> =
+            vec![(10, 11, hp.as_slice()), (2, 1, &[0x73, 0x71])];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.text.contains("153/153"), "{}", s.text);
+        for c in ['\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2026}'] {
+            assert!(!s.text.contains(c), "{c} survived into: {}", s.text);
+        }
+        assert_eq!(s.compact_text(), "153/153");
+    }
+
+    /// `$F0` is `¥` in the main font and the `ED` ("end") key under the naming
+    /// screen's own overlay (`gfx/font/ED.1bpp`, `PrintAlphabet`). Both
+    /// meanings are real, and the keyboard is the one screen that announces
+    /// itself well enough to choose between them.
+    #[test]
+    fn the_naming_screens_end_key_is_not_a_yen_sign() {
+        let q = enc("YOUR NAME?");
+        let top = enc("A B C D E F G H I");
+        let mut last = enc("- ? ! ");
+        last.push(0xF0);
+        let refs: Vec<(usize, usize, &[u8])> = vec![
+            (1, 0, q.as_slice()),
+            (5, 2, top.as_slice()),
+            (13, 2, last.as_slice()),
+        ];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.text.contains("- ? ! ED"), "{}", s.text);
+        assert!(!s.text.contains('\u{00A5}'), "{}", s.text);
+
+        // Off the keyboard the same tile is money, which is what a shop shows.
+        let mut price = vec![0xF0];
+        price.extend(enc("200"));
+        let refs: Vec<(usize, usize, &[u8])> = vec![(3, 4, price.as_slice())];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.text.contains("\u{00A5}200"), "{}", s.text);
+    }
+
+    /// On the letter grid `selected()` must name the single letter A would
+    /// type — blind spot 2 of the live-run list ("it types blind and
+    /// confirms"). It falls out of the same column rule: every other row of
+    /// the keyboard starts a word at every other column.
+    #[test]
+    fn the_naming_keyboard_names_the_letter_under_the_cursor() {
+        let q = enc("YOUR NAME?");
+        let r1 = enc("A B C D E F G H I");
+        let r2 = enc("J K L M N O P Q R");
+        let refs: Vec<(usize, usize, &[u8])> = vec![
+            (1, 0, q.as_slice()),
+            (5, 1, &[glyph::CURSOR]),
+            (5, 2, r1.as_slice()),
+            (7, 2, r2.as_slice()),
+        ];
+        let s = Screen::from_tiles(grid(&refs));
+        assert_eq!(s.kind(), ScreenKind::NamingKeyboard);
+        assert_eq!(s.selected().as_deref(), Some("A"));
+
+        // Cursor three letters along.
+        let refs: Vec<(usize, usize, &[u8])> = vec![
+            (1, 0, q.as_slice()),
+            (5, 5, &[glyph::CURSOR]),
+            (5, 2, r1.as_slice()),
+            (7, 2, r2.as_slice()),
+        ];
+        let mut tiles = grid(&refs);
+        tiles[5 * 20 + 5] = glyph::CURSOR; // over the blank before 'C'
+        let s = Screen::from_tiles(tiles);
+        assert_eq!(s.selected().as_deref(), Some("C"));
+    }
+
+    /// Every shape of screen an agent must act on differently gets its own
+    /// name. `Mode` cannot supply these: a move list and a YES/NO box are both
+    /// `Mode::Battle`, and the overworld and the title screen are both "no
+    /// text on screen" — which must be a stated fact, not an empty string.
+    #[test]
+    fn every_shape_of_screen_is_named() {
+        // Nothing decodable at all: the overworld's map tiles.
+        let map = Screen::from_tiles(vec![0x0Au8; 20 * 18]);
+        assert_eq!(map.kind(), ScreenKind::NoText);
+        assert_eq!(
+            map.trust(),
+            Trust::Ok,
+            "no text is not the same as no trust"
+        );
+
+        let hello = enc("Hello there!");
+        let refs: Vec<(usize, usize, &[u8])> = vec![(14, 1, hello.as_slice())];
+        assert_eq!(Screen::from_tiles(grid(&refs)).kind(), ScreenKind::Text);
+
+        let refs: Vec<(usize, usize, &[u8])> =
+            vec![(14, 1, hello.as_slice()), (16, 18, &[glyph::MORE_TEXT])];
+        assert_eq!(Screen::from_tiles(grid(&refs)).kind(), ScreenKind::Dialogue);
+
+        let yes = enc("YES");
+        let no = enc("NO");
+        let refs: Vec<(usize, usize, &[u8])> = vec![
+            (8, 11, &[glyph::CURSOR]),
+            (8, 12, yes.as_slice()),
+            (10, 12, no.as_slice()),
+        ];
+        assert_eq!(Screen::from_tiles(grid(&refs)).kind(), ScreenKind::YesNo);
+
+        assert_eq!(Screen::default().kind(), ScreenKind::NoText);
+        assert_eq!(Screen::default().trust(), Trust::Off);
+    }
+
+    /// `compact_text` keeps layout down to the common margin: the battle HUD
+    /// puts the opponent top-left and your Pokémon bottom-right, and per-line
+    /// trimming flattened that meaning away.
+    #[test]
+    fn compact_text_keeps_relative_indentation() {
+        let pidgey = enc("PIDGEY");
+        let chariz = enc("CHARIZARD");
+        let refs: Vec<(usize, usize, &[u8])> =
+            vec![(0, 1, pidgey.as_slice()), (7, 10, chariz.as_slice())];
+        let s = Screen::from_tiles(grid(&refs));
+        assert_eq!(s.compact_text(), "PIDGEY\n         CHARIZARD");
+    }
+
+    /// Artwork laid out as sequential tiles through the font range decodes as
+    /// alphabet salad — the Game Freak intro reads `ABCDEFGHIJKLMNOP…` on a
+    /// real cartridge. That must be flagged, and the naming keyboard (a real
+    /// text screen full of single letters) must not be.
+    #[test]
+    fn graphics_as_text_is_flagged_and_real_text_is_not() {
+        let salad: Vec<u8> = (0x80..0x90).collect();
+        let refs: Vec<(usize, usize, &[u8])> = vec![(2, 2, salad.as_slice())];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.graphics_as_text());
+        assert_eq!(s.trust(), Trust::Graphics);
+
+        // The keyboard's letters have a space tile between every pair.
+        let kbd = enc("A B C D E F G H I");
+        let refs: Vec<(usize, usize, &[u8])> = vec![(5, 2, kbd.as_slice())];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(!s.graphics_as_text());
+        assert_eq!(s.trust(), Trust::Ok);
+
+        // The LCD being off is its own verdict, not "empty text".
+        assert_eq!(Screen::default().trust(), Trust::Off);
+    }
+
+    /// A YES/NO box is recognised only as the real shape: both words on their
+    /// own rows with a menu cursor up — never dialogue that merely says "NO".
+    #[test]
+    fn a_yes_no_box_is_recognised_and_dialogue_is_not() {
+        let yes = enc("YES");
+        let no = enc("NO");
+        let refs: Vec<(usize, usize, &[u8])> = vec![
+            (8, 11, &[glyph::CURSOR]),
+            (8, 12, yes.as_slice()),
+            (10, 12, no.as_slice()),
+        ];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.yes_no_prompt());
+        assert_eq!(s.selected().as_deref(), Some("YES"));
+
+        // Dialogue containing the words without the box shape.
+        let line = enc("NO way to go YES");
+        let refs: Vec<(usize, usize, &[u8])> = vec![(14, 1, line.as_slice())];
+        assert!(!Screen::from_tiles(grid(&refs)).yes_no_prompt());
+        // The words alone, but no cursor: still not a prompt.
+        let refs: Vec<(usize, usize, &[u8])> =
+            vec![(8, 12, yes.as_slice()), (10, 12, no.as_slice())];
+        assert!(!Screen::from_tiles(grid(&refs)).yes_no_prompt());
+    }
+
+    /// The keyboard predicate must survive the cursor being rendered into the
+    /// letter grid — `A▶B C…` is still the keyboard.
+    #[test]
+    fn the_naming_keyboard_survives_an_inline_cursor() {
+        let q = enc("YOUR NAME?");
+        let mut row = enc("A");
+        row.push(glyph::CURSOR);
+        row.extend(enc("B C D E F G H I"));
+        let refs: Vec<(usize, usize, &[u8])> =
+            vec![(1, 0, q.as_slice()), (5, 2, row.as_slice())];
+        let s = Screen::from_tiles(grid(&refs));
+        assert!(s.naming_keyboard(), "{}", s.text);
+    }
 
     #[test]
     fn facing_only_accepts_the_four_real_values() {

@@ -886,3 +886,100 @@ that is **not** background-tilemap text:
    everything, which answers any confirmation prompt with its default before
    the model ever sees the question. It happened to be harmless this session;
    it will not always be.
+
+## 12. The screen as a first-class output — what it already was, and what it is now
+
+The captain, after watching §11: *"we need the game to output its screen text
+like it does other stats directly so ai can get a better handle upon whats
+happening."*
+
+### What already existed (measure the starting point before building)
+
+**The channel was already there and already worked.** `Screen::read` has read
+the live tilemap out of VRAM — through the window layer, which is the trap that
+makes every menu look empty if you read the background map — since the agent
+plugin's first commit, `Screen::compact_text` has been a `screen.text` field in
+every snapshot, and §11's own list opens by saying so: *"`screen.text` itself
+worked throughout — it read `YOUR NAME?`, menus and Oak's dialogue correctly."*
+Nothing here is a new pipe. **The defects were all in what the decode omitted,
+what it invented, and what it never admitted it could not see.**
+
+### The four blind spots closed, and the two that are not
+
+Against §11's list, in its own numbering:
+
+| # | blind spot | now |
+|---|---|---|
+| 1 | sprites are invisible, and the Poké Balls are sprites | **open** — not a decoding problem: sprites are OAM, drawn over the tilemap, so no tilemap decode can ever reach them. The prompt now *says* so, so an empty screen no longer implies an empty room |
+| 2 | the naming keyboard's cursor column is unknown | **closed** — `screen.menu_cursor_col`, and `screen.selected` names the single letter A would type |
+| 3 | a menu's selected item is not decoded | **closed** — `screen.selected` |
+| 4 | mid-redraw screens are fed as if they were stable | **closed** — the snapshot waits for the tilemap to hold still, and `screen.trust` reports `still-redrawing` with the text withheld if it never does |
+| 5 | furniture and terrain exist only as `blocked` outcomes | **open** — collision data, §8's walkability grid |
+| 6 | a YES/NO box looks like flowing text | **closed** — `screen.kind` is `yes-no` and `advance_text` refuses to press A there |
+
+### Three decode defects a real cartridge found that no list had
+
+Each was found by running `examples/screen_text` against Pokémon Blue and
+*reading the output*, and each was silent — the field was populated, confident
+and wrong.
+
+1. **The battle menu's `PKMN` option was invisible.** "PKMN" is the two ligature
+   tiles `<PK><MN>` (`$E1 $E2`, `pret/pokered` `constants/charmap.asm`) and both
+   decoded to spaces, so the menu read `FIGHT / ITEM RUN`. A model told that has
+   no way to know switching Pokémon exists. Contractions (`'s`, `'t`, …) and the
+   battle HUD's `<LV>` glyph were dropped the same way.
+2. **The two-column battle menu named an item the player does not have.**
+   `FIGHT` ends at column 14 and `PKMN` starts at 16, so exactly **one** blank
+   separates the columns — while `NEW GAME` contains one. Splitting on a
+   two-blank gap answered `"FIGHT PKMN"`. The rule that separates them is that a
+   menu's columns line up across *its own rows*: see `Screen::selected`. Taking
+   column starts from every row instead truncated `NEW NAME` to `NEW`, because
+   the question printed under that list begins a word in the same column.
+3. **Quote glyphs were HP-bar graphics.** `charmap.asm` lists `$70`-`$75` twice —
+   once as quotes in the main font, once under
+   *"Actual characters (from `gfx/font/font_battle_extra.png`)"* — and a tile id
+   cannot tell them apart. Decoding them as quotes put `”’` on a line of its own
+   under the opponent's name and `153/153”` on the HP row of every battle. They
+   are blank now. `$F0` is the same problem with an answer: `¥` normally, the
+   `ED` key on the naming screen, which announces itself well enough to choose.
+
+### The evidence: fourteen real screens
+
+`cargo run --release --features plugin-agent --example screen_text -- --rom
+<blue.gb> [--save <blue.sav>] (--tour | --menu-tour | --stability | --state
+<gbss>)` drives a real cartridge and prints the raw 20x18 grid, the compacted
+text a model is sent, and every signal beside it. Measured on Pokémon Blue:
+
+| screen | `kind` | `trust` | `selected` |
+|---|---|---|---|
+| power-on, blank | `no-text` | `ok` | — |
+| Game Freak intro artwork | `text` | **`graphics-not-text`** | — |
+| main menu (new game) | `menu` | `ok` | `NEW GAME` |
+| main menu (with a save) | `menu` | `ok` | `CONTINUE` |
+| continue confirmation | `menu` | `ok` | `CONTINUE` |
+| Oak's speech | `dialogue` | `ok` | — |
+| name prompt (preset list) | `menu` | `ok` | `NEW NAME` |
+| naming keyboard | `naming-keyboard` | `ok` | `A` |
+| overworld | `no-text` | `ok` | — |
+| START menu | `menu` | `ok` | `POKéDEX` |
+| nurse dialogue | `dialogue` | `ok` | — |
+| battle announcement | `text` | `ok` | — |
+| battle menu | `menu` | `ok` | `FIGHT` |
+| move list | `menu` | `ok` | `FLAMETHROWER` |
+
+Two of those rows are the honest ones. The overworld and the title screen are
+drawn from map and artwork tiles, so **nothing on them is text** — `kind:
+no-text` makes an empty `screen.text` a stated fact rather than something that
+looks like a failed read. The intro decodes as `ABCDEFGHIJKLMNOP` (sequential
+tiles through the font range), and that text is **withheld**, not sent.
+
+### The settling gate is bounded by measurement, not by hope
+
+Withholding text while the screen is still moving is only safe if screens
+actually stop moving. `--stability` samples the tilemap hash every frame on a
+real cartridge: the main menu, the overworld and the START menu are **identical
+for all 240 frames**; a dialogue box waiting on the blinking `▼` changes 6 times
+in 240 frames, and its **longest identical run is 42 frames** — against a
+4-frame gate. The blink cannot starve the gate, and the wait is capped at 120
+extra frames regardless, after which the text is withheld and `trust` says
+`still-redrawing` rather than the run stalling.

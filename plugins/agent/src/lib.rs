@@ -168,7 +168,24 @@ pub struct AgentPlugin {
     /// Set once the very first snapshot has been sent, so the action reference
     /// is only paid for once.
     sent_help: bool,
+    /// Screen hash seen on the previous settling frame, and how many
+    /// consecutive frames it has held. A real run spent a model call reasoning
+    /// about `KU:N:` — half of two different screens — because the settle was
+    /// a blind frame count; now the snapshot also waits for the tilemap to
+    /// stop changing (bounded — see [`SETTLE_EXTRA_CAP`]).
+    settle_hash: u64,
+    settle_stable: u16,
 }
+
+/// Consecutive identical-tilemap frames required before a snapshot. Short,
+/// because the things being waited out (a scroll, a fade, letter-by-letter
+/// printing) touch the tilemap every frame or two; the blinking ▼ arrow
+/// toggles far more slowly than this window, so it cannot starve it.
+const SCREEN_STABLE_FRAMES: u16 = 4;
+/// Extra settling frames allowed for stability before giving up and
+/// snapshotting anyway — a hard bound, so a screen that animates for ever (or
+/// one we misjudge) costs two emulated seconds, not the run.
+const SETTLE_EXTRA_CAP: u16 = 120;
 
 impl AgentPlugin {
     pub fn new(driver: Box<dyn Driver>, config: Config) -> AgentPlugin {
@@ -197,6 +214,8 @@ impl AgentPlugin {
             enabled: true,
             complaints: Vec::new(),
             sent_help: false,
+            settle_hash: 0,
+            settle_stable: 0,
         }
     }
 
@@ -286,9 +305,23 @@ impl AgentPlugin {
         match self.phase {
             Phase::Stopped => {}
             Phase::Executing => self.tick_plan(machine),
-            Phase::Thinking => self.tick_thinking(machine),
+            Phase::Thinking => {
+                // Keep watching while a call is gated or in flight: a snapshot
+                // built on the retry path must report the screen as it is
+                // *then*, not the verdict the settle happened to end on.
+                self.observe_stability(machine);
+                self.tick_thinking(machine);
+            }
             Phase::Settling(n) => {
-                if n + 1 >= self.config.settle_frames {
+                // Track whether the tilemap is still changing — a scroll, a
+                // fade, a text box printing. The minimum settle is unchanged;
+                // on top of it the snapshot waits (bounded) for the screen to
+                // hold still, so the driver is not handed half of two screens.
+                self.observe_stability(machine);
+                let min_done = n + 1 >= self.config.settle_frames;
+                let capped =
+                    n + 1 >= self.config.settle_frames.saturating_add(SETTLE_EXTRA_CAP);
+                if min_done && (self.screen_settled() || capped) {
                     self.phase = Phase::Thinking;
                     self.start_call(machine);
                 } else {
@@ -296,6 +329,29 @@ impl AgentPlugin {
                 }
             }
         }
+    }
+
+    /// One frame's worth of "is the screen still moving?". Hash-only: this runs
+    /// every frame while a decision is pending, and decoding eighteen lines of
+    /// text to answer it would be waste.
+    fn observe_stability(&mut self, machine: &mut Machine) {
+        let h = Screen::tilemap_hash(machine);
+        if h == self.settle_hash {
+            self.settle_stable = self.settle_stable.saturating_add(1);
+        } else {
+            self.settle_stable = 0;
+            self.settle_hash = h;
+        }
+    }
+
+    /// Has the tilemap held still long enough to believe what it says?
+    ///
+    /// Bounded by measurement, not by hope: on a real cartridge a dialogue box
+    /// waiting on the blinking `▼` holds still for 42 frames at a stretch, and
+    /// menus and the overworld do not change at all — so a 4-frame window
+    /// cannot be starved by anything the game does routinely.
+    fn screen_settled(&self) -> bool {
+        self.settle_stable >= SCREEN_STABLE_FRAMES
     }
 
     fn tick_plan(&mut self, machine: &mut Machine) {
@@ -669,11 +725,42 @@ impl AgentPlugin {
         w.end_obj();
 
         w.obj_field("screen");
-        w.str_field("text", &screen.compact_text());
+        // Honesty before content: a decode of a half-drawn screen or of
+        // graphics that happen to sit in the font range is nonsense, and
+        // nonsense delivered in the same field as good data gets the same
+        // trust. When the read cannot be trusted the text is *withheld* and
+        // `trust` says why, so "screen not readable right now" is a fact the
+        // driver can act on rather than a wall of letter salad.
+        let trust = match screen.trust() {
+            observe::Trust::Ok if !self.screen_settled() => observe::Trust::Settling,
+            t => t,
+        };
+        w.str_field("trust", trust.label());
+        // What shape of screen this is, so "what does A do here?" does not
+        // have to be inferred from the text every time. Sent whatever the
+        // trust verdict, because it is derived from the cursor and arrow
+        // glyphs rather than from words.
+        w.str_field("kind", screen.kind().name());
+        if trust == observe::Trust::Ok {
+            w.str_field("text", &screen.compact_text());
+            // What the ▶ cursor points at — "is NEW GAME or OPTION selected?"
+            // as a fact, not an inference over raw rows, and on the naming
+            // keyboard the single letter A would type.
+            if let Some(sel) = screen.selected() {
+                w.str_field("selected", &sel);
+            }
+        } else {
+            w.str_field("text", "");
+        }
         w.bool_field("waiting_for_input", screen.waiting);
         match screen.cursor_row {
             Some(r) => w.num_field("menu_cursor_row", r as f64),
             None => w.null_field("menu_cursor_row"),
+        }
+        // On a grid (the naming keyboard) the row alone cannot say which
+        // letter the cursor is on; the column completes it.
+        if let Some(c) = screen.cursor_col {
+            w.num_field("menu_cursor_col", c as f64);
         }
         w.end_obj();
 
@@ -744,6 +831,31 @@ impl AgentPlugin {
                  is fine — press START to finish it and move on.",
             );
         }
+        // The same promotion for the screen's own trustworthiness: when the
+        // text was withheld, say why in words rather than leaving an empty
+        // field to be guessed about.
+        match trust {
+            observe::Trust::Graphics => w.str_item(
+                "The screen is showing GRAPHICS, not text (a logo or artwork \
+                 whose tiles overlap the font). screen.text was withheld \
+                 because it would be letter salad. Judge by mode and position, \
+                 not the screen.",
+            ),
+            observe::Trust::Settling => w.str_item(
+                "The screen was still redrawing when it was read (a scroll, a \
+                 fade or printing text), so screen.text was withheld rather \
+                 than sent half-drawn. Wait a few frames and look again.",
+            ),
+            _ => {}
+        }
+        if screen.yes_no_prompt() {
+            w.str_item(
+                "A YES/NO box is up. This is a QUESTION, not flowing text — \
+                 advance_text refuses to run here so the default answer is \
+                 not chosen blindly. Read the dialogue above it, move the \
+                 cursor if needed, and answer with A deliberately.",
+            );
+        }
         match escalation {
             Escalation::Nudge => w.str_item(
                 "Nothing has changed for a few decisions — what you are trying is \
@@ -773,6 +885,7 @@ impl AgentPlugin {
         if !self.sent_help {
             self.sent_help = true;
             w.str_field("actions_help", ACTIONS_HELP);
+            w.str_field("screen_help", SCREEN_HELP);
         }
         w.end_obj();
         w.finish()
@@ -865,6 +978,33 @@ pub const ACTIONS_HELP: &str = concat!(
     "finishes, fails, or the world changes unexpectedly. Prefer few, large ",
     "actions. 'say' is read aloud to strangers watching a stream: no JSON, no ",
     "file paths, no jargon."
+);
+
+/// What the `screen` object means. Sent once, beside [`ACTIONS_HELP`] — the
+/// fields are useless if nobody says what they promise, and the promises are
+/// narrow on purpose (see [`crate::observe::Screen`]).
+pub const SCREEN_HELP: &str = concat!(
+    "READING THE SCREEN. `screen` is the game's own on-screen text, decoded ",
+    "from the tilemap — it is what a player sees, not a summary.\n",
+    "  screen.kind      what shape of screen it is, and so what A does:\n",
+    "    no-text         nothing on screen is text (the overworld, the title \
+screen). An empty screen.text here is a fact, not a failed read.\n",
+    "    text            text but nothing asking for a button.\n",
+    "    dialogue        the game is waiting: press A (or advance_text).\n",
+    "    menu            a cursor is up: A chooses screen.selected.\n",
+    "    yes-no          a QUESTION. A answers it with whatever is selected.\n",
+    "    naming-keyboard A types a letter; START finishes the name.\n",
+    "  screen.text      the visible text, blank lines dropped, indentation \
+kept so a two-column menu still reads as two columns.\n",
+    "  screen.selected  the exact item the cursor points at (on the naming \
+keyboard, the single letter A would type).\n",
+    "  screen.trust     'ok' means believe screen.text. Anything else means it \
+was WITHHELD and screen.text is empty: 'graphics-not-text' (artwork whose \
+tiles overlap the font), 'still-redrawing' (read mid-transition), \
+'screen-off'. Do not treat an empty text as an empty screen when trust is \
+not ok — look again.\n",
+    "  Sprites are NOT in screen.text. People, Poke Balls and other objects \
+are drawn over the tilemap and do not appear here at all."
 );
 
 /// A stable hash of "the situation", for stuck detection: where the player is
