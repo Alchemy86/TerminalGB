@@ -77,9 +77,10 @@ fn run(rom: &Path, frames: u32, dump: bool) -> (Verdict, Vec<u8>) {
         b'F' => Verdict::Fail,
         _ => Verdict::Unfinished,
     };
-    // `RESULTS_START` is $C000 in every APU test; 6 rows of 8 is the largest.
+    // `RESULTS_START` is $C000 in every APU test but `channel_4_lfsr`
+    // ($C006); 18 rows of 8 is the largest table.
     let table = if dump {
-        (0..64u16).map(|i| cpu.memory.rb(0xC000 + i)).collect()
+        (0..152u16).map(|i| cpu.memory.rb(0xC000 + i)).collect()
     } else {
         Vec::new()
     };

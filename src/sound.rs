@@ -242,6 +242,15 @@ const SQUARE_TRIGGER_DELAY: u32 = 6;
 /// show the first duty step *not* moving with it.
 const SQUARE_TRIGGER_ALIGN: u32 = 0;
 
+/// T-cycles knocked off [`SQUARE_TRIGGER_DELAY`] when the trigger is a
+/// *re*-trigger of an already-running channel. SameSuite `channel_N_restart`
+/// states it outright: "after restarting, the start delay from the 'delay'
+/// test is actually 1 tick shorter. The countdown for the next sample is
+/// reset, but the new pulse's first sample will be the next sample the old
+/// pulse would have played" — which is also why the duty position is left
+/// alone here.
+const SQUARE_RESTART_SPEEDUP: u32 = 4;
+
 struct SquareChannel {
     enabled: bool,
     dac_enabled: bool,
@@ -356,6 +365,7 @@ impl SquareChannel {
     /// `grid_phase` is the APU clock's position on its 1 MHz grid (`0..=3`) at
     /// the cycle the trigger lands — see [`SQUARE_TRIGGER_ALIGN`].
     fn trigger(&mut self, grid_phase: u32) {
+        let restart = self.enabled;
         self.enabled = true;
         self.calculate_period();
         // Hardware reloads the frequency timer on trigger, so the first duty
@@ -363,7 +373,12 @@ impl SquareChannel {
         // that delay as (sample length + 2) M-cycles and fails a channel that
         // steps immediately. The duty *position* is deliberately not reset.
         let pad = SQUARE_TRIGGER_ALIGN.wrapping_sub(grid_phase) & 3;
-        self.delay = self.period + SQUARE_TRIGGER_DELAY + pad;
+        let base = if restart {
+            SQUARE_TRIGGER_DELAY - SQUARE_RESTART_SPEEDUP
+        } else {
+            SQUARE_TRIGGER_DELAY
+        };
+        self.delay = self.period + base + pad;
         // Sweep trigger semantics (gg8 wiki; dmg_sound 04-sweep): the shadow
         // frequency and timer ALWAYS reload, the internal enable flag is set
         // iff period or shift is non-zero (a stale `true` from an earlier
