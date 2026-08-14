@@ -3480,6 +3480,84 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   and the receptionist is shut while it is set), and carry a party with no species `>= #152`,
   no move `> STRUGGLE` and no mail — which rules out all three Johto starters.
 
+## The cable is live by default, and Gen 2 (`src/link/peer.rs`, `examples/gen2_timecapsule.rs`)
+
+- **Full write-up: [`docs/link-cable.md`](docs/link-cable.md)** — including §9, the captain's
+  remote-play vision, marked *not built*.
+- **`link = auto` is the DEFAULT.** Two instances on one machine discover each other over a
+  unix socket in `$XDG_RUNTIME_DIR/terminalgb/link` (`$GB_LINK_DIR` overrides) and pair. That
+  is a correctness requirement, not a convenience: Gen 1's Cable Club attendant checks the
+  link *before* she lets you through, so a cable that only wakes on request is the cable she
+  turns away. `link = off`, or `W` in game, opts out.
+- **A CROSS-PROCESS MASTER TRANSFER MUST BE HELD** (`Serial::link_hold`). Both emulators pace
+  to 59.7275 Hz and each emulates a whole frame in a fraction of a millisecond then sleeps —
+  two bursts need not overlap at all, so a 4096-cycle transfer that completed on schedule
+  shifts in `$FF` every time and no link ever works. The game cannot tell: it is already
+  spinning on `SC` bit 7. **Never "fix" this by making the transfer complete on time.**
+- **Three bugs cost 409 bytes on the first cross-process trade, and it LOOKED FINE**: the
+  received Pokémon read `MMER` (OT `D`) instead of `GLIMMER` (OT `RED`), because a lost byte
+  arrives as `$FF`, `$FF` is not a character, and a decoder that skips unknown bytes turns
+  corruption into something plausible. **Check the bytes, not that something arrived.** The
+  three: both consoles mastering deadlocked (each holding for the other — Gen 1 masters on
+  both every frame until roles settle, so answer "nobody listening" at once); a timed-out
+  offer answered later, spending one of the *far* console's bytes and sliding its whole
+  stream (`Kind::Abort` retracts); and a timeout counted as benign — it is `torn` now and it
+  **faults**, because the connection is alive so the two are still exchanging and have simply
+  stopped agreeing.
+- **Pairing is two at a time in ARRIVAL ORDER, not by cartridge.** Blue, Blue, Gold → the two
+  Blues share the cable. A paired instance **stops advertising** (that is what makes three
+  terminate) and **drains its backlog with `Busy` first**, because a connection that dies
+  before saying hello is indistinguishable from a crashed partner — and faulting there would
+  poison the save of a console that was never linked. **Nothing faults over a peer it never
+  handshook with.**
+- **`Session` is built on the stack by every render test**: anything `Gameboy`-sized added to
+  it must be `Box`ed or `cargo test --lib` dies with a stack overflow. Discovery happens in
+  `App::with_warnings`, **never** `App::build` — `build` is what the render tests construct
+  in parallel and two of them would find each other, the same reason the saved volume is
+  applied there.
+- **Reading a ratatui byte stream tells you the FIRST paint, not the state.** Only changed
+  cells are rewritten, so a later state lives elsewhere in the stream. A two-instance run
+  read as `Link waiting` and had in fact paired; measure the state, not the first paint.
+
+### Gen 2 / Pokémon Gold
+
+- **`pokegold` builds byte-identical to the captain's cartridge** (SHA-1 `d8b8a360…`, matches
+  its own `roms.sha1`) with **rgbds 1.0.3** — the prebuilt Linux tarball from the gbdev
+  releases; 0.6.1 is too old, the repo demands ≥1.0.0. So `pokegold.sym` is exact, and
+  constants come from `rgbasm -Q8 -P includes.asm -D _GOLD` + `PRINTLN "{d:SYMBOL}"` rather
+  than being counted by hand. **Do this before deriving any Gen 2 address.**
+- **A Gen 2 continue does NOT load map objects.** `MapSetupScript_Continue`'s second command
+  is `LoadMapAttributes_SkipObjects`: it assumes you are on the map you saved on. Editing
+  `wMapGroup` in a save lands you on the right map with the *previous* map's NPCs, no one to
+  talk to and a stale camera — and `wObjectStructs`/`wMapObjects` are inside the saved region
+  too, so the player object must be moved as well, and even then the camera is wrong.
+  **Override the warp destination at run time instead** (`wNextWarp`/`wNextMapGroup`/
+  `wNextMapNumber`, written *between instructions* — the game reads them back a few
+  instructions after writing them, so a per-frame poke loses the race). That takes the full
+  `MAPSETUP_DOOR` path and the game sets everything up itself.
+- **Gen 2's save is three separate WRAM runs into three separate SRAM runs** (`wPlayerData`
+  → `sPlayerData`, `wCurMapData` → `sCurMapData`, `wPokemonData` → `sPokemonData`), so a
+  save offset is **not** one base plus an offset. The checksum is a 16-bit sum of
+  `sGameData`, little-endian at `sChecksum`; a stale one is rejected, not tolerated.
+- **`wTilemap` is `$C3A0` and tile id == character code, exactly as in Gen 1** — the screen
+  reads back as text. But the Gen 2 **menu cursor is tile `$ED` on screen**, and
+  `wMenuCursorY` reads 2 whatever the cursor is doing: drive menus from the cursor tile, not
+  from that byte.
+- **`wMapGroup` is loaded into WRAM *before* the continue panel is dismissed**, so it is not
+  the test for "we are in the game" — stop pressing A there and the game sits on that panel
+  for ever. It also reads as noise on frame 0 (`map 127:211`); require a stable, sane map.
+- **Time Capsule prerequisites** (`LinkReceptionistScript_TimeCapsule`): `EVENT_MET_BILL`
+  clear, the `ENGINE_TIME_CAPSULE` *daily* flag clear, and a party with no species ≥ 152, no
+  move > `STRUGGLE` and no held item. All three Johto starters are Gen 2 species.
+- **THE SHINY RULE IS CONFIRMED AGAINST GOLD ITSELF.** `engine/gfx/color.asm`:
+  `SHINY_ATK_MASK EQU %0010`, `SHINY_DEF_DV`/`SHINY_SPD_DV`/`SHINY_SPC_DV` all `10` — exactly
+  what `plugins/trainer`'s `derived::shiny_if_traded` implements. Reading the rule out of the
+  cartridge covers all 65,536 DV pairs; a trade samples one. **Do not re-litigate this.**
+- **Still open:** the Gen1↔Gen2 trade itself. Gold and Blue link and exchange 1635 bytes
+  (Gold reaches "Welcome to CABLE CLUB"), but the two bots go out of phase in the *protocol* —
+  Blue reaches its Trade Center in ~2000 frames while Gold is still at the receptionist. That
+  is bot choreography, not the wire.
+
 ## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:
