@@ -50,6 +50,28 @@ impl fmt::Display for Registers {
 }
 
 impl Registers {
+    /// The register file at **reset**, before any boot ROM has run: everything
+    /// zero, `PC = $0000`, `SP = $0000`.
+    ///
+    /// [`Registers::boot`] is the other half of the same story — the state a
+    /// boot ROM *leaves behind*, transcribed because we normally do not run
+    /// one. This is where a machine starts when the user has supplied one
+    /// ([`crate::boot`]) and it is about to produce that state itself.
+    pub fn at_reset() -> Registers {
+        Registers {
+            a: 0,
+            f: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+            e: 0,
+            h: 0,
+            l: 0,
+            pc: 0x0000,
+            sp: 0x0000,
+        }
+    }
+
     /// The registers a boot ROM leaves behind at `PC=$0100`, for the console
     /// `model` running in `mode`.
     ///

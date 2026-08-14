@@ -246,6 +246,15 @@ pub struct MemoryManagementUnit<'a> {
     gbspeed: GbSpeed,
     speed_switch_req: bool,
     undocumented_cgb_regs: [u8; 3], // 0xFF72, 0xFF73, 0xFF75
+    /// The user's own boot ROM, if they supplied one and it belongs to this
+    /// console. `None` is the ordinary case and the one every checked-in
+    /// baseline is measured in — see [`crate::boot`].
+    boot: Option<crate::boot::BootRom>,
+    /// Is that boot ROM still mapped over the cartridge? Set at construction
+    /// and cleared for good by the first `$FF50` write with bit 0 set. It is
+    /// live machine state — a save taken during the boot animation has to
+    /// resume inside it — so it is serialised.
+    boot_active: bool,
     // --- Sub-instruction memory-access timing (Blargg mem_timing) ---
     //
     // The CPU executes a whole instruction "atomically" and then advances the
@@ -341,6 +350,8 @@ impl<'a> MemoryManagementUnit<'a> {
             hdma_len: 0xFF,
             hdma_run_block: false,
             undocumented_cgb_regs: [0; 3],
+            boot: None,
+            boot_active: false,
             bus_tick_enabled: false,
             bus_ticked: 0,
             gpu_bus_ticked: 0,
@@ -388,20 +399,79 @@ impl<'a> MemoryManagementUnit<'a> {
         file: Option<path::PathBuf>,
         model: crate::mode::Model,
     ) -> StrResult<MemoryManagementUnit<'a>> {
+        Self::new_with_boot_rom(data, file, model, None)
+    }
+
+    /// [`Self::new_with_model`] with an optional **user-supplied boot ROM**
+    /// ([`crate::boot`]).
+    ///
+    /// `Some(rom)` maps the image over the cartridge and leaves the machine at
+    /// its reset state — every register zero, `PC = $0000`, and *none* of the
+    /// hand-written handoff state, because the boot ROM is about to produce the
+    /// real thing. `None`, or an image belonging to the other console, is the
+    /// ordinary HLE machine and is byte-for-byte what this constructor has
+    /// always built.
+    ///
+    /// The caller decides where the bytes came from; nothing here reads an
+    /// environment variable or a path (see the layering note in
+    /// [`crate::boot`]).
+    pub fn new_with_boot_rom(
+        data: Vec<u8>,
+        file: Option<path::PathBuf>,
+        model: crate::mode::Model,
+        boot: Option<crate::boot::BootRom>,
+    ) -> StrResult<MemoryManagementUnit<'a>> {
         let mut res = Self::raw(data, file)?;
         let cgb_flag = res.rb(0x0143);
         let console = model.console(cgb_flag);
-        res.set_mode(console.mode(cgb_flag));
+        let mode = console.mode(cgb_flag);
+        res.set_mode(mode);
         res.console = console;
-        res.set_initial();
+        // A boot ROM for the other console is declined rather than run: it
+        // would map over the wrong addresses and hand over the wrong state.
+        match boot.filter(|b| b.suits(mode)) {
+            Some(rom) => {
+                res.boot = Some(rom);
+                res.boot_active = true;
+            }
+            None => res.set_initial(),
+        }
         Ok(res)
+    }
+
+    /// Is a user-supplied boot ROM about to run (or running)?
+    ///
+    /// The CPU asks this to decide whether to start at `$0000` with a blank
+    /// register file or at `$0100` with the transcribed handoff state.
+    pub fn boot_rom_mapped(&self) -> bool {
+        self.boot_active
+    }
+
+    /// `$0000-$7FFF`: the cartridge, unless a boot ROM is still mapped over the
+    /// bottom of it.
+    ///
+    /// The overlay is a read-only window — a write in this range is a mapper
+    /// register and still reaches the cartridge, which is what the boot ROM's
+    /// own logo check depends on.
+    #[inline]
+    fn read_rom(&self, address: u16) -> u8 {
+        if self.boot_active {
+            if let Some(b) = self.boot.as_ref().and_then(|r| r.byte(address)) {
+                return b;
+            }
+        }
+        self.mbc.readrom(address)
     }
 
     /// Put the machine in the state the console's own boot ROM leaves behind at
     /// `PC=$0100`.
     ///
-    /// This emulator does not run a boot ROM (they are copyrighted and cannot
-    /// be shipped), so every byte of that state has to be written here. Three
+    /// This emulator ships no boot ROM — they are somebody else's — so by
+    /// default none runs and every byte of that state has to be written here.
+    /// A user who supplies their own ([`crate::boot`]) gets the real thing
+    /// instead and this is not called at all; that is the only way to obtain
+    /// the *video RAM* half of the handoff, which is a glyph and cannot be
+    /// transcribed (see [`docs/mealybug.md`](../docs/mealybug.md) §8.6). Three
     /// Mooneye ROMs assert the *whole* of it rather than the handful of values
     /// usually quoted — `acceptance/boot_hwio-dmgABCmgb` walks `$FF00-$FF7F`
     /// plus `IE` byte by byte, and `acceptance/boot_div-dmgABCmgb` /
@@ -629,7 +699,7 @@ impl<'a> MemoryManagementUnit<'a> {
             address -= 0x2000;
         }
         match address {
-            0x0000..=0x7FFF => self.mbc.readrom(address),
+            0x0000..=0x7FFF => self.read_rom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
             0xA000..=0xBFFF => self.mbc.readram(address),
             0xC000..=0xCFFF => self.wram[address as usize & 0x0FFF],
@@ -759,6 +829,12 @@ impl<'a> MemoryManagementUnit<'a> {
         w.u8(self.hdma_len);
         w.bool(self.hdma_run_block);
         w.bytes(&self.undocumented_cgb_regs);
+        // Whether the user's boot ROM is still mapped. The *image* is never
+        // stored — it is the host's file, exactly as the cartridge is — so a
+        // state taken during the boot animation can only be loaded into a
+        // machine that has one, and says so rather than resuming into the
+        // cartridge at `PC=$0000`.
+        w.bool(self.boot_active);
         // Sub-instruction timer stepping (mem_timing fix). These are reset to
         // false/0 between instructions, so at a normal frame-boundary save they
         // are default — but capturing them keeps the state complete regardless
@@ -826,6 +902,12 @@ impl<'a> MemoryManagementUnit<'a> {
         self.hdma_len = r.u8()?;
         self.hdma_run_block = r.bool()?;
         r.fill(&mut self.undocumented_cgb_regs)?;
+        self.boot_active = r.bool()?;
+        if self.boot_active && self.boot.is_none() {
+            return Err(crate::savestate::StateError::BadField(
+                "state was taken inside a boot ROM this machine does not have",
+            ));
+        }
         self.bus_tick_enabled = r.bool()?;
         self.bus_ticked = r.u32()?;
 
@@ -951,7 +1033,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// HRAM and `IE` — is exact.
     pub fn peek(&self, address: u16) -> u8 {
         match address {
-            0x0000..=0x7FFF => self.mbc.readrom(address),
+            0x0000..=0x7FFF => self.read_rom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
             0xA000..=0xBFFF => self.mbc.readram(address),
             0xC000..=0xCFFF | 0xE000..=0xEFFF => self.wram[address as usize & 0x0FFF],
@@ -983,7 +1065,7 @@ impl<'a> MemoryManagementUnit<'a> {
             self.oam_bug(kind, self.bus_ticked);
         }
         match address {
-            0x0000..=0x7FFF => self.mbc.readrom(address),
+            0x0000..=0x7FFF => self.read_rom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
             0xA000..=0xBFFF => self.mbc.readram(address),
             // Echo RAM (E000-FDFF) mirrors WRAM: the same arms serve both ranges
@@ -1040,6 +1122,11 @@ impl<'a> MemoryManagementUnit<'a> {
             // $FF46 reads back the last page written, transfer running or not
             // (Mooneye `acceptance/oam_dma/reg_read`).
             0xFF46 => self.oam_dma.read_reg(),
+            // `$FF50` is the boot-ROM unmap latch. Only bit 0 exists and it is
+            // one-way; the other seven read 1. With no boot ROM there is
+            // nothing mapped, so it reads `$FF` — which is what
+            // `acceptance/boot_hwio-dmgABCmgb` expects and has always seen.
+            0xFF50 => 0xFE | u8::from(!self.boot_active),
             0xFF40..=0xFF4F => self.gpu.rb(address),
             0xFF51..=0xFF55 => self.hdma_read(address),
             0xFF68..=0xFF6B => self.gpu.rb(address),
@@ -1204,6 +1291,14 @@ impl<'a> MemoryManagementUnit<'a> {
                 }
             }
             0xFF46 => self.oam_dma.request(value),
+            // Writing bit 0 unmaps the boot ROM, for good: there is no way back
+            // short of a reset, which is why the boot ROM's last instruction is
+            // this write and the byte after it is the cartridge's `$0100`.
+            0xFF50 => {
+                if value & 0x01 != 0 {
+                    self.boot_active = false;
+                }
+            }
             0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70 | 0xFF76..=0xFF77
                 if self.gbmode != GbMode::Color => {}
             0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode.is_dmg() => {}

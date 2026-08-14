@@ -1328,7 +1328,13 @@ impl App {
                 return None;
             }
         };
-        let mut gb = Gameboy::new(data, Some(path.clone()));
+        // The partner console gets the same optional boot ROM as the first —
+        // two real consoles either both have one or neither does, and "my boot
+        // ROM runs on one screen and not the other" would be a surprise nobody
+        // could diagnose. See [`crate::boot`].
+        let model = crate::mode::Model::Auto;
+        let boot = crate::boot::load(model.resolve(data[0x0143]));
+        let mut gb = Gameboy::new_with_boot_rom(data, Some(path.clone()), model, boot);
         let title = gb.rom_title();
         // **The skew is not a nicety.** Two real consoles never share a crystal
         // and two real players never press A on the same frame, so their link
@@ -4457,6 +4463,35 @@ impl App {
                 d,
             )));
         }
+        // The boot ROM is opt-in in exactly the same sense, and findable only
+        // if it is written down where the player looks. Nothing is bundled and
+        // nothing is fetched — see `crate::boot`.
+        let booting = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.gb.boot_rom_mapped());
+        out.push(Line::from(""));
+        out.push(Line::from("Boot ROM — optional, yours, never bundled"));
+        out.push(Line::from(Span::styled(
+            "  drop a dump of your own hardware's boot ROM at",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            "  ~/.config/terminalgb/dmg_boot.bin   (256 bytes)",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            "  ~/.config/terminalgb/cgb_boot.bin   (2304 bytes)",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            if booting {
+                "  in use for this game — the logo you just saw was real"
+            } else {
+                "  none found: the boot state is reconstructed instead"
+            },
+            d,
+        )));
         out
     }
 
@@ -5773,7 +5808,15 @@ fn load_session(
         return Err("file is too small to be a Game Boy ROM".to_string());
     }
     let entry = romlib::entry_from_bytes(path, &data);
-    let mut gb = Gameboy::new(data.clone(), Some(path.to_path_buf()));
+    // An **optional** boot ROM the user dumped from their own hardware. Nothing
+    // is bundled and nothing is fetched; with no file at the documented path
+    // this is exactly `Gameboy::new`, which is what a fresh clone gets and what
+    // every checked-in baseline is measured on. See [`crate::boot`].
+    let model = crate::mode::Model::Auto;
+    let (boot, boot_note) = crate::boot::explain(model.resolve(data[0x0143]));
+    let booting = boot.is_some();
+    let mut gb =
+        Gameboy::new_with_boot_rom(data.clone(), Some(path.to_path_buf()), model, boot);
     // `$GB_PPU` has already chosen an engine inside `Gpu::new`; the config key
     // only speaks when the environment did not, so a one-off `GB_PPU=fast` run
     // is not silently undone by a config file.
@@ -5783,7 +5826,18 @@ fn load_session(
         }
     }
     let audio = init_audio(&mut gb);
-    let notes = attach_plugins(&mut gb, cfg, &data);
+    let mut notes = attach_plugins(&mut gb, cfg, &data);
+    // Say it once, in the places `config_warnings` already reaches. A boot ROM
+    // changes the machine — it is running somebody else's code before the
+    // cartridge's — so it must never be invisible; and a file the user clearly
+    // meant to supply that could not be used must say why rather than silently
+    // doing nothing.
+    if booting {
+        notes.push("boot ROM: running the supplied image".to_string());
+    }
+    if let Some(why) = boot_note {
+        notes.push(why);
+    }
     Ok((gb, entry, audio, notes))
 }
 

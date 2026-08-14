@@ -39,6 +39,7 @@ use std::sync::OnceLock;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+pub mod boot;
 /// Render chiptune instructions through the emulated APU — see [`chiptune`].
 /// Behind the `chiptune` feature; the music side of it lives in the
 /// dependency-free `terminalgb-chiptune` crate, which does not depend on this one.

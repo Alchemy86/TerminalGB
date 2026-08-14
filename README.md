@@ -347,7 +347,9 @@ GB_MODEL=dmg      cargo run --release --example terminal -- game.gbc  # force an
 
 `GB_PPU` picks the [rendering engine](#two-ppu-engines--pick-your-tradeoff); `GB_MODEL` picks
 the [console](#console-model--dmg-game-boy-color-or-super-game-boy). Both also have a config key (`ppu`,
-and `GB_MODEL` only overrides `Model::Auto`).
+and `GB_MODEL` only overrides `Model::Auto`). There is a third, `GB_BOOT_ROM=<path>`, which
+points at [a boot ROM you dumped yourself](#bring-your-own-boot-rom-optional) — optional, never
+bundled, and silently ignored when it is absent.
 
 ### What audio actually costs — measured, not remembered
 
@@ -679,10 +681,11 @@ axis is **accuracy against cost.**
 |---|---|---|
 | **What it is** | draws a whole scanline in one go at the mode 3 → 0 transition; mode 3 has a fixed 172-dot length | the real pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard, and a mode 3 length that falls out of the machine |
 | **A mid-scanline register write** | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read | takes effect exactly where hardware puts it |
-| **Cost** | **0.219 ms/frame** (76.5× real time) | **0.467 ms/frame** (35.8× real time) — **2.13×** |
+| **Cost** | **0.263 ms/frame** (63.8× real time) | **0.559 ms/frame** (30.0× real time) — **2.13×** |
 | **dmg-acid2 vs the author's reference** | 0 / 23,040 pixels differ | **0 / 23,040** |
-| **Mooneye `acceptance`** | the baseline total | **the same total — but not the same rows.** The variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS` |
-| **Mealybug Tearoom rows** | 3/79 | 3/79 |
+| **Mooneye `acceptance`** | 60 / 75 | **61 / 75** — and not the same rows: the variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS` |
+| **Mealybug Tearoom rows** | 3 / 79 | **6 / 79** |
+| **Mealybug pixel distance** | 1,212,282 | **693,023** |
 | **Well-behaved games** | identical output, proved frame-for-frame | identical output |
 
 <p align="center">
@@ -705,19 +708,41 @@ mid-scanline — which is almost all of them — the two produce byte-identical 
 does it at half the cost. Reach for `accurate` when a game has a mid-scanline effect (a split
 status bar, a wobble, a parallax band) that looks wrong, or when you are working on the PPU.
 
-**And the honest part:** `accurate` is *structurally* right and *not yet calibrated*. It wins
-`ppu/hblank_ly_scx_timing-GS` outright and loses `ppu/intr_1_2_timing-GS`; on Mealybug it
-brings the closest tests one to two orders of magnitude nearer (`m3_scx_high_5_bits` 9,766 →
-141 differing pixels) while making the aggregate slightly *worse* (1,212,282 → 1,268,382
-pixels over all 79 rows), because ROMs that synchronise against mode 3 fare worse with a
-variable length that is wrong than with a constant one that is honestly wrong. Both halves are
-informative and neither should be quoted alone. Both engines have **their own baseline** and
-both are scored in CI on every push, so neither can drift unnoticed.
+**And the honest part:** `accurate` is *structurally* right and *part-way* calibrated. It is
+pixel-exact on two Mealybug ROMs against all three hardware reference sets and within a few
+hundred pixels on eight more (`m3_scx_high_5_bits` is **12**), but it still loses
+`ppu/intr_1_2_timing-GS` and Blargg `oam_bug` sub-test 7 to the default — which is why the
+default has not moved. For calibration, quote the **pixel distance**, not the row count: it is
+a *rank* distance, so a frame with one extra distinct shade reports ~23,040 whatever else is
+right, and a four-pixel error can move the total by 60,000. Both engines have **their own
+baseline** and both are scored in CI on every push, so neither can drift unnoticed.
 
-📖 **[The measurement, in full → `docs/mealybug.md` §7](docs/mealybug.md)** · the engine's own
+### Bring your own boot ROM (optional)
+
+Ten of those Mealybug ROMs draw with a tile that only a real boot ROM leaves in video RAM. That
+tile is a glyph — artwork out of somebody else's ROM — so **we do not ship it, at any size**,
+and we do not fetch it. Instead, if you have dumped the boot ROM of hardware you own, drop it
+in and TerminalGB will run it:
+
+```sh
+${XDG_CONFIG_HOME:-~/.config}/terminalgb/dmg_boot.bin    # 256 bytes
+${XDG_CONFIG_HOME:-~/.config}/terminalgb/cgb_boot.bin    # 2304 bytes
+#   or GB_BOOT_ROM=/path/to/dmg_boot.bin
+```
+
+With no file there — which is the default, and what every score in this repository and every CI
+job is measured on — nothing changes: the boot state is reconstructed by hand from Mooneye's
+hardware-verified tables, and a missing, unreadable, wrong-sized or wrong-console image is
+silently that same machine. With one, you get the real scrolling logo and the real handoff, and
+Mealybug's whole-suite pixel distance falls **693,023 → 483,005** (three rows from ~22,750 to
+108/256/324). Both numbers, and how they were measured, are in
+[`docs/mealybug.md`](docs/mealybug.md) §8.6.
+
+📖 **[The measurement, in full → `docs/mealybug.md` §8](docs/mealybug.md)** · the engine's own
 notes in [`docs/components/ppu.md`](docs/components/ppu.md) · the two held against each other
 in [`testharness/ppuengines.rs`](testharness/ppuengines.rs)
-(`cargo test --release --test ppuengines`).
+(`cargo test --release --test ppuengines`) · the boot ROM's own contract in
+[`src/boot.rs`](src/boot.rs) and [`testharness/bootrom.rs`](testharness/bootrom.rs).
 
 ---
 

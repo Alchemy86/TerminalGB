@@ -104,7 +104,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// remaining reads may run, and which background tile has already paid its
 /// per-tile penalty on this line. Both are live mid-mode-3, which is exactly
 /// where `testharness/savestate.rs` takes its snapshots.
-pub const FORMAT_VERSION: u16 = 16;
+/// v17: whether a user-supplied boot ROM is still mapped over the cartridge
+/// ([`crate::boot`]). The image itself is never stored — it is the host's file,
+/// like the cartridge — so a state taken during the boot animation refuses to
+/// load into a machine that has none rather than resuming into the cartridge at
+/// `PC=$0000`.
+pub const FORMAT_VERSION: u16 = 17;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

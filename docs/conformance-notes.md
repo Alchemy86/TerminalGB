@@ -783,7 +783,8 @@ DMG-defect and CGB-only test that follows.
 
 ## 2026-08-14 — the machine booted from nothing: no post-boot state, no serial clock
 
-This emulator does not run a boot ROM (they are copyrighted and cannot be shipped), so
+This emulator ships no boot ROM, so by default none runs (a user may supply their own —
+`src/boot.rs`, added 2026-08-14 — and then it does), which means
 every byte of the state a boot ROM leaves at `PC=$0100` has to be written by hand — and
 most of it was not being written at all. Four Mooneye ROMs assert the *whole* of that
 state rather than the handful of values usually quoted. All four now pass, plus a fifth

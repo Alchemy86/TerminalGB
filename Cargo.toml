@@ -301,6 +301,14 @@ required-features = ["mcp"]
 
 # Save-state round-trip proof. `harness = false` so it can print progress and
 # control the exit code. See testharness/savestate.rs.
+# The optional user-supplied boot ROM. Runs a 256-byte image written by hand in
+# the harness itself — nothing is bundled, nothing is fetched — to prove the
+# overlay, the `$FF50` unmap, the handoff, and the whole fail-soft contract.
+[[test]]
+name = "bootrom"
+path = "testharness/bootrom.rs"
+harness = false
+
 [[test]]
 name = "savestate"
 path = "testharness/savestate.rs"

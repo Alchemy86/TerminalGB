@@ -80,8 +80,39 @@ impl Cpu<'_> {
         file: Option<std::path::PathBuf>,
         model: Model,
     ) -> Result<Self, &'static str> {
-        let memory = MemoryManagementUnit::new_with_model(data, file, model)?;
-        let registers = Registers::boot(memory.console, memory.gbmode);
+        Self::try_new_with_boot_rom(data, file, model, None)
+    }
+
+    /// [`Cpu::new_with_model`] with an optional **user-supplied boot ROM**
+    /// ([`crate::boot`]). Panics on an unmappable cartridge, like
+    /// [`Cpu::new_with_model`].
+    pub fn new_with_boot_rom(
+        data: Vec<u8>,
+        file: Option<std::path::PathBuf>,
+        model: Model,
+        boot: Option<crate::boot::BootRom>,
+    ) -> Self {
+        Self::try_new_with_boot_rom(data, file, model, boot).unwrap()
+    }
+
+    /// [`Cpu::try_new_with_model`] with an optional user-supplied boot ROM.
+    ///
+    /// With one mapped the machine starts at **reset** — every register zero,
+    /// `PC = $0000` — and the boot ROM produces the handoff state itself. With
+    /// none (or one belonging to the other console) this is byte-for-byte the
+    /// machine every baseline in this repository is measured on.
+    pub fn try_new_with_boot_rom(
+        data: Vec<u8>,
+        file: Option<std::path::PathBuf>,
+        model: Model,
+        boot: Option<crate::boot::BootRom>,
+    ) -> Result<Self, &'static str> {
+        let memory = MemoryManagementUnit::new_with_boot_rom(data, file, model, boot)?;
+        let registers = if memory.boot_rom_mapped() {
+            Registers::at_reset()
+        } else {
+            Registers::boot(memory.console, memory.gbmode)
+        };
 
         Ok(Cpu {
             registers,

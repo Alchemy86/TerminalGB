@@ -3671,6 +3671,61 @@ throughout — everything here is `src/gpu/fifo.rs` plus one STAT signal.
   transition of each pair. Not the interrupt path (that is M-cycle quantised and 3 is not a
   multiple of 4) — it is inside the twelve dots between mode 3's start and the first pixel.
 
+## Optional user-supplied boot ROM (`src/boot.rs`) — the answer to Blocker C
+
+**Captain's decision, 2026-08-14: do NOT embed the boot ROM's `®` glyph; support an optional
+boot ROM the user supplies instead.** The reasoning is worth keeping because it draws a line
+this repo will need again: a register value or a counter phase is a *fact about hardware* and
+not copyrightable expression, which is why `set_initial` transcribes the whole `$FF00-$FF7F`
+map by hand; **a glyph bitmap is expressive content** and is not ours at any size. The repo is
+public, MPL-2.0, and has a standing requirement to be freely distributable.
+
+- **Where it looks:** `${XDG_CONFIG_HOME:-~/.config}/terminalgb/{dmg_boot,cgb_boot}.bin` (256
+  and 2304 bytes), with the pre-rename `gameboy/` fallback, and `$GB_BOOT_ROM=<path>` on top.
+- **Three rules, not negotiable: never bundle one, never fetch one, fail soft and silently.**
+  No file, unreadable, wrong length or wrong console → exactly the HLE machine a fresh clone
+  gets. `boot::explain` returns the reason *only* when the user evidently meant to supply one
+  (an explicit `$GB_BOOT_ROM`, or a file at the config path that does not work), so a machine
+  with no boot ROM says nothing on every launch.
+- **A boot ROM belongs to ONE console.** A DMG image on a Color machine is declined, not
+  approximated — it would map over the wrong addresses and hand over the wrong registers. The
+  SGB's own boot ROM is not modelled, so an SGB always takes the HLE path.
+- **THE GATED SUITES MUST NEVER PICK ONE UP AUTOMATICALLY.** Only `screen::tui::load_session`
+  auto-loads; `examples/mealybug` takes `--boot-rom <path>` explicitly and **refuses to be
+  combined with `--baseline`**, and no other harness or scout looks at all. A score that
+  depended on what happens to be in somebody's `~/.config` would not be a gate. If you add a
+  boot ROM to another runner, add the same refusal.
+- **Layering:** `BootRom` is pure bytes and is what the core takes
+  (`Cpu::new_with_boot_rom`, `Gameboy::new_with_boot_rom`). `boot::find`/`load`/`explain` are
+  the *host* half — they read `$GB_BOOT_ROM`, `$XDG_CONFIG_HOME` and `$HOME` — and **nothing in
+  the core calls them**, which is what keeps the embedding claim above true. `make embed` still
+  passes with `HOME`/`DISPLAY` unset.
+- **The mechanism:** the image overlays `$0000-$00FF` (plus `$0200-$08FF` for a CGB image, with
+  the cartridge header showing through the hole it reads its title from), the machine starts at
+  **reset** (`Registers::at_reset`, every register zero, `PC = SP = $0000`) and `set_initial` is
+  **not** run — the boot ROM produces the handoff itself. `$FF50` bit 0 unmaps it for good;
+  the register reads `$FE` while mapped and `$FF` after, which is what `boot_hwio-dmgABCmgb`
+  has always seen. Writes in `$0000-$7FFF` still reach the mapper.
+- **`savestate::FORMAT_VERSION` is 17** (`boot_active`). The *image* is never stored — it is
+  the host's file, like the cartridge — so a state taken during the boot animation refuses to
+  load into a machine that has none rather than resuming into the cartridge at `PC=$0000`.
+- **Both Mealybug numbers, measured through the shipped path** (`GB_PPU=accurate`):
+  **693,023 px HLE → 483,005 px with a boot ROM (−30 %)**, `m3_obp0_change` 22,750 → **108**,
+  `m3_lcdc_obj_en_change` 22,894 → **256**, `m3_scx_low_3_bits` 22,500 → **324**. **No row
+  flips** — the boot ROM removes a *content* error the emulator could never fix, and what
+  remains in those rows is mid-scanline timing, which is ours.
+- **There is no boot ROM on this machine and we may not fetch one**, so the right-hand column
+  was produced with hand-written 256- and 2304-byte stand-ins in `/tmp` that reproduce the
+  post-boot state and then `ldh [$50],a` themselves out — never committed, and cross-checked
+  against an earlier experiment that injected the same state directly into the MMU (they agree
+  to the pixel). If you need to re-measure, write the stand-in again; do not go looking for a
+  dump in the repository, and do not download one.
+- **`testharness/bootrom.rs`** (`cargo test --release --test bootrom`, in the default `cargo
+  test`) drives the whole contract with a 256-byte image written in the harness itself: the
+  overlay, execution from `$0000`, VRAM the HLE machine cannot reconstruct, the `$FF50` unmap,
+  the handoff to `$0100`, both fail-soft paths and the save-state refusal. Teeth proven by
+  making `read_rom` ignore the latch — five of the thirteen checks go red.
+
 ## MCP server (`src/mcp/`, `terminalgb-mcp` binary, `mcp` cargo feature)
 
 - **Full contract, install steps for Claude Desktop and Claude Code, every flag, the measured

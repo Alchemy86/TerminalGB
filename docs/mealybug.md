@@ -583,7 +583,7 @@ This matters more than the total, because three quarters of it is **not** mid-sc
 `m3_lcdc_win_map_change` 892 / 710 / 710, `m3_lcdc_bg_map_change` 922 / 538 / 538, plus
 `m3_lcdc_tile_sel_win_change2` 946 and `m3_lcdc_tile_sel_change2` 1,008 on CGB-C.
 
-### 8.6 Blocker C is now measured, and it is **eight bytes**
+### 8.6 Blocker C: measured, decided, and now a **user-supplied boot ROM**
 
 [§3.3](#33-blocker-c--we-do-not-reproduce-post-boot-vram) scoped this by counting ROMs. Having
 run the experiment, the shape is much narrower than that section implies:
@@ -597,33 +597,80 @@ run the experiment, the shape is much narrower than that section implies:
   (`m3_obp0_change`, `m3_lcdc_obj_en_change`, `m3_scx_low_3_bits`, `m3_wx_4_change_sprites`);
   the other six place every sprite with it.
 
-Measured by writing the boot ROM's eight-byte `®` bitmap to `$8190` (low bitplane, high plane
-zero, exactly as the DMG boot ROM leaves it) on both DMG and CGB-compat machines, then
-reverting:
+So the whole of Blocker C is eight bytes of bitmap in somebody else's boot ROM.
 
-| row | now | with the `®` |
+**The decision (captain, 2026-08-14): do not embed them — support an optional user-supplied
+boot ROM instead.** A register value or a counter phase is a fact about hardware and not
+copyrightable expression, which is why this emulator transcribes the entire `$FF00-$FF7F` map
+by hand; a glyph bitmap is expressive content, and this repository is public, MPL-2.0 and has a
+standing requirement to be freely distributable. Anyone may lawfully dump the boot ROM of
+hardware they own, so the accurate route is the one SameBoy and others take: run the user's own
+image when there is one, and fall back to today's high-level emulation when there is not.
+
+That is implemented ([`src/boot.rs`](../src/boot.rs)). Nothing is bundled, nothing is fetched,
+and every failure — no file, unreadable, wrong length, wrong console — is silently the HLE
+machine:
+
+```sh
+${XDG_CONFIG_HOME:-~/.config}/terminalgb/dmg_boot.bin    # 256 bytes
+${XDG_CONFIG_HOME:-~/.config}/terminalgb/cgb_boot.bin    # 2304 bytes
+```
+
+`$GB_BOOT_ROM=<path>` overrides both. The terminal frontend picks one up automatically and says
+so; the **suite runners do not** — `examples/mealybug` takes `--boot-rom <path>` explicitly and
+refuses to be combined with `--baseline`, because a gated score that depended on what happens to
+be in somebody's `~/.config` would not be a gate.
+
+#### Both numbers
+
+Every checked-in baseline, every CI job and every published score in this repository is the
+**left** column. Reproduce the right one with your own dump:
+
+```sh
+GB_PPU=accurate cargo run --release --example mealybug -- \
+    --dir <mealybug checkout> --boot-rom ~/.config/terminalgb/dmg_boot.bin
+```
+
+| | HLE (default, and what CI gates) | with a boot ROM |
 |---|---:|---:|
-| `m3_obp0_change` @DMG/@CGB-C/@CGB-D | 22,750 / 22,792 / 22,750 | **108 / 66 / 108** |
-| `m3_lcdc_obj_en_change` | 22,894 / 22,834 / 22,834 | **256 / 196 / 196** |
-| `m3_scx_low_3_bits` | 22,500 / 22,500 / 22,500 | **324 / 324 / 324** |
-| `m3_lcdc_bg_map_change` | 922 / 538 / 538 | 524 / 140 / 140 |
-| `m3_lcdc_win_map_change` | 892 / 710 / 710 | 494 / 312 / 312 |
-| `m3_bgp_change_sprites` | 2,772 / 2,444 / 3,160 | 1,800 / 1,472 / 2,188 |
-| **whole suite** | **693,023** | **483,005** |
+| rows pixel-exact | 6 / 79 | 6 / 79 |
+| DMG column | 168,453 px | **98,555 px** |
+| CPU CGB C column | 292,612 px | **222,510 px** |
+| CPU CGB D column | 231,958 px | **161,940 px** |
+| **whole suite** | **693,023 px** | **483,005 px** (−30 %) |
 
-So the `®` is worth **210,018 pixels, 30 % of everything left**, and it takes the three worst
-rows in the suite to double figures — closer to exact than anything except
-`m3_scx_high_5_bits`. It is the single largest lever on this board and it is not a PPU change.
+Per row, DMG column:
 
-**It remains the captain's call and has not been taken.** The case for it, stated plainly so
-the decision can be made once: this repository already reproduces the boot ROM's entire I/O
-register map, its system-counter value, its APU register writes and the tilemap entry that
-*points at tile `$19`* (`MemoryManagementUnit::set_boot_logo_tilemap` writes `$19` to `$9910`
-today). The glyph's pixels are the same category of thing — machine state at `PC=$0100`,
-transcribed — differing only in that eight of those bytes happen to draw a standard
-typographic symbol. The case against is the standing rule in
-[`CLAUDE.md`](../CLAUDE.md#licence-boundary-format-knowledge-is-ours-game-assets-are-not): it
-is data out of somebody else's ROM, and we do not ship those. Nothing here decides it.
+| row | HLE | with a boot ROM |
+|---|---:|---:|
+| `m3_obp0_change` | 22,750 | **108** |
+| `m3_lcdc_obj_en_change` | 22,894 | **256** |
+| `m3_scx_low_3_bits` | 22,500 | **324** |
+| `m3_lcdc_win_map_change` | 892 | 494 |
+| `m3_lcdc_bg_map_change` | 922 | 524 |
+| `m3_lcdc_tile_sel_win_change` | 1,576 | 1,184 |
+| `m3_lcdc_tile_sel_change` | 1,778 | 1,386 |
+| `m3_bgp_change_sprites` | 2,772 | 1,800 |
+
+**No row flips to green**, and that is the honest headline: the boot ROM removes a *content*
+error the emulator could never have fixed, and what is left in those rows is mid-scanline
+timing, which is ours. Three of them land inside a few hundred pixels of exact, which is where
+`m3_scx_high_5_bits` (12 px) already sits — so they are now real targets rather than blanks.
+
+**How these figures were produced, stated exactly.** There is no boot ROM on the machine this
+was measured on and the rule is never to fetch one, so the right-hand column was measured
+through the shipped `--boot-rom` path using a 256-byte and a 2304-byte stand-in written for the
+purpose in `/tmp` — programs of our own that reproduce the post-boot state the real image
+leaves (the tile at `$8190`, the tilemap, `BGP`, `LCDC` and the documented register handoff) and
+then unmap themselves with `ldh [$50],a`, exactly as a real boot ROM's last instruction does.
+Nothing from either stand-in is in this repository. The figures agree to the pixel with an
+earlier experiment that injected the same handoff state directly into the MMU, which is the
+cross-check that they are measuring the state and not the mechanism.
+
+A real dump will additionally supply the `DIV` phase and the register file, which the HLE path
+already gets exactly right (`acceptance/boot_div-dmgABCmgb`, `boot_hwio-dmgABCmgb` and
+`serial/boot_sclk_align-dmgABCmgb` all pass without one), so the right-hand column should be
+what a real image scores.
 
 ### 8.7 Eight rows compare a greyscale frame against a colour photograph
 
@@ -664,8 +711,10 @@ invalidate every comparison against the committed baselines — but quote it wit
 
 ### 8.9 What the next pass should do, in order
 
-1. **Settle the `®`** (§8.6). 210,018 pixels and three rows within ~100 of exact, for eight
-   bytes and a decision. Nothing else on this board has that ratio.
+1. ~~**Settle the `®`**~~ — **done** (§8.6): a user-supplied boot ROM, never a bundled one.
+   Worth 210,018 pixels to anyone who supplies a dump, and it takes three rows from ~22,750 to
+   108/256/324 — which turns them from blanks into the same kind of mid-scanline target the
+   rest of this list is about. It flips no row on its own.
 2. **Find the residual head-of-line offset.** After §8.2 and §8.4 the two output-stage ROMs
    agree with hardware in *shape* and sit a constant **3 pixels late** (`m3_bgp_change`'s bands
    start at 4 / 76 / 148 against hardware's 1 / 73 / 145; `m3_window_timing`'s boundary is 6

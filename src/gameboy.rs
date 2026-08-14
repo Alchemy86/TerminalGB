@@ -140,6 +140,32 @@ impl Gameboy {
         })
     }
 
+    /// [`Gameboy::new_with_model`] with an optional **user-supplied boot ROM**.
+    ///
+    /// `None` — the ordinary case, and what every checked-in baseline is
+    /// measured on — is exactly [`Gameboy::new_with_model`]. `Some(rom)` maps
+    /// the image over the cartridge and starts the machine at reset, so the
+    /// handoff state (including video RAM, which cannot be reconstructed) is
+    /// the real one. The frontend finds the file; see [`crate::boot`] for where
+    /// it looks and why the core never does it itself.
+    pub fn new_with_boot_rom(
+        data: Vec<u8>,
+        filepath: Option<std::path::PathBuf>,
+        model: crate::mode::Model,
+        boot: Option<crate::boot::BootRom>,
+    ) -> Gameboy {
+        Gameboy {
+            cpu: Cpu::new_with_boot_rom(data, filepath, model, boot),
+            width: 160,
+            height: 144,
+        }
+    }
+
+    /// Is a user-supplied boot ROM mapped (or still running)?
+    pub fn boot_rom_mapped(&self) -> bool {
+        self.cpu.memory.boot_rom_mapped()
+    }
+
     pub fn render(self, render_mode: RenderMode) {
         match render_mode {
             // Nothing to do: the caller owns the loop.

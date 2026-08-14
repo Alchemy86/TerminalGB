@@ -43,6 +43,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use terminalgb::boot::BootRom;
 use terminalgb::cpu::core::Cpu;
 use terminalgb::mode::Model;
 
@@ -107,13 +108,44 @@ fn main() {
         suite_baseline::take_baseline_arg(std::env::args().skip(1).collect());
     let mut dir = std::env::var_os("MEALYBUG_DIR").map(PathBuf::from);
     let mut filters: Vec<String> = Vec::new();
+    let mut boots: Vec<BootRom> = Vec::new();
     let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dir" => dir = args.next().map(PathBuf::from),
+            // A user-supplied boot ROM, named explicitly and never picked up
+            // from the config directory: a gated suite whose score depended on
+            // what happens to be in somebody's `~/.config` would not be a gate.
+            // May be given twice, once per console; each image is used for the
+            // machine it belongs to. See `docs/mealybug.md` §8.6.
+            "--boot-rom" => {
+                let Some(path) = args.next() else {
+                    eprintln!("--boot-rom needs a path");
+                    std::process::exit(2);
+                };
+                match std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|d| BootRom::new(d).map_err(|e| e.to_string()))
+                {
+                    Ok(rom) => boots.push(rom),
+                    Err(e) => {
+                        eprintln!("--boot-rom {path}: {e}");
+                        std::process::exit(2);
+                    }
+                }
+            }
             "-h" | "--help" => return usage(),
             other => filters.push(other.to_string()),
         }
+    }
+    if baseline.is_some() && !boots.is_empty() {
+        eprintln!(
+            "refusing to gate a run that used a boot ROM — every checked-in\n\
+             expectation is the high-level-emulation machine, which is what a\n\
+             fresh clone and CI both get. Run without --baseline to see the\n\
+             boot-ROM score; docs/mealybug.md 8.6 reports both."
+        );
+        std::process::exit(2);
     }
     let Some(dir) = dir.filter(|d| d.is_dir()) else {
         return usage();
@@ -151,8 +183,8 @@ fn main() {
         let staged = staging.join(format!("{name}.gb"));
         std::fs::copy(rom, &staged).expect("stage ROM into target/");
 
-        let dmg = run(&staged, Model::Dmg);
-        let cgb = run(&staged, Model::Cgb);
+        let dmg = run(&staged, Model::Dmg, boot_for(&boots, Model::Dmg));
+        let cgb = run(&staged, Model::Cgb, boot_for(&boots, Model::Cgb));
         let mut cells = String::new();
         for (label, sub, model) in REFS {
             let (frame, _) = if model == Model::Dmg { &dmg } else { &cgb };
@@ -174,7 +206,8 @@ fn main() {
                     slot.1 += 1;
                     if diff == 0 {
                         slot.0 += 1;
-                    } else if PINNED.contains(&(name.as_str(), label)) {
+                    } else if boots.is_empty() && PINNED.contains(&(name.as_str(), label))
+                    {
                         regressions
                             .push(format!("{name} vs {label}: {diff} pixels differ"));
                     }
@@ -216,6 +249,18 @@ fn main() {
     }
 }
 
+/// The supplied image that belongs to `model`'s console, if any.
+///
+/// `Model::Dmg`/`Model::Cgb` are what this runner passes, so resolving against
+/// the mode each produces for a DMG-flagged cartridge is exact.
+fn boot_for(boots: &[BootRom], model: Model) -> Option<BootRom> {
+    let mode = match model {
+        Model::Dmg => terminalgb::mode::GbMode::Classic,
+        _ => terminalgb::mode::GbMode::ColorAsClassic,
+    };
+    boots.iter().find(|b| b.suits(mode)).cloned()
+}
+
 fn usage() {
     println!(
         "usage: cargo run --release --example mealybug -- --dir <mealybug-tearoom-tests> [filter…]\n\
@@ -227,6 +272,15 @@ fn usage() {
            cd mealybug-tearoom-tests && unzip mealybug-tearoom-tests.zip -d build\n\
          \n\
          then pass that directory with --dir (or set MEALYBUG_DIR).\n\
+         \n\
+         --boot-rom <path>   run with a boot ROM you dumped from your own\n\
+                             hardware (256 bytes DMG, 2304 bytes CGB). May be\n\
+                             given twice, once per console. Ten of these ROMs\n\
+                             draw with a tile only a real boot ROM leaves in\n\
+                             VRAM; see docs/mealybug.md 8.6 for both scores.\n\
+                             Never combined with --baseline: the checked-in\n\
+                             expectations are the boot-ROM-less machine.\n\
+         \n\
          See docs/mealybug.md for what these tests measure and where we stand."
     );
 }
@@ -255,10 +309,10 @@ fn find_roms(dir: &Path) -> Vec<PathBuf> {
 /// Run to the `LD B,B` software breakpoint the suite documents as "a good time
 /// to take a screenshot", falling back to a cycle cap. Returns the framebuffer
 /// as RGBA plus how it stopped.
-fn run(rom: &Path, model: Model) -> (Vec<u8>, &'static str) {
+fn run(rom: &Path, model: Model, boot: Option<BootRom>) -> (Vec<u8>, &'static str) {
     let data = std::fs::read(rom).expect("read staged ROM");
     // Always pass the path: with `None` this core forces MBC3 for every cart.
-    let mut cpu = Cpu::new_with_model(data, Some(rom.to_path_buf()), model);
+    let mut cpu = Cpu::new_with_boot_rom(data, Some(rom.to_path_buf()), model, boot);
     let mut cycles: u64 = 0;
     while cycles < CYCLE_CAP {
         if cpu.memory.rb(cpu.registers.pc) == 0x40 {
