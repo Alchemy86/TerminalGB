@@ -207,11 +207,10 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
 - **What is still red is not ours:** 11 PPU tests (mode-3 timing, STAT blocking, LCD-on)
   and 5 boot-state tests.
 - **DMG mode flips two of the five boot-state tests**, not five — my earlier estimate was
-  optimistic. `boot_div-dmgABCmgb` and `boot_hwio-dmgABCmgb` need the exact machine state
-  the *boot ROM* leaves behind at `PC=$0100` (the system counter's value, and every I/O
-  register), which is a strictly harder claim than the boot registers, and
-  `serial/boot_sclk_align` needs the serial clock's phase against that same counter. Those
-  three plus the 11 PPU tests are the whole remaining red list.
+  optimistic. The other three (`boot_div-dmgABCmgb`, `boot_hwio-dmgABCmgb`,
+  `serial/boot_sclk_align-dmgABCmgb`) needed the exact machine state the *boot ROM* leaves
+  behind at `PC=$0100`, which is a strictly harder claim than the boot registers.
+  **All three pass now** — see "Exact post-boot machine state" below.
 - **`blargg/interrupt_time` moves `$0C` → `$0D` and `$0D` is CORRECT** —
   `tests/interrupt_time/interrupt_time.s` says "Should take 13 cycles at either speed". Any
   baseline note blaming "16-vs-20 T-cycle dispatch" is stale; re-bless it. It then still
@@ -534,6 +533,78 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
 - `src/cpu/z80` is a non-compiled reference file, not a module. (`src/gpu/old_gpu.rs`,
   961 lines of dead/unreferenced code, was deleted — no `mod old_gpu` ever existed.)
 - The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
+
+## Exact post-boot machine state (`MemoryManagementUnit::set_initial`, `Sound::set_post_boot_state`)
+
+We do not run a boot ROM, so **every byte of the state one leaves at `PC=$0100` has to be
+written by hand**, and most of it was not being written at all. Mooneye
+`acceptance` **55/75 → 58/75** and `misc` (`GB_MODEL=cgb`) **2/8 → 4/8**, measured on the
+same build before and after: `boot_div-dmgABCmgb`, `boot_hwio-dmgABCmgb`,
+`serial/boot_sclk_align-dmgABCmgb`, `misc/boot_div-cgbABCDE` and `misc/boot_hwio-C` all
+FAIL → PASS. Full write-up with citations: `docs/conformance-notes.md`.
+
+- **It is per console, and Mooneye's own tables are the authority** (they were verified on
+  real DMG/MGB and CGB units): `acceptance/boot_hwio-dmgABCmgb.s` and `misc/boot_hwio-C.s`
+  hold the whole `$FF00-$FF7F` map, transcribed into `mmu::boot_state_tests`. The two
+  consoles genuinely disagree — a DMG leaves both joypad select lines pulled low
+  (`P1 = $CF`), a CGB leaves them released (`$FF`). Both leave `IF = $E1` (the boot ROM's
+  VBlank is still pending). Note `boot_hwio-C`'s cartridge is **DMG**-flagged, so what it
+  measures is `ColorAsClassic`, which is why `VBK`/`BCPS`/`OCPS` read back (`$FE`/`$C8`/`$D0`)
+  while the palette *data* ports stay closed.
+- **`set_initial`'s APU block was dead code** and had been since audio became optional:
+  `self.sound` is `None` at construction, so all twenty-two `NR*` writes were dropped and
+  the chip installed afterwards started from zeroed defaults (`NR52` read `$70` — powered
+  **off**). It now lives in `Sound::set_post_boot_state`, applied from `enable_audio` and
+  only on a freshly created chip (re-attaching a player mid-run must not rewind it).
+- **NEVER write the read-back values into `NR11`/`NR14`.** They read `$BF`, but that is
+  `$80` and `$87` ORed with their write-only bits. Writing `$BF` loads a length counter of
+  **1 with the length counter enabled**, so channel 1 switches itself off within 4 ms and
+  `NR52` reads `$F0`; `boot_hwio` reads `NR52` ~2.8 ms in and requires `$F1`. Replay the
+  writes the boot ROM actually makes (`NR52=$80, NR11=$80, NR12=$F3, NR51=$F3, NR50=$77,
+  NR13=$C1, NR14=$87`) — that is the only formulation that gets both the read-back and the
+  channel-enable flip-flop right, and it falls out for free that `NR10`/`NR2x`/`NR3x`/`NR4x`
+  are never written at all (their read-back masks supply every expected bit).
+- **The boot beep is deliberately NOT reproduced.** On hardware the second "ding" is still
+  ringing at hand-off, but its envelope volume is not readable from any register, so how far
+  it has decayed cannot be derived — and we never played it. The channel-enable flip-flop is
+  set (as hardware has it); the envelope is left at zero.
+- **The system counter does not start at zero.** `$ABCC` (DMG) / `$2678` (Color), as a read
+  observes it on the first M-cycle. `boot_div` is much stronger than "`DIV` reads `$AB`": it
+  reads `DIV` six times at offsets chosen to fall either side of an increment, so the
+  counter's **low bits** are pinned too. `Timer::set_boot_counter` stores the value 4 T lower
+  because `bus_tick` advances the counter *before* the access that observes it — the
+  constant in the source is the hardware number and that adjustment happens in one place.
+- **A link transfer is timed now, and an unanswered one still completes.** Eight falling
+  edges of system-counter bit 8 (8192 Hz, ~1 ms/byte), fed to `Serial::shift_clock` by
+  `Timer::take_serial_edges`; then `SB` takes the byte, `SC` bit 7 clears and `IF` bit 3 is
+  set. With nothing attached the byte is `$FF` — the console drives the clock, so the
+  transfer runs regardless; dropping it was what made `boot_sclk_align` print "No serial
+  intr". The callback/plugin is still offered the byte at the `SC` write (so the Blargg
+  capture and the Gen 1 partner are unchanged); only *when it lands* moved.
+- **The one-M-cycle subtlety, and only one ROM can see it:** the serial edge must be taken
+  from `Timer::observed_counter()` (`div + 4`), not from `div`. Use `div` and the interrupt
+  arrives one instruction late — `boot_sclk_align` reports `C: 90!` with `$91`. Verified by
+  making that change deliberately. **No unit test can catch it**: every other measurement of
+  the serial clock is relative to an `SC` write, and a constant phase offset cancels; only
+  alignment against a boot-time counter exposes it.
+- **Save-state `FORMAT_VERSION` bumped to 10** (the shift register's `bits_left`/`incoming`).
+- **Cost:** `render_bench --frames 600` on `cpu_instrs`, three runs each, **0.339 → 0.359
+  ms/frame** (+6 % of a pure-emulation figure, 0.1 % of the 16.743 ms budget, ~46× real
+  time). About half is the serial edge test in `Timer::do_mcycle`; about half is channel 1
+  genuinely running from boot.
+- **One baseline moved — `testharness/audio_baseline.txt`'s `tone440`, and only that line**
+  (hand-edited, not `UPDATE_AUDIO_BASELINE=1`, so nothing else could move silently).
+  `testharness/baseline.txt` is untouched and matches exactly. Cause: with channel 1 enabled
+  at hand-off, the tone ROM's own `NR14` write is a *re*-trigger and takes the shorter
+  `SQUARE_RESTART_SPEEDUP` path. Confirmed by comparing the WAVs, not by assertion — RMS
+  `0.2467` and peak `0.267` identical to four decimals, every zero crossing displaced by the
+  same `−0.047` samples (one M-cycle). The printed "dominant" moved 440.0 → 438.0 Hz only
+  because that estimator counts crossings in a fixed 0.5 s window and the shift drops one.
+  `dmg_sound` hashes unchanged, verdict still 12/12. **This is the shape of evidence to
+  demand before any audio hash is re-blessed.**
+- **Still red and not this work:** the `-S`/`-sgb`/`-sgb2`/`-mgb`/`-dmg0`/`-A`/`-cgb0`
+  model variants (other consoles we do not emulate — 9 rows in `acceptance`, 2 in `misc`)
+  and the PPU mid-scanline tests.
 
 ## Console model — DMG vs CGB (`src/mode.rs`, `Cpu::new_with_model`)
 

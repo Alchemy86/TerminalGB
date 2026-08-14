@@ -71,7 +71,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// divider** (which is live machine state: drop it and every load moves the next
 /// tick by up to a second) instead of `rtc_ram`/`rtc_ram_latch`/`rtc_zero`
 /// (ax6 `rtc3test`).
-pub const FORMAT_VERSION: u16 = 9;
+/// v10: the link port's shift register — an internally clocked transfer is a
+/// timed 8-shift-clock affair now, so the shifts still owed and the byte due to
+/// land in `SB` both survive across a frame boundary (Mooneye
+/// `acceptance/serial/boot_sclk_align`).
+pub const FORMAT_VERSION: u16 = 10;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

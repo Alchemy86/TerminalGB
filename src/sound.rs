@@ -1209,6 +1209,37 @@ impl Sound {
         self.dmg_mode = dmg;
     }
 
+    /// Put the APU into the state the console's boot ROM leaves behind at
+    /// `PC=$0100`, by **replaying the writes the boot ROM actually makes** —
+    /// not by stuffing the register shadow with what a read comes back with.
+    ///
+    /// That distinction is the whole of this function. `NR11` reads `$BF` and
+    /// `NR14` reads `$BF`, but those are `$80` and `$87` ORed with their
+    /// write-only bits ([`NR_READBACK_MASKS`]). Writing the *read-back* values
+    /// instead would load a length counter of 1 with the length counter
+    /// **enabled**, so channel 1 would switch itself off within 4 ms and
+    /// `NR52` would read `$F0` — which is precisely what Mooneye
+    /// `acceptance/boot_hwio-dmgABCmgb` catches, since it reads `NR52` some
+    /// 2.8 ms in and requires `$F1`.
+    ///
+    /// The one thing not reproduced is the *sound*: the boot ROM's second beep
+    /// is still ringing at hand-off on real hardware, and its envelope volume
+    /// is not readable from any register, so how far it has decayed cannot be
+    /// derived. We never played that beep, so emitting its tail would be
+    /// inventing audio the machine never produced — the envelope is left at
+    /// zero, i.e. fully decayed. Every register, including the channel-enable
+    /// flip-flop `NR52` reports, matches hardware.
+    pub fn set_post_boot_state(&mut self) {
+        self.wb(0xFF26, 0x80); // power on
+        self.wb(0xFF11, 0x80); // CH1 duty 2, length load 0 (counter = 64)
+        self.wb(0xFF12, 0xF3); // CH1 envelope: 15, decreasing, period 3
+        self.wb(0xFF25, 0xF3); // NR51: all four left, CH1+CH2 right
+        self.wb(0xFF24, 0x77); // NR50: both sides at volume 7
+        self.wb(0xFF13, 0xC1); // CH1 frequency low
+        self.wb(0xFF14, 0x87); // CH1 trigger, length counter left disabled
+        self.channel1.volume.volume = 0;
+    }
+
     /// NRx4 length-counter semantics, including the "extra length clocking"
     /// quirks (gg8 wiki "Gameboy sound hardware" → Obscure Behavior; Blargg
     /// dmg_sound 03-trigger). `first_half` = the frame sequencer's *next*

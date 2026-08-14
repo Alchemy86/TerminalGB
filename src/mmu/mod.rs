@@ -35,6 +35,22 @@ fn is_oam_page(address: u16) -> bool {
 const WRAM_SIZE: usize = 0x8000;
 const ZRAM_SIZE: usize = 0x7F;
 
+/// The 16-bit system counter as the first cartridge instruction observes it on
+/// a DMG (`DIV` therefore reads `$AB`). Measured by Mooneye
+/// `acceptance/boot_div-dmgABCmgb`, which pins six successive `DIV` reads and
+/// so fixes the counter's low bits as well as `DIV` itself, and cross-checked
+/// by `acceptance/serial/boot_sclk_align-dmgABCmgb`, which measures the serial
+/// shift clock's phase against the same counter.
+const DMG_BOOT_SYSTEM_COUNTER: u16 = 0xABCC;
+
+/// The same value for a Color console, measured by Mooneye
+/// `misc/boot_div-cgbABCDE`. That ROM has a **DMG** cartridge header, so what it
+/// actually measures is the compatibility path; a CGB cartridge takes a
+/// different route through the boot ROM and no suite ROM pins where it ends up.
+/// The same value is used for both, which is right for `ColorAsClassic` and a
+/// documented approximation for `Color`.
+const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
+
 #[derive(PartialEq)]
 enum DMAType {
     NoDma,
@@ -231,29 +247,41 @@ impl<'a> MemoryManagementUnit<'a> {
         Ok(res)
     }
 
+    /// Put the machine in the state the console's own boot ROM leaves behind at
+    /// `PC=$0100`.
+    ///
+    /// This emulator does not run a boot ROM (they are copyrighted and cannot
+    /// be shipped), so every byte of that state has to be written here. Three
+    /// Mooneye ROMs assert the *whole* of it rather than the handful of values
+    /// usually quoted — `acceptance/boot_hwio-dmgABCmgb` walks `$FF00-$FF7F`
+    /// plus `IE` byte by byte, and `acceptance/boot_div-dmgABCmgb` /
+    /// `misc/boot_div-cgbABCDE` pin the 16-bit system counter's exact value and
+    /// phase. They disagree with each other, so the values are per console.
+    ///
+    /// The APU's share of it is **not** here: the sound chip is installed later
+    /// by [`Self::enable_audio`] (headless machines have none), so its post-boot
+    /// registers live in `Sound::set_post_boot_state`. Writing them here was
+    /// dead code — `self.sound` is `None` at this point and every one of those
+    /// writes was silently dropped.
     fn set_initial(&mut self) {
+        // The system counter is running long before the cartridge sees its
+        // first instruction. `$ABCC`/`$2674` are the values a CPU read observes
+        // on the first M-cycle — see `Timer::set_boot_counter`.
+        self.timer.set_boot_counter(match self.gbmode {
+            GbMode::Classic => DMG_BOOT_SYSTEM_COUNTER,
+            _ => CGB_BOOT_SYSTEM_COUNTER,
+        });
+        // The boot ROM ran through at least one VBlank, so its flag is still
+        // pending. `IE` is 0, so nothing is dispatched until the game asks.
+        self.intf = 0x01;
+        // `P1`: the DMG boot ROM leaves both select lines pulled low (`$CF`);
+        // the CGB boot ROM leaves them released (`$FF`).
+        if self.gbmode == GbMode::Classic {
+            self.keypad.wb(0x00);
+        }
         self.wb(0xFF05, 0);
         self.wb(0xFF06, 0);
         self.wb(0xFF07, 0);
-        self.wb(0xFF10, 0x80);
-        self.wb(0xFF11, 0xBF);
-        self.wb(0xFF12, 0xF3);
-        self.wb(0xFF14, 0xBF);
-        self.wb(0xFF16, 0x3F);
-        self.wb(0xFF16, 0x3F);
-        self.wb(0xFF17, 0);
-        self.wb(0xFF19, 0xBF);
-        self.wb(0xFF1A, 0x7F);
-        self.wb(0xFF1B, 0xFF);
-        self.wb(0xFF1C, 0x9F);
-        self.wb(0xFF1E, 0xFF);
-        self.wb(0xFF20, 0xFF);
-        self.wb(0xFF21, 0);
-        self.wb(0xFF22, 0);
-        self.wb(0xFF23, 0xBF);
-        self.wb(0xFF24, 0x77);
-        self.wb(0xFF25, 0xF3);
-        self.wb(0xFF26, 0xF1);
         self.wb(0xFF40, 0x91);
         self.wb(0xFF42, 0);
         self.wb(0xFF43, 0);
@@ -263,6 +291,15 @@ impl<'a> MemoryManagementUnit<'a> {
         self.wb(0xFF49, 0xFF);
         self.wb(0xFF4A, 0);
         self.wb(0xFF4B, 0);
+        if self.gbmode == GbMode::ColorAsClassic {
+            // A CGB running a DMG cartridge has just loaded the compatibility
+            // palettes through `BCPS`/`OCPS`, which are left pointing past the
+            // last byte written with auto-increment still on (`$C8`/`$D0`).
+            // A CGB *cartridge* takes a different path through the boot ROM and
+            // no suite ROM measures where it leaves them, so `Color` is left
+            // alone rather than guessed at.
+            self.gpu.set_boot_palette_index();
+        }
     }
 
     /// Commit the resolved hardware mode. The PPU keeps its own copy (it reads
@@ -281,6 +318,11 @@ impl<'a> MemoryManagementUnit<'a> {
             self.timer.do_cycle(4);
             self.intf |= self.timer.interrupt;
             self.timer.interrupt = 0;
+            // The link port's shift clock is divided from the same counter, so
+            // it has to be drained here, *before* the access — otherwise an
+            // `SC` write landing on an edge M-cycle would consume that edge and
+            // finish a shift too early.
+            self.serial_shift();
             // The APU clock advances per-access too, so a wave-RAM or NR5x
             // access lands on its exact sub-instruction cycle (Blargg
             // dmg_sound 09/10/12 measure this to 2 T-cycles). Synthesis stays
@@ -291,6 +333,18 @@ impl<'a> MemoryManagementUnit<'a> {
             }
             self.oam_dma_tick();
             self.bus_ticked += 4;
+        }
+    }
+
+    /// Hand the link port the shift-clock edges the system counter has just
+    /// produced, and publish any interrupt that finishes a transfer.
+    #[inline]
+    fn serial_shift(&mut self) {
+        let edges = self.timer.take_serial_edges();
+        if edges != 0 {
+            self.serial.shift_clock(edges);
+            self.intf |= self.serial.interrupt;
+            self.serial.interrupt = 0;
         }
     }
 
@@ -528,6 +582,7 @@ impl<'a> MemoryManagementUnit<'a> {
         self.oam_dma_cycles(timerticks);
         self.intf |= self.timer.interrupt;
         self.timer.interrupt = 0;
+        self.serial_shift();
 
         self.intf |= self.keypad.interrupt;
         self.keypad.interrupt = 0;
@@ -640,7 +695,10 @@ impl<'a> MemoryManagementUnit<'a> {
                 #[cfg(target_arch = "wasm32")]
                 0xFF
             }
-            0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70
+            // `$FF4F` (VBK) is deliberately absent from this list: the PPU
+            // answers it, because a Color console in compatibility mode still
+            // reads it back ($FE) even though its writes are ignored.
+            0xFF4D | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70
                 if self.gbmode != GbMode::Color =>
             {
                 0xFF
@@ -985,13 +1043,22 @@ impl<'a> MemoryManagementUnit<'a> {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn enable_audio(&mut self, player: Box<dyn crate::sound::AudioPlayer>) {
-        if self.sound.is_none() {
+        let fresh = self.sound.is_none();
+        if fresh {
             self.sound = Some(crate::sound::Sound::new());
         }
         let sound = self.sound.as_mut().unwrap();
         // DMG carts get DMG APU semantics (length counters survive power-off
         // etc. — what Blargg's dmg_sound asserts); CGB carts get CGB rules.
         sound.set_mode(self.gbmode != GbMode::Color);
+        if fresh {
+            // The APU is installed after `set_initial` has run (a headless
+            // machine may never get one at all), so its share of the post-boot
+            // state is applied here — see `Sound::set_post_boot_state`. Only on
+            // a *fresh* chip: re-attaching a player mid-run must not rewind the
+            // sound chip to its boot state.
+            sound.set_post_boot_state();
+        }
         sound.set_player(player);
     }
 
@@ -1353,5 +1420,169 @@ mod oam_bug_tests {
         });
 
         assert_ne!(oam(&plain), oam(&shared));
+    }
+}
+
+/// The state the boot ROM leaves behind — see [`MemoryManagementUnit::set_initial`].
+///
+/// These are transcriptions of the tables Mooneye's `boot_hwio` ROMs walk, so
+/// the whole of `$FF00-$FF7F` is pinned here in a form a reader can diff
+/// against the ROM source, not just the handful of values that usually get
+/// quoted. Both ROMs skip the registers that move with time (`DIV`, `LY`,
+/// `STAT`) or with the machine (wave RAM, `DMA`, the object palettes), and so
+/// does this test — the counter's exact value is asserted separately below,
+/// which is what `boot_div` measures.
+#[cfg(test)]
+mod boot_state_tests {
+    use super::*;
+
+    /// The APU is installed after the machine boots, so a headless MMU has no
+    /// sound chip and reads `$FF` across `NR10-NR52`. Every test here wants a
+    /// complete machine.
+    struct NullPlayer;
+    impl crate::sound::AudioPlayer for NullPlayer {
+        fn play(&mut self, _l: &[f32], _r: &[f32]) {}
+        fn samples_rate(&self) -> u32 {
+            44_100
+        }
+        fn underflowed(&self) -> bool {
+            false
+        }
+    }
+
+    fn machine(model: crate::mode::Model) -> MemoryManagementUnit<'static> {
+        let rom = vec![0u8; 0x8000];
+        let mut mem = MemoryManagementUnit::new_with_model(rom, None, model).unwrap();
+        mem.enable_audio(Box::new(NullPlayer));
+        mem
+    }
+
+    /// `(address, expected)`, from `mooneye-test-suite/acceptance/boot_hwio-dmgABCmgb.s`.
+    const DMG_HWIO: &[(u16, u8)] = &[
+        (0xFF00, 0xCF), // P1: both select lines pulled low, nothing pressed
+        (0xFF01, 0x00),
+        (0xFF02, 0x7E),
+        (0xFF03, 0xFF),
+        (0xFF05, 0x00),
+        (0xFF06, 0x00),
+        (0xFF07, 0xF8),
+        (0xFF0F, 0xE1), // IF: the boot ROM's VBlank is still pending
+        (0xFF10, 0x80),
+        (0xFF11, 0xBF),
+        (0xFF12, 0xF3),
+        (0xFF13, 0xFF),
+        (0xFF14, 0xBF),
+        (0xFF16, 0x3F),
+        (0xFF17, 0x00),
+        (0xFF19, 0xBF),
+        (0xFF1A, 0x7F),
+        (0xFF1C, 0x9F),
+        (0xFF1E, 0xBF),
+        (0xFF20, 0xFF),
+        (0xFF21, 0x00),
+        (0xFF22, 0x00),
+        (0xFF23, 0xBF),
+        (0xFF24, 0x77),
+        (0xFF25, 0xF3),
+        (0xFF26, 0xF1), // NR52: powered on, channel 1 still flagged enabled
+        (0xFF40, 0x91),
+        (0xFF42, 0x00),
+        (0xFF43, 0x00),
+        (0xFF45, 0x00),
+        (0xFF47, 0xFC),
+        (0xFF4A, 0x00),
+        (0xFF4B, 0x00),
+        (0xFF4C, 0xFF),
+        (0xFF4D, 0xFF),
+        (0xFF4F, 0xFF), // a DMG has no VRAM bank register at all
+        (0xFF68, 0xFF),
+        (0xFF70, 0xFF),
+        (0xFFFF, 0x00),
+    ];
+
+    /// The differences a Color console makes, from `misc/boot_hwio-C.s` (which
+    /// also runs a DMG cartridge, so this is compatibility mode).
+    const CGB_HWIO: &[(u16, u8)] = &[
+        (0xFF00, 0xFF), // the CGB boot ROM leaves the select lines released
+        (0xFF4F, 0xFE), // VBK reads back even though its writes are ignored
+        (0xFF68, 0xC8), // BCPS: one past the compatibility palettes, auto-inc on
+        (0xFF69, 0xFF), // ...but the data ports stay closed in compat mode
+        (0xFF6A, 0xD0),
+        (0xFF6B, 0xFF),
+        (0xFF6C, 0xFF),
+        (0xFF70, 0xFF),
+        (0xFF72, 0x00),
+        (0xFF73, 0x00),
+        (0xFF75, 0x8F),
+    ];
+
+    #[test]
+    fn a_dmg_boots_into_the_state_its_boot_rom_leaves() {
+        let mut mem = machine(crate::mode::Model::Dmg);
+        for &(a, want) in DMG_HWIO {
+            assert_eq!(mem.rb(a), want, "${a:04X}");
+        }
+        assert_eq!(mem.rb(0xFF04), 0xAB, "DIV = the counter's top byte");
+    }
+
+    #[test]
+    fn a_color_console_boots_into_a_different_state() {
+        let mut mem = machine(crate::mode::Model::Cgb);
+        // Everything the two consoles agree on.
+        for &(a, want) in DMG_HWIO {
+            if CGB_HWIO.iter().any(|&(b, _)| b == a) {
+                continue;
+            }
+            assert_eq!(mem.rb(a), want, "${a:04X}");
+        }
+        for &(a, want) in CGB_HWIO {
+            assert_eq!(mem.rb(a), want, "${a:04X}");
+        }
+        assert_eq!(mem.rb(0xFF04), 0x26);
+    }
+
+    /// The counter is not merely "`DIV` reads `$AB`": `boot_div` pins its low
+    /// bits too, by reading `DIV` six times at known offsets and requiring the
+    /// reads to land either side of an increment. The first read on a DMG is
+    /// 13 M-cycles in and must see `$AC00` exactly.
+    #[test]
+    fn the_system_counter_boots_with_the_right_phase() {
+        let mut mem = machine(crate::mode::Model::Dmg);
+        // 13 M-cycles of bus accesses, then the read: exactly the count from
+        // `$0100` to the `ldh a,(DIV)` in `acceptance/boot_div-dmgABCmgb`.
+        mem.set_bus_ticking(true);
+        for _ in 0..13 {
+            mem.rb(0xC000);
+        }
+        assert_eq!(mem.rb(0xFF04), 0xAC, "DIV has just incremented to $AC");
+        mem.set_bus_ticking(false);
+    }
+
+    /// An internally clocked transfer is not instantaneous, and with nothing
+    /// attached it still finishes — shifting in the idle-high `$FF` an empty
+    /// link port presents (`acceptance/serial/boot_sclk_align`).
+    #[test]
+    fn a_link_transfer_takes_eight_shift_clocks_and_completes_unanswered() {
+        let mut mem = machine(crate::mode::Model::Dmg);
+        mem.wb(0xFF01, 0x42);
+        mem.wb(0xFF02, 0x81);
+        assert_eq!(mem.rb(0xFF01), 0x42, "nothing has been shifted yet");
+        assert_eq!(mem.rb(0xFF02) & 0x80, 0x80, "the transfer is still running");
+        // Seven shift clocks (512 T each) is not enough; the eighth is.
+        mem.do_cycle(512 * 7);
+        assert_eq!(mem.rb(0xFF01), 0x42);
+        assert_eq!(
+            mem.intf & 0x08,
+            0,
+            "no serial interrupt before the last bit"
+        );
+        mem.do_cycle(512);
+        assert_eq!(mem.rb(0xFF01), 0xFF, "an unplugged cable reads all ones");
+        assert_eq!(
+            mem.rb(0xFF02) & 0x80,
+            0,
+            "SC's start bit clears on completion"
+        );
+        assert_ne!(mem.intf & 0x08, 0, "and the serial interrupt is requested");
     }
 }

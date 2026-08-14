@@ -1177,7 +1177,9 @@ mod tests {
 
     /// The seam itself, driven by the real CPU rather than by calling the host
     /// directly: a program writes `SB` then `SC = $81`, and the byte the plugin
-    /// shifts back must be readable from `SB` on the very next instruction.
+    /// shifts back must appear in `SB` — once the shift clock has run out, not
+    /// on the next instruction. Both halves are asserted, because "the reply
+    /// arrives" and "it does not arrive early" are separate claims.
     ///
     /// This is the one thing unit-testing `PluginHost` in isolation cannot
     /// prove — that `Serial::pending`, `Cpu::do_cycle` and `MMU::do_cycle` are
@@ -1204,18 +1206,7 @@ mod tests {
             }
         }
 
-        let mut rom = vec![0u8; 0x8000];
-        rom[0x100..0x112].copy_from_slice(&[
-            0x3E, 0x01, // LD A, $01
-            0xEA, 0x01, 0xFF, // LD ($FF01), A   ; SB = the byte we send
-            0x3E, 0x81, // LD A, $81
-            0xEA, 0x02, 0xFF, // LD ($FF02), A   ; SC = start, internal clock
-            0xFA, 0x01, 0xFF, // LD A, ($FF01)   ; read the received byte
-            0xEA, 0x00, 0xC0, // LD ($C000), A   ; stash it where we can see it
-            0x18, 0xFE, // JR -2            ; halt
-        ]);
-
-        let mut cpu = crate::cpu::core::Cpu::new(rom, None);
+        let mut cpu = crate::cpu::core::Cpu::new(link_poll_rom(), None);
         cpu.plugins.register(Box::new(Answer)).unwrap();
         cpu.registers.pc = 0x100;
         for _ in 0..8 {
@@ -1223,21 +1214,30 @@ mod tests {
         }
         assert_eq!(
             cpu.memory.debug_peek(0xC000),
+            0x01,
+            "a transfer is not instantaneous: SB still holds the byte we sent"
+        );
+        for _ in 0..2000 {
+            cpu.do_cycle();
+        }
+        assert_eq!(
+            cpu.memory.debug_peek(0xC000),
             0x02,
-            "the plugin's reply should be in SB by the next instruction"
+            "the plugin's reply should land in SB when the shift clock runs out"
+        );
+        assert_ne!(
+            cpu.memory.intf & 0x08,
+            0,
+            "completing the transfer requests the serial interrupt"
         );
     }
 
-    /// With nothing attached, the same program sees an unplugged cable — `SB`
-    /// keeps the byte that was written to it, and no serial interrupt is raised.
+    /// With nothing attached, the same program sees an unplugged cable: the
+    /// console is driving the clock, so the transfer still runs to completion —
+    /// it just shifts in the idle-high `$FF` the empty link port presents.
     #[test]
-    fn with_no_plugin_a_transfer_behaves_like_an_unplugged_cable() {
-        let mut rom = vec![0u8; 0x8000];
-        rom[0x100..0x112].copy_from_slice(&[
-            0x3E, 0x01, 0xEA, 0x01, 0xFF, 0x3E, 0x81, 0xEA, 0x02, 0xFF, 0xFA, 0x01, 0xFF,
-            0xEA, 0x00, 0xC0, 0x18, 0xFE,
-        ]);
-        let mut cpu = crate::cpu::core::Cpu::new(rom, None);
+    fn with_no_plugin_a_transfer_shifts_in_an_idle_cable() {
+        let mut cpu = crate::cpu::core::Cpu::new(link_poll_rom(), None);
         cpu.registers.pc = 0x100;
         for _ in 0..8 {
             cpu.do_cycle();
@@ -1246,8 +1246,33 @@ mod tests {
         assert_eq!(
             cpu.memory.intf & 0x08,
             0,
-            "no serial interrupt without a partner"
+            "nothing has been shifted yet, so no serial interrupt yet"
         );
+        for _ in 0..2000 {
+            cpu.do_cycle();
+        }
+        assert_eq!(
+            cpu.memory.debug_peek(0xC000),
+            0xFF,
+            "an unplugged cable reads as all ones"
+        );
+        assert_ne!(cpu.memory.intf & 0x08, 0);
+    }
+
+    /// Start one transfer and then poll `SB` into `$C000` forever, so a test
+    /// can watch the shift register run out instead of assuming it already has.
+    fn link_poll_rom() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x100..0x112].copy_from_slice(&[
+            0x3E, 0x01, // LD A, $01
+            0xEA, 0x01, 0xFF, // LD ($FF01), A   ; SB = the byte we send
+            0x3E, 0x81, // LD A, $81
+            0xEA, 0x02, 0xFF, // LD ($FF02), A   ; SC = start, internal clock
+            0xFA, 0x01, 0xFF, // LD A, ($FF01)   ; read the received byte
+            0xEA, 0x00, 0xC0, // LD ($C000), A   ; stash it where we can see it
+            0x18, 0xF8, // JR -8            ; ...and keep watching
+        ]);
+        rom
     }
 
     #[test]

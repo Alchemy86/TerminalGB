@@ -99,6 +99,149 @@ DMG-defect and CGB-only test that follows.
 
 ---
 
+## 2026-08-14 — the machine booted from nothing: no post-boot state, no serial clock
+
+This emulator does not run a boot ROM (they are copyrighted and cannot be shipped), so
+every byte of the state a boot ROM leaves at `PC=$0100` has to be written by hand — and
+most of it was not being written at all. Four Mooneye ROMs assert the *whole* of that
+state rather than the handful of values usually quoted. All four now pass, plus a fifth
+that was not on the work list:
+
+| ROM | before | after |
+|---|---|---|
+| `acceptance/boot_div-dmgABCmgb` | FAIL | **PASS** |
+| `acceptance/boot_hwio-dmgABCmgb` | FAIL | **PASS** |
+| `acceptance/serial/boot_sclk_align-dmgABCmgb` | FAIL | **PASS** |
+| `misc/boot_div-cgbABCDE` | FAIL | **PASS** |
+| `misc/boot_hwio-C` | FAIL | **PASS** |
+
+Measured on the same build, before and after: Mooneye `acceptance` **55/75 → 58/75**,
+`misc` (`GB_MODEL=cgb`) **2/8 → 4/8**, `emulator-only` 28/28 unchanged. `testroms`,
+`savestate`, `battery` and `trainer` all still match their baselines exactly, and the
+Gen 1 link trade still completes (two trades, `exp 135` — the game's own boosted-experience
+proof that the byte arrived *through* the trade path).
+
+There are three separate defects here.
+
+### 1. Half the I/O map was never initialised, and the APU's share was dead code
+
+**Symptom** — a game that reads a register before writing it sees a value no real console
+ever presents. Concretely: `P1` read `$FF` on a DMG instead of `$CF`; `IF` read `$E0`
+instead of `$E1`, so a game that enables the VBlank interrupt and `EI`s at start-up waits a
+whole frame for an interrupt hardware already had pending; the whole APU read back powered
+**off** (`NR52 = $70`, not `$F1`) with `NR50`/`NR51` at zero; and on a Color console in
+compatibility mode `VBK`, `BCPS` and `OCPS` read `$FF` rather than `$FE`/`$C8`/`$D0`.
+
+The APU half was not a wrong value but *dead code*: `MemoryManagementUnit::set_initial`
+wrote `NR10`–`NR52` at construction time, when `self.sound` is still `None`, so every one
+of those twenty-two writes was silently dropped and the sound chip that gets installed
+afterwards started from its own zeroed defaults. It had been dead since the APU became
+optional.
+
+**Caught by** — `acceptance/boot_hwio-dmgABCmgb` and `misc/boot_hwio-C`, which walk
+`$FF00-$FF7F` plus `IE` byte by byte against a table and name the first address that
+disagrees. Nothing in the in-repo harness caught it, and nothing would have: Blargg's ROMs
+and dmg-acid2 all write every register they depend on.
+
+**Hardware behaviour** — Pan Docs, "Power-Up Sequence" → *Hardware registers*, and the two
+Mooneye ROMs' own tables (`mooneye-test-suite/acceptance/boot_hwio-dmgABCmgb.s`,
+`misc/boot_hwio-C.s`), which are the authority here because they were verified against real
+DMG/MGB and CGB units. The two consoles genuinely disagree — a DMG boot ROM leaves both
+joypad select lines pulled low, a CGB leaves them released — so this is per-model state, not
+one table.
+
+**The trap worth writing down:** `NR11` and `NR14` read back `$BF`, but writing `$BF` to
+them is *wrong*. Those read-backs are `$80` and `$87` ORed with their write-only bits; write
+the read-back value instead and you load a length counter of 1 **with the length counter
+enabled**, so channel 1 switches itself off within 4 ms and `NR52` reads `$F0`. `boot_hwio`
+reads `NR52` about 2.8 ms in and requires `$F1`, so it catches exactly this. The fix
+replays the writes the boot ROM actually makes (`Sound::set_post_boot_state`), which is the
+only formulation that gets both the read-back and the channel-enable flip-flop right.
+
+**Deliberately not reproduced:** the sound. The boot ROM's second beep is still ringing at
+hand-off on real hardware and its envelope volume is not readable from any register, so how
+far it has decayed cannot be derived — and we never played that beep, so emitting its tail
+would be inventing audio the machine never produced. The envelope is left fully decayed.
+
+### 2. The 16-bit system counter started at zero
+
+**Symptom** — `DIV` reads `$00` at `PC=$0100` instead of `$AB` (DMG) / `$26` (CGB). Games
+seed their RNG from `DIV`, so on a real console the seed depends on how long the boot ROM
+took and on when the player pressed a button; from a zeroed counter it is the same every
+time and it is a value hardware never shows at that instant.
+
+**Caught by** — `acceptance/boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE`, which are much
+stronger than "`DIV` reads `$AB`": each reads `DIV` six times at known instruction offsets,
+chosen so the reads fall either side of an increment, and so pins the counter's **low bits**
+as well. That is what makes the value in `src/mmu/mod.rs` a measurement rather than a guess.
+
+**Hardware behaviour** — there is one 16-bit counter on the die and `DIV` is its top byte
+(Pan Docs, "Timer and Divider Registers"; Gekkio, *Game Boy: Complete Technical Reference*
+§Timer). It is free-running from power-on, so by the time the boot ROM hands over it holds
+`$ABCC` on a DMG. `Timer::set_boot_counter` stores that value four T-cycles behind, because
+this core's per-access tick (`MemoryManagementUnit::bus_tick`) advances the counter *before*
+the access that observes it; the constant in the source is the hardware number and the
+adjustment is made in one documented place.
+
+**Carries into the tool** — `mmu::boot_state_tests::the_system_counter_boots_with_the_right_phase`
+performs the same 13-M-cycle-then-read that the ROM does. Proved to have teeth by seeding
+the counter one M-cycle out, which turns it red.
+
+### 3. A link transfer completed the instant `SC` was written
+
+**Symptom** — a game that starts an internally clocked transfer and counts cycles until the
+serial interrupt measures zero. And with nothing plugged in, the transfer never completed
+*at all*: no interrupt, `SB` keeping the byte that was written to it. On hardware an
+internally clocked transfer always completes — the console is driving the clock; an empty
+link port simply shifts in all ones.
+
+**Caught by** — `acceptance/serial/boot_sclk_align-dmgABCmgb`, which starts a transfer from
+a cold boot, `EI`s, and counts `inc` instructions until the serial interrupt fires. It
+therefore tests three things at once: that the transfer is *not* instantaneous, that it
+completes with no partner attached, and that the shift clock's edges are aligned to the
+system counter's **reset time** rather than to the `SC` write. Nothing in the in-repo
+harness covers any of the three — Blargg's ROMs use the link port purely as a printer and
+never wait on the interrupt, which is a real gap in a ROM-driven suite.
+
+**Hardware behaviour** — the shift register is clocked from the same free-running counter as
+`TIMA`, at 8192 Hz on a DMG (512 T per bit, i.e. a falling edge of counter bit 8), so a byte
+takes ~1 ms and its edges are wherever the counter says they are (Pan Docs, "Serial Data
+Transfer (Link Cable)"; Gekkio, *GBCTR* §Serial). Modelled in
+`Timer::take_serial_edges` + `Serial::shift_clock`.
+
+**The one-M-cycle subtlety, which only this ROM can see:** the edge has to be taken from the
+counter *as a bus access observes it* (`Timer::observed_counter`), not from the raw field.
+Take it from the raw field and the serial interrupt arrives one instruction late — the ROM
+reports `C: 90!` against an expected `$90`… with `$91`. Verified by deliberately making that
+change. No unit test can catch it, because every other measurement of the serial clock is
+relative to an `SC` write and a constant phase offset cancels out; only alignment against a
+boot-time counter exposes it.
+
+**Carries into the tool** —
+`mmu::boot_state_tests::a_link_transfer_takes_eight_shift_clocks_and_completes_unanswered`
+(seven shift clocks is not enough, the eighth completes it with `$FF`), and the two
+`plugin` tests, which now assert *both* that a partner's reply arrives and that it does not
+arrive early.
+
+### What it cost, and the one baseline that moved
+
+Emulation cost, `render_bench --frames 600` on `cpu_instrs`, three runs each: **0.339 →
+0.359 ms/frame** (+6 % of a pure-emulation figure, 0.1 % of the 16.743 ms budget, still
+~46× real time). Attributed by disabling each half in turn: about half is the serial edge
+test in `Timer::do_mcycle`, about half is channel 1 genuinely running from boot.
+
+`testharness/audio_baseline.txt`'s `tone440` hash moved, and **only** that one. The cause is
+the boot state itself: with channel 1's enable flip-flop set at hand-off, the tone ROM's own
+`NR14` write is a *re-*trigger and takes the shorter `SQUARE_RESTART_SPEEDUP` path. Confirmed
+by comparing the two WAVs rather than by assertion — RMS `0.2467` and peak `0.267` identical
+to four decimal places, every zero crossing displaced by the same `−0.047` samples (one
+M-cycle). The reported dominant moved 440.0 → 438.0 Hz only because the estimator counts
+crossings in a fixed 0.5 s window and the shift drops one. `dmg_sound` is untouched: both
+its hashes are unchanged and its verdict is still 12/12. `testharness/baseline.txt` was not
+touched and matches exactly.
+
+---
+
 ## 2026-08-14 — MBC1M multicarts were driven as ordinary MBC1 carts
 
 Mooneye `emulator-only/mbc1/multicart_rom_8Mb` was the suite's single MBC failure

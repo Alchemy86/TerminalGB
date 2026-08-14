@@ -12,6 +12,17 @@
 # fixture below are what actually asserts accuracy; the hash only pins
 # "the samples did not change".
 
-tone440 = HASH:7e60a2ac0ca3c735 SAMPLES:221184
+# `tone440` moved once, deliberately, when the post-boot machine state landed
+# (Mooneye `boot_hwio`): the boot ROM leaves channel 1's enable flip-flop SET,
+# so the tone ROM's own `NR14` trigger is now a *re-*trigger and takes the
+# shorter `SQUARE_RESTART_SPEEDUP` path. Confirmed to be that and nothing else,
+# by comparing the two WAVs rather than by assertion: RMS 0.2467 and peak 0.267
+# are identical to four decimal places, and every zero crossing in the stream is
+# displaced by the same −0.047 samples (≈ one M-cycle). Same tone, same level,
+# one M-cycle earlier. The reported "dominant" moved 440.0 → 438.0 Hz because
+# the estimator counts crossings in a fixed 0.5 s window and the shift drops one
+# — the pitch itself did not move. `dmg_sound` is unaffected: both its hashes
+# are unchanged and its verdict is still 12/12.
+tone440 = HASH:2bbe9746f7e333e9 SAMPLES:221184
 blargg/dmg_sound-01-registers = HASH:8cbc50be13896325 SAMPLES:222208
 blargg/dmg_sound = HASH:fcb42a26ad26c1a5 SAMPLES:1625088

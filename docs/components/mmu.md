@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`9362754`](https://github.com/Alchemy86/gameboy/tree/936275439071bdfd2d82bcd09dc6af9eab246630) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`4c727ec`](https://github.com/Alchemy86/gameboy/tree/4c727ec8ea465327f9ff5568ae171f6ca4d915d4) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -163,11 +163,26 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
 - **OAM DMA restricted bus.** During a real OAM DMA the CPU running from ROM would read
   DMA-bus garbage unless it runs from HRAM; games copy a tiny wait loop into HRAM for
   exactly this. The emulator's instant DMA sidesteps the whole mechanism.
-- **The boot-ROM handoff.** There is no boot ROM here; `set_initial`
-  ([`mod.rs:176`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L176)) writes the exact post-boot I/O register values
-  (`NR*`, `LCDC=0x91`, `BGP=0xFC`, timer regs, …) the boot ROM would have left, and the
-  CPU starts at `PC=0x0100` with the boot registers (see [CPU](cpu.md)). The Nintendo logo
-  scroll and the header checksum lock are therefore skipped.
+- **The boot-ROM handoff.** There is no boot ROM here (they are copyrighted and cannot be
+  shipped); `set_initial` ([`src/mmu/mod.rs`](../../src/mmu/mod.rs)) writes the state the
+  boot ROM would have left, and the CPU starts at `PC=0x0100` with the boot registers (see
+  [CPU](cpu.md)). The Nintendo logo scroll and the header checksum lock are therefore
+  skipped. That state is **per console** and larger than the handful of values usually
+  quoted: the I/O page (`P1=$CF` on a DMG but `$FF` on a Color console, `IF=$E1`,
+  `LCDC=$91`, `BGP=$FC`, …), the 16-bit system counter's exact value *and phase*
+  (`$ABCC`/`$2678` — see [Timer](timer.md)), and, in compatibility mode, the palette-index
+  registers the CGB boot ROM leaves pointing past the compatibility palettes
+  (`BCPS=$C8`, `OCPS=$D0`). Mooneye's `boot_hwio` ROMs walk the whole page byte by byte and
+  both pass.
+  - The APU's share of it is **not** written here — the sound chip is installed later by
+    `enable_audio` (a headless machine may never get one), so it lives in
+    `Sound::set_post_boot_state`. Writing it in `set_initial` was dead code for as long as
+    audio has been optional: `self.sound` is `None` at that point and all twenty-two writes
+    were dropped.
+  - What is deliberately *not* reproduced is the boot ROM's beep, still ringing at hand-off
+    on real hardware. Its envelope volume is not readable from any register, so how far it
+    has decayed cannot be derived; the channel-enable flip-flop `NR52` reports is set, as
+    hardware has it, but the envelope is left fully decayed.
 - **Echo RAM** is faithfully mirrored (writes to `0xE000+` change `0xC000+`).
 - **CGB double-speed** halves per-cycle divisions for timer/sound and doubles DMA cost via
   `cpudivider` ([`mod.rs:348`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/mod.rs#L348)), but `STOP`-based speed switching
@@ -212,8 +227,11 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
     *(Covered: `mmu::vramdma_tests::the_dma_address_registers_read_back_as_open_bus`.)*
 16. **No value a guest can put in the DMA registers may abort the process.**
     *(Covered: the two `..._does_not_kill_the_process` tests in `mmu::vramdma_tests`.)*
-11. **Post-boot register defaults.** After construction, `rb(0xFF40) == 0x91` (LCDC),
-    `rb(0xFF47) == 0xFC` (BGP). *(Not covered.)*
+11. **Post-boot register defaults.** After construction the whole I/O page reads back what
+    the console's boot ROM leaves, per console. *(Covered:
+    `mmu::boot_state_tests::a_dmg_boots_into_the_state_its_boot_rom_leaves` and
+    `a_color_console_boots_into_a_different_state`, which transcribe Mooneye's own tables;
+    `acceptance/boot_hwio-dmgABCmgb` and `misc/boot_hwio-C` both pass.)*
 12. **OAM corruption bug.** A qualifying mode-2 OAM bus cycle corrupts OAM per the
     documented pattern, on a DMG only. *(Covered: Blargg `oam_bug` passes 8/8 on `@dmg`
     and is pinned PASS in `baseline.txt`; the patterns themselves by `gpu::oambug::tests`.)*

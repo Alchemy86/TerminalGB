@@ -169,6 +169,17 @@ impl Gpu {
         Gpu::new()
     }
 
+    /// Where the CGB boot ROM leaves `BCPS`/`OCPS` after loading the DMG
+    /// compatibility palettes: one past the last byte it wrote, auto-increment
+    /// still enabled, so they read back `$C8` and `$D0`. Mooneye
+    /// `misc/boot_hwio-C` asserts both.
+    pub(crate) fn set_boot_palette_index(&mut self) {
+        self.cbgpal_ind = 0x08;
+        self.cbgpal_inc = true;
+        self.csprit_ind = 0x10;
+        self.csprit_inc = true;
+    }
+
     /// Serialise the PPU. Everything that drives future rendering is captured,
     /// including the internal `modeclock`/`line` counters and the CGB palette
     /// memory. `bgprio` is *not* saved: it is fully rewritten at the start of
@@ -596,7 +607,15 @@ impl Gpu {
             0xFF4B => self.winx,
             0xFF4C => 0xFF,
             0xFF4E => 0xFF,
-            0xFF4F..=0xFF6B if self.gbmode != GbMode::Color => 0xFF,
+            // A DMG has none of these registers at all. A **Color console in
+            // compatibility mode** does: `VBK` and the two palette-index
+            // registers read back, even though writes to them are ignored (the
+            // compatibility palettes are the boot ROM's, not the game's). The
+            // palette *data* ports stay closed. All four values are asserted by
+            // Mooneye `misc/boot_hwio-C`, which runs a DMG cartridge on a CGB.
+            0xFF4F..=0xFF6B if self.gbmode == GbMode::Classic => 0xFF,
+            0xFF50..=0xFF67 => 0xFF,
+            0xFF69 | 0xFF6B if self.gbmode != GbMode::Color => 0xFF,
             0xFF4F => self.vrambank as u8 | 0xFE,
             0xFF68 => 0x40 | self.cbgpal_ind | (if self.cbgpal_inc { 0x80 } else { 0 }),
             0xFF69 => {

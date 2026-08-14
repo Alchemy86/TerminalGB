@@ -53,6 +53,17 @@ pub struct Timer {
     /// A CPU register write reaches this core after the M-cycle's tick, but
     /// hardware latches `TAC` before the counter advances — see [`Timer::wb`].
     prev_div: u16,
+    /// Falling edges of the serial shift clock (system-counter bit 8) that have
+    /// happened since the owner last drained them.
+    ///
+    /// The link port's shift register is divided from the *same* counter as
+    /// `TIMA`, so it belongs here rather than in [`crate::mmu::serial`] — that
+    /// is exactly what `acceptance/serial/boot_sclk_align` measures: edges
+    /// align to the counter's reset, not to the moment `SC` was written. The
+    /// owner drains this in the same breath as advancing the counter (see
+    /// `MemoryManagementUnit::bus_tick`), so it never holds a value across a
+    /// save point and is deliberately not serialised.
+    serial_edges: u8,
     /// Set on the M-cycle `TIMA` overflowed: `TMA` is copied in on the next one.
     reload_pending: bool,
     /// True for exactly the M-cycle in which `TMA` was copied into `TIMA`.
@@ -89,6 +100,33 @@ impl Timer {
             // Reads $00 for the next 4 T-cycles; TMA lands then.
             self.reload_pending = true;
         }
+    }
+
+    /// Seed the 16-bit system counter with the value the boot ROM leaves
+    /// behind at `PC=$0100`.
+    ///
+    /// **The value passed here is the counter as a CPU read observes it on the
+    /// machine's first M-cycle**, which is one M-cycle ahead of what this core
+    /// stores: [`MemoryManagementUnit::bus_tick`] advances the counter *before*
+    /// the access it belongs to, so a read on M-cycle *n* sees `div + 4n`. The
+    /// documented hardware value is therefore stored 4 T-cycles behind — see
+    /// `docs/components/timer.md` and the `boot_div` note in `AGENTS.md`.
+    ///
+    /// [`MemoryManagementUnit::bus_tick`]: crate::mmu::MemoryManagementUnit
+    pub fn set_boot_counter(&mut self, observed: u16) {
+        self.div = observed.wrapping_sub(4);
+        self.prev_div = self.div;
+    }
+
+    /// The system counter **as the current M-cycle's bus access observes it**.
+    ///
+    /// Peripherals whose divider is tapped off the same counter but whose edge
+    /// is not a CPU-visible read (the serial shift clock) need this, not
+    /// [`Self::div`]: the raw field is one M-cycle behind what a read returns,
+    /// and `acceptance/serial/boot_sclk_align` measures the difference.
+    #[inline]
+    pub fn observed_counter(&self) -> u16 {
+        self.div.wrapping_add(4)
     }
 
     pub fn rb(&self, a: u16) -> u8 {
@@ -203,6 +241,21 @@ impl Timer {
         }
         self.prev_div = self.div;
         self.set_div(self.div.wrapping_add(4));
+        // The internal serial clock is 8192 Hz, i.e. one shift per 512 T — a
+        // falling edge of counter bit 8. It is taken from the counter as a bus
+        // access observes it (see `observed_counter`), one M-cycle ahead of the
+        // raw field; `acceptance/serial/boot_sclk_align` fails by exactly one
+        // instruction if it is taken from `div` directly.
+        if self.observed_counter() & 0x01FF == 0 {
+            self.serial_edges = self.serial_edges.saturating_add(1);
+        }
+    }
+
+    /// Take the serial shift-clock edges accumulated since the last call.
+    /// Always drain this in the same step that advanced the counter.
+    #[inline]
+    pub fn take_serial_edges(&mut self) -> u8 {
+        std::mem::take(&mut self.serial_edges)
     }
 
     pub fn do_cycle(&mut self, ticks: u32) {

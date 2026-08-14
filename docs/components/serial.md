@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`4c727ec`](https://github.com/Alchemy86/gameboy/tree/4c727ec8ea465327f9ff5568ae171f6ca4d915d4) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -50,22 +50,38 @@ The link *protocol* is unchanged across models; a DMG and a CGB can link for DMG
 **The `Serial` struct** — [`src/mmu/serial.rs:7`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L7): `data` (SB),
 `control` (SC), a `callback`, and `interrupt`.
 
-**Registers** — `wb`/`rb` ([`serial.rs:24`,`40`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L24)). Writing `SC`
-with **bit 7 and bit 0 both set** (`v & 0x81 == 0x81`, an internal-clock transfer) hands
-the outgoing byte to the callback and, if it returns a byte, stores it into `SB` and raises
-the serial interrupt:
+**Registers** — `wb`/`rb` ([`serial.rs`](../../src/mmu/serial.rs)). Writing `SC`
+with **bit 7 and bit 0 both set** (`v & 0x81 == 0x81`, an internal-clock transfer) offers
+the outgoing byte to the callback and then **starts** the transfer. The reply — or `$FF`, if
+nothing answered — only reaches `SB` eight shift clocks later:
 
 ```rust
-0xFF02 => {                                   // serial.rs:27
+0xFF02 => {
     self.control = v;
     if v & 0x81 == 0x81 {
-        if let Some(v) = (self.callback)(self.data) {
-            self.data = v;
-            self.interrupt = 0x8              // IF bit 3
-        }
+        self.incoming = match (self.callback)(self.data) {
+            Some(v) => v,
+            None => { self.pending = Some(self.data); 0xFF }
+        };
+        self.bits_left = 8;                   // ~1 ms, not now
+    } else if v & 0x80 == 0 {
+        self.bits_left = 0;                   // clearing the start bit aborts
     }
 }
 ```
+
+**The shift clock is the system counter, not a private divisor.** `Serial::shift_clock`
+is fed falling edges of counter bit 8 (8192 Hz on a DMG, 512 T per bit) by
+`Timer::take_serial_edges` — the *same* free-running counter `TIMA` is tapped from, so a
+transfer's edges are aligned to when the counter was last reset and not to when `SC` was
+written. On the eighth edge `SB` takes the incoming byte, `SC` bit 7 clears and `IF` bit 3
+is set. Mooneye `acceptance/serial/boot_sclk_align-dmgABCmgb` measures all of that from a
+cold boot and passes.
+
+One subtlety that only that ROM can see: the edge is taken from the counter **as a bus
+access observes it** (`Timer::observed_counter`), which is one M-cycle ahead of the raw
+field because this core's per-access tick advances the counter before the access. Take it
+from the raw field and the serial interrupt arrives one instruction late.
 
 `SC` reads back with the unused bits set (`control | 0b01111110`,
 [`serial.rs:43`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L43)).
@@ -86,13 +102,14 @@ ever calls `set_callback`**. So today serial output is silently dropped.
 
 ### Honest approximations
 
-- **Transfer is instantaneous.** The full byte is "transferred" the moment `SC` is written
-  ([`serial.rs:29`](https://github.com/Alchemy86/gameboy/blob/main/src/mmu/serial.rs#L29)); there is no per-bit 8192 Hz shifting and no
-  transfer-in-progress timing.
-- **The start bit is not auto-cleared** after the transfer.
-- **No real link partner.** With the default no-op callback, a transfer returns `None`, so
-  no interrupt is raised and nothing is received. A harness must install a callback to see
-  output.
+- **The byte is exchanged up front, then the clock runs.** The whole reply is obtained from
+  the callback (or the plugin) at the `SC` write and parked; the eight shift clocks only
+  decide *when* it lands. So the transfer's duration and completion are right, but a game
+  that reads `SB` mid-transfer sees the byte it sent rather than a half-shifted register,
+  and there is no per-bit interleaving with a partner that changes its mind mid-byte.
+- **The CGB fast clock (`SC` bit 1, 262144 Hz) is not modelled** — an internally clocked
+  transfer always runs at the 8192 Hz rate. Double speed *is* handled, because the system
+  counter itself runs twice as fast there.
 - **External-clock transfers** (`SC` bit 0 = 0) are ignored (no partner drives the clock).
   This is survivable in practice because a link protocol gets to choose who takes the clock:
   Gen 1 offers both, so answering its "I'll take the clock" byte makes the *game* the master
@@ -105,36 +122,43 @@ ever calls `set_callback`**. So today serial output is silently dropped.
   and pulse `SC = 0x81` per character. A working `set_callback` that appends each byte to a
   string reconstructs "Passed"/"Failed" — the foundation of the headless harness
   ([testing](../testing.md)).
-- **Disconnected-cable read-back** should shift in `0xFF`; here it depends entirely on the
-  callback (default returns nothing).
-- **Serial interrupt timing** relative to the 8-bit shift is not modelled (instantaneous).
+- **Disconnected-cable read-back shifts in `0xFF`.** The console is driving the clock, so
+  an unanswered transfer still completes — with all ones, which is what an empty link port
+  presents. It used to be dropped entirely (no interrupt, `SB` unchanged), which is what
+  `boot_sclk_align` reported as "No serial intr".
+- **`SC` bit 7 auto-clears** when the transfer completes.
 
 ## 6. Expected behaviours as tests
 
-> **Coverage today: none from test ROMs** — and per
-> [conformance-notes.md](../conformance-notes.md) (2026-08-13) that is structural: a link
-> partner is a second machine, so a single-ROM harness has nothing to talk to. The
-> two-console half of the Game Boy is covered instead by `examples/gen1_trade.rs`, which
-> drives a real Gen 1 trade to completion.
+> **Coverage today: one test ROM** — `acceptance/serial/boot_sclk_align-dmgABCmgb`, which
+> passes. The rest is structural per
+> [conformance-notes.md](../conformance-notes.md) (2026-08-13): a link partner is a second
+> machine, so a single-ROM harness has nothing to talk to. The two-console half of the Game
+> Boy is covered instead by `examples/gen1_trade.rs`, which drives a real Gen 1 trade to
+> completion, and by the unit tests named below.
 
 1. **Callback capture.** After `set_callback`, writing a byte to `SB` then `0x81` to `SC`
    invokes the callback with that byte. *(Not covered — but this is the hook the test
    harness itself relies on.)*
 2. **Serial interrupt on transfer.** A completed internal-clock transfer sets `IF` bit 3.
-   *(Not covered.)*
+   *(Covered — `mmu::boot_state_tests::a_link_transfer_takes_eight_shift_clocks_and_completes_unanswered`.)*
 3. **`SC` read-back mask.** `rb(0xFF02)` ORs `0x7E`. *(Not covered.)*
 4. **Disconnected read.** An internal-clock transfer with no partner shifts in `0xFF`.
-   **Expected to FAIL with the default no-op callback.** *(Not covered; known-divergent.)*
+   *(Covered — same test.)*
 5. **Transfer duration.** A DMG internal transfer takes 8 × (1/8192 s); `SC` bit 7 stays
-   set until it completes. **Expected to FAIL — instantaneous.** *(Not covered;
-   known-divergent.)*
+   set until it completes. *(Covered — same test, and by
+   `acceptance/serial/boot_sclk_align-dmgABCmgb`, which additionally pins the edges'
+   alignment to the system counter.)*
+6. **A partner's reply does not arrive early.** A plugin holding `SERIAL_LINK` answers at
+   the `SC` write, but the byte must not appear in `SB` until the shift clock runs out.
+   *(Covered — `plugin::tests::a_plugin_answers_a_transfer_the_running_program_started`.)*
 
 ## 7. Test ROMs that exercise it
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
 | **Blargg (all suites)** | Not testing serial itself — **using** it as the results channel | If the capture callback isn't wired, the harness can't read *any* Blargg result (see [testing](../testing.md)). |
-| **Mooneye `acceptance/serial/`** (`boot_sclk_align-dmgABCmgb`) | Serial clock alignment/timing | The instantaneous-transfer approximation is the expected red. |
+| **Mooneye `acceptance/serial/`** (`boot_sclk_align-dmgABCmgb`) | Serial clock alignment/timing from a cold boot | **PASSES.** A failure means either the transfer is completing on the `SC` write, or the shift clock is not being divided from the system counter, or the post-boot counter value is wrong. |
 
 The declared `retrio/gb-test-roms` submodule is Blargg, whose entire reporting mechanism is
 serial — making a working `set_callback` the **first** thing a test harness must add.

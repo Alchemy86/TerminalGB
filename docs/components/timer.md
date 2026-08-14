@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`8b4207d`](https://github.com/Alchemy86/gameboy/tree/8b4207d3fbe3ead7f1a52ba36616ff3b9d2f9098) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`4c727ec`](https://github.com/Alchemy86/gameboy/tree/4c727ec8ea465327f9ff5568ae171f6ca4d915d4) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -101,6 +101,15 @@ What remains approximate:
   loop iteration late (`BC = $FFD8` instead of `$FFD9`).
 - **Double-speed mode is not special-cased.** `DIV` advances with the CPU clock either way.
   No wired test covers it.
+- **The counter is seeded one M-cycle behind the documented hardware value.**
+  `Timer::set_boot_counter` takes the value a CPU read observes on the machine's *first*
+  M-cycle (`$ABCC` on a DMG, `$2678` on a Color console) and stores it four T-cycles lower,
+  because `bus_tick` advances the counter before the access that observes it. That keeps
+  every *read* exact, which is what Mooneye `boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE`
+  measure. It does leave the timer's tap edges one M-cycle out of phase against those reads
+  in absolute terms — invisible to every test in the suite, because every other timer test
+  is relative to a `DIV` write, which resets both together. `Timer::observed_counter` exists
+  for the one consumer that is *not* relative: the serial shift clock.
 
 ## 5. Known quirks and edge cases
 
@@ -115,6 +124,14 @@ What remains approximate:
 - **`DIV` keeps counting regardless of `TAC` enable** — correct: `TAC` only gates the tap.
 - **Overflow requests the interrupt but doesn't dispatch it** — the MMU folds
   `timer.interrupt` into `IF` and clears it; the CPU dispatches (see [CPU](cpu.md)).
+- **The link port's shift clock is divided from this counter too** — `serial_edges` /
+  `take_serial_edges`, one falling edge of bit 8 per 512 T. It lives here rather than in
+  [Serial](serial.md) because that is where the hardware takes it from, which is exactly
+  what Mooneye `acceptance/serial/boot_sclk_align-dmgABCmgb` proves: a transfer's edges
+  align to the counter's reset, not to the `SC` write.
+- **The counter does not start at zero.** It is free-running from power-on, so the boot ROM
+  hands over with it part-way through a cycle — `DIV` reads `$AB` on a DMG, `$26` on a
+  Color console. Games seed RNGs from it.
 
 ## 6. Expected behaviours as tests
 
@@ -146,6 +163,10 @@ What remains approximate:
 10. **Enabling the timer on the M-cycle the tap itself falls still increments.** *(Covered:
     `enabling_on_the_taps_own_falling_edge_still_increments`, Mooneye
     `timer/rapid_toggle`.)*
+11. **The counter's post-boot value and phase.** At `PC=$0100` a read must see `$ABCC`
+    (DMG) / `$2678` (Color), low bits included. *(Covered:
+    `mmu::boot_state_tests::the_system_counter_boots_with_the_right_phase`, Mooneye
+    `acceptance/boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE` — both pass.)*
 
 ## 7. Test ROMs that exercise it
 
@@ -154,6 +175,7 @@ What remains approximate:
 | **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite. **13/13 pass.** Not a vendored submodule — run it with `examples/mooneye_scout.rs` against a local checkout of [mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite). |
 | **Blargg `instr_timing`** | Indirectly leans on timer/interrupt timing | A gross cycle-count error. |
 | **Blargg `interrupt_time`** | Timing of the timer/serial interrupts relative to instructions | Would catch dispatch-timing gaps. |
+| **Mooneye `acceptance/boot_div-dmgABCmgb`, `misc/boot_div-cgbABCDE`** | The counter's exact value *and phase* at `PC=$0100` — six `DIV` reads at known offsets | **Both pass.** A failure means the post-boot seed in `src/mmu/mod.rs` is wrong, or the per-access tick has moved relative to the access. |
 
 The `retrio/gb-test-roms` submodule (Blargg) is initialised and wired; the decisive timer
 tests are in Mooneye, which is not. Wiring Mooneye is the single largest coverage win
