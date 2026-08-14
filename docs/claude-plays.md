@@ -550,7 +550,7 @@ the sanitiser's ten leak shapes and the panel's "goal before history" rule.
 
 From a cold boot with no save, unaided: out of the bedroom, downstairs, out of
 the house, across Pallet Town, and into Oak's Lab as far as the screen asking
-*"which POKéMON do you want?"* — 28 model calls, $0.58, 60 emulated fps
+*"which POKéMON do you want?"* — 34 model calls, $0.68, 60 emulated fps
 throughout. See [§10](#10-the-recorded-run) for both runs, the numbers, what it
 did not finish, and where the recording is.
 
@@ -560,10 +560,15 @@ did not finish, and where the recording is.
 
 Stated plainly, because "it works" would be an overclaim:
 
-* **No spatial sense.** The agent has coordinates, exits and blocked/moved
-  feedback, and nothing else. It cannot see a table, an NPC or a path. The right
-  next step is a walkability grid derived from the game's own tileset collision
-  data — *derived*, not guessed, because a wrong one is worse than none.
+* **No spatial sense — this is the one that matters.** The agent has
+  coordinates, exits and blocked/moved feedback, and nothing else. It cannot see
+  a table, an NPC or a path, and both places the recorded runs stalled are that:
+  a fence in Pallet Town, and a Poké Ball on a table in Oak's Lab that nothing
+  in the state points at. The right next step is a walkability grid **derived**
+  from the game's own tileset collision data plus the sprite table for the
+  people and objects in the room — derived, not guessed, because a wrong map is
+  worse than none. Everything else in this milestone is finished; this is the
+  next milestone.
 * **A partial map-name table.** Only the maps the early game passes through are
   named; everything else reports its number rather than a guess.
 * **Navigating a *town* is much weaker than navigating a room.** `goto` is
@@ -766,24 +771,28 @@ run, and with the map size and the cutscene mode reported correctly, it went
 | ~20 | **Pallet Town** | out of the front door |
 | 22 | Pallet Town **(10,1)** | reached the town's north edge, which is what triggers Oak — *"Oak's calling me! Let's head to his lab to pick our starter."* |
 | 23 | **Oak's Lab** | escorted there by the game's own script |
-| 27 | Oak's Lab | read through Oak's speech to the screen that says **"which POKéMON do you want?"** |
+| 30 | Oak's Lab | read through Oak's speech to the screen that says **"which POKéMON do you want?"** |
 
 | | |
 |---|---|
-| model calls | 28, 1 failed (a CLI timeout, retried) |
-| emulated frames | 60,579 — **2,164 per call** |
+| model calls | 34, 1 failed (a CLI timeout, retried) |
+| emulated frames | 73,111 — **2,150 per call** |
 | call latency | 6 s min, 20 s median, 120 s max |
-| cost | **$0.58** |
+| cost | **$0.68** |
 | emulated frame rate | **60 fps throughout** |
 
-**What it did not do is press the last button.** The run reached the starter
-menu and then the `claude` CLI degraded to minutes per call under rate limiting,
-and the session was stopped rather than left running unattended. So: **all four
+**What it did not do is press the last button.** It reached the starter menu and
+then spent its remaining calls circling inside the lab without finding the
+table, while the `claude` CLI degraded to minutes per call under rate limiting;
+the session was stopped rather than left running unattended. So: **all four
 locations in the demo target were reached unaided, and the final selection is
-unconfirmed.** That is the honest boundary of what was measured, and it is a
-property of the adapter's throughput on this machine tonight rather than of the
-substrate — the same run's own numbers show the emulator holding 60 fps while
-each call took a minute or more.
+unconfirmed.**
+
+That last step is the *same* limitation as the Pallet Town one, indoors: the
+agent knows where it is and cannot see what is in the room, and a Poké Ball on a
+table is not a warp, so nothing in the state points at it. It is the strongest
+argument for the missing piece in [§8](#8-what-is-missing) — the agent needs to
+be able to see, or to be told, what is in the room with it.
 
 Note what the agent worked out for itself, because it is the part a script could
 not: **the lab is not the route to a starter.** Walking straight to Oak's Lab
