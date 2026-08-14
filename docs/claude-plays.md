@@ -547,7 +547,7 @@ the sanitiser's ten leak shapes and the panel's "goal before history" rule.
 
 ### A real agent playing the opening
 
-See [§9](#9-the-recorded-run) for the recorded run.
+See [§10](#10-the-recorded-run) for the run, the numbers and where the recording is.
 
 ---
 
@@ -654,4 +654,95 @@ correct.
 
 ## 10. The recorded run
 
-*(filled in from the real run — see the section below.)*
+Pokémon Blue, **from power-on with no save**, driven by Claude Haiku through
+`tools/claude_plays/claude_cli_adapter.py`. Reproduce with:
+
+```sh
+cargo run --release --example claude_plays -- \
+  --rom ~/roms/blue.gb \
+  --objective "Get out of the bedroom, go downstairs, leave the house, and \
+               choose a starter Pokemon from Professor Oak" \
+  --max-calls 130 --max-usd 4 --timeout 150 --wall 7200 \
+  --pace realtime --stop-on 'party>=1' \
+  --shots target/run --log target/run/agent.ndjson --report \
+  --driver command --command tools/claude_plays/claude_cli_adapter.py
+```
+
+`--pace realtime` runs the console at its true 59.7275 Hz, so what is recorded
+is what a viewer would have seen. The screenshots become a watchable timelapse
+with `tools/claude_plays/timelapse.sh <run-dir>`.
+
+### What it did
+
+| decision | where | what it said |
+|---:|---|---|
+| 1 | title screen | *"Let's get this adventure started! Powering through the title screen and Oak's opening now."* |
+| 4 | (cutscene) | *"Powering through the opening cutscene. We're heading out of the bedroom toward our first encounter with Professor Oak."* |
+| 11 | **bedroom** | *"We're in the bedroom now — time to head down to the first floor via that staircase!"* |
+| 12 | **Red's house 1F** | *"I'm standing on the staircase — stepping down to go to the main floor and leave the house to find Professor Oak."* |
+| 14 | **Pallet Town** | *"Heading up through Pallet Town to find Professor Oak's lab."* |
+| 20 | Pallet Town | *"Direct path to the lab is blocked—let me navigate around it by going left first."* |
+
+It handled, unaided and from a cold start: the title screen, the `NEW GAME`
+menu, the whole of Professor Oak's introduction, **both naming screens**
+(including pressing START rather than typing `AAAAA` for ever), the staircase
+out of the bedroom, and the front door of the house. Three of the four
+milestones in the demo target.
+
+### The numbers
+
+| | |
+|---|---|
+| model calls | 23, **0 failed** |
+| emulated frames | 45,020 — **1,957 frames per call** (~33 s of game time each) |
+| call latency | 8 s min, 23 s median, 55 s max |
+| cost | **$0.52**, 419k tokens (of which most is the CLI's own system prompt, re-sent every call) |
+| emulated frame rate | **60 fps, held throughout**, including while the agent was thinking |
+
+The per-call latency is the `claude` CLI's, not the substrate's: it starts a
+fresh coding-agent session every time. `claude_api_adapter.py` sends ~1.5 KB of
+prompt instead of ~18 KB and should be several times faster and cheaper — not
+measured here, because this machine has no `ANTHROPIC_API_KEY`.
+
+### Where it stopped, and why
+
+**In Pallet Town, a few tiles from Oak's lab.** It read the lab's door out of
+the warp table correctly — `{"x":12,"y":11,"to":"Oak's Lab"}` — reached the
+right row, and then could not get round the fence between it and the door. It
+said so accurately (*"Direct path to the lab is blocked—let me navigate around
+it by going left first"*) and kept trying, which is the honest failure: the
+agent's reasoning was right and the **navigation primitive** was not good
+enough.
+
+That produced a real fix rather than an excuse. `goto` was greedy with
+single-step axis alternation, which gets round a bed and cannot get round a
+building: it steps one tile aside, finds the direct route still blocked, steps
+back, and repeats. It now **commits to a four-step run** along the other axis
+before retrying, alternating the side each time. See
+[`GOTO_DETOUR`](../src/agent/action.rs).
+
+Two more corrections came out of watching this run and the one before it, and
+both were errors in what the agent was *told* rather than in what it decided —
+which is the useful kind to find:
+
+* **map size was reported in the wrong unit.** Gen 1 counts a map's width and
+  height in 32×32 blocks and the player's coordinates in 16×16 tiles, two per
+  block, so Pallet Town was described as 10 wide when its `x` runs 0..19. The
+  agent was being told it was standing outside the map.
+* **the opening cutscene looked like ordinary play.** `wCurMap` is already the
+  bedroom during Oak's speech, with plausible coordinates, so "walk down"
+  failing looked like a wall rather than like not being in control.
+  `wCurMapHeight`/`wCurMapWidth` are `0` until the header loads, which is now
+  reported as `mode: "cutscene"`.
+
+### The recording
+
+`target/<run>/timelapse.mp4` — the run's periodic screenshots at 12 fps, about
+250× real time. `target/<run>/agent.ndjson` is the full decision stream:
+request, reply, cost and error for every call.
+
+**Neither is committed.** A timelapse is mostly game frames, and this
+repository's licence boundary allows screenshots of *our own interface* with a
+game incidental in them (as `docs/link-trade/` has), not a gallery of the game
+itself. The panel render in §2.3 is committed because it is our chrome and
+nothing else.
