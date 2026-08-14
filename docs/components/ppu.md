@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`4c727ec`](https://github.com/Alchemy86/gameboy/tree/4c727ec8ea465327f9ff5568ae171f6ca4d915d4) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`0ea589a`](https://github.com/Alchemy86/gameboy/tree/0ea589a24943593937a91697b42e2aa04c77bda2) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -59,6 +59,29 @@ The numbers (Pan Docs, [Rendering](https://gbdev.io/pandocs/Rendering.html)):
 driven in CGB mode by default. SGB border/recolour is **not** implemented.
 
 ## 4. How it works here
+
+### 4.0 There are two rendering engines
+
+`RenderMode` ([`src/gpu/mod.rs`](../../src/gpu/mod.rs)) selects which one runs. Everything else
+in this section describes **`Fast`**, the default: it draws a whole scanline in one go at the
+mode 3 → 0 transition and gives mode 3 a fixed 172-dot length, so every register is read exactly
+once per line.
+
+**`Accurate`** ([`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) is the real pixel pipeline, stepped
+one dot at a time — BG/window fetcher, 8-pixel FIFO, sprite fetch stalls, `SCX & 7` discard, and
+a mode 3 length derived rather than assumed. Colour indices go into the FIFO and the palette is
+applied at the output, which is what makes a mid-line `BGP` write move a boundary along the
+scanline instead of recolouring what is already drawn. Chosen with `GB_PPU=accurate`, the `ppu`
+config key, or `Gpu::set_render_mode`, and shown in the terminal Status panel's `PPU` row.
+
+The two are **not** an appearance choice — palettes and upscaling live in `src/screen/`, above
+the PPU, and are identical either way. The axis is accuracy against cost: measured 0.219 vs
+0.463 ms/frame on dmg-acid2, and both are pixel-exact against its reference image. Where the
+accurate engine stands against the suite that motivates it, including the two rows where it is
+currently *behind* the fast one, is [`docs/mealybug.md`](../mealybug.md) §7. Both engines are
+held against each other in CI by [`testharness/ppuengines.rs`](../../testharness/ppuengines.rs).
+
+### 4.1 The whole-scanline engine
 
 Structure closely follows rboy's PPU (per-pixel `PrioType` priority tracking, the Gambatte
 RGB-correction curve, `dmg_sprite_order`/`cgb_sprite_order`).

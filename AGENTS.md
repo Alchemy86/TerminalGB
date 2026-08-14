@@ -2975,3 +2975,55 @@ it. That is now a real, CI-enforced build; it did not compile before.
   keep them **obviously synthetic** (`/home/example-user`, `someone@example.com`), never a
   real address or path. Commit *author* emails in git history are a separate thing and are
   not editable without rewriting history — a captain decision, not a crew one.
+
+## Two PPU engines — the pixel FIFO and the whole-scanline renderer (`src/gpu/fifo.rs`)
+
+- **Full state, per-test numbers and the recommendation: [`docs/mealybug.md`](docs/mealybug.md) §7.**
+  Component-level orientation: [`docs/components/ppu.md`](docs/components/ppu.md) §4.0.
+- **`RenderMode { Fast, Accurate }` picks the engine**; `GB_PPU=fast|accurate`, the `ppu` config
+  key (env wins), or `Gpu::set_render_mode`, and it is shown in the TUI Status panel's `PPU` row.
+  It is deliberately **not** in the save state — it is a property of this session's host, not of
+  the emulated machine, so loading someone else's state must not switch their renderer.
+  `Gameboy::set_render_mode` takes `gameboy::ppu::RenderMode`; the `gpu` module itself stays
+  private, and the crate root's `gameboy::RenderMode` is a *different* enum (which frontend).
+- **`Fast` is still the default and every baseline is measured on it.** The accurate engine is
+  behind on exactly two rows — Blargg `oam_bug` #7 and Mooneye `ppu/intr_1_2_timing-GS` — and
+  until it strictly dominates, flipping the default would make a published score worse.
+  **Never re-bless `testharness/baseline.txt` to hide that.**
+- **THE TRAP THAT COST THE MOST: `change_mode(0)` runs `renderscan()`.** Entering HBlank draws
+  the line that just finished. Under the accurate engine that overwrote, every scanline, the
+  picture the FIFO had just painted dot by dot — and *almost* invisibly, because the two agree
+  on ordinary content. What exposed it was a side effect: `draw_bg` advances the window's line
+  counter as it goes, so running both moved the window down two rows per scanline. **Anything
+  else hung off a mode transition must ask which engine is running.**
+- **`OAM_BUG_PHASE = -12` is not physics, it is the batched PPU's error**, and it is exactly one
+  `ldh [LCDC],a`: the write sets `modeclock = 4` and the whole-scanline renderer then applies
+  the instruction's entire twelve dots on top. The accurate engine has already spent those dots
+  access by access, so it lands on the real 4 and needs **no** correction
+  (`ACCURATE_OAM_BUG_PHASE = 0`). Measured: with `-12` the accurate engine fails `oam_bug`
+  4/5/6/8; with `0` it passes them. Swept `-12..+12`; nothing recovers #7, so #7 is a real
+  finding and not a tuning knob.
+- **A wrong *variable* mode-3 length is worse than an honest constant one** for a ROM that
+  synchronises itself against `STAT`. `m3_bgp_change` and `m3_lcdc_obj_size_change_scx` render
+  a near-blank frame under the accurate engine and a nearly-right one under the fast engine,
+  because a fixed 172 keeps their own counted-dot loop in step. Expect aggregate Mealybug pixel
+  distance to get slightly *worse* before it gets better, and never quote the aggregate alone:
+  the closest tests improved by one to two orders of magnitude (`m3_scx_high_5_bits`
+  9,766 → 141) while the total moved 1,212,282 → 1,268,382 and no row flipped.
+- **Cost, measured, since the whole two-renderer decision rests on it:** dmg-acid2 0.219
+  ms/frame fast vs 0.463 accurate — **2.1x, 2.8 % of a 16.7427 ms frame, 36x real time
+  headless**. Cost is *not* a reason to keep two renderers; the two red rows are.
+  Reproduce with `cargo test --release --test ppuengines`.
+- **`testharness/ppuengines.rs` is the only thing in CI that runs the non-default engine.** It
+  pins three hermetic claims from the vendored MIT dmg-acid2 ROM: pixel-exact against its
+  author's reference, frame-identical to the fast engine on well-behaved ROMs (which makes
+  `testroms`' whole baseline protect the accurate engine transitively), and a 4 ms/frame
+  collapse detector. Teeth proven by putting `renderscan` back on top of the FIFO: 762/23040.
+- **`modeclock` is a 0-based dot index in the accurate engine** — dot 0 is the first dot of
+  mode 2, dot 80 the first of mode 3, as Pan Docs numbers them. `accurate_dot` therefore does
+  the work first and increments after.
+- **The suites are not vendored and are not in CI.** Reproduce with
+  `cargo run --release --example mealybug -- --dir <checkout>` and
+  `cargo run --release --example mooneye_scout -- <checkout>/acceptance`, both with `GB_PPU`
+  set. `GB_SCOUT_SCREEN=1` prints a failing Mooneye test's own assertion table, which is far
+  faster than reading registers.

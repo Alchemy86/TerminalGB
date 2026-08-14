@@ -14,6 +14,25 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Added
+- **A second PPU: the per-dot pixel FIFO** (`src/gpu/fifo.rs`), selected with `GB_PPU=accurate`,
+  the `ppu` config key or `Gameboy::set_render_mode`, and shown in the terminal Status panel's
+  `PPU` row. It runs the real pipeline — OAM scan one sprite per two dots, BG/window fetcher,
+  8-pixel FIFO, sprite fetch stalls, window restart, `SCX & 7` discard — with colour *indices*
+  in the FIFO and the palette applied at the output, so a mid-line `BGP` write moves a boundary
+  along a scanline instead of recolouring what is drawn. **Mode 3's length is derived rather
+  than assumed** (172 dots plus `SCX & 7`), which wins Mooneye `acceptance/ppu/hblank_ly_scx_timing-GS`.
+  The whole-scanline renderer stays the **default** and is unchanged; the two are a cost choice,
+  not an appearance one — palettes and upscaling live above the PPU and are identical either
+  way. Measured: 0.219 vs 0.463 ms/frame on dmg-acid2 (2.1x, 2.8 % of a frame, 36x real time),
+  both pixel-exact against its reference image. Mealybug is **still 3/79**: several tests are
+  one to two orders of magnitude closer and two collapsed, which is the calibration ahead, not
+  a missing feature — the full accounting, including the two rows where the accurate engine is
+  *behind* the default, is `docs/mealybug.md` §7.
+- **`testharness/ppuengines.rs`** (`cargo test --release --test ppuengines`, in CI) holds the
+  two engines against each other and against the clock, hermetically from the vendored MIT
+  dmg-acid2 ROM: pixel-exact against its author's reference, frame-identical to the default
+  engine on well-behaved ROMs, and a 4 ms/frame collapse detector. Nothing else in CI runs the
+  non-default engine.
 - **The DMG OAM-corruption bug is modelled** (`src/gpu/oambug.rs`). On a DMG, any bus cycle
   that puts an address in `$FE00-$FEFF` on the bus while the PPU is scanning OAM corrupts
   OAM — including cycles with no memory access behind them, because the CPU's 16-bit

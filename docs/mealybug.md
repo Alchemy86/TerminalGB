@@ -354,3 +354,103 @@ And a coverage gap worth recording on its own: **no ROM-driven check we run dete
 starts zeroed instead of holding the boot ROM's handoff state.** Twelve Mealybug ROMs depend on it,
 so the suite exposes it — but only as part of a timing failure, which is exactly the kind of
 conflated verdict [`docs/conformance.md`](conformance.md) argues a good tool should separate.
+
+---
+
+## 7. The pixel-FIFO engine, measured (14 Aug 2026)
+
+The rewrite §5 scoped now exists, as a **second** engine beside the whole-scanline one rather
+than a replacement for it: `RenderMode::Accurate` (`src/gpu/fifo.rs`), selected with
+`GB_PPU=accurate`, the `ppu` config key, or `Gpu::set_render_mode`. `RenderMode::Fast` — the
+renderer this page has been about — is unchanged and is still the default. Reproduce everything
+below by putting `GB_PPU=accurate` in front of the command in the header of this page.
+
+### 7.1 What it does
+
+Per-dot mode 2 and mode 3: an OAM scan spread one sprite per two dots, a background/window
+fetcher on its 6-dot cycle, an 8-pixel FIFO, sprite fetches that suspend the output, the window
+restart with its own fetcher reset, the `SCX & 7` discard, and a **mode 3 length that falls out
+of the machine**. Colour *indices* go into the FIFO and the palette is applied at the output,
+which is the mechanism a mid-line `BGP` write needs. Every register is read where hardware reads
+it: the tile-map select at the tile-number fetch, `LCDC.4` and `SCY` at each bitplane fetch,
+`SCX`'s low three bits latched once per line and its high five re-read per tile, `LCDC.0` at the
+output.
+
+### 7.2 Where it stands, honestly
+
+**It is structurally right and not yet calibrated.** Three claims it now carries:
+
+| claim | fast | accurate |
+|---|---:|---:|
+| dmg-acid2 vs its author's reference | 0/23040 | **0/23040** |
+| mode 3 length, plain BG line | 172 (constant) | **172** (derived) |
+| mode 3 length, `SCX & 7 = n` | 172 | **172 + n** |
+| Mooneye `acceptance/ppu` | 4/12 | 4/12, **not the same 4** |
+| Mooneye `acceptance` overall | 58/75 | 58/75 |
+| cost, dmg-acid2 | 0.219 ms/frame | 0.463 ms/frame (**2.1x**) |
+
+The variable mode-3 length wins `ppu/hblank_ly_scx_timing-GS` outright and loses
+`ppu/intr_1_2_timing-GS`; `oam_bug` sub-test 7 also regresses (see §7.4).
+
+**Mealybug rows: still 3/79 — the same three.** That is the number that matters and it has not
+moved. What *has* moved is the distance to the rest, and it has moved in both directions:
+
+| test (DMG column) | fast | accurate |
+|---|---:|---:|
+| `m3_scx_high_5_bits` | 9,766 | **141** |
+| `m3_lcdc_win_en_change_multiple` | 8,982 | **485** |
+| `m3_scy_change` | 15,879 | **11,569** |
+| `m3_wx_5_change` | 11,471 | **9,521** |
+| `m3_window_timing` | 1,215 | 2,611 |
+| `m3_bgp_change` | 5,296 | 17,392 |
+| `m3_lcdc_obj_size_change_scx` | 190 | 22,032 |
+| **total, all 79 rows** | **1,212,282** | **1,268,382** |
+
+So the *aggregate* is marginally worse while the closest tests are one to two orders of
+magnitude closer. Both halves of that are informative and neither should be quoted alone:
+
+* The tests that collapsed (`m3_bgp_change`, `m3_lcdc_obj_size_change_scx`) render an almost
+  **blank frame**, not a mistimed one. These ROMs synchronise themselves against mode 3 —
+  they wait on `STAT` and then write on a counted dot — so **a variable mode-3 length that is
+  wrong is worse for them than a constant one that is honestly wrong**, because a fixed 172
+  at least keeps the ROM's own loop in step. This is the mechanism §5.2 warned about ("each of
+  the remaining ROMs pins a different constant, and they are mutually constraining"), showing
+  up on schedule.
+* The tests that improved are the ones whose result is a direct function of *where* a register
+  is read rather than of the length of the mode.
+
+### 7.3 The remaining work, and what it is not
+
+The remaining work is **calibration, not architecture**: the sprite penalty (Pan Docs' OBJ
+penalty algorithm, 6-11 dots, currently a flat 6 plus the fetcher's wait), the window's WX
+penalty, and the exact dot on which a CPU write becomes visible to the fetcher. Evidence that
+this is genuinely the hard part rather than a missing feature: sweeping the tile-number fetch
+from dot 2 to dot 4 of the 6-dot cycle moves `m3_scx_high_5_bits` from 141 to 125 pixels and
+the whole-suite total by 114 pixels out of 1.27 million, and flips **no** row. There is no
+single constant left to find; there are many, and they constrain each other.
+
+§4's calibration stands and is worth re-reading before budgeting more: **SameBoy scores 15 of
+the 24 published DMG rows and bgb scores 2.** A cycle-stepped PPU is the price of entry, not
+the prize.
+
+### 7.4 What the accurate engine is behind on
+
+Recorded rather than smoothed over — both are the accurate engine being *worse* than the
+default, and both block making it the default:
+
+1. **Blargg `oam_bug` sub-test 7** ("verifies corruption for each timing"), 8/8 → 7/8. Not a
+   phase problem: the two engines' corruption rows agree dot for dot, and no value of the phase
+   constant recovers it (`-12` through `+12` swept; only `0` passes 4/5/6/8, and none passes 7).
+   The engines diverge only after the ROM re-enables the LCD mid-test.
+2. **Mooneye `ppu/intr_1_2_timing-GS`**, pass → fail, traded for `hblank_ly_scx_timing-GS`.
+
+### 7.5 Recommendation
+
+**Keep both engines for now; ship one later.** The captain's condition for deleting the fast
+path was that the accurate one be fast enough on ordinary hardware, and on cost it plainly is —
+2.1x, 2.8 % of a 16.7427 ms frame, 36x real time headless, inside the 1.3-2x band §5.2
+predicted. Cost is no longer the argument for two renderers. The argument that remains is the
+two rows in §7.4: until the accurate engine strictly dominates, a default flip would make a
+published score worse, and `testharness/baseline.txt` must never be re-blessed to hide that.
+The order is: close §7.4, flip the default, run the conformance suite against the accurate
+engine, then delete `renderscan`.
