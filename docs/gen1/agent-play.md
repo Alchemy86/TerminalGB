@@ -174,3 +174,15 @@ real run waste decisions on it. They belong beside the ones in
   thing the layer could say. Three consecutive failures, not one.
 * **`HandleMenuInput`'s post-accept delay is real**, as this area already recorded: the agent's
   `press` action spaces repeats by 24 frames (0.4 s) rather than the default 8.
+* **Oak's Lab is not the route to a starter.** "Go to the lab" is the obvious plan and it does
+  not work: walking straight in reaches an empty room. Verified with the deterministic driver —
+  from power-on into Oak's Lab in 9,034 emulated frames, party still 0, nothing at the tiles the
+  balls sit on. The game gates the starter behind trying to **leave town to the north**, which
+  fires `PalletTownDefaultScript` and has Oak escort you back; that is the same event
+  [sharp edges](sharp-edges.md#driving-the-game) notes can be skipped outright by setting
+  `EVENT_FOLLOWED_OAK_INTO_LAB`. An agent given the objective *"choose a starter"* found the
+  north route by itself; it is worth knowing that the direct one is a dead end before concluding
+  the navigation is broken.
+* **A map's width and height are in 32×32 blocks and its coordinates are in 16×16 tiles**, two
+  per block — see the table at the top. Reporting the raw header values told the agent Pallet
+  Town was 10 wide when its `x` runs 0..19, so it decided it was standing outside the map.

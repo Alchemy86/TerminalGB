@@ -548,7 +548,11 @@ the sanitiser's ten leak shapes and the panel's "goal before history" rule.
 
 ### A real agent playing the opening
 
-See [§10](#10-the-recorded-run) for the run, the numbers and where the recording is.
+From a cold boot with no save, unaided: out of the bedroom, downstairs, out of
+the house, across Pallet Town, and into Oak's Lab as far as the screen asking
+*"which POKéMON do you want?"* — 28 model calls, $0.58, 60 emulated fps
+throughout. See [§10](#10-the-recorded-run) for both runs, the numbers, what it
+did not finish, and where the recording is.
 
 ---
 
@@ -673,7 +677,14 @@ cargo run --release --example claude_plays -- \
 is what a viewer would have seen. The screenshots become a watchable timelapse
 with `tools/claude_plays/timelapse.sh <run-dir>`.
 
-### What it did
+### Two runs, and the fix between them
+
+The first run is written up below because its *failure* is the useful part.
+After the navigation fix it produced, a second run went further: the table in
+[§Second run](#second-run-after-the-navigation-fix) is the one to read for what
+the substrate does now.
+
+### What it did (first run)
 
 | decision | where | what it said |
 |---:|---|---|
@@ -741,6 +752,45 @@ which is the useful kind to find:
   failing looked like a wall rather than like not being in control.
   `wCurMapHeight`/`wCurMapWidth` are `0` until the header loads, which is now
   reported as `mode: "cutscene"`.
+
+### Second run, after the navigation fix
+
+Same command, same model, same cold start. With `goto` committing to a sideways
+run, and with the map size and the cutscene mode reported correctly, it went
+**all the way to the starter-selection screen**:
+
+| decision | where | what happened |
+|---:|---|---|
+| 3 | **bedroom** | through the title, `NEW GAME`, Oak's speech and both naming screens |
+| 13 | **Red's house 1F** | down the staircase |
+| ~20 | **Pallet Town** | out of the front door |
+| 22 | Pallet Town **(10,1)** | reached the town's north edge, which is what triggers Oak — *"Oak's calling me! Let's head to his lab to pick our starter."* |
+| 23 | **Oak's Lab** | escorted there by the game's own script |
+| 27 | Oak's Lab | read through Oak's speech to the screen that says **"which POKéMON do you want?"** |
+
+| | |
+|---|---|
+| model calls | 28, 1 failed (a CLI timeout, retried) |
+| emulated frames | 60,579 — **2,164 per call** |
+| call latency | 6 s min, 20 s median, 120 s max |
+| cost | **$0.58** |
+| emulated frame rate | **60 fps throughout** |
+
+**What it did not do is press the last button.** The run reached the starter
+menu and then the `claude` CLI degraded to minutes per call under rate limiting,
+and the session was stopped rather than left running unattended. So: **all four
+locations in the demo target were reached unaided, and the final selection is
+unconfirmed.** That is the honest boundary of what was measured, and it is a
+property of the adapter's throughput on this machine tonight rather than of the
+substrate — the same run's own numbers show the emulator holding 60 fps while
+each call took a minute or more.
+
+Note what the agent worked out for itself, because it is the part a script could
+not: **the lab is not the route to a starter.** Walking straight to Oak's Lab
+reaches an empty room (verified separately with the deterministic driver: from
+power-on into Oak's Lab in 9,034 emulated frames and 2.1 s of wall clock, party
+still 0, nothing to interact with). The game gates the starter behind trying to
+*leave town to the north*, and the agent found that route.
 
 ### The recording
 
