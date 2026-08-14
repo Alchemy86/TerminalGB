@@ -11,7 +11,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`23a2de4`](https://github.com/Alchemy86/gameboy/tree/23a2de42adf596fadd2b176d80f34a72a2fe2b9b) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`239426e`](https://github.com/Alchemy86/gameboy/tree/239426ed55fd95ccf87f5ab19f8cc57850187742) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -553,7 +553,7 @@ or resumes calling `step_frame`), **step** (instruction / scanline / frame), **r
 is the *transport* over these existing entry points, not a second control model.
 
 > **First consumer, and what it found.** The read-only half of this surface is now
-> implemented in [`src/plugin/mod.rs`](../src/plugin/mod.rs) — `DebugView` (Tier 1) plus the
+> implemented in [`crates/gameboy-plugin-api/`](../crates/gameboy-plugin-api/) — `DebugView` (Tier 1) plus the
 > cheap *frame rendered* event — and its first user is the
 > [live trainer view](trainer.md), a Gen 1 Pokémon party/battle tracker. Building a second
 > consumer surfaced two gaps in the sketch above, both worth fixing when the rest lands:
