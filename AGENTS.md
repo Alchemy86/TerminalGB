@@ -3022,7 +3022,15 @@ it. That is now a real, CI-enforced build; it did not compile before.
 - **`modeclock` is a 0-based dot index in the accurate engine** — dot 0 is the first dot of
   mode 2, dot 80 the first of mode 3, as Pan Docs numbers them. `accurate_dot` therefore does
   the work first and increments after.
-- **The suites are not vendored and are not in CI.** Reproduce with
+- **BOTH engines are gated in CI.** `make test-external` scores the default,
+  `make test-external-accurate` scores the pixel FIFO against its own
+  `testharness/{mealybug,mooneye}_accurate_baseline.txt`. Those carry **pixel counts**, so a
+  pipeline change is a visible diff even when it flips no row — which is the only way a
+  rewrite this far from green shows progress *and* regression. **Every baseline file opens
+  with the engine that produced it and the target that re-blesses it**: the two engines score
+  the same ROMs differently, so the obvious command rewrites the file with the other machine's
+  numbers.
+- **Reproduce the suites by hand with**
   `cargo run --release --example mealybug -- --dir <checkout>` and
   `cargo run --release --example mooneye_scout -- <checkout>/acceptance`, both with `GB_PPU`
   set. `GB_SCOUT_SCREEN=1` prints a failing Mooneye test's own assertion table, which is far

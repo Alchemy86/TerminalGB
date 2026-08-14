@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 
 .PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
-        fetch-test-suites test-external
+        fetch-test-suites test-external test-external-accurate
 
 all: build install
 
@@ -83,6 +83,22 @@ test-external: fetch-test-suites
 	    --baseline testharness/samesuite_baseline.txt
 	./target/release/examples/mealybug --dir $(SUITES)/mealybug \
 	    --baseline testharness/mealybug_baseline.txt
+
+# The same suites again, against the OTHER PPU engine (src/gpu/fifo.rs). The
+# baselines above are scored on whichever engine is the default, so the per-dot
+# one — the whole point of which is these very suites — would otherwise be
+# scored by nobody. Its own baselines carry its own pixel counts, so the next
+# change to the pipeline shows up as a diff whether it moves a row or only moves
+# the distance to one. Only the two PPU-bearing suites are re-scored; SameSuite
+# is APU/DMA and does not distinguish the engines.
+# Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external-accurate`.
+test-external-accurate: fetch-test-suites
+	cargo build --release --example mooneye_scout --example mealybug
+	GB_PPU=accurate ./target/release/examples/mooneye_scout \
+	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
+	    --baseline testharness/mooneye_accurate_baseline.txt
+	GB_PPU=accurate ./target/release/examples/mealybug --dir $(SUITES)/mealybug \
+	    --baseline testharness/mealybug_accurate_baseline.txt
 
 desktop:
 	cd examples/desktop && cargo run --release

@@ -1,3 +1,9 @@
+# SCORED WITH THE `fast` PPU ENGINE (GB_PPU=fast).
+# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 make test-external
+# The other engine produces different numbers for the same ROMs — see
+# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this
+# file with the wrong machine's results.
+#
 # Mealybug Tearoom baseline — the EXPECTED result of every ROM against every
 # reference set, judged as the suite's own README asks: run to the `LD B,B`
 # software breakpoint and compare the frame with the author's reference

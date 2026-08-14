@@ -129,11 +129,15 @@ counted as open defects. Each is recorded on its component page.
   a machine nobody has. The `@dmg` row passes all eight sub-tests.
   ([MMU §5](../docs/components/mmu.md).)
 
-The remaining structural approximation is the PPU's **fixed mode-3 length**, which needs a
-cycle-stepped PPU sharing the bus dot by dot. Its tests live outside this harness and are
-gated by `make test-external` — Mealybug Tearoom **3/79** and Mooneye `acceptance/ppu`, both
-pinned so a rewrite's progress *and* its regressions are visible. See
-[PPU](../docs/components/ppu.md) and [MMU](../docs/components/mmu.md).
+The remaining structural approximation is the **default** PPU's fixed mode-3 length. A
+cycle-stepped PPU sharing the bus dot by dot now exists beside it —
+[`src/gpu/fifo.rs`](../src/gpu/fifo.rs), `GB_PPU=accurate` — and derives mode 3's length
+instead of assuming it, but it is not yet the default and Mealybug is still **3/79** on both.
+Those tests live outside this harness and are gated by `make test-external` (default engine)
+and `make test-external-accurate` (the FIFO), both pinned with pixel counts so a rewrite's
+progress *and* its regressions are visible. The two engines are held against each other
+hermetically by [`ppuengines.rs`](ppuengines.rs). See [PPU](../docs/components/ppu.md),
+[MMU](../docs/components/mmu.md) and [mealybug.md §7](../docs/mealybug.md).
 
 ## Running it
 

@@ -444,6 +444,21 @@ default, and both block making it the default:
    The engines diverge only after the ROM re-enables the LCD mid-test.
 2. **Mooneye `ppu/intr_1_2_timing-GS`**, pass → fail, traded for `hblank_ly_scx_timing-GS`.
 
+### 7.4a It is gated in CI
+
+`make test-external-accurate` scores Mooneye and Mealybug on the accurate
+engine against `testharness/mooneye_accurate_baseline.txt` and
+`testharness/mealybug_accurate_baseline.txt`, and CI runs it beside
+`make test-external` (which scores the default engine). Those baselines carry
+**pixel counts, not just PASS/FAIL**, so a change to the pipeline is a visible
+diff whether or not it flips a row — which, on a suite this far from green, is
+the only way progress and regression are both legible.
+
+Every baseline file now opens with the engine that produced it and the `make`
+target that re-blesses it, because the two engines score the same ROMs
+differently and the obvious command would otherwise rewrite a file with the
+other machine's numbers.
+
 ### 7.5 Recommendation
 
 **Keep both engines for now; ship one later.** The captain's condition for deleting the fast

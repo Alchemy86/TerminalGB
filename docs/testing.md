@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`0ea589a`](https://github.com/Alchemy86/gameboy/tree/0ea589a24943593937a91697b42e2aa04c77bda2) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`23a2de4`](https://github.com/Alchemy86/gameboy/tree/23a2de42adf596fadd2b176d80f34a72a2fe2b9b) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -341,9 +341,20 @@ rows could have lost them again silently, and a cycle-stepped-PPU rewrite would 
 way to show either its progress or its regressions.
 
 ```text
-make test-external          # fetches the suites if needed, then gates all four groups
-make fetch-test-suites      # just the download (~20 s, cached in target/test-suites)
+make test-external           # fetches the suites if needed, then gates all four groups
+make test-external-accurate  # the two PPU suites again, on the OTHER rendering engine
+make fetch-test-suites       # just the download (~20 s, cached in target/test-suites)
 ```
+
+**Both PPU engines are scored.** `test-external` runs whichever engine is the default
+(`RenderMode::Fast`); `test-external-accurate` re-scores Mooneye and Mealybug on the per-dot
+pixel FIFO (`GB_PPU=accurate`) against `mooneye_accurate_baseline.txt` and
+`mealybug_accurate_baseline.txt`. Without the second pass the engine whose entire purpose is
+these two suites would be gated by nobody. SameSuite is not re-scored — it is APU and DMA and
+does not distinguish the engines. Every baseline file **opens with the engine that produced it
+and the target that re-blesses it**: the same ROMs score differently on the two, so the obvious
+command would otherwise rewrite a file with the other machine's numbers. Where the accurate
+engine stands is [`mealybug.md`](mealybug.md) §7.
 
 **The ROMs are fetched, never vendored.** They are other people's work under other people's
 licences — the same reason [`conformance.yml`](../.github/workflows/conformance.yml)
