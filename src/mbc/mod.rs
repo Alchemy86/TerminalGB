@@ -69,6 +69,22 @@ pub trait MemoryBankController: Send {
     /// the battery file needs rewriting even though the game wrote nothing.
     fn battery_dirty(&mut self) {}
 
+    /// **Stop writing the save file, permanently, for this session.**
+    ///
+    /// Called when something has established that the emulated program is no
+    /// longer executing its own code — see
+    /// [`MemoryManagementUnit::report_fault`](crate::mmu::MemoryManagementUnit::report_fault).
+    /// A crashed CPU stores thousands of arbitrary bytes into cartridge RAM
+    /// within a few frames, and the autosave would then write them over a real
+    /// save. Refusing every later write keeps the last good file on disk.
+    /// Cartridges without a battery do nothing.
+    fn poison_battery(&mut self, _reason: &str) {}
+
+    /// Why the save file is no longer being written, if it is not.
+    fn battery_poisoned(&self) -> Option<&str> {
+        None
+    }
+
     /// The cartridge's 16-bit global checksum (header bytes 0x14E-0x14F). Used
     /// together with the title to refuse loading a state against another game.
     fn global_checksum(&self) -> u16 {

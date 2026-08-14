@@ -82,6 +82,14 @@ impl MemoryBankController for MBC0 {
         self.battery.mark_dirty();
     }
 
+    fn poison_battery(&mut self, reason: &str) {
+        self.battery.poison(reason);
+    }
+
+    fn battery_poisoned(&self) -> Option<&str> {
+        self.battery.poisoned_reason()
+    }
+
     // No banking: only the optional cartridge RAM is state, and it is written
     // only when the cartridge actually has some. Both sides derive that from
     // the ROM header, which is fixed for a given cart, so a plain ROM-ONLY

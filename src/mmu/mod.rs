@@ -91,6 +91,11 @@ pub struct MemoryManagementUnit<'a> {
     // only while a CPU instruction is executing (not during OAM DMA or setup).
     bus_tick_enabled: bool,
     bus_ticked: u32,
+    /// Why this machine is considered to have left the rails, if it has. See
+    /// [`MemoryManagementUnit::report_fault`]. Not part of the save state: a
+    /// fault is a fact about *this session's* host, not about the emulated
+    /// machine, so it is deliberately not serialised.
+    fault: Option<String>,
 }
 
 fn fill_random(slice: &mut [u8], start: u32) {
@@ -142,6 +147,7 @@ impl<'a> MemoryManagementUnit<'a> {
             undocumented_cgb_regs: [0; 3],
             bus_tick_enabled: false,
             bus_ticked: 0,
+            fault: None,
         };
         fill_random(&mut res.wram, 42);
         Ok(res)
@@ -586,6 +592,49 @@ impl<'a> MemoryManagementUnit<'a> {
 
     pub fn rw(&mut self, address: u16) -> u16 {
         (self.rb(address) as u16) | ((self.rb(address + 1) as u16) << 8)
+    }
+
+    /// **The emulated program has left the rails — stop persisting anything.**
+    ///
+    /// A Game Boy has no fault handler: a program counter that walks off its own
+    /// code keeps executing whatever bytes it finds, and one of the things it
+    /// reliably does is store them into cartridge RAM. Our autosave then writes
+    /// that over the player's save file. A scout measured **4,378 bytes of
+    /// cartridge RAM changed within six frames** of Pokémon Blue crashing out of
+    /// a link battle, and the battery persisted them. That is the worst class of
+    /// bug an emulator can have: the game is recoverable, the save file is not.
+    ///
+    /// So a fault does exactly one thing, and does it for **any** cause, not for
+    /// the one path that was reported: it
+    /// [poisons the battery](crate::mbc::MemoryBankController::poison_battery)
+    /// so no later write can reach the file, and records why. The last good save
+    /// stays on disk, and the user is told rather than silently robbed.
+    ///
+    /// It deliberately does **not** stop, reset or otherwise "fix" the machine.
+    /// Detectors are heuristics and the emulator staying watchable is useful;
+    /// only the irreversible act — writing the file — is withdrawn.
+    ///
+    /// Sticky for the session and idempotent: the first reason is the diagnosis,
+    /// later ones are consequences of it.
+    pub fn report_fault(&mut self, reason: &str) {
+        if self.fault.is_some() {
+            return;
+        }
+        self.fault = Some(reason.to_string());
+        self.mbc.poison_battery(reason);
+        // Loud, once. A guard that protects the save silently is a guard the
+        // user cannot act on — and the action here (restart; the good `.sav` is
+        // untouched) is one only they can take.
+        eprintln!(
+            "gameboy: FAULT — {reason}. The battery save will NOT be written \
+             again this session; the existing save file is left untouched. \
+             Restart the emulator to recover."
+        );
+    }
+
+    /// Why this machine is considered to have faulted, if it has.
+    pub fn fault(&self) -> Option<&str> {
+        self.fault.as_deref()
     }
 
     /// Read a byte **without perturbing timing** — the observer's read.

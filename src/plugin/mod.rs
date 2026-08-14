@@ -359,6 +359,26 @@ impl<'m, 'a> Machine<'m, 'a> {
     pub fn granted(&self) -> Capability {
         self.granted
     }
+
+    /// **Report that the game has crashed.** Stops the battery save being
+    /// written for the rest of the session, and does nothing else — see
+    /// [`MemoryManagementUnit::report_fault`](crate::mmu::MemoryManagementUnit::report_fault).
+    ///
+    /// This needs **no capability**, deliberately. Every other entry point here
+    /// is gated because it lets a plugin *do* something to the machine; this one
+    /// only withdraws the emulator's own right to overwrite a file, so the
+    /// fail-safe direction is to let any plugin call it. A plugin that watches a
+    /// game closely enough to recognise an impossible state — a link partner
+    /// seeing `wLinkState` take a value the game never assigns, say — knows
+    /// sooner than any CPU-level detector can.
+    pub fn report_fault(&mut self, reason: &str) {
+        self.mem.report_fault(reason);
+    }
+
+    /// Why the machine is considered to have crashed, if it has.
+    pub fn fault(&self) -> Option<&str> {
+        self.mem.fault()
+    }
 }
 
 /// What the user is shown about an attached plugin.

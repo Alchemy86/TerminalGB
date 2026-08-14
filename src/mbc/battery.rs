@@ -114,9 +114,10 @@ pub struct Battery {
     quiet: u32,
     /// Frames since the RAM first became dirty.
     age: u32,
-    /// Set when reading an existing save failed. Refuse to write after that —
-    /// a save we could not read is a save we must not overwrite.
-    poisoned: bool,
+    /// Why writing has been refused, if it has. Set when reading an existing
+    /// save failed — a save we could not read is a save we must not overwrite —
+    /// and by [`Battery::poison`] when the machine has faulted.
+    poisoned: Option<String>,
 }
 
 impl Battery {
@@ -137,7 +138,7 @@ impl Battery {
             dirty: false,
             quiet: 0,
             age: 0,
-            poisoned: false,
+            poisoned: None,
         }
     }
 
@@ -152,12 +153,40 @@ impl Battery {
             dirty: false,
             quiet: 0,
             age: 0,
-            poisoned: false,
+            poisoned: None,
         }
     }
 
     pub fn is_active(&self) -> bool {
         self.sav.is_some()
+    }
+
+    /// **Refuse every future write to the save file.**
+    ///
+    /// The battery already refused to write after a failed *read*, on the rule
+    /// that a save we could not read is a save we must not overwrite. This is
+    /// the same rule pointed the other way: once something has established that
+    /// the emulated program is no longer executing its own code, the bytes in
+    /// cartridge RAM are no longer a save — they are whatever a runaway CPU
+    /// happened to store there — and writing them out destroys the good save
+    /// still on disk. Keeping the last good file and telling the user is
+    /// strictly better than persisting damage.
+    ///
+    /// Deliberately one-way and cheap: there is no `unpoison`. A machine that
+    /// has left the rails cannot argue its way back, and the recovery a user
+    /// wants is to restart the emulator, where the untouched `.sav` is waiting.
+    ///
+    /// Idempotent: the *first* reason is kept, because it is the one that
+    /// diagnoses the fault; later ones are consequences.
+    pub fn poison(&mut self, reason: &str) {
+        if self.poisoned.is_none() {
+            self.poisoned = Some(reason.to_string());
+        }
+    }
+
+    /// Why the save file is being left alone, if it is.
+    pub fn poisoned_reason(&self) -> Option<&str> {
+        self.poisoned.as_deref()
     }
 
     /// Cartridge RAM (or the clock) has changed since the last write. Callers
@@ -210,7 +239,7 @@ impl Battery {
                     });
                 }
                 Err(e) => {
-                    self.poisoned = true;
+                    self.poison(e);
                     return Err(e);
                 }
             }
@@ -237,7 +266,7 @@ impl Battery {
             }),
             Ok(Some(bytes)) => {
                 if bytes.len() < 8 {
-                    self.poisoned = true;
+                    self.poison("legacy .gbsave file is truncated");
                     return Err("legacy .gbsave file is truncated");
                 }
                 let mut anchor = [0u8; 8];
@@ -251,7 +280,7 @@ impl Battery {
                 })
             }
             Err(e) => {
-                self.poisoned = true;
+                self.poison(e);
                 Err(e)
             }
         }
@@ -301,7 +330,7 @@ impl Battery {
 
     /// Write the save now, if there is anything to write. Safe to call often.
     pub fn flush(&mut self, ram: &[u8], rtc: Option<RtcState>) {
-        if !self.dirty || self.poisoned {
+        if !self.dirty || self.poisoned.is_some() {
             return;
         }
         let Some(ref sav) = self.sav else {
@@ -653,6 +682,48 @@ mod tests {
         fs::write(dir.join("game.srm"), vec![0x33u8; 0x2000]).unwrap();
         let loaded = Battery::new(&rom, 0x2000, false).load().unwrap();
         assert_eq!(loaded.ram, vec![0x33u8; 0x2000]);
+    }
+
+    /// The save-destroying case this whole latch exists for: the machine has
+    /// faulted, so whatever is in cartridge RAM now is a crashed CPU's
+    /// scribbling, not a save. The good file already on disk must survive.
+    #[test]
+    fn a_faulted_machine_never_overwrites_a_good_save() {
+        let dir = tmpdir("fault");
+        let rom = dir.join("game.gb");
+        let good = vec![0xA5u8; 0x2000];
+
+        let mut b = Battery::new(&rom, 0x2000, false);
+        b.touch();
+        b.flush(&good, None);
+        assert_eq!(fs::read(dir.join("game.sav")).unwrap(), good);
+
+        b.poison("the CPU left the program");
+        // Everything that can write: the per-frame autosave, an explicit flush,
+        // and the last-chance flush in `Drop`.
+        let garbage = vec![0x5Au8; 0x2000];
+        b.touch();
+        for _ in 0..(MAX_DIRTY_FRAMES + 1) {
+            b.tick(&garbage, None);
+        }
+        b.flush(&garbage, None);
+        drop(b);
+
+        assert_eq!(
+            fs::read(dir.join("game.sav")).unwrap(),
+            good,
+            "a crashed machine must not be able to reach the save file"
+        );
+    }
+
+    /// The first reason is the diagnosis; later ones are its consequences.
+    #[test]
+    fn poisoning_keeps_the_first_reason() {
+        let mut b = Battery::none();
+        assert_eq!(b.poisoned_reason(), None);
+        b.poison("undefined opcode");
+        b.poison("and then everything else went wrong");
+        assert_eq!(b.poisoned_reason(), Some("undefined opcode"));
     }
 
     #[test]

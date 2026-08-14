@@ -240,6 +240,36 @@ impl Cpu<'_> {
         5
     }
 
+    /// The CPU has executed an opcode that does not exist.
+    ///
+    /// On hardware these eleven bytes (`$D3 $DB $DD $E3 $E4 $EB $EC $ED $F4
+    /// $FC $FD`) **lock the CPU up**: it stops fetching and only a reset
+    /// recovers it (Pan Docs,
+    /// <https://gbdev.io/pandocs/CPU_Instruction_Set.html>). No real game
+    /// executes one on purpose, so reaching here is a definitive statement that
+    /// the program counter has walked off the program — which is why this is
+    /// also a [fault](crate::mmu::MemoryManagementUnit::report_fault): from this
+    /// point on, whatever the machine stores into cartridge RAM is not a save.
+    ///
+    /// This used to `panic!`, i.e. abort the process under
+    /// `[profile.release] panic = 'abort'`. That was worse in both directions:
+    /// it is not what the hardware does, and it kills the emulator at the exact
+    /// moment the user most wants to be told what happened — taking any
+    /// unwritten battery RAM with it.
+    fn illegal_opcode(&mut self, op: u8) -> u32 {
+        // Leave PC on the offending byte so a debugger shows it.
+        self.registers.pc = self.registers.pc.wrapping_sub(1);
+        self.memory.report_fault(&format!(
+            "the CPU executed undefined opcode {op:#04x} at {:#06x} — on hardware \
+             this locks the CPU up, so the game has crashed",
+            self.registers.pc
+        ));
+        // Locked up: stop fetching, but keep the peripherals running so the
+        // frontend stays alive to show the message.
+        self.stop = 1;
+        1
+    }
+
     pub fn exec(&mut self) -> u32 {
         // Locked up by an undefined opcode. Nothing wakes it — not even an
         // interrupt — but the rest of the machine keeps running, so the frame
@@ -340,6 +370,24 @@ impl Cpu<'_> {
     }
 
     fn operation(&mut self) -> u32 {
+        // Cheap, general "the program counter has left the program" test: one
+        // subtract and one compare per instruction, on a branch that is never
+        // taken by a working game. $FE00-$FF7F is OAM, the unusable block and
+        // the I/O registers — three regions that cannot hold code, so fetching
+        // an opcode from any of them means the CPU is executing something that
+        // is not a program. Unlike an undefined opcode this is a *heuristic*
+        // about where PC is rather than a hardware lock-up, so it reports the
+        // fault (which only withdraws the right to write the save file) and
+        // lets the machine run on.
+        if self.registers.pc.wrapping_sub(0xFE00) < 0x0180
+            && self.memory.fault().is_none()
+        {
+            self.memory.report_fault(&format!(
+                "the CPU is executing from {:#06x}, which is not memory a program \
+                 can live in (OAM / unusable / I-O) — the game has crashed",
+                self.registers.pc
+            ));
+        }
         let op = self.get_byte();
         if self.halt_bug {
             // HALT bug: the opcode was fetched but PC must not have advanced,
@@ -1290,17 +1338,9 @@ impl Cpu<'_> {
             }
             // $D3 $DB $DD $E3 $E4 $EB $EC $ED $F4 $FC $FD are not instructions.
             // Hardware does not "not implement" them — the CPU locks up and
-            // only a reset recovers (Pan Docs, "Unused opcodes"). Aborting the
-            // process instead takes any unwritten battery RAM with it under
-            // `panic = 'abort'`, which is the worst outcome an emulator has;
-            // the same rule `src/mbc/battery.rs` already established. A runaway
+            // only a reset recovers (Pan Docs, "Unused opcodes"). A runaway
             // `PC` in any game reaches this.
-            _ => {
-                self.stop = 1;
-                // Leave PC on the offending byte so a debugger shows it.
-                self.registers.pc = self.registers.pc.wrapping_sub(1);
-                1
-            }
+            _ => self.illegal_opcode(op),
         }
     }
 }
@@ -1361,5 +1401,94 @@ mod lockup_tests {
             cpu.do_cycle();
         }
         assert_eq!(cpu.registers.pc, 0x0100, "no vector was dispatched");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 32 KiB ROM-only cartridge whose entry point runs `code`.
+    fn rom_running(code: &[u8]) -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0100] = 0x00; // NOP
+        rom[0x0101] = 0xC3; // JP $0150
+        rom[0x0102] = 0x50;
+        rom[0x0103] = 0x01;
+        rom[0x0150..0x0150 + code.len()].copy_from_slice(code);
+        rom
+    }
+
+    fn run(code: &[u8], steps: usize) -> Cpu<'static> {
+        let mut cpu = Cpu::new(rom_running(code), None);
+        for _ in 0..steps {
+            cpu.do_cycle();
+        }
+        cpu
+    }
+
+    /// This used to `panic!`, i.e. abort the process under `panic = 'abort'`.
+    /// Hardware locks the CPU up instead — and either way the program has left
+    /// its own code, which must stop the emulator persisting cartridge RAM.
+    #[test]
+    fn an_undefined_opcode_faults_and_locks_up_instead_of_panicking() {
+        // LD A,$11 ; $DD (undefined) ; LD A,$22
+        let cpu = run(&[0x3E, 0x11, 0xDD, 0x3E, 0x22], 8);
+        assert!(
+            cpu.memory.fault().is_some(),
+            "an undefined opcode is a definitive 'the game has crashed'"
+        );
+        assert_ne!(cpu.stop, 0, "the CPU must be locked up, as hardware is");
+        assert_eq!(
+            cpu.registers.a, 0x11,
+            "nothing after the undefined opcode may execute"
+        );
+    }
+
+    /// $FC is exactly as undefined as the other ten. It used to be silently
+    /// treated as a NOP, which hid a crash instead of reporting it.
+    #[test]
+    fn opcode_fc_is_undefined_too() {
+        assert!(run(&[0xFC], 4).memory.fault().is_some());
+    }
+
+    /// The general detector: OAM, the unusable block and the I/O registers
+    /// cannot hold a program, so fetching an opcode there means the program
+    /// counter has walked off the program.
+    #[test]
+    fn executing_from_memory_that_cannot_hold_code_is_a_fault() {
+        for target in [0xFE00u16, 0xFEA0, 0xFF10] {
+            // JP <target>
+            let cpu = run(&[0xC3, target as u8, (target >> 8) as u8], 6);
+            assert!(
+                cpu.memory.fault().is_some(),
+                "executing from {target:#06x} must be reported"
+            );
+        }
+    }
+
+    /// ...and the branch must be genuinely never-taken for a working game: HRAM
+    /// ($FF80-$FFFE) is where real games *do* put code (the OAM DMA routine).
+    #[test]
+    fn running_from_hram_is_not_a_fault() {
+        // JP $FF80, with a `JR -2` spin planted there first.
+        let mut cpu = Cpu::new(rom_running(&[0xC3, 0x80, 0xFF]), None);
+        cpu.memory.wb(0xFF80, 0x18);
+        cpu.memory.wb(0xFF81, 0xFE);
+        for _ in 0..16 {
+            cpu.do_cycle();
+        }
+        assert_eq!(cpu.registers.pc, 0xFF80);
+        assert_eq!(cpu.memory.fault(), None);
+    }
+
+    /// A fault is a fact about this session, not about the machine, and it is
+    /// the first diagnosis that matters.
+    #[test]
+    fn the_first_fault_reason_is_the_one_kept() {
+        let mut cpu = Cpu::new(rom_running(&[0x00]), None);
+        cpu.memory.report_fault("first");
+        cpu.memory.report_fault("second");
+        assert_eq!(cpu.memory.fault(), Some("first"));
     }
 }

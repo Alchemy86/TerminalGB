@@ -113,6 +113,57 @@ fn build_battery_rom() -> Vec<u8> {
     rom
 }
 
+/// The same cartridge, but its entry point deliberately runs off the rails and
+/// then scribbles over cartridge RAM — a crashed Game Boy, in fifteen bytes.
+///
+/// This is the shape the Colosseum bug takes on real hardware: Pokémon Blue's
+/// program counter leaves its own code, the CPU keeps executing whatever it
+/// finds, and within a handful of frames thousands of bytes of cartridge RAM
+/// have changed. Modelled faithfully: the LCD is switched off (as the real
+/// crash does), a small routine is copied into **OAM** — memory no program can
+/// live in — and control is handed to it. The runaway routine fills RAM bank 0
+/// with `$5A`.
+fn build_crash_rom() -> Vec<u8> {
+    // The runaway routine, assembled to run at $FE00 (OAM).
+    #[rustfmt::skip]
+    let runaway: &[u8] = &[
+        0x3E, 0x0A,             // LD A,$0A
+        0xEA, 0x00, 0x00,       // LD ($0000),A   ; enable cartridge RAM
+        0xAF,                   // XOR A
+        0xEA, 0x00, 0x40,       // LD ($4000),A   ; RAM bank 0
+        0x21, 0x00, 0xA0,       // LD HL,$A000
+        0x3E, 0x5A,             // .loop LD A,$5A
+        0x22,                   // LD (HL+),A
+        0x7C,                   // LD A,H
+        0xFE, 0xC0,             // CP $C0
+        0x20, 0xF8,             // JR NZ,.loop
+        0x18, 0xFE,             // JR -2          ; spin, still inside OAM
+    ];
+
+    let mut rom = build_battery_rom();
+    // Park the routine in ROM where the loader can copy it from.
+    rom[0x0200..0x0200 + runaway.len()].copy_from_slice(runaway);
+
+    #[rustfmt::skip]
+    let loader: &[u8] = &[
+        0x3E, 0x00,             // LD A,0
+        0xE0, 0x40,             // LDH ($40),A    ; LCD off, as the real crash does
+        0x21, 0x00, 0x02,       // LD HL,$0200
+        0x11, 0x00, 0xFE,       // LD DE,$FE00
+        0x06, 22,               // LD B,<len>
+        0x2A,                   // .copy LD A,(HL+)
+        0x12,                   // LD (DE),A
+        0x13,                   // INC DE
+        0x05,                   // DEC B
+        0x20, 0xFA,             // JR NZ,.copy
+        0xC3, 0x00, 0xFE,       // JP $FE00       ; leave the program
+    ];
+    assert_eq!(loader[11] as usize, runaway.len(), "copy length");
+    // Overwrite the entry point: this cartridge only crashes.
+    rom[0x0150..0x0150 + loader.len()].copy_from_slice(loader);
+    rom
+}
+
 // ---------------------------------------------------------------------------
 // Harness plumbing
 // ---------------------------------------------------------------------------
@@ -578,6 +629,93 @@ fn case_odd_carts_and_saves_do_not_panic() -> Case {
     }
 }
 
+/// **The save-destroying case.** A game crashes and the runaway CPU writes
+/// thousands of bytes into cartridge RAM; the autosave must not carry that to
+/// disk. Measured on the real thing first: Pokémon Blue crashing out of a Cable
+/// Club link battle changed 4,378 bytes of cartridge RAM within six frames, and
+/// the battery persisted them over the player's save.
+///
+/// Played out in two boots against one save file, because that is the user's
+/// actual sequence: play and save, then a later session crashes.
+fn case_a_crashed_game_cannot_overwrite_a_save() -> Case {
+    const NAME: &str = "a crashed game cannot overwrite a good save";
+    let dir = workdir("crash");
+    let rom = stage(&dir);
+    let sav = dir.join("battery.sav");
+
+    // Session 1: a normal game that saves.
+    let mut gb = boot(&rom);
+    for _ in 0..180 {
+        gb.frame();
+    }
+    std::mem::forget(gb);
+    let good = match std::fs::read(&sav) {
+        Ok(b) => b,
+        Err(e) => {
+            return Case {
+                name: NAME,
+                ok: false,
+                detail: format!("session 1 wrote no save to compare against ({e})"),
+            }
+        }
+    };
+
+    // Session 2: the same cartridge, but this time the game crashes.
+    std::fs::write(&rom, build_crash_rom()).expect("write crash rom");
+    let mut gb = boot(&rom);
+    for _ in 0..180 {
+        gb.frame();
+    }
+
+    let mut problems = Vec::new();
+    if gb.fault().is_none() {
+        problems.push(
+            "the emulator did not notice the crash at all: a program counter that has \
+             walked into OAM is executing bytes that are not a program"
+                .to_string(),
+        );
+    }
+    // Not vacuous: the runaway routine really did rewrite cartridge RAM. If it
+    // did not, this case would pass for the wrong reason.
+    let scribbled = read_bank_markers(&mut gb);
+    if scribbled[0] == expected_markers()[0] {
+        problems.push(format!(
+            "the crash never reached cartridge RAM (bank 0 still reads {:02X?}), so \
+             this case proves nothing — fix the test cartridge",
+            scribbled[0]
+        ));
+    }
+    match std::fs::read(&sav) {
+        Ok(now) if now == good => {}
+        Ok(now) => {
+            let changed = now.iter().zip(good.iter()).filter(|(a, b)| a != b).count();
+            problems.push(format!(
+                "the save file changed after the crash: {changed} of {} bytes differ.\n      \
+                 A save written by a crashed CPU is not a save, it is damage — and it \
+                 has replaced the player's real one, which is unrecoverable.",
+                good.len()
+            ));
+        }
+        Err(e) => problems.push(format!("the save file disappeared ({e})")),
+    }
+    std::mem::forget(gb);
+
+    Case {
+        name: NAME,
+        ok: problems.is_empty(),
+        detail: if problems.is_empty() {
+            format!(
+                "crash detected ({}); cartridge RAM was rewritten but the {}-byte save \
+                 file is byte-identical",
+                "PC left the program",
+                good.len()
+            )
+        } else {
+            problems.join("; ")
+        },
+    }
+}
+
 fn main() {
     let cases = vec![
         case_survives_an_unclean_exit(),
@@ -587,6 +725,7 @@ fn main() {
         case_foreign_sav_loads(),
         case_no_byte_shift_on_a_plain_sav(),
         case_odd_carts_and_saves_do_not_panic(),
+        case_a_crashed_game_cannot_overwrite_a_save(),
     ];
 
     let mut failed = 0;

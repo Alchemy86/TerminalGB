@@ -744,6 +744,8 @@ struct App {
     slot: u32,
     /// Transient in-game notice (save/load/speed feedback) with its raise time.
     toast: Option<(String, Instant)>,
+    /// The machine-fault toast has been raised once for this session.
+    fault_announced: bool,
 
     // Picker screen state.
     entries: Vec<RomEntry>,
@@ -935,6 +937,7 @@ impl App {
             pending_bell: false,
             slot: 1,
             toast: None,
+            fault_announced: false,
             entries: Vec::new(),
             recent_flags: Vec::new(),
             filter: String::new(),
@@ -1313,6 +1316,34 @@ impl App {
         // (see `crate::termimage`) and a video stream may not be.
         self.video_tick(true);
         self.announce_new_encounter();
+        self.check_fault();
+    }
+
+    /// Tell the player, once, when the emulator has stopped writing their save.
+    ///
+    /// A crashed game can no longer reach the battery file (see
+    /// [`crate::mmu::MemoryManagementUnit::report_fault`]) — but a guard that
+    /// protects the save silently is one the player cannot act on, and the
+    /// action is theirs: restart, and the untouched `.sav` is waiting. The
+    /// Status panel keeps a `Fault` row for as long as it lasts.
+    fn check_fault(&mut self) {
+        if self.fault_announced {
+            return;
+        }
+        let Some(reason) = self.session.as_ref().and_then(|s| s.gb.fault()) else {
+            return;
+        };
+        let msg = format!(
+            "The game has crashed ({reason}). Your save file is NOT being written \
+             — restart to recover."
+        );
+        self.fault_announced = true;
+        self.set_toast(msg);
+    }
+
+    /// The crash reason, for the Status panel.
+    fn fault_text(&self) -> Option<&str> {
+        self.session.as_ref().and_then(|s| s.gb.fault())
     }
 
     /// Raise the one-shot half of the shiny alert.
@@ -3418,6 +3449,10 @@ impl App {
             .as_ref()
             .map(|s| s.gb.plugin_statuses())
             .unwrap_or_default();
+        // A crashed machine has stopped writing the save file. That is the most
+        // important thing on this panel while it is true, so it gets its own row
+        // (and the box grows to fit it — see the clipping bug above).
+        let fault = self.fault_text().map(str::to_string);
 
         // Status. `Sent` is the size actually transmitted to the terminal each
         // frame, which the terminal then stretches to `Scale`; keeping those
@@ -3496,13 +3531,17 @@ impl App {
             };
             status.push(kv("Plugin", &truncate(&detail, 18)));
         }
+        if fault.is_some() {
+            status.push(kv("Fault", "SAVE NOT WRITTEN"));
+        }
         // Sized from `status` itself, plus the two border rows. A hand-counted
         // constant here is the bug this box has had twice: it was `13 + plugins`
         // against a twelve-line list, so with two plugins attached the second
         // one was clipped away and `an_attached_plugin_is_visible_in_the_
         // rendered_status_panel` failed — a plugin *was* active and invisible,
         // which is exactly what docs/plugins.md §4 promises cannot happen.
-        // Adding a status row must not silently cost a plugin its row again.
+        // Adding a status row must not silently cost a plugin its row again —
+        // the `Fault` row above is one such addition and costs nothing.
         let split = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -6236,6 +6275,39 @@ mod tests {
                 (mid(pic) - mid(panel)).abs() <= 2,
                 "{cols}x{rows}: picture {pic:?} and panel {panel:?} do not share \
                  a vertical centre"
+            );
+        }
+    }
+
+    /// A crashed game stops the emulator writing the save file. The player has
+    /// to be able to *see* that, for the same reason an attached plugin does —
+    /// and the row is pushed last, exactly where the clipping bug above lived.
+    #[test]
+    fn a_faulted_machine_says_so_in_the_rendered_status_panel() {
+        use ratatui::backend::TestBackend;
+
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        app.session
+            .as_mut()
+            .expect("session")
+            .gb
+            .report_fault("the CPU left the program");
+
+        for (w, h) in [(120u16, 40u16), (100, 30), (160, 50)] {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            assert!(
+                text.contains("SAVE NOT WRITTEN"),
+                "a machine that has stopped saving must say so at {w}x{h}"
             );
         }
     }

@@ -452,6 +452,23 @@ impl Gameboy {
         self.cpu.memory.mbc.flush_battery();
     }
 
+    /// Why this machine is considered to have crashed, if it has — and with it,
+    /// why the battery save is no longer being written. See
+    /// [`MemoryManagementUnit::report_fault`](crate::mmu::MemoryManagementUnit::report_fault).
+    /// A frontend should show this: the guard protects the save file, but only
+    /// the user can act on it.
+    pub fn fault(&self) -> Option<&str> {
+        self.cpu.memory.fault()
+    }
+
+    /// Declare that the emulated program has left the rails, from outside the
+    /// core — a frontend, a test, or a game-specific plugin that can recognise a
+    /// crash the CPU-level detectors cannot. **Stops the battery save being
+    /// written for the rest of the session**, and nothing else.
+    pub fn report_fault(&mut self, reason: &str) {
+        self.cpu.memory.report_fault(reason);
+    }
+
     /// Attach a plugin. See [`crate::plugin`] for the contract; the frontend is
     /// responsible for telling the user one is active.
     pub fn add_plugin(

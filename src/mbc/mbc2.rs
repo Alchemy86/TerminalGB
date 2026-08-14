@@ -115,6 +115,14 @@ impl MemoryBankController for MBC2 {
         self.battery.mark_dirty();
     }
 
+    fn poison_battery(&mut self, reason: &str) {
+        self.battery.poison(reason);
+    }
+
+    fn battery_poisoned(&self) -> Option<&str> {
+        self.battery.poisoned_reason()
+    }
+
     fn save_state(&self, w: &mut crate::savestate::Writer) {
         w.bool(self.ram_on);
         w.usize(self.rombank);
