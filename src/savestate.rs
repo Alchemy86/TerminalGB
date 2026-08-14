@@ -53,7 +53,11 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// of the address counters, which are the real registers and are what the
 /// transfer advances), and the "move a block now" one-shot an HBlank transfer
 /// armed during mode 0 sets is captured (SameSuite `dma/*`).
-pub const FORMAT_VERSION: u16 = 6;
+/// v7: APU corner cases — the sweep unit's pending-calculation timer (and
+/// whether it was armed with a zero shift) and the volume envelope's
+/// pending-step latch, all three of which can be live at a frame boundary
+/// (SameSuite `channel_1_sweep`, `channel_N_nrx2_speed_change`).
+pub const FORMAT_VERSION: u16 = 7;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

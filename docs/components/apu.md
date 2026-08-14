@@ -270,7 +270,8 @@ headlessly. See [testing](../testing.md).
 
 [SameSuite](https://github.com/LIJI32/SameSuite)'s APU sub-suite is a much deeper test
 of this component than Blargg's `dmg_sound`, and it is where the honest number lives:
-**49 of the 61 tests in the GB Emulator Shootout's published set pass, up from 2.**
+**56 of the 69 APU ROMs in the shootout's vendored set pass, up from 2** (57/76 across
+the whole SameSuite directory, which also holds its dma, ppu and sgb tests).
 
 **Run it headlessly:**
 
@@ -304,28 +305,39 @@ visible as a whole column shifting):
 | `WAVE_TRIGGER_DELAY` | 4 T | `channel_3_delay`, and still Blargg `dmg_sound` 09/10/12 |
 | `NOISE_TRIGGER_DELAY` | 2 T | `channel_4_delay` |
 | `NOISE_TRIGGER_ALIGN` | grid phase 0 | `channel_4_align` |
+| noise re-trigger costs one extra whole sample | +1 period | `channel_4_lfsr_restart`, `_fast` |
+| `sweep_calc_delay_for(shift)` | `(shift + 1)` M-cycles, `+1` more on a trigger | `channel_1_sweep`, `channel_1_sweep_restart` |
+| envelope period counter runs on frame-sequencer step | 6 (the step it schedules lands on 7) | `channel_N_volume_div`, `channel_N_nrx2_speed_change` |
 
-**Still failing, and why** — these are scoped, not half-built:
+**Still failing, and why** — these are scoped, not half-built. Full per-fix record with
+citations: [`../conformance-notes.md`](../conformance-notes.md) §10-13.
 
-* `channel_N_nrx2_glitch` (2) — the *long* half of the test lets the envelope run for 16
-  DIV-APU events before the NRx2 write, and its answers then depend on the new period's
-  actual value, not just on whether it is zero. That needs the envelope's internal delay
-  counter modelled, not a formula over the register bits.
-* `channel_1_sweep`, `channel_1_sweep_restart`, `channel_1_sweep_restart_2` (3) — these
-  turn on a 4 T-cycle race between a DIV-APU sweep tick and the register write that
-  immediately follows it (`nops $0ffe` then a 3 M-cycle `ldh`, which puts the write 4 T
-  after the edge in our timing). Getting them right needs the DIV write's effect placed
-  within its M-cycle, which is timer territory rather than APU. (SameBoy and real
-  CPU-CGB-D both fail `sweep_restart_2` too.)
-* `channel_4_frequency_alignment`, `channel_4_equivalent_frequencies` (2) — the NR43
-  *divisor* counter is free-running as well as the 1 MHz grid: the test's own comments
-  mark divisor codes 1-7 as "affected" by alignment and code 0 as "not affected", which a
-  single 1 MHz grid cannot express.
-* `channel_4_freq_change` (1) — SameBoy fails this one too.
-* `channel_4_lfsr_restart`, `channel_4_lfsr_restart_fast`, `channel_N_nrx2_speed_change`
-  (4) — not investigated.
+* `channel_{1,2,4}_extra_length_clocking-cgb0B`, `channel_3_extra_length_clocking-cgb0`,
+  `channel_3_extra_length_clocking-cgbB` (5) — **we should not pass these.** They assert
+  the length-counter behaviour of **CPU CGB revisions ≤ B**, which the ROM source itself
+  describes as a bug that "breaks at least one game (Prehistorik Man)" and that was fixed
+  in later revisions. We model a CGB-E. The `-cgb0` and `-cgbB` pair also contradict each
+  other, so no single machine passes both.
+* `channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` (3) — three revision variants of one
+  measurement; only `-cgbDE` matches the console we model, so **at most one is winnable**.
+  Its first row is currently one M-cycle out; its second needs `STOP`-driven double speed,
+  which lives in the CPU, not here.
+* `channel_4_equivalent_frequencies`, `channel_4_freq_change`,
+  `channel_4_frequency_alignment` (3) — one cause: the noise frequency comes from a
+  **free-running 14-bit counter** clocked every `(NR43 & 7) * 8` T-cycles (4 if zero),
+  with the LFSR stepping on the 0→1 edge of bit `NR43 >> 4`. We model a per-channel period
+  timer reloaded at trigger, which gets the rate right and the phase wrong — hence
+  "identical frequencies expressed differently" landing a sample apart. Converting to the
+  counter model is the right fix; what blocks it is the value the *trigger* reloads the
+  countdown with, a table of revision- and instance-specific quirks that SameBoy's own
+  source annotates "this quirk seems way too specific" and "non-deterministic".
+* `channel_1_sweep_restart` (1) — down to a **single cell of 144**: the duty phase of a
+  re-trigger that immediately follows a sweep frequency change. `SQUARE_RESTART_SPEEDUP`
+  is not the lever (zeroing it costs four other rows).
+* `channel_1_sweep_restart_2` (1) — disagrees about where the DIV-APU sweep event sits
+  relative to a `ld [rDIV],a` by about two M-cycles.
 
-The eight `*-cgb0B` / `*-cgbB` / `*-cgb0BC` / `-A` variants in the SameSuite repository
-encode *older* CGB revisions' behaviour and are deliberately not chased: they are not in
-the shootout's published set, and this emulator targets CGB-E (which is also the revision
+The `-cgb0B` / `-cgbB` / `-cgb0BC` / `-A` variants **are** in the shootout's vendored
+`testroms/samesuite` and are counted above; they encode *older* CGB revisions' behaviour
+and are deliberately not chased, because this emulator targets CGB-E (also the revision
 SameSuite's README documents the NRx2 glitch for).

@@ -58,6 +58,15 @@ struct VolumeEnvelope {
     delay: u8,
     initial_volume: u8,
     volume: u8,
+    /// The envelope's *pending tick* flip-flop.
+    ///
+    /// The 3-bit period counter runs at 64 Hz, but the step it asks for is
+    /// carried out by a separate latch that is set the moment the counter
+    /// reads zero and acted on at the next **512 Hz** DIV-APU event. So an
+    /// envelope resumed mid-note steps within ~2 ms rather than waiting a
+    /// whole 64 Hz period — SameSuite `channel_N_nrx2_speed_change` and the
+    /// long half of `channel_N_nrx2_glitch` both count that extra step.
+    clock: bool,
 }
 
 impl VolumeEnvelope {
@@ -68,6 +77,7 @@ impl VolumeEnvelope {
             delay: 0,
             initial_volume: 0,
             volume: 0,
+            clock: false,
         }
     }
 
@@ -77,6 +87,7 @@ impl VolumeEnvelope {
             0xFF14 | 0xFF19 | 0xFF23 if v & 0x80 == 0x80 => {
                 self.delay = self.period;
                 self.volume = self.initial_volume;
+                self.clock = false;
             }
             _ => (),
         }
@@ -120,23 +131,45 @@ impl VolumeEnvelope {
             self.volume = (vol & 0x0F) as u8;
         }
 
+        // A step already asked for takes its reload from the *new* period.
+        if self.clock {
+            self.delay = new_period;
+        }
         self.period = new_period;
         self.goes_up = new_up;
         self.initial_volume = v >> 4;
     }
 
-    fn step(&mut self) {
-        match self.delay {
-            2.. => self.delay -= 1,
-            1 => {
-                self.delay = self.period;
+    /// One 512 Hz DIV-APU event, in the order the hardware performs it.
+    ///
+    /// `sixty_four_hz` is true on the one event in eight that clocks the
+    /// envelope's period counter. The counter is *free-running* — it reloads
+    /// from NRx2 when it reads zero rather than stopping there — so an
+    /// envelope parked at zero (which is where a period-0 NRx2 leaves it)
+    /// starts stepping as soon as a non-zero period is written, without
+    /// waiting for a trigger. `channel_N_nrx2_speed_change` tests 3-7 enable
+    /// the envelope mid-note and read the volume back one 64 Hz period at a
+    /// time; they see the first step arrive one *512 Hz* event later, not one
+    /// 64 Hz period later, which is why the latch is separate from the count.
+    fn div_event(&mut self, sixty_four_hz: bool, channel_enabled: bool) {
+        if sixty_four_hz && !self.clock && self.delay > 0 {
+            self.delay -= 1;
+        }
+        if self.clock {
+            self.clock = false;
+            if self.period != 0 {
                 if self.goes_up && self.volume < 15 {
                     self.volume += 1;
                 } else if !self.goes_up && self.volume > 0 {
                     self.volume -= 1;
                 }
             }
-            _ => {}
+        }
+        // The "secondary" half of the event: an exhausted counter reloads and
+        // asks for a step, which the latch above performs next time round.
+        if channel_enabled && self.delay == 0 {
+            self.delay = self.period;
+            self.clock = true;
         }
     }
 
@@ -146,6 +179,7 @@ impl VolumeEnvelope {
         w.u8(self.delay);
         w.u8(self.initial_volume);
         w.u8(self.volume);
+        w.bool(self.clock);
     }
 
     fn load_state(
@@ -157,6 +191,7 @@ impl VolumeEnvelope {
         self.delay = r.u8()?;
         self.initial_volume = r.u8()?;
         self.volume = r.u8()?;
+        self.clock = r.bool()?;
         Ok(())
     }
 }
@@ -251,6 +286,19 @@ const SQUARE_TRIGGER_ALIGN: u32 = 0;
 /// alone here.
 const SQUARE_RESTART_SPEEDUP: u32 = 4;
 
+/// How long the sweep unit's recalculation takes, in T-cycles, for a given
+/// NR10 shift.
+///
+/// The sweep shifter is a serial shift-and-add: it walks the shadow frequency
+/// down one bit position per 1 MHz tick, so a larger shift takes longer, and
+/// the overflow check that can kill the channel only happens when it finishes.
+/// SameSuite `channel_1_sweep` reads PCM12 one M-cycle at a time across the
+/// event and shows the channel still playing for exactly 8 M-cycles after a
+/// shift-7 sweep updates the frequency, then silent — hence `shift + 1`.
+fn sweep_calc_delay_for(shift: u8) -> u32 {
+    (shift as u32 + 1) * 4
+}
+
 struct SquareChannel {
     enabled: bool,
     dac_enabled: bool,
@@ -282,6 +330,18 @@ struct SquareChannel {
     /// A sweep calculation has run in negate mode since the last trigger —
     /// clearing NR10's negate bit while this is set disables the channel.
     sweep_negate_used: bool,
+    /// T-cycles until the pending sweep *recalculation* runs (0 = none).
+    ///
+    /// The sweep unit does not check for overflow at the instant it writes a
+    /// new frequency: the shifter needs time, so the second calculation — the
+    /// one whose overflow kills the channel — lands a few cycles later. Every
+    /// event that (re)starts the shifter arms this: a 128 Hz sweep event, a
+    /// trigger with a non-zero shift, and an NR10 write. See
+    /// [`sweep_calc_delay_for`].
+    sweep_calc_delay: u32,
+    /// The pending calculation was armed with a zero shift, so the "paused
+    /// while NR10's shift reads zero" rule does not apply to it.
+    sweep_calc_unshifted: bool,
     blip: BlipBuf,
     last_amp: i32,
 }
@@ -306,6 +366,8 @@ impl SquareChannel {
             sweep_freq: 0,
             sweep_enabled: false,
             sweep_negate_used: false,
+            sweep_calc_delay: 0,
+            sweep_calc_unshifted: false,
             blip,
             last_amp: 0,
         }
@@ -319,7 +381,37 @@ impl SquareChannel {
         }
     }
 
+    /// Advance the channel over `[start_time, end_time)`, splitting the window
+    /// at a pending sweep overflow check so the channel goes quiet on the
+    /// exact cycle hardware kills it (see [`SquareChannel::sweep_calc_delay`]).
     fn run(&mut self, start_time: u32, end_time: u32) {
+        // A pending calculation is *paused*, not cancelled, while NR10's shift
+        // field reads zero — there is nothing for the shifter to do, so it
+        // stops where it is and resumes if a shift is written back. SameSuite
+        // `channel_1_sweep_restart` round 3 is exactly this: it clears NR10
+        // inside the window and the channel, which was about to be killed by
+        // the overflow check, keeps playing.
+        if self.sweep_calc_delay > 0
+            && (self.sweep_shift != 0 || self.sweep_calc_unshifted)
+            && end_time > start_time
+        {
+            let span = end_time - start_time;
+            if self.sweep_calc_delay <= span {
+                let mid = start_time + self.sweep_calc_delay;
+                self.sweep_calc_delay = 0;
+                self.run_span(start_time, mid);
+                // The recalculation's only job is the overflow check; the
+                // shadow frequency was already written at the sweep event.
+                let _ = self.calc_sweep_freq();
+                self.run_span(mid, end_time);
+                return;
+            }
+            self.sweep_calc_delay -= span;
+        }
+        self.run_span(start_time, end_time);
+    }
+
+    fn run_span(&mut self, start_time: u32, end_time: u32) {
         if !self.enabled || self.period == 0 {
             if self.last_amp != 0 {
                 self.blip.add_delta(start_time, -self.last_amp);
@@ -393,9 +485,24 @@ impl SquareChannel {
         };
         self.sweep_enabled = self.sweep_period != 0 || self.sweep_shift != 0;
         self.sweep_negate_used = false;
+        self.sweep_calc_delay = 0;
         if self.sweep_shift != 0 {
-            let _ = self.calc_sweep_freq();
+            // A trigger's own calculation starts one M-cycle later than a
+            // sweep event's: the write has to land before the shifter starts.
+            // `channel_1_sweep_restart` round 2 pins the difference — it
+            // re-triggers one M-cycle after a sweep event and the channel
+            // survives two M-cycles longer than round 5, which rewrites NR10
+            // at the same moment and does not restart the shifter.
+            self.sweep_calc_delay = sweep_calc_delay_for(self.sweep_shift) + 4;
+            self.sweep_calc_unshifted = false;
         }
+    }
+
+    /// Start the shifter: the recalculation + overflow check runs
+    /// [`sweep_calc_delay_for`] T-cycles from now.
+    fn arm_sweep_calc(&mut self) {
+        self.sweep_calc_delay = sweep_calc_delay_for(self.sweep_shift);
+        self.sweep_calc_unshifted = self.sweep_shift == 0;
     }
 
     /// One sweep frequency calculation + overflow check. Every calculation
@@ -429,13 +536,22 @@ impl SquareChannel {
                 self.sweep_period
             };
             if self.sweep_period != 0 {
-                let new_freq = self.calc_sweep_freq();
-                if new_freq < 2048 && self.sweep_shift != 0 {
-                    self.sweep_freq = new_freq;
-                    self.freq = new_freq;
-                    self.calculate_period();
-                    let _ = self.calc_sweep_freq();
+                if self.sweep_shift != 0 {
+                    let new_freq = self.calc_sweep_freq();
+                    if new_freq < 2048 {
+                        self.sweep_freq = new_freq;
+                        self.freq = new_freq;
+                        self.calculate_period();
+                    }
                 }
+                // The overflow check on the *next* value is not made here —
+                // the shifter takes time. SameSuite `channel_1_sweep` measures
+                // the gap: with shift 7 the channel keeps playing for 8 more
+                // M-cycles after the frequency update before the check kills
+                // it. With shift 0 nothing is written at all and the whole
+                // event is just this delayed check
+                // (`channel_1_sweep_restart_2`).
+                self.arm_sweep_calc();
             }
         }
     }
@@ -462,6 +578,8 @@ impl SquareChannel {
         w.u16(self.sweep_freq);
         w.bool(self.sweep_enabled);
         w.bool(self.sweep_negate_used);
+        w.u32(self.sweep_calc_delay);
+        w.bool(self.sweep_calc_unshifted);
         w.i32(self.last_amp);
     }
 
@@ -486,6 +604,8 @@ impl SquareChannel {
         self.sweep_freq = r.u16()?;
         self.sweep_enabled = r.bool()?;
         self.sweep_negate_used = r.bool()?;
+        self.sweep_calc_delay = r.u32()?;
+        self.sweep_calc_unshifted = r.bool()?;
         self.last_amp = r.i32()?;
         Ok(())
     }
@@ -813,6 +933,7 @@ impl NoiseChannel {
     }
 
     fn trigger(&mut self, grid_phase: u32) {
+        let restart = self.enabled;
         self.enabled = true;
         self.lfsr = 0x7FFF;
         self.calculate_period();
@@ -831,6 +952,16 @@ impl NoiseChannel {
         };
         let pad = NOISE_TRIGGER_ALIGN.wrapping_sub(grid_phase) & 3;
         self.delay = divisor + (self.period - divisor) / 2 + NOISE_TRIGGER_DELAY + pad;
+        // Re-triggering a *running* channel costs one whole sample more. The
+        // divider that clocks the LFSR is free-running — a trigger reloads the
+        // countdown to its next tick but not the divider itself, so the first
+        // post-restart step waits for the divider's next edge rather than
+        // landing on the reloaded countdown. SameSuite `channel_4_lfsr_restart`
+        // and `_fast` reconstruct 128 consecutive LFSR outputs after a restart:
+        // without this the whole sequence is right but one sample early.
+        if restart {
+            self.delay += self.period;
+        }
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {
@@ -1212,11 +1343,22 @@ impl Sound {
         if self.frame_seq_counter % 4 == 2 {
             self.channel1.sweep_step();
         }
-        if self.frame_seq_counter == 7 {
-            self.channel1.volume.step();
-            self.channel2.volume.step();
-            self.channel4.volume.step();
-        }
+        // The envelope is driven at the full 512 Hz; only its period counter
+        // is clocked at 64 Hz, and the step it asks for lands on the *next*
+        // event — which is why the counter runs on step 6 while the volume
+        // still changes on step 7, where it always did. Step 6 is also the
+        // phase this frame sequencer's length (even steps) and sweep (step 2
+        // of 4) already imply: all three are one step ahead of the event that
+        // acts on them. See VolumeEnvelope::div_event.
+        let sixty_four_hz = self.frame_seq_counter == 6;
+        let (c1, c2, c4) = (
+            self.channel1.enabled,
+            self.channel2.enabled,
+            self.channel4.enabled,
+        );
+        self.channel1.volume.div_event(sixty_four_hz, c1);
+        self.channel2.volume.div_event(sixty_four_hz, c2);
+        self.channel4.volume.div_event(sixty_four_hz, c4);
 
         self.frame_seq_counter = (self.frame_seq_counter + 1) % 8;
     }
@@ -3085,5 +3227,177 @@ mod tests {
             "expected {expected:.2} Hz, measured {measured:.2} Hz (err {:.2}%)",
             err * 100.0
         );
+    }
+
+    /// A sweep that overflows does not kill the channel at the instant it
+    /// updates the frequency — the shifter takes `shift + 1` M-cycles and the
+    /// overflow check that disables the channel happens at the end of that.
+    /// SameSuite `channel_1_sweep` reads PCM12 one M-cycle at a time across
+    /// this window; before the delay existed the channel went silent 8
+    /// M-cycles early.
+    #[test]
+    fn a_sweep_overflow_kills_the_channel_late_not_instantly() {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        snd.wb(0xFF26, 0x80);
+        snd.wb(0xFF10, 0x17); // sweep: period 1, add, shift 7
+        snd.wb(0xFF11, 0x80);
+        snd.wb(0xFF13, 0xFF);
+        snd.wb(0xFF12, 0x80); // volume 8, DAC on
+        snd.wb(0xFF14, 0x87); // trigger, freq $7FF -> $7FF + $F overflows
+
+        // The trigger's own calculation is armed, not performed: the channel
+        // is still enabled for `(7 + 2) * 4` T-cycles.
+        assert!(snd.channel1.enabled, "trigger must not disable instantly");
+        for _ in 0..8 {
+            snd.do_cycle(4);
+            snd.catch_up();
+        }
+        assert!(
+            snd.channel1.enabled,
+            "channel died within 8 M-cycles of the trigger"
+        );
+        snd.do_cycle(8);
+        snd.catch_up();
+        assert!(
+            !snd.channel1.enabled,
+            "the overflow check never ran: channel still enabled"
+        );
+    }
+
+    /// Clearing NR10's shift field parks a calculation that is already in
+    /// flight, so a channel that was about to be killed by the overflow check
+    /// keeps playing (`channel_1_sweep_restart` round 3).
+    #[test]
+    fn clearing_the_sweep_shift_parks_a_pending_overflow_check() {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        snd.wb(0xFF26, 0x80);
+        snd.wb(0xFF10, 0x17);
+        snd.wb(0xFF11, 0x80);
+        snd.wb(0xFF13, 0xFF);
+        snd.wb(0xFF12, 0x80);
+        snd.wb(0xFF14, 0x87);
+        snd.wb(0xFF10, 0x00); // sweep off before the shifter finishes
+        for _ in 0..64 {
+            snd.do_cycle(4);
+            snd.catch_up();
+        }
+        assert!(
+            snd.channel1.enabled,
+            "a parked calculation must not disable the channel"
+        );
+    }
+
+    /// The envelope's period counter is free-running: parking it at zero with
+    /// a period-0 NRx2 and then writing a non-zero period starts it stepping
+    /// again without a trigger, and the first step lands one 512 Hz event
+    /// later rather than a whole 64 Hz period later
+    /// (`channel_N_nrx2_speed_change` tests 3-7).
+    #[test]
+    fn enabling_the_envelope_mid_note_steps_within_one_div_apu_event() {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        snd.wb(0xFF26, 0x80);
+        snd.wb(0xFF11, 0xC0);
+        snd.wb(0xFF13, 0xFF);
+        snd.wb(0xFF12, 0x88); // volume 8, up, period 0 -> envelope parked
+        snd.wb(0xFF14, 0x87);
+        // Let the parked envelope sit for a couple of 64 Hz periods.
+        for _ in 0..(CLOCKS_PER_FRAME * 16 / 8) {
+            snd.do_cycle(8);
+        }
+        snd.catch_up();
+        assert_eq!(
+            snd.channel1.volume.volume, 8,
+            "a parked envelope must not step"
+        );
+
+        snd.wb(0xFF12, 0x89); // same volume/direction, period 1
+        let after_write = snd.channel1.volume.volume;
+        assert_eq!(
+            after_write, 9,
+            "the NRx2 write itself steps the envelope once"
+        );
+        // One 512 Hz DIV-APU event is 8192 T-cycles.
+        for _ in 0..(CLOCKS_PER_FRAME / 8 + 8) {
+            snd.do_cycle(8);
+        }
+        snd.catch_up();
+        assert_eq!(
+            snd.channel1.volume.volume, 10,
+            "the resumed envelope must step at the next 512 Hz event, not the \
+             next 64 Hz one"
+        );
+    }
+
+    /// …while a *triggered* envelope still steps on the 64 Hz boundary it
+    /// always did. The period counter runs one DIV-APU event ahead of the step
+    /// it schedules, so moving the count to step 6 keeps the volume change on
+    /// step 7. SameSuite `channel_N_volume_div` measures that boundary to the
+    /// M-cycle and goes red if the step slides a whole 512 Hz event later.
+    #[test]
+    fn a_triggered_envelope_still_steps_on_the_64hz_boundary() {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        snd.wb(0xFF26, 0x80);
+        snd.wb(0xFF11, 0x80);
+        snd.wb(0xFF13, 0xFC);
+        snd.wb(0xFF12, 0x81); // volume 8, down, period 1
+        snd.wb(0xFF14, 0x87);
+        let mut t = 0u32;
+        while snd.channel1.volume.volume == 8 && t < 200_000 {
+            snd.do_cycle(4);
+            snd.catch_up();
+            t += 4;
+        }
+        // One 64 Hz envelope period is 8 * CLOCKS_PER_FRAME T-cycles.
+        let period = CLOCKS_PER_FRAME * 8;
+        assert!(
+            t <= period,
+            "first envelope step landed at {t} T-cycles, past the 64 Hz \
+             boundary at {period}"
+        );
+    }
+
+    /// Cartridge code can put any byte in any APU register in any order, and
+    /// the emulator ships with `panic = 'abort'` — a panic here is process
+    /// death and a lost battery save. Sweep every register with every value
+    /// and run the APU between writes.
+    #[test]
+    fn no_apu_register_value_can_panic_the_emulator() {
+        let mut snd = Sound::new();
+        snd.set_player(Box::new(Capture {
+            rate: 44100,
+            samples: Arc::new(Mutex::new(Vec::new())),
+        }));
+        for reg in 0xFF10u16..=0xFF3F {
+            for v in 0..=255u8 {
+                snd.wb(0xFF26, 0x80); // keep the APU powered for the write
+                snd.wb(reg, v);
+                snd.do_cycle(4);
+                snd.catch_up();
+                let _ = snd.rb(reg);
+                let _ = snd.rb(0xFF76);
+                let _ = snd.rb(0xFF77);
+                // …and again with the APU powered down.
+                snd.wb(0xFF26, 0x00);
+                snd.wb(reg, v);
+                snd.do_cycle(4);
+                let _ = snd.rb(reg);
+            }
+        }
     }
 }

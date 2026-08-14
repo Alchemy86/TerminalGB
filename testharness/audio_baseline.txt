@@ -14,4 +14,4 @@
 
 tone440 = HASH:7e60a2ac0ca3c735 SAMPLES:221184
 blargg/dmg_sound-01-registers = HASH:8cbc50be13896325 SAMPLES:222208
-blargg/dmg_sound = HASH:27db1e1a4f5af389 SAMPLES:1625088
+blargg/dmg_sound = HASH:fcb42a26ad26c1a5 SAMPLES:1625088

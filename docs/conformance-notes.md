@@ -872,3 +872,142 @@ stayed true throughout. **Neither moved by a single sub-test across nine
 behavioural fixes.** Any conformance tool that treats "passes Blargg sound" as
 "the APU is right" will report a clean bill of health on an emulator that is
 wrong about the output of every channel on every frame.
+
+---
+
+## APU corner cases — sweep, envelope and noise restart (2026-08-14)
+
+Second pass over the same suite, from the full-suite audit's work item ②.
+SameSuite went **50/76 → 57/76** (its APU half **49/69 → 56/69**), measured with
+`cargo run --release --example samesuite -- <shootout>/testroms/samesuite` before
+and after. Nothing else moved: Mooneye `acceptance` 53/75, Mealybug 3/79,
+`testroms` 33/35 all identical, and the audio-perf gate is unchanged
+(0.266 ms/frame before, 0.266–0.278 after, three runs each).
+
+### 10. The sweep's overflow check is not instantaneous
+
+- **Symptom:** a channel whose frequency sweep is about to overflow goes silent
+  a handful of microseconds too early — audible as a swept note (a laser, an
+  explosion, a rising alarm) being clipped a fraction short at its top end. In
+  a test that samples the output every M-cycle it is unmistakable; by ear it is
+  the difference between a sweep that ends cleanly and one that ends abruptly.
+- **Caught by:** SameSuite `channel_1_sweep` (FAIL → PASS),
+  `channel_1_sweep_restart` and `channel_1_sweep_restart_2` (still red, see
+  below). **Nothing in Blargg catches it** — `dmg_sound` `04-sweep` and
+  `05-sweep details` read NR52 milliseconds after the event, by which time both
+  the early and the late answer are the same.
+- **Hardware:** the sweep unit computes `freq ± (freq >> shift)` with a serial
+  shifter, so the recalculation whose overflow disables the channel finishes
+  `shift + 1` M-cycles after the frequency write, not with it. `channel_1_sweep`
+  states the mechanism in its own source: *"8 cycles after trigger, the APU
+  checks if the NEXT trigger overflows the frequency. If it does, stop the
+  channel."* — with `shift = 7`. A trigger's own calculation starts one M-cycle
+  later still (`channel_1_sweep_restart` round 2). Clearing NR10's shift field
+  **parks** a calculation already in flight rather than cancelling it
+  (`channel_1_sweep_restart` round 3: the ROM disables the sweep inside the
+  window and the channel that was about to die keeps playing).
+- **New tests:** `sound::tests::a_sweep_overflow_kills_the_channel_late_not_instantly`
+  and `::clearing_the_sweep_shift_parks_a_pending_overflow_check`. Teeth proven
+  by forcing the delay to zero — the first goes red.
+- **Carries into the tool:** *the delay between a sweep's frequency update and
+  its overflow check is observable and must be checked.* It needs the PCM
+  registers (or an audio-capture adapter) and per-M-cycle sampling; a
+  register-state probe cannot see it.
+
+### 11. The volume envelope's period counter is free-running, and the step it schedules lands on the next 512 Hz event
+
+- **Symptom:** a game that fades a note in or out by writing NRx2 *while the
+  note is playing* — the standard trick for a volume ramp that is not one of
+  the eight envelope speeds — gets no ramp at all if it enables the envelope
+  from a period of 0, and gets every subsequent step one 64 Hz period late.
+  Held notes stay at a constant volume where hardware fades them.
+- **Caught by:** SameSuite `channel_1_nrx2_glitch`, `channel_2_nrx2_glitch`,
+  `channel_1_nrx2_speed_change`, `channel_2_nrx2_speed_change` (all four
+  FAIL → PASS). **Nothing in Blargg catches it**; `dmg_sound` stayed 12/12
+  across the change and its capture hash moved with every analysed property
+  (RMS, peak, silence, dominant pitch, sample count) identical.
+- **Hardware:** the 3-bit period counter is a free-running down-counter that
+  *reloads* from NRx2 when it reads zero rather than stopping there, so an
+  envelope parked at zero — which is where a period-0 NRx2 leaves it — resumes
+  the moment a non-zero period is written, with no trigger. The step itself is
+  performed by a separate latch, set when the counter reads zero and acted on
+  at the next **512 Hz** DIV-APU event, not the next 64 Hz one. That is why
+  `channel_N_nrx2_speed_change` tests 3–7 see the first step arrive ~2 ms after
+  the write and the rest at 64 Hz. (Model corroborated against SameBoy's
+  `envelope_clock` / `volume_countdown` split, `Core/apu.c`; reimplemented, not
+  copied.)
+- **A latent inconsistency this exposed:** our frame sequencer clocks length on
+  even steps and sweep on step 2 of 4, i.e. both one step ahead of the event
+  that acts on them — but the envelope counter ran on step 7, the same step as
+  the volume change. Moving the count to step 6 puts all three on the same
+  phase and keeps the volume change on step 7 where
+  `channel_N_volume_div` measures it.
+- **New tests:** `sound::tests::enabling_the_envelope_mid_note_steps_within_one_div_apu_event`
+  and `::a_triggered_envelope_still_steps_on_the_64hz_boundary`. The second one
+  is the regression guard for the phase move and goes red if the counter is put
+  back on step 7.
+- **Carries into the tool:** *check the envelope through NRx2 writes, not only
+  through triggers.* Every published DMG sound suite tests the envelope by
+  triggering it; the mid-note write is the case real music drivers use.
+
+### 12. Re-triggering the noise channel costs one whole sample
+
+- **Symptom:** every percussion hit that re-triggers CH4 without letting it stop
+  (drum rolls, hi-hats, most Gen-1-era percussion) starts one LFSR sample early,
+  so the noise burst is a different sequence of bits from the one hardware
+  plays. The pitch and length are right; the grain is wrong.
+- **Caught by:** SameSuite `channel_4_lfsr_restart` and
+  `channel_4_lfsr_restart_fast` (both FAIL → PASS). They reconstruct 128
+  consecutive LFSR outputs after a restart, so a one-sample slip shifts the
+  whole reconstruction. **Nothing in Blargg catches it.**
+- **Hardware:** the divider that clocks the LFSR is free-running; a trigger
+  reloads the countdown to its next tick but not the divider itself, so the
+  first post-restart step waits for the divider's next edge instead of landing
+  on the reloaded countdown. (This is the same free-running-counter structure
+  SameBoy models explicitly as `noise_channel.counter` plus a bit tap — see the
+  gap recorded below.)
+- **New test:** the two ROMs above; the behaviour is also pinned by the
+  SameSuite score, which drops 57 → 55 if the extra sample is removed.
+- **Carries into the tool:** *a restart check must reconstruct the sequence,
+  not sample one point.* One reading after a restart looks right half the time.
+
+### 13. Gaps left open, deliberately, with the reason
+
+Recording these is the point of this file: an unexplained red row is worth less
+than a red row with a reason.
+
+- **`channel_{1,2,4}_extra_length_clocking-cgb0B`, `channel_3_extra_length_clocking-cgb0`,
+  `channel_3_extra_length_clocking-cgbB` — 5 ROMs we should NOT pass.** They
+  assert the length-counter behaviour of **CPU CGB revisions ≤ B**, and the ROM
+  source says so outright: *"On revisions <= CPU CGB B, the length counter only
+  has to have been disabled before; the current length enable state doesn't
+  matter. This breaks at least one game (Prehistorik Man), and was fixed on"*
+  later revisions. We model a CGB-E (the zombie-mode rule the previous APU pass
+  implemented is revision E's). Passing these would mean reintroducing a
+  hardware bug that breaks a real game. The `-cgb0` and `-cgbB` pair also
+  disagree with each other, so **no single machine can pass both**.
+- **`channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` — at most 1 of 3 winnable.**
+  Three revision variants of one measurement; only `-cgbDE` matches the console
+  we model. Its first row (single speed) is currently one M-cycle out and its
+  second row needs `STOP`-driven double speed, which is the audit's work item
+  ③ and another crew's area.
+- **`channel_4_equivalent_frequencies`, `channel_4_freq_change`,
+  `channel_4_frequency_alignment` — the free-running noise divider.** These
+  three all have one cause: the noise frequency comes from a free-running
+  14-bit counter clocked every `(NR43 & 7) * 8` T-cycles (4 if zero), with the
+  LFSR stepping on the 0→1 edge of bit `NR43 >> 4`. We model a per-channel
+  period timer reloaded at trigger, which gets the *rate* right and the *phase*
+  wrong — hence "identical frequencies expressed differently" producing outputs
+  a sample apart, which is exactly what `channel_4_equivalent_frequencies`
+  exists to catch. Converting to the counter model is the correct fix and is
+  scoped, not done: the counter itself is four lines, but the value the trigger
+  reloads its countdown with is a table of revision- and instance-specific
+  quirks that SameBoy's own source annotates *"This quirk seems way too
+  specific"* and *"non-deterministic"*. Attempting it without a real CGB to
+  calibrate against risks the eight CH4 rows that pass today.
+- **`channel_1_sweep_restart`, `channel_1_sweep_restart_2` — one cell and one
+  phase apart.** `sweep_restart` now differs in a **single** cell of 144: the
+  duty phase of a re-trigger that immediately follows a sweep frequency change.
+  The obvious lever (`SQUARE_RESTART_SPEEDUP`) is not it — zeroing it costs four
+  other rows. `sweep_restart_2` disagrees about where the DIV-APU sweep event
+  sits relative to a `ld [rDIV],a` by about two M-cycles.

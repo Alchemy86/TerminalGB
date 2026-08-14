@@ -585,9 +585,10 @@ touching APU timing — every constant below is *measured* against a named test,
   It reads SameSuite's own `RESULT_CODE` at `$CFFE` (`"P"`/`"F"`) — the ROM's verdict, not a
   screenshot. `--dump` prints the measurement table for debugging against the test's `.asm`.
   ROMs: `LIJI32/SameSuite` (source only) or the prebuilt copies in `gbdev/GBEmulatorShootout`
-  under `testroms/samesuite/`. **Score against the shootout's published 61**, not the 69 ROMs
-  in the directory — the 8 `*-cgb0B`/`-cgbB`/`-cgb0BC`/`-A` variants encode *older* CGB
-  revisions and are deliberately not chased (we target CGB-E).
+  under `testroms/samesuite/`. The 8 `*-cgb0B`/`-cgbB`/`-cgb0BC`/`-A` variants encode *older*
+  CGB revisions and are deliberately not chased (we target CGB-E) — quote the whole-directory
+  number (76 ROMs) and say which of the failures are revision-locked, rather than quietly
+  scoring against a smaller denominator. See the corner-cases section below.
 - **The APU only runs when a player is installed.** `Sound::do_cycle` returns immediately
   when `player.is_none()`, so a harness with no `enable_audio` call has *no APU at all* —
   not a quiet one. Any APU measurement without a player is measuring nothing.
@@ -636,12 +637,6 @@ touching APU timing — every constant below is *measured* against a named test,
   does. Writing it while the channel plays is "zombie mode", and the rule is **CGB revision
   E's**, derived from `channel_N_volume`'s twelve old/new direction+period combinations. The
   gg8-wiki DMG formula does not fit and must not be substituted.
-- **Still failing (12), scoped not half-built** — see `docs/components/apu.md` §8: the long
-  half of `nrx2_glitch` needs the envelope's internal delay counter; the three sweep tests
-  turn on a 4 T race between the DIV-APU sweep tick and the register write after it (timer
-  territory); `channel_4_frequency_alignment`/`equivalent_frequencies` need the NR43 divisor
-  counter free-running too; SameBoy itself fails `channel_4_freq_change` and
-  `channel_1_sweep_restart_2`.
 - **Cost and audio quality re-measured after the work** (both required, both green):
   APU cost `32.6 µs/frame` vs `31.4 µs` before — inside the noise of the measurement
   (`cargo run --release --example apu_bench -- <rom> [frames]`, best-of-3 with/without a
@@ -656,6 +651,79 @@ touching APU timing — every constant below is *measured* against a named test,
   properties, not the hash: sample counts identical (so the rate did not move), tone440 RMS
   identical at 0.2467, and its measured pitch *improved* from 438.0 Hz to 440.0 Hz against a
   ROM programming 439.84 Hz. dmg_sound still reads `01:ok..12:ok Passed`.
+
+## SameSuite APU corner cases (50/76 → 57/76) — sweep, envelope, noise restart
+
+**Per-fix conformance records: [`docs/conformance-notes.md`](docs/conformance-notes.md)
+§10-13; the failing list with reasons is [`docs/components/apu.md`](docs/components/apu.md) §8.**
+Measured before and after with
+`cargo run --release --example samesuite -- <shootout>/testroms/samesuite` over the whole
+76-ROM directory. **On `main` after this merged the number reads 61/76**, because the VRAM
+DMA crew's `dma/*` fix (4 rows) landed alongside it; 50 → 57 is this work in isolation,
+measured against the base it started from. The APU half is **56/69** either way. Nothing else moved: Mooneye `acceptance` 53/75, Mealybug 3/79,
+`cargo test --release --test testroms` 33/35 "All results match the baseline", savestate
+and battery harnesses green, and the audio-perf gate is inside its own noise
+(0.265-0.270 ms/frame before, 0.266-0.278 after, three runs each).
+
+- **A sweep's overflow check happens `shift + 1` M-cycles AFTER it writes the new
+  frequency, not with it** (`SquareChannel::sweep_calc_delay`, `sweep_calc_delay_for`).
+  `channel_1_sweep`'s own source states the mechanism: *"8 cycles after trigger, the APU
+  checks if the NEXT trigger overflows the frequency."* A trigger's own calculation starts
+  one M-cycle later still. Clearing NR10's shift field **parks** an in-flight calculation
+  rather than cancelling it — the channel that was about to die keeps playing
+  (`channel_1_sweep_restart` round 3), which is why `sweep_calc_unshifted` exists: a
+  calculation armed with shift 0 must not be parked by that same rule.
+  `SquareChannel::run` splits its window at the pending check so the channel goes quiet on
+  the exact cycle. **The old note blaming these on "a 4 T race, timer territory" was
+  wrong** — it is APU behaviour and it is now modelled.
+- **The volume envelope is TWO things, and separating them is the whole fix**: a 3-bit
+  period counter clocked at 64 Hz, and a *pending-step latch* (`VolumeEnvelope::clock`)
+  set when that counter reads zero and acted on at the next **512 Hz** DIV-APU event.
+  The counter is free-running — it reloads from NRx2 when it reads zero rather than
+  stopping — so an envelope parked at period 0 resumes the instant a non-zero period is
+  written, with no trigger. That is what every real music driver's mid-note volume ramp
+  depends on, and it is what `channel_N_nrx2_speed_change` and the long half of
+  `channel_N_nrx2_glitch` measure. `VolumeEnvelope::step` is gone; `div_event` is called
+  for CH1/CH2/CH4 on **every** frame-sequencer step.
+- **The envelope's period counter runs on frame-sequencer step 6, not 7.** Length (even
+  steps) and sweep (step 2 of 4) were already one step ahead of the event that acts on
+  them; the envelope was not, and that inconsistency is exactly what an extra 512 Hz of
+  latency looked like. With the count on 6 the *volume change* still lands on step 7 where
+  `channel_N_volume_div` measures it — putting it back on 7 costs six rows
+  (`channel_{1,2,4}_volume_div`, `div_trigger_volume_10`, `div_write_trigger_volume{,_10}`)
+  and reddens `sound::tests::a_triggered_envelope_still_steps_on_the_64hz_boundary`.
+- **Re-triggering a *running* CH4 costs one whole extra sample** (`+ self.period` in
+  `NoiseChannel::trigger` when it was already enabled). The divider that clocks the LFSR is
+  free-running: a trigger reloads the countdown to its next tick, not the divider.
+  `channel_4_lfsr_restart` / `_fast` reconstruct 128 consecutive outputs, so a one-sample
+  slip shifts the whole sequence; removing this drops the suite 57 → 55.
+- **Five of the remaining failures are ROMs we should NOT pass.**
+  `channel_{1,2,4}_extra_length_clocking-cgb0B`, `channel_3_extra_length_clocking-cgb0` and
+  `-cgbB` assert the length behaviour of **CPU CGB revisions ≤ B**, which the ROM source
+  itself calls a bug that *"breaks at least one game (Prehistorik Man)"* and that was fixed
+  in later revisions. We model CGB-E. `-cgb0` and `-cgbB` also contradict each other, so no
+  single machine passes both. Likewise only one of the three
+  `channel_1_freq_change_timing-{A,cgb0BC,cgbDE}` variants is winnable at all.
+- **The three remaining CH4 failures have ONE cause, and it is scoped not attempted**: the
+  noise frequency comes from a free-running 14-bit counter clocked every `(NR43 & 7) * 8`
+  T-cycles (4 if zero), with the LFSR stepping on the 0→1 edge of bit `NR43 >> 4`. We model
+  a per-channel period timer reloaded at trigger — right rate, wrong phase, which is
+  precisely what `channel_4_equivalent_frequencies` exists to catch. The counter is four
+  lines; what blocks it is the value the *trigger* reloads its countdown with, a table of
+  revision- and instance-specific quirks SameBoy's own source annotates "this quirk seems
+  way too specific" and "non-deterministic". Do not attempt it without a way to calibrate.
+- **`testharness/audio_baseline.txt` was re-blessed again** — deliberately, and only the
+  `dmg_sound` hash. Judge it by the properties, which are byte-identical before and after:
+  1,625,088 samples, RMS 0.0265, peak 0.283, 96.8 % silent, dominant 480 Hz, and the ROM's
+  own verdict still `01:ok..12:ok Passed`. `testharness/baseline.txt` was **not** touched.
+- **`savestate::FORMAT_VERSION` is now 7** (`SquareChannel::sweep_calc_delay` +
+  `sweep_calc_unshifted`, `VolumeEnvelope::clock`); v6 is the VRAM-DMA crew's bump, which
+  landed on `main` first.
+- **SameBoy's `Core/apu.c` was read as a hardware reference, not copied** — its
+  `envelope_clock`/`volume_countdown` split and its free-running noise counter are what
+  named the two structures above. Everything here is reimplemented in this codebase's
+  idiom, per the licence-hygiene rule in `CONTRIBUTING.md`.
+
 
 ## Terminal frontend (TUI)
 

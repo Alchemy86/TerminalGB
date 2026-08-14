@@ -14,6 +14,26 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Fixed
+- **APU corner cases: SameSuite 50/76 → 57/76.** Three independent accuracy bugs, none of
+  which any Blargg sound test can see (`dmg_sound` was and stayed 12/12 throughout).
+  (1) *Frequency sweep.* The overflow check that kills a sweeping channel ran the instant
+  the sweep wrote its new frequency; on hardware the shifter takes `shift + 1` M-cycles and
+  the check lands at the end of that, so a swept note was clipped short at its top end
+  (`channel_1_sweep`). Clearing NR10's shift field now **parks** a calculation already in
+  flight instead of letting it fire. (2) *Volume envelope.* Its period counter is
+  free-running and the step it schedules is carried by a separate latch acted on at the next
+  512 Hz DIV-APU event — so a game that enables the envelope by writing NRx2 mid-note (the
+  standard volume-ramp trick, since only eight envelope speeds exist) now ramps at all, and
+  every later step lands on time instead of a 64 Hz period late
+  (`channel_{1,2}_nrx2_glitch`, `channel_{1,2}_nrx2_speed_change`). (3) *Noise restart.*
+  Re-triggering a channel-4 that is still playing — every drum roll and hi-hat — started one
+  LFSR sample early, so the noise burst was a different sequence of bits from the one
+  hardware plays (`channel_4_lfsr_restart`, `_fast`). No other suite moved (Mooneye
+  `acceptance` 53/75, Mealybug 3/79, in-repo `testroms` 33/35 unchanged) and the
+  audio-attached frame cost is inside its own measurement noise. Five of the remaining
+  SameSuite failures assert **CGB revisions ≤ B** and are ROMs a CGB-E emulator should fail;
+  the reasons for every remaining red row are recorded in
+  [`docs/conformance-notes.md`](docs/conformance-notes.md) §10-13.
 - **You can leave the Cable Club again.** The Gen 1 link partner answered the trade menu's
   cancel nybble `$6F` in only one of its six protocol phases. In every other phase it replied
   `$60` (or, from the confirmation phase, `$62` — silently counting a trade that never
@@ -39,6 +59,10 @@ history. See [Credits & lineage](README.md#credits--lineage).
   real device; end-to-end latency **44.8 → 36.3 ms**; the 120 s soak goes FAIL → PASS (0
   underruns, 0 drops); `dmg_sound` unchanged at 12/12 and every audio-capture hash unchanged.
   Full write-up and conformance record: [`docs/audio.md`](docs/audio.md) §4c.
+
+### Changed
+- Save-state `FORMAT_VERSION` is now **7** (the sweep unit's pending-calculation timer and
+  the volume envelope's pending-step latch are machine state and are serialised).
 
 ### Added
 - **`testharness/audioperf.rs`** — emulation speed *with a host audio player attached*, the
