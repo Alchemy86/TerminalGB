@@ -23,6 +23,84 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the OAM strobe asked `mode`, not `LY` (Mealybug accurate 6/79 → 12/79)
+
+Two defects in the **accurate** engine's STAT path and register-write timing. The default
+whole-scanline renderer is byte-identical to all five of its checked-in baselines throughout.
+Full write-up: [`docs/mealybug.md`](mealybug.md) §9.
+
+### 1. The OAM-scan strobe started one M-cycle into every scanline
+
+*Symptom* — two things a player could in principle see, and one an emulator author cannot.
+A program that takes a STAT interrupt from the mode-2 source gets **two interrupts per
+scanline instead of one**; and any raster effect it drives lands **four pixels to the right on
+line 0, and only on line 0**, so the top scanline of a split-screen effect is visibly out of
+step with the 143 below it.
+
+*Caught by* — Mooneye `acceptance/ppu/intr_1_2_timing-GS` (reports `D: 14!` — the LY=0 mode-2
+interrupt one loop iteration late) and Mealybug `m3_bgp_change`, `m3_lcdc_bg_en_change`,
+`m3_window_timing`, all three of which were within a handful of pixels and all of which had
+their entire residual on line 0. **The doubled interrupt on lines 1-143 is caught by
+nothing in any public suite** — that is a coverage gap and it is the interesting half of this
+entry. The second edge lands *inside* the first one's dispatch, which clears `IF.1` at M4
+after it, so for any program that services the interrupt immediately the two collapse into
+one. A verdict-based test cannot see a spurious interrupt that is consumed before it can be
+observed. `gpu::tests::a_visible_line_strobes_the_oam_source_exactly_once` closes it by
+**counting rising edges** rather than reading the flag.
+
+*Hardware behaviour violated* — the OAM scan occupies the first 80 dots of every visible
+scanline (Pan Docs, [Rendering](https://gbdev.io/pandocs/Rendering.html)), so the signal the
+mode-2 STAT select bit watches is asserted from the dot `LY` moves to that line. We derived it
+from the `mode` field, which our dot loop updates *after* `next_line` has advanced `LY` — so
+the boundary dot read mode 0, the strobe dropped and re-rose, and (because `IF` is folded once
+per M-cycle) the line-0 interrupt arrived a whole M-cycle late. Mealybug's own
+`m3_bgp_change.asm` states the hardware requirement and encodes it: *"line 0 timing is
+different by 4 cycles"*, implemented as one `jr` that is taken on lines 1-143 and not on line
+0, making the handler exactly 4 T shorter there. Hardware wants line 0 **+4**; we were on
+**+8**.
+
+*New tests* — `gpu::tests::a_visible_line_strobes_the_oam_source_exactly_once` (teeth proven
+by reverting the arm: it then counts two raises). Conformance candidates, both generalisable
+well beyond this bug: **a visible scanline must raise the mode-2 STAT source exactly once**,
+and **an interrupt that is consumed by its own dispatch is still an interrupt — count edges,
+not flags.**
+
+### 2. A PPU register write committed at the end of its M-cycle instead of inside it
+
+*Symptom* — every mid-scanline write to `BGP`/`OBP`/`SCX`/`SCY`/`WX`/`LCDC` takes effect up to
+a full M-cycle (four pixels) later than on hardware, so raster effects driven from a STAT
+handler are smeared right by up to four pixels at every boundary.
+
+*Caught by* — most of the Mealybug `m3_*` family; `m3_bgp_change`'s DMG column moved 2,244 px →
+22 on this fix alone (and to 0 with fix 1); `m3_lcdc_obj_size_change_scx`'s DMG column moved
+22,070 → 298. Nothing in Blargg, Mooneye or acid2 sees it: they
+judge a serial string or a settled frame, never a mid-scanline boundary.
+
+*Hardware behaviour violated* — the CPU flushes a write on the **second** T-cycle of its
+M-cycle, so most of that cycle's dots already see the new value; on top of that sit
+per-register settling delays, including the DMG's one-dot window in which the PPU resolves
+colours through `old | new` rather than the new palette. Model read from
+[docboy](https://github.com/Docheinstein/docboy) (`ppu.cpp`, `cpu.cpp`) and reimplemented per
+`CONTRIBUTING.md`; each arm of `mmu::ppu_write_commit` cites the row that measures it. Our
+`bus_tick` advances the per-dot PPU one whole M-cycle *before* every access, which is what put
+the commit at the end.
+
+*New tests* — the Mealybug pixel counts in `testharness/mealybug_accurate_baseline.txt`, which
+pin the distance and not just PASS/FAIL. Conformance candidate: **a register write must become
+visible to the PPU partway through its own M-cycle, and a DMG palette write has a one-dot
+`old | new` settling window.**
+
+### A finding about our own notes, not about hardware
+
+`docs/mealybug.md` §7.4 named Blargg `oam_bug` sub-test 7 as one of two rows blocking a default
+flip. **It had already been fixed** by §8's `ACCURATE_OAM_BUG_PHASE = 0` work and the note was
+never amended; measured at the pristine parent commit, `GB_PPU=accurate` gives
+`oam_bug 01:ok … 08:ok Passed`. This is the same failure mode the APU campaign recorded when a
+commit message's honest "not fixed" outlived the fix. **Check the baseline, not a prose note,
+before starting on a named gap** — and when a gap closes, amend the note that named it.
+
+---
+
 ## 2026-08-14 — the per-dot PPU: four defects between it and Mealybug (Mealybug 3/79 → 6/79)
 
 All four are in the **accurate** rendering engine (`src/gpu/fifo.rs`, plus the STAT

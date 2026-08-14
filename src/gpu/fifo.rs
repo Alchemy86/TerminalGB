@@ -571,10 +571,21 @@ impl Gpu {
     fn bg_fetch_dot(&mut self) {
         if self.pipe.fetch_t < FETCH_DOTS {
             self.pipe.fetch_t += 1;
-            match self.pipe.fetch_t {
-                2 => self.fetch_tile_number(),
-                4 => self.lo_hi(false),
-                6 => self.lo_hi(true),
+            // Each 2-dot stage does its VRAM read on the stage's FIRST dot on
+            // DMG silicon and its SECOND on colour silicon — the same one-dot
+            // difference docboy documents from the register side ("CGB is not
+            // affected — it sees LCDC delayed by 2 T-Cycles by default",
+            // `src/docboy/docboy/ppu/ppu.cpp`; their fetcher reads at phase 0
+            // of each stage). Measured here: moving the DMG sample to the
+            // first dot takes `m3_scy_change` 2,130 → 248 px, `m3_scx_high_5_bits`
+            // 86 → 12 and `m3_lcdc_tile_sel_change` 22,316 → 802, while the
+            // same move on the colour machine loses ground on every affected
+            // CGB row.
+            let late = u8::from(!self.gbmode.is_dmg());
+            match self.pipe.fetch_t - late {
+                1 => self.fetch_tile_number(),
+                3 => self.lo_hi(false),
+                5 => self.lo_hi(true),
                 _ => {}
             }
         }

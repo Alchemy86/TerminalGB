@@ -76,20 +76,28 @@ blocking to the fast engine alone: with mode 3 fixed at 172 dots where hardware 
 172–289, blocking would silently drop writes a game placed legally in HBlank, which is
 strictly worse than not blocking. See [ppu.md](ppu.md).
 
-### The accurate engine scores differently — and trades, rather than dominating
+### The accurate engine scores differently — and now dominates
 
-`GB_PPU=accurate` gives **68/75** acceptance. The delta is three rows, in both directions:
+`GB_PPU=accurate` gives **69/75** acceptance against the default's 67/75. The delta is two
+rows and it is one-directional:
 
 | Row | `fast` | `accurate` |
 |---|---|---|
 | `acceptance/ppu/hblank_ly_scx_timing-GS` | FAIL | **PASS** |
 | `acceptance/ppu/intr_2_mode0_timing` | FAIL | **PASS** |
-| `acceptance/ppu/intr_1_2_timing-GS` | **PASS** | FAIL |
+| `acceptance/ppu/intr_1_2_timing-GS` | PASS | PASS |
 
-That single regression is why the accurate engine is not the default: until it strictly
-dominates, switching would make a published score worse. It is gated separately
-(`make test-external-accurate`, against `testharness/mooneye_accurate_baseline.txt`) so
-progress *and* regression are both visible.
+`intr_1_2_timing-GS` used to be the one row the accurate engine lost, and it was the last
+thing blocking a default flip. It is fixed — see
+[mealybug.md §9](../mealybug.md#9-the-line-0-stat-phase-679--1279-and-the-last-blocking-row).
+The engine is gated separately (`make test-external-accurate`, against
+`testharness/mooneye_accurate_baseline.txt`) so progress *and* regression are both visible.
+
+**Measured engine-for-engine, every gate, same build:** in-repo harness 46/47 both (identical
+verdicts row for row), Mooneye `acceptance` + `emulator-only` 95 vs **97**/103, Mooneye `misc`
+8/8 both, SameSuite 72/76 both, `cpp` 4/4 both, Mealybug 3 vs **12**/79. No row goes the other
+way, so the accuracy precondition for making it the default is met; what remains is a cost
+decision (2.17x on the PPU, 0.243 → 0.527 ms/frame, 31.8x real time headless).
 
 > **Both baselines must move together when a non-PPU change flips a row.** Boot registers, the
 > timer and the APU do not depend on `GB_PPU`, so such a change flips the row under both

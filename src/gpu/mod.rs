@@ -677,6 +677,34 @@ impl Gpu {
     /// cycle; the VBlank flag itself is untouched and still goes up with the
     /// line, so the two consoles differ in exactly the one place hardware does.
     fn oam_strobe(&self) -> bool {
+        // The OAM scan owns the first `OAM_DOTS` of every visible line, so ask
+        // `LY` and the dot counter rather than `mode`. `mode` is moved by the
+        // dot loop, which runs *after* `next_line` has advanced `LY`, so the
+        // dot that starts a scanline still reads mode 0 — and since the caller
+        // folds `IF` once per M-cycle, "a dot late" is a whole M-cycle late to
+        // the CPU. Two things follow, and both are measured:
+        //
+        // * the strobe stopped and restarted at every line boundary, so lines
+        //   1-143 raised **two** STAT interrupts each. It was invisible
+        //   because the second edge lands inside the first one's dispatch,
+        //   which clears `IF.1` at M4 after it — so the pair collapsed into
+        //   one for any program that dispatches immediately;
+        // * line 0, which by design has no early window, had nothing to
+        //   collapse into: its interrupt arrived a whole M-cycle after `LY`
+        //   moved, i.e. **8 dots** after the equivalent point on lines 1-143
+        //   where hardware wants 4. Mealybug's `m3_bgp_change` pads its
+        //   handler by exactly one taken `jr` on every line *except* line 0
+        //   to cancel that 4, so the residual showed up as line 0 — and only
+        //   line 0 — coming out 4 pixels to the right on every ROM that syncs
+        //   off the mode-2 source. Measured before: the handler read `LY` at
+        //   dot 52 on line 0 against dot 44 on lines 1 and 2.
+        if self.render_mode == RenderMode::Accurate
+            && self.line < VBLANK_LINE
+            && self.modeclock < OAM_DOTS
+            && !self.skip_first_oam
+        {
+            return true;
+        }
         if self.mode == 2
             || (self.line == VBLANK_LINE && self.modeclock < OAM_DOTS)
             || (!self.gbmode.is_dmg()
@@ -1549,6 +1577,37 @@ mod tests {
         gpu.do_cycle(DOTS_PER_LINE - 84 + 4);
         assert_eq!(gpu.line, 1);
         assert_eq!(gpu.rb(0xFF41) & 0x03, 2, "line 1 has a normal OAM scan");
+    }
+
+    /// **One STAT interrupt per scanline, not two.** The OAM strobe is the
+    /// first `OAM_DOTS` of a visible line, so it must already be asserted on
+    /// the dot `LY` moves to that line. Asking `mode == 2` instead asks a
+    /// field the dot loop moves *after* `next_line`, so the strobe dropped for
+    /// the boundary dot and rose again — a second rising edge, i.e. a second
+    /// interrupt, on every one of lines 1-143.
+    ///
+    /// It hid for a long time because the second edge lands inside the first
+    /// one's dispatch, which clears `IF.1` at M4 after it: any program that
+    /// services the interrupt immediately sees one. Line 0 had nothing to
+    /// collapse into — by design it gets no early window — so there the defect
+    /// was the whole error, and it showed up as `acceptance/ppu/intr_1_2_timing-GS`
+    /// (the LY=0 mode-2 interrupt a full loop iteration late) and as line 0,
+    /// and only line 0, coming out four pixels right on every Mealybug ROM
+    /// that syncs off this source.
+    #[test]
+    fn a_visible_line_strobes_the_oam_source_exactly_once() {
+        let mut gpu = lcd_on(0x20, 0xFF); // only the mode-2 source
+        gpu.set_render_mode(RenderMode::Accurate);
+        // Past the LCD-on restart line, which deliberately has no OAM scan.
+        advance_lines(&mut gpu, 2);
+        for line in 3..8 {
+            assert_eq!(
+                count_stat_raises(&mut gpu, DOTS_PER_LINE),
+                1,
+                "line {line} must raise the OAM source once, not once per \
+                 boundary and once per mode change"
+            );
+        }
     }
 
     /// The OAM strobe that the mode-2 select bit watches happens on line 144

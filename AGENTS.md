@@ -4230,10 +4230,81 @@ it. That is now a real, CI-enforced build; it did not compile before.
   the emulated machine, so loading someone else's state must not switch their renderer.
   `Gameboy::set_render_mode` takes `terminalgb::ppu::RenderMode`; the `gpu` module itself stays
   private, and the crate root's `terminalgb::RenderMode` is a *different* enum (which frontend).
-- **`Fast` is still the default and every baseline is measured on it.** The accurate engine is
-  behind on exactly two rows — Blargg `oam_bug` #7 and Mooneye `ppu/intr_1_2_timing-GS` — and
-  until it strictly dominates, flipping the default would make a published score worse.
-  **Never re-bless `testharness/baseline.txt` to hide that.**
+- **`Fast` is still the default and every baseline is measured on it — but the accuracy
+  argument for that is GONE.** The accurate engine used to be behind on two rows; both are
+  closed (see "The line-0 STAT phase" below) and it now **loses no row to the default on any
+  gate**: in-repo harness 46/47 both with *identical verdicts row for row*, Mooneye
+  `acceptance`+`emulator-only` 95 vs **97**/103, `misc` 8/8 both, SameSuite 72/76 both, `cpp`
+  4/4 both, Mealybug 3 vs **12**/79. What stands between it and the default is its **2.17x
+  cost** (0.243 → 0.527 ms/frame, 31.8x real time headless) and the fact that flipping it
+  swaps `testharness/{baseline,mealybug_baseline,mooneye_baseline,mooneye_cgb_baseline}.txt`
+  with the `*_accurate_baseline.txt` files in one commit. That is a captain-facing product
+  decision, not a crew one. **Never re-bless `testharness/baseline.txt` to hide a regression.**
+### The line-0 STAT phase — the OAM strobe must ask `LY`, not `mode` (accurate 6/79 → 12/79)
+
+**Full write-up: [`docs/mealybug.md`](docs/mealybug.md) §9.** Mealybug on the accurate engine
+**6 → 12 of 79** rows pixel-exact (693,023 → 646,838 px), Mooneye `acceptance` **68 → 69/75**,
+`ppu/intr_1_2_timing-GS` FAIL → PASS. The default engine is byte-identical throughout — none
+of its five baselines moved.
+
+- **`Gpu::oam_strobe` derived "the OAM scan is running" from `mode == 2`, and `mode` lags `LY`
+  by one dot** (the dot loop moves it *after* `next_line`). Since `bus_tick` folds `IF` once
+  per M-cycle, one dot late is a whole **M-cycle** late to the CPU. It asks `LY` and the dot
+  counter now: `line < VBLANK_LINE && modeclock < OAM_DOTS && !skip_first_oam`, accurate engine
+  only.
+- **Lines 1-143 were raising TWO STAT interrupts each, and that hid the bug for months.** The
+  strobe dropped at the line boundary and rose again a dot later. Invisible to any program that
+  services the interrupt at once, because the second edge lands *inside* the first one's
+  dispatch, which clears `IF.1` at M4 after it — so the pair collapses into one. **A defect
+  that is masked by the very thing that consumes it will not show up in a verdict; count the
+  edges.** `gpu::tests::a_visible_line_strobes_the_oam_source_exactly_once` counts them, teeth
+  proven by reverting the arm.
+- **Line 0 had nothing to collapse into**, because by design it gets no early window (lines
+  1-143 rise 4 dots early on the previous line's tail; line 144 keeps dot 0). So line 0 carried
+  the whole error: its interrupt arrived **8 dots** after the equivalent point on lines 1-143
+  where hardware wants **4**. `m3_bgp_change`'s own source pads its handler by exactly one
+  taken `jr` on every line *except* line 0 to cancel that 4 — so the residual was line 0, and
+  only line 0, four pixels right on every ROM that syncs off the mode-2 source. Measured on
+  both sides: the handler read `LY` at dot **52** on line 0 against **44** on lines 1-2.
+- **The obvious fix is wrong and was measured wrong.** Giving line 0 the early window on line
+  153's tail puts it at the *same* phase as lines 1-143, where hardware wants it one M-cycle
+  later: Mealybug **6 → 3** and `intr_1_2_timing-GS` still red. The placements available at
+  M-cycle granularity are +0, +4, +8 relative to lines 1-143; hardware is +4.
+- **A PPU-bound register write now commits partway through its own M-cycle**
+  (`mmu::ppu_write_commit`, `MemoryManagementUnit::gpu_defer`), because `bus_tick` advances the
+  per-dot PPU a whole M-cycle *before* every access. Model read from
+  [docboy](https://github.com/Docheinstein/docboy) and reimplemented per `CONTRIBUTING.md`;
+  every arm cites the Mealybug row that measures it. Includes the DMG's one-dot `old | new`
+  palette glitch. Gated on `RenderMode::Accurate`, so the default path is untouched.
+- **`oam_bug` #7 was ALREADY passing** at the parent commit — `docs/mealybug.md` §7.4 named it
+  as blocking and was never amended after §8's `ACCURATE_OAM_BUG_PHASE = 0` work fixed it. The
+  APU campaign's standing lesson, again: **check the baseline, not a prose note, before
+  starting on a named gap.** (`oam_bug@cgb` must stay red — Color silicon has no OAM defect.)
+- **NOT EVERY LINE OF A SALVAGED/INHERITED PATCH EARNS ITS PLACE — A/B EACH ONE.** The
+  mid-flight work this built on also moved `obj_fetch_dot`'s VRAM reads from dots 3/5 to 4/6
+  with no justification attached. Reverting it is **21,996 pixels better**
+  (`m3_lcdc_obj_size_change_scx@DMG` 22,190 → **298**, `m3_lcdc_obj_size_change` better on all
+  three columns) with no row lost, so it was dropped. An unexplained constant in a patch is a
+  measurement waiting to be taken.
+- **Any row near 22,500 is a RANK ARTEFACT, not a distance.** One extra distinct shade in our
+  frame re-ranks the whole picture and reports ~23,040. `m3_lcdc_obj_size_change_scx@DMG` is
+  the worked example both ways: 22,070 on the parent, **298** now — the picture did not improve
+  by 21,772 pixels, it stopped being mis-ranked. Its CGB columns are still in that zone. Net:
+  5 rows numerically worse, 41 better, none lost pixel-exactness.
+- **Closest remaining rows** (§9.6): `m3_lcdc_bg_en_change@DMG` 4 px (one pixel at `x=0`, DMG
+  only), `m3_scx_high_5_bits` 12 px on all three columns (**+3 rows** if closed — the biggest
+  single prize left), `m3_window_timing@CGB-C` 138 and `m3_bgp_change@CGB-C` 864 (both already
+  exact on DMG and CGB-D), `m3_lcdc_obj_size_change_scx@DMG` 298.
+- **THE COMMIT PHASES ARE AT THEIR OPTIMUM — DO NOT RE-SWEEP THEM.** Both remaining
+  near-misses were swept against `ppu_write_commit` afterwards and `early: 3` wins by a wide
+  margin on each (DMG `SCX` 0/1/2/3/4 → 84/77/47/**12**/53 px; DMG `LCDC` 1/2/3/4 → suite total
+  671,348/669,696/**646,838**/712,414). `SCX` and `SCY` were split into separate arms to see
+  whether they wanted different phases — they do not, and the split was reverted.
+  `m3_scx_high_5_bits` reads 12 on **all three** columns while only DMG has an early commit at
+  all, which says the same thing from the other side: **what is left is inside the fetcher, not
+  in when the write becomes visible.** That is the per-tile calibration `docs/mealybug.md` §8.9
+  scopes in weeks.
+
 - **THE TRAP THAT COST THE MOST: `change_mode(0)` runs `renderscan()`.** Entering HBlank draws
   the line that just finished. Under the accurate engine that overwrote, every scanline, the
   picture the FIFO had just painted dot by dot — and *almost* invisibly, because the two agree

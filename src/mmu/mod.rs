@@ -44,6 +44,139 @@ fn is_oam_page(address: u16) -> bool {
     address & 0xFF00 == 0xFE00
 }
 
+/// How a PPU-bound write lands within its own M-cycle, for the accurate
+/// engine: how many of the cycle's dots run **after** the value commits
+/// (`early`), and — for the registers with a settling glitch — a one-dot
+/// intermediate value the PPU sees before the real one (`stage`).
+///
+/// The physical model, read from docboy (`src/docboy/docboy/cpu/cpu.cpp`,
+/// reimplemented per CONTRIBUTING.md): the CPU flushes a write on the
+/// **second** T-cycle of the M-cycle (`flush_write()` in
+/// `tick_single_speed_1`), so up to three of the cycle's four dots see the new
+/// value — where a plain `bus_tick` before the access, which is what every
+/// other write here gets, commits at the cycle's end. On top of that sit
+/// per-register settling delays docboy documents against the very Mealybug
+/// rows that measure them; each is cited at its arm below.
+struct WriteCommit {
+    /// Dots of the write M-cycle that run after the commit point.
+    early: u32,
+    /// A value the register holds for the first post-commit dot — the DMG's
+    /// palette-OR glitch and the per-bit LCDC settling delay are this shape.
+    stage: Option<u8>,
+    /// The value the commit itself lands (`None` = the written value). Used
+    /// when some bits of a register commit on a *later* schedule than the
+    /// rest: the commit carries the old bits, `finalize` brings the real ones.
+    dispatch: Option<u8>,
+    /// A value written after the M-cycle's remaining dots have run — bits that
+    /// only commit when the cycle closes.
+    finalize: Option<u8>,
+}
+
+const NO_COMMIT: WriteCommit = WriteCommit {
+    early: 0,
+    stage: None,
+    dispatch: None,
+    finalize: None,
+};
+
+/// LCDC bits the DMG's PPU picks up one dot later than the rest of the
+/// register: window enable, OBJ enable, BG enable (docboy `ppu.cpp`, cited
+/// against `m3_lcdc_win_en_change_multiple_wx`, `m3_lcdc_obj_en_change` and
+/// `m3_lcdc_bg_en_change` respectively).
+const LCDC_DMG_STAGE_BITS: u8 = 0b0010_0011;
+
+/// And the window enable is later still: it commits only when the write's
+/// M-cycle closes. Measured, not taken from docboy — with it on the stage
+/// schedule `m3_lcdc_win_en_change_multiple` is 521 pixels out; at
+/// end-of-cycle it is pixel-exact against all three hardware references.
+const LCDC_DMG_END_BITS: u8 = 0b0010_0000;
+
+/// Where a write to `address` commits within its M-cycle. `old` is the
+/// register's value before the write. Everything not named here — STAT, LYC,
+/// VRAM, OAM, the CGB palette data ports — keeps the end-of-cycle commit the
+/// bus has always had: each is either interrupt machinery Mooneye pins at
+/// end-of-cycle calibration, or (VRAM tile data) a mid-fetch glitch of its own
+/// that is not yet modelled; widening this table is a measurement, not an
+/// edit.
+fn ppu_write_commit(address: u16, old: u8, value: u8, mode: GbMode) -> WriteCommit {
+    let dmg = mode.is_dmg();
+    match address {
+        // The DMG's BGP write glitch: for one dot after the write commits the
+        // PPU resolves colours through `old | new` (docboy `ppu.cpp`: "On DMG
+        // there is 1 T-cycle delay between BGP and the BGP value the PPU
+        // sees. During this T-Cycle, the PPU sees the last BGP ORed with the
+        // new one. [mealybug/m3_bgp_change] Verified: CGB is not affected."
+        // — including a CGB running this DMG cartridge, hence `is_dmg` and
+        // not "rendering as a DMG"). Measured here: the DMG column of
+        // `m3_bgp_change` is 2,244 pixels without this and pixel-exact with
+        // it (22 before the line-0 strobe fix in `Gpu::oam_strobe`).
+        0xFF47..=0xFF49 if dmg => WriteCommit {
+            early: 3,
+            stage: Some(old | value),
+            dispatch: None,
+            finalize: None,
+        },
+        0xFF47..=0xFF49 => WriteCommit {
+            early: 3,
+            stage: None,
+            dispatch: None,
+            finalize: None,
+        },
+        // LCDC. The write that turns the LCD **on** is exempt — the restart
+        // phase it establishes is the anchor every Mooneye interrupt/STAT
+        // figure was calibrated against, and committing it early shifts the
+        // whole PPU three dots against the CPU, which (measured) exactly
+        // cancels the early commit of every later mid-line write.
+        0xFF40 if value & 0x80 != 0 && old & 0x80 == 0 => NO_COMMIT,
+        // On a DMG most of LCDC is seen from the commit dot; the BG and OBJ
+        // enables land one dot later (the stage), and the window enable not
+        // until the cycle closes — measured: `m3_lcdc_win_en_change_multiple`
+        // is pixel-exact with the end-of-cycle window enable and 521 pixels
+        // out with it on the stage schedule.
+        0xFF40 if dmg => WriteCommit {
+            early: 3,
+            stage: Some((old & LCDC_DMG_STAGE_BITS) | (value & !LCDC_DMG_STAGE_BITS)),
+            dispatch: Some((old & LCDC_DMG_END_BITS) | (value & !LCDC_DMG_END_BITS)),
+            finalize: Some(value),
+        },
+        // Colour hardware sees LCDC two dots later than the DMG (docboy:
+        // "CGB is not affected — it sees LCDC delayed by 2 T-Cycles by
+        // default"), i.e. one dot of the cycle after visibility — except the
+        // BG-map select, which measures a dot later still on our fetcher
+        // (`m3_lcdc_bg_map_change` CGB 522 at end-of-cycle vs 730 a dot
+        // earlier; the tile-data select in the same register measures the
+        // other way, 849 vs 979 on `m3_lcdc_tile_sel_change2`).
+        0xFF40 => WriteCommit {
+            early: 1,
+            stage: Some((old & 0b0000_1000) | (value & !0b0000_1000)),
+            dispatch: None,
+            finalize: None,
+        },
+        // Scroll registers: commit with the write flush on a DMG. On colour
+        // hardware the end-of-cycle commit measures better on every affected
+        // row (`m3_scy_change` CGB-C 546 vs 4,843, `m3_scx_high_5_bits` CGB
+        // 12 vs 75) — consistent with docboy's "the CGB sees the register
+        // file two T-cycles later than the DMG".
+        0xFF42..=0xFF43 if dmg => WriteCommit {
+            early: 3,
+            stage: None,
+            dispatch: None,
+            finalize: None,
+        },
+        0xFF42..=0xFF43 => NO_COMMIT,
+        // WX is seen one dot late on both consoles (docboy: "there is 1
+        // T-cycle delay between WX and the WX value the PPU sees",
+        // `m3_wx_5_change`).
+        0xFF4B => WriteCommit {
+            early: 2,
+            stage: None,
+            dispatch: None,
+            finalize: None,
+        },
+        _ => NO_COMMIT,
+    }
+}
+
 const WRAM_SIZE: usize = 0x8000;
 const ZRAM_SIZE: usize = 0x7F;
 
@@ -277,6 +410,12 @@ pub struct MemoryManagementUnit<'a> {
     /// divided by the double-speed multiplier. Only the accurate engine moves
     /// it; see [`Self::bus_tick`].
     gpu_bus_ticked: u32,
+    /// Dots of the current write M-cycle that belong *after* the write has
+    /// committed. Set by [`Self::wb`] for a PPU-bound write in accurate mode,
+    /// clamped and left as the pending remainder by [`Self::bus_tick`], and
+    /// consumed by `wb` immediately after the write lands. Always zero between
+    /// accesses, so it is deliberately not serialised.
+    gpu_defer: u32,
     /// Force the **batched** PPU to advance with the bus, as the per-dot one
     /// always does. Set only for the five M-cycles of interrupt dispatch — see
     /// [`Self::set_ppu_bus_ticking`].
@@ -355,6 +494,7 @@ impl<'a> MemoryManagementUnit<'a> {
             bus_tick_enabled: false,
             bus_ticked: 0,
             gpu_bus_ticked: 0,
+            gpu_defer: 0,
             ppu_ticks_with_the_bus: false,
             idu_share: false,
             fault: None,
@@ -653,10 +793,18 @@ impl<'a> MemoryManagementUnit<'a> {
                     GbSpeed::Single => 4,
                     GbSpeed::Double => 2,
                 };
-                self.gpu.do_cycle(step);
+                // A PPU-bound write commits partway through its own M-cycle,
+                // not at the end of it — see `wb` and [`ppu_write_commit`].
+                // `gpu_defer` arrives here as the *request* (how many of this
+                // M-cycle's dots belong after the write) and leaves as the
+                // *pending remainder* `wb` will apply once the write has
+                // landed. Zero on every read and on every non-PPU write.
+                let defer = self.gpu_defer.min(step);
+                self.gpu.do_cycle(step - defer);
                 self.intf |= self.gpu.interrupt;
                 self.gpu.interrupt = 0;
-                self.gpu_bus_ticked += step;
+                self.gpu_bus_ticked += step - defer;
+                self.gpu_defer = defer;
             }
             self.bus_ticked += 4;
         }
@@ -1235,12 +1383,47 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     pub fn wb(&mut self, address: u16, value: u8) {
+        // A write commits partway through its own M-cycle, not at the end of
+        // it — see [`ppu_write_commit`]. `bus_tick` advances the per-dot PPU
+        // one whole M-cycle before every access, which put every mid-scanline
+        // register boundary late by most of an M-cycle; for the registers the
+        // pipeline consumes it now holds back the commit plan's `early` dots,
+        // applies the plan's one-dot stage value if there is one, and the tail
+        // of the M-cycle follows the real value below the dispatch.
+        // Only the registers [`ppu_write_commit`] actually schedules, so a
+        // write to anything else — `$FF46` above all, which is OAM DMA and
+        // never reaches the PPU at all — does not pay a `Gpu::rb` to be told
+        // `NO_COMMIT`.
+        let commit = if self.bus_tick_enabled
+            && matches!(address, 0xFF40 | 0xFF42 | 0xFF43 | 0xFF47..=0xFF49 | 0xFF4B)
+            && self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
+        {
+            let plan =
+                ppu_write_commit(address, self.gpu.rb(address), value, self.gbmode);
+            self.gpu_defer = plan.early;
+            plan
+        } else {
+            NO_COMMIT
+        };
         self.bus_tick();
         // A write and an IDU increment in the same M-cycle behave as a single
         // write, so `idu_share` is deliberately not consulted here.
         if is_oam_page(address) {
             self.oam_bug(OamBug::Write, self.bus_ticked);
         }
+        if let Some(staged) = commit.stage {
+            if self.gpu_defer > 0 {
+                self.gpu.wb(address, staged);
+                self.gpu.do_cycle(1);
+                self.intf |= self.gpu.interrupt;
+                self.gpu.interrupt = 0;
+                self.gpu_bus_ticked += 1;
+                self.gpu_defer -= 1;
+                // Fall through: the ordinary dispatch below lands the commit
+                // value and the rest of the M-cycle follows it.
+            }
+        }
+        let value = commit.dispatch.unwrap_or(value);
         match address {
             0x0000..=0x7FFF => self.mbc.writerom(address, value),
             0x8000..=0x9FFF => self.gpu.wb(address, value),
@@ -1323,6 +1506,18 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFFFF => self.inte = value,
             _ => {}
         };
+        // The rest of the write M-cycle, now that the write has committed.
+        let rest = std::mem::take(&mut self.gpu_defer);
+        if rest > 0 {
+            self.gpu.do_cycle(rest);
+            self.intf |= self.gpu.interrupt;
+            self.gpu.interrupt = 0;
+            self.gpu_bus_ticked += rest;
+        }
+        // Bits that only commit when the cycle closes (`WriteCommit::finalize`).
+        if let Some(fv) = commit.finalize {
+            self.gpu.wb(address, fv);
+        }
     }
 
     pub fn ww(&mut self, address: u16, value: u16) {

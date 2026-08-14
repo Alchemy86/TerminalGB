@@ -435,6 +435,11 @@ the prize.
 
 ### 7.4 What the accurate engine is behind on
 
+> **Superseded — both rows are closed. See
+> [§9](#9-the-line-0-stat-phase-679--1279-and-the-last-blocking-row).** Item 1 below was
+> already stale when it was written down: `oam_bug` sub-test 7 was fixed by §8's phase work
+> and this note was never amended. Item 2 was real and is fixed in §9. Kept for the record.
+
 Recorded rather than smoothed over — both are the accurate engine being *worse* than the
 default, and both block making it the default:
 
@@ -737,7 +742,182 @@ invalidate every comparison against the committed baselines — but quote it wit
 
 ### 8.10 What is still true from §7
 
-The two rows in [§7.4](#74-what-the-accurate-engine-is-behind-on) still block flipping the
-default: Blargg `oam_bug` sub-test 7, and `intr_1_2_timing-GS`. Both engines remain gated in
-CI ([§7.4a](#74a-it-is-gated-in-ci)), and the accurate engine's baselines carry pixel counts
-so a pipeline change is a visible diff whether or not it moves a row.
+~~The two rows in [§7.4](#74-what-the-accurate-engine-is-behind-on) still block flipping the
+default~~ — **both are closed; see
+[§9](#9-the-line-0-stat-phase-679--1279-and-the-last-blocking-row).** Both engines remain
+gated in CI ([§7.4a](#74a-it-is-gated-in-ci)), and the accurate engine's baselines carry pixel
+counts so a pipeline change is a visible diff whether or not it moves a row.
+
+---
+
+## 9. The line-0 STAT phase: 6/79 → 12/79, and the last blocking row
+
+**Measured with `make test-external` / `make test-external-accurate` on the ROMs pinned in
+`tools/fetch-test-suites.sh`, before and after, same build.** Mealybug on the accurate engine
+**6 → 12 of 79 rows pixel-exact**, total distance **693,023 → 646,838 px**; Mooneye
+`acceptance` **68 → 69/75** (`acceptance` + `emulator-only` 96 → 97/103) with
+`ppu/intr_1_2_timing-GS` **FAIL → PASS**. The default engine is **byte-identical** throughout
+— `testharness/baseline.txt`, `mealybug_baseline.txt`, `mooneye_baseline.txt`,
+`mooneye_cgb_baseline.txt`, `samesuite_baseline.txt` and `cpp_baseline.txt` are all untouched.
+
+Six rows gained: `m3_bgp_change@DMG`, `@CGB-D`; `m3_lcdc_bg_en_change@CGB-C`, `@CGB-D`;
+`m3_window_timing@DMG`, `@CGB-D`.
+
+### 9.1 §7.4 is closed, and one half of it was already stale
+
+[§7.4](#74-what-the-accurate-engine-is-behind-on) named two rows as blocking a default flip.
+Both are gone, and **only one of them was ever fixed here**:
+
+1. **Blargg `oam_bug` sub-test 7 was already passing.** Measured at the pristine parent commit
+   with `GB_PPU=accurate cargo test --release --test testroms`:
+   `oam_bug 01:ok 02:ok 03:ok 04:ok 05:ok 06:ok 07:ok 08:ok Passed`. The
+   `ACCURATE_OAM_BUG_PHASE = 0` work described in §8 fixed it and §7.4 was never amended. The
+   standing lesson from the APU campaign applies exactly: **check the baseline, not a prose
+   note, before starting on a named gap.** (`oam_bug@cgb` still fails, and must — Color
+   silicon has no OAM-corruption defect, so a real CGB fails that ROM too.)
+2. **`intr_1_2_timing-GS`** is what this section fixes.
+
+### 9.2 The OAM strobe asked `mode`, which lags `LY` by a dot
+
+`Gpu::oam_strobe` derived "the OAM scan is running" from `mode == 2`. `mode` is moved by the
+dot loop, which runs *after* `next_line` has advanced `LY` — so the dot that starts a scanline
+still reads mode 0. And because `MemoryManagementUnit::bus_tick` folds `IF` **once per
+M-cycle**, "a dot late" is a whole M-cycle late to the CPU.
+
+Two consequences, and the first is why it survived so long:
+
+* **Lines 1-143 raised two STAT interrupts each.** The strobe stopped at the line boundary and
+  restarted a dot later, so there was a second rising edge. It is invisible to any program that
+  services the interrupt immediately, because the second edge lands *inside* the first one's
+  dispatch, which clears `IF.1` at M4 after it — the pair collapses into one.
+* **Line 0 had nothing to collapse into.** By design it gets no early window (lines 1-143 rise
+  4 dots early, on the previous line's tail; line 144 keeps dot 0; line 0 has neither). So on
+  line 0 the whole defect was exposed: the interrupt arrived **8 dots** after the equivalent
+  point on lines 1-143 where hardware wants **4**.
+
+`m3_bgp_change`'s own source says what hardware wants, and pads its handler to prove it:
+
+```
+    ; line 0 timing is different by 4 cycles, so jump only
+    ; when on line 0
+    ldh a, [rLY]
+    and a
+    jr nz, .line_0      ; taken (12 T) on lines 1-143, not taken (8 T) on line 0
+.line_0:
+```
+
+The handler is deliberately **4 T shorter on line 0**, to cancel a line-0 interrupt that
+hardware delivers 4 T later. Ours was 8 late, so the 4-T pad left exactly 4 over — and the
+residual was line 0, and only line 0, four pixels to the right on every ROM that syncs off the
+mode-2 source.
+
+**Measured on both sides.** Tracing the handler's own `ldh a,[rLY]`: dot **44** on lines 1 and
+2, dot **52** on line 0 — before. Tracing its `BGP` writes: `77, 93, 105, 165, 177, 237, 249`
+on lines 1-2 against `81, 97, 109, 169, 181, 241, 253` on line 0, a uniform +4. Afterwards the
+reference's line 0 and line 1 are identical, as they are on hardware, and so are ours: the edge
+positions on both lines read `[1, 14, 73, 86, 145, 158]`, matching Matt Currie's photograph
+pixel for pixel.
+
+The fix asks `LY` and the dot counter instead of `mode`, on the accurate engine only —
+`self.line < VBLANK_LINE && self.modeclock < OAM_DOTS && !self.skip_first_oam`. Pinned by
+`gpu::tests::a_visible_line_strobes_the_oam_source_exactly_once`, whose teeth are proven by
+reverting the arm (it then counts two raises on line 3).
+
+### 9.3 A dead end worth recording
+
+The obvious first move — *give line 0 the early window too*, on line 153's tail — is wrong and
+was measured wrong: Mealybug **6 → 3** rows, and `intr_1_2_timing-GS` still red. It moves line
+0 to the *same* phase as lines 1-143, where hardware wants it one M-cycle later; the ROM's
+4-T pad then over-corrects in the other direction. The three placements available at M-cycle
+granularity are +0, +4 and +8 relative to lines 1-143; hardware is +4, we were on +8, and that
+experiment is +0.
+
+### 9.4 The write-commit model underneath it
+
+The line-0 fix sits on top of a second piece of work in the same change: a PPU-bound register
+write now commits **partway through its own M-cycle** rather than at the end of it
+(`mmu::ppu_write_commit`, `MemoryManagementUnit::gpu_defer`). `bus_tick` advances the per-dot
+PPU a whole M-cycle *before* every access, which put every mid-scanline register boundary most
+of an M-cycle late. The physical model — the CPU flushes a write on the second T-cycle of the
+M-cycle, plus per-register settling delays including the DMG's one-dot `old | new` palette
+glitch — is read from [docboy](https://github.com/Docheinstein/docboy) and reimplemented per
+`CONTRIBUTING.md`; each arm carries its citation and the row that measures it. On its own it
+took the suite **693,023 → 669,162 px** and turned the DMG column of `m3_bgp_change` from 2,244
+pixels to 22; the line-0 fix took those last 22 to zero.
+
+### 9.5 Is the accurate engine ready to be the default?
+
+**On accuracy, yes — it now loses no row to the default on any gate.** Measured engine-for-
+engine on the same build:
+
+| gate | `fast` | `accurate` |
+|---|---:|---:|
+| in-repo harness (`testroms`) | 46/47 | 46/47 — *identical verdicts, row for row* |
+| Mooneye `acceptance` + `emulator-only` | 95/103 | **97/103** |
+| Mooneye `misc` (CGB) | 8/8 | 8/8 |
+| SameSuite | 72/76 | 72/76 |
+| CasualPokePlayer (`cpp`) | 4/4 | 4/4 |
+| Mealybug Tearoom | 3/79 | **12/79** |
+
+**What remains is a cost decision, not an accuracy one.** `testharness/ppuengines.rs` measures
+0.2426 ms/frame fast against 0.5270 accurate — **2.17x**, 3.1 % of a 16.7427 ms frame, still
+31.8x real time headless. That is inside the band [§5.2](#5-recommendation) predicted and the
+captain's stated condition for retiring `renderscan`.
+
+Flipping the default is nonetheless a product decision with two consequences worth stating
+plainly, and it has **not** been taken here:
+
+* every user pays 2.17x on the PPU for accuracy only test ROMs can see;
+* `testharness/{baseline,mealybug_baseline,mooneye_baseline,mooneye_cgb_baseline}.txt` become
+  the accurate engine's numbers and the `*_accurate_baseline.txt` files become the fast one's —
+  the two sets swap, in one commit, and `make status` must move with them.
+
+Worth roughly **+5 rows on the GB Emulator Shootout's published 264** if taken: its Mealybug
+population is DMG-only (our DMG column goes 1/24 → 4/24) and `hblank_ly_scx_timing-GS` and
+`intr_2_mode0_timing` are both inside its 66-row Mooneye population.
+
+### 9.6 What is left, and where
+
+The residual is no longer uniform — [§8.9](#89-what-the-next-pass-should-do-in-order)'s "2-3 pixels at the
+head of the line" was the line-0 phase and is gone. What remains, in order of how close it is:
+
+1. **`m3_lcdc_bg_en_change@DMG` — 4 px**, one pixel at `x=0` on lines 19-22, DMG only (both CGB
+   columns are exact). A head-of-line interaction with the DMG LCDC stage schedule.
+2. **`m3_scx_high_5_bits` — 12 px on all three columns**, seven lines around `x=16..23`. The
+   single biggest prize left: closing it is **+3 rows**.
+3. **`m3_window_timing@CGB-C` — 138 px** and **`m3_bgp_change@CGB-C` — 864 px**, where the DMG
+   and CGB-D columns of both are already exact. A CGB-specific window/palette phase.
+4. **`m3_lcdc_obj_size_change_scx@DMG` — 298 px**, newly out of the rank-artefact zone and
+   worth re-reading now that its number means something.
+**The commit phases are already at their optimum — do not re-sweep them.** Both remaining
+near-misses were swept against `mmu::ppu_write_commit` after the fact, and `early: 3` is the
+best value for each by a wide margin:
+
+| DMG `SCX` (`$FF43`) `early` | 0 | 1 | 2 | **3** | 4 |
+|---|---:|---:|---:|---:|---:|
+| `m3_scx_high_5_bits@DMG` | 84 | 77 | 47 | **12** | 53 |
+
+| DMG `LCDC` (`$FF40`) `early` | 1 | 2 | **3** | 4 |
+|---|---:|---:|---:|---:|
+| `m3_lcdc_bg_en_change@DMG` | 855 | 403 | **4** | 376 |
+| suite total | 671,348 | 669,696 | **646,838** | 712,414 |
+
+`SCX` and `SCY` were also split into separate arms to see whether they wanted different
+phases: they do not, both sit at 3, and the split was reverted. `m3_scx_high_5_bits` reads 12
+on **all three** columns while only the DMG one has an early commit at all, which is the same
+conclusion from the other side. **What is left in these two rows is inside the fetcher, not in
+when the write becomes visible** — and that is the mutually-constraining per-tile calibration
+[§8.9](#89-what-the-next-pass-should-do-in-order) says to budget in weeks.
+
+4. Everything else is either the boot-ROM content rows
+   ([§8.6](#86-blocker-c-measured-decided-and-now-a-user-supplied-boot-rom)) or the eight CGB rows whose
+   references carry 125 luminances and cannot be compared at all
+   ([§8.7](#87-eight-rows-compare-a-greyscale-frame-against-a-colour-photograph)).
+
+**Read any row near 22,500 with care — it is a rank artefact, not a distance.** The metric is
+a shade-*rank* compare, so one extra distinct shade in our frame re-ranks the whole picture and
+reports ~23,040. `m3_lcdc_obj_size_change_scx@DMG` is the worked example in both directions: it
+sat at 22,070 on the parent commit and reads **298** now, because our shade count finally
+matches the reference — the picture did not improve by 21,772 pixels' worth, it stopped being
+mis-ranked. Its two CGB columns are still in that zone (22,076 → 22,154) and that movement is
+meaningless. Overall: **5 rows numerically worse, 41 better, none lost pixel-exactness.**

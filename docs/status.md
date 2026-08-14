@@ -29,7 +29,7 @@ yourself proves nothing.
 | CasualPokePlayer (`cpp`) | **4** / 4 | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | mid-scanline picture timing — pixel-exact rows |
 
-The selectable per-pixel PPU engine (`GB_PPU=accurate`) scores **68/75** on Mooneye `acceptance` and **6/79** on Mealybug — it trades rows with the default rather than dominating it, which is why the default has not moved ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-trades-rather-than-dominating)).
+The selectable per-pixel PPU engine (`GB_PPU=accurate`) scores **69/75** on Mooneye `acceptance` and **12/79** on Mealybug — it now loses no row to the default on any gate, so what stands between it and being the default is its 2.17x cost, not its accuracy ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-now-dominates)).
 <!-- suite-scores:end -->
 
 These scores are re-derived from the checked-in baselines under

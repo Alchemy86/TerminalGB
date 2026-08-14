@@ -97,9 +97,9 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
     lines += [
         "",
         f"The selectable per-pixel PPU engine (`GB_PPU=accurate`) scores **{pa}/{ta}** on Mooneye"
-        f" `acceptance` and **{pm}/{tm}** on Mealybug — it trades rows with the default rather than"
-        " dominating it, which is why the default has not moved"
-        " ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-trades-rather-than-dominating)).",
+        f" `acceptance` and **{pm}/{tm}** on Mealybug — it now loses no row to the default on any"
+        " gate, so what stands between it and being the default is its 2.17x cost, not its accuracy"
+        " ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-now-dominates)).",
         END,
     ]
     return "\n".join(lines)
