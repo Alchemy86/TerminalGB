@@ -9,11 +9,16 @@
 > The expected-behaviour lists are the specification we test *against* — written **before**
 > any emulation code is changed. The shared yardstick they draw from is on the
 > **[accuracy testing](../testing.md)** page.
+>
+> **For the numbers rather than the design** — every suite scored with a reason for each red
+> row, the calibrated timing constants with the sweeps that fixed them, and a symptom → cause
+> index — see **[the measured Game Boy](../measured/README.md)**. These pages say how the
+> component works; that section says what it measures and how we know.
 
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`239426e`](https://github.com/Alchemy86/gameboy/tree/239426ed55fd95ccf87f5ab19f8cc57850187742) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The components
 

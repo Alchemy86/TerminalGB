@@ -90,6 +90,23 @@ history. See [Credits & lineage](README.md#credits--lineage).
   call anything a hit. The plugin declares `OBSERVE | READ_MEMORY` and nothing else, so a
   hunter provably cannot fabricate its own result. See
   [`docs/shiny-hunt.md`](docs/shiny-hunt.md).
+- **[The measured Game Boy](docs/measured/README.md)** — a documentation section built on the
+  one thing [gbdev.io](https://gbdev.io) does not have: our measurements. Eight pages, each
+  shaped *"Pan Docs says X → here is what we measured → the test that pins it → what it looks
+  like when an emulator gets it wrong"*: a [scoreboard](docs/measured/scoreboard.md) with a
+  named, evidenced reason for **every** row still red across all seven suites; the calibrated
+  [APU constants](docs/measured/apu.md) with the ROM that pins each and the measured cost of
+  moving it; the [two PPU engines](docs/measured/ppu.md) and the one row that keeps the fast
+  one default; [timing](docs/measured/timing.md), [boot state](docs/measured/boot.md) and
+  [cartridges](docs/measured/cartridges.md); and a
+  [symptom → cause index](docs/measured/symptoms.md) over the whole conformance corpus,
+  including what **no** test ROM can catch. It **cites and links** gbdev and Pan Docs for the
+  hardware reference rather than reproducing any of it. Much of this material previously
+  existed only inside a 320 KB agent-facing `AGENTS.md`.
+  - Recorded there and worth stating plainly: **Pan Docs is CC0 1.0 Universal — public
+    domain — not CC BY-SA.** Verified against `gbdev/pandocs`'s `LICENSE`, unchanged since
+    January 2020. There is no copyleft hazard for this MPL-2.0 repository; the reason we do
+    not reproduce it is editorial, not legal.
 - **Super Game Boy support** (`src/sgb.rs`, `GB_MODEL=sgb` / `sgb2`) — the half of an SGB a
   cartridge can actually observe: the ICD2 command-packet receiver on `$FF00`, `MLT_REQ`
   multiplayer and the joypad index a game reads back, plus the SGB/SGB2 boot registers.
@@ -201,6 +218,15 @@ history. See [Credits & lineage](README.md#credits--lineage).
   `[workspace]`, so a bare `cargo test` covers the `gameboy` package only — 263 tests across
   `plugins/*` and `crates/*` were invisible. The CI step is `cargo test --release --workspace`
   now.
+- **Two documentation claims that later measurement in this same repository had already
+  contradicted.** `docs/testing.md` called a cycle-stepped PPU *"a structural commitment the
+  project has not made"* thirty lines above its own description of the gated pixel-FIFO
+  engine; and `docs/components/ppu.md`'s "Honest approximations" described fixed mode 3,
+  coarse line stepping and whole-scanline rendering without qualification, while §4.0 of the
+  same page documents the per-dot engine that does all three properly. Both now say *"this is
+  the default engine"* and link to the measured trade. Also fixed two broken in-page anchors
+  in `docs/testing.md` — `make docs-check` verifies file and line targets but not `#anchor`
+  fragments, so those had been silently dead.
 - **The DMG boot ROM's leftover Nintendo-logo tilemap is written** (`$9904`-`$990F`,
   `$9924`-`$992F`, `$9910`). A ROM that draws on part of the screen and never clears the
   tilemap renders its own tiles in rows 8 and 9 on hardware, and rendered nothing here — a

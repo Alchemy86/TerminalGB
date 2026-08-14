@@ -973,6 +973,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 
 | page | what it answers |
 |---|---|
+| **[the measured Game Boy](docs/measured/README.md)** | **"Pan Docs says X — here is what we measured, the test that catches it, and what it looks like when an emulator gets it wrong."** Every suite scored with a reason for each red row, the calibrated timing constants and the sweeps behind them, and a symptom → cause index |
 | [code map](docs/codemap.md) | traces a frame through the system, follows a memory access CPU → MMU → device, shows where the frontends attach |
 | [component reference index](docs/components/README.md) | one deep-dive page per component: hardware, history, our implementation, honest approximations, and expected behaviours phrased as future tests |
 | [accuracy-testing yardstick](docs/testing.md) | which suites exist, how each is judged, and how our harness detects a verdict |
@@ -1732,8 +1733,11 @@ The upstream author's credit is a **standing requirement, not decoration**: Raph
 stays in [`Cargo.toml`](Cargo.toml)'s `authors`, in the note at the top of this README, and
 here. The MPL-2.0 `LICENSE` text and every upstream copyright notice stay as they are.
 
-**References.** Hardware behaviour is grounded in [Pan Docs](https://gbdev.io/pandocs/),
-[gbdev/awesome-gbdev](https://github.com/gbdev/awesome-gbdev), and
+**References.** Hardware behaviour is grounded in [Pan Docs](https://gbdev.io/pandocs/) —
+public domain under CC0, and **cited rather than reproduced**; where our own measurements go
+beyond it, they live in [the measured Game Boy](docs/measured/README.md), which links back to
+the relevant Pan Docs section on every page. Also
+[gbdev/awesome-gbdev](https://github.com/gbdev/awesome-gbdev) and
 [rylev/DMG-01](https://rylev.github.io/DMG-01/); [alexcrichton/jba](https://github.com/alexcrichton/jba/tree/rust)
 was a further emulation reference. The accuracy suites are Blargg's, Gekkio's
 [Mooneye GB](https://github.com/Gekkio/mooneye-gb), LIJI32's

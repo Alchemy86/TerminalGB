@@ -15,6 +15,12 @@ pass/fail. Capture the reasoning at the moment of the fix, per entry:
 
 Entries are newest-first.
 
+> **Reader's entry point: [`docs/measured/`](measured/README.md).** This file is the raw
+> corpus — long, chronological, and written at the moment of each fix. *The measured Game Boy*
+> is the same material organised by subject for someone who has never seen this repository,
+> with a [symptom → cause index](measured/symptoms.md) over these entries. Keep writing new
+> entries **here**; distil into that section when a subject accumulates enough of them.
+
 ---
 
 ## 2026-08-14 — the per-dot PPU: four defects between it and Mealybug (Mealybug 3/79 → 6/79)

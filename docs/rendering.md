@@ -177,7 +177,7 @@ rather than a guess:
 - Every practical saving comes from *not* repeating state. A Game Boy frame has four colours,
   so a whole row of identical cells needs one colour pair and then bare glyphs: run-length
   behaviour brings a typical frame to the low tens of kilobytes.
-- Getting to the ~1.5 KB figure requires **frame differencing** (see [§3](#3-frame-differencing)):
+- Getting to the ~1.5 KB figure requires **frame differencing** (see [§3](#3-frame-differencing--and-reading-these-numbers-honestly)):
   emit only the cells that changed, each preceded by a cursor move. On a typical frame a
   small fraction of cells change, and that — not the glyph encoding — is where the number
   comes from. So half-blocks are really "cell-diffing with colour", and the diff is the

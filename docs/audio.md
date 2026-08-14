@@ -11,7 +11,7 @@
 - **Code:** [`src/sound.rs`](../src/sound.rs) — the APU *and* the cpal player.
 - **Feature-gated:** host playback is behind the `audio` cargo feature (off by
   default). The APU itself always runs; only speaker output is gated. See
-  [Build & run](#build--run).
+  [Build & run](#7-build--run).
 - **Probe your machine:** [`examples/audio_probe.rs`](../examples/audio_probe.rs).
 - **Tests:** [`src/sound.rs`](../src/sound.rs) `mod tests` — pitch + sample-rate
   checks that run under a plain `cargo test` (no audio device needed).

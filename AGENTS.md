@@ -1708,6 +1708,53 @@ capability must cost only that capability** — the same principle as the adapte
   so `1x` is real-time (fixing the old 5 ms/~200 fps terminal bug the audio crew flagged);
   `2x`/`4x` shorten the interval and `MAX` runs an uncapped burst.
 
+## `docs/measured/` — the reader-facing distillation, and the Pan Docs licence correction
+
+- **PAN DOCS IS CC0 1.0 UNIVERSAL — PUBLIC DOMAIN. IT IS NOT CC BY-SA.** Verified, because the
+  wrong belief was in circulation and the two licences imply opposite obligations:
+  `gbdev/pandocs`'s `LICENSE` is CC0 1.0, added in **one commit in January 2020 and never
+  changed since**, and its README says *"Pan Docs is released into the public domain."* So
+  there is **no copyleft hazard for this MPL-2.0 repo** and no legal barrier to quoting it.
+  A crew acting on "CC BY-SA" would refuse things that are perfectly fine.
+- **The reason we still do not reproduce Pan Docs is editorial, not legal** — a second copy of
+  a maintained reference goes stale and becomes a liability. Cite and link generously; do not
+  fork it. That distinction is stated on the section's entry page so it cannot drift back.
+- **[`docs/measured/`](docs/measured/README.md) is "the measured Game Boy"** — eight pages
+  (`README`, `scoreboard`, `timing`, `ppu`, `apu`, `boot`, `cartridges`, `symptoms`) built on
+  the one thing gbdev does not have: *our measurements*. Shape of every page: **what the
+  reference says (cited, linked, never restated) → what we measured → the test that pins it →
+  what a wrong emulator does.**
+- **Which file gets a new entry: `docs/conformance-notes.md`, always.** That is the raw
+  corpus, chronological, written at the moment of the fix. `docs/measured/` is the same
+  material organised **by subject for a stranger**; distil into it when a subject accumulates
+  enough entries. Do not fork the corpus into two chronologies.
+- **`make docs-check` does NOT check in-page `#anchor` links** — only file/dir targets and
+  line ranges. Broken anchors are silent, and two pre-existing ones in `docs/testing.md` were
+  found this way. GitHub's slug rule is: lowercase → drop everything that is not
+  word/space/hyphen → replace **each** space with a hyphen, **without collapsing runs**. So
+  `— ` and ` / ` both leave a **double** hyphen (`Mealybug Tearoom — 3 of 79` →
+  `mealybug-tearoom--3-of-79`). A checker that collapses whitespace reports false positives;
+  one that ignores anchors misses real breakage.
+- **`codemap_links.py --check` rejects any `github.com/<owner>/<repo>/blob/…` link that is not
+  ours**, so you cannot cite a file in someone else's repo that way. Link the repo and name
+  the file, or use a non-`blob` URL form.
+- **`src/sound.rs` is in `SRC_EXCLUDE`, so its references stay file-level.** Do not write
+  `src/sound.rs:1243` in link text there — the tool will not anchor it and the tool's own
+  comment calls the leftover `:line` a *stale hint*. Name the symbol instead.
+- **Two stale claims found and fixed while writing this section** (both contradicted by later
+  measurement in the *same* repo, which is why the standing "flag stale notes" rule earns its
+  place): `docs/testing.md` called a cycle-stepped PPU *"a structural commitment the project
+  has not made"* thirty lines above its own description of the gated pixel-FIFO engine; and
+  `docs/components/ppu.md`'s "Honest approximations" described fixed mode 3, coarse line
+  stepping and whole-scanline rendering unqualified, while §4.0 of the same page documents the
+  per-dot engine that does all three properly. Both now say *"this is the default engine"* and
+  link to `docs/measured/ppu.md`.
+- **Verify a doc by rendering it through GitHub's own API and looking at it** (recipe in the
+  README-verification section below). Two things that recipe's caveats do not spell out:
+  the preview needs an explicit **`<meta charset="utf-8">`** or every em dash renders as
+  `â€"` and looks like a corrupt source file — `file docs/**/*.md` confirms the source is
+  fine; and delete the preview directory before committing.
+
 ## Documentation code map & clickable links
 
 - **[`docs/codemap.md`](docs/codemap.md)** is the top-level orientation page (frame flow,

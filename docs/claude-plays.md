@@ -13,7 +13,7 @@ Twitch. The code is [`plugins/agent/src/`](../plugins/agent/src/lib.rs), the pan
 the game. The target it was built against and measured on is: from a fresh save,
 get out of the bedroom, downstairs, out of the house, and pick a starter —
 driven by the agent, not by a script written for those steps. See
-[§Proof](#proof) for what actually happened.
+[§Proof](#7-proof) for what actually happened.
 
 ---
 
@@ -50,7 +50,7 @@ frames.
 Measured on the real opening of Pokémon Blue: **about one call per 1,100
 emulated frames**, i.e. one every ~18 seconds of game time rather than 60 a
 second. The single biggest saving is one action:
-[`advance_text`](#22-action) turns thirty `A` presses into one decision, and the
+[`advance_text`](#22-action--how-the-agent-drives) turns thirty `A` presses into one decision, and the
 opening of this game is mostly dialogue.
 
 ### The emulator never waits

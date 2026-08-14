@@ -74,7 +74,7 @@ and base power, and the shiny-if-traded verdict.
 
 **Sprite.** The focused Pokémon's front picture, decompressed from the cartridge, with its
 background made transparent so it sits on the panel instead of in a white box (see
-[Sprites](#sprites-from-the-rom-not-from-vram)).
+[Sprites](#sprites-from-the-rom-not-from-vram-and-on-the-panel-rather-than-in-a-box)).
 
 ### Focus: one ring drives the picture and the numbers
 

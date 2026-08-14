@@ -3,7 +3,7 @@
 > **Generation I has no shiny Pokémon.** Nothing in Red or Blue is shiny and
 > nothing here claims otherwise. What this hunts is the DV spread that *becomes*
 > shiny the moment the Pokémon is traded forward to Gen 2 — see
-> [What we are actually hunting](#what-we-are-actually-hunting).
+> [What we are actually hunting](#1-what-we-are-actually-hunting).
 
 The captain saw a hunter run **four physical Nintendo DS consoles wired to one
 controller through a hardware input splitter**, so identical presses hit all four

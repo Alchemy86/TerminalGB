@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`239426e`](https://github.com/Alchemy86/gameboy/tree/239426ed55fd95ccf87f5ab19f8cc57850187742) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -88,7 +88,7 @@ interrupt dispatch, OAM DMA, per-model DMG/MGB/SGB/CGB behaviour) and `emulator-
   needed.
 - **This repo:** not the declared submodule — a separate suite, **fetched at run time and
   gated in CI** since 2026-08-14 (`make test-external`; see
-  [Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom)).
+  [Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp)).
 - Sources: [mooneye-gb](https://github.com/Gekkio/mooneye-gb) ·
   [Gekkio — test ROM dos & don'ts](https://gekkio.fi/blog/2016/game-boy-test-rom-dos-and-donts/).
 
@@ -124,7 +124,7 @@ trustworthy.
 - Source: [gameboy-doctor](https://github.com/robert/gameboy-doctor).
 
 **Deep-cut suites** (both now fetched and gated, see
-[Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom)):
+[Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp)):
 **Mealybug Tearoom** (mid-scanline PPU writes — exactly our whole-line-render
 approximation) and **SameSuite** (APU + CGB corners). Reference
 emulators to diff behaviour against: **SameBoy** ("over 99.9%" accuracy, passes Mooneye +
@@ -318,8 +318,11 @@ to be red: the OAM-corruption bug is a defect of DMG/MGB/SGB silicon that Game B
 hardware does not have, even running a monochrome cartridge, so a real CGB fails this ROM
 too. Turning that row green would mean emulating a machine nobody has. Every row here is
 measured rather than pinned as a hash, so `oam_bug` reports which of its eight sub-tests
-pass rather than an opaque number. The mode-3-length approximation still needs a
-cycle-stepped PPU (a structural commitment the project has not made). The whole suite runs
+pass rather than an opaque number. The mode-3-length approximation applies to the **default
+(`fast`) PPU engine**; the cycle-stepped one exists and is gated (`GB_PPU=accurate`, and the
+`external-suites-accurate` job below) — it is simply not the default yet, because it still
+loses one Mooneye row that the fast engine passes. See
+[`docs/measured/ppu.md`](measured/ppu.md). The whole suite runs
 in **~3.6 s** (the twelve `cgb_sound` rows cost about 0.8 s of that).
 
 acid2 rendering correctly is a genuinely good result — the PPU composites background, window

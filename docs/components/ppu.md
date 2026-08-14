@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`239426e`](https://github.com/Alchemy86/gameboy/tree/239426ed55fd95ccf87f5ab19f8cc57850187742) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`5092a34`](https://github.com/Alchemy86/gameboy/tree/5092a34) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -143,16 +143,22 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
 
 ### Honest approximations
 
-- **Mode 3 is fixed at 172 dots (documented non-goal).** Real mode 3 is **variable
-  (172–289)** — it lengthens with `SCX` fine-scroll, window activation, and sprite count,
-  stealing time from HBlank. This emulator uses a flat `80 / 172 / 204` split
-  ([`mod.rs:276–286`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L276)) with no penalty model. Games that time raster
-  effects to mode-3 length will drift. **Deliberately not fixed here:** a faithful
-  variable mode 3 (and the VRAM/OAM bus-blocking that rides on it) requires a per-dot,
-  cycle-stepped PPU sharing the bus with a cycle-stepped CPU — the structural restructure
-  `docs/debugging.md` flags as justified *only* if the project commits to full cycle
-  accuracy. No wired ROM proves it (dmg-acid2 is a static single-frame composition and
-  **already renders pixel-correct** — see §6.12), so it stays an approximation.
+> **These describe the default (`fast`) engine.** The per-dot pixel FIFO of §4.0
+> (`GB_PPU=accurate`, [`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) does all three of the first
+> bullets properly — variable mode 3, per-dot stepping, per-pixel output — and is gated in CI
+> by `make test-external-accurate`. It is not the default because it still loses one Mooneye
+> row the fast engine passes; the measured trade is in
+> [`docs/measured/ppu.md`](../measured/ppu.md). Read what follows as *"what you get by
+> default"*, not *"what this emulator can do"*.
+
+- **Mode 3 is fixed at 172 dots.** Real mode 3 is **variable (172–289)** — it lengthens with
+  `SCX` fine-scroll, window activation, and sprite count, stealing time from HBlank. The fast
+  engine uses a flat `80 / 172 / 204` split
+  ([`mod.rs:276–286`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L276)) with no penalty model, so games that time raster
+  effects to mode-3 length will drift. *(No longer a non-goal: the accurate engine derives it
+  from the fetcher and charges Pan Docs' OBJ penalty explicitly. dmg-acid2 cannot prove either
+  way — it is a static single-frame composition and **already renders pixel-correct** on both
+  engines, see §6.12 — which is why Mealybug Tearoom is wired as the yardstick instead.)*
 - **Line stepping is coarse (≤80-tick chunks), not per-dot.** `do_cycle` consumes ticks in
   blocks ([`mod.rs:255`](https://github.com/Alchemy86/gameboy/blob/main/src/gpu/mod.rs#L255)); a mid-scanline register read may see a
   slightly stale mode/`LY`.
