@@ -114,9 +114,26 @@ what costs time, the second is what the user sees. They used to be the same numb
 | `frames_identical` | int | cumulative frames whose picture was unchanged, so nothing was encoded or sent |
 | `frames_dropped` | int | cumulative emulated frames never displayed (render behind) |
 | `tx_bytes` | int | escape-sequence bytes for this frame (`0` = unchanged frame) |
+| `frames_issued` | int | cumulative pictures actually **written** to the terminal (a deduplicated frame writes none) |
+| `terminal_ms` | float or `null` | what the **terminal** costs to accept one frame, measured by a round-trip fence |
+| `terminal_ceiling_fps` | float or `null` | `1000 / terminal_ms` — the most frames a second it could possibly present |
 | `audio` | object or `null` | `null` when no host stream is attached |
 | `audio_host` | object | always present — whether host audio is live, and if not, why |
 | `video` | object or `null` | `null` when no raw video stream is attached (the default) |
+
+**`fps` is ours; `terminal_ceiling_fps` is the terminal's, and the pair is the point.** `fps`
+counts draws we issued — with the shared-memory transport that is ~87 bytes and ~0.2 ms, so
+nothing the terminal does can make it fall, and on a large window it read 59 while the picture
+visibly did not. `terminal_ms` is the other half, measured with a DSR/CPR fence (the terminal
+answers only after working through everything written before it). **It is a ceiling, not a
+present count** — no terminal protocol reports "I painted your image", so a frame the terminal
+coalesced and never painted is indistinguishable from one it showed; see
+[`rendering.md` §11](rendering.md#11-how-fast-can-the-terminal-actually-present--and-why-fps-used-to-say-59).
+Both fields are **`null`, never `0`**, when the terminal cannot be asked (it does not answer
+`CSI 6 n`, or `GB_TERM_FENCE=off`): "we did not measure" and "it costs nothing" are opposite
+conclusions and a consumer must be able to tell them apart. The invariant worth asserting:
+**`fps` must never exceed `terminal_ceiling_fps`** — the frontend paces drawing to it, so a
+violation means the pacing has broken. Field additions, so no `schema` bump.
 
 `audio` object: `queue_depth`, `underruns`, `dropped`, `callbacks`, `sample_rate`. Read from
 the player's existing diagnostic handle

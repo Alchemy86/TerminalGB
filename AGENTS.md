@@ -450,13 +450,13 @@ Full per-fix record with citations: [`docs/conformance-notes.md`](docs/conforman
   **no sound card**: it attaches the real producer half with no consumer so the queue
   saturates, and fails above 4 ms/frame or below 4x real time. Teeth proven: 29.6 ms and
   0.57x against the old policy. Full write-up + conformance record: `docs/audio.md` §4c.
-- **A frame-paced loop runs the machine unbounded while the LCD is off** (`Gpu::do_cycle`
-  returns immediately when `!lcd_on`, so `updated` never fires). Measured on Pokémon Blue's
-  boot: one "frame" ran **845,836** cycles instead of 70,224, and the APU emitted the matching
-  burst — which the queue's latency bound then discards. That is a **frontend pacing** defect,
-  not an audio one, and it is the only remaining source of playback discards (all inside the
-  first 20 s of a cold boot; zero thereafter). Cap an iteration by cycles as well as by
-  `gpu.updated` if it ever matters. Do not "fix" it in `sound.rs`.
+- **A frame-paced loop ran the machine unbounded while the LCD was off — FIXED** by
+  `FRAME_TICKS_CAP` in `Gameboy::frame` (see its own section below). `Gpu::do_cycle` returns
+  immediately when `!lcd_on`, so `updated` never fires and the loop had no other exit;
+  measured on Pokémon Blue's boot, one "frame" ran **845,836** cycles instead of 70,224 and
+  the APU emitted the matching burst, which the queue's latency bound then discarded. It was a
+  **frontend pacing** defect, not an audio one, and it was the only remaining source of
+  playback discards. It was never to be "fixed" in `sound.rs`, and it was not.
 - **Small blocks broke the consumer-stall detector (fixed; don't reintroduce).** It compared
   the callback counter against the previous `play()`. Fine at 45 ms/block, but at 5.8 ms one
   frame pushes several blocks back-to-back with no callback between them, so every block after
@@ -1083,6 +1083,88 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
 - This is the first implementation of the *emit* half of
   [`docs/debugging.md`](docs/debugging.md)'s extension surface (the "frame rendered" event).
   Bump `telemetry::SCHEMA_VERSION` if a field is renamed, retyped or removed; additions are free.
+
+## What the TERMINAL costs per frame — and why `fps` used to read 59 forever (`src/screen/termcost.rs`)
+
+- **Full write-up, the measured ladder and the conformance record:
+  [`docs/rendering.md` §11](docs/rendering.md).** Read it before touching the TUI's pacing.
+- **`fps` counted draws WE issued, and nothing we do can make that number fall.** With the
+  kitty shm transport a frame is ~87 bytes and ~0.2 ms of our CPU, and 87 bytes never fills a
+  pty buffer — so the whole of the displayed frame a *user* experiences happens after our
+  timers stop. That is how "reports 59 fps but is clearly rendering slower at fullscreen" went
+  unexplained. **A counter that cannot go down is not a counter.**
+- **THERE IS NO PRESENT COUNT. Do not go looking for one again.** The kitty graphics
+  protocol's response acknowledges the *command* (received + decoded); the spec defines no
+  display acknowledgement. Write back-pressure measures nothing at 87 bytes. A DSR/CPR round
+  trip **is** a fence — the terminal answers only after working through everything written
+  before it, so it includes decode + upload + composite — but it still cannot report a frame
+  the terminal *coalesced* and never painted. So the honest number is a **ceiling** (how long
+  it takes to accept one frame), it is labelled as one everywhere it is shown, and the fix is
+  to stop issuing above it so `fps` becomes *true* rather than merely lower.
+- **The cost is the composited AREA, not the bytes.** Measured on WezTerm/5120×2880, kitty
+  `t=s`, every frame changed: wire flat at 86–88 B while the terminal goes 0.04 ms (0.29 Mpx)
+  → **2.97 ms at fullscreen (7.2 Mpx)** — **≈0.42 ms per megapixel**. The fixed round-trip
+  floor is 3.35 ms at 80×24 and 3.39 ms at fullscreen (flat, so subtracting a constant is the
+  right correction) and is measured once at startup by `probe_terminal`. **On this box the
+  terminal is not the bottleneck at any size that fits the screen** (~337 fps at fullscreen;
+  reaching a 16.74 ms budget would take ~40 Mpx). The captain's report did not reproduce here
+  — the deliverable is the instrument that answers it on *his* box, and paces if the answer is
+  below 59.7.
+- **THE MEASUREMENT TRAP, do not repeat it: read `TIOCGWINSZ` AFTER the terminal has
+  answered, never before.** A window asked for more cells than the screen holds is clamped,
+  and a terminal launched *for* this process reports the size it was asked for until it has
+  done so. Sizing the placement from that early value asks the terminal to composite an image
+  mostly off-screen, and the cost then rises with a rectangle nobody can see. That produced a
+  confident, wrong "30 ms/frame, ceiling 29 fps" first time round; a "640×176" window on this
+  display is really **268×60**. `render_bench --tty` now reads the size after its first CPR.
+- **The fence is SAMPLED, never per frame** (`TerminalCost::observe`): on a layout change and
+  every `RESAMPLE_AFTER` (3 s) thereafter, minimum of 3 fences, samples over 500 ms discarded
+  as an occluded window. A fence blocks, and blocking the loop every frame would starve the
+  audio queue (cushion ~41 ms) *and* add its own 3.4 ms round trip to every displayed frame —
+  fencing per frame is exactly why `render_bench --tty` tops out at 143 fps at fullscreen when
+  the terminal itself can do ~337. Consequence to remember: a sample taken while the screen
+  was static measures the *idle* marginal cost, which is optimistic; the 3 s re-check is what
+  makes it follow the scene.
+- **Use `crossterm::cursor::position()` for the fence, NOT `/dev/tty`.** It reads through
+  crossterm's own event source, which requeues non-matching events (`skipped_events` in
+  `crossterm/src/event/read.rs`), so a keypress arriving during the wait is delivered
+  afterwards. Reading `/dev/tty` directly is right at *startup* — before the loop owns stdin,
+  which is what `probe_terminal` does — and would silently eat keys anywhere after that.
+- Pacing is one line: `next_draw_at(t, our_cost.max(termcost.draw_interval(FRAME_TIME)))`.
+  Display frames are dropped; **emulated frames never are**. `GB_TERM_FENCE=off` opts out.
+- Status panel gains a **`Term`** row (`1.8ms ok` / `30.3ms ≤33fps` / **`n/a no CPR`**);
+  telemetry gains `terminal_ms`, `terminal_ceiling_fps` (**`null`, never `0`** when
+  unmeasured — "we did not ask" and "it is free" are opposite conclusions) and
+  `frames_issued`. Additions only, so no `SCHEMA_VERSION` bump.
+- **`cell_scale` does NOT enlarge anything that reaches the terminal**, despite what the HiDPI
+  note further up reads like. It multiplies the font size fed to the picker and the fit
+  divides by the same font, so the cell rectangle is *identical*; the payload is 160×144 at
+  every window size. All it moves is the pixel figure the status panel reports (and the legacy
+  `ratatui-image` path, where the encoded image really is sized in pixels). Pinned by
+  `cell_scale_does_not_change_what_the_terminal_is_asked_to_composite`.
+- Kitty offers **no cheaper placement for an unchanged-but-rescaled image**: re-transmitting
+  data under an id deletes that id's placements, and a frame that is *not* re-transmitted is
+  already free (zero bytes, zero terminal work). There is nothing between the two cases.
+- Adding the `Term` row is exactly the pressure the trainer crew's note further down warns
+  about: **the Status box must stay sized from its own line list** (`status.len() + 2`), never
+  a hand-counted constant, or the last row — a *plugin's* row — is clipped and a plugin is
+  active and invisible. Two crews reached that fix independently on the same day from
+  different rows; that is a sign it is the right one.
+
+## `Gameboy::frame` is capped at one frame's worth of cycles (`FRAME_TICKS_CAP`)
+
+- `Gpu::do_cycle` returns immediately while the LCD is off, so `gpu.updated` never fires and
+  `frame`'s loop had **no other exit**. For a ROM that leaves the screen off it did not return
+  *at all* — proven by deleting the cap, at which point
+  `a_frame_with_the_lcd_off_still_lasts_exactly_one_frame` times out. For a game that switches
+  the screen back on later it returned after **845,836** cycles instead of 70,224 — twelve
+  frames of emulation *and twelve frames of audio* charged to one 16.743 ms slot, which is why
+  playback discards ran to ~10,000 in the first 20 s of a cold boot (`docs/audio.md` §4c).
+- The cap is `70224 + 64`. The margin means that with the LCD **on** the `updated` break
+  always arrives first and the cap is unreachable, so it is byte-for-byte the old behaviour —
+  which is what makes it safe to apply unconditionally rather than peeking at the LCD. Only
+  the LCD-off case changes. Verified: `testroms`, `audiocapture`, `savestate`, `battery` and
+  `trainer` baselines all unchanged.
 
 ## Config parsing — fail loudly
 

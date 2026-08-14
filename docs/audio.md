@@ -428,10 +428,16 @@ prefers the other side of that trade.
 
 **Follow-ups this leaves on the table**, in order of value:
 
-1. **Frame-paced frontends run the machine unbounded while the LCD is off.**
-   That is a frontend pacing bug, not an audio one — the fix is to cap an
-   iteration by cycles, not only by `gpu.updated`. It is the sole remaining
-   source of playback discards.
+1. ~~**Frame-paced frontends run the machine unbounded while the LCD is off.**~~
+   **DONE.** It was a frontend pacing bug, not an audio one, and the fix was the
+   one predicted here: cap an iteration by cycles as well as by `gpu.updated`.
+   `Gameboy::frame` now stops at `FRAME_TICKS_CAP` (70,224 + 64). The margin
+   means the `updated` break always arrives first while the LCD is **on**, so
+   that path is byte-for-byte unchanged and every baseline — `testroms`,
+   `audiocapture`, `savestate` — held. Worth knowing how bad it really was: with
+   the LCD off *permanently*, `frame()` never returned at all, which
+   `a_frame_with_the_lcd_off_still_lasts_exactly_one_frame` demonstrates by
+   timing out when the cap is removed.
 2. **Dynamic rate control** (§10) would remove the last of them and the residual
    crystal drift with them, by nudging blip's resample ratio ≤0.5 % from the
    queue depth instead of discarding. It belongs behind an optional

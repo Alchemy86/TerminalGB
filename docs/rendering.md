@@ -308,6 +308,7 @@ Overrides, for debugging and for people who know their terminal:
 | `GB_TERM_KITTY=noshm` | Never use shared memory |
 | `GB_TERM_KITTY=placeholder` | Use the Unicode-placeholder grid instead of direct placement |
 | `GB_TERM_IMAGE=rgb` | Send the **pre-compression** payload — the "before" of every measurement here |
+| `GB_TERM_FENCE=off` | Never fence the terminal: no `Term` figure, no pacing to it ([§11](#11-how-fast-can-the-terminal-actually-present--and-why-fps-used-to-say-59)) |
 | `render_path = legacy` (config) | The `ratatui-image` path, unchanged |
 
 ---
@@ -455,7 +456,8 @@ In the terminal frontend, press **`t`** for the stats overlay, or read the Statu
 ```
 Sent      160x144  28B        <-- was "91K"
 Proto     kitty shm           <-- transport chosen by handshake
-FPS       58 · emu 60
+FPS       58 · emu 60         <-- ours: pictures issued / frames emulated
+Term      1.8ms ok            <-- the terminal's: its cost per frame, measured
 ```
 
 That is a real capture of Pokémon Blue's animated intro, not a still image.
@@ -470,6 +472,12 @@ working, which is the one thing this panel is for.
   iTerm2, depending on how much is moving. If it still reads `91K`, the transport did not
   engage.
 - `Proto` names the transport: `shm`, `png`, or `legacy`.
+- `Term` is the **terminal's** cost per displayed frame, measured on this machine at this
+  window size ([§11](#11-how-fast-can-the-terminal-actually-present--and-why-fps-used-to-say-59)).
+  `1.8ms ok` means it is not the bottleneck; `30.3ms ≤33fps` means it is, and `FPS` above will
+  have settled to that ceiling because the frontend paces to it. `n/a no CPR` means this
+  terminal does not answer a cursor report, so the figure is genuinely unavailable — that is
+  the honest answer, not a zero.
 - `same` in the `t` overlay counts skipped identical frames; on a menu or a pause screen it
   should climb steadily.
 - If `Proto` says `iterm2`, try setting `protocol = kitty` in the config — with direct
@@ -590,3 +598,155 @@ byte-perfect framebuffer at 6 fps has failed its user. The telemetry stream
    Conformance candidate: **a long run must not grow host-side resource use without bound** —
    the same candidate the per-frame Kitty image-id bug produced, arrived at from a different
    direction, which is a sign it is a real one.
+
+---
+
+## 11. How fast can the terminal actually present? — and why `fps` used to say 59
+
+> *"if I fullscreen, still looks GREAT and reports 59 fps, but it's clearly rendering
+> slower."*
+
+He was reading a number that could not go down.
+
+### 11.1 What `fps` counted, and why that was not a measurement
+
+Since emulation was decoupled from rendering, the frontend's `fps` counted **display frames
+we issued**: one per `terminal.draw` plus image write. With the shared-memory transport a
+frame is ~87 bytes on the wire and ~0.2 ms of our CPU, and an 87-byte write never fills a pty
+buffer — so nothing on our side of the pipe can make that number fall, however long the
+terminal takes to put the picture on the glass. Every earlier fix in this document made our
+half faster; none of them measured the other half.
+
+### 11.2 There is no present count, and pretending otherwise would be worse
+
+No terminal protocol reports "I painted your image":
+
+- The **Kitty graphics protocol** response acknowledges the *command* — it is sent once the
+  transmission has been received and decoded. The specification defines no display
+  acknowledgement.
+- **Write back-pressure** on the pty measures nothing here, for the reason above.
+- A **DSR/CPR round trip** (`CSI 6 n`) is a *fence*: the terminal answers only after working
+  through everything written before it, so the round trip includes its decode, upload and
+  composite. That is strictly stronger than "we wrote bytes" — but it still cannot report a
+  frame the terminal **coalesced** and never painted, because from its side that frame was
+  processed.
+
+So the honest quantity is not a present count, it is **how long the terminal takes to accept
+one frame**, which is a hard ceiling on how many it can present. That is what
+[`src/screen/termcost.rs`](../src/screen/termcost.rs) measures, and it is labelled as a
+ceiling everywhere it is shown.
+
+### 11.3 The measurement: cost scales with composited **area**, not with bytes
+
+WezTerm on a 5120×2880 display, kitty `t=s`, every frame changed
+(`render_bench --tty --motion`). The fixed part of a fence — pty latency plus the terminal's
+input loop, measured with **nothing** to draw — is 3.35 ms at 80×24 and 3.39 ms at
+fullscreen: flat, as a fixed latency should be. Subtracting it leaves the terminal's frame
+work:
+
+| window (cells) | picture (physical px) | wire | fence | terminal | ceiling |
+|---|---:|---:|---:|---:|---:|
+| 40 × 12 | 516 × 563 (0.29 Mpx) | 86 B | 3.44 ms | 0.04 ms | — |
+| 80 × 20 | 840 × 939 (0.79 Mpx) | 86 B | 3.77 ms | 0.37 ms | ~2700 fps |
+| 140 × 34 | 1452 × 1596 (2.3 Mpx) | 86 B | 4.45 ms | 1.05 ms | ~950 fps |
+| 200 × 48 | 2044 × 2253 (4.6 Mpx) | 87 B | 5.25 ms | 1.85 ms | ~540 fps |
+| **268 × 60 (fullscreen)** | **2540 × 2816 (7.2 Mpx)** | **87 B** | **6.37 ms** | **2.97 ms** | **~337 fps** |
+
+**≈ 0.42 ms per megapixel of composited picture.** The wire column does not move at all: this
+is the terminal scaling and compositing a picture, not parsing bytes, and it is a function of
+the *display rectangle* — exactly the quantity [§1](#1-why-the-naive-approach-cannot-work)
+worked so hard to keep off the wire, reappearing on the terminal's side where we cannot
+optimise it away.
+
+**Practical ceiling on this machine: the terminal is not the bottleneck at any size that fits
+the screen.** Reaching a 16.74 ms budget at 0.42 ms/Mpx would take ~40 megapixels of picture,
+about 5.6× this display. Free-running at 59.7 fps into a fullscreen window leaves the
+terminal 7.8 ms behind (`--free-run --fence-every 30`), not backlogged. So on *this* box the
+captain's fullscreen report does not reproduce — said plainly, because the useful outcome is
+not a fix here but an instrument that answers the question **on his** box, and paces to the
+answer if it is below 59.7.
+
+### 11.4 A trap that produced a wrong answer first — do not repeat it
+
+The first ladder run reported **30 ms/frame at "fullscreen"** and a ceiling of 29 fps. It was
+wrong. A window asked for more cells than the screen holds is **clamped**, and a terminal
+launched for the process reports the size it was *asked* for until it has done so. Sizing the
+placement from that early value asks the terminal to composite an image mostly off the
+screen, and the cost then rises with a rectangle nobody can see. `render_bench --tty` now
+reads `TIOCGWINSZ` **after** the terminal has answered its first CPR, never before. A
+"640×176" window on this display is really 268×60.
+
+**Read the window size after the terminal has spoken, not before.**
+
+### 11.5 What changed in the frontend
+
+- `src/screen/termcost.rs` measures the terminal's per-frame cost with a fence, on a **layout
+  change** and every 3 s thereafter — never per frame, because a fence blocks and blocking
+  the loop every frame would starve the audio queue (cushion ~41 ms, `docs/audio.md`) and add
+  its own 3.4 ms round trip to every displayed frame. Each sample is the **minimum** of three
+  fences; a sample over 500 ms is discarded as an occluded window rather than committed.
+- The loop paces drawing to `max(FRAME_TIME, our draw cost, the terminal's cost)`. If the
+  terminal can take 20, we issue 20 — and `fps` becomes **true** rather than merely lower.
+  Emulated frames are never dropped for this; display frames are, as always.
+- The Status panel gains a **`Term`** row and the `t` overlay a **`term`** row: `1.8ms ok`
+  when the terminal is not the bottleneck, `30.3ms ≤33fps` when it is, and **`n/a no CPR`**
+  when it cannot be asked. Telemetry gains `terminal_ms`, `terminal_ceiling_fps` (both
+  `null`, never `0`, when unmeasured) and `frames_issued`.
+- The fence uses `crossterm::cursor::position()`, which reads through crossterm's own event
+  source, so a keypress arriving during the wait is requeued and delivered afterwards.
+  Reading `/dev/tty` directly — correct at *startup*, before the loop owns stdin — would race
+  crossterm for the same input and silently eat keys.
+- `GB_TERM_FENCE=off` opts out entirely: the frontend then paces at the display rate as
+  before, and says `n/a` rather than showing a figure it did not measure.
+
+### 11.6 The transmitted image is still 160×144, and `cell_scale` does not change that
+
+Asked directly, because the HiDPI note in `AGENTS.md` reads as though `cell_scale = auto`
+doubles something that reaches the wire. It does not. `cell_scale` multiplies the **font
+size** fed to the picker, and the fit divides by the same font, so the cell rectangle is
+identical and the payload is 160×144 either way — confirmed at fullscreen by `tx_w`/`tx_h` in
+telemetry and pinned by `cell_scale_does_not_change_what_the_terminal_is_asked_to_composite`
+and `the_transmitted_image_is_the_source_resolution_at_every_window_size`. All `cell_scale`
+moves is the pixel figure the status panel reports (and the legacy `ratatui-image` path,
+where the encoded image really is sized in pixels).
+
+Kitty offers no cheaper placement for an unchanged-but-rescaled image either: re-transmitting
+data under an id deletes that id's placements, and a placement that is *not* re-transmitted
+is already free — an unchanged frame writes zero bytes and costs the terminal nothing
+([§3](#3-frame-differencing--and-reading-these-numbers-honestly)). There is nothing between
+those two cases to optimise.
+
+### 11.7 Reproducing it
+
+```bash
+# The ladder. Run each in its own window; sizes must FIT the screen (see 11.4).
+cargo run --release --example render_bench -- --tty --motion --frames 240 --json
+
+# Is the terminal falling behind when we do not pace to it?
+cargo run --release --example render_bench -- \
+    --tty --motion --frames 300 --free-run --fence-every 30 --json
+
+# What the frontend itself measures, live:
+GB_TELEMETRY=/tmp/t.ndjson ./target/release/examples/terminal game.gb
+jq '{fps, terminal_ms, terminal_ceiling_fps, frames_issued}' /tmp/t.ndjson
+```
+
+### 11.8 Conformance record
+
+*Symptom* — the frontend reports a frame rate the user can see is wrong; the picture is
+visibly slower than the counter at large window sizes, and no number anywhere disagrees.
+*Caught by* — **no test ROM, and no headless test of any kind.** The framebuffer is perfect;
+the loss is entirely on the far side of the pty. This is the same blind spot as the three
+bugs in [`terminal-render.md`](terminal-render.md), one level further out: there, a
+framebuffer hash could not see a frozen picture; here, even *our own* frame counter cannot.
+*Contract violated* — none, and that is the finding. No terminal graphics protocol offers a
+display acknowledgement ([§11.2](#112-there-is-no-present-count-and-pretending-otherwise-would-be-worse)),
+so a frontend that reports "fps" from its own issue rate is reporting something it has not
+measured. The honest reading is a *ceiling*, obtained from a round-trip fence.
+*New test* — `a_slow_terminal_drops_pictures_not_emulated_frames`,
+`the_status_panel_reports_the_terminal_alongside_our_own_frame_rate` (`src/screen/tui.rs`),
+`an_unmeasured_terminal_cost_is_null_not_zero` (`src/telemetry.rs`), and the seven cases in
+`src/screen/termcost.rs`.
+Conformance candidate: **a reported frame rate must be bounded by something measured beyond
+the emulator's own output boundary — and where that measurement is impossible, the report
+must say so rather than substitute the number it can produce.**

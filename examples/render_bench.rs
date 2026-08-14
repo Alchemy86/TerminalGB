@@ -103,6 +103,17 @@ struct Args {
     /// measured on the frames it actually has to send. `--motion` fakes that by
     /// poking one pixel; this is the real thing.
     walk: bool,
+    /// Issue frames at the DMG rate instead of one-per-round-trip.
+    ///
+    /// This is what the frontend used to do: write a picture every 16.743 ms
+    /// and never ask whether the terminal kept up. It is the *measurement* of
+    /// the bug — with `--fence-every N` the fence latency shows how far behind
+    /// the terminal has fallen, which is invisible from our side otherwise.
+    free_run: bool,
+    /// Fence (a CPR round trip) once every N frames. 1 = every frame, which is
+    /// the self-pacing behaviour; larger values sample the terminal's backlog
+    /// without pacing to it.
+    fence_every: u32,
 }
 
 impl Default for Args {
@@ -125,6 +136,8 @@ impl Default for Args {
             probe: false,
             state: None,
             walk: false,
+            free_run: false,
+            fence_every: 1,
         }
     }
 }
@@ -398,6 +411,11 @@ fn run_case(
             frames_identical: (n + 1 - changed_frames) as u64,
             frames_dropped: 0,
             tx_bytes: bytes,
+            frames_issued: changed_frames as u64,
+            // Headless: nothing was written to a terminal, so there is no
+            // terminal cost to report. `--tty` is the mode that measures it.
+            terminal_ms: None,
+            terminal_ceiling_fps: None,
             audio: None::<AudioSample>,
             video: None,
         };
@@ -813,13 +831,6 @@ mod tty_bench {
                 std::process::exit(3);
             }
         };
-        let (cols, rows, cw, ch) = tty.size();
-        let (font_w, font_h) = if cw > 0 && ch > 0 {
-            (cw, ch)
-        } else {
-            args.font
-        };
-
         // Probe: if the terminal will not answer DSR there is nothing to
         // measure, and silently timing our own writes is exactly the lie this
         // mode exists to stop telling.
@@ -835,6 +846,24 @@ mod tty_bench {
             );
             std::process::exit(3);
         }
+
+        // Read the window size only **after** the terminal has answered, never
+        // before.
+        //
+        // A window asked for more cells than the screen holds is clamped, and a
+        // terminal launched for this process reports the size it was *asked*
+        // for until it has done that. Sizing the placement from the early value
+        // asks the terminal to composite an image mostly off the screen, whose
+        // cost then rises with a rectangle nobody can see — which is a
+        // measurement of this benchmark, not of the terminal. (Measured: a
+        // "640×176" window is really 268×60 here, and the difference was a
+        // reported 30 ms/frame that is not real.)
+        let (cols, rows, cw, ch) = tty.size();
+        let (font_w, font_h) = if cw > 0 && ch > 0 {
+            (cw, ch)
+        } else {
+            args.font
+        };
 
         let wire = match args.protocol {
             ProtocolType::Iterm2 => Wire::Iterm2,
@@ -880,8 +909,25 @@ mod tty_bench {
         let mut timeouts = 0u32;
         let mut stalled = false;
         let mut done = 0u32;
+        let mut fences = 0u32;
+        let mut sync_max = Duration::ZERO;
+        let fence_every = args.fence_every.max(1);
+        // `--free-run` issues pictures on the DMG clock and only *samples* the
+        // terminal, so the fence latency measures the backlog we built instead
+        // of pacing it away.
+        let period = Duration::from_micros(16_743);
+        let mut next_issue = Instant::now();
         let start = Instant::now();
         for n in 0..args.frames {
+            if args.free_run {
+                next_issue += period;
+                let now = Instant::now();
+                if next_issue > now {
+                    std::thread::sleep(next_issue - now);
+                } else {
+                    next_issue = now;
+                }
+            }
             if args.walk {
                 walk_input(&mut gb, n);
             }
@@ -908,17 +954,36 @@ mod tty_bench {
                 done = n + 1;
                 break;
             }
-            match tty.sync() {
-                Some(d) => sync_total += d,
-                None => timeouts += 1,
+            if (n + 1) % fence_every == 0 {
+                match tty.sync() {
+                    Some(d) => {
+                        sync_total += d;
+                        sync_max = sync_max.max(d);
+                        fences += 1;
+                    }
+                    None => timeouts += 1,
+                }
             }
             done = n + 1;
         }
+        // A final fence after a free run: everything still queued in the
+        // terminal has to be worked through before it can answer, so this is
+        // the backlog we built by issuing faster than it could accept.
+        let drain = if args.free_run {
+            tty.sync().unwrap_or(Duration::ZERO)
+        } else {
+            Duration::ZERO
+        };
         let wall = start.elapsed();
         drop(tty);
 
         let f = done.max(1) as f64;
         let ms = |d: Duration| d.as_secs_f64() * 1000.0 / f;
+        let fence_ms = if fences > 0 {
+            sync_total.as_secs_f64() * 1000.0 / fences as f64
+        } else {
+            0.0
+        };
         let achieved = f / wall.as_secs_f64();
         let payload = if term.kitty_shm() {
             "shm"
@@ -935,6 +1000,8 @@ mod tty_bench {
              \"terminal_saturated\":{stalled},\"achieved_fps\":{achieved:.2},\"dmg_fps\":{DMG_HZ:.3},\
              \"tx_bytes_avg\":{:.0},\"tx_mb_per_s\":{:.3},\
              \"encode_ms_avg\":{:.3},\"write_ms_avg\":{:.3},\"sync_ms_avg\":{:.3},\
+             \"free_run\":{},\"fence_every\":{fence_every},\"fences\":{fences},\
+             \"fence_ms_avg\":{fence_ms:.3},\"fence_ms_max\":{:.3},\"drain_ms\":{:.3},\
              \"frames_identical\":{identical},\"dsr_timeouts\":{timeouts}}}",
             args.protocol,
             rect.width,
@@ -945,6 +1012,9 @@ mod tty_bench {
             ms(encode_total),
             ms(write_total),
             ms(sync_total),
+            args.free_run,
+            sync_max.as_secs_f64() * 1000.0,
+            drain.as_secs_f64() * 1000.0,
         );
         println!("{line}");
         if !args.json {
@@ -1123,6 +1193,11 @@ fn parse_args() -> Args {
             }
             "--motion" => a.motion = true,
             "--tty" => a.tty = true,
+            "--free-run" => a.free_run = true,
+            "--fence-every" => {
+                a.fence_every = next(i).parse().unwrap_or(1);
+                i += 1;
+            }
             "--probe" => a.probe = true,
             "--walk" => a.walk = true,
             "--state" => {

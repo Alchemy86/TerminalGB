@@ -34,6 +34,7 @@ use crate::input::KeypadKey;
 use crate::screen::config::{CellScale, Config, Palette, Recent, RenderPath, ShinyAlert};
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
+use crate::screen::termcost;
 use crate::screen::trainer_view as tv;
 use crate::telemetry::{self, AudioSample, Context, FrameSample, Telemetry, VideoSample};
 use crate::termimage::{CellRect, TermImage, Wire};
@@ -360,11 +361,12 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     }));
 
     enable_raw_mode()?;
-    // Ask the terminal, once, whether it can read frames out of shared memory.
-    // Must happen here: raw mode is on (so the reply is not swallowed by the
-    // line discipline) but the event loop has not started, so nothing else is
-    // competing for stdin.
-    probe_shm_support();
+    // Ask the terminal, once, whether it can read frames out of shared memory,
+    // whether it answers a cursor report at all, and how long a bare round trip
+    // costs. Must happen here: raw mode is on (so replies are not swallowed by
+    // the line discipline) but the event loop has not started, so nothing else
+    // is competing for stdin.
+    probe_terminal();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     // We required kitty keyboard support above; enable event-type reporting so
@@ -583,6 +585,10 @@ struct Session {
     frames_dropped: u64,
     /// Emulated frames since the last displayed one.
     skipped_since_display: u64,
+    /// Display frames written to the terminal (as opposed to deduplicated away),
+    /// cumulative. This is the "issued" half of the pair the status panel shows;
+    /// see [`crate::screen::termcost`] for why there is no "presented" half.
+    frames_issued: u64,
     /// Per-stage timings of the most recent displayed frame, milliseconds.
     t_emulate: f32,
     t_palette: f32,
@@ -716,6 +722,12 @@ struct App {
     ui_sig: Option<UiSignature>,
     /// Machine-readable run telemetry; disabled (and free) unless configured.
     telemetry: Telemetry,
+    /// What the *terminal* costs per displayed frame, measured by a round-trip
+    /// fence when the window changes size. This is what stops `fps` from being
+    /// a number that can only read 59: drawing is paced to it, so the frames we
+    /// issue are frames the terminal can actually take. See
+    /// [`crate::screen::termcost`].
+    termcost: termcost::TerminalCost,
     /// Raw video-out; disabled (and free) unless configured. Driven from
     /// [`App::step_frame`] — **emulated** frames, not displayed ones, because
     /// display frames are deliberately dropped on a large window and a video
@@ -879,6 +891,7 @@ impl App {
             sprite_rect: None,
             ui_sig: None,
             telemetry,
+            termcost: terminal_cost_model(),
             video,
             video_prep: FramePrep::new(),
             video_upscaler: Upscaler::new(config_algo, config_factor),
@@ -969,6 +982,7 @@ impl App {
                     frames_identical: 0,
                     frames_dropped: 0,
                     skipped_since_display: 0,
+                    frames_issued: 0,
                     t_emulate: 0.0,
                     t_palette: 0.0,
                     t_upscale: 0.0,
@@ -1119,13 +1133,33 @@ impl App {
                 // The picture goes out *after* the text frame has been
                 // flushed, so it is never clipped, re-diffed or overwritten by
                 // `ratatui`. Nothing is written when the frame was unchanged.
-                self.flush_image()?;
-                let last_draw_cost = t.elapsed();
-                // Never faster than the panel refresh, never slower than the
-                // draw itself can sustain.
-                next_draw = next_draw_at(t, last_draw_cost);
+                let issued = self.flush_image()?;
+                let our_cost = t.elapsed();
+                // Measure the terminal's own share of the frame — decode,
+                // upload and composite — which none of the timers above can
+                // see, and which grows with the composited *area* while our own
+                // cost and the bytes on the wire stay flat (measured 0.04 ms →
+                // 2.97 ms over a 25× area range on WezTerm; the ladder is in
+                // `crate::screen::termcost`). Blocking, so it runs only when
+                // the window has changed size or the figure has gone stale,
+                // never in the steady state.
+                if issued {
+                    let layout = self
+                        .session
+                        .as_ref()
+                        .map(|s| s.disp_cells)
+                        .unwrap_or((0, 0));
+                    self.termcost.observe(Instant::now(), layout, fence);
+                }
+                // Never faster than the panel refresh, never slower than either
+                // the draw or **the terminal** can sustain. Issuing pictures a
+                // terminal cannot take does not make them appear — it coalesces
+                // them, which costs us the work and costs the user nothing but
+                // latency, while our counter cheerfully reads 59.
+                let interval = self.termcost.draw_interval(FRAME_TIME);
+                next_draw = next_draw_at(t, our_cost.max(interval));
                 dirty = false;
-                self.emit_telemetry(last_draw_cost);
+                self.emit_telemetry(our_cost);
             }
 
             // 4. Poll input until the next thing is due, so the loop sleeps
@@ -1549,7 +1583,11 @@ impl App {
     /// Writing it here rather than through a cell symbol is what makes an
     /// unchanged frame cost literally nothing, and what stops an overlay from
     /// freezing the picture. See [`crate::termimage`] for both failure modes.
-    fn flush_image(&mut self) -> io::Result<()> {
+    /// Returns whether a **picture** actually went out. A deduplicated frame
+    /// writes nothing and therefore costs the terminal nothing — it must not be
+    /// counted as an issued frame, and it is useless to fence behind. The bell
+    /// below does not count either: it is one byte and no image work.
+    fn flush_image(&mut self) -> io::Result<bool> {
         // The shiny bell rides out with the same flush: it is raised on an
         // emulated frame but must not be written mid-`ratatui` draw.
         if std::mem::take(&mut self.pending_bell) {
@@ -1559,17 +1597,18 @@ impl App {
             out.flush()?;
         }
         let Some(s) = self.session.as_mut() else {
-            return Ok(());
+            return Ok(false);
         };
         if s.pending_wire.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         use std::io::Write as _;
         let mut out = io::stdout().lock();
         out.write_all(s.pending_wire.as_bytes())?;
         out.flush()?;
         s.pending_wire.clear();
-        Ok(())
+        s.frames_issued += 1;
+        Ok(true)
     }
 
     /// Publish one telemetry record for the frame just drawn. Costs a single
@@ -1615,6 +1654,9 @@ impl App {
             frames_identical: s.frames_identical,
             frames_dropped: s.frames_dropped,
             tx_bytes: s.tx_bytes,
+            frames_issued: s.frames_issued,
+            terminal_ms: self.termcost.per_frame().map(|d| d.as_secs_f32() * 1000.0),
+            terminal_ceiling_fps: self.termcost.ceiling_fps(),
             audio: s.audio_sample(),
             video: self.video.is_enabled().then(|| {
                 let v = self.video.stats();
@@ -2512,6 +2554,10 @@ impl App {
         let speed_pct = s.emu_fps as f64 / DMG_HZ as f64 * 100.0;
         let mut lines = vec![
             Line::from(format!("fps  {:.0} / {:.0} emu", s.fps, s.emu_fps)),
+            // What the *terminal* can take, measured. `fps` above is what we
+            // issued; without this line the two cannot be told apart, which is
+            // exactly how a counter that could only read 59 went unnoticed.
+            Line::from(format!("term {}", self.termcost_label())),
             Line::from(format!("spd  {speed_pct:.0}% of real")),
             Line::from(format!("emu  {:.2}ms", s.t_emulate)),
             Line::from(format!("pal  {:.2}ms", s.t_palette)),
@@ -2615,6 +2661,31 @@ impl App {
     /// [`crate::screen::config::TransmitScale`]) — usually smaller than the
     /// factor shown in the status
     /// panel, because the terminal does the rest of the enlargement for free.
+    /// The terminal's measured per-frame cost and the ceiling it implies, or an
+    /// honest "we cannot tell".
+    ///
+    /// **This is a ceiling, not a present count**, and it is labelled so. No
+    /// terminal protocol reports "I painted your image" — the Kitty graphics
+    /// response acknowledges the command, and a fence cannot report a frame the
+    /// terminal coalesced and never painted. What it *can* report is how long
+    /// the terminal takes to accept one, which bounds what it can present.
+    fn termcost_label(&self) -> String {
+        match (self.termcost.per_frame(), self.termcost.ceiling_fps()) {
+            (Some(d), Some(fps)) => {
+                let ms = d.as_secs_f32() * 1000.0;
+                if fps >= DMG_HZ {
+                    // Not the bottleneck: say so rather than printing a
+                    // four-digit fps that invites the wrong conclusion.
+                    format!("{ms:.1}ms ok")
+                } else {
+                    format!("{ms:.1}ms ≤{fps:.0}fps")
+                }
+            }
+            _ if !self.termcost.enabled() => "n/a no CPR".to_string(),
+            _ => "measuring".to_string(),
+        }
+    }
+
     fn transmit_factor(&self) -> u8 {
         self.config
             .transmit_scale
@@ -2821,7 +2892,7 @@ impl App {
         //
         //   1. The box was a fixed `Length(13)`, which fits exactly eleven
         //      content rows, and the plugin row is pushed *last* — so it was
-        //      clipped away entirely. The box is now sized to its contents.
+        //      clipped away entirely.
         //   2. `plugin_status_line()` joins every plugin with " | " and the row
         //      truncates to 18 columns, so with the always-attached trainer
         //      view first, a *second* plugin — the link partner, the one that
@@ -2831,6 +2902,7 @@ impl App {
             .as_ref()
             .map(|s| s.gb.plugin_statuses())
             .unwrap_or_default();
+
         // Status. `Sent` is the size actually transmitted to the terminal each
         // frame, which the terminal then stretches to `Scale`; keeping those
         // two apart is what holds the frame rate up on a large window.
@@ -2890,6 +2962,13 @@ impl App {
                     format!("{fps:.0} · emu {emu_fps:.0}")
                 },
             ),
+            // The two halves of a displayed frame. `FPS` above is **ours**:
+            // pictures we issued. `Term` is the terminal's — how long it takes
+            // to accept one, and therefore the most it could possibly present.
+            // They used to be indistinguishable, which is how "reports 59, is
+            // clearly rendering slower" went unexplained. See
+            // `crate::screen::termcost` for why there is no true present count.
+            kv("Term", &self.termcost_label()),
         ];
         // The `!` / `!!` marks travel with the name, so "this one may write my
         // game" survives truncation of the detail text.
@@ -3212,8 +3291,87 @@ fn shm_supported() -> bool {
     SHM_OK.load(Ordering::Relaxed)
 }
 
-/// Ask the terminal whether it implements Kitty's `t=s` transmission medium,
-/// and remember the answer.
+/// Whether this terminal answers `CSI 6 n`, and how long a bare round trip
+/// takes — the two things [`crate::screen::termcost`] needs to be able to
+/// measure the terminal's own per-frame cost. Also resolved by
+/// [`probe_shm_support`], which already has `/dev/tty` open and has already
+/// established that the terminal is talking.
+static CPR_OK: AtomicBool = AtomicBool::new(false);
+static CPR_FLOOR_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The measured cost model for this terminal, or an unmeasurable one.
+///
+/// `GB_TERM_FENCE=off` opts out: the frontend then paces at the display rate as
+/// it always did, and says `n/a` rather than showing a ceiling it did not
+/// measure.
+fn terminal_cost_model() -> termcost::TerminalCost {
+    if env::var("GB_TERM_FENCE").as_deref() == Ok("off") {
+        return termcost::TerminalCost::unmeasurable();
+    }
+    termcost::TerminalCost::new(
+        CPR_OK.load(Ordering::Relaxed),
+        Duration::from_micros(CPR_FLOOR_US.load(Ordering::Relaxed)),
+    )
+}
+
+/// Time one round trip to the terminal, with whatever we last wrote queued
+/// ahead of it.
+///
+/// A cursor-position report is a **fence**: the terminal answers it only after
+/// working through everything written before it, so with a picture just written
+/// this measures that picture's cost *to the terminal* — the half of the frame
+/// our own timers cannot see.
+///
+/// `crossterm::cursor::position()` is the only safe way to do this once the
+/// event loop is running. It reads through crossterm's own event source, so a
+/// keypress arriving during the wait is queued and delivered afterwards; reading
+/// `/dev/tty` directly here (which is right at *startup*, before the loop owns
+/// stdin — see [`probe_terminal`]) would race crossterm for the same input and
+/// silently eat keys.
+fn fence() -> Option<Duration> {
+    let t = Instant::now();
+    match ratatui::crossterm::cursor::position() {
+        Ok(_) => Some(t.elapsed()),
+        Err(_) => None,
+    }
+}
+
+/// Time a bare cursor-position round trip a few times and keep the fastest.
+///
+/// This is the *fixed* part of a fence — pty latency plus the terminal's input
+/// loop — with nothing queued for it to work through. It is subtracted from
+/// every later sample so that what is reported is the terminal's frame work and
+/// not our round-trip overhead. Measured on WezTerm it is 3.35 ms at 80×24 and
+/// 3.39 ms at 640×176: flat across a 65× change in composited area, which is
+/// what a fixed latency looks like and why subtracting a constant is right.
+fn measure_cpr_floor(tty: &mut std::fs::File) {
+    use std::io::Write as _;
+    let mut best: Option<Duration> = None;
+    for _ in 0..termcost::SAMPLES {
+        let t = Instant::now();
+        if tty.write_all(b"\x1b[6n").and_then(|_| tty.flush()).is_err() {
+            return;
+        }
+        if !read_reply(tty, HANDSHAKE_KNOCK_WAIT).contains('R') {
+            return;
+        }
+        let d = t.elapsed();
+        best = Some(best.map_or(d, |b: Duration| b.min(d)));
+    }
+    if let Some(b) = best {
+        CPR_OK.store(true, Ordering::Relaxed);
+        CPR_FLOOR_US.store(b.as_micros() as u64, Ordering::Relaxed);
+        debug_layout(&format!("[fence] floor {:.3} ms", b.as_secs_f64() * 1000.0));
+    }
+}
+
+/// Ask the terminal what it can do, once, before the event loop owns stdin.
+///
+/// Two answers come out of this: whether it implements Kitty's `t=s`
+/// transmission medium, and whether it answers `CSI 6 n` (plus how fast) — the
+/// latter being what lets [`crate::screen::termcost`] measure the terminal's own
+/// per-frame cost instead of the frontend reporting a number that can only ever
+/// read 59.
 ///
 /// **Ask; do not infer.** WezTerm implements the Kitty graphics protocol but
 /// not its Unicode placeholders, so any rule of the form "if `$TERM` looks like
@@ -3225,14 +3383,10 @@ fn shm_supported() -> bool {
 /// Failure in any direction — no reply, an error reply, no `/dev/shm`, a
 /// platform without shared memory — leaves the flag false and the frontend on
 /// the compressed-PNG transport, which works everywhere.
-fn probe_shm_support() {
-    if !cfg!(unix) || std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
+fn probe_terminal() {
+    if !cfg!(unix) {
         return;
     }
-    let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
-        debug_layout("[shm] no shared memory available to offer the terminal");
-        return;
-    };
     // Talk to `/dev/tty`, not to stdout/stdin.
     //
     // Writing the query to `io::stdout()` and reading the answer from fd 0
@@ -3244,7 +3398,6 @@ fn probe_shm_support() {
     // opening it directly costs nothing and shares nothing.
     let Some(mut tty) = open_tty() else {
         debug_layout("[shm] no /dev/tty — assuming no shared memory");
-        query.finish();
         return;
     };
     use std::io::Write as _;
@@ -3260,9 +3413,20 @@ fn probe_shm_support() {
     // it has.
     if !terminal_is_answering(&mut tty) {
         debug_layout("[shm] terminal never answered a cursor report — assuming no");
-        query.finish();
         return;
     }
+    // It answers: time a bare round trip while we still own the terminal. This
+    // is the floor under every later fence, and the loop cannot measure it
+    // itself because by then there is always a picture queued behind it.
+    measure_cpr_floor(&mut tty);
+
+    if std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
+        return;
+    }
+    let Some(query) = crate::termimage::shm_query(SHM_QUERY_ID) else {
+        debug_layout("[shm] no shared memory available to offer the terminal");
+        return;
+    };
     let asked = tty
         .write_all(query.seq.as_bytes())
         .and_then(|_| tty.write_all(b"\x1b[6n"))
@@ -3979,6 +4143,74 @@ mod tests {
         );
     }
 
+    /// The same invariant for the half we could not previously see.
+    ///
+    /// A *slow draw* was always handled — `next_draw_at` spaced draws by their
+    /// measured cost. But with the shared-memory transport the draw costs 0.2 ms
+    /// however big the window is, and all the expense moved to the terminal,
+    /// where nothing measured it. So the loop happily issued 59.7 pictures a
+    /// second to a terminal that could take 20, the surplus was coalesced away
+    /// inside it, and `fps` read 59 throughout. Feeding the measured terminal
+    /// cost into the same pacing arithmetic is what makes that number true.
+    #[test]
+    fn a_slow_terminal_drops_pictures_not_emulated_frames() {
+        let start = Instant::now();
+        // A terminal that needs 50 ms per frame — three times the budget — with
+        // a draw of our own that costs almost nothing, which is the real shape.
+        let mut termcost = termcost::TerminalCost::new(true, Duration::ZERO);
+        let our_cost = Duration::from_micros(200);
+        let terminal = Duration::from_millis(50);
+        let horizon = Duration::from_secs(30);
+        let mut now = start;
+        let mut next_frame = start;
+        let mut next_draw = start;
+        let (mut emulated, mut drawn) = (0u32, 0u32);
+        let mut fences = 0u32;
+        while now < start + horizon {
+            let (due, deadline) = frames_due(now, next_frame, FRAME_TIME);
+            emulated += due;
+            next_frame = deadline;
+            if now >= next_draw {
+                drawn += 1;
+                let started = now;
+                now += our_cost;
+                let sampled = now;
+                termcost.observe(sampled, (133, 60), || {
+                    fences += 1;
+                    now += terminal; // the fence blocks for the round trip
+                    Some(terminal)
+                });
+                let interval = termcost.draw_interval(FRAME_TIME);
+                next_draw = next_draw_at(started, our_cost.max(interval));
+            } else {
+                now = next_frame
+                    .min(next_draw)
+                    .max(now + Duration::from_micros(100));
+            }
+        }
+        let secs = now.duration_since(start).as_secs_f32();
+        let emu_rate = emulated as f32 / secs;
+        let draw_rate = drawn as f32 / secs;
+        assert!(
+            (emu_rate - DMG_HZ).abs() < 0.15,
+            "emulation ran at {emu_rate:.1} fps, not {DMG_HZ} — the game would lag"
+        );
+        assert!(
+            (18.0..=21.0).contains(&draw_rate),
+            "expected ~20 issued fps against a 50 ms terminal, got {draw_rate:.1}"
+        );
+        // And the measurement itself must stay cheap: three fences per
+        // RESAMPLE_AFTER, not one per frame.
+        let expected_fences = (horizon.as_secs_f32()
+            / termcost::RESAMPLE_AFTER.as_secs_f32())
+        .ceil() as u32
+            * termcost::SAMPLES as u32;
+        assert!(
+            fences <= expected_fences + termcost::SAMPLES as u32,
+            "fenced {fences} times in 30 s — sampling, not per-frame, is the point"
+        );
+    }
+
     #[test]
     fn a_fast_display_is_capped_at_the_panel_rate() {
         let t = Instant::now();
@@ -4431,6 +4663,83 @@ mod tests {
                  row each, never one truncated joined line"
             );
         }
+    }
+
+    /// The status panel must name **both** halves of a displayed frame: the
+    /// pictures we issued, and what the terminal costs to take one.
+    ///
+    /// One number alone is how "reports 59 fps but is clearly rendering slower"
+    /// stayed unexplained — `fps` is entirely ours and cannot go down for
+    /// anything the terminal does. And when the terminal cannot be asked, the
+    /// panel must say so rather than print a plausible zero.
+    #[test]
+    fn the_status_panel_reports_the_terminal_alongside_our_own_frame_rate() {
+        use ratatui::backend::TestBackend;
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        // No probe ran in a test binary, so the terminal is unmeasurable — and
+        // that is exactly the case that must not be dressed up as a number.
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("FPS"), "our own rate is missing");
+        assert!(text.contains("Term"), "the terminal's rate is missing");
+        assert!(
+            text.contains("n/a"),
+            "an unmeasurable terminal must say so, not print a number: {text}"
+        );
+    }
+
+    /// The transmitted image is the source resolution whatever the window does.
+    ///
+    /// This is the rule `docs/terminal-render.md` was written to establish, and
+    /// it is worth a standing test because the failure mode is invisible from
+    /// our side: the payload stays small in *our* timings while the terminal
+    /// quietly composites something enormous.
+    #[test]
+    fn the_transmitted_image_is_the_source_resolution_at_every_window_size() {
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        for (w, h) in [(60u16, 20u16), (120, 40), (213, 55), (268, 60), (400, 120)] {
+            let _ = drawn_bytes(&mut app, w, h);
+            let s = app.session.as_ref().expect("session");
+            assert_eq!(
+                s.tx_px,
+                (160, 144),
+                "transmitted {:?} at {w}x{h} — the terminal must do the scaling",
+                s.tx_px
+            );
+        }
+    }
+
+    /// `cell_scale` cancels out of the cell rectangle, so it cannot make the
+    /// picture we ask the terminal to composite any larger.
+    ///
+    /// Worth pinning because the HiDPI note in `AGENTS.md` reads as though
+    /// `cell_scale = auto` doubles something that reaches the wire. It does not:
+    /// it scales the *font*, and the fit divides by the same font, so the cell
+    /// rectangle is identical and the payload is 160×144 either way. All it
+    /// changes is the pixel figure the status panel reports.
+    #[test]
+    fn cell_scale_does_not_change_what_the_terminal_is_asked_to_composite() {
+        let area = Rect::new(0, 0, 238, 58);
+        let (plain, s1) = fit_metrics(area, 160, 144, 19, 45);
+        let (doubled, s2) = fit_metrics(area, 160, 144, 38, 90);
+        assert_eq!(
+            plain, doubled,
+            "cell_scale changed the composited rectangle: {plain:?} vs {doubled:?}"
+        );
+        // The reported scale doubles — that is the *only* thing it moves, and
+        // it is a number on a panel, not bytes or pixels.
+        assert!((s2 - s1 * 2.0).abs() < 0.01, "{s1} {s2}");
     }
 
     /// The other half of the same bug: the stats panel must not occupy a cell
