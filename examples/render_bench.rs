@@ -418,6 +418,9 @@ fn run_case(
             terminal_ceiling_fps: None,
             audio: None::<AudioSample>,
             video: None,
+            // This bench has no agent; the field exists so a run with one can
+            // be compared against a run without.
+            agent: None,
         };
         tele.frame(&ctx, &sample);
     }

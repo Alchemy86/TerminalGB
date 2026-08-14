@@ -168,6 +168,30 @@ pub struct FrameSample {
     pub audio: Option<AudioSample>,
     /// Video-out, when a raw frame stream is attached (`None` otherwise).
     pub video: Option<VideoSample>,
+    /// The AI agent, when one is attached (`None` otherwise).
+    pub agent: Option<AgentSample>,
+}
+
+/// What the AI agent is doing, for an operator watching a live stream without
+/// looking at the commentary panel — see [`crate::agent`].
+///
+/// The invariant worth asserting on this one: **`speed_pct` must stay at 100
+/// whatever `phase` says.** An agent that is thinking must cost the emulator
+/// nothing, and this is the record that would show it if it did.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AgentSample {
+    /// `settling` / `thinking` / `executing` / `stopped`.
+    pub phase: &'static str,
+    pub decisions: u64,
+    pub calls: u32,
+    pub failures: u32,
+    pub tokens: u64,
+    /// Reported spend. Self-reported by the driver, so a floor.
+    pub usd: f64,
+    /// Fraction of the tightest budget used, 0.0..=1.0.
+    pub budget_used: f64,
+    /// Why the agent stopped, or empty while it is running.
+    pub halted: &'static str,
 }
 
 /// Raw video-out health, read from [`crate::video::VideoOut::stats`]. Present
@@ -490,6 +514,23 @@ pub fn write_frame_json(out: &mut String, ctx: &Context, s: &FrameSample) {
         }
         None => out.push_str(",\"video\":null"),
     }
+    match &s.agent {
+        Some(a) => {
+            let _ = write!(
+                out,
+                ",\"agent\":{{\"phase\":\"{}\",\"decisions\":{},\
+                 \"calls\":{},\"failures\":{},\"tokens\":{},\"usd\":{:.4},\
+                 \"budget_used\":{:.3},\"halted\":",
+                a.phase, a.decisions, a.calls, a.failures, a.tokens, a.usd, a.budget_used
+            );
+            if a.halted.is_empty() {
+                out.push_str("null}");
+            } else {
+                let _ = write!(out, "\"{}\"}}", a.halted);
+            }
+        }
+        None => out.push_str(",\"agent\":null"),
+    }
     out.push('}');
 }
 
@@ -627,6 +668,7 @@ mod tests {
                 sample_rate: 48_000,
             }),
             video: None,
+            agent: None,
         };
         t.frame(&ctx(), &s);
         let line = &t.records()[0];
@@ -723,6 +765,55 @@ mod tests {
         assert!(t.records()[0]
             .contains("\"audio_host\":{\"state\":\"failed\",\"errors\":0,\"error\":\"no default output device\"}"));
         host_status::reset();
+    }
+
+    #[test]
+    fn the_agent_is_reported_when_attached_and_null_when_not() {
+        let mut t = Telemetry::in_memory();
+        t.frame(&ctx(), &FrameSample::default());
+        assert!(t.records()[0].contains("\"agent\":null"));
+
+        let mut t = Telemetry::in_memory();
+        t.frame(
+            &ctx(),
+            &FrameSample {
+                // The invariant: a thinking agent must not slow emulation, so
+                // `speed_pct` stays at 100 while `phase` is `thinking`.
+                speed_pct: 100.0,
+                agent: Some(AgentSample {
+                    phase: "thinking",
+                    decisions: 7,
+                    calls: 8,
+                    failures: 1,
+                    tokens: 4200,
+                    usd: 0.0431,
+                    budget_used: 0.062,
+                    halted: "",
+                }),
+                ..FrameSample::default()
+            },
+        );
+        let r = &t.records()[0];
+        assert!(r.contains("\"agent\":{"), "{r}");
+        assert!(r.contains("\"phase\":\"thinking\""), "{r}");
+        assert!(r.contains("\"calls\":8"), "{r}");
+        assert!(r.contains("\"usd\":0.0431"), "{r}");
+        assert!(r.contains("\"halted\":null"), "{r}");
+        assert!(r.contains("\"speed_pct\":100"), "{r}");
+
+        let mut t = Telemetry::in_memory();
+        t.frame(
+            &ctx(),
+            &FrameSample {
+                agent: Some(AgentSample {
+                    phase: "stopped",
+                    halted: "spend-cap",
+                    ..AgentSample::default()
+                }),
+                ..FrameSample::default()
+            },
+        );
+        assert!(t.records()[0].contains("\"halted\":\"spend-cap\""));
     }
 
     #[test]

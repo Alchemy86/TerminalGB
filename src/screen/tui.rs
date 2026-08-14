@@ -1911,6 +1911,28 @@ impl App {
                     ms: v.last_ms,
                 }
             }),
+            // The AI agent's state, so an operator can watch a live stream's
+            // health without reading the commentary panel — and so the claim
+            // that a thinking agent costs the emulator nothing is checkable
+            // from the same record that carries `speed_pct`.
+            agent: s.gb.plugin::<crate::agent::AgentPlugin>().map(|p| {
+                let g = p.governor();
+                telemetry::AgentSample {
+                    phase: match p.phase() {
+                        crate::agent::PhaseView::Settling => "settling",
+                        crate::agent::PhaseView::Thinking => "thinking",
+                        crate::agent::PhaseView::Executing => "executing",
+                        crate::agent::PhaseView::Stopped => "stopped",
+                    },
+                    decisions: p.decisions(),
+                    calls: g.calls(),
+                    failures: g.failures(),
+                    tokens: g.tokens(),
+                    usd: g.usd(),
+                    budget_used: g.used_fraction(),
+                    halted: g.halted().map(|h| h.label()).unwrap_or(""),
+                }
+            }),
         };
         self.telemetry.frame(&ctx, &sample);
     }

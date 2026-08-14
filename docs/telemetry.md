@@ -120,6 +120,7 @@ what costs time, the second is what the user sees. They used to be the same numb
 | `audio` | object or `null` | `null` when no host stream is attached |
 | `audio_host` | object | always present — whether host audio is live, and if not, why |
 | `video` | object or `null` | `null` when no raw video stream is attached (the default) |
+| `agent` | object or `null` | `null` when no AI agent is attached (the default) |
 
 **`fps` is ours; `terminal_ceiling_fps` is the terminal's, and the pair is the point.** `fps`
 counts draws we issued — with the shared-memory transport that is ~87 bytes and ~0.2 ms, so
@@ -158,6 +159,15 @@ emulator is paused or in slow motion, `dropped` only while it is fast-forwarding
 per-frame convert + write cost) stays far under the 16.74 ms budget — 0.007 ms for the default
 160×144 RGBA stream on the reference box. A field addition, so no `schema` bump: consumers
 already ignore unknown fields.
+
+`agent` object: `phase` (`settling` | `thinking` | `executing` | `stopped`), `decisions`,
+`calls`, `failures`, `tokens`, `usd`, `budget_used` (0.0–1.0 of the tightest ceiling) and
+`halted` (`null`, or which cap ended the session) — the AI agent, see
+[`docs/claude-plays.md`](claude-plays.md). **The invariant to assert is the one that makes the
+whole design work: `speed_pct` stays at 100 while `phase` is `thinking`.** An agent is allowed
+to be slow; it is not allowed to make the emulator slow, and this is the record that would show
+it if it did. `usd` and `tokens` are **self-reported by the driver**, so treat them as a floor —
+the wall-clock ceiling is what actually bounds a run. A field addition, so no `schema` bump.
 
 ### 3.3 `type: "summary"` — one per run
 
