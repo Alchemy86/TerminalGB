@@ -138,6 +138,8 @@ struct Body {
     /// Set once the client has left the room for a trade or a battle, so the
     /// relay stops reporting a stale position for them.
     away: bool,
+    /// Set once the client is standing at its console, waiting to press A.
+    seated: bool,
 }
 
 #[derive(Default)]
@@ -181,11 +183,13 @@ fn serve(listener: TcpListener, expect: usize, stop: Arc<AtomicBool>) {
                     } else {
                         Phase::Waiting
                     };
+                    let seated = l.bodies.values().filter(|b| b.seated).count();
                     line.push_str(&format!(
-                        "snap\t{}\t{}\t{}\n",
+                        "snap\t{}\t{}\t{}\t{}\n",
                         l.tick,
                         phase.name(),
-                        l.bodies.len()
+                        l.bodies.len(),
+                        seated
                     ));
                     for (id, b) in &l.bodies {
                         if b.away {
@@ -236,6 +240,7 @@ fn serve(listener: TcpListener, expect: usize, stop: Arc<AtomicBool>) {
                     Some("join") => b.name = f.get(1).unwrap_or(&"?").to_string(),
                     Some("ready") => b.ready = true,
                     Some("away") => b.away = f.get(1) == Some(&"1"),
+                    Some("seated") => b.seated = true,
                     Some("pos") => {
                         let g = |i: usize| f.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
                         b.x = g(1);
@@ -434,6 +439,9 @@ impl Business {
 struct Snapshot {
     tick: u64,
     phase: Phase,
+    /// How many players are standing at a console, and how many are connected.
+    seated: usize,
+    bodies: usize,
     peers: Vec<Peer>,
 }
 
@@ -459,6 +467,8 @@ fn reader_thread(stream: TcpStream, shared: Arc<Mutex<Snapshot>>, my_id: Arc<Mut
                 building = Some(Snapshot {
                     tick: f.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
                     phase: Phase::parse(f.get(2).copied().unwrap_or("")),
+                    bodies: f.get(3).and_then(|s| s.parse().ok()).unwrap_or(0),
+                    seated: f.get(4).and_then(|s| s.parse().ok()).unwrap_or(0),
                     peers: Vec::new(),
                 });
             }
@@ -610,6 +620,16 @@ fn play(o: PlayOpts) {
     let mut flipped = false;
     let mut battle_seen = false;
     let mut business_started = false;
+    let mut seated = false;
+    let mut last_stage = String::new();
+    let mut seq = 0u32;
+    let mut last_hp: Option<Vec<(u8, u16)>> = None;
+    let tag = if o.business == Business::Battle {
+        "20-battle"
+    } else {
+        "10-trade"
+    };
+    let low = o.name.to_lowercase();
 
     // **Pace to the real console.** 70224 cycles / 4.194304 MHz = 16.7427 ms.
     // Without this the emulator would outrun the relay's wall-clock tick by two
@@ -637,9 +657,14 @@ fn play(o: PlayOpts) {
             next_frame = Instant::now();
         }
         // The emulator drives itself; the relay is read, never waited on.
-        let (tick, phase, peers) = {
+        let (tick, phase, peers, all_seated) = {
             let s = shared.lock().unwrap();
-            (s.tick, s.phase, s.peers.clone())
+            (
+                s.tick,
+                s.phase,
+                s.peers.clone(),
+                s.bodies > 0 && s.seated >= s.bodies,
+            )
         };
         let id = *my_id.lock().unwrap();
 
@@ -729,17 +754,37 @@ fn play(o: PlayOpts) {
                         // Cable Club bot, which knows the console dance.
                         let (x, y) = (gb.peek(W_X_COORD), gb.peek(W_Y_COORD));
                         if trade_bot.is_none() {
-                            if (x, y) == seat {
-                                // Let go of whatever the walker was holding
-                                // before somebody else starts pressing keys - a
-                                // direction left down is a direction held for
-                                // ever, and it looks exactly like a bot that has
-                                // stopped working.
+                            if (x, y) == seat && !seated {
+                                // Standing at the console, waiting for the
+                                // other end.
                                 walker.release(&mut gb);
                                 gb.clear_input();
+                                writeln!(sock, "seated").ok();
+                                seated = true;
+                                say("at my seat; waiting for the other console");
+                                if let Some(d) = &o.shots {
+                                    write_one(
+                                        &d.join(format!("{tag}-{low}-at-console.png")),
+                                        &mut gb,
+                                    );
+                                }
+                            } else if seated && all_seated {
+                                // **Both ends start the exchange on the same
+                                // signal, and this is the bug that cost the
+                                // first capture run.** A cable has two ends
+                                // running at the same speed; letting whichever
+                                // console arrived first press A and then run
+                                // unpaced, while its partner was still walking
+                                // back at 59.7275 Hz, meant one end offered
+                                // thousands of master transfers that nothing
+                                // answered — 33,697 of them, measured — and Gen
+                                // 1's `.establishConnectionLoop` gives up after
+                                // 90 iterations and sits on PLEASE WAIT for
+                                // ever. The relay knows when everybody is at a
+                                // console; that is the signal to start.
                                 trade_bot = Some(TradeBot::in_trade_room(seat));
-                                say("at my seat; pressing A at the console");
-                            } else {
+                                say("both consoles ready; pressing A");
+                            } else if !seated {
                                 if frame % 90 == 0 {
                                     say(&format!(
                                         "[{frame:6}] back: ({x},{y}) -> {seat:?}"
@@ -802,6 +847,45 @@ fn play(o: PlayOpts) {
             }
         }
 
+        // --- the proof screenshots ------------------------------------------
+        // Counters are not a picture. Every stage the Cable Club bot passes
+        // through gets a frame from BOTH consoles, and the exchange itself is
+        // sampled so the animation and the turn are on film rather than
+        // inferred from a transfer count.
+        if let (Some(d), Some(b)) = (&o.shots, &trade_bot) {
+            let stage = b.stage_label().to_string();
+            if stage != last_stage {
+                write_one(&d.join(format!("{tag}-{low}-{stage}.png")), &mut gb);
+                last_stage = stage;
+            }
+        }
+        if let Some(d) = &o.shots {
+            let link = gb.peek(W_LINK_STATE);
+            if business_started && link >= 0x02 && frame % 45 == 0 && seq < 24 {
+                write_one(
+                    &d.join(format!("{tag}-{low}-live-{seq:02}.png")),
+                    &mut gb,
+                );
+                seq += 1;
+            }
+            // A turn is only interesting when a number moved, so watch the
+            // party's HP and photograph the frame it changes on.
+            if o.business == Business::Battle && link >= 0x03 && frame % 20 == 0 {
+                let now: Vec<(u8, u16)> =
+                    read_party(&mut gb).iter().map(|m| (m.level, m.hp)).collect();
+                if let Some(prev) = &last_hp {
+                    if *prev != now && !now.is_empty() {
+                        write_one(
+                            &d.join(format!("{tag}-{low}-hp-{seq:02}.png")),
+                            &mut gb,
+                        );
+                        seq += 1;
+                    }
+                }
+                last_hp = Some(now);
+            }
+        }
+
         if o.business == Business::Battle
             && !battle_seen
             && gb.peek(W_LINK_STATE) >= 0x03
@@ -812,10 +896,7 @@ fn play(o: PlayOpts) {
                 gb.peek(W_LINK_STATE)
             ));
             if let Some(d) = &o.shots {
-                write_one(
-                    &d.join(format!("07-battle-{}.png", o.name.to_lowercase())),
-                    &mut gb,
-                );
+                write_one(&d.join(format!("{tag}-{low}-colosseum-entry.png")), &mut gb);
             }
         }
         if let Some(b) = &trade_bot {
