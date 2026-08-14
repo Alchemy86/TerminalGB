@@ -12,7 +12,7 @@
 //! a real trade with it. It is the right answer when you own one cartridge, and
 //! it can only ever know the protocols somebody wrote down.
 //!
-//! This is the other answer. [`gameboy::link::LinkCable`] joins **two whole
+//! This is the other answer. [`terminalgb::link::LinkCable`] joins **two whole
 //! cores** and relays bytes; neither end knows anything about Pokémon. Whatever
 //! the two games agree on works, because both ends are the genuine article.
 //!
@@ -36,12 +36,12 @@
 
 use std::path::{Path, PathBuf};
 
-use gameboy::gameboy::Gameboy;
-use gameboy::link::LinkCable;
-use gameboy::KeypadKey;
+use terminalgb::gameboy::Gameboy;
+use terminalgb::link::LinkCable;
+use terminalgb::KeypadKey;
 
-use gameboy_plugin_gen1_link::party::Party;
-use gameboy_plugin_gen1_link::spec::TradeSpec;
+use terminalgb_plugin_gen1_link::party::Party;
+use terminalgb_plugin_gen1_link::spec::TradeSpec;
 
 // --- Gen 1 addresses, all from `pret/pokered`'s symbols -------------------
 // (`ram/wram.asm` and `ram/hram.asm`; see docs/gen1/README.md for the standard
@@ -364,11 +364,11 @@ fn patch_party(s: &Staged, spec: &str) {
     }
     sram[main(W_EVENT_FLAGS) + EVENT_GOT_POKEDEX / 8] |= 1 << (EVENT_GOT_POKEDEX % 8);
 
-    let tables = gameboy_plugin_gen1_link::romdata::RomTables::locate(rom)
+    let tables = terminalgb_plugin_gen1_link::romdata::RomTables::locate(rom)
         .expect("gen 1 rom tables");
     let parsed = TradeSpec::parse(spec, "link_two").expect("party spec");
     let party: Party = {
-        use gameboy_plugin_gen1_link::spec::PokemonSource;
+        use terminalgb_plugin_gen1_link::spec::PokemonSource;
         parsed.party(&tables).expect("build party")
     };
     let image = party.to_wram_image();
@@ -660,11 +660,11 @@ struct PartyMon {
 impl PartyMon {
     fn describe(&self) -> String {
         // The verdict is the trainer plugin's, not a second copy of the rule.
-        let dvs = gameboy_plugin_trainer::gen1::Dvs::from_bytes(
+        let dvs = terminalgb_plugin_trainer::gen1::Dvs::from_bytes(
             (self.dvs.0 << 4) | self.dvs.1,
             (self.dvs.2 << 4) | self.dvs.3,
         );
-        let shiny = gameboy_plugin_trainer::derived::shiny_if_traded(dvs);
+        let shiny = terminalgb_plugin_trainer::derived::shiny_if_traded(dvs);
         format!(
             "{:<10} species {:#04x} Lv{:<3} HP {}/{} DVs {:?} exp {:<7} OT {} (id {}){}",
             self.nickname,
@@ -720,7 +720,7 @@ fn decode(bytes: &[u8]) -> String {
     bytes
         .iter()
         .take_while(|&&b| b != 0x50)
-        .filter_map(|&b| gameboy_plugin_gen1_link::text::decode_char(b))
+        .filter_map(|&b| terminalgb_plugin_gen1_link::text::decode_char(b))
         .collect()
 }
 
@@ -744,7 +744,7 @@ fn screen_text(gb: &mut Gameboy) -> String {
     for row in 0..18 {
         for col in 0..20 {
             let t = gb.peek(map + (((sy + row) % 32) * 32 + (sx + col) % 32) as u16);
-            out.push(gameboy_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
+            out.push(terminalgb_plugin_gen1_link::text::decode_char(t).unwrap_or(' '));
         }
         out.push('\n');
     }

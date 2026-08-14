@@ -164,8 +164,8 @@ pub struct LinkStats {
 /// panes, one visible and one headless, or neither).
 ///
 /// ```no_run
-/// use gameboy::gameboy::Gameboy;
-/// use gameboy::link::LinkCable;
+/// use terminalgb::gameboy::Gameboy;
+/// use terminalgb::link::LinkCable;
 ///
 /// let mut a = Gameboy::new(std::fs::read("blue.gb").unwrap(), None);
 /// let mut b = Gameboy::new(std::fs::read("blue.gb").unwrap(), None);
