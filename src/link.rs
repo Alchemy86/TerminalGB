@@ -191,6 +191,20 @@ impl LinkCable {
         self.stats
     }
 
+    /// Tell the cable that the caller is about to hand it its two consoles the
+    /// other way round.
+    ///
+    /// A pairing in flight records *which side* is driving the clock
+    /// positionally, so a frontend that swaps the two — the terminal
+    /// frontend's `L` key does, because focusing a console is implemented as a
+    /// swap so nothing downstream needs to know a second one exists — has to
+    /// say so, or a byte gets delivered to the wrong machine.
+    pub fn swap_ends(&mut self) {
+        if let Some(f) = self.in_flight.as_mut() {
+            f.master_is_a = !f.master_is_a;
+        }
+    }
+
     /// Whether the cable has seen a byte go missing. Once true, both consoles
     /// have been faulted and neither will write its battery save again.
     pub fn desynced(&self) -> bool {
@@ -556,6 +570,49 @@ mod tests {
         assert!(!cable.desynced(), "a torn byte is normal, not a desync");
         assert!(a.fault().is_none());
         assert!(b.fault().is_none());
+    }
+
+    /// A frontend that swaps the two consoles — the terminal frontend focuses
+    /// one by swapping, so nothing downstream needs to know a second exists —
+    /// must not lose the byte in flight to the wrong machine.
+    #[test]
+    fn swapping_the_ends_mid_transfer_still_delivers_to_the_right_console() {
+        let mut a = boot(master_rom(0xA5));
+        let mut b = boot(slave_rom(0x3C));
+        let mut cable = LinkCable::new();
+
+        // Get a pairing in flight, then swap the pair over as the frontend
+        // does and keep servicing with the arguments the other way round.
+        for _ in 0..80 {
+            a.step_instruction();
+            b.step_instruction();
+            cable.service(&mut a, &mut b);
+            if cable.in_flight.is_some_and(|f| f.partner == Partner::Armed) {
+                break;
+            }
+        }
+        assert!(cable.in_flight.is_some_and(|f| f.partner == Partner::Armed));
+        std::mem::swap(&mut a, &mut b);
+        cable.swap_ends();
+        // Stop the instant the transfer that was in flight across the swap
+        // completes, so the assertions below are about that byte and no other.
+        for _ in 0..8000 {
+            a.step_instruction();
+            b.step_instruction();
+            cable.service(&mut a, &mut b);
+            if cable.stats().transfers == 1 {
+                break;
+            }
+        }
+
+        // `a` and `b` are the other way round now, so the *slave* program is in
+        // `a`. Each must still be holding what the other sent.
+        assert_eq!(cable.stats().transfers, 1);
+        assert_eq!(cable.stats().torn, 0);
+        assert_eq!(a.peek(0xFF01), 0xA5, "the slave received the master's byte");
+        // `SB` itself, not the program's copy: the master is still inside its
+        // poll loop and has not stored the byte anywhere yet.
+        assert_eq!(b.peek(0xFF01), 0x3C, "and the master received the slave's");
     }
 
     /// The fail-safe that is real: a console that crashes must take its partner

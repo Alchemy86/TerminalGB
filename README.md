@@ -260,6 +260,7 @@ The recognised keys:
 | `plugins` | comma-separated names, e.g. `gen1-link` | Attach [plugins](docs/plugins.md). **Empty by default — nothing loads implicitly**, and anything attached is shown in the Status panel. [Write your own](docs/writing-a-plugin.md); the ones we ship live in [`plugins/`](plugins/) and can all be built out. |
 | `gen1_trade` | a path | Trade file for the `gen1-link` virtual link partner. Unset offers the built-in level 5 event Mew. |
 | `battles` | a path | Battle-preset file for the `gen1-battle` plugin. Unset uses the built-in presets. See [docs/gen1/battle-control.md](docs/gen1/battle-control.md). |
+| `link` | a path to a second ROM | Boot a **second console** and join it to the first with a [link cable](docs/link-cable.md). Both run; `W` swaps which one you are playing. This is how two real games trade with each other — including Gen 1 ↔ Gen 2 through the Time Capsule. |
 | `agent_command` | a program + arguments | What the `agent` plugin runs to decide what to do. Unset means no driver, and the plugin declines to attach rather than sitting there inert. See [Claude plays Pokémon](docs/claude-plays.md). |
 | `agent_objective` | one sentence | What the agent is trying to achieve this session. |
 | `agent_max_calls` | a whole number (default `200`) | Hard ceiling on the agent's decisions. It runs unattended and each call costs money. |

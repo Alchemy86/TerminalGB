@@ -135,6 +135,10 @@ fn debug_layout(msg: &str) {
 /// found on the desktop path. 1/59.7275 s ≈ 16743 µs. Emulation of a single
 /// frame runs on the main loop; input is polled between frames.
 const FRAME_TIME: Duration = Duration::from_micros(16_743);
+
+/// Frames the linked second console is run *before* the pair starts stepping
+/// together. See `App::open_link_partner` for why zero does not work.
+const LINK_START_SKEW: u32 = 3;
 /// The DMG refresh rate as a number, for "% of real hardware" reporting.
 const DMG_HZ: f32 = 59.7275;
 /// What this program calls its terminal window.
@@ -724,6 +728,16 @@ struct Session {
     gb: Gameboy,
     entry: RomEntry,
     paused: bool,
+    /// The console on the other end of the link cable, when `link = <rom>` is
+    /// configured. See [`crate::link`] and `docs/link-cable.md`.
+    ///
+    /// **`L` swaps which of the two `gb` is**, so everything downstream — the
+    /// renderer, the palette, the upscaler, the screenshot keys, the plugins —
+    /// keeps working on one machine and needs no idea a second exists. That is
+    /// the whole reason the focused console is a *swap* rather than an index.
+    /// Boxed: a whole `Gameboy` is large, and `Session` is built on the stack
+    /// by every render test. Inlining a second one overflows it.
+    link: Option<Box<LinkPartner>>,
     /// Palette-mapping stage, owning its buffer so a frame allocates nothing.
     prep: FramePrep,
     /// Fast path: our own capped-resolution encoder. `None` when the protocol
@@ -842,6 +856,16 @@ struct Session {
     /// dropping it stops the sound — so it is dropped when the session ends or a
     /// different ROM is loaded. `()` when built without the `audio` feature.
     _audio: AudioStream,
+}
+
+/// The second console, and the wire joining it to the first.
+struct LinkPartner {
+    gb: Gameboy,
+    cable: crate::link::LinkCable,
+    /// Title of the cartridge in `gb` — i.e. the console that is **not** on
+    /// screen. Kept rather than read per frame because `rom_title` builds a
+    /// `String` out of the header every call, and this only changes on `W`.
+    title: String,
 }
 
 impl Session {
@@ -1249,6 +1273,85 @@ impl App {
         }
     }
 
+    /// Swap which of the two linked consoles is the one on screen and taking
+    /// keys.
+    ///
+    /// Implemented as an actual swap of the two machines, so the renderer, the
+    /// palette, the upscaler, the screenshot keys and the plugins all keep
+    /// working on `Session::gb` and need no idea a second console exists. The
+    /// cable records which side is driving the clock positionally, so it has to
+    /// be told (`LinkCable::swap_ends`) or a byte in flight lands in the wrong
+    /// machine.
+    ///
+    /// Buttons held on the console being left are released: a key the player
+    /// let go of while looking elsewhere would otherwise stay down for ever.
+    fn swap_link_focus(&mut self) {
+        let Some(s) = self.session.as_mut() else {
+            return;
+        };
+        let Some(l) = s.link.as_mut() else {
+            self.set_toast("no link cable — set `link = <rom>` in config.toml");
+            return;
+        };
+        for i in 0..8 {
+            if s.held[i].is_some() {
+                s.gb.keyup(key_from_index(i));
+                s.held[i] = None;
+                s.last_press[i] = None;
+            }
+        }
+        std::mem::swap(&mut s.gb, &mut l.gb);
+        l.cable.swap_ends();
+        l.title = l.gb.rom_title();
+        let (now, other) = (s.gb.rom_title(), l.title.clone());
+        self.set_toast(format!("link: now playing {now} (other console: {other})"));
+    }
+
+    /// Boot the second console, if `link = <rom>` is configured, and hand back
+    /// the wire joining it to the one being started.
+    ///
+    /// Failure is a **warning, not a refusal** — a missing or unreadable second
+    /// cartridge costs you the cable and nothing else, the same rule the rest of
+    /// this frontend follows for an absent capability.
+    fn open_link_partner(&mut self) -> Option<Box<LinkPartner>> {
+        let path = PathBuf::from(self.config.link.as_ref()?);
+        let data = match std::fs::read(&path) {
+            Ok(d) if d.len() >= 0x150 => d,
+            Ok(_) => {
+                self.config_warnings
+                    .push(format!("link: {} is too small to be a ROM", path.display()));
+                return None;
+            }
+            Err(e) => {
+                self.config_warnings
+                    .push(format!("link: cannot read {}: {e}", path.display()));
+                return None;
+            }
+        };
+        let mut gb = Gameboy::new(data, Some(path.clone()));
+        let title = gb.rom_title();
+        // **The skew is not a nicety.** Two real consoles never share a crystal
+        // and two real players never press A on the same frame, so their link
+        // handshakes drift past each other until they interleave. Two cores
+        // stepped by one loop have no drift at all: started together they stay
+        // in phase for ever, both driving the clock at the same moment and each
+        // finding the other deaf. Measured on two Pokémon Blues — zero skew
+        // never connects, any skew from one frame up connects within a few
+        // hundred. See `docs/link-cable.md` §"Phase".
+        for _ in 0..LINK_START_SKEW {
+            gb.frame();
+        }
+        self.config_warnings.push(format!(
+            "link: cable attached to {title} ({})",
+            path.display()
+        ));
+        Some(Box::new(LinkPartner {
+            gb,
+            cable: crate::link::LinkCable::new(),
+            title,
+        }))
+    }
+
     /// Load a ROM and switch to the Playing screen. On failure, stay on the
     /// picker and show why.
     fn start_game(&mut self, path: &Path) {
@@ -1281,10 +1384,12 @@ impl App {
                 }
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
+                let link = self.open_link_partner();
                 self.session = Some(Session {
                     gb,
                     entry,
                     paused: false,
+                    link,
                     prep: FramePrep::new(),
                     term_image,
                     image: None,
@@ -1556,7 +1661,16 @@ impl App {
             let t = Instant::now();
             // `Gameboy::frame` publishes the "frame rendered" event to any
             // attached plugin itself, so there is nothing to drive from here.
-            s.gb.frame();
+            //
+            // With a link cable attached the cable owns the stepping instead:
+            // it interleaves the two cores instruction by instruction, which is
+            // the only way a byte on the wire lands on the right cycle at both
+            // ends. It performs the same per-frame housekeeping `frame` does,
+            // for both machines.
+            match s.link.as_mut() {
+                Some(l) => l.cable.run_frame(&mut s.gb, &mut l.gb),
+                None => s.gb.frame(),
+            }
             s.t_emulate = telemetry::ms(t.elapsed());
             s.emu_count += 1;
             s.emu_frames += 1;
@@ -2430,6 +2544,12 @@ impl App {
                     if let Some(s) = self.session.as_mut() {
                         s.paused = !s.paused;
                     }
+                    return;
+                }
+                // `W` for "which console" — `L` is already the way back to
+                // the picker, and the four game buttons default to a/s/x/z.
+                KeyCode::Char('W') => {
+                    self.swap_link_focus();
                     return;
                 }
                 KeyCode::Char('R') => {
@@ -4204,6 +4324,23 @@ impl App {
             // `crate::screen::termcost` for why there is no true present count.
             kv("Term", &self.termcost_label()),
         ];
+        // A second console must never be running invisibly — the same rule the
+        // plugin row follows. Says which machine is on screen and what the wire
+        // has carried, so a link that is quietly doing nothing is obvious.
+        if let Some(link) = self.session.as_ref().and_then(|s| s.link.as_ref()) {
+            let st = link.cable.stats();
+            status.push(kv(
+                "Link",
+                // Eighteen columns, and the fault marker must survive them —
+                // so the *title* is what gets shortened, never the warning.
+                &format!(
+                    "{} {}{}",
+                    truncate(&link.title, 11),
+                    st.transfers,
+                    if link.cable.desynced() { " FAULT" } else { "" }
+                ),
+            ));
+        }
         // The `!` / `!!` marks travel with the name, so "this one may write my
         // game" survives truncation of the detail text.
         for p in &plugins {
@@ -4241,7 +4378,7 @@ impl App {
 
         // Controls.
         let k = &self.config.keys;
-        let controls = vec![
+        let mut controls = vec![
             Line::from("Arrows  move"),
             Line::from(format!("{}       A", k.a)),
             Line::from(format!("{}       B", k.b)),
@@ -4262,6 +4399,11 @@ impl App {
             Line::from("c shot      C raw shot"),
             Line::from("v stream    V record"),
         ];
+        // Only when there is a second console — a key that does nothing is
+        // worse than no key at all.
+        if self.session.as_ref().is_some_and(|s| s.link.is_some()) {
+            controls.push(Line::from("W other console"));
+        }
         f.render_widget(
             Paragraph::new(controls)
                 .block(Block::default().borders(Borders::ALL).title(" Controls ")),
@@ -4368,6 +4510,13 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from("  ?         this help   q       quit"),
+            Line::from(""),
+            Line::from("Link cable (two consoles, one wire)"),
+            Line::from("  W         swap which console you are playing"),
+            Line::from(Span::styled(
+                "  set `link = <rom>` in config.toml to boot a second cartridge                  joined to this one by a real link cable. Both run; only the one                  on screen takes your keys. See docs/link-cable.md — including                  what Gold/Silver need before the Time Capsule will open",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
             Line::from("AI agent (Claude plays Pokémon)"),
             Line::from("  A         commentary panel   G   agent on/off"),
@@ -6391,6 +6540,138 @@ mod tests {
 
     fn test_app(protocol: ProtocolType, path: RenderPath) -> Option<App> {
         test_app_video(protocol, path, video_for_test())
+    }
+
+    /// A second console must actually run, be swappable, and be **visible** —
+    /// the same standing rule as an attached plugin. A link that is quietly
+    /// doing nothing is the failure mode this row exists to rule out.
+    #[test]
+    fn a_linked_second_console_runs_and_is_visible_and_swappable() {
+        let Some(mut app) = test_app_linked() else {
+            return;
+        };
+        assert!(
+            app.session.as_ref().unwrap().link.is_some(),
+            "`link = <rom>` should have booted a second console"
+        );
+
+        // Both machines must advance. The partner is a separate `Gameboy`, so
+        // its program counter moving is the honest evidence that the cable's
+        // loop is stepping it and not just the focused one.
+        let before = app
+            .session
+            .as_ref()
+            .unwrap()
+            .link
+            .as_ref()
+            .unwrap()
+            .gb
+            .debug_pc();
+        let mut moved = false;
+        for _ in 0..8 {
+            app.step_frame();
+            let now = app
+                .session
+                .as_ref()
+                .unwrap()
+                .link
+                .as_ref()
+                .unwrap()
+                .gb
+                .debug_pc();
+            moved |= now != before;
+        }
+        assert!(moved, "the linked console never executed an instruction");
+
+        // Visible: the Status panel names it.
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(150, 45)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("Link"),
+            "the Status panel must show the link — a second console cannot be \
+             active and invisible.\n{text}"
+        );
+
+        // Swappable, and the swap really moves the machines.
+        let focused = app.session.as_ref().unwrap().gb.debug_pc();
+        let other = app
+            .session
+            .as_ref()
+            .unwrap()
+            .link
+            .as_ref()
+            .unwrap()
+            .gb
+            .debug_pc();
+        app.handle_game_key(KeyEvent::from(KeyCode::Char('W')));
+        assert_eq!(app.session.as_ref().unwrap().gb.debug_pc(), other);
+        assert_eq!(
+            app.session
+                .as_ref()
+                .unwrap()
+                .link
+                .as_ref()
+                .unwrap()
+                .gb
+                .debug_pc(),
+            focused
+        );
+    }
+
+    /// An unreadable second cartridge costs you the cable and **nothing else**
+    /// — the same rule the frontend follows for every other absent capability.
+    #[test]
+    fn a_missing_link_rom_is_a_warning_not_a_refusal() {
+        let Some(app) = test_app_linked_to("/definitely/not/a/rom.gb") else {
+            return;
+        };
+        assert!(app.session.is_some(), "the game must still have started");
+        assert!(app.session.as_ref().unwrap().link.is_none());
+        assert!(
+            app.config_warnings.iter().any(|w| w.starts_with("link:")),
+            "and the player must be told why: {:?}",
+            app.config_warnings
+        );
+    }
+
+    fn test_app_linked() -> Option<App> {
+        test_app_linked_to("third_party/dmg-acid2/dmg-acid2.gb")
+    }
+
+    fn test_app_linked_to(link: &str) -> Option<App> {
+        isolate_state_dir();
+        let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb").ok()?;
+        let mut picker = Picker::from_fontsize((8, 16));
+        picker.set_protocol_type(ProtocolType::Halfblocks);
+        let config = Config {
+            link: Some(link.to_string()),
+            ..Config::default()
+        };
+        let mut app = App::build(
+            config,
+            Recent::default(),
+            Vec::new(),
+            picker,
+            video_for_test(),
+            None,
+        );
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir()
+            .join(format!("gameboy-link-test/{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let rom_path = dir.join("acid2.gb");
+        std::fs::write(&rom_path, &rom).ok()?;
+        app.start_game(&rom_path);
+        Some(app)
     }
 
     /// Point `$XDG_STATE_HOME` at a scratch directory, once per test process.

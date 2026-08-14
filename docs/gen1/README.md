@@ -23,6 +23,7 @@ Anything unproven says so.
 | [Battle control](battle-control.md) | Starting any battle on demand: wild, trainer, custom teams on both sides, and scripting one as an in-game cinematic | **verified on the retail ROM** |
 | [Reading the screen](reading-the-screen.md) | Why `wTileMap` reads back as text, and why that is the right way to drive the game | **verified on the retail ROM** |
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
+| [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one. Includes the Gen 1 ↔ Gen 2 Time Capsule rules | **Gen 1 ↔ Gen 1 trade verified; Time Capsule needs a Gold save** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost somebody hours | **verified the hard way** |
 | [Agent play](agent-play.md) | An AI agent that reads game state and presses buttons, with commentary for a stream | **plays the opening on the retail ROM** |
 

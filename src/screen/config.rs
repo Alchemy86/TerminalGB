@@ -378,6 +378,10 @@ pub struct Config {
     /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
     /// built-in presets. See [`terminalgb_plugin_battle_control::preset`].
     pub battles: Option<String>,
+    /// A **second cartridge**, joined to the first by a link cable
+    /// ([`crate::link::LinkCable`]). `None` — the default — is one console, as
+    /// it always was. See [`docs/link-cable.md`](../../docs/link-cable.md).
+    pub link: Option<String>,
     /// Open the trainer panel as soon as a game starts, rather than waiting for
     /// `T`. Off by default — the panel is opt-in — but somebody who plays with
     /// it up every session should not have to press a key every session.
@@ -425,6 +429,7 @@ impl Default for Config {
             video: crate::video::RawSettings::default(),
             plugins: Vec::new(),
             gen1_trade: None,
+            link: None,
             battles: None,
             trainer: false,
             agent_command: None,
@@ -764,6 +769,14 @@ impl Config {
                 Some(expand_tilde_str(v))
             };
         }
+        if let Some(v) = get("link") {
+            let v = v.trim();
+            cfg.link = if v.is_empty() || v.eq_ignore_ascii_case("off") {
+                None
+            } else {
+                Some(expand_tilde_str(v))
+            };
+        }
         if let Some(v) = get("battles") {
             let v = v.trim();
             cfg.battles = if v.is_empty() || v.eq_ignore_ascii_case("off") {
@@ -1093,6 +1106,7 @@ mod tests {
         let cfg = Config::parse(
             "rom_dir = ~/roms\n\
              gen1_trade = ~/mewtwo.trade\n\
+             link = ~/roms/gold.gbc\n\
              telemetry = ~/gb.ndjson\n\
              screenshot_dir = ~/Pictures/gb\n\
              video_dir = ~/Videos/gb\n\
@@ -1104,6 +1118,7 @@ mod tests {
             cfg.gen1_trade.as_deref(),
             Some(want("mewtwo.trade").as_str())
         );
+        assert_eq!(cfg.link.as_deref(), Some(want("roms/gold.gbc").as_str()));
         assert_eq!(cfg.telemetry.as_deref(), Some(want("gb.ndjson").as_str()));
         assert_eq!(
             cfg.screenshot_dir.as_deref(),

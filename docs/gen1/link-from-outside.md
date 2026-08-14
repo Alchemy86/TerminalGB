@@ -11,6 +11,12 @@ itself.
 This page is the *mechanism*. [`docs/link-trade.md`](../link-trade.md) is the story of getting
 it working and what to do when it hangs; [`docs/plugins.md`](../plugins.md) is the contract.
 
+**There is a second way, and it needs no protocol at all.**
+[`docs/link-cable.md`](../link-cable.md) joins *two whole emulated consoles* with a relaying
+cable, so both ends are the genuine article. That is the route for anything nobody has written
+a partner for — a link battle, or the Gen 1 ↔ Gen 2 Time Capsule, whose in-game prerequisites
+are on that page.
+
 ---
 
 ## 1. The handshake, and the one choice that makes it easy
