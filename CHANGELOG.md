@@ -14,6 +14,15 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Added
+- **The DMG OAM-corruption bug is modelled** (`src/gpu/oambug.rs`). On a DMG, any bus cycle
+  that puts an address in `$FE00-$FEFF` on the bus while the PPU is scanning OAM corrupts
+  OAM — including cycles with no memory access behind them, because the CPU's 16-bit
+  increment/decrement unit is wired to the address bus. **Blargg `oam_bug` 3/8 sub-tests →
+  8/8 on a DMG**, taking the in-repo test-ROM suite from **33/35 to 34/35 rows**.
+  `oam_bug@cgb` stays red on purpose: Game Boy Color silicon does not have the defect, even
+  running monochrome software, so a real CGB fails that ROM too. Cost ~1.5 % on the suite's
+  wall clock; no save-state format change. Reasoning, sub-test-by-sub-test:
+  [`docs/conformance-notes.md`](docs/conformance-notes.md).
 - **An AI agent can play the game, and narrate it for a stream** (`src/agent/`, `A`/`G` in the
   terminal frontend). Structured observation (map, coordinates, facing, the game's own warp
   table, the screen decoded as text, party and battle state), a bounded action vocabulary above

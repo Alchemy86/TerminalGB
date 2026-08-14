@@ -142,16 +142,24 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
 
 ## 5. Known quirks and edge cases
 
-- **OAM corruption bug (DMG) — NOT modelled (documented non-goal).** On DMG, certain
-  16-bit operations (`INC`/`DEC` of a register used as an address, etc.) that touch the
-  `0xFE00–0xFEFF` range while the PPU is in mode 2 corrupt OAM in a specific pattern.
-  Because this emulator never blocks OAM by mode, the precondition can't even arise, and
-  reproducing it would require the mode-dependent OAM bus model below. **Deliberately not
-  fixed:** it is a DMG-only hardware *defect* that the emulator boots in CGB mode
-  (`new_cgb`) anyway, essentially no commercial game depends on, and modelling it is real
-  work (mode-2 bus tracking + the corruption pattern) for ~zero practical gain. Blargg
-  `oam_bug` therefore stays red-by-design and is pinned as such in `baseline.txt`. (Pan
-  Docs — [OAM corruption](https://gbdev.io/pandocs/OAM_Corruption_Bug.html).)
+- **OAM corruption bug (DMG) — MODELLED.** On a DMG, any bus cycle that puts an address
+  in `0xFE00–0xFEFF` on the bus while the PPU is scanning OAM (mode 2) corrupts OAM. That
+  includes cycles with no memory access behind them at all: the CPU's 16-bit
+  increment/decrement unit is wired to the address bus, so `inc rr` / `dec rr` /
+  `ld a,[hl±]` / `push` / `pop` with the register in that range assert the address anyway.
+  The three corruption patterns and the trigger list are in [`src/gpu/oambug.rs`](../../src/gpu/oambug.rs);
+  the trigger points are `rb`/`wb` plus `MemoryManagementUnit::idu_tick` and `share_idu`.
+  **Blargg `oam_bug` passes all 8 sub-tests on `@dmg`.** It is expected to keep *failing*
+  on `@cgb`: Game Boy Color silicon does not have this defect even running a monochrome
+  cartridge, so a real CGB fails the ROM too. (Pan Docs —
+  [OAM corruption](https://gbdev.io/pandocs/OAM_Corruption_Bug.html).)
+  - *Honest approximation:* the PPU is stepped once per instruction, so the dot a
+    mid-instruction bus cycle lands on is **predicted** arithmetically from the
+    free-running dot counter (`Gpu::oam_scan_row_in`), and one constant —
+    `mmu::OAM_BUG_PHASE` — absorbs the phase the batched PPU accumulates when `LCDC`
+    bit 7 is switched on part-way through an instruction. That constant is calibrated for
+    the 3-M-cycle `ldh [rLCDC],a` every test ROM (and essentially every game) uses; a
+    4-M-cycle `ld [$FF40],a` would leave the corruption one row off.
 - **OAM DMA restricted bus.** During a real OAM DMA the CPU running from ROM would read
   DMA-bus garbage unless it runs from HRAM; games copy a tiny wait loop into HRAM for
   exactly this. The emulator's instant DMA sidesteps the whole mechanism.
@@ -206,16 +214,15 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
     *(Covered: the two `..._does_not_kill_the_process` tests in `mmu::vramdma_tests`.)*
 11. **Post-boot register defaults.** After construction, `rb(0xFF40) == 0x91` (LCDC),
     `rb(0xFF47) == 0xFC` (BGP). *(Not covered.)*
-12. **OAM corruption bug.** A qualifying mode-2 OAM access corrupts OAM per the documented
-    pattern. **Documented non-goal — precondition not modelled** (DMG-only defect; we boot
-    CGB; ~no games depend on it). Blargg `oam_bug` stays red-by-design in `baseline.txt`.
-    *(Not covered; deliberate non-goal — §5.)*
+12. **OAM corruption bug.** A qualifying mode-2 OAM bus cycle corrupts OAM per the
+    documented pattern, on a DMG only. *(Covered: Blargg `oam_bug` passes 8/8 on `@dmg`
+    and is pinned PASS in `baseline.txt`; the patterns themselves by `gpu::oambug::tests`.)*
 
 ## 7. Test ROMs that exercise it
 
 | Suite | What it checks | Meaning of a failure |
 |---|---|---|
-| **Blargg `oam_bug`** | The DMG OAM corruption bug | **Documented non-goal** — bug not modelled (§5); pinned red in `baseline.txt`. |
+| **Blargg `oam_bug`** | The DMG OAM corruption bug | **8/8 sub-tests pass on `@dmg`.** A failure means a trigger, a corruption pattern or the mode-2 phase has moved (§5). `@cgb` is expected to fail — CGB hardware has no such bug. |
 | **Blargg `mem_timing` / `mem_timing-2`** | Cycle-exact timing of memory reads/writes | **PASS** — timer stepped per memory access (see [CPU §4](cpu.md), [Timer §4](timer.md)). |
 | **Mooneye `acceptance/oam_dma*`** (`basic`, `reg_read`, `sources-GS`, `oam_dma_start`, `oam_dma_timing`, `oam_dma_restart`) | OAM-DMA copy, start delay, duration, restart, legal sources | **6/6 pass.** A failure means the transfer schedule or the OAM guard has moved. |
 | **Mooneye instruction-timing tests** (`rst_timing`, `call_timing*`, `push_timing`, `ret*_timing`, `jp*_timing`, `add_sp_e_timing`, `ld_hl_sp_e_timing`) | Which M-cycle each memory access of an instruction lands on — measured *through* the OAM-DMA guard | **All pass.** They are only measurable because OAM DMA is timed; see [`src/mmu/oamdma.rs`](../../src/mmu/oamdma.rs). |

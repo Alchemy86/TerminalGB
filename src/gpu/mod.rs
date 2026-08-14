@@ -1,4 +1,7 @@
+mod oambug;
+
 use crate::mode::GbMode;
+pub(crate) use oambug::OamBug;
 use std::cmp::Ordering;
 
 const VRAM_SIZE: usize = 0x4000;
@@ -297,6 +300,50 @@ impl Gpu {
         let fill = r.u8()?;
         self.stop_fill = if stopped { Some(fill) } else { None };
         Ok(())
+    }
+
+    /// The OAM row the PPU will be scanning `dots` dots from where it stands
+    /// now, or `None` if it will not be in mode 2 then.
+    ///
+    /// The PPU is stepped once per instruction, not once per bus cycle, so a
+    /// mid-instruction access has to *predict* forward — `dots` is how far the
+    /// bus has already advanced inside the current instruction. Nothing here
+    /// mutates the PPU: it is arithmetic on the free-running dot counter.
+    fn oam_scan_row_in(&self, dots: i32) -> Option<usize> {
+        if !self.lcd_on {
+            return None;
+        }
+        const FRAME_DOTS: i32 = (LINE_DOTS * 154) as i32;
+        let now = (self.line as i32) * LINE_DOTS as i32 + self.modeclock as i32;
+        let pos = (now + dots).rem_euclid(FRAME_DOTS) as u32;
+        let line = pos / LINE_DOTS;
+        let dot = pos % LINE_DOTS;
+        if line >= VBLANK_LINE as u32 || dot >= OAM_DOTS {
+            return None;
+        }
+        // The line the PPU restarts on after `LCDC` bit 7 goes 0→1 has no OAM
+        // scan at all, so nothing is there to corrupt.
+        if self.skip_first_oam && line == self.line as u32 {
+            return None;
+        }
+        Some((dot / 4) as usize)
+    }
+
+    /// The DMG OAM-corruption bug: the CPU put an OAM address on the bus
+    /// `dots` into the current instruction. Corrupts OAM if the PPU is
+    /// scanning it right then.
+    ///
+    /// CGB hardware does not have this defect, even running a monochrome
+    /// cartridge, so `ColorAsClassic` is excluded along with `Color` (Pan
+    /// Docs, ["OAM Corruption
+    /// Bug"](https://gbdev.io/pandocs/OAM_Corruption_Bug.html)).
+    pub(crate) fn oam_bug(&mut self, kind: OamBug, dots: i32) {
+        if self.gbmode != GbMode::Classic {
+            return;
+        }
+        if let Some(row) = self.oam_scan_row_in(dots) {
+            oambug::corrupt(&mut self.voam, row, kind);
+        }
     }
 
     // The PPU mode cycle. See docs/components/ppu.md §"The mode cycle" and Pan Docs:

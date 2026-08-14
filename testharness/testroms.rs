@@ -641,6 +641,12 @@ const BASELINE_HEADER: &str = "\
 #
 #   UPDATE_BASELINE=1 cargo test --release --test testroms
 #
+# `oam_bug@cgb` is expected to FAIL and must stay that way: the DMG
+# OAM-corruption bug is a defect of DMG/MGB/SGB silicon that Game Boy Color
+# hardware does not have, even running a monochrome cartridge (Pan Docs, \"OAM
+# Corruption Bug\"). A real CGB fails this ROM too. Turning that row green
+# would mean emulating a machine nobody has.
+#
 # See docs/testing.md.
 
 ";

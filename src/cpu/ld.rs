@@ -105,32 +105,41 @@ pub fn hlnn(cpu: &mut Cpu) {
 pub fn spnn(cpu: &mut Cpu) {
     cpu.registers.sp = cpu.get_word();
 }
+/// `LD (HL+),A` / `LD (HL-),A`. The memory write and the IDU's own write share
+/// one M-cycle, and Pan Docs is explicit that the pair behaves as a single
+/// write — so nothing beyond `wb`'s own OAM-bug trigger is needed here.
 pub fn hlia(cpu: &mut Cpu) {
-    let mut hl = ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16);
+    let hl = ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16);
     cpu.memory.wb(hl, cpu.registers.a);
-    hl += 1;
-    cpu.registers.h = (hl >> 8) as u8;
-    cpu.registers.l = (hl & 0x00FF) as u8;
+    let value = hl.wrapping_add(1);
+    cpu.registers.h = (value >> 8) as u8;
+    cpu.registers.l = (value & 0x00FF) as u8;
 }
+/// `LD A,(HL+)`. The read and the IDU increment share one M-cycle, which is
+/// its own OAM-corruption pattern on a DMG — see
+/// [`MemoryManagementUnit::share_idu`](crate::mmu).
 pub fn ahli(cpu: &mut Cpu) {
     let hl = ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16);
     let value = hl.wrapping_add(1);
     cpu.registers.h = (value >> 8) as u8;
     cpu.registers.l = (value & 0x00FF) as u8;
+    cpu.memory.share_idu(hl);
     cpu.registers.a = cpu.memory.rb(hl);
 }
 pub fn hld_a(cpu: &mut Cpu) {
-    let addr = ((cpu.registers.h as u16) << 8) + cpu.registers.l as u16;
+    let addr = ((cpu.registers.h as u16) << 8) | cpu.registers.l as u16;
     let value = addr.wrapping_sub(1);
     cpu.registers.h = (value >> 8) as u8;
     cpu.registers.l = (value & 0x00FF) as u8;
     cpu.memory.wb(addr, cpu.registers.a);
 }
+/// `LD A,(HL-)` — see [`ahli`].
 pub fn ahld(cpu: &mut Cpu) {
     let res = ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16);
-    let value = res - 1;
+    let value = res.wrapping_sub(1);
     cpu.registers.h = (value >> 8) as u8;
     cpu.registers.l = (value & 0x00FF) as u8;
+    cpu.memory.share_idu(res);
     cpu.registers.a = cpu.memory.rb(res);
 }
 pub fn aion(cpu: &mut Cpu) {

@@ -762,51 +762,68 @@ pub fn dechlm(cpu: &mut Cpu) {
     cpu.registers.flag(N, true);
     cpu.memory.wb(addr, r);
 }
-pub fn incbc(cpu: &mut Cpu) {
-    let mut val = ((cpu.registers.b as u16) << 8) | (cpu.registers.c as u16);
-    val = val.wrapping_add(1);
+/// The 16-bit increment/decrement unit. `INC rr` / `DEC rr` occupy two
+/// M-cycles: the opcode fetch, then this one, in which the IDU drives the old
+/// value onto the address bus — which is what corrupts OAM on a DMG when that
+/// value is in `$FE00-$FEFF` and the PPU is scanning. See
+/// [`MemoryManagementUnit::idu_tick`](crate::mmu) and
+/// `docs/components/ppu.md` §"The DMG OAM-corruption bug".
+fn idu(cpu: &mut Cpu, value: u16, delta: i16) -> u16 {
+    cpu.memory.idu_tick(value);
+    value.wrapping_add_signed(delta)
+}
+
+fn get_bc(cpu: &Cpu) -> u16 {
+    ((cpu.registers.b as u16) << 8) | (cpu.registers.c as u16)
+}
+fn set_bc(cpu: &mut Cpu, val: u16) {
     cpu.registers.b = (val >> 8) as u8;
     cpu.registers.c = (val & 0x00FF) as u8;
 }
-pub fn incde(cpu: &mut Cpu) {
-    let mut val = ((cpu.registers.d as u16) << 8) | (cpu.registers.e as u16);
-    val = val.wrapping_add(1);
+fn get_de(cpu: &Cpu) -> u16 {
+    ((cpu.registers.d as u16) << 8) | (cpu.registers.e as u16)
+}
+fn set_de(cpu: &mut Cpu, val: u16) {
     cpu.registers.d = (val >> 8) as u8;
     cpu.registers.e = (val & 0x00FF) as u8;
 }
+fn get_hl(cpu: &Cpu) -> u16 {
+    ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16)
+}
+
+pub fn incbc(cpu: &mut Cpu) {
+    let val = idu(cpu, get_bc(cpu), 1);
+    set_bc(cpu, val);
+}
+pub fn incde(cpu: &mut Cpu) {
+    let val = idu(cpu, get_de(cpu), 1);
+    set_de(cpu, val);
+}
 pub fn inchl(cpu: &mut Cpu) {
-    let mut val = ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16);
-    val = val.wrapping_add(1);
-    cpu.registers.h = (val >> 8) as u8;
-    cpu.registers.l = (val & 0x00FF) as u8;
+    let val = idu(cpu, get_hl(cpu), 1);
+    set_hl(cpu, val);
 }
 pub fn set_hl(cpu: &mut Cpu, val: u16) {
     cpu.registers.h = (val >> 8) as u8;
     cpu.registers.l = (val & 0x00FF) as u8;
 }
 pub fn incsp(cpu: &mut Cpu) {
-    cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
+    cpu.registers.sp = idu(cpu, cpu.registers.sp, 1);
 }
 pub fn decbc(cpu: &mut Cpu) {
-    let mut val = ((cpu.registers.b as u16) << 8) | (cpu.registers.c as u16);
-    val = val.wrapping_sub(1);
-    cpu.registers.b = (val >> 8) as u8;
-    cpu.registers.c = (val & 0x00FF) as u8;
+    let val = idu(cpu, get_bc(cpu), -1);
+    set_bc(cpu, val);
 }
 pub fn decde(cpu: &mut Cpu) {
-    let val =
-        (((cpu.registers.d as u16) << 8) | (cpu.registers.e as u16)).wrapping_sub(1);
-    cpu.registers.d = (val >> 8) as u8;
-    cpu.registers.e = (val & 0x00FF) as u8;
+    let val = idu(cpu, get_de(cpu), -1);
+    set_de(cpu, val);
 }
 pub fn dechl(cpu: &mut Cpu) {
-    let v = ((cpu.registers.h as u16) << 8) | (cpu.registers.l as u16);
-    let value = v.wrapping_sub(1);
-    cpu.registers.h = (value >> 8) as u8;
-    cpu.registers.l = (value & 0x00FF) as u8;
+    let val = idu(cpu, get_hl(cpu), -1);
+    set_hl(cpu, val);
 }
 pub fn decsp(cpu: &mut Cpu) {
-    cpu.registers.sp = cpu.registers.sp.wrapping_sub(1);
+    cpu.registers.sp = idu(cpu, cpu.registers.sp, -1);
 }
 pub fn cpl(cpu: &mut Cpu) {
     cpu.registers.a = !cpu.registers.a;

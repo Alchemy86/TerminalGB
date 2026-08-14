@@ -2,7 +2,7 @@ mod oamdma;
 mod serial;
 mod timer;
 
-use crate::gpu::Gpu;
+use crate::gpu::{Gpu, OamBug};
 use crate::input::{InputQueue, Keypad};
 use crate::mbc;
 use crate::mmu::oamdma::OamDma;
@@ -14,6 +14,23 @@ use crate::sound::Sound;
 use std::path;
 
 pub type StrResult<T> = Result<T, &'static str>;
+
+/// Dots between where the batched PPU stands at the top of an instruction and
+/// where the hardware's OAM scan actually is when that instruction's first
+/// M-cycle hits the bus. The PPU is stepped once per instruction, and enabling
+/// the LCD parks it a fixed distance from a real DMG's phase; this constant is
+/// what reconciles the two. Calibrated against Blargg `oam_bug/4-scanline_timing`,
+/// which brackets the 19-M-cycle corruption window to a single M-cycle at both
+/// ends — change it and that test moves.
+const OAM_BUG_PHASE: i32 = -12;
+
+/// `$FE00-$FEFF`: OAM proper plus the prohibited region above it. The whole
+/// page shares OAM's bus, which is why the corruption bug does not stop at
+/// `$FE9F`.
+#[inline]
+fn is_oam_page(address: u16) -> bool {
+    address & 0xFF00 == 0xFE00
+}
 
 const WRAM_SIZE: usize = 0x8000;
 const ZRAM_SIZE: usize = 0x7F;
@@ -95,6 +112,12 @@ pub struct MemoryManagementUnit<'a> {
     // only while a CPU instruction is executing (not during OAM DMA or setup).
     bus_tick_enabled: bool,
     bus_ticked: u32,
+    /// Set by the CPU immediately before a memory access that shares its
+    /// M-cycle with a 16-bit increment/decrement — the DMG OAM-corruption bug
+    /// treats that combination as its own pattern. Set and consumed inside a
+    /// single instruction, so it is never live at a frame boundary and is not
+    /// part of the save state. See [`MemoryManagementUnit::share_idu`].
+    idu_share: bool,
     /// Why this machine is considered to have left the rails, if it has. See
     /// [`MemoryManagementUnit::report_fault`]. Not part of the save state: a
     /// fault is a fact about *this session's* host, not about the emulated
@@ -158,6 +181,7 @@ impl<'a> MemoryManagementUnit<'a> {
             undocumented_cgb_regs: [0; 3],
             bus_tick_enabled: false,
             bus_ticked: 0,
+            idu_share: false,
             fault: None,
             cart_rtc,
         };
@@ -319,6 +343,44 @@ impl<'a> MemoryManagementUnit<'a> {
     /// instruction's remainder in [`Self::do_cycle`] stays correct.
     pub(crate) fn internal_tick(&mut self) {
         self.bus_tick();
+    }
+
+    /// Hand the PPU an OAM bus cycle that landed `dots` T-cycles into the
+    /// current instruction. No-op unless a CPU instruction is executing —
+    /// the offset is only meaningful then, and OAM DMA drives the PPU
+    /// directly rather than through `rb`/`wb`.
+    #[inline]
+    fn oam_bug(&mut self, kind: OamBug, dots: u32) {
+        if self.bus_tick_enabled {
+            self.gpu.oam_bug(kind, dots as i32 + OAM_BUG_PHASE);
+        }
+    }
+
+    /// The CPU's 16-bit increment/decrement unit put `value` on the address
+    /// bus during an M-cycle that carries no memory access of its own —
+    /// `inc rr`, `dec rr`, and the implied `dec sp` at the head of a `push`.
+    ///
+    /// Called *before* that M-cycle is consumed, so the offset is one M-cycle
+    /// past what the bus has already spent. On a DMG this is the whole cause
+    /// of the OAM-corruption bug: the IDU is wired to the address bus and
+    /// asserts the address even with no read or write behind it (Pan Docs,
+    /// ["OAM Corruption Bug"](https://gbdev.io/pandocs/OAM_Corruption_Bug.html)).
+    #[inline]
+    pub(crate) fn idu_tick(&mut self, value: u16) {
+        if is_oam_page(value) {
+            self.oam_bug(OamBug::Write, self.bus_ticked + 4);
+        }
+    }
+
+    /// Flag the *next* memory access as sharing its M-cycle with a 16-bit
+    /// increment/decrement: `ld a,[hli]`, `ld a,[hld]` and the first read of a
+    /// `pop`. `address` is the address that access will use, which in every
+    /// such instruction is also the IDU's operand — so flagging only OAM
+    /// addresses means the flag can never be left set for a *later* access to
+    /// go on and consume.
+    #[inline]
+    pub(crate) fn share_idu(&mut self, address: u16) {
+        self.idu_share = is_oam_page(address);
     }
 
     /// Enable per-access timer stepping for the duration of one CPU
@@ -528,6 +590,19 @@ impl<'a> MemoryManagementUnit<'a> {
     // memory map: https://gbdev.io/pandocs/Memory_Map.html
     pub fn rb(&mut self, address: u16) -> u8 {
         self.bus_tick();
+        // `bus_tick_enabled` is the "a CPU instruction is running" test, and it
+        // guards the flag as well as the corruption: a debug peek of OAM must
+        // neither corrupt it nor eat a pending `share_idu`.
+        if is_oam_page(address) && self.bus_tick_enabled {
+            // A read and an IDU increment sharing one M-cycle corrupt OAM
+            // differently from a plain read — see `share_idu`.
+            let kind = if std::mem::take(&mut self.idu_share) {
+                OamBug::ReadWrite
+            } else {
+                OamBug::Read
+            };
+            self.oam_bug(kind, self.bus_ticked);
+        }
         match address {
             0x0000..=0x7FFF => self.mbc.readrom(address),
             0x8000..=0x9FFF => self.gpu.rb(address),
@@ -692,6 +767,11 @@ impl<'a> MemoryManagementUnit<'a> {
 
     pub fn wb(&mut self, address: u16, value: u8) {
         self.bus_tick();
+        // A write and an IDU increment in the same M-cycle behave as a single
+        // write, so `idu_share` is deliberately not consulted here.
+        if is_oam_page(address) {
+            self.oam_bug(OamBug::Write, self.bus_ticked);
+        }
         match address {
             0x0000..=0x7FFF => self.mbc.writerom(address, value),
             0x8000..=0x9FFF => self.gpu.wb(address, value),
@@ -1091,5 +1171,187 @@ mod vramdma_tests {
             assert_eq!(mem.rb(a), 0xFF, "{a:04X}");
         }
         assert_eq!(mem.rb(0xFF55), 0xFF, "idle: bit 7 set, length $7F");
+    }
+}
+
+/// The DMG OAM-corruption bug, at the machine level.
+///
+/// [`crate::gpu::oambug`]'s own tests pin the three corruption *patterns*;
+/// these pin the parts that only exist once a CPU, an MMU and a PPU are wired
+/// together: which console has the defect, which bus cycles trigger it, and
+/// when in the scanline they have to land. Nothing here needs a ROM — every
+/// value fed to the bus is something ordinary guest code can produce.
+#[cfg(test)]
+mod oam_bug_tests {
+    use super::*;
+    use crate::mode::Model;
+
+    /// A machine with a blank 32 KiB cartridge, OAM filled with a recognisable
+    /// pattern, and the PPU parked mid-way through the OAM scan of a visible
+    /// scanline — which is the only place the bug can happen.
+    fn machine_in_oam_scan(model: Model) -> MemoryManagementUnit<'static> {
+        machine_with_header(model, 0x00)
+    }
+
+    fn machine_with_header(model: Model, cgb_flag: u8) -> MemoryManagementUnit<'static> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0143] = cgb_flag;
+        let mut mem = MemoryManagementUnit::new_with_model(rom, None, model).unwrap();
+        mem.wb(0xFF40, 0x00); // LCD off: OAM is ours to fill
+        for i in 0..0xA0u16 {
+            mem.wb(0xFE00 + i, i as u8);
+        }
+        mem.wb(0xFF40, 0x81); // LCD on
+                              // Step past line 0 — which the PPU restarts on with no OAM scan — and
+                              // then far enough into the next line's scan that the phase correction
+                              // cannot carry the prediction out of mode 2 at either end.
+        mem.gpu.do_cycle(456 + 40);
+        mem
+    }
+
+    fn oam(mem: &MemoryManagementUnit) -> Vec<u8> {
+        mem.gpu.voam.to_vec()
+    }
+
+    /// Run `f` as if it were one M-cycle inside an executing instruction.
+    fn during_instruction(
+        mem: &mut MemoryManagementUnit,
+        f: impl FnOnce(&mut MemoryManagementUnit),
+    ) {
+        let prev = mem.set_bus_ticking(true);
+        f(mem);
+        mem.set_bus_ticking(prev);
+        mem.bus_ticked = 0;
+    }
+
+    #[test]
+    fn a_16_bit_increment_over_oam_corrupts_it_on_a_dmg() {
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        let before = oam(&mem);
+        during_instruction(&mut mem, |m| m.idu_tick(0xFE00));
+        assert_ne!(oam(&mem), before, "inc rr over OAM left OAM untouched");
+    }
+
+    /// The whole point of the IDU hook: this cycle carries no memory access at
+    /// all, so an implementation that only watches `rb`/`wb` sees nothing.
+    #[test]
+    fn the_trigger_is_the_address_bus_not_a_memory_access() {
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        let before = oam(&mem);
+        // `add hl,rr` and friends go through the ALU and never assert the
+        // address, so nothing calls `idu_tick` for them — Blargg
+        // `oam_bug/3-non_causes`. A value outside the page must also be inert.
+        during_instruction(&mut mem, |m| m.idu_tick(0xFDFF));
+        during_instruction(&mut mem, |m| m.idu_tick(0xFF00));
+        assert_eq!(
+            oam(&mem),
+            before,
+            "an address outside $FE00-$FEFF triggered"
+        );
+    }
+
+    /// `$FEA0-$FEFF` is prohibited memory, not a hole: it shares OAM's bus, so
+    /// a `pop` with `SP` up there corrupts OAM just the same.
+    #[test]
+    fn the_prohibited_region_is_on_the_same_bus() {
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        let before = oam(&mem);
+        during_instruction(&mut mem, |m| m.idu_tick(0xFEF0));
+        assert_ne!(oam(&mem), before, "$FEF0 is on OAM's bus and must trigger");
+    }
+
+    /// Pan Docs: "Game Boy Color and Advance are not affected by this bug, even
+    /// when running monochrome software." `ColorAsClassic` is CGB *hardware* in
+    /// compatibility mode, so it is excluded too — which is why
+    /// `blargg/oam_bug@cgb` is pinned FAIL in the baseline.
+    #[test]
+    fn color_hardware_does_not_have_the_defect() {
+        // A CGB cartridge on a CGB, and a monochrome one on the same console —
+        // compatibility mode is still Color silicon.
+        for (model, flag) in [(Model::Cgb, 0xC0u8), (Model::Cgb, 0x00)] {
+            let mut mem = machine_with_header(model, flag);
+            assert_ne!(mem.gbmode, GbMode::Classic, "wanted CGB hardware");
+            let before = oam(&mem);
+            during_instruction(&mut mem, |m| m.idu_tick(0xFE00));
+            during_instruction(&mut mem, |m| {
+                m.rb(0xFE00);
+            });
+            during_instruction(&mut mem, |m| m.wb(0xFE00, 0x55));
+            assert_eq!(
+                oam(&mem)[8..],
+                before[8..],
+                "{model:?} (header {flag:#04X}) corrupted OAM: CGB silicon has no OAM bug"
+            );
+        }
+    }
+
+    /// Outside the OAM scan there is nothing for the CPU to collide with. Both
+    /// the LCD being off and the PPU being past mode 2 must be inert — Blargg
+    /// `oam_bug/3-non_causes` case 2 and `6-timing_no_bug`.
+    #[test]
+    fn nothing_happens_outside_the_oam_scan() {
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        mem.gpu.do_cycle(80); // past the scan, into pixel transfer
+        let before = oam(&mem);
+        during_instruction(&mut mem, |m| m.idu_tick(0xFE00));
+        assert_eq!(oam(&mem), before, "mode 3 corrupted OAM");
+
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        mem.wb(0xFF40, 0x01); // LCD off
+        let before = oam(&mem);
+        during_instruction(&mut mem, |m| m.idu_tick(0xFE00));
+        assert_eq!(oam(&mem), before, "an LCD-off access corrupted OAM");
+    }
+
+    /// An observer must not change the run it is watching: `debug_peek` and
+    /// `debug_poke` suppress the bus tick, and the OAM bug rides on that same
+    /// flag. Without this a trainer panel reading OAM ten times a second would
+    /// quietly garble the sprites it was reporting on.
+    #[test]
+    fn a_debug_peek_or_poke_of_oam_cannot_corrupt_it() {
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        let before = oam(&mem);
+        mem.debug_peek(0xFE00);
+        mem.debug_poke(0xFE00, before[0]);
+        assert_eq!(oam(&mem), before, "an inspector perturbed the machine");
+    }
+
+    /// A `pop`/`ld a,[hl±]` flags its read as sharing an M-cycle with the IDU.
+    /// The flag is keyed on the address so it cannot survive to be consumed by
+    /// some *later*, unrelated OAM read — which would silently apply the wrong
+    /// corruption pattern.
+    #[test]
+    fn the_idu_share_flag_cannot_leak_to_a_later_access() {
+        let mut mem = machine_in_oam_scan(Model::Dmg);
+        mem.share_idu(0xC000);
+        assert!(!mem.idu_share, "a non-OAM address must not arm the flag");
+
+        mem.share_idu(0xFE00);
+        assert!(mem.idu_share);
+        during_instruction(&mut mem, |m| {
+            m.rb(0xFE00);
+        });
+        assert!(
+            !mem.idu_share,
+            "the flag outlived the access that consumed it"
+        );
+    }
+
+    /// The read-and-IDU pattern is genuinely a third pattern, not a relabelled
+    /// read: at the same row it must produce a different OAM.
+    #[test]
+    fn a_read_sharing_its_cycle_with_the_idu_is_its_own_pattern() {
+        let mut plain = machine_in_oam_scan(Model::Dmg);
+        during_instruction(&mut plain, |m| {
+            m.rb(0xFE00);
+        });
+
+        let mut shared = machine_in_oam_scan(Model::Dmg);
+        shared.share_idu(0xFE00);
+        during_instruction(&mut shared, |m| {
+            m.rb(0xFE00);
+        });
+
+        assert_ne!(oam(&plain), oam(&shared));
     }
 }

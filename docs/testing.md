@@ -65,8 +65,8 @@ The classic battery. Sub-suites: `cpu_instrs` (11 sub-tests), `instr_timing`, `m
   on-screen too.) → depends on the [Serial](components/serial.md) capture hook.
 - **This repo:** the `retrio/gb-test-roms` submodule in [`.gitmodules`](../.gitmodules) is
   now **wired into CI** — the harness runs `cpu_instrs` (11/11 pass), `instr_timing` (pass),
-  `mem_timing`/`mem_timing-2` (**pass**), `halt_bug` (**pass**); `oam_bug` and
-  `interrupt_time` stay red as documented non-goals. See
+  `mem_timing`/`mem_timing-2` (**pass**), `halt_bug` (**pass**), `oam_bug` (**pass on
+  `@dmg`; expected to fail on `@cgb`, which has no such defect**). See
   [What Phase 1 actually built](#what-phase-1-actually-built--the-harness-in-this-repo).
 - Sources: [gg8 Test ROMs](https://gbdev.gg8.se/wiki/articles/Test_ROMs) ·
   [c-sp collection](https://github.com/c-sp/game-boy-test-roms).
@@ -304,16 +304,17 @@ Rows are ROM x console, so 18 ROMs give 35 rows (`interrupt_time` is CGB-only).
 | Blargg `mem_timing-2` | **PASS** | **PASS** | prints `01:ok 02:ok 03:ok Passed` |
 | Blargg `halt_bug` | **PASS** | **PASS** | prints `Passed` — HALT bug modelled |
 | Blargg `interrupt_time` | — (CGB-only ROM) | FAIL — **documented non-goal** | prints `Failed`; 16-vs-20 T-cycle interrupt dispatch |
-| Blargg `oam_bug` | FAIL — **documented non-goal** | FAIL | prints `01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 … Failed #2`, i.e. **3 of 8 sub-tests pass** |
+| Blargg `oam_bug` | **PASS** | FAIL — **expected** | `@dmg` prints `01:ok … 08:ok Passed`, i.e. **8 of 8 sub-tests**. `@cgb` is expected to fail: the OAM-corruption bug is DMG/MGB/SGB silicon only, so a real CGB fails this ROM too |
 | dmg-acid2 | **PASS** | **PASS** | **0 of 23,040** pixels differ from `reference-dmg.png` |
 
-**32 of 35 rows pass.** Both failures are deliberate, documented non-goals, and both are now
-*measured* rather than pinned as a hash: `interrupt_time` prints `Failed` (its 16-vs-20
-T-cycle interrupt-dispatch gap), and `oam_bug` reports exactly which of its eight sub-tests
-fail — the DMG OAM-corruption bug is a hardware *defect* essentially no commercial game
-relies on. The mode-3-length and OAM-DMA-bus-restriction approximations need a cycle-stepped
-PPU/CPU (a structural commitment the project has not made); they are what costs us Mealybug
-(0/71) and SameSuite DMA (0/4). The whole suite runs in **~2.7 s**.
+**34 of 35 rows pass**, measured. The one remaining red — `oam_bug@cgb` — is *supposed*
+to be red: the OAM-corruption bug is a defect of DMG/MGB/SGB silicon that Game Boy Color
+hardware does not have, even running a monochrome cartridge, so a real CGB fails this ROM
+too. Turning that row green would mean emulating a machine nobody has. Every row here is
+measured rather than pinned as a hash, so `oam_bug` reports which of its eight sub-tests
+pass rather than an opaque number. The mode-3-length approximation still needs a
+cycle-stepped PPU (a structural commitment the project has not made). The whole suite runs
+in **~2.8 s**.
 
 acid2 rendering correctly is a genuinely good result — the PPU composites background, window
 and objects correctly enough to match the reference exactly, despite the fixed mode-3 /

@@ -106,10 +106,8 @@ lines per fix, not a process document.
   (sound is `None` headless). Timer stepping costs ~15% on a pure-CPU benchmark
   (headless still ~60× realtime). The **HALT bug IS modelled** now (`halt_bug` flag; PC
   rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
-- Known-inaccurate **on purpose (documented non-goals — see component pages)**: DMG
-  OAM-corruption bug not modelled (`oam_bug` red-by-design — 3 of its 8 sub-tests pass; it
-  is a DMG hardware *defect*); PPU mode 3 fixed-length (needs a cycle-stepped PPU — it
-  costs us Mealybug 0/71). *(The "CGB double-speed switch does not take effect" entry that
+- Known-inaccurate **on purpose (documented non-goals — see component pages)**: PPU mode 3
+  fixed-length (needs a cycle-stepped PPU — it costs us Mealybug 0/71). *(The "CGB double-speed switch does not take effect" entry that
   used to sit here was a misdiagnosis and is gone — the switch was working; the APU was
   clocked at CPU speed, so a ROM that synchronises through the APU could not see it. See
   the SameSuite APU section.)*
@@ -429,6 +427,45 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   documentation**: `git clone --depth 1 https://github.com/Gekkio/mooneye-test-suite` and
   read the `.s` file. Every behaviour above was derived from the assembly plus its expected
   table, not guessed from the test's name.
+
+## The DMG OAM-corruption bug (`src/gpu/oambug.rs`) — a defect we had to ADD
+
+- **`blargg/oam_bug@dmg` 3/8 sub-tests → 8/8 PASS**; the in-repo suite went **33/35 →
+  34/35 rows**. It is no longer a non-goal. Full reasoning + the conformance corpus entry:
+  [`docs/conformance-notes.md`](docs/conformance-notes.md) (newest entry).
+- **`oam_bug@cgb` MUST STAY RED.** The bug is DMG/MGB/SGB silicon only — Pan Docs says CGB
+  and Advance are unaffected *even running monochrome software* — so a real CGB fails this
+  ROM too. `Gpu::oam_bug` returns early unless `gbmode == GbMode::Classic`, which
+  deliberately excludes `ColorAsClassic` (that is CGB hardware in compat mode). The
+  baseline header says all this so nobody "fixes" the row.
+- **The cause is the ADDRESS BUS, not a memory access.** The CPU's 16-bit
+  increment/decrement unit is wired to the address bus and asserts its operand even with
+  no read or write behind it. So `inc de` with `DE = $FE00` corrupts OAM and `add hl,bc`
+  with the same value does not. Hooking only `rb`/`wb` gets `2-causes` and `3-non_causes`
+  wrong — the IDU hook (`MemoryManagementUnit::idu_tick`, called from `cpu::data::idu`,
+  `push_rr`, `call`, `rst`) is the load-bearing half.
+- **`share_idu(address)` is how the "read and IDU in the same M-cycle" pattern is spelled**
+  (`ld a,[hl±]`, and a `pop`'s *first* read only — Pan Docs records `pop` as triggering
+  three times, not four). It takes the address so it can only ever flag an access that is
+  itself in OAM, which is what stops a stale flag being consumed by a later access. A
+  *write* sharing its M-cycle with an IDU is just a write, so `wb` never consults it.
+- **`OAM_BUG_PHASE = -12` is calibrated, not chosen.** The PPU is stepped once per
+  instruction, so which OAM row a mid-instruction bus cycle hits is *predicted*
+  arithmetically (`Gpu::oam_scan_row_in`) from the free-running dot counter. The one
+  systematic error is that enabling the LCD mid-instruction over-advances the batched PPU
+  by the ticks that instruction had already spent; this constant absorbs it. **Measured:
+  −16 and −8 both fail `4-scanline_timing`, at opposite ends of the window; only the
+  4-dot band containing −12 passes.** It assumes the 3-M-cycle `ldh [rLCDC],a` every test
+  ROM and essentially every game uses — a 4-M-cycle `ld [$FF40],a` would land one row off.
+- **Cost: ~1.5 % on the test-ROM suite** (2.78 s → 2.82 s, alternating A/B, 3 rounds).
+  The hot path gained one `address & 0xFF00 == 0xFE00` test in `rb`/`wb` and a range test
+  on the IDU value; everything else is behind those cold branches.
+- **No save-state format bump.** `idu_share` is set and consumed inside one instruction,
+  so it is never live at a frame boundary and is deliberately not serialised.
+- Verified no regression anywhere: `--lib` 589/589, savestate, battery 8/8, audiocapture
+  (`dmg_sound` 12/12, all hashes unchanged), dmg-acid2 0/23,040 px, and the external
+  suites byte-identical before/after (Mooneye acceptance 55/75, SameSuite 61/76, Mealybug
+  3 — measured on this branch's parent and again with the change).
 
 ## Test-ROM correctness harness
 

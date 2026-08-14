@@ -12,6 +12,12 @@
 #
 #   UPDATE_BASELINE=1 cargo test --release --test testroms
 #
+# `oam_bug@cgb` is expected to FAIL and must stay that way: the DMG
+# OAM-corruption bug is a defect of DMG/MGB/SGB silicon that Game Boy Color
+# hardware does not have, even running a monochrome cartridge (Pan Docs, "OAM
+# Corruption Bug"). A real CGB fails this ROM too. Turning that row green
+# would mean emulating a machine nobody has.
+#
 # See docs/testing.md.
 
 blargg/cpu_instrs/01-special@dmg = PASS | 01-special Passed
@@ -45,7 +51,7 @@ blargg/mem_timing-2@cgb = PASS | mem_timing 01:ok 02:ok 03:ok Passed
 blargg/interrupt_time@cgb = PASS | interrupt time 00 00 00 00 08 0D 01 00 00 01 08 0D Passed
 blargg/halt_bug@dmg = PASS | halt bug IE IF IF DE 01 10 F1 0C04 01 00 E1 0C04 01 01 E1 0411 11 00 E1 0C04 11 10 F1 0411 11 11 F1 0411 E1 00 E1 0C04 E1 E0 E1 0C04 E1 E1 E1 0411 Passed
 blargg/halt_bug@cgb = PASS | halt bug IE IF IF DE 01 10 F1 0C04 01 00 E1 0C04 01 01 E1 0411 11 00 E1 0C04 11 10 F1 0411 11 11 F1 0411 E1 00 E1 0C04 E1 E0 E1 0C04 E1 E1 E1 0411 Passed
-blargg/oam_bug@dmg = FAIL | oam_bug 01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 Run failed tests individually for more details. Failed #2
+blargg/oam_bug@dmg = PASS | oam_bug 01:ok 02:ok 03:ok 04:ok 05:ok 06:ok 07:ok 08:ok Passed
 blargg/oam_bug@cgb = FAIL | oam_bug 01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02 Run failed tests individually for more details. Failed #2
 acid2/dmg-acid2@dmg = PASS | 0/23040 pixels differ from third_party/dmg-acid2/reference-dmg.png
 acid2/dmg-acid2@cgb = PASS | 0/23040 pixels differ from third_party/dmg-acid2/reference-dmg.png

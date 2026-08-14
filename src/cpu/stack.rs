@@ -18,7 +18,13 @@ pub fn pushstack(cpu: &mut Cpu, value: u16) {
 }
 
 /// Pop a 16-bit value: low byte from `SP`, high from `SP+1`, one M-cycle each.
+///
+/// Both M-cycles carry a read *and* an IDU increment, but only the first
+/// asserts the IDU's glitched write — Pan Docs records `pop` as triggering the
+/// DMG OAM bug three times rather than the four its cycles suggest, "one read,
+/// one glitched write, and another read without a glitched write".
 fn popstack(cpu: &mut Cpu) -> u16 {
+    cpu.memory.share_idu(cpu.registers.sp);
     let lo = cpu.memory.rb(cpu.registers.sp) as u16;
     cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
     let hi = cpu.memory.rb(cpu.registers.sp) as u16;
@@ -31,6 +37,11 @@ fn popstack(cpu: &mut Cpu) -> u16 {
 /// is what happens when only bus accesses tick the clock) puts both writes one
 /// M-cycle early — `acceptance/push_timing` measures exactly that.
 fn push_rr(c: &mut Cpu, value: u16) {
+    // That internal cycle is the first `dec sp`: the IDU drives the old SP
+    // onto the address bus, which is one of the DMG OAM bug's triggers. The
+    // second `dec sp` shares its M-cycle with the high-byte write and folds
+    // into it.
+    c.memory.idu_tick(c.registers.sp);
     c.memory.internal_tick();
     pushstack(c, value);
 }
@@ -145,6 +156,7 @@ pub fn jrcn(c: &mut Cpu) -> u32 {
 /// `call_timing2`).
 fn call(c: &mut Cpu) {
     let target = c.get_word();
+    c.memory.idu_tick(c.registers.sp);
     c.memory.internal_tick();
     let ret_addr = c.registers.pc;
     pushstack(c, ret_addr);
@@ -223,6 +235,7 @@ pub fn retc(c: &mut Cpu) -> u32 {
 /// `RST n`: 4 M-cycles, laid out like `PUSH` — opcode fetch, internal, high
 /// push, low push (`acceptance/rst_timing`).
 pub fn rst(c: &mut Cpu, val: u16) {
+    c.memory.idu_tick(c.registers.sp);
     c.memory.internal_tick();
     let ret_addr = c.registers.pc;
     pushstack(c, ret_addr);

@@ -25,8 +25,8 @@
 
 > ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The CPU
 > passes Blargg's `cpu_instrs`, `instr_timing`, `mem_timing` and `halt_bug`; a few
-> edge-cases (interrupt-dispatch cycle count, the DMG OAM-corruption bug, parts of CGB
-> sound, variable mode-3 timing) remain known-inaccurate as documented non-goals — see
+> edge-cases (parts of CGB sound, variable mode-3 timing) remain known-inaccurate as
+> documented non-goals — see
 > **[Status](#status)**, the [test scoreboard](testharness/README.md), and the honest
 > per-component notes. This project is a study of emulation, not a piracy tool: it ships no
 > ROMs and no BIOS.
@@ -649,7 +649,7 @@ rationale: **[docs/testing.md](docs/testing.md)**.
 | Blargg `halt_bug` | ✅ Pass, DMG and CGB (HALT bug modelled) |
 | `dmg-acid2` (PPU) | ✅ 0 of 23,040 pixels differ from the reference image, DMG and CGB |
 | Blargg `dmg_sound` (12) | ✅ 12/12 pass (measured by the audio harness) |
-| Blargg `oam_bug` | 🚫 3 of 8 sub-tests pass — DMG OAM-corruption bug is a documented non-goal |
+| Blargg `oam_bug` | ✅ 8/8 sub-tests pass on DMG (the OAM-corruption bug is modelled). Expected to fail on CGB — that silicon has no such defect |
 | Blargg `interrupt_time` | 🚫 Fails — 16- vs 20-T-cycle interrupt dispatch, a documented non-goal |
 
 **32 of 35 ROM/console rows pass.** APU accuracy is measured by a separate offline audio
@@ -663,7 +663,10 @@ is Mooneye acceptance 13/66, Mealybug 0/71, SameSuite APU 2/61. Do not read "we 
 
 **Known limitations** (each is documented honestly on the relevant component page)
 - No boot ROM / logo scroll; the post-boot register state is written directly.
-- The DMG OAM-corruption bug is not modelled (deliberate non-goal); the HALT bug **is**.
+- The DMG OAM-corruption bug **is** modelled, as is the HALT bug. The PPU is stepped once
+  per instruction, so which OAM row a mid-instruction bus cycle hits is predicted
+  arithmetically rather than observed; one calibrated constant absorbs the phase the
+  batched PPU picks up when the LCD is switched on mid-instruction.
 - OAM DMA is instantaneous and does not restrict the bus; PPU mode 3 is fixed-length. Making
   these cycle-exact needs a cycle-stepped PPU/CPU — the structural step the Mealybug PPU suite
   (0/71) and SameSuite's DMA tests (0/4) are waiting on.

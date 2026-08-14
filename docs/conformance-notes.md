@@ -17,6 +17,88 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the DMG OAM-corruption bug: a defect that had to be *added*
+
+Blargg `oam_bug` went **3 of 8 sub-tests → 8 of 8** on a DMG (`blargg/oam_bug@dmg`
+FAIL → PASS in `testharness/baseline.txt`; the whole in-repo suite 33/35 → 34/35).
+This is the unusual case where conformance means reproducing a hardware *fault*,
+so the four points of the standing convention read a little differently.
+
+**Symptom.** On a DMG, a game that increments or decrements a 16-bit register while
+that register holds an address in `$FE00-$FEFF` — or reads/writes there at all — while
+the PPU is scanning OAM sees sprites visibly garble: whole 8-byte OAM rows are copied
+from their neighbour and one word is mangled. An emulator without the bug shows a clean
+screen where hardware shows corruption; an emulator with the bug but the wrong *timing*
+corrupts the wrong row. Neither is visible in a framebuffer diff of any normal game,
+because essentially no commercial game triggers it deliberately — which is exactly why
+it needs a test ROM to see at all.
+
+**Caught by.** Blargg `oam_bug`, and nothing else in any suite we run. Its eight
+sub-tests separate cleanly and are worth carrying into the tool individually, because
+three of them pass on an emulator that models *nothing*:
+
+| sub-test | what it pins | passes with no model? |
+|---|---|---|
+| 1 `lcd_sync` | enabling the LCD starts at the top of a visible line | yes |
+| 2 `causes` | the exact set of triggering instructions | no |
+| 3 `non_causes` | `add hl,rr` / `ld hl,sp+n` / `add sp,n` / 8-bit `inc` must **not** trigger | yes (vacuously) |
+| 4 `scanline_timing` | the window is 19 M-cycles and where it starts, to one M-cycle | no |
+| 5 `timing_bug` | it recurs on every visible line and not in VBlank | no |
+| 6 `timing_no_bug` | nothing is corrupted just outside the window, over 10 frames | yes (vacuously) |
+| 7 `timing_effect` | the corruption pattern for each of 116 offsets across a line | no |
+| 8 `instr_effect` | the pattern differs per instruction: `inc/dec rr`, `pop`, `push`, `ld a,[hl±]` | no |
+
+*That "passes vacuously" column is the finding.* A pass/fail runner reports "3 of 8" for
+an emulator that has never heard of the bug, which reads like partial credit for partial
+work. The tool should say: sub-tests 3 and 6 are **negative** checks and are worthless
+on their own — score them only alongside 2, 4, 5, 7 and 8.
+
+**Hardware behaviour.** Pan Docs, ["OAM Corruption
+Bug"](https://gbdev.io/pandocs/OAM_Corruption_Bug.html). Two facts do the work:
+
+1. *The cause is the address bus, not a memory access.* The CPU's 16-bit
+   increment/decrement unit (IDU) is wired straight to the address bus and asserts its
+   operand as an address even when no read or write is behind it. So `inc de` with
+   `DE = $FE00` corrupts OAM while `add hl,bc` with the same value does not — the latter
+   goes through the ALU and never reaches the bus. Blargg's `3-non_causes` is precisely
+   this distinction, and it is the part an implementation is most likely to get wrong by
+   hooking `rb`/`wb` and stopping there.
+2. *OAM is 20 rows of 8 bytes and mode 2 walks one row per M-cycle*, so which row is
+   corrupted is a pure function of the dot the offending cycle lands on. Row 0 (objects 0
+   and 1) has no preceding row to copy from and is never corrupted — which is why the
+   window is **19** M-cycles wide, not 20, and why `4-scanline_timing` brackets it at both
+   ends to a single M-cycle.
+
+The three patterns (write `((a^c)&(b^c))^c`, read `b|(a&c)`, and the read-and-write-in-one-
+M-cycle case that also reaches a row backwards) are transcribed in
+[`src/gpu/oambug.rs`](../src/gpu/oambug.rs).
+
+**A CGB is supposed to FAIL this ROM.** Pan Docs is explicit that Game Boy Color and
+Advance are not affected, *even running monochrome software*. `blargg/oam_bug@cgb` is
+therefore pinned FAIL in the baseline with a note in its header, and a conformance tool
+must not treat it as a red row: scoring it against a CGB rewards emulating a machine that
+does not exist. **Generalisation worth carrying into the tool: a check needs a
+machine-model predicate, not just a ROM.** This is the first check in the corpus whose
+*correct* result depends on which console it is run on, and the same will be true of every
+DMG-defect and CGB-only test that follows.
+
+**Carries into the tool.**
+- `oam_bug` sub-tests 2, 4, 5, 7, 8 as five separately-reported checks, with 3 and 6
+  marked as negative controls that must be scored jointly.
+- The model predicate above (`dmg` only; `cgb` expected-fail).
+- The unit assertions in `gpu::oambug::tests` — the three bitwise patterns, the row-0
+  exemption and the first-four-and-last-row exemption of the read-write pattern — which
+  are checkable without a ROM at all.
+- **A phase-calibration check.** Our PPU is stepped once per instruction, so the dot a
+  mid-instruction bus cycle lands on is predicted arithmetically and one constant
+  (`mmu::OAM_BUG_PHASE`) absorbs the offset the batched PPU accumulates when `LCDC` bit 7
+  is set part-way through an instruction. `4-scanline_timing` pins that constant to a
+  single M-cycle: measured here, ±1 M-cycle (±4 dots) flips it, in opposite directions at
+  the two ends of the window. An emulator that passes 2 and 5 but fails 4 has the bug and
+  the wrong phase, and the tool should say so rather than reporting a bare failure.
+
+---
+
 ## 2026-08-14 — MBC1M multicarts were driven as ordinary MBC1 carts
 
 Mooneye `emulator-only/mbc1/multicart_rom_8Mb` was the suite's single MBC failure

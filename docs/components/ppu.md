@@ -253,7 +253,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/gameboy/blo
 | **cgb-acid2** | The CGB equivalent (colour palettes, attributes, priority) | CGB attribute/palette/priority bugs. |
 | **Mooneye `acceptance/ppu/`** (`intr_1_2_timing`, `intr_2_0_timing`, `lcdon_timing`, `stat_irq_blocking`, `vblank_stat_intr`, …) | Exact mode/STAT/LYC interrupt timing | Directly targets §4/§5 approximations. `intr_1_2_timing-GS`, `vblank_stat_intr-GS`, `stat_irq_blocking` and `stat_lyc_onoff` pass; the other 8 are mode-3 and LCD-on-phase reds. Run with `cargo run --release --example mooneye_scout -- <suite>/acceptance`. |
 | **Mealybug Tearoom** (Matt Currie) | PPU register writes *during* mode 3, against DMG / CPU CGB C / CPU CGB D reference screenshots | Directly targets the whole-line renderer. **1 of 31 ROMs pixel-exact**; run it with `cargo run --release --example mealybug -- --dir <checkout>`. Full accounting and the cost of the rest: [`docs/mealybug.md`](../mealybug.md). |
-| **Blargg `oam_bug`** | The OAM corruption bug (DMG) | Fails — the bug isn't modelled. |
+| **Blargg `oam_bug`** | The OAM corruption bug (DMG) | **8/8 sub-tests pass on `@dmg`** — the bug is modelled in [`src/gpu/oambug.rs`](../../src/gpu/oambug.rs), driven by `Gpu::oam_scan_row_in`. A failure means the mode-2 dot window, the row the PPU is on, or a corruption pattern has moved. `@cgb` is expected to fail: CGB silicon has no such defect. See [MMU §5](mmu.md). |
 | **Blargg `cgb_sound`** shares no PPU code, but its screenshot is in the repo as "failing" | — | (APU, listed under [APU](apu.md).) |
 
 The declared submodule `retrio/gb-test-roms` is Blargg-only and **uninitialised**; acid2
