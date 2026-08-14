@@ -447,6 +447,25 @@ cargo test --lib sound
 #                                hold-and-fade on underrun, re-prime behaviour
 ```
 
+**A moved audio baseline is a console change until proven otherwise.**
+`testharness/audio_baseline.txt` pins an FNV hash of the PCM stream, and the hashes are
+**model-dependent**: the fixtures boot whichever console the cartridge header asks for, and
+`dmg_sound` is a DMG cartridge (`0x0143 == 0x00`), so it boots a DMG. When the DMG mode
+landed, both `dmg_sound` hashes moved and the sample counts dropped by exactly 256 (5.8 ms
+at 44.1 kHz) because a DMG's boot state differs from the Color console's compatibility mode.
+Before re-blessing, run the A/B:
+
+```bash
+GB_MODEL=cgb cargo test --release --test audiocapture
+```
+
+`GB_MODEL=cgb` forces the pre-DMG-mode console. If the old hashes come back **byte-for-byte**,
+the move is the console and nothing else — no synthesis regression. If they do not, something
+in `src/sound.rs` changed and you owe the WAVs a listen before blessing anything. This is the
+cheapest honest check available and it takes one command; the verdict pinned per fixture
+(`dmg_sound` **12/12**) is what actually asserts accuracy, the hash only pins "the samples did
+not change".
+
 **Capture what a ROM actually produces** (no audio device needed — this is the
 offline audio harness, wired into CI like the video frame-hash harness):
 

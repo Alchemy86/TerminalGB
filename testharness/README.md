@@ -107,8 +107,11 @@ See [PPU](../docs/components/ppu.md), [MMU](../docs/components/mmu.md) and
 ## Running it
 
 ```sh
-# Run the whole matrix (release; ~3 s). Audio is off by default, so no ALSA needed —
-# the harness installs a device-free APU itself.
+# Run the whole matrix (release; 2.9 s measured). Audio is off by default, so no ALSA
+# needed — the harness installs a device-free APU itself, which costs +0.02 ms per
+# emulated frame (1.1x) against a 16.743 ms budget. That is NOT the ~17.9 ms/frame the
+# `audio` cargo feature currently costs: cpal and the producer-side queue throttle are
+# not compiled here at all. See docs/testing.md.
 cargo test --release --test testroms
 
 # Re-bless the baseline after a deliberate, reviewed change:
@@ -117,6 +120,10 @@ UPDATE_BASELINE=1 cargo test --release --test testroms
 # Dump every ROM's final frame to target/testrom-artifacts/<id>__<model>.png:
 DUMP_FRAMES=1 cargo test --release --test testroms
 ```
+
+Before re-blessing any moved baseline, rule out the console first —
+`GB_MODEL=cgb cargo test --release --test audiocapture` forces the pre-DMG-mode machine, and
+if the old hashes come back byte-for-byte the move is the console, not a regression.
 
 CI is **green when reality matches `baseline.txt`** and red on **any** change, in either
 direction. Two startup self-checks run first, so a green result means something: the reference

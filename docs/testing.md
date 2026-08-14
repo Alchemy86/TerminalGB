@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`3819125`](https://github.com/Alchemy86/gameboy/tree/381912575bd3679c9e6b31c38a44b787b3b873e8) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/gameboy/tree/main); line references documented as of commit [`bdc55f3`](https://github.com/Alchemy86/gameboy/tree/bdc55f37f648d0aa16ad0311ec2170aa854c75ec) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -203,6 +203,19 @@ The section above is the design sketch. What is now checked in and runs in CI:
   — with one it runs to completion and prints `Failed`, which is a result worth having. (The
   audio harness had always installed one, which is why the two harnesses disagreed.)
 
+  **What that costs, measured:** `+0.02 ms per emulated frame` (0.245 → 0.265 ms on
+  dmg-acid2, +0.004 ms on `cpu_instrs/09`) against a 16.743 ms frame budget — 1.1x, and the
+  whole 35-row suite runs in **2.9 s**. Worth stating explicitly because a separate
+  investigation found that with the **`audio` cargo feature** enabled a frame costs ~17.9 ms,
+  which is a ~62x slowdown and why the terminal frontend shows ~5 fps. **That is a different
+  code path from this one** and the harness is not affected by it: `cargo test` builds
+  without the `audio` feature, so `cpal` and `sample_queue` are not compiled at all, the
+  harness' `SilentPlayer::play` is a no-op, and nothing can reach the producer-side
+  high-watermark throttle that paces the emulator against the audio clock
+  (`sample_queue`, `#[cfg(feature = "audio")]` — see [`docs/audio.md`](audio.md) §4). If that
+  changes — if the suite's wall-clock time jumps — the APU install here is the first thing to
+  re-measure, not to remove: the verdicts depend on it.
+
 - **Every ROM runs on both consoles.** Baseline keys are `<rom>@dmg` and `<rom>@cgb`; a
   cartridge whose header says it will not run on a DMG (`0x0143 == 0xC0`, e.g.
   `interrupt_time`) has no `@dmg` row. This also settles which *binary* we are testing: the
@@ -259,6 +272,21 @@ expected-results file, [`testharness/baseline.txt`](../testharness/baseline.txt)
 
   Review the diff to `baseline.txt`, confirm the change is real, and commit it. That single
   file is the mechanism that keeps the suite honest as the emulator improves.
+
+- **Before blessing a baseline move, rule out the console.** Both this baseline and
+  [`testharness/audio_baseline.txt`](../testharness/audio_baseline.txt) depend on which
+  machine a cartridge boots, and that is now chosen from the cartridge header. `$GB_MODEL`
+  forces the old behaviour, so the A/B is one command:
+
+  ```sh
+  GB_MODEL=cgb cargo test --release --test audiocapture   # the pre-DMG-mode console
+  ```
+
+  When the DMG mode landed, both `dmg_sound` hashes moved and their sample counts dropped by
+  exactly 256 — and `GB_MODEL=cgb` reproduced the old hashes **byte-for-byte**, which proves
+  the move was the console and not a synthesis regression. Do that before you re-bless
+  anything; a hash that changed for a reason you can name is a different thing from a hash
+  that changed.
 
 ### Results today (the honest baseline)
 

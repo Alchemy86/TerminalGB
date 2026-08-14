@@ -87,7 +87,11 @@ Entries are newest-first.
   APU even when nothing is playing"**. It is invisible in almost every test and then
   silently converts a measurable failure into a hang, which a runner reports as a timeout —
   the least informative verdict there is. Any adapter that offers a "headless/no-audio"
-  mode should be probed for it.
+  mode should be probed for it. And the counter-argument is answered with a number rather
+  than a shrug: emulating the APU with a device-free sink costs **+0.02 ms per frame** here
+  (0.245 → 0.265 ms, against a 16.743 ms budget), so "it is too expensive for a test run" is
+  not true. What *is* expensive is a real host-audio path that paces the producer against the
+  audio clock — a different thing, which a conformance runner should never be inside.
 
 ## 2026-08-13 — DMG wave-RAM access window (dmg_sound 09: "wave read while on")
 

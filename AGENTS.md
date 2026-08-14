@@ -156,7 +156,13 @@ lines per fix, not a process document.
 - **The harness runs with an APU installed.** It used to leave `MMU.sound` at `None`, which is
   not a real machine and silently changed results: `interrupt_time` stalled on its title
   screen (it spins on `NR52`) and was written off as "cannot run headless", and
-  `dmg_sound/01` reported Failed. Never build a test machine without an APU.
+  `dmg_sound/01` reported Failed. Never build a test machine without an APU. **Measured cost:
+  +0.02 ms/frame (1.1x), whole suite 2.9 s** — do not confuse this with the ~17.9 ms/frame
+  the **`audio` cargo feature** costs (the ~5 fps the captain sees). Different path: `cargo
+  test` does not compile `cpal` or `sample_queue`, the harness' `play()` is a no-op, and the
+  producer-side high-watermark throttle that paces emulation against the audio clock is
+  `#[cfg(feature = "audio")]`. If the suite's wall-clock ever jumps, re-measure the APU
+  install here — do not remove it, the verdicts depend on it.
 - **Every ROM runs on BOTH consoles** (`<id>@dmg`, `<id>@cgb`), skipping `@dmg` for a
   cartridge whose header says `0x0143 == 0xC0`. This is also the answer to "retrio's Blargg
   copies are patched to `0x143 = 0x80`, so we test them as CGB games": forcing the model runs
@@ -215,8 +221,11 @@ lines per fix, not a process document.
   a DMG, and the audio baseline's hashes shifted by 256 samples because the boot state differs.
   The verdicts stayed 12/12 and every analysed property (RMS, peak, silence, dominant pitch)
   held. **`GB_MODEL=cgb` reproduces the pre-change hashes exactly** — that is the cheap way to
-  prove a baseline move is the console and not a synthesis regression. `savestate` needed no
-  format bump (`gbmode` was already serialised).
+  prove a baseline move is the console and not a synthesis regression, and it is the first
+  thing to try before re-blessing any moved baseline. Written down where the next person
+  looks: `docs/audio.md` §8, `docs/testing.md`, `testharness/README.md` and the generated
+  header of `testharness/audio_baseline.txt`. `savestate` needed no format bump (`gbmode` was
+  already serialised).
 
 ## Audio quality & pacing
 
