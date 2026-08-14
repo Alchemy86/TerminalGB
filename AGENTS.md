@@ -2135,7 +2135,7 @@ price.** Concretely, for anything that reads or decodes a commercial cartridge:
 (The FlashGBX GPL note and the licence-hygiene section in `CONTRIBUTING.md` are being added on
 another branch; when those land, this belongs beside them.)
 
-## Live trainer view — the read-only plugin (`src/trainer/`)
+## Live trainer view — the read-only plugin (`plugins/trainer/src/`)
 
 - **Full design, address table, verification and follow-ups: [`docs/trainer.md`](docs/trainer.md).**
   A read-only plugin that reads a running Pokémon Red/Blue cartridge and shows the party,
@@ -2163,7 +2163,7 @@ another branch; when those land, this belongs beside them.)
 - **Addresses are derived, not looked up.** `pret/pokered` was built at its pinned RGBDS 1.0.3
   and the ROMs checked against its `roms.sha1`; the captain's cartridge is byte-identical to
   `pokeblue.gbc`, so the build's own `pokeblue.sym` is exact for it. Every constant in
-  `src/trainer/gen1.rs` carries its symbol name. `pokered.sym` gives identical addresses, which
+  `plugins/trainer/src/gen1.rs` carries its symbol name. `pokered.sym` gives identical addresses, which
   is why one table serves Red and Blue. **Re-derive rather than edit by hand.**
 - **Three traps that produce plausible-but-wrong data** (all handled, all worth remembering):
   Gen 1 species indices are **not** Pokédex numbers (`MonsterNames` is indexed by internal
@@ -2171,7 +2171,7 @@ another branch; when those land, this belongs beside them.)
   special-cased); every HP and stat is **big-endian**; and `party_struct` (44 bytes) and
   `battle_struct` (28) put level and stats at **different offsets**.
 - **Sprites come from the ROM, not VRAM**, because VRAM only holds what is on screen and a
-  party panel would be blank in the overworld. `src/trainer/sprite.rs` implements Gen 1's
+  party panel would be blank in the overworld. `plugins/trainer/src/sprite.rs` implements Gen 1's
   picture compression from the format documented in `pokered`. Proven **byte-identical** to
   `pokered`'s own 2bpp output for 13 species covering every "Pics" bank and both special cases.
 - **The sprite is a SECOND terminal image, and the enemy team strip is a THIRD.** Ids
@@ -2225,7 +2225,7 @@ another branch; when those land, this belongs beside them.)
   out. Stages are only ever read from the battle structures, never from a party copy — they do
   not survive a switch.
 - **Gen 1 capture odds were DISASSEMBLED from the cartridge, not looked up**
-  (`src/trainer/capture.rs`). `ItemUsePokeBall` sits in bank 3 and is found by its
+  (`plugins/trainer/src/capture.rs`). `ItemUsePokeBall` sits in bank 3 and is found by its
   `ld a,200` / `ld a,150` threshold pair, which occurs exactly once in the ROM (`03:570B`).
   Three things a modern formula gets wrong: (1) **`jr c, .loop` at `03:570E` jumps BACKWARDS
   to `call Random`** — the ball threshold is a *resampling loop*, not a failure, so a Great
@@ -2296,7 +2296,7 @@ another branch; when those land, this belongs beside them.)
   explanation rather than displayed wrongly. Yellow (`pret/pokeyellow`, same structures at
   different addresses) and Gen 2 (`pret/pokecrystal`, different structures) are named as
   extensions, not pretended.
-- **Derived values are the point** (`src/trainer/derived.rs`): shiny-if-traded-to-Gen-2 from the
+- **Derived values are the point** (`plugins/trainer/src/derived.rs`): shiny-if-traded-to-Gen-2 from the
   DVs a Gen 1 Pokémon already has (`CheckShininess`, pokecrystal `engine/gfx/color.asm` —
   def/spd/spc all exactly 10, attack DV with bit 1 set; note perfect 15s are **not** shiny),
   Hidden Power type and power, stat experience, DV total. **Gen 1 has no Poké Ball field at
@@ -2315,7 +2315,78 @@ another branch; when those land, this belongs beside them.)
 - **Reading the game's own screen (`text::decode_screen` over `wTileMap`) is a general tool** —
   any future test that wants to check emulator state against what the game displays can use it.
 
-## Plugins & the Gen 1 virtual link partner (`src/plugin/`)
+## Plugin system — the workspace layout, and why the API is its own crate
+
+- **Layout.** The contract is [`crates/gameboy-plugin-api/`](crates/gameboy-plugin-api/)
+  (no dependencies); each plugin is its own crate under [`plugins/`](plugins/) —
+  `trainer`, `gen1-link`, `battle-control`, `agent`, plus `example-tracer`, the one a
+  stranger copies. The emulator's side of the contract is `src/plugin.rs`. Stranger-facing
+  guide: [`docs/writing-a-plugin.md`](docs/writing-a-plugin.md); design rationale stays in
+  [`docs/plugins.md`](docs/plugins.md).
+- **The API crate is NOT tidiness — it is the only acyclic arrangement.** The TUI *draws
+  panels* for the plugins it ships with, so `gameboy` depends on the plugin crates. If the
+  `Plugin` trait lived in `gameboy`, plugins would depend back on it and Cargo would refuse
+  the cycle. `MachineAccess` is the seam that made the split possible: the API crate declares
+  what a machine must provide, `src/plugin.rs` implements it for `MemoryManagementUnit`, and
+  `Machine` (the capability-checked handle) is defined over the trait, not over the MMU.
+  **Never move the trait back into `gameboy`, and never let a plugin crate depend on
+  `gameboy` outside `[dev-dependencies]`.**
+- **A dev-dependency back-edge IS allowed and we use it.** `battle-control`'s tests need a real
+  MBC, so it dev-depends on `gameboy` with the `testing` feature and uses
+  `gameboy::testing::TestMachine` (`src/testing.rs`) — a real machine exposed only as
+  `MachineAccess`, plus `bus_read`/`bus_write`/`advance_input`. Cargo permits a cycle whose
+  back-edge is a dev-dependency; that is the escape hatch, and the only one.
+- **`make no-plugins` is the gate, and it is in CI.** Builds core + both frontends with every
+  plugin off, runs the core tests, and greps `cargo tree` to prove no plugin crate is in the
+  graph — a `cfg` that silently stopped compiling something would pass a build and fail this.
+  **Proven once by hand:** with all four plugin crates deleted and every mention removed from
+  `Cargo.toml`, the emulator builds and runs a ROM.
+- **Frontend integration is `cfg`-gated per plugin, with stubs.** `src/screen/tui.rs` gates ~20
+  functions on `plugin-trainer` / `plugin-agent` / `plugin-battle-control` and supplies
+  `#[cfg(not(...))]` stubs so callers stay untouched — a key whose plugin is absent toasts
+  "not built in", it does not silently do nothing. `trainer_view.rs` / `agent_view.rs` are
+  gated whole; `tui.rs` carries tiny stub `mod tv` / `mod av` for the layout constants the
+  always-compiled code asks for.
+- **Adding a plugin is three edits:** an optional dependency + a `plugin-*` feature in
+  `Cargo.toml`, and one `if` in `attach_named` (`src/screen/tui.rs`). Add a row to `REGISTRY`
+  beside it so a build without the feature says "not built into this binary — rebuild with
+  --features X" rather than "unknown plugin".
+- **CI's "the core has exactly one dependency" gate now reads "one THIRD-PARTY dependency"**
+  and excludes first-party `gameboy-plugin-api`. That is not a loosening: the crate has no
+  dependencies of its own and is the code that used to be `src/plugin/mod.rs` (now `crates/gameboy-plugin-api/`), so an embedder
+  gains no new third-party code. Do not let anything else onto that list.
+- **Trust model, decided: plugins are TRUSTED code the user compiled in.** Capabilities are an
+  interlock on the *emulated machine* — they make declared intent checkable and keep "which
+  plugin wrote to my save?" answerable — **not a sandbox**. A plugin can do anything a Rust
+  crate in-process can. Sandboxing would need a wasm/subprocess boundary and a serialised
+  protocol on the hot path; the wire-shaped `Event` keeps that possible later.
+- **A panicking plugin is quarantined, not fatal** — `catch_unwind` around every call, marked
+  `x` on the name, reported once via `PluginHost::take_failures`, never called again; a
+  panicking link partner becomes an unplugged cable. **Honest caveat: `[profile.release]
+  panic = 'abort'` means no `catch_unwind` catches anything in a release build.** Real in dev
+  and test; do not panic in release.
+- **Version boundary:** `API_VERSION` + `Plugin::api_version` (default body, never override),
+  refused at `register` with `RegisterError::ApiVersionMismatch`. Under build-time linking
+  Cargo already makes a mismatch impossible — the check is how compatibility is *declared* and
+  the gate that matters if anything is ever loaded at runtime. Say that plainly rather than
+  overclaiming. Real forward-compat comes from every `Plugin` method having a default body and
+  `Event` being `#[non_exhaustive]` (so external matches need a `_` arm).
+- **Runtime `dlopen` loading was considered and REJECTED** — Rust has no stable ABI, so a
+  `dyn Plugin` across the boundary is UB without an all-`extern "C"` redesign that would make
+  the API worse for the compile-time case everyone uses, and `wasm32` has no `dlopen`. If
+  cross-language plugins are ever needed the answer is a socket/subprocess transport, not a
+  dylib. Do not half-build it.
+- **Separate repos: deliberately NOT yet.** The boundary that matters (own crate, own tests,
+  depends on the published contract not on internals) is already there, so splitting one out
+  later is `git filter-repo` plus a version bump — not a redesign. Doing it now costs every
+  cross-cutting change four pull requests. The signal to split is a plugin wanting its own
+  release cadence or maintainer.
+- **`TrainerPlugin::set_encounter_for_test` is public API now**, not `#[cfg(test)]` — a
+  `cfg(test)` item is invisible across a crate boundary, and the frontend that renders the
+  panel is a different crate. That is the ordinary cost of a real boundary; the alternatives
+  (a `testing` feature for one method, or deleting the frontend's test) were worse.
+
+## Plugins & the Gen 1 virtual link partner
 
 - **Full contract: [`docs/plugins.md`](docs/plugins.md).** A plugin is an **in-process Rust
   trait** (`Plugin`), not a dylib or a script — that is the only mechanism that works
@@ -2485,7 +2556,7 @@ another branch; when those land, this belongs beside them.)
   CONTINUE is chosen, so it cannot mean "we are in the game". Same trap during Oak's speech.
 - **`CableClubLeftGameboy` requires the player to be facing RIGHT** and to be the clock master.
 
-## Battle control — starting a Gen 1 battle from outside (`src/plugin/battle/`)
+## Battle control — starting a Gen 1 battle from outside (`plugins/battle-control/src/`)
 
 **Full technique + guarantees: [`docs/gen1/battle-control.md`](docs/gen1/battle-control.md);
 the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before touching this.
@@ -2625,7 +2696,7 @@ the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before
   per-fix convention at the top of this file and `docs/conformance-notes.md`. A check with no
   `behaviour`, no `explain` or no `hardware` citation **fails the runner's test suite** — the
   explanation is the product, so it is enforced.
-## Wild-encounter shiny verdict (`src/trainer/encounter.rs`)
+## Wild-encounter shiny verdict (`plugins/trainer/src/encounter.rs`)
 
 - **Full write-up: [`docs/trainer.md`](docs/trainer.md#the-wild-encounter-banner).** The claim is
   strictly *"would be shiny if traded to Gen 2"* — **Gen 1 has no shiny Pokémon at all**, and
@@ -2775,7 +2846,7 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   in the same week; it is derived from the content now, and the `Fault` row is a live example
   of the addition that used to cost a plugin its row.
 
-## Cable Club Colosseum — the link partner takes part in battles (`src/plugin/gen1/battle.rs`)
+## Cable Club Colosseum — the link partner takes part in battles (`plugins/gen1-link/src/battle.rs`)
 
 - **One function drives both Cable Club rooms.** `CableClub_DoBattleOrTrade` exchanges the
   identical 644 transfers for a trade and for a battle and diverges only afterwards, on
@@ -2802,7 +2873,7 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   matching the active Pokémon's species, level and max HP returned exactly one candidate.
   `Host::party_hp` re-checks the species at run time, so a cartridge that disagrees is
   declined rather than misread. `battle_struct` is **29 bytes**, not 28
-  (`src/trainer/gen1.rs`'s `BATTLE_MON_SIZE` is wrong, but it is only used in a doc comment).
+  (`plugins/trainer/src/gen1.rs`'s `BATTLE_MON_SIZE` is wrong, but it is only used in a doc comment).
 - **Without a recognised cartridge the partner is blind but still safe:** it names a move slot
   that is populated in the party *it* sent. That floor is what makes the crash impossible on
   any cartridge; the host reads only make it a good opponent.
@@ -2828,7 +2899,7 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   default branch too). The fixture at `/tmp/gameboy-gen1-trade/cableclub.sav` was produced
   earlier and is what the harness finds; regenerating it is an open problem.
 
-## AI agent substrate — "Claude plays Pokémon" (`src/agent/`, `src/screen/agent_view.rs`)
+## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:
   [`docs/claude-plays.md`](docs/claude-plays.md).** Read it before touching any of this.
@@ -2859,7 +2930,7 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   answers**, against a 16.74 ms budget. Never "just await it here" — that is the same mistake as
   putting a second clock inside the audio loop (see the audio section).
 - **Budget, breaker and stuck detection live in the HOST, never in the driver or the prompt**
-  (`src/agent/governor.rs`). Four independent ceilings — calls, tokens, spend, **wall clock**.
+  (`plugins/agent/src/governor.rs`). Four independent ceilings — calls, tokens, spend, **wall clock**.
   The wall clock is the one that matters: token and cost figures are *self-reported by the
   driver*, so they are only ever a floor. A failure reported with **no call in flight is
   ignored**, or a driver that misreports one trips the breaker in milliseconds.
@@ -2971,7 +3042,7 @@ it. That is now a real, CI-enforced build; it did not compile before.
   `cargo metadata --all-features` when a dependency is added.
 - **Personal identifiers:** the tree is clean of them (`git grep -iE 'aaron|codebyexample'`
   returns nothing outside the `tests/` submodule). Sanitiser fixtures in
-  `src/agent/commentary.rs` deliberately feed private-looking shapes through `sanitise` —
+  `plugins/agent/src/commentary.rs` deliberately feed private-looking shapes through `sanitise` —
   keep them **obviously synthetic** (`/home/example-user`, `someone@example.com`), never a
   real address or path. Commit *author* emails in git history are a separate thing and are
   not editable without rewriting history — a captain decision, not a crew one.
