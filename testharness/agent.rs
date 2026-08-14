@@ -146,6 +146,17 @@ impl Asm {
     fn jp_c(&mut self, target: &'static str) {
         self.jump(0xDA, target);
     }
+    /// `JP NZ,nn`
+    fn jp_nz(&mut self, target: &'static str) {
+        self.jump(0xC2, target);
+    }
+    /// `LD L,A` / `LD A,L` — a scratch byte for "where would this move put me?"
+    fn ld_l_a(&mut self) {
+        self.raw(&[0x6F]);
+    }
+    fn ld_a_l(&mut self) {
+        self.raw(&[0x7D]);
+    }
 
     fn finish(mut self) -> Vec<u8> {
         for (at, name) in std::mem::take(&mut self.fixups) {
@@ -185,6 +196,14 @@ const START_X: u8 = 5;
 const START_Y: u8 = 5;
 const MIN_XY: u8 = 1;
 const MAX_XY: u8 = 8;
+/// A wall down column `x = WALL_X`, with a single doorway at `y = DOOR_Y`.
+///
+/// The room needs an obstacle a *straight line* cannot get round, because that
+/// is the shape `goto` was bad at: single-step axis alternation walks one tile
+/// aside, finds the direct route still blocked, walks back, and repeats. A bed
+/// it can manage; a building it cannot. This is the building.
+const WALL_X: u8 = 2;
+const DOOR_Y: u8 = 8;
 
 /// A 32 KiB cartridge that walks a player round a walled room.
 fn build_fake_gen1() -> Vec<u8> {
@@ -282,8 +301,9 @@ fn build_fake_gen1() -> Vec<u8> {
     a.raw(&[0x79]); // LD A,C
     a.raw(&[0x47]); // LD B,A  -> previous = current
 
-    // Right (bit 0): face right, then move if not against the wall.
-    a.bit_d(0);
+    // Each direction: face that way, work out where the step would land, and
+    // refuse it if that is off the map or inside the wall column.
+    a.bit_d(0); // Right
     a.jp_z("no_right");
     a.ld_a(0x0C);
     a.st(W_FACING);
@@ -291,6 +311,14 @@ fn build_fake_gen1() -> Vec<u8> {
     a.cp_n(MAX_XY);
     a.jp_nc("no_right");
     a.inc_a();
+    a.ld_l_a(); // L = the x this step would land on
+    a.cp_n(WALL_X);
+    a.jp_nz("right_ok");
+    a.ld_from(W_Y);
+    a.cp_n(DOOR_Y);
+    a.jp_nz("no_right");
+    a.label("right_ok");
+    a.ld_a_l();
     a.st(W_X);
     a.label("no_right");
 
@@ -302,6 +330,14 @@ fn build_fake_gen1() -> Vec<u8> {
     a.cp_n(MIN_XY + 1);
     a.jp_c("no_left");
     a.dec_a();
+    a.ld_l_a();
+    a.cp_n(WALL_X);
+    a.jp_nz("left_ok");
+    a.ld_from(W_Y);
+    a.cp_n(DOOR_Y);
+    a.jp_nz("no_left");
+    a.label("left_ok");
+    a.ld_a_l();
     a.st(W_X);
     a.label("no_left");
 
@@ -313,6 +349,15 @@ fn build_fake_gen1() -> Vec<u8> {
     a.cp_n(MIN_XY + 1);
     a.jp_c("no_up");
     a.dec_a();
+    a.ld_l_a(); // L = the y this step would land on
+    a.ld_from(W_X);
+    a.cp_n(WALL_X);
+    a.jp_nz("up_ok");
+    a.ld_a_l();
+    a.cp_n(DOOR_Y);
+    a.jp_nz("no_up");
+    a.label("up_ok");
+    a.ld_a_l();
     a.st(W_Y);
     a.label("no_up");
 
@@ -324,6 +369,15 @@ fn build_fake_gen1() -> Vec<u8> {
     a.cp_n(MAX_XY);
     a.jp_nc("no_down");
     a.inc_a();
+    a.ld_l_a();
+    a.ld_from(W_X);
+    a.cp_n(WALL_X);
+    a.jp_nz("down_ok");
+    a.ld_a_l();
+    a.cp_n(DOOR_Y);
+    a.jp_nz("no_down");
+    a.label("down_ok");
+    a.ld_a_l();
     a.st(W_Y);
     a.label("no_down");
 
@@ -460,13 +514,46 @@ fn case_a_wall_is_only_reported_after_repeated_failures() -> Case {
     );
     run(&mut gb, 30_000);
     let x = gb.peek(W_X);
-    // It reached the wall, was not fooled into stopping early, and could still
-    // move away afterwards.
-    let ok = x == MIN_XY + 2;
+    // It walked up to the wall column and stopped at the tile before it, was
+    // not fooled into stopping early, and could still move away afterwards.
+    let want = WALL_X + 1 + 2;
+    let ok = x == want;
     Case {
         name: "walking into a wall stops there and moving away still works",
         ok,
-        detail: format!("ended at x={x}, wanted {}", MIN_XY + 2),
+        detail: format!("ended at x={x}, wanted {want}"),
+    }
+}
+
+/// `goto` has to get round a *building*, not just a bed.
+///
+/// The room has a wall down column `WALL_X` with one doorway at `DOOR_Y`, and
+/// the target is on the far side of it on a row the wall blocks. A greedy
+/// walker that alternates one step at a time never gets there: it steps aside,
+/// finds the direct route still blocked, steps back, and gives up — which is
+/// exactly what a real run did in Pallet Town, a few tiles from Oak's lab.
+fn case_goto_routes_around_a_wall() -> Case {
+    let (mut gb, _) = machine("detour");
+    let (tx, ty) = (MIN_XY, START_Y);
+    let script = vec![reply(
+        "Round the back.",
+        &format!(r#"{{"do":"goto","x":{tx},"y":{ty}}}"#),
+    )];
+    attach(
+        &mut gb,
+        Box::new(ScriptedDriver::new(script)),
+        Config::default(),
+    );
+    run(&mut gb, 60_000);
+    let (x, y) = (gb.peek(W_X), gb.peek(W_Y));
+    let ok = (x, y) == (tx, ty);
+    Case {
+        name: "goto routes around a wall instead of giving up in front of it",
+        ok,
+        detail: format!(
+            "ended at ({x},{y}), wanted ({tx},{ty}) — the only way through is \
+             the doorway at y={DOOR_Y}"
+        ),
     }
 }
 
@@ -863,6 +950,7 @@ fn main() {
         case_the_fixture_is_not_inert(),
         case_scripted_sequence_drives_the_game(),
         case_a_wall_is_only_reported_after_repeated_failures(),
+        case_goto_routes_around_a_wall(),
         case_observation_reads_the_running_game(),
         case_the_snapshot_carries_no_host_paths(),
         case_a_malformed_reply_is_survivable(),

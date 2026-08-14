@@ -535,10 +535,6 @@ impl Executor {
                     } else {
                         *taken += 1;
                         *barren = 0;
-                        // A detour spends a step only when it actually moves.
-                        if let Some((d, n)) = *detour {
-                            *detour = (n > 1).then_some((d, n - 1));
-                        }
                     }
                 }
                 let arrived = now.x == *x && now.y == *y;
@@ -621,6 +617,14 @@ impl Executor {
                 };
 
                 if let Some(k) = dir {
+                    // A detour is a budget of *presses*, not of steps. Spending
+                    // it only on presses that move looks tidier and hangs the
+                    // moment the run reaches the edge of the map: every press
+                    // then misses, the counter never falls, and the direction
+                    // never changes.
+                    if let Some((d, n)) = *detour {
+                        *detour = (n > 1).then_some((d, n - 1));
+                    }
                     *last = Some(now);
                     *last_dir = Some(k);
                     *presses += 1;

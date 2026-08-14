@@ -527,6 +527,7 @@ nothing.
   [PASS] self-check: the fixture really does respond to the buttons
   [PASS] a scripted plan walks the player to the exit and presses A
   [PASS] walking into a wall stops there and moving away still works
+  [PASS] goto routes around a wall instead of giving up in front of it
   [PASS] the snapshot reports position, facing, exits and the screen
   [PASS] a snapshot carries no host paths unless frame capture is on
   [PASS] prose, fences and bad actions are tolerated; the good ones still run
@@ -720,6 +721,12 @@ building: it steps one tile aside, finds the direct route still blocked, steps
 back, and repeats. It now **commits to a four-step run** along the other axis
 before retrying, alternating the side each time. See
 [`GOTO_DETOUR`](../src/agent/action.rs).
+
+The fix is pinned by a CI case rather than by the next expensive run: the
+synthetic cartridge grew a wall down one column with a single doorway three rows
+away, and `goto routes around a wall instead of giving up in front of it`
+requires the primitive to find it. Teeth proved by shortening the detour back to
+one step — the case fails, ending in front of the wall at (3,6).
 
 Two more corrections came out of watching this run and the one before it, and
 both were errors in what the agent was *told* rather than in what it decided —
