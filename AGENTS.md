@@ -4586,3 +4586,22 @@ sprite**. The DVs come out of `wEnemyMonDVs` the instant `LoadEnemyMonData` roll
   the default is `available_parallelism() - 1`. ETAs are computed from the *measured* rate and the
   target's exact odds — enumerated over all 65,536 DV pairs, never multiplied, because the HP DV
   is derived from the low bit of the other four and the terms are not independent.
+
+## The status page (`docs/status.md`, `docs/status/index.html`) — scores are generated, not typed
+
+- **`docs/status.md` is the front door** — suite standings, abilities, honest gaps, roadmap —
+  linked from the very top of the README. Its styled twin `docs/status/index.html` is the
+  captain-approved field-report page, ready for GitHub Pages (**Pages is not enabled** on the
+  repo yet; enabling it with the `/docs` folder publishes the page at `/status/`).
+- **Never hand-edit a suite score on either page.** Every baseline-derived figure is written by
+  `docs/tools/status_numbers.py` from `testharness/*_baseline.txt` — `make status` regenerates
+  both pages, and `make docs-check` (in CI) fails when either page disagrees with the
+  baselines. **Re-blessing any baseline therefore requires `make status` in the same commit.**
+  Teeth proven: flipping one SameSuite row FAIL→PASS turns the check red on both pages and
+  `make status` moves the table, the HTML score *and* its bar width.
+- **Two numbers are deliberately not generated**: the GB Emulator Shootout score (measured
+  through their manifest + screenshot compare — `docs/shootout.md`) and the other emulators'
+  Mealybug scores (published board figures). Update those by re-measuring, and say so.
+- The Markdown table edits happen between `<!-- suite-scores:begin/end -->` markers; the HTML
+  rows are matched by their `.name` text, so renaming a suite row in the HTML must be mirrored
+  in `HTML_ROWS` in the script.

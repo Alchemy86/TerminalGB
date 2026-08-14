@@ -1,0 +1,460 @@
+<!-- TerminalGB status page, ready for GitHub Pages: enabling Pages on this repo
+     (Settings -> Pages -> deploy from branch, /docs folder) publishes this file at
+     /status/. Suite scores are kept in sync with testharness/*_baseline.txt by
+     `make status`; the Markdown twin that renders on GitHub today is ../status.md. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TerminalGB Field Report</title>
+<style>
+  :root{
+    --ground:#0d1210;
+    --surface:#141b17;
+    --surface-2:#1b241e;
+    --line:#26332b;
+    --text:#dde5df;
+    --muted:#8a998f;
+    --dim:#65746b;
+    --accent:#9bbc0f;
+    --accent-deep:#306230;
+    --amber:#d0a72c;
+    --red:#c8604f;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--text);
+    font-family:var(--sans);
+    font-size:16px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:56px 24px 96px}
+
+  /* ---- masthead ---- */
+  .mast{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:44px}
+  .brand{
+    font-family:var(--mono);
+    font-size:clamp(30px,6vw,46px);
+    font-weight:700;
+    letter-spacing:-.02em;
+    margin:0;
+    color:var(--text);
+  }
+  .brand .cur{
+    display:inline-block;
+    width:.52em;height:1em;
+    background:var(--accent);
+    vertical-align:-.12em;
+    margin-left:.12em;
+  }
+  .kicker{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 14px;
+  }
+  .sub{color:var(--muted);margin:12px 0 0;max-width:60ch}
+
+  /* ---- headline stat ---- */
+  .headline{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-left:3px solid var(--accent);
+    padding:26px 28px;
+    margin-bottom:44px;
+    display:flex;
+    flex-wrap:wrap;
+    gap:28px 44px;
+    align-items:baseline;
+  }
+  .stat{display:flex;flex-direction:column;gap:2px}
+  .stat .n{
+    font-family:var(--mono);
+    font-size:38px;
+    font-weight:700;
+    line-height:1;
+    color:var(--accent);
+    font-variant-numeric:tabular-nums;
+  }
+  .stat .n small{font-size:20px;color:var(--dim);font-weight:400}
+  .stat .l{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+
+  h2{
+    font-family:var(--mono);
+    font-size:13px;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 6px;
+    font-weight:600;
+  }
+  section{margin-bottom:52px}
+  .lede{color:var(--muted);margin:0 0 22px;max-width:66ch}
+
+  /* ---- suite bars ---- */
+  .suites{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line)}
+  .row{
+    background:var(--surface);
+    display:grid;
+    grid-template-columns:1fr 96px 128px;
+    gap:16px;
+    align-items:center;
+    padding:13px 18px;
+  }
+  .row .name{font-family:var(--mono);font-size:13.5px}
+  .row .name em{font-style:normal;color:var(--dim);font-size:12px;display:block;margin-top:2px}
+  .row .score{
+    font-family:var(--mono);
+    font-variant-numeric:tabular-nums;
+    text-align:right;
+    font-size:14px;
+    font-weight:600;
+  }
+  .row .score span{color:var(--dim);font-weight:400}
+  .bar{height:7px;background:var(--surface-2);position:relative;overflow:hidden}
+  .bar i{position:absolute;inset:0 auto 0 0;background:var(--accent);display:block}
+  .bar.part i{background:var(--accent-deep)}
+  .bar.low i{background:var(--amber)}
+  .row.total{background:var(--surface-2)}
+  .row.total .name,.row.total .score{color:var(--accent);font-weight:700}
+
+  /* ---- feature grid ---- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+  .cell{background:var(--surface);padding:18px 20px}
+  .cell h3{
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--text);
+    margin:0 0 10px;
+  }
+  .cell ul{margin:0;padding:0;list-style:none}
+  .cell li{
+    color:var(--muted);
+    font-size:14px;
+    padding:3px 0 3px 15px;
+    position:relative;
+    line-height:1.5;
+  }
+  .cell li::before{
+    content:"";
+    position:absolute;left:0;top:11px;
+    width:5px;height:5px;
+    background:var(--accent-deep);
+  }
+  .cell li.new::before{background:var(--accent)}
+  .cell li.new::after{
+    content:"NEW";
+    font-family:var(--mono);
+    font-size:9px;
+    letter-spacing:.1em;
+    color:var(--accent);
+    margin-left:7px;
+    vertical-align:1px;
+  }
+
+  /* ---- gaps ---- */
+  .gap{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-left:3px solid var(--amber);
+    padding:15px 20px;
+    margin-bottom:1px;
+  }
+  .gap h3{font-family:var(--mono);font-size:13px;margin:0 0 4px;color:var(--text)}
+  .gap p{margin:0;color:var(--muted);font-size:14px}
+  .gap.ok{border-left-color:var(--accent-deep)}
+
+  /* ---- roadmap ---- */
+  .lane{margin-bottom:26px}
+  .lane h3{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    margin:0 0 12px;
+    color:var(--muted);
+    display:flex;align-items:center;gap:10px;
+  }
+  .lane h3::after{content:"";flex:1;height:1px;background:var(--line)}
+  .items{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line)}
+  .item{background:var(--surface);padding:12px 18px;display:flex;gap:14px;align-items:flex-start}
+  .pip{
+    width:7px;height:7px;flex:0 0 7px;margin-top:8px;
+    background:var(--dim);border-radius:50%;
+  }
+  .item.done .pip{background:var(--accent)}
+  .item.live .pip{background:var(--amber)}
+  .item.blocked .pip{background:var(--red)}
+  .item .t{font-size:14.5px}
+  .item .t em{font-style:normal;display:block;color:var(--dim);font-size:13px;margin-top:2px}
+
+  table{border-collapse:collapse;width:100%;font-size:14px}
+  .scroll{overflow-x:auto}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line)}
+  th{
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--muted);font-weight:600;
+  }
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+  tr.us td{color:var(--accent);font-weight:600}
+
+  footer{
+    border-top:1px solid var(--line);
+    padding-top:20px;margin-top:64px;
+    color:var(--dim);font-size:13px;
+    font-family:var(--mono);
+  }
+  @media (max-width:600px){
+    .row{grid-template-columns:1fr 78px;}
+    .row .bar{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="kicker">Field report &middot; 14 August 2026</p>
+    <h1 class="brand">TerminalGB<span class="cur"></span></h1>
+    <p class="sub">A Game Boy that lives in your terminal. Where it stands against every
+      public accuracy suite, what it can do, and what is coming next.</p>
+  </header>
+
+  <div class="headline">
+    <div class="stat">
+      <span class="n">223<small>/264</small></span>
+      <span class="l">GB Emulator Shootout</span>
+    </div>
+    <div class="stat">
+      <span class="n">5<small>th of 19</small></span>
+      <span class="l">Published ranking</span>
+    </div>
+    <div class="stat">
+      <span class="n">13</span>
+      <span class="l">Shipped today</span>
+    </div>
+  </div>
+
+  <section>
+    <h2>Standing</h2>
+    <p class="lede">Every figure below is the <strong>test ROM's own verdict</strong> or its author's
+      hardware photograph — never a hash of our own output. That distinction is the whole point:
+      a suite scored against yourself proves nothing.</p>
+
+    <div class="suites">
+      <div class="row">
+        <div class="name">In-repo harness<em>Blargg + dmg-acid2</em></div>
+        <div class="score">46<span>/47</span></div>
+        <div class="bar"><i style="width:97.9%"></i></div>
+      </div>
+      <div class="row">
+        <div class="name">Mooneye GB &mdash; acceptance<em>core timing, interrupts, boot state</em></div>
+        <div class="score">67<span>/75</span></div>
+        <div class="bar"><i style="width:89.3%"></i></div>
+      </div>
+      <div class="row">
+        <div class="name">Mooneye GB &mdash; emulator-only<em>cartridge mappers</em></div>
+        <div class="score">28<span>/28</span></div>
+        <div class="bar"><i style="width:100%"></i></div>
+      </div>
+      <div class="row">
+        <div class="name">Mooneye GB &mdash; CGB misc</div>
+        <div class="score">8<span>/8</span></div>
+        <div class="bar"><i style="width:100%"></i></div>
+      </div>
+      <div class="row">
+        <div class="name">SameSuite<em>audio hardware, DMA, Super Game Boy</em></div>
+        <div class="score">72<span>/76</span></div>
+        <div class="bar"><i style="width:94.7%"></i></div>
+      </div>
+      <div class="row">
+        <div class="name">CasualPokePlayer<em>MBC3 clock + SGB</em></div>
+        <div class="score">4<span>/4</span></div>
+        <div class="bar"><i style="width:100%"></i></div>
+      </div>
+      <div class="row">
+        <div class="name">Mealybug Tearoom<em>mid-scanline picture timing</em></div>
+        <div class="score">3<span>/79</span></div>
+        <div class="bar low"><i style="width:3.8%"></i></div>
+      </div>
+      <div class="row total">
+        <div class="name">GB Emulator Shootout<em>their manifest, their screenshot comparison</em></div>
+        <div class="score">223<span>/264</span></div>
+        <div class="bar"><i style="width:84.5%"></i></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The Mealybug number, in context</h2>
+    <p class="lede">Three out of seventy-nine looks alarming until you see what everyone else scores.
+      On the twenty-four rows the Shootout publishes:</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Emulator</th><th class="num">Rows passed</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>SameBoy</td><td class="num">15</td><td>the reference implementation</td></tr>
+          <tr class="us"><td>TerminalGB</td><td class="num">3</td><td>pixel-exact, all three hardware sets</td></tr>
+          <tr><td>bgb</td><td class="num">2</td><td>long-standing, widely used</td></tr>
+          <tr><td>PyBoy</td><td class="num">0</td><td>&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="lede" style="margin-top:18px">It is not a suite a competent emulator sweeps. Passing a row
+      needs a picture unit rebuilt to run pixel by pixel rather than a scanline at a time &mdash; that
+      engine exists here and is selectable, but it is still behind the default on two rows, so the
+      default has not moved.</p>
+  </section>
+
+  <section>
+    <h2>Abilities</h2>
+    <div class="grid">
+      <div class="cell">
+        <h3>The machine</h3>
+        <ul>
+          <li>DMG, Game Boy Color and Super Game Boy models</li>
+          <li>Cartridge mappers 1, 2, 3 and 5, with a real-time clock</li>
+          <li>Battery saves in the ecosystem's own format</li>
+          <li>Save states, versioned, portable to the browser</li>
+          <li class="new">Optional user-supplied boot ROM</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>In your terminal</h3>
+        <ul>
+          <li>Kitty, Sixel, iTerm2 and half-block rendering</li>
+          <li>Shared-memory frame transport &mdash; 87 bytes a frame</li>
+          <li>Four upscalers, palettes, HiDPI correction</li>
+          <li>Runs in any terminal; degrades, never refuses</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Sound</h3>
+        <ul>
+          <li>Full audio hardware emulation, 36&nbsp;ms latency</li>
+          <li>Volume control that never touches emulation</li>
+          <li class="new">Chiptune renderer &mdash; instructions in, real audio out</li>
+          <li class="new">Music mode: ROMs as a shelf, with export</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Linking</h3>
+        <ul>
+          <li class="new">Two consoles on one cable, trade proven</li>
+          <li class="new">BGB network protocol over TCP</li>
+          <li>Virtual trade partner &mdash; no second cartridge needed</li>
+          <li>Cable Club battles against the partner</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Plugins</h3>
+        <ul>
+          <li>Live trainer view: party, stats, sprites, catch rate</li>
+          <li class="new">Shiny hunting from Gen&nbsp;1 hidden values</li>
+          <li>Battle control &mdash; start any battle from outside</li>
+          <li>AI agent substrate for autonomous play</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Beyond the terminal</h3>
+        <ul>
+          <li>Virtual camera &mdash; appears as a webcam</li>
+          <li>Screenshots, recording, telemetry stream</li>
+          <li>MCP server: any Claude client can drive it</li>
+          <li>Embeddable core &mdash; one third-party dependency</li>
+          <li>Browser build, and a conformance action others can use</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Known gaps, stated plainly</h2>
+    <div class="gap">
+      <h3>Mid-scanline picture timing</h3>
+      <p>The real ceiling. Needs the pixel-by-pixel engine promoted to default, which costs two
+        currently-passing rows until it is finished.</p>
+    </div>
+    <div class="gap ok">
+      <h3>Nine Mooneye rows are other consoles</h3>
+      <p>Machine variants we deliberately do not emulate. Pinned as failures on purpose rather
+        than quietly dropped from the denominator.</p>
+    </div>
+    <div class="gap ok">
+      <h3>Four SameSuite rows</h3>
+      <p>Two target older Color revisions and a Game Boy Advance. One is unsolved by the suite
+        author's own emulator, whose source says the logic behind it is still unclear.</p>
+    </div>
+    <div class="gap ok">
+      <h3>One test must stay red</h3>
+      <p>The Color memory-corruption defect does not exist in Color silicon, so real hardware
+        fails that ROM too. Passing it would be the bug.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Roadmap</h2>
+
+    <div class="lane">
+      <h3>Landed today</h3>
+      <div class="items">
+        <div class="item done"><span class="pip"></span><span class="t">Core timing accuracy pass<em>Mooneye acceptance to 67/75, mappers to a clean sweep</em></span></div>
+        <div class="item done"><span class="pip"></span><span class="t">Shootout submission<em>223/264 measured and packaged</em></span></div>
+        <div class="item done"><span class="pip"></span><span class="t">Two-console link cable and the network protocol<em>the foundation for remote trading</em></span></div>
+        <div class="item done"><span class="pip"></span><span class="t">Portal v1 &mdash; sign in, friends, trades<em>built, security-reviewed, 47/47 on its own suite</em></span></div>
+        <div class="item done"><span class="pip"></span><span class="t">Measured documentation section<em>six pages built from our own numbers</em></span></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <h3>In flight</h3>
+      <div class="items">
+        <div class="item live"><span class="pip"></span><span class="t">Sign-in from inside the emulator<em>a key opens the browser, returns authenticated</em></span></div>
+        <div class="item live"><span class="pip"></span><span class="t">Time Capsule shiny verification<em>trading Gen&nbsp;1 into Gold to prove the prediction</em></span></div>
+        <div class="item live"><span class="pip"></span><span class="t">Logo and wordmark</em></span></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <h3>Waiting on you</h3>
+      <div class="items">
+        <div class="item blocked"><span class="pip"></span><span class="t">Deploy the portal<em>needs a Vercel login, Clerk keys and a database</em></span></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <h3>Designed, not yet built</h3>
+      <div class="items">
+        <div class="item"><span class="pip"></span><span class="t">Live battles over the network<em>needs a persistent relay; built and tested, roughly &pound;0&ndash;4 a month</em></span></div>
+        <div class="item"><span class="pip"></span><span class="t">Hand a running game to the browser<em>the save format was designed for this</em></span></div>
+        <div class="item"><span class="pip"></span><span class="t">Real hardware on the link port<em>feasible with a thousandfold timing margin, needs an adapter</em></span></div>
+        <div class="item"><span class="pip"></span><span class="t">Save import and export with a physical console</em></span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Scores re-derived from the checked-in baselines. Suites are fetched at pinned versions,
+    never vendored. No commercial game content ships in this repository.
+  </footer>
+
+</div>
+</body>
+</html>

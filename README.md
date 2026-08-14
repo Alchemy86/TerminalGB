@@ -1,5 +1,9 @@
 # TerminalGB
 
+> ### 📊 [Where TerminalGB stands →](docs/status.md)
+> Every public accuracy suite scored from the checked-in baselines, everything the emulator can
+> do, the honest gaps — including the test that must stay failing — and what is coming next.
+
 [![CI](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml/badge.svg)](https://github.com/Alchemy86/gameboy/actions/workflows/ci.yml)
 [![conformance](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Alchemy86/gameboy/main/docs/conformance-badge.json)](docs/conformance-action.md)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)

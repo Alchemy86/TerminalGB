@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
+.PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-chiptune chiptune-demo bgb-interop
 
@@ -35,9 +35,18 @@ docs-links:
 	python3 docs/tools/codemap_links.py
 
 # Fail if any doc reference is broken: a missing file/dir target, or a line
-# number past the end of its file. Suitable for CI.
+# number past the end of its file. Suitable for CI. Also verifies the status
+# page's suite scores still match the checked-in baselines (see `status`).
 docs-check:
 	python3 docs/tools/codemap_links.py --check
+	python3 docs/tools/status_numbers.py --check
+
+# Status page (docs/status.md + the Pages-ready docs/status/index.html):
+# re-derive every suite score from testharness/*_baseline.txt and rewrite the
+# pages. Run this in the SAME commit as any baseline re-bless — docs-check
+# (in CI) is red until the pages agree with the baselines again.
+status:
+	python3 docs/tools/status_numbers.py
 
 build-wasm:
 	cargo build --release --target wasm32-unknown-unknown
