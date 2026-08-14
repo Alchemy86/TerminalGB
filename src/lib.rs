@@ -59,6 +59,9 @@ mod gpu;
 mod input;
 /// Two consoles, one wire — see [`link::LinkCable`].
 pub mod link;
+/// The World Trade Centre's relay client (see `docs/worldlobby.md`).
+#[cfg(feature = "plugin-gen1-lobby")]
+pub mod lobby;
 mod mbc;
 /// Model Context Protocol server — drive the emulator from any MCP client.
 /// See [`mcp`]. Behind the `mcp` feature and adds no third-party crate.

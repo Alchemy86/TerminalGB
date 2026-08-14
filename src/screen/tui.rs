@@ -815,6 +815,11 @@ struct Session {
     /// see half of them.
     #[cfg(feature = "bgblink")]
     netlink: Option<Box<crate::link::TransportLink>>,
+    /// The shared-room relay, when `GB_LOBBY=host:port` is set. Presence only:
+    /// it never touches a game byte and never blocks a frame. See
+    /// [`crate::lobby`] and `docs/worldlobby.md`.
+    #[cfg(feature = "plugin-gen1-lobby")]
+    lobby: Option<Box<crate::lobby::LobbyClient>>,
     /// Palette-mapping stage, owning its buffer so a frame allocates nothing.
     prep: FramePrep,
     /// Fast path: our own capped-resolution encoder. `None` when the protocol
@@ -967,6 +972,19 @@ impl Session {
         #[cfg(feature = "audio")] audio_rate: u32,
         audio: AudioStream,
     ) -> Session {
+        // Joining is fail-soft: an unreachable relay costs the room and nothing
+        // else, exactly as an unplugged cable costs the trade and nothing else.
+        #[cfg(feature = "plugin-gen1-lobby")]
+        let lobby = {
+            let who = std::env::var("GB_LOBBY_NAME")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| entry.title.clone());
+            crate::lobby::from_env(&who).map(|(c, note)| {
+                eprintln!("terminalgb: {note}");
+                Box::new(c)
+            })
+        };
         Session {
             gb,
             entry,
@@ -975,6 +993,8 @@ impl Session {
             peer,
             #[cfg(feature = "bgblink")]
             netlink,
+            #[cfg(feature = "plugin-gen1-lobby")]
+            lobby,
             prep: FramePrep::new(),
             term_image,
             image: None,
@@ -2306,6 +2326,36 @@ impl App {
                 (None, Some(p)) => p.run_frame(&mut s.gb),
                 (None, None) => s.gb.frame(),
             }
+            // --- the shared room ------------------------------------------
+            // Presence in, presence out, once per frame, never blocking: the
+            // reader thread keeps the latest snapshot and this is a lock and a
+            // clone. The plugin does the rest — it is the only thing that
+            // touches the machine.
+            #[cfg(feature = "plugin-gen1-lobby")]
+            if let Some(l) = s.lobby.as_mut() {
+                use terminalgb_plugin_gen1_lobby::{LobbyPlugin, State};
+                let peers = l.peers();
+                let (me, says, state) = match s.gb.plugin_mut::<LobbyPlugin>() {
+                    Some(p) => {
+                        p.set_peers(peers);
+                        (p.me(), p.saying().unwrap_or("").to_string(), p.state())
+                    }
+                    None => Default::default(),
+                };
+                // A trade or a battle is a private 1:1 session, so stop
+                // appearing in the crowd while one is up — otherwise everybody
+                // else keeps drawing an avatar of somebody who has left the
+                // room, and, because avatars are solid, standing in the way of
+                // the console they left it through.
+                if state == State::Busy {
+                    l.set_away(true);
+                } else {
+                    l.set_away(false);
+                    let step = ((s.emu_frames / 8) % 4) as u8;
+                    l.publish(me, step, &says);
+                }
+            }
+
             s.t_emulate = telemetry::ms(t.elapsed());
             s.emu_count += 1;
             s.emu_frames += 1;
@@ -7612,6 +7662,7 @@ const REGISTRY: &[(&str, &str)] = &[
     ("gen1-battle", "plugin-battle-control"),
     ("agent", "plugin-agent"),
     ("gen1-shinyhunt", "plugin-gen1-shinyhunt"),
+    ("gen1-lobby", "plugin-gen1-lobby"),
     ("example-tracer", "plugin-example-tracer"),
 ];
 
@@ -7728,6 +7779,30 @@ fn attach_named(
                 Err(e) => format!("plugin gen1-shinyhunt: {e}"),
             },
         );
+    }
+
+    #[cfg(feature = "plugin-gen1-lobby")]
+    if name == "gen1-lobby" {
+        // The name on other people's screens: `GB_LOBBY_NAME`, else the
+        // cartridge's own title, so a room of strangers is never a room of
+        // question marks.
+        let who = std::env::var("GB_LOBBY_NAME")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| gb.rom_title());
+        let p = terminalgb_plugin_gen1_lobby::LobbyPlugin::new(&who);
+        let room = p.room();
+        return Some(match gb.add_plugin(Box::new(p)) {
+            Ok(()) => format!(
+                "plugin gen1-lobby attached as {who}: a {}x{} room \
+                 ({}x{} walk tiles) in the Cable Club",
+                room.w,
+                room.h,
+                room.walk_size().0,
+                room.walk_size().1
+            ),
+            Err(e) => format!("plugin gen1-lobby: {e}"),
+        });
     }
 
     // The documentation example, and the shape every third-party arm takes:

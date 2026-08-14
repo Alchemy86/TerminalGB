@@ -151,14 +151,7 @@ pub fn agreement_at(
     for row in 0..SCREEN_H {
         for col in 0..SCREEN_W {
             let want = tile_for_cell_at(
-                room,
-                blocks,
-                bs,
-                px,
-                py,
-                col as i32,
-                row as i32,
-                anchor_row,
+                room, blocks, bs, px, py, col as i32, row as i32, anchor_row,
             );
             let got = m
                 .peek(W_TILE_MAP + (row * SCREEN_W + col) as u16)
@@ -241,14 +234,7 @@ pub fn repaint_rows(
         }
         for col in 0..SCREEN_W {
             let t = tile_for_cell_at(
-                room,
-                blocks,
-                bs,
-                px,
-                py,
-                col as i32,
-                row as i32,
-                anchor_row,
+                room, blocks, bs, px, py, col as i32, row as i32, anchor_row,
             );
             m.poke(W_TILE_MAP + (row * SCREEN_W + col) as u16, t);
         }
@@ -286,7 +272,10 @@ mod tests {
 
     #[test]
     fn the_two_candidate_anchors_are_the_two_rows_of_the_players_own_tile() {
-        assert_eq!(ANCHOR_CANDIDATES, [PLAYER_SCREEN_ROW, PLAYER_SCREEN_ROW + 1]);
+        assert_eq!(
+            ANCHOR_CANDIDATES,
+            [PLAYER_SCREEN_ROW, PLAYER_SCREEN_ROW + 1]
+        );
     }
 
     #[test]

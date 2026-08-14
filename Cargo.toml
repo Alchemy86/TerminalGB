@@ -325,6 +325,7 @@ required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
 name = "worldlobby"
 path = "examples/worldlobby.rs"
 required-features = [
+    "tui",
     "image",
     "plugin-gen1-lobby",
     "plugin-gen1-link",

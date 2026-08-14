@@ -243,8 +243,7 @@ pub fn stream(
 ) -> Vec<u32> {
     let chosen = choose(me, peers);
     let ids: Vec<u32> = chosen.iter().map(|p| p.id).collect();
-    let writes: Vec<SlotWrite> =
-        chosen.iter().map(|p| slot_bytes(look, me, p)).collect();
+    let writes: Vec<SlotWrite> = chosen.iter().map(|p| slot_bytes(look, me, p)).collect();
     for (i, w) in writes.iter().enumerate() {
         write_slot(m, 1 + i as u8, w);
     }
@@ -285,8 +284,7 @@ mod tests {
     fn the_crowd_can_never_exceed_the_oam_budget() {
         // Twenty people standing on top of each other is the worst case the
         // §1.2 measurement says corrupts the screen at eleven characters.
-        let peers: Vec<Peer> =
-            (0..20).map(|i| Peer::new(i, "X", 10, 10)).collect();
+        let peers: Vec<Peer> = (0..20).map(|i| Peer::new(i, "X", 10, 10)).collect();
         assert_eq!(choose(&me(), &peers).len(), MAX_AVATARS);
     }
 
@@ -351,8 +349,7 @@ mod tests {
 
     #[test]
     fn the_choice_is_stable_so_an_avatar_does_not_flicker_between_slots() {
-        let peers: Vec<Peer> =
-            (0..12u32).map(|i| Peer::new(i, "X", 10, 10)).collect();
+        let peers: Vec<Peer> = (0..12u32).map(|i| Peer::new(i, "X", 10, 10)).collect();
         let a: Vec<u32> = choose(&me(), &peers).iter().map(|p| p.id).collect();
         let b: Vec<u32> = choose(&me(), &peers).iter().map(|p| p.id).collect();
         assert_eq!(a, b);

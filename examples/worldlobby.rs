@@ -170,8 +170,8 @@ fn serve(listener: TcpListener, expect: usize, stop: Arc<AtomicBool>) {
                 let phase;
                 {
                     let mut l = lobby.lock().unwrap();
-                    let all_ready = l.bodies.len() >= expect
-                        && l.bodies.values().all(|b| b.ready);
+                    let all_ready =
+                        l.bodies.len() >= expect && l.bodies.values().all(|b| b.ready);
                     if all_ready {
                         l.started = true;
                     }
@@ -211,9 +211,7 @@ fn serve(listener: TcpListener, expect: usize, stop: Arc<AtomicBool>) {
         });
     }
 
-    listener
-        .set_nonblocking(false)
-        .expect("blocking listener");
+    listener.set_nonblocking(false).expect("blocking listener");
     let mut next_id = 1u32;
     for stream in listener.incoming() {
         if stop.load(Ordering::Relaxed) {
@@ -242,7 +240,8 @@ fn serve(listener: TcpListener, expect: usize, stop: Arc<AtomicBool>) {
                     Some("away") => b.away = f.get(1) == Some(&"1"),
                     Some("seated") => b.seated = true,
                     Some("pos") => {
-                        let g = |i: usize| f.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let g =
+                            |i: usize| f.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
                         b.x = g(1);
                         b.y = g(2);
                         b.facing = g(3);
@@ -414,6 +413,11 @@ enum Business {
     Battle,
     /// Keep walking and watch.
     Watch,
+    /// Wander, then go and stand at your console and keep offering a trade —
+    /// what a friend waiting at a machine looks like. Used for the driven
+    /// partner in `--human` mode, where the other end is a person and there is
+    /// nobody to synchronise with.
+    Await,
 }
 
 impl Business {
@@ -421,6 +425,7 @@ impl Business {
         match s {
             "trade" => Business::Trade,
             "battle" => Business::Battle,
+            "await" => Business::Await,
             _ => Business::Watch,
         }
     }
@@ -430,6 +435,7 @@ impl Business {
             Business::Trade => "trade",
             Business::Battle => "battle",
             Business::Watch => "watch",
+            Business::Await => "await",
         }
     }
 }
@@ -451,7 +457,11 @@ impl Default for Phase {
     }
 }
 
-fn reader_thread(stream: TcpStream, shared: Arc<Mutex<Snapshot>>, my_id: Arc<Mutex<u32>>) {
+fn reader_thread(
+    stream: TcpStream,
+    shared: Arc<Mutex<Snapshot>>,
+    my_id: Arc<Mutex<u32>>,
+) {
     let reader = BufReader::new(stream);
     let mut building: Option<Snapshot> = None;
     for line in reader.lines() {
@@ -474,7 +484,8 @@ fn reader_thread(stream: TcpStream, shared: Arc<Mutex<Snapshot>>, my_id: Arc<Mut
             }
             Some("peer") => {
                 if let Some(s) = &mut building {
-                    let g = |i: usize| f.get(i).and_then(|v| v.parse().ok()).unwrap_or(0u8);
+                    let g =
+                        |i: usize| f.get(i).and_then(|v| v.parse().ok()).unwrap_or(0u8);
                     let id: u32 = f.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
                     let says = f.get(7).copied().unwrap_or("");
                     s.peers.push(Peer {
@@ -575,7 +586,10 @@ fn play(o: PlayOpts) {
         peer.run_frame(&mut gb);
     }
     if let Some(d) = &o.shots {
-        write_one(&d.join(format!("01-room-{}.png", o.name.to_lowercase())), &mut gb);
+        write_one(
+            &d.join(format!("01-room-{}.png", o.name.to_lowercase())),
+            &mut gb,
+        );
     }
     say(&format!(
         "room installed: {}x{} blocks = {:?} walk tiles; {}",
@@ -673,7 +687,10 @@ fn play(o: PlayOpts) {
         }
 
         if phase != last_phase {
-            say(&format!("[{frame:6}] phase {} at tick {tick}", phase.name()));
+            say(&format!(
+                "[{frame:6}] phase {} at tick {tick}",
+                phase.name()
+            ));
             last_phase = phase;
             match phase {
                 Phase::Mingle => target = walker.wander_target(&room),
@@ -727,7 +744,7 @@ fn play(o: PlayOpts) {
                     // at two machines. A 1:1 session is 1:1: telling the relay
                     // we are away removes us from everyone's crowd, and removes
                     // everyone else from ours.
-                    if o.business != Business::Watch {
+                    if matches!(o.business, Business::Trade | Business::Battle) {
                         walker.release(&mut gb);
                         gb.clear_input();
                         writeln!(sock, "away\t1").ok();
@@ -768,7 +785,9 @@ fn play(o: PlayOpts) {
                                         &mut gb,
                                     );
                                 }
-                            } else if seated && all_seated {
+                            } else if seated
+                                && (all_seated || o.business == Business::Await)
+                            {
                                 // **Both ends start the exchange on the same
                                 // signal, and this is the bug that cost the
                                 // first capture run.** A cable has two ends
@@ -843,7 +862,10 @@ fn play(o: PlayOpts) {
                     120 => "05-crowd",
                     _ => "06-talking",
                 };
-                write_one(&d.join(format!("{n}-{}.png", o.name.to_lowercase())), &mut gb);
+                write_one(
+                    &d.join(format!("{n}-{}.png", o.name.to_lowercase())),
+                    &mut gb,
+                );
             }
         }
 
@@ -862,17 +884,16 @@ fn play(o: PlayOpts) {
         if let Some(d) = &o.shots {
             let link = gb.peek(W_LINK_STATE);
             if business_started && link >= 0x02 && frame % 45 == 0 && seq < 24 {
-                write_one(
-                    &d.join(format!("{tag}-{low}-live-{seq:02}.png")),
-                    &mut gb,
-                );
+                write_one(&d.join(format!("{tag}-{low}-live-{seq:02}.png")), &mut gb);
                 seq += 1;
             }
             // A turn is only interesting when a number moved, so watch the
             // party's HP and photograph the frame it changes on.
             if o.business == Business::Battle && link >= 0x03 && frame % 20 == 0 {
-                let now: Vec<(u8, u16)> =
-                    read_party(&mut gb).iter().map(|m| (m.level, m.hp)).collect();
+                let now: Vec<(u8, u16)> = read_party(&mut gb)
+                    .iter()
+                    .map(|m| (m.level, m.hp))
+                    .collect();
                 if let Some(prev) = &last_hp {
                     if *prev != now && !now.is_empty() {
                         write_one(
@@ -886,9 +907,7 @@ fn play(o: PlayOpts) {
             }
         }
 
-        if o.business == Business::Battle
-            && !battle_seen
-            && gb.peek(W_LINK_STATE) >= 0x03
+        if o.business == Business::Battle && !battle_seen && gb.peek(W_LINK_STATE) >= 0x03
         {
             battle_seen = true;
             say(&format!(
@@ -916,10 +935,18 @@ fn play(o: PlayOpts) {
     // --- what happened ------------------------------------------------------
     let st = peer.stats();
     if let Some(d) = &o.shots {
-        write_one(&d.join(format!("08-end-{}.png", o.name.to_lowercase())), &mut gb);
+        write_one(
+            &d.join(format!("08-end-{}.png", o.name.to_lowercase())),
+            &mut gb,
+        );
     }
     let (installs, art, ticks, touched) = match gb.plugin::<LobbyPlugin>() {
-        Some(p) => (p.installs, p.art_installs, p.ticks, p.touched_saved_region()),
+        Some(p) => (
+            p.installs,
+            p.art_installs,
+            p.ticks,
+            p.touched_saved_region(),
+        ),
         None => (0, 0, 0, false),
     };
     say(&format!(
@@ -940,7 +967,11 @@ fn play(o: PlayOpts) {
         ));
     }
     if let Some(b) = &trade_bot {
-        say(&format!("trade bot: {} traded={}", b.stage_label(), b.traded()));
+        say(&format!(
+            "trade bot: {} traded={}",
+            b.stage_label(),
+            b.traded()
+        ));
     }
     say("party:");
     let party = read_party(&mut gb);
@@ -974,21 +1005,6 @@ fn play(o: PlayOpts) {
     gb.flush_battery();
     peer.close();
     let _ = sock.shutdown(std::net::Shutdown::Both);
-}
-
-/// The 20x18 screen buffer with its walkability marked — the fastest way to
-/// see what the engine thinks the room is, because `wTileMap` is exactly what
-/// the collision test reads.
-fn dump_screen(gb: &mut Gameboy, who: &str) {
-    use terminalgb_plugin_gen1_lobby::gen1::{CLUB_WALKABLE, SCREEN_H, SCREEN_W, W_TILE_MAP};
-    for row in 0..SCREEN_H {
-        let mut line = String::new();
-        for col in 0..SCREEN_W {
-            let t = gb.peek(W_TILE_MAP + (row * SCREEN_W + col) as u16);
-            line.push(if CLUB_WALKABLE.contains(&t) { '.' } else { '#' });
-        }
-        println!("[{who:<5}]   {line}");
-    }
 }
 
 /// Distinct parties per player, so a trade is provable by whose original
@@ -1113,6 +1129,101 @@ fn demo(
 }
 
 // ---------------------------------------------------------------------------
+// human: the captain plays one console at his own terminal, through the
+// ordinary TUI, with a driven player walking about the same room.
+// ---------------------------------------------------------------------------
+
+/// One command: a relay, a driven partner in its own process, and the real
+/// terminal frontend for the person at the keyboard.
+///
+/// Nothing here is a special path for the human. The TUI attaches the same
+/// `gen1-lobby` plugin the scripted players do (`plugins = gen1-lobby`), joins
+/// the same relay over the same tab-separated wire (`GB_LOBBY`), and pairs on
+/// the cable through the same auto-discovered peer (`link = auto`, the
+/// default). The only difference is where the keypresses come from — and the
+/// emulator cannot tell, because both arrive as `Gameboy::keydown`.
+#[cfg(feature = "tui")]
+fn human(rom: &Path, save: Option<&Path>, frames: u32, verbose: bool) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
+    let port = listener.local_addr().unwrap().port();
+    let stop = Arc::new(AtomicBool::new(false));
+    {
+        let stop = Arc::clone(&stop);
+        // Two seats: the person, and the driven partner.
+        std::thread::spawn(move || serve(listener, 2, stop));
+    }
+
+    let scratch = PathBuf::from("target/worldlobby");
+    // The captain's own console gets its own staged copy, like everybody
+    // else's — his cartridge and his save are never opened for writing.
+    let mine = stage("you", rom, save, &scratch);
+    let pair = scratch.join("cable-human");
+    std::fs::create_dir_all(&pair).expect("pair dir");
+
+    let exe = std::env::current_exe().expect("current exe");
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("play")
+        .arg("--name")
+        .arg("BLUE")
+        .arg("--rom")
+        .arg(rom)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--pair-dir")
+        .arg(&pair)
+        .arg("--gather")
+        .arg("14,12")
+        .arg("--phrase")
+        .arg("HI!")
+        .arg("--business")
+        .arg("await")
+        .arg("--seed")
+        .arg("7")
+        .arg("--frames")
+        .arg(frames.to_string())
+        .arg("--speed")
+        .arg("1");
+    if let Some(s) = save {
+        cmd.arg("--save").arg(s);
+    }
+    if verbose {
+        cmd.arg("--verbose");
+    }
+    // The partner's own stdout would fight the alternate screen for the
+    // terminal, so it goes to a file the captain can read afterwards.
+    let log = scratch.join("partner.log");
+    let out = std::fs::File::create(&log).expect("partner log");
+    cmd.stdout(out.try_clone().expect("log")).stderr(out);
+    let mut kid = cmd.spawn().expect("spawn partner");
+
+    println!("relay on 127.0.0.1:{port}; partner log: {}", log.display());
+    println!();
+    println!("  You are RED. Walk to the Cable Club receptionist, say yes, and");
+    println!("  choose TRADE CENTER. Your partner BLUE is doing the same thing");
+    println!("  on the other end of the cable and will be in the room with you.");
+    println!("  Once you are both in, the room becomes 40x28 with our own floor");
+    println!("  and you will see each other walk about.");
+    println!();
+
+    std::env::set_var("GB_LINK_DIR", &pair);
+    std::env::set_var("GB_LOBBY", format!("127.0.0.1:{port}"));
+    std::env::set_var("GB_LOBBY_NAME", "RED");
+    std::env::set_var("GB_PLUGINS", "gen1-lobby");
+    // The room is a Cable Club feature and the trade partner is a real second
+    // console, so the built-in virtual partner must not also claim the cable.
+    std::env::set_var("GB_GEN1_TRADE", "");
+
+    terminalgb::gameboy::run_terminal(Some(mine.rom.clone()));
+    stop.store(true, Ordering::Relaxed);
+    let _ = kid.kill();
+    let _ = kid.wait();
+}
+
+#[cfg(not(feature = "tui"))]
+fn human(_rom: &Path, _save: Option<&Path>, _frames: u32, _verbose: bool) {
+    eprintln!("--human needs the `tui` feature");
+    std::process::exit(2);
+}
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -1137,6 +1248,7 @@ fn main() {
     let mut frames = 60 * 60 * 12;
     let mut speed = 1.0f64;
     let mut verbose = false;
+    let mut want_human = false;
 
     let pair = |s: &str| -> (u8, u8) {
         let mut it = s.split(',').map(|v| v.trim().parse::<u8>().unwrap_or(0));
@@ -1161,9 +1273,7 @@ fn main() {
                     .copied()
                     .unwrap_or(PHRASES[0]);
             }
-            "--business" => {
-                business = Business::parse(&it.next().unwrap_or_default())
-            }
+            "--business" => business = Business::parse(&it.next().unwrap_or_default()),
             "--seed" => seed = it.next().and_then(|s| s.parse().ok()).unwrap_or(seed),
             "--players" => {
                 players = it.next().and_then(|s| s.parse().ok()).unwrap_or(players)
@@ -1172,6 +1282,7 @@ fn main() {
                 frames = it.next().and_then(|s| s.parse().ok()).unwrap_or(frames)
             }
             "--speed" => speed = it.next().and_then(|s| s.parse().ok()).unwrap_or(speed),
+            "--human" | "--play" => want_human = true,
             "--verbose" => verbose = true,
             other => {
                 eprintln!("unknown argument {other}");
@@ -1202,6 +1313,10 @@ fn main() {
         std::process::exit(1);
     }
 
+    if want_human {
+        human(&rom, save.as_deref(), frames, verbose);
+        return;
+    }
     match mode {
         "play" => play(PlayOpts {
             name,

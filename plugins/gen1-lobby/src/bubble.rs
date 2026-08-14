@@ -82,11 +82,7 @@ pub fn layout(me: (u8, u8), s: &Speech) -> Option<(usize, usize, Vec<u8>)> {
     if trimmed.is_empty() {
         return None;
     }
-    let bytes: Vec<u8> = trimmed
-        .chars()
-        .take(BUBBLE_W)
-        .filter_map(charmap)
-        .collect();
+    let bytes: Vec<u8> = trimmed.chars().take(BUBBLE_W).filter_map(charmap).collect();
     if bytes.is_empty() {
         return None;
     }

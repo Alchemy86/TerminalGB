@@ -232,10 +232,7 @@ mod tests {
             Err(RoomError::TooBigForBuffer { .. })
         ));
         assert_eq!(Room::new(200, 4).check(), Err(RoomError::AxisTooLong));
-        assert_eq!(
-            Room::new(4, 4).check(),
-            Err(RoomError::SmallerThanVanilla)
-        );
+        assert_eq!(Room::new(4, 4).check(), Err(RoomError::SmallerThanVanilla));
     }
 
     #[test]
@@ -277,8 +274,9 @@ mod tests {
         // inside the three-block border, which is exactly what the border is
         // for.
         let (bx, by) = (3i32 >> 1, 4i32 >> 1);
-        let owcoord =
-            |x: i32, y: i32| (W_OVERWORLD_MAP as i32 + (x + 3) + (y + 3) * (5 + 6)) as u16;
+        let owcoord = |x: i32, y: i32| {
+            (W_OVERWORLD_MAP as i32 + (x + 3) + (y + 3) * (5 + 6)) as u16
+        };
         assert_eq!(got, owcoord(bx - 2, by - 2));
     }
 

@@ -78,8 +78,7 @@ pub const W_OVERWORLD_MAP: u16 = 0xC6E8;
 /// `wOverworldMapEnd`.
 pub const W_OVERWORLD_MAP_END: u16 = 0xCBFC;
 /// The capacity that decides how big a room may be: `(W+6)·(H+6) <= 1300`.
-pub const OVERWORLD_MAP_LEN: usize =
-    (W_OVERWORLD_MAP_END - W_OVERWORLD_MAP) as usize;
+pub const OVERWORLD_MAP_LEN: usize = (W_OVERWORLD_MAP_END - W_OVERWORLD_MAP) as usize;
 /// `MAP_BORDER` (`constants/map_data_constants.asm`) — `LoadTileBlockMap`
 /// leaves this many blocks of border on every side, so stride = width + 6.
 pub const MAP_BORDER: usize = 3;
