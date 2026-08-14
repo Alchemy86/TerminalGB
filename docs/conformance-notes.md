@@ -149,6 +149,144 @@ throw away.
   rather than reporting a number.
 ---
 
+## 2026-08-14 — the link port over a network: BGB's protocol, and what no suite can see
+
+Full guide: [`docs/bgb-link.md`](bgb-link.md). New:
+[`src/bgblink.rs`](../src/bgblink.rs) (the protocol) and
+[`src/link/transport.rs`](../src/link/transport.rs) (the `LinkTransport` seam
+and the driver). Behind the `bgblink` feature; adds no third-party crate.
+
+This is not an emulation-accuracy fix, and the entry is here for the reason the
+render bugs and the terminal-fallback bug are: it is a defect class **no
+ROM-driven suite can observe**, which is itself the finding.
+
+### The defect this whole design exists to avoid
+
+*Symptom* — an emulator whose link port answers a transfer *synchronously*
+works perfectly against a second copy of itself and cannot talk to anything
+else at all, silently. Every diagnostic looks healthy; the two machines simply
+never connect. The player is told nothing.
+
+*Caught by* — **nothing, and nothing can.** Every ROM-driven check in this
+repo runs **one console**; `docs/conformance-notes.md` already records that no
+public suite can see half of the link port (2026-08-13, "the serial port had
+never been driven by a partner"). A transport-level timing error is one step
+further out still: the framebuffer is correct, the serial verdict is correct,
+and the link does not work.
+
+*Hardware behaviour* — Pan Docs, *Serial Data Transfer*: a master's transfer
+completes on its **own** shift clock in about a millisecond whether or not
+anything answers, with `$FF` shifted in for an idle-high line; a slave's never
+completes without an external clock. So a far end reachable only across a
+socket cannot answer inside the master's window, and an emulator that assumes
+it can will hand the game `$FF` every single time.
+
+*What we do instead* — the **driver** stops paying cycles to the CPU until the
+answer arrives (`TransportLink::run_frame`). Emulated time genuinely has not
+passed, which is also why the timestamp this transport reports is derived from
+emulated T-cycles and not from the wall clock. That is the honest
+implementation of what BGB's timestamps are for: they exist "so each side can,
+at the right times, wait for the remote side"
+(<https://bgb.bircd.org/bgblink.html>).
+
+*Carries into the tool* — **a link transport must declare whether it can carry
+a master transfer's answer inside the master's own window, and count what it
+could not carry.** `TransportStats::{unanswered, missed, timeouts, stalls}` are
+that declaration; a transport that sits silently idle is the failure mode.
+
+### The second defect: refusing a byte the console was about to take
+
+*Symptom* — a link handshakes, exchanges a few bytes and then loses the first
+few bytes of every block, or never gets past a game's link menu.
+
+*Caught by* — nothing in any suite. It was found by running the real
+counterparty (§below): the first run lost `0x01` and `0x02` off the front of a
+twelve-byte payload and reported `3 missed`, because the console was still
+booting when they arrived.
+
+*Hardware behaviour* — a console armed for an external clock takes whatever
+arrives; one that is not armed does not, and the master shifts in an idle line.
+Neither end can know which instruction the other is on. So an incoming byte is
+**held** for up to two frames while the console keeps running, and refused only
+when it plainly is not going to arm (`SLAVE_ARM_WINDOW`).
+
+*Carries into the tool* — **`missed` climbing while `transfers` stays flat is
+the signature of both ends settling into the same role**, and it is invisible
+without a counter. That is the single most useful diagnostic this driver has,
+and it is in the frontend's Status row (`Net`) for exactly that reason.
+
+### The third: telling an unplugged cable from a broken one
+
+*Symptom* — a player finishes a trade, the other player quits, and the first
+player's battery save silently stops being written for the rest of the session.
+Or the mirror image: a partner's emulator **crashes** mid-trade and the
+survivor cheerfully saves half a trade over a good file.
+
+*Caught by* — nothing. There is no test ROM for the filesystem, which
+`src/mbc/battery.rs`'s notes already record as a suite gap.
+
+*Contract* — `wantdisconnect` (packet 109) is the only thing on the wire that
+distinguishes the two. TerminalGB sends one from the frontend's shutdown path
+(**never from `Drop`** — winit calls `process::exit`, the release profile
+aborts on panic, `kill` skips destructors) and honours one it receives unless a
+byte was in the air at the time. A bare EOF after the link went live is
+`TransportError::Broken` and faults the console; anything before it is
+`TransportError::Setup` and costs only the cable.
+
+*Carries into the tool* — **a link that never came up must not be reported as
+one that broke.** The two have opposite consequences for a save file.
+
+### The fourth, and the one only an end-to-end test could find
+
+*Symptom* — every clean shutdown is reported by the peer as a **broken** link,
+so the peer stops writing its save. Nothing logs anything; both emulators
+behave perfectly right up to the moment one of them quits.
+
+*Cause* — `BgbLink::disconnect` was written as an **inherent** method and never
+added to `impl LinkTransport for BgbLink`. The driver calls it through
+`dyn LinkTransport`, which resolved to the trait's empty default body.
+
+*Caught by* — a two-process Gen 1 trade over a real socket, and **nothing
+else**. The unit test for it passed throughout, because it called the inherent
+method on the concrete type; it now goes through `Box<dyn LinkTransport>`, and
+removing the override turns it red.
+
+*Carries into the tool* — **a trait with default method bodies will accept an
+implementation that silently does nothing.** Any conformance check on an
+adapter contract with optional methods has to exercise them through the
+abstraction the product actually uses, not through the concrete type a test
+happens to hold.
+
+### What was measured
+
+* **A Gen 1 trade over TCP, two processes, real sockets**: 1,786 transfers, 0
+  unanswered, 0 missed, 0 timeouts, in 22 s (roughly 1,550-1,800 depending on
+  how the two bots interleave). Each console ended holding a Pokémon whose
+  original trainer is the *other* console's player — a value neither process
+  wrote. `examples/bgb_link --expect-ot` makes that the exit status. Neither
+  side faults: the one that finishes first says goodbye.
+* **Interoperability against a second implementation**: `tools/bgb-interop/`
+  drives `PokemonGB_Online_Trades`' own `bgb_link_cable_server.py` unchanged as
+  a library, with Python as master. Twelve bytes each way, both verdicts
+  independent (the emulated cartridge answers with the *complement* of what
+  arrived, so a plain echo cannot pass by accident). **Teeth proven**: making
+  `answer_incoming` send `$00` turns it red, restoring it turns it green.
+* **Not** tested: BGB itself (a Windows program nobody here has run) and a real
+  Game Boy (no adapter on this machine). Say so rather than implying otherwise.
+
+### A property of the counterparty worth writing down
+
+`BGBLinkCableServer` sends **no data at all** until its `can_go` flag is set,
+and that only happens when it receives a sync3 with `b2 = 1` — the client
+saying "I am not doing a passive transfer". Every real cartridge satisfies that
+without trying, because it boots and draws a title screen before it ever
+touches the link port. A test ROM that arms on its first instruction never
+would, and the link comes up and then sits there for ever. Hence the deliberate
+boot delay in `examples/bgb_link`'s `echo_rom()`. **An interoperability harness
+has to look like a cartridge, not like a protocol.**
+
+---
+
 ## 2026-08-14 — the Game Boy is nine machines, and eleven ROMs could tell
 
 Mooneye `acceptance` **60/75 → 67/75** and `misc` (`GB_MODEL=cgb`) **4/8 → 8/8**,

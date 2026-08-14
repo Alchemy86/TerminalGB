@@ -21,27 +21,35 @@ find each other and link, the way plugging a real cable in does.
 and plugs it back in. (Both consoles here are the MIT
 <a href="../third_party/dmg-acid2/">dmg-acid2</a> test ROM.)</em></p>
 
-There are two ways to be the far end of a Game Boy's link port, and this
-repository now has both.
+There are three ways to be the far end of a Game Boy's link port, and this
+repository now has all of them.
 
 **Impersonation** — [`plugins/gen1-link`](../plugins/gen1-link) speaks Pokémon
 Red/Blue's trade protocol from Rust, convincingly enough that the real game
 completes a real trade with it. That is the right answer when you own one
 cartridge, and it can only ever know the protocols somebody wrote down.
 
-**Relaying** — this page. Two whole cores, joined by a cable that knows nothing
-about any game. Whatever the two programs agree on works, because both ends are
+**Relaying over a network** — [`docs/bgb-link.md`](bgb-link.md). The same wire,
+with the far end on a TCP socket speaking BGB's link protocol: another
+emulator, another copy of this one, or — through an existing MIT bridge tool —
+**a real Game Boy** on somebody else's link adapter. It uses the same
+`Serial::link_answer_master` / `link_clock_slave` half this page built, and
+adds the one thing a local cable never needs: waiting.
+
+**Relaying in one process** — this page. Two whole cores, joined by a cable
+that knows nothing about any game. Whatever the two programs agree on works, because both ends are
 the genuine article: a Gen 1 trade, a Gen 1 link battle, the Gen 1 ↔ Gen 2 Time
 Capsule, Tetris, or something nobody has looked at.
 
-It comes in two shapes, and they are alternatives because a Game Boy has one
-link port:
+It comes in two shapes, and every option below is an alternative to every
+other, because a Game Boy has one link port:
 
-| `link =` | what it does |
+| key | what it does |
 |---|---|
-| **`auto`** (default) | Find other instances **on this machine** and pair with one. See §5. |
-| `off` | Never link. For somebody running several games who does not want them finding each other. |
-| a path to a ROM | Boot a **second console inside this process** and wire the two together — deterministic and scriptable, which is what the tests and `examples/link_two.rs` use. |
+| `link = auto` (default) | Find other instances **on this machine** and pair with one. See §5. |
+| `link = off` | Never link. For somebody running several games who does not want them finding each other. |
+| `link = <path to a ROM>` | Boot a **second console inside this process** and wire the two together — deterministic and scriptable, which is what the tests and `examples/link_two.rs` use. |
+| `link_net = host:port` | Put the port on a **TCP socket** instead, reaching another machine entirely. Different page: [`docs/bgb-link.md`](bgb-link.md). |
 
 ---
 

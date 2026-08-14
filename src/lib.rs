@@ -39,10 +39,16 @@ use std::sync::OnceLock;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-pub mod boot;
 /// Render chiptune instructions through the emulated APU — see [`chiptune`].
 /// Behind the `chiptune` feature; the music side of it lives in the
 /// dependency-free `terminalgb-chiptune` crate, which does not depend on this one.
+/// BGB's link-cable protocol over TCP — see [`bgblink`]. Behind the `bgblink`
+/// feature (in `default`, out of `--no-default-features`) and adds **no**
+/// third-party crate: it is `std::net` and eight bytes at a time. Excluded on
+/// `wasm32`, which has no sockets.
+#[cfg(all(feature = "bgblink", not(target_arch = "wasm32")))]
+pub mod bgblink;
+pub mod boot;
 #[cfg(all(feature = "chiptune", not(target_arch = "wasm32")))]
 pub mod chiptune;
 pub mod cpu;

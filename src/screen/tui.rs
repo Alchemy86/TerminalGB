@@ -782,6 +782,16 @@ struct Session {
     /// `link = <rom>` put a second console in this process instead — the two
     /// are alternatives, because a Game Boy has one link port.
     peer: Option<Box<crate::link::peer::LinkPeer>>,
+    /// The link port on a **socket**, reaching another machine entirely, when
+    /// `link_net = …` is configured. See [`crate::bgblink`] and
+    /// `docs/bgb-link.md`.
+    ///
+    /// The third alternative to the two above, and it **wins** over both — it
+    /// is the only one of the three the user typed on purpose. Enforced rather
+    /// than assumed: two drivers both answering the port's transfers would each
+    /// see half of them.
+    #[cfg(feature = "bgblink")]
+    netlink: Option<Box<crate::link::TransportLink>>,
     /// Palette-mapping stage, owning its buffer so a frame allocates nothing.
     prep: FramePrep,
     /// Fast path: our own capped-resolution encoder. `None` when the protocol
@@ -924,6 +934,7 @@ impl Session {
         entry: RomEntry,
         link: Option<Box<LinkPartner>>,
         peer: Option<Box<crate::link::peer::LinkPeer>>,
+        #[cfg(feature = "bgblink")] netlink: Option<Box<crate::link::TransportLink>>,
         term_image: Option<TermImage>,
         sprite_image: Option<TermImage>,
         team_image: Option<TermImage>,
@@ -939,6 +950,8 @@ impl Session {
             paused: false,
             link,
             peer,
+            #[cfg(feature = "bgblink")]
+            netlink,
             prep: FramePrep::new(),
             term_image,
             image: None,
@@ -1700,6 +1713,42 @@ impl App {
         }))
     }
 
+    /// Put the link port on a socket, if `link_net = …` is configured.
+    ///
+    /// Failure is a **warning, not a refusal** — a peer that is not there costs
+    /// you the cable and nothing else, the same rule the rest of this frontend
+    /// follows for an absent capability, and the same one
+    /// [`open_link_partner`](App::open_link_partner) follows for a missing
+    /// second cartridge.
+    ///
+    /// Note what does *not* happen here: nothing waits. `listen:` binds and
+    /// returns, and the console runs with an unplugged cable until somebody
+    /// connects. Blocking on `accept()` would hang the emulator before the
+    /// terminal UI existed, which is exactly the bug the video sink had
+    /// (`AGENTS.md`, "no media sink may ever block the emulator").
+    #[cfg(feature = "bgblink")]
+    fn open_net_link(&mut self) -> Option<Box<crate::link::TransportLink>> {
+        // `$GB_LINK_NET` wins over the config key, the same way `$GB_PLUGINS`
+        // and `$GB_TELEMETRY` do — a link is a per-session choice far more
+        // often than a permanent one.
+        let spec = match std::env::var("GB_LINK_NET") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => self.config.link_net.as_ref()?.clone(),
+        };
+        match crate::bgblink::BgbLink::open(&spec) {
+            Ok(t) => {
+                let link = crate::link::TransportLink::new(Box::new(t));
+                self.config_warnings
+                    .push(format!("link_net: {}", link.describe()));
+                Some(Box::new(link))
+            }
+            Err(e) => {
+                self.config_warnings.push(format!("link_net {spec}: {e}"));
+                None
+            }
+        }
+    }
+
     /// Load a ROM and switch to the Playing screen. On failure, stay on the
     /// picker and show why.
     fn start_game(&mut self, path: &Path) {
@@ -1732,10 +1781,28 @@ impl App {
                 }
                 #[cfg(feature = "audio")]
                 let (audio_queue, audio_rate) = (audio.queue.clone(), audio.rate);
-                let link = self.open_link_partner();
-                // One port: an in-process second console and a discovered peer
-                // are alternatives, never both.
-                let peer = if link.is_some() {
+                let mut link = self.open_link_partner();
+                // One port, three ways to plug something into it. An explicit
+                // `link_net` wins, because it is the only one of the three the
+                // user typed on purpose: `link = auto` is the default and a
+                // ROM path is a local convenience.
+                #[cfg(feature = "bgblink")]
+                let netlink = self.open_net_link();
+                #[cfg(feature = "bgblink")]
+                let net_has_the_port = netlink.is_some();
+                #[cfg(not(feature = "bgblink"))]
+                let net_has_the_port = false;
+                if net_has_the_port && link.is_some() {
+                    self.config_warnings.push(
+                        "link_net has the port, so `link = <rom>` was ignored — \
+                         a Game Boy has one link port"
+                            .to_string(),
+                    );
+                    link = None;
+                }
+                // An in-process second console and a discovered peer are
+                // alternatives too, and both lose to the socket.
+                let peer = if link.is_some() || net_has_the_port {
                     None
                 } else {
                     self.pending_peer.take().map(|mut p| {
@@ -1755,6 +1822,8 @@ impl App {
                     entry,
                     link,
                     peer,
+                    #[cfg(feature = "bgblink")]
+                    netlink,
                     term_image,
                     sprite_image,
                     team_image,
@@ -1809,6 +1878,7 @@ impl App {
 
     /// Return to the picker, dropping the current session (refresh recents).
     fn back_to_picker(&mut self) {
+        self.unplug_net_link();
         self.session = None;
         self.screen = Screen::Picker;
         self.overlay = Overlay::None;
@@ -1995,10 +2065,26 @@ impl App {
                 }
             }
         }
+        self.unplug_net_link();
         self.telemetry.flush();
         self.video.flush();
         self.recent.save();
         Ok(())
+    }
+
+    /// Say goodbye to a network link partner before this session ends.
+    ///
+    /// Called where the loop already flushes telemetry and recents, and again
+    /// on the way back to the picker — **not** from `Drop`, for the reason
+    /// `src/mbc/battery.rs` records at length: the frontends here cannot
+    /// guarantee destructors run. It matters to the *other* console: a
+    /// disconnection it was warned about is an unplugged cable and it keeps
+    /// writing its save, one it was not is a broken link and it stops.
+    fn unplug_net_link(&mut self) {
+        #[cfg(feature = "bgblink")]
+        if let Some(n) = self.session.as_mut().and_then(|s| s.netlink.as_mut()) {
+            n.disconnect();
+        }
     }
 
     /// Advance the machine exactly one emulated frame. **Emulation only** — no
@@ -2011,11 +2097,24 @@ impl App {
             // `Gameboy::frame` publishes the "frame rendered" event to any
             // attached plugin itself, so there is nothing to drive from here.
             //
-            // With a link cable attached the cable owns the stepping instead:
-            // it interleaves the two cores instruction by instruction, which is
-            // the only way a byte on the wire lands on the right cycle at both
-            // ends. It performs the same per-frame housekeeping `frame` does,
-            // for both machines.
+            // With something plugged into the link port, *that* owns the
+            // stepping instead: it interleaves the cores instruction by
+            // instruction, which is the only way a byte on the wire lands on
+            // the right cycle at both ends, and it performs the same per-frame
+            // housekeeping `frame` does. Same reason for all three drivers —
+            // the socket one additionally stops the CPU while the far end owes
+            // it an answer (see `crate::link::TransportLink`).
+            #[cfg(feature = "bgblink")]
+            if let Some(n) = s.netlink.as_mut() {
+                n.run_frame(&mut s.gb);
+            } else {
+                match (s.link.as_mut(), s.peer.as_mut()) {
+                    (Some(l), _) => l.cable.run_frame(&mut s.gb, &mut l.gb),
+                    (None, Some(p)) => p.run_frame(&mut s.gb),
+                    (None, None) => s.gb.frame(),
+                }
+            }
+            #[cfg(not(feature = "bgblink"))]
             match (s.link.as_mut(), s.peer.as_mut()) {
                 (Some(l), _) => l.cable.run_frame(&mut s.gb, &mut l.gb),
                 (None, Some(p)) => p.run_frame(&mut s.gb),
@@ -4782,6 +4881,28 @@ impl App {
         if let Some((short, _)) = self.link_summary() {
             status.push(kv("Link", &truncate(&short, 18)));
         }
+        // A link on a socket must be as visible as a second local console, and
+        // for a stronger reason: it is somebody else's machine on the other
+        // end, it may not have arrived yet, and a link that is quietly doing
+        // nothing looks exactly like a link that is working.
+        #[cfg(feature = "bgblink")]
+        if let Some(n) = self.session.as_ref().and_then(|s| s.netlink.as_ref()) {
+            let st = n.stats();
+            let state = match (n.live(), n.failure().is_some()) {
+                (_, true) => "FAULT".to_string(),
+                (true, _) => format!("{} tx", st.transfers),
+                (false, _) => "waiting".to_string(),
+            };
+            // `missed` earns its place beside the transfer count: a climbing
+            // `missed` with a flat `transfers` is the signature of both ends
+            // settling into the same role, and it is invisible otherwise.
+            let detail = if st.missed > 0 {
+                format!("{state} {}!", st.missed)
+            } else {
+                state
+            };
+            status.push(kv("Net", &truncate(&detail, 18)));
+        }
         // The `!` / `!!` marks travel with the name, so "this one may write my
         // game" survives truncation of the detail text.
         for p in &plugins {
@@ -4999,6 +5120,12 @@ impl App {
             Line::from("  W         swap which console you are playing"),
             Line::from(Span::styled(
                 "  set `link = <rom>` in config.toml to boot a second cartridge                  joined to this one by a real link cable. Both run; only the one                  on screen takes your keys. See docs/link-cable.md — including                  what Gold/Silver need before the Time Capsule will open",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from("Link cable over the network (BGB protocol)"),
+            Line::from(Span::styled(
+                "  set `link_net = connect:HOST:PORT` (or `listen:0.0.0.0:8765`)                  in config.toml, or GB_LINK_NET=…, to reach a console on ANOTHER                  machine — BGB, another copy of this, or a bridge tool with a                  REAL Game Boy behind it. It takes the link port from the local                  cable. Watch the Net row: `waiting` = nobody has connected                  yet. See docs/bgb-link.md",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
@@ -5561,9 +5688,12 @@ impl App {
                 self.session = Some(Session::new(
                     gb,
                     entry,
-                    // No link partner and no cable: a music player has neither,
-                    // and attaching one would be a surprise nobody asked for.
+                    // No link partner, no cable and no socket: a music player
+                    // has none of them, and attaching one would be a surprise
+                    // nobody asked for.
                     None,
+                    None,
+                    #[cfg(feature = "bgblink")]
                     None,
                     term_image,
                     sprite_image,
@@ -8193,6 +8323,134 @@ mod tests {
             "and the player must be told why: {:?}",
             app.config_warnings
         );
+    }
+
+    /// A link on a socket must be as visible as one to a second local console.
+    ///
+    /// The rule this belongs to is the one `docs/plugins.md` §4 states and this
+    /// panel has broken twice: **nothing may be active and invisible.** A
+    /// network link earns it twice over — the far end is somebody else's
+    /// machine, it may not have arrived yet, and "waiting" and "working" look
+    /// identical from the outside.
+    ///
+    /// It also pins that a listener does **not** block: the console has to
+    /// have run frames with nothing connected, which is what an unplugged cable
+    /// does and what `accept()` in the wrong place would prevent.
+    #[test]
+    #[cfg(feature = "bgblink")]
+    fn a_network_link_is_visible_in_the_rendered_status_panel() {
+        let Some(mut app) = test_app_net_linked("listen:127.0.0.1:0") else {
+            return;
+        };
+        assert!(
+            app.session.as_ref().unwrap().netlink.is_some(),
+            "`link_net = …` should have opened the socket"
+        );
+        assert!(
+            !app.session
+                .as_ref()
+                .unwrap()
+                .netlink
+                .as_ref()
+                .unwrap()
+                .live(),
+            "nothing has connected, so the cable is unplugged"
+        );
+
+        // The console runs anyway. A listener that blocked would never get here.
+        let before = app.session.as_ref().unwrap().gb.debug_pc();
+        let mut moved = false;
+        for _ in 0..8 {
+            app.step_frame();
+            moved |= app.session.as_ref().unwrap().gb.debug_pc() != before;
+        }
+        assert!(moved, "the console must run while nobody is connected");
+
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(150, 45)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            text.contains("Net"),
+            "the Status panel must show the network link.\n{text}"
+        );
+        assert!(
+            text.contains("waiting"),
+            "and must say that nobody has connected yet.\n{text}"
+        );
+    }
+
+    /// **A Game Boy has one link port**, and there are now three things that
+    /// want it: a second console in this process, an auto-discovered peer, and
+    /// a socket. An explicit `link_net` wins — it is the only one of the three
+    /// the user typed on purpose — and the loser is *reported*, not silently
+    /// dropped. Two drivers both answering the port's transfers would each see
+    /// half of them, which is a desync nobody could diagnose.
+    #[test]
+    #[cfg(feature = "bgblink")]
+    fn only_one_thing_can_have_the_link_port() {
+        isolate_state_dir();
+        let Some(app) = build_test_app(Config {
+            link: LinkSetting::Rom("third_party/dmg-acid2/dmg-acid2.gb".to_string()),
+            link_net: Some("listen:127.0.0.1:0".to_string()),
+            ..Config::default()
+        }) else {
+            return;
+        };
+        {
+            let s = app.session.as_ref().unwrap();
+            assert!(s.netlink.is_some(), "the socket wins");
+            assert!(s.link.is_none(), "so the in-process second console is off");
+            assert!(s.peer.is_none(), "and so is the discovered peer");
+        }
+        assert!(
+            app.config_warnings
+                .iter()
+                .any(|w| w.contains("link_net has the port")),
+            "the user must be told which one was dropped: {:?}",
+            app.config_warnings
+        );
+    }
+
+    #[cfg(feature = "bgblink")]
+    fn test_app_net_linked(spec: &str) -> Option<App> {
+        isolate_state_dir();
+        build_test_app(Config {
+            link_net: Some(spec.to_string()),
+            ..Config::default()
+        })
+    }
+
+    /// Build an `App` with `config` and start the vendored acid2 ROM in it,
+    /// from a scratch copy so nothing writes beside the checked-in cartridge.
+    fn build_test_app(config: Config) -> Option<App> {
+        isolate_state_dir();
+        let rom = std::fs::read("third_party/dmg-acid2/dmg-acid2.gb").ok()?;
+        let mut picker = Picker::from_fontsize((8, 16));
+        picker.set_protocol_type(ProtocolType::Halfblocks);
+        let mut app = App::build(
+            config,
+            Recent::default(),
+            Vec::new(),
+            picker,
+            video_for_test(),
+            None,
+        );
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir()
+            .join(format!("gameboy-netlink-test/{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok()?;
+        let rom_path = dir.join("acid2.gb");
+        std::fs::write(&rom_path, &rom).ok()?;
+        app.start_game(&rom_path);
+        Some(app)
     }
 
     fn test_app_linked() -> Option<App> {

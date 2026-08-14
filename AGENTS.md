@@ -3471,6 +3471,133 @@ Both cost hours; `testharness/trainer.rs` check [5] documents them in place.
   default branch too). The fixture at `/tmp/gameboy-gen1-trade/cableclub.sav` was produced
   earlier and is what the harness finds; regenerating it is an open problem.
 
+## The link port over TCP — BGB's protocol (`src/bgblink.rs`, `src/link/transport.rs`)
+
+**Full guide: [`docs/bgb-link.md`](docs/bgb-link.md); conformance record in
+`docs/conformance-notes.md` (newest entry).** Behind the `bgblink` cargo feature — in
+`default`, out of `--no-default-features`, out of wasm — and it adds **no third-party
+crate**: the whole implementation is `std::net`. `make embed` still reports one
+third-party dependency.
+
+- **This is the third way to be the far end of the link port**, and the only one that
+  reaches hardware you do not own. `plugins/gen1-link` impersonates a console;
+  `LinkCable` relays between two local cores; this relays over a socket. Through
+  [`Lorenzooone/PokemonGB_Online_Trades`](https://github.com/Lorenzooone/PokemonGB_Online_Trades)
+  (**MIT**, used unchanged) the far end can be a **real Game Boy on somebody else's USB
+  adapter**, because that tool's `emulator_trading.py` and `usb_trading.py` put the *same*
+  trading logic behind two different byte channels. It costs no hardware purchase at all.
+- **`LinkTransport` (`src/link/transport.rs`) is the seam; `TransportLink` is the driver.**
+  A future USB-adapter transport implements the same trait. The trait lives in `link.rs`'s
+  submodule and not in a frontend, because it is pure logic with no host dependency — the
+  socket half is what is feature-gated.
+- **THE CONSOLE IS STALLED, AND THAT IS THE WHOLE DESIGN.** A master's transfer finishes on
+  its own shift clock in ~1 ms of emulated time whether or not anything answers, so a
+  driver that lets the console run hands it `$FF` every time and no link ever carries a
+  byte. `TransportLink::run_frame` stops paying cycles to the CPU until the answer arrives.
+  That is the honest implementation of BGB's timestamps ("so each side can, at the right
+  times, wait for the remote side") — and it is why the timestamp we report is derived from
+  **emulated** T-cycles (2 T = 1 tick of its 2 MiHz clock), never the wall clock.
+  Expect **one stall per transferred byte on whichever side drives the clock**; measured
+  1526 stalls on the master and 0 on the slave in a real trade. That is not a fault.
+- **Timestamps are carried and deliberately not enforced.** The shipping Python tool
+  "cheats" the same way (its own comment: *"Cheat, and say we are exactly in sync with the
+  client"*), paces at **10 ms per byte** from a Python thread, does not set `TCP_NODELAY`,
+  and completes real trades. These games are turn-based; the request/response structure
+  *is* the synchronisation. Do not over-engineer this.
+- **An INCOMING byte is HELD, not refused.** Our console may not have armed `SC = $80` yet.
+  Refusing immediately drops the byte — the first interop run lost the first two bytes of a
+  twelve-byte payload exactly that way. `SLAVE_ARM_WINDOW` is two frames; refusals are
+  counted as `missed`. **`missed` climbing while `transfers` stays flat is the signature of
+  both ends settling into the same role**, and it is invisible without the counter. It is
+  in the TUI's `Net` status row for that reason.
+- **NEVER answer a status packet with a status packet.** The reference Python server does
+  (its own comment admits the docs say not to), so an implementation that does the same
+  ping-pongs for ever. Send one **in response to version** and nowhere else.
+- **An unplugged cable is not a broken one, and only the second may fault the console.**
+  `TransportError::Setup` (nothing listening, refused, version mismatch) costs the cable
+  and nothing else; `TransportError::Broken` (live and then gone) faults the console, which
+  poisons the battery — same reasoning as `LinkCable`'s fault propagation. `wantdisconnect`
+  (packet 109) is the **only** thing on the wire that tells "the player quit" from "the
+  emulator died"; we send one from the frontend's shutdown path, **never from `Drop`**.
+- **Wiring: `link_net = [listen:|connect:]host:port`** in `config.toml` (or `GB_LINK_NET`),
+  following the `link = …` precedent. Without a prefix the default is **connect**,
+  because BGB's "Listen" and the Python bridge both bind first.
+  **A Game Boy has one link port and THREE things now want it** — the auto-discovered
+  local peer (`link = auto`, the default), a second console in this process
+  (`link = <rom>`), and the socket. **`link_net` wins**, because it is the only one of
+  the three a user types on purpose; whichever it displaces is reported in the warnings,
+  not silently dropped (`only_one_thing_can_have_the_link_port`).
+  A `listen:` link **binds and returns**; the console runs with an unplugged cable until
+  somebody connects. Blocking in `accept()` would be the video sink's startup hang again.
+- **Verified: a real Gen 1 trade over TCP.** Two `examples/bgb_link` processes, real
+  sockets, Pokémon Blue on both: **1786 transfers, 0 unanswered, 0 missed, 0 timeouts, 22
+  s** (1,550-1,800 depending on how the bots interleave), and each console ends holding a
+  Pokémon whose OT is the *other* console's player. `--expect-ot` makes that the exit
+  status. Run it with `--listen`/`--connect`, `--party red|blue`, `--trade`.
+- **A TRAIT METHOD THAT IS ONLY AN INHERENT METHOD IS A SILENT NO-OP, AND THAT COST A
+  REAL BUG HERE.** `BgbLink::disconnect` existed but was never added to
+  `impl LinkTransport for BgbLink`; `TransportLink` calls it through `dyn LinkTransport`,
+  got the trait's empty default, and **every clean shutdown was reported by the peer as a
+  broken link — so the peer stopped writing its save**. The unit test passed the whole
+  time because it called the inherent method on the concrete type. The test goes through
+  `Box<dyn LinkTransport>` now (teeth proven). Two-process end-to-end found it; nothing
+  else could.
+- **`examples/bgb_link --settle N` (default 600) is not padding.** The two consoles do not
+  finish together — Gen 1 runs another full three-block exchange after "Trade completed!"
+  — so whichever finishes first must keep servicing the cable. Without it a run that had
+  traded correctly reported a party entry read *mid-write* (`LIMMER`, OT `ED`, level 0).
+- **Closing a socket with unread data in its receive queue sends RST, not FIN**, and an
+  RST discards the goodbye you just wrote. `BgbLink::graceful_close` writes, drains,
+  half-closes and then waits up to `LINGER` (250 ms) for the peer's FIN. Measured: without
+  it the peer read `Connection reset by peer` and faulted.
+- **Parse the buffer BEFORE acting on the hang-up that came with it.** A polite peer writes
+  its `wantdisconnect` and closes, so both land in one `read(2)`; `close_as` keeps the
+  *first* reason it is given, so recording the EOF as it is seen overwrote the goodbye and
+  turned every clean shutdown into a broken link. `went_live` is latched where the phase
+  becomes `Live`, not at the end of a poll, for the same class of reason.
+- **Verified against a SECOND IMPLEMENTATION, which is the claim that matters.**
+  `tools/bgb-interop/interop.py` imports `PokemonGB_Online_Trades`'
+  `utilities/bgb_link_cable_server.py` **unchanged, as a library** (pinned commit in
+  `tools/bgb-interop/fetch.sh`, fetched at run time, never vendored) and drives it as
+  master. Both verdicts are independent because the emulated cartridge answers with the
+  **complement** of what arrived — a plain echo cannot tell a working link from a peer
+  reading its own transmission back. **Teeth proven**: making `answer_incoming` send `$00`
+  turns it red. **Not in CI** (fetches somebody else's repo, needs Python); run it by hand
+  when `src/bgblink.rs` changes.
+- **The counterparty sends NO DATA until it has seen one sync3 `b2 = 1` from us** (its
+  `can_go` flag) — i.e. until it has caught us *not* armed once. Every real cartridge
+  satisfies that by booting before it touches the link port; a test ROM that arms on its
+  first instruction never would, and the link comes up and then sits there. Hence the
+  deliberate boot delay in `examples/bgb_link`'s `echo_rom()`. **An interoperability
+  harness has to look like a cartridge, not like a protocol.**
+- **Not tested, and say so:** BGB itself (a Windows program nobody here has run) and a real
+  Game Boy (no adapter on this machine). The hardware path is established *by
+  construction* — `emulator_trading.py` and `usb_trading.py` bind the same `RBYTrading`
+  logic to different `sendByte`/`receiveByte` pairs — and that is an inference, not a
+  measurement. Do not let it be quoted as one.
+- **Dead ends, recorded so nobody repeats them:** (a) sending the goodbye and dropping the
+  socket — see the RST note above; (b) recording the hang-up before parsing the buffer that
+  came with it; (c) the inherent-versus-trait `disconnect`; (d) starting the interop payload
+  as soon as the counterparty is ready, which loses the first bytes while the console is
+  still booting — the fix is a **sentinel probe, not a `sleep`** (probe `0x00` until the
+  echo ROM's pre-arm `$A5` comes back, which is also why `0x5A` is absent from the payload:
+  the ROM answers with the complement, so it can only offer `$A5` again after receiving
+  `$5A`).
+- **`MASTER_TIMEOUT` is 2 s and that is deliberately generous** — the reference server paces
+  at 10 ms per byte from a Python thread with Nagle on. A timeout tight enough to feel
+  "responsive" would break the one counterparty this exists to talk to. `SLAVE_ARM_WINDOW`
+  is two frames for the mirror-image reason. Neither is a round number chosen for looks;
+  both are bounded by a measured counterparty.
+- **`examples/support/gen1_cable_club.rs` is now shared** by `link_two.rs` (both its
+  in-process and its auto-discovered-peer modes) and `bgb_link.rs` — the Cable Club bot,
+  the save staging, `patch_party`, the tilemap screen reader and `write_one`. Three copies
+  of that bot would eventually be three different bots and the trade proofs would stop
+  being comparable. `#[path]`-included, same pattern as `support/suite_baseline.rs`.
+- **A trade verdict must check the whole Pokémon, not just an OT name** — the peer-mode
+  finding, adopted here. A lost byte shows up as `$FF` inside a name, `$FF` is not a
+  character, and a decoder that skips unknown bytes turns a corrupt `GLIMMER` into a
+  plausible `MMER`. `bgb_link --expect-ot` compares nickname, species and level too.
+
 ## Two consoles on one cable (`src/link.rs`, `src/mmu/serial.rs`, `examples/link_two.rs`)
 
 - **Full write-up, with the Gen 1 ↔ Gen 2 Time Capsule rules:
@@ -4162,6 +4289,14 @@ than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o 
   removing `panic = 'abort'` — that is load-bearing (see the battery section: a panic is
   process death *and* the loss of unwritten cartridge RAM). A real fix is giving the lib
   targets distinct names, which is a repo-wide change nobody has scheduled.
+  **It is a stale artefact, not your source, and what clears it is forcing the LIB to
+  rebuild.** Measured 2026-08-14, two different shapes: `--test battery` failed on three
+  consecutive retries naming `terminalgb_plugin_battle_control`, and
+  `cargo clean -p terminalgb-plugin-battle-control` let it pass first time; `--test
+  basicterm` then failed the same way naming **every** crate in the graph, `cargo clean -p`
+  did *not* help, and checking out another commit and back — which rebuilds the lib — did.
+  Same test, same source, green either side of the rebuild. Do not read it as a
+  regression.
 - **The renderer tracks the emulator's accuracy, and that was demonstrated by accident.**
   Rebasing across `7556dde fix(apu): a square's frequency reload is latched late` changed
   the demo render in exactly the places it should: **0.0 %** of the scale and arpeggio

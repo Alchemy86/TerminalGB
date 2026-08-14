@@ -107,6 +107,11 @@ pub mod peer;
 use crate::gameboy::{Gameboy, FRAME_TICKS};
 use crate::mmu::serial::LinkRole;
 
+mod transport;
+pub use transport::{
+    LinkTransport, MasterReply, TransportError, TransportLink, TransportStats,
+};
+
 /// What the other end was doing while a master transfer ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Partner {

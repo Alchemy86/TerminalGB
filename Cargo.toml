@@ -29,7 +29,7 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # audio. See README "Embedding the core". Zero third-party crates besides
 # `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
 # belongs behind `desktop`/`tui`/`audio`, not in the core.
-default = ["desktop", "tui", "standard-plugins", "chiptune", "music"]
+default = ["desktop", "tui", "standard-plugins", "chiptune", "music", "bgblink"]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
 # Needs a display server at run time.
@@ -75,6 +75,16 @@ chiptune = ["terminalgb-chiptune"]
 # `terminalgb-chiptune`'s, deliberately shared with the chiptune renderer so
 # there is exactly one of them.
 music = ["tui", "terminalgb-chiptune"]
+# BGB's link-cable protocol over TCP (`terminalgb::bgblink`) — link this
+# emulator to BGB, to another copy of itself, or to any of the bridge tools
+# that speak it, including `PokemonGB_Online_Trades`, which puts a **real Game
+# Boy** on the far end. See docs/bgb-link.md.
+#
+# In `default` so a normal build can reach it from `config.toml`, and out of
+# `--no-default-features` so an embedder gets no networking it did not ask for
+# — the same line `chiptune` draws. It adds **no third-party crate**: the whole
+# implementation is `std::net`.
+bgblink = []
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
@@ -246,6 +256,11 @@ required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
 name = "link_two"
 path = "examples/link_two.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
+[[example]]
+name = "bgb_link"
+path = "examples/bgb_link.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer", "bgblink"]
 
 [[example]]
 name = "gen1_trade"

@@ -2,7 +2,7 @@
 
 .PHONY: web desktop docs-links docs-check lint lint-audio test-audio-perf embed \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
-        test-mcp lint-mcp test-chiptune chiptune-demo
+        test-mcp lint-mcp test-chiptune chiptune-demo bgb-interop
 
 all: build install
 
@@ -98,6 +98,18 @@ chiptune-demo:
 # testharness/mcp.rs and docs/mcp.md.
 test-mcp:
 	cargo test --release --features mcp --test mcp
+
+# Interoperability for the BGB link protocol: drive somebody else's
+# implementation and check bytes cross. NOT in CI — it fetches another
+# repository at run time and needs a Python interpreter, the same reason
+# SameSuite is not. Run it by hand when src/bgblink.rs changes and record what
+# it printed. See tools/bgb-interop/README.md and docs/bgb-link.md.
+bgb-interop:
+	./tools/bgb-interop/fetch.sh
+	cargo build --release \
+	    --features image,plugin-gen1-link,plugin-trainer,bgblink \
+	    --example bgb_link
+	python3 tools/bgb-interop/interop.py
 
 # The external suites (Mooneye GB, SameSuite, Mealybug Tearoom) are not
 # vendored — they are other people's ROMs under other people's licences, so

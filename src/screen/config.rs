@@ -411,6 +411,16 @@ pub struct Config {
     /// What the link port is plugged into. See
     /// [`docs/link-cable.md`](../../docs/link-cable.md).
     pub link: LinkSetting,
+
+    /// The link port on a **TCP socket** instead, speaking BGB's link-cable
+    /// protocol — `[listen:|connect:]host:port`, e.g. `connect:127.0.0.1:8765`.
+    /// Without a prefix the default is **connect**, because the things worth
+    /// reaching (BGB's "Listen", and `PokemonGB_Online_Trades`' bridge to a
+    /// real Game Boy) bind first. `None` — the default — is no network link.
+    ///
+    /// **This takes the port**, and [`Config::link`] is left alone: a Game Boy
+    /// has one. See [`crate::bgblink`] and `docs/bgb-link.md`.
+    pub link_net: Option<String>,
     /// Open the trainer panel as soon as a game starts, rather than waiting for
     /// `T`. Off by default — the panel is opt-in — but somebody who plays with
     /// it up every session should not have to press a key every session.
@@ -461,6 +471,7 @@ impl Default for Config {
             plugins: Vec::new(),
             gen1_trade: None,
             link: LinkSetting::default(),
+            link_net: None,
             battles: None,
             trainer: false,
             agent_command: None,
@@ -822,6 +833,28 @@ impl Config {
                 LinkSetting::Auto
             } else {
                 LinkSetting::Rom(expand_tilde_str(v))
+            };
+        }
+        if let Some(v) = get("link_net") {
+            let v = v.trim();
+            // Not a path, so no tilde expansion — but it *is* validated, since
+            // a typo that is silently stored reads as "the feature does
+            // nothing".
+            cfg.link_net = if v.is_empty() || v.eq_ignore_ascii_case("off") {
+                None
+            } else if v
+                .rsplit(':')
+                .next()
+                .is_some_and(|p| p.parse::<u16>().is_ok())
+            {
+                Some(v.to_string())
+            } else {
+                warn.push(bad(
+                    "link_net",
+                    v,
+                    "[listen:|connect:]host:port, e.g. connect:127.0.0.1:8765",
+                ));
+                None
             };
         }
         if let Some(v) = get("battles") {
@@ -1203,6 +1236,48 @@ mod tests {
         assert_eq!(cfg.keys.b, 'k');
         assert_eq!(cfg.keys.start, 'n');
         assert_eq!(cfg.keys.select, 'm');
+    }
+
+    /// The network link's address, and — the half that matters — that a typo
+    /// is **reported**, not stored and then silently ignored by the frontend.
+    ///
+    /// A key that is not read by `parse_reporting`'s `get(...)` list is
+    /// reported as *unknown*; a key that is read but never validated reads to
+    /// the user as "the feature does nothing", which is the bug the `protocol`
+    /// key had. Both halves are pinned here.
+    #[test]
+    fn the_network_link_address_is_parsed_and_a_typo_is_reported() {
+        assert_eq!(Config::default().link_net, None);
+
+        // Both prefixes, and the bare form that defaults to `connect:`.
+        for spec in [
+            "listen:0.0.0.0:8765",
+            "connect:127.0.0.1:8765",
+            "127.0.0.1:8765",
+            "[::1]:8765",
+        ] {
+            let (c, w) = Config::parse_reporting(&format!("link_net = {spec}\n"));
+            assert_eq!(c.link_net.as_deref(), Some(spec), "{spec}");
+            assert!(w.is_empty(), "{spec} should not warn: {w:?}");
+        }
+
+        // `off` and empty are "no link", not a complaint.
+        for spec in ["off", ""] {
+            let (c, w) = Config::parse_reporting(&format!("link_net = {spec}\n"));
+            assert_eq!(c.link_net, None);
+            assert!(w.is_empty(), "{spec:?} should not warn: {w:?}");
+        }
+
+        // A missing or unparseable port is a complaint, and the key is dropped
+        // rather than half-applied.
+        for spec in ["localhost", "connect:localhost", "127.0.0.1:sixty"] {
+            let (c, w) = Config::parse_reporting(&format!("link_net = {spec}\n"));
+            assert_eq!(c.link_net, None, "{spec}");
+            assert!(
+                w.iter().any(|m| m.contains("link_net")),
+                "{spec} should have been reported: {w:?}"
+            );
+        }
     }
 
     /// The battle plugin's preset file, alongside the link partner's trade
