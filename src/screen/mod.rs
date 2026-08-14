@@ -24,6 +24,11 @@ pub mod romlib;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod termcost;
 
+/// Which graphics protocol the terminal actually speaks — see [`termcaps`].
+/// Pure: builds the query, parses the reply, opens no file descriptor.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod termcaps;
+
 /// Terminal frontend. Requires the `tui` feature (ratatui + ratatui-image).
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod tui;

@@ -251,6 +251,87 @@ bonus.
 
 **Ask the terminal. Never infer from `$TERM`.**
 
+### 4a. Which *protocol* — the ladder
+
+Before the transport is negotiated at all, the frontend has to decide which graphics protocol
+to speak. The order is **kitty → sixel → iTerm2 → half-blocks**, and half-blocks is what you
+get when nothing better exists — never the default for "not kitty". Kitty leads because it is
+cell-addressed *and* can take a frame through shared memory (~15 B/frame); sixel draws real
+pixels but re-transmits the whole picture; iTerm2 is cell-addressed but **cannot be probed** (it
+is an env-var guess), so it sits below the two that can be.
+
+The first two rungs are asked for, in the same round trip as the shared-memory handshake:
+[`src/screen/termcaps.rs`](../src/screen/termcaps.rs) builds the query and parses the reply,
+[`tui::probe_graphics`](../src/screen/tui.rs) runs it on `/dev/tty`.
+
+```
+ESC _ G i=6775306,s=1,v=1,a=q,t=d,f=24;AAAA ESC \   kitty graphics?
+CSI c                                                primary DA — sixel is parameter 4
+CSI 16 t                                             cell size in pixels
+CSI 14 t / CSI 18 t                                  window in pixels / in cells
+CSI 6 n                                              the fence
+```
+
+**The defect this replaced.** `Picker::from_query_stdio()` asks the same questions but returns
+`Err(NoFontSize)` when the terminal reports no cell size — *discarding the capability answer it
+just received*. The caller is then left with `Picker::from_fontsize((10, 20))`, whose protocol is
+`Halfblocks`. So a terminal that advertised sixel or kitty but happens not to answer `CSI 16 t`
+lost its protocol for the whole session. Reproduced end-to-end over a PTY: with a sixel-
+advertising terminal that skips `CSI 16 t`, the old code chose `halfblocks`, the new code
+chooses `sixel`.
+
+`CSI 14 t` ÷ `CSI 18 t` also recovers the cell size the library gives up on — the fabricated
+`10 × 20` becomes a measured one.
+
+### Measured: VTE 0.84.1 (Ptyxis 50.1, Fedora 44)
+
+Each query asked in isolation, captured from a real terminal:
+
+| query | reply |
+|---|---|
+| `CSI c` | `ESC[?61;1;21;22;28c` — **no `4`, so no sixel** |
+| `CSI 16 t` | *silence* |
+| `CSI 14 t` | `ESC[4;700;1008t` (window px) |
+| `CSI 18 t` | `ESC[8;35;112t` (window cells) → cell **9 × 20** |
+| kitty `a=q` | *silence* |
+| `CSI > q` | `ESC P>|VTE(8401) ESC \` |
+| `TIOCGWINSZ` | `cols=112 rows=35 xpixel=0 ypixel=0` |
+
+**Fedora does not build VTE with sixel.** `vte_get_features()` returns
+`+BIDI +GNUTLS +ICU +SYSTEMD` — no `+SIXEL` — and the DA1 above agrees. So on GNOME Terminal /
+GNOME Console / Ptyxis, half-blocks is not a mis-detection: it is the best that terminal has.
+Sixel support in VTE is a *build option*, present in the source since 0.78 and off in Fedora's
+package. Nothing in the emulator can change that; a kitty-protocol terminal can.
+
+### What it costs — sixel vs half-blocks
+
+Measured through the real frontend over a PTY, 112 × 35 cells, Blargg `cpu_instrs` (scrolling
+text, so the picture really changes), 10 s steady state:
+
+| protocol | wire | per displayed frame | displayed fps | emulated fps |
+|---|---:|---:|---:|---:|
+| kitty (indexed PNG) | 2.0 KB/s | 35 B | 58.2 | 59.7 |
+| half-blocks | 5.2 KB/s | 89 B | 58.1 | 59.7 |
+| **sixel** | **125 KB/s** | **2,182 B** | 57.5 | 59.7 |
+
+Sixel is **24× the wire of half-blocks** — but read the split before concluding anything about
+sixel itself: only **8.5 %** of that is the picture (8.5 KB per sixel image, and the picture
+dedups to ~1 image/second). The other **91.5 %** is the *whole UI being re-emitted every frame*,
+because `ratatui-image` puts the entire sixel payload into **one `ratatui` cell symbol** and
+`Buffer::diff` computes `invalidated = max(symbol.width(), invalidated)` — an 8.5 KB payload
+reports a display width of ~8,500 and invalidates every cell after it. **This is bug #2 from
+[terminal-render.md](terminal-render.md) still live**, fixed for kitty and iTerm2 (which write
+after `terminal.draw` and mark their cells `skip`) and never fixed for sixel, which has no
+cell-addressed placement to write. Without it sixel would be ~7.7 KB/s.
+
+**Recommendation.** Prefer sixel over half-blocks — the picture is dramatically sharper (real
+pixels against two per character cell) and 125 KB/s is well inside what a local pty carries;
+emulation held 59.7 Hz and display 57.5 fps throughout. But it is not free, and the honest
+follow-up is to give sixel the same out-of-buffer write path kitty has, which would take ~92 %
+of its cost away. Note also that these are *production*-side numbers with an infinitely fast
+consumer: a real terminal must also **decode** sixel, and no terminal on the development machine
+can, so the consumer half is unmeasured — say so rather than implying it was.
+
 At startup, after raw mode is enabled but before the event loop takes stdin,
 [`src/screen/tui.rs`](../src/screen/tui.rs) sends the Kitty protocol's own capability
 handshake — `a=q`, "could you have done this transfer?" — naming a real shared-memory object:

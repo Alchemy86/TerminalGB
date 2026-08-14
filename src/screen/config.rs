@@ -309,6 +309,16 @@ impl ShinyAlert {
     }
 }
 
+/// Every value the `protocol` key accepts, besides `auto`.
+///
+/// Kept here rather than beside the frontend's own parser because this module
+/// is not behind the `tui` feature and has to be able to reject a typo without
+/// it. The two lists are pinned together by
+/// `every_configurable_protocol_is_understood_by_the_frontend` in
+/// [`crate::screen::tui`].
+pub const PROTOCOLS: [&str; 6] =
+    ["kitty", "sixel", "iterm2", "iterm", "halfblocks", "blocks"];
+
 /// The parsed terminal-frontend configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -507,8 +517,16 @@ impl Config {
             let v = v.trim();
             cfg.protocol = if v.is_empty() || v.eq_ignore_ascii_case("auto") {
                 None
-            } else {
+            } else if PROTOCOLS.iter().any(|p| v.eq_ignore_ascii_case(p)) {
                 Some(v.to_string())
+            } else {
+                // A typo here used to be accepted and then quietly ignored by
+                // the frontend, which reads exactly like "forcing a protocol
+                // does not work". Fail loudly instead — and note that pinning
+                // *any* value disables detection, which is how a terminal ends
+                // up on a protocol worse than the one it advertises.
+                warn.push(bad("protocol", v, "auto, kitty, sixel, iterm2, halfblocks"));
+                None
             };
         }
         if let Some(v) = get("palette") {
@@ -1283,6 +1301,35 @@ mod tests {
         let (cfg, warnings) = Config::parse_reporting("transmit_scale = 99");
         assert_eq!(cfg.transmit_scale, TransmitScale::Auto);
         assert_eq!(warnings.len(), 1);
+    }
+
+    /// `protocol` is the one knob that overrides graphics detection, so a typo
+    /// in it looks exactly like "forcing a protocol does not work". It used to
+    /// be stored verbatim and then silently ignored by the frontend.
+    #[test]
+    fn a_misspelled_protocol_is_reported_not_swallowed() {
+        let (cfg, warnings) = Config::parse_reporting("protocol = sixl");
+        assert_eq!(cfg.protocol, None, "a typo must not disable detection");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("protocol"), "{:?}", warnings[0]);
+        assert!(warnings[0].contains("sixel"), "name the valid values");
+
+        // Every accepted value parses, in either case, with no complaint.
+        for name in PROTOCOLS {
+            let (cfg, warnings) =
+                Config::parse_reporting(&format!("protocol = {}", name.to_uppercase()));
+            assert_eq!(
+                cfg.protocol.as_deref(),
+                Some(name.to_uppercase()).as_deref()
+            );
+            assert!(warnings.is_empty(), "{name}: {warnings:?}");
+        }
+        // `auto` and empty both mean "detect", and neither is a complaint.
+        for text in ["protocol = auto", "protocol ="] {
+            let (cfg, warnings) = Config::parse_reporting(text);
+            assert_eq!(cfg.protocol, None);
+            assert!(warnings.is_empty(), "{text}: {warnings:?}");
+        }
     }
 
     #[test]

@@ -1567,6 +1567,83 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
    user-visible symptom. Conformance candidate: **a long run must not grow terminal-side
    resource use without bound.**
 
+4. **A capability answer thrown away because one *unrelated* query went unanswered.**
+   *Symptom* — a terminal that can draw real pixels shows a coarse two-pixels-per-cell picture
+   instead, for the whole session, with nothing in the UI to say why. Silent: the frontend
+   reports `halfblocks` perfectly honestly, having genuinely chosen it.
+   *Caught by* — no test ROM, and no test of ours before this: the framebuffer is identical
+   whichever protocol draws it, which is the same blind spot as the three above.
+   *Contract violated* — `CSI 16 t` is an **optional** XTWINOPS report
+   ([XTerm Control Sequences, "Window manipulation"](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html));
+   nothing licenses treating its absence as "this terminal has no graphics protocol". Primary
+   DA and the kitty `a=q` handshake are the capability questions, and they had already been
+   answered. `ratatui-image`'s `Picker::from_query_stdio` returns `Err(NoFontSize)` and drops
+   the lot.
+   *New test* — `a_cell_size_is_recovered_when_csi_16t_is_unanswered`,
+   `a_terminal_that_advertises_sixel_is_chosen_over_halfblocks`,
+   `the_picker_prefers_sixel_over_halfblocks_and_kitty_over_sixel`; reproduced end-to-end over a
+   PTY (old code `halfblocks`, new code `sixel`, same simulated terminal). Conformance
+   candidate: **a missing optional report must degrade only the thing it reports.**
+
+## Graphics-protocol selection (`src/screen/termcaps.rs`, `tui::probe_graphics`, `tui::build_picker`)
+
+- **The ladder is kitty → sixel → iTerm2 → half-blocks, and half-blocks is the LAST resort**,
+  never the default for "not kitty". Kitty is cell-addressed *and* does shared memory; sixel
+  draws real pixels but re-sends the whole picture; iTerm2 is cell-addressed but **cannot be
+  probed** (env-var guess only), so it ranks below the two that can be. Full write-up with the
+  measured numbers: [`docs/rendering.md`](docs/rendering.md) §4a.
+- **Do NOT use `Picker::from_query_stdio()` — it discards a good capability answer.** It returns
+  `Err(NoFontSize)` when the terminal reports no cell size, and the caller is then left with
+  `Picker::from_fontsize((10,20))`, whose protocol is `Halfblocks`. So a terminal that
+  advertised sixel *or kitty* but does not answer `CSI 16 t` silently loses its protocol for the
+  whole session. It also queries stdout/stdin, which `crossterm` owns. We ask on `/dev/tty` in
+  the same round trip as the shm handshake (`probe_graphics`, called from `probe_terminal`
+  **before** the shm probe, which returns early on `GB_TERM_KITTY=noshm`).
+- **`CSI 14 t` ÷ `CSI 18 t` recovers the cell size when `CSI 16 t` is silent.** VTE answers
+  neither `CSI 16 t` nor `TIOCGWINSZ`'s pixel fields (`xpixel=0 ypixel=0`), so both of
+  ratatui-image's sources fail; window-px ÷ window-cells gives its real 9×20 cell instead of a
+  fabricated 10×20.
+- **Fedora's VTE is built WITHOUT sixel — this is not a detection bug.** Measured on VTE 0.84.1
+  (Ptyxis 50.1, Fedora 44): `vte_get_features()` = `+BIDI +GNUTLS +ICU +SYSTEMD` (no `+SIXEL`)
+  and DA1 = `ESC[?61;1;21;22;28c`, which has no `4`. GNOME Terminal / GNOME Console / Ptyxis
+  therefore genuinely get half-blocks and there is nothing the emulator can do about it. **The
+  authoritative check is `vte_get_feature_flags()` via `dlopen`, not the DA1 alone** — the
+  `vte_terminal_*_enable_sixel` symbols exist either way.
+- **Sixel's cost is 91.5 % a `ratatui` defect, not sixel.** Measured 125 KB/s (2,182 B/displayed
+  frame) against half-blocks' 5.2 KB/s, but only 8.5 % of that is the picture (8.5 KB/image,
+  ~1 image/s after dedup). The rest is the whole UI re-emitted every frame because
+  `ratatui-image` puts the entire sixel payload in **one cell symbol** — bug #2 of the render
+  conformance record above, still live for sixel because it has no cell-addressed placement to
+  write out-of-buffer. Giving sixel the `TermImage` treatment would remove ~92 % of its cost.
+- **`Sent` in the status row used to be a hard-coded `0 B` on the sixel/half-blocks path.**
+  Those protocols are drawn by `ratatui-image` through the buffer, so their bytes only exist at
+  the backend's writer — hence `CountingWriter` around stdout (`WROTE`/`wrote_total`). Never
+  report a transport figure the code cannot actually observe.
+- **`transport_label` takes the protocol** because "no `TermImage`" has two causes: sixel and
+  half-blocks have no cell placement (`full` — the whole picture every frame), versus the
+  `render_path = legacy` escape hatch (`legacy`). Calling both `legacy` misreported one.
+- **Config `protocol` is the ONE override** (`auto|kitty|sixel|iterm2|iterm|halfblocks|blocks`);
+  do not add a second knob. It now *validates* — a typo used to be stored and then silently
+  ignored by the frontend, which reads as "forcing a protocol does nothing".
+  `config::PROTOCOLS` and `tui::protocol_from_str` are pinned together by
+  `every_configurable_protocol_is_understood_by_the_frontend`. **Pinning any value disables
+  detection**, which is how a terminal ends up worse than it can do.
+- **How to test protocol selection without a terminal: drive the frontend over a PTY you create
+  and *be* the terminal.** A ~150-line Python harness (`pty.fork`, answer `CSI c` / `CSI 16 t` /
+  `CSI 14 t` / `CSI 18 t` / kitty `a=q` / `CSI 6 n` / `CSI 5 n` from a captured profile, read
+  `GB_DEBUG_LAYOUT`) reproduces every case deterministically. Three traps: **answer `CSI 5 n`**
+  or ratatui-image's own query times out and every terminal looks capability-less; make the
+  master **non-blocking** or a keystroke feed parks the harness in `write()`; and **`p` is
+  PAUSE**, `[` is the palette key — sending `p` stops the frontend drawing and the run measures
+  nothing.
+- **A real VTE terminal can be driven headlessly, with no window on anybody's desktop:**
+  `gtk4-broadwayd :7` then `GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 ptyxis -s -- <cmd>`
+  (`-s` = standalone, so it never attaches to the user's running instance), and screenshot it by
+  pointing a browser at `http://localhost:8087`. This is how the VTE captures above were made.
+- **Sixel output can be verified without a sixel terminal**: decode the DCS bytes the binary
+  actually wrote (sixel is deterministic) and look at the PNG. Done for dmg-acid2 — 738×660,
+  12.8 KB of sixel, text crisply legible where half-blocks smears it.
+
 ## Frame transport — how a frame reaches the terminal (`src/termimage.rs`, `src/shmframe.rs`, `src/deflate.rs`)
 
 - **Full write-up: [`docs/rendering.md`](docs/rendering.md)** — the ladder, the measured

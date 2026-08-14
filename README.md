@@ -199,7 +199,7 @@ The recognised keys:
 | Key | Values | Meaning |
 |---|---|---|
 | `rom_dir` | a path (`~` expands) | Directory the ROM picker browses. Default `~/roms`. |
-| `protocol` | `auto` / `kitty` / `sixel` / `iterm2` … | Force a graphics protocol; `auto` (default) picks the best advertised. |
+| `protocol` | `auto` / `kitty` / `sixel` / `iterm2` / `halfblocks` | Force a graphics protocol. `auto` (default) asks the terminal and takes the best it advertises — **kitty → sixel → iTerm2 → half-blocks**, half-blocks only when nothing better exists. Pinning a value *disables* detection, so a terminal can end up on a worse protocol than it can actually do; the status row's `Proto` line always names what is live. An unrecognised value is reported, not silently ignored. |
 | `palette` | `grayscale` / `green` / `amber` | Recolour classic (DMG) games. Default `grayscale`. |
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |

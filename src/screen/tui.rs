@@ -37,6 +37,7 @@ use crate::screen::config::{
 };
 use crate::screen::frame::FramePrep;
 use crate::screen::romlib::{self, RomEntry};
+use crate::screen::termcaps;
 use crate::screen::termcost;
 use crate::screen::trainer_view as tv;
 use crate::sound::output_volume;
@@ -502,7 +503,7 @@ pub fn run(initial_rom: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
         );
     }
 
-    let backend = CrosstermBackend::new(stdout);
+    let backend = CrosstermBackend::new(CountingWriter(stdout));
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::with_warnings(
@@ -743,6 +744,9 @@ struct Session {
     /// transport is working, which is the one thing this panel is for.
     tx_window: usize,
     tx_per_frame: f32,
+    /// Value of [`wrote_total`] at the end of the last draw, so the resize path
+    /// can bill itself the bytes `ratatui` wrote for it.
+    wrote_mark: u64,
     /// The image sequence to write straight to the terminal once the frame has
     /// been flushed. Empty when the picture did not change.
     pending_wire: String,
@@ -831,11 +835,22 @@ impl Session {
     /// How this session is getting frames to the terminal, for the status
     /// panel: the transport is chosen at runtime by asking the terminal, so it
     /// has to be *visible* or nobody can tell which one they got.
-    fn transport_label(&self) -> &'static str {
+    ///
+    /// `proto` is needed because "no [`TermImage`]" has two very different
+    /// causes and calling both of them `legacy` misreports one of them. Sixel
+    /// and half-blocks have no cell-addressed placement, so the resize path is
+    /// the *only* path they have and there is nothing legacy about it — they are
+    /// labelled `full`, for the whole picture going over the wire every frame,
+    /// which is also the thing worth knowing about their cost. `legacy` is then
+    /// only what it says: the `render_path = legacy` escape hatch.
+    fn transport_label(&self, proto: ProtocolType) -> &'static str {
         match self.term_image.as_ref() {
-            None => "legacy",
             Some(t) if t.kitty_shm() => "shm",
             Some(_) => "png",
+            None if matches!(proto, ProtocolType::Sixel | ProtocolType::Halfblocks) => {
+                "full"
+            }
+            None => "legacy",
         }
     }
 
@@ -1250,6 +1265,7 @@ impl App {
                     tx_bytes: 0,
                     tx_window: 0,
                     tx_per_frame: 0.0,
+                    wrote_mark: wrote_total(),
                     pending_wire: String::new(),
                     fps: 0.0,
                     emu_fps: 0.0,
@@ -3596,7 +3612,10 @@ impl App {
             Line::from(format!("up   {:.2}ms", s.t_upscale)),
             Line::from(format!("enc  {:.2}ms", s.t_encode)),
             Line::from(format!("tx   {}/f", human_bytes_f(s.tx_per_frame))),
-            Line::from(format!("via  {}", s.transport_label())),
+            Line::from(format!(
+                "via  {}",
+                s.transport_label(self.picker.protocol_type())
+            )),
             Line::from(format!("drop {}", s.frames_dropped)),
             Line::from(format!("same {}", s.frames_identical)),
             Line::from(format!("pc   {:04X}", s.gb.debug_pc())),
@@ -3906,11 +3925,19 @@ impl App {
                     s.frames_identical += 1;
                 }
                 s.t_encode = telemetry::ms(t.elapsed());
-                s.tx_bytes = 0;
                 if let Some(proto) = s.image.as_mut() {
                     let image = StatefulImage::default().resize(Resize::Scale(None));
                     f.render_stateful_widget(image, rect, proto);
                 }
+                // This path writes through `ratatui`'s buffer, so its bytes are
+                // only visible at the backend's writer — and they are billed to
+                // the *previous* draw, because this one has not been flushed
+                // yet. Reporting the delta is what makes `Sent` true here
+                // instead of the hard-coded `0 B` it used to show.
+                let wrote = wrote_total();
+                s.tx_bytes = wrote.saturating_sub(s.wrote_mark) as usize;
+                s.wrote_mark = wrote;
+                s.tx_window += s.tx_bytes;
             }
         }
 
@@ -3965,7 +3992,7 @@ impl App {
                     s.paused,
                     s.tx_px,
                     s.tx_per_frame,
-                    s.transport_label(),
+                    s.transport_label(self.picker.protocol_type()),
                 )
             })
             .unwrap_or((
@@ -4749,6 +4776,40 @@ fn kv<'a>(key: &'a str, value: &str) -> Line<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// What actually went to the terminal
+// ---------------------------------------------------------------------------
+
+/// Bytes `ratatui` has written to the terminal, ever.
+///
+/// The cell-addressed protocols know their own payload size because *we* build
+/// it ([`TermImage`]), but Sixel and half-blocks are drawn by `ratatui-image`
+/// through the buffer, so their bytes only exist inside the backend's writer.
+/// The status panel used to report a hard-coded `0 B` for those two — a number
+/// that reads as "this transport is free" while 125 KB/s crosses the wire.
+/// Counting at the writer is the one place that is true for every protocol.
+static WROTE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn wrote_total() -> u64 {
+    WROTE.load(Ordering::Relaxed)
+}
+
+/// A `Write` that counts. One relaxed add per `write`, on a path that is
+/// already making a syscall.
+struct CountingWriter<W: io::Write>(W);
+
+impl<W: io::Write> io::Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.0.write(buf)?;
+        WROTE.fetch_add(n as u64, Ordering::Relaxed);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared-memory capability
 // ---------------------------------------------------------------------------
 
@@ -4767,6 +4828,69 @@ fn shm_supported() -> bool {
 /// established that the terminal is talking.
 static CPR_OK: AtomicBool = AtomicBool::new(false);
 static CPR_FLOOR_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What the terminal answered about graphics, packed into one word so
+/// [`build_picker`] can read it without a lock. `0` means "never asked" — which
+/// is not the same as "answered, supports nothing", and must not be.
+///
+/// Layout: bit 0 `answered`, bit 1 kitty, bit 2 sixel, bits 8..24 cell width,
+/// bits 24..40 cell height. A cell of `0` means the terminal reported none.
+static GFX_CAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn pack_caps(c: termcaps::TermCaps) -> u64 {
+    let (w, h) = c.cell.unwrap_or((0, 0));
+    (c.answered as u64)
+        | (c.kitty as u64) << 1
+        | (c.sixel as u64) << 2
+        | (w as u64) << 8
+        | (h as u64) << 24
+}
+
+fn probed_caps() -> termcaps::TermCaps {
+    let v = GFX_CAPS.load(Ordering::Relaxed);
+    let (w, h) = (((v >> 8) & 0xffff) as u16, ((v >> 24) & 0xffff) as u16);
+    termcaps::TermCaps {
+        answered: v & 1 != 0,
+        kitty: v & 2 != 0,
+        sixel: v & 4 != 0,
+        cell: (w > 0 && h > 0).then_some((w, h)),
+    }
+}
+
+/// Ask the terminal which graphics protocol it speaks, and how big a cell is.
+///
+/// Writes one query and reads up to the cursor-position fence it ends with, so
+/// this costs one round trip on top of the handshake the frontend already does.
+/// Everything it learns is advisory: a terminal that says nothing leaves
+/// [`build_picker`] exactly where it was.
+#[cfg(all(unix, feature = "libc"))]
+fn probe_graphics(tty: &mut std::fs::File) {
+    use std::io::Write as _;
+    let is_tmux = env::var("TERM").is_ok_and(|t| t.starts_with("tmux"))
+        || env::var("TERM_PROGRAM").as_deref() == Ok("tmux");
+    let q = termcaps::query(is_tmux);
+    if tty
+        .write_all(q.as_bytes())
+        .and_then(|_| tty.flush())
+        .is_err()
+    {
+        debug_layout("[gfx] could not write the capability query to /dev/tty");
+        return;
+    }
+    let reply = read_reply(tty, SHM_PROBE_TIMEOUT);
+    let caps = termcaps::parse(&reply);
+    GFX_CAPS.store(pack_caps(caps), Ordering::Relaxed);
+    // The protocol is negotiated once and invisibly. When it comes out worse
+    // than expected the only way to tell a terminal that genuinely cannot do
+    // better from a reply we mis-read is to see the bytes.
+    debug_layout(&format!(
+        "[gfx] kitty={} sixel={} cell={:?} answered={} reply={reply:?}",
+        caps.kitty, caps.sixel, caps.cell, caps.answered
+    ));
+}
+
+#[cfg(not(all(unix, feature = "libc")))]
+fn probe_graphics(_tty: &mut std::fs::File) {}
 
 /// The measured cost model for this terminal, or an unmeasurable one.
 ///
@@ -4888,6 +5012,13 @@ fn probe_terminal() {
     // is the floor under every later fence, and the loop cannot measure it
     // itself because by then there is always a picture queued behind it.
     measure_cpr_floor(&mut tty);
+
+    // Which graphics protocol does it speak? Asked here, on the same open
+    // `/dev/tty`, for the same reason the shared-memory question is: this is the
+    // one moment where raw mode is on and nothing else is reading the terminal.
+    // It must come *before* the shared-memory probe, which returns early on
+    // `GB_TERM_KITTY=noshm` and when there is no shared memory to offer.
+    probe_graphics(&mut tty);
 
     if std::env::var("GB_TERM_KITTY").as_deref() == Ok("noshm") {
         return;
@@ -5022,37 +5153,81 @@ fn read_reply(_tty: &std::fs::File, _timeout: Duration) -> String {
     String::new()
 }
 
-/// Build a [`Picker`], preferring the sharpest graphics protocol the terminal
-/// actually advertises (kept from the dead-code/audio crew).
+/// The cell size assumed when the terminal reports none.
 ///
-/// `Picker::from_query_stdio()` lets an env-var guess (e.g. `TERM_PROGRAM=WezTerm`)
-/// force the fuzzy iTerm2 protocol even when the terminal advertises the crisper
-/// Kitty graphics protocol. We first query with those env guesses suppressed so
-/// the *advertised* protocol wins; only if the terminal advertises no real
-/// graphics protocol do we fall back to the env-based guess. Never panics on a
-/// query timeout — falls back to a sane default font size instead.
+/// Only reached by a terminal that answers neither `CSI 16 t` nor the
+/// `CSI 14 t` / `CSI 18 t` pair *and* leaves `TIOCGWINSZ`'s pixel fields at
+/// zero. It is a guess, and it is only ever a fit-and-aspect guess: no protocol
+/// draws fewer pixels because of it.
+const DEFAULT_CELL: (u16, u16) = (10, 20);
+
+/// Build a [`Picker`] on the best graphics protocol the terminal actually
+/// advertises.
+///
+/// # The ladder
+///
+/// **Kitty → Sixel → iTerm2 → half-blocks**, and half-blocks is what you get
+/// when nothing better exists — never the default for "not kitty". Kitty leads
+/// because it is cell-addressed *and* can take a frame through shared memory
+/// (~15 bytes a frame); Sixel draws real pixels but re-transmits the whole
+/// picture; iTerm2 is cell-addressed but cannot be probed at all, so it sits
+/// below the two that can be; half-blocks is text — two pixels per character
+/// cell, which is the coarse picture this ladder exists to avoid.
+///
+/// The first two rungs come from [`probe_graphics`], which asked the terminal on
+/// `/dev/tty` before the event loop started. The third is an env-var guess that
+/// [`Picker::from_fontsize`] makes for us (`TERM_PROGRAM` naming iTerm2, WezTerm,
+/// mintty, …, plus tmux's outer-terminal hints), and it applies only when the
+/// probe found nothing better — so an *advertised* protocol always beats a
+/// guessed one, which is the property the old implementation went to the trouble
+/// of suppressing `$TERM_PROGRAM` to get.
+///
+/// # Why not `Picker::from_query_stdio()`
+///
+/// Because it discards a good capability answer. It returns `Err(NoFontSize)`
+/// when the terminal reports no cell size, and the caller is then left with
+/// `Picker::from_fontsize`, whose protocol is `Halfblocks`. Measured on VTE
+/// 0.84.1 (Ptyxis, Fedora 44): `CSI 16 t` is unanswered and `TIOCGWINSZ` reports
+/// `xpixel=0 ypixel=0`, so both of the library's sources of a cell size fail and
+/// the result is discarded. On VTE that happens to be harmless — it advertises
+/// no graphics protocol either way (`DA1 = ?61;1;21;22;28`, no `4`; Fedora
+/// builds VTE without Sixel, `vte_get_features()` = `+BIDI +GNUTLS +ICU
+/// +SYSTEMD`) — but on any Sixel- or Kitty-capable terminal with the same gap it
+/// silently costs the whole session its protocol. See
+/// [`crate::screen::termcaps`], which also recovers the cell size from
+/// `CSI 14 t` / `CSI 18 t`.
+///
+/// It also queries stdout/stdin, which `crossterm` owns; our probe uses
+/// `/dev/tty`, drains stale input and knocks first, for the reasons documented
+/// on [`probe_terminal`].
 fn build_picker() -> Picker {
-    let saved_term_program = env::var_os("TERM_PROGRAM");
-    let saved_lc_terminal = env::var_os("LC_TERMINAL");
-    env::remove_var("TERM_PROGRAM");
-    env::remove_var("LC_TERMINAL");
-    let advertised = Picker::from_query_stdio();
-    if let Some(v) = saved_term_program {
-        env::set_var("TERM_PROGRAM", v);
-    }
-    if let Some(v) = saved_lc_terminal {
-        env::set_var("LC_TERMINAL", v);
+    let caps = probed_caps();
+    // `from_fontsize` seeds the tmux flag and the iTerm2-from-env guess for us —
+    // rung three of the ladder — so it is the right base whatever we then decide.
+    let mut picker = Picker::from_fontsize(caps.cell.unwrap_or(DEFAULT_CELL));
+
+    if let Some(best) = caps.best() {
+        picker.set_protocol_type(match best {
+            termcaps::Graphics::Kitty => ProtocolType::Kitty,
+            termcaps::Graphics::Sixel => ProtocolType::Sixel,
+            termcaps::Graphics::Iterm2 => ProtocolType::Iterm2,
+            termcaps::Graphics::Halfblocks => ProtocolType::Halfblocks,
+        });
+        return picker;
     }
 
-    match advertised {
-        // The terminal advertised a real graphics protocol — use it.
-        Ok(p) if p.protocol_type() != ProtocolType::Halfblocks => p,
-        // Otherwise fall back to the env-guess query (e.g. a genuine iTerm2), and
-        // if even that fails (timeout / no capabilities) use a default rather
-        // than panicking.
-        _ => {
-            Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20)))
-        }
+    // The terminal answered and advertised neither. Keep the env guess (iTerm2)
+    // or half-blocks — both already set by `from_fontsize`.
+    if caps.answered {
+        return picker;
+    }
+
+    // Nobody answered: either the probe could not run (no `/dev/tty`, no `libc`
+    // feature, not unix) or the terminal never replied. Fall back to the
+    // library's own query rather than declaring half-blocks on no evidence.
+    match Picker::from_query_stdio() {
+        Ok(p) => p,
+        Err(_) => picker,
     }
 }
 
@@ -5576,6 +5751,97 @@ mod tests {
         assert_eq!(protocol_from_str("ITERM"), Some(ProtocolType::Iterm2));
         assert_eq!(protocol_from_str("nonsense"), None);
         assert_eq!(protocol_name(ProtocolType::Sixel), "sixel");
+    }
+
+    /// The config validates `protocol` without being able to see the frontend's
+    /// parser (it is not behind the `tui` feature), so the two lists can drift.
+    /// If they do, a value the config accepts is silently ignored by the
+    /// frontend — the exact "forcing a protocol does nothing" bug the
+    /// validation was added to stop.
+    #[test]
+    fn every_configurable_protocol_is_understood_by_the_frontend() {
+        for name in crate::screen::config::PROTOCOLS {
+            assert!(
+                protocol_from_str(name).is_some(),
+                "config accepts protocol = {name}, but the frontend ignores it"
+            );
+        }
+    }
+
+    /// The ladder, at the level that decides what the user sees. Half-blocks is
+    /// the *last* resort: a terminal that advertises Sixel must not get it.
+    #[test]
+    fn the_picker_prefers_sixel_over_halfblocks_and_kitty_over_sixel() {
+        use termcaps::{Graphics, TermCaps};
+        let sixel_only = TermCaps {
+            answered: true,
+            kitty: false,
+            sixel: true,
+            cell: Some((9, 20)),
+        };
+        assert_eq!(sixel_only.best(), Some(Graphics::Sixel));
+
+        let both = TermCaps {
+            kitty: true,
+            ..sixel_only
+        };
+        assert_eq!(both.best(), Some(Graphics::Kitty));
+
+        // Answered, advertises neither: the caller keeps the env guess or
+        // half-blocks, and `best()` says so by returning nothing.
+        let neither = TermCaps {
+            sixel: false,
+            ..sixel_only
+        };
+        assert_eq!(neither.best(), None);
+    }
+
+    /// The capability word is packed into one atomic so `build_picker` can read
+    /// it without a lock; a packing bug would silently downgrade every session.
+    #[test]
+    fn probed_capabilities_survive_the_round_trip_through_the_atomic() {
+        for caps in [
+            termcaps::TermCaps {
+                answered: true,
+                kitty: true,
+                sixel: false,
+                cell: Some((7, 14)),
+            },
+            termcaps::TermCaps {
+                answered: true,
+                kitty: false,
+                sixel: true,
+                cell: Some((9, 20)),
+            },
+            termcaps::TermCaps {
+                answered: true,
+                kitty: false,
+                sixel: false,
+                cell: None,
+            },
+            termcaps::TermCaps::default(),
+        ] {
+            GFX_CAPS.store(pack_caps(caps), Ordering::Relaxed);
+            assert_eq!(probed_caps(), caps);
+        }
+        GFX_CAPS.store(0, Ordering::Relaxed);
+    }
+
+    /// Sixel and half-blocks have no cell-addressed placement, so they have no
+    /// `TermImage` — but that is not the `render_path = legacy` escape hatch and
+    /// must not be reported as it. `full` says the whole picture goes over the
+    /// wire every frame, which is the cost worth seeing.
+    #[test]
+    fn the_status_row_does_not_call_sixel_legacy() {
+        let app = test_app(ProtocolType::Sixel, RenderPath::Fast).unwrap();
+        let s = app.session.as_ref().expect("test_app starts a session");
+        assert!(s.term_image.is_none(), "sixel has no cell placement");
+        assert_eq!(s.transport_label(ProtocolType::Sixel), "full");
+        assert_eq!(s.transport_label(ProtocolType::Halfblocks), "full");
+        // The escape hatch keeps its own name.
+        assert_eq!(s.transport_label(ProtocolType::Kitty), "legacy");
+        // ...and the protocol itself is named, so `sixel full` is what shows.
+        assert_eq!(protocol_name(app.picker.protocol_type()), "sixel");
     }
 
     #[test]
