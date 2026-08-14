@@ -86,6 +86,14 @@ pub mod ppu {
 /// itself is the dependency-free [`terminalgb_plugin_api`] crate; this module
 /// re-exports it and implements the emulator's side. See [`plugin`].
 pub mod plugin;
+/// Trade-portal client: a network [`PokemonSource`] and the device-code
+/// sign-in. Behind the `portal` cargo feature and never on wasm, so the
+/// embedding build inherits no network code. See [`portal`] and
+/// `docs/portal.md`.
+///
+/// [`PokemonSource`]: terminalgb_plugin_gen1_link::spec::PokemonSource
+#[cfg(all(feature = "portal", not(target_arch = "wasm32"), not(feature = "ffi")))]
+pub mod portal;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
 pub mod screen;

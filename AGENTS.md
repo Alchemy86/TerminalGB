@@ -3762,6 +3762,72 @@ third-party dependency.
   ends. Bonus quirk observed: the arrival holds **item 200** — Gen 2 reads the Gen 1
   catch-rate byte (Abra's is 200) as a held item.
 
+## The trade-portal client (`src/portal/`, `portal` cargo feature)
+
+**Full write-up, the HTTP contract as this client speaks it, and the honest
+measured/unverified split: [`docs/portal.md`](docs/portal.md).** The portal itself is a
+separate repo built by another crew; the only join is the HTTP contract, so
+`testharness/portal.rs`'s stub **is** that contract from this side (16 checks, real
+`TcpListener`, real curl transport). Field names are **unverified against the real portal**
+until it is live — treat a mismatch there as a coordination item, never something to patch
+silently on one side.
+
+- **The transport is the system `curl` binary, not a crate** (`portal::http`), because the
+  dependency count is a contract (`make embed`) and TLS is the one thing never to hand-roll.
+  Every request goes through `curl --config -`: **credentials ride stdin, never argv**
+  (argv is world-readable in `ps`; the device code is a credential too). curl's config
+  quoting understands only `\\` and `\"` — `config_quote` emits exactly those and drops
+  control characters. Timeouts are hard on every request (5 s connect / 15 s total),
+  measured by harness check [7] (an unreachable portal fails in bounded time).
+- **A portal error is a REFUSAL to arm gen1-link, never a fallback** (`attach_portal_gen1`,
+  `src/screen/tui.rs`). Signed out or unreachable ⇒ *no partner at all*, not the trade
+  file, not the default Mew: a matched trade may exist that this process cannot see, and a
+  player who trades their Pokémon to the built-in partner while a friend waits has lost it
+  silently — the exact failure the feature exists to prevent. The **only** route to the
+  trade-file fallback is the portal answering, signed in, "nothing pending". The portal
+  outranks `gen1_trade` for the same reason: a pending trade was explicitly accepted.
+- **The stored token is fingerprinted to the portal URL that issued it**
+  (`auth::parse_store`, the volume file's `from_config` rule applied to a credential):
+  change `portal =` and the token is refused, not sent to the new server. Stored at
+  `state_dir()/portal-token`, `0600` from creation (`OpenOptionsExt::mode`, no
+  default-permission window), tmp→rename like the battery. Sign-in is RFC 8628; any 4xx
+  carrying `error` is accepted as flow state (the report sketched 428, the RFC says 400 —
+  do not pin one).
+- **In-TUI login (`@`) is a thread the loop polls** (`portal::login::LoginFlow`,
+  `App::portal_tick`) — same never-block-the-frame rule as the audio hand-off. The browser
+  open is fail-soft (`portal::browser`, `$BROWSER` first, then xdg-open/open/start) and the
+  URL + code are always shown as well; `GB_PORTAL_NO_BROWSER=1` for headless. Auth state is
+  a Status-panel `Portal` row — the plugin-row rule: a state nobody can see is one nobody
+  can debug. Completion (`POST /trades/<id>/done`) is watched on the partner's own
+  `trades_completed()` counter and retried on a bounded schedule (30 s × 10, then a loud
+  give-up naming the website); the received Pokémon is already safe in the save either way.
+- **THE TWO-RLIB TRAP BIT THIS WORK — a `harness = false` test must not link a plugin
+  crate the lib also links.** `testharness/portal.rs` calling
+  `terminalgb_plugin_gen1_link::spec::PokemonSource::describe(&src)` failed E0277 ("trait
+  not implemented" for a type that plainly implements it): with `[profile.release]
+  panic = 'abort'` on the lib targets, the test resolved the plugin crate to a *second*
+  (unwind-built) rlib, so trait and impl came from different crate instances. It compiled
+  on the first run and failed on the next two — the same intermittent class the chiptune
+  section records. Fix: the harness talks only to `terminalgb` re-exports
+  (`PortalSource::describe_line` exists for exactly this); the real
+  partner-from-portal-source construction is proven in `examples/portal_trade.rs`, where
+  examples and lib share one build graph. Verified there against a staged copy of Pokémon
+  Blue: trade #71 resolved to "BULBA the BULBASAUR (Lv14)" through the cartridge's own
+  tables and the done-POST landed authenticated.
+- **The wasm break the scout report flagged really was TWO breaks, the second hidden
+  behind the first** — measured independently here before `5092a34` landed the same
+  diagnosis on `main` (whose fix is the better one and is what shipped: `audio_enabled`
+  answers `false` on wasm instead of vanishing from the API, and `make check-wasm` now
+  gates it). The report's own caveat ("I cannot tell whether a second error hides behind
+  the first — treat 'one line from working' as unverified") was exactly right: applying
+  the one-line `audio_enabled` cfg let the lib compile and exposed the next failure, the
+  default-feature `terminalgb-chiptune` `[[bin]]` importing a module that is compiled out
+  on wasm. Two crews hit both within the hour; re-measure before fixing a red build
+  someone else may already have fixed.
+- **Config key `portal` validates** (must start `http://`/`https://`, trailing slash
+  trimmed so path joins cannot `//api`; a non-URL warns and is dropped — the `protocol`
+  key's rule). It is a URL, deliberately not in the tilde-expansion test.
+
 ## AI agent substrate — "Claude plays Pokémon" (`plugins/agent/src/`, `src/screen/agent_view.rs`)
 
 - **Full design, OBS/Twitch recipe, honest gaps and the recorded run:

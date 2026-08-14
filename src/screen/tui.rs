@@ -1072,6 +1072,67 @@ impl Session {
 }
 
 #[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
+/// A trade armed from the portal, carried out of plugin attach so the app can
+/// confirm completion back to the portal (`POST /api/trades/<id>/done`).
+///
+/// Defined unconditionally (it is four strings) so the `portal` feature does
+/// not have to `cfg` its way through every attach-function signature; without
+/// the feature it is simply always `None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PortalArmed {
+    trade_id: String,
+    friend: String,
+    /// What this player agreed to give, display text from the portal.
+    give: String,
+    /// The species arriving, for toasts.
+    incoming: String,
+}
+
+/// Where the portal sign-in stands, for the Status row and the `@` key.
+#[cfg(feature = "portal")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PortalAuthView {
+    /// No `portal =` in config and no `$GB_PORTAL`: the feature is dormant
+    /// and paints nothing.
+    Unconfigured,
+    /// Signed out, with the reason when there is a useful one (a token for a
+    /// different portal, an unreadable store).
+    SignedOut(Option<String>),
+    /// Signed in, with the account name when the portal reported one.
+    SignedIn(Option<String>),
+}
+
+#[cfg(feature = "portal")]
+impl PortalAuthView {
+    fn resolve(cfg: &Config) -> PortalAuthView {
+        use crate::portal::auth::{self, Stored};
+        match crate::portal::portal_url(cfg.portal.as_deref()) {
+            None => PortalAuthView::Unconfigured,
+            Some(url) => match auth::load(&url) {
+                Ok(Stored::Token(t)) => PortalAuthView::SignedIn(t.user),
+                Ok(Stored::None) => PortalAuthView::SignedOut(None),
+                Ok(Stored::Mismatch { stored_portal }) => PortalAuthView::SignedOut(
+                    Some(format!("the stored sign-in is for {stored_portal}")),
+                ),
+                Err(e) => PortalAuthView::SignedOut(Some(e.to_string())),
+            },
+        }
+    }
+}
+
+/// The confirmation call for a completed portal trade, running on its own
+/// thread — the same never-block-the-frame rule as every other slow thing
+/// near the loop. Bounded retries, loud at every step.
+#[cfg(feature = "portal")]
+#[derive(Default)]
+struct PortalDone {
+    inflight: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    attempts: u32,
+    next_retry: Option<Instant>,
+    confirmed: bool,
+    gave_up: bool,
+}
+
 struct App {
     config: Config,
     recent: Recent,
@@ -1231,6 +1292,23 @@ struct App {
     /// shown in the help overlay so "is anything modifying my game?" always
     /// has an answer.
     plugin_notes: Vec<String>,
+    /// The portal trade armed on the current session's link partner, if any.
+    /// Unconditional (see [`PortalArmed`]); always `None` without the feature.
+    portal_armed: Option<PortalArmed>,
+    /// Sign-in state, shown on the Status row — an auth state nobody can see
+    /// is one nobody can debug, the plugin-row rule again.
+    #[cfg(feature = "portal")]
+    portal_auth: PortalAuthView,
+    /// A sign-in in flight (`@`), on its own thread; polled by
+    /// [`App::portal_tick`], never waited on.
+    #[cfg(feature = "portal")]
+    portal_login: Option<crate::portal::login::LoginFlow>,
+    /// The last login status announced, so each transition toasts exactly once.
+    #[cfg(feature = "portal")]
+    portal_login_seen: Option<crate::portal::login::LoginStatus>,
+    /// The completed-trade confirmation call. See [`PortalDone`].
+    #[cfg(feature = "portal")]
+    portal_done: PortalDone,
 }
 
 impl App {
@@ -1419,7 +1497,23 @@ impl App {
             link_prev_transfers: 0,
             pending_peer: None,
             plugin_notes: Vec::new(),
+            portal_armed: None,
+            #[cfg(feature = "portal")]
+            portal_auth: PortalAuthView::Unconfigured,
+            #[cfg(feature = "portal")]
+            portal_login: None,
+            #[cfg(feature = "portal")]
+            portal_login_seen: None,
+            #[cfg(feature = "portal")]
+            portal_done: PortalDone::default(),
         };
+        // Read-only: resolves the sign-in state from the stored token file.
+        // Safe in `build` (unlike the volume or the cable) because it writes
+        // nothing anywhere.
+        #[cfg(feature = "portal")]
+        {
+            app.portal_auth = PortalAuthView::resolve(&app.config);
+        }
         app.rescan();
         if let Some(first) = app.config_warnings.first() {
             app.message = Some(first.clone());
@@ -1756,9 +1850,18 @@ impl App {
         let sprite_image = self.new_sprite_image();
         let team_image = self.new_team_image();
         match load_session(path, &self.config) {
-            Ok((mut gb, entry, audio, plugin_notes)) => {
+            Ok((mut gb, entry, audio, plugin_notes, portal_armed)) => {
                 self.recent.record(path);
                 self.recent.save();
+                // A fresh session gets a fresh confirmation state: the armed
+                // trade belongs to this machine, and a done-POST for a trade
+                // completed in a *previous* session has already fired or been
+                // given up on.
+                self.portal_armed = portal_armed;
+                #[cfg(feature = "portal")]
+                {
+                    self.portal_done = PortalDone::default();
+                }
                 // Carry the current speed rung's audio contract into the new
                 // session (see bump_speed): non-1x must drop, not wait.
                 gb.set_audio_fast_forward(self.speed != SPEED_NORMAL);
@@ -1914,6 +2017,12 @@ impl App {
         while !self.should_quit {
             // 1. Advance emulation, paced to the selected speed (1x = real
             //    time; faster rungs shorten the interval; MAX runs a burst).
+            // Portal sign-in and trade confirmation advance on every screen —
+            // signing in happens most naturally from the picker — and never
+            // block: both halves run on their own threads and are polled here.
+            if self.portal_tick() {
+                dirty = true;
+            }
             #[cfg(feature = "music")]
             let on_a_machine = matches!(self.screen, Screen::Playing | Screen::Shelf);
             #[cfg(not(feature = "music"))]
@@ -2920,6 +3029,9 @@ impl App {
             // Resume the most-recently-played ROM directly, even if it lives
             // outside the current `rom_dir` (so it isn't in the list).
             KeyCode::Char('.') => self.resume_last(),
+            // Portal sign-in, reachable before any game is loaded — which is
+            // the natural time to do it, since trades arm at ROM load.
+            KeyCode::Char('@') => self.portal_key(),
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
             KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
@@ -3064,6 +3176,11 @@ impl App {
                 }
                 KeyCode::Char('V') => {
                     self.toggle_recording();
+                    return;
+                }
+                // Portal sign-in — `@` for the account, on both screens.
+                KeyCode::Char('@') => {
+                    self.portal_key();
                     return;
                 }
                 // Screenshot: `c` captures what you see (palette + upscaler),
@@ -4903,6 +5020,12 @@ impl App {
             };
             status.push(kv("Net", &truncate(&detail, 18)));
         }
+        // Portal sign-in / armed-trade state — visible for the same reason the
+        // plugin row is: an auth state (or a trade waiting to be confirmed)
+        // nobody can see is one nobody can debug.
+        if let Some(row) = self.portal_row() {
+            status.push(kv("Portal", &truncate(&row, 18)));
+        }
         // The `!` / `!!` marks travel with the name, so "this one may write my
         // game" survives truncation of the detail text.
         for p in &plugins {
@@ -5023,6 +5146,27 @@ impl App {
                 d,
             )));
         }
+        // The trade portal — findable from here or it does not exist. The
+        // whole flow: sign in once, accept a trade on the website, load the
+        // game, walk into the Cable Club.
+        out.push(Line::from(""));
+        out.push(Line::from("Trade portal — async trades with friends"));
+        out.push(Line::from(Span::styled(
+            "  config.toml:  portal = <url>   (plus plugins = gen1-link)",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            "  @  sign in (opens your browser; the code is shown too)",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            "  or: terminal login / logout on the command line",
+            d,
+        )));
+        out.push(Line::from(Span::styled(
+            "  an accepted trade arms the link partner at ROM load",
+            d,
+        )));
         // The boot ROM is opt-in in exactly the same sense, and findable only
         // if it is written down where the player looks. Nothing is bundled and
         // nothing is fetched — see `crate::boot`.
@@ -7149,12 +7293,22 @@ fn window_title(game: Option<&str>) -> String {
 ///
 /// NOTE: always pass `Some(path)` to `Gameboy::new` so the MBC is detected from
 /// the header — with `None`, `get_mbc` forces MBC3 and mis-drives other carts.
+/// What [`load_session`] hands back: the machine, its ROM entry, the audio
+/// hold, the plugin-attach notes, and any portal trade that was armed.
+type LoadedSession = (
+    Gameboy,
+    RomEntry,
+    AudioHold,
+    Vec<String>,
+    Option<PortalArmed>,
+);
+
 // `audio` is `()` without the audio feature; that unit binding is intentional.
 #[cfg_attr(not(feature = "audio"), allow(clippy::let_unit_value))]
 fn load_session(
     path: &Path,
     cfg: &crate::screen::config::Config,
-) -> Result<(Gameboy, RomEntry, AudioHold, Vec<String>), String> {
+) -> Result<LoadedSession, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     if data.len() < 0x150 {
         return Err("file is too small to be a Game Boy ROM".to_string());
@@ -7178,7 +7332,7 @@ fn load_session(
         }
     }
     let audio = init_audio(&mut gb);
-    let mut notes = attach_plugins(&mut gb, cfg, &data);
+    let (mut notes, portal_armed) = attach_plugins(&mut gb, cfg, &data);
     // Say it once, in the places `config_warnings` already reaches. A boot ROM
     // changes the machine — it is running somebody else's code before the
     // cartridge's — so it must never be invisible; and a file the user clearly
@@ -7190,7 +7344,7 @@ fn load_session(
     if let Some(why) = boot_note {
         notes.push(why);
     }
-    Ok((gb, entry, audio, notes))
+    Ok((gb, entry, audio, notes, portal_armed))
 }
 
 /// Attach the plugins the user configured, returning a line per plugin — one
@@ -7208,8 +7362,9 @@ fn attach_plugins(
     gb: &mut Gameboy,
     cfg: &crate::screen::config::Config,
     rom: &[u8],
-) -> Vec<String> {
+) -> (Vec<String>, Option<PortalArmed>) {
     let mut notes = Vec::new();
+    let mut portal_armed = None;
     if let Some(msg) = gb.open_plugin_trace() {
         notes.push(msg);
     }
@@ -7235,7 +7390,7 @@ fn attach_plugins(
         Err(_) => cfg.plugins.clone(),
     };
     for name in names {
-        match attach_named(gb, cfg, rom, &name) {
+        match attach_named(gb, cfg, rom, &name, &mut portal_armed) {
             Some(note) => {
                 if !note.is_empty() {
                     notes.push(note)
@@ -7254,7 +7409,7 @@ fn attach_plugins(
             }),
         }
     }
-    notes
+    (notes, portal_armed)
 }
 
 /// Every plugin this project ships, whether or not this binary was built with
@@ -7286,7 +7441,10 @@ fn attach_named(
     cfg: &crate::screen::config::Config,
     rom: &[u8],
     name: &str,
+    portal_armed: &mut Option<PortalArmed>,
 ) -> Option<String> {
+    // Silence "unused" in builds where no arm consumes it.
+    let _ = &portal_armed;
     // Already attached above; naming it explicitly is not an error.
     #[cfg(feature = "plugin-trainer")]
     if name == terminalgb_plugin_trainer::NAME {
@@ -7295,27 +7453,22 @@ fn attach_named(
 
     #[cfg(feature = "plugin-gen1-link")]
     if name == terminalgb_plugin_gen1_link::NAME {
-        let trade = std::env::var("GB_GEN1_TRADE")
-            .ok()
-            .or_else(|| cfg.gen1_trade.clone());
-        let path = trade.as_deref().map(std::path::Path::new);
-        return Some(
-            match terminalgb_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
-                rom.to_vec(),
-                path,
-            ) {
-                Ok(p) => {
-                    let offer = p.offer().to_string();
-                    match gb.add_plugin(Box::new(p)) {
-                        Ok(()) => {
-                            format!("plugin gen1-link attached, offering {offer}")
-                        }
-                        Err(e) => format!("plugin gen1-link: {e}"),
-                    }
-                }
-                Err(e) => format!("plugin gen1-link: {e}"),
-            },
-        );
+        // The portal outranks the trade file: a pending portal trade was
+        // *explicitly accepted* by this player, so it is what the partner must
+        // offer. And when the portal is configured but cannot answer (signed
+        // out, unreachable), **no partner is attached at all** — arming the
+        // built-in Mew instead would let the player trade a Pokémon away to a
+        // partner their friend will never hear from, which is exactly the
+        // silent-loss failure a trade feature must not have.
+        #[cfg(feature = "portal")]
+        match attach_portal_gen1(gb, cfg, rom, portal_armed) {
+            PortalArm::Handled(note) => return Some(note),
+            PortalArm::Fallback(note) => {
+                return Some(format!("{note}; {}", attach_gen1_from_file(gb, cfg, rom)))
+            }
+            PortalArm::NotConfigured => {}
+        }
+        return Some(attach_gen1_from_file(gb, cfg, rom));
     }
 
     #[cfg(feature = "plugin-battle-control")]
@@ -7409,6 +7562,411 @@ fn attach_named(
     // Silence "unused" warnings in a build with no plugins at all.
     let _ = (gb, cfg, rom, name);
     None
+}
+
+/// The trade-file / built-in-Mew arm of gen1-link attach, exactly as it was
+/// before the portal existed — split out so the portal path can fall back to
+/// it with one call.
+#[cfg(feature = "plugin-gen1-link")]
+fn attach_gen1_from_file(
+    gb: &mut Gameboy,
+    cfg: &crate::screen::config::Config,
+    rom: &[u8],
+) -> String {
+    let trade = std::env::var("GB_GEN1_TRADE")
+        .ok()
+        .or_else(|| cfg.gen1_trade.clone());
+    let path = trade.as_deref().map(std::path::Path::new);
+    match terminalgb_plugin_gen1_link::Gen1LinkPartner::from_trade_file(
+        rom.to_vec(),
+        path,
+    ) {
+        Ok(p) => {
+            let offer = p.offer().to_string();
+            match gb.add_plugin(Box::new(p)) {
+                Ok(()) => format!("plugin gen1-link attached, offering {offer}"),
+                Err(e) => format!("plugin gen1-link: {e}"),
+            }
+        }
+        Err(e) => format!("plugin gen1-link: {e}"),
+    }
+}
+
+/// What the portal decided about arming gen1-link.
+#[cfg(all(feature = "plugin-gen1-link", feature = "portal"))]
+enum PortalArm {
+    /// No portal configured — the portal has no opinion.
+    NotConfigured,
+    /// The portal answered authoritatively that nothing is pending, so the
+    /// trade-file path may run; the note says so.
+    Fallback(String),
+    /// The portal decided the outcome (armed a trade, or refused to attach
+    /// anything) — do not touch the trade file.
+    Handled(String),
+}
+
+/// Try to arm the gen1-link partner from the portal.
+///
+/// The one rule that matters: **an error is a refusal, never a fallback.**
+/// When the portal is configured but signed out or unreachable, a trade the
+/// player accepted may exist that this process cannot see — attaching the
+/// default partner instead would happily complete a "trade" the friend's side
+/// never learns about. The only path to the trade file is the portal saying,
+/// signed in and reachable, "nothing pending".
+///
+/// This runs synchronously during session load (bounded by the HTTP client's
+/// 5 s connect / 15 s total caps), so a slow portal delays the launch of a
+/// portal-configured session rather than trading correctness for latency.
+#[cfg(all(feature = "plugin-gen1-link", feature = "portal"))]
+fn attach_portal_gen1(
+    gb: &mut Gameboy,
+    cfg: &crate::screen::config::Config,
+    rom: &[u8],
+    portal_armed: &mut Option<PortalArmed>,
+) -> PortalArm {
+    use crate::portal::{client::Portal, source::PortalSource};
+    let Some(url) = crate::portal::portal_url(cfg.portal.as_deref()) else {
+        return PortalArm::NotConfigured;
+    };
+    let portal = match Portal::connect(&url) {
+        Ok(p) => p,
+        Err(e) => {
+            return PortalArm::Handled(format!(
+                "portal: {e} — link partner NOT armed (a trade could be \
+                 waiting; sign in and reload the ROM, or set portal = off)"
+            ))
+        }
+    };
+    let src = match PortalSource::fetch(&portal) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            return PortalArm::Fallback("portal: no pending trade".to_string());
+        }
+        Err(e) => {
+            return PortalArm::Handled(format!(
+                "portal: {e} — link partner NOT armed (retry by reloading the \
+                 ROM, or set portal = off)"
+            ))
+        }
+    };
+    let armed = PortalArmed {
+        trade_id: src.trade_id.clone(),
+        friend: src.friend.clone(),
+        give: src.give.clone(),
+        incoming: src.incoming().to_string(),
+    };
+    match terminalgb_plugin_gen1_link::Gen1LinkPartner::new(rom.to_vec(), &src) {
+        Ok(p) => {
+            let offer = p.offer().to_string();
+            match gb.add_plugin(Box::new(p)) {
+                Ok(()) => {
+                    let note = format!(
+                        "portal trade #{} with {}: give {}, receive {offer} — \
+                         complete it at the Cable Club TRADE CENTER",
+                        armed.trade_id, armed.friend, armed.give
+                    );
+                    *portal_armed = Some(armed);
+                    PortalArm::Handled(note)
+                }
+                Err(e) => PortalArm::Handled(format!("plugin gen1-link: {e}")),
+            }
+        }
+        // The friend's Pokémon does not resolve against THIS cartridge
+        // (species or move this game does not have). A matched trade exists,
+        // so no fallback partner — the player fixes it on the portal side.
+        Err(e) => PortalArm::Handled(format!(
+            "portal: trade #{} cannot be armed on this cartridge: {e} — \
+             link partner NOT armed",
+            armed.trade_id
+        )),
+    }
+}
+
+/// How often a failed trade-confirmation POST is retried, and how many
+/// attempts before giving up loudly. Bounded — never an unbounded retry loop —
+/// and giving up is safe: the *trade* is already complete in the save; only
+/// the notification to the friend is outstanding, and the portal website can
+/// confirm it by hand.
+#[cfg(feature = "portal")]
+const PORTAL_DONE_RETRY_EVERY: Duration = Duration::from_secs(30);
+#[cfg(feature = "portal")]
+const PORTAL_DONE_RETRY_CAP: u32 = 10;
+
+#[cfg(feature = "portal")]
+impl App {
+    /// A transient notice on whichever screen is up — toast in game, footer
+    /// message in the picker.
+    fn portal_announce(&mut self, msg: String) {
+        match self.screen {
+            Screen::Playing => self.set_toast(msg),
+            _ => self.message = Some(msg),
+        }
+    }
+
+    /// The `@` key — sign in from inside the emulator, the `/login` shape:
+    /// starts the device-code flow, opens the browser itself (fail-soft), and
+    /// completes back here via [`App::portal_tick`].
+    fn portal_key(&mut self) {
+        let Some(url) = crate::portal::portal_url(self.config.portal.as_deref()) else {
+            self.portal_announce(
+                "portal: not configured — set portal = <url> in config.toml \
+                 (see docs/portal.md)"
+                    .into(),
+            );
+            return;
+        };
+        // A flow already waiting: re-show the code rather than starting over.
+        if let Some(flow) = &self.portal_login {
+            let st = flow.status();
+            if let crate::portal::login::LoginStatus::Waiting {
+                user_code,
+                verification_uri,
+                ..
+            } = st
+            {
+                self.portal_announce(format!(
+                    "portal: go to {verification_uri} and enter {user_code}"
+                ));
+                return;
+            }
+        }
+        match &self.portal_auth {
+            PortalAuthView::SignedIn(user) => {
+                let who = user.clone().unwrap_or_else(|| "(name unknown)".into());
+                self.portal_announce(format!(
+                    "portal: signed in as {who} — trades arm when a game \
+                     loads; `terminal logout` signs out"
+                ));
+            }
+            _ => {
+                if !crate::portal::http::curl_available() {
+                    self.portal_announce(
+                        "portal: the `curl` binary is missing — install curl \
+                         to sign in"
+                            .into(),
+                    );
+                    return;
+                }
+                self.portal_login = Some(crate::portal::login::LoginFlow::start(url));
+                self.portal_login_seen = None;
+                self.portal_announce("portal: requesting a sign-in code …".into());
+            }
+        }
+    }
+
+    /// Advance the sign-in and trade-confirmation state machines. Called once
+    /// per loop iteration; returns whether anything changed (redraw). Never
+    /// blocks — both halves live on their own threads and are only polled.
+    fn portal_tick(&mut self) -> bool {
+        let mut dirty = self.portal_login_tick();
+        if self.portal_done_tick() {
+            dirty = true;
+        }
+        dirty
+    }
+
+    fn portal_login_tick(&mut self) -> bool {
+        use crate::portal::login::LoginStatus as S;
+        let Some(flow) = &self.portal_login else {
+            return false;
+        };
+        let st = flow.status();
+        if self.portal_login_seen.as_ref() == Some(&st) {
+            return false;
+        }
+        self.portal_login_seen = Some(st.clone());
+        match st {
+            S::Starting => false,
+            S::Waiting {
+                user_code,
+                verification_uri,
+                opened_browser,
+            } => {
+                // The URL and code are always shown — the opened browser is a
+                // convenience, and a headless or SSH session has none.
+                let msg = if opened_browser {
+                    format!(
+                        "portal: browser opened — enter {user_code} \
+                         (or go to {verification_uri})"
+                    )
+                } else {
+                    format!("portal: go to {verification_uri} and enter {user_code}")
+                };
+                self.portal_announce(msg);
+                true
+            }
+            S::Done { user } => {
+                self.portal_auth = PortalAuthView::SignedIn(user.clone());
+                self.portal_login = None;
+                self.portal_announce(match user {
+                    Some(u) => format!("portal: signed in as {u}"),
+                    None => "portal: signed in".into(),
+                });
+                true
+            }
+            S::Failed(e) => {
+                self.portal_auth = PortalAuthView::SignedOut(Some(e.clone()));
+                self.portal_login = None;
+                self.portal_announce(format!("portal: sign-in failed: {e}"));
+                true
+            }
+        }
+    }
+
+    /// Watch the link partner for a completed portal trade and confirm it
+    /// back (`POST /api/trades/<id>/done`) so the friend's side learns of it.
+    /// Failures are loud and retried on a bounded schedule.
+    fn portal_done_tick(&mut self) -> bool {
+        let Some(armed) = self.portal_armed.clone() else {
+            return false;
+        };
+        if self.portal_done.confirmed || self.portal_done.gave_up {
+            return false;
+        }
+
+        // Result of an in-flight POST first.
+        if self.portal_done.inflight.is_some() {
+            let outcome = self
+                .portal_done
+                .inflight
+                .as_ref()
+                .expect("checked above")
+                .try_recv();
+            return match outcome {
+                Ok(Ok(())) => {
+                    self.portal_done.inflight = None;
+                    self.portal_done.confirmed = true;
+                    self.portal_announce(format!(
+                        "portal: trade #{} confirmed — {} will see it complete",
+                        armed.trade_id, armed.friend
+                    ));
+                    true
+                }
+                Ok(Err(e)) => {
+                    self.portal_done.inflight = None;
+                    if self.portal_done.attempts >= PORTAL_DONE_RETRY_CAP {
+                        self.portal_done.gave_up = true;
+                        self.portal_announce(format!(
+                            "portal: could NOT confirm trade #{} after {} \
+                             attempts: {e} — the received Pokémon is safe in \
+                             your save; confirm the trade on the portal website",
+                            armed.trade_id, self.portal_done.attempts
+                        ));
+                    } else {
+                        self.portal_done.next_retry =
+                            Some(Instant::now() + PORTAL_DONE_RETRY_EVERY);
+                        self.portal_announce(format!(
+                            "portal: confirming trade #{} failed ({e}) — retrying",
+                            armed.trade_id
+                        ));
+                    }
+                    true
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => false,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // The worker died without answering: count it as a failed
+                    // attempt and retry on the same schedule.
+                    self.portal_done.inflight = None;
+                    self.portal_done.next_retry =
+                        Some(Instant::now() + PORTAL_DONE_RETRY_EVERY);
+                    true
+                }
+            };
+        }
+
+        // Has the trade actually happened? The partner's own counter is the
+        // witness — the same number `examples/gen1_trade.rs` asserts on.
+        let completed = self
+            .session
+            .as_ref()
+            .and_then(|s| {
+                s.gb.plugin::<terminalgb_plugin_gen1_link::Gen1LinkPartner>()
+            })
+            .map(|p| p.trades_completed() > 0)
+            .unwrap_or(false);
+        if !completed {
+            return false;
+        }
+        if let Some(at) = self.portal_done.next_retry {
+            if Instant::now() < at {
+                return false;
+            }
+        }
+
+        // Fire (or retry) the confirmation on its own thread; the loop only
+        // ever try_recv()s it.
+        self.portal_done.attempts += 1;
+        self.portal_done.next_retry = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let url = crate::portal::portal_url(self.config.portal.as_deref());
+        let id = armed.trade_id.clone();
+        std::thread::spawn(move || {
+            let res = match url {
+                Some(u) => crate::portal::client::Portal::connect(&u)
+                    .and_then(|p| p.trade_done(&id))
+                    .map_err(|e| e.to_string()),
+                None => Err("the portal is no longer configured".into()),
+            };
+            let _ = tx.send(res);
+        });
+        self.portal_done.inflight = Some(rx);
+        if self.portal_done.attempts == 1 {
+            self.portal_announce(format!(
+                "portal: trade completed — confirming #{} …",
+                armed.trade_id
+            ));
+        }
+        true
+    }
+
+    /// The Status panel's `Portal` row. `None` (no row) when no portal is
+    /// configured — a dormant feature paints nothing.
+    fn portal_row(&self) -> Option<String> {
+        if let Some(flow) = &self.portal_login {
+            if let crate::portal::login::LoginStatus::Waiting { user_code, .. } =
+                flow.status()
+            {
+                return Some(format!("code {user_code}"));
+            }
+            return Some("signing in…".into());
+        }
+        if let Some(a) = &self.portal_armed {
+            if self.portal_done.confirmed {
+                return Some(format!("#{} confirmed", a.trade_id));
+            }
+            if self.portal_done.gave_up {
+                return Some(format!("#{} UNCONFIRMED", a.trade_id));
+            }
+            return Some(format!("#{} armed", a.trade_id));
+        }
+        match &self.portal_auth {
+            PortalAuthView::Unconfigured => None,
+            PortalAuthView::SignedOut(_) => Some("out — @ signs in".into()),
+            PortalAuthView::SignedIn(Some(u)) => Some(format!("in as {u}")),
+            PortalAuthView::SignedIn(None) => Some("signed in".into()),
+        }
+    }
+}
+
+/// Built without the portal: `@` says how to get it (the absent-plugin
+/// courtesy), and the tick and row cost nothing.
+#[cfg(not(feature = "portal"))]
+impl App {
+    fn portal_key(&mut self) {
+        let msg = "portal: not built into this binary — rebuild with --features portal";
+        match self.screen {
+            Screen::Playing => self.set_toast(msg),
+            _ => self.message = Some(msg.into()),
+        }
+    }
+
+    fn portal_tick(&mut self) -> bool {
+        false
+    }
+
+    fn portal_row(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Build the agent plugin from configuration.
@@ -7944,8 +8502,11 @@ mod tests {
 
         #[cfg(not(feature = "plugin-example-tracer"))]
         {
-            assert_eq!(attach_named(&mut gb, &cfg, &rom, "example-tracer"), None);
-            let notes = {
+            assert_eq!(
+                attach_named(&mut gb, &cfg, &rom, "example-tracer", &mut None),
+                None
+            );
+            let (notes, _) = {
                 let mut c = cfg.clone();
                 c.plugins = vec!["example-tracer".to_string()];
                 // GB_PLUGINS would win over the config; this test reads config.
@@ -7964,7 +8525,7 @@ mod tests {
         let mut c = cfg.clone();
         c.plugins = vec!["definitely-not-a-plugin".to_string()];
         std::env::remove_var("GB_PLUGINS");
-        let notes = attach_plugins(&mut gb, &c, &rom);
+        let (notes, _) = attach_plugins(&mut gb, &c, &rom);
         assert!(
             notes
                 .iter()

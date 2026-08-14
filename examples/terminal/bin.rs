@@ -7,6 +7,8 @@ use terminalgb::gameboy::run_terminal;
 ///   `terminal <rom.gb>`  — launch straight into the game (no picker).
 ///   `terminal`           — open the ROM picker.
 ///   `terminal music`     — open MUSIC MODE: the shelf of cartridges as albums.
+///   `terminal login`     — sign in to the trade portal (device-code flow).
+///   `terminal logout`    — forget the stored portal sign-in.
 ///
 /// `--video-*` flags stream the picture to a file or FIFO for `ffmpeg`/OBS to
 /// pick up (see `docs/video-out.md`). Not stdout here: the TUI owns stdout.
@@ -24,7 +26,7 @@ fn main() {
 
     match rest.first().map(String::as_str) {
         Some("-h") | Some("--help") => {
-            eprintln!("usage: terminal [ROM.gb | music] [--video-out PATH ...]");
+            eprintln!("usage: terminal [ROM.gb | music | login | logout] [--video-out PATH ...]");
             eprintln!("  with a ROM path: launch straight into the game");
             eprintln!("  with no args:    browse the ROM picker (rom_dir from config)");
             eprintln!(
@@ -43,9 +45,40 @@ fn main() {
         // The run command the captain asked for. `--music` too, because a
         // person who types one will type the other.
         Some("music") | Some("--music") | Some("-m") => run_music(),
+        // The `gh auth login` shape: sign in once in a browser, then the
+        // terminal is silent. Also reachable from inside the TUI with `@`.
+        Some("login") | Some("--login") => std::process::exit(run_login()),
+        Some("logout") | Some("--logout") => std::process::exit(run_logout()),
         Some(path) => run_terminal(Some(PathBuf::from(path))),
         None => run_terminal(None),
     }
+}
+
+#[cfg(feature = "portal")]
+fn run_login() -> i32 {
+    let cfg = terminalgb::screen::config::Config::load();
+    terminalgb::portal::login::run_cli(cfg.portal.as_deref())
+}
+
+#[cfg(feature = "portal")]
+fn run_logout() -> i32 {
+    terminalgb::portal::login::run_logout_cli()
+}
+
+/// Built without the `portal` feature: say how to get it rather than
+/// pretending `login` is a ROM path that could not be found.
+#[cfg(not(feature = "portal"))]
+fn run_login() -> i32 {
+    eprintln!(
+        "terminal: the trade portal is not built into this binary — rebuild \
+         with `--features portal`"
+    );
+    2
+}
+
+#[cfg(not(feature = "portal"))]
+fn run_logout() -> i32 {
+    run_login()
 }
 
 #[cfg(feature = "music")]

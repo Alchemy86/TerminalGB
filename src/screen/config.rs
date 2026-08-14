@@ -408,6 +408,10 @@ pub struct Config {
     /// Battle-preset file for the Gen 1 battle plugin, or `None` for its
     /// built-in presets. See [`terminalgb_plugin_battle_control::preset`].
     pub battles: Option<String>,
+    /// The trade portal's base URL (e.g. `https://portal.example`), or `None`
+    /// when no portal is in use. A URL, not a path, so no tilde expansion.
+    /// `$GB_PORTAL` overrides it. See `docs/portal.md`.
+    pub portal: Option<String>,
     /// What the link port is plugged into. See
     /// [`docs/link-cable.md`](../../docs/link-cable.md).
     pub link: LinkSetting,
@@ -473,6 +477,7 @@ impl Default for Config {
             link: LinkSetting::default(),
             link_net: None,
             battles: None,
+            portal: None,
             trainer: false,
             agent_command: None,
             agent_objective: None,
@@ -823,6 +828,17 @@ impl Config {
                 None
             } else {
                 Some(expand_tilde_str(v))
+            };
+        }
+        if let Some(v) = get("portal") {
+            let v = v.trim().trim_end_matches('/');
+            cfg.portal = if v.is_empty() || v.eq_ignore_ascii_case("off") {
+                None
+            } else if v.starts_with("http://") || v.starts_with("https://") {
+                Some(v.to_string())
+            } else {
+                warn.push(bad("portal", v, "a URL starting http:// or https://"));
+                None
             };
         }
         if let Some(v) = get("link") {
@@ -1618,6 +1634,23 @@ mod tests {
         let (_, warnings) =
             Config::parse_reporting("plugins = gen1-link\ngen1_trade = /tmp/x\n");
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+    }
+
+    #[test]
+    fn the_portal_key_parses_validates_and_is_not_unknown() {
+        // A URL, trimmed of its trailing slash so later joins cannot "//api".
+        let (c, w) = Config::parse_reporting("portal = https://portal.example/\n");
+        assert_eq!(c.portal.as_deref(), Some("https://portal.example"));
+        assert!(w.is_empty(), "unexpected warnings: {w:?}");
+        // Off and empty are both "no portal".
+        assert_eq!(Config::parse("portal = off").portal, None);
+        assert_eq!(Config::parse("portal =").portal, None);
+        assert_eq!(Config::default().portal, None);
+        // A value that is not a URL is refused loudly, not stored and
+        // silently ignored — the same rule as `protocol`.
+        let (c, w) = Config::parse_reporting("portal = portal.example\n");
+        assert_eq!(c.portal, None);
+        assert_eq!(w.len(), 1, "{w:?}");
     }
 
     #[test]

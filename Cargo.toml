@@ -29,7 +29,15 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 # audio. See README "Embedding the core". Zero third-party crates besides
 # `blip_buf` (the APU resampler). Keep it that way: anything a frontend needs
 # belongs behind `desktop`/`tui`/`audio`, not in the core.
-default = ["desktop", "tui", "standard-plugins", "chiptune", "music", "bgblink"]
+default = [
+    "desktop",
+    "tui",
+    "standard-plugins",
+    "chiptune",
+    "music",
+    "bgblink",
+    "portal",
+]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
 # Needs a display server at run time.
@@ -85,6 +93,15 @@ music = ["tui", "terminalgb-chiptune"]
 # — the same line `chiptune` draws. It adds **no third-party crate**: the whole
 # implementation is `std::net`.
 bgblink = []
+# The trade portal client (`terminalgb::portal`): a network `PokemonSource`
+# that arms the gen1-link partner with a trade accepted on the web portal, and
+# the device-code sign-in behind `terminal login` / the TUI's `@` key. It adds
+# **no third-party crate**: HTTPS is delegated to the system's `curl` binary
+# (the same "no new dependency" bar as the hand-rolled PNG/deflate/base64), and
+# the JSON codec is the agent plugin's — the same reuse the `mcp` feature makes.
+# In `default` because it costs no dependency; out of `--no-default-features`
+# so the embedding build and wasm inherit no network code. See docs/portal.md.
+portal = ["plugin-gen1-link", "plugin-agent"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
@@ -267,6 +284,13 @@ name = "gen1_trade"
 path = "examples/gen1_trade.rs"
 required-features = ["image", "plugin-gen1-link"]
 
+# The portal client walked by hand against a stub or the live portal: fetch
+# the pending trade, resolve it against a real cartridge, arm the partner.
+[[example]]
+name = "portal_trade"
+path = "examples/portal_trade.rs"
+required-features = ["portal"]
+
 [[example]]
 name = "upscale_gallery"
 path = "examples/upscale_gallery.rs"
@@ -336,6 +360,15 @@ required-features = ["libc"]
 name = "testroms"
 path = "testharness/testroms.rs"
 harness = false
+
+# The portal client against a local stub server (no real portal, no network
+# beyond 127.0.0.1). Needs the system `curl` binary; skips with a message if
+# it is absent.
+[[test]]
+name = "portal"
+path = "testharness/portal.rs"
+harness = false
+required-features = ["portal"]
 
 # The two rendering engines held against each other, against dmg-acid2's
 # reference image and against the clock — the accurate engine is not the
