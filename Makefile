@@ -86,7 +86,8 @@ fetch-test-suites:
 # change too. Whole thing runs in about a second once the ROMs are on disk.
 # Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external`.
 test-external: fetch-test-suites
-	cargo build --release --example mooneye_scout --example samesuite --example mealybug
+	cargo build --release --example mooneye_scout --example samesuite \
+	    --example mealybug --example cpp_suite
 	./target/release/examples/mooneye_scout \
 	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
 	    --baseline testharness/mooneye_baseline.txt
@@ -97,6 +98,8 @@ test-external: fetch-test-suites
 	    --baseline testharness/samesuite_baseline.txt
 	./target/release/examples/mealybug --dir $(SUITES)/mealybug \
 	    --baseline testharness/mealybug_baseline.txt
+	./target/release/examples/cpp_suite $(SUITES)/cpp \
+	    --baseline testharness/cpp_baseline.txt
 
 # The same suites again, against the OTHER PPU engine (src/gpu/fifo.rs). The
 # baselines above are scored on whichever engine is the default, so the per-dot

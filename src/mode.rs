@@ -12,11 +12,38 @@
 ///   undocumented CGB registers `FF72`/`FF73`/`FF75`-`FF77` still respond.
 ///   Mooneye's `acceptance/bits/reg_f` and friends print those boot registers
 ///   and so distinguish the two.
-#[derive(PartialEq, Debug, Copy, Clone)]
+/// * `Super` / `Super2` — a **Super Game Boy** (or the later SGB2). The Game
+///   Boy side is DMG hardware, so the PPU, APU and I/O map behave as a DMG's;
+///   what differs is the boot registers and the ICD2 chip listening on the
+///   joypad port (see [`crate::sgb`]). The two SGB revisions differ only in the
+///   boot value of `A`, which is precisely what Mooneye's `boot_regs-sgb` and
+///   `boot_regs-sgb2` measure — so they are separate machines here.
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum GbMode {
     Classic,
     Color,
     ColorAsClassic,
+    Super,
+    Super2,
+}
+
+impl GbMode {
+    /// True for every machine that presents **DMG** hardware to the cartridge:
+    /// an original Game Boy and both Super Game Boys.
+    ///
+    /// A CGB in compatibility mode is deliberately **not** one of these. It
+    /// renders the same picture but it is Color silicon: the undocumented
+    /// `FF72`/`FF73`/`FF75`-`FF77` registers still respond, it has no OAM
+    /// corruption bug, and its boot ROM leaves a different machine behind.
+    pub fn is_dmg(self) -> bool {
+        matches!(self, GbMode::Classic | GbMode::Super | GbMode::Super2)
+    }
+
+    /// True on a Super Game Boy, where the joypad port is also a command
+    /// channel to the SNES side ([`crate::sgb`]).
+    pub fn is_sgb(self) -> bool {
+        matches!(self, GbMode::Super | GbMode::Super2)
+    }
 }
 
 /// Which **console** to boot. Chosen before the cartridge is examined, unlike
@@ -40,6 +67,16 @@ pub enum Model {
     Dmg,
     /// Force a Game Boy Color, whatever the header says.
     Cgb,
+    /// Force a Super Game Boy. Never chosen by [`Model::Auto`]: an SGB is a
+    /// peripheral a player opts into, and this emulator shows the Game Boy
+    /// screen rather than the SNES's border and palettes, so booting one by
+    /// accident would give a game SGB boot registers and none of the display it
+    /// asked for. Conformance runners select it explicitly, as the GB Emulator
+    /// Shootout's own manifest does.
+    Sgb,
+    /// Force the later SGB2. Identical to [`Model::Sgb`] except for the boot
+    /// value of `A`.
+    Sgb2,
 }
 
 /// Environment override consulted by [`Model::resolve`] when the caller asked
@@ -55,6 +92,8 @@ impl Model {
             "auto" | "" => Some(Model::Auto),
             "dmg" | "gb" | "classic" => Some(Model::Dmg),
             "cgb" | "gbc" | "color" | "colour" => Some(Model::Cgb),
+            "sgb" | "super" => Some(Model::Sgb),
+            "sgb2" | "super2" => Some(Model::Sgb2),
             _ => None,
         }
     }
@@ -66,7 +105,8 @@ impl Model {
             let m = Model::parse(&v);
             if m.is_none() {
                 eprintln!(
-                    "warning: {MODEL_ENV}={v:?} is not one of auto/dmg/cgb — ignoring"
+                    "warning: {MODEL_ENV}={v:?} is not one of auto/dmg/cgb/sgb/sgb2 \
+                     — ignoring"
                 );
             }
             m
@@ -103,6 +143,8 @@ impl Model {
         };
         match chosen {
             Model::Dmg => GbMode::Classic,
+            Model::Sgb => GbMode::Super,
+            Model::Sgb2 => GbMode::Super2,
             // A Color console running a cartridge that does not advertise CGB
             // support runs in compatibility mode.
             Model::Cgb | Model::Auto => {
@@ -186,10 +228,60 @@ mod tests {
         for s in ["cgb", "GBC", "color", "colour"] {
             assert_eq!(Model::parse(s), Some(Model::Cgb), "{s:?}");
         }
+        for s in ["sgb", "SGB", "super"] {
+            assert_eq!(Model::parse(s), Some(Model::Sgb), "{s:?}");
+        }
+        assert_eq!(Model::parse("sgb2"), Some(Model::Sgb2));
         assert_eq!(Model::parse("auto"), Some(Model::Auto));
         // A typo must be rejected, not silently treated as a console.
         assert_eq!(Model::parse("dgm"), None);
-        assert_eq!(Model::parse("sgb"), None);
+        assert_eq!(Model::parse("sgb3"), None);
+    }
+
+    /// An SGB is never inferred. A cartridge's SGB flag (`$0146 == 0x03`) says
+    /// the game has a border and a palette to offer, not that the player owns
+    /// the peripheral — and this emulator shows the Game Boy screen, so booting
+    /// one by accident would change a game's boot registers and give it nothing
+    /// in return.
+    #[test]
+    fn an_sgb_is_only_ever_asked_for_explicitly() {
+        assert_eq!(Model::Auto.resolve_with(DMG_ONLY, None), GbMode::Classic);
+        assert_eq!(
+            Model::Auto.resolve_with(DMG_ONLY, Some(Model::Sgb)),
+            GbMode::Super
+        );
+        assert_eq!(Model::Sgb.resolve_with(DMG_ONLY, None), GbMode::Super);
+        assert_eq!(Model::Sgb2.resolve_with(DMG_ONLY, None), GbMode::Super2);
+        // Forcing means forcing, here too.
+        assert_eq!(Model::Sgb.resolve_with(CGB_ONLY, None), GbMode::Super);
+    }
+
+    #[test]
+    fn both_super_game_boys_are_dmg_hardware_to_the_cartridge() {
+        for m in [GbMode::Classic, GbMode::Super, GbMode::Super2] {
+            assert!(m.is_dmg(), "{m:?}");
+        }
+        for m in [GbMode::Color, GbMode::ColorAsClassic] {
+            assert!(!m.is_dmg(), "{m:?}");
+        }
+        assert!(GbMode::Super.is_sgb() && GbMode::Super2.is_sgb());
+        assert!(!GbMode::Classic.is_sgb());
+    }
+
+    /// Save states carry the mode as a byte; every machine must survive the
+    /// round trip or a state loads as the wrong console.
+    #[test]
+    fn every_mode_round_trips_through_a_save_state() {
+        for m in [
+            GbMode::Classic,
+            GbMode::Color,
+            GbMode::ColorAsClassic,
+            GbMode::Super,
+            GbMode::Super2,
+        ] {
+            assert_eq!(GbMode::from_u8(m.to_u8()).unwrap(), m, "{m:?}");
+        }
+        assert!(GbMode::from_u8(5).is_err());
     }
 }
 
@@ -205,6 +297,8 @@ impl GbMode {
             GbMode::Classic => 0,
             GbMode::Color => 1,
             GbMode::ColorAsClassic => 2,
+            GbMode::Super => 3,
+            GbMode::Super2 => 4,
         }
     }
 
@@ -213,6 +307,8 @@ impl GbMode {
             0 => Ok(GbMode::Classic),
             1 => Ok(GbMode::Color),
             2 => Ok(GbMode::ColorAsClassic),
+            3 => Ok(GbMode::Super),
+            4 => Ok(GbMode::Super2),
             _ => Err(crate::savestate::StateError::BadField("GbMode")),
         }
     }

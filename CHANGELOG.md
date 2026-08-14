@@ -14,6 +14,23 @@ history. See [Credits & lineage](README.md#credits--lineage).
 ## [Unreleased]
 
 ### Added
+- **Super Game Boy support** (`src/sgb.rs`, `GB_MODEL=sgb` / `sgb2`) — the half of an SGB a
+  cartridge can actually observe: the ICD2 command-packet receiver on `$FF00`, `MLT_REQ`
+  multiplayer and the joypad index a game reads back, plus the SGB/SGB2 boot registers.
+  **All three published GB Emulator Shootout SGB rows now pass**, pixel-exact against the
+  shootout's own reference screenshots (`cpp/sgb-ext-test`,
+  `samesuite/sgb/command_mlt_req`, `..._1_incrementing`) — of the eighteen emulators in that
+  table only GSE passes all three; SameBoy passes one, bgb one, mGBA two. Mooneye
+  `acceptance/boot_regs-sgb` and `-sgb2` pass too (Mooneye 86 → 88 of 103, SameSuite
+  69 → 71 of 76, everything else unchanged). The **border, the SGB
+  palettes and SGB sound are a documented non-goal**: they live on the SNES side, a Game Boy
+  program cannot read them back, and no test ROM asserts them. `Model::Auto` never picks an
+  SGB — it is an explicit choice, as it is in the shootout's own manifest. See
+  [`docs/components/sgb.md`](docs/components/sgb.md).
+- **The shootout's `cpp` group is gated** (`examples/cpp_suite.rs`,
+  `testharness/cpp_baseline.txt`) — four published rows (three MBC3/RTC tests and
+  `sgb-ext-test`) judged against their author's reference screenshots by shade rank, that
+  nothing in CI was watching. **4/4.**
 - **A second PPU: the per-dot pixel FIFO** (`src/gpu/fifo.rs`), selected with `GB_PPU=accurate`,
   the `ppu` config key or `Gameboy::set_render_mode`, and shown in the terminal Status panel's
   `PPU` row. It runs the real pipeline — OAM scan one sprite per two dots, BG/window fetcher,
@@ -104,6 +121,13 @@ history. See [Credits & lineage](README.md#credits--lineage).
   [`docs/audio.md`](docs/audio.md) §6b.
 
 ### Fixed
+- **The DMG boot ROM's leftover Nintendo-logo tilemap is written** (`$9904`-`$990F`,
+  `$9924`-`$992F`, `$9910`). A ROM that draws on part of the screen and never clears the
+  tilemap renders its own tiles in rows 8 and 9 on hardware, and rendered nothing here — a
+  *whole-screen* difference under a screenshot-comparing suite, because with one shade fewer
+  on screen every white pixel ranks differently. It is why both SameSuite `sgb/` ROMs could
+  report their own verdict as `PASS` while failing the shootout's image compare, and it is a
+  boot-state gap rather than an SGB one.
 - **A channel-1 re-trigger no longer loses the note when a frequency sweep is running.**
   A trigger reloads the sweep unit's shadow register from the frequency registers, and that
   reload takes three M-cycles: for 12 T-cycles afterwards the sweep's overflow check reads

@@ -35,6 +35,11 @@ MEALYBUG_COMMIT=70e88fb90b59d19dfbb9c3ac36c64105202bb1f4
 # so we take the prebuilt copies vendored by the GB Emulator Shootout — which
 # is also the exact corpus our published 264-row score is measured on. A
 # blobless sparse checkout pulls ~76 ROMs, not the whole 18 MB repository.
+#
+# The same checkout brings the shootout's `cpp` group (CasualPokePlayer's four
+# ROMs: three MBC3/RTC tests and `sgb-ext-test`) with its reference
+# screenshots, because those four are published shootout rows that nothing here
+# was gating.
 SHOOTOUT_COMMIT=38b926bdbc26993d1b4c43e97979ecc66287bf02
 
 mkdir -p "$DEST"
@@ -69,16 +74,17 @@ if [ ! -d "$DEST/mealybug/expected" ]; then
         -d "$DEST/mealybug/build"
 fi
 
-# --- SameSuite -------------------------------------------------------------
-if [ ! -d "$DEST/samesuite/apu" ]; then
-    echo "fetching samesuite (shootout $SHOOTOUT_COMMIT)"
-    rm -rf "$DEST/shootout" "$DEST/samesuite"
+# --- SameSuite + the shootout's `cpp` group --------------------------------
+if [ ! -d "$DEST/samesuite/apu" ] || [ ! -d "$DEST/cpp" ]; then
+    echo "fetching samesuite + cpp (shootout $SHOOTOUT_COMMIT)"
+    rm -rf "$DEST/shootout" "$DEST/samesuite" "$DEST/cpp"
     git clone -q --filter=blob:none --no-checkout \
         https://github.com/gbdev/GBEmulatorShootout.git "$DEST/shootout"
     git -C "$DEST/shootout" sparse-checkout init --cone
-    git -C "$DEST/shootout" sparse-checkout set testroms/samesuite
+    git -C "$DEST/shootout" sparse-checkout set testroms/samesuite testroms/cpp
     git -C "$DEST/shootout" checkout -q "$SHOOTOUT_COMMIT"
     mv "$DEST/shootout/testroms/samesuite" "$DEST/samesuite"
+    mv "$DEST/shootout/testroms/cpp" "$DEST/cpp"
     rm -rf "$DEST/shootout"
 fi
 
@@ -86,3 +92,4 @@ echo "suites ready under $DEST:"
 echo "  mooneye     $(find "$DEST/mooneye" -name '*.gb' | wc -l) roms"
 echo "  mealybug    $(find "$DEST/mealybug/build" -name '*.gb' | wc -l) roms"
 echo "  samesuite   $(find "$DEST/samesuite" -name '*.gb' | wc -l) roms"
+echo "  cpp         $(find "$DEST/cpp" -name '*.gb' | wc -l) roms"

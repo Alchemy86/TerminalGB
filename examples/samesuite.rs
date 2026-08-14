@@ -28,6 +28,7 @@
 //! player, `Sound::do_cycle` returns immediately and the APU never advances.
 
 use gameboy::cpu::core::Cpu;
+use gameboy::mode::Model;
 use gameboy::sound::{AudioPlayer, CgbRevision};
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,10 @@ const BASELINE_HEADER: &str = "\
 # ships source only, so CI fetches the prebuilt copies vendored by
 # gbdev/GBEmulatorShootout at the commit pinned in tools/fetch-test-suites.sh
 # (that is also the corpus our published 264-row score is measured on).
+#
+# Every ROM runs on the console its own header names. Only the two `sgb/` tests
+# declare anything (SGB flag $0146 = $03) and they get a Super Game Boy, which
+# is what the shootout's own manifest gives them; everything else is Auto.
 #
 # CI is green when reality matches this file and red on ANY change, in either
 # direction — a row that starts PASSING is a change too. Re-bless deliberately:
@@ -104,7 +109,17 @@ fn revision_for(rom: &Path) -> CgbRevision {
 
 fn run(rom: &Path, frames: u32, dump: bool) -> (Verdict, Vec<u8>) {
     let data = std::fs::read(rom).unwrap_or_else(|e| panic!("{}: {e}", rom.display()));
-    let mut cpu = Cpu::new(data, Some(rom.to_path_buf()));
+    // Run each ROM on the console its own header asks for. The `sgb/` tests
+    // set the SGB flag ($0146 == 0x03) and measure the joypad port's SGB
+    // behaviour, so a DMG cannot pass them — the GB Emulator Shootout's own
+    // manifest gives them `model=SGB` for the same reason. Nothing else in the
+    // suite declares it, so nothing else changes console.
+    let model = if data.get(0x146) == Some(&0x03) {
+        Model::Sgb
+    } else {
+        Model::Auto
+    };
+    let mut cpu = Cpu::new_with_model(data, Some(rom.to_path_buf()), model);
     cpu.memory.enable_audio(Box::new(NullPlayer));
     if let Some(sound) = cpu.memory.sound.as_mut() {
         sound.set_cgb_revision(revision_for(rom));

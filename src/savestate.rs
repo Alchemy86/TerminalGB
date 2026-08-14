@@ -90,7 +90,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// check actually compares — the addend latched when the check was armed, and
 /// the post-trigger restart hold during which the shadow reads zero. Both can
 /// be live at a frame boundary (SameSuite `channel_1_sweep_restart_2`).
-pub const FORMAT_VERSION: u16 = 13;
+/// v14: the Super Game Boy arrived — a length-prefixed, present-flagged SGB
+/// block sits between the joypad and the PPU, carrying the ICD2's packet
+/// receiver and the multiplayer joypad index ([`crate::sgb`]). It is skippable
+/// like the APU block, so a state taken on an SGB still loads on a build that
+/// is not one, but its position in the stream moved every later block.
+pub const FORMAT_VERSION: u16 = 14;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -15,6 +15,10 @@
 # gbdev/GBEmulatorShootout at the commit pinned in tools/fetch-test-suites.sh
 # (that is also the corpus our published 264-row score is measured on).
 #
+# Every ROM runs on the console its own header names. Only the two `sgb/` tests
+# declare anything (SGB flag $0146 = $03) and they get a Super Game Boy, which
+# is what the shootout's own manifest gives them; everything else is Auto.
+#
 # CI is green when reality matches this file and red on ANY change, in either
 # direction — a row that starts PASSING is a change too. Re-bless deliberately:
 #
@@ -104,5 +108,5 @@ dma/gdma_addr_mask = PASS
 dma/hdma_lcd_off = PASS
 dma/hdma_mode0 = PASS
 ppu/blocking_bgpi_increase = PASS
-sgb/command_mlt_req = FAIL
-sgb/command_mlt_req_1_incrementing = FAIL
+sgb/command_mlt_req = PASS
+sgb/command_mlt_req_1_incrementing = PASS

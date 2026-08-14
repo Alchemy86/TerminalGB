@@ -106,8 +106,10 @@ lines per fix, not a process document.
   (sound is `None` headless). Timer stepping costs ~15% on a pure-CPU benchmark
   (headless still ~60× realtime). The **HALT bug IS modelled** now (`halt_bug` flag; PC
   rewind after the post-HALT fetch) → **Blargg `halt_bug` PASSES**.
-- Known-inaccurate **on purpose (documented non-goals — see component pages)**: PPU mode 3
-  fixed-length (needs a cycle-stepped PPU — it costs us Mealybug, **3/79** measured and gated,
+- Known-inaccurate **on purpose (documented non-goals — see component pages)**: the Super
+  Game Boy's **SNES side** — border, palettes and SGB sound (`docs/components/sgb.md`; the
+  ICD2 command channel a cartridge *can* read back **is** modelled and passes all three
+  published SGB rows); PPU mode 3 fixed-length (needs a cycle-stepped PPU — it costs us Mealybug, **3/79** measured and gated,
   see "Gating the EXTERNAL suites" below). *(The "CGB double-speed switch does not take effect" entry that
   used to sit here was a misdiagnosis and is gone — the switch was working; the APU was
   clocked at CPU speed, so a ROM that synchronises through the APU could not see it. See
@@ -467,6 +469,61 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   suites byte-identical before/after (Mooneye acceptance 55/75, SameSuite 61/76, Mealybug
   3 — measured on this branch's parent and again with the change).
 
+## Super Game Boy (`src/sgb.rs`) — the ICD2, and nothing else
+
+- **Full page: [`docs/components/sgb.md`](docs/components/sgb.md); conformance record in
+  `docs/conformance-notes.md`.** `Model::Sgb` / `Model::Sgb2` (`GB_MODEL=sgb|sgb2`) →
+  `GbMode::Super`/`Super2`. `GbMode::is_dmg()` is now what every "this is DMG hardware"
+  branch asks (PPU OAM-bug, undocumented CGB registers, boot counter, `P1` boot state, `STOP`
+  fill) — Classic **and** both SGBs, never `ColorAsClassic`.
+- **The audit called this "a new subsystem" and that was wrong.** All three published
+  shootout SGB references are plain 160×144 DMG-grey screens: no border, no palette, no SNES
+  side. Every one of the three tests measures the packet receiver on `$FF00` plus `MLT_REQ`,
+  because that is the **only** part of an SGB a Game Boy program can read back. ~300 lines.
+- **Border, SGB palettes and SGB sound are a documented non-goal**, and the reason is the
+  argument above, not laziness: they are one-way traffic to a screen the cartridge cannot
+  see. If they are ever wanted they are a *display* feature.
+- **`Model::Auto` must never pick an SGB.** The cartridge SGB flag (`$0146 == 0x03`) says the
+  game *offers* a border, not that the player owns the peripheral; auto-booting one would
+  change every SGB-enhanced game's boot registers (Pokémon R/B included) for no visible gain.
+  The suite runners select it the way the shootout's own manifest does: `samesuite.rs` from
+  the header flag, `mooneye_scout.rs` from the `-sgb`/`-sgb2` filename suffix.
+- **The four protocol rules the tests pin down** (prose docs are ambiguous on all four):
+  `$00` arms and aborts; a bare `$00` **not** followed by `$30` starts nothing; a bit is
+  latched on the write of `$30` and its value is **the last line held low** (`$20 → $10 → $30`
+  is a `1`); the command runs on the **last data bit**, not the stop bit, so a corrupt stop
+  cannot cancel it.
+- **`MLT_REQ 2` is THREE players, not four.** `player_count = (param & 3) + 1` with no
+  correction → mask 2 → the index alternates between players 1 and **3**. SameBoy's
+  `if (player_count == 3) player_count++;` is exactly why **SameBoy fails
+  `samesuite/sgb/command_mlt_req`**. Only GSE passes all three SGB rows among the 18 published
+  emulators. Do not "fix" our version to match SameBoy.
+- **The index advances on the rising edge of P15 and on nothing else** (so `$10 → $30` moves
+  it, `$20 → $30` does not), masked with `player_count - 1` every step; and **applying
+  `MLT_REQ` advances it `player_count` more times** — invisible for 1/2/4 players, and the
+  entire point for the illegal 3.
+- **The model was derived, not guessed.** 59 ground-truth constraints (24 + 8 expected bytes
+  from the two SameSuite ROMs' own `CorrectResults` tables, 27 player counts decoded out of
+  `sgb-ext-test`'s reference PNG) and the rules above are the only model that satisfies all
+  59. If you change any rule here, re-check it against all three ROMs, not one.
+- `savestate::FORMAT_VERSION` is **12**: a length-prefixed, present-flagged SGB block sits
+  between the joypad and the PPU. Plugin-style skippable, so an SGB state loads on a DMG build.
+
+## Boot state: the DMG boot ROM leaves a tilemap behind
+
+- **`MemoryManagementUnit::set_boot_logo_tilemap`** writes `$01`-`$0C` to `$9904`-`$990F`,
+  `$0D`-`$18` to `$9924`-`$992F` and `$19` (®) to `$9910`, for every DMG-class machine,
+  **before** `LCDC` is enabled so the write cannot land in a blocked PPU mode.
+- **Why it matters far more than it sounds.** A ROM that draws on part of the screen and
+  never clears the tilemap renders its *own* tiles in rows 8 and 9 on hardware. We rendered
+  blanks. Under a shade-rank image compare that is a **whole-screen** mismatch, because one
+  shade fewer on screen re-ranks every white pixel. Both SameSuite `sgb/` ROMs reported their
+  own verdict as PASS while failing the shootout's screenshot compare for this reason alone.
+- The tile **pixels** are still not written (on hardware they are the logo decompressed out of
+  the cartridge header, and every ROM has replaced them by the time anything looks). Pinned by
+  `the_boot_rom_leaves_its_logo_in_the_tilemap`. **Two verdict methods disagreeing is the
+  finding** — if a ROM's own report and an image compare differ, do not pick the flattering one.
+
 ## Test-ROM correctness harness
 
 - **Runner:** `testharness/testroms.rs`, a `harness = false` Cargo integration test
@@ -558,7 +615,12 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   frame), never a hash of our output; **any change is red in either direction** — a row that
   starts *passing* is a baseline change too; re-bless deliberately with
   `UPDATE_EXTERNAL_BASELINE=1 make test-external`. Shared gating code:
-  `examples/support/suite_baseline.rs`, included by all three scouts with `#[path]`.
+  `examples/support/suite_baseline.rs`, included by every scout with `#[path]`.
+- **A fifth group: the shootout's `cpp`** (`examples/cpp_suite.rs`,
+  `testharness/cpp_baseline.txt`, **4/4**) — CasualPokePlayer's three MBC3/RTC tests and
+  `sgb-ext-test`, judged against *his* reference screenshots by shade rank. Four published
+  shootout rows that nothing was watching; the same shootout sparse checkout that brings
+  SameSuite brings them, so it costs no extra fetch.
 - **The Mealybug baseline pins the PIXEL COUNT, not just PASS/FAIL.** At 3/79 a PASS/FAIL file
   is a flat wall that cannot show a cycle-stepped-PPU rewrite getting closer, so each row
   records *how many of the 23040 pixels differ*. Consequence the PPU crew must expect: **any**

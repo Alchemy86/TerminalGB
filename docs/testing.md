@@ -332,16 +332,16 @@ checked in and never actually compared.
 "We pass Blargg" is true and is a narrow slice. The wider community suites are scored — and,
 since 2026-08-14, **gated** — separately; see the next section for the measured figures.
 
-## Gating the external suites — Mooneye GB, SameSuite, Mealybug Tearoom
+## Gating the external suites — Mooneye GB, SameSuite, Mealybug Tearoom, `cpp`
 
-Everything above is the *in-repo* harness. The three big community suites are 266 further
+Everything above is the *in-repo* harness. The community suites are 270 further
 rows, and until now **nothing in CI looked at any of them**: every point they measure was
 protected only by somebody remembering to re-run a scout by hand. A night that gained +96
 rows could have lost them again silently, and a cycle-stepped-PPU rewrite would have had no
 way to show either its progress or its regressions.
 
 ```text
-make test-external           # fetches the suites if needed, then gates all four groups
+make test-external           # fetches the suites if needed, then gates all five groups
 make test-external-accurate  # the two PPU suites again, on the OTHER rendering engine
 make fetch-test-suites       # just the download (~20 s, cached in target/test-suites)
 ```
@@ -365,6 +365,9 @@ Makefile and a laptop all measure the same bytes: Mooneye from Gekkio's own preb
 his hardware-photographed reference PNGs), SameSuite from the copies vendored by the GB
 Emulator Shootout at a pinned commit — LIJI32 ships source only and there is no upstream
 binary release, and that is also the exact corpus our published 264-row score is measured on.
+That same shootout checkout brings the **`cpp`** group — CasualPokePlayer's four ROMs (three
+MBC3/RTC tests and `sgb-ext-test`) with his reference screenshots — because those are four
+published shootout rows that nothing here was gating.
 
 **What is checked in is the expectations**, one file per group, under the same rules as
 [`testharness/baseline.txt`](../testharness/baseline.txt): every value is the ROM's *own*
@@ -374,17 +377,24 @@ that starts passing is a baseline change too); re-blessing is deliberate
 
 | group | file | rows | measured 2026-08-14 |
 |---|---|---:|---|
-| Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **86 pass** — acceptance **58/75**, `emulator-only` **28/28** |
+| Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **88 pass** — acceptance **60/75**, `emulator-only` **28/28** |
 | Mooneye `misc` (`GB_MODEL=cgb`) | `testharness/mooneye_cgb_baseline.txt` | 8 | **4 pass** |
-| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **68 pass** |
+| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **71 pass** |
 | Mealybug Tearoom | `testharness/mealybug_baseline.txt` | 79 | **3 pixel-exact** (DMG 1/24, CGB-C 1/31, CGB-D 1/24) |
+| shootout `cpp` | `testharness/cpp_baseline.txt` | 4 | **4 pixel-exact** |
 
 Notes worth having before you read a red build:
 
+* **Every ROM runs on the console it names.** Mooneye names each ROM after the machines it
+  is written for, so `mooneye_scout` boots the one each names where we have it: `-sgb` and
+  `-sgb2` get a Super Game Boy ([`components/sgb.md`](components/sgb.md)) and pass. The two
+  SameSuite `sgb/` tests set the cartridge SGB flag (`$0146 == 0x03`) and get one too, which
+  is what the shootout's own manifest gives them. `Model::Auto` never picks an SGB by itself.
 * **Mooneye's 66-row denominator excludes nine ROMs**, and so should any comparison against
   other emulators: `acceptance` ships `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` variants for
-  machines this emulator does not model. They are pinned FAIL on purpose. On the community's
-  66 rows we are **58/66**.
+  named machines. Seven of them — the SNES-side `-S` ROMs, an original MGB, a revision-0
+  DMG — are still machines this emulator does not model and are pinned FAIL on purpose. On
+  the community's 66 rows we are **58/66**.
 * **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At 3/79 the count is
   the only number that can show a PPU rewrite making progress instead of a flat wall of red —
   so an intermediate PPU change *will* turn that file red. Read the diff, then re-bless with

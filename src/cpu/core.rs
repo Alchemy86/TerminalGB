@@ -295,7 +295,7 @@ impl Cpu<'_> {
     fn enter_stop_mode(&mut self) {
         self.stop = Self::STOP_MODE;
         self.memory.reset_div();
-        let fill = if self.memory.gbmode == crate::mode::GbMode::Classic {
+        let fill = if self.memory.gbmode.is_dmg() {
             Some(255)
         } else if self.memory.gpu.mode() == 3 {
             None

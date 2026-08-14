@@ -99,6 +99,10 @@ pub struct MemoryManagementUnit<'a> {
     /// OAM DMA ($FF46) — a timed 160 M-cycle transfer, see [`oamdma`].
     oam_dma: OamDma,
     pub keypad: Keypad,
+    /// The Super Game Boy's ICD2, listening on `$FF00`. `None` on every other
+    /// console — see [`crate::sgb`] for what it does and what it deliberately
+    /// does not.
+    pub sgb: Option<crate::sgb::Sgb>,
     /// Scheduled button presses from outside the machine — see
     /// [`crate::input::InputQueue`]. Empty unless something is driving the
     /// game programmatically, and **not** part of a save state.
@@ -199,6 +203,7 @@ impl<'a> MemoryManagementUnit<'a> {
             timer: Timer::default(),
             oam_dma: OamDma::new(),
             keypad: Keypad::default(),
+            sgb: None,
             input_queue: InputQueue::default(),
             gpu: Gpu::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -286,21 +291,26 @@ impl<'a> MemoryManagementUnit<'a> {
         // The system counter is running long before the cartridge sees its
         // first instruction. `$ABCC`/`$2674` are the values a CPU read observes
         // on the first M-cycle — see `Timer::set_boot_counter`.
-        self.timer.set_boot_counter(match self.gbmode {
-            GbMode::Classic => DMG_BOOT_SYSTEM_COUNTER,
-            _ => CGB_BOOT_SYSTEM_COUNTER,
+        self.timer.set_boot_counter(if self.gbmode.is_dmg() {
+            DMG_BOOT_SYSTEM_COUNTER
+        } else {
+            CGB_BOOT_SYSTEM_COUNTER
         });
         // The boot ROM ran through at least one VBlank, so its flag is still
         // pending. `IE` is 0, so nothing is dispatched until the game asks.
         self.intf = 0x01;
         // `P1`: the DMG boot ROM leaves both select lines pulled low (`$CF`);
         // the CGB boot ROM leaves them released (`$FF`).
-        if self.gbmode == GbMode::Classic {
+        if self.gbmode.is_dmg() {
             self.keypad.wb(0x00);
         }
         self.wb(0xFF05, 0);
         self.wb(0xFF06, 0);
         self.wb(0xFF07, 0);
+        // Before the LCD comes on, so the write cannot land in a blocked mode.
+        if self.gbmode.is_dmg() {
+            self.set_boot_logo_tilemap();
+        }
         self.wb(0xFF40, 0x91);
         self.wb(0xFF42, 0);
         self.wb(0xFF43, 0);
@@ -323,9 +333,62 @@ impl<'a> MemoryManagementUnit<'a> {
 
     /// Commit the resolved hardware mode. The PPU keeps its own copy (it reads
     /// it per scanline), so the two must be set together.
+    /// `$FF00`. On a Super Game Boy running a multiplayer game the low nibble
+    /// answers two different questions depending on the select lines: with both
+    /// released it reports **which player** is next
+    /// ([`crate::sgb::Sgb::player_nibble`]), and with a row selected it reports
+    /// that player's buttons — of which only player 1's exist here, so the
+    /// other ports read as nothing pressed, exactly as a port with no pad
+    /// plugged in does.
+    fn joypad_read(&self) -> u8 {
+        let raw = self.keypad.rb();
+        let Some(sgb) = self.sgb.as_ref() else {
+            return raw;
+        };
+        match sgb.player_nibble() {
+            // Both lines released: the player index, not the buttons.
+            Some(nibble) if raw & 0x30 == 0x30 => (raw & 0xF0) | nibble,
+            // A row is selected and this is not player 1's pad.
+            _ if sgb.player_index() != 0 => raw | 0x0F,
+            _ => raw,
+        }
+    }
+
+    /// The DMG boot ROM's last act before `PC=$0100` is to scroll the Nintendo
+    /// logo into place, and it leaves the **tilemap** entries behind: `$01`-`$0C`
+    /// across `$9904`-`$990F`, `$0D`-`$18` across `$9924`-`$992F`, and `$19`
+    /// (the ® glyph) at `$9910`. Nothing clears them, so a game that loads its
+    /// own tiles over ids `$01`-`$19` and never touches the map still shows
+    /// *something* in those two rows.
+    ///
+    /// That is not a curiosity: it is visible in the reference screenshots the
+    /// GB Emulator Shootout compares against. SameSuite's `sgb/` tests write
+    /// only their results table and leave rows 8 and 9 alone, so on hardware
+    /// they render as the test ROM's own hex font and on a machine that booted
+    /// with a blank tilemap they are empty — a whole-screen difference that has
+    /// nothing to do with what the test measures.
+    ///
+    /// The tile *pixels* are not written. On hardware they are the logo the
+    /// boot ROM decompressed out of the cartridge header, and every ROM that
+    /// reaches this state has already replaced them by the time anything looks;
+    /// the map entries are the part that survives.
+    fn set_boot_logo_tilemap(&mut self) {
+        for (i, addr) in (0x9904u16..=0x990F).enumerate() {
+            self.wb(addr, 0x01 + i as u8);
+        }
+        for (i, addr) in (0x9924u16..=0x992F).enumerate() {
+            self.wb(addr, 0x0D + i as u8);
+        }
+        self.wb(0x9910, 0x19);
+    }
+
     fn set_mode(&mut self, mode: GbMode) {
         self.gbmode = mode;
         self.gpu.gbmode = mode;
+        // The ICD2 exists only on an SGB, so a machine that is not one pays
+        // nothing: `Option::is_some` on the `$FF00` path and no state to
+        // serialise.
+        self.sgb = mode.is_sgb().then(crate::sgb::Sgb::new);
     }
 
     /// Advance the timer by exactly one M-cycle for a single CPU memory access,
@@ -529,6 +592,18 @@ impl<'a> MemoryManagementUnit<'a> {
         self.timer.save_state(w);
         self.oam_dma.save_state(w);
         self.keypad.save_state(w);
+        // SGB block (present flag + payload), length-prefixed and skippable so
+        // a state taken on a Super Game Boy can still be read by a build that
+        // is not one.
+        let mut sgb = crate::savestate::Writer::new();
+        match &self.sgb {
+            Some(icd) => {
+                sgb.bool(true);
+                icd.save_state(&mut sgb);
+            }
+            None => sgb.bool(false),
+        }
+        w.blob(&sgb.buf);
         self.gpu.save_state(w);
 
         // APU block (present flag + payload), length-prefixed & skippable.
@@ -580,6 +655,15 @@ impl<'a> MemoryManagementUnit<'a> {
         self.timer.load_state(r)?;
         self.oam_dma.load_state(r)?;
         self.keypad.load_state(r)?;
+        // SGB block. Only parsed when this machine is a Super Game Boy; the
+        // length prefix means a DMG build skips it whole.
+        let sgb = r.blob()?;
+        let mut sr = crate::savestate::Reader::new(&sgb);
+        if sr.bool()? {
+            if let Some(icd) = self.sgb.as_mut() {
+                icd.load_state(&mut sr)?;
+            }
+        }
         self.gpu.load_state(r)?;
 
         // APU block. Parse only if this build has a Sound instance to restore
@@ -739,7 +823,7 @@ impl<'a> MemoryManagementUnit<'a> {
                     self.gpu.rb(address)
                 }
             }
-            0xFF00 => self.keypad.rb(),
+            0xFF00 => self.joypad_read(),
             0xFF01..=0xFF02 => self.serial.rb(address),
             0xFF04..=0xFF07 => self.timer.rb(address),
             // IF: only 5 interrupt bits exist; the unused top 3 always read 1
@@ -765,7 +849,7 @@ impl<'a> MemoryManagementUnit<'a> {
             {
                 0xFF
             }
-            0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode == GbMode::Classic => 0xFF,
+            0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode.is_dmg() => 0xFF,
             0xFF4D => {
                 0b01111110
                     | (if self.gbspeed == GbSpeed::Double {
@@ -907,7 +991,15 @@ impl<'a> MemoryManagementUnit<'a> {
                     self.gpu.wb(address, value)
                 }
             }
-            0xFF00 => self.keypad.wb(value),
+            0xFF00 => {
+                self.keypad.wb(value);
+                // The SGB's ICD2 sees every write to the select lines, whatever
+                // the write was for — a packet bit and a joypad poll are the
+                // same two wires.
+                if let Some(sgb) = self.sgb.as_mut() {
+                    sgb.write(value);
+                }
+            }
             0xFF01..=0xFF02 => self.serial.wb(address, value),
             0xFF04..=0xFF07 => {
                 // A DIV reset is also an APU event: the frame sequencer is
@@ -936,7 +1028,7 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF46 => self.oam_dma.request(value),
             0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF6C | 0xFF70 | 0xFF76..=0xFF77
                 if self.gbmode != GbMode::Color => {}
-            0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode == GbMode::Classic => {}
+            0xFF72..=0xFF73 | 0xFF75..=0xFF77 if self.gbmode.is_dmg() => {}
             // KEY1 bit 0 is a request, not a trigger: `STOP` performs the
             // switch. Writing 0 back withdraws it (only bit 0 is writable).
             0xFF4D => self.speed_switch_req = value & 0x1 == 0x1,
@@ -1601,6 +1693,70 @@ mod boot_state_tests {
             assert_eq!(mem.rb(a), want, "${a:04X}");
         }
         assert_eq!(mem.rb(0xFF04), 0x26);
+    }
+
+    /// The boot ROM leaves the Nintendo logo's **tilemap** entries behind, and
+    /// they are still on screen when a game that never clears the map draws its
+    /// first frame — which is exactly what the GB Emulator Shootout's reference
+    /// screenshots for SameSuite's `sgb/` tests show.
+    #[test]
+    fn the_boot_rom_leaves_its_logo_in_the_tilemap() {
+        let mut mem = machine(crate::mode::Model::Dmg);
+        for (i, addr) in (0x9904u16..=0x990F).enumerate() {
+            assert_eq!(mem.rb(addr), 0x01 + i as u8, "${addr:04X}");
+        }
+        for (i, addr) in (0x9924u16..=0x992F).enumerate() {
+            assert_eq!(mem.rb(addr), 0x0D + i as u8, "${addr:04X}");
+        }
+        assert_eq!(mem.rb(0x9910), 0x19, "the ® tile");
+        // Everything around it is untouched.
+        assert_eq!(mem.rb(0x9903), 0x00);
+        assert_eq!(mem.rb(0x9911), 0x00);
+        assert_eq!(mem.rb(0x9944), 0x00);
+
+        // A Super Game Boy is DMG hardware and boots the same way.
+        let mut sgb = machine(crate::mode::Model::Sgb);
+        assert_eq!(sgb.rb(0x9904), 0x01);
+
+        // The Color boot ROM draws the logo differently and this is not a
+        // claim about it; it is left as it was.
+        let mut cgb = machine(crate::mode::Model::Cgb);
+        assert_eq!(cgb.rb(0x9904), 0x00);
+    }
+
+    /// A Super Game Boy answers `$FF00` with a player index once a game has
+    /// asked for multiplayer, and that has to survive the trip through the MMU
+    /// — the joypad and the ICD2 share the register.
+    #[test]
+    fn a_super_game_boy_reports_the_player_through_the_joypad_register() {
+        let mut mem = machine(crate::mode::Model::Sgb);
+        assert!(mem.sgb.is_some(), "an SGB has an ICD2");
+        assert_eq!(mem.rb(0xFF00) & 0x0F, 0x0F, "one player until asked");
+
+        // MLT_REQ 1 = two players, sent as the pulse sequence a game uses.
+        let mut packet = [0u8; 16];
+        packet[0] = (0x11 << 3) | 1;
+        packet[1] = 0x01;
+        let mut writes = vec![0x00u8, 0x30];
+        for b in packet {
+            for i in 0..8 {
+                writes.push(if b >> i & 1 == 1 { 0x10 } else { 0x20 });
+                writes.push(0x30);
+            }
+        }
+        writes.extend_from_slice(&[0x20, 0x30]);
+        for w in writes {
+            mem.wb(0xFF00, w);
+        }
+        assert_eq!(mem.rb(0xFF00) & 0x0F, 0x0F, "player 1");
+        mem.wb(0xFF00, 0x10);
+        mem.wb(0xFF00, 0x30);
+        assert_eq!(mem.rb(0xFF00) & 0x0F, 0x0E, "player 2");
+
+        // A DMG has no ICD2, so the same pulses mean nothing.
+        let mut dmg = machine(crate::mode::Model::Dmg);
+        assert!(dmg.sgb.is_none());
+        assert_eq!(dmg.rb(0xFF00) & 0x0F, 0x0F);
     }
 
     /// The counter is not merely "`DIV` reads `$AB`": `boot_div` pins its low

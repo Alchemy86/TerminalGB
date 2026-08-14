@@ -825,7 +825,7 @@ consume the same stream. Full guide, measured costs, platform limits and the cap
 | Web (WASM) | 🟡 Video + input work; **no audio yet** |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
 
-**Console model — DMG or Game Boy Color**
+**Console model — DMG, Game Boy Color, or Super Game Boy**
 
 The emulator picks the console from the cartridge header: a cartridge whose CGB flag
 (`0x0143` bit 7) is set boots a **Game Boy Color**, anything else boots an original
@@ -833,9 +833,21 @@ The emulator picks the console from the cartridge header: a cartridge whose CGB 
 `GB_MODEL` environment variable, which every frontend honours:
 
 ```bash
-GB_MODEL=dmg cargo run --release --example desktop -- game.gbc   # force an original Game Boy
-GB_MODEL=cgb cargo run --release --example desktop -- game.gb    # force the Color's DMG-compat mode
+GB_MODEL=dmg  cargo run --release --example desktop -- game.gbc  # force an original Game Boy
+GB_MODEL=cgb  cargo run --release --example desktop -- game.gb   # force the Color's DMG-compat mode
+GB_MODEL=sgb  cargo run --release --example desktop -- game.gb   # a Super Game Boy (sgb2 also works)
 ```
+
+A **Super Game Boy** is never chosen automatically. A cartridge's SGB flag (`0x0146 == 0x03`)
+says the game *offers* a border and a palette, not that you own the peripheral — and this
+emulator shows the 160×144 Game Boy screen, so booting one on that hint would change the
+game's boot registers and give it none of the display it asked for. What `GB_MODEL=sgb` does
+give you is the real machine underneath: the SGB boot registers and the **ICD2 command
+channel on `$FF00`**, so `MLT_REQ` multiplayer works and a game can read back which player it
+is talking to. **The border, the SGB palettes and SGB sound are a documented non-goal** —
+they live on the SNES side, a Game Boy program cannot observe them, and no test ROM asserts
+them. Full reasoning, the packet protocol and the three published conformance rows it passes:
+[`docs/components/sgb.md`](docs/components/sgb.md).
 
 This matters more than it sounds. Before this existed *everything* booted a Color, so a
 DMG-only game always ran in the Color's compatibility mode — a different machine, with

@@ -17,6 +17,139 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-14 — the Super Game Boy: a joypad port that is also a command channel
+
+Not a fix to an existing subsystem — a subsystem that was not there. Three of
+the GB Emulator Shootout's 264 published rows are SGB tests and all three were
+red; the audit that commissioned this work rated it lowest priority and
+recommended declaring SGB out of scope, on the grounds that it is "a new
+subsystem" and that bgb fails two of the three as well.
+
+**The audit's size estimate was wrong, and the reason is worth recording**: all
+three reference screenshots are plain 160×144 DMG-grey screens. No border, no
+SGB palette, no SNES side is involved in any of them. Every one of the three
+tests measures the same thing — the command-packet receiver on `$FF00` and the
+`MLT_REQ` multiplayer joypad index — because that is the *only* part of an SGB a
+Game Boy program can read back. Everything else an SGB does (border, palettes,
+sound) is one-way traffic to a screen the cartridge cannot see, so no test ROM
+can assert it. The whole of it is one 300-line file.
+
+### 1. No SGB machine at all
+
+**Symptom.** A game that sends `MLT_REQ` and then reads `$FF00` to find out
+which player it is talking to always sees player 1. On an SGB with two or four
+controllers, every player after the first is invisible: a two-player game reads
+player 1's buttons for both.
+
+**Caught by.** `samesuite/sgb/command_mlt_req`,
+`samesuite/sgb/command_mlt_req_1_incrementing` (the ROM's own `RESULT_CODE` at
+`$CFFE`), `cpp/sgb-ext-test` (its author's reference screenshot), and Mooneye
+`acceptance/boot_regs-sgb` / `-sgb2`. All five now pass and are gated by
+`make test-external`.
+
+**Hardware behaviour.** Pan Docs, ["SGB Command Packet
+Transfer"](https://gbdev.io/pandocs/SGB_Command_Packet_Transfer.html) and
+["Multiplayer"](https://gbdev.io/pandocs/SGB_Command_MLT_REQ.html). A packet is
+16 bytes sent LSB-first by pulsing `P14`/`P15`; `MLT_REQ` sets how many
+controllers the SNES side polls, and the joypad register reports `$F - index`
+in its low nibble whenever both select lines are released.
+
+**Carries into the tool.** Full write-up in
+[`docs/components/sgb.md`](components/sgb.md). Three protocol rules that the
+prose documentation leaves ambiguous and the test ROMs settle, each a check in
+its own right:
+
+* *A bare `$00` starts nothing.* The opening `$00` must be acknowledged by a
+  `$30` before any pulse is read as a bit — `sgb-ext-test`'s
+  `SendPacketShortStart` sends a packet without that acknowledgement and expects
+  it to be ignored entirely.
+* *The bit is the last line held low.* `$20 → $10 → $30` transmits a `1` and
+  `$10 → $20 → $30` transmits a `0`; an implementation that latches on the
+  *first* falling edge gets both backwards. `sgb-ext-test` sends exactly these
+  two sequences for the same bit position to separate the rules.
+* *The command runs on the last bit, not on the stop bit.* `SendPacketCorruptStop`
+  terminates a packet with a `1` where the stop bit should be a `0` and still
+  expects the command to have taken effect.
+
+### 2. `MLT_REQ 2` is three players, not four — and SameBoy gets this wrong
+
+**Symptom.** A game that sends the illegal two-player-code `2` sees the joypad
+alternate between player 1 and player **3** rather than cycling 1-2-3-4 or
+staying on 1. Nothing ships that does it deliberately, but it is a precise probe
+of how the SNES side computes its mask, and it is where implementations diverge.
+
+**Caught by.** `samesuite/sgb/command_mlt_req`. This is the row **SameBoy
+fails** — `Core/sgb.c` has `if (player_count == 3) player_count++;`, rounding the
+illegal request up to four players, and that one line is the whole difference.
+Of the eighteen emulators in the published shootout only GSE passes all three
+SGB rows; SameBoy passes one, bgb one, mGBA two, and six decline the SGB model
+entirely.
+
+**Hardware behaviour.** `player_count = (param & 3) + 1` with no correction, so
+the index is masked with `player_count - 1 = 2` and can only be 0 or 2. Applying
+the command then advances the index `player_count` further times — a whole
+number of turns for 1, 2 and 4 players and therefore invisible, but not for 3,
+which is precisely what sixteen of `command_mlt_req`'s twenty-four samples
+measure. (Physically: the SNES polls every controller it now believes is
+attached.)
+
+**Carries into the tool.** *"An illegal `MLT_REQ` parameter must not be
+normalised."* Also the index rule it depends on: the index advances on the
+**rising edge of P15** and on nothing else, so `$10 → $30` moves it and
+`$20 → $30` does not — `command_mlt_req_1_incrementing` is eight pulse patterns
+that test only this, and it is the cheapest single check of the three.
+
+### 3. The boot ROM's leftover tilemap — a whole-screen difference, and not an SGB bug
+
+**Symptom.** Any ROM that draws on part of the screen and never clears the
+tilemap shows blank cells in tile rows 8 and 9 where hardware shows *something*.
+Under a screenshot-comparing suite that is not a small difference: with two
+shades on screen instead of three, **every white pixel ranks differently**, so
+the whole frame mismatches over two rows of glyphs.
+
+**Caught by.** Nothing here, before this. Both SameSuite `sgb/` ROMs pass on
+their own `RESULT_CODE` while failing the shootout's image compare for this
+reason alone, and the two verdicts disagreeing is exactly the kind of thing a
+project that scores itself by one method never notices. The `cpp` group's four
+ROMs are now run against their reference PNGs by
+[`examples/cpp_suite.rs`](../examples/cpp_suite.rs), which is what made it
+visible.
+
+**Hardware behaviour.** The DMG boot ROM's last act is to scroll the Nintendo
+logo into place, and it leaves the tilemap entries behind: `$01`-`$0C` across
+`$9904`-`$990F`, `$0D`-`$18` across `$9924`-`$992F`, and `$19` (the ® glyph) at
+`$9910`. Nothing clears them, so a game that loads its own tiles over those ids
+and never touches the map renders its own glyphs there. This emulator runs no
+boot ROM (they are copyrighted and cannot be shipped), so every byte of that
+state has to be written by hand in `MemoryManagementUnit::set_initial` — and
+this part of it was missing. The tile *pixels* are still not written: on
+hardware they are the logo decompressed out of the cartridge header, and every
+ROM that reaches `$0100` has replaced them long before anything looks.
+
+**Carries into the tool.** *"Post-boot VRAM is not zero."* A conformance tool
+comparing frames should say so explicitly, because the failure it produces looks
+like a rendering bug and is not one. Pinned here by
+`the_boot_rom_leaves_its_logo_in_the_tilemap`.
+
+### Measured
+
+Before and after on the same ROMs, same commands, no estimates:
+
+| suite | before (`main` @ `fba9d73`) | after |
+|---|---:|---:|
+| Mooneye `acceptance` + `emulator-only` | 86 / 103 | **88 / 103** |
+| Mooneye `misc` (CGB) | 4 / 8 | 4 / 8 |
+| SameSuite | 69 / 76 | **71 / 76** |
+| Mealybug Tearoom | 3 / 79 | 3 / 79 |
+| shootout `cpp` group | *not gated* | **4 / 4** |
+
+All three published SGB rows are pixel-exact against the shootout's own
+reference screenshots (0 of 23,040 pixels differ on each). No row moved in any
+other direction; `testroms`, `savestate`, `battery` and `audiocapture` are
+unchanged.
+
+---
+
 ## 2026-08-14 — 266 external rows were measured by hand and gated by nothing
 
 Not a bug fix, and it is here because the standing convention's second point —

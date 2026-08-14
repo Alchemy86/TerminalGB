@@ -1,0 +1,22 @@
+# `cpp` baseline — the EXPECTED verdict of each of CasualPokePlayer's four
+# shootout ROMs, judged against **his** reference screenshot by shade rank.
+# Nothing here is a hash of our output.
+#
+# The ROMs are NOT vendored. CI fetches them from gbdev/GBEmulatorShootout at
+# the commit pinned in tools/fetch-test-suites.sh — the same corpus the
+# published 264-row score is measured on.
+#
+# `sgb-ext-test` runs on a Super Game Boy (its header sets $0146 = $03); the
+# other three run on a DMG. The `diff=` figure is how many of the 23,040 pixels
+# disagree with the reference, so a partial regression is visible rather than
+# just PASS -> FAIL.
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+
+latch-rtc-test = PASS | diff=0
+ramg-mbc3-test = PASS | diff=0
+rtc-invalid-banks-test = PASS | diff=0
+sgb-ext-test = PASS | diff=0

@@ -18,8 +18,8 @@
 ## The components
 
 The list below is derived from the code (`src/cpu`, `src/gpu`, `src/mmu`, `src/mbc`,
-`src/sound.rs`, `src/mmu/timer.rs`, `src/mmu/serial.rs`, `src/input.rs`, and the
-frontends), split where the hardware is genuinely distinct — Timer and Serial get their own
+`src/sound.rs`, `src/mmu/timer.rs`, `src/mmu/serial.rs`, `src/input.rs`, `src/sgb.rs`, and
+the frontends), split where the hardware is genuinely distinct — Timer and Serial get their own
 pages because they are separate chips with their own registers, quirks, and test suites,
 even though they live under `src/mmu/`.
 
@@ -33,6 +33,7 @@ even though they live under `src/mmu/`.
 | **[Timer & Divider](timer.md)** | [`src/mmu/timer.rs`](../../src/mmu/timer.rs) | `DIV`/`TIMA`/`TMA`/`TAC` — the programmable interrupt heartbeat. |
 | **[Serial](serial.md)** | [`src/mmu/serial.rs`](../../src/mmu/serial.rs) | The link cable — **and the channel Blargg test ROMs report results through.** |
 | **[Joypad (Input)](input.md)** | [`src/input.rs`](../../src/input.rs) | The 2×4 button matrix at `0xFF00` and the joypad interrupt. |
+| **[Super Game Boy](sgb.md)** | [`src/sgb.rs`](../../src/sgb.rs) | The ICD2 command channel on `0xFF00` — packet protocol and `MLT_REQ` multiplayer. *Border and palettes are a documented non-goal.* |
 | **[Frontends](frontends.md)** | [`src/screen/`](../../src/screen), [`examples/`](../../examples), [`web/`](../../web) | Desktop (OpenGL), terminal (ratatui), web (canvas), and the C/Go FFI. |
 
 ## How they fit together

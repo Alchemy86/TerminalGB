@@ -21,6 +21,7 @@
 //!        the register it disagreed about, which the Fibonacci dump cannot.
 
 use gameboy::cpu::core::Cpu;
+use gameboy::mode::Model;
 use gameboy::sound::AudioPlayer;
 use std::path::{Path, PathBuf};
 
@@ -44,10 +45,12 @@ const BASELINE_HEADER: &str = "\
 #
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 #
-# The nine `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` rows in `acceptance` are
-# ROMs for machines this emulator does not model (SGB, an original MGB, a
-# revision-0 DMG). They are pinned FAIL on purpose: they are not evidence of a
-# bug, and the community's 66-row denominator excludes them.
+# The `-S`, `-sgb`, `-sgb2`, `-mgb` and `-dmg0` rows in `acceptance` are ROMs
+# for a *named machine*, and this runner boots the one each names where it can:
+# `-sgb`/`-sgb2` get a Super Game Boy (see src/sgb.rs) and pass. The remaining
+# seven name machines still not modelled here — the SGB's SNES side (`-S`), an
+# original MGB, a revision-0 DMG — and are pinned FAIL on purpose: they are not
+# evidence of a bug, and the community's 66-row denominator excludes them.
 #
 ";
 
@@ -106,12 +109,28 @@ fn screen_text(cpu: &mut Cpu<'static>) -> String {
     lines.join("\n")
 }
 
+/// Mooneye names each ROM after the machines it is written for, and a ROM for
+/// one machine cannot pass on another — `boot_regs-sgb` asserts the Super Game
+/// Boy's boot registers and is *expected* to fail on a DMG. Where this
+/// emulator has the machine, run it: the `-sgb` and `-sgb2` suffixes select a
+/// Super Game Boy. Everything else keeps whatever the caller asked for, which
+/// is `$GB_MODEL` or [`Model::Auto`] — the `-S`, `-mgb` and `-dmg0` ROMs name
+/// machines this emulator still does not model, and they stay red on purpose.
+fn model_for(rom: &Path) -> Model {
+    let name = rom.file_stem().unwrap_or_default().to_string_lossy();
+    match name.rsplit('-').next() {
+        Some("sgb") => Model::Sgb,
+        Some("sgb2") => Model::Sgb2,
+        _ => Model::from_env().unwrap_or_default(),
+    }
+}
+
 fn run(rom: &Path) -> (Verdict, String) {
     let data = match std::fs::read(rom) {
         Ok(d) => d,
         Err(e) => return (Verdict::Timeout, format!("read error: {e}")),
     };
-    let mut cpu = Cpu::new(data, Some(rom.to_path_buf()));
+    let mut cpu = Cpu::new_with_model(data, Some(rom.to_path_buf()), model_for(rom));
     cpu.memory.enable_audio(Box::new(NullPlayer));
 
     let mut budget: u64 = 400_000_000;

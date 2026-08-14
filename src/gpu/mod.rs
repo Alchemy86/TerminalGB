@@ -449,11 +449,11 @@ impl Gpu {
     /// scanning it right then.
     ///
     /// CGB hardware does not have this defect, even running a monochrome
-    /// cartridge, so `ColorAsClassic` is excluded along with `Color` (Pan
-    /// Docs, ["OAM Corruption
+    /// cartridge, so `ColorAsClassic` is excluded along with `Color`; a Super
+    /// Game Boy is DMG silicon and does have it (Pan Docs, ["OAM Corruption
     /// Bug"](https://gbdev.io/pandocs/OAM_Corruption_Bug.html)).
     pub(crate) fn oam_bug(&mut self, kind: OamBug, dots: i32) {
-        if self.gbmode != GbMode::Classic {
+        if !self.gbmode.is_dmg() {
             return;
         }
         if let Some(row) = self.oam_scan_row_in(dots) {
@@ -728,7 +728,7 @@ impl Gpu {
             // compatibility palettes are the boot ROM's, not the game's). The
             // palette *data* ports stay closed. All four values are asserted by
             // Mooneye `misc/boot_hwio-C`, which runs a DMG cartridge on a CGB.
-            0xFF4F..=0xFF6B if self.gbmode == GbMode::Classic => 0xFF,
+            0xFF4F..=0xFF6B if self.gbmode.is_dmg() => 0xFF,
             0xFF50..=0xFF67 => 0xFF,
             0xFF69 | 0xFF6B if self.gbmode != GbMode::Color => 0xFF,
             0xFF4F => self.vrambank as u8 | 0xFE,

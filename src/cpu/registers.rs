@@ -89,6 +89,23 @@ impl Registers {
                 pc: 0x0100,
                 sp: 0xFFFE,
             },
+            // The Super Game Boy's boot code leaves a different state again —
+            // notably `F` clear rather than `Z H C`, and `HL = $C060`. The two
+            // revisions differ only in `A`; Mooneye's `boot_regs-sgb` and
+            // `boot_regs-sgb2` are the tests that tell them apart. (Pan Docs,
+            // "Console state after boot ROM".)
+            GbMode::Super | GbMode::Super2 => Registers {
+                a: if mode == GbMode::Super { 0x01 } else { 0xFF },
+                f: 0x00,
+                b: 0x00,
+                c: 0x14,
+                d: 0x00,
+                e: 0x00,
+                h: 0xC0,
+                l: 0x60,
+                pc: 0x0100,
+                sp: 0xFFFE,
+            },
         }
     }
 

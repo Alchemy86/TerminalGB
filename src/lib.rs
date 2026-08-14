@@ -70,6 +70,7 @@ pub mod plugin;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
 pub mod screen;
+pub mod sgb;
 /// Shared-memory frame handoff for the Kitty protocol — see [`shmframe`].
 /// Compiles everywhere; the module itself stubs out where shared memory does
 /// not exist, so callers need no `cfg` of their own.

@@ -173,9 +173,9 @@ jobs:
   #
   # The expectations (testharness/*_baseline.txt) are the ROMs' own verdicts,
   # never a hash of our output, and the job is red on ANY change in either
-  # direction. ~20s to fetch, ~2s to run all four groups.
+  # direction. ~20s to fetch, ~2s to run all five groups.
   external-suites:
-    name: External suites (Mooneye / SameSuite / Mealybug)
+    name: External suites (Mooneye / SameSuite / Mealybug / cpp)
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: full

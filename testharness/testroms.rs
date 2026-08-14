@@ -336,6 +336,8 @@ fn model_tag(m: Model) -> &'static str {
     match m {
         Model::Dmg => "dmg",
         Model::Cgb => "cgb",
+        Model::Sgb => "sgb",
+        Model::Sgb2 => "sgb2",
         Model::Auto => "auto",
     }
 }
