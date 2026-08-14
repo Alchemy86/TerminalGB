@@ -83,6 +83,9 @@ const FETCH_DOTS: u8 = 6;
 /// A sprite fetch is the same three reads and costs the same six dots — but it
 /// suspends the output rather than running beside it.
 const OBJ_FETCH_DOTS: u8 = 6;
+/// `Pipeline::obj_tile_paid` when no background tile has paid its per-object
+/// penalty yet. A real tile index is `(X + SCX) / 8`, at most 52.
+const NO_TILE: u8 = 0xFF;
 
 /// Everything the per-dot pipeline needs between one dot and the next. All of
 /// it is machine state: a save taken mid-mode-3 has to resume the same picture,
@@ -117,6 +120,13 @@ pub(super) struct Pipeline {
     obj: [Pixel; 8],
     /// 0 = no sprite fetch in progress, else how many dots it has run.
     obj_t: u8,
+    /// Stall dots still owed before the fetch's remaining reads may run — the
+    /// per-tile half of Pan Docs' OBJ penalty. See [`Gpu::start_obj_fetch`].
+    obj_wait: u8,
+    /// The background tile (`(X + SCX) / 8`) whose per-tile OBJ penalty has
+    /// already been paid on this line; `NO_TILE` while none has. Objects are
+    /// fetched left to right, so remembering the last one is enough.
+    obj_tile_paid: u8,
     /// Index into `scan` of the sprite being fetched.
     obj_i: u8,
     obj_tile: u8,
@@ -155,6 +165,8 @@ impl Default for Pipeline {
             bg_len: 0,
             obj: [Pixel::default(); 8],
             obj_t: 0,
+            obj_wait: 0,
+            obj_tile_paid: NO_TILE,
             obj_i: 0,
             obj_tile: 0,
             obj_flags: 0,
@@ -219,6 +231,8 @@ impl Pipeline {
         w.u8(self.bg_len);
         Self::save_fifo(w, &self.obj);
         w.u8(self.obj_t);
+        w.u8(self.obj_wait);
+        w.u8(self.obj_tile_paid);
         w.u8(self.obj_i);
         w.u8(self.obj_tile);
         w.u8(self.obj_flags);
@@ -275,6 +289,8 @@ impl Pipeline {
         self.bg_len = r.u8()?;
         Self::load_fifo(r, &mut self.obj)?;
         self.obj_t = r.u8()?;
+        self.obj_wait = r.u8()?;
+        self.obj_tile_paid = r.u8()?;
         self.obj_i = r.u8()?;
         self.obj_tile = r.u8()?;
         self.obj_flags = r.u8()?;
@@ -443,6 +459,8 @@ impl Gpu {
         p.bg_clear();
         p.obj = [Pixel::default(); 8];
         p.obj_t = 0;
+        p.obj_wait = 0;
+        p.obj_tile_paid = NO_TILE;
         p.lx = 0;
         p.window = false;
         p.win_drawn = false;
@@ -481,19 +499,10 @@ impl Gpu {
             return;
         }
 
-        // A sprite is due here: the output stops until it has been fetched, but
-        // the background fetcher keeps running until it reaches a tile
-        // boundary. That wait is the variable half of the OBJ penalty.
+        // A sprite is due here: the output stops until it has been fetched.
         if let Some(i) = self.due_sprite() {
             if self.pipe.bg_len > 0 {
-                if self.pipe.fetch_t >= FETCH_DOTS {
-                    self.pipe.obj_i = i as u8;
-                    self.pipe.fetched |= 1 << i;
-                    self.pipe.obj_t = 1;
-                    self.read_obj_attributes();
-                } else {
-                    self.bg_fetch_dot();
-                }
+                self.start_obj_fetch(i);
                 return;
             }
         }
@@ -667,8 +676,44 @@ impl Gpu {
                 return false;
             }
             let x = self.pipe.scan[i].x as i16;
-            x > lx && x <= lx + 8
+            // `x <= lx + 8` and nothing else. An object whose `X` is below 8
+            // hangs off the left edge and shows no pixels at all, but hardware
+            // still fetches it and still pays for it — Mooneye's
+            // `intr_2_mode0_timing_sprites` opens with ten arrangements at
+            // `X = 0` precisely to measure that, and its table says each one
+            // costs its full six dots. Excluding them (`x > lx`, as this used
+            // to) made every object at `X = 0` free.
+            x <= lx + 8
         })
+    }
+
+    /// Begin an object fetch, charging **Pan Docs' OBJ penalty algorithm**
+    /// ([Rendering § OBJ penalty algorithm](https://gbdev.io/pandocs/Rendering.html)):
+    /// six dots for the fetch itself, plus — for the *first* object on each
+    /// background tile — `max(0, 5 - ((X + SCX) % 8))` dots of stall while the
+    /// tile the object lands on is finished.
+    ///
+    /// The formula is charged rather than emerging from the fetcher's phase,
+    /// and Mooneye's `intr_2_mode0_timing_sprites` is why: its 39 arrangements
+    /// give the answer for every object count and every position within a tile,
+    /// and the phase this fetcher happens to be in at the head of a line
+    /// reproduced only the maximum — ten objects at `X = 0` and ten at `X = 7`
+    /// both came out at 66 dots where hardware wants 65 and 60. See
+    /// `the_obj_penalty_matches_mooneyes_table`.
+    fn start_obj_fetch(&mut self, i: usize) {
+        let x = self.pipe.scan[i].x as i16 + self.scx as i16;
+        let tile = (x >> 3) as u8;
+        let penalty = if tile == self.pipe.obj_tile_paid {
+            0
+        } else {
+            self.pipe.obj_tile_paid = tile;
+            (5 - (x & 7)).max(0) as u8
+        };
+        self.pipe.obj_i = i as u8;
+        self.pipe.fetched |= 1 << i;
+        self.pipe.obj_wait = penalty;
+        self.pipe.obj_t = 1;
+        self.read_obj_attributes();
     }
 
     fn read_obj_attributes(&mut self) {
@@ -681,6 +726,10 @@ impl Gpu {
     /// background tile, but the output is frozen throughout — that is the fixed
     /// half of the OBJ penalty (Pan Docs, "OBJ penalty algorithm").
     fn obj_fetch_dot(&mut self) {
+        if self.pipe.obj_wait > 0 {
+            self.pipe.obj_wait -= 1;
+            return;
+        }
         self.pipe.obj_t += 1;
         match self.pipe.obj_t {
             3 => self.obj_plane(false),
@@ -908,6 +957,85 @@ mod mode3_length {
         let mut gpu = engine();
         gpu.wb(0xFF43, 0xF8);
         assert_eq!(mode3_dots(&mut gpu), 172);
+    }
+
+    /// Put `n` sprites on the line the engine is parked in front of, all at the
+    /// same `X`, and turn objects on.
+    fn with_sprites(gpu: &mut Gpu, n: usize, xs: &[u8]) {
+        gpu.wb(0xFF40, 0x93); // + LCDC.1: objects on
+        for i in 0..40u16 {
+            // Y = 0 puts a sprite above the screen, i.e. out of the scan.
+            gpu.wb(0xFE00 + i * 4, 0);
+            gpu.wb(0xFE00 + i * 4 + 1, 0);
+        }
+        // `engine()` parks a few dots into the OAM scan, which has therefore
+        // already walked the first entries; start at 10 so every sprite here is
+        // still ahead of it.
+        for (i, x) in xs.iter().copied().take(n).enumerate() {
+            let base = 0xFE00 + (i as u16 + 10) * 4;
+            // `mode3_dots` measures the line the engine is parked at the top
+            // of, so Y = LY + 16 puts the object on exactly that line.
+            gpu.wb(base, 16 + gpu.rb(0xFF44));
+            gpu.wb(base + 1, x);
+        }
+    }
+
+    /// **Pan Docs' OBJ penalty algorithm, against Mooneye's own table.**
+    ///
+    /// `acceptance/ppu/intr_2_mode0_timing_sprites` measures the mode-2 →
+    /// mode-0 distance for 39 sprite arrangements and states the answer for
+    /// each in M-cycles above the base. Reading its numbers back as dots gives
+    /// exactly `6` dots per object plus, for the **first** object on each
+    /// background tile, `max(0, 5 - ((X + SCX) % 8))` — Pan Docs, [Rendering §
+    /// OBJ penalty algorithm](https://gbdev.io/pandocs/Rendering.html).
+    ///
+    /// Worked from the ROM's own table (its unit is one M-cycle and it
+    /// truncates, so a dot figure of 65 reads as 16):
+    ///
+    /// | arrangement | this formula | the ROM says |
+    /// |---|---:|---:|
+    /// | 1 sprite at X=0 | 6+5 = 11 → 2 | 2 |
+    /// | 10 sprites at X=0 | 60+5 = 65 → 16 | 16 |
+    /// | 10 at X=2 | 60+3 = 63 → 15 | 15 |
+    /// | 10 at X=5..7 | 60+0 = 60 → 15 | 15 |
+    /// | 5 at X=0 and 5 at X=160 | 60+5+5 = 70 → 17 | 17 |
+    /// | 5 at X=4 and 5 at X=164 | 60+1+1 = 62 → 15 | 15 |
+    #[test]
+    fn the_obj_penalty_matches_mooneyes_table() {
+        // n sprites all on one background tile: one tile penalty, n fetches.
+        for n in 1..=10usize {
+            let mut gpu = engine();
+            with_sprites(&mut gpu, n, &[0u8; 10]);
+            assert_eq!(
+                mode3_dots(&mut gpu),
+                172 + 6 * n as u32 + 5,
+                "{n} sprites at X=0"
+            );
+        }
+        // One tile, ten sprites, sweeping where in the tile they sit.
+        for x in 0..8u8 {
+            let mut gpu = engine();
+            with_sprites(&mut gpu, 10, &[x; 10]);
+            assert_eq!(
+                mode3_dots(&mut gpu),
+                172 + 60 + 5u32.saturating_sub(x as u32),
+                "ten sprites at X={x}"
+            );
+        }
+        // Two groups a whole number of tiles apart: each group's first object
+        // pays its own tile penalty.
+        for x in 0..6u8 {
+            let mut gpu = engine();
+            let xs = [x, x, x, x, x, 160 + x, 160 + x, 160 + x, 160 + x, 160 + x];
+            with_sprites(&mut gpu, 10, &xs);
+            let one = 5u32.saturating_sub(x as u32);
+            assert_eq!(
+                mode3_dots(&mut gpu),
+                172 + 60 + 2 * one,
+                "five sprites at X={x} and five at X={}",
+                160 + x
+            );
+        }
     }
 }
 

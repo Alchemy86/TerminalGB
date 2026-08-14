@@ -99,7 +99,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// reloaded, which decides whether an NRx3/NRx4 write still edits that reload
 /// (SameSuite `channel_1_freq_change_timing-cgbDE`). It cannot be derived from
 /// the countdown, and it is live at a frame boundary.
-pub const FORMAT_VERSION: u16 = 15;
+/// v16: the per-dot PPU's object fetch gained the two fields Pan Docs' OBJ
+/// penalty algorithm needs — the stall dots still owed before the fetch's
+/// remaining reads may run, and which background tile has already paid its
+/// per-tile penalty on this line. Both are live mid-mode-3, which is exactly
+/// where `testharness/savestate.rs` takes its snapshots.
+pub const FORMAT_VERSION: u16 = 16;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
