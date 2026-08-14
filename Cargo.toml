@@ -238,6 +238,11 @@ path = "examples/cpp_suite.rs"
 required-features = ["image"]
 
 [[example]]
+name = "gen2_timecapsule"
+path = "examples/gen2_timecapsule.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
+[[example]]
 name = "link_two"
 path = "examples/link_two.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
