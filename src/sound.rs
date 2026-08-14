@@ -569,6 +569,13 @@ impl WaveChannel {
 
             let mut last_fetch: Option<u32> = None;
             while time < end_time {
+                // The position advances *then* the sample is fetched, which is
+                // why a freshly triggered CH3 never plays wave sample 0: the
+                // trigger resets the position to 0 and the first fetch is
+                // already sample 1 (Pan Docs, "Audio Details" → Wave Channel;
+                // SameSuite `channel_3_first_sample` puts a distinguishable
+                // nibble in each half of byte 0 and reads back the second).
+                self.wave_pos = (self.wave_pos + 1) % 32;
                 let byte = self.waveram[self.wave_pos as usize / 2];
                 let sample = if self.wave_pos & 1 == 0 {
                     byte >> 4
@@ -587,7 +594,6 @@ impl WaveChannel {
 
                 last_fetch = Some(time);
                 time += self.period;
-                self.wave_pos = (self.wave_pos + 1) % 32;
             }
 
             self.delay = time - end_time;
@@ -648,6 +654,14 @@ impl WaveChannel {
         Ok(())
     }
 }
+
+/// T-cycles from a noise-channel trigger to its first LFSR step, beyond the
+/// reload of the frequency timer. SameSuite `channel_4_delay` measures the
+/// total as "sample length + 3 M-cycles" and steps its read point one M-cycle
+/// at a time; `channel_4_lfsr` then pins the *phase* by reconstructing the
+/// LFSR from 128 consecutive samples, so an error here rotates the whole
+/// reconstructed sequence.
+const NOISE_TRIGGER_DELAY: u32 = 0;
 
 struct NoiseChannel {
     enabled: bool,
@@ -742,7 +756,20 @@ impl NoiseChannel {
         self.enabled = true;
         self.lfsr = 0x7FFF;
         self.calculate_period();
-        self.delay = 0;
+        // The noise frequency is built from two counters — the NR43 divisor
+        // and the shift stage above it — and a trigger reloads only the
+        // divisor, leaving the shift stage half-way through. The first LFSR
+        // step therefore lands at `divisor + (period - divisor)/2`, not at a
+        // full period. SameSuite `channel_4_delay` measures this across three
+        // shift settings at a fixed divisor (2/4/8 M-cycle samples) and the
+        // lateness of a plain full-period reload grows as 0/1/3 M-cycles,
+        // which is exactly that halved shift stage.
+        let divisor = if self.divisor == 0 {
+            8
+        } else {
+            self.divisor as u32 * 16
+        };
+        self.delay = divisor + (self.period - divisor) / 2 + NOISE_TRIGGER_DELAY;
     }
 
     fn save_state(&self, w: &mut crate::savestate::Writer) {
@@ -1575,6 +1602,14 @@ impl Sound {
                     self.channel1.duty_out = false;
                     self.channel2.duty_pos = 0;
                     self.channel2.duty_out = false;
+                    // CH3's sample buffer is part of the powered domain, so it
+                    // empties too. A trigger deliberately does *not* refill it
+                    // (Pan Docs, "Audio Details"), so without this a channel
+                    // re-triggered after a power cycle would report the sample
+                    // it was playing before the power-off for a whole period —
+                    // SameSuite `channel_3_first_sample` reads exactly that
+                    // stale nibble.
+                    self.channel3.sample_latch = 0;
                 }
                 if !self.on && will_be_on {
                     // Powering on resets the frame sequencer so its NEXT step
