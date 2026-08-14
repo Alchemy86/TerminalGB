@@ -23,15 +23,17 @@ drives the same tiny surface: `Gameboy::new(rom) → frame() → image()`, plus 
 
 | Terminal | Desktop | The `?` overlay |
 |:---:|:---:|:---:|
-| <img src="../shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2, the picture scaled to fill the pane with Status and Controls panels beside it" width="360" /> | <img src="../shots/desktop-acid2.png" alt="The OpenGL desktop window showing dmg-acid2" width="180" /> | <img src="../shots/tui-help.png" alt="The help overlay listing every picker and in-game key, drawn beside the running picture rather than over it" width="360" /> |
+| <img src="../shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2, the picture scaled to fill the pane with Status and Controls panels beside it" width="360" /> | <img src="../shots/desktop-acid2.png" alt="The OpenGL desktop window showing dmg-acid2" width="180" /> | <img src="../shots/tui-help.png" alt="The help overlay listing every picker and in-game key, drawn over the paused picture but clear of the Status and Controls panels" width="360" /> |
 | `cargo run --example terminal` | `cargo run --example desktop` | every key, without leaving the game |
 
-<p align="center"><em>The same core, the same frame, three ways out. Note what the terminal
-frontend is <strong>not</strong> doing in the third shot: the overlay sits beside the picture,
-never on top of it. A terminal image owns whole cells, so text drawn there is not over the
-picture — it <em>replaces</em> it, and under the kitty protocol it removes the placeholders
-that make the picture update at all. That was a live bug; see
-<a href="../terminal-render.md">terminal-render</a>.</em></p>
+<p align="center"><em>The same core, the same frame, three ways out. The Status panel in the
+terminal shots is worth reading: <code>Scale 15.0x</code> beside <code>Sent 160x144</code> is the
+rule that keeps that frontend fast — the picture is <strong>transmitted</strong> at 160×144
+however large the window gets, and the terminal does the scaling, because sizing the transmission
+by the window costs ~40 ms a frame. <code>0B</code> is the frame after that: an unchanged frame
+transmits nothing at all. Both in <a href="../terminal-render.md">terminal-render</a>. The help
+overlay does cover the picture — it is a modal — but it stays clear of the panels, and the
+<em>stats</em> overlay gets its own rectangle for the reason described there.</em></p>
 
 ## 2. The real hardware
 
