@@ -164,7 +164,7 @@ generated from the checked-in baselines and verified in CI.
 | Mooneye GB — `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score--> | digital, bus-observable, M-cycle exact |
 | Mooneye GB — `emulator-only` | <!--score:mooneye_emulator_only-->28 / 28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28 / 28<!--/score--> | cartridge mappers |
 | SameSuite | <!--score:samesuite-->73 / 76<!--/score--> | <!--score:samesuite-->73 / 76<!--/score--> | sound chip, sub-sample timing |
-| **Mealybug Tearoom** | **<!--score:mealybug-->3 / 79<!--/score-->** | **<!--score:mealybug_accurate-->23 / 79<!--/score-->** | **the picture, mid-scanline** |
+| **Mealybug Tearoom** | **<!--score:mealybug-->3 / 79<!--/score-->** | **<!--score:mealybug_accurate-->26 / 79<!--/score-->** | **the picture, mid-scanline** |
 
 The shape of that table is the argument of this page, and it is not flattering by accident:
 
@@ -176,7 +176,7 @@ The shape of that table is the argument of this page, and it is not flattering b
   we mostly are.
 - On the suite that asks questions **inside a scanline**, we are at
   <!--score:mealybug-->3 / 79<!--/score--> by default and
-  <!--score:mealybug_accurate-->23 / 79<!--/score--> with the pipeline engaged. That is the
+  <!--score:mealybug_accurate-->26 / 79<!--/score--> with the pipeline engaged. That is the
   closest a test ROM can get to probing a wire mid-cycle, and it is exactly where software
   emulation is most expensive and most fiddly. (It is also expensive for everyone: on the 24
   Mealybug rows the Shootout publishes, SameBoy scores 15 and bgb scores 2.)

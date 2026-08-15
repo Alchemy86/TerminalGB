@@ -19,7 +19,7 @@ trade was one-for-one and it went both ways, every time.
 > The two numbers above are historical measurements of two *rejected* configurations and are
 > deliberately not wrapped in generated markers. The shipped score today is
 > <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score--> and
-> <!--score:mealybug_accurate-->23 / 79<!--/score--> — both at once.
+> <!--score:mealybug_accurate-->26 / 79<!--/score--> — both at once.
 
 **What it looks like.** It looks like a genuine hardware ambiguity, and it invites splitting
 the difference: pick the value that loses fewest rows, write it down as "the contested

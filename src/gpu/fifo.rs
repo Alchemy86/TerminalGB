@@ -1019,15 +1019,20 @@ impl Gpu {
             return;
         }
         let bg = self.pipe.bg_pop();
-        let obj = self.pipe.obj_shift();
         if self.pipe.win_skip > 0 {
             // The window's first tile begins at `WX - 7`; with `WX < 7` its
             // leading pixels are left of the screen. They are shifted out a dot
             // each, which is what makes the takeover's head start early enough
             // for pixel 0 to land on the dot it does.
+            // **The sprite FIFO is NOT shifted here.** These pixels are left
+            // of the screen and an object's `X` is a screen coordinate, so
+            // consuming its leading pixels against them loses them: the object
+            // at `X = 8` in `m3_wx_4_change_sprites` came out three pixels
+            // short on every line, which is `7 - WX` for that ROM's `WX = 4`.
             self.pipe.win_skip -= 1;
             return;
         }
+        let obj = self.pipe.obj_shift();
         if self.pipe.lx == 0 && self.pipe.discard != self.scx & 7 {
             self.pipe.discard = (self.pipe.discard + 1) & 7;
             return;
@@ -1675,6 +1680,57 @@ mod head_of_line {
                 // then the discards — plus the one extra dot.
                 18 + (scx & 7) as u32 + extra,
                 "SCX={scx}"
+            );
+        }
+    }
+
+    /// **An object's `X` is a screen coordinate, so the window's off-screen
+    /// pixels must not consume it.** With `WX < 7` the window's first tile
+    /// starts left of the screen and `7 - WX` of its pixels are dropped; if the
+    /// sprite FIFO is shifted against them, an object at the left edge loses
+    /// exactly that many of its own. `mealybug/m3_wx_4_change_sprites` tiles
+    /// its whole line with objects at `X = 8, 16, 24 …` over a `WX = 4` window
+    /// and is 24 pixels — three on each of eight lines — out when it is.
+    #[test]
+    fn the_windows_off_screen_pixels_do_not_eat_an_object_at_the_left_edge() {
+        const LINE: u8 = 3;
+        let mut gpu = engine();
+        // A solid tile for both the background and the object.
+        for b in 0..16u16 {
+            gpu.wb(0x8010 + b, 0xFF);
+        }
+        for t in 0..32u16 {
+            gpu.wb(0x9800 + t, 1);
+            gpu.wb(0x9C00 + t, 1);
+        }
+        gpu.wb(0xFF47, 0xE4); // BGP identity: background/window are colour 3
+        gpu.wb(0xFF48, 0x40); // OBP0: object colour 3 -> shade 1, distinct
+        for i in 0..40u16 {
+            gpu.wb(0xFE00 + i * 4, 0);
+        }
+        gpu.wb(0xFE00, 16 + LINE); // Y: on LINE
+        gpu.wb(0xFE01, 8); // X = 8 -> screen columns 0..7
+        gpu.wb(0xFE02, 1);
+        gpu.wb(0xFE03, 0);
+        gpu.wb(0xFF4A, LINE); // WY
+        gpu.wb(0xFF4B, 4); // WX = 4: three window pixels are off-screen
+        gpu.wb(0xFF40, 0xB3); // LCD, BG, OBJ, window all on
+        let mut seen = 0;
+        while seen < 2 {
+            let before = gpu.line;
+            gpu.do_cycle(1);
+            if before == 143 && gpu.line == 144 {
+                seen += 1;
+            }
+        }
+        let row = |x: usize| gpu.data[(LINE as usize * super::super::WIDTH + x) * 4];
+        let obj = row(0);
+        for x in 0..8 {
+            assert_eq!(
+                row(x),
+                obj,
+                "column {x} of the object at X = 8 is missing (the window's \
+                 off-screen pixels ate it)"
             );
         }
     }
