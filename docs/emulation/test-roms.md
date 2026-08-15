@@ -211,7 +211,7 @@ the same ROM is telling you there is more than one machine.
 
 This is where our numbers hurt, and where they should:
 <!--score:mealybug-->3 / 79<!--/score--> pixel-exact rows in the default picture mode,
-<!--score:mealybug_accurate-->22 / 79<!--/score--> with the per-dot pipeline. The baseline
+<!--score:mealybug_accurate-->23 / 79<!--/score--> with the per-dot pipeline. The baseline
 records **how many pixels differ** on every row rather than PASS/FAIL, precisely because at
 3 out of 79 a pass count is a flat wall that cannot show a rewrite getting closer. The
 consequence to expect: any change to the picture processor turns that file red, and reading

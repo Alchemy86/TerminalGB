@@ -196,7 +196,7 @@ cannot drift away from the tests:
 | Mooneye GB — `misc` (Color) | <!--score:mooneye_cgb-->8 / 8<!--/score--> | <!--score:mooneye_cgb-->8 / 8<!--/score--> | Color-specific behaviour |
 | SameSuite | <!--score:samesuite-->73 / 76<!--/score--> | <!--score:samesuite-->73 / 76<!--/score--> | sound hardware, DMA, Super Game Boy |
 | CasualPokePlayer | <!--score:cpp-->4 / 4<!--/score--> | <!--score:cpp-->4 / 4<!--/score--> | cartridge clock, Super Game Boy |
-| **Mealybug Tearoom** | **<!--score:mealybug-->3 / 79<!--/score-->** | **<!--score:mealybug_accurate-->22 / 79<!--/score-->** | **mid-scanline picture timing** |
+| **Mealybug Tearoom** | **<!--score:mealybug-->3 / 79<!--/score-->** | **<!--score:mealybug_accurate-->23 / 79<!--/score-->** | **mid-scanline picture timing** |
 
 Read the last row twice. The suite built specifically to ask questions *inside* a scanline is
 the one where the two engines differ by a factor of five — and it is also the suite where we

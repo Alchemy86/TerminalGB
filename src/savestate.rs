@@ -123,7 +123,9 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// `WX < 7` the takeover happens inside the head-of-line prologue and those
 /// pixels are shifted out and dropped a dot each — live state for the first
 /// eighteen dots of a scanline.
-pub const FORMAT_VERSION: u16 = 21;
+/// v22: and whether the window has pushed its first tile yet, which is what
+/// exempts that one tile from the window pixel-insertion glitch.
+pub const FORMAT_VERSION: u16 = 22;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

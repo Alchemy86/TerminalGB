@@ -159,6 +159,9 @@ pub(super) struct Pipeline {
     /// shifted out and dropped a dot each, exactly like the `SCX & 7` discards
     /// that follow them. See [`Gpu::check_window_start`].
     win_skip: u8,
+    /// Set by the window's takeover and cleared by its first push. The window
+    /// pixel-insertion glitch skips that one tile — see [`Gpu::bg_fetch_dot`].
+    win_fresh: bool,
 }
 
 impl Default for Pipeline {
@@ -192,6 +195,7 @@ impl Default for Pipeline {
             window: false,
             win_drawn: false,
             win_skip: 0,
+            win_fresh: false,
         }
     }
 }
@@ -260,6 +264,7 @@ impl Pipeline {
         w.bool(self.window);
         w.bool(self.win_drawn);
         w.u8(self.win_skip);
+        w.bool(self.win_fresh);
     }
 
     fn save_fifo(w: &mut crate::savestate::Writer, f: &[Pixel; 8]) {
@@ -320,6 +325,7 @@ impl Pipeline {
         self.window = r.bool()?;
         self.win_drawn = r.bool()?;
         self.win_skip = r.u8()?;
+        self.win_fresh = r.bool()?;
         Ok(())
     }
 }
@@ -495,6 +501,7 @@ impl Gpu {
         p.window = false;
         p.win_drawn = false;
         p.win_skip = 0;
+        p.win_fresh = false;
         p.fetched = 0;
         // Nothing about `SCX` is latched here. Its low three bits decide how
         // many pixels the head of the line throws away, and that comparison is
@@ -654,6 +661,7 @@ impl Gpu {
         // the window's own fetch is what runs from here.
         p.first_fetch = false;
         p.win_skip = skip;
+        p.win_fresh = true;
         p.bg_clear();
         stall
     }
@@ -711,6 +719,29 @@ impl Gpu {
         if self.pipe.bg_len > 0 {
             return; // no room yet — this is the fetcher's idle
         }
+        // **The window pixel-insertion glitch.** Once `WY == LY` has latched for
+        // the frame, a push landing on the pixel the window starts at supplies a
+        // single colour-0 pixel instead of the tile, and the real push is
+        // postponed a dot — so everything from there on is one pixel to the
+        // right. It fires whether or not the window is currently drawing, and
+        // the window's *own* first tile is exempt. docboy,
+        // `src/docboy/docboy/ppu/ppu.cpp`, `handle_pixel_slice_fetcher_push`:
+        // "if this push stage happens when LX == WX, then a 00 pixel is pushed
+        // into the bg fifo instead of the fetched tile … The first window tile
+        // after the window activation seems to be an exception."
+        // (SameBoy reaches the same place through `gb->insert_bg_pixel`.)
+        // `mealybug/m3_wx_4_change@DMG` is 229 pixels of exactly this: one
+        // inserted pixel at column `WX - 7` on every line whose mid-mode-3 `WX`
+        // write lands there.
+        if self.wy_trigger
+            && !self.pipe.win_fresh
+            && self.pipe.lx as i16 == self.winx as i16 - 7
+        {
+            self.pipe.bg[self.pipe.bg_head as usize & 7] = Pixel::default();
+            self.pipe.bg_len = 1;
+            return;
+        }
+        self.pipe.win_fresh = false;
         self.push_bg_tile();
         self.pipe.fetch_x = self.pipe.fetch_x.wrapping_add(1);
         self.pipe.fetch_t = 0;
@@ -1646,6 +1677,59 @@ mod head_of_line {
                 "SCX={scx}"
             );
         }
+    }
+
+    /// **The window pixel-insertion glitch.** Once `WY == LY` has latched for
+    /// the frame, a background push landing on the pixel the window starts at
+    /// supplies one transparent pixel instead of the tile and postpones the
+    /// real push by a dot — so everything from there rightwards is one pixel
+    /// over. It does **not** need the window to be drawing, and the window's own
+    /// first tile is exempt.
+    ///
+    /// docboy, `src/docboy/docboy/ppu/ppu.cpp`,
+    /// `handle_pixel_slice_fetcher_push`: "if this push stage happens when
+    /// LX == WX, then a 00 pixel is pushed into the bg fifo instead of the
+    /// fetched tile … The first window tile after the window activation seems
+    /// to be an exception." SameBoy reaches the same place through
+    /// `gb->insert_bg_pixel` (`Core/display.c`, citing its issue #278).
+    #[test]
+    fn a_push_on_the_windows_own_start_pixel_inserts_one_transparent_pixel() {
+        const LINE: u8 = 3;
+        // Tile 1 is solid colour 3 and the whole background map uses it, so an
+        // inserted transparent pixel shows up as a hole in a flat line.
+        let mut gpu = engine();
+        for b in 0..16u16 {
+            gpu.wb(0x8010 + b, 0xFF);
+        }
+        for t in 0..32u16 {
+            gpu.wb(0x9800 + t, 1);
+        }
+        gpu.wb(0xFF47, 0xE4); // BGP identity
+        gpu.wb(0xFF4A, LINE); // the Y condition latches on this line...
+                              // ...and the window would start at pixel 8. A push only ever lands on
+                              // the eight-pixel grid, so `WX - 7` has to be on it for the glitch to
+                              // be reachable at all — which is exactly why `m3_wx_4_change` shows it
+                              // on one line in eight.
+        gpu.wb(0xFF4B, 8 + 7);
+        gpu.wb(0xFF40, 0x91); // LCDC.5 is off, so the window never draws.
+                              // Run a whole frame so the line is drawn with the Y condition latched.
+        let mut seen = 0;
+        while seen < 2 {
+            let before = gpu.line;
+            gpu.do_cycle(1);
+            if before == 143 && gpu.line == 144 {
+                seen += 1;
+            }
+        }
+        let row = |x: usize| gpu.data[(LINE as usize * super::super::WIDTH + x) * 4];
+        let solid = row(0);
+        let hole = (0..super::super::WIDTH).find(|&x| row(x) != solid);
+        assert_eq!(
+            hole,
+            Some(8),
+            "a transparent pixel should have been inserted at WX - 7"
+        );
+        assert_eq!(row(9), solid, "and only one of them");
     }
 
     /// **The window's tile grid is anchored at `WX - 7`, even when that is off

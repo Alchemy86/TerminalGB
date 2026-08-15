@@ -134,8 +134,8 @@ The mode is gated separately (`make test-external-accurate`, against
 | Mooneye `misc` (CGB) | <!--score:mooneye_cgb-->8/8<!--/score--> | <!--score:mooneye_cgb-->8/8<!--/score--> |
 | SameSuite | <!--score:samesuite-->73/76<!--/score--> | <!--score:samesuite-->73/76<!--/score--> |
 | `cpp` | <!--score:cpp-->4/4<!--/score--> | <!--score:cpp-->4/4<!--/score--> |
-| Mealybug — rows pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->22/79<!--/score-->** |
-| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->567,482<!--/score-->** |
+| Mealybug — rows pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->23/79<!--/score-->** |
+| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->498,278<!--/score-->** |
 
 (Rows with one baseline are scored once: the picture mode does not reach what they measure, so
 the same figure stands in both columns.)
@@ -146,7 +146,7 @@ headless, re-measured on every `cargo test --release --test ppuengines`.
 
 > This table is where the drift happened. Its Mealybug figure read **12** for as long as it
 > took somebody to notice, five rows after `identical` reached
-> <!--score:mealybug_accurate-->22/79<!--/score-->. The row is generated now.
+> <!--score:mealybug_accurate-->23/79<!--/score-->. The row is generated now.
 
 > **Both baselines must move together when a non-PPU change flips a row.** Boot registers, the
 > timer and the APU do not depend on `GB_PPU`, so such a change flips the row under both
@@ -242,7 +242,7 @@ they belong to the Shootout's 24-row Mealybug population, not our
 | Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
 | `standard` (default) | <!--score:mealybug-->3 / 79<!--/score--> | <!--score:mealybug:px-->1,212,282<!--/score--> |
-| `identical` (`GB_PPU=identical`) | **<!--score:mealybug_accurate-->22 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->567,482<!--/score-->** |
+| `identical` (`GB_PPU=identical`) | **<!--score:mealybug_accurate-->23 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->498,278<!--/score-->** |
 
 The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at
 <!--score:mealybug-->3/79<!--/score--> a
