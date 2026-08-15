@@ -6353,3 +6353,80 @@ plugin READMEs and each other; a stranger landing on `plugins/agent/` is now poi
   the preview and none of them is. Check anchors with the slug rule instead (lowercase, drop
   everything not word/space/hyphen, one hyphen per space, **no collapsing runs**) — a ~15-line
   Python check over the pages' own headings is what was used here.
+
+## One click: the Codespace, the image, and `terminalgb-run` (`.devcontainer/`, `Dockerfile`, `tools/oneclick/`)
+
+**Reader-facing page: [`docs/quickstart.md`](docs/quickstart.md)** — the badge, the three
+commands, the key, what is pinned, and every measured number. Gated by
+`.github/workflows/container.yml` (both Docker stages + a smoke test that requires a decoded
+160×144 PNG out of the MCP server, because a server that *starts* is not a server that
+emulates).
+
+- **THE DEVCONTAINER BUILDS THE REPOSITORY'S OWN `Dockerfile`, `--target dev`.** That is the
+  whole arrangement, not tidiness: a Codespace and a local `docker build` are then the same
+  environment rather than two definitions that drift. Three stages — `toolchain` (pinned Rust
+  + the three apt packages), `dev` (adds the developer conveniences and a `vscode` user; what
+  `.devcontainer` opens), `runtime` (the slim shipped image, no compiler). Adding a system
+  package for the dev environment goes in `dev`, never in `runtime`.
+- **The image's feature set is chosen for a container and is NOT `default`**: `tui,mcp,image`.
+  No `desktop` (a container has no window) and no `audio` (no sound card, and it would pull
+  ALSA in, which is exactly the fresh-clone trap the whole project avoids). Both the Makefile
+  (`ONECLICK_FEATURES`) and `devcontainer.json`'s `onCreateCommand` spell the same set; if you
+  change one, change both.
+- **`terminalgb-run` must resolve the repository from ITS OWN PATH, never `git rev-parse` and
+  never `$PWD`.** Both obvious alternatives fail in exactly the case that matters: a
+  devcontainer bind-mounts the clone under a different uid, so git refuses it for *dubious
+  ownership*, and a source tarball has no `.git` at all. Symptom, observed: `doctor` reported
+  `NOT BUILT` / `MISSING` for everything while sitting beside a perfectly good
+  `target/release`. `tools/oneclick/` is two levels below the root, and it confirms the guess
+  with `Cargo.toml` + the vendored ROM before believing it (the same script is installed to
+  `/usr/local/bin` in the image, where `../..` is `/usr`).
+- **THE AGENT'S NDJSON LOG CARRIES AN ADAPTER'S STDERR VERBATIM — REPRODUCED, NOT ASSUMED.**
+  `plugins/agent/src/lib.rs`'s `log_record` writes it deliberately (a failing model call has to
+  be diagnosable), and that log is a *published artefact* here. A four-line adapter that echoes
+  its environment to stderr puts `ANTHROPIC_API_KEY` in `agent.ndjson` **twice**, on a run that
+  exits 0. `terminalgb-run agent` therefore greps its own run directory for the key's exact
+  value afterwards, deletes what contains it, and exits non-zero; both directions are proven
+  against a real cartridge and a real run. **The key goes to `grep` on stdin, never as an
+  argument** — argv is world-readable in `ps`, which is the same reason the state snapshot goes
+  to the adapter over stdin. This is a backstop on the artefact, not a sanitiser on the pipe:
+  an adapter must not print the key.
+- **Two POSIX-shell traps, both of which produced a silent exit with no diagnostic:**
+  `shift` is a **special built-in**, so shifting an empty argument list exits a non-interactive
+  shell *whatever `|| true` says* (`terminalgb-run mcp` with no ROM exited 2 saying nothing);
+  and under `set -e` a top-level `[ … ] && cmd` whose test is false ends the script (running
+  with no arguments at all exited silently instead of playing the bundled ROM). Use
+  `if … then … fi`. The same shape bites a GitHub Actions `run:` block, which is `bash -e`:
+  `grep -q X && { exit 1; }` fails the step in the **good** case.
+- **`agent` needs a Gen 1 cartridge and says so; `mcp` is the "AI drives it with nothing
+  configured" path.** The autonomous loop declines a cartridge it cannot read rather than
+  flailing, so against the bundled dmg-acid2 it prints one line and stops — by design. The MCP
+  server, by contrast, drives *any* cartridge and works against the bundled ROM with no key and
+  no game: that is what the smoke test exercises and what a stranger should be pointed at.
+- **The only game content in the image is the vendored MIT dmg-acid2 ROM, with its `LICENSE`
+  beside it.** `.dockerignore` excludes `**/*.gb` and re-admits that one file, so a developer's
+  cartridges cannot reach a layer even by accident. Nothing is fetched at build time.
+- **Measured, so nobody re-measures or over-claims** (20-core x86-64 box, `2e0da0e` era):
+  cold `docker build --no-cache` **56 s**; the cargo build alone **37 s** on 20 cores and
+  **58 s** under a real 2-CPU `cpuset` with a cold registry and target — only 1.6×, because the
+  critical path is the single large `terminalgb` crate. Runtime image **193 MB** on disk /
+  **46 MB** pulled (85 MB Debian, 52 MB ca-certificates + python3, 7.9 MB binaries); the `dev`
+  image is **2.6 GB** because it contains a toolchain. Container start → 120 emulated frames →
+  a decoded 160×144 PNG: **0.74 s**. 6,000 frames of a real cartridge in the image: **1.6 s,
+  61× real time**.
+- **`docker run --cpus 2` DOES NOT SIMULATE A TWO-CORE MACHINE for a build.** It is a CFS
+  quota, so `nproc` still reports the host's core count and cargo spawns that many jobs to
+  share two CPUs' worth of time — the number it produces is not the number a small machine
+  gives. Use `--cpuset-cpus 0,1`, and check `nproc` inside the container before believing any
+  figure.
+- **On Fedora (or any SELinux distribution) a bind-mounted workspace is denied to the
+  container unless it is relabelled** — `chcon -Rt container_file_t <dir>`, or a `:z` mount
+  flag. The failure is silent and reads exactly like a broken devcontainer: the container
+  starts, the lifecycle command runs, and every path inside reports as missing. Codespaces runs
+  on Ubuntu and never sees it.
+- **A GitHub-hosted Codespace itself has NOT been exercised** — this project develops on
+  branches that are never pushed, and a Codespace can only be created from a branch on GitHub.
+  What was driven is the same `devcontainer.json` and the same Dockerfile stage through
+  `@devcontainers/cli`, which is the tool Codespaces runs. Unverified until it lands on `main`:
+  the badge URL, GitHub's creation flow, and the secret prompt. `docs/quickstart.md` §8 says so
+  in the same words; do not let it be quoted as verified.

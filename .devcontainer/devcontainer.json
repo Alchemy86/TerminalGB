@@ -1,0 +1,64 @@
+{
+  "name": "TerminalGB",
+
+  // Built from the repository's own Dockerfile, `dev` stage. That is the whole
+  // point of the arrangement: a Codespace and `docker build` are the same
+  // environment, not two definitions that drift apart. See docs/quickstart.md.
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "target": "dev"
+  },
+
+  // No `workspaceFolder`: the default is derived from the folder the clone
+  // landed in, which is what makes this work whether the repository was cloned
+  // as `TerminalGB`, as `gameboy`, or as anything else.
+  "remoteUser": "vscode",
+
+  // Build once, during Codespace creation, so opening the terminal lands on
+  // something that runs. This is the bulk of the create time (see
+  // docs/quickstart.md §"How long, and what it costs"); a GitHub *prebuild*
+  // moves it off the user's clock entirely.
+  //
+  // The feature set matches the container image: the terminal frontend, the
+  // MCP server, and the PNG encoder the agent's screenshot channel needs. No
+  // `desktop` (a Codespace has no window) and no `audio` (no sound card, and it
+  // would pull ALSA in).
+  "onCreateCommand": "cargo build --release --locked --no-default-features --features tui,mcp,image --bin terminalgb --bin terminalgb-mcp --example claude_plays",
+
+  "postAttachCommand": "./tools/oneclick/terminalgb-run doctor",
+
+  // The key. Codespaces prompts for this the first time and stores it
+  // encrypted per user; it is injected into the environment of the running
+  // Codespace and is never part of the image, the repository or a layer.
+  // Set one at https://github.com/settings/codespaces — nothing here needs it
+  // to start, and `terminalgb-run agent` says so plainly when it is absent.
+  "secrets": {
+    "ANTHROPIC_API_KEY": {
+      "description": "Anthropic API key, for `terminalgb-run agent`. Optional: everything else — playing, and driving the emulator from an MCP client — works without one.",
+      "documentationUrl": "https://console.anthropic.com/settings/keys"
+    }
+  },
+
+  "containerEnv": {
+    "CARGO_TERM_COLOR": "always"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // A Codespace terminal is xterm.js: no kitty graphics protocol and no sixel,
+  // so the picture is drawn with half-blocks. That is a real answer, not a
+  // failure — the emulator says which transport it negotiated in its own status
+  // panel. docs/rendering.md has the ladder.
+  "postCreateCommand": "echo 'TerminalGB is built. Try: ./tools/oneclick/terminalgb-run play'"
+}

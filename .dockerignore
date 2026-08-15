@@ -1,0 +1,26 @@
+# The build context for the image. `target/` alone is several gigabytes on a
+# working checkout, and sending it would dominate the build time it is supposed
+# to be saving.
+target/
+**/target/
+.git/
+node_modules/
+web/node_modules/
+roms/
+
+# Somebody else's ROMs must never end up in an image. `.gitignore` already keeps
+# them out of the repository; this keeps them out of the build context even when
+# a developer has left one lying in the tree. The one exception is the vendored
+# MIT dmg-acid2 ROM, which is what the image boots with nothing configured.
+**/*.gb
+**/*.gbc
+**/*.sav
+**/*.gbsave
+**/*.gbss
+!third_party/dmg-acid2/dmg-acid2.gb
+
+# Build/dev leftovers with no business in an image.
+**/*.rs.bk
+__pycache__/
+.preview/
+*.preview.html

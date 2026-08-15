@@ -3,7 +3,9 @@
 .PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
-        test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune chiptune-demo bgb-interop
+        test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
+        chiptune-demo bgb-interop \
+        oneclick play mcp agent doctor image image-smoke
 
 all: build install
 
@@ -211,6 +213,54 @@ no-plugins:
 	    | grep -E 'terminalgb-plugin-(trainer|gen1-link|battle-control|agent|example-tracer)'; \
 	  then echo "FAIL: a plugin crate is in the no-plugin dependency graph"; exit 1; \
 	  else echo "OK: no plugin crate in the dependency graph"; fi
+
+# ---------------------------------------------------------------------------
+# One click: the container, the devcontainer, and the three ways to run it.
+# See docs/quickstart.md. `tools/oneclick/terminalgb-run` is the same entry
+# point the image uses as its ENTRYPOINT and a Codespace finds on its PATH, so
+# these targets are shorthands rather than a fourth definition of anything.
+# ---------------------------------------------------------------------------
+
+# The build the container and the Codespace do: the terminal frontend, the MCP
+# server and the agent runner. Deliberately NOT `default` — a container has no
+# window (`desktop`) and no sound card (`audio`, which would pull ALSA in).
+ONECLICK_FEATURES ?= tui,mcp,image
+
+oneclick:
+	cargo build --release --locked \
+	    --no-default-features --features $(ONECLICK_FEATURES) \
+	    --bin terminalgb --bin terminalgb-mcp --example claude_plays
+
+play: oneclick
+	./tools/oneclick/terminalgb-run play $(ROM)
+
+mcp: oneclick
+	./tools/oneclick/terminalgb-run mcp $(ROM)
+
+agent: oneclick
+	./tools/oneclick/terminalgb-run agent $(ROM)
+
+doctor:
+	./tools/oneclick/terminalgb-run doctor
+
+# The shipped image. `--target dev` is what .devcontainer builds; `runtime` is
+# what a user runs. Both are gated by .github/workflows/container.yml.
+image:
+	docker build --target runtime -t terminalgb:oneclick .
+	@docker image ls terminalgb:oneclick
+
+# The claim the image has to earn: it does not merely start, it emulates. Runs
+# 120 frames through the MCP server and requires a 160x144 PNG back.
+image-smoke: image
+	@printf '%s\n' \
+	  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"make","version":"0"}}}' \
+	  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+	  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"step","arguments":{"frames":120}}}' \
+	  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"screenshot","arguments":{}}}' \
+	  > target/mcp-smoke-in.jsonl
+	docker run --rm -i terminalgb:oneclick mcp < target/mcp-smoke-in.jsonl \
+	  > target/mcp-smoke-out.jsonl
+	python3 tools/oneclick/check_frame.py target/mcp-smoke-out.jsonl
 
 desktop:
 	cd examples/desktop && cargo run --release

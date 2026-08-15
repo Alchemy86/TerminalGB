@@ -64,6 +64,26 @@ point the opt-in local [telemetry file](docs/telemetry.md) somewhere, and the on
 features — the [link cable over TCP](docs/bgb-link.md) and the [trade portal](docs/portal.md)
 — are off until you configure them yourself.
 
+## Run it in one click
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Alchemy86/TerminalGB?quickstart=1)
+
+Click that and GitHub builds the [devcontainer](.devcontainer/devcontainer.json) — which is the
+repository's own [`Dockerfile`](Dockerfile), so the Codespace and a local `docker build` are the
+same environment — and hands you a terminal. Nothing needs configuring: it boots the bundled
+MIT test ROM, and the [MCP server](docs/mcp.md) will let Claude Desktop, Claude Code or any
+other MCP client drive that emulator without a cartridge or an API key. Bring a key
+(`ANTHROPIC_API_KEY`, as a Codespaces secret) and a cartridge you own, and the
+[headless agent](docs/claude-plays.md) plays it on its own.
+
+```bash
+./tools/oneclick/terminalgb-run play      # or: mcp · agent · doctor
+```
+
+**[The whole quick start →](docs/quickstart.md)** — the three commands, how the key is handled
+(and how it is checked out of the run log), what is pinned, and the measured image size, build
+time and cost.
+
 ## Quick start
 
 Requires **Rust 1.83+**. Bring your own `.gb`/`.gbc` ROM.

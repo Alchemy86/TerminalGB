@@ -1,0 +1,367 @@
+#!/bin/sh
+# terminalgb-run — the one command, for each of the three ways to run this.
+#
+#   terminalgb-run play  [rom]      the emulator, in this terminal
+#   terminalgb-run mcp   [rom]      the MCP server on stdio, for an AI client
+#   terminalgb-run agent [rom]      the headless agent, at speed
+#   terminalgb-run doctor           what is present, what is missing, what it costs
+#
+# It works three ways round without changing: from a clone (it finds the
+# binaries under `target/release`), inside the container built by the
+# repository's `Dockerfile` (they are on `PATH`), and inside a Codespace opened
+# from `.devcontainer` (either, depending on whether the build has run).
+#
+# THE KEY. `ANTHROPIC_API_KEY` is read from the environment and handed to the
+# adapter through the environment. It is never written to a file, never passed
+# on a command line (argv is world-readable in `ps`), and never printed — this
+# script only ever reports whether one is *set*. After an agent run it greps the
+# run's own artefacts for the key's exact value and refuses to leave them on
+# disk if it finds it; see `check_for_leaked_key` at the bottom and
+# docs/quickstart.md §"The key".
+#
+# Full documentation: docs/quickstart.md
+
+set -eu
+
+SELF=${0##*/}
+
+# ---------------------------------------------------------------------------
+# where things are
+# ---------------------------------------------------------------------------
+
+# The repository root, when we are running from a clone. In the container this
+# stays empty, and everything is found on PATH and under /opt instead.
+#
+# Resolved from THIS FILE's own location, not with `git rev-parse`, and not from
+# the working directory. Both of the obvious alternatives fail in exactly the
+# case that matters: a devcontainer bind-mounts the clone under a different uid,
+# so `git rev-parse` refuses it for "dubious ownership", and a source tarball has
+# no `.git` at all. Either way the whole install reported NOT BUILT while sitting
+# beside a perfectly good `target/release`. A path two levels up from
+# `tools/oneclick/` is a fact about the repository layout, and it cannot lie.
+REPO=""
+_self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P) || _self_dir=""
+if [ -n "$_self_dir" ]; then
+    _maybe=$(CDPATH= cd -- "$_self_dir/../.." 2>/dev/null && pwd -P) || _maybe=""
+    # Confirm it really is this repository before believing it — the script is
+    # also installed to /usr/local/bin in the image, where `../..` is `/usr`.
+    if [ -n "$_maybe" ] \
+        && [ -f "$_maybe/Cargo.toml" ] \
+        && [ -f "$_maybe/third_party/dmg-acid2/dmg-acid2.gb" ]; then
+        REPO=$_maybe
+    fi
+fi
+
+# These three take the `if ... then ... fi` shape rather than `[ … ] && { … }`.
+# Under `set -e` an `&&` list whose left side is false returns non-zero, and as
+# the last command of a loop body that ends the script — so the tidier spelling
+# would turn "this candidate does not exist" into a silent exit.
+
+# Find a program: PATH first (the container installs them there), then a release
+# build in the clone, then an example binary of the same name.
+find_bin() {
+    _name=$1
+    if command -v "$_name" >/dev/null 2>&1; then
+        command -v "$_name"
+        return 0
+    fi
+    if [ -n "$REPO" ]; then
+        for _c in \
+            "$REPO/target/release/$_name" \
+            "$REPO/target/release/examples/$_name"
+        do
+            if [ -x "$_c" ]; then
+                printf '%s\n' "$_c"
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+
+# The default cartridge: the MIT-licensed dmg-acid2 PPU test that ships with the
+# repository. It is the only game content here and the only game content there
+# will ever be — nothing in this project ships or downloads a commercial ROM.
+default_rom() {
+    for _c in \
+        "${TERMINALGB_ROM_DIR:-/opt/terminalgb/roms}/dmg-acid2.gb" \
+        "$REPO/third_party/dmg-acid2/dmg-acid2.gb"
+    do
+        if [ -f "$_c" ]; then
+            printf '%s\n' "$_c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+agent_dir() {
+    for _c in \
+        "${TERMINALGB_AGENT_DIR:-/opt/terminalgb/agent}" \
+        "$REPO/tools/claude_plays"
+    do
+        if [ -d "$_c" ]; then
+            printf '%s\n' "$_c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+die() { printf '%s: %s\n' "$SELF" "$*" >&2; exit 1; }
+
+# Resolve the ROM argument, falling back to the vendored one and saying so.
+resolve_rom() {
+    if [ -n "${1:-}" ]; then
+        [ -f "$1" ] || die "no such ROM: $1"
+        printf '%s\n' "$1"
+        return 0
+    fi
+    _d=$(default_rom) || die "no ROM given and the bundled dmg-acid2 is missing"
+    printf '%s\n' "$_d"
+    printf '%s: no ROM given — using the bundled MIT dmg-acid2 test ROM.\n' "$SELF" >&2
+    printf '%s: point it at a cartridge you own with: %s %s /path/to/game.gb\n' \
+        "$SELF" "$SELF" "${MODE:-play}" >&2
+}
+
+# ---------------------------------------------------------------------------
+# modes
+# ---------------------------------------------------------------------------
+
+mode_play() {
+    _bin=$(find_bin terminalgb) || die "terminalgb is not built — run: cargo build --release --no-default-features --features tui,mcp,image --bin terminalgb"
+    _rom=$(resolve_rom "${1:-}")
+    exec "$_bin" "$_rom"
+}
+
+mode_mcp() {
+    _bin=$(find_bin terminalgb-mcp) || die "terminalgb-mcp is not built — run: cargo build --release --features mcp --bin terminalgb-mcp"
+    _rom=$(resolve_rom "${1:-}")
+    # `shift` is a POSIX *special* built-in: shifting an empty argument list is
+    # an error, and an error in a special built-in exits a non-interactive shell
+    # whatever `|| true` says. So test first. (`terminalgb-run mcp` with no ROM
+    # exited 2 with no diagnostic until this was guarded.)
+    if [ $# -gt 0 ]; then shift; fi
+    # stdin/stdout are the MCP transport, so every diagnostic goes to stderr.
+    printf '%s: MCP server on stdio, cartridge %s\n' "$SELF" "$_rom" >&2
+    printf '%s: this is not interactive — point an MCP client at it (docs/mcp.md).\n' "$SELF" >&2
+    exec "$_bin" --rom "$_rom" "$@"
+}
+
+mode_agent() {
+    _bin=$(find_bin terminalgb-agent) || _bin=$(find_bin claude_plays) \
+        || die "the agent runner is not built — run: cargo build --release --features image,plugin-agent --example claude_plays"
+    _rom=$(resolve_rom "${1:-}")
+    # Run artefacts go under `target/` in a clone, which is already ignored, so
+    # a run does not leave an untracked directory in the working tree; in the
+    # container there is no clone, so they land in the working directory.
+    if [ -n "${TERMINALGB_RUN_DIR:-}" ]; then
+        _out=$TERMINALGB_RUN_DIR
+    elif [ -n "$REPO" ]; then
+        _out=$REPO/target/agent-run
+    else
+        _out=./terminalgb-run
+    fi
+    mkdir -p "$_out"
+
+    _frames=${TERMINALGB_AGENT_FRAMES:-6000}
+
+    # The autonomous loop reads Pokémon Red/Blue: it has a structured view of
+    # the party, the map and the battle, and it declines to press buttons at a
+    # cartridge it cannot read rather than flailing. So say that here, before
+    # the run, rather than letting the refusal look like a broken install.
+    if [ -z "${1:-}" ]; then
+        printf '%s: the agent plays Pokémon Red/Blue and will decline the bundled\n' "$SELF" >&2
+        printf '%s: test ROM — it has no party and no map to reason about.\n' "$SELF" >&2
+        printf '%s: for an AI driving *any* cartridge, use `%s mcp` instead.\n' "$SELF" "$SELF" >&2
+    fi
+
+    if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+        # No key: run the same loop with the free local driver. This is not a
+        # pretend model — it exercises the whole substrate and prints the real
+        # emulated frame rate, which is the number that says the emulator never
+        # waits on the agent.
+        printf '%s: ANTHROPIC_API_KEY is not set — running the free `random` driver.\n' "$SELF" >&2
+        printf '%s: it presses buttons and reports the speed; it does not think.\n' "$SELF" >&2
+        printf '%s: set the key (a Codespaces secret, or `export`) for a real model.\n' "$SELF" >&2
+        exec "$_bin" --rom "$_rom" --driver random \
+            --frames "$_frames" --report --log "$_out/agent.ndjson"
+    fi
+
+    # The adapter is a program that turns a state snapshot on stdin into a plan
+    # on stdout — the emulator has no HTTP client and never will (it would be a
+    # dependency in every build, including wasm and FFI). `TERMINALGB_AGENT_CMD`
+    # replaces the whole command, so a local model or another vendor's CLI drops
+    # in without touching this script.
+    if [ -n "${TERMINALGB_AGENT_CMD:-}" ]; then
+        # Deliberately unquoted: the value is a command line, not a filename.
+        # shellcheck disable=SC2086
+        set -- $TERMINALGB_AGENT_CMD
+        _shown=$1
+    else
+        _adapters=$(agent_dir) || die "the agent adapters are missing (tools/claude_plays)"
+        _adapter=${TERMINALGB_AGENT_ADAPTER:-$_adapters/claude_api_adapter.py}
+        [ -f "$_adapter" ] || die "no adapter at $_adapter"
+        command -v python3 >/dev/null 2>&1 || die "python3 is needed by the adapter"
+        set -- python3 "$_adapter"
+        _shown=${_adapter##*/}
+    fi
+
+    # The *length* only. Never the value, not even a prefix — this line ends up
+    # in run logs and pasted terminal transcripts.
+    printf '%s: ANTHROPIC_API_KEY is set (%d characters) — using %s\n' \
+        "$SELF" "${#ANTHROPIC_API_KEY}" "$_shown" >&2
+    printf '%s: model %s; artefacts in %s\n' \
+        "$SELF" "${GB_AGENT_MODEL:-claude-haiku-4-5-20251001}" "$_out" >&2
+
+    # `--command` swallows the rest of the command line, so it goes LAST — the
+    # runner rejects an option after it rather than silently handing the option
+    # to the adapter. `set +e` so the leak check below runs even when the agent
+    # exits non-zero.
+    set +e
+    "$_bin" --rom "$_rom" \
+        --driver command \
+        --objective "${TERMINALGB_AGENT_OBJECTIVE:-Explore, and describe what you see.}" \
+        --frames "$_frames" \
+        --max-calls "${TERMINALGB_AGENT_MAX_CALLS:-12}" \
+        --max-usd "${TERMINALGB_AGENT_MAX_USD:-0.25}" \
+        --report \
+        --shots "$_out" \
+        --log "$_out/agent.ndjson" \
+        --command "$@"
+    _rc=$?
+    set -e
+
+    check_for_leaked_key "$_out"
+    exit "$_rc"
+}
+
+mode_doctor() {
+    printf 'TerminalGB — what is here\n\n'
+
+    for _b in terminalgb terminalgb-mcp; do
+        if _p=$(find_bin "$_b" 2>/dev/null); then
+            printf '  %-16s %s\n' "$_b" "$_p"
+        else
+            printf '  %-16s NOT BUILT\n' "$_b"
+        fi
+    done
+    # The agent runner is the `claude_plays` example; the image installs it as
+    # `terminalgb-agent`. Either name is the same program, so report it once.
+    if _p=$(find_bin terminalgb-agent 2>/dev/null) || _p=$(find_bin claude_plays 2>/dev/null); then
+        printf '  %-16s %s\n' "agent runner" "$_p"
+    else
+        printf '  %-16s NOT BUILT\n' "agent runner"
+    fi
+
+    printf '\n'
+    if _r=$(default_rom 2>/dev/null); then
+        printf '  bundled ROM      %s (MIT dmg-acid2)\n' "$_r"
+    else
+        printf '  bundled ROM      MISSING\n'
+    fi
+    if _a=$(agent_dir 2>/dev/null); then
+        printf '  agent adapters   %s\n' "$_a"
+    else
+        printf '  agent adapters   MISSING\n'
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        printf '  python3          %s\n' "$(python3 --version 2>&1)"
+    else
+        printf '  python3          NOT INSTALLED (the agent adapters need it)\n'
+    fi
+
+    printf '\n'
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        # Length only. Never the value, not even a prefix: this output is
+        # exactly the kind of thing that gets pasted into an issue.
+        printf '  ANTHROPIC_API_KEY  set, %d characters\n' "${#ANTHROPIC_API_KEY}"
+    else
+        printf '  ANTHROPIC_API_KEY  not set — `%s agent` will use the free driver\n' "$SELF"
+    fi
+
+    printf '\nRoughly what this costs you\n'
+    printf '  Codespace           free tier: 120 core-hours/month; a 2-core machine\n'
+    printf '                      idle-stops after 30 minutes and bills nothing while stopped.\n'
+    printf '  a short agent run   the caps below are the ceiling, not an estimate:\n'
+    printf '                      --max-calls %s, --max-usd %s.\n' \
+        "${TERMINALGB_AGENT_MAX_CALLS:-12}" "${TERMINALGB_AGENT_MAX_USD:-0.25}"
+    printf '  play / mcp          nothing. No model is called.\n'
+    printf '\nSee docs/quickstart.md for the detail.\n'
+}
+
+# ---------------------------------------------------------------------------
+# the key must not survive in a run artefact
+# ---------------------------------------------------------------------------
+#
+# The host copies an adapter's stderr verbatim into the NDJSON decision log
+# (`plugins/agent/src/lib.rs`, `log_record`) — deliberately, because that log is
+# where a failing call has to be diagnosable. The shipped adapters never print
+# the key, but the log is a *published artefact* here (people attach it to
+# issues, and a broadcast run publishes it), and a third-party adapter written
+# in an afternoon might. So the run's own output is checked before anyone is
+# invited to share it.
+#
+# The key is fed to grep on **stdin**, never as an argument: a command line is
+# world-readable in `ps` on a shared machine, which would defeat the exercise.
+check_for_leaked_key() {
+    _dir=$1
+    [ -n "${ANTHROPIC_API_KEY:-}" ] || return 0
+    [ -d "$_dir" ] || return 0
+
+    if printf '%s' "$ANTHROPIC_API_KEY" | grep -rqIF -f - "$_dir" 2>/dev/null; then
+        printf '\n%s: STOP — your API key appears in the run artefacts under %s.\n' \
+            "$SELF" "$_dir" >&2
+        printf '%s: something an adapter printed to stderr carried it into the log.\n' "$SELF" >&2
+        printf '%s: the affected files have been removed. Rotate that key, then fix\n' "$SELF" >&2
+        printf '%s: the adapter so it never prints the key.\n' "$SELF" >&2
+        printf '%s' "$ANTHROPIC_API_KEY" \
+            | grep -rlIF -f - "$_dir" 2>/dev/null \
+            | while IFS= read -r _f; do rm -f -- "$_f"; done
+        return 1
+    fi
+    printf '%s: checked %s — the API key is not in the run artefacts.\n' "$SELF" "$_dir" >&2
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+
+usage() {
+    cat <<EOF
+$SELF — one command per way of running TerminalGB
+
+  $SELF play  [rom]   the emulator, in this terminal (q to quit, ? for help)
+  $SELF mcp   [rom]   the Model Context Protocol server on stdio
+  $SELF agent [rom]   the headless agent, at speed
+  $SELF doctor        what is present, what is missing, what it costs
+
+With no [rom] it uses the bundled MIT dmg-acid2 test ROM. Point it at a
+cartridge you own to play a game: this project ships and downloads none.
+
+Environment:
+  ANTHROPIC_API_KEY          a real model for \`agent\`; without it, a free
+                             local driver runs the same loop
+  GB_AGENT_MODEL             default claude-haiku-4-5-20251001
+  TERMINALGB_RUN_DIR         where \`agent\` writes its artefacts
+  TERMINALGB_AGENT_FRAMES    emulated frames per \`agent\` run (default 6000)
+  TERMINALGB_AGENT_MAX_CALLS hard ceiling on model calls (default 12)
+  TERMINALGB_AGENT_MAX_USD   hard ceiling on approximate spend (default 0.25)
+
+Detail: docs/quickstart.md
+EOF
+}
+
+MODE=${1:-play}
+# Not `[ $# -gt 0 ] && shift`: under `set -e` a top-level `&&` whose left side is
+# false ends the script, so running with no arguments at all would have exited
+# silently instead of playing the bundled ROM.
+if [ $# -gt 0 ]; then shift; fi
+
+case "$MODE" in
+    play)   mode_play "$@" ;;
+    mcp)    mode_mcp "$@" ;;
+    agent)  mode_agent "$@" ;;
+    doctor) mode_doctor ;;
+    -h|--help|help) usage ;;
+    *) usage >&2; die "unknown mode: $MODE" ;;
+esac

@@ -1,0 +1,135 @@
+name: Container
+
+# The one-click path (docs/quickstart.md) is a build definition like any other,
+# so it gets a gate like any other. Two things are checked, and the second is
+# the one that matters:
+#
+#   1. the `dev` stage builds — that is what `.devcontainer/devcontainer.json`
+#      opens, so a break here is a Codespace that will not start;
+#   2. the shipped `runtime` image really emulates — the smoke test drives the
+#      MCP server over stdio and requires a decoded PNG back, which is the whole
+#      path (cartridge → emulator → frame → encoder → protocol) rather than a
+#      `--version` string.
+#
+# It does not push anywhere. Publishing an image is a decision with a registry,
+# a retention policy and a name behind it; this job only proves the definition
+# still works.
+
+on:
+  push:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.devcontainer/**'
+      - 'tools/oneclick/**'
+      - '.github/workflows/container.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.devcontainer/**'
+      - 'tools/oneclick/**'
+      - '.github/workflows/container.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+jobs:
+  image:
+    name: Build and smoke-test the image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # No submodules: the image must build from a plain clone, because that
+        # is what a Codespace and `docker build` from a fresh checkout get.
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The devcontainer's stage. It copies no source, so this is quick — but a
+      # broken `dev` stage is a Codespace that will not open, which is the
+      # failure mode nobody notices until a stranger tries the badge.
+      - name: The devcontainer stage builds
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: dev
+          push: false
+          load: true
+          tags: terminalgb:dev
+          cache-from: type=gha,scope=devstage
+          cache-to: type=gha,mode=max,scope=devstage
+
+      - name: The runtime image builds
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: false
+          load: true
+          tags: terminalgb:oneclick
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+
+      # Reported, not asserted: a size threshold in CI turns every Debian
+      # security update into a red build. docs/quickstart.md §4 carries the
+      # measured figures; this is here so a change to them is visible in the log.
+      - name: Image size
+        run: |
+          docker image ls terminalgb:oneclick
+          docker save terminalgb:oneclick \
+            | wc -c \
+            | awk '{printf "pull size: %.1f MB\n", $1/1048576}'
+
+      - name: doctor reports a complete install
+        run: |
+          out=$(docker run --rm terminalgb:oneclick doctor)
+          printf '%s\n' "$out"
+          # `if ! grep`, never `grep && { exit 1; }` — the step runs under
+          # `bash -e`, where a non-matching grep at the end of an `&&` list
+          # fails the step in the *good* case.
+          if printf '%s' "$out" | grep -q 'NOT BUILT'; then
+            echo "a binary is missing from the image"; exit 1
+          fi
+          if printf '%s' "$out" | grep -q 'MISSING'; then
+            echo "an asset is missing from the image"; exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'dmg-acid2'; then
+            echo "the bundled ROM is not in the image"; exit 1
+          fi
+          echo "ok"
+
+      # The real proof: initialise, run 120 frames, ask for a frame, and require
+      # a PNG that decodes to 160x144. A server that starts is not a server that
+      # emulates.
+      - name: The MCP server emulates and returns a real frame
+        run: |
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"step","arguments":{"frames":120}}}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"screenshot","arguments":{}}}' \
+            > /tmp/mcp-in.jsonl
+          docker run --rm -i terminalgb:oneclick mcp < /tmp/mcp-in.jsonl > /tmp/mcp-out.jsonl
+          python3 tools/oneclick/check_frame.py /tmp/mcp-out.jsonl
+
+      # With no key, `agent` must fall back to the free local driver and SAY so
+      # rather than quietly trying to call a model. It then declines the bundled
+      # test ROM, because the autonomous loop reads Pokémon Red/Blue — that
+      # refusal is the design, so the check is on the messages, not the exit
+      # code. `|| true` because declining is a non-zero exit.
+      - name: agent with no key falls back to the free driver and says so
+        run: |
+          out=$(docker run --rm terminalgb:oneclick agent 2>&1 || true)
+          printf '%s\n' "$out"
+          if ! printf '%s' "$out" | grep -q 'ANTHROPIC_API_KEY is not set'; then
+            echo "agent did not report the missing key"; exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'random'; then
+            echo "agent did not fall back to the free driver"; exit 1
+          fi
+          if ! printf '%s' "$out" | grep -q 'Pokémon Red/Blue'; then
+            echo "agent did not explain why it declines the bundled ROM"; exit 1
+          fi
+          echo "ok"
