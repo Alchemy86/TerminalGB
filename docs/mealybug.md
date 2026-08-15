@@ -1196,15 +1196,24 @@ both regressions and gains.
 
 | block | rows | winnable? |
 |---|---:|---|
-| **A** — the boot ROM's `®` glyph | 30 | **no**, and not ours to decide — see §8.6 |
+| **A** — the boot ROM's `®` glyph | 27 | **no**, and not ours to decide — see §8.6 |
 | **B** — CGB references that are colour photographs | 8 | **no** — see §8.7 |
 | **C** — the `*2` ROMs: a DMG build against a CGB-mode reference | 7 | **no** — new, §11.3 |
-| **D/E/F/G** — genuine mid-scanline error | **12** | yes — §11.4 |
+| **D/E/F/G** — genuine mid-scanline error | **11** | yes — §11.4 |
 
 So with the suite pinned as it is, and with the licensing decision of §8.6 standing, the
-reachable ceiling is **79 − 45 = 34 rows.** At <!--score:mealybug_accurate:pass-->22<!--/score-->
-that leaves **twelve rows in play**, not fifty-seven. Anyone planning work against this suite
-should plan against twelve.
+reachable ceiling is **79 − 42 = 37 rows.** At <!--score:mealybug_accurate:pass-->26<!--/score-->
+that leaves **eleven rows in play**, not fifty-three. Anyone planning work against this suite
+should plan against eleven.
+
+**`grep -l '\$19'` finds ten ROMs and only nine of them are blocked.**
+`m3_wx_4_change_sprites` places its objects with tile `$19` *and then fills all tile character
+data with `$FF`* before it starts, so the glyph never reaches the screen; its three rows are
+pixel-exact now. Referencing the tile is a first pass, not a verdict — check whether the ROM
+overwrites it. The nine that genuinely depend on it write nothing at `$8190`:
+`m3_bgp_change_sprites`, `m3_lcdc_bg_map_change`, `m3_lcdc_obj_en_change`,
+`m3_lcdc_obj_en_change_variant`, `m3_lcdc_tile_sel_change`, `m3_lcdc_tile_sel_win_change`,
+`m3_lcdc_win_map_change`, `m3_obp0_change`, `m3_scx_low_3_bits`.
 
 **Block A still repays effort even though it cannot reach zero.** What is left in those ten
 ROMs after the missing glyph is ordinary mid-scanline error of exactly the kinds D/E/F name, so
@@ -1266,7 +1275,7 @@ Measured on the `identical` engine at the head of this campaign.
 
 | group | rows | code | signature |
 |---|---|---|---|
-| **D** window / `WX` | `m3_wx_4_change@DMG` 12,409 · `m3_wx_5_change@DMG` 12,015 · `m3_wx_6_change@DMG` 5,734 · `m3_lcdc_win_en_change_multiple_wx@DMG` 1,141 | `check_window_start`, `check_window_stop`, the head-of-line prologue | the window's tile grid, and `WX` moved before the trigger |
+| **D** window / `WX` | `m3_wx_5_change@DMG` 13,660 · `m3_wx_6_change@DMG` 4,792 · `m3_lcdc_win_en_change_multiple_wx@DMG` 1,273 | `check_window_start`, `check_window_stop`, `prologue_pos` | `LCDC.5` toggled and `WX` moved *after* the window has started |
 | **E** `SCY` / bitplane mix | `m3_scy_change` 257 / 560 / 116 | `fetch_tile_number`, `lo_hi`, the `$FF42`/`$FF43` arms of `ppu_write_commit` | **tile 1 only**, and it renders the previous scanline's `SCY` |
 | **F** the object fetch | `m3_lcdc_obj_size_change` 51 / 10 / 10 · `m3_lcdc_obj_size_change_scx@DMG` 30 | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
 | **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records the dead end |

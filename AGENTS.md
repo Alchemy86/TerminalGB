@@ -5194,15 +5194,15 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   `intr_2_mode3_timing`, exactly, in both directions — which is the signature of a constant
   absorbing an error somewhere else, and is what sent the search to the mode-0 end.
 
-### The head of a scanline: the discard, and where the window really starts (Mealybug identical 17/79 → 22/79)
+### The head of a scanline: the discard, and where the window really starts (Mealybug identical 17/79 → 26/79)
 
 **Full record, including the corrected denominator, `docs/mealybug.md` §11.** Suite total on
-the `identical` engine 630,266 → **567,482 px**; `standard` byte-identical throughout, Mooneye
+the `identical` engine 630,266 → **498,206 px**; `standard` byte-identical throughout, Mooneye
 95/103 + 8/8 (**103/103** on `identical`), SameSuite 72/76, `cpp` 4/4, in-repo harness 46/47 on
 both engines.
 
-- **45 OF THE 57 FAILING ROWS CANNOT BE WON BY PPU WORK, AND ANYONE PLANNING AGAINST THIS SUITE
-  SHOULD PLAN AGAINST TWELVE.** 30 rows need the boot ROM's `®` glyph (a captain decision, not a
+- **42 OF THE 53 FAILING ROWS CANNOT BE WON BY PPU WORK, AND ANYONE PLANNING AGAINST THIS SUITE
+  SHOULD PLAN AGAINST ELEVEN.** 27 rows need the boot ROM's `®` glyph (a captain decision, not a
   crew one — §8.6), 8 compare our greyscale against a colour reference (§8.7), and **7 are a
   suite ROM/reference mismatch** — the `*2` ROMs ship a DMG build (`$0143 = $00`) and are scored
   against a CGB-mode reference. That last one is new and it is *proved*: our frame is
@@ -5210,6 +5210,9 @@ both engines.
   15,379 match ours to the pixel; its 2,729 green + 140 pink are our 2,869 grey), and patching
   the flag in a scratch copy drops the row 18,108 → 2,869. **Do not close them by forcing the
   flag in the runner** — that is the runner measuring a machine the cartridge does not ask for.
+  **`grep -l '$19'` finds ten ROMs for block A and only nine are blocked**: `m3_wx_4_change_sprites`
+  references the glyph and then fills every tile with `$FF`, so it never reaches the screen.
+  Referencing a tile is a first pass, not a verdict.
 - **THE `expected/` IMAGES ARE THE AUTHOR'S OWN EMULATOR'S SCREENSHOTS, NOT PHOTOGRAPHS.** His
   README says so plainly ("screenshots from my Game Boy emulator (which I believe to be
   correct)", with blurry hardware photos in a separate `photos/`). Still somebody else's
@@ -5236,6 +5239,18 @@ both engines.
   `m3_window_timing_wx_0` outright. `prologue_pos`'s dummy-fetch dots must stay **negative** or
   `WX = 7` matches `lx == 0` on dot 0 and truncates the prologue. Worth `m3_wx_4_change@DMG`
   **12,409 → 229 px**.
+- **THE WINDOW PIXEL-INSERTION GLITCH: once `WY == LY` has latched for the frame, a background
+  push landing on the pixel the window starts at supplies one transparent pixel instead of the
+  tile and postpones the real push a dot.** It does not need the window to be drawing and the
+  window's own first tile is exempt (docboy `handle_pixel_slice_fetcher_push`; SameBoy
+  `insert_bg_pixel`). A push only ever lands on the eight-pixel grid, so it is reachable on one
+  line in eight — which is why `m3_wx_4_change@DMG` was 229 pixels and not 23,040.
+- **AND THE WINDOW'S OFF-SCREEN PIXELS MUST NOT SHIFT THE SPRITE FIFO.** An object's `X` is a
+  *screen* coordinate, so consuming its leading pixels against the `7 - WX` pixels of the
+  window's first tile that fall off the left edge costs an object at the left edge exactly that
+  many of its own. Worth three rows on `m3_wx_4_change_sprites`. The `SCX & 7` discards
+  deliberately keep shifting it — nothing measures them and `m3_bgp_change_sprites` is the row
+  that would notice.
 - **An object's row index is MASKED, not clamped, and Y-flip is an XOR against the same mask.**
   `LCDC.2` is read at the bitplane fetch, so the scan can accept an object as sixteen tall and
   the fetch find it eight — a row of 8-15 with three bits to hold it. Hardware has no comparator
@@ -5259,9 +5274,9 @@ both engines.
   A/B, four rounds), i.e. **0.07 % of a 16.743 ms frame**, and the `standard` engine is
   unmoved (0.235). `RenderMode::IDENTICAL_COST` is still 2.1 and `testharness/ppuengines.rs`
   still agrees.
-- `savestate::FORMAT_VERSION` 19 → **21**: v20 because `Pipeline::discard` changed meaning
+- `savestate::FORMAT_VERSION` 19 → **22**: v20 because `Pipeline::discard` changed meaning
   (a count, not a countdown — same width, same place, so nothing about the layout moved), v21
-  for `Pipeline::win_skip`.
+  for `Pipeline::win_skip`, v22 for `Pipeline::win_fresh`.
 
 ## Optional user-supplied boot ROM (`src/boot.rs`) — the answer to Blocker C
 
