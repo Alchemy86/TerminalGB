@@ -1,9 +1,3 @@
-# The Gen 1 memory atlas — the single source of truth.
-# Generated columns (region bank addr len symbol role) come from a built
-# pret/pokered checkout via tools/gen1-atlas/extract.py; the rest are ours.
-# Rendered to Markdown by tools/gen1-atlas/render.py, checked against a
-# running cartridge by testharness/gen1atlas.rs.  Do not hand-edit the
-# generated columns.
 region	bank	addr	len	symbol	role	sect	group	verify	desc
 VRAM	-	$8000	2048	vChars0	entry	VRAM	graphics	rom,live	The first of three tile blocks in video RAM, `$8000-$87FF`. Objects are always fetched from here and the block above it.
 VRAM	-	$8000	2048	vNPCSprites	alias	VRAM	graphics	rom,live	The overworld people's tiles.

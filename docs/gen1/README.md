@@ -23,7 +23,7 @@ Anything unproven says so.
 
 | Page | What it covers | Status |
 |---|---|---|
-| [**The memory atlas**](atlas/README.md) | The whole address space, region by region: what lives where, what is unused, and the evidence for every entry. Indexed [by address](atlas/by-address.md) and [by name](atlas/by-name.md) | **every byte of WRAM and HRAM accounted for; checked against a running cartridge** |
+| [**The memory atlas**](atlas/README.md) | The whole address space, region by region: what lives where, what is unused, and the evidence for every entry — indexed by address and by name. It lives at [AtlasGB](https://github.com/Alchemy86/AtlasGB) now; this page is how this repository consumes it and publishes the evidence back | **every byte of WRAM and HRAM accounted for; checked against a running cartridge** |
 | [Memory map](memory-map.md) | Where the game keeps the party, the battle, the screen, the map and the dice — with the symbol name and the derivation for every address | **verified on the retail ROM** |
 | [Authoring an area](authoring-an-area.md) | What a room is made of, how the engine loads one, and the recipe for building a new one in memory and walking into it through an ordinary door — with the ceilings, and Gen 2 scoped | **built and walked on the retail ROM** |
 | [Battle control](battle-control.md) | Starting any battle on demand: wild, trainer, custom teams on both sides, and scripting one as an in-game cinematic | **verified on the retail ROM** |

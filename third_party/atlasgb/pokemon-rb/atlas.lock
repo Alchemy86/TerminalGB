@@ -1,0 +1,11 @@
+# Pinned AtlasGB snapshot. Written by tools/fetch-atlas.sh — do not hand-edit,
+# and do not hand-edit atlas.tsv either: fix it upstream and re-pin. The sha256
+# below is what --verify, and testharness/gen1atlas.rs, compare against.
+repo=https://github.com/Alchemy86/AtlasGB
+atlas=pokemon-rb
+file=atlases/pokemon-rb/data/atlas.tsv
+ref=1f8e7fe6d84ac65e774b9bde318d33a62eca30ad
+commit=1f8e7fe6d84ac65e774b9bde318d33a62eca30ad
+sha256=dc07eeec54e9f18303b2843c3d8cc21bf9aaa96faae131ae20efde442074598c
+fetched=2026-08-15
+origin=https://raw.githubusercontent.com/Alchemy86/AtlasGB/1f8e7fe6d84ac65e774b9bde318d33a62eca30ad/atlases/pokemon-rb/data/atlas.tsv

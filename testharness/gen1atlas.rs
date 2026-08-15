@@ -1,5 +1,5 @@
 //! **The Gen 1 memory atlas harness** — the machinery that keeps
-//! [`docs/gen1/atlas/`](../docs/gen1/atlas/README.md) true.
+//! [AtlasGB](https://github.com/Alchemy86/AtlasGB)'s evidence true.
 //!
 //! A memory map is easy to write and impossible to trust. Every published Gen 1
 //! map — the disassembly's own `ram/wram.asm`, the wiki tables, the cheat-code
@@ -9,17 +9,32 @@
 //! the atlas is not a transcription, it is a set of claims, and this is the thing
 //! that checks them.
 //!
+//! ## The atlas lives upstream; the evidence is produced here
+//!
+//! The data is [`third_party/atlasgb/pokemon-rb/atlas.tsv`](../third_party/atlasgb/README.md),
+//! a pinned snapshot of AtlasGB, which owns it and owns every check provable
+//! from the file alone. This repository owns the half upstream cannot do for
+//! itself: **proving an address against a running cartridge needs a cartridge
+//! and an emulator.** So the flow is one way — the snapshot comes in, and the
+//! evidence goes back out as a report (`ATLAS_EVIDENCE_OUT`, below).
+//!
+//! One consequence, and it is the important one: **the `verify` column is not
+//! ours to rewrite any more.** There is no re-bless flag here. A disagreement
+//! with the vendored atlas is a real finding, and it is landed upstream where
+//! CI checks a digest of what was actually run.
+//!
 //! ## Three tiers, and only the first needs anything
 //!
-//! **Tier A — structure. No ROM, runs in CI on every `cargo test --release`.**
-//! The atlas parses; every address lies inside the region it claims; entries in a
-//! region march strictly upwards; each entry's `len` really is the distance to
-//! the next address; the WRAM walk has no unexplained gap; every `verify` token
-//! is from the vocabulary; and — the anti-drift gate — **every Gen 1 address
-//! hard-coded in the plugins is in the atlas**. That last one is the point of
-//! having a single source of truth at all: `wCurMap` was spelled out in nine
-//! separate files before this existed, and nothing could tell you whether they
-//! agreed.
+//! **Tier A — structure. No ROM, no network, runs in CI on every
+//! `cargo test --release`.** The vendored snapshot is the one `atlas.lock`
+//! pinned; the atlas parses; every address lies inside the region it claims;
+//! entries in a region march strictly upwards; each entry's `len` really is the
+//! distance to the next address; the WRAM walk has no unexplained gap; every
+//! `verify` token is from the vocabulary; and — the anti-drift gate — **every
+//! Gen 1 address hard-coded in the plugins is in the atlas**. That last one is
+//! the point of having a single source of truth at all: `wCurMap` was spelled
+//! out in nine separate files before this existed, and nothing could tell you
+//! whether they agreed.
 //!
 //! **Tier B — the cartridge image.** For each entry, look for its address as the
 //! operand of an instruction that takes one. `ld [nn],a` is `EA lo hi`; `ldh
@@ -42,17 +57,27 @@
 //! must be 44. These are the strongest evidence in the file and the only kind
 //! that can catch an address that is real, live, and describing the wrong thing.
 //!
-//! ## The baseline
+//! ## The baseline, and publishing evidence back
 //!
-//! Tier B and C write the atlas's `verify` column, under the rule every baseline
-//! in this repository follows: **any change is red in either direction**, an
-//! entry that starts being verified is a baseline change too, and you re-bless
-//! deliberately:
+//! The vendored `verify` column *is* the baseline, under the rule every baseline
+//! in this repository follows: **any change is red in either direction**, and an
+//! entry that starts being verified is a change too. What is different here is
+//! where a change is landed. It is not re-blessed in place — the lock check
+//! would catch that, which is the point of having one — it is published:
 //!
 //! ```text
-//! cargo test --release --test gen1atlas                   # check
-//! UPDATE_ATLAS_VERIFY=1 cargo test --release --test gen1atlas   # re-bless
+//! cargo test --release --test gen1atlas                        # check
+//! ATLAS_EVIDENCE_OUT=report.json \
+//!   POKE_ROM=~/roms/pokeblue.gb cargo test --release --test gen1atlas
+//! # then, in a clone of AtlasGB:
+//! tools/apply-evidence.py report.json && make docs data
 //! ```
+//!
+//! The report is `atlasgb-evidence/1` and carries **every symbol in the atlas**,
+//! including the ones that earned nothing: upstream refuses a partial report
+//! rather than guessing, because an omission would read as a downgrade. It is
+//! written only when `ATLAS_EVIDENCE_OUT` names a path — a file that appeared on
+//! every test run is a file somebody commits by accident.
 //!
 //! ## Running it
 //!
@@ -69,8 +94,14 @@
 //!
 //! **It never writes beside your cartridge.** The ROM is staged into `target/`
 //! first, because the MBC writes a `.sav` next to whatever path it was given.
+//!
+//! **Nothing here touches the network**, including the lock check: `sha256` below
+//! is hand-rolled for the same reason the FNV hash, the PNG codec and the
+//! inflater in `testharness/` are. A build must not need `sha256sum` on the path,
+//! and `make embed`'s one-third-party-dependency rule must not move.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use terminalgb::gameboy::Gameboy;
@@ -80,7 +111,22 @@ use terminalgb::KeypadKey;
 // The atlas file
 // ---------------------------------------------------------------------------
 
-const ATLAS: &str = "docs/gen1/atlas/atlas.tsv";
+/// Which of AtlasGB's atlases this harness verifies. AtlasGB is an atlas
+/// *project*: `pokemon-rb` is its first and the only one this repository has a
+/// use for, but the vendored copy is namespaced the same way upstream is so a
+/// second one costs no restructuring here either.
+const ATLAS_ID: &str = "pokemon-rb";
+
+/// The pinned AtlasGB snapshot, vendored by `tools/fetch-atlas.sh`. Vendored
+/// rather than fetched at build time so that everything in Tier A — the
+/// structure and the anti-drift gate — runs on a plain `cargo test` with no
+/// network, which is the whole reason it catches drift on the commit that
+/// introduces it rather than in a nightly job.
+const ATLAS: &str = "third_party/atlasgb/pokemon-rb/atlas.tsv";
+
+/// The lock beside it: `key=value` lines recording the atlas, the ref, the
+/// commit and the sha256 of exactly the bytes that were pinned.
+const ATLAS_LOCK: &str = "third_party/atlasgb/pokemon-rb/atlas.lock";
 
 /// Region extents as the Game Boy's address decoder sees them. An atlas entry
 /// claiming a region must lie inside it — a claim we can check without a ROM,
@@ -151,6 +197,137 @@ fn parse_atlas(text: &str) -> Result<Vec<Entry>, String> {
         });
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// The lock — is the vendored copy the one that was pinned?
+// ---------------------------------------------------------------------------
+
+/// SHA-256 of `data`, hand-rolled (FIPS 180-4).
+///
+/// No new crate: the dependency count of this repository is a contract that
+/// `make embed` measures, and one hash is not worth spending it on — the FNV
+/// hash, the PNG writer, the PNG reader and the deflater in `testharness/` and
+/// `src/` were all written for exactly this reason. Shelling out to `sha256sum`
+/// was the other option and is worse: it puts a program that may not exist on
+/// the path of `cargo test`, on every platform this core is cross-built for.
+fn sha256(data: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+        0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+        0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+        0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+        0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+        0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+        0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c,
+        0x1f83d9ab, 0x5be0cd19,
+    ];
+
+    let mut msg = data.to_vec();
+    let bits = (data.len() as u64).wrapping_mul(8);
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bits.to_be_bytes());
+
+    let mut w = [0u32; 64];
+    for chunk in msg.chunks_exact(64) {
+        for (i, word) in chunk.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..64 {
+            let s0 =
+                w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 =
+                w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let (mut a, mut b, mut c, mut d) = (h[0], h[1], h[2], h[3]);
+        let (mut e, mut f, mut g, mut hh) = (h[4], h[5], h[6], h[7]);
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let t1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        for (slot, v) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+            *slot = slot.wrapping_add(v);
+        }
+    }
+    h.iter()
+        .fold(String::with_capacity(h.len() * 8), |mut s, v| {
+            let _ = write!(s, "{v:08x}");
+            s
+        })
+}
+
+/// `key=value` lines. The lock is deliberately not JSON: the shell script that
+/// writes it needs no parser to read one back, and neither does this.
+fn lock_get(lock: &str, key: &str) -> Option<String> {
+    lock.lines()
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix('=').map(str::to_string))
+}
+
+/// The check that makes vendoring safe: a vendored file is exactly the file
+/// somebody will eventually hand-edit instead of fixing upstream, and the
+/// `verify` column is the column they would be tempted to edit. Offline, so it
+/// runs here on every test rather than only in a job that reaches the network.
+fn tier_a_lock(raw: &[u8], report: &mut Report) {
+    let Ok(lock) = std::fs::read_to_string(ATLAS_LOCK) else {
+        report.check(
+            "the snapshot matches its lock",
+            false,
+            format!(
+                "{ATLAS_LOCK} is missing — re-pin with tools/fetch-atlas.sh --ref <tag>"
+            ),
+        );
+        return;
+    };
+    let want = lock_get(&lock, "sha256").unwrap_or_default();
+    let got = sha256(raw);
+    let re_pin = lock_get(&lock, "ref").unwrap_or_else(|| "?".into());
+    report.check(
+        "the snapshot matches its lock",
+        want == got,
+        if want == got {
+            format!("{} @ {}", re_pin, &got[..10])
+        } else {
+            format!(
+                "{ATLAS} is not the file that was pinned: locked {} , actual {} . \
+                 Do not edit it here — the verify column is written by landing a \
+                 verification report upstream (see third_party/atlasgb/README.md); \
+                 fix the data at https://github.com/Alchemy86/AtlasGB and re-pin.",
+                &want[..want.len().min(10)],
+                &got[..10]
+            )
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,6 +1288,207 @@ const INVARIANTS: &[Invariant] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Publishing evidence back to AtlasGB
+// ---------------------------------------------------------------------------
+
+/// SHA-1 of `data` (FIPS 180-4). AtlasGB's record identifies the cartridge a
+/// run was made against by its SHA-1, which is the digest the disassembly's own
+/// `roms.sha1` uses, so this is the number a reader can check for themselves.
+/// Hand-rolled for the same reason `sha256` above is.
+fn sha1(data: &[u8]) -> String {
+    let mut h: [u32; 5] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
+    let mut msg = data.to_vec();
+    let bits = (data.len() as u64).wrapping_mul(8);
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bits.to_be_bytes());
+
+    let mut w = [0u32; 80];
+    for chunk in msg.chunks_exact(64) {
+        for (i, word) in chunk.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for (i, wi) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5a827999u32),
+                20..=39 => (b ^ c ^ d, 0x6ed9eba1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
+                _ => (b ^ c ^ d, 0xca62c1d6),
+            };
+            let t = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*wi);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = t;
+        }
+        for (slot, v) in h.iter_mut().zip([a, b, c, d, e]) {
+            *slot = slot.wrapping_add(v);
+        }
+    }
+    h.iter()
+        .fold(String::with_capacity(h.len() * 8), |mut s, v| {
+            let _ = write!(s, "{v:08x}");
+            s
+        })
+}
+
+/// Best effort, and it says so when it cannot answer: the report records which
+/// commit of this repository produced it, so a tier in the published atlas
+/// names a run somebody else could repeat. Only reached when the report is
+/// being written, so a machine with no `git` costs a field, not a test.
+fn this_commit() -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Emit an `atlasgb-evidence/1` report — the half of the loop this repository
+/// owns. AtlasGB cannot produce a tier for itself: proving an address against a
+/// running cartridge needs a cartridge and an emulator, and it has neither. So
+/// the tiers arrive there as this file, `tools/apply-evidence.py` lands it, and
+/// upstream CI then holds the `verify` column to a digest of what was run.
+///
+/// Two rules from upstream's contract, both load-bearing:
+///
+/// * **Every symbol in the atlas appears**, including the ones that earned
+///   nothing. `apply-evidence.py` refuses a partial report rather than guessing,
+///   because an omission would silently read as a downgrade. An empty list is a
+///   claim the report is making — "no evidence" — not an absence.
+/// * **It is written only when asked.** A file that appeared on every test run
+///   is a file somebody commits by accident, and publishing evidence is a
+///   deliberate act.
+fn write_evidence_report(
+    entries: &[Entry],
+    fresh_verify: &BTreeMap<String, String>,
+    rom_path: &Path,
+    rom_bytes: &[u8],
+    title: &str,
+    with_save: bool,
+) {
+    let Ok(path) = std::env::var("ATLAS_EVIDENCE_OUT") else {
+        return;
+    };
+
+    let date = lock_get(
+        &std::fs::read_to_string(ATLAS_LOCK).unwrap_or_default(),
+        "fetched",
+    )
+    .unwrap_or_else(|| "unknown".into());
+    // The report's own date, not the snapshot's, when one is offered: a run is
+    // dated by when it ran. `ATLAS_EVIDENCE_DATE` exists so a publication can be
+    // stamped without this harness reaching for a clock it otherwise never uses.
+    let date = std::env::var("ATLAS_EVIDENCE_DATE").unwrap_or(date);
+
+    let mut out = String::new();
+    out.push_str("{\n \"schema\": \"atlasgb-evidence/1\",\n");
+    // Which atlas this run is evidence for. Optional in the schema — upstream
+    // defaults it to whatever `--atlas` names — but naming it is the better
+    // habit now that AtlasGB carries more than one, and it makes the report
+    // self-describing rather than dependent on how it happens to be landed.
+    out.push_str(&format!(" \"atlas\": \"{ATLAS_ID}\",\n"));
+    out.push_str(&format!(
+        " \"produced_by\": {{\"repo\": \"Alchemy86/TerminalGB\", \"commit\": \"{}\", \
+          \"harness\": \"testharness/gen1atlas.rs\"}},\n",
+        json_escape(&this_commit())
+    ));
+    // The region comes out of the cartridge header's destination code ($014A),
+    // not out of a constant written beside it: everything the report claims
+    // about the cartridge should be something a reader can recompute from the
+    // same bytes, which is the whole reason the sha1 is there.
+    let region = match rom_bytes.get(0x014A) {
+        Some(0x00) => "Japan",
+        Some(_) => "USA/Europe",
+        None => "unknown",
+    };
+    out.push_str(&format!(
+        " \"cartridge\": {{\"title\": \"{}\", \"region\": \"{region}\", \"sha1\": \"{}\", \
+          \"bytes\": {}}},\n",
+        json_escape(title),
+        sha1(rom_bytes),
+        rom_bytes.len()
+    ));
+    // The live sweep is always a cold boot with no save — that is what makes it
+    // reproducible for anybody holding the cartridge. A save, when one is given,
+    // reaches only the invariants, and it changes which of them can run, so it
+    // is provenance worth recording rather than a detail.
+    out.push_str(&format!(
+        " \"script\": {{\"name\": \"opening+overworld\", \"frames\": {RUN_FRAMES}, \
+          \"save\": \"none (cold boot){}\"}},\n",
+        if with_save {
+            "; a save was supplied to the invariants"
+        } else {
+            ""
+        }
+    ));
+    out.push_str(&format!(
+        " \"run\": {{\"date\": \"{}\"}},\n",
+        json_escape(&date)
+    ));
+    out.push_str(" \"verify\": {\n");
+    let rows: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            let toks: Vec<String> = fresh_verify[&e.symbol]
+                .split(',')
+                .filter(|t| !t.is_empty())
+                .map(|t| format!("\"{t}\""))
+                .collect();
+            format!("  \"{}\": [{}]", json_escape(&e.symbol), toks.join(", "))
+        })
+        .collect();
+    out.push_str(&rows.join(",\n"));
+    out.push_str("\n }\n}\n");
+
+    match std::fs::write(&path, out) {
+        Ok(()) => {
+            println!("\nEvidence report");
+            println!("  wrote {path} — {} symbols", entries.len());
+            println!("  cartridge {title:?} sha1 {}", sha1(rom_bytes));
+            println!("  from {}", rom_path.display());
+            println!(
+                "  land it in a clone of AtlasGB:\n    \
+                 tools/apply-evidence.py {path} && make docs data"
+            );
+        }
+        Err(e) => println!("\nEvidence report\n  could not write {path}: {e}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------
 
@@ -1184,10 +1562,18 @@ fn cartridge_title(rom: &[u8]) -> String {
 }
 
 fn main() {
-    println!("The Gen 1 memory atlas — verifying {ATLAS}\n");
+    println!("The Gen 1 memory atlas — verifying {ATLAS}");
+    println!("  the data is AtlasGB's; the evidence below is this repository's\n");
 
-    let Ok(text) = std::fs::read_to_string(ATLAS) else {
-        eprintln!("cannot read {ATLAS} — run this from the repository root");
+    let Ok(raw) = std::fs::read(ATLAS) else {
+        eprintln!(
+            "cannot read {ATLAS} — run this from the repository root, and if the \
+             file is absent vendor it with `tools/fetch-atlas.sh --ref <tag>`"
+        );
+        std::process::exit(1);
+    };
+    let Ok(text) = String::from_utf8(raw.clone()) else {
+        eprintln!("{ATLAS} is not UTF-8");
         std::process::exit(1);
     };
     let entries = match parse_atlas(&text) {
@@ -1200,6 +1586,7 @@ fn main() {
 
     let mut report = Report::new();
     println!("Tier A — structure (no cartridge needed)");
+    tier_a_lock(&raw, &mut report);
     tier_a(&entries, &mut report);
     tier_a_plugins(&entries, &mut report);
     report.print();
@@ -1406,7 +1793,6 @@ fn main() {
         fresh_verify.insert(e.symbol.clone(), toks.join(","));
     }
 
-    let update = std::env::var("UPDATE_ATLAS_VERIFY").is_ok();
     let mut moved: Vec<String> = Vec::new();
     for e in &entries {
         let now = &fresh_verify[&e.symbol];
@@ -1421,79 +1807,83 @@ fn main() {
         }
     }
 
+    // The vendored `verify` column is the baseline, and unlike every other
+    // baseline in this repository it is NOT re-blessed in place: it belongs to
+    // AtlasGB, which makes it unwritable by hand deliberately and checks a
+    // digest of it in its own CI. A disagreement is landed by publishing a
+    // report, which is what `ATLAS_EVIDENCE_OUT` is for.
     println!("\nBaseline");
     if moved.is_empty() {
         println!("  every entry's evidence matches {ATLAS}");
-    } else if update {
-        let mut out = String::new();
-        let mut header: Option<Vec<String>> = None;
-        for line in text.lines() {
-            if line.starts_with('#') || line.trim().is_empty() {
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            }
-            let fields: Vec<&str> = line.split('\t').collect();
-            let Some(h) = &header else {
-                header = Some(fields.iter().map(|s| s.to_string()).collect());
-                out.push_str(line);
-                out.push('\n');
-                continue;
-            };
-            let vi = h.iter().position(|c| c == "verify").unwrap();
-            let si = h.iter().position(|c| c == "symbol").unwrap();
-            let mut fields: Vec<String> = fields.iter().map(|s| s.to_string()).collect();
-            if let Some(v) = fresh_verify.get(&fields[si]) {
-                fields[vi] = v.clone();
-            }
-            out.push_str(&fields.join("\t"));
-            out.push('\n');
-        }
-        std::fs::write(ATLAS, out).expect("rewrite the atlas");
-        println!("  rewrote the verify column of {} entries", moved.len());
     } else {
-        println!("  {} entries disagree with the baseline:", moved.len());
+        println!("  {} entries disagree with the pinned atlas:", moved.len());
         for m in moved.iter().take(20) {
             println!("    {m}");
         }
         if moved.len() > 20 {
             println!("    ... and {} more", moved.len() - 20);
         }
-        println!("  re-bless with UPDATE_ATLAS_VERIFY=1 once you know why.");
+        println!(
+            "  This is not re-blessed here. Once you know why it moved, publish it:\n    \
+             ATLAS_EVIDENCE_OUT=report.json POKE_ROM=… cargo test --release --test gen1atlas\n    \
+             # then in a clone of AtlasGB: tools/apply-evidence.py report.json && make docs data\n  \
+             and re-pin with tools/fetch-atlas.sh once it has landed."
+        );
     }
+
+    write_evidence_report(
+        &entries,
+        &fresh_verify,
+        &staged,
+        &rom_bytes,
+        &title,
+        save_path.is_some(),
+    );
 
     // --- summary -----------------------------------------------------------
     // Counted from what this run observed, not from the file it may have just
     // rewritten — a summary that echoed the baseline back would say nothing.
-    let has = |tok: &str| {
-        fresh_verify
-            .values()
-            .filter(|v| v.split(',').any(|t| t == tok))
+    //
+    // Counted the way AtlasGB publishes them, so the two repositories cannot
+    // quote different numbers for the same run: the headline tiers are over
+    // *storage* entries, because "observed live" means something quite
+    // different for a table in the cartridge than for a byte of RAM. The
+    // all-entries figure is printed beside it rather than instead of it —
+    // three ROM labels earn `inv` by having their contents read, and folding
+    // those into the storage total is how 36 becomes an unexplained 39.
+    let storage = |e: &Entry| e.region != "ROM0" && e.region != "ROMX";
+    let has = |tok: &str, only_storage: bool| {
+        entries
+            .iter()
+            .filter(|e| !only_storage || storage(e))
+            .filter(|e| fresh_verify[&e.symbol].split(',').any(|t| t == tok))
             .count()
     };
-    let none = fresh_verify
+    let none = entries
         .iter()
-        .filter(|(sym, v)| {
-            v.is_empty()
-                && entries.iter().any(|e| {
-                    &e.symbol == *sym && e.region != "ROM0" && e.region != "ROMX"
-                })
-        })
+        .filter(|e| storage(e) && fresh_verify[&e.symbol].is_empty())
         .count();
     println!(
-        "\n{} entries: {} referenced by the cartridge, {} observed live, \
-         {} covered by an invariant, {none} storage entries with no evidence at all",
+        "\n{} storage entries of {}: {} referenced by the cartridge, {} observed live, \
+         {} covered by an invariant, {none} with no evidence at all",
+        entries.iter().filter(|e| storage(e)).count(),
         entries.len(),
-        has("rom"),
-        has("live"),
-        has("inv"),
+        has("rom", true),
+        has("live", true),
+        has("inv", true),
+    );
+    println!(
+        "  including the ROM-table labels: {} rom, {} live, {} inv",
+        has("rom", false),
+        has("live", false),
+        has("inv", false),
     );
     if inv_skipped > 0 {
         println!("{inv_skipped} invariant(s) skipped for want of a save");
     }
 
     let rom_failures = rom_checks.iter().filter(|(_, ok, _)| !ok).count();
-    if inv_failures > 0 || rom_failures > 0 || (!moved.is_empty() && !update) {
+    if inv_failures > 0 || rom_failures > 0 || !moved.is_empty() {
         std::process::exit(1);
     }
     println!("\nAll checks passed.");

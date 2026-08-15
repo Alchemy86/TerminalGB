@@ -3960,32 +3960,109 @@ that holds it to the retail cartridge, agents that play it, and an evaluation pr
   player's own cartridge, so they are run by hand — the same rule `tools/sameboy-oracle/` and
   `tools/bgb-interop/` follow. **No LLM has been measured through the seam**; it exists, is
   tested against a real child process, and has never had a model on the far end.
-## The Gen 1 memory atlas — the whole address space, verified (`docs/gen1/atlas/`)
+## The Gen 1 memory atlas — AtlasGB owns the data, this repo produces the evidence
 
-**Full page: [`docs/gen1/atlas/README.md`](docs/gen1/atlas/README.md); the data is
-`docs/gen1/atlas/atlas.tsv`; the machinery is `tools/gen1-atlas/` and
-`testharness/gen1atlas.rs`.** `docs/gen1/memory-map.md` is still the right page for *why* —
-it is task-shaped and explains mechanisms. The atlas is the *where*: 2,898 entries, **every
-byte of WRAM and HRAM accounted for**, indexed by address and by name, with the structures
-written out in full.
+**The atlas moved out.** It lives at **<https://github.com/Alchemy86/AtlasGB>** (MIT, its own
+CI, its own release cadence); a pinned snapshot is vendored here at
+[`third_party/atlasgb/pokemon-rb/`](third_party/atlasgb/README.md) and
+[`docs/gen1/atlas/README.md`](docs/gen1/atlas/README.md) is now a **pointer page**, not a copy —
+twenty-two generated pages and a 238 KB TSV used to be duplicated in this tree, and a mirror
+nothing regenerates is wrong within a month. The harness is still
+[`testharness/gen1atlas.rs`](testharness/gen1atlas.rs). `docs/gen1/memory-map.md` is still the
+right page for *why* — it is task-shaped and explains mechanisms. The atlas is the *where*:
+2,898 entries, **every byte of WRAM and HRAM accounted for**.
 
 - **THE POINT IS NOT THE MAP, IT IS THAT THE MAP IS CHECKED.** Every published Gen 1 memory
   map is a transcription — somebody read an address once and everybody since copied it. This
   repository has a cycle-accurate emulator, so an entry can carry *evidence*: **R** the
   cartridge names the address as an instruction operand, **L** the byte changed during a
   fixed script on a real cartridge, **I** a named invariant proved it means what it says.
-  Measured on the retail cartridge: 1,594 R, 2,694 L, 39 I, and **7 storage entries with no
-  evidence at all — which the pages say out loud** rather than hiding.
-- **`atlas.tsv` IS the source of truth and eight of its ten columns are generated.**
-  `region bank addr len symbol role sect` come from a built `pret/pokered` checkout whose
-  `pokeblue.gbc` matches `roms.sha1` (and is byte-identical to the captain's cartridge —
-  checked by SHA-1 before a single address is believed); `group` comes from the rules in
-  `tools/gen1-atlas/chapters.py`; `verify` is the machine's own baseline; only `desc` is
-  hand-written. **Never hand-edit a generated column.**
-- **`make gen1-atlas` renders 22 pages; `make docs-check` (already in CI) fails if any is
-  stale.** Prose outside the `<!-- atlas:… -->` markers is preserved, so writing and tables
-  live in one file and only one of them is machine-owned. Same habit as
-  `docs/tools/status_numbers.py`'s `suite-scores:begin`.
+- **THE SPLIT IS THE WHOLE POINT AND IT IS NOT ARBITRARY: upstream owns everything provable
+  from the file alone, we own everything that needs a machine.** AtlasGB's CI proves it
+  parses, that addresses lie inside their regions, that the walk is complete, that every link
+  resolves. It cannot prove a single tier, because proving an address against a running
+  cartridge needs a cartridge and an emulator and it has neither. So the flow is one way: the
+  snapshot comes in, the evidence goes back out as a report.
+- **QUOTE THE TIERS THE WAY UPSTREAM PUBLISHES THEM — over STORAGE entries.** On the retail
+  cartridge: **1,594 R, 2,694 L, 36 I, and 7 storage entries with no evidence at all**, which
+  the pages say out loud rather than hiding. Counting all 2,898 entries instead gives `inv`
+  **39**, because three ROM-table labels (`MonsterNames`, `BaseStats`, `PokedexOrder`) earn
+  `inv` by having their *contents* read out of the cartridge — "observed live" means something
+  quite different for a table in a ROM than for a byte of RAM. The harness now prints both
+  lines so 36 cannot silently become an unexplained 39; the older note here said 39 with no
+  qualifier and disagreed with the published atlas.
+- **THE `verify` COLUMN IS THE ONE BASELINE IN THIS REPOSITORY THAT IS NOT OURS TO REWRITE.**
+  There is no `UPDATE_ATLAS_VERIFY` any more and there must not be one: upstream makes that
+  column unwritable by hand on purpose and checks a SHA-256 digest of it in its own CI, so a
+  hand-edited tier is a claim with nothing behind it — the exact failure the project is a
+  reaction to. A disagreement is still red in either direction; it is landed by **publishing**:
+  `ATLAS_EVIDENCE_OUT=report.json POKE_ROM=… cargo test --release --test gen1atlas`, then
+  `tools/apply-evidence.py report.json && make docs data` in a clone of AtlasGB, then re-pin.
+  `make atlas-evidence` is the target. The report must carry **every symbol including the ones
+  that earned nothing** — a partial report reads as a downgrade and upstream refuses it — and
+  is written **only** when the env var names a path, because a file that appears on every test
+  run is a file somebody commits by accident. It also carries a top-level `"atlas"` key —
+  optional upstream (it defaults to `--atlas`) but the better habit now that there is more than
+  one atlas, because it makes the report self-describing rather than dependent on how it is
+  landed.
+- **The migration was proved faithful, not asserted: landing our report upstream moved 0
+  entries and reproduced the published `verify_digest` `sha256:59c413f2ff645ff3…` exactly.**
+  Do that check after any change to the tier machinery — it is the one measurement that says
+  the evidence this repository produces is the evidence the published atlas carries.
+- **ATLASGB IS AN ATLAS *PROJECT*, NOT ONE ATLAS, AND BOTH SIDES ARE NAMESPACED BY ATLAS ID.**
+  Pokémon Red/Blue is `pokemon-rb`, its first; upstream keeps the data at
+  `atlases/pokemon-rb/data/atlas.tsv`, project-wide pages at `docs/` (`consuming.md`,
+  `verification.md`, `schema.md`) and this atlas's chapters at `atlases/pokemon-rb/docs/`
+  with their filenames and their `#s-<symbol>` / `#a-<ADDR>` anchors unchanged. Our vendored
+  copy and `tools/fetch-atlas.sh --atlas <id>` (default `pokemon-rb`) mirror that, so a
+  second atlas is a flag rather than a restructuring. **`--atlas`, never `--game`** — one
+  atlas covers two games, which is the whole reason the unit is an atlas.
+- **VENDORED, NOT A SUBMODULE AND NOT A BUILD-TIME FETCH — and the lock is the load-bearing
+  half.** A submodule breaks shallow CI checkouts and source tarballs and makes a one-file
+  dependency cost a clone; a build-time fetch would put the network on the path of
+  `cargo test`, which is fatal because Tier A and the anti-drift gate are supposed to run on
+  every plain test run. A vendored file is exactly the file somebody eventually hand-edits, so
+  `tools/fetch-atlas.sh --verify` recomputes the sha256 offline **and the harness makes the
+  same comparison in-process** — teeth proven by editing one `verify` cell and watching Tier A
+  go red naming both digests. Same shape as `third_party/dmg-acid2/` and the GBSelfTest
+  cartridge; one pattern for every artefact consumed from outside this tree.
+- **SHA-256 AND SHA-1 ARE HAND-ROLLED IN THE HARNESS AND MUST STAY THAT WAY.** The dependency
+  count is a contract `make embed` measures, and shelling out to `sha256sum` would put a
+  program that need not exist on the path of `cargo test` on every platform this core is
+  cross-built for. Same call as the FNV hash, the PNG codec and the inflater. Both were
+  cross-checked against the system tools: the sha1 the report emits is byte-for-byte
+  `sha1sum`'s and matches the one already recorded upstream.
+- **`tools/fetch-atlas.sh` IS UPSTREAM'S OWN SCRIPT, COPIED — do not reinvent it.**
+  AtlasGB's `docs/consuming.md` asks consumers to copy it and the lock format is shared (down
+  to the `atlas=` line), so its copy and ours read each other. Three adaptations, all marked
+  in the file: the destination resolves from the script's own location; `ATLASGB_LOCAL=<checkout>`
+  can stand in for a published ref (AtlasGB has cut no release tag yet, and it is how a data
+  change is tried here before it is published); and `--file` names the path explicitly, so a
+  ref from *before* the namespacing is still pinnable.
+- **THE PIN IS `1f8e7fe`, THE NAMESPACED LAYOUT, AND THE MOVE COST NOTHING — which is worth
+  knowing before anyone treats a re-pin as risky.** It was first pinned at the pre-namespace
+  `data/atlas.tsv` while upstream was mid-restructure and re-pinned once that landed, and the
+  vendored bytes are **identical across the two**: same `dc07eeec…`, git recorded a pure
+  rename. So a layout change upstream is provenance, not a correction, and the lock's checksum
+  survives it. Re-pin in a commit of its own — `tools/fetch-atlas.sh --ref <ref>` then
+  `make test-gen1-atlas` — and ask the captain for a `v1.0.0` tag while you are there:
+  `consuming.md` recommends pinning a tag over a bare commit and there is not one yet.
+- **DO NOT PUT A COMMENT BANNER ABOVE THE VENDORED TSV.** The file this repository used to
+  own opened with six `#` lines; AtlasGB's does not, on purpose — GitHub renders a TSV whose
+  first line is the header row as a *table*, and a preamble turns it back into plain text.
+  `tools/fetch-atlas.sh` sanity-checks for that header row and refuses anything else, which is
+  also what catches a 404 page being saved as an atlas.
+- **UPSTREAM'S JSON HAS ONE BREAKING RENAME AND WE DO NOT READ IT — but check before you do.**
+  In the namespaced layout the exports' `meta` block renames `name: "AtlasGB"` to
+  `project: "AtlasGB"` and gains `atlas`/`title`/`platform`/`engine`/`pages`; the schema moves
+  to `schema/atlas.schema.json` and no longer pins `source_of_truth` to a const path; and
+  `atlases/<id>/meta.json` is the new machine-readable "which cartridge is this". Nothing here
+  parses `atlas.json` — this harness reads the TSV — so none of it reaches us today. It would
+  the moment anybody reached for the JSON.
+- **`make atlas-upstream` is ADVISORY and is in no gate.** A build must not break because
+  somebody else published; `--check-upstream` exits 0 whether upstream has moved or not, and
+  with no network at all. Re-pinning moves what the harness scores, so it belongs in a commit
+  of its own.
 - **The anti-drift gate is the thing to keep: every Gen 1 address hard-coded in a plugin must
   appear in the atlas.** `wCurMap` was written out in **nine** separate files before this
   existed and nothing could tell you whether they agreed. It is a *text scan* for
@@ -3994,21 +4071,21 @@ written out in full.
   are editing, and the drift that matters is "somebody wrote down an address nothing has heard
   of". **107 constants across 9 files gated today**, and adding a file to `PLUGIN_SOURCES` is
   how a new consumer joins. It is not plugins-only: `src/gen1battle.rs` and
-  `src/longplay/mod.rs` landed with Gen 1 addresses of their own while this was being written,
-  and both agree with the atlas — which is the first time that could be checked at all.
+  `src/longplay/mod.rs` carry Gen 1 addresses of their own and both agree with the atlas.
+  *(Upstream's `consuming.md` quotes 98 across 7 — that was true when it was written; this
+  gate has only ever grown, and it must not shrink to match a number in a document.)*
 - **`battle_struct` IS 29 BYTES.** `plugins/battle-control/src/wram.rs` said 29 and
   `plugins/trainer/src/gen1.rs` said 28; the map settles it and the harness proves it by
   requiring `wTrainerClass` to sit immediately after `wBattleMonPP + 4`. Do not copy the 28.
-- **`verify` is a baseline under this repo's usual rule** — any change is red in either
-  direction, an entry that *starts* being verified is a change too, re-bless deliberately with
-  `UPDATE_ATLAS_VERIFY=1 cargo test --release --test gen1atlas`. Tier A needs no cartridge and
-  runs in CI under a plain `cargo test --release`; tiers B and C skip with **exit 0** without
-  `POKE_ROM`, like `colosseum.rs`.
+- Tier A needs no cartridge **and no network** and runs in CI under a plain
+  `cargo test --release`; tiers B and C skip with **exit 0** without `POKE_ROM`, like
+  `colosseum.rs`.
 - **The live sweep runs WITHOUT a save, on purpose.** Its result must depend only on the
   cartridge and the fixed script or it cannot be a baseline. The invariants run on a
   *separately staged* copy carrying the player's real save — one staged path for both was a
   real bug here, where whichever ran last silently decided the other. Neither ever writes
-  beside the user's ROM.
+  beside the user's ROM. The report records which of the two it was, because a save changes
+  which invariants can run and that is provenance, not a detail.
 - **AN INVARIANT CAN PASS FOR THE WRONG REASON, AND SAYING SO IS THE JOB.** `owned ⊆ seen` is
   symmetric when the two sets are equal, so on a save where everything seen was caught it
   cannot tell `wPokedexOwned` from `wPokedexSeen` — proved by swapping the symbols and
@@ -4019,31 +4096,32 @@ written out in full.
   beside it, independently.
 - **Teeth proved, not claimed:** moving `wPartyCount` one byte reddens the ordering and alias
   checks; an invented plugin constant reddens the drift gate by name; a one-byte
-  `PokedexOrder` shift reddens two checks. The RHYDON signature check caught a typo of *mine*
-  (`D` is `$83`, not `$84`) during development.
+  `PokedexOrder` shift reddens two checks; a one-cell edit to the vendored TSV reddens the lock
+  check. The RHYDON signature check caught a typo of *mine* (`D` is `$83`, not `$84`).
 - **`gap` and `free` rows are why the coverage adds up.** The Stack section is `$DF00-$DFFF`
   and its only label `wStack` sits at `$DFFF` because the pointer grows **downwards** — so
   255 bytes are "reached by no label", which is the honest description and not a hole. `free`
-  rows are runs the linker reported EMPTY. With those, every byte of a region is accounted
-  for and "unused" becomes something the atlas *states*.
-- **pokered numbers repeated structures BOTH ways** — `wPartyMon1`..`wPartyMon6` and the
-  zero-padded `wSprite01`..`wSprite15` — so slot-1 detection must carry the digit run's
-  *width* across. Getting that wrong listed 49 sprite slots in full on a page nobody could
-  read, and it bit in all three places that do the detection.
+  rows are runs the linker reported EMPTY.
+- **THE EXTRACTOR AND THE RENDERER ARE UPSTREAM'S NOW — `tools/gen1-atlas/` is deleted, and
+  `make gen1-atlas` and `docs-check`'s `render.py --check` are gone with it.** Refreshing the
+  data from a built `pret/pokered` checkout, re-rendering the twenty-two pages, and the
+  `<!-- atlas:… -->` marker discipline all live in AtlasGB (`make extract POKERED=…`,
+  `make docs data`). Do not re-add a second copy here; **the pages that were deleted were
+  generated files, and regenerating them in this tree would recreate the drift the split
+  exists to remove.**
 - **Licence line, unchanged and load-bearing:** addresses, symbol names and structure layouts
-  are **facts** and are cited; pokered's prose and comments are **not ours to copy**, so every
-  `desc` is written from scratch. Nothing from pokered is vendored, nothing is fetched at run
-  time, and no ROM or game data is in the repository. The extractor is pointed at *your* built
-  checkout or it does not run.
-- **Red falls out nearly free** (`extract.py --game red`; same engine, same WRAM layout).
-  **Yellow is deliberately out** — its work RAM shifted, so an address from this page is
-  *wrong* there rather than approximately right, and the failure mode is a write landing in
-  the middle of somebody else's data that still passes its own checksum.
-- **Rebuilding pokered from scratch takes about two minutes** and is worth it rather than
-  trusting a stale `/tmp` checkout: build rgbds 1.0.3 from the gbdev release tarball (needs
-  only gcc/make/bison), then `make blue` in a `pret/pokered` clone, then `sha1sum -c
-  roms.sha1`. The **`.map` file, not the `.sym`**, is what the extractor reads — it is the
-  only artefact carrying both an address and enough structure to derive a length.
+  are **facts** and are cited; pokered's prose and comments are **not ours to copy**. Nothing
+  from pokered is vendored in either repository, nothing is fetched at run time, and no ROM or
+  game data is in either tree. AtlasGB is MIT; its `docs/licensing.md` is the honest longer
+  answer, and it is a better one than "MIT" alone.
+- **Yellow is deliberately out** — its work RAM shifted, so an address from this map is *wrong*
+  there rather than approximately right, and the failure mode is a write landing in the middle
+  of somebody else's data that still passes its own checksum.
+- **The highest-value contribution left is a SECOND LIVE SCRIPT, and it can only be written
+  here.** The current one plays the opening and then walks and opens menus, so it never reaches
+  a battle or a PC — which is why several hundred entries are honestly unmarked. A script that
+  starts from a save, fights something and opens the storage system would move them from "no
+  evidence" to observed. The machinery exists; only the script is missing.
 
 ## The Gen 1 mechanics & hacking area (`docs/gen1/`)
 
@@ -5970,6 +6048,15 @@ than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o 
   different versions of crate `X` are being used?``; and `undefined reference to` a symbol
   that plainly exists. Full entry, with the verbatim strings for searching:
   [`docs/pitfalls/builds.md`](docs/pitfalls/builds.md).
+  **A FIFTH symptom shape, and it is the most misleading one yet: a DOCTEST failing with
+  `` unresolved import `terminalgb::<module>` `` plus rustc's own note ``found an item that
+  was configured out``, naming a `#[cfg(feature = …)]` on a feature that IS enabled.** Seen on
+  `src/link/transport.rs`'s `bgblink` doctest during a plain `cargo test --release`; it reads
+  exactly like somebody broke the feature gating, and it is the wrong rlib again.
+  **`cargo test --release --doc` on its own passes, on the same tree, in three seconds** — that
+  is the cheap discriminator, and it is worth running before believing any feature-gate error
+  from a whole-suite run. The whole-suite run then failed the *next* time with the ordinary
+  panic-strategy wall, from the same tree: the two shapes alternate.
 - **The renderer tracks the emulator's accuracy, and that was demonstrated by accident.**
   Rebasing across `7556dde fix(apu): a square's frequency reload is latched late` changed
   the demo render in exactly the places it should: **0.0 %** of the scale and arpeggio

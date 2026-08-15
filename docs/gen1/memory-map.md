@@ -8,11 +8,12 @@ themselves. Both are named as extensions everywhere, never assumed.
 
 > **Looking for an address this page does not cover?** This page is *task-shaped*: it documents
 > the blocks this project's plugins needed and explains the mechanism behind each. The
-> **[memory atlas](atlas/README.md)** beside it is the other thing — a walk of the *whole*
-> address space with every byte of work RAM and high RAM accounted for, indexed
-> [by address](atlas/by-address.md) and [by name](atlas/by-name.md), with the
-> [structures](atlas/structures.md) written out in full and evidence recorded per entry. Start
-> here for *why*; go there for *where*.
+> **memory atlas** is the other thing — a walk of the *whole* address space with every byte of
+> work RAM and high RAM accounted for, indexed by address and by name, with the structures
+> written out in full and evidence recorded per entry. It lives in its own project,
+> [AtlasGB](https://github.com/Alchemy86/AtlasGB); **[the atlas page](atlas/README.md)** next
+> door is how this repository consumes it, and carries the links into it. Start here for
+> *why*; go there for *where*.
 
 Each entry carries its `pret/pokered` **symbol name** and how the address was established —
 see the three grades in the [area standards](README.md#standards-for-this-area). The short
@@ -320,8 +321,8 @@ keeps game data out of this repository: the numbers are read from the player's o
 Three things this map makes obviously possible that nobody has built yet:
 
 * ~~**The box.**~~ ~~**The item bag.**~~ Both are mapped now, with their structures written out
-  and their consistency checked against a real save on every run —
-  [storage](atlas/storage.md), [the bag](atlas/bag.md), [the structures](atlas/structures.md).
+  and their consistency checked against a real save on every run — see the storage, bag and
+  structure chapters of [the atlas](atlas/README.md).
   What is still unbuilt is the *use*: the same "snapshot, replace, restore" discipline battle
   control uses would give a scripted scenario its items and its stored teams.
 * **Map and warp editing as a *feature*.** Redirecting `wWarpEntries` is already proven

@@ -691,9 +691,12 @@ path = "testharness/agent.rs"
 required-features = ["plugin-agent"]
 harness = false
 
-# The Gen 1 memory atlas. Tier A (structure, and the gate that every address
-# hard-coded in a plugin is in the atlas) needs nothing and runs in CI; tiers B
-# and C need the reader's own Pokemon cartridge and skip with exit 0 without one.
+# The Gen 1 memory atlas. The data is AtlasGB's, vendored as a pinned snapshot
+# at third_party/atlasgb/; the evidence is this repository's, because proving an
+# address needs a running cartridge. Tier A (the lock check, the structure, and
+# the gate that every address hard-coded in a plugin is in the atlas) needs
+# neither cartridge nor network and runs in CI; tiers B and C need the reader's
+# own Pokemon cartridge and skip with exit 0 without one.
 # See testharness/gen1atlas.rs and docs/gen1/atlas/README.md.
 [[test]]
 name = "gen1atlas"

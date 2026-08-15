@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: gen1-atlas test-gen1-atlas web desktop docs-links docs-check status picture-numbers lint lint-audio test-audio-perf embed test-longplay \
+.PHONY: test-gen1-atlas atlas-evidence atlas-upstream web desktop docs-links docs-check status picture-numbers lint lint-audio test-audio-perf embed test-longplay \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
@@ -46,7 +46,6 @@ docs-check:
 	python3 docs/tools/codemap_links.py --check
 	python3 docs/tools/status_numbers.py --check
 	python3 docs/tools/picture_numbers.py --check
-	python3 tools/gen1-atlas/render.py --check
 
 # docs/picture.md: re-read the transport ladder, the upscaler table and the
 # picture key bindings out of src/ and rewrite the generated blocks. The
@@ -64,23 +63,36 @@ picture-numbers:
 status:
 	python3 docs/tools/status_numbers.py
 
-# The Gen 1 memory atlas (docs/gen1/atlas/): regenerate every table, index and
-# coverage figure from docs/gen1/atlas/atlas.tsv. Prose outside the
-# <!-- atlas:… --> markers is preserved. docs-check (in CI) is red until the
-# pages agree with the data again.
+# The Gen 1 memory atlas. The DATA and every page rendered from it live at
+# https://github.com/Alchemy86/AtlasGB, not here; a pinned snapshot is vendored
+# at third_party/atlasgb/ and docs/gen1/atlas/README.md says why. What this
+# repository owns is the EVIDENCE, because proving an address needs a running
+# cartridge and upstream has neither one nor an emulator.
 #
-# To refresh the *data* you need a built pret/pokered checkout — see
-# tools/gen1-atlas/extract.py — and to re-verify it against a cartridge, see
-# testharness/gen1atlas.rs.
-gen1-atlas:
-	python3 tools/gen1-atlas/render.py
-
-# The atlas harness. Its structural tier — including the gate that every Gen 1
-# address hard-coded in a plugin is in the atlas — needs no cartridge and runs
-# under a plain `cargo test --release`. Point POKE_ROM at your own Pokemon Red
-# or Blue for the tiers that check the map against a running machine.
+# The atlas harness. Its structural tier — the lock check, the structure, and
+# the gate that every Gen 1 address hard-coded in a plugin is in the atlas —
+# needs no cartridge and no network, and runs under a plain
+# `cargo test --release`. Point POKE_ROM at your own Pokemon Red or Blue for the
+# tiers that check the map against a running machine.
 test-gen1-atlas:
 	cargo test --release --test gen1atlas
+
+# Produce a verification report and hand the evidence back to AtlasGB. Needs a
+# cartridge. Land it in a clone of AtlasGB with `tools/apply-evidence.py`; the
+# verify column is not editable by hand there, on purpose.
+#
+#   make atlas-evidence POKE_ROM=~/roms/pokeblue.gb
+atlas-evidence:
+	ATLAS_EVIDENCE_OUT=$(or $(ATLAS_EVIDENCE_OUT),target/atlas-evidence.json) \
+	  cargo test --release --test gen1atlas
+
+# Has AtlasGB released something newer than the snapshot we pinned? ADVISORY,
+# and deliberately not part of any gate: a build must not break because somebody
+# else published, and re-pinning moves what the harness scores, so it is a
+# deliberate act in a commit of its own. Exits 0 either way, including with no
+# network.
+atlas-upstream:
+	tools/fetch-atlas.sh --check-upstream
 
 build-wasm:
 	cargo build --release --target wasm32-unknown-unknown

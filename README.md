@@ -1131,7 +1131,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | page | what it answers |
 |---|---|
 | [the index](docs/gen1/README.md) | memory map, reading the screen as text, driving the link cable, and the sharp edges |
-| [the memory atlas](docs/gen1/atlas/README.md) | every address in the game, walked region by region, with the evidence that we watched the cartridge use it — [by address](docs/gen1/atlas/by-address.md), [by name](docs/gen1/atlas/by-name.md), [the structures](docs/gen1/atlas/structures.md) |
+| [the memory atlas](docs/gen1/atlas/README.md) | every address in the game, walked region by region, with the evidence that we watched the cartridge use it. It is its own project now — [AtlasGB](https://github.com/Alchemy86/AtlasGB) — and this emulator is what produces that evidence |
 | [the link trade](docs/link-trade.md) · [the link battle](docs/link-battle.md) | the whole journey, with screenshots, and what to do if it hangs |
 | [starting battles on demand](docs/gen1/battle-control.md) | the one byte the engine reads, and how to script what follows |
 | [the trainer view](docs/trainer.md) | the address table, the derivation, and the verification |

@@ -9,7 +9,7 @@ than what it says.
 
 ## Two builds of one crate, and rustc blames your code
 
-**Symptom.** Any of these four, from a build that compiled yesterday:
+**Symptom.** Any of these five, from a build that compiled yesterday:
 
 ```
 error[E0277]: the trait bound `BattlePlugin: Plugin` is not satisfied
@@ -34,8 +34,26 @@ the crate `X` requires panic strategy `abort` which is incompatible with
 this crate's strategy of `unwind`
 ```
 
+```
+---- src/link/transport.rs - link::transport::TransportLink (line 206) stdout ----
+error[E0432]: unresolved import `terminalgb::bgblink`
+note: found an item that was configured out
+note: the item is gated here
+   |
+49 | #[cfg(all(feature = "bgblink", not(target_arch = "wasm32")))]
+```
+
 The first is the one that wastes the most time: **rustc's own `help` lists the exact type you
 passed as implementing the exact trait it says is unimplemented.**
+
+The last is the most misleading, because it accuses a `cfg` rather than the build: it names a
+feature that **is** enabled — `bgblink` is in `default` — and it only ever appears inside a
+whole-suite `cargo test --release`. It reads exactly like somebody broke the feature gating.
+**`cargo test --release --doc` on its own passes, on the same tree, in about three seconds**,
+and that is the cheap discriminator: run it before believing any feature-gate error that came
+out of a whole-suite run. On the tree where this was recorded the very next whole-suite run
+failed with the panic-strategy wall instead, from the same unchanged source — the shapes
+alternate, which is itself the tell that the source is not what is wrong.
 
 **The early warning, which everybody scrolls past:**
 
