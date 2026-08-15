@@ -5194,6 +5194,75 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   `intr_2_mode3_timing`, exactly, in both directions — which is the signature of a constant
   absorbing an error somewhere else, and is what sent the search to the mode-0 end.
 
+### The head of a scanline: the discard, and where the window really starts (Mealybug identical 17/79 → 22/79)
+
+**Full record, including the corrected denominator, `docs/mealybug.md` §11.** Suite total on
+the `identical` engine 630,266 → **567,482 px**; `standard` byte-identical throughout, Mooneye
+95/103 + 8/8 (**103/103** on `identical`), SameSuite 72/76, `cpp` 4/4, in-repo harness 46/47 on
+both engines.
+
+- **45 OF THE 57 FAILING ROWS CANNOT BE WON BY PPU WORK, AND ANYONE PLANNING AGAINST THIS SUITE
+  SHOULD PLAN AGAINST TWELVE.** 30 rows need the boot ROM's `®` glyph (a captain decision, not a
+  crew one — §8.6), 8 compare our greyscale against a colour reference (§8.7), and **7 are a
+  suite ROM/reference mismatch** — the `*2` ROMs ship a DMG build (`$0143 = $00`) and are scored
+  against a CGB-mode reference. That last one is new and it is *proved*: our frame is
+  structurally identical to the reference and differs only in colour (its black 4,792 and white
+  15,379 match ours to the pixel; its 2,729 green + 140 pink are our 2,869 grey), and patching
+  the flag in a scratch copy drops the row 18,108 → 2,869. **Do not close them by forcing the
+  flag in the runner** — that is the runner measuring a machine the cartridge does not ask for.
+- **THE `expected/` IMAGES ARE THE AUTHOR'S OWN EMULATOR'S SCREENSHOTS, NOT PHOTOGRAPHS.** His
+  README says so plainly ("screenshots from my Game Boy emulator (which I believe to be
+  correct)", with blurry hardware photos in a separate `photos/`). Still somebody else's
+  judgement — which is the property that makes the baselines trustworthy — but this repo said
+  "photographed off real hardware" in four places and now does not.
+- **`SCX & 7` is read on every discarded dot, not latched when mode 3 began.** Five M-cycles of
+  interrupt dispatch plus a jump put every Mealybug handler's `SCX` write around dot 8 while the
+  first pixel is not shifted until dot 12, so a latch uses the *previous* line's value and the
+  whole stair pattern comes out one scanline stale. The counter wraps at 8 exactly as SameBoy's
+  `(position_in_line & 7) == (SCX & 7)` does, so lowering `SCX` mid-discard costs a further lap.
+- **A `WX = 0` window costs one extra dot when the line has fractional scrolling** — the ROM's
+  own header says it, SameBoy charges it right after `fifo_clear`. Here the takeover simply
+  consumes its dot, so it needs no state.
+- **THE WINDOW STARTS ON THE PIXEL `WX - 7` AND ON NO OTHER — an equality, never a threshold.**
+  Indistinguishable for the first activation and wrong for every later one: after `LCDC.5` has
+  gone low and the background resumed, `lx` is already past the old `WX - 7` and a threshold
+  restarts the window on the next dot however `WX` was left. Mealybug's own WIN_EN notes state
+  the rule; SameBoy spells it `WX == (uint8_t)(position_in_line + 7)`.
+- **AND ITS TILE GRID IS ANCHORED AT `WX - 7` EVEN WHEN THAT IS OFF THE LEFT EDGE**, so for
+  `WX <= 6` the takeover happens **inside the head-of-line prologue** (`Gpu::prologue_pos` — the
+  eight output positions left of pixel 0) and the first tile's off-screen pixels are shifted out
+  and dropped a dot each. Both halves or neither: dropping them for free brings the next push
+  forward and shortens the line, which was measured and costs `m3_window_timing` and
+  `m3_window_timing_wx_0` outright. `prologue_pos`'s dummy-fetch dots must stay **negative** or
+  `WX = 7` matches `lx == 0` on dot 0 and truncates the prologue. Worth `m3_wx_4_change@DMG`
+  **12,409 → 229 px**.
+- **An object's row index is MASKED, not clamped, and Y-flip is an XOR against the same mask.**
+  `LCDC.2` is read at the bitplane fetch, so the scan can accept an object as sixteen tall and
+  the fetch find it eight — a row of 8-15 with three bits to hold it. Hardware has no comparator
+  there. Worth two rows, and it is the worked example of the rank metric: **sixteen wrong pixels
+  scored 22,154**, because one extra distinct shade re-ranks the whole frame. Read a row near
+  22,500 as "wrong shade count", never as "nothing works".
+- **The measurement trap that costs an hour: `target/mealybug/*.png` holds whichever engine ran
+  last.** Scoring `identical`'s frames against `standard`'s numbers invents both regressions and
+  gains. `tools/mealybug/characterise.py` re-renders before it reads for exactly this reason
+  (`MEALYBUG_NO_RUN=1` opts out); `tools/mealybug/rowview.py` prints one row's frame beside its
+  reference as shade digits, and `gpu::fifo::tracing::mid_line_trace` (ignored by default) is
+  the dot-by-dot trace of one ROM. Every finding above came out of those three.
+- **Sweeps already done — do not repeat them.** `ppu_write_commit`'s scroll phases are at their
+  optimum (DMG `early` 0/1/2/3 → `m3_scy_change` 6313/5128/965/**257**; Color end-of-cycle/1/2/3
+  → **560**/4699/5418/5453), which also settles the author's "a CGB `SCY` write lands 2 T-cycles
+  later" note at our M-cycle granularity. The object fetch's two plane-read dots were swept over
+  six pairs; `3/6` buys a third row and **was not taken**, because low-on-the-first-dot and
+  high-on-the-second is an asymmetry no source justifies — that is the per-test fudge constant
+  to avoid. The measured table is in `docs/mealybug.md` §11 and `data/gameboy-mealybug-w8/`.
+- **Cost: +2.6 % on the `identical` engine's own figure** (0.4824 → 0.4948 ms/frame, interleaved
+  A/B, four rounds), i.e. **0.07 % of a 16.743 ms frame**, and the `standard` engine is
+  unmoved (0.235). `RenderMode::IDENTICAL_COST` is still 2.1 and `testharness/ppuengines.rs`
+  still agrees.
+- `savestate::FORMAT_VERSION` 19 → **21**: v20 because `Pipeline::discard` changed meaning
+  (a count, not a countdown — same width, same place, so nothing about the layout moved), v21
+  for `Pipeline::win_skip`.
+
 ## Optional user-supplied boot ROM (`src/boot.rs`) — the answer to Blocker C
 
 **Captain's decision, 2026-08-14: do NOT embed the boot ROM's `®` glyph; support an optional
