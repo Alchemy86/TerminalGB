@@ -729,3 +729,49 @@ problem in netplay synchronisation and should not be promised alongside it. And
 the version that is already built — two instances on one machine, linked
 automatically — needs no server, no account and no network, which is why it went
 first.
+
+## 10. A deadline for another process belongs to the wall clock
+
+**Symptom, measured:** `FAULT — the console on the other end of the link cable
+stopped answering mid-exchange, so a byte was lost`, on the *first* master
+transfer, every time, whenever the two consoles were not running at the same
+multiple of real time. The far console was healthy and executing throughout.
+
+**Cause.** [`LinkPeer`](../src/link/peer.rs) held a master transfer open for
+`HOLD_TIMEOUT_TICKS = 1_048_576` **emulated** T-cycles — a quarter of a second,
+but only if this console happens to run at 1x. What the transfer is actually
+waiting for is *another process* getting round to servicing its socket, and the
+only clock two processes share is the wall. On a console running unpaced — a
+scripted player, a fast-forwarding one, a benchmark — a quarter-second of
+emulated time is about **5 ms**, and the far end services its socket once per
+16.7 ms frame. So every transfer was declared `torn`, and `torn` faults both
+machines and poisons both saves.
+
+`HOLD_TIMEOUT` is now `Duration::from_secs(2)` — the same value, and the same
+argument, as [`crate::bgblink`](../src/bgblink.rs)'s `MASTER_TIMEOUT`
+([`docs/bgb-link.md`](bgb-link.md) §3a): generous on purpose, because it must
+comfortably cover a far end that is merely *slow* and only catch one that has
+actually stopped. The counterparty that design was verified against
+([`Lorenzooone/PokemonGB_Online_Trades`](https://github.com/Lorenzooone/PokemonGB_Online_Trades),
+MIT, used unchanged by `tools/bgb-interop/`) paces at **10 ms per byte from a
+Python thread that does not even set `TCP_NODELAY`** and completes real trades.
+
+**The same mistake in the other direction.** `OFFER_TICKS` — how long an
+*incoming* byte is held while this console is given a chance to arm `SC = $80` —
+was 4096 T-cycles, one transfer's worth, i.e. **one seventeenth of a frame**. A
+console that armed its port on its very next frame missed every offer. It is two
+frames now: [`transport::SLAVE_ARM_WINDOW`](../src/link/transport.rs), the same
+number and the same reasoning as §3b of the BGB page.
+
+**A dead end worth recording.** The obvious fix from the BGB transport is to
+*stall the console* — stop paying cycles to the CPU until the far end answers
+(`TransportLink::run_frame`). That is right for a socket transport and wrong
+here: `LinkPeer`'s own tests drive two peers **in one thread**, alternately, so a
+peer that stops stepping deadlocks against a far end that only runs once this
+call returns. Holding the shift register — which `LinkPeer` already does through
+`Serial::link_hold` — gives the *game* the same guarantee without that hazard.
+Only the deadline was ever wrong.
+
+**Where it was found:** the World Trade Centre's human seat, where one console
+is a person walking at 1x and the other is a driven console.
+[`docs/worldlobby.md`](worldlobby.md) §9.2 has the full record.

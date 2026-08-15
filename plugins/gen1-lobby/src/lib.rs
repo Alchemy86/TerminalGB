@@ -231,7 +231,6 @@ impl LobbyPlugin {
             self.borrowed.clear();
             return;
         };
-        self.state = State::InRoom;
         self.ticks += 1;
 
         // The blockset is the cartridge's and never moves; read it once.
@@ -241,13 +240,29 @@ impl LobbyPlugin {
         // Calibrate against the engine while the room is still the
         // cartridge's, which is the only moment there is an independent answer
         // to check against.
-        if self.anchor.is_none() && self.installs == 0 {
+        //
+        // **Retried every tick until it succeeds, and NOTHING is written until
+        // it does.** `wCurMap` says Trade Center about thirty frames before
+        // `LoadMapHeader` has run, and installing the room in that window draws
+        // its blocks through the previous map's header — see
+        // `docs/worldlobby.md` §9.1 for the measurement. This calibration is
+        // the only test that asks the *engine* rather than a byte.
+        if self.anchor.is_none() {
             if let Some(bs) = &self.blockset {
                 let (best, scores) = screen::calibrate(m, bs);
                 self.anchor = best;
                 self.calibration = scores;
             }
         }
+        if self.anchor.is_none() {
+            // The two map bytes say Cable Club and the engine disagrees. We are
+            // not in a room yet whatever `wCurMap` claims — say so, and touch
+            // nothing.
+            self.state = State::Outside;
+            self.borrowed.clear();
+            return;
+        }
+        self.state = State::InRoom;
         // Wear whatever the cartridge's own opponent object wears, so the
         // avatars cost no VRAM pattern slot of their own.
         if self.installs == 0 {

@@ -165,6 +165,37 @@ pub fn agreement_at(
     (ok, total)
 }
 
+/// How many different tile ids the engine currently has on screen.
+///
+/// The cheap "is this a real picture?" test — see [`MIN_DISTINCT_TILES`].
+pub fn distinct_screen_tiles(m: &mut Machine<'_>) -> usize {
+    let mut tiles = [0u8; SCREEN_W * SCREEN_H];
+    for (i, t) in tiles.iter_mut().enumerate() {
+        *t = m.peek(W_TILE_MAP + i as u16).unwrap_or(0);
+    }
+    distinct(&tiles)
+}
+
+/// Is this screen detailed enough for an exact match against it to be evidence?
+///
+/// Pure, so the rule can be tested without a machine. See
+/// [`MIN_DISTINCT_TILES`] for why the rule exists at all.
+pub fn enough_detail_to_calibrate(tiles: &[u8]) -> bool {
+    distinct(tiles) >= MIN_DISTINCT_TILES
+}
+
+fn distinct(tiles: &[u8]) -> usize {
+    let mut seen = [false; 256];
+    let mut n = 0;
+    for &t in tiles {
+        if !seen[t as usize] {
+            seen[t as usize] = true;
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Read the room the machine is currently running straight out of WRAM — the
 /// cartridge's own, before we replace it — so [`agreement`] has something
 /// independent to check against.
@@ -195,13 +226,36 @@ pub fn live_room(m: &mut Machine<'_>) -> Option<(Room, Vec<u8>)> {
 /// against the running engine than to argue it out of the disassembly.
 pub const ANCHOR_CANDIDATES: [i32; 2] = [8, 9];
 
+/// How many distinct tiles the engine's screen must show before a match with
+/// our reconstruction counts as evidence of anything.
+///
+/// **A blank screen agrees with a blank block map, and that is not a
+/// calibration — it is two uninitialised buffers holding the same byte.** On
+/// the very first frame after a cartridge is loaded, `wTileMap` and
+/// `wOverworldMap` are both untouched WRAM, and a 360-of-360 "exact
+/// reproduction" falls straight out. Measured: with the plugin attached at ROM
+/// load, as the terminal frontend attaches it, the room installed on **frame
+/// 1** — before the boot logo — on a match of one repeated byte.
+///
+/// Four is a real screen: even the Cable Club's bare floor has a floor tile,
+/// two wall tiles and a border. Same rule, and the same reason, as the
+/// test-ROM harness requiring its reference image to have more than one shade
+/// before it will believe a comparison against it.
+const MIN_DISTINCT_TILES: usize = 4;
+
 /// Pick the anchor row that reproduces the engine's screen exactly, or `None`
 /// if neither does — in which case the plugin declines to paint at all rather
 /// than painting something plausible and wrong.
+///
+/// `None` is also the answer when the engine's screen is too uniform to be
+/// evidence — see [`MIN_DISTINCT_TILES`].
 pub fn calibrate(
     m: &mut Machine<'_>,
     bs: &Blockset,
 ) -> (Option<i32>, [(usize, usize); 2]) {
+    if distinct_screen_tiles(m) < MIN_DISTINCT_TILES {
+        return (None, [(0, 0); 2]);
+    }
     let Some((room, blocks)) = live_room(m) else {
         return (None, [(0, 0); 2]);
     };
@@ -245,6 +299,32 @@ pub fn repaint_rows(
 mod tests {
     use super::*;
     use crate::room::DEFAULT_ROOM;
+
+    /// **A blank screen agrees with a blank block map, and that is not a
+    /// calibration.** Measured: with the plugin attached at ROM load — which is
+    /// what the terminal frontend does — the room installed on frame 1, before
+    /// the boot logo, on a 360-of-360 "exact reproduction" of one repeated byte
+    /// against another. See `docs/worldlobby.md` §9.1.
+    #[test]
+    fn a_blank_screen_is_never_a_calibration() {
+        let blank = [0u8; SCREEN_W * SCREEN_H];
+        assert!(!enough_detail_to_calibrate(&blank));
+        // Uninitialised WRAM is not always zero, and a uniform anything is
+        // just as worthless.
+        assert!(!enough_detail_to_calibrate(&[0xFFu8; SCREEN_W * SCREEN_H]));
+        // Nor is a screen of two or three tiles — a fade, a text box border.
+        let mut nearly = blank;
+        nearly[0] = 1;
+        nearly[1] = 2;
+        assert!(!enough_detail_to_calibrate(&nearly));
+        // A real room is. The Cable Club's own screen measured 19 distinct
+        // tiles; four is the floor.
+        let mut real = blank;
+        for (i, t) in real.iter_mut().enumerate() {
+            *t = (i % 19) as u8;
+        }
+        assert!(enough_detail_to_calibrate(&real));
+    }
 
     #[test]
     fn the_players_own_walk_tile_is_the_four_cells_at_eight_eight() {

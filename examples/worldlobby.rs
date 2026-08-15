@@ -44,7 +44,6 @@
 //! one shift register and no addressing; there is nothing to make a hub out of,
 //! so the crowd lives entirely outside the machine.
 
-use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -54,6 +53,7 @@ use std::time::{Duration, Instant};
 
 use terminalgb::gameboy::Gameboy;
 use terminalgb::link::peer::LinkPeer;
+use terminalgb::lobby::{Phase, RelayOptions, TICK_HZ};
 use terminalgb::KeypadKey;
 
 use terminalgb_plugin_gen1_lobby::avatar::{Peer, Presence};
@@ -66,199 +66,30 @@ use terminalgb_plugin_gen1_lobby::{LobbyPlugin, State};
 mod cable_club;
 use cable_club::*;
 
-/// The relay's tick rate. A Gen 1 walk step is 16 frames ≈ 268 ms, so 8 Hz is
-/// twice what "smooth" needs and a late packet costs one stale frame of
-/// somebody else's avatar, never a desync.
-const TICK_HZ: u64 = 8;
 const FRAMES_PER_TICK: u32 = 60 / TICK_HZ as u32;
 
-// ---------------------------------------------------------------------------
-// The wire. Tab-separated lines, no dependency, no escaping problem: every name
-// and phrase has already been filtered to Gen 1's charmap, which has no tab.
-// ---------------------------------------------------------------------------
-
-/// What phase of the demonstration the room is in. The **relay** owns this so
-/// that four processes act together without any of them being in charge, and so
-/// that a screenshot taken at a given tick really is the same instant on every
-/// screen.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-enum Phase {
-    #[default]
-    Waiting,
-    Gather,
-    Mingle,
-    Talk,
-    Business,
-    Done,
-}
-
-impl Phase {
-    fn name(self) -> &'static str {
-        match self {
-            Phase::Waiting => "waiting",
-            Phase::Gather => "gather",
-            Phase::Mingle => "mingle",
-            Phase::Talk => "talk",
-            Phase::Business => "business",
-            Phase::Done => "done",
-        }
-    }
-
-    fn parse(s: &str) -> Phase {
-        match s {
-            "gather" => Phase::Gather,
-            "mingle" => Phase::Mingle,
-            "talk" => Phase::Talk,
-            "business" => Phase::Business,
-            "done" => Phase::Done,
-            _ => Phase::Waiting,
-        }
-    }
-
-    /// The schedule, in relay ticks after everybody was in the room.
-    fn at(tick: u64) -> Phase {
-        match tick {
-            0..=47 => Phase::Gather,
-            48..=127 => Phase::Mingle,
-            128..=175 => Phase::Talk,
-            176..=760 => Phase::Business,
-            _ => Phase::Done,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct Body {
-    name: String,
-    x: u8,
-    y: u8,
-    facing: u8,
-    step: u8,
-    says: String,
-    ready: bool,
-    /// Set once the client has left the room for a trade or a battle, so the
-    /// relay stops reporting a stale position for them.
-    away: bool,
-    /// Set once the client is standing at its console, waiting to press A.
-    seated: bool,
-}
-
-#[derive(Default)]
-struct Lobby {
-    bodies: BTreeMap<u32, Body>,
-    tick: u64,
-    started: bool,
-}
-
+/// The relay, the tick rate and the phase schedule all live in
+/// [`terminalgb::lobby`] rather than here.
+///
+/// They moved there when the shipped frontend learned to open a room of its
+/// own (`terminalgb --lobby`): the demonstration's driven players and the
+/// frontend's driven partner are the *same program* reading the same `phase`
+/// field off the same wire, so two definitions of it would be two rooms that
+/// slowly stopped agreeing. What is left here is what is genuinely the
+/// demonstration's: the walking, the schedule of screenshots, and the child
+/// processes.
 fn serve(listener: TcpListener, expect: usize, stop: Arc<AtomicBool>) {
-    let lobby = Arc::new(Mutex::new(Lobby::default()));
-    let clients: Arc<Mutex<Vec<(u32, TcpStream)>>> = Arc::new(Mutex::new(Vec::new()));
-
-    // The broadcaster: one snapshot per tick to everybody, rather than a
-    // fan-out per message. At four players that is indistinguishable; it is the
-    // shape that stays affordable at a hundred (report §7.1 point 4).
-    {
-        let lobby = Arc::clone(&lobby);
-        let clients = Arc::clone(&clients);
-        let stop = Arc::clone(&stop);
-        std::thread::spawn(move || {
-            let period = Duration::from_millis(1000 / TICK_HZ);
-            let mut next = Instant::now();
-            while !stop.load(Ordering::Relaxed) {
-                next += period;
-                std::thread::sleep(next.saturating_duration_since(Instant::now()));
-                let mut line = String::new();
-                let phase;
-                {
-                    let mut l = lobby.lock().unwrap();
-                    let all_ready =
-                        l.bodies.len() >= expect && l.bodies.values().all(|b| b.ready);
-                    if all_ready {
-                        l.started = true;
-                    }
-                    if l.started {
-                        l.tick += 1;
-                    }
-                    phase = if l.started {
-                        Phase::at(l.tick)
-                    } else {
-                        Phase::Waiting
-                    };
-                    let seated = l.bodies.values().filter(|b| b.seated).count();
-                    line.push_str(&format!(
-                        "snap\t{}\t{}\t{}\t{}\n",
-                        l.tick,
-                        phase.name(),
-                        l.bodies.len(),
-                        seated
-                    ));
-                    for (id, b) in &l.bodies {
-                        if b.away {
-                            continue;
-                        }
-                        line.push_str(&format!(
-                            "peer\t{id}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                            b.name, b.x, b.y, b.facing, b.step, b.says
-                        ));
-                    }
-                    line.push_str("end\n");
-                }
-                let mut cs = clients.lock().unwrap();
-                cs.retain_mut(|(_, s)| s.write_all(line.as_bytes()).is_ok());
-                if phase == Phase::Done {
-                    stop.store(true, Ordering::Relaxed);
-                }
-            }
-        });
-    }
-
-    listener.set_nonblocking(false).expect("blocking listener");
-    let mut next_id = 1u32;
-    for stream in listener.incoming() {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        let Ok(mut stream) = stream else { continue };
-        let id = next_id;
-        next_id += 1;
-        stream
-            .write_all(format!("you\t{id}\n").as_bytes())
-            .expect("greet");
-        let tx = stream.try_clone().expect("clone");
-        clients.lock().unwrap().push((id, tx));
-        let lobby = Arc::clone(&lobby);
-        let stop = Arc::clone(&stop);
-        std::thread::spawn(move || {
-            let reader = BufReader::new(stream);
-            for line in reader.lines() {
-                let Ok(line) = line else { break };
-                let f: Vec<&str> = line.split('\t').collect();
-                let mut l = lobby.lock().unwrap();
-                let b = l.bodies.entry(id).or_default();
-                match f.first().copied() {
-                    Some("join") => b.name = f.get(1).unwrap_or(&"?").to_string(),
-                    Some("ready") => b.ready = true,
-                    Some("away") => b.away = f.get(1) == Some(&"1"),
-                    Some("seated") => b.seated = true,
-                    Some("pos") => {
-                        let g =
-                            |i: usize| f.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
-                        b.x = g(1);
-                        b.y = g(2);
-                        b.facing = g(3);
-                        b.step = g(4);
-                        b.says = f.get(5).unwrap_or(&"").to_string();
-                    }
-                    _ => {}
-                }
-            }
-            lobby.lock().unwrap().bodies.remove(&id);
-            let _ = &stop;
-        });
-        if next_id as usize > expect + 4 {
-            break;
-        }
-    }
+    terminalgb::lobby::serve(
+        listener,
+        RelayOptions {
+            expect,
+            // The capture run's schedule *ends* — `Phase::Done` is what stops
+            // the relay once the last screenshot is written.
+            schedule: Box::new(Phase::at),
+            max_clients: Some(expect + 4),
+        },
+        stop,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -531,10 +362,39 @@ fn play(o: PlayOpts) {
         std::fs::create_dir_all(d).expect("shots dir");
     }
 
+    // **Pace to the real console.** 70224 cycles / 4.194304 MHz = 16.7427 ms.
+    // Without this the emulator would outrun the relay's wall-clock tick by two
+    // orders of magnitude and every "phase" would be over before a single frame
+    // of it had been walked — and, more to the point, a demonstration of what
+    // four people would see has to run at the speed four people would see it.
+    let period = Duration::from_micros((16_743.0 / o.speed) as u64);
+
     // --- phase 0: get this console into the Cable Club, the shipped way ----
+    //
+    // **Paced, and waited out in WALL CLOCK.** This loop used to run unpaced
+    // and count out its patience in emulated frames, which is fine when the
+    // console on the other end of the cable is another copy of this program
+    // (they start together and run at the same multiple of real time) and is
+    // wrong the moment it is a person: six emulated minutes at ~50x is seven
+    // seconds of anybody's afternoon, and the Cable Club attendant will not let
+    // either console through until *both* are standing at a desk. Measured: the
+    // bot gave up before the player had left the Pokémon Center.
+    //
+    // Pacing it is not a special case for humans — it is the rule
+    // `docs/worldlobby.md` §6.4 already states, that the two ends of a cable
+    // must run at the same speed, applied to the half of the run that was
+    // exempt from it. `--speed` scales it, so the four-instance demonstration
+    // is as quick as it ever was.
     let mut bot = TradeBot::default();
     let mut arrived = None;
-    for f in 0..60 * 60 * 6 {
+    let deadline = Instant::now() + Duration::from_secs_f64(6.0 * 60.0 / o.speed);
+    let mut next = Instant::now();
+    for f in 0.. {
+        if Instant::now() >= deadline {
+            break;
+        }
+        next += period;
+        std::thread::sleep(next.saturating_duration_since(Instant::now()));
         bot.act(&mut gb, false, &o.name);
         peer.run_frame(&mut gb);
         if gb.peek(W_CUR_MAP) == MAP_TRADE_CENTER && gb.peek(W_LINK_STATE) == 0x01 {
@@ -639,12 +499,6 @@ fn play(o: PlayOpts) {
     };
     let low = o.name.to_lowercase();
 
-    // **Pace to the real console.** 70224 cycles / 4.194304 MHz = 16.7427 ms.
-    // Without this the emulator would outrun the relay's wall-clock tick by two
-    // orders of magnitude and every "phase" would be over before a single frame
-    // of it had been walked — and, more to the point, a demonstration of what
-    // four people would see has to run at the speed four people would see it.
-    let period = Duration::from_micros((16_743.0 / o.speed) as u64);
     let mut next_frame = Instant::now();
 
     for frame in 0..o.frames {
@@ -1130,87 +984,44 @@ fn demo(
 /// One command: a relay, a driven partner in its own process, and the real
 /// terminal frontend for the person at the keyboard.
 ///
-/// Nothing here is a special path for the human. The TUI attaches the same
-/// `gen1-lobby` plugin the scripted players do (`plugins = gen1-lobby`), joins
-/// the same relay over the same tab-separated wire (`GB_LOBBY`), and pairs on
-/// the cable through the same auto-discovered peer (`link = auto`, the
-/// default). The only difference is where the keypresses come from — and the
-/// emulator cannot tell, because both arrive as `Gameboy::keydown`.
+/// **This is now the shipped frontend's own `terminalgb --lobby`, called with
+/// two things set differently** — which is the point. Nothing here is a special
+/// path for the human: the TUI attaches the same `gen1-lobby` plugin the
+/// scripted players do, joins the same relay over the same tab-separated wire,
+/// and pairs on the cable through the same auto-discovered peer. The only
+/// difference is where the keypresses come from, and the emulator cannot tell,
+/// because both arrive as `Gameboy::keydown`.
+///
+/// The two differences from a shipped launch, both deliberate:
+///
+/// * `stage_self` — a capture run must not be able to write to the captain's
+///   own cartridge at all, so this seat plays a copy out of `target/`. The
+///   shipped `--lobby` plays the real save, because it is an ordinary launch of
+///   somebody's own game.
+/// * `bin` — this process *is* the driven partner's program, so it says so
+///   rather than going looking for it beside the executable.
 #[cfg(feature = "tui")]
 fn human(rom: &Path, save: Option<&Path>, frames: u32, verbose: bool) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
-    let port = listener.local_addr().unwrap().port();
-    let stop = Arc::new(AtomicBool::new(false));
-    {
-        let stop = Arc::clone(&stop);
-        // Two seats: the person, and the driven partner.
-        std::thread::spawn(move || serve(listener, 2, stop));
+    use terminalgb::lobby::{PartnerOptions, SeatOptions};
+    let r = terminalgb::lobby::take_seat(SeatOptions {
+        rom: rom.to_path_buf(),
+        save: save.map(Path::to_path_buf),
+        name: "RED".to_string(),
+        join: None,
+        partner: Some(PartnerOptions {
+            bin: std::env::current_exe().ok(),
+            name: "BLUE".to_string(),
+            rom: rom.to_path_buf(),
+            save: save.map(Path::to_path_buf),
+            frames,
+            verbose,
+        }),
+        stage_self: true,
+    });
+    if let Err(e) = r {
+        eprintln!("worldlobby --human: {e}");
+        std::process::exit(1);
     }
-
-    let scratch = PathBuf::from("target/worldlobby");
-    // The captain's own console gets its own staged copy, like everybody
-    // else's — his cartridge and his save are never opened for writing.
-    let mine = stage("you", rom, save, &scratch);
-    let pair = scratch.join("cable-human");
-    std::fs::create_dir_all(&pair).expect("pair dir");
-
-    let exe = std::env::current_exe().expect("current exe");
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.arg("play")
-        .arg("--name")
-        .arg("BLUE")
-        .arg("--rom")
-        .arg(rom)
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--pair-dir")
-        .arg(&pair)
-        .arg("--gather")
-        .arg("14,12")
-        .arg("--phrase")
-        .arg("HI!")
-        .arg("--business")
-        .arg("await")
-        .arg("--seed")
-        .arg("7")
-        .arg("--frames")
-        .arg(frames.to_string())
-        .arg("--speed")
-        .arg("1");
-    if let Some(s) = save {
-        cmd.arg("--save").arg(s);
-    }
-    if verbose {
-        cmd.arg("--verbose");
-    }
-    // The partner's own stdout would fight the alternate screen for the
-    // terminal, so it goes to a file the captain can read afterwards.
-    let log = scratch.join("partner.log");
-    let out = std::fs::File::create(&log).expect("partner log");
-    cmd.stdout(out.try_clone().expect("log")).stderr(out);
-    let mut kid = cmd.spawn().expect("spawn partner");
-
-    println!("relay on 127.0.0.1:{port}; partner log: {}", log.display());
-    println!();
-    println!("  You are RED. Walk to the Cable Club receptionist, say yes, and");
-    println!("  choose TRADE CENTER. Your partner BLUE is doing the same thing");
-    println!("  on the other end of the cable and will be in the room with you.");
-    println!("  Once you are both in, the room becomes 40x28 with our own floor");
-    println!("  and you will see each other walk about.");
-    println!();
-
-    std::env::set_var("GB_LINK_DIR", &pair);
-    std::env::set_var("GB_LOBBY", format!("127.0.0.1:{port}"));
-    std::env::set_var("GB_LOBBY_NAME", "RED");
-    std::env::set_var("GB_PLUGINS", "gen1-lobby");
-    // The room is a Cable Club feature and the trade partner is a real second
-    // console, so the built-in virtual partner must not also claim the cable.
-    std::env::set_var("GB_GEN1_TRADE", "");
-
-    terminalgb::gameboy::run_terminal(Some(mine.rom.clone()));
-    stop.store(true, Ordering::Relaxed);
-    let _ = kid.kill();
-    let _ = kid.wait();
 }
 
 #[cfg(not(feature = "tui"))]

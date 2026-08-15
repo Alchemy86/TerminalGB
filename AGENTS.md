@@ -5053,8 +5053,72 @@ captain's call**. What is now load-bearing:
 **Full report, screenshots and the exact commands: [`docs/worldlobby.md`](docs/worldlobby.md).**
 A 40x28 Cable Club room built at run time in unsaved WRAM, several independent emulator
 processes in it at once, each walking under its own control and seeing the others. A real
-trade and a real link battle both completed **inside** it.
+trade and a real link battle both completed **inside** it. The way in is
+**`gameboy --lobby`** (see below); `plugin-gen1-lobby` has been in `default` via
+`standard-plugins` since the room landed, so nothing needs rebuilding with extra features.
 
+- **`wCurMap` IS NOT "the map is loaded", AND THE ROOM MUST NOT BE INSTALLED UNTIL IT IS.**
+  The guard was `wCurMap == TRADE_CENTER && wLinkState == IN_CABLE_CLUB` — two bytes that
+  are true for about **thirty frames** before `LoadMapHeader` has run. Install in that window
+  and the room's block layout is drawn through the *previous* map's header: a screenful of
+  bikes, tables, chairs and counters, and a console that then wedges and drags its cable
+  partner down with it. Measured on the human console, the frame either side:
+  `f2040 map0xEF link0x01 h4 w7` (the Pokémon Center's 7x4 — header not loaded) →
+  `f2070 map0xEF link0x01 h4 w5` (the Trade Center's 5x4). **A "non-zero width and height"
+  gate does NOT catch this** — the width was 7, not 0, restored from the save by `LoadSAV`.
+  The gate that does is the plugin's own `screen::calibrate`, which reconstructs all 360
+  cells of `wTileMap` from the live block map and demands an exact match; it already
+  computed that proof and installed regardless of it. **Ask the engine, not a byte.**
+- **AN EXACT MATCH AGAINST A BLANK SCREEN IS NOT EVIDENCE.** The first version of that gate
+  still installed on **frame 1, before the boot logo**, scoring 360/360 — `wTileMap` and
+  `wOverworldMap` are both untouched WRAM there, so "an exact reproduction" is two uniform
+  buffers holding the same byte. `screen::MIN_DISTINCT_TILES` (4) is the fix, and it is the
+  same rule as the test-ROM harness requiring its reference image to have >1 shade before it
+  will believe a comparison against it. Any future "compare against the running engine"
+  check needs the same guard.
+- **A DEADLINE FOR SOMETHING ANOTHER PROCESS MUST DO BELONGS TO THE WALL CLOCK.**
+  `LinkPeer`'s master-transfer hold was `HOLD_TIMEOUT_TICKS = 1_048_576` *emulated* T-cycles.
+  That is a quarter of a second only if this console runs at 1x; on an unpaced one (a
+  scripted player, fast-forward, a benchmark) it is **~5 ms of wall clock**, and the far end
+  services its socket once per 16.7 ms frame — so every master transfer was declared torn and
+  the save guard faulted both machines before the player left the Pokémon Center. It is
+  `Duration::from_secs(2)` now, the same value and the same argument as `bgblink`'s
+  `MASTER_TIMEOUT` (`docs/bgb-link.md` §3a; the counterparty it was verified against paces at
+  10 ms/byte from a Python thread with Nagle on). Same mistake twice: `OFFER_TICKS` was 4096 T
+  — **one seventeenth of a frame** — so a console that armed `SC = $80` on its very next frame
+  missed every offer. It is two frames now, i.e. `transport::SLAVE_ARM_WINDOW`.
+- **Do NOT "stall the console" here the way `TransportLink` does.** Right shape for a socket
+  transport, wrong for this one: `LinkPeer`'s own tests drive two peers **in one thread**,
+  alternately, so a peer that stops paying cycles to the CPU until the far end answers
+  deadlocks against a far end that only runs once this call returns. Holding the shift
+  register — which `LinkPeer` already does — gives the *game* the same thing without that
+  hazard; only the deadline was wrong.
+- **`gameboy --lobby` needs NO launcher change**, and that is measured, not assumed: the
+  launcher's argument loop matches its own five flags and forwards anything else as the ROM
+  path, so `--lobby` reaches the frontend intact and is matched before the path arm.
+  `lobby`, `--lobby`, `--lobby=HOST:PORT` and `--lobby-alone` are all single tokens for that
+  reason — the launcher forwards exactly one argument.
+- **The seat is `lobby::take_seat`, and the demo's `--human` is the same call** with two
+  fields different: `stage_self` (a capture run plays a copy out of `target/`; a launch plays
+  the person's own save) and the partner binary's path. **The driven partner is
+  `examples/worldlobby.rs`'s `play` subcommand spawned as a child process, never a second
+  implementation of it** — a walker, a phase machine, a screenshot writer and the Cable Club
+  bot do not belong in the shipped emulator, and two copies would drift apart. Missing binary
+  costs the partner and nothing else.
+- **The demonstration passed while the human seat was broken, and the reason is a coverage
+  gap worth remembering:** `worldlobby play` attaches the plugin *after* its console has
+  already arrived in the Cable Club; the terminal frontend attaches plugins at ROM load. Only
+  a person walking in at their own speed goes through the window. **A driven console is not a
+  test of a path a person takes.**
+- **`worldlobby play`'s phase 0 must be PACED.** It ran unpaced with its patience counted in
+  emulated frames — fine against another copy of itself, and six emulated minutes at ~50x is
+  seven seconds of somebody's afternoon. The Cable Club attendant will not let *either*
+  console through until both are at a desk, so the bot gave up before the player had left the
+  Pokémon Center. That is §6.4's own rule ("both ends of a cable run at the same speed")
+  applied to the half of the run that was exempt from it.
+- **Diagnose two consoles from a TAGGED trace, not from screenshots.** Both processes append
+  to one file and a pid does not say which console is which; two runs were spent squinting at
+  pictures deciding. Tag with the plugin's own name (RED/BLUE) and it takes one run.
 - **The room is a BLOCK MAP, not the screen buffer.** Writing `wOverworldMap` does not race
   the engine's scroll redraw; `RedrawRowOrColumn` then draws every row and column that
   scrolls in out of our blocks, so walking, collision, the walk cycle, the bump sound and

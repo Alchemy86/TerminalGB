@@ -79,20 +79,50 @@ pub const SERVICE_TICKS: u32 = 256;
 
 /// How long a master transfer's offer is held open on the receiving side.
 ///
-/// One transfer's worth of T-cycles, which mirrors what the in-process cable
-/// does by re-checking: a console that arms its port *after* the master started
-/// is still in time, because the master is still shifting.
-const OFFER_TICKS: u32 = 4096;
+/// **Two frames, which is [`crate::link::transport::SLAVE_ARM_WINDOW`], and it
+/// is deliberately much longer than one transfer.** This used to be 4096 — one
+/// transfer's worth, on the reasoning that a console arming its port inside the
+/// far end's shift window is still in time. That reasoning holds for a *shift
+/// window*, and this is not one: the far end is another process whose master is
+/// held open until we answer (see [`HOLD_TIMEOUT`]), so the question is not
+/// "how long is the far end still shifting" but "how long might this console
+/// take to get round to arming". 4096 T is 1/17th of a frame; a console that
+/// arms on its very next frame missed it every time.
+///
+/// The same argument, the same answer and the same number as the BGB transport
+/// (`src/link/transport.rs`, and `docs/bgb-link.md` §3b: *"an incoming byte is
+/// held for up to `SLAVE_ARM_WINDOW` (two frames) while the console keeps
+/// running, and only refused when it plainly is not going to take it"*). Gen
+/// 1's link handler arms and re-arms several times a frame, so anything that
+/// is going to listen has listened long before this expires.
+const OFFER_TICKS: u32 = 2 * FRAME_TICKS;
 
 /// A peer vanishing within this much emulated time of the last byte is treated
 /// as a link that was in use, and faults both consoles. One second.
 const ACTIVE_WINDOW_TICKS: u64 = 4_194_304;
 
 /// How long a held master transfer waits for the far console before giving up
-/// and shifting in the idle line. 250 ms of emulated time — far longer than two
-/// frame-paced processes can stay out of step, and short enough that a peer
-/// which has wedged does not hang the game.
-const HOLD_TIMEOUT_TICKS: u32 = 1_048_576;
+/// and shifting in the idle line.
+///
+/// **This is WALL-CLOCK time, and that is the whole point.** What the transfer
+/// is waiting for is not this console's emulated clock — it is *another
+/// process* getting round to servicing its socket, and the only clock the two
+/// processes share is the wall. Measuring the wait in our own T-cycles makes
+/// the deadline mean whatever multiple of real time this console happens to be
+/// running at, so a console running unpaced (a scripted player, a
+/// fast-forwarding one, a benchmark) gives a console running at 59.7275 Hz a
+/// budget of *milliseconds* and then declares the byte lost.
+///
+/// Measured: a driven console at ~50x real time and a person's console at 1x.
+/// The old quarter-second of emulated time was ~5 ms of wall clock, and the
+/// far end services its socket once per 16.7 ms frame, so **every** master
+/// transfer was declared torn and the save guard faulted both machines before
+/// the player had walked to the Cable Club (`docs/link-cable.md` §10).
+///
+/// Two seconds is deliberately generous, for the same reason
+/// [`crate::bgblink`]'s `MASTER_TIMEOUT` is: it must comfortably cover a far
+/// end that is merely slow, and only catch one that has actually stopped.
+const HOLD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Cap on unsent bytes before the peer is declared stalled. A transfer is 32
 /// bytes each way; this is hundreds of them.
@@ -236,8 +266,9 @@ impl PeerState {
 struct MasterXfer {
     seq: u32,
     answered: bool,
-    /// Emulated T-cycles this transfer has been held waiting for an answer.
-    held: u32,
+    /// When this transfer started waiting. **Wall clock**, not emulated
+    /// cycles — see [`HOLD_TIMEOUT`].
+    since: std::time::Instant,
 }
 
 /// The far console's master transfer, waiting for us to arm a slave.
@@ -551,7 +582,7 @@ impl LinkPeer {
                 self.mine = Some(MasterXfer {
                     seq,
                     answered: false,
-                    held: 0,
+                    since: std::time::Instant::now(),
                 });
                 // Do not let the register run out until the far console has
                 // answered — see `Serial::link_hold`.
@@ -574,7 +605,7 @@ impl LinkPeer {
                 self.mine = Some(MasterXfer {
                     seq,
                     answered: false,
-                    held: 0,
+                    since: std::time::Instant::now(),
                 });
                 gb.link_set_hold(self.state.is_paired());
                 self.push(Frame {
@@ -585,12 +616,12 @@ impl LinkPeer {
                 urgent = true;
             }
             (LinkRole::Master, Some(mut m)) => {
-                // Still shifting, still unanswered. Give up after a quarter of
-                // a second of emulated time and let it finish the way an
-                // unplugged cable would.
+                // Still shifting, still unanswered. Give up after two seconds
+                // of WALL CLOCK and let it finish the way an unplugged cable
+                // would — the far end is another process, so its patience is
+                // measured in the clock the two of us share, not in ours.
                 if !m.answered {
-                    m.held = m.held.saturating_add(ticks);
-                    if m.held >= HOLD_TIMEOUT_TICKS {
+                    if m.since.elapsed() >= HOLD_TIMEOUT {
                         gb.link_set_hold(false);
                         m.answered = true;
                         // Counted as `torn`, not `unanswered`: the far console
@@ -604,10 +635,12 @@ impl LinkPeer {
                             ..Frame::of(Kind::Abort)
                         });
                         urgent = true;
-                        // A quarter of a second of emulated time with no answer
-                        // at all from a socket on the same machine means the
-                        // far console is not executing — paused, wedged, or
-                        // stopped in a debugger. The byte we just shifted in is
+                        // Two seconds of wall clock with no answer at all from
+                        // a socket on the same machine means the far console is
+                        // not executing — paused, wedged, or stopped in a
+                        // debugger. A console that is merely *slow* answers
+                        // inside one of its own frames, which is three orders
+                        // of magnitude sooner. The byte we just shifted in is
                         // `$FF` and the far end does not know it, so the two
                         // streams have diverged: this is the corrupt-trade case
                         // the save guard exists for.
