@@ -1,5 +1,7 @@
 # The trade portal client — asynchronous friend trades over HTTPS
 
+> **Keys:** `@` sign in · `O` offer a Pokémon from the loaded save. [Every control →](controls.md)
+
 The portal is a web app (its own repository, built in parallel) where two
 friends each offer a Pokémon and accept each other's; the emulator then arms
 its **local** [gen1-link partner](plugins.md) with the Pokémon the friend is

@@ -1,5 +1,7 @@
 # Pixel-art upscaling
 
+> **Keys:** `]` cycles the algorithm, `}` the factor (web: `]` and `\`). [Every control →](controls.md)
+
 > Related: [How the picture reaches you](picture.md) — where the upscaler sits in the frame
 > path, what each option costs on the wire, and how the upscalers interact with the screenshot
 > keys · [Display scaling](display.md) · [🗺️ Code map](codemap.md)

@@ -1,5 +1,7 @@
 # Picture modes — `standard` and `identical`
 
+> **Key:** `P` switches mode live. [Every control →](controls.md)
+
 TerminalGB carries **two complete picture engines**, and which one runs is a mode you choose.
 
 | | **`standard`** | **`identical`** |

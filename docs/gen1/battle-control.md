@@ -1,5 +1,7 @@
 # Starting a battle from outside the game
 
+> **Keys:** `B` fires the selected preset · `N` chooses the next one. [Every control →](../controls.md)
+
 [← Gen 1 area](README.md) · implemented in [`plugins/battle-control/src/`](../../plugins/battle-control/src/)
 
 **Pokémon Red and Blue decide to start a battle by reading one byte.** Write that byte and the

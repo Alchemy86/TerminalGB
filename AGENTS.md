@@ -7083,3 +7083,54 @@ do not restate.
   panel, never from that column.
 - **`pkill -f 'http.server 8711'` killed this crew's own shell mid-command**, exactly as the
   standing `pgrep -f`/`pkill -f` note warns. Kill by the PID you captured at launch.
+
+## `src/screen/controls.rs` — every key in ONE table, and `docs/controls.md` is generated from it
+
+**Reader-facing page: [`docs/controls.md`](docs/controls.md); the registry is
+[`src/screen/controls.rs`](src/screen/controls.rs); regenerate with `make controls-doc`.**
+The captain's question — *"do all the controls appear on a written page, with links, so `C`
+is listed as screenshots and links to the page that explains it?"* — had the answer **no**.
+
+- **THERE WERE THREE LISTS AND NO RELATIONSHIP BETWEEN THEM, AND TWO OF THEM HAD ALREADY
+  FORGOTTEN A KEY.** The in-app **Controls** panel was a hand-written `Vec<Line>`, the **`?`
+  overlay** was a second hand-written one, and the feature pages were a third. Reading the
+  actual handler rather than either list found **`F2`** (a second screenshot key) and the
+  **`Esc` that leaves fullscreen** bound and named *nowhere at all*, plus the quit prompt's
+  `y` and the whole trade-offer picker written only inside their own dialogs, and music
+  mode's `Home`/`End` written nowhere. All are in the overlay and on the page now.
+- **The registry is the source of truth for three things and each is gated**: `panel_lines`
+  renders the Controls panel, `markdown` generates the page between its
+  `<!-- controls:begin -->` markers, and the `?` overlay is held to it by
+  `the_help_overlay_names_every_key_in_the_registry`. Re-bless the page in the SAME commit as
+  the key that moved — `UPDATE_CONTROLS_DOC=1 cargo test --lib controls_doc` — a plain
+  `cargo test` is red until you do. Teeth proven in both directions (a probe pointed at
+  absent text reddens the overlay gate; one edited word reddens the doc gate).
+- **The overlay gate reads `App::help_text()`, NOT the rendered buffer, and that is
+  deliberate.** The `?` overlay does not scroll and is longer than its popup, so a line past
+  the bottom is a *layout* defect; conflating it with "this key is undocumented" would make
+  the test unfixable. `render_help`/`render_music_help` are now thin wrappers over
+  `help_text()`/`music_help_text()` for exactly this.
+- **ADDING A LINE TO THE `?` OVERLAY SILENTLY DELETES ONE AT THE BOTTOM**, and it bit
+  immediately: one new `Esc` line pushed the "GAME PICTURE ONLY … titled TerminalGB"
+  paragraph off a 140x60 popup and turned
+  `the_help_says_the_feed_is_game_only_and_where_to_go_instead` red. The fixes are the
+  pattern to copy: fold the new key onto an existing line (`f/esc     fullscreen on / off`),
+  and put the pointer to the written page **on the title line's second span** rather than on
+  a line of its own — the top is the part of the overlay a real terminal actually shows.
+- **The panel is grouped now and one row taller** (18 content rows, was 17): two per row
+  *within* a group, a group never sharing a row with the next, `q quit` added to fill a gap.
+  The deliberate ordering survives and is asserted — **volume stays in the third packed row**,
+  because the panel clips from the *bottom* and an everyday control must not be the first
+  casualty. `W` is still conditional and still last.
+- **Doc-link rows are checked to resolve** (`every_control_links_to_a_page_that_exists`), and
+  a group blurb naming a plugin is checked against `REGISTRY`
+  (`every_plugin_a_blurb_names_is_a_real_plugin`) — which caught this work writing
+  `plugins = gen1-agent` for a plugin called `agent`.
+- **Both doc tests skip when `docs/` is absent**, because the published crate's `include`
+  whitelist does not ship it. A skip there is correct; a skip anywhere else is not.
+- **The desktop and web frontends bind the game pad and nothing else** — desktop's A/B are
+  the literal letter keys, not the terminal's configurable `key_a`/`key_b`, and web's upscale
+  *factor* key is `\` where the terminal's is `}`. The page says so rather than implying the
+  terminal's list applies everywhere.
+- Keys `4`-`9` are swallowed by the slot handler and do nothing (there are three slots) —
+  recorded on the page so it does not read as a missing feature.

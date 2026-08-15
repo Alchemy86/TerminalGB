@@ -1,5 +1,7 @@
 # Save states
 
+> **Keys:** `1`-`3` choose a slot · `F5` save · `F8` load. [Every control →](controls.md)
+
 The core serialises the **complete** machine to a flat `Vec<u8>` and restores it
 from `&[u8]`. It is frontend-agnostic and `wasm32`-clean: the core produces bytes,
 each frontend decides where they live (terminal → a file, browser → local storage

@@ -1,5 +1,7 @@
 # Display scaling — enlarging the 160×144 screen
 
+> **Keys:** `[` palette · `f` / `Esc` fullscreen · `]` `}` upscaler. [Every control →](controls.md)
+
 > Source: [`src/screen/`](../src/screen), [`src/gameboy.rs`](../src/gameboy.rs), [`web/`](../web) · Related: [How the picture reaches you](picture.md) · [Frontends](components/frontends.md) · [PPU](components/ppu.md) · [🗺️ Code map](codemap.md)
 > [← Docs: components index](components/README.md) · [testing](testing.md) · [debugging](debugging.md)
 

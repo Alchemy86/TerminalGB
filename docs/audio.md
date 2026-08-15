@@ -1,5 +1,7 @@
 # Audio — the whole sound pipeline, and why it sounded rough & fast
 
+> **Keys:** `,` / `.` volume · `m` mute · `+` / `-` speed (fast-forward drops samples). [Every control →](controls.md)
+
 > **Scope.** This page is the end-to-end story of **sound as you hear it**: how a
 > square wave inside the APU becomes samples in your speakers, where quality is
 > won or lost, and the investigation that fixed a "rough and slightly fast"

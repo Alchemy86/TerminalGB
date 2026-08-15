@@ -36,6 +36,7 @@ use crate::screen::agent_view as av;
 use crate::screen::config::{
     CellScale, Config, LinkSetting, Palette, Recent, RenderPath, ShinyAlert, VolumeState,
 };
+use crate::screen::controls;
 use crate::screen::frame::FramePrep;
 #[cfg(feature = "music")]
 use crate::screen::music_view as mv;
@@ -4777,15 +4778,30 @@ impl App {
     fn render_music_help(&self, f: &mut Frame<'_>) {
         let area = popup_area(f.area(), 66, 66);
         f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new(self.music_help_text())
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::ALL).title(" ? ")),
+            area,
+        );
+    }
+
+    /// The shelf's `?` overlay, built apart from the drawing so the same test
+    /// that holds the main overlay to `screen::controls` can hold this one —
+    /// music mode is a whole screen with its own keys, and they were listed
+    /// nowhere but here.
+    #[cfg(feature = "music")]
+    fn music_help_text(&self) -> Vec<Line<'static>> {
         let d = Style::default().fg(Color::DarkGray);
         let dir = music_dir(&self.config);
-        let text = vec![
+        vec![
             Line::from(Span::styled(
                 "Music mode",
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from("  ←/→ ↑/↓   browse — the music keeps playing"),
+            Line::from("  Home/End  first / last album"),
             Line::from("  ⏎         play the selected album"),
             Line::from("  w         save what you are hearing as a WAV"),
             Line::from("  c         next cover candidate"),
@@ -4832,13 +4848,11 @@ impl App {
             )),
             Line::from(Span::styled(format!("  WAVs go to {}", dir.display()), d)),
             Line::from(Span::styled("  docs/music-mode.md", d)),
-        ];
-        f.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title(" ? ")),
-            area,
-        );
+            Line::from(Span::styled(
+                "  every key, with a link each: docs/controls.md",
+                d,
+            )),
+        ]
     }
 
     fn render_toast(&self, f: &mut Frame<'_>, area: Rect) {
@@ -5419,42 +5433,33 @@ impl App {
             split[0],
         );
 
-        // Controls.
+        // Controls. **Rendered from `screen::controls`, not written here** —
+        // this list, the `?` overlay and `docs/controls.md` were three places a
+        // key could be forgotten, and two of them had forgotten one. The order,
+        // the pairing and the deliberate omissions all live in that registry;
+        // see its module docs for why volume sits third from the top.
         let k = &self.config.keys;
-        let mut controls = vec![
-            Line::from("Arrows  move"),
-            Line::from(format!("{}       A", k.a)),
-            Line::from(format!("{}       B", k.b)),
-            Line::from(format!("{}       Start", k.start)),
-            Line::from(format!("{}       Select", k.select)),
-            Line::from(""),
-            Line::from("p pause     R reset"),
-            Line::from("+/- speed   t stats"),
-            // Volume sits high in this list on purpose: the panel is clipped
-            // from the bottom on a short window, and an everyday control must
-            // not be the first casualty. (A screenshot key can afford to be.)
-            Line::from(", . volume  m mute"),
-            Line::from("1-3 slot"),
-            Line::from("F5 save     F8 load"),
-            Line::from("L load ROM  f full"),
-            Line::from("[ palette   ? help"),
-            Line::from("] upscale   } factor"),
-            // The picture mode sits with the other look-and-feel keys and above
-            // the capture keys, which are the ones that can afford to be
-            // clipped first on a short window.
-            Line::from("P picture mode"),
-            Line::from("c shot      C raw shot"),
-            Line::from("v stream    V record"),
-        ];
+        let pad = controls::PadKeys {
+            a: k.a,
+            b: k.b,
+            start: k.start,
+            select: k.select,
+        };
         // Only when there is a cable — a key that does nothing is worse than no
         // key at all — and it says which of the two things it will do.
-        if let Some(s) = self.session.as_ref() {
+        let cable = self.session.as_ref().and_then(|s| {
             if s.link.is_some() {
-                controls.push(Line::from("W other console"));
+                Some("W other console")
             } else if s.peer.is_some() {
-                controls.push(Line::from("W cable on/off"));
+                Some("W cable on/off")
+            } else {
+                None
             }
-        }
+        });
+        let controls: Vec<Line<'static>> = controls::panel_lines(pad, cable)
+            .into_iter()
+            .map(Line::from)
+            .collect();
         f.render_widget(
             Paragraph::new(controls)
                 .block(Block::default().borders(Borders::ALL).title(" Controls ")),
@@ -5579,11 +5584,38 @@ impl App {
         }
         let area = popup_area(f.area(), 60, 60);
         f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new(self.help_text())
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title(" ? ")),
+            area,
+        );
+    }
+
+    /// The `?` overlay's whole text, built separately from the drawing so it
+    /// can be *tested*.
+    ///
+    /// The overlay does not scroll and is longer than its popup, so a section
+    /// appended to the end can silently stop existing — which has happened
+    /// twice. Worse, until `screen::controls` existed a key could be bound and
+    /// named in neither this overlay nor the panel, and two were. The gate is
+    /// `the_help_overlay_names_every_key_in_the_registry`, which reads this
+    /// text rather than the rendered picture, so a line pushed past the bottom
+    /// still counts as *written* — the scrolling problem is a separate one.
+    fn help_text(&self) -> Vec<Line<'static>> {
         let mut text = vec![
-            Line::from(Span::styled(
-                "Help",
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
+            // The pointer to the written page rides the title rather than
+            // taking a line of its own — see the `f/esc` comment below — and
+            // it goes at the *top* because that is the part of this overlay a
+            // 60-row terminal actually shows. Without it a player who has seen
+            // `C raw shot` in the corner has no route to what a raw shot is.
+            Line::from(vec![
+                Span::styled("Help", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "   ·   every key, with a link each: docs/controls.md",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
             Line::from(""),
             Line::from("Picker"),
             Line::from("  ↑/↓ j/k   move        enter   play"),
@@ -5618,7 +5650,12 @@ impl App {
             )),
             Line::from("  1-3       save slot    F5/F8   save / load"),
             Line::from("  R         reset       L       load ROM"),
-            Line::from("  f         fullscreen  [       palette"),
+            // `esc` was bound as long as fullscreen has been and named
+            // nowhere until the controls registry went looking. It rides the
+            // same line rather than taking one of its own: this overlay does
+            // not scroll and is already longer than its popup, so a line added
+            // here silently deletes one at the bottom.
+            Line::from("  f/esc     fullscreen on / off      [   palette"),
             Line::from("  ]         upscaler    }       upscale factor"),
             Line::from(format!(
                 "  P         picture: standard ⇄ identical    (now: {})",
@@ -5634,7 +5671,9 @@ impl App {
                 ),
                 Style::default().fg(Color::DarkGray),
             )),
-            Line::from("  c         screenshot  C       screenshot (raw 160x144)"),
+            Line::from(
+                "  c         screenshot (or F2)   C   screenshot (raw 160x144)",
+            ),
             Line::from(
                 "  v         live feed to `video_out` on/off — starts OFF; a camera \
                  stays open and shows an idle card",
@@ -5760,6 +5799,17 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
+            Line::from("Dialogs"),
+            Line::from(Span::styled(
+                "  y / enter confirms the quit prompt; any other key cancels",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  in the offer picker: ↑/↓ choose, type to filter, enter arms \
+                 then enter again submits, esc closes",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
             Line::from(Span::styled(
                 format!("screenshots -> {}", screenshot_dir(&self.config).display()),
                 Style::default().fg(Color::DarkGray),
@@ -5782,12 +5832,7 @@ impl App {
                 )));
             }
         }
-        f.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: true })
-                .block(Block::default().borders(Borders::ALL).title(" ? ")),
-            area,
-        );
+        text
     }
 }
 
@@ -9066,6 +9111,203 @@ fn build_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- the controls registry, and the three things derived from it ------
+    //
+    // A controls list rots the moment somebody adds a key, so none of these is
+    // a transcription: the panel renders from `screen::controls`, the written
+    // page is generated from it, and the `?` overlay is held to it.
+
+    /// Every key in the registry has to be *named in the `?` overlay*, which
+    /// is the copy a player reads without leaving the app.
+    ///
+    /// This is what stops the two drifting. It reads the overlay's text rather
+    /// than the rendered picture on purpose: the overlay does not scroll, so a
+    /// line past the bottom is a *layout* problem, and conflating it with "the
+    /// key is undocumented" would make this test unfixable.
+    ///
+    /// It found two real gaps on the commit that added it — `F2` and the `Esc`
+    /// that leaves fullscreen were bound and named in neither the panel nor
+    /// the overlay — plus the quit prompt and the trade-offer picker.
+    #[test]
+    fn the_help_overlay_names_every_key_in_the_registry() {
+        use crate::screen::controls::{Group, CONTROLS};
+        isolate_state_dir();
+        let Some(app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let flatten = |lines: Vec<Line<'static>>| -> String {
+            lines
+                .iter()
+                .map(|l| {
+                    l.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let main = flatten(app.help_text());
+        #[cfg(feature = "music")]
+        let music = flatten(app.music_help_text());
+        for ctl in CONTROLS {
+            let Some(probe) = ctl.help else { continue };
+            // Music mode is a whole screen with its own overlay; the main one
+            // carries a summary, that one carries the keys.
+            let (text, which) = match ctl.group {
+                #[cfg(feature = "music")]
+                Group::Music => (&music, "the music `?` overlay"),
+                #[cfg(not(feature = "music"))]
+                Group::Music => continue,
+                _ => (&main, "the `?` overlay"),
+            };
+            assert!(
+                text.contains(probe),
+                "`{}` is in the controls registry but {which} does not say so \
+                 (looking for {probe:?}). Either add it there or drop it from \
+                 `screen::controls`.\n\n{text}",
+                ctl.keys,
+            );
+        }
+    }
+
+    /// The overlay must point at the written page: a player who has seen
+    /// `C raw shot` in the corner needs a route to what a raw shot *is*, and
+    /// this overlay is a reminder, not the reference.
+    #[test]
+    fn the_help_overlay_points_at_the_written_page() {
+        isolate_state_dir();
+        let Some(app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let text: String = app
+            .help_text()
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("docs/controls.md"), "{text}");
+    }
+
+    /// A group blurb that tells the reader to write `plugins = gen1-agent`
+    /// when the plugin is called `agent` is worse than saying nothing — the
+    /// name would be reported back as unknown. It caught exactly that here.
+    #[test]
+    fn every_plugin_a_blurb_names_is_a_real_plugin() {
+        use crate::screen::controls::CONTROLS;
+        let mut groups: Vec<_> = CONTROLS.iter().map(|c| c.group).collect();
+        groups.dedup();
+        for g in groups {
+            let blurb = g.blurb();
+            for (i, _) in blurb.match_indices("plugins = ") {
+                let name: String = blurb[i + "plugins = ".len()..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .collect();
+                assert!(
+                    REGISTRY.iter().any(|(n, _)| *n == name),
+                    "{}'s blurb names plugin `{name}`, which is not in REGISTRY",
+                    g.title()
+                );
+            }
+        }
+    }
+
+    /// A link that does not resolve is worse than no link — the whole point of
+    /// the page is that a key takes you to the document explaining it.
+    #[test]
+    fn every_control_links_to_a_page_that_exists() {
+        use crate::screen::controls::CONTROLS;
+        let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+        if !docs.is_dir() {
+            // The published crate does not ship `docs/` (see the `include`
+            // whitelist in Cargo.toml). Nothing to check, and nothing broken.
+            return;
+        }
+        for ctl in CONTROLS {
+            let Some((_, path)) = ctl.doc else { continue };
+            let file = path.split('#').next().unwrap();
+            assert!(
+                docs.join(file).is_file(),
+                "`{}` links to docs/{file}, which does not exist",
+                ctl.keys
+            );
+        }
+    }
+
+    /// `docs/controls.md` is **generated** from the registry, so it cannot go
+    /// stale the way a hand-written key table does.
+    ///
+    /// Re-bless deliberately, in the same commit as the key that moved:
+    /// `UPDATE_CONTROLS_DOC=1 cargo test --lib controls_doc`
+    #[test]
+    fn the_controls_doc_matches_the_registry() {
+        const BEGIN: &str = "<!-- controls:begin -->";
+        const END: &str = "<!-- controls:end -->";
+        let page = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs")
+            .join("controls.md");
+        if !page.parent().is_some_and(|d| d.is_dir()) {
+            return; // packaged crate: no `docs/`
+        }
+        let current = std::fs::read_to_string(&page)
+            .expect("docs/controls.md is part of this feature, not optional");
+        let (head, rest) = current
+            .split_once(BEGIN)
+            .expect("docs/controls.md must carry the generated block's markers");
+        let (_, tail) = rest.split_once(END).expect("…and close them");
+        let want = format!(
+            "{head}{BEGIN}\n<!-- generated from src/screen/controls.rs — \
+             `UPDATE_CONTROLS_DOC=1 cargo test --lib controls_doc` -->\n{}\n\
+             {END}{tail}",
+            crate::screen::controls::markdown()
+        );
+        if want == current {
+            return;
+        }
+        if std::env::var_os("UPDATE_CONTROLS_DOC").is_some() {
+            std::fs::write(&page, want).unwrap();
+            return;
+        }
+        panic!(
+            "docs/controls.md no longer matches src/screen/controls.rs. \
+             Re-bless it in the same commit as the key that moved:\n    \
+             UPDATE_CONTROLS_DOC=1 cargo test --lib controls_doc"
+        );
+    }
+
+    /// The panel is drawn from the registry, and these are the strings a player
+    /// actually looks for. Pinned against *rendered output*, because the
+    /// panel's own box is sized from its contents and has clipped a row twice.
+    #[test]
+    fn the_controls_panel_is_rendered_from_the_registry() {
+        use ratatui::backend::TestBackend;
+        let _g = output_volume::test_lock();
+        isolate_state_dir();
+        let Some(mut app) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 44)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        for want in [
+            "Arrows  move",
+            "p pause     R reset",
+            ", . volume  m mute",
+            "1-3 slot",
+            "[ palette",
+            "P picture mode",
+            "c shot",
+        ] {
+            assert!(text.contains(want), "the Controls panel lost {want:?}");
+        }
+    }
 
     #[test]
     fn fit_uses_whole_area_and_centres() {

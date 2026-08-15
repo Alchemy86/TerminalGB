@@ -40,6 +40,13 @@ pub mod termcost;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod termcaps;
 
+/// Every key the terminal frontend binds, in one table — see [`controls`].
+/// The in-app Controls panel and `docs/controls.md` are both rendered from it,
+/// and the `?` overlay is tested against it. Pure data: no ratatui, no key
+/// dispatch.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub mod controls;
+
 /// Terminal frontend. Requires the `tui` feature (ratatui + ratatui-image).
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod tui;

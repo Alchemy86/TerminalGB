@@ -1,5 +1,7 @@
 # Music mode — cartridges as albums
 
+> **Keys:** `M` from the picker to get here; then `←`/`→` browse, `Enter` play, `w` export a WAV, `c` next cover, `g` play it properly. [Every control →](controls.md)
+
 <!-- codemap:asof -->
 > 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
 

@@ -1,5 +1,7 @@
 # Video out — the picture as a stream, and as a webcam
 
+> **Keys:** `v` live feed on/off · `V` record a file. [Every control →](controls.md)
+
 > The captain: *"can we confirm it's also possible for our terminal to PROVIDE A VIDEO STREAM
 > OUT for things to plumb into and play, or even a webcam to PICK IT UP DIRECTLY!! like a
 > camera feed!"*

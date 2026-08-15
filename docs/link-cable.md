@@ -1,5 +1,7 @@
 # The link cable — two consoles, one wire
 
+> **Key:** `W` swaps console / plugs the cable in and out — bound only when there *is* a cable. [Every control →](controls.md)
+
 > Code: [`src/link.rs`](../src/link.rs) · [`src/link/peer.rs`](../src/link/peer.rs) ·
 > [`src/mmu/serial.rs`](../src/mmu/serial.rs) · [`examples/link_two.rs`](../examples/link_two.rs) ·
 > [`examples/gen2_timecapsule.rs`](../examples/gen2_timecapsule.rs) ·

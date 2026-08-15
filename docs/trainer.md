@@ -1,5 +1,7 @@
 # The live trainer view
 
+> **Keys:** `T` show/hide · `d` detail · `Tab` / `Shift-Tab` walk the focus ring. [Every control →](controls.md)
+
 A read-only plugin that reads a running Pokémon Red/Blue cartridge and shows the party, the
 badges and — during a battle — the opponent's stats, beside the game. It is the emulator's
 own answer to the [Ironmon Tracker](https://github.com/besteon/Ironmon-Tracker), and the

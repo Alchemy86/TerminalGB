@@ -1,5 +1,7 @@
 # How the picture reaches you — and how to capture it
 
+> **Keys on this page:** `c` screenshot · `C` raw screenshot · `[` palette · `]` `}` upscaler · `P` picture mode — and [**every control, with a link each**](controls.md).
+
 > Source: [`src/termimage.rs`](../src/termimage.rs) · [`src/shmframe.rs`](../src/shmframe.rs) ·
 > [`src/screen/halfblocks.rs`](../src/screen/halfblocks.rs) ·
 > [`src/screen/termcaps.rs`](../src/screen/termcaps.rs) · [`src/upscale/`](../src/upscale) ·

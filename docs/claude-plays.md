@@ -1,5 +1,7 @@
 # Claude Plays Pokémon — the agent substrate
 
+> **Keys:** `A` commentary panel · `G` hand the controller to the agent or take it back. [Every control →](controls.md)
+
 *Just like Twitch Plays Pokémon, but the player is a model, and it says what it
 is thinking while it plays.*
 

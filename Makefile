@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: test-gen1-atlas atlas-evidence atlas-upstream web desktop docs-links docs-check status picture-numbers lint lint-audio test-audio-perf embed test-longplay \
+.PHONY: test-gen1-atlas atlas-evidence atlas-upstream web desktop docs-links docs-check status picture-numbers controls-doc lint lint-audio test-audio-perf embed test-longplay \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
@@ -55,6 +55,14 @@ docs-check:
 # agrees with both again.
 picture-numbers:
 	python3 docs/tools/picture_numbers.py
+
+# docs/controls.md: regenerate the key table from src/screen/controls.rs, which
+# is also what the in-app Controls panel renders from. A plain `cargo test`
+# (in CI) is red until the page agrees with the registry again, so run this in
+# the SAME commit as any key that moves. Prose outside the <!-- controls:… -->
+# markers is preserved.
+controls-doc:
+	UPDATE_CONTROLS_DOC=1 cargo test --lib controls_doc
 
 # Status page (docs/status.md + the Pages-ready docs/status/index.html):
 # re-derive every suite score from testharness/*_baseline.txt and rewrite the
