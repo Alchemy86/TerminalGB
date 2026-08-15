@@ -41,6 +41,15 @@ asked: *"it's just pixel screens — can we enlarge, smoothly, scale like vector
 > the upscaler, and `src/screen/tui.rs` is under active development right now — so
 > treat terminal specifics below as provisional and prefer the in-app `?` help for
 > the current keys.
+>
+> **The terminal blur is fixed and documented (2026-08-15).** All three frontends
+> are now crisp, and each got there a different way: desktop `gl::NEAREST`, web
+> `image-rendering: pixelated`, terminal
+> [`screen::halfblocks`](../src/screen/halfblocks.rs) replacing `ratatui-image`'s
+> hard-coded `FilterType::Triangle`. Full story, before/after screenshots in the
+> captain's own terminal, the per-terminal matrix and the regression guard:
+> [**§1 → the half-block path
+> smoothed**](#the-half-block-path-smoothed--the-terminals-version-of-the-desktop-linear-bug).
 
 This page answers three things:
 
@@ -58,7 +67,8 @@ This page answers three things:
 |---|---|---|---|---|---|
 | **Desktop** | opens at **160×144** logical px | the **GPU** (textured quad) | ~~`LINEAR`~~ → **`NEAREST`** — *crisp* ✅ | **Yes** (`resizable(true)`) | **preserved** — integer scale + black letterbox; resize updates the viewport ✅ |
 | **Web** | backing store **160×144**, CSS-scaled up | **CSS integer scale** (GPU compositor) | **`pixelated`** — *crisp* ✅ | **Yes** — fills viewport, re-fits on resize ✅ | **preserved** (integer multiple, centred, letterboxed) |
-| **Terminal** | source **160×144** (optionally pixel-art upscaled) | **`Resize::Scale`** upscales to fill a centred `fit_metrics` pane | nearest / scale2x / mmpx / lcd, then protocol scale | **Yes** — auto-re-fits on resize | **preserved** (aspect-correct centred rect) |
+| **Terminal** (image protocol) | source **160×144** (optionally pixel-art upscaled) | the **terminal**, over a cell-addressed placement (kitty/iTerm2) or `Resize::Scale(None)` = `Nearest` (sixel) | nearest / scale2x / mmpx / lcd, then protocol scale — *crisp* ✅ | **Yes** — auto-re-fits on resize | **preserved** (aspect-correct centred rect) |
+| **Terminal** (half-blocks) | source **160×144** | **us** — [`screen::halfblocks`](../src/screen/halfblocks.rs) samples straight into `ratatui`'s buffer | ~~`FilterType::Triangle`~~ → **nearest at pixel centres** — *crisp* ✅ ([why](#the-half-block-path-smoothed--the-terminals-version-of-the-desktop-linear-bug)) | **Yes** — auto-re-fits on resize | **preserved** (aspect-correct centred rect) |
 
 ### Desktop — GPU-scaled, but smoothed *and* the resize is broken
 
@@ -153,6 +163,115 @@ have no cell-addressed placement, so they keep the `ratatui-image` `Resize::Scal
 `Scale`, not `Fit`, because `Fit` refuses to enlarge a source smaller than the area, which is
 why a 160×144 image used to render tiny. (On scaled-Wayland HiDPI terminals the `cell_scale`
 config corrects a logical-vs-physical pixel mismatch — see the top-level README.)
+
+#### The half-block path smoothed — the *terminal's* version of the desktop `LINEAR` bug
+
+**Reported 2026-08-15:** *"running gameboy on our normal terminal is blurry again — so only
+wezterm is looking good, we have corrected that before so get on it team."* Status panel:
+`Proto halfblocks full`, `Upscale nearest x1`.
+
+It was **not** the desktop `gl::LINEAR` regression above coming back, and it was not the
+upscaler. It is the same *class* of defect one layer further out — something downstream
+applying its own interpolation — and the layer was `ratatui-image`.
+
+**The mechanism, measured rather than argued.** A terminal that speaks no image protocol
+draws the picture out of the upper-half-block glyph `▀`: foreground paints the top half of a
+character cell, background the bottom, two vertical pixels per cell. That is crisp *by
+construction* — a cell is two flat colours and there is nothing in it that can be soft. The
+softness was in the **sampling**: `ratatui-image`'s half-block encoder resizes the frame onto
+the cell grid with a hard-coded smoothing filter,
+
+```rust
+// ratatui-image-4.2.0/src/protocol/halfblocks.rs
+let img = img.resize_exact(rect.width as u32, (rect.height * 2) as u32,
+                           FilterType::Triangle);
+```
+
+so every cell was a *weighted average* of the Game Boy pixels beneath it. Two facts pin it as
+the cause rather than a suspect: the same crate's **sixel** encoder does no such thing, and
+`Resize::Scale`'s own default filter is `FilterType::Nearest` — half-blocks is the single path
+with a filter baked in, which is exactly why WezTerm looked right and Ptyxis did not.
+
+Measured on dmg-acid2 at 80×24 cells: **271 distinct colours in a four-shade picture**, 268 of
+which no Game Boy shade maps to.
+
+**The fix** is [`src/screen/halfblocks.rs`](../src/screen/halfblocks.rs) — we sample the cells
+ourselves, nearest-neighbour at pixel centres (`(2i+1)·s / 2t`, the same rule as
+[`video::fit_maps`](../src/video.rs)), straight from the framebuffer into `ratatui`'s buffer.
+The same move [`src/termimage.rs`](../src/termimage.rs) already made for kitty and iTerm2, for
+a related reason: the library's general-purpose answer is wrong for a 60 Hz four-colour video
+source. A uniform cell is written as a **space**, not `▀` — visually identical but it asks the
+terminal to rasterise no glyph, so a font with a poor `▀` cannot soften the large flat areas a
+Game Boy picture is mostly made of. `render_path = legacy` still takes the library's path, so
+one binary can A/B the two in the same terminal.
+
+Before and after, both in **Ptyxis 50.1 (VTE)** — the captain's own terminal — at the same
+80×24, same 2.8× scale, same `Proto halfblocks`:
+
+| before (`render_path = legacy`) | after (default) |
+|---|---|
+| ![blurry half-blocks](shots/halfblocks-blurry.png) | ![crisp half-blocks](shots/halfblocks-crisp.png) |
+
+**Cost: it is *cheaper*.** Telemetry over ~1,070 frames at 146×54 cells, WezTerm forced to
+half-blocks, same ROM and window both sides: whole-frame `frame_ms` **0.460 → 0.349**. Our
+encoder pays its full sampling cost on *every* frame (it does no picture dedup at all, because
+`ratatui`'s own per-cell diff is what suppresses an unchanged screen) and still wins, because
+it replaces two `image`-crate resizes — a nearest upscale to the display's pixel size followed
+by a Triangle downscale back to the cell grid. That is the worst case for us and the best case
+for the old path.
+
+##### Per-terminal matrix
+
+Crispness is decided by **who resamples the picture**, so that is the column that matters.
+
+| Terminal | Protocol chosen | Who resamples | Crisp? |
+|---|---|---|---|
+| **Ptyxis 50.1 / VTE** (also GNOME Terminal, GNOME Console) | `halfblocks` | **us** (`screen::halfblocks`) | ✅ *measured here* — was ❌ before this fix |
+| **WezTerm** (default) | `kitty` + shared memory | the terminal scales a cell-addressed placement | ✅ *measured here* |
+| **WezTerm** (`protocol = halfblocks`) | `halfblocks` | **us** | ✅ *measured here* — was ❌ before this fix |
+| kitty, Ghostty | `kitty` | the terminal | *not run here* — same wire path as WezTerm's kitty |
+| foot, xterm with sixel | `sixel` | `ratatui-image`, `Resize::Scale(None)` = `Nearest` | *not run here* — no smoothing filter on that path |
+
+Only the three ✅ *measured here* rows were actually executed on this machine; the rest state
+which code path the terminal takes, which is a claim about our source, not a screenshot.
+
+Two honest caveats:
+
+* **Fedora builds VTE without sixel.** Verified previously by `vte_get_feature_flags()` and by
+  DA1 (`ESC[?61;1;21;22;28c`, no `4`) — see [rendering.md](rendering.md) §4a. So GNOME-family
+  terminals genuinely get half-blocks and there is nothing this end can do about it.
+* **Crisp is not full resolution.** Half-blocks resolution *is* the character grid: at 80×24
+  the picture is about 87×78 against the Game Boy's 160×144, so fine in-game text is lost
+  whatever the filter. That is a limit of the host, so the frontend now **says so** —
+  `HALFBLOCKS_NOTICE` in [`tui.rs`](../src/screen/tui.rs) reaches the same four surfaces every
+  config warning does (stderr scrollback, picker footer, a toast on entering a game, the `?`
+  overlay), naming the cause and the remedy; and the Status panel's `Proto` row carries the
+  picture's **real resolution** (`halfblocks 146x108`) in place of the transport word `full`,
+  which for half-blocks meant nothing — there is no wire transport, the picture goes through
+  `ratatui`'s buffer. Same contract as the existing key-release and no-audio notices: a player
+  must never be left thinking the emulator is broken when it is a property of the host.
+
+##### The regression guard
+
+Blur has now been reported twice, so something has to fail loudly if it returns. Two layers,
+both asserting the same property — **every colour on screen must be a colour that was in the
+framebuffer**, which no interpolating resampler can satisfy:
+
+* `screen::halfblocks::tests::no_colour_appears_that_was_not_in_the_framebuffer` — unit speed,
+  a one-pixel checkerboard (the worst case for a smoothing filter) at five window sizes.
+* `screen::tui::tests::the_halfblock_picture_uses_only_real_game_boy_shades` — end to end
+  through the real `App::render` on dmg-acid2 at four window sizes, comparing against the four
+  colours the live palette maps to. **This is the test that reproduced the bug**: against the
+  unfixed code it reports *"the picture contains 268 colour(s) no Game Boy shade maps to"*.
+
+Plus `an_exact_fit_reproduces_the_framebuffer_pixel_for_pixel` (the mapping is right, not
+merely un-blurred), `sampling_is_symmetric_so_no_edge_is_shaved_off`, and
+`the_proto_row_reports_the_half_block_picture_resolution`.
+
+**A note for whoever meets this next:** a colour count is a far better blur detector than a
+pixel diff. The Game Boy emits exactly four shades, so "a colour that is not one of the four"
+is a *categorical* error with no threshold to tune, and it stays true at every window size,
+palette and scaling ratio.
 
 ### FFI — no scaling; the embedder owns it
 

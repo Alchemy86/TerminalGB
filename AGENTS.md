@@ -2086,6 +2086,73 @@ ROMs can see, and the argument for the telemetry stream being the reference adap
    PTY (old code `halfblocks`, new code `sixel`, same simulated terminal). Conformance
    candidate: **a missing optional report must degrade only the thing it reports.**
 
+## Half-blocks are OURS now — `ratatui-image` smooths them (`src/screen/halfblocks.rs`)
+
+**Full story, the before/after screenshots in the captain's own terminal, the per-terminal
+matrix and the guard: [`docs/display.md`](docs/display.md) §1 "The half-block path
+smoothed".** Reported as *"running gameboy on our normal terminal is blurry again — so only
+wezterm is looking good, we have corrected that before"*.
+
+- **`ratatui_image::protocol::halfblocks::encode` HARD-CODES `FilterType::Triangle`** in its
+  `resize_exact(w, h * 2, …)` onto the cell grid, so every cell was a weighted average of the
+  Game Boy pixels under it. **Its sixel encoder does not, and `Resize::Scale`'s own default
+  filter is `Nearest`** — half-blocks is the single path in that crate with a filter baked in,
+  which is exactly why WezTerm (kitty/iTerm2) looked right and Ptyxis (VTE → half-blocks) did
+  not. *Re-check this if the crate is ever bumped: it is upstream behaviour we route around,
+  not a bug we fixed there.*
+- **This was NOT the desktop `gl::LINEAR` regression coming back**, and the first instinct —
+  "the old fix regressed" — is wrong. Same *class* (something downstream interpolating), a
+  different layer, three frontends now crisp by three different mechanisms: desktop
+  `gl::NEAREST`, web `image-rendering: pixelated`, terminal `screen::halfblocks`.
+- **A COLOUR COUNT IS THE BLUR DETECTOR, NOT A PIXEL DIFF.** The Game Boy emits exactly four
+  shades and every palette maps them to four colours, so "a colour on screen that is not one of
+  the four" is a **categorical** error with no threshold to tune, and it holds at every window
+  size, palette and scaling ratio. Measured on dmg-acid2 at 80x24: **271 distinct colours in a
+  four-shade picture**. Guarded at two layers —
+  `screen::halfblocks::tests::no_colour_appears_that_was_not_in_the_framebuffer` (unit, a
+  one-pixel checkerboard, five sizes) and
+  `screen::tui::tests::the_halfblock_picture_uses_only_real_game_boy_shades` (end to end
+  through the real `App::render`, four sizes). The second **is** the reproduction: against the
+  unfixed code it reports "268 colour(s) no Game Boy shade maps to".
+- **Sample at pixel CENTRES** (`(2i+1)·s / 2t`), the same rule and the same reason as
+  `video::fit_maps`: edge sampling never reaches the last source column or row. A column whose
+  centre lands exactly on a source-pixel boundary is a tie and cannot be symmetric — the
+  symmetry test skips those explicitly rather than picking sizes that hide it.
+- **A uniform cell is written as a space, not `▀`.** Visually identical, but the terminal
+  rasterises no glyph, so a font with a poor `▀` cannot soften the large flat areas a Game Boy
+  picture is mostly made of.
+- **It is CHEAPER than what it replaces**: whole-frame `frame_ms` **0.460 → 0.349** over ~1,070
+  frames at 146x54 cells (telemetry, WezTerm forced to half-blocks). Ours pays its full
+  sampling cost on *every* frame — `ratatui`'s per-cell diff is what suppresses an unchanged
+  screen — and still wins, because the old path did **two** `image`-crate resizes.
+  `encode_ms` alone (0.013 → 0.073) is misleading: the library's per-frame cell copy is billed
+  to the draw, not to `encode_ms`. **Compare `frame_ms`.**
+- **`render_path = legacy` still takes the library's path for half-blocks**, deliberately, so
+  one binary can A/B the two in the same terminal — the `GB_TERM_IMAGE=rgb` precedent.
+- **Crisp is not full resolution, and the product says so.** Half-blocks resolution *is* the
+  character grid (~87x78 at 80x24 against 160x144). `HALFBLOCKS_NOTICE` rides the
+  `config_warnings` channel (the `BASIC_INPUT_NOTICE` pattern), and the Status `Proto` row now
+  carries the picture's **real resolution** instead of the transport word `full`, which meant
+  nothing there — half-blocks has no wire transport, it goes through `ratatui`'s buffer.
+  **Push that notice from `App::with_warnings`, never `App::build`**: every render test builds
+  a half-block `App`, so a warning added in `build` puts a toast over the picture in all of
+  them. Same reason the volume and the link cable live there.
+- **The `Proto` row is one frame behind** (`disp_cells` is set by `render_display`, and the
+  sidebar is drawn first), exactly like `Sent`. A test must draw twice.
+- **Reproducing in the captain's own terminal, headlessly**: `gtk4-broadwayd :7` then
+  `GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 ptyxis -s -- <cmd>`, screenshot
+  `http://localhost:8087`. Two traps that cost real time: **one client at a time** — a second
+  connect (or a `navigate` to a different path) leaves the page frozen on a stale surface
+  showing `FPS 0`, which reads exactly like a hung emulator, so restart `broadwayd` and connect
+  **once**; and `pkill -f "ptyxis -s"` matches your own command line (the standing `pgrep -f`
+  trap). Check `ps -o wchan` before believing a frozen picture — `ep_poll` at 4 % CPU is a
+  healthy emulator with a dead viewer.
+- **Force the protocol to isolate the variable.** `protocol = halfblocks` in WezTerm gives the
+  same code path in a terminal that *can* be screenshotted with `import`, with font, cell size
+  and window identical — which is what proves the softening is ours and not the terminal's.
+  `Scale` in the status panel fluctuates between runs when the capability probe does (measured
+  3.4x once, 9.6x on three re-runs of the same binary); re-run before reading anything into it.
+
 ## Graphics-protocol selection (`src/screen/termcaps.rs`, `tui::probe_graphics`, `tui::build_picker`)
 
 - **The ladder is kitty → sixel → iTerm2 → half-blocks, and half-blocks is the LAST resort**,

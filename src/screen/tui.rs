@@ -259,6 +259,23 @@ const BASIC_INPUT_NOTICE: &str =
      For exact press/release use Kitty, Ghostty, foot, or WezTerm with \
      `enable_kitty_keyboard = true`.";
 
+/// What a terminal with no image protocol is told about its own picture.
+///
+/// The picture *is* crisp there (see [`crate::screen::halfblocks`]), but it is
+/// drawn out of text, so its resolution is the character grid rather than the
+/// Game Boy's 160x144 — small in-game text is genuinely unreadable and no
+/// amount of fixing this end changes that. Saying so is the difference between
+/// a known limit of the host and "the emulator looks wrong": exactly the
+/// argument [`BASIC_INPUT_NOTICE`] and [`NO_AUDIO_NOTICE`] already make.
+const HALFBLOCKS_NOTICE: &str =
+    "picture: this terminal advertises no image protocol (no kitty, iTerm2 or \
+     sixel), so the picture is drawn from text — two colours per character \
+     cell. Pixels are sharp, but the resolution is the character grid, so fine \
+     detail is lost; a bigger window or a smaller font gives more of it. For \
+     all 160x144 pixels use Kitty, Ghostty, WezTerm, or foot (sixel). GNOME \
+     Terminal, GNOME Console and Ptyxis are VTE, which Fedora builds without \
+     sixel.";
+
 /// What a build without the `audio` feature says about its own silence. The
 /// sound chip is still fully emulated — only speaker output is missing — and
 /// the fix is a rebuild, not a mixer setting, so the message has to carry the
@@ -1453,6 +1470,13 @@ impl App {
             video_template,
         );
         app.video_autostart = video_autostart;
+        // Pushed here rather than in `build` for the same reason as the volume
+        // and the cable above: `build` is what the render tests construct, and
+        // they all use half-blocks, so a warning added there would put a toast
+        // over the picture in every one of them.
+        if app.picker.protocol_type() == ProtocolType::Halfblocks {
+            app.config_warnings.push(HALFBLOCKS_NOTICE.to_string());
+        }
         app.pending_peer = pending_peer;
         if let Some(p) = &app.pending_peer {
             app.config_warnings
@@ -4960,6 +4984,28 @@ impl App {
         self.ppu_mode().status_label()
     }
 
+    /// The Status panel's `Proto` row: which graphics protocol is live, and how
+    /// the picture reaches the terminal through it.
+    ///
+    /// For half-blocks the transport word is meaningless — there is no wire
+    /// transport at all, the picture goes through `ratatui`'s own buffer — so
+    /// the row carries the thing that *is* worth knowing instead: **the
+    /// picture's real resolution**, two vertical pixels per character cell. A
+    /// player looking at 146x108 where a Game Boy has 160x144 can see at a
+    /// glance why small text is unreadable, and that a bigger window buys more
+    /// of it. See [`HALFBLOCKS_NOTICE`] and [`crate::screen::halfblocks`].
+    fn proto_label(&self, via: &str) -> String {
+        let name = protocol_name(self.picker.protocol_type());
+        if self.picker.protocol_type() == ProtocolType::Halfblocks {
+            if let Some((cols, rows)) = self.session.as_ref().map(|s| s.disp_cells) {
+                if cols > 0 && rows > 0 {
+                    return format!("{name} {cols}x{}", rows as u32 * 2);
+                }
+            }
+        }
+        format!("{name} {via}")
+    }
+
     /// `P` — switch picture mode live. Safe mid-frame (`Gpu::set_render_mode`
     /// rebuilds the pipeline at the head of the next scanline), so this needs
     /// no pause and no reload. With no ROM loaded there is nothing to switch,
@@ -5045,6 +5091,14 @@ impl App {
         let palette = self.palette;
         let picker = self.picker;
         let tx_factor = self.transmit_factor();
+        // A terminal with no image protocol draws the picture out of `▀`
+        // glyphs, and we sample that ourselves — `ratatui-image`'s half-block
+        // encoder hard-codes a *smoothing* filter, which is the whole of the
+        // "blurry in an ordinary terminal" report. See `screen::halfblocks`.
+        // `render_path = legacy` still takes the library's path, so one binary
+        // can A/B the two in the same terminal.
+        let crisp_halfblocks = self.config.render_path != RenderPath::Legacy
+            && picker.protocol_type() == ProtocolType::Halfblocks;
         let upscaler = &mut self.upscaler;
         let Some(s) = self.session.as_mut() else {
             return;
@@ -5116,6 +5170,33 @@ impl App {
                         }
                     }
                 }
+            }
+            None if crisp_halfblocks => {
+                // Two flat colours per cell, sampled nearest-neighbour. Crisp
+                // by construction and cheaper than the two `image`-crate
+                // resizes it replaces — see `screen::halfblocks` for the
+                // measurement that put it here.
+                let t = Instant::now();
+                let hash = crate::termimage::fnv1a(scaled);
+                if hash == s.legacy_hash {
+                    s.frames_identical += 1;
+                }
+                s.legacy_hash = hash;
+                // The cells are written every frame regardless: `ratatui`'s own
+                // per-cell diff is what suppresses an unchanged picture, and
+                // leaving them empty would let the diff erase it.
+                crate::screen::halfblocks::render(
+                    scaled,
+                    tw as u32,
+                    th as u32,
+                    rect,
+                    f.buffer_mut(),
+                );
+                s.t_encode = telemetry::ms(t.elapsed());
+                let wrote = wrote_total();
+                s.tx_bytes = wrote.saturating_sub(s.wrote_mark) as usize;
+                s.wrote_mark = wrote;
+                s.tx_window += s.tx_bytes;
             }
             None => {
                 // Legacy path: hand `ratatui-image` the frame and let it resize
@@ -5228,10 +5309,7 @@ impl App {
                 "Sent",
                 &format!("{}x{} {}", sent.0, sent.1, human_bytes_f(tx)),
             ),
-            kv(
-                "Proto",
-                &format!("{} {via}", protocol_name(self.picker.protocol_type())),
-            ),
+            kv("Proto", &self.proto_label(via)),
             // Which input mode is live. Without this the fallback's different
             // feel — a held direction that pauses before it walks — reads as
             // the emulator being broken rather than the terminal being basic.
@@ -7949,6 +8027,25 @@ enum PortalArm {
 
 /// Try to arm the gen1-link partner from the portal.
 ///
+/// Squeeze a portal transport error down to something that fits a toast.
+///
+/// The raw string is `portal unreachable: curl failed (exit status: 7): curl:
+/// (7) Failed to connect to localhost port 3000 after 0 ms: Could not connect
+/// to server` — three restatements of one fact, led by an exit code, and long
+/// enough to push the *consequence* off the end of a 2.5 s bar. The
+/// consequence is what the player needs; the transport detail is a
+/// parenthesis. Nothing is invented: the tail is curl's own sentence.
+#[cfg(all(feature = "plugin-gen1-link", feature = "portal"))]
+fn short_portal_error(msg: &str) -> String {
+    let last = msg.rsplit(':').next().unwrap_or(msg).trim();
+    // Keep the whole thing when the tail is uselessly short ("7", "").
+    if last.len() < 8 {
+        msg.trim().to_string()
+    } else {
+        last.to_string()
+    }
+}
+
 /// The one rule that matters: **an error is a refusal, never a fallback.**
 /// When the portal is configured but signed out or unreachable, a trade the
 /// player accepted may exist that this process cannot see — attaching the
@@ -7974,8 +8071,11 @@ fn attach_portal_gen1(
         Ok(p) => p,
         Err(e) => {
             return PortalArm::Handled(format!(
-                "portal: {e} — link partner NOT armed (a trade could be \
-                 waiting; sign in and reload the ROM, or set portal = off)"
+                "portal: link partner NOT armed — {} did not answer ({}). A \
+                 trade could be waiting; sign in and reload the ROM, or set \
+                 portal = off.",
+                url,
+                short_portal_error(&e.to_string())
             ))
         }
     };
@@ -10107,6 +10207,174 @@ mod tests {
     /// bytes the frontend would write to the terminal for it.
     fn drawn_bytes(app: &mut App, cols: u16, rows: u16) -> usize {
         drawn_wire(app, cols, rows).len()
+    }
+
+    /// Every distinct RGB colour the half-block picture put on screen.
+    ///
+    /// A DMG framebuffer holds exactly four shades and every palette maps them
+    /// to four colours, so a *crisp* half-block picture can only ever contain
+    /// those four. Anything else is an interpolated pixel — a colour no Game
+    /// Boy ever produced — and that is precisely what "blurry" looks like from
+    /// the outside.
+    fn halfblock_colours(app: &mut App, cols: u16, rows: u16) -> Vec<(u8, u8, u8)> {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut seen: Vec<(u8, u8, u8)> = Vec::new();
+        for y in 0..rows {
+            for x in 0..cols {
+                let Some(cell) = buf.cell((x, y)) else {
+                    continue;
+                };
+                if cell.symbol() != "\u{2580}" {
+                    continue; // not part of the picture
+                }
+                for c in [cell.fg, cell.bg] {
+                    if let Color::Rgb(r, g, b) = c {
+                        if !seen.contains(&(r, g, b)) {
+                            seen.push((r, g, b));
+                        }
+                    }
+                }
+            }
+        }
+        seen
+    }
+
+    /// The `Proto` row must report the picture's real resolution on a
+    /// half-block terminal, not the meaningless transport word `full`.
+    ///
+    /// Half-blocks has no wire transport — the picture goes through `ratatui`'s
+    /// buffer — so `full` said nothing, while the number a player actually
+    /// needs (why is small text unreadable? does a bigger window help?) was
+    /// nowhere on screen. Two vertical pixels per cell, so the height is
+    /// `rows * 2`. Asserted on **rendered output**: a row nobody can see is a
+    /// row nobody got.
+    #[test]
+    fn the_proto_row_reports_the_half_block_picture_resolution() {
+        use ratatui::backend::TestBackend;
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        let (cols, rows) = (120u16, 40u16);
+        let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        // Twice: the sidebar is drawn before the picture, so like `Sent` this
+        // row reports the *previous* draw's rectangle. One frame of lag on a
+        // number that only moves when the window is resized.
+        terminal.draw(|f| app.render(f)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let (c, r) = app.session.as_ref().unwrap().disp_cells;
+        assert!(c > 0 && r > 0, "no picture rectangle was allocated");
+        let want = format!("{c}x{}", r as u32 * 2);
+        let buf = terminal.backend().buffer().clone();
+        let screen: String = (0..rows)
+            .map(|y| {
+                (0..cols)
+                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            screen.contains(&format!("halfblocks {want}")),
+            "the Proto row must show the half-block resolution {want}; screen:\n{screen}"
+        );
+        // …and an image protocol still shows how the picture reaches the
+        // terminal, which is the useful fact *there*.
+        let Some(app2) = test_app(ProtocolType::Kitty, RenderPath::Fast) else {
+            return;
+        };
+        assert_eq!(app2.proto_label("shm"), "kitty shm");
+    }
+
+    /// A terminal with no image protocol must be *told* that the picture is
+    /// drawn from text at the character grid's resolution. Crisp is not the
+    /// same as full resolution, and a player who cannot read a menu must know
+    /// the reason is the host, with the concrete remedy — the same contract
+    /// [`BASIC_INPUT_NOTICE`] and [`NO_AUDIO_NOTICE`] keep.
+    #[test]
+    fn the_half_block_notice_names_the_limit_and_the_remedy() {
+        let n = HALFBLOCKS_NOTICE;
+        assert!(n.contains("no image protocol"), "must name the cause: {n}");
+        assert!(n.contains("160x144"), "must name what is lost: {n}");
+        for remedy in ["Kitty", "Ghostty", "WezTerm", "foot"] {
+            assert!(n.contains(remedy), "must name {remedy} as a remedy: {n}");
+        }
+        // Never leave the reader thinking the emulator is at fault.
+        assert!(
+            n.contains("this terminal"),
+            "must put the limit on the host, not on us: {n}"
+        );
+    }
+
+    /// A portal that is not answering must lead with the **consequence**, not
+    /// with curl's exit code. The raw error restates one fact three times and
+    /// pushes "link partner NOT armed" off the end of a 2.5 s toast.
+    #[cfg(all(feature = "plugin-gen1-link", feature = "portal"))]
+    #[test]
+    fn a_portal_transport_error_is_shortened_to_its_own_last_sentence() {
+        let raw = "portal unreachable: curl failed (exit status: 7): curl: (7) \
+                   Failed to connect to localhost port 3000 after 0 ms: Could \
+                   not connect to server";
+        assert_eq!(short_portal_error(raw), "Could not connect to server");
+        // A message with no useful tail is kept whole rather than reduced to
+        // an exit code.
+        assert_eq!(short_portal_error("curl failed: 7"), "curl failed: 7");
+        assert_eq!(short_portal_error("no colons here"), "no colons here");
+    }
+
+    /// **The blur, as a test.** Reported twice now: "running gameboy on our
+    /// normal terminal is blurry again". The first report was the desktop
+    /// OpenGL frontend's `gl::LINEAR` filters (see `docs/display.md`); this one
+    /// is the terminal, where a VTE-family terminal (GNOME Terminal, Ptyxis,
+    /// GNOME Console) has no image protocol at all and gets half-blocks.
+    ///
+    /// A half-block cell is two solid colours — it *cannot* be soft by itself.
+    /// The softening came from the sampling: `ratatui-image`'s half-block
+    /// encoder hard-codes `FilterType::Triangle` when it resizes the frame down
+    /// to the cell grid, so every cell was a weighted average of the Game Boy
+    /// pixels under it. See `halfblocks::render`.
+    #[test]
+    fn the_halfblock_picture_uses_only_real_game_boy_shades() {
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        // A real picture, not the blank first frame: dmg-acid2 has drawn its
+        // face by frame ~30 and uses all four shades.
+        for _ in 0..60 {
+            app.step_frame();
+        }
+        // Several window sizes, because the resampling ratio is what decides
+        // how much a filter smears and one size proves nothing.
+        for (cols, rows) in [(80u16, 24u16), (120, 40), (213, 55), (160, 90)] {
+            let seen = halfblock_colours(&mut app, cols, rows);
+            assert!(
+                !seen.is_empty(),
+                "{cols}x{rows}: no half-block picture was drawn at all"
+            );
+            let palette = app.config.palette;
+            let allowed: Vec<(u8, u8, u8)> = (0..4)
+                .map(|i| {
+                    let s = palette.shade(i);
+                    (s[0], s[1], s[2])
+                })
+                .collect();
+            let strays: Vec<(u8, u8, u8)> = seen
+                .iter()
+                .copied()
+                .filter(|c| !allowed.contains(c))
+                .collect();
+            assert!(
+                strays.is_empty(),
+                "{cols}x{rows}: the picture contains {} colour(s) no Game Boy \
+                 shade maps to — it has been interpolated, i.e. blurred. \
+                 Allowed {allowed:?}, saw {} distinct, strays (first 8) {:?}",
+                strays.len(),
+                seen.len(),
+                &strays[..strays.len().min(8)]
+            );
+        }
     }
 
     /// Draw one frame and return the image sequence the loop would flush.

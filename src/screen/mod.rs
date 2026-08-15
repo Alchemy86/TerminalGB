@@ -44,6 +44,12 @@ pub mod termcaps;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod tui;
 
+/// Crisp `▀` rendering for a terminal with no image protocol — see
+/// [`halfblocks`]. Pure: samples a framebuffer into a `ratatui` buffer and
+/// touches nothing else.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub mod halfblocks;
+
 /// Layout of the live Gen 1 trainer panel — see [`trainer_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
