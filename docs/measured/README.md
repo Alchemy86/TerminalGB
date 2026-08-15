@@ -14,7 +14,7 @@ produced, on a machine, with the command that reproduces it printed beside it.
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`72a5454`](https://github.com/Alchemy86/TerminalGB/tree/72a545438d2a2422f1b55c3452032d76259993be) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## What this section is *not*
 
@@ -140,6 +140,11 @@ Each one follows the same shape: **what the reference says** (cited, linked, not
 This section is the *measured* layer. It sits on top of, and links into, work that already had
 a home:
 
+- **[`docs/emulation/`](../emulation/README.md)** — the *conceptual* layer underneath both this
+  section and the component pages: what an emulator actually is, the machine chip by chip,
+  where imitating it has to stop being convenient and start being exact, how test ROMs prove
+  it, and where a software emulator structurally differs from an FPGA. Written for a reader
+  with no hardware background; it owns no numbers of its own and hands off here for them.
 - **[`docs/components/`](../components/README.md)** — one deep-dive page per component:
   hardware background, our implementation with `path:line` references, honest approximations,
   and expected behaviours phrased as future tests.

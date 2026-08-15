@@ -250,10 +250,18 @@ def modes_block(n: dict[str, tuple[int, int]]) -> str:
 # scanned, so adding a page here is what opts it in.
 INLINE_PAGES = [
     os.path.join("docs", "status.md"),
+    os.path.join("docs", "conformance.md"),
     *[os.path.join("docs", "measured", f)
       for f in ("README.md", "scoreboard.md", "ppu.md", "apu.md", "timing.md",
                 "boot.md", "cartridges.md", "symptoms.md", "serial.md", "sgb.md",
                 "host.md")],
+    # docs/emulation/ is the conceptual layer (what an emulator is, chip by chip).
+    # It quotes suite scores to make a point — "the suite that asks questions
+    # inside a scanline is the one we are furthest from" — so it is opted in for
+    # exactly the reason the mechanism exists: a teaching page that has drifted
+    # away from the tests teaches the wrong thing.
+    *[os.path.join("docs", "emulation", f)
+      for f in ("accuracy.md", "test-roms.md", "fpga.md")],
 ]
 
 # Suite key -> (baseline file, group or None). Group totals are included

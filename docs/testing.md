@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`72a5454`](https://github.com/Alchemy86/TerminalGB/tree/72a545438d2a2422f1b55c3452032d76259993be) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -107,6 +107,9 @@ it.
   [`third_party/dmg-acid2/`](../third_party/dmg-acid2/) and the harness renders it every run
   (currently renders correctly). The cheapest, highest-value *visual* regression net for
   [PPU](components/ppu.md) work.
+- **Why a picture rather than a number**, and a gallery of how the face deforms under each
+  individual PPU bug — measured here by breaking them one at a time, not copied from upstream:
+  [`docs/emulation/test-roms.md`](emulation/test-roms.md).
 - Sources: [dmg-acid2](https://github.com/mattcurrie/dmg-acid2) ·
   [cgb-acid2](https://github.com/mattcurrie/cgb-acid2).
 

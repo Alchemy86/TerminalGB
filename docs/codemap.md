@@ -4,12 +4,17 @@
 > memory access travels**, **how an interrupt is delivered**, and **where the frontends
 > attach**. Every code reference below is a clickable link; the per-component deep dives
 > live in [`docs/components/`](components/README.md).
-> [README](../README.md) · [component index](components/README.md) · [testing](testing.md) · [debugging](debugging.md) · [display](display.md) · [terminal rendering](rendering.md)
+>
+> This page assumes you already know roughly what an emulator does and want to find your way
+> around *this tree*. If that assumption is wrong, read
+> [**what an emulator actually is**](emulation/README.md) first — same machine, no code.
+>
+> [README](../README.md) · [what an emulator is](emulation/README.md) · [component index](components/README.md) · [testing](testing.md) · [debugging](debugging.md) · [display](display.md) · [terminal rendering](rendering.md)
 
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`72a5454`](https://github.com/Alchemy86/TerminalGB/tree/72a545438d2a2422f1b55c3452032d76259993be) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The one-paragraph model
 

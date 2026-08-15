@@ -1046,6 +1046,10 @@ dispatches them (priority VBlank → STAT → Timer → Serial → Joypad).
 frame through the system, follows a memory access from CPU → MMU → device, and shows where the
 frontends attach, with every reference a clickable link into the source.
 
+📖 **New to emulation itself? Read [what an emulator actually is](docs/emulation/README.md)** —
+four pages explaining the machine chip by chip, where the imitation has to become exact, how
+we prove it, and what an FPGA does differently. No hardware background assumed.
+
 ### Every page, and what it is for
 
 Nothing below is repeated here — this README is the index, those are the sources.
@@ -1054,6 +1058,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 
 | page | what it answers |
 |---|---|
+| **[what an emulator actually is](docs/emulation/README.md)** | **The concepts, for a reader who is not a hardware engineer.** What a Game Boy is chip by chip, where imitating it has to stop being convenient and start being exact, how test ROMs prove it (dmg-acid2 draws a face, and every PPU bug deforms it differently — with our own measurements of how), and the emulation-vs-FPGA question |
 | **[the measured Game Boy](docs/measured/README.md)** | **"Pan Docs says X — here is what we measured, the test that catches it, and what it looks like when an emulator gets it wrong."** Every suite scored with a reason for each red row, the calibrated timing constants and the sweeps behind them, and a symptom → cause index |
 | [code map](docs/codemap.md) | traces a frame through the system, follows a memory access CPU → MMU → device, shows where the frontends attach |
 | [component reference index](docs/components/README.md) | one deep-dive page per component: hardware, history, our implementation, honest approximations, and expected behaviours phrased as future tests |

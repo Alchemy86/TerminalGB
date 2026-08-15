@@ -14,11 +14,15 @@
 > row, the calibrated timing constants with the sweeps that fixed them, and a symptom → cause
 > index — see **[the measured Game Boy](../measured/README.md)**. These pages say how the
 > component works; that section says what it measures and how we know.
+>
+> **New to emulation itself?** Start at **[what an emulator actually is](../emulation/README.md)**
+> — the conceptual layer under both of the above: what each chip *is* and what makes it hard,
+> written for a reader with no hardware background. It hands off to these pages for the detail.
 
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`72a5454`](https://github.com/Alchemy86/TerminalGB/tree/72a545438d2a2422f1b55c3452032d76259993be) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## The components
 

@@ -136,15 +136,28 @@ To become a standalone crate/repo, the following would have to be decoupled from
 A conformance tool is only trustworthy if **our own emulator passes what the tool claims to
 check.** Our scores are the proof, and they must stay honest and visible:
 
-- **32/35** ROM x console rows in `testharness/baseline.txt` (18 ROMs on a DMG and a CGB),
+- **<!--score:harness-->46 / 47<!--/score-->** ROM x console rows in
+  `testharness/baseline.txt` — the one red row is `oam_bug` on a Color console, which must
+  stay red because Color silicon has no such defect,
 - **12/12** Blargg `dmg_sound`,
 - **dmg-acid2** pixel-perfect — 0 of 23,040 pixels differ from the reference, **asserted in
   CI** rather than spot-checked by a human.
 
-And the part that keeps the rest honest: **measured against the
-[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264 tests we score 92** —
-Mooneye acceptance 13/66, Mealybug 0/71, SameSuite APU 2/61. A tool that only reports the
-suites its author passes is marketing; publish the denominator that hurts.
+And the part that keeps the rest honest, on the suites that hurt:
+Mooneye `acceptance` <!--score:mooneye_acceptance-->67 / 75<!--/score-->, SameSuite's audio
+group <!--score:samesuite_apu-->65 / 69<!--/score-->, and Mealybug Tearoom
+<!--score:mealybug-->3 / 79<!--/score--> in the default picture mode
+(<!--score:mealybug_accurate-->17 / 79<!--/score--> with the per-dot pipeline). Against the
+[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264-row manifest we score
+**223** — see [`docs/shootout.md`](shootout.md); that figure is measured through their runner
+and their screenshot comparison, so it is deliberately *not* derived from our baselines and
+must be re-measured rather than edited. A tool that only reports the suites its author passes
+is marketing; publish the denominator that hurts.
+
+> Every score above except the Shootout row is rewritten from the checked-in baselines by
+> `make status` and verified by `make docs-check`. That is not decoration: the figures this
+> paragraph used to carry (32/35, and a Shootout score of 92) were stale by a wide margin,
+> which is precisely the failure mode this page is arguing against.
 
 If any of those regressed and we hid it, the tool would be checking behaviour we don't ourselves
 meet — which is exactly the failure mode that makes a benchmark worthless. So the same

@@ -17,7 +17,15 @@ MIT-licensed and only 32 KB, so it is vendored directly. The `**/*.gb` entry in 
 repo's [`.gitignore`](../../.gitignore) is negated for this one file so it stays tracked.
 
 The test-ROM harness ([`testharness/testroms.rs`](../../testharness/testroms.rs)) renders
-this ROM headlessly and compares the framebuffer hash against
-[`testharness/baseline.txt`](../../testharness/baseline.txt); compare the dumped frame in
-`target/testrom-artifacts/acid2__dmg-acid2.png` against `reference-dmg.png` by eye. See
-[`docs/testing.md`](../../docs/testing.md).
+this ROM headlessly and compares the framebuffer **pixel by pixel against
+`reference-dmg.png`**, by luminance rank rather than by colour (our shades are
+`000000/606060/c0c0c0/ffffff`, the reference's are `000000/555555/aaaaaa/ffffff`). The
+resulting count goes into [`testharness/baseline.txt`](../../testharness/baseline.txt) as
+`0/23040 pixels differ …` — **not** a hash of our own output, which is what it used to be and
+which could never fail. The dumped frame is written to
+`target/testrom-artifacts/acid2__dmg-acid2.png` if you want to look at it.
+
+See [`docs/testing.md`](../../docs/testing.md) for the harness, and
+[`docs/emulation/test-roms.md`](../../docs/emulation/test-roms.md) for what this ROM is
+actually testing — including a gallery of how the face deforms under each individual PPU
+bug, measured by breaking them one at a time.

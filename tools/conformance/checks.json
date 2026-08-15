@@ -256,7 +256,8 @@
         "Features under test include: the 10-sprites-per-scanline limit, sprite X-coordinate priority, the OBJ-to-BG priority bit, 8x16 sprite tile-index bit 0 being ignored, sprite and background flipping, the window, the BG/window tile-data select, and the OBJ palettes.",
         "This runner compares SHADE RANK, not RGB, so your palette can be green, grey or anything else — only which of the four shades each pixel received is judged.",
         "A frame that differs everywhere usually means the run never reached the finished image (too few frames, or the LCD never enabled), not a rendering bug. Check the artifact before chasing the PPU.",
-        "Run it in DMG mode. In CGB mode the ROM draws a different (also correct) image, which this reference does not describe."
+        "Run it in DMG mode. In CGB mode the ROM draws a different (also correct) image, which this reference does not describe.",
+        "A gallery of what each individual mistake does to the face \u2014 measured by breaking one behaviour at a time and rendering the result, with the pixel distance each one scores \u2014 is at docs/emulation/test-roms.md in the TerminalGB repository. Note that severity and pixel count are barely related: ignoring sprite X-priority is 12 pixels, indexing the signed tile-data block as unsigned is 1,044, and both are total failures of a documented behaviour."
       ],
       "hardware": "Pan Docs — Rendering, OBJ priority, and the LCDC register.",
       "reference": "https://github.com/mattcurrie/dmg-acid2"

@@ -5725,3 +5725,58 @@ destination**, entered through the cartridge's own unedited door.
   the same bytes with the bit clear, and the "wrote / now / kept-or-clobbered" table is what
   turns the whole claim from a story into ten lines of evidence. Any host that writes
   emulated memory and hopes it sticks should do this.
+
+## `docs/emulation/` — the conceptual layer, and the acid2 failure gallery
+
+- **There are now THREE documentation layers about the machine and they must not merge.**
+  [`docs/emulation/`](docs/emulation/README.md) is *what an emulator is* (concepts, no
+  numbers of its own, written for a reader with no hardware background);
+  [`docs/components/`](docs/components/README.md) is *how our implementation works*
+  (`path:line`, quirks, future tests); [`docs/measured/`](docs/measured/README.md) is *what we
+  measured and scored*. Four pages: `README` (what an emulator is, the loop, the three rates),
+  `the-machine` (chip by chip), `accuracy` (the three cracks in the naive loop), `test-roms`
+  (how we know it is right), `fpga` (emulation vs. a reconfigured circuit). Every section
+  hands off rather than restating — **if a component has no deep page, say so, do not invent
+  detail.**
+- **THE ACID2 FAILURE GALLERY IS MEASURED, NOT COPIED — and the method is reusable for any
+  picture-judged ROM.** `docs/emulation/faces/*.png` are renders of the vendored MIT
+  dmg-acid2 ROM produced by breaking **one** behaviour in `src/gpu/mod.rs` at a time,
+  rebuilding `examples/conformance_adapter`, rendering 600 frames and comparing with
+  `tools/conformance/image.py`'s shade-rank compare. Measured distances, in the file names:
+  `x-priority` **12**, `ten-per-line` **28** (the `!` of "HELLO WORLD!" disappears),
+  `x-flip` **119**, `bg-priority` **144**, `tall-tile-bit` **256**, `wx-offset` **733**,
+  `y-flip` **868** (the smile becomes a straight line), `tile-data-select` **1,044**. The
+  119 for X-flip independently reproduces the figure the harness' own teeth-test records,
+  which is what says the method is sound. Committing renders of an MIT test ROM is the same
+  call `docs/upscale-samples/` already made — **never do this with a commercial cartridge.**
+- **The lesson the gallery exists to teach: severity and pixel count are barely related.**
+  12 pixels and 1,044 pixels are both total failures of a documented behaviour. Anyone
+  reading a Mealybug or acid2 number as a percentage is reading it wrong.
+- **`docs/tools/status_numbers.py`'s `INLINE_PAGES` now covers `docs/emulation/` and
+  `docs/conformance.md`.** Adding a page to that list is what opts it in; a score written
+  into a sentence anywhere else is unguarded. Teeth re-proven here: editing one wrapped
+  Mealybug figure turns `make docs-check` red.
+- **`docs/conformance.md`'s credibility paragraph had been stale for a long time** (it
+  claimed 32/35 and a Shootout score of 92, on a page whose whole argument is "publish the
+  denominator that hurts"). Its in-repo figures are wrapped in generated markers now; the
+  Shootout figure is deliberately left ungated and must be re-measured, not edited.
+- **`third_party/dmg-acid2/README.md` claimed the harness compares a framebuffer *hash*.**
+  It has compared pixels against the author's reference image since the harness was fixed —
+  fixed here. Worth remembering as a class: a stale sentence beside a vendored artefact is
+  the least-read and longest-lived kind.
+- **Two facts checked rather than recalled while writing these pages, both cited in them:**
+  mGBA's SM83 core is an explicit per-cycle state machine (`enum SM83ExecutionState` in
+  `include/mgba/internal/sm83/sm83.h`, `_SM83Step` in `src/sm83/sm83.c` — one bus operation
+  per M-cycle), which is the instructive contrast with our fused decode-execute in
+  `Cpu::operation`; and Analogue's own Pocket page says *"Completely engineered in two FPGAs.
+  No emulation."*, which is the marketing claim the FPGA page examines. **The Pocket page does
+  NOT name its FPGA models or its core authors** — a first draft asserted "Cyclone V, cores by
+  Kevin Horton" and it could not be verified there, so it was cut.
+- Measured on this machine while writing, for anyone who wants a fresh figure rather than a
+  quoted one: dmg-acid2 runs **17,288 instructions per frame** at **4.06 T-cycles per
+  instruction**, and `cargo test --release --test ppuengines` gave **0.2182 ms/frame
+  standard vs 0.4614 identical, ratio 2.11x** (76.7x vs 36.3x real time).
+- **`make docs-links` restamps the "documented as of <sha>" marker on EVERY page**, so
+  running it after a docs change produces ~20 one-line diffs on pages you never touched.
+  Revert the marker-only ones before committing to keep a review surface readable — nothing
+  verifies marker freshness, only link validity.
