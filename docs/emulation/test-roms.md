@@ -189,7 +189,7 @@ no output device can measure things a test that must draw its own report cannot.
 Score: <!--score:mooneye_acceptance-->67 / 75<!--/score--> `acceptance`,
 <!--score:mooneye_emulator_only-->28 / 28<!--/score--> `emulator-only`, and
 <!--score:mooneye_cgb-->8 / 8<!--/score--> Color `misc` in the default picture mode;
-`acceptance` rises to <!--score:mooneye_acceptance_accurate-->70 / 75<!--/score--> under
+`acceptance` rises to <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score--> under
 `identical`. Every remaining failure is a picture-timing test — see
 [measured/scoreboard.md](../measured/scoreboard.md#mooneye-gb--every-remaining-failure-is-a-ppu-test).
 

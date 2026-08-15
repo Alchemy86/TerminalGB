@@ -341,6 +341,62 @@ impl Cpu<'_> {
         self.memory.gpu.set_stop_fill(None);
     }
 
+    /// **How long an interrupt takes to reach the CPU depends on where inside
+    /// the M-cycle it was requested, and on whether the CPU is running or
+    /// halted.** This is the one case in this machine where the two differ.
+    ///
+    /// Every interrupt source here flips on an M-cycle boundary — VBlank, the
+    /// timer, the serial port, the mode-0 and mode-1 STAT sources — except the
+    /// **mode-2 OAM strobe**, which is asserted part-way through the last
+    /// M-cycle of the previous scanline
+    /// ([`Gpu::oam_strobe`](crate::gpu::Gpu), `OAM_STROBE_LEAD`). A CPU
+    /// executing instructions is watching the line as it goes and dispatches at
+    /// the instruction boundary it has already reached; a CPU sitting in `HALT`
+    /// is one M-cycle slower, so the whole handler — and every mid-scanline
+    /// register write in it — lands one M-cycle later.
+    ///
+    /// **This is what the two PPU suites were disagreeing about.** Mealybug's
+    /// ROMs take that interrupt out of a `nop` slide and photograph where a
+    /// mid-line write lands, so they measure the *running* latency; Mooneye's
+    /// five `acceptance/ppu/intr_2_*` take it out of `HALT` and count cycles to
+    /// a mode change, so they measure the *halted* one. Modelling them as the
+    /// same latency makes the two irreconcilable and forces a compensating fudge
+    /// into the strobe; modelling the difference satisfies both untouched.
+    ///
+    /// Two independent references describe the same mechanism:
+    ///
+    /// * **docboy** (MIT; `src/docboy/docboy/cpu/cpu.cpp`,
+    ///   `INTERRUPTS_TIMINGS`) tabulates the latency per source, per halt
+    ///   state, and per T-cycle of the M-cycle. Its DMG row for STAT is
+    ///   `{1, 1, 1, 2}` running against `{1, 2, 2, 2}` halted: identical when
+    ///   the request lands on the M-cycle's first T-cycle, one M-cycle longer
+    ///   when it lands part-way through.
+    /// * **SameBoy** (Expat; `Core/sm83_cpu.c`, `GB_cpu_run`) reaches it from
+    ///   the other side — its halt path advances the clock *before* sampling
+    ///   `IE & IF` and again after, so a halted CPU samples the line at a
+    ///   different point in the cycle from a running one, while the run path
+    ///   samples at the instruction boundary with nothing advanced.
+    ///
+    /// Only the mode-2 strobe can answer `true` here, so no other interrupt's
+    /// timing moves — which is exactly why `acceptance/di_timing-GS`,
+    /// `halt_ime1_timing2-GS`, `halt_ime0_nointr_timing`,
+    /// `ppu/intr_1_2_timing-GS` and `ppu/hblank_ly_scx_timing-GS` (all of which
+    /// wake from `HALT` on a boundary-aligned source) are untouched.
+    fn mid_mcycle_request_reaches_halt_late(&mut self) -> bool {
+        // Nothing pending: no request to be late about, and the marker must not
+        // be consumed by an unrelated M-cycle of a long HALT.
+        if self.memory.inte & self.memory.intf & 0x1F == 0 {
+            return false;
+        }
+        // The delay belongs to the request itself, so it is only spent when the
+        // request that would be served *is* the mid-cycle one. Priority is the
+        // lowest set bit, so STAT must be the winner (VBlank outranks it).
+        if self.memory.inte & self.memory.intf & 0x03 != 0x02 {
+            return false;
+        }
+        self.memory.gpu.take_stat_irq_mid_mcycle()
+    }
+
     // Interrupt dispatch. See docs/components/cpu.md §"Interrupts" and Pan Docs:
     // https://gbdev.io/pandocs/Interrupts.html
     fn handleinterrupt(&mut self) -> u32 {
@@ -459,6 +515,10 @@ impl Cpu<'_> {
         }
 
         self.updateime();
+        if self.halt == 1 && self.mid_mcycle_request_reaches_halt_late() {
+            // Still halted for this M-cycle; the request is acted on next one.
+            return 1;
+        }
         match self.handleinterrupt() {
             0 => {}
             n => return n,
@@ -1614,6 +1674,87 @@ mod tests {
         rom[0x0103] = 0x01;
         rom[0x0150..0x0150 + code.len()].copy_from_slice(code);
         rom
+    }
+
+    /// Cycles from an identical starting point to the STAT vector, for a CPU
+    /// that meets the **mode-2 OAM strobe** while waiting in `HALT` and for one
+    /// meeting it in the middle of a `nop` slide.
+    ///
+    /// Both machines run the same prologue, so they enter the wait at the same
+    /// PPU dot; the only difference is what they are doing when the strobe
+    /// arrives. Returns `(halted, running)` in dots.
+    fn dots_to_stat_vector(mode: crate::gpu::RenderMode) -> (u32, u32) {
+        // DI; STAT = mode-2 source; IE = STAT; wait for LY == $42; clear IF
+        // (so the interrupt measured is the *next* strobe, not one that piled
+        // up while IME was off); EI. Laid out from $0150:
+        //   $015F  XOR A          <- the measurement starts here
+        //   $0163  the tail under test
+        let prologue: &[u8] = &[
+            0xF3, // DI
+            0x3E, 0x20, 0xE0, 0x41, // LD A,$20 ; LDH ($41),A   (STAT)
+            0x3E, 0x02, 0xE0, 0xFF, // LD A,$02 ; LDH ($FF),A   (IE)
+            0xF0, 0x44, 0xFE, 0x42, 0x20, 0xFA, // -: LDH A,($44); CP $42; JR NZ,-
+            0xAF, 0xE0, 0x0F, //       XOR A    ; LDH ($0F),A   (IF)
+            0xFB, // EI
+        ];
+        let measure = |tail: &[u8]| -> u32 {
+            let mut code = prologue.to_vec();
+            code.extend_from_slice(tail);
+            let mut cpu = Cpu::new(rom_running(&code), None);
+            cpu.memory.gpu.set_render_mode(mode);
+            let mut dots = 0;
+            let mut waiting = true;
+            for _ in 0..200_000 {
+                let d = cpu.do_cycle();
+                // Start counting once the `LY` wait has been left, so the
+                // prologue's own length cannot enter the comparison.
+                if waiting {
+                    waiting = cpu.registers.pc < 0x015F;
+                } else {
+                    dots += d;
+                }
+                if cpu.registers.pc == 0x0048 {
+                    return dots;
+                }
+            }
+            panic!("the STAT vector was never reached");
+        };
+        // 0x76 = HALT. The slide is nops, long enough to span a whole line.
+        (measure(&[0x76]), measure(&[0x00; 200]))
+    }
+
+    /// **The mode-2 OAM strobe reaches a halted CPU one M-cycle later than a
+    /// running one, and no other interrupt in the machine does.**
+    ///
+    /// It is the only source here that is asserted part-way through an M-cycle
+    /// rather than on its boundary (see `OAM_STROBE_LEAD`), and a CPU sitting
+    /// in `HALT` samples the interrupt line at a different point in the cycle
+    /// from one that is executing. docboy tabulates it directly
+    /// (`INTERRUPTS_TIMINGS`, DMG STAT row `{1,1,1,2}` running vs `{1,2,2,2}`
+    /// halted); SameBoy's `GB_cpu_run` advances the clock around its halt-path
+    /// `IE & IF` sample and not around the run-path one.
+    ///
+    /// Modelling the two as equal is what forced `Gpu::oam_strobe`'s lead to be
+    /// a knob: Mooneye's five `acceptance/ppu/intr_2_*` take this interrupt out
+    /// of `HALT` and Mealybug's ROMs take it out of a `nop` slide, so no single
+    /// strobe position satisfies both.
+    #[test]
+    fn a_halted_cpu_meets_the_oam_strobe_one_m_cycle_later_than_a_running_one() {
+        let (halted, running) = dots_to_stat_vector(crate::gpu::RenderMode::Accurate);
+        assert_eq!(
+            halted,
+            running + 4,
+            "halted {halted} vs running {running} dots to the STAT vector"
+        );
+    }
+
+    /// And the whole-scanline renderer is untouched by it: it has no
+    /// sub-instruction phase for a mid-M-cycle assertion to live in, so both
+    /// paths must still cost exactly the same.
+    #[test]
+    fn the_standard_renderer_does_not_pay_the_mid_m_cycle_delay() {
+        let (halted, running) = dots_to_stat_vector(crate::gpu::RenderMode::Fast);
+        assert_eq!(halted, running, "the default engine must not move");
     }
 
     fn run(code: &[u8], steps: usize) -> Cpu<'static> {

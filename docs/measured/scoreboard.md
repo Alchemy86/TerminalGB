@@ -98,7 +98,7 @@ blocking. See [ppu.md](ppu.md).
 ### The `identical` picture mode scores differently — and now dominates
 
 The [`identical` picture mode](../picture-modes.md) (`GB_PPU=identical`, formerly `accurate`)
-gives **<!--score:mooneye_acceptance_accurate-->70/75<!--/score-->** acceptance against the
+gives **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** acceptance against the
 default `standard` mode's <!--score:mooneye_acceptance-->67/75<!--/score-->. The delta is three
 rows and it is one-directional:
 
@@ -108,14 +108,15 @@ rows and it is one-directional:
 | `acceptance/ppu/lcdon_timing-GS` | FAIL | **PASS** |
 | `acceptance/ppu/lcdon_write_timing-GS` | FAIL | **PASS** |
 | `acceptance/ppu/intr_1_2_timing-GS` | PASS | PASS |
+| the five `acceptance/ppu/intr_2_*` | FAIL | **PASS** |
 
-The five still red on `identical` are the whole `intr_2_*` group, and they share **one** cause:
-`OAM_STROBE_LEAD` in [`src/gpu/mod.rs`](../../src/gpu/mod.rs) raises the mode-2 STAT strobe one
-M-cycle early, and each of the five comes out exactly one loop iteration long because of it.
-Setting it to zero makes `acceptance` **75/75** with no contradictions left in the suite — and
-costs eleven Mealybug rows their pixel-exactness, every one by a uniform four-pixel shift. That
-trade, and the three places the missing M-cycle has been *ruled out* of, are written up in
-[`conformance-notes.md`](../conformance-notes.md) (2026-08-15).
+`identical` has **no red rows left in `acceptance` at all**. The five `intr_2_*` were the last,
+and they were red for the same reason `OAM_STROBE_LEAD` was documented as a contested knob:
+they take the mode-2 STAT interrupt out of **`HALT`**, where Mealybug's ROMs take it out of a
+**`nop` slide**, and a request asserted part-way through an M-cycle reaches those two CPUs one
+M-cycle apart. Modelling that difference satisfies both suites with the strobe untouched — see
+[`conformance-notes.md`](../conformance-notes.md) (2026-08-15, "a mid-M-cycle interrupt reaches
+a halted CPU late").
 
 `intr_1_2_timing-GS` used to be the one row `identical` lost, and it was the last thing
 blocking a default flip. It is fixed — see
@@ -128,7 +129,7 @@ The mode is gated separately (`make test-external-accurate`, against
 | Gate | `standard` | `identical` |
 |---|---:|---:|
 | In-repo harness (Blargg + dmg-acid2) | <!--score:harness-->46/47<!--/score--> | <!--score:harness-->46/47<!--/score--> — *identical verdicts row for row* |
-| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->70/75<!--/score-->** |
+| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** |
 | Mooneye `emulator-only` | <!--score:mooneye_emulator_only-->28/28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28/28<!--/score--> |
 | Mooneye `misc` (CGB) | <!--score:mooneye_cgb-->8/8<!--/score--> | <!--score:mooneye_cgb-->8/8<!--/score--> |
 | SameSuite | <!--score:samesuite-->72/76<!--/score--> | <!--score:samesuite-->72/76<!--/score--> |

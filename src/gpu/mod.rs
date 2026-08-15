@@ -171,30 +171,26 @@ const VBLANK_LINE: u8 = 144;
 const VBLANK_STROBE_LEAD: u32 = 4;
 
 /// How far before its own scanline the mode-2 OAM strobe rises, on lines 1-143
-/// of the per-dot engine. **This one constant is the last unresolved conflict
-/// between the two PPU suites, and it is a knob, not a model — see
-/// [`Gpu::oam_strobe`] for the whole argument and the measurements.**
+/// of the per-dot engine: one M-cycle, so the request appears **part-way
+/// through the last M-cycle of the previous line** rather than on a boundary.
+/// See [`Gpu::oam_strobe`] for the measurements and the references.
 ///
-/// Set to `4` (one M-cycle): Mealybug scores 17 of 79 rows pixel-exact against
-/// its hardware photographs, and five Mooneye `acceptance/ppu/intr_2_*` tests
-/// each come out exactly one loop iteration long.
+/// **This used to be documented as a knob rather than a model, and as the last
+/// unresolved conflict between the two PPU suites.** It is neither any more.
+/// At `4` five Mooneye `acceptance/ppu/intr_2_*` came out one loop iteration
+/// long; at `0` those five passed and eleven Mealybug rows lost pixel-exactness
+/// to a uniform four-pixel shift. Both suites are hardware ground truth, and
+/// what reconciled them was not this constant: it is that Mooneye's five take
+/// the interrupt out of **`HALT`** and Mealybug's ROMs take it out of a **`nop`
+/// slide**, and a mid-M-cycle request reaches those two CPUs one M-cycle apart.
+/// That is modelled now — [`Gpu::take_stat_irq_mid_mcycle`] and
+/// [`crate::cpu::core::Cpu::exec`] — and both suites are satisfied with the
+/// lead where it always was.
 ///
-/// Set to `0`: Mooneye `acceptance` is **75/75** with no contradictions left in
-/// it, and Mealybug drops to 6 of 79 — every one of the eleven lost rows by a
-/// *uniform four-pixel horizontal shift* (measured: the two frames correlate at
-/// 99.9 % under a +4 px offset), because every mid-scanline register write
-/// lands one M-cycle late.
-///
-/// Both suites are hardware ground truth and both are internally consistent, so
-/// one 1-M-cycle error remains somewhere between the interrupt and the pixel.
-/// It is **not** in the CPU (three Mooneye tests pin the interrupt's position
-/// independently), **not** in the write commit (`ppu_write_commit` spans one
-/// M-cycle and has a single dot of slack left), and **not** in the pixel phase
-/// (measured: the fetcher pushes pixel 0 on dot 92 and pixel 159 on dot 251, so
-/// mode 3's 172 dots are full and there is nowhere to move). Whoever finds it
-/// gets both suites at once; until then this constant chooses which one to
-/// satisfy, and `4` is the value that does not regress the picture a player
-/// sees.
+/// Being asserted inside an M-cycle is the *whole* content of this constant on
+/// this engine: any value in 1..=4 puts the request in the same M-cycle, which
+/// is why SameBoy's "1 T-cycle" and docboy's dot 452/453 are the same model as
+/// ours. Only `0` — a boundary-aligned strobe — is a different machine.
 const OAM_STROBE_LEAD: u32 = 4;
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -257,6 +253,11 @@ pub struct Gpu {
     /// enabled STAT source. `IF.1` is raised on its 0→1 transition only; see
     /// [`Gpu::refresh_stat_line`].
     stat_line: bool,
+    /// Was the most recent `IF.1` request asserted part-way through an
+    /// M-cycle? See [`Gpu::take_stat_irq_mid_mcycle`]. Live across an
+    /// instruction boundary — a HALTed CPU consumes it on the M-cycle after
+    /// the one that raised it — so it is machine state and is serialised.
+    stat_irq_mid_mcycle: bool,
     /// The **latched** `LY == LYC` coincidence flag (`STAT` bit 2). It is a
     /// flip-flop clocked by the PPU, not a live comparison: with the LCD off
     /// the comparison clock stops, so the flag keeps whatever it held and a
@@ -337,6 +338,7 @@ impl Gpu {
             vrambank: 0,
             hblanking: false,
             stat_line: false,
+            stat_irq_mid_mcycle: false,
             lyc_match: false,
             skip_first_oam: false,
             stop_fill: None,
@@ -542,6 +544,7 @@ impl Gpu {
         w.u8(self.gbmode.to_u8());
         w.bool(self.hblanking);
         w.bool(self.stat_line);
+        w.bool(self.stat_irq_mid_mcycle);
         w.bool(self.lyc_match);
         w.bool(self.skip_first_oam);
         // STOP mode can be live at a frame boundary (the CPU sits there until
@@ -622,6 +625,7 @@ impl Gpu {
         self.gbmode = crate::mode::GbMode::from_u8(r.u8()?)?;
         self.hblanking = r.bool()?;
         self.stat_line = r.bool()?;
+        self.stat_irq_mid_mcycle = r.bool()?;
         self.lyc_match = r.bool()?;
         self.skip_first_oam = r.bool()?;
         let stopped = r.bool()?;
@@ -878,31 +882,41 @@ impl Gpu {
     ///   the real mode 2 at `LY=0` is blocked and its interrupt arrives a line
     ///   late. `acceptance/ppu/intr_1_2_timing-GS` counts exactly that gap.
     ///
-    /// **There is no early window on lines 1-143, and removing the one that
-    /// used to be here is what made the mode-0 end solvable.** A four-dot lead
-    /// was added because three Mooneye tests each came out exactly one M-cycle
-    /// short; it bought two of them and cost the other two, in a perfect
-    /// two-for-two trade that never moved the total. Measured both ways on the
-    /// per-dot engine: with the lead, `intr_2_mode0_timing` and
-    /// `intr_2_oam_ok_timing` pass while `intr_2_0_timing` and
-    /// `intr_2_mode3_timing` fail; without it, exactly the other two.
+    /// **On lines 1-143 the strobe rises one M-cycle early**
+    /// ([`OAM_STROBE_LEAD`]) — and the point of that is not *when* it rises but
+    /// *that it rises inside an M-cycle instead of on a boundary*, which is
+    /// what makes it the only interrupt source here that reaches a halted CPU
+    /// and a running one at different times. See
+    /// [`Gpu::take_stat_irq_mid_mcycle`], which is where that difference is
+    /// recorded, and [`crate::cpu::core::Cpu::exec`], where it is spent.
     ///
-    /// **A knob that trades tests one-for-one is not modelling anything** — it
-    /// is a constant absorbing an error somewhere else. The error was at the
-    /// other end: mode 3 handed over to mode 0 a dot early, and the mode-0
-    /// interrupt and the mode-0 register bits are not the same edge. See
-    /// [`Gpu::hblank_strobe`] and the mode-3 exit in `Gpu::accurate_dot`. With
-    /// those two right, the lead is unnecessary and all four tests pass
-    /// together — plus `intr_2_mode0_timing_sprites` and
-    /// `hblank_ly_scx_timing-GS`, which no setting of the lead could reach.
+    /// Two references say the same thing from opposite sides, and both put it
+    /// inside the M-cycle rather than on its edge:
     ///
-    /// **SameBoy makes the same call and puts a number on it**: `Core/display.c`
-    /// sets `mode_for_interrupt = 2` one T-cycle before it clears the `STAT`
-    /// mode bits, commented *"The OAM STAT interrupt occurs 1 T-cycle before
-    /// STAT actually changes, except on line 0. PPU glitch?"*. **One T-cycle,
-    /// not four** — and since the caller folds `IF` once per M-cycle, a one-dot
-    /// lead is invisible here, so lead-of-one and no lead at all are the same
-    /// model on this engine. That is what Mooneye measures, three times over.
+    /// * **SameBoy** (`Core/display.c`) sets `mode_for_interrupt = 2` one
+    ///   T-cycle before it clears the `STAT` mode bits, commented *"The OAM
+    ///   STAT interrupt occurs 1 T-cycle before STAT actually changes, except
+    ///   on line 0. PPU glitch?"*;
+    /// * **docboy** (`src/docboy/docboy/ppu/ppu.cpp`) calls
+    ///   `update_stat_irq_for_oam_mode()` from `hblank_452`, and its
+    ///   `update_stat_irq` raises the request one T-cycle later still
+    ///   (*"It seems that STAT interrupt is triggered with a delay of 1
+    ///   T-Cycle"*) — so dot 453.
+    ///
+    /// Any of dots 452-455 is the same M-cycle, so all three descriptions are
+    /// one model here; `0` would be a different one.
+    ///
+    /// **The line-0 exclusion is measured, not assumed.** `self.line + 1 <
+    /// VBLANK_LINE` gives the lead to lines 1-143 and to no other, so line 0's
+    /// strobe stays on the boundary — which is what SameBoy's *"except on line
+    /// 0"* says, and what Mealybug's own `m3_bgp_change` source says in its
+    /// handler comment (*"line 0 timing is different by 4 cycles, so jump only
+    /// when on line 0"*, padding every other line by one taken `jr`).
+    ///
+    /// The mode-0 end of the line is a separate reading, and the two were once
+    /// confused with each other: mode 3 handed over to mode 0 a dot early, and
+    /// the mode-0 interrupt and the mode-0 register bits are not the same edge.
+    /// See [`Gpu::hblank_strobe`] and the mode-3 exit in `Gpu::accurate_dot`.
     ///
     /// One exclusion remains, and a test insists on it: **line 144 keeps its
     /// strobe at dot 0**, simultaneous with the VBlank interrupt, which is
@@ -1012,8 +1026,44 @@ impl Gpu {
         let now = self.stat_signal();
         if now && !self.stat_line {
             self.interrupt |= 0x02;
+            // Record *where inside the CPU's M-cycle* this request appeared.
+            // See [`Gpu::stat_irq_mid_mcycle`] — it is the only source in the
+            // machine that asserts anywhere but on an M-cycle boundary, and a
+            // HALTed CPU is one M-cycle slower to notice it.
+            self.stat_irq_mid_mcycle = self.oam_strobe_is_early();
         }
         self.stat_line = now;
+    }
+
+    /// Is the mode-2 strobe currently asserted **inside** an M-cycle — the
+    /// early window on lines 1-143 that [`OAM_STROBE_LEAD`] describes — rather
+    /// than on the boundary every other interrupt source flips on?
+    ///
+    /// Per-dot engine only; the batched renderer has no sub-instruction phase
+    /// for the question to mean anything in.
+    fn oam_strobe_is_early(&self) -> bool {
+        self.render_mode == RenderMode::Accurate
+            && self.m2_inte
+            && self.modeclock >= LINE_DOTS - OAM_STROBE_LEAD
+            && self.line + 1 < VBLANK_LINE
+            && !self.skip_first_oam
+    }
+
+    /// Was the most recent `IF.1` request raised **part-way through an
+    /// M-cycle** rather than on its boundary?
+    ///
+    /// Every other interrupt in the machine — VBlank, the mode-0 and mode-1
+    /// STAT sources, the timer, the serial port — flips on an M-cycle
+    /// boundary, so a CPU sampling the interrupt line once per M-cycle sees it
+    /// at the same instant whatever it happens to be doing. The **mode-2 OAM
+    /// strobe does not**: it is asserted during the last M-cycle of the
+    /// previous scanline (see [`Gpu::oam_strobe`] and [`OAM_STROBE_LEAD`]), and
+    /// a CPU sitting in `HALT` is one M-cycle slower to act on it than one
+    /// executing instructions. [`crate::cpu::core::Cpu::exec`] is where that is
+    /// spent; the whole argument, with both references, is at
+    /// [`Gpu::stat_irq_mid_mcycle`]'s consumer.
+    pub(crate) fn take_stat_irq_mid_mcycle(&mut self) -> bool {
+        std::mem::take(&mut self.stat_irq_mid_mcycle)
     }
 
     fn change_mode(&mut self, mode: u8) {
@@ -1927,6 +1977,47 @@ mod tests {
                 "line {line} must raise the OAM source once, not once per \
                  boundary and once per mode change"
             );
+        }
+    }
+
+    /// **Only the mode-2 strobe is asserted part-way through an M-cycle.**
+    ///
+    /// That is what confines the extra HALT latency
+    /// ([`crate::cpu::core::Cpu::exec`]) to this one source. If the mode-0 or
+    /// the line-144 strobe answered `true` here, `acceptance/ppu/
+    /// hblank_ly_scx_timing-GS` and `ppu/intr_1_2_timing-GS` — which both wake
+    /// from `HALT` on those sources — would each come out an M-cycle long.
+    #[test]
+    fn only_the_mode_2_strobe_is_asserted_inside_an_m_cycle() {
+        // (STAT source bits, how many raises must be marked mid-M-cycle)
+        for (stat, want_early) in [
+            (0x20, true),  // mode 2 — the OAM strobe, asserted at dot 452
+            (0x08, false), // mode 0 — flips on an M-cycle boundary
+            (0x40, false), // LYC   — flips with `LY`, also a boundary
+        ] {
+            let mut gpu = lcd_on(stat, 0xFF);
+            gpu.set_render_mode(RenderMode::Accurate);
+            gpu.wb(0xFF45, 100); // LYC, for the third case
+            advance_lines(&mut gpu, 2);
+
+            let (mut early, mut boundary) = (0, 0);
+            for _ in 0..(DOTS_PER_LINE * 140 / 4) {
+                gpu.interrupt = 0;
+                gpu.do_cycle(4);
+                if gpu.interrupt & 0x02 != 0 {
+                    if gpu.take_stat_irq_mid_mcycle() {
+                        early += 1;
+                    } else {
+                        boundary += 1;
+                    }
+                }
+            }
+            assert!(early + boundary > 0, "source {stat:#04x} never fired");
+            if want_early {
+                assert_eq!(boundary, 0, "source {stat:#04x}: all mid-M-cycle");
+            } else {
+                assert_eq!(early, 0, "source {stat:#04x}: none mid-M-cycle");
+            }
         }
     }
 

@@ -23,6 +23,114 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — a mid-M-cycle interrupt reaches a halted CPU late (Mooneye `acceptance` accurate 70/75 → 75/75, Mealybug unmoved at 17/79)
+
+The previous entry closed with `OAM_STROBE_LEAD` recorded as *"the one conflict left, fully
+characterised and NOT resolved"*: a constant the two PPU suites wanted at opposite values, with
+no setting that satisfied both.
+
+| `OAM_STROBE_LEAD` | Mooneye `acceptance` | Mealybug pixel-exact rows |
+|---|---:|---:|
+| `4` (shipped) | 70 / 75 | **17** / 79 |
+| `0` | **75** / 75 | 6 / 79 |
+
+**The constant was never the disagreement, and it has not moved.** It stays at `4`; Mooneye
+`acceptance` is **75/75** and Mealybug is **17/79 with every per-row pixel count
+byte-identical**, on the same build. The `standard` engine is untouched — all five of its
+baselines match byte for byte, and the in-repo harness reports the same 46/47 rows with the same
+verdict text.
+
+**Symptom.** Two hardware-photographed suites contradict each other about the same interrupt.
+Five Mooneye `acceptance/ppu/intr_2_*` each count exactly one loop iteration too many (their own
+tables print `D: 01!` against an expected `$01`, and `intr_2_0_timing` prints `D: 07!`), while
+eleven Mealybug rows are pixel-exact — and any change that fixes the five costs those eleven a
+uniform four-pixel horizontal shift, in both directions, every time.
+
+**Caught by.** `acceptance/ppu/intr_2_0_timing`, `intr_2_mode0_timing`,
+`intr_2_mode0_timing_sprites`, `intr_2_mode3_timing`, `intr_2_oam_ok_timing` — against
+`mealybug/m3_bgp_change` and its ten neighbours. **Neither suite can see this alone**: each is
+internally consistent at the setting it prefers, and a project running only one of them would
+call the other's answer a bug. That is the finding, and it is the argument for scoring pictures
+*and* verdicts rather than picking the flattering one — the same rule the boot-tilemap and
+`m2_win_en_toggle` entries record.
+
+**Hardware behaviour.** How long an interrupt takes to reach the CPU depends on **where inside
+the M-cycle it was requested** and on **whether the CPU is executing or sitting in `HALT`**.
+Every interrupt source in this machine flips on an M-cycle boundary — VBlank, the timer, the
+serial port, the mode-0 and mode-1 STAT sources — so a CPU sampling the line once per M-cycle
+sees them at the same instant whatever it is doing. The **mode-2 OAM strobe is the exception**:
+it is asserted part-way through the last M-cycle of the previous scanline, and a halted CPU is
+one M-cycle slower to act on it than a running one.
+
+Two independent implementations describe the same mechanism, and neither was copied — both are
+cited at `Cpu::mid_mcycle_request_reaches_halt_late`, per `CONTRIBUTING.md`:
+
+* **docboy** (MIT — checked; `src/docboy/docboy/cpu/cpu.cpp`, `INTERRUPTS_TIMINGS`) tabulates
+  the latency per source, per halt state and **per T-cycle of the M-cycle**. Its DMG STAT row is
+  `{1, 1, 1, 2}` running against `{1, 2, 2, 2}` halted: identical when the request lands on the
+  cycle's first T-cycle, one M-cycle longer when it lands part-way through. Its PPU raises that
+  request from `hblank_452` with a documented one-T-cycle delay (*"It seems that STAT interrupt
+  is triggered with a delay of 1 T-Cycle"*), i.e. dot 453 — inside the M-cycle.
+* **SameBoy** (Expat outside `iOS/` and `HexFiend/` — checked; `Core/sm83_cpu.c`, `GB_cpu_run`)
+  reaches it from the other side: its halt path advances the clock *before* sampling
+  `IE & IF` and again after, while its run path samples at the instruction boundary with nothing
+  advanced. `Core/display.c` places the strobe itself with *"The OAM STAT interrupt occurs 1
+  T-cycle before STAT actually changes, except on line 0. PPU glitch?"*.
+
+**And the two suites differ in exactly that one way.** Mooneye's five `intr_2_*` all run
+`ei / halt / nop` and are woken by the strobe; Mealybug's ROMs run a 1200-instruction `nop`
+slide and are interrupted out of it. Nothing else about them differs — both then count fixed
+CPU cycles to a PPU observation.
+
+**What this does *not* change, and why that is the check.** Only the mode-2 strobe can be
+mid-M-cycle, so no other interrupt's timing moves. That is not a hope: `acceptance/di_timing-GS`
+and `halt_ime1_timing2-GS` measure *halt-dispatch minus run-dispatch* off the **VBlank** flag,
+which pins that difference to zero outright; `ppu/intr_1_2_timing-GS` wakes on the mode-1 STAT
+source and `ppu/hblank_ly_scx_timing-GS` on the mode-0 strobe, both boundary-aligned. All four
+were green before and are green after — and all four go red under the naive fix (see below).
+
+### Three things it is not, each measured
+
+Recorded so nobody repeats them, and because two of them are what localised the answer.
+
+* **Not a blanket extra M-cycle on the `HALT` wake.** Charging one unconditionally fixes all
+  five `intr_2_*` and breaks `di_timing-GS`, `halt_ime1_timing2-GS`, `intr_1_2_timing-GS` and
+  `hblank_ly_scx_timing-GS` — measured, 71/75. The delay belongs to the *request*, not to
+  `HALT`, and the two VBlank-based rows say so outright.
+* **Not `ppu_write_commit`.** It spans exactly one M-cycle and sits at `early: 3`, so it has a
+  single dot of slack, not four.
+* **Not the PPU-versus-CPU phase.** Sweeping the LCD-on phase 0..7 moves Mooneye and leaves
+  Mealybug untouched at every value — **because both suites anchor on the strobe and are
+  therefore invariant to a global phase shift**. That invariance is the fact that localises the
+  error: it cannot be in the phase, nor in the pixel stream relative to the strobe (Mealybug
+  measures exactly that and is exact), so it has to be in how the two *CPU states* consume one
+  request.
+
+### Diagnostics worth keeping
+
+* **Trace `(line, dot)` at every register write and every dispatch, and lay it beside the ROM's
+  own cycle comments.** `m3_bgp_change`'s handler is annotated cycle by cycle; a trace showing
+  BGP committing at dots 77/93/105/165/177/237/249 on line 1 reconciles against the reference
+  PNG's transition columns 1/14/73/86/145/158 exactly under *pixel = dot − 92*. Reading the
+  reference image's transitions is a five-line script and turns "the row is red" into an
+  arithmetic statement.
+* **A one-dot change is a whole M-cycle to the CPU, so check where the dot sits in the grid.**
+  Moving the mode-3 `STAT` transition one dot earlier fixes `intr_2_mode3_timing` and breaks
+  both `lcdon_timing-GS` rows — which is how the mode edges were confirmed pinned and the search
+  pushed onto the interrupt path.
+
+**Carries into the tool.** `cpu::core::tests::a_halted_cpu_meets_the_oam_strobe_one_m_cycle_later_than_a_running_one`
+drives a real machine through both paths from one starting point and requires exactly four dots
+between them (teeth proven: with the fix disabled both read 456);
+`the_standard_renderer_does_not_pay_the_mid_m_cycle_delay` pins that none of it reaches the
+default engine; `gpu::tests::only_the_mode_2_strobe_is_asserted_inside_an_m_cycle` pins the
+scope, which is what protects the four rows above. Conformance candidate, and it generalises far
+past this bug: **two suites that disagree about one number may be measuring two different
+machine states, not one wrong constant — before splitting the difference, check what the ROMs
+were *doing* when the event arrived.**
+
+---
+
 ## 2026-08-15 — VRAM/OAM access blocking, and the two mode edges that are not one edge (Mooneye accurate 97/103 → 98/103)
 
 Three defects in the **accurate** (`identical`) engine, found by reading Mooneye's own
@@ -121,45 +229,6 @@ default engine. Conformance candidates: **an access on the dot a bus changes han
 same for a read and a write**, and **an interrupt source and the register that reports it are
 not obliged to be the same edge**.
 
-### The one conflict left, fully characterised and NOT resolved: `OAM_STROBE_LEAD`
-
-`Gpu::oam_strobe` raises the mode-2 strobe four dots (one M-cycle) before its scanline on lines
-1-143. That constant is now the **only** thing standing between us and Mooneye `acceptance`
-75/75, and it is a knob rather than a model. Measured on this branch, changing nothing else:
-
-| `OAM_STROBE_LEAD` | Mooneye `acceptance` | Mealybug pixel-exact rows |
-|---|---:|---:|
-| `4` (shipped) | 70 / 75 | **17** / 79 |
-| `0` | **75** / 75 | 6 / 79 |
-
-At `4`, five `acceptance/ppu/intr_2_*` tests each come out exactly one loop iteration long. At
-`0` all five pass, `lcdon_timing-GS` and `lcdon_write_timing-GS` pass with them, `intr_2_mode0_timing`
-comes back, and **Mooneye has no contradictions left in it at all** — but eleven Mealybug rows
-lose pixel-exactness against their hardware photographs, every one of them by a *uniform
-four-pixel horizontal shift* (measured: the two frames correlate at **99.9 %** under a `+4 px`
-offset), because every mid-scanline register write lands one M-cycle late.
-
-**So one 1-M-cycle error remains somewhere between the interrupt and the pixel, and the lead
-absorbs it.** Three things it is *not*, each measured rather than argued:
-
-- **not in the CPU.** Three Mooneye tests pin the mode-2 interrupt's position independently, and
-  `lcdon_timing-GS` pins the PPU's dot positions against the CPU without using an interrupt at
-  all. Lengthening the HALT wake by one M-cycle fixes all five `intr_2_*` at lead `4` and breaks
-  `di_timing-GS`, `halt_ime0_nointr_timing`, `halt_ime1_timing2-GS`, `intr_1_2_timing-GS` and
-  `hblank_ly_scx_timing-GS` — so the wake is right at zero.
-- **not in the write commit.** `ppu_write_commit` spans exactly one M-cycle and sits at
-  `early: 3`, so it has a single dot of slack, not four.
-- **not in the pixel phase.** Measured: the fetcher pushes pixel 0 on dot 92 and pixel 159 on
-  dot 251, so mode 3's 172 dots are full and there is nowhere for the pixel stream to move
-  without changing a length Mooneye pins. Sweeping the PPU's phase against the CPU's M-cycle
-  grid at LCD-on (0..7) moves Mooneye and leaves Mealybug untouched at every value.
-
-**And the lead is four times too big whatever else is true.** SameBoy's `Core/display.c` says
-*"The OAM STAT interrupt occurs 1 T-cycle before STAT actually changes, except on line 0. PPU
-glitch?"* — **one** T-cycle. Since this engine folds `IF` once per M-cycle, a one-dot lead is
-indistinguishable from none, which is exactly what Mooneye measures. The value `4` is kept only
-because it is the one that does not regress the picture a player sees; it is documented at the
-constant as contested, and whoever finds the missing M-cycle gets both suites at once.
 ---
 
 ## 2026-08-15 — a Gen 1 ↔ Gen 2 trade between two hand-launched emulators, and the two-process path that had no coverage at all

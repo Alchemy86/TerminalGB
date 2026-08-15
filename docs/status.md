@@ -22,14 +22,14 @@ yourself proves nothing.
 | Suite | `standard` (default) | `identical` | What it measures |
 |---|---:|---:|---|
 | In-repo harness — Blargg + dmg-acid2 | **46** / 47 | same | CPU instructions, memory/interrupt timing, sound hardware, a reference picture |
-| [Mooneye GB](measured/scoreboard.md#mooneye-gb--every-remaining-failure-is-a-ppu-test) — `acceptance` | **67** / 75 | **70** / 75 | core timing, interrupts, boot state |
+| [Mooneye GB](measured/scoreboard.md#mooneye-gb--every-remaining-failure-is-a-ppu-test) — `acceptance` | **67** / 75 | **75** / 75 | core timing, interrupts, boot state |
 | Mooneye GB — `emulator-only` | **28** / 28 | same | cartridge mappers |
 | Mooneye GB — `misc` (CGB) | **8** / 8 | same | Color-specific behaviour |
 | [SameSuite](measured/scoreboard.md) | **72** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **17** / 79 | mid-scanline picture timing — pixel-exact rows |
 
-**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **70/75** on Mooneye `acceptance` and **17/79** on Mealybug for about **2.1x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` now **loses no row to the default on any gate**, so what stands between it and being the default is only its cost ([why](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-now-dominates)).
+**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **75/75** on Mooneye `acceptance` and **17/79** on Mealybug for about **2.1x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` now **loses no row to the default on any gate**, so what stands between it and being the default is only its cost ([why](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-now-dominates)).
 <!-- suite-scores:end -->
 
 These scores are re-derived from the checked-in baselines under

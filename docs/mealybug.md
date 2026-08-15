@@ -539,6 +539,15 @@ short. Dispatch latency is common to *both* ends of `intr_2_0_timing`'s measurem
 cancels there — the error was in the signal, not in the CPU. `intr_2_mode0_timing` goes
 FAIL → PASS.
 
+> **Later correction (2026-08-15):** this lead is right, but it is not the whole story, and for
+> a while it was recorded as a knob that could not satisfy both suites at once. What was
+> missing is that being asserted *inside* an M-cycle is the point: a halted CPU is one M-cycle
+> slower to act on such a request than a running one, which is the only difference between
+> Mooneye's five `intr_2_*` (`ei / halt`) and Mealybug's ROMs (a `nop` slide). With that
+> modelled, `acceptance` is 75/75 **and** Mealybug is 17/79 with the lead untouched — see
+> [`conformance-notes.md`](conformance-notes.md), "a mid-M-cycle interrupt reaches a halted CPU
+> late".
+
 Two exclusions, each demanded by a test: line 144 keeps its strobe at dot 0, simultaneous with
 the VBlank interrupt (`vblank_stat_intr-GS`), and **line 0 gets no early window** — which
 Mealybug states in its own source, `m3_bgp_change` commenting *"line 0 timing is different by

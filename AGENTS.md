@@ -4985,21 +4985,44 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   keeps a separate `ly_for_comparison` set to `-1` over the same window.
 - **`fifo::mode3_length`'s helper measures the FETCHER's length, not the window `STAT` reports.**
   They now differ by one dot on purpose; the helper subtracts it. Do not "fix" the 172 to 173.
-- **`OAM_STROBE_LEAD` IS THE ONE CONTESTED CONSTANT LEFT, AND IT IS A KNOB, NOT A MODEL.** At
-  `4` (shipped) Mooneye `acceptance` is 70/75 and Mealybug 17/79; at `0` Mooneye is **75/75 with
-  no contradictions left in it** and Mealybug is 6/79 — eleven rows lost to a *uniform four-pixel
-  shift* (the two frames correlate at **99.9 %** under `+4 px`). One 1-M-cycle error remains
-  between the interrupt and the pixel and this constant absorbs it. **Three places it has been
-  ruled OUT of, each measured, so nobody repeats them:** not the CPU (a +1 M HALT wake fixes all
-  five `intr_2_*` and breaks `di_timing-GS`, `halt_ime0_nointr_timing`, `halt_ime1_timing2-GS`,
-  `intr_1_2_timing-GS`, `hblank_ly_scx_timing-GS`); not `ppu_write_commit` (it spans one M-cycle
-  and has one dot of slack at `early: 3`); not the pixel phase (the fetcher pushes pixel 0 on dot
-  92 and pixel 159 on dot 251, so mode 3's 172 dots are full — and sweeping the LCD-on PPU phase
-  0..7 moves Mooneye while leaving Mealybug untouched at every value).
-- **And the lead is four times too big whatever else is true**: SameBoy says *"The OAM STAT
-  interrupt occurs 1 T-cycle before STAT actually changes, except on line 0. PPU glitch?"* —
-  **one** T-cycle, which on an engine that folds `IF` per M-cycle is indistinguishable from
-  none. Keep the value at `4` only because it is the one that does not regress the picture.
+- **THE MODE-2 STROBE IS ASSERTED INSIDE AN M-CYCLE, AND THAT IS WHY A HALTED CPU IS ONE
+  M-CYCLE SLOWER TO SEE IT.** `OAM_STROBE_LEAD` used to be recorded here as "the one contested
+  constant left, a knob not a model", because at `4` Mooneye `acceptance` was 70/75 with
+  Mealybug 17/79 and at `0` it was 75/75 with Mealybug 6/79 — eleven rows lost to a *uniform
+  four-pixel shift*. **Both are hardware ground truth and the constant was never the
+  disagreement.** Mooneye's five `acceptance/ppu/intr_2_*` take that interrupt out of **`HALT`**;
+  Mealybug's ROMs take it out of a **`nop` slide** (its `lcdc_handler` runs off a 1200-`nop`
+  slide, and its own comment pads every line but line 0 by one taken `jr`). Every other
+  interrupt in the machine — VBlank, the mode-0 and mode-1 STAT sources, the timer, the serial
+  port — flips on an M-cycle boundary, so a CPU sampling once per M-cycle sees it at the same
+  instant whatever it is doing. The OAM strobe does not, and the two CPUs are one M-cycle apart
+  on it. `Gpu::take_stat_irq_mid_mcycle` + `Cpu::mid_mcycle_request_reaches_halt_late` is that
+  M-cycle. **Result: `acceptance` 75/75 AND Mealybug 17/79, with the lead where it always was,
+  every Mealybug per-row pixel count byte-identical and every `standard` baseline untouched.**
+- **The two references that name the mechanism, and it is worth reading both:** **docboy** (MIT,
+  `src/docboy/docboy/cpu/cpu.cpp`) tabulates interrupt latency per source, per halt state **and
+  per T-cycle of the M-cycle** — its DMG STAT row is `{1,1,1,2}` running against `{1,2,2,2}`
+  halted, identical on the cycle's first T and one M-cycle longer part-way through; **SameBoy**
+  (Expat, `Core/sm83_cpu.c` `GB_cpu_run`) reaches it from the other side, advancing the clock
+  around its halt-path `IE & IF` sample and not around the run-path one. Neither was copied;
+  both are cited at `Cpu::mid_mcycle_request_reaches_halt_late`.
+- **A BLANKET "+1 M-cycle on the HALT wake" IS WRONG AND WAS MEASURED WRONG.** It fixes all five
+  `intr_2_*` and breaks `di_timing-GS`, `halt_ime1_timing2-GS`, `intr_1_2_timing-GS` and
+  `hblank_ly_scx_timing-GS` — and the reason is exact, not bad luck: those four wake from `HALT`
+  on **boundary-aligned** sources (VBlank, the mode-1 STAT source, the mode-0 STAT strobe), and
+  two of them measure *halt-dispatch minus run-dispatch* off the same VBlank flag, which pins
+  that difference to zero outright. The delay belongs to the *request*, not to `HALT`.
+- **Two other places the M-cycle was ruled out of, each measured, so nobody repeats them:** not
+  `ppu_write_commit` (it spans one M-cycle and has one dot of slack at `early: 3`); not the
+  pixel phase (the fetcher pushes pixel 0 on dot 92 and pixel 159 on dot 251, so mode 3's 172
+  dots are full — and sweeping the LCD-on PPU phase 0..7 moves Mooneye while leaving Mealybug
+  untouched at every value, because **both suites anchor on the strobe and are invariant to a
+  global PPU-vs-CPU phase shift**). That invariance is the fact that localises the error: it
+  cannot be in the phase, so it is in how the two *CPU states* consume the same request.
+- **Any `OAM_STROBE_LEAD` in 1..=4 is the same model on this engine** — the whole content of the
+  constant is "inside an M-cycle rather than on its boundary", so SameBoy's *"1 T-cycle"* and
+  docboy's dot 452/453 and our `4` agree. Only `0` is a different machine. Do not "correct" it
+  to 1 thinking it changes anything, and do not set it to 0.
 - **THE DIAGNOSTIC THAT CRACKED ALL OF THIS: trace the emulator against the ROM's own expected
   table, not its pass/fail line.** `lcdon_timing-GS` ships a 24-entry `cycle_counts` table beside
   four 24-entry expectation tables. Printing `(line, modeclock, mode)` at every `STAT` read and
