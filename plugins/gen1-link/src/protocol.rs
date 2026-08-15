@@ -368,9 +368,17 @@ impl LinkPartner {
     /// `Serial_SyncAndExchangeNybble` round, and **only** falls through to
     /// `ReturnToCableClubRoom` when the round comes back `$F`
     /// (`cp $f / jr nz, .cancelMenuItem_Loop`). Anything else and the player is
-    /// left on the trade screen pressing A for ever — and since the Trade Center
-    /// has no warp events at all (`data/maps/objects/TradeCenter.asm`), that
-    /// screen is the *only* exit the room has.
+    /// left on the trade screen pressing A for ever, with `wLinkState` pinned at
+    /// `LINK_STATE_TRADING` — measured at 60 presses in
+    /// `examples/gen1_cancel_exit.rs` and at 2,475 in the original report.
+    ///
+    /// Answering it is the only way *off the trade screen*. It is **not** the
+    /// way out of the Cable Club: `ReturnToCableClubRoom` reloads the same map,
+    /// and the Trade Center has no warp events at all
+    /// (`data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads 0), so the
+    /// player is back in a room with no door and has to press START -> RESET.
+    /// That is the cartridge, not us — see
+    /// [`docs/gen1/leaving-the-cable-club.md`](../../../docs/gen1/leaving-the-cable-club.md).
     ///
     /// Three things make this a whole-state-machine concern rather than one
     /// branch of the selection round:

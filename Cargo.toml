@@ -361,6 +361,14 @@ name = "link_two"
 path = "examples/link_two.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
 
+# "There is simply no leaving the damn room" — the three separate claims in
+# that report, measured on the running cartridge. See docs/gen1/leaving-the-
+# cable-club.md.
+[[example]]
+name = "gen1_cancel_exit"
+path = "examples/gen1_cancel_exit.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+
 [[example]]
 name = "bgb_link"
 path = "examples/bgb_link.rs"

@@ -332,10 +332,12 @@ simply hangs) is real, but it is a *protocol* risk here, not a timing one.
 6. **Confirmation** — a nybble round: `1` cancel, `2` confirm.
 7. **Post-trade sync**, then back to 4.
 
-**`$6F` is the way out of the Cable Club, and it must be answered from every phase.** The Trade
+**`$6F` is the way off the trade screen, and it must be answered from every phase.** The Trade
 Center has no warp events at all (`data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads 0),
-so backing out of the selection screen is the *only* exit the room has — and
+so backing out of the selection screen is the only way to reach the room's floor again — and
 `.cancelMenuItem_APressed` reaches `ReturnToCableClubRoom` only when the round comes back `$F`.
+(Reaching the floor is not leaving the *room*; nothing can, short of START → RESET. See
+[`docs/gen1/leaving-the-cable-club.md`](gen1/leaving-the-cable-club.md).)
 `wSerialExchangeNybbleSendData` is a latch, a round is 11–12 copies of the same byte, and a
 wrongly-answered round is retried from whatever phase the partner has moved into, so handling
 `$6F` in step 5 alone leaves the player permanently sealed in the room the moment anything

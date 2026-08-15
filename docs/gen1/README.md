@@ -30,6 +30,7 @@ Anything unproven says so.
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
 | [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one | **Gen 1 ↔ Gen 1 and Gen 1 ↔ Gen 2 trades both verified** |
 | [The Time Capsule](../gen2/time-capsule.md) | The one door to Generation 2: what Gold refuses, what it requires, and why the wire needs nothing added | **a Pokémon crossed it, both directions** |
+| [Leaving the Cable Club](leaving-the-cable-club.md) | Why cancelling needs *both* players, why the Trade Center has no door, and the button that actually gets you out | **measured on the retail ROM** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost somebody hours | **verified the hard way** |
 | [Agent play](agent-play.md) | An AI agent that reads game state and presses buttons, with commentary for a stream | **plays the opening on the retail ROM** |
 | [Shiny hunting](../shiny-hunt.md) | Hunting the DV spread that becomes shiny in Gen 2, across many headless emulators at once — including how to decorrelate machines that all start from the same save state | **hunts on the retail ROM** |

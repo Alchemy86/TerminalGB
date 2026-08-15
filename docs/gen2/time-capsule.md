@@ -208,6 +208,14 @@ face-the-console presses walk the selection onto the wrong Pokémon.
 Time Capsule room, so an "am I beside the desk?" test goes false and a bot that keeps steering
 walks straight back out of the link. Measured — mid-handshake.
 
+**Leaving afterwards is asymmetric, and the Gen 1 player will think it is the emulator's
+fault.** Gold's Time Capsule room has two ordinary warps back to `POKECENTER_2F`
+(`TimeCapsule_MapEvents`, `pokegold/maps/TimeCapsule.asm`), so the Gen 2 player walks out down
+the stairs. Gen 1's Trade Center has **no warp events at all**: its player has to get both
+sides to choose CANCEL and then press START → RESET, which is what Red/Blue substitutes for
+SAVE for the whole visit. Neither side is broken. Measured, with the reproduction:
+[`docs/gen1/leaving-the-cable-club.md`](../gen1/leaving-the-cable-club.md).
+
 ---
 
 ## 6. The shiny rule, read out of the cartridge, not inferred

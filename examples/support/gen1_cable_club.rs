@@ -424,9 +424,12 @@ impl TradeBot {
                 }
             }
             Stage::LeaveTradeScreen => {
-                // `LINK_STATE_IN_CABLE_CLUB`: `ReturnToCableClubRoom` has run.
-                // The Trade Center has no warp events at all, so being back in
-                // the room *is* leaving.
+                // `LINK_STATE_IN_CABLE_CLUB`: `ReturnToCableClubRoom` has run
+                // and the trade *screen* is behind us. It is not the *room* —
+                // the Trade Center has no warp events at all and a real player
+                // still has to press START -> RESET to get out of it (see
+                // `docs/gen1/leaving-the-cable-club.md`). For a bot that only
+                // wants the trade, being back here is the finish line.
                 if link == 0x01 {
                     set(self, Stage::Finished);
                     return;

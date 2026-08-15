@@ -23,6 +23,70 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — leaving the Cable Club: a reported bug that was the cartridge, and a doc note that was ours
+
+Reported live while trading Pokémon Gold against Pokémon Blue on two separately
+launched, auto-linked consoles: *"there is simply no leaving the damn room…
+Blue is trapped in the void trade room. Gold has a door to walk out."* Nothing in
+the emulator is at fault. What was at fault was a note in this repository that
+asserted the opposite of the cartridge and would have sent the next reader
+looking for a defect that does not exist.
+
+- **Symptom, in user terms:** a Gen 1 player in the Cable Club picks CANCEL and
+  presses A for ever with nothing happening; and if the partner does cancel too,
+  the player lands back in a room that has no exit tile. A Gen 2 partner on the
+  same cable walks out of its own room through an ordinary staircase, so the
+  asymmetry reads as "the Gen 1 side is broken".
+- **Caught by:** nothing in any suite, and nothing can — every byte the emulator
+  produced was correct. Now measured end to end by
+  [`examples/gen1_cancel_exit.rs`](../examples/gen1_cancel_exit.rs), which puts
+  two whole cores on a [`LinkCable`](../src/link.rs) and walks all three claims.
+- **Cartridge behaviour, with citations:**
+  1. `.cancelMenuItem_APressed`
+     ([`engine/link/cable_club.asm`](https://github.com/pret/pokered/tree/master/engine/link/cable_club.asm))
+     sends `$F` and falls through only when the round comes back `$F` — the
+     disassembly's own comment on that compare is *"did the other person choose
+     Cancel too?"* **Both players must cancel.** Generation 2 is symmetric:
+     `LinkTradeOTPartymonMenuCheckCancel`
+     ([`pokegold/engine/link/link.asm`](https://github.com/pret/pokegold/tree/master/engine/link/link.asm))
+     sends `SERIAL_TIMECAPSULE | $F` = `$6F` and requires `$F` back, so a Time
+     Capsule partner is under exactly the same rule and there is nothing for an
+     emulator to relay or translate.
+  2. `ReturnToCableClubRoom` reloads the **same** map, and
+     `data/maps/objects/TradeCenter.asm` declares `def_warp_events` with nothing
+     under it. `wNumberOfWarps` reads **0** at run time.
+  3. The exit is **START → RESET**: `StartMenu_SaveReset`
+     ([`engine/menus/start_sub_menus.asm`](https://github.com/pret/pokered/tree/master/engine/menus/start_sub_menus.asm))
+     jumps to `Init` whenever `BIT_LINK_CONNECTED` is set, which is why the START
+     menu in a link room shows RESET where it normally shows SAVE. It is safe by
+     design — `TradeCenter_Trade` calls `predef SavePartyAndDexData` right after
+     "Trade completed!", commented in the source as *"this allows reset into
+     Pokecenter"*.
+- **What was measured** (Blue against Blue, one process, `LinkCable`): one player
+  cancelling alone → 60 A presses, `wLinkState` pinned at `$32`,
+  `wSerialExchangeNybbleSendData` (`$CC42`) latched `$0F`,
+  `wSerialSyncAndExchangeNybbleReceiveData` (`$CC3D`) reading `$FE`, and the
+  cancel cursor cell `$C4E1` showing `▷`; both cancelling → `recv` `$0F` and
+  `wLinkState` `$01`; the room → `wNumberOfWarps` 0; START → RESET → CONTINUE →
+  map `$29`, the Pokémon Center it saved in, party intact, **and neither console
+  faulted**, so the save guard did not poison a battery over a legitimate reset.
+  The two WRAM addresses were read **out of the cartridge**, not looked up: the
+  byte string `EA E1 C4 3E 0F EA lo hi` occurs exactly once in the ROM.
+- **The defect that was ours, and it was prose.** `AGENTS.md`, `docs/plugins.md`,
+  `plugins/gen1-link/src/protocol.rs`, `examples/gen1_trade.rs` and
+  `examples/support/gen1_cable_club.rs` all stated that because the Trade Center
+  has no warps, backing out of the trade screen *is* leaving the room. All five
+  now say what the cartridge does. **A note that contradicts the disassembly is
+  worse than no note** — it is confidently wrong in exactly the place someone
+  goes when they are already confused.
+- **Carries into the tool:** not a conformance check — there is no wrong
+  behaviour to detect. What carries is the *class*: a report of the form "the
+  emulator has trapped me" whose answer is a button on the cartridge's own menu.
+  The product answer is to say so on the way in, which is what
+  `plugins/trainer/src/cableclub.rs` and `App::announce_cable_club` now do.
+
+---
+
 ## 2026-08-15 — the fetcher at an object hit, and the CGB stepping the PPU shipped in (Mealybug accurate 12/79 → 17/79)
 
 Two defects in the **accurate** (`identical`) engine, both found by reading the emulators ahead
@@ -1713,8 +1777,13 @@ one of its six phases. Everywhere else the player was sealed in the Cable Club.
   And the Trade Center has **no warp events at all**
   ([`data/maps/objects/TradeCenter.asm`](https://github.com/pret/pokered/tree/master/data/maps/objects/TradeCenter.asm)
   — confirmed at run time: `wNumberOfWarps` reads 0), so that screen is the only
-  way out of the room. Measured on the retail cartridge: **2,475 CANCEL presses,
-  `wLinkState` stuck at `$32` (`LINK_STATE_TRADING`), never left.**
+  way back onto the room's floor. Measured on the retail cartridge: **2,475
+  CANCEL presses, `wLinkState` stuck at `$32` (`LINK_STATE_TRADING`), never
+  left.** *(Correction, 2026-08-15: this sentence used to read "the only way out
+  of the room". It is not — `ReturnToCableClubRoom` reloads the same doorless
+  map, and a player leaves with START → RESET. See the 2026-08-15 entry
+  "leaving the Cable Club"; the defect recorded here was real, its stated
+  consequence was one step too strong.)*
 - **Caught by:** **no test ROM, and none can** — the same blind spot as the
   terminal-render bugs and the `wIsInBattle` sentinel above. The cartridge was
   entirely correct; the defect was in a *consumer* of emulated state, in this

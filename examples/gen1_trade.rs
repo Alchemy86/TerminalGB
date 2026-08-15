@@ -26,8 +26,10 @@
 //! end with the player back out of the trade screen. That matters because the
 //! Trade Center has **no warp events at all**
 //! (`pret/pokered`, `data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads
-//! 0 at run time): backing out of the selection screen is the only exit the room
-//! has, and it depends entirely on the partner echoing the cancel nybble `$6F`.
+//! 0 at run time): backing out of the selection screen is the only way to reach
+//! the room's floor again, and it depends entirely on the partner echoing the
+//! cancel nybble `$6F`. (Reaching the floor is not *leaving* — that takes
+//! START -> RESET; see `docs/gen1/leaving-the-cable-club.md`.)
 //! `--quick-load` presses F5 then F8 at that moment, which resets plugin state
 //! mid-session exactly as the terminal frontend does, so the cancel has to work
 //! from a phase the partner did not expect. `GB_GEN1_LINK_TRACE=1` prints the
@@ -756,7 +758,8 @@ enum TradeStage {
     LeaveTradeScreen,
     /// Off the trade screen and standing in the room again. The Trade Center
     /// has **no warp events at all** (`data/maps/objects/TradeCenter.asm`), so
-    /// there is no door to walk out of: getting back here *is* leaving.
+    /// there is no door to walk out of — a *player* leaves with START -> RESET.
+    /// For this run, getting back here is the end of a visit.
     BackInRoom,
     Finished,
 }
@@ -1031,7 +1034,8 @@ impl TradeBot {
             }
             TradeStage::BackInRoom => {
                 // The Trade Center is a sealed room — no warps — so being back
-                // here, walkable and out of the link screens, *is* leaving.
+                // here, walkable and out of the link screens, is as far out as
+                // the trade protocol can take anybody.
                 if self.visit >= self.plan.len() {
                     set(self, TradeStage::Finished);
                     return;

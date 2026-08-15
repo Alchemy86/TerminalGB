@@ -354,6 +354,16 @@ expensive; a second live picture is real work with real regression risk. The lin
 is the deliverable, and a side-by-side capture proves both machines are running
 without putting a finger anywhere near the frontend.
 
+### Getting back out again
+
+The bots here stop at "off the trade screen", and a **player** cannot. Gen 1's Cable Club
+rooms have no warp events at all, so leaving the trade screen puts you back on the floor of a
+room with no door; the cartridge's exit is the START menu's RESET, which it substitutes for
+SAVE for the whole visit. Gen 2's Time Capsule room is an ordinary Pokémon Center 2F with a
+staircase, which is why a Gold player walks out and a Blue player appears to be trapped by
+the emulator. Neither is a cable problem. Measured, with the reproduction:
+[`docs/gen1/leaving-the-cable-club.md`](gen1/leaving-the-cable-club.md).
+
 ### Which seat, and why the bot does not choose
 
 One bot drives both consoles. Which Game Boy on the Trade Center table is yours is

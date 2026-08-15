@@ -3234,10 +3234,16 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
 - **`PokemonSource` keeps the *source* of the Pokémon separate from the protocol.** That is the
   load-bearing abstraction: a file, a converter, a remote peer and a live partner all become
   interchangeable, which is what makes cross-generation and remote trading possible later.
-- **`$6F` — the cancel nybble — MUST be echoed from EVERY phase, and it is the only way out of
-  the Cable Club.** The Trade Center has **no warp events at all**
-  (`data/maps/objects/TradeCenter.asm`; `wNumberOfWarps` reads 0 at run time), so backing out of
-  the trade-selection screen *is* leaving the room. `.cancelMenuItem_APressed`
+- **`$6F` — the cancel nybble — MUST be echoed from EVERY phase, and it is the only way off the
+  trade *screen*.** (**Correction, measured 2026-08-15:** this entry used to end that sentence
+  "the only way out of the Cable Club", and add that because the Trade Center has no warps,
+  backing out of the trade screen *is* leaving the room. **Both halves are wrong and they cost
+  a captain-reported bug hunt.** `ReturnToCableClubRoom` reloads the *same* map: the player is
+  back in a room that has **no warp events at all** — `data/maps/objects/TradeCenter.asm`,
+  `wNumberOfWarps` reads 0 at run time — so leaving the screen is emphatically *not* leaving the
+  room. The cartridge's exit is **START → RESET**. See
+  [`docs/gen1/leaving-the-cable-club.md`](docs/gen1/leaving-the-cable-club.md), which measures
+  all of it.) `.cancelMenuItem_APressed`
   (`engine/link/cable_club.asm`) only reaches `ReturnToCableClubRoom` when the round comes back
   `$F`, and three things make this a whole-state-machine obligation rather than one branch of
   the selection round: `wSerialExchangeNybbleSendData` is a **latch** (later syncs keep sending
@@ -3265,6 +3271,48 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   `predef SavePartyAndDexData` right after "Trade completed!" — pokered's own comment is *"this
   allows reset into Pokecenter"* — so the received Pokémon is already in SRAM and a reset returns
   the player to the Pokémon Center with it.
+
+### Leaving the Cable Club — the report that was NOT our bug (`docs/gen1/leaving-the-cable-club.md`)
+
+Reported live: *"there is simply no leaving the damn room… Blue is trapped in the void trade
+room. Gold has a door to walk out."* Measured end to end with
+`cargo run --release --features image,plugin-gen1-link,plugin-trainer --example gen1_cancel_exit
+-- --rom <blue.gb> --save <cableclub.sav>` — two whole cores on a `LinkCable`, so nothing of ours
+is impersonating anything. **Three separate claims, three different answers:**
+
+1. **One player cancelling alone is stuck, and that is the cartridge.**
+   `.cancelMenuItem_APressed` falls through only when the round comes back `$F`, and the
+   disassembly's own comment on that compare is *"did the other person choose Cancel too?"*
+   Observed: 60 A presses on CANCEL with `wLinkState` pinned at `$32`, `wSerialExchangeNybbleSendData`
+   (**`$CC42`**, read out of the cartridge) latched at `$0F`,
+   `wSerialSyncAndExchangeNybbleReceiveData` (**`$CC3D`**) reading `$FE`, and the cancel cursor
+   cell `wTileMap(1,16)` = `$C4E1` showing `▷` (`$EC`) — the *observable* signature of "pressing A
+   on CANCEL for ever". Gen 2 is symmetric: `LinkTradeOTPartymonMenuCheckCancel` sends
+   `SERIAL_TIMECAPSULE | $F` = `$6F` and requires `$F` back, so a Gold partner is under exactly
+   the same rule and there is nothing for us to relay or translate.
+2. **Both cancelling does leave the trade screen** (`recv` = `$0F`, `wLinkState` → `$01`).
+3. **…and leaves you in a room with no door.** `wNumberOfWarps` reads **0** in the Trade Center.
+   `ReturnToCableClubRoom` reloads the same map. **The cartridge's exit is START → RESET**:
+   `StartMenu_SaveReset` jumps to `Init` whenever `BIT_LINK_CONNECTED` is set, which is why the
+   START menu there shows RESET where it normally shows SAVE. Measured safe — RESET → CONTINUE
+   put the player back on map `$29` (the Pokémon Center it saved in) with the party intact, and
+   **neither console faulted, so no battery was poisoned**.
+
+- **Gen 2 having a door is not a second bug, and it is cited:** `TimeCapsule_MapEvents`
+  (`pokegold/maps/TimeCapsule.asm`) declares `warp_event 4,7` and `warp_event 5,7` back to
+  `POKECENTER_2F`, one behind each seat. The asymmetry is the two cartridges, not the cable.
+- **Nothing of ours was in the path.** Only the trainer plugin auto-attaches (`attach_plugins`),
+  and it is read-only; `gen1-link` and `gen1-lobby` need an explicit `plugins = …`.
+- **Now surfaced in the product**, because a room with no exit and no explanation reads as
+  "the emulator has trapped me": `plugins/trainer/src/cableclub.rs` watches `wLinkState`
+  (`$D12B`) with the panel closed — one peek at ~10 Hz, a second only once it is non-zero — and
+  the TUI toasts `CableClub::advice()` on the way in (`App::announce_cable_club`), naming both
+  obstacles. It also takes the trainer plugin's status row, outranking the encounter verdict,
+  because it is the one thing there that is *actionable*.
+- **The lesson for this file:** the old entry above asserted the exact opposite of (3) and was
+  never measured. A prose note that contradicts the disassembly sends the next crew hunting for
+  a defect that does not exist — *check the claim against the cartridge before building on it*,
+  the same rule the APU campaign wrote as "check the baseline, not a commit message".
 
 ### Verifying a trade (`examples/gen1_trade.rs`) — hard-won gotchas
 

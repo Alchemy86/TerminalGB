@@ -45,6 +45,7 @@
 //! display, and the run-tracking (seed counters, "furthest gym") that an Ironmon
 //! run wants. Each is additive on top of this data.
 
+pub mod cableclub;
 pub mod capture;
 pub mod collection;
 pub mod derived;
@@ -56,6 +57,7 @@ pub mod text;
 
 use std::collections::HashMap;
 
+use cableclub::CableClub;
 use encounter::WildEncounter;
 use gen1::{addr, battle, party, BattleKind, BattleType, Dvs, Mon, Status};
 use terminalgb_plugin_api::{Capability, Event, Machine, Plugin};
@@ -276,6 +278,13 @@ pub struct TrainerPlugin {
     /// direction of travel. Cleared the moment an encounter ends, so a stale
     /// arrow can never survive into the next one.
     last_catch: Option<f64>,
+    /// Which doorless link room the player is standing in, if any. Watched with
+    /// the panel closed for the same reason the encounter is: being stuck is
+    /// exactly when nobody has a stats panel up. See [`cableclub`].
+    cable_club: Option<CableClub>,
+    /// Bumped when the player *enters* a link room, so a frontend can say the
+    /// sentence once instead of every frame.
+    cable_club_seq: u64,
 }
 
 impl TrainerPlugin {
@@ -299,6 +308,8 @@ impl TrainerPlugin {
             encounter_seq: 0,
             detected_title: String::new(),
             last_catch: None,
+            cable_club: None,
+            cable_club_seq: 0,
         }
     }
 
@@ -380,6 +391,15 @@ impl TrainerPlugin {
     /// a test hook another crate needs is part of the surface, and saying so
     /// is better than the alternatives (a `testing` feature for one method, or
     /// deleting the frontend's test).
+    /// Plant a Cable Club room without a cartridge, for the same reason and on
+    /// the same terms as [`TrainerPlugin::set_encounter_for_test`].
+    pub fn set_cable_club_for_test(&mut self, room: Option<CableClub>) {
+        if room.is_some() && self.cable_club.is_none() {
+            self.cable_club_seq += 1;
+        }
+        self.cable_club = room;
+    }
+
     pub fn set_encounter_for_test(&mut self, enc: Option<WildEncounter>) {
         if enc.is_some() {
             self.encounter_seq += 1;
@@ -431,6 +451,37 @@ impl TrainerPlugin {
             kind: BattleType::from_flag(battle_type),
         });
         self.encounter_seq += 1;
+    }
+
+    /// Which doorless Cable Club room the player is standing in, if any.
+    ///
+    /// **Live whether or not the panel is open** — see [`cableclub`] for why
+    /// the answer is worth volunteering at all.
+    pub fn cable_club(&self) -> Option<CableClub> {
+        self.cable_club
+    }
+
+    /// Bumped each time the player *enters* a link room, so a frontend can tell
+    /// "just walked in" from "still in there" and say its piece once.
+    pub fn cable_club_seq(&self) -> u64 {
+        self.cable_club_seq
+    }
+
+    /// Two bytes: is the player in a Cable Club room, and which one.
+    fn watch_cable_club(&mut self, machine: &mut Machine<'_>) {
+        let view = &mut Reads(machine);
+        let link_state = view.peek(cableclub::LINK_STATE);
+        // The map is only read once `wLinkState` has said "in a Cable Club",
+        // so an ordinary game costs one peek.
+        let now = if link_state == 0 {
+            None
+        } else {
+            cableclub::detect(link_state, view.peek(cableclub::CUR_MAP))
+        };
+        if now.is_some() && self.cable_club.is_none() {
+            self.cable_club_seq += 1;
+        }
+        self.cable_club = now;
     }
 
     /// The cached sprite for a species, decompressing it on first use.
@@ -736,6 +787,11 @@ impl Plugin for TrainerPlugin {
     }
 
     fn status(&self) -> String {
+        // A player who cannot get out of the room outranks everything else the
+        // row could say — and unlike the encounter verdict it is *actionable*.
+        if let (Some(_), Some(c)) = (self.game, self.cable_club) {
+            return c.short().to_string();
+        }
         match (self.game, self.encounter.as_ref()) {
             (None, _) => "unsupported cartridge".to_string(),
             // A live encounter outranks the party count: it is the thing the
@@ -770,6 +826,7 @@ impl Plugin for TrainerPlugin {
         // and it costs one byte at ~10 Hz. The full party read stays gated on
         // the panel being visible.
         self.watch_encounter(machine);
+        self.watch_cable_club(machine);
         if self.active {
             self.sample(machine);
         }

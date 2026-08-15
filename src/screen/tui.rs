@@ -1244,6 +1244,10 @@ struct App {
     /// toast and the bell fire exactly once per Pokémon rather than every
     /// frame the banner is up.
     last_encounter_seq: u64,
+    /// The last `TrainerPlugin::cable_club_seq` this app reacted to, so the
+    /// "this room has no door" sentence is said on the way in and not on every
+    /// frame the player spends looking for one.
+    last_cable_club_seq: u64,
     /// A terminal bell owed to a shiny-if-traded verdict, written on the next
     /// flush rather than from inside the emulation step.
     pending_bell: bool,
@@ -1542,6 +1546,7 @@ impl App {
             trainer_sel: 0,
             shiny_alert,
             last_encounter_seq: 0,
+            last_cable_club_seq: 0,
             pending_bell: false,
             agent_panel: false,
             slot: 1,
@@ -2386,6 +2391,7 @@ impl App {
         // (see `crate::termimage`) and a video stream may not be.
         self.video_tick(true);
         self.announce_new_encounter();
+        self.announce_cable_club();
         self.check_fault();
     }
 
@@ -2461,6 +2467,41 @@ impl App {
     #[cfg(not(feature = "plugin-trainer"))]
     /// No trainer plugin is built in, so there is no encounter to announce.
     fn announce_new_encounter(&mut self) {}
+
+    /// Say, once, that the room the player just walked into has no door.
+    ///
+    /// Gen 1's Cable Club rooms are the only maps in Red/Blue with no warp
+    /// events at all, so a player who walks in has no way out except the START
+    /// menu's RESET — and nothing on screen says so. Every report of this
+    /// arrives as "the emulator has trapped me", because from the inside that
+    /// is exactly what it looks like. See
+    /// [`terminalgb_plugin_trainer::cableclub`] and
+    /// [`docs/gen1/leaving-the-cable-club.md`](../../docs/gen1/leaving-the-cable-club.md).
+    ///
+    /// The whole cost when nothing is happening is comparing two `u64`s.
+    #[cfg(feature = "plugin-trainer")]
+    fn announce_cable_club(&mut self) {
+        let last = self.last_cable_club_seq;
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(plugin) = session.gb.plugin::<TrainerPlugin>() else {
+            return;
+        };
+        let seq = plugin.cable_club_seq();
+        if seq == last {
+            return;
+        }
+        self.last_cable_club_seq = seq;
+        let Some(room) = plugin.cable_club() else {
+            return;
+        };
+        self.set_toast(room.advice().to_string());
+    }
+
+    #[cfg(not(feature = "plugin-trainer"))]
+    /// No trainer plugin is built in, so there is no link room to recognise.
+    fn announce_cable_club(&mut self) {}
 
     /// The wild encounter to draw a banner for this frame, if any. `None` in the
     /// overworld, in a trainer battle, and when the alert is configured off.
@@ -12109,6 +12150,45 @@ mod tests {
             .map(|c| c.symbol().to_string())
             .collect();
         assert!(row.contains("SHINY IF TRADED TO GEN 2"), "{row:?}");
+    }
+
+    /// The captain's report: "there is simply no leaving the damn room."
+    ///
+    /// Gen 1's Cable Club rooms have no warp events at all, so a player who
+    /// walks in is stuck until they find the START menu's RESET — and nothing
+    /// on screen says so, which is why every report of it arrives as "the
+    /// emulator has trapped me". The sentence must be said on the way in, once,
+    /// and it must name the button.
+    #[test]
+    #[cfg(feature = "plugin-trainer")]
+    fn walking_into_the_cable_club_says_which_button_gets_you_out() {
+        use terminalgb_plugin_trainer::cableclub::CableClub;
+        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast).unwrap();
+
+        // Outside a link room there is nothing to say and nothing is said.
+        app.announce_cable_club();
+        assert!(app.toast.is_none(), "no toast in an ordinary game");
+
+        app.session
+            .as_mut()
+            .unwrap()
+            .gb
+            .plugin_mut::<TrainerPlugin>()
+            .unwrap()
+            .set_cable_club_for_test(Some(CableClub::Trading));
+        app.announce_cable_club();
+        let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap();
+        // Both obstacles, because clearing only the first leaves the player
+        // exactly where they started: back in a room with no door.
+        assert!(toast.contains("CANCEL"), "{toast}");
+        assert!(toast.contains("BOTH"), "{toast}");
+        assert!(toast.contains("RESET"), "{toast}");
+        assert!(toast.contains("saved"), "{toast}");
+
+        // Said once, not on every frame the player spends looking for a door.
+        app.toast = None;
+        app.announce_cable_club();
+        assert!(app.toast.is_none(), "the same room must not re-toast");
     }
 
     /// The Status panel is a fixed column of rows, and rows keep being added to

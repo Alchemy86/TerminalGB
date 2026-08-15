@@ -63,6 +63,15 @@ at the top of `ReadTrainer`). It is worth knowing three places it silently chang
   divider-free RNG in the game — see
   [battle control](battle-control.md#making-a-cinematic-reproducible).)
 
+There is a fourth thing worth knowing about `wLinkState`, and it is what players notice
+first: **while it is nonzero the player is in a room with no exit tile.** The Trade Center
+and the Colosseum are the only maps in Red/Blue with no warp events at all, so answering the
+cancel nybble `$6F` gets a player off the trade *screen* and no further — the way out of the
+room is the START menu's RESET, which Gen 1 substitutes for SAVE exactly here. A partner
+implementation that answers `$6F` correctly will still be blamed for trapping people if
+nobody says that out loud. Measured, with the disassembly and the reproduction:
+[**Leaving the Cable Club**](leaving-the-cable-club.md).
+
 ---
 
 ## 3. The trade protocol, in one table
