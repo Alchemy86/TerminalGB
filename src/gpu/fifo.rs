@@ -581,8 +581,24 @@ impl Gpu {
         if self.winx > 166 {
             return false;
         }
-        let start = (self.winx as i16) - 7;
-        if (self.pipe.lx as i16) < start {
+        // **The comparison is an equality, not a threshold.** The window
+        // starts on the pixel `WX - 7` and on no other, which is what makes
+        // re-enabling `LCDC.5` later in the same scanline a no-op unless `WX`
+        // has been moved somewhere the output has not reached yet — mealybug's
+        // own notes: "Setting WIN_EN again during mode 3 on the same scanline
+        // will have no effect unless WX has been updated to set the window to
+        // activate on a pixel that hasn't been drawn yet"
+        // (`the-comprehensive-game-boy-ppu-documentation.md`, WIN_EN). With a
+        // threshold, `lx` has already passed the old `WX - 7` by then and the
+        // window restarts on the very next dot however `WX` was left. SameBoy
+        // spells it the same way (`Core/display.c`:
+        // `WX == (uint8_t)(gb->position_in_line + 7)`).
+        //
+        // `WX <= 7` puts the start at or left of the first pixel, where the
+        // equality still has to fire: those are the positions
+        // `m3_window_timing_wx_0` walks.
+        let start = (self.winx as i16 - 7).max(0);
+        if self.pipe.lx as i16 != start {
             return false;
         }
         self.wy_pos += 1;
@@ -1576,6 +1592,75 @@ mod head_of_line {
                 "SCX={scx}"
             );
         }
+    }
+
+    /// **The window starts on the pixel `WX - 7` and on no other.** Re-enabling
+    /// `LCDC.5` later in the same scanline is therefore a no-op unless `WX` has
+    /// been moved somewhere the output has not reached yet — mealybug's own
+    /// notes, WIN_EN: "Setting WIN_EN again during mode 3 on the same scanline
+    /// will have no effect unless WX has been updated to set the window to
+    /// activate on a pixel that hasn't been drawn yet."
+    #[test]
+    fn a_window_re_enabled_behind_the_output_does_not_start_again() {
+        let mut gpu = engine();
+        gpu.wb(0xFF4A, 0); // WY = 0
+        gpu.wb(0xFF4B, 40); // the window starts at pixel 33
+        gpu.wb(0xFF40, 0xB1); // + LCDC.5
+                              // Run until the window has taken over and drawn a whole tile, then
+                              // turn it off. It resumes the background at the next tile boundary.
+        while !gpu.pipe.window {
+            gpu.do_cycle(1);
+        }
+        while gpu.pipe.lx < 48 {
+            gpu.do_cycle(1);
+        }
+        gpu.wb(0xFF40, 0x91); // LCDC.5 off
+        while gpu.pipe.window {
+            gpu.do_cycle(1);
+        }
+        let resumed_at = gpu.pipe.lx;
+        // Now turn it straight back on, leaving `WX` where it was — behind the
+        // output. Nothing may happen for the rest of the line.
+        gpu.wb(0xFF40, 0xB1);
+        while gpu.mode() == 3 {
+            gpu.do_cycle(1);
+            assert!(
+                !gpu.pipe.window,
+                "the window restarted at lx={} with WX-7={} already drawn",
+                gpu.pipe.lx, 33
+            );
+        }
+        assert!(resumed_at >= 48, "the background never resumed");
+    }
+
+    /// ...and moving `WX` ahead of the output first *does* start it again.
+    #[test]
+    fn a_window_re_enabled_ahead_of_the_output_starts_again() {
+        let mut gpu = engine();
+        gpu.wb(0xFF4A, 0);
+        gpu.wb(0xFF4B, 40);
+        gpu.wb(0xFF40, 0xB1);
+        while !gpu.pipe.window {
+            gpu.do_cycle(1);
+        }
+        while gpu.pipe.lx < 48 {
+            gpu.do_cycle(1);
+        }
+        gpu.wb(0xFF40, 0x91);
+        while gpu.pipe.window {
+            gpu.do_cycle(1);
+        }
+        gpu.wb(0xFF4B, 120); // pixel 113, still ahead of the output
+        gpu.wb(0xFF40, 0xB1);
+        let mut restarted = false;
+        while gpu.mode() == 3 {
+            gpu.do_cycle(1);
+            if gpu.pipe.window {
+                restarted = true;
+                break;
+            }
+        }
+        assert!(restarted, "the window did not restart at the new WX");
     }
 
     /// The extra dot is `WX = 0`'s alone: at any other `WX` the window's
