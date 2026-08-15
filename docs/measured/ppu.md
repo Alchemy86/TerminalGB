@@ -39,7 +39,7 @@ emulated machine, so loading somebody else's state must not switch their rendere
 | Granularity | one whole scanline at the mode 3 → 0 transition | one dot at a time |
 | Mode 3 length | fixed 172 dots | variable, from the fetcher |
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
-| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->69/75<!--/score-->** |
+| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->70/75<!--/score-->** |
 | Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->17/79<!--/score-->** |
 | Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->630,266<!--/score--> px** |
 | Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |

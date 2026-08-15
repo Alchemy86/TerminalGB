@@ -423,12 +423,14 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
 - **The line the PPU restarts on has no OAM scan** (`skip_first_oam`): `STAT` reads mode 0
   through the OAM slot and goes straight to mode 3.
 - **`lcdon_timing-GS` and `lcdon_write_timing-GS` are NOT separable from the cycle-stepped
-  PPU** — this was attempted and the audit's separability call was an inference that turned
-  out wrong for half the item. They sample OAM/VRAM **accessibility** at 1 M-cycle
-  resolution over three scanlines, so they need (a) mode-based VRAM/OAM access blocking and
-  (b) the PPU stepped per bus access. **Do not add (a) alone**: with mode 3 fixed at 172
-  dots where hardware varies it 172-289, blocking would silently drop writes a game placed
-  legally in HBlank — strictly worse than not blocking. Schedule both with the FIFO rewrite.
+  PPU — and that is now settled, not predicted: both PASS on the `identical` engine and
+  stay red here.** They sample OAM/VRAM **accessibility** at 1 M-cycle resolution over
+  three scanlines, so they need (a) mode-based VRAM/OAM access blocking and (b) the PPU
+  stepped per bus access. The per-dot engine has both, so it gets the blocking
+  (`Gpu::cpu_can_read_vram` and its three siblings). **Do not add (a) to the default
+  engine**: with mode 3 fixed at 172 dots where hardware varies it 172-289, blocking would
+  silently drop writes a game placed legally in HBlank — strictly worse than not blocking.
+  That is why all four predicates return "reachable" unconditionally for `RenderMode::Fast`.
 - **Save-state `FORMAT_VERSION` is now 6** (`stat_line`, `lyc_match`, `skip_first_oam`).
 - **Debugging tool worth knowing: `GB_SCOUT_SCREEN=1 mooneye_scout <rom>`** prints the ROM's
   own assertion table by decoding the BG tilemap as ASCII. `stat_lyc_onoff` says
@@ -4902,6 +4904,76 @@ misc 8/8, SameSuite 72/76, `cpp` 4/4, `testroms` 46/47 all unmoved. Full record:
 - **The eight rows that got worse are all the object-trigger dot**, and they are all
   mid-line-write rows that also place objects (`m3_lcdc_win_map_change@DMG` 644 → 1,028 is the
   largest). ~800 px spread over eight rows against three exact rows and a 15,000-px correction.
+
+### VRAM/OAM access blocking, and the two mode edges that are not one edge (Mooneye accurate 97/103 → 98/103)
+
+**`acceptance/ppu/lcdon_timing-GS` and `lcdon_write_timing-GS` are GREEN on `identical`** — the
+two rows this file spent a long time recording as needing the rewrite. `intr_2_mode0_timing`
+went the other way and it is the same one M-cycle as the five below, not new code. Every
+`standard` baseline and every Mealybug baseline **byte-identical**; SameSuite 72/76, `cpp` 4/4,
+`testroms` 46/47, 656 lib tests, savestate/battery/audiocapture/bootrom/ppuengines all green.
+Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes.md) (newest).
+
+- **MODE-BASED VRAM/OAM BLOCKING IS NOW ON — FOR THE PER-DOT ENGINE ONLY, AND THAT GATE IS THE
+  WHOLE POINT.** The standing warning ("do not add blocking alone; a fixed 172-dot mode 3 would
+  drop writes a game placed legally in HBlank") is still exactly right **for the batched
+  renderer**, and all four predicates (`Gpu::cpu_can_read_vram` / `cpu_can_write_vram` /
+  `cpu_can_read_oam` / `cpu_can_write_oam`) return "reachable" unconditionally for
+  `RenderMode::Fast`. The per-dot engine has both halves the rule needs — a mode-3 length its
+  fetcher produces, and `bus_tick` standing it on the exact dot of the access — so for it the
+  warning does not apply. mGBA (**MPL-2.0, the same licence as this repo**) spells the base rule
+  `if (gb->video.mode != 3)` / `if (gb->video.mode < 2)` in `GBLoad8`/`GBStore8`,
+  `src/gb/memory.c`.
+- **Gate blocking on `bus_tick_enabled`, the existing "a CPU instruction is running" test.**
+  `debug_peek` routes through `rb` with the tick suppressed; block without that gate and every
+  plugin, the MCP server and the trainer panel read `$FF` out of VRAM at random.
+- **A READ IS BLOCKED ONE DOT BEFORE A WRITE IS.** `lcdon_timing-GS` and `lcdon_write_timing-GS`
+  are the same nineteen offsets read and written, and their tables disagree at exactly the dots
+  the bus changes hands: at dot 80 of a normal line a VRAM *read* returns `$FF` while a VRAM
+  *write* still lands, and the same for OAM at dot 0 and dot 80. Only the acquiring edge is
+  asymmetric — the release at the end of mode 3 is shared. That is why there are four
+  predicates and not two. **Collapse any pair and the row goes red.**
+- **The mode-3 → mode-0 transition belongs at the TOP of the first mode-0 dot**, the same edge
+  convention mode 2 → 3 already used; ours was at the bottom of the last mode-3 dot, and since
+  the caller folds `IF` and reads registers once per M-cycle, one dot is a whole M-cycle to the
+  CPU. `lcdon_timing-GS` reads `STAT` at dot 252 and requires mode **3**.
+- **An interrupt source and the register that reports it are not obliged to be the same edge.**
+  Mooneye ships the same interval twice — `intr_2_0_timing` to the mode-0 *interrupt* (dispatch
+  latency cancels) and `intr_2_mode0_timing` to the first `STAT` read that *reports* mode 0 —
+  and the answers differ by one M-cycle. `Gpu::hblank_strobe` is that split; SameBoy models the
+  same shape with a `mode_for_interrupt` field distinct from the `STAT` mode bits
+  (`Core/display.c`).
+- **The LY==LYC comparator blacks out for the dot `LY` changes** (`Gpu::lyc_signal`). It is a
+  *suppression*, not a hold: at the next line's dot 0 with a stale `LYC` the flag must read
+  clear too. mGBA's `_endMode0` carries the comment *"LYC stat is delayed 1 T-cycle"*; SameBoy
+  keeps a separate `ly_for_comparison` set to `-1` over the same window.
+- **`fifo::mode3_length`'s helper measures the FETCHER's length, not the window `STAT` reports.**
+  They now differ by one dot on purpose; the helper subtracts it. Do not "fix" the 172 to 173.
+- **`OAM_STROBE_LEAD` IS THE ONE CONTESTED CONSTANT LEFT, AND IT IS A KNOB, NOT A MODEL.** At
+  `4` (shipped) Mooneye `acceptance` is 70/75 and Mealybug 17/79; at `0` Mooneye is **75/75 with
+  no contradictions left in it** and Mealybug is 6/79 — eleven rows lost to a *uniform four-pixel
+  shift* (the two frames correlate at **99.9 %** under `+4 px`). One 1-M-cycle error remains
+  between the interrupt and the pixel and this constant absorbs it. **Three places it has been
+  ruled OUT of, each measured, so nobody repeats them:** not the CPU (a +1 M HALT wake fixes all
+  five `intr_2_*` and breaks `di_timing-GS`, `halt_ime0_nointr_timing`, `halt_ime1_timing2-GS`,
+  `intr_1_2_timing-GS`, `hblank_ly_scx_timing-GS`); not `ppu_write_commit` (it spans one M-cycle
+  and has one dot of slack at `early: 3`); not the pixel phase (the fetcher pushes pixel 0 on dot
+  92 and pixel 159 on dot 251, so mode 3's 172 dots are full — and sweeping the LCD-on PPU phase
+  0..7 moves Mooneye while leaving Mealybug untouched at every value).
+- **And the lead is four times too big whatever else is true**: SameBoy says *"The OAM STAT
+  interrupt occurs 1 T-cycle before STAT actually changes, except on line 0. PPU glitch?"* —
+  **one** T-cycle, which on an engine that folds `IF` per M-cycle is indistinguishable from
+  none. Keep the value at `4` only because it is the one that does not regress the picture.
+- **THE DIAGNOSTIC THAT CRACKED ALL OF THIS: trace the emulator against the ROM's own expected
+  table, not its pass/fail line.** `lcdon_timing-GS` ships a 24-entry `cycle_counts` table beside
+  four 24-entry expectation tables. Printing `(line, modeclock, mode)` at every `STAT` read and
+  laying it beside those tables turned "one row is red" into "every entry agrees except
+  `modeclock == 252`" in one run. Same family as `GB_SCOUT_SCREEN=1`; do this before changing a
+  constant.
+- **A knob that trades tests one-for-one is not modelling anything.** The lead bought
+  `intr_2_mode0_timing` + `intr_2_oam_ok_timing` and cost `intr_2_0_timing` +
+  `intr_2_mode3_timing`, exactly, in both directions — which is the signature of a constant
+  absorbing an error somewhere else, and is what sent the search to the mode-0 end.
 
 ## Optional user-supplied boot ROM (`src/boot.rs`) — the answer to Blocker C
 

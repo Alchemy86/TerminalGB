@@ -140,7 +140,9 @@ pub(super) struct Pipeline {
 
     // --- output ---
     /// Pixels painted on this line so far; mode 3 ends when it reaches 160.
-    lx: u8,
+    /// Read by [`Gpu::hblank_strobe`](super::Gpu::hblank_strobe), which needs
+    /// the dot the fetcher finishes rather than the dot `mode` changes on.
+    pub(super) lx: u8,
     /// `SCX & 7` pixels are shifted out and dropped at the head of the line.
     discard: u8,
     /// The fetcher is drawing the window rather than the background.
@@ -390,15 +392,26 @@ impl Gpu {
                 // its first fetch happens on that dot rather than a dot late.
                 self.start_mode3();
             }
+        } else if self.mode == 3 && self.pipe.lx as usize >= WIDTH {
+            // Mode 3 is over. **The transition is applied at the TOP of the
+            // first mode-0 dot, not at the bottom of the last mode-3 one** —
+            // the same edge convention mode 2 → 3 already uses above, and the
+            // asymmetry was a real one-dot error. Because the caller folds `IF`
+            // and reads registers once per M-cycle, a dot is a whole M-cycle to
+            // the CPU: `acceptance/ppu/lcdon_timing-GS` reads `STAT` at dot 252
+            // of a line and requires mode **3**, which is only true if dot 251
+            // is still a mode-3 dot when observed.
+            //
+            // The mode-0 *interrupt* does not move with it — it is one dot
+            // earlier, on the dot the fetcher finished. See
+            // [`Gpu::hblank_strobe`](super::Gpu::hblank_strobe).
+            self.change_mode(0);
         } else {
             if self.mode != 3 {
                 self.skip_first_oam = false;
                 self.change_mode(3);
             }
             self.pipeline_dot();
-            if self.pipe.lx as usize >= WIDTH {
-                self.change_mode(0);
-            }
         }
 
         self.modeclock += 1;
@@ -958,11 +971,17 @@ mod mode3_length {
         gpu
     }
 
-    /// Dots spent in mode 3 on the next scanline, measured one dot at a time.
+    /// Dots the fetcher spends painting the next scanline — the figure Pan Docs
+    /// quotes as "mode 3 length", which is what every expectation below is.
     ///
-    /// Counted off `modeclock` rather than by tallying steps: the dot that
-    /// paints pixel 160 is itself a mode-3 dot *and* the one that flips STAT to
-    /// mode 0, so a step-tallying loop is short by exactly one.
+    /// **It is one dot shorter than the window `STAT` reports mode 3 for**, and
+    /// that is not an accounting slip: the mode bits flip at the top of the
+    /// first mode-0 dot, so the dot that paints pixel 160 still reads mode 3
+    /// when the CPU looks at it (`acceptance/ppu/lcdon_timing-GS` requires
+    /// exactly that at dot 252). The loop below therefore leaves `modeclock`
+    /// one dot past the last painted dot, and the `- 1` takes it back off.
+    /// Measure the reported window instead and every figure here would read one
+    /// higher while the fetcher had done identical work.
     fn mode3_dots(gpu: &mut Gpu) -> u32 {
         while gpu.mode() != 2 {
             gpu.do_cycle(1);
@@ -973,7 +992,7 @@ mod mode3_length {
         while gpu.mode() == 3 {
             gpu.do_cycle(1);
         }
-        gpu.modeclock - super::OAM_DOTS
+        gpu.modeclock - super::OAM_DOTS - 1
     }
 
     /// The floor: 160 pixels plus the 12 dots of the discarded first fetch.

@@ -191,7 +191,7 @@ cannot drift away from the tests:
 | Suite | `standard` | `identical` | What it measures |
 |---|---:|---:|---|
 | In-repo harness (Blargg + dmg-acid2) | <!--score:harness-->46 / 47<!--/score--> | <!--score:harness-->46 / 47<!--/score--> | instructions, memory and interrupt timing, sound, a reference picture |
-| Mooneye GB — `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | <!--score:mooneye_acceptance_accurate-->69 / 75<!--/score--> | core timing, interrupt dispatch, boot state |
+| Mooneye GB — `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | <!--score:mooneye_acceptance_accurate-->70 / 75<!--/score--> | core timing, interrupt dispatch, boot state |
 | Mooneye GB — `emulator-only` | <!--score:mooneye_emulator_only-->28 / 28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28 / 28<!--/score--> | cartridge mappers |
 | Mooneye GB — `misc` (Color) | <!--score:mooneye_cgb-->8 / 8<!--/score--> | <!--score:mooneye_cgb-->8 / 8<!--/score--> | Color-specific behaviour |
 | SameSuite | <!--score:samesuite-->72 / 76<!--/score--> | <!--score:samesuite-->72 / 76<!--/score--> | sound hardware, DMA, Super Game Boy |

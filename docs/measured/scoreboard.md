@@ -88,24 +88,34 @@ groups are the hard ones:
 
 **Why the eight are red, honestly:** they sample OAM/VRAM *accessibility* and mode-3 length at
 one-M-cycle resolution. `lcdon_timing-GS` and `lcdon_write_timing-GS` in particular are **not
-separable** from a per-dot PPU — this was attempted, and the conclusion that they could be
-done alone turned out to be wrong for half of them. Do **not** add mode-based VRAM/OAM
-blocking to the `standard` mode alone: with mode 3 fixed at 172 dots where hardware varies it
-172–289, blocking would silently drop writes a game placed legally in HBlank, which is
-strictly worse than not blocking. See [ppu.md](ppu.md).
+separable** from a per-dot PPU — and that is now settled rather than predicted: **both pass on
+the [`identical` mode](../picture-modes.md)**, which has the mode-3 length and the per-access
+stepping the rule needs, and both stay red here. Do **not** add mode-based VRAM/OAM blocking to
+the `standard` mode: with mode 3 fixed at 172 dots where hardware varies it 172–289, blocking
+would silently drop writes a game placed legally in HBlank, which is strictly worse than not
+blocking. See [ppu.md](ppu.md).
 
 ### The `identical` picture mode scores differently — and now dominates
 
 The [`identical` picture mode](../picture-modes.md) (`GB_PPU=identical`, formerly `accurate`)
-gives **<!--score:mooneye_acceptance_accurate-->69/75<!--/score-->** acceptance against the
-default `standard` mode's <!--score:mooneye_acceptance-->67/75<!--/score-->. The delta is two
+gives **<!--score:mooneye_acceptance_accurate-->70/75<!--/score-->** acceptance against the
+default `standard` mode's <!--score:mooneye_acceptance-->67/75<!--/score-->. The delta is three
 rows and it is one-directional:
 
 | Row | `standard` | `identical` |
 |---|---|---|
 | `acceptance/ppu/hblank_ly_scx_timing-GS` | FAIL | **PASS** |
-| `acceptance/ppu/intr_2_mode0_timing` | FAIL | **PASS** |
+| `acceptance/ppu/lcdon_timing-GS` | FAIL | **PASS** |
+| `acceptance/ppu/lcdon_write_timing-GS` | FAIL | **PASS** |
 | `acceptance/ppu/intr_1_2_timing-GS` | PASS | PASS |
+
+The five still red on `identical` are the whole `intr_2_*` group, and they share **one** cause:
+`OAM_STROBE_LEAD` in [`src/gpu/mod.rs`](../../src/gpu/mod.rs) raises the mode-2 STAT strobe one
+M-cycle early, and each of the five comes out exactly one loop iteration long because of it.
+Setting it to zero makes `acceptance` **75/75** with no contradictions left in the suite — and
+costs eleven Mealybug rows their pixel-exactness, every one by a uniform four-pixel shift. That
+trade, and the three places the missing M-cycle has been *ruled out* of, are written up in
+[`conformance-notes.md`](../conformance-notes.md) (2026-08-15).
 
 `intr_1_2_timing-GS` used to be the one row `identical` lost, and it was the last thing
 blocking a default flip. It is fixed — see
@@ -118,7 +128,7 @@ The mode is gated separately (`make test-external-accurate`, against
 | Gate | `standard` | `identical` |
 |---|---:|---:|
 | In-repo harness (Blargg + dmg-acid2) | <!--score:harness-->46/47<!--/score--> | <!--score:harness-->46/47<!--/score--> — *identical verdicts row for row* |
-| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->69/75<!--/score-->** |
+| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->70/75<!--/score-->** |
 | Mooneye `emulator-only` | <!--score:mooneye_emulator_only-->28/28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28/28<!--/score--> |
 | Mooneye `misc` (CGB) | <!--score:mooneye_cgb-->8/8<!--/score--> | <!--score:mooneye_cgb-->8/8<!--/score--> |
 | SameSuite | <!--score:samesuite-->72/76<!--/score--> | <!--score:samesuite-->72/76<!--/score--> |

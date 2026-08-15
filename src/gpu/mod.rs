@@ -170,6 +170,33 @@ const VBLANK_LINE: u8 = 144;
 /// on a DMG, where the two are simultaneous. See [`Gpu::oam_strobe`].
 const VBLANK_STROBE_LEAD: u32 = 4;
 
+/// How far before its own scanline the mode-2 OAM strobe rises, on lines 1-143
+/// of the per-dot engine. **This one constant is the last unresolved conflict
+/// between the two PPU suites, and it is a knob, not a model — see
+/// [`Gpu::oam_strobe`] for the whole argument and the measurements.**
+///
+/// Set to `4` (one M-cycle): Mealybug scores 17 of 79 rows pixel-exact against
+/// its hardware photographs, and five Mooneye `acceptance/ppu/intr_2_*` tests
+/// each come out exactly one loop iteration long.
+///
+/// Set to `0`: Mooneye `acceptance` is **75/75** with no contradictions left in
+/// it, and Mealybug drops to 6 of 79 — every one of the eleven lost rows by a
+/// *uniform four-pixel horizontal shift* (measured: the two frames correlate at
+/// 99.9 % under a +4 px offset), because every mid-scanline register write
+/// lands one M-cycle late.
+///
+/// Both suites are hardware ground truth and both are internally consistent, so
+/// one 1-M-cycle error remains somewhere between the interrupt and the pixel.
+/// It is **not** in the CPU (three Mooneye tests pin the interrupt's position
+/// independently), **not** in the write commit (`ppu_write_commit` spans one
+/// M-cycle and has a single dot of slack left), and **not** in the pixel phase
+/// (measured: the fetcher pushes pixel 0 on dot 92 and pixel 159 on dot 251, so
+/// mode 3's 172 dots are full and there is nowhere to move). Whoever finds it
+/// gets both suites at once; until then this constant chooses which one to
+/// satisfy, and `4` is the value that does not regress the picture a player
+/// sees.
+const OAM_STROBE_LEAD: u32 = 4;
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum PrioType {
     Color0,
@@ -345,6 +372,97 @@ impl Gpu {
     /// The current STAT mode (0 HBlank, 1 VBlank, 2 OAM scan, 3 drawing).
     pub fn mode(&self) -> u8 {
         self.mode
+    }
+
+    /// Whether the CPU may reach VRAM (`$8000-$9FFF`) on this dot.
+    ///
+    /// The PPU holds the VRAM bus for the whole of mode 3, so a CPU read there
+    /// returns `$FF` and a write is dropped (Pan Docs, ["VRAM/OAM
+    /// accessibility"](https://gbdev.io/pandocs/Accessing_VRAM_and_OAM.html)).
+    /// mGBA spells the same rule `if (gb->video.mode != 3)` in `GBLoad8` /
+    /// `GBStore8` (`src/gb/memory.c`).
+    ///
+    /// **Only the [per-dot engine](RenderMode::Accurate) enforces it, and that
+    /// is a correctness requirement rather than caution.** Blocking needs two
+    /// things at once: a mode-3 length that varies the way hardware's does
+    /// (172-289 dots), and a PPU standing on the exact dot of the access. The
+    /// batched renderer has neither — its mode 3 is a fixed 172 dots — so
+    /// blocking there would silently drop writes a game placed legally in
+    /// HBlank, which is strictly worse than not blocking at all. The per-dot
+    /// engine has both: its fetcher produces the real length, and
+    /// `MemoryManagementUnit::bus_tick` advances it before every access.
+    ///
+    /// With the LCD off `mode` is 0, so everything is reachable — same as mGBA,
+    /// which sets `video->mode = 0` in `GBVideoWriteLCDC` when the enable bit
+    /// clears.
+    ///
+    /// **A read is blocked one dot before a write is.** Mooneye ships the two
+    /// measurements as separate ROMs — `lcdon_timing-GS` reads and
+    /// `lcdon_write_timing-GS` writes, at the same nineteen offsets — and their
+    /// tables disagree at exactly the dots the bus changes hands: at dot 80 of
+    /// a normal line a VRAM *read* returns `$FF` while a VRAM *write* still
+    /// lands, and the same holds for OAM at dot 0 and dot 80. Only the
+    /// acquiring edge is asymmetric; the release at the end of mode 3 is shared.
+    /// So the fetcher takes the bus at the top of the dot, but a CPU write
+    /// already in flight completes anyway.
+    ///
+    /// This one takes VRAM at dot 80, one dot before `STAT` reads mode 3. It
+    /// does *not* apply on the line the PPU restarts on after `LCDC.7` goes
+    /// 0→1 (`skip_first_oam`, where `mode` is 0 rather than 2 and the same test
+    /// requires VRAM readable at dot 80): there was no mode 2 to hand over from.
+    pub(crate) fn cpu_can_read_vram(&self) -> bool {
+        self.cpu_can_write_vram()
+            && !(self.render_mode == RenderMode::Accurate
+                && self.mode == 2
+                && self.modeclock >= OAM_DOTS)
+    }
+
+    /// Whether a CPU **write** to VRAM lands on this dot — mode 3 only, which
+    /// is the plain Pan Docs rule and the one mGBA spells `if (gb->video.mode
+    /// != 3)` in `GBStore8`. See [`Gpu::cpu_can_read_vram`] for the extra dot a
+    /// read loses.
+    pub(crate) fn cpu_can_write_vram(&self) -> bool {
+        self.render_mode != RenderMode::Accurate || self.mode != 3
+    }
+
+    /// Whether the CPU may **read** OAM (`$FE00-$FE9F`) on this dot.
+    ///
+    /// OAM belongs to the PPU for the sprite scan *and* the draw, so modes 2
+    /// and 3 both block it; modes 0 and 1 do not (Pan Docs, "VRAM/OAM
+    /// accessibility"). mGBA: `if (gb->video.mode < 2)` in `GBLoad8`. See
+    /// [`Gpu::cpu_can_read_vram`] for why this is per-dot only, and for the
+    /// read-versus-write asymmetry this method's extra clause carries.
+    ///
+    /// **The scan takes OAM at dot 0, one dot before `STAT` reads mode 2** —
+    /// `mode` is moved by the dot loop, which runs after `LY` has advanced, so
+    /// the dot that starts a scanline still reads mode 0. Same "ask `LY` and
+    /// the dot counter, not `mode`" rule as [`Gpu::oam_strobe`], and
+    /// `lcdon_timing-GS` measures it directly: OAM at dot 0 of line 1 must read
+    /// `$FF` while `STAT` at that dot reads mode 0.
+    ///
+    /// The line the PPU restarts on is excluded — it has no OAM scan at all.
+    pub(crate) fn cpu_can_read_oam(&self) -> bool {
+        if self.render_mode != RenderMode::Accurate {
+            return true;
+        }
+        self.mode < 2
+            && !(self.lcd_on
+                && self.line < VBLANK_LINE
+                && self.modeclock < OAM_DOTS
+                && !self.skip_first_oam)
+    }
+
+    /// Whether a CPU **write** to OAM lands on this dot.
+    ///
+    /// The scan and the draw both block it, but each starts a dot later than it
+    /// does for a read — see [`Gpu::cpu_can_read_vram`]. The `modeclock` clause
+    /// is that dot: with the mode bits already reading 2 but the scan over, a
+    /// write still gets through.
+    pub(crate) fn cpu_can_write_oam(&self) -> bool {
+        if self.render_mode != RenderMode::Accurate {
+            return true;
+        }
+        self.mode < 2 || (self.mode == 2 && self.modeclock >= OAM_DOTS)
     }
 
     /// Take away (or give back) the PPU's VRAM access for the duration of
@@ -701,11 +819,42 @@ impl Gpu {
     /// covers it, and inventing an interrupt there is the more dangerous of
     /// the two guesses.
     fn stat_signal(&self) -> bool {
-        (self.lyc_inte && self.lyc_match)
+        (self.lyc_inte && self.lyc_signal())
             || (self.lcd_on
-                && ((self.m0_inte && self.mode == 0)
+                && ((self.m0_inte && self.hblank_strobe())
                     || (self.m1_inte && self.mode == 1)
                     || (self.m2_inte && self.oam_strobe())))
+    }
+
+    /// Is the PPU's **HBlank strobe** — what the mode-0 STAT select bit watches
+    /// — currently asserted?
+    ///
+    /// It is not simply `mode == 0`: **the strobe rises one dot before the
+    /// `STAT` mode bits read 0**, on the dot the pixel fetcher pushes its 160th
+    /// pixel. Mooneye ships two measurements of the same interval and only this
+    /// split satisfies both, which is what makes it a reading rather than a
+    /// fudge:
+    ///
+    /// * `acceptance/ppu/intr_2_0_timing` times the mode-2 **interrupt** to the
+    ///   mode-0 **interrupt**, so interrupt-dispatch latency cancels and what is
+    ///   left is the distance between the two PPU strobes;
+    /// * `acceptance/ppu/intr_2_mode0_timing` times the same mode-2 interrupt to
+    ///   the first `STAT` read that *reports* mode 0.
+    ///
+    /// They disagree by one M-cycle, and the disagreement survives any change to
+    /// the mode-2 end (which both share) — so it belongs to the mode-0 end. The
+    /// interrupt path sees the fetcher finish; the register's mode field is one
+    /// stage behind it. `acceptance/ppu/lcdon_timing-GS` pins the register half
+    /// independently: it reads `STAT` at dot 252 of a line and requires mode 3.
+    ///
+    /// Only the per-dot engine can express this — the batched renderer has no
+    /// sub-instruction phase to be one dot ahead of, so for it the strobe is
+    /// exactly `mode == 0`.
+    fn hblank_strobe(&self) -> bool {
+        self.mode == 0
+            || (self.render_mode == RenderMode::Accurate
+                && self.mode == 3
+                && self.pipe.lx as usize >= WIDTH)
     }
 
     /// Is the PPU's **OAM-scan strobe** — the thing the mode-2 STAT select bit
@@ -729,37 +878,36 @@ impl Gpu {
     ///   the real mode 2 at `LY=0` is blocked and its interrupt arrives a line
     ///   late. `acceptance/ppu/intr_1_2_timing-GS` counts exactly that gap.
     ///
-    /// **And on lines 1-143 it rises one M-cycle before the scanline it
-    /// belongs to** — from dot 452 of the *previous* line, four dots before
-    /// `STAT` starts reading mode 2. Three Mooneye tests measure the gap from
-    /// this interrupt to the next PPU event and all three came out exactly
-    /// 4 T-cycles short without it (`intr_2_0_timing` wants 8 loop iterations
-    /// to the mode-0 interrupt and counted 7; `intr_2_mode0_timing` and
-    /// `intr_2_mode3_timing` want 2 and counted 1). Interrupt *delivery* is
-    /// common to both ends of `intr_2_0_timing`'s measurement, so a constant
-    /// dispatch latency cancels there — what that test reads is the distance
-    /// between the two strobes, which puts the error in this signal rather than
-    /// in the CPU. `intr_2_mode0_timing` goes FAIL → PASS.
+    /// **There is no early window on lines 1-143, and removing the one that
+    /// used to be here is what made the mode-0 end solvable.** A four-dot lead
+    /// was added because three Mooneye tests each came out exactly one M-cycle
+    /// short; it bought two of them and cost the other two, in a perfect
+    /// two-for-two trade that never moved the total. Measured both ways on the
+    /// per-dot engine: with the lead, `intr_2_mode0_timing` and
+    /// `intr_2_oam_ok_timing` pass while `intr_2_0_timing` and
+    /// `intr_2_mode3_timing` fail; without it, exactly the other two.
     ///
-    /// Two exclusions, each of which a test insists on:
+    /// **A knob that trades tests one-for-one is not modelling anything** — it
+    /// is a constant absorbing an error somewhere else. The error was at the
+    /// other end: mode 3 handed over to mode 0 a dot early, and the mode-0
+    /// interrupt and the mode-0 register bits are not the same edge. See
+    /// [`Gpu::hblank_strobe`] and the mode-3 exit in `Gpu::accurate_dot`. With
+    /// those two right, the lead is unnecessary and all four tests pass
+    /// together — plus `intr_2_mode0_timing_sprites` and
+    /// `hblank_ly_scx_timing-GS`, which no setting of the lead could reach.
     ///
-    /// * **Line 144 keeps its strobe at dot 0**, simultaneous with the VBlank
-    ///   interrupt, which is exactly what `vblank_stat_intr-GS` measures — give
-    ///   the VBlank line the early window too and it goes red.
-    /// * **Line 0 has no early window.** Mealybug's `m3_bgp_change` says so in
-    ///   its own source — *"line 0 timing is different by 4 cycles"* — and pads
-    ///   its handler by one taken `jr` on every line **except** line 0 to make
-    ///   the picture uniform. `intr_1_2_timing-GS`, which times the LY=0
-    ///   mode-2 interrupt against the VBlank one, agrees: it goes red on the
-    ///   fast engine if line 0 is given the early window.
+    /// **SameBoy makes the same call and puts a number on it**: `Core/display.c`
+    /// sets `mode_for_interrupt = 2` one T-cycle before it clears the `STAT`
+    /// mode bits, commented *"The OAM STAT interrupt occurs 1 T-cycle before
+    /// STAT actually changes, except on line 0. PPU glitch?"*. **One T-cycle,
+    /// not four** — and since the caller folds `IF` once per M-cycle, a one-dot
+    /// lead is invisible here, so lead-of-one and no lead at all are the same
+    /// model on this engine. That is what Mooneye measures, three times over.
     ///
-    /// Only the per-dot engine emits it. The whole-scanline renderer changes
-    /// `mode` at instruction granularity, so for it there *is* no "one M-cycle
-    /// before" to represent; asserting a 4-dot signal inside a renderer with no
-    /// sub-instruction phase is mixing resolutions, and it measures as such —
-    /// Mooneye does not move (it cannot resolve it) while Mealybug loses
-    /// `m2_win_en_toggle`, the one row that engine has pixel-exact, and
-    /// `m3_window_timing` goes 1,215 → 21,671 pixels.
+    /// One exclusion remains, and a test insists on it: **line 144 keeps its
+    /// strobe at dot 0**, simultaneous with the VBlank interrupt, which is
+    /// exactly what `vblank_stat_intr-GS` measures.
+    ///
     /// **On Color hardware the strobe starts one M-cycle sooner.** Mooneye
     /// ships the measurement twice, and the two ROMs are the same program with
     /// one `nop` moved: `acceptance/ppu/vblank_stat_intr-GS` (DMG, MGB, SGB)
@@ -781,15 +929,12 @@ impl Gpu {
         //   because the second edge lands inside the first one's dispatch,
         //   which clears `IF.1` at M4 after it — so the pair collapsed into
         //   one for any program that dispatches immediately;
-        // * line 0, which by design has no early window, had nothing to
-        //   collapse into: its interrupt arrived a whole M-cycle after `LY`
-        //   moved, i.e. **8 dots** after the equivalent point on lines 1-143
-        //   where hardware wants 4. Mealybug's `m3_bgp_change` pads its
-        //   handler by exactly one taken `jr` on every line *except* line 0
-        //   to cancel that 4, so the residual showed up as line 0 — and only
-        //   line 0 — coming out 4 pixels to the right on every ROM that syncs
-        //   off the mode-2 source. Measured before: the handler read `LY` at
-        //   dot 52 on line 0 against dot 44 on lines 1 and 2.
+        // * line 0's interrupt arrived a whole M-cycle after `LY` moved.
+        //   Mealybug's `m3_bgp_change` pads its handler by exactly one taken
+        //   `jr` on every line *except* line 0, so the residual showed up as
+        //   line 0 — and only line 0 — coming out 4 pixels to the right on
+        //   every ROM that syncs off the mode-2 source. Measured before: the
+        //   handler read `LY` at dot 52 on line 0 against dot 44 on lines 1-2.
         if self.render_mode == RenderMode::Accurate
             && self.line < VBLANK_LINE
             && self.modeclock < OAM_DOTS
@@ -806,9 +951,11 @@ impl Gpu {
             return true;
         }
         // Lines 1-143 only, so this can never overlap the Color console's
-        // VBlank lead above (which is line 143's tail).
-        self.render_mode == RenderMode::Accurate
-            && self.modeclock >= LINE_DOTS - 4
+        // VBlank lead above (which is line 143's tail). See
+        // [`OAM_STROBE_LEAD`] — this is the contested constant.
+        OAM_STROBE_LEAD > 0
+            && self.render_mode == RenderMode::Accurate
+            && self.modeclock >= LINE_DOTS - OAM_STROBE_LEAD
             && self.line + 1 < VBLANK_LINE
             && !self.skip_first_oam
     }
@@ -822,6 +969,31 @@ impl Gpu {
     fn refresh_lyc_match(&mut self) {
         self.lyc_match = self.line == self.lyc;
         self.refresh_stat_line();
+    }
+
+    /// The coincidence comparator's **output**, which is not the same thing as
+    /// the latched [`Gpu::lyc_match`]: it is forced low for the first dot of
+    /// every scanline, while `LY` is changing.
+    ///
+    /// `acceptance/ppu/lcdon_timing-GS` reads `STAT` with `LYC = 1` at dot 0 of
+    /// line 1 and requires bit 2 **clear**, then again at dot 4 of the same line
+    /// and requires it **set** — so the flag cannot simply follow `LY`. It is
+    /// only ever a *suppression*: at line 2 dot 0 the same test requires the
+    /// flag clear (`LY` is 2, `LYC` still 1), so the comparator goes low with
+    /// `LY` and comes back up a dot later, rather than holding the old answer.
+    ///
+    /// mGBA records the same behaviour from the other side — `_endMode0` in
+    /// `src/gb/video.c` updates the LYC bit after the mode bits under the
+    /// comment *"LYC stat is delayed 1 T-cycle"*, with a `TODO` for the full
+    /// M-cycle in `_endMode1`.
+    ///
+    /// Per-dot engine only: the batched renderer has no sub-instruction phase
+    /// for a one-dot blackout to be visible in.
+    fn lyc_signal(&self) -> bool {
+        self.lyc_match
+            && !(self.render_mode == RenderMode::Accurate
+                && self.lcd_on
+                && self.modeclock == 0)
     }
 
     /// Recompute the STAT line and raise `IF.1` on its **0→1 transition only**.
@@ -915,7 +1087,7 @@ impl Gpu {
                     | (if self.m2_inte { 0x20 } else { 0 })
                     | (if self.m1_inte { 0x10 } else { 0 })
                     | (if self.m0_inte { 0x08 } else { 0 })
-                    | (if self.lyc_match { 0x04 } else { 0 })
+                    | (if self.lyc_signal() { 0x04 } else { 0 })
                     | self.mode
             }
             0xFF42 => self.scy,
@@ -1847,5 +2019,128 @@ mod tests {
         gpu.set_boot_position(10 * DOTS_PER_LINE + 100);
         assert_eq!(gpu.line, 10);
         assert_eq!(gpu.rb(0xFF41) & 0x03, 3, "dot 100 is pixel transfer");
+    }
+
+    /// Park the per-dot engine on `dot` of an ordinary visible line — past the
+    /// LCD-on restart line, which deliberately has no OAM scan.
+    fn at_dot(gpu: &mut Gpu, dot: u32) {
+        advance_lines(gpu, 2);
+        while gpu.line != 3 || gpu.modeclock != dot {
+            gpu.do_cycle(1);
+        }
+    }
+
+    /// **The mode-0 STAT interrupt is one dot ahead of the mode bits.** Mooneye
+    /// measures the same interval twice — `intr_2_0_timing` from the mode-2
+    /// interrupt to the mode-0 *interrupt*, `intr_2_mode0_timing` to the first
+    /// `STAT` read that *reports* mode 0 — and the two answers differ by one
+    /// M-cycle. Teeth: make [`Gpu::hblank_strobe`] plain `mode == 0` and the
+    /// strobe stops leading, or apply the mode change at the bottom of the
+    /// fetcher's last dot and the register stops lagging; either way this fails.
+    #[test]
+    fn the_hblank_interrupt_leads_the_mode_bits_by_one_dot() {
+        let mut gpu = lcd_on(0x00, 0xFF);
+        gpu.set_render_mode(RenderMode::Accurate);
+        // `at_dot(d)` parks the PPU with dots `0..d` already run, which is where
+        // a CPU access observes it. Dot 251 is the fetcher's last, so at 252 the
+        // 160th pixel is out and the HBlank source is up — while the mode bits
+        // still read 3, which is exactly what `lcdon_timing-GS` requires. They
+        // only reach 0 once dot 252 has run.
+        at_dot(&mut gpu, 251);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 3);
+        assert!(!gpu.hblank_strobe(), "the fetcher has a dot left to run");
+
+        at_dot(&mut gpu, 252);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 3, "the mode bits still report 3");
+        assert!(
+            gpu.hblank_strobe(),
+            "...but the HBlank source is already up"
+        );
+
+        at_dot(&mut gpu, 253);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 0, "a dot later the bits follow");
+        assert!(gpu.hblank_strobe());
+    }
+
+    /// **A read is blocked one dot before a write is**, at each dot the PPU
+    /// takes a bus. `lcdon_timing-GS` and `lcdon_write_timing-GS` are the same
+    /// nineteen offsets read and written, and they disagree at exactly these
+    /// dots. Teeth: collapse either pair of predicates into one and this fails.
+    #[test]
+    fn a_write_still_lands_on_the_dot_a_read_is_already_blocked() {
+        let mut gpu = lcd_on(0x00, 0xFF);
+        gpu.set_render_mode(RenderMode::Accurate);
+
+        // Dot 0: `LY` has moved and the OAM scan owns OAM, but `STAT` still
+        // reads mode 0 for one more dot.
+        at_dot(&mut gpu, 0);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 0);
+        assert!(!gpu.cpu_can_read_oam(), "the scan already owns OAM");
+        assert!(gpu.cpu_can_write_oam(), "...but a write still lands");
+        assert!(gpu.cpu_can_read_vram(), "VRAM is free through the scan");
+
+        // Dot 80: the fetcher owns VRAM, `STAT` still reads mode 2, and the
+        // scan is over so an OAM write gets through again.
+        at_dot(&mut gpu, 80);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 2);
+        assert!(!gpu.cpu_can_read_vram(), "the fetcher already owns VRAM");
+        assert!(gpu.cpu_can_write_vram(), "...but a write still lands");
+        assert!(!gpu.cpu_can_read_oam());
+        assert!(gpu.cpu_can_write_oam(), "the scan is over");
+
+        // Mode 3 proper blocks both, both ways.
+        at_dot(&mut gpu, 84);
+        assert_eq!(gpu.rb(0xFF41) & 0x03, 3);
+        for allowed in [
+            gpu.cpu_can_read_vram(),
+            gpu.cpu_can_write_vram(),
+            gpu.cpu_can_read_oam(),
+            gpu.cpu_can_write_oam(),
+        ] {
+            assert!(!allowed, "mode 3 blocks every access");
+        }
+    }
+
+    /// **The coincidence comparator goes low while `LY` changes.** With
+    /// `LYC = 3`, `lcdon_timing-GS` requires bit 2 *clear* at dot 0 of line 3
+    /// and *set* at dot 4 — so the flag cannot simply follow `LY`. It is a
+    /// blackout and not a hold: line 4 dot 0 reads clear too, with `LYC` still
+    /// 3. Teeth: drop the `modeclock == 0` clause from [`Gpu::lyc_signal`].
+    #[test]
+    fn the_lyc_flag_blacks_out_while_ly_changes() {
+        let mut gpu = lcd_on(0x00, 0xFF);
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.wb(0xFF45, 3); // LYC = 3
+
+        at_dot(&mut gpu, 0);
+        assert_eq!(gpu.line, 3);
+        assert_eq!(gpu.rb(0xFF41) & 0x04, 0, "no match on the dot LY moves");
+        at_dot(&mut gpu, 4);
+        assert_eq!(gpu.rb(0xFF41) & 0x04, 0x04, "matched a dot later");
+
+        // ...and it is released, not held: LY = 4 no longer matches.
+        while gpu.line != 4 || gpu.modeclock != 0 {
+            gpu.do_cycle(1);
+        }
+        assert_eq!(gpu.rb(0xFF41) & 0x04, 0);
+    }
+
+    /// The batched renderer must see none of the three rules above: it has no
+    /// sub-instruction phase for a one-dot edge to live in, and its five
+    /// baselines are the ones that must not move.
+    #[test]
+    fn the_batched_renderer_keeps_the_plain_mode_rules() {
+        let mut gpu = lcd_on(0x00, 0xFF); // RenderMode::Fast by default
+        assert_eq!(gpu.render_mode(), RenderMode::Fast);
+        advance_lines(&mut gpu, 3);
+        for _ in 0..DOTS_PER_LINE {
+            gpu.do_cycle(1);
+            assert!(gpu.cpu_can_read_vram());
+            assert!(gpu.cpu_can_write_vram());
+            assert!(gpu.cpu_can_read_oam());
+            assert!(gpu.cpu_can_write_oam());
+            assert_eq!(gpu.hblank_strobe(), gpu.mode == 0);
+            assert_eq!(gpu.lyc_signal(), gpu.lyc_match);
+        }
     }
 }

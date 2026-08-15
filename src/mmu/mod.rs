@@ -1210,7 +1210,17 @@ impl<'a> MemoryManagementUnit<'a> {
         }
         match address {
             0x0000..=0x7FFF => self.read_rom(address),
-            0x8000..=0x9FFF => self.gpu.rb(address),
+            // The PPU holds the VRAM bus through mode 3 — see
+            // [`Gpu::cpu_can_reach_vram`]. `bus_tick_enabled` keeps the block on
+            // the CPU's own accesses: a debug peek routes through here with the
+            // tick suppressed and must see the real byte.
+            0x8000..=0x9FFF => {
+                if self.bus_tick_enabled && !self.gpu.cpu_can_read_vram() {
+                    0xFF
+                } else {
+                    self.gpu.rb(address)
+                }
+            }
             0xA000..=0xBFFF => self.mbc.readram(address),
             // Echo RAM (E000-FDFF) mirrors WRAM: the same arms serve both ranges
             // because & 0x0FFF folds the echo address onto the C000-page bank.
@@ -1220,8 +1230,12 @@ impl<'a> MemoryManagementUnit<'a> {
             }
             // OAM belongs to the DMA while a transfer runs: the CPU reads
             // $FF and its writes are dropped (Pan Docs, "OAM DMA Transfer").
+            // It belongs to the PPU through modes 2 and 3 for the same reason
+            // VRAM does — see [`Gpu::cpu_can_reach_oam`].
             0xFE00..=0xFE9F => {
-                if self.oam_dma.active() {
+                if self.oam_dma.active()
+                    || (self.bus_tick_enabled && !self.gpu.cpu_can_read_oam())
+                {
                     0xFF
                 } else {
                     self.gpu.rb(address)
@@ -1419,7 +1433,12 @@ impl<'a> MemoryManagementUnit<'a> {
         let value = commit.dispatch.unwrap_or(value);
         match address {
             0x0000..=0x7FFF => self.mbc.writerom(address, value),
-            0x8000..=0x9FFF => self.gpu.wb(address, value),
+            // Dropped outright through mode 3 — see [`Gpu::cpu_can_reach_vram`].
+            0x8000..=0x9FFF => {
+                if !self.bus_tick_enabled || self.gpu.cpu_can_write_vram() {
+                    self.gpu.wb(address, value)
+                }
+            }
             0xA000..=0xBFFF => self.mbc.writeram(address, value),
             0xC000..=0xCFFF | 0xE000..=0xEFFF => {
                 self.wram[address as usize & 0x0FFF] = value
@@ -1428,7 +1447,9 @@ impl<'a> MemoryManagementUnit<'a> {
                 self.wram[(self.wrambank * 0x1000) | (address as usize & 0x0FFF)] = value
             }
             0xFE00..=0xFE9F => {
-                if !self.oam_dma.active() {
+                if !self.oam_dma.active()
+                    && (!self.bus_tick_enabled || self.gpu.cpu_can_write_oam())
+                {
                     self.gpu.wb(address, value)
                 }
             }

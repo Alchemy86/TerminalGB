@@ -79,12 +79,12 @@ acceptance/pop_timing = PASS
 acceptance/ppu/hblank_ly_scx_timing-GS = PASS
 acceptance/ppu/intr_1_2_timing-GS = PASS
 acceptance/ppu/intr_2_0_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
-acceptance/ppu/intr_2_mode0_timing = PASS
+acceptance/ppu/intr_2_mode0_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
 acceptance/ppu/intr_2_mode0_timing_sprites = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
 acceptance/ppu/intr_2_mode3_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
 acceptance/ppu/intr_2_oam_ok_timing = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
-acceptance/ppu/lcdon_timing-GS = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
-acceptance/ppu/lcdon_write_timing-GS = FAIL | b=42 c=42 d=42 e=42 h=42 l=42
+acceptance/ppu/lcdon_timing-GS = PASS
+acceptance/ppu/lcdon_write_timing-GS = PASS
 acceptance/ppu/stat_irq_blocking = PASS
 acceptance/ppu/stat_lyc_onoff = PASS
 acceptance/ppu/vblank_stat_intr-GS = PASS

@@ -23,6 +23,145 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — VRAM/OAM access blocking, and the two mode edges that are not one edge (Mooneye accurate 97/103 → 98/103)
+
+Three defects in the **accurate** (`identical`) engine, found by reading Mooneye's own
+expectation tables against a trace of our PPU rather than guessing from the pass/fail line.
+`acceptance/ppu/lcdon_timing-GS` and `lcdon_write_timing-GS` were the two rows
+[`docs/measured/ppu.md`](measured/ppu.md) had scoped as needing a rewrite; they are green.
+The default whole-scanline renderer is **byte-identical to all five of its baselines** — every
+rule below is gated on `RenderMode::Accurate`, because each one is a *one-dot* edge and that
+engine has no sub-instruction phase for a one-dot edge to live in.
+
+### 1. VRAM and OAM were reachable in every mode
+
+**Symptom.** A game that writes to VRAM during mode 3 — which hardware silently discards — has
+that write land. Tile data or a sprite attribute appears mid-frame that a real console never
+shows, and a program that *deliberately* writes into the blocked window to prove it is blocked
+(as several test ROMs do) reads its own value back instead of `$FF`.
+
+**Caught by.** `acceptance/ppu/intr_2_oam_ok_timing` and `lcdon_write_timing-GS`. Nothing in the
+in-repo harness catches it: `testroms` is judged by serial verdicts and framebuffer compares,
+and a well-behaved cartridge never writes into a blocked window at all.
+
+**Hardware behaviour.** The PPU owns the OAM bus through modes 2 and 3 and the VRAM bus through
+mode 3; a CPU read there returns `$FF` and a write is dropped (Pan Docs, ["Accessing VRAM and
+OAM"](https://gbdev.io/pandocs/Accessing_VRAM_and_OAM.html)). mGBA — MPL-2.0, the same licence
+as this repository — spells it `if (gb->video.mode != 3)` for VRAM and `if (gb->video.mode < 2)`
+for OAM, in both `GBLoad8` and `GBStore8` (`src/gb/memory.c`), and sets `video->mode = 0` when
+`LCDC.7` clears (`GBVideoWriteLCDC`) so everything is reachable with the LCD off.
+
+**Why it could not be done before, and can be now.** Blocking needs two things at once: a mode-3
+length that varies the way hardware's does, and a PPU standing on the exact dot of the access.
+The batched renderer has neither — its mode 3 is a fixed 172 dots — so blocking there would
+silently drop writes a game placed legally in HBlank, which is *worse* than not blocking. The
+per-dot engine has both, and `MemoryManagementUnit::bus_tick` already advances it before every
+access. The old warning against adding blocking alone stands for the default engine and is now
+scoped to it.
+
+**Sharp edge: a read is blocked one dot before a write is.** `lcdon_timing-GS` and
+`lcdon_write_timing-GS` are the same nineteen offsets read and written, and their tables
+disagree at exactly the dots the bus changes hands — at dot 80 of a normal line a VRAM *read*
+returns `$FF` while a VRAM *write* still lands, and the same for OAM at dot 0 and dot 80. Only
+the acquiring edge is asymmetric; the release at the end of mode 3 is shared. Hence four
+predicates (`Gpu::cpu_can_read_vram` / `cpu_can_write_vram` / `cpu_can_read_oam` /
+`cpu_can_write_oam`) rather than two.
+
+**Gated on `bus_tick_enabled`**, the existing "a CPU instruction is running" test — `debug_peek`
+routes through `rb` with the tick suppressed, and an observer must see the real byte.
+
+### 2. The mode-3 → mode-0 transition was applied a dot early
+
+**Symptom.** `STAT` reports HBlank one M-cycle before hardware does, so a program that polls
+`STAT` for mode 0 to find the safe window starts writing VRAM one M-cycle too soon — and on
+hardware that write is dropped.
+
+**Caught by.** `lcdon_timing-GS`, which reads `STAT` at dot 252 of a line and requires mode
+**3**. Also visible as the whole of `intr_2_mode0_timing`'s disagreement with `intr_2_0_timing`.
+
+**Hardware behaviour.** Mode 3's 172 dots are 80..251 inclusive; the mode bits flip at the *top*
+of dot 252, the same edge convention `accurate_dot` already used for mode 2 → 3. Ours flipped at
+the bottom of dot 251 — an asymmetry, and since the caller folds `IF` and reads registers once
+per M-cycle, one dot is a whole M-cycle to the CPU.
+
+**And the mode-0 interrupt does *not* move with it.** Mooneye ships the same interval twice —
+`intr_2_0_timing` from the mode-2 interrupt to the mode-0 **interrupt** (where dispatch latency
+cancels), `intr_2_mode0_timing` to the first `STAT` read that **reports** mode 0 — and the two
+answers differ by one M-cycle. The interrupt path sees the fetcher finish; the register's mode
+field is one stage behind it. `Gpu::hblank_strobe` is that split, and it is the same shape
+SameBoy models with a `mode_for_interrupt` field distinct from the `STAT` mode bits
+(`Core/display.c`; SameBoy is Expat-licensed outside `iOS/` and `HexFiend/`).
+
+**Consequence for the unit tests:** `fifo::mode3_length` measures the *fetcher's* length, which
+is unchanged at 172, and now subtracts the extra observed dot explicitly rather than reporting
+the one-dot-wider window `STAT` shows.
+
+### 3. The LY==LYC comparator did not black out while `LY` changed
+
+**Symptom.** The coincidence flag is set for one M-cycle where hardware reads it clear, and an
+LYC STAT interrupt is delivered an M-cycle early — a raster split driven off `LYC` lands one
+scanline's worth of CPU time out.
+
+**Caught by.** `lcdon_timing-GS` with `LYC = 1`: bit 2 must be **clear** at dot 0 of line 1 and
+**set** at dot 4. It is a blackout and not a hold — at line 2 dot 0 the same test requires it
+clear again, so the comparator goes low with `LY` and comes back up a dot later.
+
+**Hardware behaviour.** mGBA records it from the other side, updating the LYC bit after the mode
+bits under the comment *"LYC stat is delayed 1 T-cycle"* (`_endMode0`, `src/gb/video.c`) with a
+`TODO` for the full M-cycle in `_endMode1`. SameBoy keeps a separate `ly_for_comparison` set to
+`-1` for the same window. `Gpu::lyc_signal` is our version.
+
+### New tests (all three teeth-proven by reverting the fix)
+
+`gpu::tests::the_hblank_interrupt_leads_the_mode_bits_by_one_dot`,
+`a_write_still_lands_on_the_dot_a_read_is_already_blocked`,
+`the_lyc_flag_blacks_out_while_ly_changes`, and
+`the_batched_renderer_keeps_the_plain_mode_rules` — which pins that none of it reaches the
+default engine. Conformance candidates: **an access on the dot a bus changes hands is not the
+same for a read and a write**, and **an interrupt source and the register that reports it are
+not obliged to be the same edge**.
+
+### The one conflict left, fully characterised and NOT resolved: `OAM_STROBE_LEAD`
+
+`Gpu::oam_strobe` raises the mode-2 strobe four dots (one M-cycle) before its scanline on lines
+1-143. That constant is now the **only** thing standing between us and Mooneye `acceptance`
+75/75, and it is a knob rather than a model. Measured on this branch, changing nothing else:
+
+| `OAM_STROBE_LEAD` | Mooneye `acceptance` | Mealybug pixel-exact rows |
+|---|---:|---:|
+| `4` (shipped) | 70 / 75 | **17** / 79 |
+| `0` | **75** / 75 | 6 / 79 |
+
+At `4`, five `acceptance/ppu/intr_2_*` tests each come out exactly one loop iteration long. At
+`0` all five pass, `lcdon_timing-GS` and `lcdon_write_timing-GS` pass with them, `intr_2_mode0_timing`
+comes back, and **Mooneye has no contradictions left in it at all** — but eleven Mealybug rows
+lose pixel-exactness against their hardware photographs, every one of them by a *uniform
+four-pixel horizontal shift* (measured: the two frames correlate at **99.9 %** under a `+4 px`
+offset), because every mid-scanline register write lands one M-cycle late.
+
+**So one 1-M-cycle error remains somewhere between the interrupt and the pixel, and the lead
+absorbs it.** Three things it is *not*, each measured rather than argued:
+
+- **not in the CPU.** Three Mooneye tests pin the mode-2 interrupt's position independently, and
+  `lcdon_timing-GS` pins the PPU's dot positions against the CPU without using an interrupt at
+  all. Lengthening the HALT wake by one M-cycle fixes all five `intr_2_*` at lead `4` and breaks
+  `di_timing-GS`, `halt_ime0_nointr_timing`, `halt_ime1_timing2-GS`, `intr_1_2_timing-GS` and
+  `hblank_ly_scx_timing-GS` — so the wake is right at zero.
+- **not in the write commit.** `ppu_write_commit` spans exactly one M-cycle and sits at
+  `early: 3`, so it has a single dot of slack, not four.
+- **not in the pixel phase.** Measured: the fetcher pushes pixel 0 on dot 92 and pixel 159 on
+  dot 251, so mode 3's 172 dots are full and there is nowhere for the pixel stream to move
+  without changing a length Mooneye pins. Sweeping the PPU's phase against the CPU's M-cycle
+  grid at LCD-on (0..7) moves Mooneye and leaves Mealybug untouched at every value.
+
+**And the lead is four times too big whatever else is true.** SameBoy's `Core/display.c` says
+*"The OAM STAT interrupt occurs 1 T-cycle before STAT actually changes, except on line 0. PPU
+glitch?"* — **one** T-cycle. Since this engine folds `IF` once per M-cycle, a one-dot lead is
+indistinguishable from none, which is exactly what Mooneye measures. The value `4` is kept only
+because it is the one that does not regress the picture a player sees; it is documented at the
+constant as contested, and whoever finds the missing M-cycle gets both suites at once.
+---
+
 ## 2026-08-15 — a Gen 1 ↔ Gen 2 trade between two hand-launched emulators, and the two-process path that had no coverage at all
 
 The captain started Pokémon Gold in one terminal window and Pokémon Blue in

@@ -383,18 +383,35 @@ fn artifact_dir() -> PathBuf {
 
 /// Stage a ROM into the artifact work dir (the MBC writes .gbsave next to the
 /// ROM path; never dirty the submodule checkout).
-fn staged_rom(spec: &AudioSpec) -> PathBuf {
+///
+/// **An absent Blargg ROM is a SKIP, not a failure.** `tests/` is the
+/// `retrio/gb-test-roms` submodule: those ROMs carry no explicit licence, are
+/// deliberately never vendored, and nothing fetches them for you — so a clean
+/// checkout that has not run `git submodule update --init` simply does not have
+/// them. Failing there reports an environment as an APU regression, which has
+/// cost real time misreading other people's work. The distinction is narrow on
+/// purpose: only [`ErrorKind::NotFound`] skips. A ROM that is present but
+/// unreadable (permissions, a truncated checkout) is a real fault and still
+/// fails, as does every check on a fixture that *did* load.
+fn staged_rom(spec: &AudioSpec) -> Result<PathBuf, String> {
     let dir = artifact_dir().join("work");
     std::fs::create_dir_all(&dir).unwrap();
     let dst = dir.join(spec.id.replace('/', "__")).with_extension("gb");
     let data = match spec.rom {
-        Some(p) => std::fs::read(p).unwrap_or_else(|e| {
-            panic!("cannot read ROM {p}: {e} (submodule initialised?)")
-        }),
+        Some(p) => match std::fs::read(p) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(format!(
+                    "{p} is absent — run `git submodule update --init tests` \
+                     to fetch the Blargg ROMs"
+                ));
+            }
+            Err(e) => panic!("cannot read ROM {p}: {e}"),
+        },
         None => build_tone_rom(),
     };
     std::fs::write(&dst, data).unwrap();
-    dst
+    Ok(dst)
 }
 
 fn main() {
@@ -428,6 +445,7 @@ fn main() {
     let update = std::env::var("UPDATE_AUDIO_BASELINE").is_ok();
     let baseline = load_baseline();
     let mut failures: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     let mut new_baseline = String::from(
         "# Audio-capture baseline: FNV-1a64 of the 16-bit interleaved PCM stream.\n\
          # A changed hash means the emulator now produces different samples for the\n\
@@ -451,7 +469,19 @@ fn main() {
     println!("{}", "-".repeat(110));
 
     for spec in SPECS {
-        let rom = staged_rom(spec);
+        let rom = match staged_rom(spec) {
+            Ok(p) => p,
+            Err(why) => {
+                // Carry the fixture's baseline line through untouched, so a
+                // re-bless on a machine without the submodule cannot silently
+                // delete rows another machine is gated on.
+                if let Some(prev) = baseline.get(spec.id) {
+                    new_baseline.push_str(&format!("{} = {}\n", spec.id, prev));
+                }
+                skipped.push(format!("{}: {why}", spec.id));
+                continue;
+            }
+        };
         let cap = run_capture(&rom, spec.frames);
 
         // --- Determinism: a second run must be byte-identical. ---
@@ -604,7 +634,23 @@ fn main() {
     if update {
         std::fs::write(baseline_path(), &new_baseline).unwrap();
         println!("\naudio baseline written to {}", baseline_path().display());
+        if !skipped.is_empty() {
+            println!(
+                "note: {} fixture(s) were skipped and kept their previous line",
+                skipped.len()
+            );
+        }
         return;
+    }
+
+    if !skipped.is_empty() {
+        println!(
+            "\n⚠ {} fixture(s) SKIPPED (ROM not fetched):",
+            skipped.len()
+        );
+        for s in &skipped {
+            println!("    {s}");
+        }
     }
 
     if !failures.is_empty() {
@@ -615,7 +661,13 @@ fn main() {
         std::process::exit(1);
     }
     println!(
-        "\nAll audio captures match the baseline. ✅ (WAVs in {})",
+        "\n{} audio capture(s) match the baseline{}. ✅ (WAVs in {})",
+        SPECS.len() - skipped.len(),
+        if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped", skipped.len())
+        },
         artifact_dir().display()
     );
 }

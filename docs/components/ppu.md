@@ -177,15 +177,17 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
   slightly stale mode/`LY`.
 - **The whole scanline is rendered in one shot** at the end of mode 3, so a mid-line write
   to `SCX`/palette during mode 3 is not reflected within that line (no per-pixel FIFO).
-- **VRAM/OAM read- and write-blocking during modes 2/3 is not enforced** (the CPU can read
-  and write VRAM any time) — see MMU. This is what costs us
-  `acceptance/ppu/lcdon_timing-GS` and `lcdon_write_timing-GS`: both sample OAM/VRAM
-  accessibility at **1 M-cycle** resolution across the first three scanlines after the LCD
-  is switched on, so they need blocking *and* a PPU stepped per bus access rather than once
-  per instruction. That is the cycle-stepped PPU restructure, not STAT work — see
-  [`docs/mealybug.md`](../mealybug.md). Enforcing blocking on top of the fixed-length
-  mode 3 above would be worse than not enforcing it: a write the game placed legally in
-  HBlank could land in our approximate mode 3 and be silently dropped.
+- **VRAM/OAM read- and write-blocking during modes 2/3 is not enforced on this engine** (the
+  CPU can read and write VRAM any time) — see MMU. That is deliberate and must stay:
+  enforcing blocking on top of the fixed-length mode 3 above would be *worse* than not
+  enforcing it, because a write the game placed legally in HBlank could land in our
+  approximate mode 3 and be silently dropped. **The `identical` engine does enforce it**,
+  because it has both halves the rule needs — a mode-3 length its fetcher produces, and a PPU
+  standing on the exact dot of the access — and with it
+  `acceptance/ppu/lcdon_timing-GS`, `lcdon_write_timing-GS` and `intr_2_oam_ok_timing` pass
+  there. Both sample OAM/VRAM accessibility at **1 M-cycle** resolution across the first
+  three scanlines after the LCD is switched on. See §4.0 and
+  [`docs/conformance-notes.md`](../conformance-notes.md) (2026-08-15).
 - The old `// Full line takes 114 ticks` comment (a stale M-cycle count that predated the
   456-dot loop) has been corrected in place to an accurate 456-dot note
   ([`mod.rs:259`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L259)), which links back to this page.
@@ -313,9 +315,13 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
     `gpu::tests::the_line_the_ppu_restarts_on_has_no_oam_scan`.
 17. **OAM/VRAM accessibility after the LCD is switched on.** Reads and writes to OAM and
     VRAM must be blocked or pass according to the mode the PPU is in, at 1 M-cycle
-    resolution, over the first three scanlines. **Expected to FAIL — no access blocking and
-    the PPU is stepped once per instruction, not per bus access.** *(Measured by Mooneye
-    `acceptance/ppu/lcdon_timing-GS` and `lcdon_write_timing-GS`, both red.)*
+    resolution, over the first three scanlines — and **a read is blocked one dot before a
+    write is**, at each dot the PPU takes a bus. **COVERED on the `identical` engine**
+    (`Gpu::cpu_can_read_vram` and its three siblings;
+    `gpu::tests::a_write_still_lands_on_the_dot_a_read_is_already_blocked`), and
+    deliberately **not** on the default one — a fixed-length mode 3 would drop writes a
+    game placed legally in HBlank. *(Mooneye `acceptance/ppu/lcdon_timing-GS`,
+    `lcdon_write_timing-GS` and `intr_2_oam_ok_timing`, all green on `identical`.)*
 15. **Mid-mode-3 register writes take effect part-way along the line.** Writing `BGP`,
     `LCDC`, `SCX`, `SCY` or `WX` during mode 3 must change only the pixels drawn after the
     write, at the fetcher's own granularity. **Expected to FAIL — whole-line rendering.**
@@ -328,7 +334,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
 |---|---|---|
 | **dmg-acid2** (Matt Currie) | A single-frame BG/window/sprite composition that draws a face; any PPU feature bug distorts it | The best cheap visual PPU regression check — see [testing](../testing.md). |
 | **cgb-acid2** | The CGB equivalent (colour palettes, attributes, priority) | CGB attribute/palette/priority bugs. |
-| **Mooneye `acceptance/ppu/`** (`intr_1_2_timing`, `intr_2_0_timing`, `lcdon_timing`, `stat_irq_blocking`, `vblank_stat_intr`, …) | Exact mode/STAT/LYC interrupt timing | Directly targets §4/§5 approximations. `intr_1_2_timing-GS`, `vblank_stat_intr-GS`, `stat_irq_blocking` and `stat_lyc_onoff` pass; the other 8 are mode-3 and LCD-on-phase reds. Run with `cargo run --release --example mooneye_scout -- <suite>/acceptance`. |
+| **Mooneye `acceptance/ppu/`** (`intr_1_2_timing`, `intr_2_0_timing`, `lcdon_timing`, `stat_irq_blocking`, `vblank_stat_intr`, …) | Exact mode/STAT/LYC interrupt timing | Directly targets §4/§5 approximations. **Quote these per engine**: on `identical` only the five `intr_2_*` rows are red, and all five are one M-cycle long because of `OAM_STROBE_LEAD` (see [`docs/conformance-notes.md`](../conformance-notes.md), 2026-08-15); on the default engine eight are red. Run with `GB_PPU=identical cargo run --release --example mooneye_scout -- <suite>/acceptance`. |
 | **Mealybug Tearoom** (Matt Currie) | PPU register writes *during* mode 3, against DMG / CPU CGB C / CPU CGB D reference screenshots | Directly targets the whole-line renderer. **1 of 31 ROMs pixel-exact**; run it with `cargo run --release --example mealybug -- --dir <checkout>`. Full accounting and the cost of the rest: [`docs/mealybug.md`](../mealybug.md). |
 | **Blargg `oam_bug`** | The OAM corruption bug (DMG) | **8/8 sub-tests pass on `@dmg`** — the bug is modelled in [`src/gpu/oambug.rs`](../../src/gpu/oambug.rs), driven by `Gpu::oam_scan_row_in`. A failure means the mode-2 dot window, the row the PPU is on, or a corruption pattern has moved. `@cgb` is expected to fail: CGB silicon has no such defect. See [MMU §5](mmu.md). |
 | **Blargg `cgb_sound`** shares no PPU code, but its screenshot is in the repo as "failing" | — | (APU, listed under [APU](apu.md).) |
