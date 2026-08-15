@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -204,8 +204,10 @@ Two hardware readings that measurement forced, both recorded in
 9. **Two masters shift in `$FF`; two slaves deadlock.** A cable must not invent a byte for
    either. *(Covered — `link::tests::two_masters_shift_in_an_idle_line`,
    `two_slaves_deadlock_quietly`.)*
-10. **A torn byte keeps its data.** *(Covered —
-    `link::tests::a_slave_that_disarms_mid_transfer_leaves_the_master_an_idle_line`.)*
+10. **A torn byte keeps its data.** The master keeps what it latched when the two were
+    paired; only a *later* transfer, with nobody listening any more, shifts in `$FF`.
+    *(Covered — `link::tests::a_slave_that_disarms_mid_transfer_keeps_the_byte_it_had_offered`,
+    which asserts both halves. See [`docs/measured/serial.md`](../measured/serial.md).)*
 
 ## 7. Test ROMs that exercise it
 

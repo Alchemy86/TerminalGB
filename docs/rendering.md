@@ -599,9 +599,16 @@ GNOME/Wayland box — the earlier attempt only tried the X root window, which is
 Wayland because Wayland clients do not draw there. Run the terminal on **XWayland** and
 capture its window by id:
 
+**Every path here must be absolute, and `--cwd` is not optional.** A spawned terminal starts in
+`$HOME`, not the repository, so a relative binary path fails with
+`Unable to spawn /home/<user>/./target/release/examples/terminal because it does not exist` —
+and a relative ROM path fails the same way, one step later and less obviously.
+
 ```bash
+REPO=$(git rev-parse --show-toplevel)
 env -u WAYLAND_DISPLAY DISPLAY=:0 wezterm-gui --config initial_cols=120 \
-    start --always-new-process --class gbshot -- ./target/release/examples/terminal ROM.gb &
+    start --always-new-process --class gbshot --cwd "$REPO" \
+    -- "$REPO/target/release/examples/terminal" "$REPO/target/repro/ROM.gb" &
 sleep 8
 WID=$(DISPLAY=:0 xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1)
 DISPLAY=:0 import -window "$WID" shot.png

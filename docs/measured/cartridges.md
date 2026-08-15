@@ -2,7 +2,8 @@
 
 ← [The measured Game Boy](README.md)
 
-Mooneye `emulator-only` is **28/28** (`mbc1` 13/13 · `mbc2` 7/7 · `mbc5` 8/8) and ax6's
+Mooneye `emulator-only` is **<!--score:mooneye_emulator_only-->28/28<!--/score-->**
+(`mbc1` 13/13 · `mbc2` 7/7 · `mbc5` 8/8) and ax6's
 `rtc3test` went **0/3 → 3/3**. But the most important material on this page is not a suite
 score at all: it is the set of defects that **destroy the player's save file**, which no public
 test ROM catches, because no test ROM tries to crash its host or looks at the filesystem.
@@ -17,7 +18,7 @@ Hardware reference, not restated here:
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Persistence: never in a `Drop` impl
 

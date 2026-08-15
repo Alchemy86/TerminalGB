@@ -14,7 +14,7 @@ produced, on a machine, with the command that reproduces it printed beside it.
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## What this section is *not*
 
@@ -82,6 +82,41 @@ Community: [Discord/IRC](https://gbdev.io/chat.html) ·
 
 ---
 
+## Reading other emulators: what the licences actually allow
+
+The other reference nobody publishes as a reference: **the emulators ahead of you are open
+source, and several of them answer a question the documentation does not.** Two of the fixes on
+the [PPU page](ppu.md) came from reading them rather than from first principles, and cost hours
+instead of weeks.
+
+The blocker is never technical, it is a licence question — so it is answered here once, with
+the file checked in each case rather than assumed. This is the same discipline
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md) applies to Scale2x and to FlashGBX, and it works in
+both directions: it tells you what you *may* do as well as what you may not.
+
+| Project | Licence, as checked | What that permits an MPL-2.0 repo |
+|---|---|---|
+| [mgba-emu/mGBA](https://github.com/mgba-emu/mgba) | **MPL-2.0** — root `LICENSE` is the Mozilla Public License Version 2.0 verbatim; the README states *"distributed under the Mozilla Public License version 2.0"*. Bundled third-party components are separately licensed and permissive (inih BSD-3, LZMA SDK / MurmurHash3 / getopt-for-MSVC / SQLite3 public domain) | **The same licence as this repository.** File-for-file compatible, so its code is not merely readable for behaviour but *reusable* with file-level attribution and the MPL notice retained. Still prefer reimplementing in this codebase's idiom, and cite repo + file + symbol for anything taken. |
+| [Docheinstein/docboy](https://github.com/Docheinstein/docboy) | MIT (`LICENSE`, "Copyright (c) 2025 Docheinstein") | Compatible. Read for behaviour; reimplement and cite. |
+| [LIJI32/SameBoy](https://github.com/LIJI32/SameBoy) | Expat — "all files and directories in this repository, **except for the iOS and HexFiend directories**" | Compatible, with that carve-out. Read for behaviour; reimplement and cite. |
+| [mattcurrie/mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests) | MIT (`LICENSE`, "Copyright (c) 2018 Matt Currie") | The `src/ppu/*.asm` sources say what each ROM measures — read them before grinding a row. |
+| [LIJI32/SameSuite](https://github.com/LIJI32/SameSuite) | see the repository | `apu/README.md` states which CGB revisions pass what, and names the two tests SameBoy fails. Read it first ([apu.md](apu.md)). |
+
+**Two rules that survive whatever the licence says.** Learn the *behaviour*, not the
+implementation, and reimplement it here — a borrowed structure that does not fit this
+codebase's shape produces the failure recorded on [ppu.md](ppu.md#the-dot-an-object-is-detected-is-still-a-fetcher-dot),
+where docboy's own model of the fetcher-during-an-object-hit is **worse in this engine** than a
+one-dot approximation of it, because our neighbouring code charges a formula where theirs counts
+real time. And **cite by repo, file and symbol**, so a reviewer can check the claim: every
+hardware statement taken from one of these is quoted with the function it came from.
+
+> **Check the `LICENSE` yourself and write down what it said.** These entries were verified
+> rather than recalled — the same reason [this page corrects the Pan Docs licence](#a-correction-worth-recording-pan-docs-is-cc0-not-cc-by-sa)
+> a paragraph above. A wrong belief in either direction costs something: refusing what is
+> permitted, or taking what is not.
+
+---
+
 ## The pages
 
 Each one follows the same shape: **what the reference says** (cited, linked, not restated) →
@@ -89,12 +124,15 @@ Each one follows the same shape: **what the reference says** (cited, linked, not
 
 | Page | What it answers |
 |---|---|
-| **[Scoreboard](scoreboard.md)** | Every suite, scored today, group by group — and a named, evidenced reason for **every** row still red. |
+| **[Scoreboard](scoreboard.md)** | Every suite, scored today, group by group — and a named, evidenced reason for **every** row still red. Says which of its own numbers are gated and which are not. |
 | **[Timing](timing.md)** | Timer, `DIV`, interrupt dispatch, OAM DMA. The four defects that cost 37 Mooneye rows, and the one glitch a single test can see. |
-| **[The PPU](ppu.md)** | Two engines and the measured trade between them; the OBJ penalty calibrated against Mooneye's own table; why a pixel count is not a percentage. |
+| **[The PPU](ppu.md)** | Two engines and the measured trade between them; the OBJ penalty calibrated against Mooneye's own table; the Color console's PPU steppings; why a pixel count is not a percentage. |
 | **[The APU](apu.md)** | Nine calibrated constants, each with the ROM that pins it and the measured cost of moving it one tick. |
 | **[Boot state](boot.md)** | Nine consoles, not four. Every byte a boot ROM leaves behind, and where the numbers came from. |
 | **[Cartridges](cartridges.md)** | MBC wiring, the real-time clock, save-file formats — and the class of bug that destroys a player's save. |
+| **[The link port](serial.md)** | The half of the Game Boy no ROM-driven suite can reach, measured two cores at a time — and what a torn byte carries. |
+| **[The Super Game Boy](sgb.md)** | Scope as the interesting question: only the ICD2 command channel is observable, and `MLT_REQ 2` is three players. |
+| **[The host boundary](host.md)** | Defects that leave the framebuffer perfect: the clock, the build, the audio device, the terminal. |
 | **[Symptoms](symptoms.md)** | Reverse index: *"my emulator does X"* → the cause, the test that catches it, the citation. Plus what **no** suite catches. |
 
 ### Where the rest of it lives

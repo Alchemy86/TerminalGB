@@ -37,6 +37,32 @@ a whole class of defect that a ROM-driven runner is structurally unable to see.
 | A game's music tempo drifts, or a timer glitch fires one iteration late | the timer built as "a divider and a counter" rather than one tapped 16-bit counter ([timing.md](timing.md#the-timer-is-the-circuit-not-a-divider-and-a-counter)) | `acceptance/timer/*`; the one-iteration case is `rapid_toggle` **alone** |
 | A game that starts an internally clocked serial transfer and counts cycles measures zero — or the transfer never completes with nothing plugged in | an untimed serial port. The console drives the clock, so the transfer runs regardless and the byte is `$FF` | `acceptance/serial/boot_sclk_align-dmgABCmgb` |
 
+## The link port
+
+Full page: [serial.md](serial.md). Every row's answer to "caught by" is *nothing in any public
+suite*, and the reason is structural — a link partner is a second machine, and every ROM-driven
+suite runs one.
+
+| Symptom | Cause |
+|---|---|
+| Every two-player feature hangs at the game's link menu, while one console alone is flawless | `SC = $80` unimplemented. **Correct for one console**, which is exactly why nothing catches it |
+| Two consoles connect, exchange a few bytes and never agree who drives the clock | a **torn** byte voided instead of kept. Gen 1's handshake offers `SB = $02` behind `SC = $80` for ~100 T-cycles and replaces it; reading that byte out of that window is the *only* way the roles get assigned |
+| Two emulator instances never connect however long they are left | two deterministic cores started in phase. Measured: skew 0 never connects, every skew from 1 to 34 frames connects within ~700 |
+| A link works against a second copy of the same emulator and nothing else | a transport answering a master transfer synchronously, inside a window a socket cannot meet |
+| A link works at 1× and tears every byte under fast-forward | a deadline for another *process* measured in emulated cycles — 1,048,576 T is ~5 ms of wall clock on an unpaced core |
+| A player finishes a trade, the partner quits, and the first player's save stops being written | a clean disconnect reported as a broken link. The two have opposite consequences for a save file |
+
+## The Super Game Boy
+
+Full page: [sgb.md](sgb.md).
+
+| Symptom | Cause | Caught by |
+|---|---|---|
+| A two-player SGB game reads player 1's buttons for both | `MLT_REQ` not implemented — the joypad index never advances | SameSuite `sgb/command_mlt_req`, `cpp/sgb-ext-test` |
+| Every bit of every SGB command arrives inverted | latching the bit on the first falling edge instead of on **the last line held low** | `sgb-ext-test` sends both sequences for the same bit position |
+| `MLT_REQ 2` cycles four players instead of alternating 1 and 3 | normalising an illegal parameter. **This is the row SameBoy fails**, and the whole difference is one `if (player_count == 3) player_count++;` | `sgb/command_mlt_req` — 16 of its 24 samples |
+| Pokémon Red/Blue's boot registers are wrong on an emulator nobody asked for an SGB | `Model::Auto` inferring the peripheral from the cartridge's SGB flag. The flag says the game *offers* a border, not that the player owns one | `boot_regs-sgb` / `-sgb2` — but only if the runner reads the machine off the ROM's name |
+
 ## Boot and machine identity
 
 | Symptom | Cause | Caught by |
@@ -128,10 +154,16 @@ to it.
 |---|---|
 | **Persistence** | every save-file defect above. Suites run in one process and never touch the filesystem |
 | **Host survival** | four abort-on-guest-input defects. No ROM tries to crash its host |
-| **Presentation cost** | the terminal transport sized by the window: the framebuffer is perfect and the player sees ~18 fps. Bytes on the wire fell ~1,000× when it was capped |
+| **Presentation cost** | the terminal transport sized by the window: the framebuffer is perfect and the player sees ~18 fps. Bytes on the wire fell ~1,000× when it was capped ([host.md](host.md#presentation-cost-is-not-a-function-of-output-size)) |
 | **Startup and capability negotiation** | the frontend refusing to run in a terminal without an optional keyboard extension. Every ROM harness constructs a `Gameboy` directly and never enters the frontend at all |
 | **Sub-sample APU timing** | the square frequency-reload latch. `dmg_sound` stays 12/12 with **every captured audio hash unmoved** on both sides |
 | **Consumers of correct state** | the blacked-out sentinel above. The cartridge was entirely correct; the defect was in something reading it |
+| **The second console** | the whole slave half of the link port. A suite that runs one cartridge on one machine cannot exercise a state whose definition is *"waiting for the other console"* ([serial.md](serial.md)) |
+| **Which build you are running** | the `wasm32` target had **no APU at all** — `NR52` never powered on, so a sound driver's init loop spun for ever and the game looked hung. Every harness and all 646 unit tests run on the host target, and a type-check cannot see a missing peripheral ([host.md](host.md#a-build-configuration-is-part-of-the-machine)) |
+| **What paces the machine** | emulation stepped by `requestAnimationFrame`: **200 % speed on a 120 Hz display**, with a byte-identical framebuffer at any rate |
+| **A spurious interrupt consumed by its own dispatch** | the mode-2 STAT strobe raising **two** edges per scanline. The second lands inside the first one's dispatch, which clears the flag after it, so a verdict-based test can never see it. **Count edges, not flags** ([ppu.md](ppu.md#the-strobe-must-ask-ly-not-mode--and-the-bug-it-hid-was-two-interrupts-a-line)) |
+| **A fetcher moved by one dot** | invisible to any test that does not write a fetcher-read register *inside* mode 3 — so a whole-frame comparison and a mode-3-length measurement both pass ([ppu.md](ppu.md#the-dot-an-object-is-detected-is-still-a-fetcher-dot)) |
+| **Which machine the runner booted** | Mealybug ships three reference sets and SameSuite's `-cgb0`/`-cgbB` contradict each other. Scoring several references against one machine is a **runner** bug that no emulator can pass |
 
 This is the argument for a machine-readable telemetry stream being the reference adapter for a
 standalone conformance tool: `speed_pct`, `fps`, `tx_bytes` and `frames_dropped` expose the

@@ -1727,11 +1727,37 @@ capability must cost only that capability** — the same principle as the adapte
 - **The reason we still do not reproduce Pan Docs is editorial, not legal** — a second copy of
   a maintained reference goes stale and becomes a liability. Cite and link generously; do not
   fork it. That distinction is stated on the section's entry page so it cannot drift back.
-- **[`docs/measured/`](docs/measured/README.md) is "the measured Game Boy"** — eight pages
-  (`README`, `scoreboard`, `timing`, `ppu`, `apu`, `boot`, `cartridges`, `symptoms`) built on
-  the one thing gbdev does not have: *our measurements*. Shape of every page: **what the
-  reference says (cited, linked, never restated) → what we measured → the test that pins it →
-  what a wrong emulator does.**
+- **[`docs/measured/`](docs/measured/README.md) is "the measured Game Boy"** — eleven pages
+  (`README`, `scoreboard`, `timing`, `ppu`, `apu`, `boot`, `cartridges`, `serial`, `sgb`,
+  `host`, `symptoms`) built on the one thing gbdev does not have: *our measurements*. Shape of
+  every page: **what the reference says (cited, linked, never restated) → what we measured →
+  the test that pins it → what a wrong emulator does.** The three newest cover the subjects
+  whose corpus entries had no home: **`serial.md`** (the link port — the half no ROM-driven
+  suite can reach), **`sgb.md`** (the ICD2 command channel, and scope as the interesting
+  question), **`host.md`** (defects that leave the framebuffer perfect — the pacing clock, the
+  build configuration, the audio device, the terminal).
+- **A SCORE WRITTEN INTO A SENTENCE IS GATED NOW — wrap it, or it will go stale and CI will not
+  notice.** `docs/tools/status_numbers.py` used to verify only the *generated* table on
+  `docs/status.md`, so hand-written prose was invisible to it; `docs/measured/scoreboard.md`
+  carried "Mealybug 3 vs **12**/79" for as long as it took a human to spot, five rows after
+  `identical` reached 17. Every current suite score in `docs/measured/` is now wrapped
+  `<!--score:mealybug_accurate-->17/79<!--/score-->`, rewritten by `make status` and verified
+  by `make docs-check` (59 of them today). Suffixes: `:pass`, `:total`, `:px`, or the default
+  `pass / total`. Only the *digit runs* inside the marker are substituted, so emphasis and
+  spacing survive a re-bless. Add a new page to `INLINE_PAGES` to opt it in.
+  - **A regex hunting prose for `\d+/\d+` was tried and rejected** — `docs/measured` is full of
+    legitimate non-score fractions (a constant sweep printing `84/77/47/12/53`, "3 of 8
+    sub-tests", "`oam_bug` 4/5/6/8"), so it cried wolf. Naming the suite cannot be wrong.
+  - **NEVER put a marker inside a heading** — a heading is a link target, and burying an HTML
+    comment in one produces an anchor nobody can guess. Two links broke exactly that way;
+    `headings_with_scores` now fails the build instead. Put the score on the line below.
+  - **Deliberately ungated, and the page says so at the top:** the Shootout figure (not
+    baseline-derivable), other emulators' published scores, historical attribution figures
+    (`13/66 → 52/66`) and measured counterfactuals ("moving that constant costs 56/76"). Those
+    must *not* track the baselines.
+- **`make docs-check` still does not verify in-page anchors, so check them by hand after
+  editing headings** — the ~20-line slug checker used for this work is in the commit that added
+  these pages; the rule is below.
 - **Which file gets a new entry: `docs/conformance-notes.md`, always.** That is the raw
   corpus, chronological, written at the moment of the fix. `docs/measured/` is the same
   material organised **by subject for a stranger**; distil into it when a subject accumulates
@@ -1746,6 +1772,21 @@ capability must cost only that capability** — the same principle as the adapte
 - **`codemap_links.py --check` rejects any `github.com/<owner>/<repo>/blob/…` link that is not
   ours**, so you cannot cite a file in someone else's repo that way. Link the repo and name
   the file, or use a non-`blob` URL form.
+- **WHICH OTHER EMULATORS MAY BE READ, AND WHAT MAY BE DONE WITH WHAT YOU FIND — verified, not
+  recalled, and tabulated on `docs/measured/README.md`.** **mGBA is MPL-2.0 — the *same*
+  licence as this repository** (checked against `mgba-emu/mgba`'s root `LICENSE`, which is the
+  Mozilla Public License 2.0 verbatim, and its README: *"distributed under the Mozilla Public
+  License version 2.0"*; its bundled third-party components — inih BSD-3, LZMA SDK /
+  MurmurHash3 / getopt-for-MSVC / SQLite3 public domain — are separately licensed). That is
+  **materially stronger than docboy (MIT) and SameBoy (Expat, except `iOS/` and `HexFiend/`)**:
+  MPL-2.0 → MPL-2.0 means its code is *reusable* with file-level attribution and the notice
+  retained, not merely readable for behaviour. Even so, **prefer reimplementing in this
+  codebase's idiom per `CONTRIBUTING.md`, and cite repo + file + symbol for anything taken.**
+  - **A borrowed structure that does not fit this codebase's shape can be worse than an
+    approximation of it** — docboy's own fetcher-during-an-object-hit model costs 64,784 extra
+    Mealybug pixels here against a one-dot approximation's 151, because our neighbouring code
+    charges Pan Docs' *formula* where theirs counts real time. Read the behaviour; measure the
+    port.
 - **`src/sound.rs` is in `SRC_EXCLUDE`, so its references stay file-level.** Do not write
   `src/sound.rs:1243` in link text there — the tool will not anchor it and the tool's own
   comment calls the leftover `:line` a *stale hint*. Name the symbol instead.
@@ -3139,8 +3180,10 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   `--state <path>` writes a save state at the console the instant before the trade, which is how
   the frontend screenshots are reproducible: drop it in save slot 1, press F8, press A.
 - **Driving the real TUI for screenshots is possible and worth it** (this is how the two status
-  bugs below were found). `wezterm-gui --config enable_wayland=false start -- <cmd>` on
-  XWayland, then `wezterm cli send-text --no-paste --pane-id 0` against **that instance's**
+  bugs below were found). `wezterm-gui --config enable_wayland=false start --cwd <abs repo>
+  -- <abs cmd>` on XWayland (**absolute paths only** — a spawned terminal starts in `$HOME`;
+  see the screenshot recipe near the end of this file), then
+  `wezterm cli send-text --no-paste --pane-id 0` against **that instance's**
   socket (`WEZTERM_UNIX_SOCKET=/run/user/1000/wezterm/gui-sock-<gui-pid>` — the default socket
   belongs to the captain's session), and capture with
   `import -window $(xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1)`.
@@ -3739,6 +3782,17 @@ third-party dependency.
   replaces it with `SB = $01` / `SC = $81` about **100 T-cycles** later, every frame. Reading
   `$02` out of that window is the only way two consoles agree who drives the clock, so voiding
   a torn byte means never connecting two Game Boys at all.
+  - **Now measured rather than asserted, because the source had drifted against itself.** With
+    a slave offering `$22` and disarming mid-transfer, the torn transfer lands **`SB = $22`**;
+    only the *next* transfer, with nobody listening any more, shifts in the idle-high `$FF`.
+    `src/link.rs`'s module docs had grown a sentence claiming a torn byte gives the master
+    `$FF`, and the test was **named** after that (`…_leaves_the_master_an_idle_line`) while
+    asserting `$C000` after the ROM's loop had already run a *later*, unanswered transfer — so
+    the name and the prose agreed with each other and disagreed with the code and with
+    `docs/components/serial.md` item 10. Renamed to
+    `a_slave_that_disarms_mid_transfer_keeps_the_byte_it_had_offered`, and it asserts both
+    halves now. **A test that asserts the right value for the wrong reason is a stale note with
+    a green tick on it.**
 - **The fail-safe is fault propagation, not byte accounting.** One console faulting faults the
   other (`Gameboy::report_fault`, so both batteries are poisoned): half a trade leaves the
   *survivor* holding the dangerous save. Byte-level desync is the games' job and Gen 1 is good
@@ -4732,13 +4786,25 @@ public, MPL-2.0, and has a standing requirement to be freely distributable.
 - **The recipe that produced them** (the screenshot mechanics in the frame-transport section
   above are the same, this is the README-specific application):
   ```bash
+  REPO=$(git rev-parse --show-toplevel)          # absolute paths only — see below
   env -u WAYLAND_DISPLAY DISPLAY=:0 wezterm-gui --config enable_wayland=false \
       --config initial_cols=150 --config initial_rows=45 --config font_size=13 \
-      --config enable_kitty_keyboard=true start -- ./target/release/examples/terminal <rom>
+      --config enable_kitty_keyboard=true start --cwd "$REPO" \
+      -- "$REPO/target/release/examples/terminal" "$REPO/target/repro/<rom>"
   WID=$(DISPLAY=:0 xprop -root _NET_CLIENT_LIST | grep -o '0x[0-9a-f]*' | tail -1)
   DISPLAY=:0 import -window $WID shot.png
   magick shot.png -resize 1600x -strip -colors 128 PNG8:docs/shots/<name>.png
   ```
+- **A SPAWNED TERMINAL STARTS IN `$HOME`, NOT THE REPO — EVERY PATH ON A `wezterm-gui …
+  start --` LINE MUST BE ABSOLUTE, AND `--cwd <absolute repo path>` IS NOT OPTIONAL.** A
+  relative binary path fails with `Unable to spawn /home/<user>/./target/release/examples/
+  terminal because it does not exist`; a relative ROM or save argument fails one step later
+  and much less obviously, because the window opens and the emulator reports the missing
+  file inside it. This is a **repo-wide trap that has caught several people**, which is why
+  both screenshot recipes in this file and in `docs/rendering.md` now derive `$REPO` from
+  `git rev-parse --show-toplevel` rather than writing `./target/…`. Same rule for the ROM:
+  stage it into `target/` first (the MBC writes a `.sav` beside it) and pass the absolute
+  staged path.
   Drive keys with `wezterm cli send-text --no-paste --pane-id 0` against **that instance's**
   socket (`WEZTERM_UNIX_SOCKET=/run/user/1000/wezterm/gui-sock-<gui-pid>`). Point
   `XDG_CONFIG_HOME`/`XDG_STATE_HOME`/`XDG_PICTURES_DIR` at a scratch dir so a capture run

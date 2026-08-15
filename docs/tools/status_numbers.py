@@ -18,6 +18,35 @@ their manifest and screenshot comparison — see docs/shootout.md) and the other
 emulators' Mealybug scores (published board figures). Both are labelled with
 where they come from on the page itself.
 
+INLINE SCORES IN PROSE
+----------------------
+The generated table above was always safe. A score written into a *sentence* was
+not, and that is how docs/measured/scoreboard.md came to claim "Mealybug 3 vs 12
+/79" for a week after the real figure became 17 — `make docs-check` passed the
+whole time, because it only ever looked at the generated block.
+
+So a score may also be written inline, wrapped in a marker that names the suite:
+
+    <!--score:mealybug_accurate-->17 / 79<!--/score-->
+
+The markers are HTML comments, so they are invisible wherever Markdown is
+rendered; `--check` verifies the text between them and `make status` rewrites
+it. Suffixes pick the shape: `:pass` (just the numerator), `:total`, `:px` (the
+Mealybug shade-rank distance, comma-grouped) and the default `pass / total`.
+A `~` prefix on the value keeps whatever spacing and emphasis the author wrote
+around the digits — see `render_score`.
+
+A regex that merely hunted prose for `\\d+/\\d+` was tried first and rejected:
+docs/measured is full of legitimate fractions that are not suite scores (a
+constant sweep printing `84/77/47/12/53`, "3 of 8 sub-tests", "oam_bug 4/5/6/8"),
+so it produced false positives, and a checker that cries wolf is worse than none.
+Naming the suite explicitly costs one comment and cannot be wrong.
+
+Not everything is wrapped, deliberately: historical attribution figures
+("13/66 → 52/66") and measured counterfactuals ("moving that constant costs
+56/76") are NOT current scores and must not track the baselines. The head of
+docs/measured/scoreboard.md says which numbers are gated and which are not.
+
 Usage:
     status_numbers.py            # rewrite docs/status.md + docs/status/index.html
     status_numbers.py --check    # verify only; exit 1 on any drift
@@ -213,6 +242,157 @@ def modes_block(n: dict[str, tuple[int, int]]) -> str:
     ])
 
 
+# ---------------------------------------------------------------------------
+# Inline scores in prose (see the module docstring)
+# ---------------------------------------------------------------------------
+
+# Every page that may carry an inline score. Anything not listed is never
+# scanned, so adding a page here is what opts it in.
+INLINE_PAGES = [
+    os.path.join("docs", "status.md"),
+    *[os.path.join("docs", "measured", f)
+      for f in ("README.md", "scoreboard.md", "ppu.md", "apu.md", "timing.md",
+                "boot.md", "cartridges.md", "symptoms.md", "serial.md", "sgb.md",
+                "host.md")],
+]
+
+# Suite key -> (baseline file, group or None). Group totals are included
+# because prose quotes them ("SameSuite's `apu` group is 65/69").
+INLINE_SUITES = {
+    "harness": ("baseline.txt", None),
+    "mooneye_acceptance": ("mooneye_baseline.txt", "acceptance"),
+    "mooneye_emulator_only": ("mooneye_baseline.txt", "emulator-only"),
+    "mooneye_acceptance_accurate": ("mooneye_accurate_baseline.txt", "acceptance"),
+    "mooneye_emulator_only_accurate": ("mooneye_accurate_baseline.txt", "emulator-only"),
+    "mooneye_cgb": ("mooneye_cgb_baseline.txt", None),
+    "samesuite": ("samesuite_baseline.txt", None),
+    "samesuite_apu": ("samesuite_baseline.txt", "apu"),
+    "samesuite_dma": ("samesuite_baseline.txt", "dma"),
+    "samesuite_ppu": ("samesuite_baseline.txt", "ppu"),
+    "samesuite_sgb": ("samesuite_baseline.txt", "sgb"),
+    "cpp": ("cpp_baseline.txt", None),
+    "mealybug": ("mealybug_baseline.txt", None),
+    "mealybug_accurate": ("mealybug_accurate_baseline.txt", None),
+}
+
+# Suites whose Mealybug-style pixel distance may also be quoted.
+INLINE_PIXELS = {
+    "mealybug": "mealybug_baseline.txt",
+    "mealybug_accurate": "mealybug_accurate_baseline.txt",
+}
+
+INLINE_RE = re.compile(
+    r"<!--score:(?P<key>[a-z0-9_]+)(?::(?P<kind>pass|total|px))?-->"
+    r"(?P<body>.*?)"
+    r"<!--/score-->",
+    re.S,
+)
+
+# The digits inside a wrapped score, so surrounding emphasis/spacing survives a
+# rewrite: `**17** / 79` stays bold, `17/79` stays tight.
+DIGITS_RE = re.compile(r"\d[\d,]*")
+
+
+def score_values(key: str, kind: str | None) -> list[int]:
+    """The number(s) a wrapped score must contain, in order."""
+    if kind == "px":
+        if key not in INLINE_PIXELS:
+            raise KeyError(f"no pixel distance for suite {key!r}")
+        return [pixels(INLINE_PIXELS[key])]
+    if key not in INLINE_SUITES:
+        raise KeyError(f"unknown suite {key!r}")
+    path, group = INLINE_SUITES[key]
+    p, t = count(path, group)
+    if kind == "pass":
+        return [p]
+    if kind == "total":
+        return [t]
+    return [p, t]
+
+
+def render_score(body: str, values: list[int]) -> str:
+    """Replace the digits in `body` with `values`, keeping everything else.
+
+    Authors write the shape they want — `**17** / 79`, `17/79`, `630,266` — and
+    only the digit runs are substituted, so re-blessing a baseline never
+    reformats a sentence.
+    """
+    found = DIGITS_RE.findall(body)
+    if len(found) != len(values):
+        # The body's shape does not match the suffix; fall back to a plain form
+        # rather than guessing which run is which.
+        return " / ".join(f"{v:,}" for v in values) if len(values) > 1 else f"{values[0]:,}"
+    it = iter(values)
+    return DIGITS_RE.sub(lambda _m: f"{next(it):,}" if _m.group(0).count(",") else str(next(it)),
+                         body)
+
+
+def rewrite_inline(text: str, problems: list[str], rel: str) -> str:
+    def sub(m: re.Match) -> str:
+        key, kind = m.group("key"), m.group("kind")
+        try:
+            values = score_values(key, kind)
+        except KeyError as e:
+            problems.append(f"{rel}: {e}")
+            return m.group(0)
+        body = render_score(m.group("body"), values)
+        head = m.group(0)[: m.group(0).index("-->") + 3]
+        return f"{head}{body}<!--/score-->"
+
+    return INLINE_RE.sub(sub, text)
+
+
+def headings_with_scores(text: str) -> list[str]:
+    """Headings containing a score marker — always a mistake.
+
+    A heading is a link target. GitHub builds the anchor slug from the heading's
+    text, so burying a marker in one produces an anchor nobody can guess and
+    silently breaks every existing link to that section the moment it is added
+    (`make docs-check` does NOT verify in-page anchors). Two links broke exactly
+    this way before the guard existed. Put the score in the line beneath.
+    """
+    return [ln.strip() for ln in text.split("\n")
+            if re.match(r"#{1,6}\s", ln) and "<!--score:" in ln]
+
+
+def check_inline(problems: list[str]) -> int:
+    """Verify every wrapped score; return how many were checked."""
+    checked = 0
+    for rel in INLINE_PAGES:
+        path = os.path.join(ROOT, rel)
+        if not os.path.isfile(path):
+            problems.append(f"{rel}: listed in INLINE_PAGES but missing")
+            continue
+        text = open(path, encoding="utf-8").read()
+        checked += len(INLINE_RE.findall(text))
+        for h in headings_with_scores(text):
+            problems.append(
+                f"{rel}: a score marker inside a heading breaks its anchor — "
+                f"move it to the line below: {h}"
+            )
+        new = rewrite_inline(text, problems, rel)
+        if new != text:
+            problems.append(
+                f"{rel}: an inline score disagrees with the baselines — run `make status`"
+            )
+    return checked
+
+
+def write_inline(problems: list[str]) -> list[str]:
+    changed = []
+    for rel in INLINE_PAGES:
+        path = os.path.join(ROOT, rel)
+        if not os.path.isfile(path):
+            problems.append(f"{rel}: listed in INLINE_PAGES but missing")
+            continue
+        text = open(path, encoding="utf-8").read()
+        new = rewrite_inline(text, problems, rel)
+        if new != text:
+            open(path, "w", encoding="utf-8").write(new)
+            changed.append(rel)
+    return changed
+
+
 def replace_between(text: str, begin: str, end: str, block: str) -> str:
     start = text.index(begin)
     stop = text.index(end) + len(end)
@@ -256,13 +436,15 @@ def main() -> int:
             problems.append("docs/status.md suite table disagrees with the baselines — run `make status`")
         if new_html != html_text:
             problems.append("docs/status/index.html scores disagree with the baselines — run `make status`")
+        inline = check_inline(problems)
         if problems:
             print("FAIL:")
             for p in problems:
                 print("  -", p)
             return 1
         scores = ", ".join(f"{k} {p}/{t}" for k, (p, t) in n.items())
-        print(f"OK — status page matches the baselines ({scores}).")
+        print(f"OK — status page matches the baselines ({scores}); "
+              f"{inline} inline score(s) in prose verified.")
         return 0
 
     changed = []
@@ -272,6 +454,7 @@ def main() -> int:
     if new_html != html_text:
         open(HTML, "w", encoding="utf-8").write(new_html)
         changed.append("docs/status/index.html")
+    changed += write_inline(problems)
     for p in problems:
         print("Warning:", p)
     print(f"Updated: {', '.join(changed) if changed else 'nothing (already current)'}")

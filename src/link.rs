@@ -95,8 +95,12 @@
 //! (`engine/link/cable_club_npc.asm`) arms `SC = $80` and overwrites it with
 //! `SC = $81` six instructions later, **every frame**, for as long as it takes
 //! to find a partner: tearing a byte is how that handshake *works*. So a torn
-//! byte gives the master `$FF` — a data line nobody is driving — and is
-//! counted, not punished. The games' own protocols are the byte-level
+//! byte is counted, not punished — and the master keeps what it had already
+//! latched, which is measured rather than asserted: with a slave offering
+//! `$22`, the torn transfer lands `SB = $22`, and only the *next* transfer —
+//! started with nobody listening any more — shifts in the idle-high `$FF`.
+//! (`a_slave_that_disarms_mid_transfer_keeps_the_byte_it_had_offered`.) The
+//! games' own protocols are the byte-level
 //! desync detectors, and Gen 1's is a good one (`Serial_ExchangeBytes` re-sends
 //! its first byte until it sees the `$FD` preamble come back).
 
@@ -542,10 +546,12 @@ mod tests {
     }
 
     /// A slave that disarms mid-transfer is **not** corruption — it is what
-    /// Gen 1's own handshake does every frame. The master must be handed the
-    /// idle line hardware would give it, and nothing may be faulted.
+    /// Gen 1's own handshake does every frame. The master keeps the byte it had
+    /// already latched (that hundred-cycle window is the whole of how two
+    /// consoles agree who drives the clock), nothing is faulted, and only a
+    /// *subsequent* transfer with nobody listening shifts in the idle line.
     #[test]
-    fn a_slave_that_disarms_mid_transfer_leaves_the_master_an_idle_line() {
+    fn a_slave_that_disarms_mid_transfer_keeps_the_byte_it_had_offered() {
         let mut a = boot(master_rom(0x11));
         let mut b = boot(slave_rom(0x22));
         let mut cable = LinkCable::new();
@@ -565,6 +571,24 @@ mod tests {
             "the two should have paired"
         );
         b.debug_write(0xFF02, 0x00);
+
+        // Stop the moment the torn transfer itself has run out its eight edges,
+        // so what is read back is that transfer's byte and not a later one's.
+        let mut torn_sb = None;
+        for _ in 0..4000 {
+            a.step_instruction();
+            cable.service(&mut a, &mut b);
+            if cable.in_flight.is_none() {
+                torn_sb = Some(a.peek(0xFF01));
+                break;
+            }
+        }
+        assert_eq!(
+            torn_sb,
+            Some(0x22),
+            "the master keeps the byte the slave was offering when they paired"
+        );
+
         for _ in 0..4000 {
             a.step_instruction();
             cable.service(&mut a, &mut b);
@@ -575,7 +599,7 @@ mod tests {
         assert_eq!(
             a.peek(0xC000),
             0xFF,
-            "the master shifts in an idle line, not the byte it had been promised"
+            "and a later transfer, with nobody listening, shifts in the idle line"
         );
         assert!(!cable.desynced(), "a torn byte is normal, not a desync");
         assert!(a.fault().is_none());

@@ -5,9 +5,26 @@
 What this emulator scores, group by group, **and why each remaining failure is still there**.
 A total on its own is not evidence; a named reason per red row is.
 
-> Measured on `main` at [`4807f86`](https://github.com/Alchemy86/TerminalGB/tree/4807f86), on the
-> ROM versions pinned in [`tools/fetch-test-suites.sh`](../../tools/fetch-test-suites.sh),
-> with the **default (`fast`) PPU engine** unless a row says otherwise.
+> On the ROM versions pinned in
+> [`tools/fetch-test-suites.sh`](../../tools/fetch-test-suites.sh), with the **default
+> (`standard`) picture mode** unless a row says otherwise.
+
+### Which numbers on this page are gated, and which are not
+
+Read this before quoting anything here, because the answer is not uniform — and a silent stale
+score is worse than an admitted one.
+
+| | |
+|---|---|
+| **Gated** — re-derived from `testharness/*_baseline.txt` by [`docs/tools/status_numbers.py`](../tools/status_numbers.py), rewritten by `make status`, and **CI red whenever the page and the baselines disagree** | every current suite score on this page, in the tables **and in the prose**, each wrapped in a `<!--score:…-->` marker naming its suite |
+| **Not gated, and cannot be** | the [Shootout](#the-shootout-is-a-different-population-again) figure (measured through their manifest and screenshot comparison, not derivable from any baseline) and other emulators' scores (published board figures) |
+| **Deliberately not gated** | historical attribution figures (`13/66 → 52/66`) and measured counterfactuals ("moving that constant costs 56/76"). Those are *not* current scores and must not track the baselines |
+
+That split exists because this file drifted exactly once and nothing caught it: the generated
+table was verified on every CI run while a **sentence** two sections down carried a Mealybug
+figure five rows out of date. `make docs-check` passed the whole time, because it only ever
+looked at the generated block. **A score written into a sentence is gated now too** — the
+tool's docstring records why a regex hunting prose for `N/M` was tried and rejected.
 
 ---
 
@@ -15,14 +32,14 @@ A total on its own is not evidence; a named reason per red row is.
 
 | Suite | Rows | Pass | Judged by |
 |---|---:|---:|---|
-| In-repo harness (Blargg + dmg-acid2) | 47 | **46** | the ROM's own printed verdict / the author's reference image |
-| Mooneye GB `acceptance` | 75 | **67** | the ROM's own `LD B,B` + Fibonacci register check |
-| Mooneye GB `emulator-only` | 28 | **28** | as above |
-| Mooneye GB `misc` (CGB) | 8 | **8** | as above |
-| SameSuite | 76 | **72** | the ROM's own `RESULT_CODE` at `$CFFE` |
-| Mealybug Tearoom | 79 | **3** pixel-exact | the author's hardware photographs |
-| `cpp` (CasualPokePlayer MBC3/RTC + SGB) | 4 | **4** | the author's reference screenshots |
-| **[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)** | **264** | **223 (84.5 %)** | their screenshot comparison — **5th of 19** (18 published emulators, plus us) |
+| In-repo harness (Blargg + dmg-acid2) | <!--score:harness:total-->47<!--/score--> | **<!--score:harness:pass-->46<!--/score-->** | the ROM's own printed verdict / the author's reference image |
+| Mooneye GB `acceptance` | <!--score:mooneye_acceptance:total-->75<!--/score--> | **<!--score:mooneye_acceptance:pass-->67<!--/score-->** | the ROM's own `LD B,B` + Fibonacci register check |
+| Mooneye GB `emulator-only` | <!--score:mooneye_emulator_only:total-->28<!--/score--> | **<!--score:mooneye_emulator_only:pass-->28<!--/score-->** | as above |
+| Mooneye GB `misc` (CGB) | <!--score:mooneye_cgb:total-->8<!--/score--> | **<!--score:mooneye_cgb:pass-->8<!--/score-->** | as above |
+| SameSuite | <!--score:samesuite:total-->76<!--/score--> | **<!--score:samesuite:pass-->72<!--/score-->** | the ROM's own `RESULT_CODE` at `$CFFE` |
+| Mealybug Tearoom | <!--score:mealybug:total-->79<!--/score--> | **<!--score:mealybug:pass-->3<!--/score-->** pixel-exact | the author's hardware photographs |
+| `cpp` (CasualPokePlayer MBC3/RTC + SGB) | <!--score:cpp:total-->4<!--/score--> | **<!--score:cpp:pass-->4<!--/score-->** | the author's reference screenshots |
+| **[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)** | **264** | **223 (84.5 %)** | their screenshot comparison — **5th of 19** (18 published emulators, plus us). *Not baseline-derived — see below* |
 
 Re-derive every one of the first seven from the checked-in baselines, in about a second, with
 no ROMs and no emulator run — the baselines *are* the expectations:
@@ -45,7 +62,8 @@ only the result.
 
 ## Mooneye GB — every remaining failure is a PPU test
 
-`acceptance` **67/75**, and the eight reds are *all eight* of the `ppu/` group's failures:
+`acceptance` **<!--score:mooneye_acceptance-->67/75<!--/score-->**, and the eight reds are *all
+eight* of the `ppu/` group's failures:
 
 ```
 acceptance/ppu/hblank_ly_scx_timing-GS      acceptance/ppu/intr_2_mode3_timing
@@ -65,8 +83,8 @@ groups are the hard ones:
 | `interrupts/`, `intr_timing`, `ei_*`, `di_timing`, `halt_*`, `rapid_di_ei`, `reti_*` | **all** | |
 | `boot_regs` / `boot_div` / `boot_hwio` across five consoles | **all** | see [boot.md](boot.md) |
 | `serial/boot_sclk_align` | **PASS** | |
-| `emulator-only/mbc1` · `mbc2` · `mbc5` | **13/13 · 7/7 · 8/8** | includes MBC1M multicarts — see [cartridges.md](cartridges.md) |
-| `misc/*` (CGB) | **8/8** | |
+| `emulator-only/mbc1` · `mbc2` · `mbc5` | **13/13 · 7/7 · 8/8** — <!--score:mooneye_emulator_only-->28/28<!--/score--> together | includes MBC1M multicarts — see [cartridges.md](cartridges.md) |
+| `misc/*` (CGB) | **<!--score:mooneye_cgb-->8/8<!--/score-->** | |
 
 **Why the eight are red, honestly:** they sample OAM/VRAM *accessibility* and mode-3 length at
 one-M-cycle resolution. `lcdon_timing-GS` and `lcdon_write_timing-GS` in particular are **not
@@ -79,8 +97,9 @@ strictly worse than not blocking. See [ppu.md](ppu.md).
 ### The `identical` picture mode scores differently — and now dominates
 
 The [`identical` picture mode](../picture-modes.md) (`GB_PPU=identical`, formerly `accurate`)
-gives **69/75** acceptance against the default `standard` mode's 67/75. The delta is two rows
-and it is one-directional:
+gives **<!--score:mooneye_acceptance_accurate-->69/75<!--/score-->** acceptance against the
+default `standard` mode's <!--score:mooneye_acceptance-->67/75<!--/score-->. The delta is two
+rows and it is one-directional:
 
 | Row | `standard` | `identical` |
 |---|---|---|
@@ -94,12 +113,29 @@ blocking a default flip. It is fixed — see
 The mode is gated separately (`make test-external-accurate`, against
 `testharness/mooneye_accurate_baseline.txt`) so progress *and* regression are both visible.
 
-**Measured mode-for-mode, every gate, same build:** in-repo harness 46/47 both (identical
-verdicts row for row), Mooneye `acceptance` + `emulator-only` 95 vs **97**/103, Mooneye `misc`
-8/8 both, SameSuite 72/76 both, `cpp` 4/4 both, Mealybug 3 vs **12**/79. No row goes the other
-way, so the accuracy precondition for making `identical` the default is met; what remains is a
-cost decision — **~2.1x**, 0.221 → 0.461 ms/frame, 36x real time headless, re-measured on every
-`cargo test --release --test ppuengines`.
+**Measured mode-for-mode, every gate, same build** — every figure in this paragraph is gated:
+
+| Gate | `standard` | `identical` |
+|---|---:|---:|
+| In-repo harness (Blargg + dmg-acid2) | <!--score:harness-->46/47<!--/score--> | <!--score:harness-->46/47<!--/score--> — *identical verdicts row for row* |
+| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->69/75<!--/score-->** |
+| Mooneye `emulator-only` | <!--score:mooneye_emulator_only-->28/28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28/28<!--/score--> |
+| Mooneye `misc` (CGB) | <!--score:mooneye_cgb-->8/8<!--/score--> | <!--score:mooneye_cgb-->8/8<!--/score--> |
+| SameSuite | <!--score:samesuite-->72/76<!--/score--> | <!--score:samesuite-->72/76<!--/score--> |
+| `cpp` | <!--score:cpp-->4/4<!--/score--> | <!--score:cpp-->4/4<!--/score--> |
+| Mealybug — rows pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->17/79<!--/score-->** |
+| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->630,266<!--/score-->** |
+
+(Rows with one baseline are scored once: the picture mode does not reach what they measure, so
+the same figure stands in both columns.)
+
+**No row goes the other way**, so the accuracy precondition for making `identical` the default
+is met; what remains is a cost decision — **~2.1x**, 0.221 → 0.461 ms/frame, 36x real time
+headless, re-measured on every `cargo test --release --test ppuengines`.
+
+> This table is where the drift happened. Its Mealybug figure read **12** for as long as it
+> took somebody to notice, five rows after `identical` reached
+> <!--score:mealybug_accurate-->17/79<!--/score-->. The row is generated now.
 
 > **Both baselines must move together when a non-PPU change flips a row.** Boot registers, the
 > timer and the APU do not depend on `GB_PPU`, so such a change flips the row under both
@@ -120,11 +156,30 @@ own gates and moved the Shootout number by **exactly zero**, verified by re-scor
 diffing: no row changed in either direction. *Check which population a number belongs to before
 comparing two of them.*
 
+### The Shootout is a different population again
+
+Three separate traps, and each one has produced a wrong comparison here at least once. **Never
+put one of these numbers beside another without saying which population it belongs to.**
+
+| | |
+|---|---|
+| **The Shootout suite is 264 rows, not 311.** `testroms/mealybug.py` builds three lists and ends with `all = dmgs # + cgbcs + cgbds`, so 47 of the `Test(...)` objects it constructs are never run | a manifest generator that collects *constructions* instead of each module's `all` gives 311 and buries a DMG-only score under CGB rows nobody is graded on |
+| **Its Mooneye population is 97 rows, not our 103** — `acceptance` 66 (not <!--score:mooneye_acceptance:total-->75<!--/score-->) and `misc` 2 (not <!--score:mooneye_cgb:total-->8<!--/score-->) | its `testroms/mooneye.py` comments out **all fifteen** model-variant ROMs — exactly the population the console-revision work fixed, which is why eleven rows of real accuracy moved the Shootout number by zero |
+| **Its SameSuite population is not ours either.** Only two of the seven rows the CH4/CGB-revision work moved are in the 311-row manifest at all; the five `extra_length_clocking-*` ROMs are not in that corpus | so that work's honest published-264 delta is *at most* +2, and screenshot-judged, which it did not measure |
+
+Our own figure — **223 / 264, 84.5 %, 5th of 19** — is measured through their manifest and
+their screenshot comparison, and is **not derivable from any baseline**, which is why it is the
+one score on this page the generator leaves alone. Re-derive it with
+`python3 tools/shootout/manifest.py <checkout> > m.tsv` and
+`cargo run --release --features image --example shootout_scout -- m.tsv` (~17 s). An older
+report's **92/264** is stale by a wide margin. Full method: [`docs/shootout.md`](../shootout.md).
+
 ---
 
-## SameSuite — 72/76, and four evidenced reds
+## SameSuite — four evidenced reds
 
-All four are APU rows, and each is red for a stated reason rather than for want of effort:
+**<!--score:samesuite-->72/76<!--/score-->.** All four reds are APU rows, and each is red for a
+stated reason rather than for want of effort:
 
 | Row | Why it is red |
 |---|---|
@@ -137,23 +192,36 @@ And a counterpoint that keeps the first row honest: we **pass**
 `apu/channel_1/channel_1_sweep_restart_2`, which is the *other* test that same README names
 SameBoy as failing. The suite is not simply harder than us in one direction.
 
-Group totals: `apu` **65/69** · `dma` **4/4** · `ppu` **1/1** · `sgb` **2/2**.
+Group totals: `apu` **<!--score:samesuite_apu-->65/69<!--/score-->** · `dma` **<!--score:samesuite_dma-->4/4<!--/score-->** · `ppu` **<!--score:samesuite_ppu-->1/1<!--/score-->** · `sgb` **<!--score:samesuite_sgb-->2/2<!--/score-->**.
 
 ---
 
-## Mealybug Tearoom — 3 of 79, and the number is not a percentage
+## Mealybug Tearoom — and the number is not a percentage
 
 Mealybug photographs a real console mid-scanline. It is the suite that separates a
 whole-scanline renderer from a pixel FIFO, and it is *hard*: on the Shootout's 24 published
 Mealybug rows, **SameBoy scores 15, bgb scores 2, PyBoy 0.** This is not a suite a competent
-cycle-stepped PPU sweeps.
+cycle-stepped PPU sweeps. (Those three are published board figures — **not** gated here, and
+they belong to the Shootout's 24-row Mealybug population, not our
+<!--score:mealybug:total-->79<!--/score-->.)
+
+> **Where the remaining rows are most likely to come from: reading the emulators ahead of us.**
+> Five of the seventeen `identical` rows were won that way in one pass rather than in weeks —
+> and the reference list now includes **[mGBA](https://github.com/mgba-emu/mgba), which is
+> MPL-2.0, the same licence as this repository** (verified against its root `LICENSE`, not
+> assumed). That is a materially different position from docboy's MIT and SameBoy's Expat:
+> compatible in the strong sense, so its code is reusable with file-level attribution, not
+> merely readable for behaviour. Prefer reimplementing in this codebase's idiom anyway, and
+> cite repo, file and symbol for anything taken. Full table and the reasoning:
+> [README § reading other emulators](README.md#reading-other-emulators-what-the-licences-actually-allow).
 
 | Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
-| `standard` (default) | 3 / 79 | 1,212,282 |
-| `identical` (`GB_PPU=identical`) | **17 / 79** | **630,266** |
+| `standard` (default) | <!--score:mealybug-->3 / 79<!--/score--> | <!--score:mealybug:px-->1,212,282<!--/score--> |
+| `identical` (`GB_PPU=identical`) | **<!--score:mealybug_accurate-->17 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->630,266<!--/score-->** |
 
-The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at 3/79 a
+The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at
+<!--score:mealybug-->3/79<!--/score--> a
 pass/fail file is a flat wall that cannot show a rewrite getting closer. Consequence to expect:
 **any PPU change turns that file red.** Read the diff, re-bless with the new counts in the same
 commit — that is the point.
@@ -174,9 +242,9 @@ Full scoping, including which rows are winnable now versus after the rewrite:
 
 ---
 
-## The in-repo harness — 46/47, and the one red must stay red
+## The in-repo harness — the one red must stay red
 
-30 ROMs × console = 47 rows (`interrupt_time` and the twelve `cgb_sound` ROMs are CGB-only
+**<!--score:harness-->46/47<!--/score-->.** 30 ROMs × console = <!--score:harness:total-->47<!--/score--> rows (`interrupt_time` and the twelve `cgb_sound` ROMs are CGB-only
 cartridges, so they have no `@dmg` row). Blargg `cpu_instrs` 11/11, `instr_timing`,
 `mem_timing`, `mem_timing-2`, `halt_bug`, `interrupt_time`, `cgb_sound` 12/12 and dmg-acid2
 (**0 of 23,040 pixels differ**) all pass on both machines.

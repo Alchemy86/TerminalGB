@@ -4,8 +4,9 @@
 
 The PPU is where this emulator's remaining accuracy work is. It is also the one component
 where the *shape* of the implementation is a documented, measured choice rather than a
-detail: there are **two renderers**, both shipped, both gated in CI, and the fast one is still
-the default because the accurate one does not yet strictly dominate it.
+detail: there are **two renderers**, both shipped, both gated in CI, and the whole-scanline one
+is still the default — **on cost alone now**, since the per-dot engine no longer loses a row on
+any gate.
 
 Hardware reference, not restated here:
 [Rendering](https://gbdev.io/pandocs/Rendering.html) ·
@@ -21,7 +22,7 @@ directly relevant to the STAT section below. Component page:
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`f69fff9`](https://github.com/Alchemy86/TerminalGB/tree/f69fff9889fe64e40dc194949e820c2b6ead6b52) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Two picture modes
 
@@ -38,9 +39,9 @@ emulated machine, so loading somebody else's state must not switch their rendere
 | Granularity | one whole scanline at the mode 3 → 0 transition | one dot at a time |
 | Mode 3 length | fixed 172 dots | variable, from the fetcher |
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
-| Mooneye `acceptance` | 67/75 | **69/75** |
-| Mealybug pixel-exact | 3/79 | **17/79** |
-| Mealybug total distance | 1,212,282 px | **630,266 px** |
+| Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->69/75<!--/score-->** |
+| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->17/79<!--/score-->** |
+| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->630,266<!--/score--> px** |
 | Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |
 
 **~2.1×** — 2.8 % of a 16.7427 ms frame, ~36× real time headless. Reproduce with
@@ -100,6 +101,152 @@ that started after. Ours put the boundary at the same pixel for every `WX`. Pinn
 
 ---
 
+## The dot an object is detected is still a *fetcher* dot
+
+Pan Docs gives the OBJ penalty as an amount of time mode 3 grows by. It does not say what the
+**background** fetcher is doing while that time is being spent, and the obvious reading —
+freeze it — is wrong by exactly one dot.
+
+The object fetch begins from inside the background fetcher's own tick, so the tile fetch in
+progress advances rather than stopping where it stood. This one came from **reading the
+emulators ahead of us on the Shootout board** rather than from first principles — see
+[README § reading other emulators](README.md#reading-other-emulators-what-the-licences-actually-allow)
+for which ones may be read and what may be done with what you find. docboy states it in a
+comment on the line that starts the object prefetcher (`src/docboy/docboy/ppu/ppu.cpp`,
+`handle_pixel_slice_fetcher_push`: *"Note: the first obj prefetcher tick overlaps this tick"*),
+with the *output* already stalled a stage earlier. We froze the fetcher on the spot, which put
+the next tile-number read one dot late and let a mid-line `SCX` write land in front of it.
+
+*Symptom* — one background tile per scanline is fetched from the wrong map column, **one tile
+early**, but only on scanlines carrying an object that sits on a tile boundary, and only when
+the game moves `SCX` (or anything else the tile-number fetch reads) mid-line. A player sees a
+raster split misplaced by eight pixels on some lines and not others, in a pattern that follows
+where the sprites are — which makes it look like a sprite bug and is a background one.
+
+*Caught by* — Mealybug `m3_scx_high_5_bits`, and **nothing else in any suite**. Mooneye's
+`intr_2_mode0_timing_sprites` measures the *length* of mode 3 with objects on the line, which
+this does not change, and every other harness we run compares a settled frame with no mid-line
+writes in it. **A defect that moves the fetcher by one dot is invisible to any test that does
+not write a fetcher-read register inside mode 3.** Pinned device-free by
+`the_background_fetcher_still_gets_the_dot_an_object_is_detected`
+([`src/gpu/fifo.rs:498`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/fifo.rs#L498)), teeth proven by removing the tick.
+
+> **Diagnosis worth reusing: read the failing frame, not the pixel count.**
+> `m3_scx_high_5_bits` fills the background with `'A'`, `'B'`, `'C'`… one letter per tile
+> column and sets `SCX = LY` part-way along every line, so **decoding the frame as text says
+> which `SCX` each tile's fetch used**. We drew `'S'` (map column 18) where hardware drew `'C'`
+> (column 2); the seven failing lines were seven rows of one glyph. The count alone could not
+> have said that. Same family of trick as `GB_SCOUT_SCREEN=1` on a Mooneye failure.
+
+**The full structural model is worse here, and that is the interesting part.** Letting the
+fetcher run for *all* of the penalty's dots — docboy's actual shape — wins the same three rows
+and costs 64,784 pixels elsewhere; a single tick on the trigger dot costs 151. The reason is
+that our `obj_wait` is Pan Docs' *formula*, not the fetcher's real remaining time, so running
+the fetcher through it double-counts. Measured, everything else held constant:
+
+| | rows pixel-exact | suite pixel distance |
+|---|---:|---:|
+| before | 12 | 646,838 |
+| fetcher ticks for the whole penalty | 15 | 711,773 |
+| **fetcher ticks on the trigger dot only** | **15** | **646,989** |
+
+**Do not "finish the job" without doing the per-tile calibration first.** Making the wait
+structural means the penalty stops being a charged formula, which is what makes
+`intr_2_mode0_timing_sprites` exact today.
+
+---
+
+## A PPU register write commits partway through its own M-cycle
+
+*Symptom* — every mid-scanline write to `BGP` / `OBP` / `SCX` / `SCY` / `WX` / `LCDC` takes
+effect up to a full M-cycle (four pixels) later than on hardware, so raster effects driven from
+a STAT handler are smeared right by up to four pixels at every boundary.
+
+The CPU flushes a write on the **second** T-cycle of its M-cycle, so most of that cycle's dots
+already see the new value; on top of that sit per-register settling delays, including **the
+DMG's one-dot window in which the PPU resolves colours through `old | new` rather than the new
+palette**. Our bus advances the per-dot PPU a whole M-cycle *before* every access, which is
+what put the commit at the end. `ppu_write_commit`
+([`src/mmu/mod.rs:100`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L100)) is the model; each arm cites the Mealybug row
+that measures it, and the whole thing is gated on the `identical` picture mode so the default
+path is untouched.
+
+*Caught by* — most of the Mealybug `m3_*` family. `m3_bgp_change`'s DMG column moved
+**2,244 px → 22** on this fix alone; `m3_lcdc_obj_size_change_scx`'s DMG column moved
+**22,070 → 298**. Nothing in Blargg, Mooneye or acid2 sees it: they judge a serial string or a
+settled frame, never a mid-scanline boundary.
+
+**The commit phases are at their optimum — do not re-sweep them.** Both remaining near-misses
+were swept afterwards and `early: 3` wins on each by a wide margin: DMG `SCX` at 0/1/2/3/4 gives
+84/77/47/**12**/53 px, and DMG `LCDC` at 1/2/3/4 gives a suite total of
+671,348/669,696/**646,838**/712,414. `SCX` and `SCY` were split into separate arms to see
+whether they wanted different phases; they do not, and the split was reverted.
+
+---
+
+## The Color console's PPU shipped in revisions too
+
+`PpuRevision` ([`src/mode.rs:516`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mode.rs#L516)) — `CgbC` / `CgbD`, default `CgbD`.
+Pan Docs describes *a* Game Boy Color; the fetcher changed between steppings, and Mealybug is
+the suite that can tell.
+
+**CPU CGB D and later latch the fetcher's `SCY + LY` at the tile-number fetch and reuse it for
+both bitplanes; CPU CGB C and earlier re-read it, as every DMG does.** SameBoy says it in a
+comment (`Core/display.c`, `GB_FETCHER_GET_TILE_T1`: *"This value is cached on the CGB-D and
+newer, so it cannot be used to mix tiles together"*), and docboy states the same boundary from
+the other side, modelling D-and-later only. **Two independent implementations agreeing on where
+the boundary sits is what makes it a fact rather than a fit.**
+
+*Symptom* — a game that changes `SCY` between a tile's two bitplane fetches draws a tile made
+of two different rows on our Color console. On a real CPU CGB D that effect **cannot exist**.
+
+Measured on the Color machine, everything else held:
+
+| | `m3_scy_change@CGB-C` | `m3_scy_change@CGB-D` |
+|---|---:|---:|
+| `SCY` re-read (CGB C) | **560** | 15,085 |
+| `SCY` latched (CGB D) | 15,129 | **116** |
+
+That reproduces the two references' own 6,217-pixel disagreement from both ends.
+
+The second difference — **a palette write is seen one dot later on a CPU CGB C** — is *measured
+here* and is in neither reference emulator. The C and D photographs of `m3_bgp_change` differ
+by exactly six pixels per line, at `x = 1, 13, 73, 85, 145, 157`: three 12-pixel bands each
+shifted by one. Sweeping our Color palette-commit dot swaps the two columns exactly, on four
+rows at once, and in no other configuration.
+
+**Before this we were a machine that never shipped** — CGB-D palette timing with CGB-C `SCY`
+behaviour. That is the shape of error to look for: not "wrong", but *incoherent*, passing half
+of one console's rows and half of another's.
+
+Deliberately **not** `sound::CgbRevision`: the APU's boundary is 0/B against C-and-later, the
+PPU's is C-and-earlier against D-and-later, so one enum would name four steppings to express
+two facts — and `src/sound.rs` is not compiled on `wasm32` while the PPU always is. Both read
+`$GB_CGB_REVISION`, so a user still has one knob. It is machine *configuration*, not cartridge
+state, and is **not serialised**. Pinned by
+`only_a_cgb_c_can_desync_the_two_bitplanes_with_scy` and
+`the_revision_tags_land_on_the_right_side_of_the_boundary`.
+
+> ### When a suite ships more than one reference for a ROM, it is telling you there is more
+> ### than one machine
+>
+> Mealybug ships `DMG-blob`, `CPU CGB C` **and** `CPU CGB D` reference photographs, and seven
+> of its ROMs disagree between the two Color sets by 8,265 pixels in total. Scoring both Color
+> columns against one Color machine is a **runner** bug that no emulator can pass;
+> `examples/mealybug` runs three machines now, one per reference set.
+>
+> The same lesson is already recorded one suite over: SameSuite's `-cgb0` and `-cgbB` ROMs
+> contradict each other, so a runner that ignores the stepping in the filename can never score
+> more than four of the five. Two suites, two authors, one rule.
+>
+> **The diagnostic habit that follows: before grinding a row, compare the suite's own reference
+> sets against each other.** `m3_window_timing@CGB-C` sat at 138 px and `m3_bgp_change@CGB-C` at
+> 864 — and the C-vs-D *reference* gap is 138 and 864. Both were already pixel-exact on DMG and
+> on CGB-D. They were never fetcher errors; they were the wrong machine. **If the gap between
+> two references equals your error, the emulator is right and the runner is wrong.**
+
+---
+
 ## The STAT interrupt is ONE LINE, not four triggers
 
 The single most consequential PPU fix for real games, and the thing gbdev's
@@ -139,6 +286,34 @@ unmoved, Mealybug *loses* `m2_win_en_toggle`.
 > the mode-0 interrupt. Dispatch latency is common to both ends, so it **cancels** — which
 > proves the 4-cycle error was in the PPU signal and not in the CPU. That is what stopped this
 > becoming "fudge the interrupt path".
+
+### The strobe must ask `LY`, not `mode` — and the bug it hid was *two* interrupts a line
+
+`oam_strobe` ([`src/gpu/mod.rs:771`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L771)) derived "the OAM scan is running"
+from the `mode` field. The per-dot loop updates `mode` *after* `next_line` has advanced `LY`,
+so `mode` lags `LY` by one dot — and since `IF` is folded once per M-cycle, one dot late is a
+whole **M-cycle** late to the CPU. It asks `LY` and the dot counter now.
+
+**Lines 1–143 were raising two STAT interrupts each, and that is what hid it for months.** The
+strobe dropped at the line boundary and rose again a dot later. It is invisible to any program
+that services the interrupt at once, because the second edge lands *inside* the first one's
+dispatch, which clears `IF.1` at M4 after it — so the pair collapses into one.
+
+> **A defect masked by the very thing that consumes it will not show up in a verdict. Count
+> edges, not flags.** `a_visible_line_strobes_the_oam_source_exactly_once` counts them; teeth
+> proven by reverting the arm, at which point it counts two. **Nothing in any public suite
+> catches the doubled interrupt** — that is a coverage gap, and it is the interesting half.
+
+Line 0 had nothing to collapse into, so it carried the whole error: its interrupt arrived
+**8 dots** after the equivalent point on lines 1–143, where hardware wants **4**. Mealybug's
+`m3_bgp_change.asm` encodes the requirement itself — one `jr` taken on lines 1–143 and not on
+line 0, making the handler exactly 4 T shorter there, under the comment *"line 0 timing is
+different by 4 cycles"*.
+
+**The obvious fix is wrong, and was measured wrong.** Giving line 0 the same early window as
+lines 1–143 (on line 153's tail) puts it at the *same* phase, where hardware wants it one
+M-cycle later: Mealybug **6 → 3** and `intr_1_2_timing-GS` still red. At M-cycle granularity the
+placements available are +0, +4 and +8 relative to lines 1–143; hardware is +4.
 
 ### The CGB strobes STAT one M-cycle before VBlank
 
@@ -224,7 +399,7 @@ rounds). The hot path gained one `address & 0xFF00 == 0xFE00` test.
 
 ## Reading a Mealybug number
 
-Everything in [scoreboard.md § Mealybug](scoreboard.md#mealybug-tearoom--3-of-79-and-the-number-is-not-a-percentage)
+Everything in [scoreboard.md § Mealybug](scoreboard.md#mealybug-tearoom--and-the-number-is-not-a-percentage)
 applies. The two things that most often produce a wrong conclusion:
 
 1. **The metric is a shade *rank* distance.** One extra distinct shade in the frame re-ranks
@@ -233,11 +408,16 @@ applies. The two things that most often produce a wrong conclusion:
 2. **Score each column on the machine its reference was photographed on.** These cartridges
    carry no CGB flag, so `Model::Auto` gives a DMG — right for `DMG-blob`, wrong for
    `CPU CGB C`/`CPU CGB D`, which are a Color console running the same cartridge in
-   compatibility mode. They render identically *today*, and that must stop being true once
-   mode 3 is fully modelled — which is exactly why the suite ships three sets.
+   compatibility mode. The two Color columns are **also two different machines**, not one:
+   `examples/mealybug` now runs three, one per reference set, with the
+   [PPU stepping](#the-color-consoles-ppu-shipped-in-revisions-too) selected per column. (An
+   earlier version of this page said the Color columns "render identically today"; that
+   stopped being true the moment `PpuRevision` landed, and the suite shipping three sets is
+   why.)
 
-**Before believing a suite score, check the ROMs are actually running.** Most of the original
-"3/79" was measuring a stall, not accuracy: the accurate engine never left mode 0 after the LCD
+**Before believing a suite score, check the ROMs are actually running.** Most of the per-dot
+engine's *original* three-of-seventy-nine (a historical figure, not the gated one above) was
+measuring a stall, not accuracy: it never left mode 0 after the LCD
 came on, so every Mealybug ROM — all of which arm on the mode-2 STAT source — ran off the end
 of its code before drawing anything. `m3_bgp_change` hit its ten-frame breakpoint in 80,668
 cycles instead of ~767,000 and made exactly **one** `BGP` write. Both facts were visible in a
@@ -259,3 +439,7 @@ five-minute trace.
 | Mid-scanline palette or scroll changes have no effect (bands are missing) | a whole-scanline renderer — expected on the `fast` engine, by design |
 | Objects on a line cost the wrong amount of mode 3, so mid-line writes land on the wrong pixel | the OBJ penalty derived from fetcher phase rather than charged |
 | Nothing draws at all after the LCD is switched on, and the program runs off the end of its code | the restart line's mode-3 entry skipped, so no mode-2 STAT interrupt ever arrives |
+| A parallax layer wobbles by one tile, on the scanlines that carry sprites and no others | the background fetcher frozen on the dot an object is detected instead of finishing its tile |
+| Every mid-scanline raster boundary is smeared up to four pixels right | a register write committed at the end of its M-cycle rather than partway through it |
+| The top scanline of a split-screen effect is four pixels out of step with the 143 below it | the mode-2 strobe derived from `mode`, which lags `LY` by a dot; line 0 is the only line where the resulting spurious edge has nothing to hide inside |
+| A Color game's `SCY` trick produces a tile made of two different rows — or refuses to | the CGB PPU stepping: CPU CGB D latches `SCY + LY` at the tile fetch, CPU CGB C re-reads it |

@@ -9,7 +9,7 @@ it does not tell you that a square channel's frequency-timer reload is latched f
 T-cycles late, because that is not a fact anybody has needed to write down until an emulator
 tried to pass [SameSuite](https://github.com/LIJI32/SameSuite).
 
-SameSuite's APU group is **65/69** here today; the first campaign over it took this emulator
+SameSuite's APU group is **<!--score:samesuite_apu-->65/69<!--/score-->** here today; the first campaign over it took this emulator
 from **2 to 49** of the 61 ROMs that run scored. (Two figures, two denominators — stated
 separately on purpose, per rule 2 on the [entry page](README.md#reading-the-numbers-honestly).)
 Every constant below is a number that was *swept* until a ROM agreed, with the ROM named and
@@ -163,7 +163,7 @@ serialised: a save state restores into whatever machine is running.
 
 ## Four rows left red, all on evidence
 
-See [scoreboard.md § SameSuite](scoreboard.md#samesuite--7276-and-four-evidenced-reds) for the
+See [scoreboard.md § SameSuite](scoreboard.md#samesuite--four-evidenced-reds) for the
 table. The two worth understanding:
 
 **`channel_1_sweep_restart` — 143 of its 144 cells match.** Round 1 sweeps `$7FF` down to
