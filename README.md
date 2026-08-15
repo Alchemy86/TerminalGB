@@ -1754,12 +1754,12 @@ exec my-emulator --headless --frames "$GBCONFORM_FRAMES" \
 
 | | |
 |---|---|
-| **Runs today** | Blargg `cpu_instrs` 01–11, `instr_timing`, `mem_timing` (serial) + `dmg-acid2` (screen) — 14 checks |
+| **Runs today** | Blargg `cpu_instrs` 01–11, `instr_timing`, `mem_timing` (serial) + `dmg-acid2` (screen) + `mem_timing-2`, `halt_bug`, `oam_bug`, `interrupt_time` (the ROM's own printed report, read off the frame) — 18 checks |
 | **Badge** | shields.io endpoint JSON **and** a self-contained SVG; `conformance 24/26`, not pass/fail |
 | **Report** | `results.json`, a Markdown summary in the job page, captured serial text, actual + diff frames |
 | **Cost** | Python standard library only — no `pip install`, no toolchain, seconds to run |
 | **ROMs** | dmg-acid2 is MIT and vendored here; **Blargg's are fetched from their own upstream** at a pinned commit, never redistributed by us; commercial ROMs never |
-| **Proven on** | ourselves (14/14, enforced in CI) and on **[binjgb](https://github.com/binji/binjgb)** — an unrelated emulator, which passes dmg-acid2 through it unmodified |
+| **Proven on** | ourselves (18/18, enforced in CI) and on **two unrelated emulators, unmodified** — [binjgb](https://github.com/binji/binjgb) (screen only: 4/5) and [Peanut-GB](https://github.com/deltabeard/Peanut-GB) (both capabilities: 13/18) |
 
 Screen checks compare **shade rank, not colour**, so your palette can be green, grey or
 anything else. Checks needing a capability your adapter does not have are reported *skipped*

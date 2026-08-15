@@ -40,11 +40,18 @@
 //!   pristine checkout dirties it. (Here the runner already stages ROMs into a
 //!   temporary directory, but the emulator picking its save path from the ROM
 //!   path is a general trap — see `src/mbc/battery.rs`.)
+//! * **Honour `GBCONFORM_MODEL`.** It is not decoration: `oam_bug` is a *pass*
+//!   on a DMG and a *fail* on a Color console, because Color silicon has no
+//!   OAM-corruption defect at all, and `interrupt_time` is a CGB-only
+//!   cartridge. An adapter that auto-detects the console from the cartridge
+//!   header instead answers a question nobody asked. This file documented the
+//!   variable and ignored it until a check finally needed it.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use terminalgb::cpu::core::Cpu;
+use terminalgb::mode::Model;
 
 /// Safety cap so a ROM that never completes a frame cannot spin forever. The
 /// runner also enforces a wall-clock timeout; this one keeps the result
@@ -74,9 +81,27 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // `GBCONFORM_MODEL` names the console to emulate. An unset or unknown
+    // value means "you choose", which for us is `Model::Auto` — the CGB flag
+    // in the cartridge header, i.e. what a person owning both consoles would
+    // do. A *stated* model always wins over the header: forcing means forcing.
+    let model = std::env::var("GBCONFORM_MODEL")
+        .ok()
+        .and_then(|v| Model::parse(&v))
+        .unwrap_or(Model::Auto);
+
     // Pass the path so cartridge RAM is battery-backed where the ROM expects
     // it. It does not choose the mapper — that is header byte `$0147`.
-    let mut cpu = Cpu::new(data, Some(rom_path.clone()));
+    let mut cpu = Cpu::new_with_model(data, Some(rom_path.clone()), model);
+
+    // A machine with no sound chip is not a quiet Game Boy, it is a Game Boy
+    // with a hole where the APU should be: `Sound::do_cycle` returns at once
+    // when no player is installed, so `NR52` never reports itself powered on.
+    // `interrupt_time` spins on exactly that and never leaves its title
+    // screen — it looks like a hang, and was written off as "cannot run
+    // headless" in this project once already. Install a silent player.
+    cpu.memory
+        .enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
     // Serial capture. The contract asks for the raw bytes the ROM sends to the
     // link port — no framing, no interpretation. Whoever reads them decides

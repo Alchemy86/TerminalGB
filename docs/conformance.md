@@ -10,8 +10,9 @@
 > **What the action already settles from this page:** the adapter interface (serial capture +
 > framebuffer comparison, each an independent capability), the explanation-first reporting, and
 > the licensing line — dmg-acid2 vendored under MIT, Blargg's fetched from upstream at a pinned
-> commit, commercial ROMs never. **What it does not:** the audio capability, Mooneye, CGB, and
-> extraction into its own repository.
+> commit, commercial ROMs never. Both capabilities are now proven against emulators that are
+> **not ours** (binjgb for the screen, Peanut-GB for both). **What it does not:** the audio
+> capability, Mooneye, CGB beyond one ROM, and extraction into its own repository.
 
 ## The idea
 
@@ -53,17 +54,29 @@ hooks, each needing only a **thin per-emulator adapter**:
 
 1. **Serial-output capture** — for Blargg-style ROMs that print a result. The adapter feeds the
    ROM and streams the bytes the emulator writes to the serial port (`SB`/`SC`); the tool matches
-   the `Passed`/`Failed N` string. Almost every emulator can expose serial output.
+   the `Passed`/`Failed N` string. *Written as "almost every emulator can expose serial output",
+   and that turned out optimistic:* binjgb's public API has no serial hook at all, while
+   Peanut-GB's does. Two of the two emulators tried needed the capability model, not one.
 2. **Framebuffer / screenshot comparison** — for acid2-style visual tests. The adapter hands the
-   tool one rendered frame (a PNG or a raw RGBA buffer); the tool compares it to our reference
-   image and reports the differing region. Any emulator that can screenshot can participate.
-3. **Recorded-audio capture** — for APU tests. The adapter records the emulator's produced sample
+   tool one rendered frame (a PNG or a raw RGBA buffer). *Written as "the tool compares it to our
+   reference image", and the shipped action deliberately does not:* it compares against the ROM
+   author's own reference, because an expected picture rendered here would make this project the
+   authority for its own suite. Any emulator that can screenshot can participate.
+3. **Reading the ROM's report off that same frame** — a method this page originally missed, and
+   the one that turned "the screen-only Blargg ROMs cannot be scored independently" from a
+   compromise into a solved case. Blargg's font glyphs live in the ROM being tested, so the text
+   can be decoded with no font, no reference frame and nothing of ours involved. It is a third
+   *method* riding the second *capability*, so it cost adapters nothing. See
+   [`conformance-action.md` §2](conformance-action.md).
+4. **Recorded-audio capture** — for APU tests. The adapter records the emulator's produced sample
    stream (or a WAV); the tool runs the same objective analysis we already do (sample count vs
    cycles, dominant frequency, level, silence/step continuity) plus the `dmg_sound` `$A000`
    verdict.
 
-Each adapter is small because it only has to *emit* one of those three streams. The tool owns
-the ROMs, the reference data, the analysis, and the reporting.
+Each adapter is small because it only has to *emit* one of those streams — three streams, four
+methods, and keeping those two counts apart is what let method 3 be added without asking any
+adapter for anything new. The tool owns the ROMs, the reference data, the analysis, and the
+reporting.
 
 ### Our telemetry stream is the reference adapter
 

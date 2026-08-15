@@ -23,6 +23,81 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — two defects in our own adapter, exposed only by widening the suite (conformance action 14 → 18 checks)
+
+The conformance action deliberately excluded Blargg's four **screen-only** ROMs
+(`mem_timing-2`, `halt_bug`, `oam_bug`, `interrupt_time`) because scoring them looked like it
+required shipping reference frames of our own. It does not: the verdict can be **read as text**
+off the frame, because Blargg's print routine loads a font whose glyphs live in the cartridge
+under test. `tools/conformance/screentext.py` does that, and the four checks are in. The
+interesting part is what including them immediately found in
+`examples/conformance_adapter.rs` — **the reference implementation of our own contract** —
+after months of the action being green at 14/14.
+
+**① The adapter documented `GBCONFORM_MODEL` and ignored it.**
+
+*Symptom* — `oam_bug` reports `Failed #2` from an emulator that passes it. The adapter called
+`Cpu::new` (i.e. `Model::Auto`), which reads the cartridge's CGB flag, so a ROM whose header
+says `$80` booted a Color console. `oam_bug` is a *DMG-silicon* defect; a real Color console
+fails that ROM too, so the emulator's answer was correct for a question nobody asked.
+*Caught by* — nothing, for as long as no check used the variable. Two ROMs now pin their
+console in `checks.json` (`oam_bug` → `dmg`, `interrupt_time` → `cgb`), which is what made the
+gap visible. `tools/conformance/adapters/binjgb.sh` had the mirror-image bug — a hard-coded
+`--force-dmg`, which ran the CGB-only `interrupt_time` on a DMG and cost it a pass it deserved;
+fixing that took binjgb from 3/5 to **4/5**.
+*Hardware behaviour* — Pan Docs, *OAM Corruption Bug*: the defect is DMG/MGB/SGB only, "the CGB
+and Advance are not affected, even when running monochrome software". And cartridge header
+`$0143 = $C0` means CGB-only (Pan Docs, *The Cartridge Header*).
+*Carries into the tool* — **an adapter that hard-codes a console returns a wrong answer, not a
+missing one.** The generalisation is worth stating in any adapter contract: a parameter the
+runner passes and nothing checks is a parameter that is not implemented. The four `screen-text`
+checks' `explain` text names this as the first thing to suspect.
+
+**② The adapter built a machine with no APU, and one ROM hung on it.**
+
+*Symptom* — `interrupt_time` never leaves its title screen and reports no verdict at any frame
+budget; the elapsed time flattens because the run hits its cycle cap. It looks exactly like a
+CPU hang.
+*Caught by* — nothing in the action. `testharness/testroms.rs` already carried the finding
+("never build a test machine without an APU") and the adapter was written without it.
+*Hardware behaviour* — `Sound::do_cycle` returns immediately with no player installed, so
+`NR52` never reports itself powered on; the ROM's own `apu.s` spins on exactly that. A machine
+with no sound chip is not a quiet Game Boy. Fix: install `sound::SilentPlayer`.
+*Carries into the tool* — a **conformance check for headless emulators**: a ROM that
+synchronises through a subsystem you have stubbed out will hang rather than fail, and the
+failure will name the wrong subsystem. This is the same class as the CGB double-speed
+misdiagnosis recorded further down this file.
+
+**③ The widening itself, and why it does not break the guiding principle.**
+
+*Symptom* — four ROMs that print their result on screen and nowhere else could not be scored
+without an expected picture, and the only expected picture available was one we rendered.
+*Caught by* — nothing; this was a **coverage gap in the tool**, which is itself the finding.
+*Contract relied on* — Blargg's `common/` print routine loads its font so that a tile id is the
+ASCII code of the glyph it draws, and the glyph bitmaps are in the ROM. Measured on `halt_bug`:
+all 19 distinct non-blank glyphs on screen are found in the ROM, uniquely, and all 19 share one
+`offset % 8` alignment class — that shared alignment *is* the font block. The remaining unknown
+(which ASCII code the block starts at) is pinned by requiring the decoded words to appear
+verbatim in the ROM; every one of these ROMs carries its own title and the strings `Passed` and
+`Failed` as plain ASCII (verified in all four).
+*Carries into the tool* — three reusable rules. **(a)** A decode that cannot be sure must say
+so: an unreadable screen is reported as an *error*, never as a failure, because "no verdict" and
+"the ROM said no" are different claims. **(b)** Distinguish a *capability* (what an adapter must
+write) from a *method* (how a verdict is reached) — `screen-text` needed no contract change
+because it rides the frame the screen checks already ask for, and every existing adapter gained
+four checks with no edit. **(c)** Proven against a foreign emulator whose **shade ramp is
+inverted** relative to ours (Peanut-GB's shade 0 is white): a text decoder that only asks which
+cells carry ink is palette-blind by construction, the same argument as the shade-rank image
+compare.
+
+Measured: ourselves **18/18**; [binjgb](https://github.com/binji/binjgb) unmodified **4/5**
+(screen capability only — its one failure is `oam_bug`, which it does not model);
+[Peanut-GB](https://github.com/deltabeard/Peanut-GB) unmodified **13/18** through a ~100-line
+adapter against its published header, which is the first foreign proof of the contract's
+**serial** half.
+
+---
+
 ## 2026-08-15 — leaving the Cable Club: a reported bug that was the cartridge, and a doc note that was ours
 
 Reported live while trading Pokémon Gold against Pokémon Blue on two separately

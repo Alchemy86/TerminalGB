@@ -21,6 +21,11 @@ Design rules, in priority order:
    emulator: serial verdicts are the test ROM's own printed judgement, and the
    dmg-acid2 verdict is its author's reference image.
 
+The four rules above are why `screen-text` exists and why it needed no change
+to the contract: the ROMs that print their verdict on screen are judged by
+reading that text back off the frame (see `screentext.py`), so their expected
+output is still the ROM's own words rather than a picture rendered here.
+
 Outputs (all under `--out`): `results.json` (documented schema), `badge.json`
 (shields.io endpoint), `badge.svg` (self-contained), `summary.md`, and an
 `artifacts/` directory with the captured serial text and any frame + diff.
@@ -43,9 +48,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import image  # noqa: E402  (local, sibling module)
+import screentext  # noqa: E402  (local, sibling module)
 
 CONTRACT = "gbconform/1"
 RESULTS_SCHEMA = 1
+
+# A check's *method* is how its verdict is reached; a *capability* is what the
+# adapter has to be able to write for that to be possible. They are not the
+# same thing, and keeping them apart is what let `screen-text` be added without
+# touching the contract at all: it reads the ROM's own printed report off the
+# very same frame the pixel-compare checks already ask for.
+CAPABILITY_FOR_METHOD = {
+    "serial": "serial",
+    "screen": "screen",
+    "screen-text": "screen",
+}
 
 CONTRACT_TEXT = f"""\
 The adapter contract — {CONTRACT}
@@ -58,7 +75,10 @@ with these environment variables set:
 
     GBCONFORM_CONTRACT    always "{CONTRACT}"
     GBCONFORM_ROM         the ROM path (also argv[1] — use whichever suits)
-    GBCONFORM_MODEL       "dmg" or "cgb": which model to emulate
+    GBCONFORM_MODEL       "dmg" or "cgb": which model to emulate. NOT
+                          advisory -- a few checks pin it because the answer
+                          differs by console (`oam_bug` is a DMG-only defect;
+                          `interrupt_time`'s cartridge is CGB-only)
     GBCONFORM_FRAMES      run at least this many frames, then stop
     GBCONFORM_SERIAL_OUT  set ONLY when serial output is wanted: write the
                           raw bytes the ROM sends to the link port (SB) here
@@ -107,6 +127,10 @@ class Result:
         self.detail = ""
         self.evidence: dict = {}
         self.artifacts: list[str] = []
+        # Which console this check actually ran on. Reported per check because
+        # a check may pin it (see `model` in checks.json), so the run-level
+        # `model` is only the default.
+        self.model = ""
 
     @property
     def counts_towards_score(self) -> bool:
@@ -118,6 +142,7 @@ class Result:
             "id": c["id"],
             "suite": c["suite"],
             "method": c["method"],
+            "model": self.model,
             "status": self.status,
             "detail": self.detail,
             "behaviour": c.get("behaviour", ""),
@@ -366,6 +391,63 @@ def judge_screen(res: Result, run: AdapterRun, reference: Path,
     )
 
 
+def judge_screen_text(res: Result, run: AdapterRun, rom: Path,
+                      artifacts: Path) -> None:
+    """Read the ROM's own printed verdict off the frame it drew.
+
+    Four of Blargg's ROMs never touch the link port and print their result on
+    screen only. This judges them the same way the serial checks are judged —
+    by what the ROM itself said — rather than by comparing pixels against a
+    frame produced here, which would make this project the authority for its
+    own conformance suite. See `screentext.py` for how the character table is
+    recovered **from the ROM under test**.
+    """
+    if run.timed_out:
+        res.status = "error"
+        res.detail = "the adapter exceeded its wall-clock budget"
+        return
+    if run.returncode != 0:
+        res.status = "error"
+        res.detail = f"the adapter exited {run.returncode}"
+        res.evidence["stderr"] = run.stderr
+        return
+    if not run.frame:
+        res.status = "error"
+        res.detail = "the adapter wrote no frame for this ROM"
+        res.evidence["stderr"] = run.stderr
+        return
+    try:
+        actual = image.decode(run.frame, expect=(FRAME_W, FRAME_H))
+    except image.ImageError as e:
+        res.status = "error"
+        res.detail = f"could not read the frame the adapter wrote: {e}"
+        return
+
+    got = artifacts / f"{safe(res.check['id'])}.actual.png"
+    got.write_bytes(image.encode_png(actual))
+    res.artifacts.append(got.name)
+
+    try:
+        reading = screentext.read(actual, rom.read_bytes(), image.quantise_shades)
+    except screentext.ScreenTextError as e:
+        # Unreadable is an ERROR, not a fail: we have no verdict at all, and
+        # saying "failed" would be inventing one. The frame is in the
+        # artifacts so a human can see what the emulator actually drew.
+        res.status = "error"
+        res.detail = f"could not read the ROM's report off the frame: {e}"
+        return
+
+    res.evidence["screen"] = reading.text
+    res.evidence["glyphs_matched_in_rom"] = reading.glyphs
+    p = artifacts / f"{safe(res.check['id'])}.screen.txt"
+    p.write_text(reading.text + "\n")
+    res.artifacts.append(p.name)
+
+    status, detail = screentext.verdict(reading.text)
+    res.status = "fail" if status == "unfinished" else status
+    res.detail = detail
+
+
 def bounding_box(mask: bytes, width: int) -> tuple[int, int, int, int]:
     xs_min = ys_min = 1 << 30
     xs_max = ys_max = -1
@@ -584,7 +666,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--label", default="conformance", help="badge label")
     ap.add_argument("--fail-below", type=float, default=-1.0,
                     help="exit non-zero if the pass percentage is below this")
-    ap.add_argument("--model", default="dmg", choices=["dmg", "cgb"])
+    ap.add_argument("--model", default="dmg", choices=["dmg", "cgb"],
+                    help="console for checks that do not pin one themselves "
+                         "(a few must: see `model` in checks.json)")
     args = ap.parse_args(argv)
 
     if args.contract:
@@ -619,22 +703,25 @@ def main(argv: list[str]) -> int:
     # A capability is probed with the first check that needs it, so the probe
     # ROM is always one we know is well-formed.
     capabilities: dict[str, tuple[bool, str]] = {}
-    for method in ("serial", "screen"):
-        first = next((c for c in checks if c["method"] == method), None)
+    for capability in ("serial", "screen"):
+        first = next(
+            (c for c in checks
+             if CAPABILITY_FOR_METHOD[c["method"]] == capability), None
+        )
         if first is None:
             continue
         sdir = suite_dirs.get(first["suite"])
         if sdir is None:
-            capabilities[method] = (False, "the ROMs for this suite are unavailable")
+            capabilities[capability] = (False, "the ROMs for this suite are unavailable")
             continue
-        ok, why = probe(adapter, sdir / first["rom"], method, args.timeout)
-        capabilities[method] = (ok, why)
+        ok, why = probe(adapter, sdir / first["rom"], capability, args.timeout)
+        capabilities[capability] = (ok, why)
         if ok and why:
             # Assumed available *despite* the probe failing — the checks will
             # run and record real errors rather than vanishing into "skipped".
-            log(f"capability {method}: assumed yes — the adapter {why}")
+            log(f"capability {capability}: assumed yes — the adapter {why}")
         else:
-            log(f"capability {method}: {'yes' if ok else 'no — it ' + why}")
+            log(f"capability {capability}: {'yes' if ok else 'no — it ' + why}")
 
     # --- run ---------------------------------------------------------------
     results: list[Result] = []
@@ -649,10 +736,11 @@ def main(argv: list[str]) -> int:
                 "(no network, --no-fetch, or nothing supplied in --roms-dir)"
             )
             continue
-        able, why = capabilities.get(c["method"], (False, "not probed"))
+        capability = CAPABILITY_FOR_METHOD[c["method"]]
+        able, why = capabilities.get(capability, (False, "not probed"))
         if not able:
             res.status = "skipped"
-            res.detail = f"your adapter provides no {c['method']} output — it {why}"
+            res.detail = f"your adapter provides no {capability} output — it {why}"
             continue
         rom = sdir / c["rom"]
         if not rom.is_file():
@@ -660,15 +748,22 @@ def main(argv: list[str]) -> int:
             res.detail = f"ROM not found: {c['rom']}"
             continue
         log(f"running {c['id']}")
+        # A check may PIN its model. That is not a preference: `oam_bug` is a
+        # DMG-silicon defect a real Color console does not have, and
+        # `interrupt_time` is a CGB-only cartridge — running either on the
+        # other machine measures nothing. Everything else follows --model.
+        res.model = c.get("model", args.model)
         run = run_adapter(
             adapter, rom,
-            frames=int(c.get("frames", 600)), model=args.model,
-            want_serial=(c["method"] == "serial"),
-            want_frame=(c["method"] == "screen"),
+            frames=int(c.get("frames", 600)), model=res.model,
+            want_serial=(capability == "serial"),
+            want_frame=(capability == "screen"),
             timeout=args.timeout,
         )
         if c["method"] == "serial":
             judge_serial(res, run, artifacts)
+        elif c["method"] == "screen-text":
+            judge_screen_text(res, run, rom, artifacts)
         else:
             judge_screen(res, run, sdir / c["reference_image"], artifacts)
         log(f"  {res.status}: {res.detail}")

@@ -16,7 +16,10 @@
 #
 #   $1 / $GBCONFORM_ROM   the ROM to run
 #   $GBCONFORM_FRAMES     run at least this many frames, then stop
-#   $GBCONFORM_MODEL      "dmg" or "cgb"
+#   $GBCONFORM_MODEL      "dmg" or "cgb" -- USE IT. Some checks pin the console
+#                         because the right answer differs by machine, so an
+#                         adapter that hard-codes one reports a wrong verdict
+#                         rather than a missing one.
 #   $GBCONFORM_TIMEOUT_S  wall-clock budget before you are killed
 #
 # ...and at most one of these two is set, telling you what is wanted:
@@ -46,7 +49,10 @@ fi
 
 if [ -n "${GBCONFORM_FRAME_OUT:-}" ]; then
     # A frame wanted. Run in the requested model: dmg-acid2 draws a different
-    # (also correct) picture in CGB mode, and the reference image is the DMG one.
+    # (also correct) picture in CGB mode, and the reference image is the DMG
+    # one. The same frame also carries the printed report of the ROMs that
+    # never touch the link port, so getting the console right matters twice —
+    # `oam_bug` passes on a DMG and fails on a Color console.
     exec "$EMU" --headless \
         --model "$GBCONFORM_MODEL" \
         --frames "$GBCONFORM_FRAMES" \

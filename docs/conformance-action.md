@@ -47,7 +47,7 @@ with these environment variables set:
 |---|---|
 | `GBCONFORM_CONTRACT` | always `gbconform/1` |
 | `GBCONFORM_ROM` | the ROM path (also `argv[1]` — use whichever suits) |
-| `GBCONFORM_MODEL` | `dmg` or `cgb`: which model to emulate |
+| `GBCONFORM_MODEL` | `dmg` or `cgb`: which model to emulate. **Not advisory** — `oam_bug` is a pass on a DMG and a fail on a Color console, and `interrupt_time`'s cartridge is CGB-only |
 | `GBCONFORM_FRAMES` | run at least this many frames, then stop |
 | `GBCONFORM_SERIAL_OUT` | **set only when serial output is wanted**: write the raw bytes the ROM sends to the link port (`SB`) here |
 | `GBCONFORM_FRAME_OUT` | **set only when a frame is wanted**: write the final 160×144 frame here |
@@ -86,7 +86,7 @@ are excluded from the score. Declining is explicit: exit `0` and write nothing.
 > records a real error. There is a test for exactly this
 > (`test_an_adapter_that_crashes_is_an_error_everywhere_not_a_skip`).
 
-### Two things worth copying into your adapter
+### Four things worth copying into your adapter
 
 * **Stop early on a serial verdict.** Blargg's ROMs print `Passed`/`Failed` and
   then loop forever. Running the full frame budget every time turns a
@@ -94,6 +94,14 @@ are excluded from the score. Declining is explicit: exit `0` and write nothing.
 * **Give the cartridge a private copy of the ROM** if your MBC derives a save
   path from it. The runner stages ROMs into a temporary directory, but an
   emulator writing a `.sav` beside the ROM will dirty any local mirror.
+* **Honour `GBCONFORM_MODEL`.** Both adapters here got this wrong first time —
+  ours ignored it and auto-detected from the cartridge header, binjgb's
+  hard-coded `--force-dmg` — and in both cases it cost a check that would
+  otherwise have passed.
+* **Install your APU even with nothing to play it through.** A machine with no
+  sound chip is not a quiet Game Boy: `interrupt_time` synchronises through the
+  APU and never leaves its title screen without one. This project made exactly
+  that mistake and wrote the ROM off as unable to run headless.
 
 ### Example adapters
 
@@ -126,17 +134,64 @@ exec binjgb-tester -f "$GBCONFORM_FRAMES" --force-dmg \
 | Blargg `instr_timing` | serial | as above |
 | Blargg `mem_timing` | serial | as above |
 | `dmg-acid2` | screen | its author's reference image |
+| Blargg `mem_timing-2` | screen-text | the ROM's own printed report, **read off the frame** |
+| Blargg `halt_bug` | screen-text | as above |
+| Blargg `oam_bug` (DMG) | screen-text | as above |
+| Blargg `interrupt_time` (CGB) | screen-text | as above |
 
-Fourteen checks. Narrow on purpose: a working action that runs Blargg via
+Eighteen checks. Narrow on purpose: a working action that runs Blargg via
 serial and produces a badge is genuinely useful, and trying to cover every
 suite first produces nothing.
 
 **A principle that keeps this honest: no check's expected output is defined by
 our emulator.** A serial verdict is the test ROM's own judgement, and the
 dmg-acid2 verdict is Matt Currie's own reference image. We are a participant in
-this suite, not the authority for it. Blargg ROMs that only *draw* their result
-are therefore not included yet — scoring them would mean shipping reference
-frames produced by us, which is a different and weaker claim.
+this suite, not the authority for it.
+
+### `screen-text` — the ROM's own verdict, read off the picture
+
+Four of Blargg's ROMs never touch the link port; they print their result on
+screen and nowhere else. For a long time they were left out, because the only
+obvious way to score them was to compare pixels against a reference frame —
+and the only reference frame available is one *we* rendered, which would have
+made this project the authority for its own conformance suite. That exclusion
+is now gone, and the principle above is intact: these checks read the **text**
+and let the ROM's own `Passed` / `Failed #N` be the verdict, exactly as the
+serial checks do.
+
+The trick is that Blargg's print routine loads a font whose 8x8 glyphs live
+**in the ROM under test**, one per character in ASCII order. So every glyph on
+the screen is a byte-for-byte copy of eight bytes already in the cartridge we
+were handed:
+
+1. cut the frame into 8x8 cells and reduce each to a one-bit ink mask;
+2. find each cell's eight bytes in the ROM — every non-blank glyph is there,
+   at one place: the font;
+3. the font is contiguous and in ASCII order, so `offset // 8` is the
+   character code up to one unknown constant, and the constant is recovered by
+   keeping the alignment whose decoded words appear **verbatim in the ROM**
+   (each of these ROMs carries its own title and the strings `Passed` and
+   `Failed` as plain ASCII).
+
+Step 3 is what makes it self-validating: a wrong alignment decodes to noise,
+and noise is not in the ROM. When nothing scores, the check reports **error —
+"could not read the ROM's report off the frame"**, never a guessed verdict.
+Inverse video (`oam_bug` prints a failing sub-test's code white-on-black) and a
+console scrolled by a non-multiple of eight are both handled. The whole thing
+is `tools/conformance/screentext.py`, and its tests build a synthetic cartridge
+rather than needing a real one.
+
+**It costs an adapter nothing.** `screen-text` is a new *method*, not a new
+capability: it consumes the same `GBCONFORM_FRAME_OUT` frame the dmg-acid2
+check already asks for. Every adapter with a screenshot flag gained four checks
+with no change at all — measured on binjgb, which went from one scoreable check
+to five.
+
+Two of the four **pin their console** and ignore `--model`, because running
+them on the other machine measures nothing: `oam_bug` is a DMG-silicon defect a
+real Color console does not have, and `interrupt_time`'s cartridge header says
+CGB-only. That makes `GBCONFORM_MODEL` load-bearing for the first time — see
+§7, where honouring it turned a binjgb failure into a pass.
 
 ### Screen checks compare shade rank, not colour
 
@@ -256,17 +311,18 @@ The action also sets step outputs `passed`, `total`, `percent`, `skipped` and
   "schema": 1,                    // bumped if a field is renamed or removed
   "contract": "gbconform/1",
   "label": "conformance",
-  "model": "dmg",
-  "score": { "passed": 14, "total": 14, "percent": 100.0, "skipped": 0 },
-  "capabilities": {
-    "serial": { "available": true,  "reason": "" },
+  "model": "dmg",                 // the DEFAULT; a check may pin its own
+  "score": { "passed": 18, "total": 18, "percent": 100.0, "skipped": 0 },
+  "capabilities": {               // capabilities, not methods: `screen-text`
+    "serial": { "available": true,  "reason": "" },   // needs `screen`
     "screen": { "available": false, "reason": "exited cleanly without writing a GBCONFORM_FRAME_OUT file" }
   },
   "checks": [
     {
       "id": "blargg/cpu_instrs/08-misc",
       "suite": "blargg",
-      "method": "serial",
+      "method": "serial",          // serial | screen | screen-text
+      "model": "dmg",              // what this check actually ran on
       "status": "fail",            // pass | fail | skipped | error
       "detail": "the ROM reported Failed #2",
       "behaviour": "The leftovers: PUSH/POP (AF in particular) …",
@@ -321,7 +377,7 @@ suite.
 
 ## 7. Proven on
 
-**Ourselves — 14/14.** The [`Conformance (self)`](../.github/workflows/conformance-self.yml)
+**Ourselves — 18/18.** The [`Conformance (self)`](../.github/workflows/conformance-self.yml)
 workflow scores this emulator through the *same composite action* an external
 project calls, on every push, and fails below 100%. It also fails if the badge
 committed at [`docs/conformance-badge.json`](conformance-badge.json) has drifted
@@ -329,36 +385,89 @@ from the real result, so the README badge cannot quietly lie. That is the
 credibility requirement from [`conformance.md`](conformance.md) made mechanical:
 a suite whose author fails their own checks is worthless.
 
-**A foreign emulator — [binjgb](https://github.com/binji/binjgb).** Honest
-result, because the honest result is the useful one:
+**A foreign emulator, screen only — [binjgb](https://github.com/binji/binjgb).**
+Honest result, because the honest result is the useful one:
 
 * Its shipped headless `binjgb-tester` covers the **screen** capability with a
-  four-line shell adapter, and it **passes dmg-acid2** through this runner —
-  1/1, judged against the upstream reference image, with no changes to binjgb.
+  short shell adapter ([`adapters/binjgb.sh`](../tools/conformance/adapters/binjgb.sh)),
+  and it scores **4/5** through this runner with no changes to binjgb:
+  `dmg-acid2` against the upstream reference image, plus `mem_timing-2`,
+  `halt_bug` and `interrupt_time` on their own printed reports. Its one failure
+  is `oam_bug` — it does not model the DMG OAM-corruption defect, which the
+  report says in those words with the ROM's own `01:ok 02:02 …` line attached.
 * It has **no serial output**: no flag for it, and `emulator.h` publishes no
-  serial hook. So the thirteen serial checks are reported **skipped**, which is
-  exactly what the capability model is for.
+  serial hook (the one that exists is inside an `EM_ASM` and reaches only the
+  emscripten build). So the thirteen serial checks are reported **skipped**,
+  which is exactly what the capability model is for.
 * Writing the adapter surfaced one real gap in the runner — binjgb writes
   **ASCII `P3`** Netpbm, which we did not accept at first. That is precisely
   the kind of needless demand that stops projects adopting a contract, and it
   is why the frame formats are now deliberately permissive.
+* And a second one, found when `screen-text` arrived: that adapter passed
+  `--force-dmg` unconditionally, so the CGB-only `interrupt_time` was run on a
+  DMG and reported `Failed`. Honouring `GBCONFORM_MODEL` turned it into a pass.
+  **An adapter that hard-codes a console gets a wrong answer, not a missing
+  one** — worth checking before believing any single-check failure.
 
-So: the contract is proven end-to-end against an unrelated emulator for the
-screen half, and against ours for both. The serial half has not been proven
-foreign — binjgb cannot exercise it, and no claim is made that it has.
+**A foreign emulator, both capabilities — [Peanut-GB](https://github.com/deltabeard/Peanut-GB).**
+This is what closes the gap this section used to name. Peanut-GB is a
+single-header MIT emulator by Mahyar Koshkouei with no relation to this
+project, and `gb_init_serial()` is part of its published API — so it can
+exercise the half binjgb cannot. It has no headless runner, no screenshot flag
+and no serial dump of its own, so it is also the honest measure of the
+worst-case adoption cost below:
+[`adapters/peanut-gb.c`](../tools/conformance/adapters/peanut-gb.c), about a
+hundred lines against its header, nothing patched or forked.
+
+```console
+$ git clone --depth 1 https://github.com/deltabeard/Peanut-GB /tmp/peanut
+$ cc -O2 -I/tmp/peanut -o /tmp/peanut-gbconform \
+      tools/conformance/adapters/peanut-gb.c
+$ python3 tools/conformance/gbconform.py --adapter /tmp/peanut-gbconform \
+      --out /tmp/peanut-out --label peanut-gb
+peanut-gb: 13/18 (72%), 0 skipped
+```
+
+Eleven of the twelve serial checks pass, `dmg-acid2` passes, `mem_timing` fails
+over serial, and all four `screen-text` checks report the ROM's own `Failed` —
+with the sub-test codes readable in the artifacts (`01:03 02:02 03:ok …` for
+`oam_bug`; a `halt_bug` table whose DE column reads `0C04` on every row, which
+is the textbook signature of an emulator that gets "HALT does not halt" right
+and the PC-rewind half wrong). Peanut-GB is a DMG emulator and does not
+implement the Color console, so the CGB-pinned `interrupt_time` measures a DMG
+running a CGB cartridge; that is a true statement about the emulator, which is
+what the runner is for.
+
+Two things that matter more than the number. First, those four frames were
+drawn by an emulator whose shade ramp is **inverted** relative to ours (its
+shade 0 is white) — the text decoder never sees a colour, only which cells
+carry ink, so it read them straight off. Second, it read them without any
+picture of ours being involved anywhere, which is the whole point.
+
+So: **both halves of the contract are now proven against emulators that are not
+ours** — screen by binjgb and Peanut-GB, serial by Peanut-GB.
+
+Neither foreign run is in CI, and deliberately: both fetch and build somebody
+else's repository, which is a poor thing to put on every push. Re-run them by
+hand with the commands above when the runner or an adapter changes. What CI
+does enforce is our own 18/18 and the runner's own unit tests, which is the
+part that has to be right in *other people's* repositories.
 
 ### What adoption actually costs
 
 * **You already have a headless mode with a screenshot flag** — a four-line
-  shell script, as above. Minutes.
+  shell script, as above. Minutes, and it now buys five checks rather than one.
 * **You have serial output too** — one more line writing the bytes you already
   collect. Minutes.
-* **You have neither** — you need a headless entry point that runs N frames,
-  and a hook on `SB` writes. In our core that is about sixty lines
-  ([`examples/conformance_adapter.rs`](../examples/conformance_adapter.rs)),
-  and most of it is argument handling. In binjgb it would mean exposing serial
-  through `emulator.h`, which its public API does not do today — a real cost,
-  and worth naming rather than glossing over.
+* **You have neither** — you need a headless entry point that runs N frames, a
+  hook on `SB` writes, and a way to get the framebuffer out. Two independent
+  data points: about sixty lines in our own Rust core
+  ([`examples/conformance_adapter.rs`](../examples/conformance_adapter.rs)) and
+  about a hundred in C against Peanut-GB's header
+  ([`adapters/peanut-gb.c`](../tools/conformance/adapters/peanut-gb.c)), most
+  of both being argument handling and file I/O. In binjgb it would mean
+  exposing serial through `emulator.h`, which its public API does not do today
+  — a real cost, and worth naming rather than glossing over.
 
 ---
 
@@ -384,10 +493,16 @@ its badge SVG, which is the same dependency-light ethos as this project's own
 
 ## 9. Not covered yet, and honestly so
 
-* **Blargg's screen-only ROMs** (`mem_timing-2`, `halt_bug`, `interrupt_time`,
-  `oam_bug`) — including them means shipping reference frames produced by *us*,
-  which breaks the "no check is defined by our emulator" principle. Reading the
-  verdict text off the frame would fix that properly.
+* ~~**Blargg's screen-only ROMs**~~ — **done**: `mem_timing-2`, `halt_bug`,
+  `oam_bug` and `interrupt_time` are scored now, by reading the verdict text off
+  the frame rather than comparing it to a picture of ours (§2). The rest of
+  Blargg's screen-reporting corpus (`dmg_sound`, `cgb_sound`) is the same
+  mechanism away, and is only unwired because its checks want the audio
+  capability to be interesting.
+* **Sub-test resolution on a `screen-text` failure.** The decoded report is in
+  the artifacts and in `evidence.screen`, so `01:ok 02:02 …` is *there* — but
+  the `explain` text is still per-ROM, not per-sub-test. Mapping each code to
+  the behaviour it measures is the same next step named below for `Failed #N`.
 * **Audio.** [`testharness/audiocapture.rs`](../testharness/audiocapture.rs)
   already scores `dmg_sound` 12/12 device-free by reading the ROM's verdict at
   `$A000`; a third capability (`GBCONFORM_AUDIO_OUT`, a WAV or raw samples)
@@ -395,8 +510,9 @@ its badge SVG, which is the same dependency-light ethos as this project's own
   extension does not.
 * **Mooneye GB.** MIT-licensed, judged by `LD B,B` plus the Fibonacci register
   signature rather than serial — a third *method*, not a third capability.
-* **CGB.** `--model cgb` is plumbed through the contract, but no check uses it
-  yet: `cgb-acid2` and `cgb_sound` are unwired here.
+* **CGB.** `interrupt_time` is the first check to require it (its cartridge is
+  CGB-only), so `GBCONFORM_MODEL` is now load-bearing rather than plumbed —
+  but `cgb-acid2` and `cgb_sound` are still unwired.
 * **Sub-test detail.** A Blargg failure quotes `Failed #N`; mapping every `N`
   to the specific behaviour it measures would be the next big step in
   explanation quality.

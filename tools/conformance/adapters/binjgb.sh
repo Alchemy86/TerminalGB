@@ -30,8 +30,17 @@ TESTER="${BINJGB_TESTER:-binjgb-tester}"
 # cleanly. That is how an adapter declines a capability it does not have.
 [ -n "${GBCONFORM_FRAME_OUT:-}" ] || exit 0
 
+# GBCONFORM_MODEL is not decoration. `oam_bug` is a pass on a DMG and a fail on
+# a Color console because Color silicon has no OAM-corruption defect, and
+# `interrupt_time` is a CGB-only cartridge — so an adapter that hard-codes one
+# console reports the wrong answer for at least one check. binjgb has only
+# `--force-dmg`; for "cgb" the right move is to pass nothing and let it read
+# the cartridge header, which is what it does by default.
+MODEL_FLAG=--force-dmg
+[ "${GBCONFORM_MODEL:-dmg}" = "cgb" ] && MODEL_FLAG=
+
 exec "$TESTER" \
     -f "${GBCONFORM_FRAMES:-600}" \
-    --force-dmg \
+    ${MODEL_FLAG} \
     -o "$GBCONFORM_FRAME_OUT" \
     "$GBCONFORM_ROM"

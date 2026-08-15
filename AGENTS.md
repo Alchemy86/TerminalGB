@@ -3442,9 +3442,10 @@ the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before
   acid2 reference is **2-bit greyscale** PNG, an uncommon shape a naive decoder gets wrong.
 - **Guiding principle, worth defending: no check's expected output is defined by our emulator.**
   Serial verdicts are the ROM's own printed judgement; the acid2 verdict is its author's
-  reference image. This is why Blargg's *screen-only* ROMs (`mem_timing-2`, `halt_bug`,
-  `interrupt_time`, `oam_bug`) are NOT in the action — including them means shipping reference
-  frames produced by us, which is a weaker claim. Read the verdict text off the frame instead.
+  reference image. It is **enforced now, not just written down**:
+  `test_no_check_expects_a_reference_frame_produced_here` refuses any check that pins an image
+  unless that image ships with its own ROM under a redistributable licence. A future check that
+  quietly pinned one of our frames would go red rather than merely be regrettable.
 - **ROM licensing (the constraint that shaped the design):** dmg-acid2 is MIT and vendored
   (`third_party/`), so the action already has it. **Blargg's ROMs carry no explicit licence** —
   freely distributed but not relicensed — so they are **fetched at run time** from
@@ -3463,9 +3464,67 @@ the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before
   caller takes and it is the one that breaks silently when a mirror moves.
 - **Proven foreign against [binjgb](https://github.com/binji/binjgb)** (`gcc -O2 -Isrc -o
   binjgb-tester src/{tester,emulator,joypad,options,common,memory}.c -lm`): its shipped headless
-  tester covers the screen capability in a four-line adapter and **passes dmg-acid2 unmodified**.
-  It has **no serial output** (no flag, and `emulator.h` publishes no serial hook), so the serial
-  half is *not* proven foreign — say so rather than implying it is.
+  tester covers the screen capability in a short adapter and scores **4/5 unmodified**. It has
+  **no serial output** — no flag, and the only serial hook in `emulator.c` is inside an `EM_ASM`,
+  so it reaches the emscripten build and nothing else.
+- **The serial half IS proven foreign now, by [Peanut-GB](https://github.com/deltabeard/Peanut-GB)**
+  (single-header, MIT, Mahyar Koshkouei) — `gb_init_serial()` is in its public API.
+  `tools/conformance/adapters/peanut-gb.c` is ~100 lines against its header, nothing patched:
+  `git clone --depth 1 https://github.com/deltabeard/Peanut-GB /tmp/peanut && cc -O2 -I/tmp/peanut
+  -o /tmp/peanut-gbconform tools/conformance/adapters/peanut-gb.c`. Scores **13/18** (11 of 12
+  serial, dmg-acid2, and all four `screen-text` checks reporting the ROM's own `Failed`). It is a
+  DMG-only emulator, so a CGB-pinned check measures a DMG running a CGB cartridge — a true
+  statement about it. **Do not go back to saying the serial half is unproven.**
+- **Neither foreign run is in CI** (each fetches and builds somebody else's repo — the same call
+  `tools/bgb-interop/` makes). Re-run both by hand when the runner or an adapter changes.
+
+### `screen-text` — reading a ROM's own printed verdict off the frame
+
+Four Blargg ROMs never touch the link port. They are scored now, and the guiding principle above
+is intact: `tools/conformance/screentext.py` decodes the **text**, so the verdict is still the
+ROM's own `Passed`/`Failed #N`.
+
+- **The character table comes from the ROM UNDER TEST, not from us and not from a shipped font.**
+  Blargg's print routine loads a font whose 8x8 glyphs sit in the cartridge in ASCII order, so
+  every glyph on screen is eight bytes already in the ROM we were handed. Cut the frame into 8x8
+  ink masks, `rom.find` each one, and `offset // 8` is the character code up to one constant. The
+  constant is pinned by keeping the alignment whose decoded **words appear verbatim in the ROM**
+  (each ROM carries its own title plus `Passed`/`Failed` as plain ASCII). **Measured: all 19
+  non-blank glyphs of `halt_bug` are found, uniquely, and every one lands on the same `offset % 8`
+  class** — that shared alignment is the check that the block really is the font.
+- **A wrong alignment decodes to noise, and noise is not in the ROM** — which is what makes this
+  self-validating. When nothing scores, the check reports **error**, never a guessed verdict.
+- **NO CONTRACT CHANGE, AND THAT WAS THE DESIGN GOAL.** `screen-text` is a new *method* riding the
+  existing *screen capability* (`CAPABILITY_FOR_METHOD` in `gbconform.py` is where the two are
+  kept apart). Every adapter with a screenshot flag gained four checks with no edit at all —
+  binjgb went 1/1 → 4/5.
+- **Two real frames needed two wrinkles, both handled and both unit-tested:** `oam_bug` prints a
+  failing sub-test's code in **inverse video** (a cell that is the glyph's exact complement), and
+  a console scrolled by a non-multiple of eight puts the cell grid off the frame's lattice (the
+  sub-cell origin is searched 0..7 in each axis).
+- **It reads a FOREIGN emulator's frames whose shade ramp is inverted relative to ours** — the
+  decoder never looks at a colour, only at which cells carry ink. Proven on Peanut-GB, whose
+  shade 0 is white.
+- **The tests build a synthetic cartridge** (font + message + rendered frame) rather than needing
+  a real ROM, because Blargg's are fetched at run time and never vendored. Teeth proven: removing
+  the inverse-video retry reddens one case, taking the first alignment instead of the best-scoring
+  one reddens five.
+
+### `GBCONFORM_MODEL` is load-bearing, and BOTH adapters ignored it until a check needed it
+
+- **`oam_bug` is pinned to `dmg` and `interrupt_time` to `cgb` in `checks.json`** (a per-check
+  `model` overrides `--model`), because the answer differs by machine: the OAM-corruption defect
+  is DMG/MGB/SGB silicon only, and `interrupt_time`'s cartridge header says `$0143 = $C0`.
+- **`examples/conformance_adapter.rs` documented `GBCONFORM_MODEL` and ignored it**, calling
+  `Cpu::new` (i.e. `Model::Auto`) — so `oam_bug` ran on a Color console and failed. Nothing caught
+  it because no check had ever used the variable. `tools/conformance/adapters/binjgb.sh` had the
+  mirror-image bug: a hard-coded `--force-dmg`, which cost it `interrupt_time`. **An adapter that
+  hard-codes a console returns a wrong answer, not a missing one** — check that before believing a
+  single-check failure.
+- **`examples/conformance_adapter.rs` also built a machine with NO APU**, so `interrupt_time`
+  (which spins on `NR52`) never left its title screen — the exact trap `testharness/testroms.rs`
+  already records as "never build a test machine without an APU". `sound::SilentPlayer` is the fix.
+  Both defects were invisible for as long as the suite avoided the ROMs that expose them.
 - **`.github/actions/conformance` is the primary product**; the reusable workflow
   (`.github/workflows/conformance.yml`) is a wrapper. A called workflow gets a bare runner and
   must `actions/checkout` the caller itself; the composite action instead gets this whole repo

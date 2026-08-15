@@ -29,6 +29,7 @@ sys.path.insert(0, str(HERE))
 
 import gbconform  # noqa: E402
 import image  # noqa: E402
+import screentext  # noqa: E402
 
 REFERENCE = REPO / "third_party" / "dmg-acid2" / "reference-dmg.png"
 
@@ -289,6 +290,223 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("acid2_fake.actual.png", names)
 
 
+class ScreenTextFixture:
+    """A synthetic Blargg-shaped cartridge, shared by the cases below.
+
+    Everything here is synthetic on purpose. Blargg's ROMs carry no explicit
+    licence and are fetched at run time, never vendored, so these tests build
+    their own cartridge: a font laid out the way `common/print.s` lays one out,
+    a message, and a frame rendered from the two. That proves the algorithm
+    rather than one particular ROM, and it keeps the test suite runnable with
+    no network and no emulator.
+    """
+
+    FIRST = 0x20   # the font covers ASCII 0x20.. as Blargg's does
+    COUNT = 0x60
+
+    def font(self):
+        """A distinct 8x8 bitmap per character; space is blank."""
+        out = []
+        for i in range(self.COUNT):
+            if i == 0:
+                out.append(bytes(8))
+                continue
+            # Vary every row so no two glyphs collide and none is all-zero.
+            out.append(bytes(((i * 7 + r * 29) & 0xFF) | 0x81 for r in range(8)))
+        return out
+
+    def cartridge(self, message, *, pad=0x13):
+        """A fake ROM: filler, the font at an arbitrary alignment, the text."""
+        font = self.font()
+        base = bytearray(b"\x00" * pad)
+        base += b"".join(font)
+        base += message.replace("\n", " ").encode("latin-1")
+        return bytes(base), pad
+
+    def frame(self, lines, font, *, invert=()):
+        """Render 20x18 cells of text into a 160x144 two-shade image."""
+        px = bytearray(b"\xff" * (160 * 144 * 3))
+        for cy, line in enumerate(lines):
+            for cx, ch in enumerate(line):
+                g = font[ord(ch) - self.FIRST]
+                if (cx, cy) in invert:
+                    g = bytes(b ^ 0xFF for b in g)
+                for y in range(8):
+                    for x in range(8):
+                        if g[y] & (1 << (7 - x)):
+                            o = ((cy * 8 + y) * 160 + cx * 8 + x) * 3
+                            px[o:o + 3] = b"\x00\x00\x00"
+        return image.Image(160, 144, bytes(px))
+
+
+class ScreenText(ScreenTextFixture, unittest.TestCase):
+    """The decoder itself."""
+
+    def test_the_character_table_comes_from_the_rom_not_from_us(self):
+        lines = ["halt bug", "", "01 10 F1 0C04", "", "Passed"]
+        rom, _ = self.cartridge(" ".join(lines))
+        img = self.frame(lines, self.font())
+        reading = screentext.read(img, rom, image.quantise_shades)
+        self.assertEqual(reading.text.split("\n")[:5], lines)
+        self.assertEqual(screentext.verdict(reading.text)[0], "pass")
+
+    def test_a_failing_run_quotes_the_line_the_rom_printed(self):
+        lines = ["oam_bug", "01:ok  02:02", "Failed #2"]
+        rom, _ = self.cartridge(" ".join(lines))
+        reading = screentext.read(self.frame(lines, self.font()), rom,
+                                  image.quantise_shades)
+        status, detail = screentext.verdict(reading.text)
+        self.assertEqual(status, "fail")
+        self.assertIn("Failed #2", detail)
+
+    def test_inverse_video_is_read_not_rejected(self):
+        # oam_bug prints a failing sub-test's code white-on-black. Such a cell
+        # is the glyph's exact complement, and dropping it would lose the one
+        # number the report is about.
+        lines = ["oam_bug", "01:ok  02:02", "Failed #2"]
+        rom, _ = self.cartridge(" ".join(lines))
+        img = self.frame(lines, self.font(), invert={(7, 1), (8, 1), (10, 1), (11, 1)})
+        reading = screentext.read(img, rom, image.quantise_shades)
+        self.assertEqual(reading.text.split("\n")[1], lines[1])
+        # Distinct glyph shapes, not cells: `02` twice is two shapes.
+        self.assertEqual(reading.inverted, 2)
+
+    def test_a_frame_not_drawn_with_this_roms_font_is_refused(self):
+        # Refusing is the whole safety property: a screen we cannot read must
+        # produce "no verdict", never a guessed one.
+        lines = ["Passed"]
+        rom, _ = self.cartridge(" ".join(lines))
+        other = [bytes((b + 1) & 0xFF for b in g) for g in self.font()]
+        with self.assertRaises(screentext.ScreenTextError):
+            screentext.read(self.frame(lines, other), rom, image.quantise_shades)
+
+    def test_a_blank_screen_is_refused_rather_than_read_as_a_failure(self):
+        rom, _ = self.cartridge("Passed")
+        with self.assertRaises(screentext.ScreenTextError):
+            screentext.read(rgb_image(160, 144, b"\xff\xff\xff"), rom,
+                            image.quantise_shades)
+
+    def test_an_unfinished_run_is_not_a_pass(self):
+        lines = ["interrupt time"]
+        rom, _ = self.cartridge(" ".join(lines))
+        reading = screentext.read(self.frame(lines, self.font()), rom,
+                                  image.quantise_shades)
+        self.assertEqual(screentext.verdict(reading.text)[0], "unfinished")
+
+    def test_a_scrolled_console_is_still_read(self):
+        # A ROM that has scrolled its background by a non-multiple of 8 puts
+        # the cell grid off the frame's own 8x8 lattice.
+        lines = ["mem_timing", "01:ok  02:ok", "Passed"]
+        rom, _ = self.cartridge(" ".join(lines))
+        flat = self.frame(lines, self.font())
+        shifted = bytearray(b"\xff" * len(flat.pixels))
+        dx, dy = 3, 5
+        for y in range(144 - dy):
+            for x in range(160 - dx):
+                s = (y * 160 + x) * 3
+                d = ((y + dy) * 160 + x + dx) * 3
+                shifted[d:d + 3] = flat.pixels[s:s + 3]
+        reading = screentext.read(image.Image(160, 144, bytes(shifted)), rom,
+                                  image.quantise_shades)
+        self.assertEqual(reading.origin, (dx, dy))
+        self.assertEqual(screentext.verdict(reading.text)[0], "pass")
+
+
+SCREEN_TEXT_ADAPTER = r'''#!/usr/bin/env python3
+"""Answers a frame request with a pre-rendered picture chosen by MODEL."""
+import os, shutil, sys
+frame_out = os.environ.get("GBCONFORM_FRAME_OUT")
+if not frame_out:
+    sys.exit(0)                       # declines the serial capability
+shutil.copyfile(os.environ["FAKE_FRAME_" + os.environ["GBCONFORM_MODEL"].upper()],
+                frame_out)
+'''
+
+
+class ScreenTextEndToEnd(ScreenTextFixture, unittest.TestCase):
+    """The `screen-text` method through `main()`, including the model pin.
+
+    The unit cases above prove the decoder; this proves the wiring — that the
+    method reaches the right judge, that it needs only the SCREEN capability,
+    and that a check pinning its console actually gets that console.
+    """
+
+    def setUp(self):
+        self.td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self.td.name)
+        self.addCleanup(self.td.cleanup)
+
+        dmg = ["fake rom", "01:01", "Failed #1"]
+        cgb = ["fake rom", "01:ok", "Passed"]
+        rom, _ = self.cartridge(" ".join(dmg + cgb))
+        roms = self.tmp / "roms" / "blargg"
+        roms.mkdir(parents=True)
+        (roms / "fake.gb").write_bytes(rom)
+        for name, lines in (("DMG", dmg), ("CGB", cgb)):
+            p = self.tmp / f"frame-{name}.png"
+            p.write_bytes(image.encode_png(self.frame(lines, self.font())))
+            os.environ[f"FAKE_FRAME_{name}"] = str(p)
+
+        self.adapter = self.tmp / "adapter.py"
+        self.adapter.write_text(SCREEN_TEXT_ADAPTER)
+        self.registry = self.tmp / "checks.json"
+        self.registry.write_text(json.dumps({
+            "contract": "gbconform/1",
+            "suites": {"blargg": {"source": {"kind": "vendored", "dir": "blargg"}}},
+            "checks": [{
+                "id": "blargg/fake", "suite": "blargg", "rom": "fake.gb",
+                "method": "screen-text", "model": "cgb", "frames": 10,
+                "behaviour": "a stand-in", "explain": ["look here"],
+                "hardware": "Pan Docs",
+            }],
+        }))
+
+    def run_runner(self, extra=None):
+        out = self.tmp / f"out{len(list(self.tmp.iterdir()))}"
+        code = gbconform.main([
+            "--adapter", f"{sys.executable} {self.adapter}",
+            "--checks", str(self.registry),
+            "--roms-dir", str(self.tmp / "roms"),
+            "--repo-root", str(self.tmp / "roms"),
+            "--out", str(out), "--no-fetch",
+        ] + (extra or []))
+        return code, json.loads((out / "results.json").read_text()), out
+
+    def test_a_pinned_check_gets_its_own_console_whatever_model_says(self):
+        # --model dmg would make this ROM report Failed. The pin must win:
+        # `oam_bug` and `interrupt_time` are only meaningful on one machine
+        # each, so a global --model cannot be allowed to overrule them.
+        _, res, out = self.run_runner(["--model", "dmg"])
+        check = res["checks"][0]
+        self.assertEqual(check["model"], "cgb")
+        self.assertEqual(check["status"], "pass")
+        self.assertIn("Passed", check["evidence"]["screen"])
+        # The decoded report is kept for a human, not just summarised.
+        self.assertIn("blargg_fake.screen.txt",
+                      {p.name for p in (out / "artifacts").iterdir()})
+
+    def test_it_rides_the_screen_capability_and_needs_no_serial(self):
+        _, res, _ = self.run_runner()
+        self.assertTrue(res["capabilities"]["screen"]["available"])
+        # The adapter declines serial and is not asked for it: the only check
+        # here is screen-text, so no serial probe should even be attempted.
+        self.assertNotIn("serial", res["capabilities"])
+        self.assertEqual(res["score"]["skipped"], 0)
+
+    def test_an_unreadable_frame_is_an_error_not_an_invented_verdict(self):
+        os.environ["FAKE_FRAME_CGB"] = str(self.tmp / "blank.png")
+        (self.tmp / "blank.png").write_bytes(
+            image.encode_png(rgb_image(160, 144, b"\xff\xff\xff"))
+        )
+        _, res, _ = self.run_runner()
+        check = res["checks"][0]
+        self.assertEqual(check["status"], "error")
+        self.assertIn("could not read the ROM's report", check["detail"])
+        # An error still carries the explanation — a crash on one ROM is often
+        # caused by the very behaviour under test.
+        self.assertEqual(check["explain"], ["look here"])
+
+
 class Contract(unittest.TestCase):
     def test_the_contract_is_printable_without_an_adapter(self):
         # `--contract` is the thing an emulator author reads first; it must
@@ -308,7 +526,7 @@ class Contract(unittest.TestCase):
             self.assertNotIn(c["id"], ids, "check ids must be unique")
             ids.add(c["id"])
             self.assertIn(c["suite"], reg["suites"])
-            self.assertIn(c["method"], ("serial", "screen"))
+            self.assertIn(c["method"], gbconform.CAPABILITY_FOR_METHOD)
             # Every check must be able to explain itself. This is the
             # project's differentiator, so it is enforced, not hoped for.
             self.assertTrue(c["behaviour"], f"{c['id']} has no behaviour")
@@ -316,6 +534,39 @@ class Contract(unittest.TestCase):
             self.assertTrue(c["hardware"], f"{c['id']} cites no hardware source")
             if c["method"] == "screen":
                 self.assertIn("reference_image", c)
+            # A `screen-text` check reads the ROM's own printed report, so it
+            # must NOT carry a reference image — the whole point is that no
+            # expected picture of ours is involved.
+            if c["method"] == "screen-text":
+                self.assertNotIn("reference_image", c)
+            if "model" in c:
+                self.assertIn(c["model"], ("dmg", "cgb"))
+
+    def test_no_check_expects_a_reference_frame_produced_here(self):
+        """The guiding principle, made mechanical.
+
+        Only ONE suite in the registry is allowed to be judged against a
+        picture, and that picture must be its own author's, shipped with the
+        ROM under its own licence. Everything else is judged by what the ROM
+        itself printed. A future check that quietly pins a frame rendered by
+        this emulator would make this project the authority for its own
+        conformance suite; this test is what stops that happening by accident.
+        """
+        reg = json.loads((HERE / "checks.json").read_text())
+        for c in reg["checks"]:
+            if "reference_image" not in c:
+                continue
+            src = reg["suites"][c["suite"]]["source"]
+            self.assertEqual(
+                src["kind"], "vendored",
+                f"{c['id']} is judged against an image, so its suite must ship "
+                "that image itself",
+            )
+            self.assertIn(
+                "MIT", " ".join(src["reason"]),
+                f"{c['id']}'s reference image must come with a licence that "
+                "permits redistributing it",
+            )
 
 
 if __name__ == "__main__":

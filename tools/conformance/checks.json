@@ -260,6 +260,75 @@
       ],
       "hardware": "Pan Docs — Rendering, OBJ priority, and the LCDC register.",
       "reference": "https://github.com/mattcurrie/dmg-acid2"
+    },
+    {
+      "id": "blargg/mem_timing-2",
+      "suite": "blargg",
+      "rom": "mem_timing-2/mem_timing.gb",
+      "method": "screen-text",
+      "frames": 1500,
+      "behaviour": "The same per-access read/write timing `mem_timing` measures, re-run by a ROM that prints its result on screen instead of down the link port.",
+      "explain": [
+        "This is `mem_timing`'s three sub-tests again (`read_timing`, `write_timing`, `modify_timing`) in a build that reports on screen only. If `mem_timing` passes over serial and this does not, suspect your adapter or your frame, not your timer: the emulation under test is identical.",
+        "If BOTH fail the same way, the cause is structural — an emulator that executes a whole instruction and only then advances the timer cannot land a read on the right M-cycle whatever its per-instruction cycle table says. Step the timer one M-cycle BEFORE each bus access.",
+        "The sub-test line the ROM prints (`01:ok 02:ok 03:ok`) names which of the three failed, which is more specific than the `Failed #N` a serial run gives you.",
+        "This check reads the text the ROM drew, so a wrong palette cannot fail it — but a frame with more than the two shades this ROM uses, or one your adapter scaled, will make the screen unreadable and report an error rather than a verdict."
+      ],
+      "hardware": "Pan Docs — Timer and Divider Registers; the ROM's own readme.txt describes the measurement.",
+      "reference": "https://gbdev.io/pandocs/Timer_and_Divider_Registers.html"
+    },
+    {
+      "id": "blargg/halt_bug",
+      "suite": "blargg",
+      "rom": "halt_bug.gb",
+      "method": "screen-text",
+      "frames": 1500,
+      "behaviour": "The HALT bug: `HALT` executed with IME=0 while an interrupt is already pending does not halt, and the CPU reads the byte after it TWICE.",
+      "explain": [
+        "The rule is exact. When `HALT` is reached with `IME = 0` and `IE & IF & 0x1F != 0`, the CPU does not stop; it fetches the next byte and then fails to increment PC, so that byte is executed a second time. `HALT` there is effectively a one-byte instruction whose successor runs twice.",
+        "Emulators usually get the 'does not halt' half right and the PC half wrong, because the second half only shows up when the following byte is the first of a MULTI-byte instruction — `halt; ld a,$14` becomes `ld a,$14` then whatever `$14` decodes to. That is precisely what this ROM builds.",
+        "Symptom in real software: a game freezes or mis-times interrupts after a `HALT` taken with interrupts disabled and one already pending.",
+        "The table this ROM prints has one row per (IE, IF) pair with the DE it expected; a single wrong row is far more useful than the pass/fail, and it is in this check's `screen` evidence.",
+        "This ROM prints its result on screen and never touches the link port, so no amount of serial capture will score it."
+      ],
+      "hardware": "Pan Docs — Halt (the 'halt bug' subsection).",
+      "reference": "https://gbdev.io/pandocs/halt.html"
+    },
+    {
+      "id": "blargg/oam_bug",
+      "suite": "blargg",
+      "rom": "oam_bug/oam_bug.gb",
+      "method": "screen-text",
+      "model": "dmg",
+      "frames": 3000,
+      "behaviour": "The DMG's OAM-corruption defect: while the PPU is scanning OAM, a 16-bit increment/decrement on an address in $FE00-$FEFF corrupts a row of sprite attributes.",
+      "explain": [
+        "This check is PINNED to DMG and cannot honour a global --model, because the defect is DMG/MGB/SGB silicon only: a real Color console passes none of it and is right not to. If your adapter ignores GBCONFORM_MODEL and picks the console from the cartridge header instead, it will run this ROM on a Color machine and report `Failed #2` — that failure is your adapter, not your PPU. Check that first.",
+        "The cause is the ADDRESS BUS, not a memory access. The CPU's 16-bit increment/decrement unit is wired to the address bus and asserts its operand even when no read or write follows, so `inc de` with `DE = $FE00` corrupts OAM while `add hl,bc` with the same value does not. An emulator that hooks only its read and write paths gets sub-tests 2 (`causes`) and 3 (`non_causes`) wrong.",
+        "`ld a,[hl+]` and the FIRST read of a `pop` share their M-cycle with the increment unit, so they trigger it once each — Pan Docs records `pop` as triggering three times, not four.",
+        "Sub-test 4 (`scanline_timing`) is the sharp one: it needs to know WHICH OAM row a bus cycle inside an instruction lands on, so an emulator that only advances its PPU at instruction boundaries has to predict the row arithmetically, and the phase constant is narrow — this project measured a window only four dots wide.",
+        "The `01:ok 02:02 …` line names each failing sub-test with its own code; read it in this check's `screen` evidence rather than working from `Failed #N`."
+      ],
+      "hardware": "Pan Docs — OAM Corruption Bug.",
+      "reference": "https://gbdev.io/pandocs/OAM_Corruption_Bug.html"
+    },
+    {
+      "id": "blargg/interrupt_time",
+      "suite": "blargg",
+      "rom": "interrupt_time/interrupt_time.gb",
+      "method": "screen-text",
+      "model": "cgb",
+      "frames": 1500,
+      "behaviour": "How long interrupt dispatch takes, measured from inside the handler — and that it takes the SAME time at single and double speed.",
+      "explain": [
+        "This check is PINNED to CGB: the cartridge header says $0143 = $C0, so it is a Color-only cartridge and a DMG run measures nothing.",
+        "The ROM's own source states the expected answer: 'Should take 13 cycles at either speed'. If your dispatch is a flat 16 or 20 T-cycles applied in one lump, the count is wrong. Hardware spends five M-cycles — two idle, PC-high push, PC-low push, vector fetch — and the timer keeps running through all of them.",
+        "IT HANGS ON ITS TITLE SCREEN IF YOUR MACHINE HAS NO APU. The ROM synchronises through the sound chip (it spins on NR52), so an emulator built without one, or a headless mode that omits it, never gets past the first screen. A 'no verdict' result here is far more often a missing APU than a broken interrupt path — this project made exactly that mistake and wrote the ROM off as unable to run headless.",
+        "The second half is the speed switch. Rounds 3 and 4 run after `cpu_fast`, and if the APU is clocked at CPU speed rather than the fixed base clock it runs twice as fast at double speed and the ROM's own synchronisation misses, printing speed `00`. That reads exactly like 'the double-speed switch does not work' and is not: when a test synchronises through one subsystem to measure another, its failure names the wrong one.",
+        "The printed table gives one line per round, so a run that is right at single speed and wrong at double is visible directly in this check's `screen` evidence."
+      ],
+      "hardware": "Pan Docs — Interrupts (dispatch timing) and CGB Registers (KEY1, the speed switch); the ROM's own `interrupt_time.s`.",
+      "reference": "https://gbdev.io/pandocs/Interrupts.html"
     }
   ]
 }
