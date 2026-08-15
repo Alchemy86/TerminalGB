@@ -15,6 +15,23 @@
 
 **A Game Boy / Game Boy Color emulator written in Rust — runs on the desktop, in your terminal, and in the browser via WebAssembly.**
 
+## Run it
+
+```bash
+git clone https://github.com/Alchemy86/TerminalGB && cd TerminalGB
+cargo run --release --example terminal -- third_party/dmg-acid2/dmg-acid2.gb
+```
+
+Needs **Rust 1.83+** and nothing else — no system libraries, no `apt install`, no submodule, and
+no cartridge to start with: the MIT-licensed [dmg-acid2](third_party/dmg-acid2/) test ROM ships
+with the repository, and that is what the command runs. Swap in your own `.gb`/`.gbc` when you
+have one — [it stays on your machine](#your-roms-stay-yours--and-stay-local).
+
+Or with nothing installed at all: [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Alchemy86/TerminalGB?quickstart=1) builds it in the browser and hands you a terminal.
+
+**[Quick start ↓](#quick-start)** — `cargo install`, the desktop window, sound ·
+**[Run it in one click ↓](#run-it-in-one-click)** — the Codespace, the MCP server, the headless agent
+
 <img width="2152" height="1822" alt="The terminal frontend running Pokémon Blue with the live trainer panel beside it: TRAINER, BADGES, a decompressed SQUIRTLE sprite, and the battle opponent's stats, moves and hidden values" src="https://github.com/user-attachments/assets/d7af5464-22c9-4a36-acf2-cf1e8c7b9956" />
 
 <p align="center"><em>The whole thing in a terminal: the game on the left, the read-only
@@ -25,7 +42,8 @@
 </p>
 
 <p align="center"><em>The terminal frontend running
-<a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> — 0 of 23,040 pixels differ from
+<a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> — the ROM the
+<a href="#run-it">Run it</a> command above starts, and 0 of 23,040 pixels differ from
 the author's reference image. Every screenshot in this README was taken from this emulator, with
 its own <code>c</code> key or a capture of its own window; apart from the trainer-view picture
 above, they use only test ROMs the repository is free to show.</em></p>
@@ -113,11 +131,9 @@ cd TerminalGB
 cargo run --release --example terminal -- third_party/dmg-acid2/dmg-acid2.gb
 ```
 
-That is the whole set-up, and it works from a clean clone: **no system libraries, no
-`apt install`, no submodule.** The ROM in that command is the MIT-licensed
-[dmg-acid2](third_party/dmg-acid2/) PPU test that ships with the repository — the one thing
-here you can run without bringing your own cartridge, and what the pictures above are. Swap it
-for your own `.gb`/`.gbc` when you have one.
+That is the [command at the top of this page](#run-it), and it is the whole set-up: **no system
+libraries, no `apt install`, no submodule**, and the [dmg-acid2](third_party/dmg-acid2/) ROM it
+runs ships with the repository.
 
 The `tests/` submodule carries **Blargg's test ROMs** and is needed only by the accuracy
 harness: `git clone --recurse-submodules`, or `git submodule update --init` afterwards.

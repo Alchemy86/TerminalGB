@@ -3338,6 +3338,36 @@ attic, not ours.
   cannot bite; check any new lockup on white, black **and** at 16 px before committing — a
   mark that fails as a favicon has failed.
 
+### The README's first code block is a PROMISE, and nothing in CI checks it
+
+`README.md` opens with a **`## Run it`** block — `git clone …` then
+`cargo run --release --example terminal -- third_party/dmg-acid2/dmg-acid2.gb` — placed
+immediately after the tagline, above every screenshot, because the whole of it had previously
+sat at line 68 of a 2,003-line file behind five images and two prose sections. It is the first
+thing a stranger reads and **it is the one claim on the page no gate can verify**:
+`docs-check` checks links and scores, not that a command works.
+
+- **Re-verify it from a GENUINELY CLEAN CLONE whenever the ROM path, the default feature set or
+  the toolchain pin moves** — `git clone <this repo> /tmp/x && cd /tmp/x && cargo build --release
+  --example terminal`, with the ALSA shim variables (`PKG_CONFIG_PATH`/`LIBRARY_PATH`/
+  `LD_LIBRARY_PATH`) **unset**, or you are measuring this box's shims and not a stranger's
+  machine. Verified 2026-08-16: 34 s build, no system libraries, `tests/` submodule empty and
+  irrelevant, `rom: "DMG-ACID2"`, `speed_pct` 99.94.
+- **A TUI cannot be smoke-tested by piping it to a file** — it refuses only when *neither*
+  stdin nor stdout is a tty, and otherwise draws nothing useful into a pipe. **There is no
+  `script(1)` on this box**; a ~25-line `pty.fork` harness plus `GB_TELEMETRY=<path>` is the
+  way, and the telemetry line is the evidence (`rom`, `emulated_fps`, `speed_pct`) rather than
+  bytes on the wire. Point `XDG_CONFIG_HOME`/`XDG_STATE_HOME` at a scratch dir so the check
+  cannot rewrite the captain's recents or volume.
+- **Three headings now contain the word "run"** — `## Run it` (the two-line answer, top),
+  `## Run it in one click` (Codespaces, the MCP server, the headless agent) and
+  `## Quick start` (`cargo install`, the desktop window, sound). That is deliberate: the top
+  block is a **doorway** that links down to both and duplicates neither. If you add a fourth,
+  collapse one.
+- The Codespaces badge is repeated in the top block, and the argument is that it is the only
+  genuinely **zero-install** path: a reader without a Rust toolchain is otherwise told to
+  install one before seeing anything. The detail stays in its own section below.
+
 ### Verifying that a README or doc actually renders
 
 **Render it through GitHub's own renderer and look at it** — this is how the wrong caption in
