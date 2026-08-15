@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed test-longplay \
+.PHONY: gen1-atlas test-gen1-atlas web desktop docs-links docs-check status lint lint-audio test-audio-perf embed test-longplay \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
@@ -43,6 +43,7 @@ docs-links:
 docs-check:
 	python3 docs/tools/codemap_links.py --check
 	python3 docs/tools/status_numbers.py --check
+	python3 tools/gen1-atlas/render.py --check
 
 # Status page (docs/status.md + the Pages-ready docs/status/index.html):
 # re-derive every suite score from testharness/*_baseline.txt and rewrite the
@@ -50,6 +51,24 @@ docs-check:
 # (in CI) is red until the pages agree with the baselines again.
 status:
 	python3 docs/tools/status_numbers.py
+
+# The Gen 1 memory atlas (docs/gen1/atlas/): regenerate every table, index and
+# coverage figure from docs/gen1/atlas/atlas.tsv. Prose outside the
+# <!-- atlas:… --> markers is preserved. docs-check (in CI) is red until the
+# pages agree with the data again.
+#
+# To refresh the *data* you need a built pret/pokered checkout — see
+# tools/gen1-atlas/extract.py — and to re-verify it against a cartridge, see
+# testharness/gen1atlas.rs.
+gen1-atlas:
+	python3 tools/gen1-atlas/render.py
+
+# The atlas harness. Its structural tier — including the gate that every Gen 1
+# address hard-coded in a plugin is in the atlas — needs no cartridge and runs
+# under a plain `cargo test --release`. Point POKE_ROM at your own Pokemon Red
+# or Blue for the tiers that check the map against a running machine.
+test-gen1-atlas:
+	cargo test --release --test gen1atlas
 
 build-wasm:
 	cargo build --release --target wasm32-unknown-unknown

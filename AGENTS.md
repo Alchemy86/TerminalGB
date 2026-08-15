@@ -3834,6 +3834,90 @@ that holds it to the retail cartridge, agents that play it, and an evaluation pr
   player's own cartridge, so they are run by hand — the same rule `tools/sameboy-oracle/` and
   `tools/bgb-interop/` follow. **No LLM has been measured through the seam**; it exists, is
   tested against a real child process, and has never had a model on the far end.
+## The Gen 1 memory atlas — the whole address space, verified (`docs/gen1/atlas/`)
+
+**Full page: [`docs/gen1/atlas/README.md`](docs/gen1/atlas/README.md); the data is
+`docs/gen1/atlas/atlas.tsv`; the machinery is `tools/gen1-atlas/` and
+`testharness/gen1atlas.rs`.** `docs/gen1/memory-map.md` is still the right page for *why* —
+it is task-shaped and explains mechanisms. The atlas is the *where*: 2,898 entries, **every
+byte of WRAM and HRAM accounted for**, indexed by address and by name, with the structures
+written out in full.
+
+- **THE POINT IS NOT THE MAP, IT IS THAT THE MAP IS CHECKED.** Every published Gen 1 memory
+  map is a transcription — somebody read an address once and everybody since copied it. This
+  repository has a cycle-accurate emulator, so an entry can carry *evidence*: **R** the
+  cartridge names the address as an instruction operand, **L** the byte changed during a
+  fixed script on a real cartridge, **I** a named invariant proved it means what it says.
+  Measured on the retail cartridge: 1,594 R, 2,694 L, 39 I, and **7 storage entries with no
+  evidence at all — which the pages say out loud** rather than hiding.
+- **`atlas.tsv` IS the source of truth and eight of its ten columns are generated.**
+  `region bank addr len symbol role sect` come from a built `pret/pokered` checkout whose
+  `pokeblue.gbc` matches `roms.sha1` (and is byte-identical to the captain's cartridge —
+  checked by SHA-1 before a single address is believed); `group` comes from the rules in
+  `tools/gen1-atlas/chapters.py`; `verify` is the machine's own baseline; only `desc` is
+  hand-written. **Never hand-edit a generated column.**
+- **`make gen1-atlas` renders 22 pages; `make docs-check` (already in CI) fails if any is
+  stale.** Prose outside the `<!-- atlas:… -->` markers is preserved, so writing and tables
+  live in one file and only one of them is machine-owned. Same habit as
+  `docs/tools/status_numbers.py`'s `suite-scores:begin`.
+- **The anti-drift gate is the thing to keep: every Gen 1 address hard-coded in a plugin must
+  appear in the atlas.** `wCurMap` was written out in **nine** separate files before this
+  existed and nothing could tell you whether they agreed. It is a *text scan* for
+  `const NAME: u16 = 0x____;` across a named list of files — deliberately, because making
+  every consumer import a shared table is a large mechanical change across crates other crews
+  are editing, and the drift that matters is "somebody wrote down an address nothing has heard
+  of". **107 constants across 9 files gated today**, and adding a file to `PLUGIN_SOURCES` is
+  how a new consumer joins. It is not plugins-only: `src/gen1battle.rs` and
+  `src/longplay/mod.rs` landed with Gen 1 addresses of their own while this was being written,
+  and both agree with the atlas — which is the first time that could be checked at all.
+- **`battle_struct` IS 29 BYTES.** `plugins/battle-control/src/wram.rs` said 29 and
+  `plugins/trainer/src/gen1.rs` said 28; the map settles it and the harness proves it by
+  requiring `wTrainerClass` to sit immediately after `wBattleMonPP + 4`. Do not copy the 28.
+- **`verify` is a baseline under this repo's usual rule** — any change is red in either
+  direction, an entry that *starts* being verified is a change too, re-bless deliberately with
+  `UPDATE_ATLAS_VERIFY=1 cargo test --release --test gen1atlas`. Tier A needs no cartridge and
+  runs in CI under a plain `cargo test --release`; tiers B and C skip with **exit 0** without
+  `POKE_ROM`, like `colosseum.rs`.
+- **The live sweep runs WITHOUT a save, on purpose.** Its result must depend only on the
+  cartridge and the fixed script or it cannot be a baseline. The invariants run on a
+  *separately staged* copy carrying the player's real save — one staged path for both was a
+  real bug here, where whichever ran last silently decided the other. Neither ever writes
+  beside the user's ROM.
+- **AN INVARIANT CAN PASS FOR THE WRONG REASON, AND SAYING SO IS THE JOB.** `owned ⊆ seen` is
+  symmetric when the two sets are equal, so on a save where everything seen was caught it
+  cannot tell `wPokedexOwned` from `wPokedexSeen` — proved by swapping the symbols and
+  watching it stay green. The check now reports that it is vacuous, and the asymmetric
+  replacement ("the party is in the Pokédex") cross-references three independently located
+  things: the party's *internal* species index, `PokedexOrder` **read out of the cartridge**,
+  and `wPokedexOwned`. Shifting `PokedexOrder` by one byte reddens it and the content check
+  beside it, independently.
+- **Teeth proved, not claimed:** moving `wPartyCount` one byte reddens the ordering and alias
+  checks; an invented plugin constant reddens the drift gate by name; a one-byte
+  `PokedexOrder` shift reddens two checks. The RHYDON signature check caught a typo of *mine*
+  (`D` is `$83`, not `$84`) during development.
+- **`gap` and `free` rows are why the coverage adds up.** The Stack section is `$DF00-$DFFF`
+  and its only label `wStack` sits at `$DFFF` because the pointer grows **downwards** — so
+  255 bytes are "reached by no label", which is the honest description and not a hole. `free`
+  rows are runs the linker reported EMPTY. With those, every byte of a region is accounted
+  for and "unused" becomes something the atlas *states*.
+- **pokered numbers repeated structures BOTH ways** — `wPartyMon1`..`wPartyMon6` and the
+  zero-padded `wSprite01`..`wSprite15` — so slot-1 detection must carry the digit run's
+  *width* across. Getting that wrong listed 49 sprite slots in full on a page nobody could
+  read, and it bit in all three places that do the detection.
+- **Licence line, unchanged and load-bearing:** addresses, symbol names and structure layouts
+  are **facts** and are cited; pokered's prose and comments are **not ours to copy**, so every
+  `desc` is written from scratch. Nothing from pokered is vendored, nothing is fetched at run
+  time, and no ROM or game data is in the repository. The extractor is pointed at *your* built
+  checkout or it does not run.
+- **Red falls out nearly free** (`extract.py --game red`; same engine, same WRAM layout).
+  **Yellow is deliberately out** — its work RAM shifted, so an address from this page is
+  *wrong* there rather than approximately right, and the failure mode is a write landing in
+  the middle of somebody else's data that still passes its own checksum.
+- **Rebuilding pokered from scratch takes about two minutes** and is worth it rather than
+  trusting a stale `/tmp` checkout: build rgbds 1.0.3 from the gbdev release tarball (needs
+  only gcc/make/bison), then `make blue` in a `pret/pokered` clone, then `sha1sum -c
+  roms.sha1`. The **`.map` file, not the `.sym`**, is what the extractor reads — it is the
+  only artefact carrying both an address and enough structure to derive a length.
 
 ## The Gen 1 mechanics & hacking area (`docs/gen1/`)
 

@@ -6,6 +6,14 @@ Every address on this page is for **English Pokémon Red and Blue**, which share
 layout exactly. Yellow does not (its WRAM shifted); Generation 2 changed the structures
 themselves. Both are named as extensions everywhere, never assumed.
 
+> **Looking for an address this page does not cover?** This page is *task-shaped*: it documents
+> the blocks this project's plugins needed and explains the mechanism behind each. The
+> **[memory atlas](atlas/README.md)** beside it is the other thing — a walk of the *whole*
+> address space with every byte of work RAM and high RAM accounted for, indexed
+> [by address](atlas/by-address.md) and [by name](atlas/by-name.md), with the
+> [structures](atlas/structures.md) written out in full and evidence recorded per entry. Start
+> here for *why*; go there for *where*.
+
 Each entry carries its `pret/pokered` **symbol name** and how the address was established —
 see the three grades in the [area standards](README.md#standards-for-this-area). The short
 version: *symbol file* means the disassembly was built and its ROMs matched `roms.sha1`;
@@ -311,11 +319,11 @@ keeps game data out of this repository: the numbers are read from the player's o
 
 Three things this map makes obviously possible that nobody has built yet:
 
-* **The box.** `wBoxCount`/`wBoxMons` are `box_struct`s — the same layout as a party entry
-  minus level and stats. Everything party-shaped on this page applies to storage.
-* **The item bag.** `wNumBagItems`/`wBagItems` is a terminated `(item, quantity)` list. The
-  same "snapshot, replace, restore" discipline battle control uses would give a scripted
-  scenario its items.
+* ~~**The box.**~~ ~~**The item bag.**~~ Both are mapped now, with their structures written out
+  and their consistency checked against a real save on every run —
+  [storage](atlas/storage.md), [the bag](atlas/bag.md), [the structures](atlas/structures.md).
+  What is still unbuilt is the *use*: the same "snapshot, replace, restore" discipline battle
+  control uses would give a scripted scenario its items and its stored teams.
 * **Map and warp editing as a *feature*.** Redirecting `wWarpEntries` is already proven
   ([`examples/gen1_trade.rs`](../../examples/gen1_trade.rs)); generalising it would let a
   script put the player anywhere the game can legitimately walk to.
