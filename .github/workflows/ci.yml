@@ -236,7 +236,7 @@ jobs:
   # never a hash of our output, and the job is red on ANY change in either
   # direction. ~20s to fetch, ~2s to run all five groups.
   external-suites:
-    name: External suites (Mooneye / SameSuite / Mealybug / cpp)
+    name: External suites (Mooneye / SameSuite / Mealybug / cpp / c-sp x13)
     runs-on: ubuntu-latest
     env:
       RUST_BACKTRACE: full
@@ -249,12 +249,14 @@ jobs:
         run: make fetch-test-suites
       - name: Score every external suite against its baseline
         run: make test-external
-      # …and the two PPU-bearing suites again in the OTHER picture mode.
+      # …and the PPU-bearing suites again in the OTHER picture mode.
       # `test-external` scores whichever mode is the default, so without this
       # the per-dot `identical` mode — whose whole purpose is these suites — is
       # gated by nobody, and both its progress and its regressions would be
       # invisible. Its baselines carry their own pixel counts, so a change to
-      # the pipeline shows up whether or not it moves a row.
+      # the pipeline shows up whether or not it moves a row. The Gambatte suite
+      # is where the two engines disagree most (hundreds of rows), so it is
+      # scored twice like the rest.
       - name: Score the `identical` picture mode against its own baseline
         run: make test-external-accurate
       # Mealybug writes the frame it produced for every ROM; on a red build

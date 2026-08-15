@@ -282,12 +282,24 @@ const SGB_BOOT_SYSTEM_COUNTER_ALL_ONES: u16 = 0xD174;
 /// `None` to leave it where the `LCDC` write in
 /// [`MemoryManagementUnit::set_initial`] puts it (the start of line 0).
 ///
-/// See [`crate::gpu::Gpu::set_boot_position`]. Only the first DMG needs one:
+/// See [`crate::gpu::Gpu::set_boot_position`]. Only the first DMG gets one:
 /// every other console this emulator models either measures line 0 (`DMG ABC`,
 /// via `boot_hwio-dmgABCmgb`'s `LY = $0A`) or does not measure `LY`/`STAT` at
 /// all (`boot_hwio-S` and `misc/boot_hwio-C` both skip `$FF40`, `$FF41` and
-/// `$FF44` — see their own masks). Guessing a position no ROM checks would be
-/// inventing state, so those are left alone.
+/// `$FF44` — see their own masks).
+///
+/// **Correction, 2026-08-15: a suite DOES measure it on a plain DMG.**
+/// GBMicrotest's `poweron_ly_*` and `poweron_stat_*` are nothing but nine to
+/// two hundred `nop`s followed by `LDH A,[$FF44]` / `[$FF41]` and a `cp`, so
+/// every one of them pins where the PPU was when the cartridge started. They
+/// disagree with us: hardware reads `LY = 0` at 119 M-cycles and `1` at 120,
+/// where we roll over at 114, and hardware's `STAT` is still mode 1 for the
+/// first six M-cycles where ours is already mode 0. **The constant was
+/// nevertheless left alone, deliberately.** Sweeping it across the whole frame
+/// scores 237/513 at 69900, 251 at line 0 (today), 262 at 70168 and 250 at
+/// 70184 — a jagged profile with no clean optimum, which is the signature of a
+/// constant absorbing an error somewhere else rather than a value being found.
+/// See `docs/measured/scoreboard.md`, "The c-sp aggregation".
 fn boot_ppu_dot(console: crate::mode::Model) -> Option<u32> {
     match console {
         crate::mode::Model::Dmg0 => Some(DMG0_BOOT_PPU_DOT),

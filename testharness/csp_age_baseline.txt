@@ -1,0 +1,83 @@
+# SCORED WITH THE `standard` PICTURE MODE (GB_PPU=standard, alias `fast`).
+# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 make test-external
+# The other mode produces different numbers for the same ROMs — see
+# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this
+# file with the wrong machine's results.
+#
+# `age` baseline — the EXPECTED verdict of every ROM in the age suite,
+# judged by ITS OWN AUTHOR'S convention (see `age-test-roms/game-boy-test-roms-howto.md`
+# in the release, and the module docs of examples/csp_suite.rs). Nothing here is
+# a hash or a screenshot of our own output.
+#
+# The ROMs are NOT vendored. `tools/fetch-test-suites.sh` downloads the
+# c-sp/game-boy-test-roms release pinned there and checks its SHA-256.
+#
+# A row key is `<path-under-the-suite>@<console>`, where the console is the word
+# the ROM's or the reference screenshot's own file name used. `SKIP` marks a row
+# this runner deliberately does not score and says why; those count in neither
+# column.
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction: a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+
+halt/ei-halt-dmgC-cgbBCE@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+halt/ei-halt-dmgC-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+halt/halt-m0-interrupt-dmgC-cgbBCE@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+halt/halt-m0-interrupt-dmgC-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+halt/halt-prefetch-dmgC-cgbBCE@dmgC = PASS
+halt/halt-prefetch-dmgC-cgbBCE@cgbBCE = PASS
+lcd-align-ly/lcd-align-ly-cgbBC@cgbBC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+lcd-align-ly/lcd-align-ly-cgbE@cgbE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+ly/ly-cgbE@cgbE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+ly/ly-dmgC-cgbBC@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+ly/ly-dmgC-cgbBC@cgbBC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+ly/ly-ncmBC@ncmBC = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+ly/ly-ncmE@ncmE = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+m3-bg-bgp/m3-bg-bgp@dmgC = FAIL diff=674
+m3-bg-bgp/m3-bg-bgp@ncmBC = FAIL diff=636
+m3-bg-bgp/m3-bg-bgp@ncmE = FAIL diff=612
+m3-bg-lcdc/m3-bg-lcdc-ds@cgbBCE = FAIL diff=5888
+m3-bg-lcdc/m3-bg-lcdc-nocgb@ncmBCE = FAIL diff=5120
+m3-bg-lcdc/m3-bg-lcdc@cgbBCE = FAIL diff=5120
+m3-bg-lcdc/m3-bg-lcdc@dmgC = FAIL diff=5120
+m3-bg-scx/m3-bg-scx-ds@cgbBCE = FAIL diff=1972
+m3-bg-scx/m3-bg-scx-nocgb@ncmBCE = FAIL diff=1972
+m3-bg-scx/m3-bg-scx@cgbBCE = FAIL diff=1972
+m3-bg-scx/m3-bg-scx@dmgC = FAIL diff=1958
+oam/oam-read-cgbE@cgbE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+oam/oam-read-dmgC-cgbBC@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+oam/oam-read-dmgC-cgbBC@cgbBC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+oam/oam-read-ncmBC@ncmBC = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+oam/oam-read-ncmE@ncmE = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+oam/oam-write-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+oam/oam-write-dmgC@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+oam/oam-write-ncmBCE@ncmBCE = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+speed-switch/caution/spsw-interrupts-cgbBC@cgbBC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+speed-switch/caution/spsw-interrupts-cgbE@cgbE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+speed-switch/spsw-ch2-lc-delay-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+speed-switch/spsw-div-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+speed-switch/spsw-mode0-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+speed-switch/spsw-stop-prefetch-cgbBCE@cgbBCE = PASS
+speed-switch/spsw-tima-cgbBC@cgbBC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+speed-switch/spsw-tima-cgbE@cgbE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-interrupt/stat-int-dmgC-cgbBCE@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-interrupt/stat-int-dmgC-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-interrupt/stat-int-ncmBCE@ncmBCE = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+stat-mode/stat-mode-cgbE@cgbE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode/stat-mode-dmgC-cgbBC@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode/stat-mode-dmgC-cgbBC@cgbBC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode/stat-mode-ds-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode/stat-mode-ncmBC@ncmBC = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+stat-mode/stat-mode-ncmE@ncmE = FAIL b=00 c=6B d=14 e=19 h=98 l=10
+stat-mode-sprites/stat-mode-sprites-dmgC-cgbBCE@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode-sprites/stat-mode-sprites-dmgC-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode-sprites/stat-mode-sprites-ds-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode-window/stat-mode-window-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode-window/stat-mode-window-dmgC@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode-window/stat-mode-window-ds-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+stat-mode-window/stat-mode-window-ncmBCE@ncmBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+vram/vram-read-cgbBCE@cgbBCE = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+vram/vram-read-dmgC@dmgC = FAIL b=00 c=6B d=14 e=06 h=98 l=10
+vram/vram-read-ncmBCE@ncmBCE = FAIL b=00 c=6B d=14 e=19 h=98 l=10

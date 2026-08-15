@@ -3495,3 +3495,91 @@ through its period the frequency timer is (`delay = 62` of a 64 T period here,
 *conditional* re-trigger reload rule, and there is no evidence in the suite for
 what that condition is. Recorded rather than guessed: one row, and guessing
 costs four.
+
+---
+
+## The thirteen suites we had never run, and the mapper bug they found (2026-08-15)
+
+[c-sp/game-boy-test-roms](https://github.com/c-sp/game-boy-test-roms) bundles eighteen suites;
+five were gated here and **thirteen had never been run at all** — 4,510 ROMs, **6,045 rows**
+once each is scored on the consoles its own file names name. They are gated now, in both
+picture modes, by [`examples/csp_suite.rs`](../examples/csp_suite.rs) and
+`testharness/csp_*_baseline.txt`. Scores and a reason per red group:
+[`docs/measured/scoreboard.md`](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time).
+Mechanics: [`docs/testing.md`](testing.md#the-c-sp-aggregation--thirteen-more-suites).
+
+Per the standing convention at the top of `AGENTS.md`, the fix that came out of it:
+
+### MBC30 — a 4 MiB MBC3 could only reach half its ROM
+
+**Symptom in user terms.** Half of a 4 MiB MBC3 cartridge is unreachable: every read from
+banks `$80-$FF` returns whatever bank `$00-$7F` happens to hold. In a game that is corrupt
+graphics, missing text and code jumping into the wrong bank — the Japanese Pokémon Crystal is
+the only commercial cartridge with that mapper, and it would not boot far.
+
+**Which test catches it.** [MBC3 Bank Tester](https://github.com/EricKirschenmann/MBC3-Tester-gb)
+(`csp_mbc3-tester_baseline.txt`), which walks all 256 banks and draws a tick per bank it can
+read back and an `F` per bank it cannot. It drew **128 `F`s** — a clean half — and the diff
+against the author's reference screenshot was a flat 1,280 pixels from frame 38 onwards.
+**Nothing else in any suite catches it**, and that is itself the finding: every other MBC3 ROM
+in every suite we score is 2 MiB or smaller, so the seventh bit was the only one anything ever
+exercised.
+
+**The hardware behaviour.** Pan Docs, [MBC3](https://gbdev.io/pandocs/MBC3.html): *"max 2MByte
+ROM … the whole 7 bits of the ROM Bank Number are written directly to this address … All other
+values $01-$7F select the corresponding ROM Banks."* And, on the same page,
+[MBC30](https://gbdev.io/pandocs/MBC3.html#mbc30): *"(4 MiB ROM, 64 KiB RAM, timer) … The MBC30
+is practically identical to MBC3 in operation, but is capable of addressing twice as much
+memory for both ROM and RAM. The only title to be shipped with the MBC30 mapper was Pocket
+Monsters: Crystal Version in Japan."*
+
+**The detection, and why it cannot be the header byte.** Both mappers use cartridge types
+`$0F`-`$13`; the header footnote on Pan Docs' cartridge-header page says only that *"MBC3 with
+64 KiB of SRAM refers to MBC30"*, and this tester declares type `$11` with **no RAM at all**.
+What does distinguish them is the ROM: 256 banks cannot be addressed by seven bits, so a
+cartridge that has them must have the eighth line connected. `MBC3::bank_mask` is that one
+comparison, and everything at 128 banks or fewer keeps the seven-bit register unchanged — so no
+existing baseline could move, and none did.
+
+**New tests.** `mbc::mbc3::test::{a_four_megabyte_mbc3_reaches_all_256_banks,
+a_two_megabyte_mbc3_keeps_its_seven_bit_bank_register, bank_zero_still_selects_bank_one}`,
+which build a synthetic cartridge whose every bank reports its own number and need no ROM at
+all. Conformance candidate: **a mapper's bank register is as wide as the cartridge needs, and
+a suite that only ships small cartridges cannot tell you that.** Teeth proven by putting
+`& 0x7F` back: both `mbc3-tester` rows go red with the same 1,280-pixel diff.
+
+### Two findings recorded rather than fixed
+
+* **`boot_ppu_dot`'s comment was out of date, and the correction is in the source now.** It
+  said no ROM measures where the PPU sits when a plain DMG's boot ROM hands over, so no
+  position was invented. GBMicrotest's `poweron_ly_*` and `poweron_stat_*` measure exactly
+  that — each is a run of `nop`s and one `LDH A,[$FF44]`/`[$FF41]` — and they disagree with us:
+  hardware reads `LY = 0` at 119 M-cycles and `1` at 120 where we roll over at 114, and its
+  `STAT` is still mode 1 for the first six M-cycles where ours is already mode 0. **The
+  constant was not changed.** Sweeping it scores 237/513 at dot 69900, 251 at line 0 (today),
+  262 at 70168 and 250 at 70184 — a jagged profile with no clean optimum, which is what this
+  repository has repeatedly recorded as the signature of a constant absorbing an error
+  somewhere else rather than a value being found. The next crew should come back to it with a
+  model, not a sweep.
+* **The `identical` picture mode does NOT dominate everywhere.** `docs/measured/scoreboard.md`
+  claimed it "loses no row to the default on any gate"; that was true of the six gates in
+  existence when it was written and is false of the twenty that exist now. `cgb-acid2` is
+  pixel-exact on `standard` and 158 pixels wrong on `identical`; Gambatte's `sprites` group
+  goes 245 → 241 and `window` 259 → 227. It still wins overwhelmingly (Gambatte 2,682 → 3,059,
+  GBMicrotest 251 → 338), but the accuracy precondition for making it the default is no longer
+  met, and that is a PPU finding rather than a cost decision. The claim is corrected on the
+  page and in the generated text of `docs/tools/status_numbers.py`.
+
+### A runner rule this work adds to the conformance corpus
+
+**A verdict method is the suite author's, and the runner must implement it rather than pick a
+convenient one.** Five conventions are in play across the thirteen suites (`LD B,B` +
+Fibonacci registers, `$ED` + Fibonacci registers, a byte at `$FF82`, a hex digit drawn in the
+corner, an author's screenshot), and each is stated in that suite's own
+`game-boy-test-roms-howto.md`, which is why the release is pinned whole. Two runner mistakes
+that produced wrong verdicts before they were caught, both worth carrying into the standalone
+tool: **a reference screenshot belongs to the ROM with the longest matching stem** (several
+suites ship `foo.gb` beside `foo-nocgb.gb`, and a shortest-match rule scores the wrong picture
+as a wrong emulator), and **a runner must open the reference names upstream opens and no
+others** (Gambatte ships bare `<stem>.png` and `<stem>_gba.png` files its own `testrunner.cpp`
+never looks at).

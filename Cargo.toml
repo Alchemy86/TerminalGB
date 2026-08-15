@@ -373,6 +373,16 @@ name = "cpp_suite"
 path = "examples/cpp_suite.rs"
 required-features = ["image"]
 
+# The suites in c-sp/game-boy-test-roms this repository had never scored: AGE,
+# Bully, cgb-acid2, cgb-acid-hell, Gambatte, GBMicrotest, MBC3 Tester, the
+# wilbertpol Mooneye fork, little-things-gb, rtc3test, Scribbltests,
+# Strikethrough and TurtleTests. Reads the authors' reference screenshots, so it
+# needs `image` for the same reason `mealybug` does.
+[[example]]
+name = "csp_suite"
+path = "examples/csp_suite.rs"
+required-features = ["image"]
+
 # Lists what a loaded save can offer to the trade portal, through the exact
 # code path the TUI's `O` key uses (boots into the save with the shared Cable
 # Club bot, hence gen1-link + image).

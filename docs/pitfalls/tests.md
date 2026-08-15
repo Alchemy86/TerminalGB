@@ -351,3 +351,65 @@ version, because it belongs to this page too: `blargg/oam_bug@cgb` is pinned **F
 `testharness/baseline.txt`, with the reason written directly above it, because Game Boy Color
 silicon does not have the DMG OAM-corruption defect. Turning that row green would mean
 emulating a machine nobody has.
+
+---
+
+## A reference screenshot claimed by the wrong ROM
+
+**Symptom.** One row of a screenshot-judged suite reports a large, stable pixel difference
+while every neighbouring row is exact — and the frame you dump for it looks *right*.
+
+**What it looks like.** A single hard emulation bug, in the one feature that row exercises.
+It is not: the runner scored the picture against a different program.
+
+**Root cause.** Several suites put a ROM and a variant of it in one directory —
+`m3-bg-lcdc.gb` beside `m3-bg-lcdc-nocgb.gb`, `statcount.gb` beside `statcount-auto.gb` — and
+name the references after the ROM plus a device tag: `m3-bg-lcdc-dmgC.png`,
+`m3-bg-lcdc-nocgb-ncmBCE.png`. A runner that pairs a picture with the *first* ROM stem that
+prefixes it hands `m3-bg-lcdc-nocgb-ncmBCE.png` to `m3-bg-lcdc.gb`, because `m3-bg-lcdc` is a
+prefix of it too. **A wrong reference is scored as a wrong emulator**, and it also silently
+produces two rows claiming the same console, which a naive baseline then collapses into one.
+
+**Resolution.** A picture belongs to the ROM with the **longest** matching stem, and the match
+must end on a separator or an exact equality. `examples/csp_suite.rs::references` and its
+`owns` helper. The runner also asserts that no two rows share a key, so the collapse can never
+happen quietly again.
+
+**Related, and the same class:** a suite's own runner may open only *some* of the pictures it
+ships. Gambatte's `testrunner.cpp` opens exactly `<stem>_dmg08_cgb04c.png`, `<stem>_cgb04c.png`
+and `<stem>_dmg08.png`; the release also contains bare `<stem>.png` and `<stem>_gba.png` files
+it never looks at. Scoring those measures expectations upstream does not hold anyone to.
+
+**Side effects and blast radius.** None to the emulator — this is entirely a runner defect. It
+does change baseline *keys*, so fixing it after a baseline exists is a re-bless.
+
+**How we found it.** Wiring the thirteen c-sp suites, 2026-08-15: `m3-bg-lcdc@ncm` reported
+"reference palette not understood" because the picture it had been given was drawn by the
+other cartridge.
+
+---
+
+## A suite's own documentation disagreeing with the files it ships
+
+**Symptom.** A reference screenshot uses a colour that the suite's own readme says it does
+not, so a strict comparison reports every pixel of that shade as wrong.
+
+**What it looks like.** A palette bug in your emulator, or a corrupt download.
+
+**Root cause.** Prose drifts and binaries do not. Every `game-boy-test-roms-howto.md` in the
+c-sp release states the Color boot ROM's compatibility background palette as `#000000
+#0063C6 #7BFF31 #FFFFFF`. Thirty of the thirty-one references that carry that shade use
+`#7BFF31` — and MBC3 Tester's uses **`#7BFF4A`**. Both are self-consistent: `#7BFF31` is
+`(X << 3) | (X >> 2)` applied to the 5-bit triple `(15, 31, 6)` and `#7BFF4A` to `(15, 31, 9)`.
+One of the two is what the boot ROM really loads and the other is a digit somebody typed.
+
+**Resolution.** Accept both as the same shade index, and say in the code *why* there are two —
+refusing the one that disagrees with the prose would cost a real row over a typo. The general
+rule: **when a suite's documentation and its artefacts disagree, the artefact is the
+expectation**, because the artefact is what every other runner is scored against.
+
+**Side effects and blast radius.** None; it only widens what the runner recognises.
+
+**How we found it.** `mbc3-tester@cgb` reported "reference is neither a DMG nor a
+compatibility palette" — a message that exists precisely so an unrecognised colour is reported
+as a runner limitation rather than as 23,040 wrong pixels.

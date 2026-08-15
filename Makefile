@@ -181,11 +181,20 @@ bgb-interop:
 	    --example bgb_link
 	python3 tools/bgb-interop/interop.py
 
-# The external suites (Mooneye GB, SameSuite, Mealybug Tearoom) are not
-# vendored — they are other people's ROMs under other people's licences, so
-# they are fetched at run time from the versions pinned in the script. See
-# docs/testing.md, "Gating the external suites".
+# The external suites (Mooneye GB, SameSuite, Mealybug Tearoom, and the thirteen
+# in c-sp/game-boy-test-roms) are not vendored — they are other people's ROMs
+# under other people's licences, so they are fetched at run time from the
+# versions pinned in the script. See docs/testing.md, "Gating the external
+# suites".
 SUITES ?= target/test-suites
+
+# The suites in the c-sp aggregation this repository scores, each judged by its
+# own author's convention. `examples/csp_suite.rs` is the one runner; the suite
+# name selects the convention and the baseline. Keep this list sorted — it is
+# also the order the scoreboard reads in.
+CSP_SUITES = age bully cgb-acid-hell cgb-acid2 gambatte gbmicrotest \
+             little-things-gb mbc3-tester mooneye-wilbertpol rtc3test \
+             scribbltests strikethrough turtle-tests
 
 fetch-test-suites:
 	./tools/fetch-test-suites.sh $(SUITES)
@@ -196,7 +205,12 @@ fetch-test-suites:
 # Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external`.
 test-external: fetch-test-suites
 	cargo build --release --example mooneye_scout --example samesuite \
-	    --example mealybug --example cpp_suite
+	    --example mealybug --example cpp_suite --example csp_suite
+	@for s in $(CSP_SUITES); do \
+	    ./target/release/examples/csp_suite --quiet --suite $$s \
+	        --dir $(SUITES)/csp \
+	        --baseline testharness/csp_$${s}_baseline.txt || exit 1; \
+	done
 	./target/release/examples/mooneye_scout \
 	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
 	    --baseline testharness/mooneye_baseline.txt
@@ -218,16 +232,27 @@ test-external: fetch-test-suites
 # still parses, and leaving it here keeps the alias exercised in CI.
 # Its own baselines carry its own pixel counts, so the next change to the
 # pipeline shows up as a diff whether it moves a row or only moves the distance
-# to one. Only the two PPU-bearing suites are re-scored; SameSuite is APU/DMA
-# and does not distinguish the modes.
+# to one. SameSuite is APU/DMA and does not distinguish the modes, so it is
+# scored once; everything else is scored twice.
+#
+# The c-sp suites are re-scored here too, and they are where the two engines
+# disagree most: the Gambatte suite alone moves by hundreds of rows and
+# GBMicrotest by ~90, because both are largely mid-scanline PPU probes. Scoring
+# them once would leave the per-dot engine's biggest population ungated.
 # Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external-accurate`.
 test-external-accurate: fetch-test-suites
-	cargo build --release --example mooneye_scout --example mealybug
+	cargo build --release --example mooneye_scout --example mealybug \
+	    --example csp_suite
 	GB_PPU=accurate ./target/release/examples/mooneye_scout \
 	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
 	    --baseline testharness/mooneye_accurate_baseline.txt
 	GB_PPU=accurate ./target/release/examples/mealybug --dir $(SUITES)/mealybug \
 	    --baseline testharness/mealybug_accurate_baseline.txt
+	@for s in $(CSP_SUITES); do \
+	    GB_PPU=accurate ./target/release/examples/csp_suite --quiet --suite $$s \
+	        --dir $(SUITES)/csp \
+	        --baseline testharness/csp_$${s}_accurate_baseline.txt || exit 1; \
+	done
 
 # THE claim of the plugin system: the emulator is the product and the plugins
 # are optional extras. Builds the whole thing — core, terminal and desktop

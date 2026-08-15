@@ -1,6 +1,6 @@
 use crate::mbc::battery::{Battery, RtcState};
 use crate::mbc::rtc::Rtc;
-use crate::mbc::{ram_banks, MemoryBankController};
+use crate::mbc::{ram_banks, rom_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
 use std::path;
@@ -9,6 +9,10 @@ pub struct MBC3 {
     rom: Vec<u8>,
     ram: Vec<u8>,
     rombank: usize,
+    /// How many 16 KiB banks the cartridge actually has. Only read when a game
+    /// writes the bank register, to decide whether the eighth bank line is
+    /// connected — see [`MBC3::bank_mask`].
+    rombanks: usize,
     rambank: usize,
     rambanks: usize,
     selectrtc: bool,
@@ -51,10 +55,12 @@ impl MBC3 {
             0x0F | 0x10 => Some(Rtc::new()),
             _ => None,
         };
+        let rombanks = rom_banks(data[0x148], data.len());
         let mut res = MBC3 {
             rom: data,
             ram: vec![0u8; ramsize],
             rombank: 1,
+            rombanks,
             rambank: 0,
             rambanks,
             selectrtc: false,
@@ -63,6 +69,30 @@ impl MBC3 {
             rtc,
         };
         res.loadram().map(|_| res)
+    }
+
+    /// How many bits of `$2000-$3FFF` reach the ROM's bank lines.
+    ///
+    /// An MBC3 has **seven** — Pan Docs, [MBC3]: *"max 2MByte ROM … the whole 7
+    /// bits of the ROM Bank Number are written directly … All other values
+    /// $01-$7F select the corresponding ROM Banks."* An **MBC30** has eight:
+    /// *"(4 MiB ROM, 64 KiB RAM, timer) … practically identical to MBC3 in
+    /// operation, but is capable of addressing twice as much memory"* — the
+    /// mapper in the Japanese Pokémon Crystal.
+    ///
+    /// The two share every cartridge-type byte, so the ROM's own size is what
+    /// tells them apart: a cartridge with more than 128 banks cannot be reached
+    /// by seven bits at all, so its eighth line must be connected. Below that
+    /// the mask stays at seven bits, which is what an MBC3 does and what every
+    /// existing baseline was measured against.
+    ///
+    /// [MBC3]: https://gbdev.io/pandocs/MBC3.html
+    fn bank_mask(&self) -> u8 {
+        if self.rombanks > 0x80 {
+            0xFF
+        } else {
+            0x7F
+        }
     }
 
     fn loadram(&mut self) -> StrResult<()> {
@@ -140,7 +170,7 @@ impl MemoryBankController for MBC3 {
         match a {
             0x0000..=0x1FFF => self.ram_on = (v & 0x0F) == 0x0A,
             0x2000..=0x3FFF => {
-                self.rombank = match v & 0x7F {
+                self.rombank = match v & self.bank_mask() {
                     0 => 1,
                     n => n as usize,
                 }
@@ -264,5 +294,60 @@ impl MemoryBankController for MBC3 {
         }
         self.ram = ram;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    /// A cartridge image with `banks` 16 KiB banks, each bank's first byte set
+    /// to its own number, declaring MBC3 and the matching ROM-size code.
+    fn cart(banks: usize) -> Vec<u8> {
+        let mut rom = vec![0u8; banks * 0x4000];
+        rom[0x147] = 0x11; // MBC3, no RAM
+        rom[0x148] = (banks.trailing_zeros() - 1) as u8;
+        for b in 0..banks {
+            rom[b * 0x4000] = b as u8;
+        }
+        rom
+    }
+
+    fn select(mbc: &mut MBC3, bank: u8) -> u8 {
+        mbc.writerom(0x2000, bank);
+        mbc.readrom(0x4000)
+    }
+
+    /// An MBC30 — a 4 MiB MBC3, the mapper in the Japanese Pokémon Crystal —
+    /// has an eighth ROM bank line, so banks $80-$FF are reachable. Without it
+    /// half the cartridge is invisible: the MBC3 Bank Tester draws a tick for
+    /// every bank it can read back and an `F` for every one it cannot, and it
+    /// printed 128 `F`s.
+    #[test]
+    fn a_four_megabyte_mbc3_reaches_all_256_banks() {
+        let mut mbc = MBC3::new(cart(256), None).unwrap();
+        for bank in [0x01u8, 0x7F, 0x80, 0xA5, 0xFF] {
+            assert_eq!(select(&mut mbc, bank), bank, "bank {bank:#04X}");
+        }
+    }
+
+    /// …and a cartridge small enough to be a real MBC3 keeps the seven-bit
+    /// register Pan Docs describes, so nothing that was measured before moves.
+    #[test]
+    fn a_two_megabyte_mbc3_keeps_its_seven_bit_bank_register() {
+        let mut mbc = MBC3::new(cart(128), None).unwrap();
+        assert_eq!(select(&mut mbc, 0x7F), 0x7F);
+        // Bit 7 is not connected: $80 is $00, and $00 selects bank 1.
+        assert_eq!(select(&mut mbc, 0x80), 0x01);
+        assert_eq!(select(&mut mbc, 0xC5), 0x45);
+    }
+
+    /// Writing $00 selects bank $01 on both mappers (Pan Docs, MBC3).
+    #[test]
+    fn bank_zero_still_selects_bank_one() {
+        for banks in [64usize, 256] {
+            let mut mbc = MBC3::new(cart(banks), None).unwrap();
+            assert_eq!(select(&mut mbc, 0x00), 0x01, "{banks} banks");
+        }
     }
 }

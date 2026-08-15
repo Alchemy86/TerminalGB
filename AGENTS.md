@@ -616,6 +616,132 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   Same class as the `dmg_sound` ROMs `audiocapture` wants; the note at the top of this file
   saying it "is now initialised and wired into CI" is about CI, not about your working copy.
 
+## The c-sp aggregation — thirteen suites nothing here had ever run (`examples/csp_suite.rs`)
+
+**Full record: [`docs/measured/scoreboard.md`](docs/measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time)
+(scores + a reason per red group), [`docs/testing.md`](docs/testing.md#the-c-sp-aggregation--thirteen-more-suites)
+(mechanics), `docs/conformance-notes.md` (2026-08-15).**
+
+- **[c-sp/game-boy-test-roms](https://github.com/c-sp/game-boy-test-roms) bundles eighteen
+  suites; five were gated here and THIRTEEN had never been run at all** — AGE, Bully,
+  cgb-acid2, cgb-acid-hell, Gambatte, GBMicrotest, MBC3 Tester, the wilbertpol Mooneye fork,
+  little-things-gb, rtc3test, Scribbltests, Strikethrough, TurtleTests. 4,510 ROMs, **6,045
+  rows** once each is scored on the consoles its own file names name. Gated in **both** picture
+  modes by `make test-external` / `make test-external-accurate` against
+  `testharness/csp_<suite>[_accurate]_baseline.txt`.
+- **THE RELEASE IS PINNED WHOLE, and that is a deliberate departure from the per-suite pins
+  beside it.** One immutable artefact, one sha256; it is the corpus other emulators' published
+  c-sp scores are measured on; and — the reason that decided it — **every suite in it ships the
+  author's own `game-boy-test-roms-howto.md`** stating that author's exit condition and pass
+  criterion. Those documents are the specification `csp_suite.rs` implements. **Do not
+  re-point the five already-pinned suites at this release**: their baselines were measured
+  against those exact builds.
+- **Five verdict conventions, none of them ours:** `LD B,B` + Fibonacci registers (AGE), the
+  undefined `$ED` + Fibonacci registers (wilbertpol — that is how Mooneye worked in 2016), a
+  verdict byte at **`$FF82`** (GBMicrotest — read *only* that byte, several tests leave
+  `$FF80 == $FF81` on failure), a hex digit drawn in the top-left corner compared against
+  Gambatte's own font (transcribed into `OUT_TILES` from its `testrunner.cpp`), and the
+  author's reference screenshot for everything else.
+- **COLOUR IS THE PART THAT IS EASY TO GET WRONG, and it is decided from evidence.** A frame we
+  drew in `GbMode::Color` is real colour; anything else is four greys, and then the reference is
+  either the DMG palette or the Color boot ROM's eight compatibility colours — told apart from
+  the reference's own palette. **A shade-rank compare cannot do the compatibility case**: eight
+  reference luminances against four of ours re-ranks every pixel. A true colour reference is
+  taken back to 15-bit RGB (`(X << 3) | (X >> 2)` is exactly invertible) and pushed through
+  *our* correction, so our framebuffer is never re-ranked. Gambatte's own screenshots are
+  already in our space (it uses the same correction) and take its `& 0xF8F8F8` mask.
+  Sharp edge: **the shipped `mbc3-tester-cgb.png` uses `#7BFF4A` where every howto says
+  `#7BFF31`** — both are accepted as compat shade 2.
+- **A `SKIP` row counts in NEITHER column and says why** (96 of the 6,045: 95 Gambatte ROMs
+  upstream itself disables via an `_xout0` name that its own `find("_out")` misses, or state
+  dumpers; plus `tellinglys`, which needs a human pressing every button). `count()` in
+  `docs/tools/status_numbers.py` drops them from both columns.
+- **Two runner traps that produced wrong verdicts before they were caught:** a reference
+  belongs to the ROM with the **longest** matching stem (suites ship `foo.gb` beside
+  `foo-nocgb.gb`, and shortest-match scores the wrong picture as a wrong emulator); and a
+  runner must open **only** the reference names upstream opens (Gambatte ships bare
+  `<stem>.png` and `<stem>_gba.png` files its `testrunner.cpp` never looks at, and picking them
+  up also produces two rows claiming the same console).
+- **The Gambatte baseline is 5,320 rows / ~400 KB, twice over.** Deliberate, and the same trade
+  the Mealybug baselines make with their pixel counts: at that size a PASS/FAIL total is a flat
+  wall and what a PPU campaign needs is to see *which* rows moved. Expect a large readable diff
+  from any PPU change.
+- **Teeth proven:** `DRAW_DOTS` 172 → 176 (one line) turns the Gambatte gate red on **288**
+  rows, GBMicrotest on 38 and wilbertpol on 14; restoring `MBC3`'s `& 0x7F` turns
+  `mbc3-tester` red on both rows. Same rebuild caveat as the other scouts — `csp_suite` is a
+  `cargo build` target, so rebuild after breaking source.
+- **The fix it bought: MBC30 (`src/mbc/mbc3.rs::bank_mask`).** MBC3's ROM-bank register is
+  seven bits (Pan Docs, MBC3); **MBC30's is eight** (Pan Docs, MBC30 — "4 MiB ROM, 64 KiB RAM,
+  timer … the only title to be shipped with the MBC30 mapper was Pocket Monsters: Crystal
+  Version in Japan"), and **no cartridge-type byte tells them apart** — the tester declares type
+  `$11` with no RAM at all. The ROM's own size does: 256 banks cannot be addressed by seven
+  bits. `mbc3-tester` FAIL → PASS on both consoles; nothing at 128 banks or fewer changes, so
+  no other baseline moved. No `savestate::FORMAT_VERSION` bump (`rombanks` is derived from the
+  cartridge).
+- **`boot_ppu_dot`'s "no ROM measures this on a plain DMG" is FALSE and the source now says
+  so.** GBMicrotest's `poweron_ly_*`/`poweron_stat_*` are a run of `nop`s and one
+  `LDH A,[$FF44]`, so every one of them pins it: hardware reads `LY = 0` at 119 M-cycles and
+  `1` at 120 where we roll over at 114. **The constant was still not changed** — sweeping it
+  gives 237/513 at dot 69900, 251 at line 0 (today), 262 at 70168, 250 at 70184: a jagged
+  profile with no clean optimum, i.e. a constant absorbing an error somewhere else. Come back
+  with a model, not a sweep.
+- **`identical` does NOT dominate everywhere any more, and the scoreboard's old claim is
+  corrected.** It loses `cgb-acid2` outright (pixel-exact on `standard`, 158 px wrong on
+  `identical`) and part of Gambatte's `sprites` (245 → 241) and `window` (259 → 227) groups,
+  while winning hugely overall (Gambatte 2,682 → 3,059, GBMicrotest 251 → 338). **The accuracy
+  precondition for making it the default is therefore not met** — that is a PPU finding, not a
+  cost decision.
+- **Where the remaining reds are, grouped:** mid-scanline PPU timing is most of them and is the
+  same wall Mealybug describes (Gambatte `scy` 0/67 and `bgtilemap` 0/40 on the default engine
+  against 54/67 and 36/40 on the per-dot one); OAM/VRAM access blocking, which is deliberately
+  absent from the default engine; console revisions we do not model; `firstwhite` printing an
+  error on a DMG and not on a Color console (unexplained); and **`bully` drawing an entirely
+  black screen**, which is a failure to *start* and is the first thing to look at.
+
+### A SUITE IS AN INPUT, NOT A SCOREBOARD — and `docs/pitfalls/codes.md` is the third output
+
+The captain's framing, and it changes what "triage" means here: every failure ends as **(1)** a
+fix, **(2)** a check in the GBSelfTest cartridge so it is caught forever, and/or **(3)** a
+documented behaviour carrying a **stable code** the cartridge prints, so a failure on anybody's
+emulator points a stranger straight at our page. Nothing else in the ecosystem does the third.
+
+- **[`docs/pitfalls/codes.md`](docs/pitfalls/codes.md) is the registry and it is a CONTRACT.**
+  `TGB-<AREA>-<NNN>`, one code per behaviour, each with an anchor on that page naming the
+  hardware, the public suites that already measure it, and what a wrong emulator does.
+  **A code is permanent once published** — its whole value is that a five-year-old build log
+  still resolves — so adding is free and renumbering is forbidden. The registry is ours; which
+  codes the cartridge *emits* is the cartridge crew's (`gameboy-testcart-m5`).
+- **Every row carries "already covered?" and "diagnosable from inside a cartridge?", and both
+  are there to stop wasted work.** A behaviour Gambatte already measures across 811 rows does
+  not want a fourteenth reimplementation — GBSelfTest should aim at **gaps** and at checks that
+  *discriminate*. And three of the named behaviours are **not decidable from inside a
+  cartridge at all** (mid-mode-3 register writes, late OAM writes, the host-side presentation
+  defects): the evidence is the picture or the wire, so they belong to Mealybug and to the
+  render conformance record, not to a self-test.
+- **The ranked handoff, top of the list first:** `TGB-MBC-002` (cartridge input must never
+  abort the host — **nothing public covers it and nothing ever will**, no suite ships a ROM
+  designed to crash its runner, and this class has cost this project five real aborts);
+  `TGB-MBC-001` (a mapper's bank register is as wide as the cartridge needs — one 4 MiB
+  screenshot-judged ROM in the world tests it); `TGB-PPU-004` (OAM/VRAM access blocking —
+  trivially self-checking and it discriminates rough from careful); `TGB-PPU-008` (the mode-0
+  interrupt versus `SCX` — eight values, one interrupt each, and we fail all 24 rows);
+  `TGB-PPU-007` (the STAT write glitch, covered only by ROMs the modern Mooneye suite dropped,
+  so it is quietly rotting out of the ecosystem); `TGB-SER-001` (the serial interrupt's phase
+  against `DIV` — one suite measures it at all).
+- **`TGB-DMA-001` is the single largest named cause in the whole aggregation** — 562 failing
+  rows: while OAM DMA runs the CPU sees the DMA's bus rather than the memory it addressed. Our
+  OAM blocking and 160-cycle timing are right (every Mooneye `oam_dma_*` passes); the bus
+  conflict is not modelled at all. Gambatte covers it exhaustively, so this is a *fix* item,
+  not a cartridge item.
+- **`TGB-APU-001` was verified not to be a runner artefact before it was written down.** 71
+  Gambatte rows where we emit a flat 0.0 for the whole judged frame and hardware does not.
+  Re-running the audio player at the Game Boy's own 2 MiHz rate (`Sound::set_player` honours
+  whatever `samples_rate()` reports) changes **not one verdict**, nor does widening the
+  window from one frame to a whole second, and the APU demonstrably produces non-zero output on
+  37 other rows in the same group. **Do the equivalent check before blaming an emulator for an
+  audio verdict** — a band-limited resample really can turn a high square wave into a flat line,
+  it just was not what happened here.
+
 ## Gating the EXTERNAL suites — Mooneye / SameSuite / Mealybug (`make test-external`)
 
 - **The problem this solves: 266 rows that CI never looked at.** Mooneye GB, SameSuite and

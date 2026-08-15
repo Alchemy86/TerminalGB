@@ -95,7 +95,7 @@ the `standard` mode: with mode 3 fixed at 172 dots where hardware varies it 172�
 would silently drop writes a game placed legally in HBlank, which is strictly worse than not
 blocking. See [ppu.md](ppu.md).
 
-### The `identical` picture mode scores differently — and now dominates
+### The `identical` picture mode scores differently — and mostly dominates
 
 The [`identical` picture mode](../picture-modes.md) (`GB_PPU=identical`, formerly `accurate`)
 gives **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** acceptance against the
@@ -140,9 +140,19 @@ The mode is gated separately (`make test-external-accurate`, against
 (Rows with one baseline are scored once: the picture mode does not reach what they measure, so
 the same figure stands in both columns.)
 
-**No row goes the other way**, so the accuracy precondition for making `identical` the default
-is met; what remains is a cost decision — **~6.3x**, 0.079 → 0.494 ms/frame, 34x real time
-headless, re-measured on every `cargo test --release --test ppuengines`.
+**On these six gates no row goes the other way**, and the cost is **~6.3x** — 0.079 → 0.494
+ms/frame, 34x real time headless, re-measured on every `cargo test --release --test
+ppuengines`.
+
+> **Correction, 2026-08-15: rows DO go the other way, on gates this table did not have.**
+> The thirteen [c-sp suites](#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time)
+> wired up that day found three places where `identical` scores *worse* than the default:
+> `cgb-acid2` (pixel-exact on `standard`, 158 pixels wrong on `identical`), and Gambatte's
+> `sprites` (245 → 241) and `window` (259 → 227) groups. `identical` still wins overwhelmingly
+> — Gambatte 2,682 → 3,059 and GBMicrotest 251 → 338 — but "loses no row anywhere" was a claim
+> about the six gates that existed when it was written, and it is not true of the twenty that
+> exist now. **The accuracy precondition for a default flip is therefore not met**; it is a
+> PPU finding, not a cost decision.
 
 > This table is where the drift happened. Its Mealybug figure read **12** for as long as it
 > took somebody to notice, five rows after `identical` reached
@@ -263,6 +273,136 @@ everywhere else. That is 26 % of the remaining pixel distance and no PPU work mo
 
 Full scoping, including which rows are winnable now versus after the rewrite:
 [`docs/mealybug.md`](../mealybug.md).
+
+---
+
+## The c-sp aggregation — thirteen suites measured for the first time
+
+[c-sp/game-boy-test-roms](https://github.com/c-sp/game-boy-test-roms) is the community's
+standard bundle: eighteen suites, one pinned release. Five of them were already scored above.
+**The other thirteen had never been run here at all**, which is 4,510 ROMs and, once each is
+scored on the consoles its own file names name, **6,045 rows**. They are gated now, in both
+picture modes, by [`examples/csp_suite.rs`](../../examples/csp_suite.rs).
+
+| Suite | `standard` | `identical` | Judged by |
+|---|---:|---:|---|
+| Gambatte | **<!--score:csp_gambatte:pass-->2682<!--/score-->** / <!--score:csp_gambatte:total-->5225<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3059<!--/score-->** / <!--score:csp_gambatte_accurate:total-->5225<!--/score--> | a hexadecimal digit drawn in the top-left corner, its audio, or the author's screenshot |
+| GBMicrotest | **<!--score:csp_gbmicrotest:pass-->251<!--/score-->** / <!--score:csp_gbmicrotest:total-->513<!--/score--> | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / <!--score:csp_gbmicrotest_accurate:total-->513<!--/score--> | the verdict byte the ROM writes to `$FF82` |
+| Mooneye GB (wilbertpol fork) | **<!--score:csp_mooneye-wilbertpol:pass-->62<!--/score-->** / <!--score:csp_mooneye-wilbertpol:total-->117<!--/score--> | **<!--score:csp_mooneye-wilbertpol_accurate:pass-->82<!--/score-->** / <!--score:csp_mooneye-wilbertpol_accurate:total-->117<!--/score--> | `$ED` then the Fibonacci registers |
+| AGE test roms | **<!--score:csp_age:pass-->3<!--/score-->** / <!--score:csp_age:total-->59<!--/score--> | **<!--score:csp_age_accurate:pass-->8<!--/score-->** / <!--score:csp_age_accurate:total-->59<!--/score--> | `LD B,B` then the Fibonacci registers, or the author's screenshot |
+| cgb-acid2 | **<!--score:csp_cgb-acid2:pass-->1<!--/score-->** / <!--score:csp_cgb-acid2:total-->1<!--/score--> | **<!--score:csp_cgb-acid2_accurate:pass-->0<!--/score-->** / <!--score:csp_cgb-acid2_accurate:total-->1<!--/score--> | the author's reference image, in colour |
+| cgb-acid-hell | **<!--score:csp_cgb-acid-hell:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell:total-->1<!--/score--> | **<!--score:csp_cgb-acid-hell_accurate:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell_accurate:total-->1<!--/score--> | as above |
+| rtc3test | **<!--score:csp_rtc3test:pass-->6<!--/score-->** / <!--score:csp_rtc3test:total-->6<!--/score--> | **<!--score:csp_rtc3test_accurate:pass-->6<!--/score-->** / <!--score:csp_rtc3test_accurate:total-->6<!--/score--> | the author's screenshots, one per sub-test |
+| MBC3 Tester | **<!--score:csp_mbc3-tester:pass-->2<!--/score-->** / <!--score:csp_mbc3-tester:total-->2<!--/score--> | **<!--score:csp_mbc3-tester_accurate:pass-->2<!--/score-->** / <!--score:csp_mbc3-tester_accurate:total-->2<!--/score--> | the author's screenshots |
+| Scribbltests | **<!--score:csp_scribbltests:pass-->7<!--/score-->** / <!--score:csp_scribbltests:total-->9<!--/score--> | **<!--score:csp_scribbltests_accurate:pass-->7<!--/score-->** / <!--score:csp_scribbltests_accurate:total-->9<!--/score--> | the author's screenshots |
+| TurtleTests | **<!--score:csp_turtle-tests:pass-->2<!--/score-->** / <!--score:csp_turtle-tests:total-->2<!--/score--> | **<!--score:csp_turtle-tests_accurate:pass-->2<!--/score-->** / <!--score:csp_turtle-tests_accurate:total-->2<!--/score--> | the author's screenshots |
+| Strikethrough | **<!--score:csp_strikethrough:pass-->0<!--/score-->** / <!--score:csp_strikethrough:total-->2<!--/score--> | **<!--score:csp_strikethrough_accurate:pass-->0<!--/score-->** / <!--score:csp_strikethrough_accurate:total-->2<!--/score--> | the author's screenshots |
+| Bully | **<!--score:csp_bully:pass-->0<!--/score-->** / <!--score:csp_bully:total-->1<!--/score--> | **<!--score:csp_bully_accurate:pass-->0<!--/score-->** / <!--score:csp_bully_accurate:total-->1<!--/score--> | the author's screenshot |
+| little-things-gb | **<!--score:csp_little-things-gb:pass-->1<!--/score-->** / <!--score:csp_little-things-gb:total-->2<!--/score--> | **<!--score:csp_little-things-gb_accurate:pass-->1<!--/score-->** / <!--score:csp_little-things-gb_accurate:total-->2<!--/score--> | the author's screenshot |
+
+Rows marked `SKIP` in a baseline count in **neither** column and each says why. There are 96 of
+them: 95 Gambatte ROMs that upstream itself disables (a `_xout0` name makes its own
+`find("_out")` miss them) or that are state dumpers with no expectation at all, and
+`tellinglys`, which only reaches a verdict after a human has pressed every button in an
+arbitrary order.
+
+### Every verdict here is the suite author's
+
+Each suite in the release ships a `game-boy-test-roms-howto.md` stating its exit condition and
+its pass criterion, and those documents — not our judgement — are what
+[`examples/csp_suite.rs`](../../examples/csp_suite.rs) implements. Nothing on this page is
+compared against a frame we produced. Where a suite ships no reference at all
+(Scribbltests' `failrylake` and `winpos`, which its own howto says are missing), the row is
+`SKIP`, not a baseline invented from our own output.
+
+The one place a *runner* decision was needed is colour, and it is decided from evidence rather
+than assumed: a reference drawn in the four DMG greys, or in the Color boot ROM's eight
+compatibility colours, is compared by shade index; a real colour reference is taken back to
+15-bit RGB (`(X << 3) | (X >> 2)` is exactly invertible) and pushed through *our* colour
+correction, so our framebuffer is never re-ranked. **A shade-rank compare cannot do the
+compatibility case** — eight distinct luminances in the reference against four in our frame
+re-ranks every pixel.
+
+### What the thirteen suites bought, immediately
+
+* **A save-visible mapper bug.** MBC3 Tester walks all 256 banks of a 4 MiB cartridge and draws
+  a tick for each one it can read back. It drew **128 `F`s**: our ROM-bank register masked
+  `v & 0x7F`, so banks `$80-$FF` were unreachable. Pan Docs' [MBC3] page is right that the
+  register is seven bits — but its [MBC30] section describes the eighth line, on the mapper
+  that shipped in the Japanese Pokémon Crystal, and no cartridge-type byte tells the two apart.
+  A cartridge with more than 128 banks cannot be addressed by seven bits at all, so its ROM
+  size is what decides. Fixed, with the seven-bit behaviour kept for everything smaller;
+  `mbc3-tester` went **FAIL → PASS** on both consoles.
+* **A `boot_ppu_dot` comment that was out of date.** `src/mmu/mod.rs` recorded that no ROM
+  measures where the PPU sits when a plain DMG's boot ROM hands over, so no position was
+  invented. GBMicrotest's `poweron_ly_*` and `poweron_stat_*` measure exactly that — they are a
+  run of `nop`s and one `LDH A,[$FF44]` — and they disagree with us: hardware reads `LY = 0` at
+  119 M-cycles and `1` at 120, where we roll over at 114. **The constant was still not
+  changed**: sweeping it scores 237/513 at dot 69900, 251 at line 0 (today), 262 at 70168 and
+  250 at 70184, a jagged profile with no clean optimum — the signature of a constant absorbing
+  an error somewhere else, which this repository has been careful about before.
+* **A `cgb-acid2` row the `identical` engine loses.** The per-dot pixel FIFO renders it 158
+  pixels wrong where the default engine is pixel-exact, and it loses rows in Gambatte's
+  `sprites` and `window` groups too (245→241 and 259→227). That is the first counter-example to
+  ["`identical` loses no row to the default on any gate"](#the-identical-picture-mode-scores-differently--and-mostly-dominates),
+  and it is a PPU finding, not a runner one.
+* **`cgb-acid-hell` is two pixels away.** `(80, 68)` and `(80, 69)` are swapped: the reference
+  wants yellow above black and we draw black above yellow, one row of one column of the devil's
+  face. Everything else in the picture is exact.
+
+[MBC3]: https://gbdev.io/pandocs/MBC3.html
+[MBC30]: https://gbdev.io/pandocs/MBC3.html#mbc30
+
+### Where the remaining reds are — and where each group goes next
+
+Grouped the way the Mealybug campaign groups its rows, so the denominator is honest. **A suite
+is an input, not a scoreboard**: every group below ends up as a fix, as a check in
+[GBSelfTest](../pitfalls/codes.md), or as a documented behaviour with a **stable code** a
+failing check can print — see [the stable-code registry](../pitfalls/codes.md), which carries
+the full triage (row counts, whether a public suite already covers the behaviour well, and
+whether it is decidable from inside a cartridge at all).
+
+* **Mid-scanline PPU timing is most of it, and it is the same wall Mealybug describes.** In
+  Gambatte, `scy` scores 0/67 and `bgtilemap` 0/40 on the default engine and 54/67 and 36/40 on
+  the per-dot one; `scx_during_m3` goes 3/178 → 30/178. In GBMicrotest the `int_hblank_*_scx`
+  family is 0/24. These are not separate problems from the Mealybug campaign — they are the
+  same one, measured by four more authors.
+* **OAM and VRAM access blocking.** GBMicrotest's `poweron_oam_006` and `poweron_vram_026` want
+  `$FF` from a locked bus and get the real byte. That is deliberate on the default engine and
+  documented at `Gpu::cpu_can_read_vram`: with mode 3 fixed at 172 dots where hardware varies it
+  172-289, blocking would silently drop writes a game placed legally in HBlank. The per-dot
+  engine has both halves and does block, which is most of its +87 rows here.
+* **Console revisions we do not model.** AGE names the CPU revision in every file name
+  (`-cgbBC` versus `-cgbE`), and where a name lists several (`-cgbBCE`) no single machine can
+  satisfy all of them. The runner forces a stepping only when the name gives exactly one.
+* **`firstwhite` prints an error on a DMG and not on a Color console** — it draws its message
+  at about frame 21 and holds it, on both picture modes. Unexplained; the ROM is
+  [pinobatch/little-things-gb](https://github.com/pinobatch/little-things-gb)'s and its readme
+  says an emulator that shows text there "probably shows 1-frame glitches in *Pokémon
+  Pinball*".
+* **`bully` draws nothing at all** — our frame is entirely black where the reference is a page
+  of text. That is a failure to *start*, not a failure of a check, and it is the first thing to
+  look at in this group.
+
+### Re-running them
+
+```sh
+make test-external              # every suite, default picture mode  (~20 s)
+make test-external-accurate     # the same, GB_PPU=identical         (~45 s)
+
+# one suite, with the per-row detail and the frames written out:
+cargo run --release --example csp_suite -- \
+    --suite gbmicrotest --dir target/test-suites/csp --out target/cspshots
+```
+
+`--filter <substr>` narrows to one ROM and `--frames N` overrides a suite's frame budget for
+investigating a row by hand; neither is used by the gate, whose budgets come from each suite's
+own howto.
+
+**The Gambatte baseline is 5,320 rows and about 400 KB, twice over.** That is deliberate: at
+that size a PASS/FAIL total is a flat wall, and what a PPU campaign needs is to see *which*
+rows moved. Expect any PPU change to produce a large, readable diff there — that is the point,
+and it is the same trade the Mealybug baselines make with their pixel counts.
 
 ---
 

@@ -1,0 +1,146 @@
+# SCORED WITH THE `identical` PICTURE MODE (GB_PPU=identical, alias `accurate`).
+# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 make test-external-accurate
+# The other mode produces different numbers for the same ROMs — see
+# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this
+# file with the wrong machine's results.
+#
+# `mooneye-wilbertpol` baseline — the EXPECTED verdict of every ROM in the mooneye-wilbertpol suite,
+# judged by ITS OWN AUTHOR'S convention (see `mooneye-test-suite-wilbertpol/game-boy-test-roms-howto.md`
+# in the release, and the module docs of examples/csp_suite.rs). Nothing here is
+# a hash or a screenshot of our own output.
+#
+# The ROMs are NOT vendored. `tools/fetch-test-suites.sh` downloads the
+# c-sp/game-boy-test-roms release pinned there and checks its SHA-256.
+#
+# A row key is `<path-under-the-suite>@<console>`, where the console is the word
+# the ROM's or the reference screenshot's own file name used. `SKIP` marks a row
+# this runner deliberately does not score and says why; those count in neither
+# column.
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction: a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+
+acceptance/add_sp_e_timing@auto = PASS
+acceptance/bits/mem_oam@auto = PASS
+acceptance/bits/reg_f@auto = PASS
+acceptance/bits/unused_hwio-GS@auto = PASS
+acceptance/boot_hwio-G@G = FAIL b=00 c=CB d=42 e=F0 h=FF l=40
+acceptance/boot_regs-dmg@dmg = PASS
+acceptance/call_cc_timing@auto = PASS
+acceptance/call_cc_timing2@auto = PASS
+acceptance/call_timing@auto = PASS
+acceptance/call_timing2@auto = PASS
+acceptance/di_timing-GS@auto = PASS
+acceptance/div_timing@auto = PASS
+acceptance/ei_timing@auto = PASS
+acceptance/gpu/hblank_ly_scx_timing-C@C = FAIL b=04 c=93 d=42 e=08 h=FF l=40
+acceptance/gpu/hblank_ly_scx_timing-GS@auto = PASS
+acceptance/gpu/hblank_ly_scx_timing_nops@auto = FAIL b=04 c=95 d=42 e=08 h=FF l=40
+acceptance/gpu/hblank_ly_scx_timing_variant_nops@auto = FAIL b=0A c=45 d=42 e=08 h=FF l=40
+acceptance/gpu/intr_0_timing@auto = FAIL b=48 c=BE d=02 e=3C h=FF l=40
+acceptance/gpu/intr_1_2_timing-GS@auto = PASS
+acceptance/gpu/intr_1_timing@auto = FAIL b=48 c=BE d=01 e=C5 h=FF l=40
+acceptance/gpu/intr_2_0_timing@auto = PASS
+acceptance/gpu/intr_2_mode0_scx1_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx2_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx3_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx4_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx5_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx6_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx7_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_scx8_timing_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_timing@auto = PASS
+acceptance/gpu/intr_2_mode0_timing_sprites@auto = PASS
+acceptance/gpu/intr_2_mode0_timing_sprites_nops@auto = PASS
+acceptance/gpu/intr_2_mode0_timing_sprites_scx1_nops@auto = FAIL b=10 c=BA d=42 e=F0 h=FF l=40
+acceptance/gpu/intr_2_mode0_timing_sprites_scx2_nops@auto = FAIL b=10 c=BA d=42 e=F0 h=FF l=40
+acceptance/gpu/intr_2_mode0_timing_sprites_scx3_nops@auto = FAIL b=10 c=BA d=42 e=F0 h=FF l=40
+acceptance/gpu/intr_2_mode0_timing_sprites_scx4_nops@auto = FAIL b=10 c=BA d=42 e=F0 h=FF l=40
+acceptance/gpu/intr_2_mode3_timing@auto = PASS
+acceptance/gpu/intr_2_oam_ok_timing@auto = PASS
+acceptance/gpu/intr_2_timing@auto = FAIL b=48 c=BE d=02 e=FD h=FF l=40
+acceptance/gpu/lcdon_mode_timing@auto = PASS
+acceptance/gpu/ly00_01_mode0_2@auto = PASS
+acceptance/gpu/ly00_mode0_2-GS@auto = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly00_mode1_0-GS@auto = FAIL b=48 c=BE d=02 e=FF h=FF l=40
+acceptance/gpu/ly00_mode1_2-C@C = PASS
+acceptance/gpu/ly00_mode2_3@auto = PASS
+acceptance/gpu/ly00_mode3_0@auto = PASS
+acceptance/gpu/ly143_144_145@auto = PASS
+acceptance/gpu/ly143_144_152_153@auto = PASS
+acceptance/gpu/ly143_144_mode0_1@auto = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly143_144_mode3_0@auto = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly_lyc-C@C = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly_lyc-GS@auto = PASS
+acceptance/gpu/ly_lyc_0-C@C = FAIL b=48 c=BE d=05 e=FF h=FF l=40
+acceptance/gpu/ly_lyc_0-GS@auto = FAIL b=48 c=BE d=04 e=FF h=FF l=40
+acceptance/gpu/ly_lyc_0_write-C@C = FAIL b=48 c=BE d=02 e=FC h=FF l=40
+acceptance/gpu/ly_lyc_0_write-GS@auto = FAIL b=48 c=BE d=01 e=FC h=FF l=40
+acceptance/gpu/ly_lyc_144-C@C = FAIL b=48 c=BE d=03 e=FF h=FF l=40
+acceptance/gpu/ly_lyc_144-GS@auto = FAIL b=48 c=BE d=02 e=FF h=FF l=40
+acceptance/gpu/ly_lyc_153-C@C = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly_lyc_153-GS@auto = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly_lyc_153_write-C@C = FAIL b=48 c=BE d=04 e=FC h=FF l=40
+acceptance/gpu/ly_lyc_153_write-GS@auto = FAIL b=48 c=BE d=03 e=FC h=FF l=40
+acceptance/gpu/ly_lyc_write-C@C = FAIL b=48 c=BE d=02 e=FD h=FF l=40
+acceptance/gpu/ly_lyc_write-GS@auto = PASS
+acceptance/gpu/ly_new_frame-C@C = FAIL b=48 c=BE d=01 e=FF h=FF l=40
+acceptance/gpu/ly_new_frame-GS@auto = FAIL b=48 c=BE d=02 e=FF h=FF l=40
+acceptance/gpu/stat_irq_blocking@auto = PASS
+acceptance/gpu/stat_write_if-C@C = FAIL b=08 c=D3 d=42 e=F0 h=FF l=40
+acceptance/gpu/stat_write_if-GS@auto = FAIL b=0A c=13 d=42 e=F0 h=FF l=40
+acceptance/gpu/vblank_if_timing@auto = FAIL b=48 c=BE d=01 e=7C h=FF l=40
+acceptance/gpu/vblank_stat_intr-GS@auto = PASS
+acceptance/halt_ime0_ei@auto = PASS
+acceptance/halt_ime0_nointr_timing@auto = PASS
+acceptance/halt_ime1_timing@auto = PASS
+acceptance/halt_ime1_timing2-GS@auto = PASS
+acceptance/if_ie_registers@auto = PASS
+acceptance/intr_timing@auto = PASS
+acceptance/jp_cc_timing@auto = PASS
+acceptance/jp_timing@auto = PASS
+acceptance/ld_hl_sp_e_timing@auto = PASS
+acceptance/oam_dma_restart@auto = PASS
+acceptance/oam_dma_start@auto = PASS
+acceptance/oam_dma_timing@auto = PASS
+acceptance/pop_timing@auto = PASS
+acceptance/push_timing@auto = PASS
+acceptance/rapid_di_ei@auto = PASS
+acceptance/ret_cc_timing@auto = PASS
+acceptance/ret_timing@auto = PASS
+acceptance/reti_intr_timing@auto = PASS
+acceptance/reti_timing@auto = PASS
+acceptance/rst_timing@auto = PASS
+acceptance/timer/div_write@auto = PASS
+acceptance/timer/rapid_toggle@auto = PASS
+acceptance/timer/tim00@auto = PASS
+acceptance/timer/tim00_div_trigger@auto = PASS
+acceptance/timer/tim01@auto = PASS
+acceptance/timer/tim01_div_trigger@auto = PASS
+acceptance/timer/tim10@auto = PASS
+acceptance/timer/tim10_div_trigger@auto = PASS
+acceptance/timer/tim11@auto = PASS
+acceptance/timer/tim11_div_trigger@auto = PASS
+acceptance/timer/tima_reload@auto = PASS
+acceptance/timer/tima_write_reloading@auto = PASS
+acceptance/timer/timer_if@auto = FAIL b=48 c=BE d=01 e=FC h=FF l=40
+acceptance/timer/tma_write_reloading@auto = PASS
+emulator-only/mbc1_rom_4banks@auto = PASS
+logic-analysis/external-bus/read_timing/read_timing@none = SKIP a state dumper, not a test
+logic-analysis/external-bus/write_timing/write_timing@none = SKIP a state dumper, not a test
+logic-analysis/ppu/simple_scx/simple_scx@none = SKIP a state dumper, not a test
+madness/mgb_oam_dma_halt_sprites@dmg = SKIP reference is neither a DMG nor a compatibility palette
+manual-only/sprite_priority@cgb = PASS
+manual-only/sprite_priority@dmg = PASS
+misc/bits/unused_hwio-C@C = PASS
+misc/boot_hwio-C@C = FAIL b=FF c=CB d=42 e=F0 h=FF l=40
+misc/boot_hwio-S@S = FAIL b=00 c=CB d=42 e=F0 h=FF l=40
+misc/boot_regs-A@A = PASS
+misc/boot_regs-cgb@cgb = PASS
+misc/boot_regs-mgb@mgb = PASS
+misc/boot_regs-sgb@sgb = PASS
+misc/boot_regs-sgb2@sgb2 = PASS
+misc/gpu/vblank_stat_intr-C@C = PASS
+utils/dump_boot_hwio@none = SKIP a state dumper, not a test

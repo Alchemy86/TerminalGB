@@ -42,6 +42,27 @@ MEALYBUG_COMMIT=70e88fb90b59d19dfbb9c3ac36c64105202bb1f4
 # was gating.
 SHOOTOUT_COMMIT=38b926bdbc26993d1b4c43e97979ecc66287bf02
 
+# c-sp/game-boy-test-roms: the community's standard aggregation, taken as ONE
+# pinned release asset rather than as thirteen more upstreams.
+#
+# Why the whole release and not per-suite pins, given every other pin here is
+# per-suite: (a) it is a single immutable artefact with a single checksum, so a
+# laptop, a CI job and a published score measure identical bytes with one pin to
+# bump; (b) it is the corpus other emulators' published c-sp scores are measured
+# on, which is what makes a comparison meaningful; and (c) — the one that
+# decided it — **each suite in it ships the author's own
+# `game-boy-test-roms-howto.md`**, which states that author's exit condition and
+# pass criterion. Those documents are the specification `examples/csp_suite.rs`
+# implements, and fetching thirteen upstreams separately would leave the runner
+# implementing thirteen conventions from memory.
+#
+# The five suites already pinned above are deliberately NOT taken from here:
+# their baselines were measured against those exact builds, and re-pointing them
+# at a different build of the same ROMs would move rows for a reason that has
+# nothing to do with the emulator.
+CSP_TAG=v7.0
+CSP_SHA256=b9a9d7a1075aa35a3d07c07c34974048672d8520dca9e07a50178f5860c3832c
+
 mkdir -p "$DEST"
 DEST=$(cd "$DEST" && pwd)
 
@@ -88,8 +109,24 @@ if [ ! -d "$DEST/samesuite/apu" ] || [ ! -d "$DEST/cpp" ]; then
     rm -rf "$DEST/shootout"
 fi
 
+# --- c-sp/game-boy-test-roms ------------------------------------------------
+# The tag is stamped rather than kept in the path: consumers name a fixed
+# `csp/gambatte`, and bumping the pin still re-fetches.
+if [ "$(cat "$DEST/csp/.release" 2>/dev/null || true)" != "$CSP_TAG" ]; then
+    echo "fetching c-sp/game-boy-test-roms $CSP_TAG"
+    rm -rf "$DEST/csp"
+    mkdir -p "$DEST/csp"
+    curl -sSL -o "$DEST/csp.zip" \
+        "https://github.com/c-sp/game-boy-test-roms/releases/download/$CSP_TAG/game-boy-test-roms-$CSP_TAG.zip"
+    echo "$CSP_SHA256  $DEST/csp.zip" | sha256sum -c -
+    unzip -q -o "$DEST/csp.zip" -d "$DEST/csp"
+    rm -f "$DEST/csp.zip"
+    echo "$CSP_TAG" > "$DEST/csp/.release"
+fi
+
 echo "suites ready under $DEST:"
 echo "  mooneye     $(find "$DEST/mooneye" -name '*.gb' | wc -l) roms"
 echo "  mealybug    $(find "$DEST/mealybug/build" -name '*.gb' | wc -l) roms"
 echo "  samesuite   $(find "$DEST/samesuite" -name '*.gb' | wc -l) roms"
 echo "  cpp         $(find "$DEST/cpp" -name '*.gb' | wc -l) roms"
+echo "  csp         $(find "$DEST/csp" \( -name '*.gb' -o -name '*.gbc' \) | wc -l) roms in $(find "$DEST/csp" -mindepth 1 -maxdepth 1 -type d | wc -l) suites"

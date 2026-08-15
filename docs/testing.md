@@ -88,7 +88,7 @@ interrupt dispatch, OAM DMA, per-model DMG/MGB/SGB/CGB behaviour) and `emulator-
   needed.
 - **This repo:** not the declared submodule — a separate suite, **fetched at run time and
   gated in CI** since 2026-08-14 (`make test-external`; see
-  [Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp)).
+  [Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp-and-the-thirteen-in-c-sp)).
 - Sources: [mooneye-gb](https://github.com/Gekkio/mooneye-gb) ·
   [Gekkio — test ROM dos & don'ts](https://gekkio.fi/blog/2016/game-boy-test-rom-dos-and-donts/).
 
@@ -127,7 +127,7 @@ trustworthy.
 - Source: [gameboy-doctor](https://github.com/robert/gameboy-doctor).
 
 **Deep-cut suites** (both now fetched and gated, see
-[Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp)):
+[Gating the external suites](#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp-and-the-thirteen-in-c-sp)):
 **Mealybug Tearoom** (mid-scanline PPU writes — exactly our whole-line-render
 approximation) and **SameSuite** (APU + CGB corners). Reference
 emulators to diff behaviour against: **SameBoy** ("over 99.9%" accuracy, passes Mooneye +
@@ -339,10 +339,12 @@ checked in and never actually compared.
 "We pass Blargg" is true and is a narrow slice. The wider community suites are scored — and,
 since 2026-08-14, **gated** — separately; see the next section for the measured figures.
 
-## Gating the external suites — Mooneye GB, SameSuite, Mealybug Tearoom, `cpp`
+## Gating the external suites — Mooneye GB, SameSuite, Mealybug Tearoom, `cpp`, and the thirteen in c-sp
 
 Everything above is the *in-repo* harness. The community suites are 270 further
-rows, and until now **nothing in CI looked at any of them**: every point they measure was
+rows — plus **6,045 more** from the thirteen suites in the
+[c-sp aggregation](#the-c-sp-aggregation--thirteen-more-suites) below —
+and until this landed **nothing in CI looked at any of them**: every point they measure was
 protected only by somebody remembering to re-run a scout by hand. A night that gained +96
 rows could have lost them again silently, and a cycle-stepped-PPU rewrite would have had no
 way to show either its progress or its regressions.
@@ -418,6 +420,71 @@ Notes worth having before you read a red build:
   poisons the battery, so a game legitimately running a routine out of OAM silently stopped
   saving for the rest of the session. The heuristic now covers `$FEA0-$FF7F` only; see
   [`docs/conformance-notes.md`](conformance-notes.md).
+
+### The c-sp aggregation — thirteen more suites
+
+[c-sp/game-boy-test-roms](https://github.com/c-sp/game-boy-test-roms) bundles eighteen suites
+into one pinned release. Five were already gated above; the other thirteen — AGE, Bully,
+cgb-acid2, cgb-acid-hell, Gambatte, GBMicrotest, MBC3 Tester, the wilbertpol Mooneye fork,
+(parts of) little-things-gb, rtc3test, Scribbltests, Strikethrough and TurtleTests — are
+4,510 ROMs and **6,045 rows**, all of them scored by one runner,
+[`examples/csp_suite.rs`](../examples/csp_suite.rs), against
+`testharness/csp_<suite>_baseline.txt` (and `csp_<suite>_accurate_baseline.txt` for the
+`identical` picture mode). The scores and what each red group means are on
+[`docs/measured/scoreboard.md`](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time);
+this section is the mechanics.
+
+**The release is taken WHOLE, as one pin, and that is a deliberate departure** from the
+per-suite pins above. Three reasons: one immutable artefact with one checksum; it is the corpus
+other emulators' published c-sp scores are measured on; and — the one that decided it — **every
+suite in it ships the author's own `game-boy-test-roms-howto.md`** stating that author's exit
+condition and pass criterion. Those documents are the specification the runner implements, and
+thirteen separate upstreams would leave it implementing thirteen conventions from memory. The
+five suites already pinned are *not* re-pointed at this release: their baselines were measured
+against those exact builds.
+
+**Five conventions, none of them ours**, one per group of suites:
+
+| Convention | Suites | What the ROM does |
+|---|---|---|
+| `LD B,B` + Fibonacci registers | AGE | stops on `$40` with `B=3 C=5 D=8 E=13 H=21 L=34` on success |
+| `$ED` + Fibonacci registers | Mooneye (wilbertpol) | the same idea, with the undefined opcode the 2016 suite used |
+| a verdict byte at `$FF82` | GBMicrotest | `$01` pass / `$FF` fail; its README says to read **only** that byte, because several tests leave `$FF80 == $FF81` on failure |
+| a hex digit in the corner | Gambatte | the file name carries the value; Gambatte's own `testrunner.cpp` compares the first 8x8 tiles against a built-in font, transcribed bit for bit into `OUT_TILES` |
+| the author's reference screenshot | everything else | the same rule Mealybug and `cpp` already follow |
+
+**Colour is the part that is easy to get wrong**, so it is decided from evidence rather than
+assumed, and the reference is always converted *towards* us so our framebuffer is never
+re-ranked. A frame we drew in `GbMode::Color` is real colour; anything else is four grey
+shades, and then the reference is either the DMG palette (`#000000 #555555 #AAAAAA #FFFFFF`) or
+the Color boot ROM's eight compatibility colours — told apart from the reference's own palette,
+which is a fact about the picture. **A shade-rank compare cannot do the compatibility case**:
+eight distinct luminances in the reference against four in our frame re-ranks every pixel. A
+true colour reference is taken back to 15-bit RGB (`(X << 3) | (X >> 2)` is exactly invertible)
+and pushed through `Gpu::setrgb`'s correction; Gambatte's own screenshots are already in our
+space, because it uses the same correction, and are compared under its `& 0xF8F8F8` mask.
+
+**A `SKIP` row counts in neither column and says why.** 96 of the 6,045 are skipped: 95
+Gambatte ROMs that upstream itself disables (an `_xout0` name makes its own `find("_out")` miss
+it) or that are state dumpers with no expectation, and `tellinglys`, which only reaches a
+verdict after a human has pressed every button in an arbitrary order. Counting those as
+failures would invent a denominator nobody measures; dropping them would hide them.
+
+**Two runner traps worth knowing before adding a suite here**, both of which produced wrong
+verdicts before they were fixed:
+
+* **A reference belongs to the ROM with the longest matching stem.** Several suites put
+  `foo.gb` and `foo-nocgb.gb` in one directory, and a shortest-match rule hands
+  `foo-nocgb-ncmBCE.png` to `foo.gb` — a wrong reference scored as a wrong emulator.
+* **Gambatte's own runner opens exactly three reference names** (`_dmg08_cgb04c.png`,
+  `_cgb04c.png`, `_dmg08.png`). The suite also ships bare `<stem>.png` and `<stem>_gba.png`
+  files it never looks at; picking those up scores pictures upstream does not treat as
+  expectations, and for the pair that differ only by suffix produces two rows claiming the
+  same console.
+
+**The Gambatte baseline is 5,320 rows, about 400 KB, twice over.** That is the same trade the
+Mealybug baselines make with their pixel counts: at that size a PASS/FAIL total is a flat wall,
+and what a PPU campaign needs is to see *which* rows moved.
 
 ## A suite no public test ROM covers: battery-save durability
 

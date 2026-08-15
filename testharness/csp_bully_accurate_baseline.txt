@@ -1,0 +1,25 @@
+# SCORED WITH THE `identical` PICTURE MODE (GB_PPU=identical, alias `accurate`).
+# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 make test-external-accurate
+# The other mode produces different numbers for the same ROMs — see
+# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this
+# file with the wrong machine's results.
+#
+# `bully` baseline — the EXPECTED verdict of every ROM in the bully suite,
+# judged by ITS OWN AUTHOR'S convention (see `bully/game-boy-test-roms-howto.md`
+# in the release, and the module docs of examples/csp_suite.rs). Nothing here is
+# a hash or a screenshot of our own output.
+#
+# The ROMs are NOT vendored. `tools/fetch-test-suites.sh` downloads the
+# c-sp/game-boy-test-roms release pinned there and checks its SHA-256.
+#
+# A row key is `<path-under-the-suite>@<console>`, where the console is the word
+# the ROM's or the reference screenshot's own file name used. `SKIP` marks a row
+# this runner deliberately does not score and says why; those count in neither
+# column.
+#
+# CI is green when reality matches this file and red on ANY change, in either
+# direction: a row that starts PASSING is a change too. Re-bless deliberately:
+#
+#   UPDATE_EXTERNAL_BASELINE=1 make test-external
+
+bully@cgb = FAIL diff=22893

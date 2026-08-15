@@ -55,6 +55,8 @@ Search this page for the error text you have. Strings are quoted verbatim.
 | a measurement that got worse after you reverted the break | [a stale binary](tests.md#a-stale-binary-looks-exactly-like-a-regression) |
 | an intermittent failure only under load, in a test that paces itself with `sleep` | [`sleep` is not a clock](tests.md#sleep-is-not-a-clock-on-a-busy-machine) |
 | a comparison that scores 100 % against a buffer nobody has written yet | [an exact match against a blank screen](tests.md#an-exact-match-against-a-blank-screen-is-not-evidence) |
+| one screenshot row wrong by thousands of pixels while its neighbours are exact | [a reference claimed by the wrong ROM](tests.md#a-reference-screenshot-claimed-by-the-wrong-rom) |
+| `reference is neither a DMG nor a compatibility palette`, or a suite's readme naming a colour its own pictures do not use | [documentation disagreeing with the files](tests.md#a-suites-own-documentation-disagreeing-with-the-files-it-ships) |
 
 ### The host, the terminal and the clock
 
@@ -76,6 +78,12 @@ Search this page for the error text you have. Strings are quoted verbatim.
 | many image rows failing, all by the same offset | [that is one bug, not many](accuracy.md#rows-that-move-together-are-one-bug) |
 | a subsystem blamed by a test that only *synchronises* through it | [the failure names the wrong component](accuracy.md#a-test-that-synchronises-through-one-subsystem-to-measure-another-names-the-wrong-one) |
 | a defect that produces no wrong verdict anywhere | [masked by the thing that consumes it](accuracy.md#a-defect-masked-by-the-very-thing-that-consumes-it) |
+
+### A code you were handed
+
+| what you see | entry |
+|---|---|
+| a failure that printed `TGB-PPU-004`, `TGB-DMA-001` or any other `TGB-<AREA>-<NNN>` | [the stable-code registry](codes.md) — every code has an anchor there naming the behaviour, the public suites that already measure it, and what a wrong emulator does |
 
 ### It is not your bug
 
@@ -112,6 +120,7 @@ the entry says so.
 | [environment.md](environment.md) | traps outside the program: clocks, spawned terminals, signals, filenames, shutdown |
 | [not-our-bug.md](not-our-bug.md) | when the cartridge, the suite or the reference is what is wrong |
 | [techniques.md](techniques.md) | the instruments that found the entries above — worth stealing whatever you are building |
+| [codes.md](codes.md) | **the stable-code registry** — one permanent code per hardware behaviour, so a failing check can point a stranger at the page that explains it |
 
 ## Credit
 
