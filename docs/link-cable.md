@@ -964,17 +964,59 @@ three verdicts, the save-file one included, and on its own.
 
 ### Reliability — measured, and it is not good enough
 
-**122 of 130 rounds passed** (Gen 1 ↔ Gen 1, this box, `GB_TWOPROCESS_REPEAT`).
-Roughly **one round in sixteen fails**, in two distinct ways:
+**On a quiet box, 122 of 130 rounds passed** (Gen 1 ↔ Gen 1, 20 cores,
+`GB_TWOPROCESS_REPEAT`). Two distinct failures:
 
 | mode | count | what it looks like |
 |---|---:|---|
 | **stall** | 5 | the two consoles pair and exchange 17,000–22,000 bytes, and the trade never completes; both run to the 24,000-frame cap with `torn = 0` and no fault |
 | **silent corruption** | 3 | the trade *completes*, `torn = 0`, `fault = none`, and the received party block is **shifted**: `OCKY` (OT `LUE`) level 0, HP 38/9728, DVs (5,6,1,9) where `ROCKY` (OT `BLUE`) level 11 was sent; other rounds produced `MMER` with an empty OT, and `LIMMER` (OT `ED`) |
 
-All three corruptions lost **one or two bytes off the front** of the arriving
+All the corruptions lost **one or two bytes off the front** of the arriving
 block, which is the signature of a stream that slipped rather than of a byte
 flipped in place.
+
+#### It is not 94 %. It is a function of how busy the machine is.
+
+The 130 rounds above were run while nothing else was happening. Repeating the
+sweep while other work ran on the same box gives a different answer, and the
+relationship is monotonic — same binary, same cartridge, same save, same
+harness, 10 or 20 rounds each:
+
+| 1-minute load average (20 cores) | rounds passed |
+|---:|---:|
+| ~5 | **19 / 20** |
+| ~10 | 7 / 10 |
+| ~31 | 3 / 10 |
+| ~49 | 1 / 10 |
+
+**So the two-process link is not 94 % reliable; it is reliable when the machine
+is idle and unreliable when it is not**, and the thing it does when it fails
+includes writing a corrupt Pokémon to a save file. That is a much less
+comfortable claim than a flat percentage and it is the correct one. Anybody
+quoting a number for this must say what else was running.
+
+It also says something about the cause: a purely logical race would not track
+CPU availability like that. Both consoles here run **unpaced**, as fast as the
+scheduler will let them, so a descheduled process is a console that has stopped
+answering for a long time in its own clock's terms.
+
+#### The obvious explanation was tested, and it is wrong
+
+`OFFER_TICKS` — how long an incoming master transfer is held for the local
+console to arm — is `2 * FRAME_TICKS` of **emulated** time. On an unpaced
+console at ~50× real time that is about 0.7 ms of wall clock, which a
+descheduled process exceeds trivially; and §10 of this very page records the
+sister bug, a deadline for another process counted in emulated cycles. It is a
+compelling story.
+
+**It is not the cause.** Multiplying `OFFER_TICKS` by 100 and A/B-ing the two
+binaries against each other under the same load, interleaved: baseline 17/20,
+patched 15/20. No effect. The window is not what expires. (`HOLD_TIMEOUT`, the
+other side of the same handshake, is already wall-clock — §10.)
+
+Whatever it is, it is still open, and the next step is instrumentation rather
+than another guess.
 
 **The second mode is the serious one, and it is not a harness artefact: the
 corrupt Pokémon was written to the battery file.** Nothing in the emulator
@@ -986,18 +1028,19 @@ compares whole Pokémon rather than asking whether *something* arrived.
 Consequences to act on rather than admire:
 
 * **This harness is deliberately NOT wired into CI**, and not because it needs a
-  cartridge (it skips cleanly without one). At 94 % it would be a red build one
-  run in sixteen, and a test people learn to re-run is a test people learn to
-  ignore. Wire it in when the two modes below are fixed; until then run it by
-  hand with `GB_TWOPROCESS_REPEAT=40` before and after anything that touches
+  cartridge (it skips cleanly without one). A CI runner is a *loaded* machine,
+  which is the worst end of the table above; a test that is red as often as it
+  is green is a test people learn to ignore. Wire it in when the two modes are
+  fixed; until then run it by hand with `GB_TWOPROCESS_REPEAT=40` **on an idle
+  box, and quote the load average**, before and after anything that touches
   `src/link/peer.rs`.
 * **The single-observation Time Capsule trade above sits on top of this number.**
   It worked; there is no measurement saying it works reliably, and the honest
-  reading of 122/130 on the simpler Gen 1 ↔ Gen 1 case is that a person
-  attempting a cross-generation trade should expect to occasionally have to
-  retry — and, worse, may not be told. It is also a live candidate explanation
-  for Gold's missing post-trade save above.
-* **Diagnosis is scoped, not attempted.** `LinkPeer` has no equivalent of
+  reading of the table above is that a person attempting a cross-generation
+  trade on a busy laptop should expect to have to retry — and, worse, may not be
+  told. It is also a live candidate explanation for Gold's missing post-trade
+  save above.
+* **Diagnosis is scoped, not finished.** `LinkPeer` has no equivalent of
   `GB_GEN1_LINK_TRACE`, so there is no record of which byte slipped; the first
   thing to build is a wire log on the peer transport, because every interesting
   link failure is a reply to one byte and the state diagram will not tell you

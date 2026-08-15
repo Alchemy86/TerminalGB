@@ -243,13 +243,14 @@ fn parent() {
     println!("twoprocess: save      {}", save.display());
 
     // `GB_TWOPROCESS_REPEAT=N` runs the whole thing N times and prints the
-    // tally. That is not decoration: **this path is not reliable yet** — 122 of
-    // 130 rounds passed when it was measured (five stalls, three arrivals with a
-    // byte missing off the front, all three of which reached the battery file
-    // with `torn = 0` and no fault). So a single green round says less than it
-    // looks like it does, and the harness is not in CI until those are fixed.
-    // Full record: `docs/link-cable.md` §8, "Reliability". Any round failing
-    // fails the harness.
+    // tally. That is not decoration: **this path is not reliable yet, and how
+    // unreliable depends on how busy the machine is** — 122 of 130 rounds on an
+    // idle 20-core box, but 19/20 at load ~5, 7/10 at ~10, 3/10 at ~31 and 1/10
+    // at ~49 (stalls, and arrivals with a byte missing off the front which
+    // reached the battery file with `torn = 0` and no fault). So a single green
+    // round says very little, and this harness is not in CI because a CI runner
+    // is a loaded machine. Full record: `docs/link-cable.md` §8, "Reliability".
+    // Any round failing fails the harness.
     let rounds: u32 = std::env::var("GB_TWOPROCESS_REPEAT")
         .ok()
         .and_then(|v| v.parse().ok())

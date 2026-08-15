@@ -84,7 +84,7 @@ and links them.
   scans); it bites anything that launches two processes at once.
 * **A link that has stopped agreeing must fault rather than write** — this
   repository's own rule (`src/mbc/battery.rs`, `docs/link-cable.md` §5). Measured
-  three times in 130 rounds: a corrupt arrival reached the battery file with `torn = 0`
+  three times in 130 rounds on an idle box, and far more often on a busy one: a corrupt arrival reached the battery file with `torn = 0`
   and `fault = none`. The games' resynchronisation is `Serial_ExchangeBytes`
   re-sending a block's first byte until it *receives* the `$FD` preamble; a
   byte-shifted party block is that having failed.
@@ -97,12 +97,20 @@ where the bugs are. The harness's third check is the one an in-process test
 cannot make: read both `.sav` files back off disk and require each to hold the
 other console's Pokémon *and* pass the game's own checksum.
 
-**Honest state of it: 122 of 130 rounds pass** (Gen 1 ↔ Gen 1, this box) — five
-stalls where the two consoles exchange 17,000–22,000 bytes and never finish, and
-three silent corruptions where a party block that had lost a byte off the front
-was written to the save. So the harness is deliberately **not** in CI: at 94 % it
-would be red one run in sixteen, and a test people learn to re-run is a test people learn to ignore.
-The milestone above is a single observation sitting on top of that number, and
+**Honest state of it, and it is not a percentage.** On an idle 20-core box, 122
+of 130 rounds pass — five stalls where the two consoles exchange 17,000–22,000
+bytes and never finish, three silent corruptions. Repeat the sweep while the
+machine is busy and it collapses monotonically: **19/20 at load ~5, 7/10 at ~10,
+3/10 at ~31, 1/10 at ~49**, same binary and same fixtures. So the two-process
+link is reliable when nothing else is running and unreliable when something is,
+and what it does when it fails includes writing a corrupt Pokémon to a save
+file. The obvious explanation — `OFFER_TICKS` is two frames of *emulated* time
+on an unpaced console, i.e. ~0.7 ms of wall clock, the sister of the bug in
+`docs/link-cable.md` §10 — was **tested and rejected**: ×100 the window, A/B
+interleaved under the same load, 15/20 against a baseline 17/20. The cause is
+open and the next step is a wire log, not another guess. The harness is
+therefore deliberately **not** in CI, because a CI runner is a loaded machine.
+The milestone above is a single observation sitting on top of all of this and
 should be quoted as such.
 
 ---

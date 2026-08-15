@@ -4026,14 +4026,19 @@ field-by-field table, file offsets, md5s — [`docs/link-cable.md`](docs/link-ca
   each child checks its arrival field by field, the parent checks `transfers > 0 / torn = 0 /
   no fault`, **and the parent reads both `.sav` files back off disk**. That third check is the
   claim only two processes can make and it is the one a person means by "the trade worked".
-- **IT IS NOT IN CI ON PURPOSE. Measured 122/130 rounds** (`GB_TWOPROCESS_REPEAT=N`): five
-  stalls (both consoles pair, exchange 17-22k bytes, never finish) and **three silent
-  corruptions where an arrival that had lost a byte off the front was written to the battery
-  file with `torn = 0` and `fault = none`** (`OCKY` OT `LUE` Lv0, `MMER` with no OT, `LIMMER`
-  OT `ED`). At 94 % it would be red one run in sixteen, and a test people re-run is a test
-  people ignore. **Run it by hand before and after anything touching `src/link/peer.rs`.**
-  Diagnosis is scoped, not done: `LinkPeer` has no `GB_GEN1_LINK_TRACE` equivalent, and a wire
-  log is the first thing to build.
+- **IT IS NOT IN CI ON PURPOSE, AND ITS FAILURE RATE IS A FUNCTION OF MACHINE LOAD, NOT A
+  PERCENTAGE.** `GB_TWOPROCESS_REPEAT=N`, 20 cores, same binary and fixtures throughout:
+  **122/130 on an idle box**, then **19/20 at load ~5, 7/10 at ~10, 3/10 at ~31, 1/10 at ~49**.
+  Two failure modes — stalls (both consoles pair, exchange 17-22k bytes, never finish) and
+  **silent corruptions where an arrival that had lost a byte off the front was written to the
+  battery file with `torn = 0` and `fault = none`** (`OCKY` OT `LUE` Lv0, `MMER` with no OT,
+  `LIMMER` OT `ED`). A CI runner is a loaded machine, which is the bad end of that table.
+  **Run it by hand on an idle box and quote the load average**, before and after anything
+  touching `src/link/peer.rs`. **The obvious cause was tested and REJECTED**: `OFFER_TICKS` is
+  two frames of *emulated* time (~0.7 ms of wall clock on an unpaced console — the sister of
+  §10's "a deadline for another process belongs to the wall clock"), and ×100 it changes
+  nothing (15/20 patched vs 17/20 baseline, interleaved under the same load). Cause open; build
+  a wire log on the peer transport before guessing again.
 - **`LinkPeer::discover` scans the rendezvous directory ONCE and never rescans**, so two
   instances started in the same instant both advertise and neither ever pairs (measured: 24,000
   frames, `transfers = 0`). A person cannot hit it; anything spawning two processes hits it
