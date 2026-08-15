@@ -6850,3 +6850,96 @@ system `curl`, the same bar `portal` meets.
 - **Nothing here has been run for eight hours.** The longest verified session is twenty minutes;
   the checkpoint/resume path is tested by a second process reading a first's checkpoint. "It
   survives an overnight run" is a prediction, not a measurement — say so.
+## GBSelfTest — a test cartridge that lives OUTSIDE this repository
+
+**Reader-facing page: [`docs/gbselftest.md`](docs/gbselftest.md); the artefact and its lock are
+[`third_party/gbselftest/`](third_party/gbselftest/README.md).** A Game Boy cartridge that tests
+the machine it runs on, prints a verdict on the screen and over the link port at once, and
+carries a **stable code per check** that resolves to a heading on our documentation page. Run it:
+`make gbselftest`.
+
+- **IT IS IN ITS OWN REPOSITORY (`Alchemy86/GBSelfTest`, MIT) AND THAT IS LOAD-BEARING, NOT
+  TIDINESS.** Our whole conformance position is *"no check's expected output may be defined by
+  our emulator"* (`docs/conformance-action.md`); a test cartridge kept inside the emulator it
+  judges is the easiest possible way to break that. Out of tree it can be adopted without a
+  dependency on us, and it is free to disagree with us — which it does, on five rows, on
+  purpose. **Consume it as a built artefact, never as source.**
+- **Vendored with a lock, not a submodule and not a build-time fetch** — the pattern agreed with
+  the AtlasGB crew so the repository has one: `third_party/gbselftest/{gbselftest.gb,
+  gbselftest.lock, CHECKS.md}`, refreshed by `tools/fetch-gbselftest.sh`, whose `--verify`
+  recomputes the checksum offline and whose `--check-upstream` is advisory and never a build
+  failure. `GBSELFTEST_LOCAL=<checkout>` stands in for a release, which is how it was
+  bootstrapped and how a cartridge change is tried here before publishing.
+- **IT IS DELIBERATELY OUT OF `tools/conformance/checks.json`.** That manifest is gated at 100 %
+  by `conformance-self.yml` and its result is the README badge; the **default** picture mode
+  loses five of the cartridge's rows *by choice*, so folding them in would force either a
+  permanently red gate or a lowered threshold. It has its own manifest
+  (`tools/conformance/checks-gbselftest.json`) and its own job. Fold it in the day the default
+  models those five — a one-line change, and the file says so.
+- **The gate is WHICH rows fail, not whether it passes.** `tools/gbselftest-gate.py` scores both
+  picture modes: `identical` must pass all 76, and `standard` must lose exactly `GB-PPU-07` to
+  `GB-PPU-11` — the mode-3 length penalties and the mode-based VRAM/OAM blocking — **and no
+  more**. A sixth red row is news; a row that starts passing is a change too and the script says
+  so. Teeth proven in both directions.
+- **Scores, measured 2026-08-15 and the reason to trust the instrument:** this emulator
+  `identical` **76/76** and `standard` **71/76**; SameBoy DMG and MGB **76/76**, CGB-E and AGB
+  74/76 with two documented skips; Peanut-GB **58/76**. A cartridge that separates our two
+  renderers on precisely the rows our own documentation predicts is worth trusting on the rows
+  we did not predict. **That spread is the property to protect** — a suite everybody passes
+  measures nothing.
+- **No emulation changed and no baseline moved.** The five failures are the standing trade-off
+  restated by an instrument written somewhere else, not a regression.
+- **The doc page's per-code half is GENERATED, not written here.** `docs/tools/gbselftest_doc.py`
+  splices the vendored `CHECKS.md` between markers in `docs/gbselftest.md`; `--check` fails if it
+  has drifted, which is what stops a URL the ROM printed landing on a heading that no longer
+  means what the ROM said. Edit the cartridge, not the page.
+- **Reading a report: `Passed`/`Failed` on the last line is Blargg's convention on purpose**, so
+  every existing runner understands it with no contract change. **The one-line explanation and
+  the code are the product**; a bare `Failed` is the least useful thing in it. `GB-SER-03`
+  deliberately shifts one byte out of the link port, and the link port is the log, so one
+  verdict line can begin with a stray `.` — a parser anchored at column zero silently loses a
+  check, which is how the gate first reported 75 of 76.
+
+### What a cartridge can and cannot measure, settled by building one
+
+- **The composited picture is unreachable** — no framebuffer exists; the PPU streams to the
+  panel. But **rendering leaves a timing fingerprint**: mode 3 lasts exactly as long as the
+  fetcher takes, so a scene of documented cost can be laid out and the length measured. Those
+  checks turned out to be the most discriminating in the whole suite.
+- **The technique, worth stealing:** arm the coincidence interrupt on one scanline, and in the
+  handler run a variable-length `NOP` sled before reading `STAT` **once**; binary-search the
+  delay to find the machine cycle the mode changes at. The offset from interrupt to first `NOP`
+  is unknown and irrelevant because **every result is the difference between two such edges**.
+  Mode 3's absolute length falls out of two edges plus two documented constants (456 dots a
+  line, 80 of them the object scan) with the unknown cancelling.
+- **Four dots is the floor and it is physics, not effort** — the CPU observes only on M-cycle
+  boundaries. An `SCX` of 1, 2 or 3 is unmeasurable from inside; 4 is not, which is why the
+  fine-scroll check uses 4.
+- **Two of our own expectations were wrong and only a FOREIGN emulator found them.** `LY` reads
+  153 for four dots and then reads 0, so a poller sees 152 and both readings are correct; and a
+  length counter enabled part-way through its period is clocked once immediately, which can
+  reload it to a full 64 steps, so a check that waited 60 ms passed or failed by luck. Neither
+  was reachable by reasoning. **Validate a test ROM against an implementation nobody here wrote,
+  every time.**
+- **A model difference we did NOT assert:** on a Color console, clearing `LCDC` bit 1 still
+  charges the fetcher for its ten objects; on a DMG it does not. One independent measurement is
+  not enough to assert a rule, so that check skips on Color and says why.
+- **`tools/sameboy-oracle/` cannot read serial**, so the cartridge repo carries its own
+  ~90-line SameBoy runner that accumulates the bit-level callbacks into bytes. If you need a
+  foreign opinion on anything serial-reported, that is where it is.
+
+### Build traps this cost real time to find
+
+- **A Makefile whose objects do not depend on the `.inc` files rebuilds nothing when the memory
+  map changes, and the half-stale ROM gets blamed on the emulator.** An hour went into
+  "debugging" a WRAM shift that was three stale object files. Every object in the cartridge
+  depends on every include, deliberately.
+- **A test cartridge must not scribble on its own state.** The echo-RAM check wrote to `$C000`,
+  which is where the captured boot registers live, and `GB-BOOT-03` then reported a value no
+  console has ever handed over. Use the cartridge's own scratch and its echo.
+- **`RET` during an OAM transfer whose source is work RAM pops rubbish** — the CPU cannot reach
+  that bus, and the stack is on it. Sit in high RAM for the whole transfer. This hung the
+  cartridge on SameBoy while passing here.
+- **After a teeth test, REBUILD before measuring anything else.** `git checkout` restores the
+  source, not the binary; a stale `conformance_adapter` reported `GB-CPU-07` failing long after
+  the deliberate break was reverted.

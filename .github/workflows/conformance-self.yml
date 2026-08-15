@@ -85,3 +85,34 @@ jobs:
           label: conformance (fetched)
           artifact-name: conformance-results-fetched
           output-dir: target/conformance-fetched
+
+  gbselftest:
+    name: GBSelfTest cartridge
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The vendored cartridge must be the one the lock pins. This is the check
+      # that catches somebody editing the artefact in place instead of fixing
+      # it upstream, and it needs no network.
+      - name: The vendored cartridge is the pinned one
+        run: tools/fetch-gbselftest.sh --verify
+
+      # ...and the documentation page its failures point at must still say what
+      # the ROM says, or a printed URL lands on a heading that has drifted.
+      - name: docs/gbselftest.md matches the vendored check reference
+        run: python3 docs/tools/gbselftest_doc.py --check
+
+      - name: Build the reference adapter
+        run: cargo build --release --example conformance_adapter
+
+      # Both picture modes, because they are expected to differ and the
+      # difference is the interesting part: the per-dot renderer must pass
+      # everything, and the whole-scanline renderer must lose exactly its five
+      # documented approximations. A sixth is news either way.
+      - name: Score both picture modes
+        run: python3 tools/gbselftest-gate.py

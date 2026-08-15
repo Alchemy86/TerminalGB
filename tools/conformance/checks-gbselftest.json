@@ -1,0 +1,68 @@
+{
+  "contract": "gbconform/1",
+  "note": [
+    "GBSelfTest, kept in a manifest of its own rather than folded into",
+    "checks.json, and the reason is the published badge.",
+    "",
+    "checks.json is scored at 100% by .github/workflows/conformance-self.yml and",
+    "the result is the badge on the README. This emulator's DEFAULT picture mode",
+    "loses five of this cartridge's rows on purpose -- the mode 3 length",
+    "penalties and the mode-based VRAM and OAM blocking, which the whole-scanline",
+    "renderer does not model and docs/picture-modes.md says so. Folding them in",
+    "would force either a permanently red gate or a lowered threshold, and both",
+    "are worse than saying which population is being scored.",
+    "",
+    "So this file is scored separately, on both picture modes, by the",
+    "`gbselftest` job in .github/workflows/conformance-self.yml: the per-dot",
+    "renderer must pass every row, and the whole-scanline renderer must lose",
+    "exactly the five known ones and no more. A sixth is news.",
+    "",
+    "Run it by hand:",
+    "  tools/fetch-gbselftest.sh --verify",
+    "  cargo build --release --example conformance_adapter",
+    "  python3 tools/conformance/gbconform.py --checks tools/conformance/checks-gbselftest.json \\",
+    "      --adapter target/release/examples/conformance_adapter --out out",
+    "",
+    "Fold it into checks.json the day the default picture mode models those five,",
+    "or the day the badge is meant to reflect them. It is a one-line change."
+  ],
+  "suites": {
+    "gbselftest": {
+      "name": "GBSelfTest - the self-testing cartridge",
+      "author": "GBSelfTest contributors",
+      "source": {
+        "kind": "vendored",
+        "reason": [
+          "MIT licensed and redistributable, so the built cartridge is vendored",
+          "here together with the check reference its failures point at. It lives",
+          "in its own repository (Alchemy86/GBSelfTest) and is consumed as an",
+          "artefact rather than as source: a test cartridge kept inside the",
+          "emulator it judges would be the easiest possible way to break the rule",
+          "this whole runner rests on. Refresh with tools/fetch-gbselftest.sh,",
+          "which pins a release and a checksum in third_party/gbselftest/gbselftest.lock."
+        ],
+        "dir": "third_party/gbselftest",
+        "url": "https://github.com/Alchemy86/GBSelfTest"
+      }
+    }
+  },
+  "checks": [
+    {
+      "id": "gbselftest/all",
+      "suite": "gbselftest",
+      "rom": "gbselftest.gb",
+      "method": "serial",
+      "frames": 2000,
+      "behaviour": "Seventy-six checks across eleven areas, run by the cartridge itself and judged by its own printed report: instruction results and flags, instruction and memory timing, the divider and the timer, interrupts, the memory map, display timing and the rendering fingerprint, the object transfer, the sound registers, the mapper, the boot hand-over and the link port.",
+      "explain": [
+        "READ THE SERIAL EVIDENCE, NOT JUST THIS LINE. The cartridge prints one line per check with a stable code, and for every failure a one-line statement of what behaviour is missing plus a URL whose anchor is that code. A bare `Failed` here is the least useful thing in the result; the whole report is in this check's `serial` artefact.",
+        "The codes are stable for the life of the cartridge and resolve to headings on docs/gbselftest.md, which also records what the cartridge deliberately does not check and which suite to use instead.",
+        "It reports skips separately from passes, and a skip is never a pass. Checks that do not apply to the console being emulated -- the boot register table on a Color machine running this DMG cartridge, for instance -- are skipped with the reason printed.",
+        "This emulator's default picture mode loses exactly five rows, GB-PPU-07 through GB-PPU-11, and they are the documented approximations of the whole-scanline renderer: the mode 3 length penalties and the mode-based VRAM and OAM blocking. The per-dot renderer passes all seventy-six. If a sixth row goes red, that is news.",
+        "A run that produces no serial output at all is far more often a missing link port in the adapter than a broken cartridge: the report IS the link port, and an adapter that does not capture it sees nothing."
+      ],
+      "hardware": "Every expectation in the cartridge is either recomputed on the machine by a route that shares no logic with what it tests, or is a documented constant from Pan Docs and the published opcode table. Its own README states the rule and the sources.",
+      "reference": "https://github.com/Alchemy86/GBSelfTest/blob/main/docs/CHECKS.md"
+    }
+  ]
+}

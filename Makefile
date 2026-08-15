@@ -5,7 +5,7 @@
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
         chiptune-demo bgb-interop \
-        oneclick play mcp agent doctor image image-smoke
+        oneclick play mcp agent doctor image image-smoke gbselftest
 
 all: build install
 
@@ -223,6 +223,21 @@ test-external: fetch-test-suites
 	    --baseline testharness/mealybug_baseline.txt
 	./target/release/examples/cpp_suite $(SUITES)/cpp \
 	    --baseline testharness/cpp_baseline.txt
+
+# GBSelfTest: the cartridge that tests the machine from the inside and prints a
+# stable code per check (third_party/gbselftest/, docs/gbselftest.md). It is
+# scored on BOTH picture modes and the gate is not "does it pass" -- the
+# per-dot renderer must pass everything, and the whole-scanline renderer must
+# lose exactly its five documented approximations and no more.
+#
+# It is kept out of tools/conformance/checks.json on purpose: that manifest is
+# gated at 100% and its result is the README badge, and folding in five rows we
+# fail by choice would force either a red gate or a lowered threshold.
+gbselftest:
+	./tools/fetch-gbselftest.sh --verify
+	python3 docs/tools/gbselftest_doc.py --check
+	cargo build --release --example conformance_adapter
+	python3 tools/gbselftest-gate.py
 
 # The same suites again, in the OTHER picture mode — `identical`, the per-dot
 # pixel FIFO in src/gpu/fifo.rs (docs/picture-modes.md). The baselines above are

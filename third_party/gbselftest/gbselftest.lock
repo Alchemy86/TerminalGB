@@ -1,0 +1,8 @@
+# Written by tools/fetch-gbselftest.sh. Do not edit: the checksum below is what
+# the --verify option compares the vendored ROM against, and editing it by hand
+# makes the pin a lie.
+repo = https://github.com/Alchemy86/GBSelfTest
+ref = e27fc06
+commit = e27fc06ae638d53c6cccaaf40731719e9b792af3
+sha256 = 0297f42a0986a8f13542b327391b78f3f566eb2ae232d4bca25d91a28f36c892
+origin = local checkout /home/aaron/Github/firstmate/projects/gbselftest
