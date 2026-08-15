@@ -39,8 +39,8 @@ emulated machine, so loading somebody else's state must not switch their rendere
 | Mode 3 length | fixed 172 dots | variable, from the fetcher |
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
 | Mooneye `acceptance` | 67/75 | **69/75** |
-| Mealybug pixel-exact | 3/79 | **12/79** |
-| Mealybug total distance | 1,212,282 px | **646,838 px** |
+| Mealybug pixel-exact | 3/79 | **17/79** |
+| Mealybug total distance | 1,212,282 px | **630,266 px** |
 | Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |
 
 **~2.1×** — 2.8 % of a 16.7427 ms frame, ~36× real time headless. Reproduce with

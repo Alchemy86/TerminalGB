@@ -1,7 +1,7 @@
 mod fifo;
 mod oambug;
 
-use crate::mode::GbMode;
+use crate::mode::{GbMode, PpuRevision};
 use fifo::Pipeline;
 pub(crate) use oambug::OamBug;
 use std::cmp::Ordering;
@@ -221,6 +221,10 @@ pub struct Gpu {
     pub updated: bool,
     pub interrupt: u8,
     pub gbmode: GbMode,
+    /// Which CGB CPU stepping's PPU this is. Machine configuration, not
+    /// cartridge state, so it is deliberately **not** serialised — a state
+    /// restores into whatever machine is running. See [`PpuRevision`].
+    cgb_ppu_revision: PpuRevision,
     hblanking: bool,
     /// The current level of the **STAT interrupt line** — the OR of every
     /// enabled STAT source. `IF.1` is raised on its 0→1 transition only; see
@@ -296,6 +300,7 @@ impl Gpu {
             updated: false,
             interrupt: 0,
             gbmode: GbMode::Classic,
+            cgb_ppu_revision: PpuRevision::from_env(),
             cbgpal_inc: false,
             cbgpal_ind: 0,
             cbgpal: [[[0u8; 3]; 4]; 8],
@@ -316,6 +321,17 @@ impl Gpu {
     /// Which rendering engine this PPU is running — see [`RenderMode`].
     pub fn render_mode(&self) -> RenderMode {
         self.render_mode
+    }
+
+    /// Which CGB CPU stepping's PPU this is ([`PpuRevision`]).
+    pub fn cgb_ppu_revision(&self) -> PpuRevision {
+        self.cgb_ppu_revision
+    }
+
+    /// Model a specific CGB CPU stepping's PPU. Ignored on DMG-class hardware,
+    /// where both differences the type carries are Color-only.
+    pub fn set_cgb_ppu_revision(&mut self, rev: PpuRevision) {
+        self.cgb_ppu_revision = rev;
     }
 
     /// Switch rendering engine. Safe at any point: the two engines share every

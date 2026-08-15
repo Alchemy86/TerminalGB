@@ -47,7 +47,9 @@ Mealybug rows across the three models — this is **0/71 → 3/71**.
 > have no CGB flag, so `Model::Auto` puts them in a DMG — right for `DMG-blob`, wrong for the two
 > CGB sets, where the reference is a *Color console running the same DMG cartridge in
 > compatibility mode*. `examples/mealybug` therefore runs every ROM on both (`Model::Dmg` and
-> `Model::Cgb`) and compares each column against its own frame. Today the two produce identical
+> `Model::Cgb`) and compares each column against its own frame. It is **three** machines now,
+> not two: the two Color reference sets are different CPU steppings and seven ROMs disagree
+> between them — see [§10.2](#102-m3_window_timingcgb-c-and-m3_bgp_changecgb-c-were-never-a-fetcher-bug). Today the two produce identical
 > pictures — `GbMode::Classic` and `GbMode::ColorAsClassic` take the same path through
 > `draw_bg`/`draw_sprites`, and the consoles differ in boot registers and CGB register
 > availability, not in the DMG-mode renderer. That is expected to change the moment mode-3
@@ -925,3 +927,239 @@ sat at 22,070 on the parent commit and reads **298** now, because our shade coun
 matches the reference — the picture did not improve by 21,772 pixels' worth, it stopped being
 mis-ranked. Its two CGB columns are still in that zone (22,076 → 22,154) and that movement is
 meaningless. Overall: **5 rows numerically worse, 41 better, none lost pixel-exactness.**
+
+---
+
+## 10. Reading the leaders: 12/79 → 17/79 (15 Aug 2026)
+
+Measured with `make test-external-accurate` on the ROMs pinned in
+[`tools/fetch-test-suites.sh`](../tools/fetch-test-suites.sh), before and after, on the
+`identical` picture mode. **Rows 12 → 17; total distance 646,838 → 630,266 pixels; five rows
+`FAIL → PASS` and none lost.** Every `standard`-engine baseline is byte-identical, as are
+Mooneye (95/103 standard, 97/103 identical), Mooneye CGB `misc` (8/8 both), SameSuite (72/76
+both), `cpp` (4/4), the in-repo `testroms` suite (46/47), `audiocapture`, `savestate`,
+`battery`, `bootrom`, `chiptune` and the `ppuengines` gate (accurate still 0/23,040 on
+dmg-acid2, cost ratio 2.10×).
+
+This pass did not grind the rows from first principles. Two emulators ahead of us on the
+[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/) board are open source, and both
+already answer the two questions §9.6 left standing. **Licences checked before anything was
+read**, and recorded here so nobody has to check again:
+
+| repo | licence | what was taken |
+|---|---|---|
+| [Docheinstein/docboy](https://github.com/Docheinstein/docboy) | MIT (`LICENSE`, "Copyright (c) 2025 Docheinstein") | the fetcher's behaviour at an object hit; the CGB `SCY` latch |
+| [LIJI32/SameBoy](https://github.com/LIJI32/SameBoy) | Expat, "all files and directories … except for the iOS and HexFiend directories" | the CGB-C/CGB-D PPU boundary |
+| [mattcurrie/mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests) | MIT (`LICENSE`, "Copyright (c) 2018 Matt Currie") | `src/ppu/*.asm`, to read what each ROM actually measures |
+
+All three are MPL-2.0-compatible, so nothing here was blocked. **No code was copied**: each
+behaviour was read as a hardware statement and reimplemented in this codebase's idiom, the same
+rule `CONTRIBUTING.md` states and the same one the `ppu_write_commit` model already followed.
+Every claim below carries its file and symbol.
+
+### 10.1 The dot an object is detected is still a fetcher dot (`m3_scx_high_5_bits`, +3 rows)
+
+`m3_scx_high_5_bits` sat at **12 pixels on all three columns** — §9.6 called it the biggest
+single prize left and read the fact that it is 12 on all three, while only the DMG has an early
+register commit, as "what is left is inside the fetcher". That reading was right.
+
+Where the 12 pixels are: lines 128-134 only, all inside the single tile at `x = 16..23`. The
+ROM fills the background with `'A'`, `'B'`, `'C'`… one letter per tile column and sets
+`SCX = LY` part-way along every line, so which letter a tile holds says which `SCX` its
+tile-number fetch used. On those lines we drew **`'S'` (map column 18, the new `SCX >> 3` of
+16) where hardware drew `'C'` (column 2, the old `SCX` of 0)** — one tile of the line took the
+new value a fetch too early. The seven failing lines are seven rows of one glyph; line 135 is
+the eighth and happens to agree.
+
+Lines 128-135 are the ones carrying the ROM's object at `X = 16`. `16 & 7 == 0`, so Pan Docs'
+[OBJ penalty](https://gbdev.io/pandocs/Rendering.html) charges its maximum five dots there,
+where the object at `X = 15` on lines 120-127 costs nothing — and only the lines with the
+five-dot penalty were wrong. So the defect is in what happens to the **background fetcher**
+while an object is being served.
+
+docboy answers it structurally. Its object fetch is started from inside the background
+fetcher's own tick — `handle_pixel_slice_fetcher_push` in
+`src/docboy/docboy/ppu/ppu.cpp` ends with `if (is_obj_ready_to_be_fetched()) { … is_fetching_sprite = true; obj_prefetcher_get_tile_0(); }`,
+under the comment *"Note: the first obj prefetcher tick overlaps this tick"* — and the output
+stalls earlier than that, at `is_bg_fifo_ready_to_be_popped()`. So between "an object is due"
+and "the object fetch owns the fetcher" the background fetcher **keeps running**, finishing the
+tile it is in the middle of. Ours froze it on the spot, which put the next tile-number read one
+dot late and let the `SCX` write land in front of it.
+
+`Gpu::pipeline_dot` now gives the fetcher that dot. The charged penalty is kept exactly as it
+was — it is what makes `acceptance/ppu/intr_2_mode0_timing_sprites` exact and it is unmoved —
+so this is one dot of fetcher progress, not a change to mode 3's length.
+
+**The full structural model was tried and is worse here, which is worth writing down.** Letting
+the fetcher run for *all* `obj_wait` dots (docboy's actual shape) also wins the three rows but
+costs 64,784 pixels elsewhere; a single tick at the trigger costs 151. The reason is that our
+`obj_wait` is Pan Docs' *formula*, not the fetcher's real remaining time, so running the
+fetcher through it double-counts. Making the wait structural instead is the per-tile
+calibration §8.9 budgets in weeks, and [`src/gpu/fifo.rs`](../src/gpu/fifo.rs)'s
+`start_obj_fetch` already records why the formula is charged rather than emerging.
+
+Measured, everything else held constant:
+
+| | rows | suite pixels |
+|---|---:|---:|
+| before | 12 | 646,838 |
+| fetcher ticks for the whole penalty | 15 | 711,773 |
+| **fetcher ticks on the trigger dot only** | **15** | **646,989** |
+
+Pinned by `gpu::fifo::fetcher_details::the_background_fetcher_still_gets_the_dot_an_object_is_detected`,
+teeth proven by removing the tick.
+
+### 10.2 `m3_window_timing@CGB-C` and `m3_bgp_change@CGB-C` were never a fetcher bug
+
+Both were named as close rows: 138 and 864 pixels, **already pixel-exact on DMG and on CGB-D**.
+Comparing the suite's own two Color reference sets against each other explains why:
+
+```
+m3_window_timing:   CPU CGB C vs CPU CGB D references differ in 138 pixels
+m3_bgp_change:      CPU CGB C vs CPU CGB D references differ in 864 pixels
+```
+
+The numbers are ours exactly. We matched CGB-D to the pixel, and the C column is the *other
+machine*. Seven of the suite's ROMs disagree between the two Color reference sets, by 8,265
+pixels in total:
+
+| ROM | C vs D reference |
+|---|---:|
+| `m3_scy_change` | 6,217 |
+| `m3_bgp_change` | 864 |
+| `m3_bgp_change_sprites` | 716 |
+| `m3_window_timing_wx_0` | 144 |
+| `m3_lcdc_obj_en_change_variant` | 144 |
+| `m3_window_timing` | 138 |
+| `m3_obp0_change` | 42 |
+
+`examples/mealybug` was already running two machines because the DMG and CGB references are
+different consoles. It was scoring both Color columns against **one** Color machine, and no
+emulator can pass both that way — the same lesson `examples/samesuite.rs::revision_for`
+records about SameSuite's mutually-contradictory `-cgb0` and `-cgbB` ROMs.
+
+### 10.3 What actually differs between CPU CGB C and CPU CGB D
+
+Two facts, and between them they account for all seven rows.
+
+**(a) CGB-D and later latch the fetcher's `SCY + LY`.** SameBoy says it outright, and it is the
+only CGB stepping difference in its whole PPU — `Core/display.c`, `GB_FETCHER_GET_TILE_T1`:
+
+> `if (gb->model > GB_MODEL_CGB_C) { /* This value is cached on the CGB-D and newer, so it cannot be used to mix tiles together */ gb->fetcher_y = y; }`
+
+with the bitplane fetch reading `gb->model > GB_MODEL_CGB_C ? gb->fetcher_y : fetcher_y(gb)`.
+docboy states the same boundary from the other side and models D-and-later only
+(`bg_prefetcher_get_tile_0`: *"Differently from DMG, on CGB there's no way to create a bitplane
+desync effect by changing SCY between the tile data low/high fetches. That is, the same SCY is
+used for both low and high byte of the tile, and it's computed exactly here.
+[mealybug/m3_scy_change]"*). Our fetcher re-read `SCY` at every bitplane on both consoles, so
+we were a CGB-C for this. Measured on the Color machine, everything else held:
+
+| | `m3_scy_change@CGB-C` | `m3_scy_change@CGB-D` |
+|---|---:|---:|
+| `SCY` re-read (CGB-C) | **560** | 15,085 |
+| `SCY` latched (CGB-D) | 15,129 | **116** |
+
+That is the two references' 6,217-pixel disagreement reproduced from both ends, which is what
+says the mechanism is right rather than fitted.
+
+**(b) A palette write is seen one dot later on a CPU CGB C.** This one is *measured here*, not
+borrowed — neither reference emulator models it. The C and D reference photographs differ by
+exactly six pixels per line on `m3_bgp_change`, at `x = 1, 13, 73, 85, 145, 157`: three
+12-pixel bands each shifted by one pixel. Sweeping our Color palette-commit dot reproduces the
+swap exactly and in no other configuration:
+
+| `$FF47-$FF49` `early` on colour hardware | 4 | **3** | **2** | 1 |
+|---|---:|---:|---:|---:|
+| `m3_bgp_change` C / D | 1728 / 864 | 864 / **0** | **0** / 864 | 864 / 1728 |
+| `m3_window_timing` C / D | 276 / 138 | 138 / **0** | **0** / 138 | 138 / 276 |
+| `m3_bgp_change_sprites` C / D | 2400 / 1684 | 1688 / **972** | **972** / 1688 | 1682 / 2398 |
+| `m3_lcdc_obj_en_change_variant` C / D | 350 / 494 | 350 / **206** | **206** / 350 | 350 / 494 |
+
+Three rows land on their C reference at one setting and on their D reference at the setting one
+dot later, and nothing else in the suite moves. `m3_window_timing_wx_0` is the one row that
+fits neither (263/371 against a 144-pixel reference gap), so it has a second cause.
+
+### 10.4 How it is modelled
+
+[`PpuRevision`](../src/mode.rs) — `CgbC` and `CgbD`, default `CgbD`, in `src/mode.rs` because
+`src/sound.rs` is not compiled on `wasm32` and the PPU always is. It is deliberately **not**
+`sound::CgbRevision`: that type's boundary is 0/B against C-and-later, and the PPU's is
+C-and-earlier against D-and-later, so one enum would have to name four steppings to express two
+facts. Both read the same `$GB_CGB_REVISION`, and every tag one accepts the other accepts, so a
+user still has one knob.
+
+It is machine **configuration**, not cartridge state, so it is not serialised — the same call
+`Sound::cgb_revision` makes, and for the same reason: a save state should restore into whatever
+machine is running. (`savestate::FORMAT_VERSION` did move, 17 → 18, but for the fetcher's
+latched `SCY + LY`, which *is* live pipeline state.)
+
+The default is `CgbD` because that is the machine this emulator already claims elsewhere: the
+APU targets CGB-E (`docs/components/apu.md` §8), SameBoy's default Color console is
+`GB_MODEL_CGB_E`, and docboy models D-and-later. Before this we were neither — CGB-D palette
+timing with CGB-C `SCY` behaviour, a machine that never shipped.
+
+`examples/mealybug` now runs **three** machines, one per reference set, and `REFS` carries the
+stepping beside the console. Only the runner selects a non-default stepping; nothing in the
+product does, and no other suite runner or harness looks at it.
+
+### 10.5 Every row that moved, both directions
+
+Five `FAIL → PASS`, none lost:
+
+| row | before | after |
+|---|---:|---:|
+| `m3_scx_high_5_bits@DMG` | 12 | **PASS** |
+| `m3_scx_high_5_bits@CGB-C` | 12 | **PASS** |
+| `m3_scx_high_5_bits@CGB-D` | 12 | **PASS** |
+| `m3_bgp_change@CGB-C` | 864 | **PASS** |
+| `m3_window_timing@CGB-C` | 138 | **PASS** |
+
+Better but still failing:
+
+| row | before | after |
+|---|---:|---:|
+| `m3_scy_change@CGB-D` | 15,101 | 116 |
+| `m3_bgp_change_sprites@CGB-C` | 1,688 | 972 |
+| `m3_lcdc_tile_sel_change@CGB-C` / `@CGB-D` | 1,094 | 802 |
+| `m3_lcdc_obj_en_change_variant@CGB-C` | 350 | 206 |
+| `m3_lcdc_win_map_change@CGB-C` / `@CGB-D` | 710 | 590 |
+
+Worse, and all of it is the object-trigger dot in §10.1 — these rows all place objects, so the
+fetcher genuinely moves one dot at each of them and the mid-line write they photograph lands
+somewhere else:
+
+| row | before | after |
+|---|---:|---:|
+| `m3_lcdc_win_map_change@DMG` | 644 | 1,028 |
+| `m3_lcdc_tile_sel_win_change@CGB-C` / `@CGB-D` | 1,178 | 1,366 |
+| `m3_lcdc_bg_map_change@DMG` | 466 | 594 |
+| `m3_window_timing_wx_0@CGB-C` | 263 | 371 |
+| `m3_lcdc_tile_sel_win_change@DMG` | 1,222 | 1,300 |
+| `m3_lcdc_bg_map_change@CGB-C` / `@CGB-D` | 522 | 530 |
+| `m3_lcdc_tile_sel_change@DMG` | 802 | 822 |
+| `m3_scy_change@CGB-C` | 546 | 560 |
+| `m3_scy_change@DMG` | 246 | 257 |
+
+Net: **−16,572 pixels, +5 rows, 0 rows lost.** Trading ~800 pixels spread over eight
+mid-line-write rows for three exact rows and a 15,000-pixel correction is the right trade, and
+the eight are all in the same place — *when the fetcher resumes after an object*, which is the
+per-tile calibration §8.9 already scopes.
+
+### 10.6 The rows named in the brief that this pass did **not** close
+
+* **`m3_lcdc_bg_en_change@DMG`, 4 pixels — open, and not for want of trying.** The four are one
+  pixel each at `x = 0` on LY 19-22: we blank the background where hardware still draws it, on
+  the very first visible pixel of four lines. docboy has a rule that looks made for it
+  (`pixel_transfer_lx8`: *"On DMG, it seems that there is a 1 T-cycle delay between the real
+  LCDC and the LCDC the PPU sees, both for LCDC.OBJ_ENABLE and LCDC.BG_WIN_ENABLE. **LX == 8
+  seems to be an exception to this rule.**"* — their `LX == 8` is our `lx == 0`). We already
+  model that one-dot delay, on the *write* side, as `LCDC_DMG_STAGE_BITS`. Moving it to the read
+  side with the exception was implemented and measured: **the suite total is identical to the
+  digit, 646,989 either way**, and these four pixels do not move. So the exception is
+  unobservable in this engine and the write-side model is equivalent; the four pixels are a
+  different cause and the change was reverted rather than carried for nothing.
+* **`m3_lcdc_obj_size_change_scx@DMG`, 298 pixels — not attempted.** Its two CGB columns sit at
+  22,154, which is the shade-rank artefact zone, so the row cannot go green without the DMG
+  column and both CGB columns moving together.
+

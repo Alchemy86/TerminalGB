@@ -109,7 +109,7 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// like the cartridge — so a state taken during the boot animation refuses to
 /// load into a machine that has none rather than resuming into the cartridge at
 /// `PC=$0000`.
-pub const FORMAT_VERSION: u16 = 17;
+pub const FORMAT_VERSION: u16 = 18;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

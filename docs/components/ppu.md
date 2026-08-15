@@ -73,6 +73,15 @@ The numbers (Pan Docs, [Rendering](https://gbdev.io/pandocs/Rendering.html)):
 **This emulator implements both DMG and CGB paths** (`Gpu::new` vs `Gpu::new_cgb`) and is
 driven in CGB mode by default. SGB border/recolour is **not** implemented.
 
+**And the Color console itself shipped in steppings whose PPUs differ.**
+[`PpuRevision`](../../src/mode.rs) (`CgbC` / `CgbD`, default `CgbD`, selected by the same
+`$GB_CGB_REVISION` the APU reads) carries the two known differences: CPU CGB D and later latch
+the fetcher's `SCY + LY` at the tile-number fetch, so the bitplane desync a DMG and a CPU CGB C
+can produce is unavailable on them; and a palette write is seen one dot later on a CPU CGB C.
+Both only reach the [`identical` picture mode](../picture-modes.md). Mealybug ships a separate
+reference set per stepping and seven of its ROMs disagree between them — see
+[`docs/mealybug.md`](../mealybug.md) §10 for the evidence and the citations.
+
 ## 4. How it works here
 
 ### 4.0 There are two picture modes

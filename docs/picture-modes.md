@@ -86,8 +86,8 @@ Both modes are gated in CI, each against **its own baselines**, so neither can d
 | Gated suite | `standard` | `identical` |
 |---|---:|---:|
 | Mooneye GB `acceptance` | 67 / 75 | **69 / 75** |
-| Mealybug Tearoom — pixel-exact rows | 3 / 79 | **12 / 79** |
-| Mealybug Tearoom — pixels wrong (lower is better) | 1,212,282 | **646,838** |
+| Mealybug Tearoom — pixel-exact rows | 3 / 79 | **17 / 79** |
+| Mealybug Tearoom — pixels wrong (lower is better) | 1,212,282 | **630,266** |
 | dmg-acid2 against its author's reference | 0 / 23,040 differ | 0 / 23,040 differ |
 
 Everything else — the in-repo Blargg harness (46/47), Mooneye `emulator-only` (28/28) and `misc`

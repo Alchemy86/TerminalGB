@@ -8,7 +8,7 @@ use crate::mbc;
 use crate::mmu::oamdma::OamDma;
 use crate::mmu::serial::Serial;
 use crate::mmu::timer::Timer;
-use crate::mode::{GbMode, GbSpeed};
+use crate::mode::{GbMode, GbSpeed, PpuRevision};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::sound::Sound;
 use std::path;
@@ -98,7 +98,13 @@ const LCDC_DMG_END_BITS: u8 = 0b0010_0000;
 /// end-of-cycle calibration, or (VRAM tile data) a mid-fetch glitch of its own
 /// that is not yet modelled; widening this table is a measurement, not an
 /// edit.
-fn ppu_write_commit(address: u16, old: u8, value: u8, mode: GbMode) -> WriteCommit {
+fn ppu_write_commit(
+    address: u16,
+    old: u8,
+    value: u8,
+    mode: GbMode,
+    rev: PpuRevision,
+) -> WriteCommit {
     let dmg = mode.is_dmg();
     match address {
         // The DMG's BGP write glitch: for one dot after the write commits the
@@ -116,8 +122,12 @@ fn ppu_write_commit(address: u16, old: u8, value: u8, mode: GbMode) -> WriteComm
             dispatch: None,
             finalize: None,
         },
+        // On colour hardware a palette write is seen one dot later on a
+        // **CPU CGB C** than on a CPU CGB D — measured against the suite's own
+        // two CGB reference sets, which differ by exactly that one dot on
+        // every row a mid-line palette write reaches (`docs/mealybug.md` §10).
         0xFF47..=0xFF49 => WriteCommit {
-            early: 3,
+            early: if rev == PpuRevision::CgbD { 3 } else { 2 },
             stage: None,
             dispatch: None,
             finalize: None,
@@ -1398,8 +1408,13 @@ impl<'a> MemoryManagementUnit<'a> {
             && matches!(address, 0xFF40 | 0xFF42 | 0xFF43 | 0xFF47..=0xFF49 | 0xFF4B)
             && self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
         {
-            let plan =
-                ppu_write_commit(address, self.gpu.rb(address), value, self.gbmode);
+            let plan = ppu_write_commit(
+                address,
+                self.gpu.rb(address),
+                value,
+                self.gbmode,
+                self.gpu.cgb_ppu_revision(),
+            );
             self.gpu_defer = plan.early;
             plan
         } else {

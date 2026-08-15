@@ -27,9 +27,9 @@ yourself proves nothing.
 | Mooneye GB — `misc` (CGB) | **8** / 8 | same | Color-specific behaviour |
 | [SameSuite](measured/scoreboard.md) | **72** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
-| [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **12** / 79 | mid-scanline picture timing — pixel-exact rows |
+| [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **17** / 79 | mid-scanline picture timing — pixel-exact rows |
 
-**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **69/75** on Mooneye `acceptance` and **12/79** on Mealybug for about **2.1x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` now **loses no row to the default on any gate**, so what stands between it and being the default is only its cost ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-now-dominates)).
+**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **69/75** on Mooneye `acceptance` and **17/79** on Mealybug for about **2.1x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` now **loses no row to the default on any gate**, so what stands between it and being the default is only its cost ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-now-dominates)).
 <!-- suite-scores:end -->
 
 These scores are re-derived from the checked-in baselines under
@@ -55,7 +55,7 @@ twenty-four rows the Shootout publishes:
 
 It is not a suite a competent emulator sweeps. Passing a row needs a picture unit rebuilt to run
 pixel by pixel rather than a scanline at a time — [that engine exists here, as the selectable
-`identical` picture mode](picture-modes.md), and scores **12/79**, four times the default. The
+`identical` picture mode](picture-modes.md), and scores **17/79**, nearly six times the default. The
 default has not moved because `identical` costs about twice the CPU, not because it is behind on
 anything: it now loses no row to `standard` on any gate.
 

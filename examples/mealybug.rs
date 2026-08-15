@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use terminalgb::boot::BootRom;
 use terminalgb::cpu::core::Cpu;
-use terminalgb::mode::Model;
+use terminalgb::mode::{Model, PpuRevision};
 
 #[path = "support/suite_baseline.rs"]
 mod suite_baseline;
@@ -83,17 +83,28 @@ const H: usize = 144;
 const CYCLE_CAP: u64 = 250_000_000;
 
 /// Reference sets, in the order they are printed: label, the suite's own
-/// directory name, and **the console that reference was photographed on**.
+/// directory name, **the console that reference was photographed on** and
+/// **which CGB CPU stepping's PPU it is**.
 ///
 /// This matters. These cartridges have no CGB flag, so `Model::Auto` puts them
 /// in a DMG — which is the right machine for `DMG-blob` and the wrong one for
 /// the two CGB sets, where the reference is a Color console running the same
-/// DMG cartridge in compatibility mode. Each ROM is therefore run on both
-/// machines and each column scored against the frame from its own.
-const REFS: [(&str, &str, Model); 3] = [
-    ("DMG", "DMG-blob", Model::Dmg),
-    ("CGB-C", "CPU CGB C", Model::Cgb),
-    ("CGB-D", "CPU CGB D", Model::Cgb),
+/// DMG cartridge in compatibility mode.
+///
+/// The two CGB sets are not one machine either, and that is not a detail: they
+/// are photographs of **different CPU steppings**, and seven of the suite's
+/// ROMs genuinely disagree between them by 8,265 pixels in total. `m3_scy_change`
+/// alone differs by 6,217 — CPU CGB D and later latch the fetcher's `SCY + LY`
+/// at the tile-number fetch, so the bitplane desync a DMG and a CGB C can
+/// produce is simply unavailable there (see [`PpuRevision`]). A runner that
+/// scored both columns against one Color machine could never pass both,
+/// whatever the emulator did — the same lesson `examples/samesuite.rs` records
+/// about SameSuite's `-cgb0`/`-cgbB` pairs. Each ROM is therefore run on all
+/// three machines and each column scored against the frame from its own.
+const REFS: [(&str, &str, Model, PpuRevision); 3] = [
+    ("DMG", "DMG-blob", Model::Dmg, PpuRevision::CgbD),
+    ("CGB-C", "CPU CGB C", Model::Cgb, PpuRevision::CgbC),
+    ("CGB-D", "CPU CGB D", Model::Cgb, PpuRevision::CgbD),
 ];
 
 /// Tests that are pixel-exact today, and must stay that way. `(rom, ref-label)`.
@@ -183,11 +194,15 @@ fn main() {
         let staged = staging.join(format!("{name}.gb"));
         std::fs::copy(rom, &staged).expect("stage ROM into target/");
 
-        let dmg = run(&staged, Model::Dmg, boot_for(&boots, Model::Dmg));
-        let cgb = run(&staged, Model::Cgb, boot_for(&boots, Model::Cgb));
+        let runs: Vec<(Vec<u8>, &'static str)> = REFS
+            .iter()
+            .map(|&(_, _, model, rev)| run(&staged, model, rev, boot_for(&boots, model)))
+            .collect();
+        let dmg = &runs[0];
+        let cgb = &runs[2];
         let mut cells = String::new();
-        for (label, sub, model) in REFS {
-            let (frame, _) = if model == Model::Dmg { &dmg } else { &cgb };
+        for (i, (label, sub, _, _)) in REFS.iter().copied().enumerate() {
+            let (frame, _) = &runs[i];
             let path = dir.join("expected").join(sub).join(format!("{name}.png"));
             match load_reference(&path) {
                 None => cells.push_str(&format!("{:>7} ", "-")),
@@ -217,6 +232,9 @@ fn main() {
         println!("{name:<38} {cells}  {} / {}", dmg.1, cgb.1);
         save_png(&staging.join(format!("{name}.dmg.png")), &dmg.0);
         save_png(&staging.join(format!("{name}.cgb.png")), &cgb.0);
+        // The CGB-C machine is a third frame now, and it is the one worth
+        // having beside the others when a row fails on only one Color column.
+        save_png(&staging.join(format!("{name}.cgb-c.png")), &runs[1].0);
     }
 
     println!();
@@ -309,10 +327,16 @@ fn find_roms(dir: &Path) -> Vec<PathBuf> {
 /// Run to the `LD B,B` software breakpoint the suite documents as "a good time
 /// to take a screenshot", falling back to a cycle cap. Returns the framebuffer
 /// as RGBA plus how it stopped.
-fn run(rom: &Path, model: Model, boot: Option<BootRom>) -> (Vec<u8>, &'static str) {
+fn run(
+    rom: &Path,
+    model: Model,
+    rev: PpuRevision,
+    boot: Option<BootRom>,
+) -> (Vec<u8>, &'static str) {
     let data = std::fs::read(rom).expect("read staged ROM");
     // Always pass the path: with `None` this core forces MBC3 for every cart.
     let mut cpu = Cpu::new_with_boot_rom(data, Some(rom.to_path_buf()), model, boot);
+    cpu.memory.gpu.set_cgb_ppu_revision(rev);
     let mut cycles: u64 = 0;
     while cycles < CYCLE_CAP {
         if cpu.memory.rb(cpu.registers.pc) == 0x40 {

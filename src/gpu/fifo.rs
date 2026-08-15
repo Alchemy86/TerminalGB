@@ -107,6 +107,8 @@ pub(super) struct Pipeline {
     fetch_x: u8,
     tile_num: u8,
     tile_attr: u8,
+    /// `SCY + LY` as latched at the tile-number fetch.
+    fetch_y: u8,
     lo: u8,
     hi: u8,
     /// The first fetch of a scanline is thrown away. See the module docs.
@@ -157,6 +159,7 @@ impl Default for Pipeline {
             fetch_x: 0,
             tile_num: 0,
             tile_attr: 0,
+            fetch_y: 0,
             lo: 0,
             hi: 0,
             first_fetch: true,
@@ -223,6 +226,7 @@ impl Pipeline {
         w.u8(self.fetch_x);
         w.u8(self.tile_num);
         w.u8(self.tile_attr);
+        w.u8(self.fetch_y);
         w.u8(self.lo);
         w.u8(self.hi);
         w.bool(self.first_fetch);
@@ -281,6 +285,7 @@ impl Pipeline {
         self.fetch_x = r.u8()?;
         self.tile_num = r.u8()?;
         self.tile_attr = r.u8()?;
+        self.fetch_y = r.u8()?;
         self.lo = r.u8()?;
         self.hi = r.u8()?;
         self.first_fetch = r.bool()?;
@@ -503,6 +508,18 @@ impl Gpu {
         if let Some(i) = self.due_sprite() {
             if self.pipe.bg_len > 0 {
                 self.start_obj_fetch(i);
+                // The background fetcher still gets this dot. docboy
+                // (`src/docboy/docboy/ppu/ppu.cpp`,
+                // `handle_pixel_slice_fetcher_push`) starts the object fetch
+                // from inside the fetcher's own tick — "Note: the first obj
+                // prefetcher tick overlaps this tick" — so the dot on which an
+                // object is detected is a fetcher dot as well. Freezing the
+                // fetcher here instead put every tile-number read after an
+                // object one dot late, which is exactly what
+                // `m3_scx_high_5_bits` measures: with a mid-line `SCX` write
+                // landing in that dot we read the *new* high five bits for a
+                // tile hardware had already fetched with the old ones.
+                self.bg_fetch_dot();
                 return;
             }
         }
@@ -625,6 +642,9 @@ impl Gpu {
                 (bgy >> 3) & 31,
             )
         };
+        // Latched for the bitplane fetches on CPU CGB D and later — see
+        // `lo_hi` and [`PpuRevision`].
+        self.pipe.fetch_y = self.scy.wrapping_add(self.line);
         let addr = map + ty * 32 + tx;
         self.pipe.tile_num = self.rbvram0(addr);
         self.pipe.tile_attr = if self.gbmode == GbMode::Color {
@@ -639,8 +659,17 @@ impl Gpu {
     /// change to either mix data from two different tiles or two different rows
     /// into a single drawn tile.
     fn lo_hi(&mut self, high: bool) {
+        // `SCY + LY` is re-read here, not latched at the tile-number fetch —
+        // which is what lets a one-M-cycle `SCY` change mix two different rows
+        // into a single drawn tile (`m3_scy_change`). **Colour silicon from
+        // CPU CGB D onward latches it instead**, so the desync is not
+        // available there at all; see [`PpuRevision`], which cites SameBoy and
+        // docboy for the boundary.
+        let cached = !self.gbmode.is_dmg() && self.cgb_ppu_revision().caches_fetcher_y();
         let row = if self.pipe.window {
             (self.wy_pos.max(0) as u16) & 7
+        } else if cached {
+            self.pipe.fetch_y as u16 & 7
         } else {
             self.scy.wrapping_add(self.line) as u16 & 7
         };
@@ -1170,5 +1199,134 @@ mod lcd_restart {
             fired.is_some(),
             "no mode-2 STAT interrupt in the two scanlines after the LCD came on"
         );
+    }
+}
+
+/// The two facts this engine learned from reading the emulators ahead of us on
+/// the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/) board —
+/// docboy and SameBoy, both MIT/Expat, both read as hardware references and
+/// reimplemented here per `CONTRIBUTING.md`. See
+/// [`docs/mealybug.md`](../../docs/mealybug.md) §10.
+#[cfg(test)]
+mod fetcher_details {
+    use super::super::{Gpu, RenderMode};
+    use crate::mode::{GbMode, PpuRevision};
+
+    /// A machine parked at the top of an ordinary scanline with the accurate
+    /// engine selected.
+    fn engine(mode: GbMode, rev: PpuRevision) -> Gpu {
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.gbmode = mode;
+        gpu.set_cgb_ppu_revision(rev);
+        gpu.wb(0xFF40, 0x93); // LCD on, BG on, OBJ on, tile data $8000
+        gpu.do_cycle(super::LINE_DOTS); // past the line the LCD came up on
+        gpu
+    }
+
+    /// **The dot an object is detected is still a fetcher dot.**
+    ///
+    /// docboy starts the object fetch from inside the background fetcher's own
+    /// tick (`src/docboy/docboy/ppu/ppu.cpp`,
+    /// `handle_pixel_slice_fetcher_push`: "Note: the first obj prefetcher tick
+    /// overlaps this tick"), so the tile fetch in progress advances on that
+    /// dot rather than freezing where it stood. Freezing it put every
+    /// tile-number read after an object one dot late, which is precisely what
+    /// `mealybug/m3_scx_high_5_bits` photographs.
+    #[test]
+    fn the_background_fetcher_still_gets_the_dot_an_object_is_detected() {
+        let mut gpu = engine(GbMode::Classic, PpuRevision::CgbD);
+        // One object at X = 16 — a tile boundary, so it stalls the output for
+        // the full five-dot per-tile penalty and the fetcher is demonstrably
+        // mid-fetch when it is detected. `engine` parks a few dots into the
+        // OAM scan, so use an entry the scan has not walked past yet.
+        for i in 0..40u16 {
+            gpu.wb(0xFE00 + i * 4, 0);
+            gpu.wb(0xFE00 + i * 4 + 1, 0);
+        }
+        let ly = gpu.rb(0xFF44);
+        gpu.wb(0xFE00 + 10 * 4, 16 + ly);
+        gpu.wb(0xFE00 + 10 * 4 + 1, 16);
+        let mut seen = None;
+        for _ in 0..super::LINE_DOTS {
+            let before = gpu.pipe.fetch_t;
+            let was_fetching = gpu.pipe.obj_t > 0;
+            gpu.do_cycle(1);
+            if !was_fetching && gpu.pipe.obj_t > 0 {
+                seen = Some((before, gpu.pipe.fetch_t));
+                break;
+            }
+        }
+        let (before, after) = seen.expect("the object was never fetched");
+        assert!(
+            before < super::FETCH_DOTS,
+            "the test needs the fetcher mid-tile when the object lands (was {before})"
+        );
+        assert_eq!(
+            after,
+            before + 1,
+            "the background fetcher must advance on the dot the object is detected"
+        );
+    }
+
+    /// Tile 0 with every row distinguishable: the low bitplane of row *r* is
+    /// `r + 1`, the high bitplane `0x80 | (r + 1)`. Reading a fetched byte back
+    /// therefore says which row the fetcher took it from.
+    fn load_striped_tile(gpu: &mut Gpu) {
+        for row in 0..8u16 {
+            gpu.wb(0x8000 + row * 2, row as u8 + 1);
+            gpu.wb(0x8000 + row * 2 + 1, 0x80 | (row as u8 + 1));
+        }
+    }
+
+    /// **`SCY` is re-read at each bitplane fetch — except on a CPU CGB D.**
+    ///
+    /// SameBoy, `Core/display.c` (`GB_FETCHER_GET_TILE_T1`): "This value is
+    /// cached on the CGB-D and newer, so it cannot be used to mix tiles
+    /// together", with the bitplane fetch reading
+    /// `gb->model > GB_MODEL_CGB_C ? gb->fetcher_y : fetcher_y(gb)`. docboy
+    /// says the same thing from the other side (`bg_prefetcher_get_tile_0`:
+    /// "on CGB there's no way to create a bitplane desync effect by changing
+    /// SCY between the tile data low/high fetches"), and models D+ only.
+    /// `mealybug/m3_scy_change`'s own two Color reference photographs differ by
+    /// 6,217 pixels for exactly this reason.
+    #[test]
+    fn only_a_cgb_c_can_desync_the_two_bitplanes_with_scy() {
+        for (mode, rev, desyncs) in [
+            (GbMode::Classic, PpuRevision::CgbD, true),
+            (GbMode::ColorAsClassic, PpuRevision::CgbC, true),
+            (GbMode::ColorAsClassic, PpuRevision::CgbD, false),
+        ] {
+            let mut gpu = engine(mode, rev);
+            load_striped_tile(&mut gpu);
+            gpu.wb(0xFF42, 0); // SCY = 0: the fetcher is on tile row 0
+            gpu.line = 0;
+            gpu.fetch_tile_number();
+            gpu.lo_hi(false);
+            gpu.wb(0xFF42, 3); // ...and moves to row 3 mid-fetch
+            gpu.lo_hi(true);
+            assert_eq!(gpu.pipe.lo, 1, "the low bitplane is always row 0's");
+            let want = if desyncs { 0x80 | 4 } else { 0x80 | 1 };
+            assert_eq!(
+                gpu.pipe.hi, want,
+                "{mode:?}/{rev:?}: a CPU CGB D latches SCY + LY at the \
+                 tile-number fetch; every other machine re-reads it"
+            );
+        }
+    }
+
+    /// The knob is spelled the way the APU's already is, so one
+    /// `$GB_CGB_REVISION` configures both — and a tag naming several steppings
+    /// resolves to the one this type distinguishes.
+    #[test]
+    fn the_revision_tags_land_on_the_right_side_of_the_boundary() {
+        for tag in ["cgb0", "cgbB", "cgbC", "cgb0BC", "C"] {
+            assert_eq!(PpuRevision::from_tag(tag), Some(PpuRevision::CgbC), "{tag}");
+        }
+        for tag in ["cgbD", "cgbDE", "cgbE", "D"] {
+            assert_eq!(PpuRevision::from_tag(tag), Some(PpuRevision::CgbD), "{tag}");
+        }
+        assert_eq!(PpuRevision::from_tag("agb"), None);
+        assert_eq!(PpuRevision::default(), PpuRevision::CgbD);
     }
 }

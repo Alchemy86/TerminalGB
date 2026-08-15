@@ -4453,6 +4453,72 @@ default is 67/75. Mealybug is unaffected by that work (re-measured, identical).
   transition of each pair. Not the interrupt path (that is M-cycle quantised and 3 is not a
   multiple of 4) — it is inside the twelve dots between mode 3's start and the first pixel.
 
+### The fetcher at an object hit, and the CGB stepping the PPU shipped in (accurate 12/79 → 17/79)
+
+**Mealybug `identical` 12 → 17 of 79 rows, 646,838 → 630,266 px, five rows FAIL→PASS and none
+lost.** Every `standard` baseline byte-identical; Mooneye 95/103 standard and 97/103 identical,
+misc 8/8, SameSuite 72/76, `cpp` 4/4, `testroms` 46/47 all unmoved. Full record:
+[`docs/mealybug.md`](docs/mealybug.md) §10, `docs/conformance-notes.md` (newest entry).
+
+- **READ THE LEADERS' REPOS FIRST — this pass cost hours, not weeks, because of it.** docboy
+  (**MIT**) and SameBoy (**Expat**, except `iOS/` and `HexFiend/`) are both MPL-2.0-compatible,
+  and both already answered the two open questions. **Check the `LICENSE` yourself and record
+  it**; learn the behaviour, cite repo + file + symbol, and reimplement in our idiom —
+  `CONTRIBUTING.md`'s rule, which `ppu_write_commit` already followed. Mealybug's own
+  `src/ppu/*.asm` (MIT) says what each ROM measures and is worth reading before any row.
+- **The dot an object is detected is still a FETCHER dot.** docboy starts the object fetch from
+  inside the background fetcher's own tick (`ppu.cpp`, `handle_pixel_slice_fetcher_push`: *"the
+  first obj prefetcher tick overlaps this tick"*). Ours froze the fetcher on the spot, so every
+  tile-number read after an object was one dot late — the whole of `m3_scx_high_5_bits` (12 px
+  on all three columns → 0). The charged Pan Docs penalty is unchanged, so mode 3's length and
+  `intr_2_mode0_timing_sprites` do not move.
+- **The FULL structural model (fetcher runs for the whole penalty) is docboy's shape and is
+  WORSE here — do not "finish the job" without doing the calibration.** Same +3 rows, but
+  +64,784 px elsewhere against +151 for the single trigger tick. Our `obj_wait` is Pan Docs'
+  *formula*, not the fetcher's real remaining time, so running the fetcher through it
+  double-counts. Making the wait structural is the per-tile calibration `docs/mealybug.md` §8.9
+  budgets in weeks.
+- **THE COLOR CONSOLE'S PPU SHIPPED IN REVISIONS TOO.** `mode::PpuRevision` (`CgbC`/`CgbD`,
+  default `CgbD`): CPU CGB D and later **latch `SCY + LY` at the tile-number fetch** and reuse it
+  for both bitplanes, so the DMG's bitplane desync does not exist there (SameBoy
+  `Core/display.c` `GB_FETCHER_GET_TILE_T1`, *"cached on the CGB-D and newer, so it cannot be
+  used to mix tiles together"*; docboy `bg_prefetcher_get_tile_0` says the same and models D+
+  only). Plus one measured here and in neither of them: **a palette write is seen one dot later
+  on a CPU CGB C.**
+- **It is deliberately NOT `sound::CgbRevision`.** The APU's boundary is 0/B against C-and-later;
+  the PPU's is C-and-earlier against D-and-later — one enum would name four steppings to express
+  two facts — and `src/sound.rs` is not compiled on `wasm32` while the PPU always is. Both read
+  `$GB_CGB_REVISION` and accept the same tags, so the user still has one knob. **Not serialised**
+  (machine configuration, same call `Sound::cgb_revision` makes); `savestate::FORMAT_VERSION` is
+  **18** for the latched `SCY + LY`, which *is* live pipeline state.
+- **Before this we were a machine that never shipped** — CGB-D palette timing with CGB-C `SCY`
+  behaviour. Default is `CgbD` because the APU already targets CGB-E, SameBoy's default is
+  `GB_MODEL_CGB_E` and docboy models D+.
+- **`examples/mealybug` runs THREE machines now, one per reference set.** The two Color reference
+  sets are different CPU steppings: seven ROMs disagree between them by **8,265 px**
+  (`m3_scy_change` alone by 6,217), so scoring both columns against one Color machine can never
+  pass both. Same lesson `examples/samesuite.rs::revision_for` records for SameSuite's
+  contradictory `-cgb0`/`-cgbB` pair. **When a suite ships more than one reference for a ROM it
+  is telling you there is more than one machine.**
+- **Diagnostic habit that closed two named rows in minutes: compare the suite's own reference
+  sets against each other.** `m3_window_timing@CGB-C` was 138 px and `m3_bgp_change@CGB-C` was
+  864 — and the C-vs-D *references* differ by exactly 138 and 864. If the gap between two
+  references equals your error, the emulator is right and the runner is wrong.
+- **Read the failing FRAME, not the pixel count.** `m3_scx_high_5_bits` fills the background with
+  `'A'`, `'B'`, `'C'`… one letter per tile column, so decoding the frame as ASCII says which
+  `SCX` each tile's fetch used — we drew `'S'` (column 18) where hardware drew `'C'` (column 2).
+  The count alone could not have said that. Same trick as `GB_SCOUT_SCREEN=1` and the Gen 1
+  tilemap readers.
+- **`m3_lcdc_bg_en_change@DMG` (4 px) is still open and docboy's `LX == 8` exception is NOT the
+  answer** — *"On DMG … 1 T-cycle delay between the real LCDC and the LCDC the PPU sees, both
+  for LCDC.OBJ_ENABLE and LCDC.BG_WIN_ENABLE. LX == 8 seems to be an exception"*
+  (`pixel_transfer_lx8`). We already model that delay write-side as `LCDC_DMG_STAGE_BITS`;
+  moving it read-side with the exception was implemented and measured — **suite total identical
+  to the digit, 646,989 either way** — and reverted. Do not re-implement it.
+- **The eight rows that got worse are all the object-trigger dot**, and they are all
+  mid-line-write rows that also place objects (`m3_lcdc_win_map_change@DMG` 644 → 1,028 is the
+  largest). ~800 px spread over eight rows against three exact rows and a 15,000-px correction.
+
 ## Optional user-supplied boot ROM (`src/boot.rs`) — the answer to Blocker C
 
 **Captain's decision, 2026-08-14: do NOT embed the boot ROM's `®` glyph; support an optional
@@ -4617,7 +4683,7 @@ Mooneye 86 → 88 → 95 (the console revisions). **Measured on `main` plus both
 
 **Every number above is the DEFAULT `standard` picture mode.** `identical` is scored separately
 and differently — measured on this branch, `GB_PPU=identical` gives Mooneye **97/103**
-(acceptance **69/75**) against the default's 95/103 (67/75), and Mealybug **12/79** against
+(acceptance **69/75**) against the default's 95/103 (67/75), and Mealybug **17/79** against
 3/79 — so **add the mode to any figure you quote**, and read
 `testharness/{mooneye,mealybug}_accurate_baseline.txt` (not the unsuffixed files) for it. The
 baseline filenames still say `accurate`; the mode is `identical`. Both spellings parse.

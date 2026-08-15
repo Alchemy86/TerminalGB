@@ -151,7 +151,7 @@ cycle-stepped PPU sweeps.
 | Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
 | `standard` (default) | 3 / 79 | 1,212,282 |
-| `identical` (`GB_PPU=identical`) | **12 / 79** | **646,838** |
+| `identical` (`GB_PPU=identical`) | **17 / 79** | **630,266** |
 
 The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at 3/79 a
 pass/fail file is a flat wall that cannot show a rewrite getting closer. Consequence to expect:

@@ -479,3 +479,82 @@ impl GbSpeed {
         }
     }
 }
+
+/// Which CGB CPU stepping's **PPU** to model.
+///
+/// The Color console shipped in revisions and its silicon changed between
+/// them. `sound::CgbRevision` already carries the *APU*'s split, and this is a
+/// separate type on purpose: **the two subsystems' revision boundaries do not
+/// coincide.** The APU's quirks divide 0/B from C-and-later; the PPU's divide
+/// C-and-earlier from D-and-later. One enum spanning both would have to name
+/// four steppings to express two facts, and `sound` is not even compiled on
+/// `wasm32` while the PPU always is.
+///
+/// Two independent emulators state the same boundary, and it is the only PPU
+/// difference either of them models:
+///
+/// * SameBoy, `Core/display.c` (`GB_FETCHER_GET_TILE_T1`):
+///   `if (gb->model > GB_MODEL_CGB_C) { /* This value is cached on the CGB-D
+///   and newer, so it cannot be used to mix tiles together */ gb->fetcher_y =
+///   y; }`, and the bitplane fetch reads
+///   `gb->model > GB_MODEL_CGB_C ? gb->fetcher_y : fetcher_y(gb)`.
+/// * docboy, `src/docboy/docboy/ppu/ppu.cpp` (`bg_prefetcher_get_tile_0`):
+///   "Differently from DMG, on CGB there's no way to create a bitplane desync
+///   effect by changing SCY between the tile data low/high fetches … it's
+///   computed exactly here. [mealybug/m3_scy_change]" — docboy models D+ only.
+///
+/// Both are read as hardware references and reimplemented here per
+/// `CONTRIBUTING.md`; no code was taken. The second difference — a palette
+/// write landing one dot later on a CGB C — is **measured**, not borrowed: the
+/// Mealybug suite's own `CPU CGB C` and `CPU CGB D` reference photographs
+/// differ by exactly one dot of palette-change position on every affected row
+/// (`docs/mealybug.md` §10).
+///
+/// This is machine *configuration*, not cartridge state, so it is not
+/// serialised — the same call `Sound::cgb_revision` makes.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Default)]
+pub enum PpuRevision {
+    /// CPU CGB 0, B and C. `SCY` is re-read at every bitplane fetch (so a
+    /// mid-fetch write desyncs the two bitplanes, as on a DMG), and a palette
+    /// write is seen one dot later than on a CGB D.
+    CgbC,
+    /// CPU CGB D and later — including E, the stepping this emulator targets
+    /// elsewhere (see `sound::CgbRevision`). The default.
+    #[default]
+    CgbD,
+}
+
+impl PpuRevision {
+    /// The spellings `$GB_CGB_REVISION` and the suite runners use, matching
+    /// `sound::CgbRevision::from_tag` where they overlap. A multi-letter tag
+    /// means "these revisions agree here"; `cgb0BC` is C-and-earlier and
+    /// `cgbDE` is D-and-later, which is exactly this type's boundary.
+    pub fn from_tag(tag: &str) -> Option<PpuRevision> {
+        match tag.to_ascii_lowercase().as_str() {
+            "cgb0" | "0" | "cgb0b" | "cgbb" | "b" | "cgbc" | "c" | "cgb0bc" => {
+                Some(PpuRevision::CgbC)
+            }
+            "cgbd" | "d" | "cgbde" | "cgbe" | "e" => Some(PpuRevision::CgbD),
+            _ => None,
+        }
+    }
+
+    /// Read `$GB_CGB_REVISION` — the same knob the APU reads, so one spelling
+    /// configures both subsystems and every tag one accepts the other accepts
+    /// too. An unset or unparseable value is the default; the warning for a
+    /// mis-spelled tag is `sound::CgbRevision::from_env`'s, which reads the
+    /// same variable — printing a second one here would double up.
+    pub fn from_env() -> PpuRevision {
+        match std::env::var("GB_CGB_REVISION") {
+            Ok(s) if !s.is_empty() => PpuRevision::from_tag(&s).unwrap_or_default(),
+            _ => PpuRevision::default(),
+        }
+    }
+
+    /// `true` where the fetcher latches `SCY + LY` at the tile-number fetch and
+    /// reuses it for both bitplanes, so a mid-fetch `SCY` write cannot mix two
+    /// rows into one drawn tile.
+    pub fn caches_fetcher_y(self) -> bool {
+        self == PpuRevision::CgbD
+    }
+}

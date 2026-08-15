@@ -23,6 +23,121 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — the fetcher at an object hit, and the CGB stepping the PPU shipped in (Mealybug accurate 12/79 → 17/79)
+
+Two defects in the **accurate** (`identical`) engine, both found by reading the emulators ahead
+of us on the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/) board rather than
+from first principles. The default whole-scanline renderer is byte-identical to all five of its
+checked-in baselines throughout, as are Mooneye (both engines), Mooneye CGB `misc`, SameSuite,
+`cpp`, `testroms`, `audiocapture`, `savestate`, `battery`, `bootrom`, `chiptune` and the
+`ppuengines` gate. Full write-up with every measurement:
+[`docs/mealybug.md`](mealybug.md) §10.
+
+**Sources and their licences, checked before anything was read** — all MPL-2.0-compatible, and
+nothing was copied: each behaviour was read as a statement about hardware and reimplemented in
+this codebase's idiom, per `CONTRIBUTING.md`.
+[Docheinstein/docboy](https://github.com/Docheinstein/docboy) is MIT (`LICENSE`, "Copyright (c)
+2025 Docheinstein"); [LIJI32/SameBoy](https://github.com/LIJI32/SameBoy) is Expat ("all files
+and directories in this repository, except for the iOS and HexFiend directories");
+[mattcurrie/mealybug-tearoom-tests](https://github.com/mattcurrie/mealybug-tearoom-tests) is
+MIT (`LICENSE`, "Copyright (c) 2018 Matt Currie").
+
+### 1. The background fetcher froze on the dot an object was detected
+
+*Symptom* — one background tile per scanline is fetched from the **wrong map column, one tile
+early**, but only on scanlines carrying an object that sits on a tile boundary, and only when
+the game changes `SCX` (or any other register the tile-number fetch reads) mid-line. A player
+sees a raster split misplaced by eight pixels on some scanlines and not others — the classic
+"parallax layer wobbles by one tile" artefact, on a line-by-line pattern that follows where the
+sprites are, which is what makes it look like a sprite bug rather than a background one.
+
+*Caught by* — Mealybug `m3_scx_high_5_bits`, which sat at **12 pixels on all three hardware
+reference sets** (`testharness/mealybug_accurate_baseline.txt`). Nothing else in any suite
+catches it: Mooneye's `acceptance/ppu/intr_2_mode0_timing_sprites` measures the *length* of
+mode 3 with objects on the line, which this does not change, and every other harness we run
+compares a whole frame that has no mid-line register writes in it. **That is the finding as
+much as the fix** — a defect that moves the fetcher by one dot is invisible to any test that
+does not write a fetcher-read register inside mode 3.
+
+*Hardware behaviour* — the object fetch begins from inside the background fetcher's own tick,
+so the dot on which an object is detected is still a fetcher dot: the tile fetch in progress
+advances rather than freezing where it stood. docboy,
+`src/docboy/docboy/ppu/ppu.cpp`, `handle_pixel_slice_fetcher_push` — the object prefetcher is
+started at the end of that function under the comment *"Note: the first obj prefetcher tick
+overlaps this tick"*, while the output has already stalled a stage earlier in
+`is_bg_fifo_ready_to_be_popped()`. The per-object stall itself is Pan Docs' [OBJ penalty
+algorithm](https://gbdev.io/pandocs/Rendering.html) and is unchanged, so mode 3's length does
+not move.
+
+*Diagnosis worth reusing* — the ROM fills the background with `'A'`, `'B'`, `'C'`… one letter
+per tile column, so **decoding the failing frame as text says which `SCX` each tile's fetch
+used**. We drew `'S'` (column 18) where hardware drew `'C'` (column 2); the seven failing lines
+were seven rows of that one glyph. Reading the picture answered in minutes what the pixel count
+alone could not have answered at all.
+
+*Carries into the tool* — `gpu::fifo::fetcher_details::the_background_fetcher_still_gets_the_dot_an_object_is_detected`
+(device-free, teeth proven by removing the tick), and `m3_scx_high_5_bits` moving `FAIL → PASS`
+on all three reference sets.
+
+### 2. The Color console's PPU shipped in revisions, and we were a machine that never existed
+
+*Symptom* — a game that changes `SCY` between a tile's two bitplane fetches draws a tile made
+of two different rows on our Color console. On a real CPU CGB D or later it cannot: the effect
+does not exist on that silicon. And a mid-line palette change lands one pixel out on whichever
+of the two Color steppings we are not.
+
+*Caught by* — Mealybug ships **two** Color reference sets, `CPU CGB C` and `CPU CGB D`, and
+seven of its ROMs disagree between them by 8,265 pixels in total (`m3_scy_change` alone by
+6,217). `examples/mealybug` was scoring both columns against one Color machine, which no
+emulator can pass. **This is the same class of runner bug `examples/samesuite.rs::revision_for`
+already records** — SameSuite's `-cgb0` and `-cgbB` ROMs contradict each other, and a runner
+that ignores the stepping in the filename can never score more than four of the five. Two
+suites, two authors, the same lesson: *when a suite ships more than one reference for a ROM, it
+is telling you there is more than one machine.*
+
+*Hardware behaviour* — **CPU CGB D and newer latch the fetcher's `SCY + LY` at the tile-number
+fetch and reuse it for both bitplanes; CPU CGB C and earlier re-read it, as every DMG does.**
+SameBoy, `Core/display.c`, `GB_FETCHER_GET_TILE_T1`: *"This value is cached on the CGB-D and
+newer, so it cannot be used to mix tiles together"*, with the bitplane fetch reading
+`gb->model > GB_MODEL_CGB_C ? gb->fetcher_y : fetcher_y(gb)`. docboy states the same boundary
+from the other side and models D-and-later only (`bg_prefetcher_get_tile_0`: *"Differently from
+DMG, on CGB there's no way to create a bitplane desync effect by changing SCY between the tile
+data low/high fetches … [mealybug/m3_scy_change]"*). Two independent implementations agreeing
+on where the boundary sits is what makes it a fact rather than a fit.
+
+The second half — **a palette write is seen one dot later on a CPU CGB C** — is measured here
+and is in neither reference emulator. The two reference photographs of `m3_bgp_change` differ
+by exactly six pixels per line at `x = 1, 13, 73, 85, 145, 157`: three 12-pixel bands each
+shifted by one. Sweeping our Color palette-commit dot swaps the two columns exactly, on four
+rows at once, and in no other configuration.
+
+*Modelled as* — `mode::PpuRevision` (`CgbC` / `CgbD`, default `CgbD`), deliberately separate
+from `sound::CgbRevision`: the APU's boundary is 0/B against C-and-later, the PPU's is
+C-and-earlier against D-and-later, and `src/sound.rs` is not compiled on `wasm32`. Both read
+`$GB_CGB_REVISION`, so the user still has one knob. It is machine configuration, not cartridge
+state, so it is **not serialised** — the same call `Sound::cgb_revision` makes. The default
+moved us to a coherent machine: before this we had CGB-D palette timing with CGB-C `SCY`
+behaviour, which is not a console anyone shipped.
+
+*Carries into the tool* — `gpu::fifo::fetcher_details::only_a_cgb_c_can_desync_the_two_bitplanes_with_scy`
+(device-free, three machines, teeth proven by latching unconditionally) and
+`…::the_revision_tags_land_on_the_right_side_of_the_boundary`; `m3_bgp_change@CGB-C` and
+`m3_window_timing@CGB-C` moving `FAIL → PASS`, and `m3_scy_change@CGB-D` 15,101 → 116. **The
+conformance check this suggests for the standalone tool is a runner-level one**: a suite that
+ships N reference sets for one ROM must be scored on N machines, and a tool that quietly folds
+them into one will report a failure the emulator cannot fix.
+
+### 3. Two rows the brief named that measurement closed as *not* fetcher bugs
+
+`m3_window_timing@CGB-C` (138 px) and `m3_bgp_change@CGB-C` (864 px) were both already
+pixel-exact on DMG **and** on CGB-D. Their C-vs-D reference gap is 138 and 864 — our numbers
+exactly. They were never a fetcher error; they were the wrong machine. Worth recording as a
+diagnostic habit: **before grinding a row, compare the suite's own reference sets against each
+other** — if the gap between two references equals your error, the emulator is right and the
+runner is wrong.
+
+---
+
 ## 2026-08-14 — the OAM strobe asked `mode`, not `LY` (Mealybug accurate 6/79 → 12/79)
 
 Two defects in the **accurate** engine's STAT path and register-write timing. The default
