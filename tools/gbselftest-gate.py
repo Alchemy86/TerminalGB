@@ -6,13 +6,13 @@ prints one line each, so what is worth gating is WHICH of them fail — and the
 answer differs between the two picture modes in a way that is documented and
 deliberate:
 
-  * `identical`, the per-dot renderer, must pass every row.
-  * `standard`, the whole-scanline renderer, must lose exactly the five rows
-    below and no others. Those are its documented approximations
-    (`docs/picture-modes.md`), not defects, and a sixth red row is news.
+Each mode has a list of rows it is expected to lose, and each entry says why.
+A row that fails and is not on its list is a regression; a row on the list that
+starts passing is a change too, and the script asks for the list and the table
+in docs/gbselftest.md to move in the same commit.
 
-That second expectation is the useful one. A gate that only says "the default
-build fails the cartridge" would be satisfied by any regression at all.
+That is the useful shape. A gate that only said "the default build fails the
+cartridge" would be satisfied by any regression at all.
 
     tools/gbselftest-gate.py
     tools/gbselftest-gate.py --adapter target/release/examples/conformance_adapter
@@ -34,17 +34,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ROM = ROOT / "third_party" / "gbselftest" / "gbselftest.gb"
 
+# Rows this emulator is expected to lose, per picture mode, and why. Anything
+# here is a KNOWN gap or a deliberate trade-off; anything not here is news.
+#
 # The whole-scanline renderer draws a line in one go and charges mode 3 a fixed
-# 172 cycles, so it can report no fetcher penalty; and it deliberately does not
-# block VRAM or OAM by mode, because with a fixed mode 3 that would drop writes
-# a game placed legally in HBlank. Both decisions are recorded in
+# 172 cycles, so it can report no fetcher penalty at all; and it deliberately
+# does not block VRAM or OAM by mode, because with a fixed mode 3 that would
+# drop writes a game placed legally in HBlank. Both decisions are recorded in
 # docs/picture-modes.md and in this project's own notes.
-STANDARD_KNOWN_FAILURES = {
-    "GB-PPU-07",  # fine scrolling lengthens mode 3
-    "GB-PPU-08",  # objects on a line lengthen mode 3
-    "GB-PPU-09",  # the window lengthens mode 3
-    "GB-PPU-10",  # VRAM is unreadable during mode 3
-    "GB-PPU-11",  # OAM is unreadable during modes 2 and 3
+FETCHER_PENALTIES = {
+    "GB-PPU-07": "fine scrolling: a fixed-length mode 3 cannot show the penalty",
+    "GB-PPU-08": "objects on a line: same",
+    "GB-PPU-09": "the window taking over: same",
+    "GB-PPU-18": "an object off the left edge: same",
+    "GB-PPU-10": "VRAM blocking is deliberately off with a fixed mode 3",
+    "GB-PPU-11": "OAM blocking, for the same reason",
+}
+
+# A gap this project had already written down and had never been able to
+# measure. docs/components/ppu.md says in as many words that the DMG STAT write
+# bug is not modelled here: writing ANY value to STAT while the screen is on
+# behaves for one cycle as though $FF had been written, so a condition that is
+# true then raises the interrupt (Pan Docs, "Spurious STAT interrupts"). Two
+# commercial games depend on it. SameBoy models it and passes this row; neither
+# of our picture modes does.
+#
+# What is new is not the knowledge, it is that a prose note in a component page
+# is now a check with a code on it. It is listed here rather than quietly
+# dropped so that the day somebody implements it, this gate says so.
+NOT_MODELLED_YET = {
+    "GB-PPU-16": "the DMG spurious STAT-write interrupt is not modelled here",
+}
+
+KNOWN_FAILURES = {
+    "identical": dict(NOT_MODELLED_YET),
+    "standard": {**FETCHER_PENALTIES, **NOT_MODELLED_YET},
 }
 
 # Not anchored at the start of the line: GB-SER-03 shifts a byte out of the
@@ -88,14 +112,17 @@ def summarise(report: str) -> tuple[dict[str, str], str]:
     return verdicts, final
 
 
-def report_on(name: str, verdicts: dict[str, str], final: str) -> None:
+def report_on(
+    name: str, verdicts: dict[str, str], final: str, known: dict[str, str]
+) -> None:
     ok = sum(1 for v in verdicts.values() if v == "ok")
     bad = sorted(c for c, v in verdicts.items() if v == "FAIL")
     skipped = sorted(c for c, v in verdicts.items() if v == "skip")
     print(f"  {name}: {ok}/{len(verdicts)} ok, {len(bad)} failed, "
           f"{len(skipped)} skipped, verdict {final or '(none)'}")
     for c in bad:
-        print(f"      FAIL {c}")
+        why = known.get(c, "NOT A KNOWN GAP")
+        print(f"      FAIL {c}  -- {why}")
     for c in skipped:
         print(f"      skip {c}")
 
@@ -122,36 +149,28 @@ def main(argv: list[str]) -> int:
     print("GBSelfTest, both picture modes:")
     failures = []
 
-    verdicts, final = summarise(run(args.adapter, "identical", args.frames))
-    report_on("identical", verdicts, final)
-    if not verdicts:
-        failures.append("identical produced no report at all")
-    elif final != "Passed":
-        failures.append(
-            "the per-dot renderer must pass every check; it did not. The rows "
-            "above are the ones to look at, and the cartridge's own explanation "
-            "of each is in docs/gbselftest.md."
-        )
-
-    verdicts, final = summarise(run(args.adapter, "standard", args.frames))
-    report_on("standard", verdicts, final)
-    if not verdicts:
-        failures.append("standard produced no report at all")
-    else:
+    for mode in ("identical", "standard"):
+        known = KNOWN_FAILURES[mode]
+        verdicts, final = summarise(run(args.adapter, mode, args.frames))
+        report_on(mode, verdicts, final, known)
+        if not verdicts:
+            failures.append(f"{mode} produced no report at all")
+            continue
         bad = {c for c, v in verdicts.items() if v == "FAIL"}
-        unexpected = bad - STANDARD_KNOWN_FAILURES
-        recovered = STANDARD_KNOWN_FAILURES - bad
+        unexpected = bad - set(known)
+        recovered = set(known) - bad
         if unexpected:
             failures.append(
-                "the whole-scanline renderer failed rows that are not among its "
-                f"documented approximations: {', '.join(sorted(unexpected))}"
+                f"{mode} failed rows that are not known gaps: "
+                f"{', '.join(sorted(unexpected))}. Each one's explanation is in "
+                "the cartridge's own report and at docs/gbselftest.md."
             )
         if recovered:
             failures.append(
-                "the whole-scanline renderer now PASSES rows it was expected to "
-                f"lose: {', '.join(sorted(recovered))}. That is good news and "
-                "still a change: update STANDARD_KNOWN_FAILURES here and the "
-                "table in docs/gbselftest.md in the same commit."
+                f"{mode} now PASSES rows it was expected to lose: "
+                f"{', '.join(sorted(recovered))}. That is good news and still a "
+                "change: update KNOWN_FAILURES here and the table in "
+                "docs/gbselftest.md in the same commit."
             )
 
     if failures:

@@ -169,6 +169,12 @@ an instruction took a different number of machine cycles from the published opco
 
 an instruction took a different number of machine cycles from the published opcode table.
 
+### GB-CYC-06
+
+**restarts, returns and the register-addressed load**
+
+an instruction took a different number of machine cycles from the published opcode table.
+
 ## TIM: the divider and the timer
 
 ### GB-TIM-01
@@ -262,6 +268,12 @@ the enable register is real storage throughout; the flag register's top three bi
 **RETI restores the master enable**
 
 returning from a handler with RETI re-enables interrupts with none of EI's delay.
+
+### GB-INT-10
+
+**clearing IF cancels a pending interrupt**
+
+IF is a register a program can write, and clearing a bit before the interrupt is taken takes the request back.
 
 ## MEM: the memory map
 
@@ -387,6 +399,24 @@ switching the screen off stops the timing chain and resets the line counter.
 
 the selected conditions are ORed together and only the rising edge of the result raises anything.
 
+### GB-PPU-16
+
+**writing STAT raises a spurious interrupt**
+
+on the original silicon the write acts for one cycle as though every condition were selected, and games depend on it.
+
+### GB-PPU-17
+
+**a window past the right edge costs nothing**
+
+the cost is the takeover, not the enable bit.
+
+### GB-PPU-18
+
+**an object off the left edge still costs**
+
+the scan finds it and its row is fetched; only the drawing is thrown away.
+
 ## DMA: the object transfer
 
 ### GB-DMA-01
@@ -439,6 +469,18 @@ the sixteen bytes at $FF30 are ordinary memory when channel 3 is not playing.
 
 the top five bits of NRx2 drive the converter, and a channel without one cannot be triggered on.
 
+### GB-APU-06
+
+**powering off switches every channel off**
+
+clearing bit 7 of NR52 stops everything, and the status bits go with it.
+
+### GB-APU-07
+
+**wave memory survives a power cycle**
+
+the registers are cleared by a power cycle; the sixteen bytes of wave memory are not.
+
 ## MBC: banking and cartridge RAM
 
 ### GB-MBC-01
@@ -464,6 +506,12 @@ a write to cartridge RAM must be discarded unless $0A was written to $0000.
 **a bank number past the end wraps**
 
 only as many of the register's five bits are connected as the cartridge has banks.
+
+### GB-MBC-05
+
+**the RAM enable decodes four bits only**
+
+any value whose low nibble is $A enables cartridge RAM; anything else locks it.
 
 ## BOOT: the state handed over at $0100
 

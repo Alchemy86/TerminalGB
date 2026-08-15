@@ -6877,18 +6877,26 @@ carries a **stable code per check** that resolves to a heading on our documentat
   (`tools/conformance/checks-gbselftest.json`) and its own job. Fold it in the day the default
   models those five — a one-line change, and the file says so.
 - **The gate is WHICH rows fail, not whether it passes.** `tools/gbselftest-gate.py` scores both
-  picture modes: `identical` must pass all 76, and `standard` must lose exactly `GB-PPU-07` to
-  `GB-PPU-11` — the mode-3 length penalties and the mode-based VRAM/OAM blocking — **and no
-  more**. A sixth red row is news; a row that starts passing is a change too and the script says
-  so. Teeth proven in both directions.
+  picture modes against a per-mode list of KNOWN gaps, each carrying a one-line reason. A row
+  that fails and is not on its list is a regression; a row on the list that starts passing is a
+  change too, and the script asks for the list and the table in `docs/gbselftest.md` to move in
+  the same commit. Teeth proven in both directions.
 - **Scores, measured 2026-08-15 and the reason to trust the instrument:** this emulator
-  `identical` **76/76** and `standard` **71/76**; SameBoy DMG and MGB **76/76**, CGB-E and AGB
-  74/76 with two documented skips; Peanut-GB **58/76**. A cartridge that separates our two
+  `identical` **83/84** and `standard` **77/84**; SameBoy DMG and MGB **84/84**, CGB-E and AGB
+  81/84 with three documented skips; Peanut-GB **62/84**. A cartridge that separates our two
   renderers on precisely the rows our own documentation predicts is worth trusting on the rows
   we did not predict. **That spread is the property to protect** — a suite everybody passes
   measures nothing.
-- **No emulation changed and no baseline moved.** The five failures are the standing trade-off
-  restated by an instrument written somewhere else, not a regression.
+- **Every row we lose was already written down here, which is the point.** Six are the
+  whole-scanline renderer's documented trade-off (`GB-PPU-07/08/09/18` the mode-3 fetcher
+  penalties, `GB-PPU-10/11` the mode-based blocking) and the per-dot engine passes all six.
+  **`GB-PPU-16` is lost by BOTH engines and is the interesting one**: `docs/components/ppu.md`
+  says in as many words that the DMG spurious STAT-write interrupt is not modelled, and until
+  now **nothing in this project could measure it**. A sentence in a component page is a check
+  with a stable code now. Do not read it as a regression, and do not "fix" the note — fix the
+  PPU, and the gate will notice.
+- **No emulation changed and no baseline moved.** Everything red is a standing trade-off or a
+  standing gap, restated by an instrument written somewhere else.
 - **The doc page's per-code half is GENERATED, not written here.** `docs/tools/gbselftest_doc.py`
   splices the vendored `CHECKS.md` between markers in `docs/gbselftest.md`; `--check` fails if it
   has drifted, which is what stops a URL the ROM printed landing on a heading that no longer
