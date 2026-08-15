@@ -111,7 +111,14 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// like the cartridge — so a state taken during the boot animation refuses to
 /// load into a machine that has none rather than resuming into the cartridge at
 /// `PC=$0000`.
-pub const FORMAT_VERSION: u16 = 19;
+/// v20: the per-dot PPU's head-of-line `discard` counter changed meaning — it
+/// counts pixels already dropped and the phase ends when it reaches the *live*
+/// `SCX & 7`, where it used to be a countdown loaded once at the start of mode
+/// 3. The field is the same width and in the same place, so nothing about the
+/// layout moved; a v19 state loaded blind would simply mis-drive the first
+/// eight dots of one scanline, which is exactly the kind of silent wrongness a
+/// version is for.
+pub const FORMAT_VERSION: u16 = 20;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
