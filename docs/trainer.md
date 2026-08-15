@@ -19,38 +19,46 @@ Press **`T`** in the terminal frontend.
 
 ## What it shows
 
-The panel is one bordered frame of **bracketed sections** — `[ TRAINER ]`, `[ BADGES ]`,
-`[ OPPONENT ]`, `[ PARTY ]` — separated by centred rules. Everything inside a section is
-aligned to fixed columns, so a value changing never shifts the one beside it.
+The panel is a **left sprite gutter with facts in columns beside it**. One grammar, applied
+to every block: wherever the panel names a Pokémon, its picture is in the gutter on that
+block's own rows and everything said about it is aligned to the right of it. Sections are
+announced by a **left-anchored rule** (`─ PARTY ──────── 6/6`), so every section label starts
+in the same column and the page can be scanned down its left edge.
 
-![the panel during a trainer battle](trainer-panel/1-battle-40col.png)
+![the panel during a wild encounter](trainer-panel/1-battle-40col.png)
 
-**Header.** Name, ID and money on one packed line; play time and the cartridge on the next;
-then eight discrete badge markers in two groups of four with the count. Held and missing
-differ in **both** glyph and colour (`●` yellow against `○` dark grey) so the count survives a
-monochrome or colour-blind read.
+**Header — three rows, no banners.** Name, ID and money; play time and the cartridge; then
+the eight badge markers, the count, and the next gym leader. Held and missing badges differ
+in **both** glyph and colour (`●` yellow against `○` dark grey) so the count survives a
+monochrome or colour-blind read. The brackets around the markers are the first thing to go as
+the panel narrows — they are decoration around markers that already differ two ways, and
+thirteen columns of them is exactly what would stop the next gym fitting.
 
-**Party slots.** Six markers under the sprite: filled and coloured by remaining HP, hollow and
-dim for an empty slot, hollow and red for a fainted one. This is the only place an *empty*
-slot is visible at all — the list below only lists what exists. The Pokémon currently in a
-fight is underlined.
+**Party — all six, always, each with its own picture.** Two rows per Pokémon: marker, index,
+nickname, level, HP bar, status and `★` on the first; species, `cur/max` and types on the
+second; a small sprite spanning both in the gutter. It is present in **both** modes — `d` used
+to replace the team with one Pokémon's numbers, so the mode that exists to compare made the
+thing being compared against invisible. `▸` marks the focus and `▌` the Pokémon in the fight.
 
-**Party.** Two lines each out of battle: marker, index, nickname, level, HP bar and status on
-the first; species, `cur/max` and types on the second. `★` marks a Pokémon that would be shiny
-in Gen 2. A gutter cell carries `▸` for the focus and `▌` for the Pokémon in the fight.
+**Opponent.** In a battle this block comes **first**, beside its own picture. Species, level,
+HP bar and status; the encounter (`wild` / `safari` / `wild (demo)` / `trainer NAME`, on the
+rule as its annotation rather than on a row of its own); types; all four battle stats; any
+stat stages on either side; the opponent's DVs (the numbers behind the encounter banner's
+verdict — a trainer's Pokémon shows the fixed `$98/$88` pair every time, which is itself worth
+seeing); the moves table; and the opposing trainer's roster.
 
-**Opponent (`[ OPPONENT ]`).** In a battle this section comes **first**, right under the
-sprite, and the party below it collapses to one line each so all six still fit. Species,
-level, HP bar and status; the encounter (`wild` / `safari` / `wild (demo)` / `trainer NAME`);
-`cur/max` and types; all four battle stats; any stat stages on either side; the opponent's
-DVs (the numbers behind the encounter banner's verdict — a trainer's Pokémon shows the fixed
-`$98/$88` pair every time, which is itself worth seeing); the moves with PP; and the opposing
-trainer's roster.
+**Moves — a table, with what a turn is actually decided on.** `MOVE · TYPE · PP · POW · ACC`,
+in columns, in the same order on the opponent block and in the detail view so the two read as
+one design. Power and accuracy come from the cartridge's own `Moves` table (see
+[Where every address came from](#where-every-address-came-from)); accuracy is converted from
+its 0-255 byte to a percentage. **A zero-power move gets a dash, never a `0`** — a status move
+genuinely does no direct damage, and printing `0` invites comparison with a 40 as if they were
+the same kind of number. A move out of PP is red, one at a quarter or less is amber.
 
 **Stat stages (`MOD` / `YOU`).** The stat numbers in a battle are the *modified* ones — a
 Growl visibly takes an Attack of 10 down to 6 — so the panel says which stats are staged, in
 which direction and by how many, for the opponent (`MOD`) and for your own active Pokémon
-(`YOU`). Lowered is red, raised is green. See
+(`YOU`). Lowered is red, raised is green, and both carry their sign. See
 [`derived::StatMods`](../plugins/trainer/src/derived.rs) for why the *stage* is shown rather than a
 reconstructed "before" value, and for the Gen 1 ratios (`-1` is two thirds, not a half; `+1`
 is 1.5×, so up and down do not cancel).
@@ -61,22 +69,87 @@ Ball, recomputed every sample so they move as HP comes off and status lands, wit
 a trainer's Pokémon cannot be caught, so a percentage there would be worse than
 nothing. See [Catch chance](#catch-chance) for where the arithmetic came from.
 
-![a wild encounter with the catch chance](trainer-panel/4-wild-catch-chance.png)
+**The opposing trainer's team.** Read from the enemy party block and reported as a
+`TEAM ● ○ ?  n left` line plus the names, in every mode and at every width. Standing, fainted
+and *unreadable* are three different glyphs — "beaten" and "not yet legible" are opposite
+facts. (It used to be a strip of *pictures*, granted only on a panel wide and tall enough.
+There is one picture budget and the player's own six won it; the roster keeps the form it
+already fell back to on most window sizes, and keeps it unconditionally.)
 
-**The opposing trainer's team.** In a trainer battle the roster is read from the enemy party
-block and drawn as a row of small sprites in its own band, with a `TEAM ● ○ ?  n left` line in
-the opponent section. Standing, fainted and *unreadable* are three different glyphs — "beaten"
-and "not yet legible" are opposite facts. The strip is **progressive**: it needs 30 columns
-and six spare rows, and where it does not fit the marker line carries the same information.
+![the detail view, with the party still under it](trainer-panel/9-detail.png)
 
-**Detail (`d`).** One Pokémon at a time, headed `[ OPPONENT ]` or `[ YOUR POKéMON ]` so whose
-numbers these are is never left to be inferred from the picture. Four moves with PP (including
-PP Ups), the DVs and their total out of 75, the invisible stat experience, Hidden Power's type
-and base power, and the shiny-if-traded verdict.
+**Detail (`d`).** One Pokémon's full page, headed `OPPONENT` or `YOUR POKéMON` so whose
+numbers these are is never left to be inferred from the picture — with the party still under
+it. The moves table, then the DVs and the invisible stat experience under **one shared
+legend** (five columns wide, so the two rows genuinely line up under `hp atk def spd spc`),
+Hidden Power's type and base power, and the shiny-if-traded verdict.
 
-**Sprite.** The focused Pokémon's front picture, decompressed from the cartridge, with its
-background made transparent so it sits on the panel instead of in a white box (see
-[Sprites](#sprites-from-the-rom-not-from-vram-and-on-the-panel-rather-than-in-a-box)).
+### Colour carries meaning
+
+The palette lives in [`screen::panel`](../src/screen/panel.rs) — one place, shared with any
+future tracker-shaped panel, so colour cannot come to mean two different things in two panels.
+Five families and nothing outside them: structure, the fifteen Gen 1 types, HP by remaining
+fraction, status by *which* status, and stat stages by direction.
+
+**Every one of them is redundant with something a reader can also read.** A raised stat is
+green *and* carries a `+`; a fainted slot is dim *and* hollow; a type is coloured *and* named.
+A terminal theme can make any two hues indistinguishable and a colour-blind reader may never
+separate the red/green pair, so colour here is an accelerator and never the only carrier of a
+fact.
+
+Each half of a dual type gets its own colour: one uniform colour over `GRASS/POISON` says
+"this is a type label", two say which two. **Ground and Rock are deliberately further apart
+here than in the games** — their canonical colours are two shades of the same khaki, which is
+fine on a printed type chart and useless in three terminal columns, and Rock/Ground is a real
+dual type (Geodude, Onix, Rhyhorn), so the one place they appear together is the place they
+must not be confusable.
+
+Fifteen types do not fit in the eight ANSI colours, so the panel uses the 256-colour cube and
+falls back to a named-ANSI table when `$COLORTERM` and `$TERM` say the terminal will not have
+it. The fallback has **declared collisions** — it must — chosen so that no pair of types that
+occurs together on one Pokémon shares a hue, which is the only place a collision would
+mislead. A terminal that takes the fallback is told so on the warnings channel.
+
+### Pictures cost columns, never rows
+
+A sprite spans exactly the rows the text beside it already needed. That is the whole reason
+six party pictures are affordable where the single large one they replace was not: the panel
+showing six pictures is exactly as tall as the panel showing none. The old one took eleven
+rows of a twenty-four-row panel to itself.
+
+Vertically, then, the order of sacrifice is only ever about text: the party's *second* line
+goes first (and the gutter with it, because a one-row sprite is a smudge), and a slot is never
+dropped. Horizontally the gutter is refused below 28 columns, where three columns of Pokémon
+is a smudge and the row needs the space more.
+
+### In a terminal with no image protocol
+
+`ratatui-image` speaks Kitty and iTerm2 and nothing else, so `sprite_image` is `None` in every
+VTE-family terminal — GNOME Terminal, GNOME Console, Ptyxis, which Fedora builds without sixel
+— and the trainer panel used to draw **no Pokémon at all there and say nothing about it**. It
+draws through [`screen::halfblocks`](../src/screen/halfblocks.rs) now, the same fallback the
+game picture and the music-mode sleeve already take.
+
+What it can carry there is different, and [`Pictures`](../src/screen/trainer_view.rs) owns the
+difference rather than the call sites guessing at it. An image-protocol cell carries 8×16
+device pixels; a half-block cell carries 1×2 samples. So the same icon needs roughly eight
+times the cells in each axis — and a party slot is two rows, four samples, which measured out
+as noise rather than a Pokémon. Half-blocks therefore get:
+
+* the **focused** picture, at six rows rather than three, which is legible; and
+* **no party pictures**, with the panel saying `party pictures need an image protocol` under
+  the party rather than drawing six smudges.
+
+![the panel in a terminal with no image protocol](trainer-panel/8-halfblocks.png)
+
+The half-block renderer had to learn about **alpha** for this. It ignored it, which is
+harmless for the game picture and the music sleeve (both opaque) and puts a black slab behind
+every Pokémon here, since a sprite's background is flood-filled transparent. A fully
+transparent sample is the terminal's own background now, and `▄` joined `▀` because a
+transparent top half cannot be expressed with `▀` alone. A *partly* transparent sample — the
+ghosting a fainted party member is composed with — is drawn at full strength: the terminal's
+background is not knowable, so blending towards it is a guess, and the fact that a Pokémon has
+fainted is carried by the hollow marker, the empty bar and `FNT` beside its name.
 
 ### Focus: one ring drives the picture and the numbers
 
@@ -161,13 +234,16 @@ slack goes to the outside edges where it is symmetric and reads as margin.
 **The panel scales with the picture rather than beside it.** Terminal text is
 bound to the cell grid and cannot be made larger, so "scales" has to mean
 something real: the panel takes **two fifths of the width** rather than a fixed
-column count, the **sprite band grows with that width**
-([`sprite_rows`](../src/screen/trainer_view.rs)) so the one part of the panel
-that genuinely is an image scales like one, and the party columns **grow above
-the design width** ([`party_cols`](../src/screen/trainer_view.rs)) so a wider
-panel spends the space on longer names and more HP-bar resolution instead of
-stranding it. Below the design width the same code shrinks them, which is the
-degradation that was already there.
+column count, and the party columns **grow above the design width**
+([`party_cols`](../src/screen/trainer_view.rs)) so a wider panel spends the space
+on longer names and more HP-bar resolution instead of stranding it. Below the
+design width the same code shrinks them, which is the degradation that was
+already there.
+
+The *pictures* do not scale with the panel any more, and that is the point of
+the redesign rather than a loss: they are icons that identify a Pokémon, not
+posters. A gutter cell is a fixed few columns by the rows its own text needed,
+so a wider window buys more **text** and a taller one buys more **party**.
 
 ![the composition in a tall narrow split](trainer-panel/6-composition-tall.png)
 
@@ -179,13 +255,15 @@ is no panel worth drawing and the width goes back to the game picture.
 
 ![the same battle in a 30-column panel](trainer-panel/2-battle-30col.png)
 
-At 30 columns: the badge brackets go, the stat line compacts to `A6 D12 S10 C10`, the moves go
-one to a row, the team strip stands down to its marker line, and long names truncate with `…`.
-Everything still reads. `no_line_overflows_at_any_width` renders every section at every width
-from 8 to 60 and asserts nothing exceeds it, so the guarantee is a test rather than arithmetic
-in a comment.
+At 30 columns: the badge brackets go and the next gym shortens to `→Lt.Surge`, the stat line
+compacts to one letter per label, the moves table drops accuracy and then power, the sprite
+gutter narrows to four columns and then to nothing, only the first of a dual type survives,
+and long names truncate with `…`. Everything still reads. `no_line_overflows_at_any_width`
+renders every section at every width from 8 to 60 and asserts nothing exceeds it, so the
+guarantee is a test rather than arithmetic in a comment.
 
-Out of battle the panel closes with a plain separator and the badge summary:
+Out of battle the party is the whole panel — here on the captain's own save, a party of two,
+where the empty slots simply are not drawn and the panel shrinks to what it has to say:
 
 ![out of battle](trainer-panel/3-out-of-battle.png)
 
@@ -231,6 +309,15 @@ Each constant carries its label in
 | Type names | `TypeNames` | `09:7DAE` |
 | Base stats + sprite pointers | `BaseStats` | `0E:43DE` |
 | Internal index → Pokédex number | `PokedexOrder` | `10:5024` |
+
+A `Moves` entry is six bytes — `animation, effect, power, type, accuracy, PP` — from the
+`move` macro in `macros/data.asm` that `data/moves/moves.asm` invokes once per move. Only PP
+was read from it before the moves table needed the other three. **Accuracy is stored as a
+fraction of 255**, because `MoveHitTest` compares the byte against a random one, so `$FF` is
+100 %, `$D8` is 85 % and `$CC` is 80 %; the panel converts it. Verified against the retail
+cartridge — THUNDERBOLT (id 85) is `[85, 6, 95, 23, 255, 15]` and HYDRO PUMP (id 56) is
+`[56, 0, 120, 21, 204, 5]` — and pinned by `a_moves_entry_decodes_power_type_and_accuracy`
+against a **synthetic** cartridge, so no game data is vendored to test it.
 
 Three traps worth naming, because each silently produces plausible-but-wrong data:
 
@@ -408,11 +495,17 @@ battle in Oak's Lab (`cargo run --release --example trainer_layout -- --rom <rom
 `party_struct` copy and `wEnemyMonSpecies` all read `$B1` — SQUIRTLE, which is what the rival
 takes when you pick BULBASAUR.
 
-The roster is drawn as **one** wide strip image, `n × 56` by `56` pixels, each Pokémon
-bottom-centred in its own cell with transparent gutters and fainted members ghosted to
-`A = 80`. One image rather than six is the whole design: six would mean six terminal image
-ids, six placements and six PNG encodes every time the strip changed, in a panel 38 cells
-wide where each would land under six cells anyway.
+The roster is reported as the `TEAM ● ○ ?  n left` line plus the names, at every width and in
+both modes. **It used to be a strip of pictures** across its own band, granted only on a panel
+both wide and tall enough; the redesign spent the panel's picture budget on the player's own
+six instead, and the roster kept the text form it already fell back to on most window sizes —
+but keeps it unconditionally now rather than only when the strip was refused. That is a
+declared trade, not an omission: `the_opposing_roster_is_still_reported_at_every_width` holds
+it.
+
+The technique the strip used is not lost — it is what the party column is built on. **One
+composed image rather than six** is the whole design there: six would mean six terminal image
+ids, six placements and six encodes every time anything changed.
 
 **What is not here: the trainer's own portrait.** The captain asked for the opposing trainer's
 picture beside their team. `wTrainerClass` is available, but the pic pointers
@@ -458,8 +551,9 @@ the other four, again per `CalcStat`.
   that ratio is Gen 2 data present nowhere in a Gen 1 cartridge. Deriving it means embedding a
   151-entry table from `pokecrystal` — a bigger and more debatable step than the rules above,
   so it is named rather than half-built.
-- **Type effectiveness, catch odds, route encounters, move power/accuracy.** All computable
-  from tables already in the ROM, all additive on this data, none implemented.
+- **Type effectiveness and route encounters.** Computable from tables already in the ROM,
+  additive on this data, not implemented. (Move power and accuracy *were* on this list and are
+  done — see the moves table above.)
 
 ---
 
@@ -478,8 +572,14 @@ and does not get the cost handed back.
   plugin holds the answer until the battle ends: no further reads, and the banner cannot
   flicker.
 - **Sprites are decompressed once per species and cached**, so an unchanged party costs
-  nothing, and the encoded image is only rebuilt when the focused species or the palette
-  changes.
+  nothing, and a composed picture is rebuilt only when its species, the palette or the
+  gutter's pixel size changes — the last because a picture is composed at the size the
+  terminal will draw it, which is what keeps a small sprite crisp.
+- **Six party pictures cost, measured: 37.4 µs against 19.2 µs for the single large sprite
+  they replace** — 1.95× for 2.45× the pixels, paid on a party change and never on a frame
+  (`party_column_costs_no_more_than_the_sprite_it_replaces` prints both). The panel's *text*
+  is composed twice per displayed frame at **6.1 µs** a call, 0.07 % of a 16.743 ms frame
+  (`composing_the_panel_text_is_negligible_against_a_frame`).
 - With no plugin attached, `PluginHost::frame` is one `is_empty` test per frame.
 
 ## Read-only, structurally

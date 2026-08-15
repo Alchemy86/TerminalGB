@@ -23,6 +23,81 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — the trainer panel had no pictures at all in a VTE terminal (presentation)
+
+The trainer panel was redesigned for density and hierarchy, and the redesign turned up two
+**presentation** defects of the class this file already records for the render path: the
+emulated machine was entirely correct and the framebuffer was perfect, and the player still
+saw the wrong thing. Point 3 therefore cites a library or protocol contract rather than
+Pan Docs.
+
+### 1. A panel picture that only exists in two terminals
+
+- **Symptom.** The trainer panel reserves eleven rows for the focused Pokémon's picture, and
+  in every VTE-family terminal — GNOME Terminal, GNOME Console, Ptyxis, which Fedora builds
+  without sixel — those rows are **blank**, with nothing anywhere saying why. The panel is
+  otherwise fully functional, so it reads as a rendering bug in the emulator. Screenshotted
+  before and after; the before is a blank band between the badge row and the party.
+- **Caught by** — **no test ROM, and none could.** The framebuffer is identical whichever
+  protocol draws it, and every ROM-driven harness in this repository builds a `Gameboy`
+  directly and never enters `screen::tui`. This is the same blind spot as the four render
+  defects recorded below, and the same one that hid the music-mode cover for its whole life
+  (`f99a033`) — which is the finding: `new_term_image()` returns `None` for anything but
+  Kitty and iTerm2 and `place_panel_image` returns immediately on a missing image, so **any**
+  panel picture built on that pair is invisible in a VTE terminal by construction. Two
+  features have now shipped with it. Anything that adds a third must add its half-block arm
+  in the same commit.
+- **Contract violated.** `ratatui-image`'s `Picker` reports the protocol the *terminal*
+  advertises; nothing licenses treating "no image protocol" as "no picture". A terminal with
+  no image protocol has had a crisp picture path in this frontend since `08902d5`
+  ([`screen::halfblocks`](../src/screen/halfblocks.rs)), and the game picture and the music
+  sleeve both take it.
+- **Carries into the tool.** *A capability that is absent must cost only the thing it
+  provides* — the same principle as "a missing optional report must degrade only the thing it
+  reports" (defect 4 below) and as the adapter contract's "declining a capability is `exit 0`,
+  not an error" ([`conformance-action.md`](conformance-action.md)). New tests:
+  `a_terminal_with_no_image_protocol_still_gets_a_picture_and_is_told_why`, teeth proven by
+  making half-blocks claim the party pictures too.
+
+### 2. The half-block renderer ignored alpha
+
+- **Symptom.** With (1) fixed, every Pokémon in the panel is drawn inside an **opaque black
+  box**. A black slab is a worse answer than no picture: it looks like a corrupted image
+  rather than a missing one.
+- **Caught by** — nothing, and nothing could have. `screen::halfblocks` had two callers, the
+  game picture and the music sleeve, and **both are opaque everywhere**; the trainer panel's
+  sprites are the first thing to reach it with transparency, which is flood-filled from the
+  edges (`terminalgb_plugin_trainer::sprite::background_mask`). The existing guard —
+  *no colour may appear that was not in the framebuffer* — passes either way, because black
+  **is** in the framebuffer: it is Game Boy shade 0 with alpha 0.
+- **Contract violated.** RGBA's fourth channel is not decoration. A fully transparent sample
+  composites to whatever is behind it, which in a terminal is the terminal's own background
+  (`Color::Reset`), never `#000000`.
+- **Carries into the tool.** Two things worth absorbing. First, `▀` alone **cannot express**
+  a transparent top half — its foreground *is* the top half — so `▄` had to join it; a
+  half-block renderer with one glyph has a hole in it. Second, a *partly* transparent sample
+  has **no correct composite** without knowing the terminal's background, so the ghosting a
+  fainted party member is composed with is drawn at full strength and the fact is carried by
+  the hollow marker, the empty bar and `FNT` beside its name — which is the redundancy rule
+  in [`screen::panel`](../src/screen/panel.rs) doing its job rather than a limitation being
+  papered over.
+
+### 3. …and what a half-block cell can actually carry, measured
+
+Not a defect, but the measurement that decided the design, and the reason the answer differs
+per terminal rather than being one layout everywhere.
+
+An image-protocol cell carries 8×16 device pixels; a half-block cell carries **1×2 samples**.
+The same icon therefore needs roughly eight times the cells in each axis. A party slot is two
+rows — four samples tall — and a Pokémon at five columns by four samples was rendered, looked
+at, and is **noise**. So half-blocks get the focused picture at six rows (twelve samples,
+legible: the Onix in `docs/trainer-panel/8-halfblocks.png` is unmistakable) and **no** party
+pictures, with the panel saying so.
+
+The general rule, for anything that draws a picture in a terminal: **a cell is not a unit of
+resolution — it is a unit of resolution *per protocol*.** Sizing a picture in cells and
+assuming it will read is how six smudges get shipped.
+
 ## 2026-08-15 — the five "principled reds", re-opened against a running SameBoy (SameSuite 72/76 → 73/76)
 
 Five rows in this repository had been recorded as red-for-a-reason and left alone. The captain

@@ -62,6 +62,12 @@ pub mod halfblocks;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod watch;
 
+/// The panel design system — palette and layout primitives — see [`panel`].
+/// Shared by every tracker-shaped panel so colour means the same thing in all
+/// of them. Pure: composes `ratatui` spans and touches nothing else.
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub mod panel;
+
 /// Layout of the live Gen 1 trainer panel — see [`trainer_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]

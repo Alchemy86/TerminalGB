@@ -14,41 +14,86 @@
 //!
 //! # The shape of the panel
 //!
-//! One bordered frame holding **bracketed sections** separated by centred rules
-//! — `[ TRAINER ]`, `[ BADGES ]`, `[ PARTY ]`, `[ OPPONENT ]`. The rules cost
-//! one row each and are what stops the panel reading as an undifferentiated
-//! column of text; everything inside a section is aligned to fixed columns so a
-//! value changing never shifts the one beside it.
+//! **A left sprite gutter, and facts in columns to the right of it.** One
+//! grammar, applied to every block: wherever the panel names a Pokémon, its
+//! picture is in the gutter on that block's own rows and everything said about
+//! it is aligned in columns beside it. Sections are announced by a
+//! **left-anchored rule** ([`crate::screen::panel::rule`]) so every section
+//! label starts in the same column and the page can be scanned down its edge.
 //!
 //! ```text
-//! ┌ Trainer · d detail ──────────────────┐
-//! │─────────── [ TRAINER ] ──────────────│
-//! │NAME BLUE │ ID 62800 │ ¥3,000         │
-//! │TIME 00:01:41 │ Pokémon Blue          │
-//! │──────────── [ BADGES ] ──────────────│
-//! │[●][●][○][○] [○][○][○][○]  2/8        │
-//! │                                      │
-//! │            ( the sprite )            │
-//! │                                      │
-//! │           ● ● ● ○ ○ ○                │
-//! │──────────── [ PARTY ] ───────────────│
-//! │▸1 SPARK       L 12 ████░░░░ PSN ★    │
-//! │   PIKACHU      34/ 34  ELECTRIC      │
-//! │──────────────────────────────────────│
-//! │BADGES Boulder, Cascade               │
-//! │NEXT   Lt.Surge                       │
+//! ┌ Trainer · d detail · Tab ────────────┐
+//! │BLUE  ID 62800  ¥3,000                │
+//! │0:01:41  Pokémon Blue                 │
+//! │●●○○ ○○○○ 2/8  next Lt.Surge          │
+//! │─ OPPONENT ─────────────── JOEY ──────│
+//! │▟▙   CHARMANDER            L7  FIRE   │
+//! │▛▜   ███████░░░ 18/20   ATK-1 SPD+2   │
+//! │▘▝   ATK 42  DEF 38  SPD 61  SPC 50   │
+//! │─ PARTY ──────────────────────── 4/6 ─│
+//! │▟▙  ▸1 SPARK      L12 ██████░░ PSN ★  │
+//! │▛▜     PIKACHU  34/ 34  ELECTRIC      │
+//! │▟▙   2 RATTY     L 9 ███░░░░░ PSN     │
+//! │▛▜     RATTATA  11/ 27  NORMAL        │
 //! └──────────────────────────────────────┘
 //! ```
 //!
-//! # Degrading as the panel narrows
+//! The `▟▙`/`▛▜` blocks stand for the sprite images, which are **not text** —
+//! see "Pictures" below.
+//!
+//! ## What changed, and why
+//!
+//! Three things the captain asked for, against the panel this replaces:
+//!
+//! * **Every party member is visible at all times, with its own picture.** The
+//!   party used to be two lines of text per Pokémon and *nothing* in the detail
+//!   view, so opening `d` lost the team. The team is now the spine of the
+//!   panel: it is in both modes, and [`layout_with_pictures`] gives up the
+//!   focused block's own picture before it gives up a party row.
+//! * **The sprites are small.** One picture used to take eleven of a
+//!   twenty-four-row panel. A party cell is [`SLOT_ROWS`] rows and the focused
+//!   block's is [`FOCUS_ROWS`]; nothing on the panel is bigger than the text
+//!   beside it.
+//! * **Chrome earns its row or goes.** `[ TRAINER ]`, `[ BADGES ]` and the
+//!   `BADGES`/`NEXT` footer are gone — the trainer's own two lines say what
+//!   they said, and the badge row carries the next gym. `[ MOVES ]` and
+//!   `[ HIDDEN ]` became column headers, so those rows are legends rather than
+//!   labels. Six rows of decoration became one row of data and five rows of
+//!   party.
+//!
+//! # Degrading as the panel narrows and shortens
 //!
 //! Every section takes the width it is given and drops its **least valuable
 //! column first** rather than wrapping into mush. The party rows have four
-//! tiers ([`party_cols`]); the trainer fields drop by a declared priority
-//! ([`Field::drop`]); the badge row falls from `[●][●]…` to `●●…` to a bare
-//! count. `no_line_overflows_at_any_width` renders every section at every width
-//! from 8 to 60 and asserts nothing exceeds it — the layout is guaranteed by
-//! that test, not by arithmetic in a comment.
+//! tiers ([`party_cols`]); the moves table has three ([`MoveCols`]); the
+//! trainer fields drop by a declared priority ([`Field::drop`]); the badge row
+//! falls from `[●][●]…` to `●●…` to a bare count.
+//! `no_line_overflows_at_any_width` renders every section at every width from 8
+//! to 60 and asserts nothing exceeds it — the layout is guaranteed by that
+//! test, not by arithmetic in a comment.
+//!
+//! Vertically the order of sacrifice is declared in [`layout_with_pictures`]
+//! and it is the same principle: **the pictures are the decoration and the six
+//! slots are the point.** The focused block's picture goes first, then the
+//! party pictures (the rows stay, they just lose their gutter), then the party
+//! collapses to one line per Pokémon, and only after all of that does anything
+//! fall off the bottom.
+//!
+//! # Pictures
+//!
+//! Both gutters are **terminal images**, not text, so the same three rules
+//! apply to them as to the game picture (`docs/terminal-render.md`): one image
+//! id reused for the life of the session, a cell rectangle text never shares,
+//! and nothing transmitted for an unchanged picture. The party gutter is
+//! **one** composed image of six cells rather than six images — that is what
+//! makes six small sprites cheaper than the single large one they replace, and
+//! `render_trainer` keys it on the party's species and fainted-ness so it is
+//! recomposed when a Pokémon changes and not once a frame.
+//!
+//! A terminal with no image protocol draws both gutters through
+//! [`crate::screen::halfblocks`] instead. It is the same fallback the game
+//! picture and the music-mode sleeve already take, and without it the whole
+//! feature is invisible in every VTE-family terminal.
 //!
 //! # Glyphs
 //!
@@ -84,9 +129,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
+use crate::screen::panel;
 use terminalgb_plugin_trainer::encounter::WildEncounter;
 use terminalgb_plugin_trainer::gen1::{BattleKind, BattleType};
-use terminalgb_plugin_trainer::gen1::{Mon, BADGE_LEADERS, BADGE_NAMES};
+use terminalgb_plugin_trainer::gen1::{Mon, MoveSlot, BADGE_LEADERS};
 use terminalgb_plugin_trainer::{TeamMon, TrainerState};
 
 /// Shown wherever a value is not known yet, so a blank never reads as a zero.
@@ -103,42 +149,122 @@ pub const PANEL_W: u16 = 40;
 /// the game picture instead.
 pub const PANEL_MIN_W: u16 = 22;
 
-/// Rows reserved for the sprite **at the panel's design width**. See
-/// [`sprite_rows`], which scales it.
-pub const SPRITE_ROWS: u16 = 11;
+/// Rows one party slot occupies when it has a picture: a headline row and a
+/// reference row, with the sprite cell spanning both.
+///
+/// Two is the smallest a Pokémon stays identifiable at — one row is sixteen
+/// device pixels on a normal cell, which is a smudge — and it is also exactly
+/// what the two text lines need, so the gutter and the text divide the same
+/// rows with nothing left over.
+pub const SLOT_ROWS: u16 = 2;
 
-/// Rows the sprite band gets in a panel `inner` columns wide.
+/// Rows the focused block (the opponent in a battle, or `d`'s subject) gives
+/// its own picture. One more than a party cell, because it is the thing the
+/// panel is currently *about*.
+pub const FOCUS_ROWS: u16 = 3;
+
+/// What kind of picture this terminal can draw, which decides how many cells
+/// a picture needs to be worth drawing at all.
 ///
-/// The sprite is the one part of the panel that can genuinely *scale*: it is an
-/// image, so a taller band means `fit_metrics` gives it more cells and the
-/// picture inside grows. Text cannot do that — it is bound to the cell grid —
-/// so if the band stayed a constant eight rows the panel would keep the same
-/// visual weight while the game picture beside it grew with the window, which
-/// is exactly the "footnote pinned next to a poster" the captain described.
-///
-/// Three tenths of the width keeps the band close to square at a normal cell
-/// aspect. The floor is what a Pokémon stays recognisable at; the ceiling stops
-/// the sprite eating a tall panel's text.
-pub fn sprite_rows(inner: u16) -> u16 {
-    (inner * 3 / 10).clamp(6, 16)
+/// **This is not a cosmetic distinction.** An image-protocol cell carries
+/// 8x16 device pixels; a half-block cell carries 1x2 samples. So the same
+/// icon needs roughly eight times the cells in each axis — and a party slot
+/// is two rows, which is four half-block samples tall. Measured: a Pokémon at
+/// five columns by four samples is noise, not a Pokémon. Half-blocks
+/// therefore get **no party gutter** and a **larger focused picture**, which
+/// is the one that has the rows to be legible, and the panel says so rather
+/// than drawing six smudges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pictures {
+    /// No pictures at all — the message screens, and a panel too small.
+    None,
+    /// Drawn from `▀`, so a cell is two samples. See
+    /// [`crate::screen::halfblocks`].
+    Halfblocks,
+    /// A terminal image protocol: a cell is a font cell of real pixels.
+    Image,
 }
 
-/// Rows the trainer header always takes: two section rules, two field lines and
-/// the badge row.
-pub const HEADER_ROWS: u16 = 5;
+impl Pictures {
+    /// Rows the focused block gives its own picture.
+    pub fn focus_rows(self) -> u16 {
+        match self {
+            Pictures::None => 0,
+            // Twelve samples tall: enough for a silhouette, and the rows come
+            // out of the block's own text, which needs three of them anyway.
+            Pictures::Halfblocks => 6,
+            Pictures::Image => FOCUS_ROWS,
+        }
+    }
 
-/// Rows of text that must survive before the sprite is allowed any. The party
-/// is the point; the picture is the decoration.
+    /// Whether the party's six slots each get a picture.
+    pub fn party(self) -> bool {
+        self == Pictures::Image
+    }
+
+    /// Gutter width in columns at a panel `inner` wide, or 0 for a panel too
+    /// narrow to spend any.
+    pub fn gutter(self, inner: u16) -> u16 {
+        match self {
+            Pictures::None => 0,
+            Pictures::Halfblocks if inner < HALFBLOCK_MIN_PANEL_W => 0,
+            // Wider, because a half-block column is one sample rather than
+            // eight pixels — and affordable, because only one block has a
+            // picture rather than seven.
+            Pictures::Halfblocks => 10,
+            Pictures::Image => gutter_w(inner),
+        }
+    }
+}
+
+/// Narrowest panel that spends columns on a half-block picture. Wider than
+/// [`GUTTER_MIN_PANEL_W`] because the picture itself has to be wider.
+pub const HALFBLOCK_MIN_PANEL_W: u16 = 34;
+
+/// What a terminal with no image protocol is told about the party pictures it
+/// is not getting.
+///
+/// One line, in the panel, rather than a silent absence — the rule the rest of
+/// this frontend already follows for a missing capability
+/// (`BASIC_INPUT_NOTICE`, `HALFBLOCKS_NOTICE`). Six unrecognisable smudges
+/// would be worse than the sentence.
+pub const NO_PARTY_PICTURES: &str = "party pictures need an image protocol";
+
+/// Columns the sprite gutter takes at the panel's design width.
+///
+/// Sized so a party cell is close to square in device pixels at an ordinary
+/// 8x16 cell: five columns by two rows is 40x32. The composer letterboxes the
+/// sprite into whatever the gutter actually turns out to be, so this is a
+/// budget rather than an assumption about anybody's font.
+pub const GUTTER_W: u16 = 5;
+
+/// Columns of gutter at a given panel width, or 0 for a panel too narrow to
+/// spend any.
+///
+/// Below [`GUTTER_MIN_PANEL_W`] the gutter is refused outright rather than
+/// shrunk: three columns of Pokémon is a smudge, and the row it sits on needs
+/// the space more.
+pub fn gutter_w(inner: u16) -> u16 {
+    if inner < GUTTER_MIN_PANEL_W {
+        0
+    } else if inner < 34 {
+        4
+    } else {
+        GUTTER_W
+    }
+}
+
+/// Narrowest panel that spends any columns on pictures.
+pub const GUTTER_MIN_PANEL_W: u16 = 28;
+
+/// Rows the trainer header always takes: the two trainer lines and the badge
+/// row. No section rule — the header is the top of the panel and a label
+/// saying so would be a row spent restating the border's own title.
+pub const HEADER_ROWS: u16 = 3;
+
+/// Rows of text that must survive before *any* picture is allowed one. The
+/// party is the point; the pictures are the decoration.
 const MIN_BODY_ROWS: u16 = 6;
-
-/// Rows the opposing trainer's team strip takes when it is drawn as pictures.
-/// Three rows of a 6:1 strip is about the smallest a Pokémon stays recognisable
-/// at, and it is what the panel can spare.
-pub const TEAM_ROWS: u16 = 3;
-
-/// Narrowest panel that gets the team strip as pictures rather than as markers.
-/// Below this each Pokémon would be under four cells wide, which is a smudge.
-pub const TEAM_MIN_W: u16 = 30;
 
 fn dim() -> Style {
     Style::default().fg(Color::DarkGray)
@@ -146,89 +272,41 @@ fn dim() -> Style {
 
 /// Where the panel's pieces go inside its rectangle.
 ///
-/// Everything except [`frame`](PanelLayout::frame) is *inside* the border, so
-/// the panel reads as one object rather than as two stacked boxes.
+/// Deliberately only three: a header, one body of text, and a **gutter width**
+/// reserved on the body's left for pictures. The pictures are not rectangles
+/// in this struct because they do not have rows of their own — a sprite spans
+/// exactly the rows the text beside it already needed
+/// ([`PanelLayout::gutter_rect`] cuts one out on demand). That is the whole
+/// reason six party pictures are affordable where one large one was not: they
+/// cost columns, never rows.
 pub struct PanelLayout {
     /// The single bordered block, drawn over the whole panel rectangle.
     pub frame: Rect,
-    /// The trainer header: name, ID, money, play time, badges.
+    /// The trainer header: name, ID, money, play time, badges, next gym.
     pub header: Rect,
-    /// The picture of the focused Pokémon. Empty (`height == 0`) when there is
-    /// no room for it — the text must still be readable on a short terminal.
-    pub sprite: Rect,
-    /// The opposing trainer's team, as a single wide strip image. Empty
-    /// (`height == 0`) for a wild encounter, on a narrow or short panel, or
-    /// when the roster did not read back — in which case the `[ OPPONENT ]`
-    /// section carries the markers instead.
-    pub team: Rect,
-    /// The party list, or the detail view.
+    /// Everything else, as one paragraph. Composed lines are already indented
+    /// past [`PanelLayout::gutter`], so text and picture never share a cell.
     pub body: Rect,
-}
-
-/// Split the panel rectangle. Never returns overlapping rectangles, and never
-/// returns a sprite area that the text would be drawn over.
-pub fn layout(area: Rect, want_sprite: bool) -> PanelLayout {
-    layout_with_team(area, want_sprite, false, MIN_BODY_ROWS)
-}
-
-/// [`layout`] plus the opposing trainer's team strip.
-///
-/// `body_rows` is how many rows of text the body actually wants — the caller
-/// has already composed them, so it costs nothing to ask. **Both pictures are
-/// granted space only if the text still fits after them.** That is what stops a
-/// battle, whose `[ OPPONENT ]` block is a dozen rows on its own, from pushing
-/// the party off the bottom: the picture is the decoration and it goes first,
-/// then the team strip, and the numbers stay.
-///
-/// The strip is **progressive and the last thing in**: it also needs at least
-/// [`TEAM_MIN_W`] columns. Where it does not fit, the roster is still reported
-/// — as markers on a single line inside `[ OPPONENT ]`.
-pub fn layout_with_team(
-    area: Rect,
-    want_sprite: bool,
-    want_team: bool,
-    body_rows: u16,
-) -> PanelLayout {
-    // Inside the border. A panel too small to have an interior gets zero-sized
-    // pieces rather than rectangles that escape it.
-    let inner = Rect::new(
-        area.x + 1,
-        area.y + 1,
-        area.width.saturating_sub(2),
-        area.height.saturating_sub(2),
-    );
-    let header_h = HEADER_ROWS.min(inner.height);
-    let rest_h = inner.height.saturating_sub(header_h);
-    // The sprite is the first thing to lose when the terminal is short.
-    let need = body_rows.max(MIN_BODY_ROWS);
-    let want_rows = sprite_rows(inner.width);
-    let sprite_h = if want_sprite && rest_h >= want_rows + need {
-        want_rows
-    } else {
-        0
-    };
-    let after_sprite = rest_h.saturating_sub(sprite_h);
-    let team_h =
-        if want_team && inner.width >= TEAM_MIN_W && after_sprite >= TEAM_ROWS + need {
-            TEAM_ROWS
-        } else {
-            0
-        };
-    PanelLayout {
-        frame: area,
-        header: Rect::new(inner.x, inner.y, inner.width, header_h),
-        sprite: Rect::new(inner.x, inner.y + header_h, inner.width, sprite_h),
-        team: Rect::new(inner.x, inner.y + header_h + sprite_h, inner.width, team_h),
-        body: Rect::new(
-            inner.x,
-            inner.y + header_h + sprite_h + team_h,
-            inner.width,
-            after_sprite.saturating_sub(team_h),
-        ),
-    }
+    /// Columns reserved on the left of [`body`](PanelLayout::body) for the
+    /// sprite gutters. Zero on a panel too narrow to spend them, or in a
+    /// terminal that cannot draw a picture at all.
+    pub gutter: u16,
 }
 
 impl PanelLayout {
+    /// The rectangle a picture occupies: `rows` rows of gutter, starting
+    /// `row` rows into the body.
+    ///
+    /// `None` when there is no gutter, or when the rows asked for have fallen
+    /// off the bottom of the body — a picture whose text has been clipped away
+    /// must go with it rather than hang over the next section.
+    pub fn gutter_rect(&self, row: u16, rows: u16) -> Option<Rect> {
+        if self.gutter == 0 || rows == 0 || row + rows > self.body.height {
+            return None;
+        }
+        Some(Rect::new(self.body.x, self.body.y + row, self.gutter, rows))
+    }
+
     /// Shrink the panel to the rows it actually uses and **centre it
     /// vertically** in `area`, so it sits at the same height as the game
     /// picture beside it rather than starting at the ceiling.
@@ -239,11 +317,6 @@ impl PanelLayout {
     /// panel jammed to the top of the other, and a different-sized gap under
     /// each. Centring both makes them one composition.
     ///
-    /// **The whole block moves; nothing is re-decided.** The sprite and team
-    /// bands were granted against the full column, so translating the finished
-    /// layout cannot make either of them vanish — which re-running the split on
-    /// a shorter rectangle could.
-    ///
     /// When the content is taller than the column there is no slack to
     /// distribute, and the panel stays exactly where it was: full height and
     /// top-aligned, so what falls off is the **bottom**. Centring an
@@ -251,21 +324,68 @@ impl PanelLayout {
     /// the part that says whose panel this is.
     pub fn centre_in(self, area: Rect, body_rows: u16) -> PanelLayout {
         let content = body_rows.min(self.body.height);
-        let used =
-            2 + self.header.height + self.sprite.height + self.team.height + content;
+        let used = 2 + self.header.height + content;
         if used >= area.height {
             return self;
         }
         let dy = (area.height - used) / 2;
-        let shift = |r: Rect| Rect::new(r.x, r.y + dy, r.width, r.height);
         PanelLayout {
             frame: Rect::new(area.x, area.y + dy, area.width, used),
-            header: shift(self.header),
-            sprite: shift(self.sprite),
-            team: shift(self.team),
+            header: Rect::new(
+                self.header.x,
+                self.header.y + dy,
+                self.header.width,
+                self.header.height,
+            ),
             body: Rect::new(self.body.x, self.body.y + dy, self.body.width, content),
+            gutter: self.gutter,
         }
     }
+}
+
+/// Split the panel rectangle.
+///
+/// `pictures` is what this terminal can draw — see [`Pictures`], which owns
+/// the sizing. It only ever changes the gutter's *width*; it never moves a
+/// row, so a panel with pictures and one without lay their text out
+/// identically apart from the indent.
+pub fn layout(area: Rect, pictures: Pictures) -> PanelLayout {
+    // Inside the border. A panel too small to have an interior gets zero-sized
+    // pieces rather than rectangles that escape it.
+    let inner = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let header_h = HEADER_ROWS.min(inner.height);
+    let body_h = inner.height.saturating_sub(header_h);
+    let gutter = if body_h >= MIN_BODY_ROWS {
+        pictures.gutter(inner.width)
+    } else {
+        0
+    };
+    PanelLayout {
+        frame: area,
+        header: Rect::new(inner.x, inner.y, inner.width, header_h),
+        body: Rect::new(inner.x, inner.y + header_h, inner.width, body_h),
+        gutter,
+    }
+}
+
+/// [`layout`], with the gutter withdrawn when the composed body did not ask
+/// for one.
+///
+/// The party's pictures need two rows per slot; when the panel is too short
+/// for that the party collapses to one line each and the gutter goes with it,
+/// because a one-row sprite is sixteen device pixels of smudge. Passing the
+/// composed body back in is what lets that decision be made once, by the code
+/// that already knows which tier it chose, rather than guessed at twice.
+pub fn layout_with_pictures(area: Rect, body: &Body) -> PanelLayout {
+    let mut l = layout(area, body.pictures);
+    // The composer already decided; the layout only places what it asked for.
+    l.gutter = body.gutter;
+    l
 }
 
 /// The panel's single frame.
@@ -282,66 +402,22 @@ pub fn body_block(title: &str) -> Block<'_> {
     panel_block(title)
 }
 
-/// Clip a composed line to `width`, span by span, keeping the styling of what
-/// survives.
-///
-/// Every section already sizes its own columns, so at any width a person would
-/// actually use this changes nothing. It is a **net**, for the widths nobody
-/// designed for — a 12-column panel, a detail view whose species name is longer
-/// than the box — where the alternative is a line that bleeds into the border
-/// and corrupts the frame. `no_line_overflows_at_any_width` is what proves the
-/// net is never load-bearing at a realistic width, because it renders the
-/// sections directly.
-pub fn clamp_line<'a>(l: Line<'a>, width: usize) -> Line<'a> {
-    if line_width(&l) <= width {
-        return l;
-    }
-    let mut used = 0usize;
-    let mut out: Vec<Span<'a>> = Vec::with_capacity(l.spans.len());
-    for s in l.spans {
-        if used >= width {
-            break;
-        }
-        let room = width - used;
-        let n = s.content.chars().count();
-        if n <= room {
-            used += n;
-            out.push(s);
-        } else {
-            let text: String = s.content.chars().take(room).collect();
-            used = width;
-            out.push(Span::styled(text, s.style));
-        }
-    }
-    Line::from(out)
+/// Clip a composed line to `width`. See [`panel::clamp_line`].
+pub fn clamp_line(l: Line<'_>, width: usize) -> Line<'_> {
+    panel::clamp_line(l, width)
 }
 
-/// A centred section rule: `───── [ PARTY ] ─────`.
-///
-/// The bracketed title is what gives the panel its structure; when there is not
-/// room for the rule the title still survives, because losing the label is
-/// worse than losing the decoration.
+/// A left-anchored section rule. See [`panel::rule`].
 pub fn rule<'a>(title: &str, width: usize) -> Line<'a> {
-    let deco = format!("[ {title} ]");
-    let n = deco.chars().count();
-    let title_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-    if width < n {
-        // Narrower than the label: keep as much of the label as fits.
-        return Line::from(Span::styled(clip(&deco, width), title_style));
-    }
-    let left = (width - n) / 2;
-    let right = width - n - left;
-    Line::from(vec![
-        Span::styled("─".repeat(left), dim()),
-        Span::styled(deco, title_style),
-        Span::styled("─".repeat(right), dim()),
-    ])
+    panel::rule(title, width)
 }
 
-/// A plain full-width separator, used before the summary lines so they read as
-/// a footnote rather than as more party.
+/// A left-anchored section rule with a right-aligned annotation.
+pub fn rule_with<'a>(title: &str, note: &str, width: usize) -> Line<'a> {
+    panel::rule_with(title, Some(note), width)
+}
+
+/// A plain full-width separator, used where a section break needs no name.
 pub fn separator<'a>(width: usize) -> Line<'a> {
     Line::from(Span::styled("─".repeat(width), dim()))
 }
@@ -397,7 +473,10 @@ fn fields_line<'a>(mut fields: Vec<Field>, width: usize) -> Line<'a> {
             if used + 3 > width {
                 break;
             }
-            spans.push(Span::styled(" │ ", dim()));
+            // A middle dot rather than a bar: with most of these fields now
+            // unlabelled, a full-height rule between them reads as a table
+            // border and makes the header the heaviest thing on the panel.
+            spans.push(Span::styled(" · ", panel::label()));
             used += 3;
         }
         let label = f.prefix();
@@ -411,44 +490,22 @@ fn fields_line<'a>(mut fields: Vec<Field>, width: usize) -> Line<'a> {
         }
         let value = clip(&f.value, width - used);
         used += value.chars().count();
-        spans.push(Span::raw(value));
+        spans.push(Span::styled(value, panel::value()));
     }
     Line::from(spans)
 }
 
-/// HP colour by remaining fraction. Three bands, because more than three is
-/// noise at a glance.
+/// HP colour by remaining fraction. See [`panel::hp_color`].
 pub fn hp_color(fraction: f32) -> Color {
-    if fraction <= 0.2 {
-        Color::Red
-    } else if fraction <= 0.5 {
-        Color::Yellow
-    } else {
-        Color::Green
-    }
+    panel::hp_color(fraction)
 }
 
-/// A fixed-width HP bar. Always renders `width` cells so rows stay aligned —
-/// alignment is most of what makes a column of numbers readable at speed.
+/// A fixed-width HP bar. See [`panel::bar`], which owns the rule that a
+/// survivor never renders as an empty bar.
 pub fn hp_bar(fraction: f32, width: usize) -> String {
-    let filled = (fraction * width as f32).round() as usize;
-    let filled = filled.min(width);
-    // A Pokémon on 1 HP must not render as an empty bar; that is the one case
-    // where the bar and the number would disagree.
-    // …but a zero-width bar is still zero cells: a panel too narrow for a bar
-    // asks for none, and `max(1)` there would underflow the padding below.
-    let filled = if fraction > 0.0 {
-        filled.max(1).min(width)
-    } else {
-        0
-    };
-    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
+    panel::bar(fraction, width)
 }
 
-/// The trainer header: two field lines and the badge row, under their rules.
-///
-/// Exactly [`HEADER_ROWS`] lines whatever the width, so the sprite below it
-/// never moves.
 /// The cable, as one line for the top of the trainer panel.
 ///
 /// The panel is what a player actually watches, and the question it has to
@@ -489,11 +546,13 @@ pub fn header_lines<'a>(state: &TrainerState, game: &str, width: usize) -> Vec<L
 fn header_rows<'a>(state: &TrainerState, game: &str, width: usize) -> Vec<Line<'a>> {
     let (h, m, s) = state.play_time;
     vec![
-        rule("TRAINER", width),
+        // The trainer's name is the value, not a labelled field: it is the
+        // only string on the row that is not self-describing, and `NAME `
+        // spent five of thirty-eight columns saying so.
         fields_line(
             vec![
                 Field {
-                    label: "NAME",
+                    label: "",
                     value: state.player_name.clone(),
                     drop: 0,
                 },
@@ -506,7 +565,7 @@ fn header_rows<'a>(state: &TrainerState, game: &str, width: usize) -> Vec<Line<'
                 },
                 Field {
                     label: "",
-                    value: format!("¥{}", thousands(state.money)),
+                    value: format!("\u{a5}{}", thousands(state.money)),
                     drop: 1,
                 },
             ],
@@ -515,8 +574,8 @@ fn header_rows<'a>(state: &TrainerState, game: &str, width: usize) -> Vec<Line<'
         fields_line(
             vec![
                 Field {
-                    label: "TIME",
-                    value: format!("{h:02}:{m:02}:{s:02}"),
+                    label: "",
+                    value: format!("{h}:{m:02}:{s:02}"),
                     drop: 0,
                 },
                 Field {
@@ -527,7 +586,6 @@ fn header_rows<'a>(state: &TrainerState, game: &str, width: usize) -> Vec<Line<'
             ],
             width,
         ),
-        rule("BADGES", width),
         badge_row(state, width),
     ]
 }
@@ -544,24 +602,47 @@ pub fn badge_row<'a>(state: &TrainerState, width: usize) -> Line<'a> {
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
 
+    // **The next gym rides on this row rather than in a footer of its own.**
+    // It used to cost two rows at the bottom of the panel — a `BADGES` list
+    // that restated these very markers, and a `NEXT` line — and it is the one
+    // part of that footer a run acts on. The names of the badges already held
+    // went with the footer: the markers say how many and which, in order.
+    let next = BADGE_LEADERS
+        .iter()
+        .zip(flags)
+        .find(|(_, g)| !*g)
+        .map(|(n, _)| *n);
+    // Two forms, because on a narrow panel the *leader's name* is the fact and
+    // the word "next" is not.
+    let (tail, short) = match next {
+        Some(leader) => (format!("  next {leader}"), format!("  \u{2192}{leader}")),
+        None => ("  all eight".to_string(), "  8/8".to_string()),
+    };
+
     // `[●][●][●][●] [●][●][●][●]  n/8`
     let bracketed = 8 * 3 + 1 + 2 + count.chars().count();
     // `●●●● ●●●●  n/8`
     let bare = 8 + 1 + 2 + count.chars().count();
+    let tail_w = tail.chars().count();
+    // **The brackets are the first thing to go, not the next gym.** They are
+    // decoration around markers that already differ in glyph *and* colour, and
+    // thirteen columns of them is exactly what stops the actionable half of
+    // the old footer fitting on this row at the design width.
+    let boxed = width >= bracketed + tail_w;
 
     let mut spans = Vec::new();
-    if width >= bracketed {
+    if boxed {
         for (i, &on) in flags.iter().enumerate() {
             if i == 4 {
                 spans.push(Span::raw(" "));
             }
-            spans.push(Span::styled("[", dim()));
+            spans.push(Span::styled("[", panel::label()));
             spans.push(if on {
                 Span::styled("●", got)
             } else {
-                Span::styled("○", dim())
+                Span::styled("○", panel::label())
             });
-            spans.push(Span::styled("]", dim()));
+            spans.push(Span::styled("]", panel::label()));
         }
     } else if width >= bare {
         for (i, &on) in flags.iter().enumerate() {
@@ -571,14 +652,21 @@ pub fn badge_row<'a>(state: &TrainerState, width: usize) -> Line<'a> {
             spans.push(if on {
                 Span::styled("●", got)
             } else {
-                Span::styled("○", dim())
+                Span::styled("○", panel::label())
             });
         }
     } else {
         // No room for markers at all: the count is the part that cannot go.
         return Line::from(Span::styled(clip(&count, width), got));
     }
-    spans.push(Span::styled(format!("  {count}"), dim()));
+    spans.push(Span::styled(format!("  {count}"), panel::label()));
+    let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let style = if next.is_some() { panel::label() } else { got };
+    if used + tail_w <= width {
+        spans.push(Span::styled(tail, style));
+    } else if used + short.chars().count() <= width {
+        spans.push(Span::styled(short, style));
+    }
     Line::from(spans)
 }
 
@@ -711,21 +799,25 @@ pub fn party_cols(width: usize) -> PartyCols {
             ty: third.min(16),
         };
     }
-    if width >= 34 {
+    // The thresholds are the width **left of the sprite gutter**, not the
+    // panel's: the gutter takes its columns before the party row is laid out,
+    // so a 40-column panel lays its rows out for 33 and the top tier has to
+    // start below that or the design width would fall into the tier under it.
+    if width >= 32 {
         PartyCols {
             nick: 10,
             bar: 8,
             status: true,
             ty: 12,
         }
-    } else if width >= 28 {
+    } else if width >= 27 {
         PartyCols {
             nick: 8,
             bar: 5,
             status: true,
             ty: 8,
         }
-    } else if width >= 22 {
+    } else if width >= 21 {
         PartyCols {
             nick: 7,
             bar: 3,
@@ -759,8 +851,8 @@ fn party_head<'a>(
     let nick = c.nick.min(width.saturating_sub(3));
     // One gutter cell, two meanings that never both apply to the reader at
     // once: `▸` is what `d` will open, `▌` is the Pokémon currently in the
-    // fight. Focus wins the cell, because the slot row above underlines the
-    // active one anyway.
+    // fight. Focus wins the cell, because the picture beside it is the
+    // focused one too.
     let gutter = if selected {
         "▸"
     } else if active {
@@ -772,7 +864,7 @@ fn party_head<'a>(
         Span::styled(
             format!("{gutter}{} ", i + 1),
             if active {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(panel::ink::ACCENT)
             } else {
                 dim()
             },
@@ -790,14 +882,11 @@ fn party_head<'a>(
     if used + 4 > width {
         return Line::from(spans);
     }
-    spans.push(Span::raw(format!(" L{:>3}", m.level)));
+    spans.push(Span::styled(format!(" L{:>3}", m.level), panel::value()));
     used += 4;
     if c.bar > 0 && used + 1 + c.bar <= width {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            hp_bar(frac, c.bar),
-            Style::default().fg(hp_color(frac)),
-        ));
+        spans.push(panel::hp_bar_span(frac, c.bar));
         used += 1 + c.bar;
     }
     if c.status && used + 4 <= width {
@@ -805,14 +894,21 @@ fn party_head<'a>(
             .status
             .label()
             .unwrap_or(if m.is_fainted() { "FNT" } else { "" });
+        // Coloured by *which* status, not by "something is wrong": a burn, a
+        // paralysis and a sleep each want a different decision, and the panel
+        // can say which before the word has been read.
         spans.push(Span::styled(
             format!(" {label:<3}"),
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(panel::status_color(label)),
         ));
         used += 4;
     }
     if m.would_be_shiny() && used < width {
-        spans.push(Span::styled("★", Style::default().fg(Color::LightYellow)));
+        // A space before it where there is room: `PSN★` reads as one token,
+        // and the star is the loudest thing on the row precisely because it
+        // is separate from everything else.
+        let mark = if used + 2 <= width { " ★" } else { "★" };
+        spans.push(Span::styled(mark, Style::default().fg(panel::ink::SHINY)));
     }
     Line::from(spans)
 }
@@ -830,43 +926,299 @@ fn party_body<'a>(m: &Mon, c: PartyCols, width: usize) -> Line<'a> {
     used += 8;
     if c.ty > 0 && used + 1 < width {
         let room = c.ty.min(width - used - 1);
-        spans.push(Span::styled(
-            format!(" {}", type_text(m, room)),
-            Style::default().fg(Color::Cyan),
-        ));
+        spans.push(Span::raw(" "));
+        spans.extend(type_spans(m, room));
     }
     Line::from(spans)
 }
 
-/// The party list. Two lines per Pokémon; `compact` collapses that to one,
-/// which is what a battle uses so the opponent block cannot push the team off
-/// the bottom of the panel.
+/// A Pokémon's type or types, **each in its own colour**, fitted to `max`
+/// columns.
+///
+/// Two spans rather than one string because a dual type is two facts: colouring
+/// `GRASS/POISON` uniformly says "this is a type label", colouring each half
+/// says which two. Falls back to three-letter abbreviations, which stay
+/// readable where a truncation (`GRASS/POI…`) does not — and the abbreviations
+/// keep their colours, because the colour matters most exactly where the text
+/// had to be shortened.
+fn type_spans<'a>(m: &Mon, max: usize) -> Vec<Span<'a>> {
+    let (a, b) = (m.types.0.clone(), m.types.1.clone());
+    let dual = !b.is_empty() && a != b;
+    let full = if dual { format!("{a}/{b}") } else { a.clone() };
+    let short = |t: &str| -> String { t.chars().take(3).collect() };
+    let (a, b) = if full.chars().count() <= max {
+        (a, b)
+    } else {
+        (short(&a), short(&b))
+    };
+    if !dual {
+        return vec![Span::styled(
+            clip(&a, max),
+            Style::default().fg(panel::type_color(&a)),
+        )];
+    }
+    let joined = format!("{a}/{b}");
+    if joined.chars().count() > max {
+        // Not even the abbreviations fit: keep the first type whole rather
+        // than half of each.
+        return vec![Span::styled(
+            clip(&a, max),
+            Style::default().fg(panel::type_color(&a)),
+        )];
+    }
+    vec![
+        Span::styled(a.clone(), Style::default().fg(panel::type_color(&a))),
+        Span::styled("/", dim()),
+        Span::styled(b.clone(), Style::default().fg(panel::type_color(&b))),
+    ]
+}
+
+/// The party list: one entry per Pokémon, indented past the sprite gutter.
+///
+/// `compact` collapses the two lines to one, which is the tier a short panel
+/// takes — and with one row a slot the gutter goes too, because a one-row
+/// sprite is a smudge. `gutter` is the indent, already decided by the layout.
 pub fn party_lines<'a>(
     state: &TrainerState,
     selected: Option<usize>,
     width: usize,
     compact: bool,
 ) -> Vec<Line<'a>> {
+    party_lines_indented(state, selected, width, compact, 0)
+}
+
+/// [`party_lines`] with an explicit gutter indent.
+pub fn party_lines_indented<'a>(
+    state: &TrainerState,
+    selected: Option<usize>,
+    width: usize,
+    compact: bool,
+    gutter: usize,
+) -> Vec<Line<'a>> {
     if state.party.is_empty() {
         return vec![Line::from(Span::styled("  no Pokémon yet", dim()))];
     }
-    let c = party_cols(width);
+    // The text lives to the right of the gutter, so it is laid out for the
+    // columns it actually has.
+    let gutter = text_indent(gutter);
+    let text_w = width.saturating_sub(gutter);
+    let c = party_cols(text_w);
     let active = active_slot(state);
     let mut lines = Vec::new();
     for (i, m) in state.party.iter().enumerate() {
-        lines.push(party_head(
-            i,
-            m,
-            selected == Some(i),
-            active == Some(i),
-            c,
-            width,
+        lines.push(indent(
+            party_head(i, m, selected == Some(i), active == Some(i), c, text_w),
+            gutter,
         ));
         if !compact {
-            lines.push(party_body(m, c, width));
+            lines.push(indent(party_body(m, c, text_w), gutter));
         }
     }
     lines
+}
+
+/// Columns of text indent a `g`-column picture gutter costs.
+///
+/// One more than the picture, so a sprite and the word beside it are not
+/// touching. The gutter *rectangle* stays `g` wide — the extra column is
+/// blank text, not picture — which is what keeps the "text and the picture
+/// never share a cell" rule true with room to spare.
+pub fn text_indent(g: usize) -> usize {
+    if g == 0 {
+        0
+    } else {
+        g + 1
+    }
+}
+
+/// Indent every line of `beside` past a `g`-column gutter and **pad it to
+/// `rows`**, so a picture of exactly `rows` rows can be placed over it.
+///
+/// The padding is the load-bearing half. A half-block picture needs twice the
+/// rows of an image one to be legible, so it can want more rows than the
+/// identity lines beside it have — and without padding it would reach down
+/// into whatever comes next, which is a *table*. A moves table whose header is
+/// indented and whose rows are not is a legend that lies about its own
+/// columns; it was drawn exactly once, in a screenshot, and this is the fix.
+///
+/// A blank row beside a picture is not waste: it **is** the picture.
+fn indent_beside(beside: &mut Vec<Line<'_>>, g: usize, rows: usize) {
+    if g == 0 || rows == 0 {
+        return;
+    }
+    let pad = " ".repeat(text_indent(g));
+    for l in beside.iter_mut().take(rows) {
+        let taken = std::mem::take(&mut l.spans);
+        let mut spans = Vec::with_capacity(taken.len() + 1);
+        spans.push(Span::raw(pad.clone()));
+        spans.extend(taken);
+        l.spans = spans;
+    }
+    // Pad rather than let the picture reach the row below. Only ever needed
+    // for the half-block picture, which is the taller of the two.
+    while beside.len() < rows {
+        beside.push(Line::from(Span::raw(pad.clone())));
+    }
+}
+
+/// The width a block's row `i` has, given a picture covering its first `rows`
+/// rows of a `g`-column gutter.
+///
+/// A row the picture covers is laid out for what is left of the panel; a row
+/// below it gets the whole panel back. Getting this wrong is not cosmetic —
+/// it is how the opponent's DV legend came to be measured against columns the
+/// picture had already taken, and then clipped mid-word.
+fn row_width(i: usize, rows: usize, g: usize, width: usize) -> usize {
+    if i < rows {
+        width.saturating_sub(text_indent(g))
+    } else {
+        width
+    }
+}
+
+/// Push a composed line right by `n` blank columns, so the sprite gutter's
+/// cells stay empty and a picture placed over them shares nothing with text.
+fn indent(l: Line<'_>, n: usize) -> Line<'_> {
+    if n == 0 {
+        return l;
+    }
+    let mut spans = Vec::with_capacity(l.spans.len() + 1);
+    spans.push(Span::raw(" ".repeat(n)));
+    spans.extend(l.spans);
+    Line::from(spans)
+}
+
+/// The column widths the moves table uses, in three tiers.
+///
+/// The order of sacrifice is what a turn is *not* decided on: accuracy goes
+/// first (most Gen 1 moves are 100 %, and the exceptions are memorable), then
+/// the type column shortens to three letters, then power goes, and the name
+/// and PP are what is left — because a move you cannot afford to use is the
+/// one fact that stops the turn dead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MoveCols {
+    pub name: usize,
+    /// Type column; 0 for no type at all.
+    pub ty: usize,
+    /// Whether the `POW` column is drawn.
+    pub power: bool,
+    /// Whether the `ACC` column is drawn.
+    pub accuracy: bool,
+}
+
+impl MoveCols {
+    /// The header row this tier's columns line up under. It is a legend as
+    /// well as a label, which is what makes it worth the row that
+    /// `[ MOVES ]` was not.
+    pub fn head<'a>(self) -> Line<'a> {
+        let mut cells = vec![
+            ("MOVE", self.name, panel::Align::Left),
+            ("PP", 5, panel::Align::Right),
+        ];
+        if self.ty > 0 {
+            cells.insert(1, ("TYPE", self.ty, panel::Align::Left));
+        }
+        if self.power {
+            cells.push(("POW", 3, panel::Align::Right));
+        }
+        if self.accuracy {
+            cells.push(("ACC", 3, panel::Align::Right));
+        }
+        panel::table_head(&cells)
+    }
+}
+
+pub fn move_cols(width: usize) -> MoveCols {
+    if width >= 34 {
+        MoveCols {
+            name: width - 24,
+            ty: 8,
+            power: true,
+            accuracy: true,
+        }
+    } else if width >= 26 {
+        MoveCols {
+            name: width - 16,
+            ty: 4,
+            power: true,
+            accuracy: false,
+        }
+    } else if width >= 18 {
+        MoveCols {
+            name: width - 6,
+            ty: 0,
+            power: false,
+            accuracy: false,
+        }
+    } else {
+        MoveCols {
+            name: width,
+            ty: 0,
+            power: false,
+            accuracy: false,
+        }
+    }
+}
+
+/// One row of the moves table.
+///
+/// **A zero-power move gets a dash, never a `0` and never the unknown glyph.**
+/// A status move genuinely does no direct damage; printing `0` invites the
+/// reader to compare it against a 40 as if they were the same kind of number,
+/// and printing `?` claims we could not read it.
+fn move_row<'a>(mv: &MoveSlot, c: MoveCols) -> Line<'a> {
+    let out_of_pp = mv.pp == 0;
+    let low_pp = !out_of_pp && mv.pp_max > 0 && mv.pp * 4 <= mv.pp_max;
+    let mut spans = vec![Span::styled(
+        panel::Align::Left.fit(&mv.name, c.name),
+        if out_of_pp { dim() } else { panel::value() },
+    )];
+    if c.ty > 0 {
+        spans.push(Span::raw(" "));
+        let t = if mv.type_name.chars().count() > c.ty {
+            mv.type_name.chars().take(c.ty).collect::<String>()
+        } else {
+            mv.type_name.clone()
+        };
+        spans.push(Span::styled(
+            panel::Align::Left.fit(&t, c.ty),
+            Style::default().fg(panel::type_color(&mv.type_name)),
+        ));
+    }
+    spans.push(Span::styled(
+        format!(" {:>2}/{:<2}", mv.pp, mv.pp_max),
+        Style::default().fg(if out_of_pp {
+            panel::ink::BAD
+        } else if low_pp {
+            panel::ink::WARN
+        } else {
+            panel::ink::VALUE
+        }),
+    ));
+    if c.power {
+        spans.push(Span::styled(
+            format!(
+                " {:>3}",
+                if mv.power == 0 {
+                    "—".to_string()
+                } else {
+                    mv.power.to_string()
+                }
+            ),
+            if mv.power == 0 { dim() } else { panel::value() },
+        ));
+    }
+    if c.accuracy {
+        spans.push(Span::styled(
+            format!(" {:>3}", mv.accuracy),
+            if mv.accuracy >= 100 {
+                dim()
+            } else {
+                Style::default().fg(panel::ink::WARN)
+            },
+        ));
+    }
+    Line::from(spans)
 }
 
 /// The detail view for one Pokémon: everything the game keeps to itself.
@@ -875,15 +1227,31 @@ pub fn party_lines<'a>(
 /// from the picture is exactly the bug this replaced: during a battle the
 /// sprite and the numbers can legitimately be different Pokémon, so the block
 /// has to say which one it is describing.
+///
+/// `gutter` is the indent its own picture takes; the first [`FOCUS_ROWS`] rows
+/// after the rule leave it blank.
 pub fn detail_lines<'a>(
     m: &Mon,
     opponent: bool,
     mods: Option<terminalgb_plugin_trainer::derived::StatMods>,
     width: usize,
 ) -> Vec<Line<'a>> {
+    detail_lines_indented(m, opponent, mods, width, 0, 0)
+}
+
+/// [`detail_lines`] with an explicit gutter indent for its picture.
+pub fn detail_lines_indented<'a>(
+    m: &Mon,
+    opponent: bool,
+    mods: Option<terminalgb_plugin_trainer::derived::StatMods>,
+    width: usize,
+    gutter: usize,
+    gutter_rows: usize,
+) -> Vec<Line<'a>> {
     let frac = m.hp_fraction();
     let hp = m.hidden_power();
-    let bar = 12.min(width.saturating_sub(14));
+    let text_w = width.saturating_sub(text_indent(gutter));
+    let bar = 12.min(text_w.saturating_sub(14));
     // A wild Pokémon's "nickname" is its species name, and an opponent may
     // have none at all — an empty bold field followed by `(CHARMANDER)` reads
     // as a missing value rather than as an absent one.
@@ -892,124 +1260,149 @@ pub fn detail_lines<'a>(
     } else {
         (m.nickname.clone(), format!("({})", m.name))
     };
-    let mut lines = vec![
-        rule(
-            if opponent {
-                "OPPONENT"
+    let mut lines = vec![panel::rule(
+        if opponent {
+            "OPPONENT"
+        } else {
+            "YOUR POKéMON"
+        },
+        width,
+    )];
+    // Everything beside the picture; padded to its height by `indent_beside`.
+    let mut beside: Vec<Line<'a>> = Vec::new();
+
+    // --- the identity, beside the picture -----------------------------------
+    let mut ident = vec![Span::styled(
+        format!("{} ", clip(&title, text_w.saturating_sub(8))),
+        Style::default()
+            .fg(if opponent {
+                panel::ink::FOE
             } else {
-                "YOUR POKéMON"
-            },
-            width,
-        ),
-        Line::from(vec![
-            Span::styled(
-                format!("{} ", clip(&title, width.saturating_sub(4))),
-                Style::default()
-                    .fg(if opponent { Color::Red } else { Color::Reset })
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(sub, dim()),
-        ]),
-        Line::from(vec![
-            Span::raw(format!("#{:03}  L{:<4}", m.dex, m.level)),
-            Span::styled(m.type_label(), Style::default().fg(Color::Cyan)),
-        ]),
-        Line::from(vec![
-            Span::raw("HP  "),
-            Span::styled(hp_bar(frac, bar), Style::default().fg(hp_color(frac))),
-            Span::raw(format!(" {}/{}", m.hp, m.max_hp)),
-        ]),
-        stat_line(m.attack, m.defense, m.speed, m.special, width),
-    ];
-    if let Some(l) = stat_mod_line(mods.or(m.stat_mods), "MOD", width) {
-        lines.push(l);
+                panel::ink::VALUE
+            })
+            .add_modifier(Modifier::BOLD),
+    )];
+    ident.push(Span::styled(format!("L{}", m.level), panel::value()));
+    beside.push(Line::from(ident));
+
+    let mut second = vec![Span::styled(format!("#{:03} ", m.dex), dim())];
+    second.extend(type_spans(m, text_w.saturating_sub(6)));
+    if !sub.is_empty() {
+        second.push(Span::styled(format!(" {sub}"), dim()));
     }
-    lines.push(rule("MOVES", width));
+    beside.push(panel::clamp_line(Line::from(second), text_w));
+
+    beside.push(Line::from(vec![
+        Span::styled("HP ", panel::label()),
+        panel::hp_bar_span(frac, bar),
+        Span::styled(format!(" {}/{}", m.hp, m.max_hp), panel::value()),
+    ]));
+
+    let w = |i: usize| row_width(i, gutter_rows, gutter, width);
+    beside.push(stat_line(
+        m.attack,
+        m.defense,
+        m.speed,
+        m.special,
+        w(beside.len()),
+    ));
+    if let Some(l) = stat_mod_line(mods.or(m.stat_mods), "MOD", w(beside.len())) {
+        beside.push(l);
+    }
+    indent_beside(&mut beside, gutter, gutter_rows);
+    lines.append(&mut beside);
+
+    // --- and the rest, full width, below the picture ------------------------
+    let c = move_cols(width);
+    lines.push(c.head());
     for i in 0..4 {
         match m.moves.get(i) {
-            Some(mv) => lines.push(Line::from(vec![
-                Span::raw(pad(&mv.name, width.saturating_sub(9).min(14))),
-                Span::styled(
-                    format!(" {:>2}/{:<2}", mv.pp, mv.pp_max),
-                    Style::default().fg(if mv.pp == 0 {
-                        Color::Red
-                    } else {
-                        Color::Reset
-                    }),
-                ),
-                Span::styled(
-                    if mv.pp_ups > 0 {
-                        format!(" +{}", mv.pp_ups)
-                    } else {
-                        String::new()
-                    },
-                    dim(),
-                ),
-            ])),
+            Some(mv) => lines.push(move_row(mv, c)),
             // An empty move slot is genuinely empty, not unknown — so it gets a
             // dash rather than the unknown glyph.
             None => lines.push(Line::from(Span::styled("—", dim()))),
         }
     }
-    lines.push(rule("HIDDEN", width));
-    lines.push(Line::from(Span::raw(format!(
-        "DV {:>2}/{:>2}/{:>2}/{:>2}/{:>2}  {}/75",
-        m.dvs.hp(),
-        m.dvs.attack,
-        m.dvs.defense,
-        m.dvs.speed,
-        m.dvs.special,
-        m.dv_total()
-    ))));
-    // Stat experience runs to five digits, so five columns of it plus a label
-    // is 33 — one more than a 34-column panel has inside it. The label is what
-    // gives, not a digit; the column header is derived from the same label so
-    // the two cannot drift out of alignment.
-    let label = if width >= 33 { "EXP " } else { "E " };
-    lines.push(Line::from(Span::styled(
-        format!(
-            "{}{:>5} {:>5} {:>5} {:>5} {:>5}",
-            " ".repeat(label.len()),
-            "hp",
-            "atk",
-            "def",
-            "spd",
-            "spc"
+
+    lines.push(panel::rule("HIDDEN", width));
+    // **DVs and stat experience share one legend, so they share one set of
+    // columns.** Five numbers under `hp atk def spd spc` is one glance;
+    // `5/10/11/12/13` is counting on your fingers, and two rows of different
+    // widths under a single header is worse than either — the legend would be
+    // telling the truth about one of them and lying about the other.
+    //
+    // Stat experience runs to five digits, so five is the column width and the
+    // DVs (0-15) sit in it with room to spare. The label column is what gives
+    // when the panel is narrow, never a digit.
+    let lab = if width >= 34 { 4 } else { 2 };
+    lines.push(panel::table_head(&[
+        ("", lab, panel::Align::Left),
+        ("hp", 5, panel::Align::Right),
+        ("atk", 5, panel::Align::Right),
+        ("def", 5, panel::Align::Right),
+        ("spd", 5, panel::Align::Right),
+        ("spc", 5, panel::Align::Right),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(panel::Align::Left.fit("DV", lab), panel::label()),
+        Span::styled(
+            format!(
+                " {:>5} {:>5} {:>5} {:>5} {:>5}",
+                m.dvs.hp(),
+                m.dvs.attack,
+                m.dvs.defense,
+                m.dvs.speed,
+                m.dvs.special
+            ),
+            panel::value(),
         ),
-        dim(),
-    )));
-    match &m.stat_exp {
-        Some(e) => {
-            lines.push(Line::from(Span::raw(format!(
-                "{label}{:>5} {:>5} {:>5} {:>5} {:>5}",
-                e.hp, e.attack, e.defense, e.speed, e.special
-            ))));
+    ]));
+    // The running total is a nicety beside five numbers that are the point, so
+    // it is appended only where it fits whole — a clipped `51/7` is worse than
+    // no total at all.
+    if let Some(last) = lines.last_mut() {
+        let total = format!("  {}/75", m.dv_total());
+        if line_width(last) + total.chars().count() <= width {
+            last.spans.push(Span::styled(total, dim()));
         }
+    }
+    match &m.stat_exp {
+        Some(e) => lines.push(Line::from(vec![
+            Span::styled(panel::Align::Left.fit("EXP", lab), panel::label()),
+            Span::styled(
+                format!(
+                    " {:>5} {:>5} {:>5} {:>5} {:>5}",
+                    e.hp, e.attack, e.defense, e.speed, e.special
+                ),
+                panel::value(),
+            ),
+        ])),
         // The in-battle structure does not carry stat experience, so during a
         // battle this is unknown rather than zero.
         None => lines.push(Line::from(vec![
-            Span::raw("EXP "),
+            Span::styled(panel::Align::Left.fit("EXP", lab), panel::label()),
             Span::styled(
                 clip(
-                    &format!("{UNKNOWN} (not in the battle copy)"),
-                    width.saturating_sub(4),
+                    &format!(" {UNKNOWN} (not in the battle copy)"),
+                    width.saturating_sub(lab),
                 ),
                 dim(),
             ),
         ])),
     }
     lines.push(Line::from(vec![
-        Span::styled("HIDDEN POWER ", dim()),
+        Span::styled("HIDDEN POWER ", panel::label()),
         Span::styled(
-            format!("{} {}", hp.type_name, hp.power),
-            Style::default().fg(Color::Cyan),
+            hp.type_name.to_string(),
+            Style::default().fg(panel::type_color(hp.type_name)),
         ),
+        Span::styled(format!(" {}", hp.power), panel::value()),
     ]));
     lines.push(Line::from(if m.would_be_shiny() {
         Span::styled(
             "★ would be SHINY in Gen 2",
             Style::default()
-                .fg(Color::LightYellow)
+                .fg(panel::ink::SHINY)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
@@ -1154,47 +1547,84 @@ pub fn stat_mod_line<'a>(
     }
     let head = format!("{label:<4}");
     let mut used = head.chars().count();
-    let mut spans = vec![Span::styled(head, dim())];
+    let mut spans = vec![Span::styled(head, panel::label())];
     for (name, stage) in changed {
         let text = format!("{name}{stage:+}  ");
         if used + text.chars().count() > width {
             break;
         }
         used += text.chars().count();
+        // Colour AND sign: `+2` is green, `-1` is red, and either is legible
+        // with the colour thrown away. See `panel`'s redundancy rule.
         spans.push(Span::styled(
             text,
             Style::default()
-                .fg(if stage < 0 { Color::Red } else { Color::Green })
+                .fg(panel::stage_color(stage))
                 .add_modifier(Modifier::BOLD),
         ));
     }
     Some(Line::from(spans))
 }
 
-/// The four battle stats on one line, dropping to two labels per line if the
-/// panel cannot hold four.
+/// The four battle stats, tabulated: labels dim and fixed-width, values in
+/// columns that do not move as the numbers change.
+///
+/// Aligning them is most of what makes four numbers readable at a glance —
+/// `ATK 42   DEF 8    SPD 61` reads as a table, `ATK 42 DEF 8 SPD 61` reads as
+/// a sentence and has to be parsed.
 fn stat_line<'a>(atk: u16, def: u16, spd: u16, spc: u16, width: usize) -> Line<'a> {
-    let full = format!("ATK {atk:<4} DEF {def:<4} SPD {spd:<4} SPC {spc}");
-    if full.chars().count() <= width {
-        return Line::from(Span::raw(full));
+    let cells = [("ATK", atk), ("DEF", def), ("SPD", spd), ("SPC", spc)];
+    // `ATK 999 ` x 4 = 32; the last cell needs no trailing pad.
+    if width >= 31 {
+        let mut spans = Vec::with_capacity(8);
+        for (i, (l, v)) in cells.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(format!("{l} "), panel::label()));
+            spans.push(Span::styled(format!("{v:<3}"), panel::value()));
+        }
+        return Line::from(spans);
     }
-    Line::from(Span::raw(clip(
-        &format!("A{atk} D{def} S{spd} C{spc}"),
-        width,
-    )))
+    // Too narrow for four labelled cells: **two** letters each, still in
+    // columns. Not one — `SPD` and `SPC` both begin with `S`, so a
+    // single-letter tier prints `S55 S29` and the reader cannot tell which
+    // number is Speed. An ambiguous label is worse than a missing one, and
+    // this tier is only two columns cheaper than the full one.
+    let short = [("AT", atk), ("DF", def), ("SP", spd), ("SC", spc)];
+    let mut spans = Vec::with_capacity(8);
+    for (i, (l, v)) in short.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(format!("{l} "), panel::label()));
+        spans.push(Span::styled(format!("{v:<3}"), panel::value()));
+    }
+    panel::clamp_line(Line::from(spans), width)
 }
 
-/// The opponent section — its own `[ OPPONENT ]` block rather than an appended
-/// afterthought, because a battle is the moment the panel matters most.
+/// The opponent section — its own block, because a battle is the moment the
+/// panel matters most.
 ///
-/// It is drawn **above** the party (see [`body_lines`]) so it sits next to the
-/// sprite, which has already switched to the opponent; and the party below it
-/// collapses to one line each, so the team is still on screen. Nothing about
-/// the opponent is behind a key.
+/// It is drawn **above** the party (see [`body_lines`]) and gets the gutter's
+/// first [`FOCUS_ROWS`] rows for its own picture. The party below it collapses
+/// to one line each when the panel is short, so the team is still on screen.
+/// Nothing about the opponent is behind a key.
 pub fn opponent_lines<'a>(
     state: &TrainerState,
     focused: bool,
     width: usize,
+) -> Vec<Line<'a>> {
+    opponent_lines_indented(state, focused, width, 0, 0)
+}
+
+/// [`opponent_lines`] with an explicit gutter indent for its picture.
+pub fn opponent_lines_indented<'a>(
+    state: &TrainerState,
+    focused: bool,
+    width: usize,
+    gutter: usize,
+    gutter_rows: usize,
 ) -> Vec<Line<'a>> {
     let Some(o) = state.opponent.as_ref() else {
         return Vec::new();
@@ -1217,57 +1647,58 @@ pub fn opponent_lines<'a>(
         }
         BattleKind::None => return Vec::new(),
     };
-    let c = party_cols(width);
+    let text_w = width.saturating_sub(text_indent(gutter));
     let frac = o.hp_fraction();
-    let mut lines = vec![rule("OPPONENT", width)];
+    // Whose battle this is rides on the rule as its annotation, rather than
+    // costing a row of its own under the name.
+    let mut lines = vec![panel::rule_with("OPPONENT", Some(&kind), width)];
+    // Everything that sits **beside** the picture. Laid out for `text_w`, and
+    // padded to the picture's height by `indent_beside` so the table below can
+    // never be half-indented.
+    let mut beside: Vec<Line<'a>> = Vec::new();
 
-    let nick = (c.nick + 2).min(width.saturating_sub(1));
+    // --- the identity, beside the picture -----------------------------------
     let mut head = vec![
-        Span::styled(if focused { "▸" } else { " " }, dim()),
+        Span::styled(if focused { "▸" } else { " " }, panel::label()),
         Span::styled(
-            pad(&o.name, nick),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            clip(&o.name, text_w.saturating_sub(6)),
+            Style::default()
+                .fg(panel::ink::FOE)
+                .add_modifier(Modifier::BOLD),
         ),
+        Span::styled(format!(" L{}", o.level), panel::value()),
     ];
-    let mut used = 1 + nick;
-    if used + 4 <= width {
-        head.push(Span::raw(format!(" L{:>3}", o.level)));
-        used += 4;
-    }
-    if c.bar > 0 && used + 1 + c.bar <= width {
-        head.push(Span::raw(" "));
-        head.push(Span::styled(
-            hp_bar(frac, c.bar),
-            Style::default().fg(hp_color(frac)),
-        ));
-        used += 1 + c.bar;
-    }
     if let Some(s) = o.status.label() {
-        if used + 4 <= width {
-            head.push(Span::styled(
-                format!(" {s:<3}"),
-                Style::default().fg(Color::Magenta),
-            ));
-        }
+        head.push(Span::styled(
+            format!(" {s}"),
+            Style::default().fg(panel::status_color(s)),
+        ));
     }
-    lines.push(Line::from(head));
+    beside.push(panel::clamp_line(Line::from(head), text_w));
 
-    let mut sub = vec![Span::styled(pad(&kind, nick + 1), dim())];
-    let mut used = nick + 1;
-    if used + 8 <= width {
-        sub.push(Span::styled(format!(" {:>3}/{:>3}", o.hp, o.max_hp), dim()));
-        used += 8;
-        if used + 2 <= width {
-            sub.push(Span::styled(
-                format!(" {}", type_text(o, width - used - 1)),
-                Style::default().fg(Color::Cyan),
-            ));
-        }
-    }
-    lines.push(Line::from(sub));
-    lines.push(stat_line(o.attack, o.defense, o.speed, o.special, width));
-    if let Some(l) = stat_mod_line(o.stat_mods, "MOD", width) {
-        lines.push(l);
+    let mut second = vec![Span::styled(format!(" #{:03} ", o.dex), panel::label())];
+    second.extend(type_spans(o, text_w.saturating_sub(7)));
+    beside.push(panel::clamp_line(Line::from(second), text_w));
+
+    let bar = 10.min(text_w.saturating_sub(10));
+    beside.push(Line::from(vec![
+        Span::raw(" "),
+        panel::hp_bar_span(frac, bar),
+        Span::styled(format!(" {}/{}", o.hp, o.max_hp), panel::value()),
+    ]));
+
+    // The stats follow the identity into the gutter's rows when the picture is
+    // tall enough to want them, which is what a half-block picture is.
+    let w = |i: usize| row_width(i, gutter_rows, gutter, width);
+    beside.push(stat_line(
+        o.attack,
+        o.defense,
+        o.speed,
+        o.special,
+        w(beside.len()),
+    ));
+    if let Some(l) = stat_mod_line(o.stat_mods, "MOD", w(beside.len())) {
+        beside.push(l);
     }
     // The DVs of whatever is on the other side, always — they are the numbers
     // behind the encounter banner's verdict, and a trainer's Pokémon showing
@@ -1281,14 +1712,23 @@ pub fn opponent_lines<'a>(
         o.dvs.speed,
         o.dvs.special
     );
-    let mut dv_row = vec![Span::styled("DV  ", dim()), Span::raw(dvs.clone())];
+    let mut dv_row = vec![
+        Span::styled("DV  ", panel::label()),
+        Span::styled(dvs.clone(), panel::value()),
+    ];
     // The legend is the part that goes when the panel is narrow — a truncated
-    // `hp/atk/def/sp` is worse than none, and the numbers are the point.
+    // `hp/atk/def/sp` is worse than none, and the numbers are the point. It is
+    // measured against `text_w`, not `width`: this row is beside the picture,
+    // so the gutter's columns are not its to spend.
     let legend = "  hp/atk/def/spd/spc";
-    if 4 + dvs.chars().count() + legend.chars().count() <= width {
-        dv_row.push(Span::styled(legend, dim()));
+    if 4 + dvs.chars().count() + legend.chars().count() <= w(beside.len()) {
+        dv_row.push(Span::styled(legend, panel::label()));
     }
-    lines.push(Line::from(dv_row));
+    beside.push(Line::from(dv_row));
+    indent_beside(&mut beside, gutter, gutter_rows);
+    lines.append(&mut beside);
+
+    // --- and the rest, full width, below the picture -------------------------
     if state.battle == BattleKind::Wild && o.would_be_shiny() {
         lines.push(Line::from(Span::styled(
             "★ would be SHINY if traded to Gen 2",
@@ -1296,43 +1736,18 @@ pub fn opponent_lines<'a>(
         )));
     }
 
-    // Moves, two to a row while they fit — an Ironmon run reads these before it
-    // reads anything else on the panel.
+    // Moves, in the same table the detail view uses — an Ironmon run reads
+    // these before it reads anything else on the panel, and reading them
+    // against *the same columns in the same order* on both screens is what
+    // makes the two views one design rather than two.
     if o.moves.is_empty() {
         // A freshly-encountered Pokémon whose moves have not loaded yet.
         lines.push(Line::from(Span::styled(format!("moves {UNKNOWN}"), dim())));
     } else {
-        // Two to a row while they fit, in fixed-width cells with a gutter — a
-        // pair of moves that runs together (`THUNDERBOLT 15/15QUICK ATTACK`)
-        // reads as one long move with a strange PP count.
-        let per = if width >= 34 { 2 } else { 1 };
-        // A single-column row still keeps its name column tight: padding the
-        // name to the whole panel strands the PP against the far edge, which
-        // reads as two unrelated pieces of information.
-        let cell = if per == 2 {
-            (width - 1) / 2
-        } else {
-            width.min(20)
-        };
-        for chunk in o.moves.chunks(per) {
-            let mut spans = Vec::new();
-            for (i, mv) in chunk.iter().enumerate() {
-                if i > 0 {
-                    spans.push(Span::raw(" "));
-                }
-                let pp = format!("{:>2}/{:<2}", mv.pp, mv.pp_max);
-                let name = pad(&mv.name, cell.saturating_sub(pp.chars().count() + 1));
-                spans.push(Span::raw(name));
-                spans.push(Span::styled(
-                    format!(" {pp}"),
-                    Style::default().fg(if mv.pp == 0 {
-                        Color::Red
-                    } else {
-                        Color::DarkGray
-                    }),
-                ));
-            }
-            lines.push(Line::from(spans));
+        let c = move_cols(width);
+        lines.push(c.head());
+        for mv in &o.moves {
+            lines.push(move_row(mv, c));
         }
     }
     // The roster line closes the section: a trainer battle is as much about
@@ -1527,80 +1942,133 @@ pub fn team_names<'a>(state: &TrainerState, width: usize) -> Vec<Line<'a>> {
         .collect()
 }
 
-/// The summary footnote: which badges are in hand and whose gym is next.
+/// The composed body: the lines, and **where the pictures go in them**.
 ///
-/// Preceded by a plain separator rather than a bracketed rule, because it is a
-/// footnote to the panel and not another section of it.
-pub fn summary_lines<'a>(state: &TrainerState, width: usize) -> Vec<Line<'a>> {
-    let flags = state.badge_flags();
-    let got: Vec<&str> = BADGE_NAMES
-        .iter()
-        .zip(flags)
-        .filter(|(_, g)| *g)
-        .map(|(n, _)| *n)
-        .collect();
-    let next = BADGE_LEADERS
-        .iter()
-        .zip(flags)
-        .find(|(_, g)| !*g)
-        .map(|(n, _)| *n);
-    vec![
-        separator(width),
-        Line::from(vec![
-            Span::styled("BADGES ", dim()),
-            Span::raw(clip(
-                &if got.is_empty() {
-                    "—".to_string()
-                } else {
-                    got.join(", ")
-                },
-                width.saturating_sub(7),
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled("NEXT   ", dim()),
-            Span::raw(clip(
-                match next {
-                    Some(leader) => leader,
-                    None => "all eight",
-                },
-                width.saturating_sub(7),
-            )),
-        ]),
-    ]
+/// The gutters are reported as row offsets rather than rectangles because
+/// only the composer knows how many rows precede each block, and only the
+/// layout knows where the body landed on screen. Keeping them apart is what
+/// lets the whole body be unit-tested without a terminal
+/// ([`the_party_gutter_lines_up_with_the_party_rows`] is that test) and what
+/// guarantees the two can never disagree about which rows a picture covers.
+pub struct Body<'a> {
+    pub lines: Vec<Line<'a>>,
+    /// Row within [`lines`](Body::lines) where the focused block's picture
+    /// starts, and how many rows it spans.
+    pub focus_gutter: Option<(u16, u16)>,
+    /// Row within [`lines`](Body::lines) where the party gutter starts, and
+    /// how many slots it covers. Each slot spans [`SLOT_ROWS`].
+    pub party_gutter: Option<(u16, u16)>,
+    /// Columns the composer indented its rows by. Zero when it laid out
+    /// without pictures.
+    pub gutter: u16,
+    /// What the composer was told this terminal can draw.
+    pub pictures: Pictures,
 }
 
-/// Everything below the sprite, assembled in the order the situation calls for.
+impl Body<'_> {
+    pub fn rows(&self) -> u16 {
+        self.lines.len() as u16
+    }
+
+    /// Whether this composition actually reserved gutter columns.
+    pub fn wants_gutter(&self) -> bool {
+        self.gutter > 0
+    }
+}
+
+/// Compose the body, choosing the tier that fits the rows available.
 ///
-/// **Out of battle** the party is the panel and the badge summary closes it.
-/// **In battle** the opponent goes first — beside its own sprite, which the
-/// frontend has already switched — the party collapses to one line each so all
-/// six still fit, and the badge summary stands down. Nothing is hidden behind a
-/// key and nothing scrolls: the *names* of the badges held are the one thing
-/// that goes, and the count and the eight markers are still in the header two
-/// rows up.
+/// **The order of sacrifice, and it is the captain's requirement made
+/// mechanical:** the six party slots are never the thing that goes. What goes,
+/// in order, is
+///
+/// 1. the party's *second* line per slot — species, HP numbers and types move
+///    into the one headline row's own columns;
+/// 2. with it, the party gutter, because a one-row sprite is a smudge;
+/// 3. and only then does anything fall off the bottom, which the frontend's
+///    `centre_in` makes the *last* rows of the party rather than the header.
+///
+/// Note what is **not** in that list: the pictures never cost a row, so they
+/// are never traded against the text. A party cell spans exactly the two rows
+/// its own text needed. That is the whole reason six small pictures are
+/// affordable where the single large one they replace was not.
+pub fn compose_body<'a>(
+    state: &TrainerState,
+    focus: Option<Focus>,
+    detail: bool,
+    width: usize,
+    pictures: Pictures,
+    rows_available: u16,
+) -> Body<'a> {
+    let gutter = pictures.gutter(width as u16);
+    let kind = if gutter == 0 {
+        Pictures::None
+    } else {
+        pictures
+    };
+    let full = body_rows(state, focus, detail, width, gutter, kind, false);
+    if full.rows() <= rows_available || rows_available == 0 {
+        return full;
+    }
+    // Doesn't fit: collapse the party to one line each. The party gutter goes
+    // with it — see the doc comment. The focused block keeps its picture,
+    // because its rows did not change.
+    let compact = body_rows(state, focus, detail, width, gutter, kind, true);
+    if compact.rows() < full.rows() {
+        compact
+    } else {
+        full
+    }
+}
+
+/// Everything below the header, assembled in the order the situation calls for.
+///
+/// **Out of battle** the party is the panel. **In battle** the opponent goes
+/// first — beside its own picture — and the party follows it, so the team is
+/// still on screen whatever else is happening. **In the detail view** the
+/// focused Pokémon's full page goes first and *the party is still under it*,
+/// which is the single biggest change here: `d` used to replace the team with
+/// one Pokémon's numbers, so the mode that exists to compare made the thing
+/// being compared against invisible.
 pub fn body_lines<'a>(
     state: &TrainerState,
     focus: Option<Focus>,
     detail: bool,
     width: usize,
 ) -> Vec<Line<'a>> {
-    body_rows(state, focus, detail, width)
-        .into_iter()
-        .map(|l| clamp_line(l, width))
-        .collect()
+    body_rows(state, focus, detail, width, 0, Pictures::None, false).lines
 }
 
+#[allow(clippy::too_many_arguments)]
 fn body_rows<'a>(
     state: &TrainerState,
     focus: Option<Focus>,
     detail: bool,
     width: usize,
-) -> Vec<Line<'a>> {
+    gutter: u16,
+    pictures: Pictures,
+    compact: bool,
+) -> Body<'a> {
+    let g = gutter as usize;
+    let focus_rows = pictures.focus_rows();
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    let mut focus_gutter = None;
+    let fighting = state.opponent.is_some() && state.battle != BattleKind::None;
+    let selected = match focus {
+        Some(Focus::Party(i)) => Some(i),
+        _ => None,
+    };
+
     if detail {
         let Some((f, m)) = focus.and_then(|f| focused_mon(state, f).map(|m| (f, m)))
         else {
-            return vec![Line::from(Span::styled("  no Pokémon yet", dim()))];
+            return Body {
+                lines: vec![Line::from(Span::styled("  no Pokémon yet", dim()))],
+                focus_gutter: None,
+                party_gutter: None,
+                gutter: 0,
+                pictures: Pictures::None,
+            };
         };
         // The party copy carries no stages — by design, they do not survive a
         // switch. So when the focused party member IS the one in the fight, the
@@ -1612,34 +2080,72 @@ fn body_rows<'a>(
             }
             Focus::Party(_) => None,
         };
-        let mut lines = detail_lines(m, f.is_opponent(), mods, width);
+        // Row 0 is the section rule; the picture starts on the row after it.
+        focus_gutter = (g > 0 && focus_rows > 0).then_some((1u16, focus_rows));
+        lines.extend(detail_lines_indented(
+            m,
+            f.is_opponent(),
+            mods,
+            width,
+            g,
+            focus_rows as usize,
+        ));
         // The roster follows the opponent's own numbers even here, because
         // "what else has this trainer got" is part of the same decision.
         if f.is_opponent() && state.battle == BattleKind::Trainer {
             let l = team_line(state, width, true);
             if line_width(&l) > 0 {
-                lines.push(separator(width));
                 lines.push(l);
                 lines.extend(team_names(state, width));
             }
         }
-        return lines;
+    } else if fighting {
+        focus_gutter = (g > 0 && focus_rows > 0).then_some((1u16, focus_rows));
+        lines.extend(opponent_lines_indented(
+            state,
+            focus == Some(Focus::Opponent),
+            width,
+            g,
+            focus_rows as usize,
+        ));
     }
-    let fighting = state.opponent.is_some() && state.battle != BattleKind::None;
-    let selected = match focus {
-        Some(Focus::Party(i)) => Some(i),
-        _ => None,
-    };
-    let mut lines = vec![slot_row(state, active_slot(state), width)];
-    if fighting {
-        lines.extend(opponent_lines(state, focus == Some(Focus::Opponent), width));
+
+    // The party, in both modes and always last, so its rows are the ones a
+    // short panel clips and its gutter can never be pushed off by a block
+    // above it changing length.
+    let party_pictures = pictures.party() && !compact && !state.party.is_empty();
+    let note =
+        (!pictures.party() && pictures != Pictures::None).then_some(NO_PARTY_PICTURES);
+    lines.push(panel::rule_with(
+        "PARTY",
+        Some(&format!("{}/6", state.party.len())),
+        width,
+    ));
+    let party_at = lines.len() as u16;
+    let rows_before = lines.len();
+    let party_g = if party_pictures { g } else { 0 };
+    lines.extend(party_lines_indented(
+        state, selected, width, compact, party_g,
+    ));
+    let party_gutter =
+        party_pictures.then(|| (party_at, ((lines.len() - rows_before) / 2) as u16));
+    // **Say what was dropped, once, under the thing that is missing.** A
+    // silent absence reads as a defect in the emulator; six unrecognisable
+    // smudges would be worse than either.
+    if let Some(n) = note {
+        lines.push(Line::from(Span::styled(clip(n, width), dim())));
     }
-    lines.push(rule("PARTY", width));
-    lines.extend(party_lines(state, selected, width, fighting));
-    if !fighting {
-        lines.extend(summary_lines(state, width));
+
+    Body {
+        lines: lines
+            .into_iter()
+            .map(|l| panel::clamp_line(l, width))
+            .collect(),
+        focus_gutter,
+        party_gutter,
+        gutter: if g > 0 { gutter } else { 0 },
+        pictures,
     }
-    lines
 }
 
 /// Which party slot the battle engine currently has out, by matching the
@@ -1669,21 +2175,6 @@ pub fn active_slot(state: &TrainerState) -> Option<usize> {
 /// A type label that fits `max` columns: the full `GRASS/POISON` when it fits,
 /// otherwise three-letter abbreviations, which stay readable where a truncation
 /// (`GRASS/POI…`) does not.
-fn type_text(m: &Mon, max: usize) -> String {
-    let full = m.type_label();
-    if full.chars().count() <= max {
-        return full;
-    }
-    let short = |t: &str| -> String { t.chars().take(3).collect() };
-    let (a, b) = (&m.types.0, &m.types.1);
-    let abbreviated = if b.is_empty() || a == b {
-        short(a)
-    } else {
-        format!("{}/{}", short(a), short(b))
-    };
-    clip(&abbreviated, max)
-}
-
 /// Pad or clip to exactly `n` columns, so a column stays a column.
 fn pad(s: &str, n: usize) -> String {
     let t = clip(s, n);
@@ -1786,13 +2277,21 @@ mod tests {
                     pp: 15,
                     pp_max: 15,
                     pp_ups: 0,
+                    power: 95,
+                    type_name: "ELECTRIC".into(),
+                    accuracy: 100,
                 },
+                // Zero power and a sub-100 accuracy, so the two columns that
+                // exist to distinguish moves are actually distinguishing.
                 MoveSlot {
                     id: 2,
                     name: "QUICK ATTACK".into(),
                     pp: 0,
                     pp_max: 30,
                     pp_ups: 0,
+                    power: 0,
+                    type_name: "NORMAL".into(),
+                    accuracy: 85,
                 },
             ];
             st.party.push(m);
@@ -1819,6 +2318,9 @@ mod tests {
                 pp: 35,
                 pp_max: 35,
                 pp_ups: 0,
+                power: 40,
+                type_name: "NORMAL".into(),
+                accuracy: 100,
             },
             MoveSlot {
                 id: 4,
@@ -1826,6 +2328,9 @@ mod tests {
                 pp: 25,
                 pp_max: 25,
                 pp_ups: 0,
+                power: 40,
+                type_name: "FIRE".into(),
+                accuracy: 100,
             },
         ];
         st.opponent = Some(o);
@@ -1843,8 +2348,8 @@ mod tests {
         for w in [10u16, 20, 40, 80, 200] {
             for h in [1u16, 3, 5, 6, 12, 13, 40, 100] {
                 let area = Rect::new(3, 2, w, h);
-                let l = layout(area, true);
-                for a in [l.header, l.sprite, l.body] {
+                let l = layout(area, Pictures::Image);
+                for a in [l.header, l.body] {
                     assert!(
                         a.x >= area.x
                             && a.y >= area.y
@@ -1854,41 +2359,249 @@ mod tests {
                     );
                 }
                 assert!(
-                    l.header.bottom() <= l.sprite.y,
-                    "header runs into the sprite at {w}x{h}"
+                    l.header.bottom() <= l.body.y,
+                    "header runs into the body at {w}x{h}"
+                );
+                // Every gutter a picture could be asked for stays inside the
+                // body and inside the reserved columns.
+                for row in 0..l.body.height {
+                    for rows in 1..=FOCUS_ROWS.max(SLOT_ROWS * 6) {
+                        if let Some(g) = l.gutter_rect(row, rows) {
+                            assert!(
+                                g.x >= l.body.x
+                                    && g.right() <= l.body.x + l.gutter
+                                    && g.y >= l.body.y
+                                    && g.bottom() <= l.body.bottom(),
+                                "gutter {g:?} escapes body {:?} at {w}x{h}",
+                                l.body
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The pictures cost columns, never rows.** This is the property the
+    /// whole redesign turns on: the panel that shows six party pictures is
+    /// exactly as tall as the panel that shows none, so "always show all six"
+    /// costs nothing vertically. The single large sprite it replaces took
+    /// eleven rows of a twenty-four-row panel.
+    #[test]
+    fn pictures_cost_columns_and_never_rows() {
+        let st = filled_state();
+        for w in [28usize, 34, 40, 60] {
+            let with =
+                compose_body(&st, Some(Focus::Party(0)), false, w, Pictures::Image, 60);
+            let without =
+                compose_body(&st, Some(Focus::Party(0)), false, w, Pictures::None, 60);
+            assert_eq!(
+                with.rows(),
+                without.rows(),
+                "{w} columns: a gutter changed the row count"
+            );
+            assert!(with.gutter > 0, "{w} columns should afford a gutter");
+            assert_eq!(without.gutter, 0);
+        }
+        // …and the panel that results is the same height either way.
+        let area = Rect::new(0, 0, 40, 40);
+        let a = compose_body(&st, None, false, 38, Pictures::Image, 60);
+        let b = compose_body(&st, None, false, 38, Pictures::None, 60);
+        assert_eq!(
+            layout_with_pictures(area, &a)
+                .centre_in(area, a.rows())
+                .frame
+                .height,
+            layout_with_pictures(area, &b)
+                .centre_in(area, b.rows())
+                .frame
+                .height,
+        );
+    }
+
+    /// The gutter a picture is placed over must cover **exactly** the rows of
+    /// the text it belongs to. This is the invariant that keeps a sprite level
+    /// with its own party row rather than one slot out — which is the failure
+    /// a screenshot shows and a row count does not.
+    #[test]
+    fn the_party_gutter_lines_up_with_the_party_rows() {
+        let st = filled_state();
+        let body =
+            compose_body(&st, Some(Focus::Party(0)), false, 38, Pictures::Image, 60);
+        let (row, slots) = body.party_gutter.expect("a party gutter");
+        assert_eq!(slots as usize, st.party.len(), "one cell per Pokémon");
+        // The row the gutter starts on is the first party row, i.e. the one
+        // after the `PARTY` rule — and the text on it is that Pokémon's.
+        let text = plain(&body.lines);
+        // The nickname is legitimately clipped in the row, so match its stem.
+        let stem = |s: &str| s.chars().take(6).collect::<String>();
+        assert!(
+            text[row as usize].contains(&stem(&st.party[0].nickname))
+                && text[row as usize].contains("▸1"),
+            "gutter starts on {row}, which reads {:?}",
+            text[row as usize]
+        );
+        // …and the last row it covers is the last party row.
+        let last = (row + slots * SLOT_ROWS - 1) as usize;
+        assert_eq!(last, body.lines.len() - 1, "gutter overruns the party");
+        assert!(
+            text[last].contains(&stem(&st.party[2].name)),
+            "{:?}",
+            text[last]
+        );
+    }
+
+    /// The focused block's picture likewise sits on its own three rows, under
+    /// the section rule and never over it.
+    #[test]
+    fn the_focus_gutter_sits_under_its_own_rule() {
+        let st = battling();
+        for detail in [false, true] {
+            let body =
+                compose_body(&st, Some(Focus::Opponent), detail, 38, Pictures::Image, 80);
+            let (row, rows) = body.focus_gutter.expect("a focus gutter");
+            assert_eq!(rows, FOCUS_ROWS);
+            let text = plain(&body.lines);
+            assert!(
+                text[(row - 1) as usize].contains("OPPONENT"),
+                "the rule is not directly above the picture: {:?}",
+                text[(row - 1) as usize]
+            );
+            // The fixture's opponent carries a nickname, so the identity row
+            // is the *displayed title* — which is the point: the picture and
+            // the name beside it must be the same Pokémon.
+            let ident = &text[row as usize];
+            assert!(
+                ident.contains("CHARMANDER")
+                    || ident.contains(&st.opponent.as_ref().unwrap().nickname),
+                "the picture's first row is not the identity: {ident:?}"
+            );
+        }
+    }
+
+    /// **A terminal with no image protocol still gets a picture, and is told
+    /// what it is not getting.**
+    ///
+    /// This is the reproduction of the fault the redesign found: `sprite_image`
+    /// is `None` for anything but Kitty and iTerm2, so on a VTE-family
+    /// terminal — the captain's own, and the one Fedora builds without sixel —
+    /// the trainer panel drew no Pokémon at all and said nothing about it.
+    ///
+    /// The two halves of the answer are both asserted, because either alone is
+    /// wrong: half-blocks **do** get the focused picture, at more rows because
+    /// a cell there is two samples rather than sixteen pixels; and they **do
+    /// not** get six party pictures, because a party slot is two rows, four
+    /// samples, and four samples is not a Pokémon — so the panel says so
+    /// instead of drawing six smudges.
+    #[test]
+    fn a_terminal_with_no_image_protocol_still_gets_a_picture_and_is_told_why() {
+        let st = battling();
+        let blocks = compose_body(
+            &st,
+            Some(Focus::Opponent),
+            false,
+            38,
+            Pictures::Halfblocks,
+            80,
+        );
+        let (_, rows) = blocks
+            .focus_gutter
+            .expect("half-blocks must still draw the focused Pokémon");
+        assert!(
+            rows > FOCUS_ROWS,
+            "a half-block cell is two samples, so it needs more rows than an \
+             image one: got {rows}, an image picture gets {FOCUS_ROWS}"
+        );
+        assert_eq!(blocks.party_gutter, None, "four samples is not a Pokémon");
+        let text = plain(&blocks.lines).join("\n");
+        assert!(
+            text.contains(NO_PARTY_PICTURES),
+            "the panel must say what it is not drawing:\n{text}"
+        );
+        // …and it says it once, not once per slot.
+        assert_eq!(text.matches(NO_PARTY_PICTURES).count(), 1);
+
+        // An image-protocol terminal gets the party pictures and no notice —
+        // a line explaining an absence that is not happening is noise.
+        let image =
+            compose_body(&st, Some(Focus::Opponent), false, 38, Pictures::Image, 80);
+        assert!(image.party_gutter.is_some());
+        assert!(!plain(&image.lines).join("\n").contains(NO_PARTY_PICTURES));
+    }
+
+    /// **A picture never overlaps a table's header.** The half-block picture is
+    /// twice as tall as the image one, so it reaches past the identity rows —
+    /// and a moves header indented over rows that are not is a legend that
+    /// lies about its own columns. Caught in a screenshot; pinned here.
+    #[test]
+    fn a_tall_picture_never_half_indents_the_table_under_it() {
+        let st = battling();
+        for pictures in [Pictures::Halfblocks, Pictures::Image] {
+            for detail in [false, true] {
+                let body =
+                    compose_body(&st, Some(Focus::Opponent), detail, 44, pictures, 90);
+                let Some((row, rows)) = body.focus_gutter else {
+                    continue;
+                };
+                let text = plain(&body.lines);
+                let indent = text_indent(body.gutter as usize);
+                // Every row the picture covers is blank in the gutter…
+                for i in row..row + rows {
+                    let l = &text[i as usize];
+                    assert!(
+                        l.chars().take(indent).all(|c| c == ' '),
+                        "{pictures:?} detail={detail}: row {i} writes into the \
+                         gutter: {l:?}"
+                    );
+                }
+                // …and the moves table starts *below* it, whole.
+                let head = text
+                    .iter()
+                    .position(|l| l.trim_start().starts_with("MOVE "))
+                    .expect("a moves table");
+                assert!(
+                    head as u16 >= row + rows,
+                    "{pictures:?} detail={detail}: the moves header at {head} is \
+                     inside the picture's rows {row}..{}",
+                    row + rows
                 );
                 assert!(
-                    l.sprite.bottom() <= l.body.y,
-                    "the sprite would be drawn over at {w}x{h}"
+                    !text[head].starts_with(' '),
+                    "{pictures:?} detail={detail}: the header is indented and its \
+                     rows are not: {:?}",
+                    text[head]
                 );
             }
         }
     }
 
+    /// A short panel gives up the party's second line — and the gutter with
+    /// it, because a one-row sprite is a smudge — before it gives up a slot.
     #[test]
-    fn a_short_panel_drops_the_sprite_before_the_text() {
-        // Border (2) + header (5) + the sprite band + six rows of text; below
-        // that the picture goes and the numbers stay.
-        let band = sprite_rows(PANEL_W - 2);
-        let need = 2 + HEADER_ROWS + band + MIN_BODY_ROWS;
-        let short = layout(Rect::new(0, 0, PANEL_W, need - 1), true);
-        assert_eq!(short.sprite.height, 0);
-        assert!(short.body.height > 0, "the text must survive");
-        let tall = layout(Rect::new(0, 0, PANEL_W, need), true);
-        assert_eq!(tall.sprite.height, band);
-    }
-
-    /// The sprite band is the panel's one genuinely scalable part, so it has to
-    /// actually grow with the panel — and stay bounded at both ends.
-    #[test]
-    fn the_sprite_band_grows_with_the_panel() {
-        assert!(sprite_rows(20) < sprite_rows(40));
-        assert!(sprite_rows(40) < sprite_rows(60));
-        assert_eq!(sprite_rows(4), 6, "a floor a Pokémon is still legible at");
-        assert_eq!(sprite_rows(400), 16, "and a ceiling, so text still fits");
-        for w in 0u16..200 {
-            let r = sprite_rows(w);
-            assert!((6..=16).contains(&r), "{w} -> {r}");
+    fn a_short_panel_collapses_the_party_before_it_loses_one() {
+        let st = filled_state();
+        let full = compose_body(&st, None, false, 38, Pictures::Image, 60);
+        assert!(full.wants_gutter());
+        let squeezed =
+            compose_body(&st, None, false, 38, Pictures::Image, full.rows() - 1);
+        assert!(squeezed.rows() < full.rows());
+        assert_eq!(
+            squeezed.party_gutter, None,
+            "a one-row sprite is a smudge and must not be drawn"
+        );
+        // Every Pokémon is still named.
+        let text = plain(&squeezed.lines).join("\n");
+        for (i, _m) in st.party.iter().enumerate() {
+            // Names are clipped at this width; the slot number is not, and it
+            // is what says the slot is still on the panel.
+            assert!(
+                plain(&squeezed.lines).iter().any(|l| {
+                    l.trim_start_matches([' ', '\u{25b8}', '\u{258c}'])
+                        .starts_with(&format!("{} ", i + 1))
+                }),
+                "party slot {} was dropped:\n{text}",
+                i + 1
+            );
         }
     }
 
@@ -1896,7 +2609,7 @@ mod tests {
     /// than stranding the space, which is the only way text scales on a grid.
     #[test]
     fn the_party_columns_grow_with_a_wide_panel() {
-        let narrow = party_cols(38);
+        let narrow = party_cols(33);
         let wide = party_cols(60);
         assert!(wide.nick > narrow.nick && wide.bar > narrow.bar);
         // …but not without bound: past a point a longer bar is just a longer
@@ -1905,10 +2618,21 @@ mod tests {
         assert_eq!((huge.nick, huge.bar, huge.ty), (18, 20, 16));
     }
 
+    /// The design width must land in the *top* fixed tier once the gutter has
+    /// taken its columns — a threshold set against the panel rather than
+    /// against the text left of it silently demotes every default panel.
     #[test]
-    fn asking_for_no_sprite_leaves_no_gap() {
-        let l = layout(Rect::new(0, 0, PANEL_W, 40), false);
-        assert_eq!(l.sprite.height, 0);
+    fn the_design_width_keeps_the_widest_fixed_party_tier() {
+        let inner = PANEL_W - 2;
+        let text = inner - gutter_w(inner) - 1;
+        assert_eq!(party_cols(text as usize), party_cols(32));
+    }
+
+    #[test]
+    fn asking_for_no_pictures_leaves_no_gutter() {
+        let l = layout(Rect::new(0, 0, PANEL_W, 40), Pictures::None);
+        assert_eq!(l.gutter, 0);
+        assert_eq!(l.gutter_rect(0, 2), None);
         assert_eq!(l.header.bottom(), l.body.y);
     }
 
@@ -1980,7 +2704,7 @@ mod tests {
 
     /// A battle must not push the party off the panel. The body has to fit the
     /// rows a 40x30 terminal leaves it — which is the smallest window the
-    /// captain plays in — with the sprite still up.
+    /// captain plays in — with every party member still named.
     #[test]
     fn a_battle_still_shows_the_whole_party() {
         let mut st = battling();
@@ -1988,72 +2712,103 @@ mod tests {
             st.party.push(mon(30, 41));
         }
         let panel = Rect::new(0, 0, PANEL_W, 30);
-        // The width does not depend on the pictures, so the body can be
-        // composed first and the layout told what it needs.
         let width = panel.width.saturating_sub(2) as usize;
-        let lines = body_lines(&st, Some(Focus::Opponent), false, width);
-        let l = layout_with_team(panel, true, true, lines.len() as u16);
+        let rows = panel.height - 2 - HEADER_ROWS;
+        let body = compose_body(
+            &st,
+            Some(Focus::Opponent),
+            false,
+            width,
+            Pictures::Image,
+            rows,
+        );
+        let l = layout_with_pictures(panel, &body);
         assert!(
-            lines.len() <= l.body.height as usize,
+            body.rows() <= l.body.height,
             "a battle overflows the body at 40x30: {} lines into {} rows",
-            lines.len(),
+            body.rows(),
             l.body.height
         );
-        // …and the picture is what gave way for it, not the party.
-        assert_eq!(l.sprite.height, 0, "the sprite is the first thing to lose");
-        let text = plain(&lines).join("\n");
+        let text = plain(&body.lines).join("\n");
         assert!(
             text.contains("OPPONENT"),
             "the opponent has its own section"
         );
         assert!(text.contains("CHARMANDER"));
         assert!(text.contains("SCRATCH"), "and its moves are on screen");
-        // Every party member is still listed.
-        for m in &st.party {
+        // Every party member is still listed, by slot number — the nicknames
+        // are legitimately clipped at this width.
+        for i in 0..st.party.len() {
+            // By slot number, not by name: nicknames are legitimately clipped
+            // at this width and the fixture repeats them.
             assert!(
-                text.contains(&m.nickname.chars().take(6).collect::<String>()),
-                "party member {} fell off the panel",
-                m.nickname
+                plain(&body.lines).iter().any(|l| {
+                    l.trim_start_matches([' ', '\u{25b8}', '\u{258c}'])
+                        .starts_with(&format!("{} ", i + 1))
+                }),
+                "party slot {} is not on the panel:\n{text}",
+                i + 1
             );
         }
     }
 
-    /// The opponent comes before the party during a battle: it is what is being
-    /// watched, and it belongs next to the sprite that has switched to it.
     #[test]
     fn the_opponent_section_is_above_the_party() {
         let st = battling();
         let text = plain(&body_lines(&st, Some(Focus::Opponent), false, 38)).join("\n");
         let o = text.find("OPPONENT").expect("an opponent section");
-        let p = text.find("[ PARTY ]").expect("a party section");
+        let p = text.find("PARTY").expect("a party section");
         assert!(o < p, "the opponent must come first in a battle");
     }
 
+    /// **Every section label starts in the same column**, which is the whole
+    /// argument for a left-anchored rule over a centred one: the page can be
+    /// scanned down its left edge instead of the eye travelling to the middle
+    /// of each rule to find out where it is.
+    ///
+    /// The header has no rule at all — `[ TRAINER ]` and `[ BADGES ]` were two
+    /// rows spent restating what the border's own title and the eight markers
+    /// already say.
     #[test]
-    fn every_section_is_announced_by_a_bracketed_rule() {
-        let st = filled_state();
-        let head = plain(&header_lines(&st, "Pokémon Blue", 38)).join("\n");
-        assert!(head.contains("[ TRAINER ]"));
-        assert!(head.contains("[ BADGES ]"));
-        let body = plain(&body_lines(&st, Some(Focus::Party(0)), false, 38)).join("\n");
-        assert!(body.contains("[ PARTY ]"));
+    fn every_section_label_starts_in_the_same_column() {
+        let st = battling();
+        let head = plain(&header_lines(&st, "Pokémon Blue", 38));
+        assert_eq!(head.len(), HEADER_ROWS as usize);
+        for l in &head {
+            assert!(!l.contains('['), "the header spends no row on a rule: {l}");
+        }
+        let mut labelled = 0;
+        for detail in [false, true] {
+            for l in plain(&body_lines(&st, Some(Focus::Opponent), detail, 38)) {
+                if let Some(at) = l.find("─ ") {
+                    assert_eq!(at, 0, "a rule that does not start at column 0: {l}");
+                    labelled += 1;
+                }
+            }
+        }
+        assert!(labelled >= 4, "expected OPPONENT/PARTY/MOVES-ish rules");
         let detail = plain(&body_lines(&st, Some(Focus::Party(0)), true, 38)).join("\n");
-        assert!(detail.contains("[ YOUR POKéMON ]"));
-        assert!(detail.contains("[ MOVES ]"));
+        assert!(detail.contains("─ YOUR POKéMON"));
+        assert!(detail.contains("─ HIDDEN"));
+        // `[ MOVES ]` became a column header, which is a legend as well as a
+        // label — the row it costs now carries data.
+        assert!(detail.contains("MOVE"), "{detail}");
+        assert!(detail.contains("POW"), "{detail}");
+        assert!(detail.contains("ACC"), "{detail}");
     }
 
     #[test]
-    fn a_rule_is_centred_and_exactly_the_width_asked_for() {
+    fn a_rule_is_left_anchored_and_exactly_the_width_asked_for() {
         // A rule always fills exactly the width it is given, down to the
         // point where the label itself no longer fits and gets clipped.
-        for w in 9usize..=60 {
+        for w in 5usize..=60 {
             assert_eq!(line_width(&rule("PARTY", w)), w, "at width {w}");
         }
-        for w in 0usize..9 {
+        for w in 0usize..5 {
             assert!(line_width(&rule("PARTY", w)) <= w, "at width {w}");
         }
-        assert_eq!(plain(&[rule("PARTY", 21)])[0], "──────[ PARTY ]──────");
-        assert_eq!(plain(&[rule("PARTY", 9)])[0], "[ PARTY ]");
+        assert_eq!(plain(&[rule("PARTY", 21)])[0], "─ PARTY ─────────────");
+        assert_eq!(plain(&[rule("PARTY", 5)])[0], "PARTY");
     }
 
     #[test]
@@ -2067,7 +2822,10 @@ mod tests {
         assert_eq!(text.matches('●').count(), 2, "two held: {text}");
         assert_eq!(text.matches('○').count(), 6, "six missing: {text}");
         assert!(text.contains("2/8"));
-        assert!(text.contains("] ["), "two groups of four");
+        assert!(
+            text.contains("●○ ○") || text.contains("] ["),
+            "two groups of four: {text}"
+        );
         // Glyph *and* colour, so a monochrome or colour-blind read still works.
         let held = line
             .spans
@@ -2082,17 +2840,35 @@ mod tests {
         assert_ne!(held.style.fg, missing.style.fg);
     }
 
+    /// **The brackets go before the next gym does.** They are decoration
+    /// around markers that already differ in glyph and colour, and thirteen
+    /// columns of them is exactly what would stop the actionable half of the
+    /// deleted footer fitting on this row at the design width.
     #[test]
     fn the_badge_row_degrades_rather_than_wrapping() {
         let st = TrainerState {
+            badges: 0b0000_0011,
+            ..Default::default()
+        };
+        // At the design width the next gym is there and the brackets are not.
+        let design = plain(&[badge_row(&st, 38)])[0].clone();
+        assert!(design.contains("Lt.Surge"), "{design}");
+        assert!(!design.contains("[●]"), "brackets over the gym: {design}");
+        // Given enough room, both.
+        let wide = plain(&[badge_row(&st, 60)])[0].clone();
+        assert!(wide.contains("[●]") && wide.contains("Lt.Surge"), "{wide}");
+        // Narrower still: the leader's name outlives the word "next".
+        let mid = plain(&[badge_row(&st, 26)])[0].clone();
+        assert!(!mid.contains("next"), "{mid}");
+        assert!(mid.contains("Lt.Surge"), "{mid}");
+        let all = TrainerState {
             badges: 0xFF,
             ..Default::default()
         };
-        assert!(plain(&[badge_row(&st, 34)])[0].contains("[●]"));
-        let mid = plain(&[badge_row(&st, 20)])[0].clone();
-        assert!(!mid.contains("[●]"), "brackets go first: {mid}");
-        assert!(mid.contains("●●●●"), "{mid}");
-        let tiny = plain(&[badge_row(&st, 5)])[0].clone();
+        let narrow = plain(&[badge_row(&all, 20)])[0].clone();
+        assert!(!narrow.contains("[●]"), "brackets go first: {narrow}");
+        assert!(narrow.contains("●●●●"), "{narrow}");
+        let tiny = plain(&[badge_row(&all, 5)])[0].clone();
         assert!(tiny.contains("8/8"), "the count is what cannot go: {tiny}");
     }
 
@@ -2116,27 +2892,80 @@ mod tests {
     #[test]
     fn the_trainer_line_drops_the_id_before_the_money() {
         let st = filled_state();
-        let wide = plain(&header_lines(&st, "Pokémon Blue", 38))[1].clone();
+        let wide = plain(&header_lines(&st, "Pokémon Blue", 38))[0].clone();
         assert!(wide.contains("ID"), "{wide}");
         assert!(wide.contains("3,000"), "{wide}");
-        let narrow = plain(&header_lines(&st, "Pokémon Blue", 20))[1].clone();
+        let narrow = plain(&header_lines(&st, "Pokémon Blue", 20))[0].clone();
         assert!(!narrow.contains("ID"), "the ID goes first: {narrow}");
         assert!(narrow.contains("3,000"), "the money stays: {narrow}");
-        let tiny = plain(&header_lines(&st, "Pokémon Blue", 11))[1].clone();
+        let tiny = plain(&header_lines(&st, "Pokémon Blue", 11))[0].clone();
         assert!(tiny.contains("BLUE"), "the name never goes: {tiny}");
+    }
+
+    /// **No two stats may share a label at any width.** The narrow tier used
+    /// one letter each, which prints `S55 S29` — Speed and Special, and no way
+    /// to tell which is which. An ambiguous label is worse than a missing one,
+    /// and this tier was only two columns cheaper than the full one.
+    #[test]
+    fn the_four_stats_never_share_a_label_at_any_width() {
+        for w in 8usize..=60 {
+            let text = plain(&[stat_line(39, 112, 55, 29, w)])[0].clone();
+            assert!(text.chars().count() <= w, "overflows at {w}: {text:?}");
+            // The labels are whatever is left when the digits and spaces go.
+            let labels: Vec<&str> = text
+                .split_whitespace()
+                .filter(|t| t.chars().any(|c| c.is_ascii_alphabetic()))
+                .collect();
+            let mut seen = Vec::new();
+            for l in &labels {
+                assert!(
+                    !seen.contains(l),
+                    "two stats share the label {l:?} at width {w}: {text:?}"
+                );
+                seen.push(l);
+            }
+        }
     }
 
     #[test]
     fn a_long_type_is_abbreviated_rather_than_truncated() {
+        let text = |m: &Mon, w: usize| -> String {
+            type_spans(m, w)
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
         let m = mon(20, 41);
-        assert_eq!(type_text(&m, 12), "GRASS/POISON");
-        assert_eq!(type_text(&m, 8), "GRA/POI");
+        assert_eq!(text(&m, 12), "GRASS/POISON");
+        assert_eq!(text(&m, 8), "GRA/POI");
         let single = Mon {
             types: ("ELECTRIC".into(), "ELECTRIC".into()),
             ..mon(20, 41)
         };
-        assert_eq!(type_text(&single, 8), "ELECTRIC");
-        assert_eq!(type_text(&single, 4), "ELE");
+        assert_eq!(text(&single, 8), "ELECTRIC");
+        assert_eq!(text(&single, 4), "ELE");
+    }
+
+    /// **Each half of a dual type gets its own colour.** One uniform colour
+    /// over `GRASS/POISON` says "this is a type label"; two say which two, and
+    /// that is the whole reason the panel spends colour on types at all.
+    #[test]
+    fn a_dual_type_is_two_colours_and_survives_abbreviation() {
+        let _g = panel::test_lock();
+        panel::set_depth(panel::Depth::Indexed);
+        let m = mon(20, 41); // GRASS/POISON
+        for w in [12usize, 8] {
+            let spans = type_spans(&m, w);
+            assert_eq!(spans.len(), 3, "name, separator, name at width {w}");
+            assert_eq!(spans[0].style.fg, Some(panel::type_color("GRASS")));
+            assert_eq!(spans[2].style.fg, Some(panel::type_color("POISON")));
+            assert_ne!(spans[0].style.fg, spans[2].style.fg);
+        }
+        // Not even the abbreviations fit: the first type survives whole and
+        // keeps its colour, rather than half of each losing both.
+        let spans = type_spans(&m, 4);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.fg, Some(panel::type_color("GRASS")));
     }
 
     /// Every glyph the panel draws must be one column wide, or the fixed-width
@@ -2169,6 +2998,12 @@ mod tests {
                             | '…'
                             | '—'
                             | 'é'
+                            // Added by the redesign: a field separator that
+                            // does not read as a table border, and the short
+                            // form of the next-gym marker.
+                            | '·'
+                            | '→'
+                            | '▚'
                     );
                 assert!(ok, "unexpected glyph {ch:?} ({:#06x})", ch as u32);
             }
@@ -2356,32 +3191,37 @@ mod tests {
         st
     }
 
-    /// The strip is the *last* thing granted space: it may never be the reason
-    /// the opponent's stats or the party fall off the bottom.
+    /// **The opposing trainer's roster is text now, and that is a declared
+    /// trade rather than an omission.**
+    ///
+    /// It used to be a strip of pictures across the panel, granted only in a
+    /// trainer battle on a panel wide *and* tall enough. There is one picture
+    /// budget and the captain's ask was the player's own six, always — so the
+    /// roster keeps the marker line and the names, which is exactly the
+    /// fallback it already took on most window sizes, and it keeps them
+    /// **unconditionally** instead. Fainted, standing and unreadable stay
+    /// three different glyphs.
     #[test]
-    fn the_team_strip_never_squeezes_out_the_party() {
-        for h in 12u16..=48 {
-            for w in [24u16, 30, 40, 56] {
-                let a = Rect::new(0, 0, w, h);
-                let l = layout_with_team(a, true, true, MIN_BODY_ROWS);
-                let plain = layout_with_team(a, true, false, MIN_BODY_ROWS);
-                assert!(
-                    l.body.height >= MIN_BODY_ROWS || l.team.height == 0,
-                    "{w}x{h}: the strip left only {} body rows",
-                    l.body.height
-                );
-                assert!(
-                    l.body.height == plain.body.height || l.team.height > 0,
-                    "{w}x{h}: refusing the strip must cost the body nothing"
-                );
-                assert!(l.sprite.bottom() <= l.team.y);
-                assert!(l.team.bottom() <= l.body.y);
-                assert!(l.team.bottom() <= a.bottom());
-                if l.team.height > 0 {
-                    assert!(w >= TEAM_MIN_W, "{w}x{h}: strip drawn too narrow");
-                }
-            }
+    fn the_opposing_roster_is_still_reported_at_every_width() {
+        let st = with_team();
+        for w in 20usize..=60 {
+            let body =
+                compose_body(&st, Some(Focus::Opponent), false, w, Pictures::Image, 80);
+            let text = plain(&body.lines).join("\n");
+            assert!(
+                text.contains("TEAM"),
+                "{w} columns: the roster vanished:\n{text}"
+            );
         }
+        // …and in the detail view, where the strip was refused outright.
+        let body =
+            compose_body(&st, Some(Focus::Opponent), true, 38, Pictures::Image, 80);
+        let text = plain(&body.lines).join("\n");
+        assert!(
+            text.contains("TEAM"),
+            "no roster in the detail view:\n{text}"
+        );
+        assert!(text.contains("GEODUDE"), "and it names what is coming");
     }
 
     /// Beaten and unreadable are opposite facts and must not share a glyph.
@@ -2593,10 +3433,12 @@ mod tests {
         ))
         .join("\n");
         assert!(!text.contains("OPPONENT"));
-        assert!(
-            text.contains("BADGES"),
-            "the summary is there out of battle"
-        );
+        // The badge footer is gone — its two rows restated the eight markers
+        // in the header and named the next gym, which now rides on the marker
+        // row itself. Check the fact survived the rows that carried it.
+        let head = plain(&header_lines(&filled_state(), "Pokémon Blue", 38)).join("\n");
+        assert!(head.contains("2/8"), "{head}");
+        assert!(head.contains("Lt.Surge"), "the next gym survived: {head}");
     }
 
     #[test]

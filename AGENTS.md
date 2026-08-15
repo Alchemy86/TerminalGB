@@ -3438,11 +3438,31 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   party panel would be blank in the overworld. `plugins/trainer/src/sprite.rs` implements Gen 1's
   picture compression from the format documented in `pokered`. Proven **byte-identical** to
   `pokered`'s own 2bpp output for 13 species covering every "Pics" bank and both special cases.
-- **The sprite is a SECOND terminal image, and the enemy team strip is a THIRD.** Ids
+- **The focused Pokémon is a SECOND terminal image and the WHOLE PARTY is a THIRD.** Ids
   `0x00676202` and `0x00676203` against the game's `0x00676201`; each has its own cell
   rectangle and its cells marked `skip`. All three rules from `docs/terminal-render.md` apply
   to both. They are drawn **after** `render_display`, because `render_display` clears
-  `pending_wire` for the frame.
+  `pending_wire` for the frame. (`0x00676203` used to be the *opposing trainer's* roster
+  strip; the redesign spent it on the player's own six and the roster went back to the text
+  form it already fell back to on most window sizes.)
+- **THE PICTURES COST COLUMNS, NEVER ROWS, and that is the whole reason six of them are
+  affordable.** A sprite lives in a **gutter** down the left of the block it belongs to and
+  spans exactly the rows the text beside it already needed, so the panel with six party
+  pictures is exactly as tall as the panel with none. The one it replaces took eleven rows of
+  a twenty-four-row panel to itself. `pictures_cost_columns_and_never_rows` pins it.
+  Vertically the only sacrifice is text: the party's *second* line goes first (and the gutter
+  with it — a one-row sprite is a smudge), and a slot is never dropped.
+- **The party column is ONE composed image of six cells**, keyed on species + fainted +
+  palette + the cell's pixel size, so it is rebuilt on a switch or a faint and never per
+  frame. Measured: **37.4 µs against 19.2 µs** for the single large sprite it replaces — 1.95x
+  for 2.45x the pixels, on a path that is not the frame path
+  (`party_column_costs_no_more_than_the_sprite_it_replaces` prints both).
+- **A picture is composed at the size the terminal will DRAW it** (`gutter_px`, `blit_cell`),
+  nearest-neighbour, sampled at pixel centres — the `screen::halfblocks` / `video::fit_maps`
+  rule. Hand the terminal a 56x56 picture for a 32x32 hole and *it* resamples with whatever
+  filter it likes, which is exactly the softness `08902d5` removed one layer further out.
+  Verified categorically on a real screenshot: the party gutter contains **five** colours, the
+  four Game Boy shades plus the terminal's own background.
 - **ONE focus drives the picture and the numbers** (`trainer_view::Focus`, `focus_ring`,
   `focus_at`). The sprite used to switch to the opponent on its own while the stat block kept
   rendering the player's party, so during a battle the panel showed one Pokémon's face over
@@ -3450,6 +3470,61 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   tracker is for. `Tab` walks a ring that **starts at the opponent in a battle**;
   `App::trainer_sel` indexes the ring, not the party, and snaps to 0 on a battle transition
   (`App::trainer_fighting`) because the ring changes length underneath a stale index.
+- **A PANEL PICTURE MUST HAVE A HALF-BLOCK ARM OR IT DOES NOT EXIST IN THE CAPTAIN'S
+  TERMINAL.** `new_term_image()` is `None` for anything but Kitty and iTerm2 and
+  `place_panel_image` returns on a missing image, so the trainer sprite was **invisible in
+  every VTE-family terminal** — reserving eleven blank rows and saying nothing — exactly as
+  the music cover was until `f99a033`. Two features have shipped with it; a third must not.
+  `screen::halfblocks::render` is a free function over `(rgba, w, h, rect, buf)` and needs no
+  state.
+- **A CELL IS A UNIT OF RESOLUTION *PER PROTOCOL*, and sizing a picture in cells without
+  asking which is how six smudges get shipped.** An image cell is 8x16 device pixels; a
+  half-block cell is **1x2 samples**. `trainer_view::Pictures` owns the difference: half-blocks
+  get the focused picture at **six** rows rather than three (twelve samples — legible,
+  screenshotted) and **no party pictures**, because a party slot is two rows and a Pokémon at
+  four samples was rendered, looked at, and is noise. The panel says
+  `party pictures need an image protocol` rather than drawing them anyway.
+- **`screen::halfblocks` HONOURS ALPHA NOW, and had to.** It ignored it, which is harmless for
+  its two previous callers (the game picture and the music sleeve, both opaque) and puts an
+  **opaque black slab** behind every Pokémon here, whose background is flood-filled
+  transparent. A fully transparent sample is `Color::Reset`; `▄` (`LOWER_HALF`) joined `▀`
+  because a transparent *top* half cannot be expressed with `▀` alone. A **partly**
+  transparent sample is drawn at full strength — the terminal's background is not knowable, so
+  blending towards it is a guess, and a fainted party member's state is carried by the hollow
+  marker, the empty bar and `FNT`. Note the existing colour guard passes either way: black
+  **is** in the framebuffer, as shade 0 with alpha 0.
+- **The palette and the layout primitives live in `src/screen/panel.rs`, once**, so the Gen 1
+  battle panel that `crates/terminalgb-gen1-battle` is waiting for reads the same decisions.
+  Five families and nothing outside them (structure, type, HP, status, stat stage), and
+  **every one is redundant with something a reader can also read** — a raised stat is green
+  *and* carries a `+`. Types use the 256-colour cube with a named-ANSI fallback whose
+  collisions are **declared** and chosen so no pair that occurs on one Pokémon shares a hue;
+  `no_dual_type_shares_a_colour_at_either_depth` enumerates them. **Ground and Rock are
+  further apart here than in the games** on purpose — their canonical colours are two shades
+  of one khaki and Rock/Ground is a real dual type.
+- **`rule` is LEFT-anchored** (`─ PARTY ──── 6/6`), not centred: `[ TRAINER ]` and
+  `[ BADGES ]` were two rows restating the border's own title and the eight markers, and a
+  centred label's column depends on how long it is, so the page could not be scanned down its
+  edge. `[ MOVES ]` and `[ HIDDEN ]` became **column headers**, which earn the row by being a
+  legend as well as a label.
+- **A tall picture must not half-indent the table under it.** The half-block picture reaches
+  past the identity rows, and a moves header indented over rows that are not is a legend that
+  lies about its own columns — drawn exactly once, in a screenshot. `indent_beside` **pads**
+  the beside-the-picture block to the picture's height; a blank row beside a picture is not
+  waste, it *is* the picture. `row_width` gives the rows below it their full width back.
+- **The row estimate must use the SAME composition that will be drawn.** `trainer_panel_rows`
+  called `body_lines` (no pictures), which is one row short in the terminal that gains the
+  "no party pictures" line — so the composer was handed one row too few and collapsed the
+  party to one line each. Only visible in a screenshot of that terminal.
+- **No two stats may share a label at any width.** The narrow `stat_line` tier used one letter
+  each and printed `S55 S29` — Speed and Special, indistinguishable. Two letters cost two
+  columns. `the_four_stats_never_share_a_label_at_any_width`.
+- **`MoveSlot` carries power, type and accuracy** now, from the same `Moves` entry PP already
+  came from (`animation, effect, power, type, accuracy, PP`; `macros/data.asm`). **Accuracy is
+  a fraction of 255**, because `MoveHitTest` compares it against a random byte — `$FF` is
+  100 %, `$CC` is 80 %. **Zero power is a status move, not a missing value**: the table prints
+  a dash, never a `0` (which invites comparison with a 40) and never `?` (which claims we
+  could not read it).
 - **`skip` cells are never ERASED, which is a ghosting trap.** A cell marked `skip` is left
   alone by ratatui's diff, so when a layout moves an image the text that used to be underneath
   is still on the terminal. An opaque sprite hid this; a **transparent** one shows it straight
@@ -3516,12 +3591,15 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   in its half exactly as `fit_metrics` centres the picture in its own. **When the panel wants
   more rows than the pane has it stays top-aligned** — centring an over-height panel pushes
   its header off the ceiling, and the header is the part that says whose panel it is.
-- **"The panel should scale with the game" — text cannot, so three things do.** The panel
-  takes **two fifths of the width** rather than a fixed `PANEL_W`; `sprite_rows` grows the
-  sprite band with that width (the sprite is an image, so it genuinely scales); and
-  `party_cols` grows the name/bar/type columns above the design width instead of stranding
-  the space. A fixed 40-column panel beside a picture that grows with the window reads as "a
-  footnote pinned next to a poster", which is exactly how it was reported.
+- **"The panel should scale with the game" — text cannot, so two things do.** The panel takes
+  **two fifths of the width** rather than a fixed `PANEL_W`, and `party_cols` grows the
+  name/bar/type columns above the design width instead of stranding the space. A fixed
+  40-column panel beside a picture that grows with the window reads as "a footnote pinned next
+  to a poster", which is exactly how it was reported. **`sprite_rows` used to be the third and
+  is gone** — the sprite band grew with the panel, which is what made the picture "TOO HUGE";
+  the pictures are icons in a fixed-width gutter now, so a wider window buys more *text* and a
+  taller one buys more *party*. `party_cols`'s tiers key on the width **left of the gutter**,
+  not the panel's, or the design width falls into the tier below.
 - **The controls and plugin state live on a ONE-ROW BAR across the top** (`render_top_bar`),
   not along the bottom and not inside the trainer panel. The bottom row is the row a terminal
   clips when its pixel height is not a whole number of cells, which is how the controls were

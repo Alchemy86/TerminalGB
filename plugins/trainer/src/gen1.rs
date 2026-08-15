@@ -317,12 +317,15 @@ impl Status {
     }
 }
 
-/// One move slot: the move's internal id and its current/maximum PP.
+/// One move slot: the move's internal id, its current/maximum PP, and the
+/// three facts a turn is actually decided on — what it hits for, what type it
+/// is, and how often it lands.
 ///
 /// PP is packed: the low six bits are the remaining PP, the top two are the
 /// number of PP Ups applied (`ram/wram.asm`, `wPartyMon1PP`). Maximum PP
 /// therefore has to come from the move's own data in ROM, which is why
-/// [`super::rom`] resolves it.
+/// [`super::rom`] resolves it — and once that table is being read, power, type
+/// and accuracy are the next three bytes of the same entry.
 #[derive(Debug, Clone, Default)]
 pub struct MoveSlot {
     pub id: u8,
@@ -330,6 +333,19 @@ pub struct MoveSlot {
     pub pp: u8,
     pub pp_max: u8,
     pub pp_ups: u8,
+    /// Base power. **Zero means the move does no direct damage** — a status
+    /// move — which is a fact, not a missing value, so the panel prints a dash
+    /// rather than a `0` or the unknown glyph.
+    pub power: u8,
+    /// The move's own type, which is often *not* the user's: a Pikachu's
+    /// QUICK ATTACK is Normal, and whether the same-type bonus applies is the
+    /// first thing a reader wants from this row.
+    pub type_name: String,
+    /// Accuracy as a percentage, converted from the cartridge's 0-255 byte.
+    /// 100 for a move that cannot miss on its accuracy roll — Gen 1's separate
+    /// 1-in-256 miss is a property of the engine, not of the move, and is not
+    /// folded in here.
+    pub accuracy: u8,
 }
 
 /// A Pokémon as the panel shows it, decoded from either struct form.

@@ -41,6 +41,9 @@ fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -
                 pp: 15,
                 pp_max: 15,
                 pp_ups: 0,
+                power: 95,
+                type_name: "ELECTRIC".into(),
+                accuracy: 100,
             },
             MoveSlot {
                 id: 98,
@@ -48,13 +51,32 @@ fn mon(nick: &str, name: &str, level: u8, hp: u16, max: u16, ty: (&str, &str)) -
                 pp: 0,
                 pp_max: 30,
                 pp_ups: 0,
+                power: 40,
+                type_name: "NORMAL".into(),
+                accuracy: 100,
             },
+            // A status move: zero power is a fact, and the table has to say so
+            // without printing a `0` that invites comparison with a 40.
             MoveSlot {
                 id: 45,
                 name: "GROWL".into(),
                 pp: 40,
                 pp_max: 40,
                 pp_ups: 0,
+                power: 0,
+                type_name: "NORMAL".into(),
+                accuracy: 100,
+            },
+            // …and one that can miss, so the ACC column is not all 100s.
+            MoveSlot {
+                id: 56,
+                name: "HYDRO PUMP".into(),
+                pp: 2,
+                pp_max: 5,
+                pp_ups: 0,
+                power: 120,
+                type_name: "WATER".into(),
+                accuracy: 80,
             },
         ],
         dvs: Dvs::from_bytes(0xAB, 0xCD),
@@ -100,6 +122,11 @@ fn state(battle: bool) -> TrainerState {
     ));
     st.party
         .push(mon("ZUB", "ZUBAT", 7, 3, 22, ("POISON", "FLYING")));
+    let mut asleep = mon("GHOSTY", "GASTLY", 24, 40, 55, ("GHOST", "POISON"));
+    asleep.status = Status(3);
+    st.party.push(asleep);
+    st.party
+        .push(mon("BIG", "GYARADOS", 41, 122, 130, ("WATER", "FLYING")));
     if battle {
         st.battle = BattleKind::Trainer;
         st.trainer_name = "JOEY".into();
@@ -146,18 +173,36 @@ fn draw(
     w: usize,
 ) {
     let inner = w.saturating_sub(2);
+    // Compose exactly as the frontend does, with pictures asked for and the
+    // rows a generous terminal would give, so the printed shape is the shape.
+    let body = tv::compose_body(st, focus, detail, inner, tv::Pictures::Image, 60);
     println!("\n{title} — {w} columns");
     println!("┌{}┐", "─".repeat(inner));
     for l in tv::plain(&tv::header_lines(st, "Pokémon Blue", inner)) {
         println!("│{l:<inner$}│");
     }
-    println!("│{:<inner$}│", "");
-    println!("│{:^inner$}│", "( sprite )");
-    println!("│{:<inner$}│", "");
-    if !st.enemy_team.is_empty() && !detail {
-        println!("│{:^inner$}│", "( team strip )");
-    }
-    for l in tv::plain(&tv::body_lines(st, focus, detail, inner)) {
+    // The gutters are terminal images, which this tool cannot draw — so it
+    // marks the cells they occupy instead. That is the point of printing them:
+    // a gutter cell that does not line up with the text beside it is a bug
+    // this view makes obvious and a unit test would state in numbers.
+    let g = body.gutter as usize;
+    let mark: Vec<usize> = {
+        let mut rows = Vec::new();
+        if let Some((r, n)) = body.focus_gutter {
+            rows.extend(r as usize..(r + n) as usize);
+        }
+        if let Some((r, n)) = body.party_gutter {
+            rows.extend(r as usize..(r + n * tv::SLOT_ROWS) as usize);
+        }
+        rows
+    };
+    for (i, l) in tv::plain(&body.lines).into_iter().enumerate() {
+        let l = if g > 0 && mark.contains(&i) {
+            // `▚` stands in for the picture; the text is untouched.
+            format!("{}{}", "▚".repeat(g), &l[l.len().min(g)..])
+        } else {
+            l
+        };
         println!("│{l:<inner$}│");
     }
     println!("└{}┘", "─".repeat(inner));

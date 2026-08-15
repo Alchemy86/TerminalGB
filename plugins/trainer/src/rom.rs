@@ -34,7 +34,7 @@ const MEW_BASE_STATS: usize = flat(0x01, 0x425B);
 /// that Pokémon's Pokédex number; `data/pokemon/dex_order.asm`.
 const POKEDEX_ORDER: usize = flat(0x10, 0x5024);
 /// `Moves` — `0E:4000`. Six bytes per move (`MOVE_LENGTH`), indexed by move id
-/// minus one; the last byte is base PP.
+/// minus one. See [`move_entry`] for the fields.
 const MOVES: usize = flat(0x0E, 0x4000);
 
 /// `BASE_DATA_SIZE` — `constants/pokemon_data_constants.asm`.
@@ -66,6 +66,26 @@ mod base {
     pub const SPRITE_DIMS: usize = 10;
     /// `dw <mon>PicFront, <mon>PicBack`.
     pub const FRONT_PIC: usize = 11;
+}
+
+/// Offsets inside a `Moves` entry.
+///
+/// From the `move` macro in `pret/pokered`'s `macros/data.asm`, which
+/// `data/moves/moves.asm` invokes once per move:
+/// `move: MACRO / db \1, \2, \3, \4, \5, \6` — animation, effect, power, type,
+/// accuracy, PP. Verified against the retail cartridge: THUNDERBOLT (id 85) is
+/// `[85, 6, 95, 23, 255, 15]` — 95 power, type 23 (`ELECTRIC`), `$FF` accuracy
+/// (100 %), 15 PP; HYDRO PUMP (id 56) is `[56, 0, 120, 21, 204, 5]` — 120
+/// power, `WATER`, `$CC` (80 %), 5 PP.
+mod move_entry {
+    #[allow(dead_code)] // kept for symmetry with the entry layout
+    pub const ANIMATION: usize = 0;
+    #[allow(dead_code)]
+    pub const EFFECT: usize = 1;
+    pub const POWER: usize = 2;
+    pub const TYPE: usize = 3;
+    pub const ACCURACY: usize = 4;
+    pub const PP: usize = 5;
 }
 
 /// The cartridge image, with the accessors a tracker needs.
@@ -188,10 +208,27 @@ impl RomTables {
 
     /// Base PP for a move id, from the `Moves` table.
     pub fn move_base_pp(&self, id: u8) -> u8 {
+        self.move_field(id, move_entry::PP)
+    }
+
+    /// One byte of a move's `Moves` entry. See [`move_entry`] for the layout.
+    fn move_field(&self, id: u8, field: usize) -> u8 {
         if id == 0 {
             return 0;
         }
-        self.byte(MOVES + (id as usize - 1) * MOVE_LENGTH + 5)
+        self.byte(MOVES + (id as usize - 1) * MOVE_LENGTH + field)
+    }
+
+    /// A move's accuracy as a **percentage**.
+    ///
+    /// The cartridge stores it as a fraction of 255 (`MoveHitTest` compares
+    /// the byte against a random one), so `$FF` is 100 %, `$D8` is 85 % and
+    /// `$CC` is 80 %. Rounded to nearest, which reproduces the percentages
+    /// `pret/pokered`'s own `data/moves/moves.asm` writes in its `percent`
+    /// macro arguments.
+    pub fn move_accuracy_percent(&self, id: u8) -> u8 {
+        let raw = self.move_field(id, move_entry::ACCURACY) as u16;
+        ((raw * 100 + 127) / 255) as u8
     }
 
     /// Decode a Pokémon's front picture to Game Boy 2bpp tiles.
@@ -234,6 +271,9 @@ impl RomTables {
             pp: raw_pp & 0x3F,
             pp_max: base_pp.saturating_add((base_pp / 5).saturating_mul(ups)),
             pp_ups: ups,
+            power: self.move_field(id, move_entry::POWER),
+            type_name: self.type_name(self.move_field(id, move_entry::TYPE)),
+            accuracy: self.move_accuracy_percent(id),
         }
     }
 
@@ -292,6 +332,74 @@ mod tests {
         assert_eq!(MOVES, 0x3_8000);
     }
 
+    /// The six-byte `Moves` entry is decoded field by field, on a **synthetic**
+    /// cartridge — no game data is vendored here, so the fixture writes the
+    /// bytes the retail one is known to hold rather than shipping them.
+    ///
+    /// The two rows are the pair used to establish the layout in the first
+    /// place: THUNDERBOLT and HYDRO PUMP, the second of which is the only one
+    /// of the two whose accuracy is not `$FF`, so it is what pins the
+    /// percentage conversion rather than the identity `255 -> 100`.
+    #[test]
+    fn a_moves_entry_decodes_power_type_and_accuracy() {
+        let mut rom = vec![0u8; 0x10_0000];
+        let put = |rom: &mut Vec<u8>, id: u8, e: [u8; 6]| {
+            let at = MOVES + (id as usize - 1) * MOVE_LENGTH;
+            rom[at..at + 6].copy_from_slice(&e);
+        };
+        // animation, effect, power, type, accuracy, pp
+        put(&mut rom, 85, [85, 6, 95, 23, 0xFF, 15]); // THUNDERBOLT
+        put(&mut rom, 56, [56, 0, 120, 21, 0xCC, 5]); // HYDRO PUMP
+        put(&mut rom, 45, [45, 19, 0, 0, 0xFF, 40]); // GROWL — a status move
+        let r = RomTables::new(rom);
+
+        let tb = r.move_slot(85, 15);
+        assert_eq!(tb.power, 95);
+        assert_eq!(tb.accuracy, 100, "$FF is 100 %");
+        assert_eq!(tb.pp_max, 15);
+
+        let hp = r.move_slot(56, 5);
+        assert_eq!(hp.power, 120);
+        // $CC = 204; 204/255 = 80 %. The one row that proves the conversion is
+        // a conversion and not a pass-through.
+        assert_eq!(hp.accuracy, 80);
+        assert_eq!(hp.pp_max, 5);
+
+        // Zero power is a *status move*, not a missing value — the panel is
+        // required to tell those apart.
+        assert_eq!(r.move_slot(45, 40).power, 0);
+
+        // A PP Up raises the maximum without touching the other three fields.
+        let upped = r.move_slot(85, 15 | (3 << 6));
+        assert_eq!(upped.pp_ups, 3);
+        assert_eq!(upped.pp_max, 15 + 3 * 3);
+        assert_eq!((upped.power, upped.accuracy), (95, 100));
+    }
+
+    /// Every accuracy the cartridge can store converts to a percentage in
+    /// range, and the conversion is monotonic — so a less accurate move never
+    /// prints a higher number.
+    #[test]
+    fn accuracy_converts_monotonically_and_stays_in_range() {
+        // Move id `n` holds accuracy byte `n`, so ids 1..=255 cover every raw
+        // value except 0 — which id 0 (no move at all) already answers as 0.
+        let mut rom = vec![0u8; 0x10_0000];
+        for id in 1u16..=255 {
+            let at = MOVES + (id as usize - 1) * MOVE_LENGTH;
+            rom[at + move_entry::ACCURACY] = id as u8;
+        }
+        let r = RomTables::new(rom);
+        assert_eq!(r.move_accuracy_percent(0), 0, "no move has no accuracy");
+        let mut last = 0u8;
+        for id in 1u16..=255 {
+            let pct = r.move_accuracy_percent(id as u8);
+            assert!(pct <= 100, "raw {id} converts to {pct} %");
+            assert!(pct >= last, "raw {id} went backwards: {last} -> {pct}");
+            last = pct;
+        }
+        assert_eq!(last, 100, "$FF must be 100 %");
+    }
+
     #[test]
     fn sprite_banks_follow_the_ranges_in_pics_asm() {
         assert_eq!(sprite_bank(0x15), 0x01); // MEW is special-cased
@@ -316,6 +424,10 @@ mod tests {
         assert!(r.base_stats(0x99).is_none());
         assert_eq!(r.move_name(1), "");
         assert_eq!(r.move_base_pp(1), 0);
+        assert_eq!(r.move_accuracy_percent(1), 0);
+        let slot = r.move_slot(1, 0);
+        assert_eq!((slot.power, slot.accuracy), (0, 0));
+        assert!(slot.type_name.is_empty());
         assert!(r.front_sprite(0x99).is_none());
     }
 
@@ -329,6 +441,7 @@ mod tests {
             pp: 0b11_010101 & 0x3F,
             pp_max: 35 + (35 / 5) * 3,
             pp_ups: 3,
+            ..Default::default()
         };
         assert_eq!(slot.pp, 21);
         assert_eq!(slot.pp_max, 56); // 35 base + 3 x 7

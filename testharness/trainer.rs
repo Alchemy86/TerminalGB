@@ -1461,9 +1461,10 @@ fn print_panel(st: &terminalgb_plugin_trainer::TrainerState) {
         let mut term = Terminal::new(TestBackend::new(tv::PANEL_W, 30)).unwrap();
         term.draw(|f| {
             let area = Rect::new(0, 0, tv::PANEL_W, 30);
-            // No sprite here: a terminal image is not text and cannot be shown
-            // in a text dump. It is drawn by the TUI into `layout().sprite`.
-            let l = tv::layout(area, false);
+            // No pictures here: a terminal image is not text and cannot be
+            // shown in a text dump. The TUI draws them into the gutters
+            // `layout()` reserves — see `tv::Pictures`.
+            let l = tv::layout(area, tv::Pictures::None);
             let w = l.body.width as usize;
             f.render_widget(tv::panel_block(title), l.frame);
             f.render_widget(

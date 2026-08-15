@@ -288,6 +288,22 @@ const NO_AUDIO_NOTICE: &str =
      on Linux that needs ALSA headers (libasound2-dev / alsa-lib-devel) — or \
      use a prebuilt release binary, which ships with sound.";
 
+/// What a terminal that will not have 256 colours is told about the trainer
+/// panel's type colours.
+///
+/// The panel is fully legible either way — [`crate::screen::panel`] carries no
+/// fact in colour alone — so this is not a warning that anything is broken.
+/// It is here for the same reason [`HALFBLOCKS_NOTICE`] is: a limit of the
+/// host that nobody has been told about reads as a defect in the emulator, and
+/// a palette that silently degraded is one nobody can debug.
+const ANSI_PALETTE_NOTICE: &str =
+    "colour: this terminal does not advertise 256 colours ($COLORTERM and \
+     $TERM), so the trainer panel's fifteen Pokémon types are drawn from the \
+     sixteen named ones and some of them share a hue. Every type is still \
+     named in text beside its colour, and no two types that occur together on \
+     one Pokémon share one. Set COLORTERM=truecolor, or use a TERM naming 256 \
+     colours, for one hue per type.";
+
 /// Number of save-state slots the terminal exposes (`1`/`2`/`3`).
 const NUM_SLOTS: u32 = 3;
 
@@ -851,20 +867,23 @@ struct Session {
     /// Its own id, because Kitty images are addressed by id and reusing the
     /// game's would replace the picture (see `crate::termimage`).
     sprite_image: Option<TermImage>,
-    /// Species currently encoded into `sprite_image`, so an unchanged party
-    /// re-encodes nothing.
-    sprite_key: Option<(u8, Palette)>,
+    /// Species + palette + the gutter's pixel size, so an unchanged picture
+    /// re-encodes nothing. The pixel size is in the key because the picture is
+    /// composed **at the size the terminal will draw it**, so a resize has to
+    /// recompose even when the Pokémon has not changed.
+    sprite_key: Option<(u8, Palette, (u32, u32))>,
     /// RGBA scratch for the sprite, reused so drawing it allocates nothing.
     sprite_rgba: Vec<u8>,
     sprite_dims: (u32, u32),
-    /// The opposing trainer's roster, composed into ONE wide strip rather than
-    /// six images. Six images means six ids, six placements and six PNGs a
-    /// frame; one strip with transparent gutters looks identical and costs what
-    /// a single sprite costs. See `compose_team_strip`.
+    /// **The player's party, composed into ONE tall column rather than six
+    /// images.** Six images means six ids, six placements and six PNGs a
+    /// frame; one column with transparent gutters looks identical and costs
+    /// what a single sprite costs — which is what makes "always show all six"
+    /// affordable at all. See `compose_party_column`.
     team_image: Option<TermImage>,
-    /// Species + fainted flags + palette, so an unchanged roster is not
-    /// recomposed.
-    team_key: Option<(Vec<(u8, bool)>, Palette)>,
+    /// Species + fainted flags + palette + cell pixel size, so an unchanged
+    /// party is not recomposed.
+    team_key: Option<PartyKey>,
     team_rgba: Vec<u8>,
     team_dims: (u32, u32),
     /// Whether each panel picture was on screen last frame, so one that has
@@ -1477,6 +1496,16 @@ impl App {
         // over the picture in every one of them.
         if app.picker.protocol_type() == ProtocolType::Halfblocks {
             app.config_warnings.push(HALFBLOCKS_NOTICE.to_string());
+        }
+        // **Decided once, here, and never per span.** `type_color` is called
+        // from inside rendering where there is no room for another parameter,
+        // so the depth is a process-wide value like `sound::output_volume`'s
+        // level — and, like it, it is set on the production path only, never
+        // in `build`, which the render tests construct in parallel.
+        let depth = crate::screen::panel::Depth::from_env();
+        crate::screen::panel::set_depth(depth);
+        if depth == crate::screen::panel::Depth::Ansi {
+            app.config_warnings.push(ANSI_PALETTE_NOTICE.to_string());
         }
         app.pending_peer = pending_peer;
         if let Some(p) = &app.pending_peer {
@@ -4335,22 +4364,33 @@ impl App {
         let inner = panel_w.saturating_sub(2) as usize;
         let st = p.state();
         let focus = tv::focus_at(st, self.trainer_sel);
-        let lines = tv::body_lines(st, focus, self.trainer_detail, inner).len() as u16;
-        // The pictures are *asked for* here rather than decided: `layout_with_team`
-        // still refuses either if the block turns out too short, and asking for
-        // them cannot make the block shorter than the text needs.
-        let sprite = u16::from(
-            !self.trainer_detail
-                && focus
-                    .and_then(|fo| tv::focused_mon(st, fo))
-                    .is_some_and(|m| m.species != 0),
-        ) * tv::sprite_rows(panel_w.saturating_sub(2));
-        let team = u16::from(
-            !self.trainer_detail
-                && !st.enemy_team.is_empty()
-                && panel_w.saturating_sub(2) >= tv::TEAM_MIN_W,
-        ) * tv::TEAM_ROWS;
-        2 + tv::HEADER_ROWS + sprite + team + lines
+        // The pictures need no allowance in *rows* — a sprite spans exactly the
+        // rows the text beside it already needed, which is what stops a party
+        // of six pictures making the panel taller than a party of six lines.
+        //
+        // But **it must be the same composition that will be drawn**, because
+        // the picture capability does change the line count in one place: a
+        // terminal that cannot draw the party pictures gains the line that says
+        // so. Estimating without it left the composer one row short of its full
+        // tier and collapsed the party to one line each — a redesign
+        // regression that only showed up in a screenshot of the terminal that
+        // has that line.
+        let pictures = self.trainer_pictures();
+        let lines =
+            tv::compose_body(st, focus, self.trainer_detail, inner, pictures, 0).rows();
+        2 + tv::HEADER_ROWS + lines
+    }
+
+    /// What the trainer panel's pictures can be drawn with, in this terminal.
+    ///
+    /// One place, so the row estimate and the render cannot disagree about it.
+    #[cfg(feature = "plugin-trainer")]
+    fn trainer_pictures(&self) -> tv::Pictures {
+        match self.session.as_ref() {
+            Some(s) if s.sprite_image.is_some() => tv::Pictures::Image,
+            Some(_) => tv::Pictures::Halfblocks,
+            None => tv::Pictures::None,
+        }
     }
 
     #[cfg(not(feature = "plugin-trainer"))]
@@ -4591,39 +4631,50 @@ impl App {
         let species =
             focus.and_then(|fo| tv::focused_mon(plugin.state(), fo).map(|m| m.species));
 
-        let want_sprite = species.is_some() && session.sprite_image.is_some();
-        // The team strip is progressive: asked for only in a trainer battle
-        // with a roster that read back, and granted only if the panel has the
-        // width and the spare rows. Where it is refused the roster still shows
-        // — as the marker line inside `[ OPPONENT ]`.
-        let team: Vec<terminalgb_plugin_trainer::TeamMon> =
-            if plugin.state().battle == BattleKind::Trainer {
-                plugin.state().enemy_team.clone()
-            } else {
-                Vec::new()
-            };
-        // Not in the detail view: that is a request for a page of numbers, and
-        // three rows of pictures there costs the bottom of the stat block. The
-        // roster is still reported, as a caption under the numbers.
-        let want_team = !team.is_empty() && !detail && session.team_image.is_some();
-        // Compose the text FIRST and tell the layout how many rows it wants:
-        // the width does not depend on the pictures, and the pictures must only
-        // be granted space the numbers do not need. A battle's `[ OPPONENT ]`
-        // block is a dozen rows on its own, and it must never be the reason the
-        // party falls off the bottom.
+        // **A picture is possible in every terminal, not only in the two that
+        // speak an image protocol.** `sprite_image` is `None` for anything but
+        // Kitty and iTerm2, and asking `is_some()` here is precisely what made
+        // the whole feature invisible in the captain's own terminal — a
+        // VTE-family one, which Fedora builds without sixel. Half-blocks are
+        // the fallback the game picture and the music sleeve already take,
+        // and `tv::Pictures` owns what each of the two can actually carry.
+        let halfblocks = session.sprite_image.is_none();
+        let has_subject = species.is_some() || !plugin.state().party.is_empty();
+        let want_pictures = if !has_subject {
+            tv::Pictures::None
+        } else if halfblocks {
+            tv::Pictures::Halfblocks
+        } else {
+            tv::Pictures::Image
+        };
+
+        // Compose the text FIRST and let it say where its pictures go: the
+        // width does not depend on them, a gutter costs columns rather than
+        // rows, and the composer is the only thing that knows how many rows
+        // precede each block.
         let width = area.width.saturating_sub(2) as usize;
+        let rows_for_body = area
+            .height
+            .saturating_sub(2)
+            .saturating_sub(tv::HEADER_ROWS);
+        let body = tv::compose_body(
+            plugin.state(),
+            focus,
+            detail,
+            width,
+            want_pictures,
+            rows_for_body,
+        );
         let mut header = tv::header_lines(plugin.state(), game.label(), width);
         // The cable, where the player is already looking. Same source as the
         // Status row's `Link`, so the two cannot drift.
         if let Some(l) = link_row.as_deref() {
             header.push(tv::link_line(l, link_busy, width));
         }
-        let lines = tv::body_lines(plugin.state(), focus, detail, width);
         // Laid out against the whole column, then **centred as a block** so the
         // panel sits at the same height as the picture beside it — which
         // `fit_metrics` has always centred. See `PanelLayout::centre_in`.
-        let l = tv::layout_with_team(area, want_sprite, want_team, lines.len() as u16)
-            .centre_in(area, lines.len() as u16);
+        let l = tv::layout_with_pictures(area, &body).centre_in(area, body.rows());
         // The panel's own rectangle is the frame it actually drew, not the
         // column it was offered: the "never touches the picture" invariant is
         // about drawn cells, and after centring those are a subset.
@@ -4634,102 +4685,149 @@ impl App {
             " Trainer · d detail · Tab next "
         };
 
-        // Encode both pictures before dropping the plugin borrow.
-        let mut sprite_ready = false;
-        if l.sprite.height > 0 {
-            if let Some(species) = species {
-                if session.sprite_key != Some((species, palette)) {
-                    if let Some(img) = plugin.sprite(species) {
-                        encode_sprite(
-                            &img.pixels,
-                            img.width,
-                            img.height,
-                            palette,
-                            &mut session.sprite_rgba,
-                        );
-                        session.sprite_dims = (img.width as u32, img.height as u32);
-                        session.sprite_key = Some((species, palette));
-                    } else {
-                        session.sprite_key = None;
-                        session.sprite_dims = (0, 0);
-                        session.sprite_rgba.clear();
-                    }
-                }
-                sprite_ready = session.sprite_dims.0 > 0;
+        // Where each picture lands, in cells. `gutter_rect` returns `None` for
+        // rows the body no longer has, so a picture can never hang below the
+        // text it belongs to.
+        let focus_rect = body
+            .focus_gutter
+            .and_then(|(row, rows)| l.gutter_rect(row, rows));
+        let party_rect = body
+            .party_gutter
+            .and_then(|(row, slots)| l.gutter_rect(row, slots * tv::SLOT_ROWS));
+
+        // Encode both pictures before dropping the plugin borrow. Each is
+        // composed to the gutter's own pixel size, so the terminal scales by
+        // exactly 1:1 and the sampling stays nearest-neighbour crisp.
+        let mut focus_ready = false;
+        if let (Some(rect), Some(species)) = (focus_rect, species) {
+            let px = gutter_px(rect, font_w, font_h);
+            if session.sprite_key != Some((species, palette, px)) {
+                session.sprite_dims = compose_sprite_cell(
+                    plugin,
+                    species,
+                    false,
+                    palette,
+                    px,
+                    &mut session.sprite_rgba,
+                )
+                .unwrap_or((0, 0));
+                session.sprite_key = Some((species, palette, px));
             }
+            focus_ready = session.sprite_dims.0 > 0;
         }
-        if l.team.height > 0 {
-            // Keyed on species *and* whether each is standing, so the strip is
+        let mut party_ready = false;
+        if let Some(rect) = party_rect {
+            let slots: Vec<(u8, bool)> = plugin
+                .state()
+                .party
+                .iter()
+                .map(|m| (m.species, m.is_fainted()))
+                .collect();
+            let px = gutter_px(
+                Rect::new(rect.x, rect.y, rect.width, tv::SLOT_ROWS),
+                font_w,
+                font_h,
+            );
+            // Keyed on species *and* whether each is standing, so the column is
             // recomposed exactly when one of them faints and not once a frame.
-            let key: Vec<(u8, bool)> =
-                team.iter().map(|m| (m.species, m.is_fainted())).collect();
-            if session.team_key.as_ref().map(|(k, p)| (k, *p)) != Some((&key, palette)) {
-                session.team_dims =
-                    compose_team_strip(plugin, &team, palette, &mut session.team_rgba)
-                        .unwrap_or((0, 0));
-                session.team_key = Some((key, palette));
+            if session.team_key.as_ref().map(|(k, p, q)| (k, *p, *q))
+                != Some((&slots, palette, px))
+            {
+                session.team_dims = compose_party_column(
+                    plugin,
+                    &slots,
+                    palette,
+                    px,
+                    &mut session.team_rgba,
+                )
+                .unwrap_or((0, 0));
+                session.team_key = Some((slots, palette, px));
             }
+            party_ready = session.team_dims.0 > 0;
         }
 
         f.render_widget(tv::panel_block(title), l.frame);
         f.render_widget(Paragraph::new(header), l.header);
-        f.render_widget(Paragraph::new(lines), l.body);
+        f.render_widget(Paragraph::new(body.lines), l.body);
 
         // The panel is drawn *before* the game picture, so `ui_sig` still holds
         // the previous frame's signature here — comparing against it is exactly
         // the "something may have painted over the image" test.
         let ui_changed = self.ui_sig != Some(sig);
+        let show_focus = focus_ready && focus_rect.is_some();
+        let show_party = party_ready && party_rect.is_some();
         // A picture that stops being drawn does not stop being displayed: a
-        // Kitty placement lives until it is deleted. Opening the detail view
-        // retires the team strip and a battle ending retires the sprite, and
-        // without this the retired picture hangs over whatever replaced it.
-        let show_sprite = sprite_ready && l.sprite.height > 0;
-        let show_team = l.team.height > 0 && session.team_dims.0 > 0;
+        // Kitty placement lives until it is deleted. Leaving the detail view
+        // retires one gutter and a battle ending retires the other, and without
+        // this the retired picture hangs over whatever replaced it.
         let mut retired = false;
-        if session.sprite_shown && !show_sprite {
+        if session.sprite_shown && !show_focus {
             if let Some(img) = session.sprite_image.as_mut() {
                 let seq = img.erase().to_string();
                 session.pending_wire.push_str(&seq);
                 retired = true;
             }
         }
-        if session.team_shown && !show_team {
+        if session.team_shown && !show_party {
             if let Some(img) = session.team_image.as_mut() {
                 let seq = img.erase().to_string();
                 session.pending_wire.push_str(&seq);
                 retired = true;
             }
         }
-        session.sprite_shown = show_sprite;
-        session.team_shown = show_team;
+        session.sprite_shown = show_focus && !halfblocks;
+        session.team_shown = show_party && !halfblocks;
         self.full_redraw |= retired;
-        if show_sprite {
-            let (sw, sh) = session.sprite_dims;
-            let (rect, _) = fit_metrics(l.sprite, sw, sh, font_w, font_h);
-            self.sprite_rect = place_panel_image(
-                f,
-                session.sprite_image.as_mut(),
-                &session.sprite_rgba,
-                (sw, sh),
-                rect,
-                ui_changed,
-                modal,
-                &mut session.pending_wire,
-            );
+
+        self.sprite_rect = None;
+        if show_focus {
+            let rect = focus_rect.expect("checked by show_focus");
+            let dims = session.sprite_dims;
+            if halfblocks {
+                crate::screen::halfblocks::render(
+                    &session.sprite_rgba,
+                    dims.0,
+                    dims.1,
+                    rect,
+                    f.buffer_mut(),
+                );
+                self.sprite_rect = Some(rect);
+            } else {
+                self.sprite_rect = place_panel_image(
+                    f,
+                    session.sprite_image.as_mut(),
+                    &session.sprite_rgba,
+                    dims,
+                    rect,
+                    ui_changed,
+                    modal,
+                    &mut session.pending_wire,
+                );
+            }
         }
-        if show_team {
-            let (tw, th) = session.team_dims;
-            let (rect, _) = fit_metrics(l.team, tw, th, font_w, font_h);
-            place_panel_image(
-                f,
-                session.team_image.as_mut(),
-                &session.team_rgba,
-                (tw, th),
-                rect,
-                ui_changed,
-                modal,
-                &mut session.pending_wire,
-            );
+        if show_party {
+            let rect = party_rect.expect("checked by show_party");
+            let dims = session.team_dims;
+            if halfblocks {
+                crate::screen::halfblocks::render(
+                    &session.team_rgba,
+                    dims.0,
+                    dims.1,
+                    rect,
+                    f.buffer_mut(),
+                );
+            } else {
+                place_panel_image(
+                    f,
+                    session.team_image.as_mut(),
+                    &session.team_rgba,
+                    dims,
+                    rect,
+                    ui_changed,
+                    modal,
+                    &mut session.pending_wire,
+                );
+            }
         }
     }
 
@@ -5905,21 +6003,6 @@ fn render_quit(f: &mut Frame<'_>) {
 /// `GB_TERM_IMAGE=rgb` escape hatch, or a truecolour PNG) renders exactly the
 /// opaque picture it renders today rather than a hole full of undefined colour.
 #[cfg(feature = "plugin-trainer")]
-fn encode_sprite(pixels: &[u8], w: usize, h: usize, palette: Palette, out: &mut Vec<u8>) {
-    let bg = terminalgb_plugin_trainer::sprite::background_mask(pixels, w, h);
-    out.clear();
-    out.reserve(pixels.len() * 4);
-    for (i, &px) in pixels.iter().enumerate() {
-        let [r, g, b] = palette.shade(px);
-        let a = if bg.get(i).copied().unwrap_or(false) {
-            0
-        } else {
-            255
-        };
-        out.extend_from_slice(&[r, g, b, a]);
-    }
-}
-
 /// Fit a bar of segments into `width`, shrinking each through **its own ladder
 /// of shorter forms** before any of it is dropped.
 ///
@@ -6901,82 +6984,229 @@ impl App {
     }
 }
 
-/// One cell of the team strip, in pixels. The largest Gen 1 picture is 56×56,
-/// so every roster slot gets the same box whatever its occupant's size and the
-/// row does not jitter as the trainer's team changes.
+/// What identifies the composed party column: the species in each slot and
+/// whether it is standing, the palette, and the pixel size of one cell.
+///
+/// A named type because the tuple is four deep and `clippy::type_complexity`
+/// is right that a reader cannot hold it — and because the *cell size* being
+/// part of the identity is the non-obvious half: the column is composed at the
+/// size the terminal will draw it, so a resize has to recompose even when
+/// nothing about the party has changed.
 #[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
-const TEAM_CELL_PX: usize = 56;
+type PartyKey = (Vec<(u8, bool)>, Palette, (u32, u32));
 
-/// Alpha applied to a fainted team member, so it reads as *out* rather than as
-/// missing. Both protocols alpha-blend, so this is a ghost over the panel
+/// Alpha applied to a fainted party member, so it reads as *out* rather than
+/// as missing. Both protocols alpha-blend, so this is a ghost over the panel
 /// rather than a colour we had to guess at.
 #[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
 const FAINTED_ALPHA: u8 = 80;
 
-/// Compose the opposing trainer's roster into **one** wide RGBA strip:
-/// `n × 56` by `56`, each Pokémon bottom-centred in its own cell, background
-/// transparent, fainted members ghosted, unreadable slots left empty.
+/// Largest a composed gutter cell is allowed to get, per axis.
 ///
-/// One image rather than six is the whole design. Six would mean six terminal
-/// image ids, six placements and six PNG encodes every time the strip changed,
-/// in a panel that is 38 cells wide — where each would land under six cells
-/// anyway. A single strip is transmitted once, scaled by the terminal to the
-/// team rectangle, and deduplicated by the same whole-image hash the game
-/// picture uses, so a roster that has not changed costs nothing at all.
+/// The biggest Gen 1 picture is 56×56, so past this the composer would be
+/// paying to upscale something the terminal upscales for nothing — and every
+/// pixel over it is bytes on the wire. It only binds on a HiDPI cell (see
+/// `cell_scale`), where a five-column gutter can be 160 device pixels wide.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
+const CELL_MAX_PX: u32 = 64;
+
+/// The pixel size to compose a gutter picture at: the rectangle's own size in
+/// device pixels, bounded by [`CELL_MAX_PX`] **without changing its aspect**.
 ///
-/// Returns `None` when nothing could be drawn, which the caller reports as the
-/// marker line rather than as an empty band.
-#[cfg(feature = "plugin-trainer")]
-fn compose_team_strip(
-    plugin: &mut TrainerPlugin,
-    team: &[terminalgb_plugin_trainer::TeamMon],
-    palette: Palette,
-    out: &mut Vec<u8>,
-) -> Option<(u32, u32)> {
-    if team.is_empty() {
-        return None;
+/// Composing at the destination size is what keeps a small sprite crisp. Hand
+/// the terminal a 56×56 picture for a 32×32 hole and *it* resamples, with
+/// whatever filter it likes — which is exactly the softness
+/// `screen::halfblocks` was written to remove one layer further out. Hand it
+/// the picture already at 32×32 and there is nothing left to resample.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
+fn gutter_px(rect: Rect, font_w: u16, font_h: u16) -> (u32, u32) {
+    let w = (rect.width as u32) * (font_w.max(1) as u32);
+    let h = (rect.height as u32) * (font_h.max(1) as u32);
+    if w == 0 || h == 0 {
+        return (0, 0);
     }
-    let w = team.len() * TEAM_CELL_PX;
-    let h = TEAM_CELL_PX;
-    out.clear();
-    out.resize(w * h * 4, 0);
+    let over = (w.max(h) as f32) / CELL_MAX_PX as f32;
+    if over <= 1.0 {
+        return (w, h);
+    }
+    (
+        ((w as f32 / over).round() as u32).max(1),
+        ((h as f32 / over).round() as u32).max(1),
+    )
+}
+
+/// Blit one Game Boy picture into an RGBA cell of `cw`×`ch` pixels at
+/// `(ox, oy)` in a buffer `stride` pixels wide. Returns whether anything
+/// landed.
+///
+/// **Nearest-neighbour, sampled at pixel centres** — the same rule as
+/// `screen::halfblocks` and `video::fit_maps`, and for the same two reasons: a
+/// Game Boy picture is four flat shades and any interpolation invents a fifth,
+/// and edge sampling never reaches the last source column or row.
+///
+/// The picture keeps its aspect inside the cell (**fit, never fill** — a
+/// cropped Pokémon is unrecognisable and recognition is the entire point) and
+/// is **bottom-centred**: Gen 1 art stands on the bottom of its own box, so
+/// aligning the feet is what makes a column of different-sized pictures read
+/// as a line-up rather than a scatter.
+///
+/// Split out from [`draw_sprite_cell`] with no plugin, no ROM and no cartridge
+/// in its signature, so the pixel rule can be tested directly — which is where
+/// a blur or a misalignment would actually live.
+#[cfg_attr(not(feature = "plugin-trainer"), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+fn blit_cell(
+    pixels: &[u8],
+    (iw, ih): (u32, u32),
+    background: &[bool],
+    palette: Palette,
+    alpha: u8,
+    out: &mut [u8],
+    stride: u32,
+    (ox, oy): (u32, u32),
+    (cw, ch): (u32, u32),
+) -> bool {
+    if iw == 0 || ih == 0 || cw == 0 || ch == 0 {
+        return false;
+    }
+    let scale = (cw as f32 / iw as f32).min(ch as f32 / ih as f32);
+    let dw = ((iw as f32 * scale).round() as u32).clamp(1, cw);
+    let dh = ((ih as f32 * scale).round() as u32).clamp(1, ch);
+    let dx = ox + (cw - dw) / 2;
+    let dy = oy + (ch - dh); // bottom-aligned
     let mut drew = false;
-    for (slot, m) in team.iter().enumerate() {
-        if !m.known || m.species == 0 {
-            continue;
-        }
-        let Some(img) = plugin.sprite(m.species) else {
-            continue;
-        };
-        let (iw, ih) = (img.width, img.height);
-        if iw == 0 || ih == 0 || iw > TEAM_CELL_PX || ih > TEAM_CELL_PX {
-            continue;
-        }
-        let bg = terminalgb_plugin_trainer::sprite::background_mask(&img.pixels, iw, ih);
-        // Bottom-centred: Gen 1 art is drawn standing on the bottom of its own
-        // box, so aligning the *feet* is what makes a row of different-sized
-        // pictures look like a line-up rather than a scatter.
-        let ox = slot * TEAM_CELL_PX + (TEAM_CELL_PX - iw) / 2;
-        let oy = TEAM_CELL_PX - ih;
-        let alpha = if m.is_fainted() { FAINTED_ALPHA } else { 255 };
-        for y in 0..ih {
-            for x in 0..iw {
-                let src = y * iw + x;
-                if bg.get(src).copied().unwrap_or(false) {
-                    continue;
-                }
-                let [r, g, b] = palette.shade(img.pixels[src]);
-                let dst = ((oy + y) * w + ox + x) * 4;
+    for y in 0..dh {
+        // Pixel centres: (2j+1) * src / (2 * dst).
+        let sy = ((2 * y + 1) * ih / (2 * dh)).min(ih - 1);
+        for x in 0..dw {
+            let sx = ((2 * x + 1) * iw / (2 * dw)).min(iw - 1);
+            let src = (sy * iw + sx) as usize;
+            if background.get(src).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(&shade) = pixels.get(src) else {
+                continue;
+            };
+            let [r, g, b] = palette.shade(shade);
+            let dst = (((dy + y) * stride + dx + x) * 4) as usize;
+            if dst + 4 <= out.len() {
                 out[dst..dst + 4].copy_from_slice(&[r, g, b, alpha]);
+                drew = true;
             }
         }
-        drew = true;
     }
-    if !drew {
-        out.clear();
+    drew
+}
+
+/// [`blit_cell`], having asked the plugin for the species' picture and its
+/// transparent background.
+#[cfg(feature = "plugin-trainer")]
+#[allow(clippy::too_many_arguments)]
+fn draw_sprite_cell(
+    plugin: &mut TrainerPlugin,
+    species: u8,
+    fainted: bool,
+    palette: Palette,
+    out: &mut [u8],
+    stride: u32,
+    origin: (u32, u32),
+    cell: (u32, u32),
+) -> bool {
+    if species == 0 {
+        return false;
+    }
+    let Some(img) = plugin.sprite(species) else {
+        return false;
+    };
+    let bg = terminalgb_plugin_trainer::sprite::background_mask(
+        &img.pixels,
+        img.width,
+        img.height,
+    );
+    blit_cell(
+        &img.pixels,
+        (img.width as u32, img.height as u32),
+        &bg,
+        palette,
+        if fainted { FAINTED_ALPHA } else { 255 },
+        out,
+        stride,
+        origin,
+        cell,
+    )
+}
+
+/// One Pokémon, composed to fill `px` exactly. Used for the focused block's
+/// picture — the opponent in a battle, or `d`'s subject.
+#[cfg(feature = "plugin-trainer")]
+fn compose_sprite_cell(
+    plugin: &mut TrainerPlugin,
+    species: u8,
+    fainted: bool,
+    palette: Palette,
+    px: (u32, u32),
+    out: &mut Vec<u8>,
+) -> Option<(u32, u32)> {
+    let (w, h) = px;
+    if w == 0 || h == 0 {
         return None;
     }
-    Some((w as u32, h as u32))
+    out.clear();
+    out.resize((w * h * 4) as usize, 0);
+    if draw_sprite_cell(plugin, species, fainted, palette, out, w, (0, 0), (w, h)) {
+        Some((w, h))
+    } else {
+        out.clear();
+        None
+    }
+}
+
+/// **The whole party as ONE tall image**, one `px`-sized cell per slot.
+///
+/// One image rather than six is what makes the captain's "always show all six"
+/// affordable: six images would be six Kitty ids, six placements and six
+/// encodes every time anything moved. It is also *smaller than the single
+/// large sprite it replaces* — that one was transmitted at its native 56×56
+/// (3,136 pixels) and scaled up by the terminal, where six cells composed for
+/// a five-column gutter at an 8×16 cell are 40×32 each, 7,680 pixels for the
+/// lot but transmitted only when a Pokémon actually changes.
+///
+/// An empty slot is left transparent rather than skipped, so the cells below
+/// it stay lined up with their text rows.
+#[cfg(feature = "plugin-trainer")]
+fn compose_party_column(
+    plugin: &mut TrainerPlugin,
+    slots: &[(u8, bool)],
+    palette: Palette,
+    px: (u32, u32),
+    out: &mut Vec<u8>,
+) -> Option<(u32, u32)> {
+    let (cw, ch) = px;
+    if slots.is_empty() || cw == 0 || ch == 0 {
+        return None;
+    }
+    let h = ch * slots.len() as u32;
+    out.clear();
+    out.resize((cw * h * 4) as usize, 0);
+    let mut drew = false;
+    for (i, (species, fainted)) in slots.iter().enumerate() {
+        drew |= draw_sprite_cell(
+            plugin,
+            *species,
+            *fainted,
+            palette,
+            out,
+            cw,
+            (0, ch * i as u32),
+            (cw, ch),
+        );
+    }
+    if drew {
+        Some((cw, h))
+    } else {
+        out.clear();
+        None
+    }
 }
 
 /// Largest centred rectangle inside `area` whose footprint matches the game
@@ -10833,6 +11063,344 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // The trainer panel's party pictures
+    // -----------------------------------------------------------------------
+
+    /// A synthetic Game Boy picture: a `n`x`n` square of shade 1 with a shade-3
+    /// border, on a shade-0 field that the background mask will make
+    /// transparent. No game data — see the licence boundary in `AGENTS.md`.
+    #[cfg(feature = "plugin-trainer")]
+    fn fake_sprite(n: u32) -> (Vec<u8>, Vec<bool>) {
+        let mut px = vec![0u8; (n * n) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                let edge = x == 0 || y == 0 || x == n - 1 || y == n - 1;
+                px[(y * n + x) as usize] = if edge { 3 } else { 1 };
+            }
+        }
+        // Nothing is background here — every pixel is part of the figure — so
+        // the mask is all false and the cell fills.
+        (px, vec![false; (n * n) as usize])
+    }
+
+    /// **A party picture must never introduce a colour the Game Boy cannot
+    /// produce.** The same categorical guard as
+    /// `the_halfblock_picture_uses_only_real_game_boy_shades`, applied to the
+    /// gutter: a Game Boy emits exactly four shades, so a fifth colour is a
+    /// *categorical* error with no threshold to tune, and it is precisely what
+    /// an interpolating downscale produces.
+    ///
+    /// This is the guard the small sprites needed: making them small is
+    /// exactly what invites a resample, and the resample is what
+    /// `screen::halfblocks` was written to remove one layer further out.
+    #[cfg(feature = "plugin-trainer")]
+    #[test]
+    fn a_party_picture_uses_only_real_game_boy_shades() {
+        let palette = Palette::Grayscale;
+        let allowed: Vec<[u8; 3]> = (0..4).map(|i| palette.shade(i)).collect();
+        let (px, bg) = fake_sprite(56);
+        // Every cell size a five- or four-column gutter produces on the fonts
+        // this frontend meets, including sizes that are not integer divisors
+        // of 56 — which is where a filter would show up.
+        for (cw, ch) in [
+            (40u32, 32u32),
+            (32, 32),
+            (40, 40),
+            (24, 20),
+            (64, 64),
+            (13, 7),
+        ] {
+            let mut out = vec![0u8; (cw * ch * 4) as usize];
+            assert!(
+                blit_cell(
+                    &px,
+                    (56, 56),
+                    &bg,
+                    palette,
+                    255,
+                    &mut out,
+                    cw,
+                    (0, 0),
+                    (cw, ch)
+                ),
+                "{cw}x{ch}: nothing was drawn"
+            );
+            let mut strays = Vec::new();
+            for p in out.chunks_exact(4) {
+                if p[3] == 0 {
+                    continue; // untouched, transparent
+                }
+                let c = [p[0], p[1], p[2]];
+                if !allowed.contains(&c) && !strays.contains(&c) {
+                    strays.push(c);
+                }
+            }
+            assert!(
+                strays.is_empty(),
+                "{cw}x{ch}: {} colour(s) no Game Boy shade maps to — the \
+                 picture has been interpolated, i.e. blurred. Allowed \
+                 {allowed:?}, strays {strays:?}",
+                strays.len()
+            );
+        }
+    }
+
+    /// A picture is **fitted, never cropped**, and stands on the bottom of its
+    /// cell. A cropped Pokémon is unrecognisable, and recognition is the only
+    /// thing a five-column picture is for.
+    #[cfg(feature = "plugin-trainer")]
+    #[test]
+    fn a_party_picture_is_fitted_and_stands_on_its_feet() {
+        let palette = Palette::Grayscale;
+        let (px, bg) = fake_sprite(56);
+        // A wide, short cell: the square picture must letterbox horizontally.
+        let (cw, ch) = (40u32, 20u32);
+        let mut out = vec![0u8; (cw * ch * 4) as usize];
+        blit_cell(
+            &px,
+            (56, 56),
+            &bg,
+            palette,
+            255,
+            &mut out,
+            cw,
+            (0, 0),
+            (cw, ch),
+        );
+        let opaque = |x: u32, y: u32| out[((y * cw + x) * 4 + 3) as usize] != 0;
+        // The bottom row of the cell is drawn on…
+        assert!(
+            (0..cw).any(|x| opaque(x, ch - 1)),
+            "the picture does not reach the bottom of its cell"
+        );
+        // …and the picture is square, so a 40x20 cell has blank columns either
+        // side rather than a picture cut off at the edges.
+        assert!(!opaque(0, ch - 1), "the picture was stretched to fill");
+        assert!(!opaque(cw - 1, ch - 1), "the picture was stretched to fill");
+        // Nothing escapes the cell.
+        assert_eq!(out.len(), (cw * ch * 4) as usize);
+    }
+
+    /// A fainted party member is a **ghost, not a gap**: it is still drawn,
+    /// at reduced alpha, so the column keeps its six cells and the slot below
+    /// it stays level with its own text row.
+    #[cfg(feature = "plugin-trainer")]
+    #[test]
+    fn a_fainted_party_member_is_a_ghost_not_a_gap() {
+        let palette = Palette::Grayscale;
+        let (px, bg) = fake_sprite(16);
+        let mut out = vec![0u8; (16 * 16 * 4) as usize];
+        blit_cell(
+            &px,
+            (16, 16),
+            &bg,
+            palette,
+            FAINTED_ALPHA,
+            &mut out,
+            16,
+            (0, 0),
+            (16, 16),
+        );
+        let alphas: Vec<u8> = out.chunks_exact(4).map(|p| p[3]).collect();
+        assert!(alphas.contains(&FAINTED_ALPHA), "nothing was drawn");
+        assert!(
+            !alphas.contains(&255),
+            "a fainted member is not at full alpha"
+        );
+        assert!(
+            alphas.iter().any(|a| *a > 0),
+            "…and is not invisible either"
+        );
+    }
+
+    /// **The gutter is composed at the size the terminal will draw it**, which
+    /// is what keeps a small sprite crisp: hand the terminal a 56x56 picture
+    /// for a 32x32 hole and *it* resamples, with whatever filter it likes.
+    #[cfg(feature = "plugin-trainer")]
+    #[test]
+    fn a_gutter_picture_is_composed_at_its_destination_size() {
+        // Five columns by two rows on an ordinary 8x16 cell.
+        assert_eq!(gutter_px(Rect::new(0, 0, 5, 2), 8, 16), (40, 32));
+        // The party column is composed **cell by cell**, so the bound applies
+        // per slot and a six-slot column is six of them stacked — asking for
+        // the whole column at once would trip the bound and hand the terminal
+        // a third-size picture to scale back up, which is the blur again.
+        let cell = gutter_px(Rect::new(0, 0, 5, tv::SLOT_ROWS), 8, 16);
+        assert_eq!(cell, (40, 32));
+        assert_eq!(cell.1 * 6, 5 * tv::SLOT_ROWS as u32 * 6 / 5 * 16, "6 slots");
+        // A HiDPI cell is bounded, and the bound keeps the aspect — otherwise
+        // `fit_metrics` would letterbox the column and the cells would stop
+        // lining up with their rows.
+        let (w, h) = gutter_px(Rect::new(0, 0, 5, 2), 32, 64);
+        assert!(w <= CELL_MAX_PX && h <= CELL_MAX_PX, "{w}x{h} is unbounded");
+        assert_eq!(
+            (w as f32 / h as f32 * 100.0).round(),
+            (160.0f32 / 128.0 * 100.0).round(),
+            "the bound changed the aspect: {w}x{h}"
+        );
+        // A degenerate rectangle asks for nothing rather than dividing by zero.
+        assert_eq!(gutter_px(Rect::new(0, 0, 0, 2), 8, 16), (0, 0));
+        assert_eq!(gutter_px(Rect::new(0, 0, 5, 0), 8, 16), (0, 0));
+    }
+
+    /// **Six small party pictures must not cost more than the one large sprite
+    /// they replace**, which is the captain's explicit condition on this
+    /// redesign and the reason the party is composed as one image rather than
+    /// six.
+    ///
+    /// The comparison is like for like: the old panel encoded one 56x56 sprite
+    /// (3,136 pixels) whenever the focused Pokémon changed; the new one
+    /// composes a six-cell column at the gutter's own size whenever the party
+    /// changes. Both are **keyed**, so the steady-state cost of either is zero
+    /// — this measures the recomposition, which is what a switch or a faint
+    /// costs.
+    ///
+    /// Printed as well as asserted (`cargo test --release --lib -- --nocapture
+    /// party_column_costs`), because a figure nobody can read is a figure that
+    /// goes stale. The ceiling is deliberately loose: it is a collapse
+    /// detector, not a benchmark, and a tight one on a shared CI runner is a
+    /// flake.
+    #[cfg(feature = "plugin-trainer")]
+    #[test]
+    fn party_column_costs_no_more_than_the_sprite_it_replaces() {
+        let palette = Palette::Grayscale;
+        let (px, bg) = fake_sprite(56);
+        // The old panel: one 56x56 sprite, mapped through the palette into an
+        // RGBA buffer. `encode_sprite`, as it was.
+        let one_big = || {
+            let mut out = vec![0u8; 56 * 56 * 4];
+            blit_cell(
+                &px,
+                (56, 56),
+                &bg,
+                palette,
+                255,
+                &mut out,
+                56,
+                (0, 0),
+                (56, 56),
+            )
+        };
+        // The new panel: six cells at a five-column gutter's own pixel size.
+        let (cw, ch) = gutter_px(Rect::new(0, 0, 5, tv::SLOT_ROWS), 8, 16);
+        let six_small = || {
+            let mut out = vec![0u8; (cw * ch * 6 * 4) as usize];
+            for i in 0..6u32 {
+                blit_cell(
+                    &px,
+                    (56, 56),
+                    &bg,
+                    palette,
+                    255,
+                    &mut out,
+                    cw,
+                    (0, ch * i),
+                    (cw, ch),
+                );
+            }
+        };
+        const N: u32 = 200;
+        let t0 = std::time::Instant::now();
+        for _ in 0..N {
+            std::hint::black_box(one_big());
+        }
+        let big = t0.elapsed() / N;
+        let t1 = std::time::Instant::now();
+        for _ in 0..N {
+            six_small();
+            std::hint::black_box(());
+        }
+        let six = t1.elapsed() / N;
+        println!(
+            "party column: one 56x56 sprite {big:?}, six {cw}x{ch} cells {six:?} \
+             ({:.2}x)",
+            six.as_secs_f64() / big.as_secs_f64().max(f64::EPSILON)
+        );
+        // Six cells of 40x32 are 7,680 pixels against the single sprite's
+        // 3,136, so a little over twice the work is the honest expectation —
+        // and it is paid on a party change, not on a frame.
+        assert!(
+            six < big * 5,
+            "six party cells cost {six:?} against {big:?} for the one large \
+             sprite they replace — more than five times is a collapse, not a \
+             trade"
+        );
+        // …and both are far inside a frame, which is the figure that matters:
+        // this runs at most once per displayed frame and only on a change.
+        assert!(
+            six < std::time::Duration::from_millis(2),
+            "recomposing the party column took {six:?} of a 16.743 ms frame"
+        );
+    }
+
+    /// The panel's **text** is composed twice per displayed frame — once to
+    /// size the block, once to draw it — so its cost is on the displayed-frame
+    /// path even when no picture changes. It must stay negligible against the
+    /// 16.743 ms frame.
+    #[cfg(feature = "plugin-trainer")]
+    #[test]
+    fn composing_the_panel_text_is_negligible_against_a_frame() {
+        use terminalgb_plugin_trainer::gen1::{Dvs, Mon, MoveSlot, Status};
+        let mon = |i: u8| Mon {
+            species: 0x99,
+            dex: 25,
+            name: "BULBASAUR".into(),
+            nickname: format!("NICK{i}"),
+            level: 41,
+            hp: 20,
+            max_hp: 41,
+            status: Status(0),
+            types: ("GRASS".into(), "POISON".into()),
+            attack: 25,
+            defense: 26,
+            speed: 24,
+            special: 30,
+            moves: (0..4)
+                .map(|m| MoveSlot {
+                    id: m + 1,
+                    name: "THUNDERBOLT".into(),
+                    pp: 15,
+                    pp_max: 15,
+                    power: 95,
+                    type_name: "ELECTRIC".into(),
+                    accuracy: 100,
+                    pp_ups: 0,
+                })
+                .collect(),
+            dvs: Dvs::from_bytes(0x9A, 0x88),
+            stat_exp: None,
+            stat_mods: None,
+        };
+        let mut st = terminalgb_plugin_trainer::TrainerState {
+            in_game: true,
+            player_name: "BLUE".into(),
+            ..Default::default()
+        };
+        for i in 0..6 {
+            st.party.push(mon(i));
+        }
+        const N: u32 = 500;
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            std::hint::black_box(tv::compose_body(
+                &st,
+                Some(tv::Focus::Party(0)),
+                false,
+                38,
+                tv::Pictures::Image,
+                40,
+            ));
+        }
+        let each = t.elapsed() / N;
+        println!("compose_body: {each:?} per call, twice per displayed frame");
+        assert!(
+            each < std::time::Duration::from_micros(500),
+            "composing the panel text took {each:?}; it happens twice per \
+             displayed frame inside a 16.743 ms budget"
+        );
+    }
+
     /// Draw one frame and return the image sequence the loop would flush.
     fn drawn_wire(app: &mut App, cols: u16, rows: u16) -> String {
         use ratatui::backend::TestBackend;
@@ -12574,20 +13142,22 @@ mod tests {
     #[cfg(feature = "plugin-trainer")]
     fn an_over_height_panel_keeps_its_head_and_loses_its_tail() {
         let area = Rect::new(0, 0, tv::PANEL_W, 12);
-        let l = tv::layout_with_team(area, true, false, 40).centre_in(area, 40);
+        let l = tv::layout(area, tv::Pictures::Image).centre_in(area, 40);
         assert_eq!(l.frame, area, "no slack: the panel fills the column");
         assert_eq!(l.header.y, area.y + 1, "and the header stays at the top");
         // With slack it centres instead.
         let tall = Rect::new(0, 0, tv::PANEL_W, 60);
-        let c = tv::layout_with_team(tall, true, false, 10).centre_in(tall, 10);
+        let c = tv::layout(tall, tv::Pictures::Image).centre_in(tall, 10);
         assert!(
             c.frame.y > tall.y,
             "with room to spare the panel is centred"
         );
-        assert_eq!(
-            c.frame.y - tall.y,
-            tall.bottom() - c.frame.bottom(),
-            "and the slack is even"
+        // Even to within the odd row integer division cannot split.
+        let above = c.frame.y - tall.y;
+        let below = tall.bottom() - c.frame.bottom();
+        assert!(
+            above.abs_diff(below) <= 1,
+            "the slack is lopsided: {above} above, {below} below"
         );
     }
 

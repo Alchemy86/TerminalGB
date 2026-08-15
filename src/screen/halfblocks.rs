@@ -54,6 +54,31 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 /// background the bottom.
 pub const UPPER_HALF: &str = "\u{2580}";
 
+/// The other half of the same cell, needed only for a picture with
+/// **transparency**: where the top sample is transparent and the bottom is
+/// not, `▀` cannot express it (its foreground is the top half) and `▄` can.
+///
+/// The game picture is opaque everywhere, so this glyph appeared the day the
+/// trainer panel's Pokémon — which have a flood-filled transparent background,
+/// see `terminalgb_plugin_trainer::sprite::background_mask` — started being
+/// drawn through this path.
+pub const LOWER_HALF: &str = "\u{2584}";
+
+/// A sample is transparent only when it is **fully** transparent.
+///
+/// There is no correct partial composite here: the terminal's own background
+/// is not knowable, so blending towards it is a guess, and blending towards
+/// black is right on a dark theme and backwards on a light one. So a partly
+/// transparent pixel — the ghosting a fainted party member is composed with —
+/// is drawn at full strength, and the fact that it has fainted is carried
+/// where it always was: a hollow slot marker, an empty bar, and `FNT` beside
+/// its name. That is the redundancy rule in `crate::screen::panel` doing its
+/// job rather than a limitation being papered over.
+#[inline]
+fn opaque(a: u8) -> bool {
+    a != 0
+}
+
 /// Nearest-neighbour sample index: the *centre* of output pixel `i` of `t`,
 /// mapped into `s` source pixels.
 #[inline]
@@ -103,17 +128,40 @@ pub fn render(rgba: &[u8], src_w: u32, src_h: u32, rect: Rect, buf: &mut Buffer)
             } as usize;
             let ti = top_row + sx * 4;
             let bi = bot_row + sx * 4;
+            let up = opaque(rgba[ti + 3]);
+            let lo = opaque(rgba[bi + 3]);
             let upper = Color::Rgb(rgba[ti], rgba[ti + 1], rgba[ti + 2]);
             let lower = Color::Rgb(rgba[bi], rgba[bi + 1], rgba[bi + 2]);
             let Some(cell) = buf.cell_mut((rect.x + cx, rect.y + cy)) else {
                 continue;
             };
             cell.set_skip(false);
-            if upper == lower {
-                // No glyph to rasterise: a flat cell is just a coloured space.
-                cell.set_char(' ').set_bg(lower).set_fg(lower);
-            } else {
-                cell.set_symbol(UPPER_HALF).set_fg(upper).set_bg(lower);
+            // **A transparent sample shows the terminal's own background**,
+            // which is `Color::Reset` — not black. Writing black would put an
+            // opaque slab behind every Pokémon in the trainer panel's gutter,
+            // and a black box is a worse answer than no picture at all.
+            match (up, lo) {
+                (false, false) => {
+                    cell.set_char(' ').set_bg(Color::Reset).set_fg(Color::Reset);
+                }
+                (true, false) => {
+                    cell.set_symbol(UPPER_HALF)
+                        .set_fg(upper)
+                        .set_bg(Color::Reset);
+                }
+                (false, true) => {
+                    cell.set_symbol(LOWER_HALF)
+                        .set_fg(lower)
+                        .set_bg(Color::Reset);
+                }
+                (true, true) if upper == lower => {
+                    // No glyph to rasterise: a flat cell is just a coloured
+                    // space.
+                    cell.set_char(' ').set_bg(lower).set_fg(lower);
+                }
+                (true, true) => {
+                    cell.set_symbol(UPPER_HALF).set_fg(upper).set_bg(lower);
+                }
             }
         }
     }
