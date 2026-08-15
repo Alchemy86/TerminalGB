@@ -5419,6 +5419,16 @@ than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o 
   did *not* help, and checking out another commit and back — which rebuilds the lib — did.
   Same test, same source, green either side of the rebuild. Do not read it as a
   regression.
+  **It has a DETERMINISTIC trigger, and three more symptom shapes than this note recorded**
+  (measured on `2e0da0e`, twice): `cargo build --release --all-targets` fails outright, with
+  13 errors, while `--lib`, `--examples`, `--bins` and `--tests` each build clean separately
+  and `cargo clippy --all-targets` is clean *and prints no collision at all* — because clippy
+  uses the **dev** profile, which sets no `panic` key, so there is only one strategy and one
+  rlib. Besides the panic-strategy wall, the same cause produces `` the trait bound `X: Y` is
+  not satisfied `` with rustc's own *help* listing `X` as implementing `Y`; ``perhaps two
+  different versions of crate `X` are being used?``; and `undefined reference to` a symbol
+  that plainly exists. Full entry, with the verbatim strings for searching:
+  [`docs/pitfalls/builds.md`](docs/pitfalls/builds.md).
 - **The renderer tracks the emulator's accuracy, and that was demonstrated by accident.**
   Rebasing across `7556dde fix(apu): a square's frequency reload is latched late` changed
   the demo render in exactly the places it should: **0.0 %** of the scale and arpeggio
@@ -6004,3 +6014,51 @@ destination**, entered through the cartridge's own unedited door.
   running it after a docs change produces ~20 one-line diffs on pages you never touched.
   Revert the marker-only ones before committing to keep a review surface readable — nothing
   verifies marker freshness, only link validity.
+
+## `docs/pitfalls/` — the trap index, for a stranger with a symptom
+
+**There are now FOUR documentation layers about this project and they must not merge.**
+[`docs/emulation/`](docs/emulation/README.md) is *what an emulator is*;
+[`docs/components/`](docs/components/README.md) is *how our implementation works*;
+[`docs/measured/`](docs/measured/README.md) is *what we measured and scored*; and
+[`docs/pitfalls/`](docs/pitfalls/README.md) is **everything between a developer and the
+machine** — the harness, the build, the terminal, the clock, the cartridge, the suite's own
+denominator. `docs/measured/symptoms.md` indexes symptoms of the *machine*;
+`docs/pitfalls/README.md` indexes symptoms of the *tooling*, and the two cross-link.
+
+- **Six pages, one shape per entry**: Symptom (verbatim, quoted so it is searchable) → What it
+  looks like (**including the wrong conclusion it invites** — that is the trap) → Root cause →
+  Resolution → **Side effects and blast radius** → How we found it, citing the commit. The
+  blast-radius section is the captain's explicit ask and is the part most write-ups omit; if
+  an entry has none, it says so.
+- **Write it for somebody who is not us.** The audience is a developer at 1am who landed here
+  from a search on an error string, not a crew member with the repo's history in their head.
+  That is why every entry quotes the literal text and why `README.md` opens with a symptom
+  index rather than a table of contents.
+- **`docs/pitfalls/{README,accuracy,tests,not-our-bug}.md` are in `INLINE_PAGES`**
+  (`docs/tools/status_numbers.py`), so live scores in their prose are rewritten by
+  `make status` and gated by `make docs-check`. **Historical and counterfactual figures on
+  those pages are deliberately UNWRAPPED and must stay so** — the value a *rejected* constant
+  scored, or a denominator another project uses, must not track our baselines. Teeth
+  re-proven here by editing one wrapped figure and watching `docs-check` go red.
+- **Two corrections that came out of writing it, both verified against a primary source:**
+  - **The Mealybug reference images are NOT hardware photographs.** The suite's own README:
+    *"the `expected` directory for screenshots from **my Game Boy emulator** (which I believe
+    to be correct), and the `photos` directory contains blurry photos of the ROMs running on
+    real devices."* So `expected/` — what every automated runner compares against — is Beaten
+    Dying Moon's output, cross-checked by its author against `photos/`. Still a good oracle,
+    but a weaker claim than the one `docs/mealybug.md` and the header of
+    `testharness/mealybug_accurate_baseline.txt` make. **Those belong to the PPU crew and were
+    left for them.**
+  - **`state bytes` is 142091, not 142090** (measured live with `make test-cross` on
+    `2e0da0e`; the save-state format grew a byte at `FORMAT_VERSION` 18 → 19).
+    `docs/portability.md:49` and this file's portability section still say 142090. **Left for
+    the crew that owns that page.**
+- **A claim in the brief that did not survive checking, recorded because the correction is the
+  better entry:** the eleven Mealybug rows that moved with `OAM_STROBE_LEAD` were *not*
+  "correlating at 99.9 % under a +4 px offset" — no such correlation was ever computed here.
+  The measured statement is *a uniform four-pixel horizontal shift, in both directions, every
+  time*, and the symmetry is the tell. Repeat the weaker, true claim.
+- **`cargo build --release --all-targets` fails deterministically on this repository** and is
+  the sharpest reproduction of the multi-`crate-type` + `panic = 'abort'` trap; see the
+  chiptune section above and `docs/pitfalls/builds.md`. Build target classes separately.

@@ -262,6 +262,15 @@ INLINE_PAGES = [
     # away from the tests teaches the wrong thing.
     *[os.path.join("docs", "emulation", f)
       for f in ("accuracy.md", "test-roms.md", "fpga.md")],
+    # docs/pitfalls/ is symptom-first developer documentation. It quotes live
+    # scores to say what a trap costs *now* ("the shipped score is 17/79 and
+    # 75/75, both at once"), so it is opted in for the same reason: a page whose
+    # numbers have drifted teaches the wrong thing. Historical and
+    # counterfactual figures on those pages — the value a rejected constant
+    # scored, a denominator another project uses — are deliberately left
+    # unwrapped and must NOT track the baselines.
+    *[os.path.join("docs", "pitfalls", f)
+      for f in ("README.md", "accuracy.md", "tests.md", "not-our-bug.md")],
 ]
 
 # Suite key -> (baseline file, group or None). Group totals are included

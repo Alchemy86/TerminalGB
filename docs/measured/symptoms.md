@@ -10,6 +10,12 @@ behaviour it violates. The working for all of them is in
 The column that matters most is the last one. **Where it says *nothing*, that is a finding**:
 a whole class of defect that a ROM-driven runner is structurally unable to see.
 
+> **Looking for a tooling symptom rather than an emulation one?** A build that says two
+> identical types are distinct, a suite that skips silently, a deadline measured in the wrong
+> clock, a test whose pass rate tracks the machine's load — those are indexed separately, in
+> [pitfalls & gotchas](../pitfalls/README.md). This page is about the *machine*; that one is
+> about everything between you and it.
+
 ---
 
 ## On screen
