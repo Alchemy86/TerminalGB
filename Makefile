@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: test-gen1-atlas atlas-evidence atlas-upstream web desktop docs-links docs-check status picture-numbers controls-doc lint lint-audio test-audio-perf embed test-longplay \
+.PHONY: test-gen1-atlas atlas-evidence atlas-upstream web desktop docs-links docs-check docs-index status picture-numbers controls-doc lint lint-audio test-audio-perf embed test-longplay \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
@@ -39,13 +39,24 @@ docs-links:
 
 # Fail if any doc reference is broken: a missing file/dir target, or a line
 # number past the end of its file. Suitable for CI. Also verifies the status
-# page's suite scores still match the checked-in baselines (see `status`), and
-# that docs/picture.md's generated tables still match the source and the
-# committed measurements (see `picture-numbers`).
+# page's suite scores still match the checked-in baselines (see `status`), that
+# docs/picture.md's generated tables still match the source and the committed
+# measurements (see `picture-numbers`), and that every page under docs/ is
+# reachable from the index (see `docs-index`).
 docs-check:
 	python3 docs/tools/codemap_links.py --check
 	python3 docs/tools/status_numbers.py --check
 	python3 docs/tools/picture_numbers.py --check
+	python3 docs/tools/docs_index.py --check
+
+# docs/README.md is the documentation index. This checks every page under docs/
+# is on it (or explicitly exempt with a reason), that every row it carries
+# points at a page that exists and says what that page is for. Nothing is
+# generated — the rule is coverage, because coverage is what drifted: when the
+# gate was written, 57 of 101 pages were in no index at all and the best demo
+# in the repository was one of them.
+docs-index:
+	python3 docs/tools/docs_index.py
 
 # docs/picture.md: re-read the transport ladder, the upscaler table and the
 # picture key bindings out of src/ and rewrite the generated blocks. The

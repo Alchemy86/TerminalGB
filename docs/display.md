@@ -275,6 +275,13 @@ pixel diff. The Game Boy emits exactly four shades, so "a colour that is not one
 is a *categorical* error with no threshold to tune, and it stays true at every window size,
 palette and scaling ratio.
 
+**And it generalises past this frontend.** [The swarm view](swarm-view.md) reuses the same rule
+for its zoom: every agent is a distinct colour and every colour on the picture *means* something,
+so after each integer scaling step it asserts that no colour in the output was absent from the
+input, and the run fails loudly if one appears. Same argument, different picture — wherever
+something downstream might interpolate, "did a colour appear that could not have?" is a check
+with nothing to tune.
+
 ### FFI — no scaling; the embedder owns it
 
 `image()` ([`lib.rs`](../src/lib.rs)) hands back the raw 160×144 RGBA buffer; any scaling is

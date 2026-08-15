@@ -484,6 +484,11 @@ at [`IDLE_PERIOD`](../src/video.rs) (2 Hz):
   idle has to be a trickle; the card is converted once and cached, so a tick is one `write(2)` of an
   unchanged buffer.
 
+> **The card's renderer outlived the card.** `video::card::Canvas` and that hand-written 5×7 font are
+> what [the swarm view](swarm-view.md) draws every caption and map label with — writing text onto an
+> RGBA buffer with no dependency, no asset and no licence question turned out to be the thing a second
+> tool needed, three features later. It was built here so a webcam would never sit on a stale frame.
+
 Recordings are the exception and are still **closed** on stop — that is what makes a recording a finished
 file. The rule is [`Intent`](../src/video.rs): close a recording, hold anything live. A FIFO counts as
 live, and deliberately so: its consumer is very often `tools/virtual-camera.sh`, whose `ffmpeg` owns the

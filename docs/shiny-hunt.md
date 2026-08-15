@@ -289,6 +289,17 @@ by `(instance seed, attempt number)`: a **lead-in** of 0–239 idle frames, then
 Nothing else feeds the schedule, so **a hit is reproducible from three
 numbers** — the base state, the instance seed and the attempt index.
 
+> **This machinery is shared now.** [The swarm view](swarm-view.md) draws
+> twenty-four agents diverging across a map, and every timing decision its
+> walker makes comes out of this same `Schedule` — `Schedule::step` was made
+> `pub` and `Schedule::draw` added so a second walker can take a further value
+> from the **same stream** rather than starting a private PRNG beside it. That
+> was the point of the additions: a second source of randomness would have made
+> the two rigs diverge for different reasons, and a divergence result on one
+> would then say nothing about the other. As it stands they share a lever, so
+> the swarm's *"twenty-four distinct paths, disagreeing within 24 frames"* is a
+> second, independent witness for the claim `--probe` makes from the DV side.
+
 ### Divergence is necessary and **not** sufficient — the finding that cost the most
 
 Instances that differ from one another can still, between them, only ever produce

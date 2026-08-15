@@ -1126,7 +1126,14 @@ us and has just landed here from a search.
 
 ### Every page, and what it is for
 
-Nothing below is repeated here — this README is the index, those are the sources.
+📚 **The complete index is [`docs/README.md`](docs/README.md)** — every page in `docs/`,
+grouped, one line each. What follows here is a *selection*: the pages worth knowing about
+before you have decided to read anything, described at length. The two are allowed to
+describe a page differently; they are not allowed to disagree about which pages exist, and
+[`make docs-check`](docs/tools/docs_index.py) enforces that, because more than half of this
+documentation was once in no index at all.
+
+Nothing below is repeated here — these are pointers, those are the sources.
 
 **Start here**
 
@@ -1185,6 +1192,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | [Claude plays Pokémon](docs/claude-plays.md) | the agent architecture, the OBS/Twitch recipe, and the honest gaps |
 | [long runs and episodes](docs/longplay.md) | an agent plays unattended for hours at 70x and reports in — durable state, milestones pushed to a phone, a game-level stuck detector, and the **episode** primitive that resets and repeats a chosen segment so an agent becomes measurable |
 | [scenarios](docs/scenarios.md) | a goal and **rules the host enforces rather than asks for** — a run that pokes memory forfeits and names the rule — plus the knowledge an agent plans against (the memory atlas, and a map graph earlier runs *walked*), and a run recorded as a file that replays byte-exactly with **no model calls** |
+| [the swarm view](docs/swarm-view.md) | twenty-four emulators from one save state, drawn as twenty-four dots on a map. It is the **null model** an agent has to beat — a random walk drains south through Route 1's one-way ledges and never reaches Viridian — and an object lesson in convergence: **every piece it uses was built for something else**, and the compositor is the only new code |
 
 **Pokémon Generation 2**
 

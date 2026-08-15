@@ -225,6 +225,15 @@ makes a success *rate* mean anything.
 segment without touching the emulator, and an episode file plus its results is
 a reproducible artefact somebody else can re-run.
 
+> **A success rate needs a floor as well as a ceiling.** "The agent reached
+> Viridian City" means very little on its own; what it is worth depends on what
+> *undirected* play does on the same corridor, and the answer there is often
+> less flattering than it looks. [The swarm view](swarm-view.md) is that
+> measurement — twenty-four decorrelated random walkers on the same save state,
+> published as a baseline — and it found that a random walk drains south through
+> Route 1's one-way ledges and **never reaches Viridian at all**. Worth having
+> before quoting any episode's rate: the same rig can run the null model.
+
 ### The condition grammar
 
 `<thing><op><number>`, and nothing else. `op` is `=`, `!=`, `>=`, `<=`, `>`,

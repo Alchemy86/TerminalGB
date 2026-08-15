@@ -510,6 +510,13 @@ becomes everybody's benchmark by accident, and this repository has watched a han
 outlive its own correction by months. `gb_env.py`'s `reward_from()` raises `NotImplementedError`
 with a pointer to this section.
 
+**What *is* shipped is a floor.** [The swarm view](swarm-view.md) runs twenty-four decorrelated
+random walkers from one save state and publishes where they end up, so any score on that
+corridor can be read against what undirected play achieves — which on Route 1 turns out to be
+"drains south through the ledges and never reaches Viridian City". A null model is the cheapest
+defence on the list above: most of the cheats produce a number that looks impressive until it is
+put next to one.
+
 ---
 
 ## 12. Prior art, and what is different here

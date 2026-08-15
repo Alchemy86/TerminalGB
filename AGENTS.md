@@ -7407,3 +7407,71 @@ reports `blip_buf` + first-party `terminalgb-plugin-api`).
   which on that save is **Pallet Town**, not Viridian City. That is why the shipped scenario's
   goal is `map!=0x29` and not a specific destination: a goal tuned to one save's `wLastMap`
   would be wrong everywhere else.
+
+## The documentation has an index now, and it is GATED (`docs/README.md`, `docs/tools/docs_index.py`)
+
+- **`docs/README.md` is the complete index; the top-level `README.md`'s *"Every page, and what
+  it is for"* section is a curated shop window.** The split is deliberate and both pages say so:
+  the README answers *"why would I read this?"* for a visitor at length, the index answers
+  *"what is there?"* tersely for someone already inside. **They are allowed to describe a page
+  differently. They may not disagree about which pages exist**, and that is the half that is
+  mechanical.
+- **THE MEASUREMENT THAT MADE IT NECESSARY: 57 of 101 pages under `docs/` were in no index at
+  all**, including `docs/swarm-view.md` — the demo the captain rates most highly. **The failure
+  mode is quiet, which is why it needs a gate**: a page nobody links to is not broken, fails no
+  build, and reads perfectly well to whoever wrote it. It simply never gets read again.
+- **`make docs-check` (in CI) now runs `docs_index.py --check`**, four rules, all teeth-proven:
+  (1) every `docs/**/*.md` is linked from the index or on `EXEMPT` **with a stated reason**;
+  (2) every row points at a page that exists; (3) a row must *say* what the page is for, so a
+  bare link added to silence rule 1 is red; (4) nothing on `EXEMPT` may be linked from the
+  top-level README — the one way `EXEMPT` could be abused is to silence rule 1 and then promote
+  the page anyway. `make docs-index` runs it alone.
+- **There is deliberately NO generation step between the two lists.** Splicing the index into
+  the README was considered and rejected: they are prose for different readers and the README's
+  descriptions are its own, so generating one from the other would destroy the thing that makes
+  the shop window worth having. Only *coverage* is enforced. Rule 4 was also rewritten during
+  the work because its first form ("every docs page the README links must be indexed") was
+  strictly implied by rule 1 — **a rule that can never fire on its own is dead weight with a
+  paragraph of justification attached**; make it catch the case rule 1 cannot.
+- **Two `EXEMPT` entries today**: `docs/README.md` (is the index) and
+  `docs/brand/exploration/README.md` (retired studies whose own first line is "do not ship
+  anything in this directory" — indexing it would invite exactly that).
+- **`make docs-check` still does not verify in-page `#anchor` links.** The ~25-line slug checker
+  is worth re-running by hand after adding cross-page anchors; GitHub's rule is lowercase → drop
+  everything not word/space/hyphen → one hyphen per space, **runs not collapsed**, so `— ` and
+  ` / ` each leave a **double** hyphen (`## 4. Decorrelation — the interesting problem` →
+  `#4-decorrelation--the-interesting-problem`).
+- **`codemap_links.py --check` rejects a `github.com/<owner>/<repo>/blob/…` link that is not
+  ours**, so the back-link to AgentGB's `docs/media/README.md` names the file in prose instead.
+  Expect this the moment you cite a sibling repository's page.
+
+### The swarm view is the worked example of convergence — say so, do not just link it
+
+- **Not one piece the swarm view depends on was built for it**, and that is a better argument
+  for how this project is built than any claim about capability: the shiny hunter's
+  `HuntConfig::seed_for`/`Schedule` (built to decorrelate parallel hunts), save states (built to
+  reset an attempt), the atlas's `wCurMap`/`wXCoord`/`wYCoord` (built as evidence-graded
+  documentation), the raw `C` screenshot path (built for archival frames), `video::card::Canvas`
+  and its 5×7 font (built so a **virtual camera** would never sit on a stale frame), the
+  categorical colour guard (built to prove the terminal was not blurring half-blocks), and the
+  screen anchor at tile (8, 8) (measured by the World Trade Centre work). **The compositor is
+  the only new code.** That table lives near the top of `docs/swarm-view.md`.
+- **Check the convergence claims against `examples/swarm_view.rs` before repeating them.** A
+  brief handed to this work said the swarm view used `--video-out` to make its film; it does
+  not — it writes PNGs and ffmpeg encodes them. What it actually took from the video-out work is
+  `video::card::Canvas`, which is a *truer and more interesting* dependency. **The plausible
+  version of a convergence story is the one that is wrong.**
+- **`docs/swarm-view.md` carried two disagreeing figures for the same run** (632x in the prose,
+  608x in the table; 24 × 36,000 / 59.7275 / 23.8 s = 607.8, so the table was right). Fixed by
+  making the prose *point at the table* rather than restating it — the general answer whenever a
+  number has no generated marker to carry it: **reference the one measured place, do not copy
+  the digits.**
+- **Cross-links now run both ways** from `docs/shiny-hunt.md` (§4, and why a second walker would
+  have been the wrong choice), `docs/picture.md` (§4, the raw frame is what stitches the map),
+  `docs/video-out.md` (the idle card's renderer outlived the card), `docs/display.md` and
+  `docs/pitfalls/techniques.md` (the categorical guard, now written up as a reusable technique),
+  `docs/longplay.md` and `docs/agent-environment.md` (a success rate needs a floor).
+- **AgentGB publishes this run as a baseline** (`swarm-baseline.png` / `.mp4` under its
+  `docs/media/`) and links back here; `docs/swarm-view.md` now links forward. Publishing a null
+  model as *the floor* is the point — "our agent reached Viridian City" says very little until
+  somebody has measured that undirected walking never does.

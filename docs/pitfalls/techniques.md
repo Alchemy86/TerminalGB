@@ -183,6 +183,44 @@ nothing for a session that never touched it. That trap cost one of our tests its
 
 ---
 
+## Make the check categorical, not a threshold
+
+**The problem.** "Is the picture blurred?" and "did the zoom soften anything?" sound like
+questions you answer with a tolerance. Pick one and you have invented a number that is too
+tight on somebody's window size and too loose on somebody else's, and you will spend the
+argument on the threshold rather than on the bug.
+
+**The technique.** Find the property that is *categorically* true of correct output, and assert
+that instead. A Game Boy emits exactly four shades and every palette maps them to four colours,
+so **"a colour on screen that is not one of the four" cannot happen** — there is nothing to
+tune, and it holds at every window size, palette and scaling ratio. No interpolating resampler
+can satisfy it, which is precisely why it catches them.
+
+Ours, twice, in two unrelated pictures:
+
+* **The terminal half-block path.** `ratatui-image`'s half-block encoder hard-codes a `Triangle`
+  filter, so every cell was an average of the pixels under it. Measured on dmg-acid2 at 80×24:
+  **271 distinct colours in a four-shade picture.** The guard is
+  `no_colour_appears_that_was_not_in_the_framebuffer` plus an end-to-end twin, and against the
+  unfixed code the second one *reports the bug in words* — "the picture contains 268 colour(s)
+  no Game Boy shade maps to". [display.md](../display.md#the-regression-guard).
+* **The swarm view's zoom.** Every agent is a distinct colour and every colour on the frame
+  means something, so a smoothed zoom inventing a shade between two agents is a bug rather than
+  a softness. Each integer scaling step asserts that no colour in the output was absent from
+  the input. [swarm-view.md](../swarm-view.md).
+
+**Why it is worth reaching for.** A categorical check is *self-explaining* — it can name the
+offending value, so the failure message is the diagnosis. A threshold check can only say the
+number was too big.
+
+**Where else it applies here.** Any point where something downstream might interpolate,
+quantise or re-rank: a scaler, a terminal, a video sink, a screenshot path. The related trap is
+the opposite direction — a **shade-rank** comparison is categorical about *order*, so one extra
+distinct shade re-ranks the whole frame and reports ~23,040 pixels wrong for four bad ones. See
+the pixel-count warning above.
+
+---
+
 ## Two verdict methods disagreeing is the finding
 
 **The problem.** You have two ways to judge a run and they disagree.

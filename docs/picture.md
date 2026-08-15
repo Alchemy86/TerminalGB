@@ -363,6 +363,13 @@ emulated PPU produced, so:
 
 The keys are the game screen's only; the picker has no frame to capture. `?` lists both.
 
+**And the raw path is not only for people.** [The swarm view](swarm-view.md) stitches its map
+backgrounds out of `Gameboy::image()` — the same un-palette-mapped, un-upscaled buffer `C`
+writes — by placing each frame at the world pixel the player's position implies. It works
+*because* the raw frame is the machine's own output: a palette or an upscaler applied first
+would have to be undone before two frames from different moments could be laid on the same
+sheet, and neither is recorded anywhere in the file.
+
 ---
 
 ## 5. The upscalers

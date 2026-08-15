@@ -29,27 +29,39 @@ emulator, [Stable-Baselines3](https://github.com/DLR-RM/stable-baselines3) with
 `Monitor` / `DummyVecEnv` / `VecTransposeImage` wrappers, PPO, in a conda
 environment. One detail is worth naming fairly, because it is the whole reason
 the economics here are different: **PyBoy warns that its own timing degrades
-above about 5x speed.** This core does not have that constraint — the swarm
-below ran at **632x real time** with every frame cycle-accurate — which is what
-makes resets, replays and byte-identical reruns affordable rather than a
-luxury.
+above about 5x speed.** This core does not have that constraint — [the swarm
+below](#the-run) ran hundreds of times faster than real time with every frame
+cycle-accurate — which is what makes resets, replays and byte-identical reruns
+affordable rather than a luxury.
 
 ## What is assembled, and what is new
 
-Almost nothing here is new, and that is the point.
+**Not one of the pieces this depends on was built for it.** That is the
+interesting fact about the picture, more than the picture itself: every row
+below was written for its own unrelated reason, by whoever needed it, and the
+demo fell out of the pile afterwards.
 
-| Piece | Where it already lived |
-|---|---|
-| N parallel instances diverging from one save state | `terminalgb-plugin-gen1-shinyhunt`: `HuntConfig::seed_for` and `Schedule` |
-| Driving a headless machine | `hunt::HuntMachine`, which `Gameboy` already implements |
-| Agent position | `wCurMap` / `wXCoord` / `wYCoord`, `inv`-tier entries in [the vendored atlas](../third_party/atlasgb/README.md) |
-| The raw 160x144 framebuffer | `Gameboy::image()` |
-| Text on an RGBA buffer | `video::card::Canvas`, the virtual camera's idle-card font |
+| Piece | Built for | What the swarm view uses it for |
+|---|---|---|
+| `HuntConfig::seed_for` + `Schedule` ([shiny hunting](shiny-hunt.md#4-decorrelation--the-interesting-problem)) | decorrelating parallel shiny hunts, so N instances do not all roll the same Pokémon | making twenty-four walkers genuinely diverge |
+| `HuntMachine::load_state` and [save states](savestates.md) | letting a hunt reset an attempt to a known position | starting every instance from one identical world |
+| `wCurMap` / `wXCoord` / `wYCoord` — `inv`-tier entries in [the memory atlas](gen1/atlas/README.md), [vendored here](../third_party/atlasgb/README.md) | documenting Gen 1 memory with evidence that the cartridge uses it | knowing where every agent is, every frame |
+| `Gameboy::image()` and the [raw screenshot path](picture.md#4-screenshots--c-and-c) | an archival frame that is comparable against hardware, un-palette-mapped and un-upscaled | capturing the map backgrounds out of the running cartridge |
+| `video::card::Canvas` and its 5x7 font ([video out](video-out.md#5b-configuring-a-destination-is-not-deciding-to-stream)) | so a virtual camera has something to show while the game is not streaming | every caption and map label on the composited frame |
+| The categorical colour guard ([display scaling](display.md#the-regression-guard)) | proving the terminal's half-block picture is not being blurred | proving the zoom invents no shade between two agents' colours |
+| The screen anchor at tile (8, 8) ([the World Trade Centre](worldlobby.md)) | calibrating a shared room against the running engine | placing a 160x144 framebuffer at the right world pixel |
+| Headless speed, and frame-exact determinism | accuracy, and making the test suites affordable to run | twenty-four agents x ten emulated minutes in the wall time below, reproducibly |
 
 **The compositor is the only genuinely new piece**: take N positions, stamp
 markers on a canvas, emit a frame. The map backgrounds are captured by the same
 example from the emulator itself (below), and ffmpeg turns the PNGs into a
 video.
+
+That is a better argument for how this project is built than any claim about
+capability. Nobody planned a swarm view. The parts were sharp enough
+individually that assembling one cost **one example file and no new
+dependency** — and each of them is still doing its original job, unchanged, for
+the feature it was actually written for.
 
 Two small additions were made to the shiny hunter, both purely additive and
 neither changing its behaviour: `Schedule::step` became `pub`, and
@@ -178,6 +190,20 @@ picture is the diagnostic; what an actual policy does to it is the experiment,
 and the emulator already has an agent harness for that
 ([`docs/claude-plays.md`](claude-plays.md),
 [`docs/longplay.md`](longplay.md)).
+
+### It is published as the floor
+
+**[AgentGB](https://github.com/Alchemy86/AgentGB) publishes a rendered still and
+video of this run**, as `swarm-baseline.png` / `swarm-baseline.mp4` under its
+`docs/media/`; that directory's own README carries the picture, the numbers
+above and the same warning that the agents are not learning.
+
+That is the useful thing to do with a null model: publish it as **the floor**.
+Anything trained has to beat these figures on this corridor, and until now there
+was nothing to beat — a paper reporting "our agent reached Viridian City" says
+very little without knowing that undirected walking never does. The two commands
+at the top regenerate it from a seed, so the baseline is checkable rather than
+quoted.
 
 ## Determinism, tested
 
