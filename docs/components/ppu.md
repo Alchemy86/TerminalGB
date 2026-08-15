@@ -205,6 +205,12 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
 - **The DMG STAT write bug — NOT modelled.** On DMG, writing *any* value to `STAT`
   (even `0x00`) during OAM scan / HBlank / VBlank / LY=LYC can spuriously fire the STAT
   interrupt, as if `0xFF` were written for one M-cycle. Two commercial games depend on it.
+  **Measured now, on both picture modes, by `GB-PPU-16`** of the GBSelfTest cartridge
+  ([`docs/gbselftest.md`](../gbselftest.md#gb-ppu-16)) — until that landed this was a
+  sentence nothing in the project could check, because Mooneye, SameSuite and Mealybug
+  between them never write `STAT` in a mode where it fires. It is listed as a known gap in
+  `tools/gbselftest-gate.py`, so implementing it will turn that gate red until the list is
+  updated, which is the intended way to find out it has been done.
 - **Mid-scanline `SCX`/`SCY`/`WX`/`WY`/palette writes** are a legitimate technique
   (parallax, status bars). With whole-line rendering (§4) these land at line granularity,
   not pixel granularity. This is what the **Mealybug Tearoom** suite measures, and
