@@ -528,6 +528,15 @@ name = "trainer_layout"
 path = "examples/trainer_layout.rs"
 required-features = ["tui", "plugin-trainer"]
 
+# The swarm view: N headless emulators from one save state, every agent drawn
+# at its own place on one map, composited into a video. Reuses the shiny
+# hunter's divergence machinery; `image` is for reading and writing PNGs.
+# See docs/swarm-view.md.
+[[example]]
+name = "swarm_view"
+path = "examples/swarm_view.rs"
+required-features = ["plugin-gen1-shinyhunt", "image"]
+
 # The shiny hunter's driver and CLI: N headless emulators, an encounter loop
 # each, stop on a DV spread. Headless — no window, no terminal UI, no audio —
 # so it needs only the plugin. See docs/shiny-hunt.md.

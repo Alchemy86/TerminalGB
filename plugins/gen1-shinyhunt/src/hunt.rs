@@ -296,10 +296,26 @@ impl Schedule {
 
     /// The next step's `(hold, gap)`, drawn fresh. See the type's docs for why
     /// this is per step rather than per attempt.
-    fn step(&mut self) -> (u32, u32) {
+    ///
+    /// Public because the swarm view (`examples/swarm_view.rs`) walks its
+    /// agents on this same lever: it is the thing that makes N instances
+    /// started from one save state diverge, and a second walker that invented
+    /// its own would be measuring a different rig.
+    pub fn step(&mut self) -> (u32, u32) {
         let hold = (HOLD_MIN + next(&mut self.state) % HOLD_SPAN) as u32;
         let gap = (next(&mut self.state) % 25) as u32;
         (hold, gap)
+    }
+
+    /// A further draw from the **same** stream.
+    ///
+    /// A walker that needs a choice this type does not model — the swarm
+    /// view's compass direction — takes it from here rather than from a
+    /// private PRNG of its own. One stream per attempt is what keeps
+    /// `(base state, seed, instance, attempt)` naming one run exactly, and two
+    /// streams would be two things to keep in step.
+    pub fn draw(&mut self) -> u64 {
+        next(&mut self.state)
     }
 }
 

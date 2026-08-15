@@ -6366,6 +6366,74 @@ should take this shape rather than growing a second copy of the script.
   refused `WRITE_MEMORY` by the host. A satnav with the postcode typed in versus looking out of
   the window — and the agent's slowness is the measurement.
 
+## The swarm view — N agents on one map (`examples/swarm_view.rs`, `docs/swarm-view.md`)
+
+Peter Whidden's opening shot from *Training AI to Play Pokémon with Reinforcement Learning*
+([PWhiddy/PokemonRedExperiments](https://github.com/PWhiddy/PokemonRedExperiments)), reproduced
+as a proof of concept: 24 emulators from one save state, every agent a dot at its own world
+position, the camera pulling back. Assembled from what already existed — the shiny hunter's
+`HuntConfig::seed_for` + `Schedule` for divergence, `hunt::HuntMachine` for the seam,
+`wCurMap`/`wXCoord`/`wYCoord` from the atlas, `Gameboy::image()`, `video::card::Canvas` for text
+— **the compositor is the only new code.** No emulation change; every baseline byte-identical
+(in-repo 46/47, Mooneye 103/103 + 8/8, SameSuite 76, Mealybug 79, cpp 4/4, the whole c-sp
+aggregation, savestate and battery).
+
+- **`hunt::Schedule::step` is `pub` now and `Schedule::draw` was added**, both purely additive.
+  A second walker that invented its own randomness would be measuring a different rig; the whole
+  claim that these instances diverge for the *same* reason the hunter's do rests on both walkers
+  drawing from one stream. Anything else needing a decision the type does not model should call
+  `draw` rather than starting a private PRNG beside it.
+- **The walk is deliberately NOT `Instance::attempt`.** That walker paces a ±1 tile band on
+  purpose (it must not leave the grass); a swarm view wants agents that go somewhere. Only the
+  *policy* differs — every timing decision still comes from `Schedule`.
+- **SAMPLE ON EACH INSTANCE'S OWN FRAME COUNTER, NEVER ON WALL TIME OR A SHARED TICK.** That one
+  choice is what makes the finished video independent of thread scheduling: instance *i*'s
+  emulated frame 1200 always lands in video frame 50. Measured both ways — two separate processes
+  produced 375 byte-identical PNGs (`sha256 494eb030…`), a different `--seed` produced
+  `ba670d5e…`, so the check is not vacuous.
+- **THE FINDING, and it is the reason the picture is worth having: Route 1's ledges are a
+  one-way valve.** After ten emulated minutes per agent, **54.97 % of samples are in Pallet Town
+  and 44.73 % on Route 1**, the northern half of Route 1 is empty in every frame, and **no agent
+  ever reaches Viridian City** — not in that run and not in a 12-agent / 16-emulated-minute
+  control (Route 1 70.06 %, Pallet 29.87 %). 5 % of the tiles they visit hold 37 % of their
+  time. A random walk over one-way ledges is a ratchet. Do not read the swarm as learning agents:
+  it is the null model.
+- **A random walk is also a bad SURVEYOR, for the same reason** — 120,000 frames of undirected
+  walking captured 100 % of Pallet Town and **44 %** of Route 1. `--capture-maps` therefore heads
+  three times in four for the centroid of whatever is still un-photographed; that reaches Route 1
+  100 % / Pallet 98 % in 25 s.
+- **Stitching a map out of framebuffers: the anchor is screen pixel (64, 64) and the gate is
+  `wWalkCounter == 0`.** The player's walk tile is screen tile (8, 8) (the World Trade Centre
+  crew's measured anchor), so a frame belongs at world pixel `(x*16 - 64, y*16 - 64)` — but only
+  between steps, because mid-step the engine is scrolling and the screen is off the tile grid.
+  Skip the 16x24 box around the player or the finished map is a trail of Reds; write each pixel
+  once so a later, worse view cannot overwrite a good one.
+- **Map offsets are MEASURED from agents crossing the seam**, not tabulated: a connection
+  preserves world position, so B's origin is `A's + (fx + step - tx, fy + step - ty)` tiles.
+  **WATCH THE CROSSING EVERY FRAME, NOT EVERY SAMPLE, OR THE OFFSET IS SHORT BY HOWEVER FAR THE
+  AGENT WALKED FIRST** — at one sample per 24 frames the agent got one to three tiles into the
+  new map and Pallet Town landed **32 px under** Route 1, which looked plausible and was only
+  caught because Pallet's own label was overpainted. Only observe on a frame where
+  `wWalkCounter == 0`, out of battle, and `wCurMapWidth != 0`: during `LoadMapData` the
+  coordinates and the header disagree. Fixed, the two maps abut to the pixel. **A warp looks
+  identical from outside** — a door also changes `wCurMap` while a direction is held — so the
+  inference is restricted to an allow-list of outdoor maps between which no warp exists.
+  Anything else is reported unplaced and counted in the caption. The real world layout comes
+  from PixelGB (`mapgb-render-t8`) later.
+- **FEDORA'S FFMPEG HAS NO `libx264`** (patent-clean build): `-c:v libopenh264 -b:v 4M` is the
+  substitute, and `-crf` is not accepted there. The tool prints that note itself, because
+  `Unknown encoder 'libx264'` reads as a broken command rather than a missing codec. `libx265`,
+  `libvpx` and AV1 encoders are present.
+- **`video::card`'s 5x7 font has letters, digits, `-`, `.`, `:` and `/` and silently draws
+  anything else as a blank.** A `+` in a caption disappears — seen live as `T 01:20` where
+  `T+01:20` was written. Check any new glyph against `card::glyph` before shipping a caption.
+- **The zoom is integer-scale nearest-neighbour and it is CHECKED, not promised.** Every colour
+  in a scaled frame must already exist in the source — the same categorical guard
+  `screen::halfblocks` uses, and the right one here because an invented shade between two agents'
+  colours would be a marker that does not exist.
+- **Nothing is committed**: the video and the captured map sheets are game art and live in
+  `target/swarm/`. The two commands in `docs/swarm-view.md` regenerate them in about a minute.
+
 ## The status page (`docs/status.md`, `docs/status/index.html`) — scores are generated, not typed
 
 - **`docs/status.md` is the front door** — suite standings, abilities, honest gaps, roadmap —

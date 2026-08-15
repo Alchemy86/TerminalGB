@@ -823,6 +823,50 @@ docs/shiny-hunt.md](docs/shiny-hunt.md)**
 
 ---
 
+## 🐝 The swarm view — many agents, one map, one picture
+
+The opening shot of [Peter Whidden's *Training AI to Play Pokémon with Reinforcement
+Learning*](https://github.com/PWhiddy/PokemonRedExperiments): dozens of agents running at once,
+each a dot at its own place in the world, the camera pulling back until the whole crowd is in
+frame. It is the best diagnostic picture in this field — **the moment a hundred agents pile into
+one corner you can see it, instead of reading it out of a table.**
+
+Twenty-four emulators start from the same save state on Route 1 and walk off in twenty-four
+different directions, decorrelated by the shiny hunter's own machinery. The backgrounds are
+captured out of the emulator itself, by walking one agent around and stitching its framebuffers
+at their world positions; where the maps sit relative to each other is *measured* from agents
+crossing the seam, not looked up.
+
+```bash
+cargo build --release --features plugin-gen1-shinyhunt,image --example swarm_view
+cd target/swarm   # a staged copy of the cartridge and the save state
+
+# capture the map backgrounds out of the emulator (25s)
+../release/examples/swarm_view --rom blue.gb --state route1.gbss \
+    --capture-maps maps --capture-frames 200000
+
+# run the swarm and composite the video frames (23s), then the ffmpeg line it prints
+../release/examples/swarm_view --rom blue.gb --state route1.gbss --maps maps \
+    --instances 24 --frames 36000 --sample 24 --zoom --out frames
+```
+
+**Measured: 864,000 emulated frames in 23.8 s — 608x real time — for a 50-second video.** All
+24 instances take distinct paths, diverging within the first 24 emulated frames, and two
+separate processes with the same seed produce byte-identical PNGs (a different seed does not,
+so the check has teeth).
+
+**And the picture immediately said something a table would have buried: Route 1's ledges are a
+one-way valve.** After ten emulated minutes more than half the swarm has drained *south* into
+Pallet Town, the northern half of Route 1 is empty in every frame, and **not one agent ever
+reaches Viridian City** — in this run or in a longer control. Five per cent of the tiles they
+ever stand on hold 37 % of their time. These are a decorrelated random walk, not learning
+agents; that is the null model the picture exists to make visible.
+
+📖 **[The whole build, the numbers, the determinism test and the honest limits →
+docs/swarm-view.md](docs/swarm-view.md)**
+
+---
+
 ## 🎮 Game mechanics & hacking — Pokémon Gen 1
 
 A documented area for how these games keep their state and how to drive them from outside:
