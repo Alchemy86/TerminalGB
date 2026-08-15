@@ -685,7 +685,11 @@ processes found each other over the ordinary `link = auto` unix-socket
 rendezvous (§5). **A cross-generation Time Capsule trade completed.**
 
 That is a materially stronger claim than the one above it and it is worth
-separating carefully from it. `--capsule-trade` proves the *protocol* works when
+separating carefully from it. (The same session produced a second finding, from
+inside the game rather than from the save files: a Gen 1 player cannot leave the
+Cable Club unless *both* players cancel, and the room genuinely has no exit tile
+— `examples/gen1_cancel_exit.rs`, and the newest-but-one entry in
+[`docs/conformance-notes.md`](conformance-notes.md).) `--capsule-trade` proves the *protocol* works when
 one program owns both machines and can hold one back until the other is ready.
 This proves the **product** works: two independent processes, no shared state,
 no coordination available to either of them, and a human pressing the buttons on

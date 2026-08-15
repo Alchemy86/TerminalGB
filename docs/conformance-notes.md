@@ -33,7 +33,9 @@ Gen 1 ↔ Gen 2 chain was proved with both cores *inside one process*
 (`--capsule-trade`), where one program can hold one machine back until the other
 is ready. Full forensics, with the field-by-field table and the file offsets:
 [`docs/link-cable.md`](link-cable.md) §8, "Two independently launched emulators,
-driven by a person".
+driven by a person". The entry below on *leaving the Cable Club* is the same
+afternoon seen from the other end — the player's report from inside that session
+— and its citation of `SavePartyAndDexData` is the same one this entry leans on.
 
 **Symptom** — two people open the emulator on the same machine and try to trade.
 Either it works and a Pokémon really moves between two save files, or it silently
