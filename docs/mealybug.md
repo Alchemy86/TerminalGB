@@ -1172,3 +1172,139 @@ per-tile calibration §8.9 already scopes.
   22,154, which is the shade-rank artefact zone, so the row cannot go green without the DMG
   column and both CGB columns moving together.
 
+
+## 11. The denominator: 45 of the failing rows cannot be won by PPU work (15 Aug 2026)
+
+Everything before this section counts progress against **79**, and every recommendation in it
+is scoped as though the whole 79 were reachable. It is not, and this section is the correction.
+A characterisation of all 62 failures at 17/79 — the *shape* of each difference, not its pixel
+count — sorted them into four blocks, three of which no amount of mid-scanline accuracy can
+move.
+
+Reproduce the classification with the two instruments this pass added:
+
+```sh
+python3 tools/mealybug/characterise.py                       # every failure's signature
+python3 tools/mealybug/rowview.py <rom> [DMG|CGB-C|CGB-D] --cols A B --lines A B
+```
+
+`characterise.py` re-renders before it reads, deliberately: `target/mealybug/*.png` holds
+whichever engine ran last, and scoring `identical`'s frames against `standard`'s numbers invents
+both regressions and gains.
+
+### 11.1 The four blocks
+
+| block | rows | winnable? |
+|---|---:|---|
+| **A** — the boot ROM's `®` glyph | 30 | **no**, and not ours to decide — see §8.6 |
+| **B** — CGB references that are colour photographs | 8 | **no** — see §8.7 |
+| **C** — the `*2` ROMs: a DMG build against a CGB-mode reference | 7 | **no** — new, §11.3 |
+| **D/E/F/G** — genuine mid-scanline error | **12** | yes — §11.4 |
+
+So with the suite pinned as it is, and with the licensing decision of §8.6 standing, the
+reachable ceiling is **79 − 45 = 34 rows.** At <!--score:mealybug_accurate:pass-->22<!--/score-->
+that leaves **twelve rows in play**, not fifty-seven. Anyone planning work against this suite
+should plan against twelve.
+
+**Block A still repays effort even though it cannot reach zero.** What is left in those ten
+ROMs after the missing glyph is ordinary mid-scanline error of exactly the kinds D/E/F name, so
+a fix in those groups improves them; they simply stop short. A crew with its own boot-ROM dump
+can measure the true residual through the shipped `--boot-rom` path (§8.6); the gated score must
+never use one.
+
+### 11.2 A correction: the references are the author's *emulator*, not photographs
+
+This page, the brief that commissioned this work and the headers of both Mealybug baselines all
+described `expected/` as hardware photographs. The suite's own README says otherwise:
+
+> You can check in the `expected` directory for screenshots from **my Game Boy emulator** (which
+> I believe to be correct), and the `photos` directory contains blurry photos of the ROMs
+> running on real devices.
+
+They are [Beaten Dying Moon](https://mattcurrie.com/bdm-demo/)'s output — the test author's own
+emulator, cross-checked by him against the hardware photographs he ships in `photos/`. That is
+still an excellent oracle and nothing about the campaign changes because of it. But it is a
+different claim from "this is what the silicon did", it is the claim the baselines should carry,
+and §11.3 only makes sense once you know it.
+
+### 11.3 Block C — the seven `*2` rows are a ROM/reference mismatch in the suite
+
+`m3_lcdc_bg_en_change2`, `m3_lcdc_bg_map_change2`, `m3_lcdc_tile_sel_change2`,
+`m3_lcdc_tile_sel_win_change2`, `m3_lcdc_win_map_change2`, `m3_scx_high_5_bits_change2` and
+`m3_scy_change2` exist only in the `CPU CGB C` column. Their sources program **CGB attributes
+and CGB palettes** — `rVBK = 1`, then a green/blue/red palette 1 through `BCPS`/`BCPD`. The
+prebuilt ROMs in `mealybug-tearoom-tests.zip` carry **`$0143 = $00`**, a DMG cartridge, so on a
+Color console they run in compatibility mode where `VBK` is locked and the palette data ports
+are closed and none of that has any effect.
+
+**But their references are in colour.** `m3_lcdc_bg_map_change2`'s CGB-C reference contains
+`(123, 255, 49)` and `(255, 132, 132)`. Our frame is *structurally identical* to it and differs
+only in colour:
+
+```
+ours  (0,0,0)×4792   (192,192,192)×2869                    (255,255,255)×15379
+hw    (0,0,0)×4792   (123,255,49)×2729  (255,132,132)×140  (255,255,255)×15379
+```
+
+`2729 + 140 = 2869`, and the black and white counts agree to the pixel. Patch `$0143` to `$80`
+in a scratch copy of the ROM and the row falls **18,108 → 2,869**, the remainder being nothing
+but our CGB colour conversion (we apply Gambatte's correction matrix; the suite's README asks
+for `(r << 3) | (r >> 2)` — a display choice the shade-rank compare is designed to be immune to,
+and not a defect).
+
+So the author scored these against a CGB-mode build and shipped a DMG build in the zip.
+
+**Do not close them by forcing the CGB flag in the runner.** That is the runner measuring a
+machine the cartridge does not ask for — the mistake `examples/mealybug`'s own header warns
+against, and the same one that made the DMG/CGB columns worth separating in the first place. The
+legitimate route is to build the suite from source with its CGB define and pin *that* in
+`tools/fetch-test-suites.sh`, which is a suite-plumbing change and a whole-baseline re-bless.
+
+### 11.4 The twelve winnable rows, grouped by the code they live in
+
+Measured on the `identical` engine at the head of this campaign.
+
+| group | rows | code | signature |
+|---|---|---|---|
+| **D** window / `WX` | `m3_wx_4_change@DMG` 12,409 · `m3_wx_5_change@DMG` 12,015 · `m3_wx_6_change@DMG` 5,734 · `m3_lcdc_win_en_change_multiple_wx@DMG` 1,141 | `check_window_start`, `check_window_stop`, the head-of-line prologue | the window's tile grid, and `WX` moved before the trigger |
+| **E** `SCY` / bitplane mix | `m3_scy_change` 257 / 560 / 116 | `fetch_tile_number`, `lo_hi`, the `$FF42`/`$FF43` arms of `ppu_write_commit` | **tile 1 only**, and it renders the previous scanline's `SCY` |
+| **F** the object fetch | `m3_lcdc_obj_size_change` 51 / 10 / 10 · `m3_lcdc_obj_size_change_scx@DMG` 30 | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
+| **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records the dead end |
+
+These are four disjoint regions of `src/gpu/fifo.rs`, so they can be worked in parallel. **The
+coupling is not the code, it is the baseline**: `testharness/mealybug_accurate_baseline.txt`
+carries a pixel count for all 79 rows, so any PPU change rewrites lines belonging to rows nobody
+is working on, and `docs/status*` is regenerated from it. The rule that makes that painless is
+**rebase first, re-measure second, re-bless third** — never carry a re-blessed baseline through
+a rebase.
+
+### 11.5 What group D still needs, with the arithmetic already done
+
+The window's tile grid is anchored at `WX - 7` even when that is left of the screen. Ground
+truth, from `m3_lcdc_win_en_change_multiple_wx@DMG` where `WX = LY`: with `LCDC.5` taken low
+around pixel 3, the background resumes at **9, 10, 3, 4, 5, 6, 7, 8** for `WX = 0..7` — exactly
+the first `WX - 7 + 8n` at or after pixel 3. Our grid is anchored at `max(0, WX - 7)`, so we
+resume at 16 where hardware resumes at 9.
+
+Implementing it by dropping the first tile's off-screen pixels out of the FIFO **does not work**
+and was measured: it brings the next push forward and shortens the line, costing
+`m3_window_timing` (0 → 3/6/3) and `m3_window_timing_wx_0` (0 → 666/702/666).
+
+The model that fits every measurement is that for `WX < 7` **the window takes over `7 - WX` dots
+earlier than it does now** and the leading pixels are shifted out and dropped during dots that
+are already being spent. Working backwards from the two rows that pass, the takeover belongs at
+mode-3 dot `5 + WX`:
+
+| `WX` | takeover | window fetch | push | off-screen shifts | pixel 0 |
+|---:|---:|---|---:|---|---:|
+| 0 | dot 5 | 5-10 | 10 | 11-17 (seven) | **18** |
+| 6 | dot 11 | 11-16 | 16 | 17 (one) | **18** |
+| 7 | dot 12 | 12-17 | 17 | none | **18** |
+
+Pixel 0 lands on dot 18 in every case, which is what `m3_window_timing_wx_0` measures and what
+we already get. What blocks it is that our pipeline has no output position left of pixel 0: the
+takeover is gated on the FIFO being non-empty, which cannot be true before dot 12. Both
+reference emulators carry a signed one (SameBoy's `position_in_line` runs from −16, docboy's
+`LX` from 0 with the screen at 8), and adopting one would also let the `SCX & 7` discard, the
+`WX = 0` extra dot and this all fall out of one rule instead of three. That is the refactor this
+group wants; it is not a special case away.

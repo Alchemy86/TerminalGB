@@ -24,6 +24,13 @@
 //!
 //! Exactly as the suite's own README asks: run to the `LD B,B` software
 //! breakpoint, then compare the frame with the reference **pixel for pixel**.
+//!
+//! **The references are the test author's own emulator's screenshots**, not
+//! photographs — his README is explicit ("screenshots from my Game Boy
+//! emulator (which I believe to be correct)", with blurry hardware photographs
+//! in a separate `photos/` directory he cross-checked them against). That is
+//! still somebody else's judgement rather than ours, which is the property
+//! that matters here; it is simply not the claim this file used to make.
 //! The comparison is by **shade rank** (luminance order), the same rule
 //! `tools/conformance/image.py` uses — a DMG frame is four shades and every
 //! emulator paints them in its own palette, so a literal RGB compare would fail
@@ -55,8 +62,10 @@ const BASELINE_HEADER: &str = "\
 # reference set, judged as the suite's own README asks: run to the `LD B,B`
 # software breakpoint and compare the frame with the author's reference
 # screenshot, pixel for pixel, by shade rank. Nothing here is a hash of our own
-# output — the reference frames are Matt Currie's, photographed off real
-# hardware.
+# output — the reference frames are Matt Currie's, produced by his own emulator
+# (Beaten Dying Moon) and cross-checked by him against the hardware photographs
+# he ships in the suite's `photos/` directory. Somebody else's judgement, which
+# is the property that matters; not, as this header used to say, a photograph.
 #
 # Key is `<rom>@<reference set>`; the value is PASS/FAIL plus **how many of the
 # 23040 pixels differ**. The pixel count is part of the expectation on purpose:
