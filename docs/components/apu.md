@@ -326,36 +326,37 @@ visible as a whole column shifting):
 | envelope period counter runs on frame-sequencer step | 6 (the step it schedules lands on 7) | `channel_N_volume_div`, `channel_N_nrx2_speed_change` |
 
 **Still failing, and why** — these are scoped, not half-built. Full per-fix record with
-citations: [`../conformance-notes.md`](../conformance-notes.md) §10-18.
+citations: [`../conformance-notes.md`](../conformance-notes.md) §10-19. All three were
+re-opened on 2026-08-15 and checked against a *running* SameBoy
+([`../../tools/sameboy-oracle/`](../../tools/sameboy-oracle/README.md)) rather than against
+prose; two of the reasons that used to be recorded here did not survive it.
 
-* `channel_4_freq_change` (1) — **left red on evidence.** SameSuite's own `apu/README.md`
-  says SameBoy, the emulator the suite exists to develop, fails exactly this test and
-  `channel_1_sweep_restart_2`; the ROM's own header says "the logic behind it is still
-  unclear". Diagnosis for whoever tries: our single `period` countdown cannot move the
-  *next* LFSR step after an NR43 write (it fires ≤ 16 T later), while the ROM measures
-  ~56–70 T — a two-stage counter keeping its position and counting on to the new
-  `2^shift`. That is a `NoiseChannel` restructure, a save-state format bump and a
-  re-calibration of the ten green CH4 rows, for one row nothing passes.
-* `channel_1_freq_change_timing-{A,cgb0BC}` (2) — **`-cgbDE`, the machine we model,
-  passes** since the frequency-reload latch landed
-  ([`../conformance-notes.md`](../conformance-notes.md), 2026-08-14). The other two are
-  not a revision knob we are missing, which an earlier note here claimed: **`-A` is the
-  Game Boy Advance** (every CGB stepping tag in this suite is spelled `cgb…`, and
-  `apu/README.md` names the AGB line as the family still to be verified) — a console this
-  emulator does not have. **`-cgb0BC` differs in the PCM12 *read-back*, not the frequency
-  timer**: it is the "PCM12/PCM34 report a glitched amplitude if read in the same M-cycle
-  they change" quirk of revisions C and older, which the same README lists as needing to
-  *"be understood, tested and documented"* by anyone at all. Splitting `CgbRevision` was
-  tried on paper and buys neither row.
-* `channel_1_sweep_restart` (1) — down to a **single cell of 144**: round 1's last
-  subtest, the duty phase of a re-trigger that immediately follows a sweep frequency
-  change. It is a **square-timing** question, not a sweep one — the re-trigger's first
-  duty step lands 66 T after the write and hardware's is at 69 or later. Both levers are
-  already pinned by rows that pass: `SQUARE_RESTART_SPEEDUP = 0` costs four
-  (`channel_{1,2}_restart`, `channel_{1,2}_restart_nrx2_glitch`) and
-  `SQUARE_TRIGGER_DELAY = 8` costs most of the square suite. A correct fix needs a
-  *conditional* re-trigger reload rule and the suite carries no evidence for the
-  condition. Full measurement: [`../conformance-notes.md`](../conformance-notes.md) §18.
+* `channel_4_freq_change` (1) — **the structure is known and the calibration is not.** The
+  old note here said SameSuite's `apu/README.md` names this as a test SameBoy fails, so no
+  reference implementation existed. **Measured: current SameBoy on CGB-E passes it** — that
+  README predates its own emulator. What the ROM needs is the free-running 14-bit counter
+  this page has predicted all along (ticked every `(NR43 & 7) × 8` T-cycles, 4 for code 0,
+  the LFSR stepping on the 0→1 edge of bit `NR43 >> 4`); our single `period` countdown is
+  algebraically the same thing for a fixed NR43, which is why ten CH4 rows are green, and
+  differs only across an NR43 write. Searched exhaustively, the clean counter model reaches
+  **61 of the 64 cells** and the parameters that get there contradict the trigger countdown
+  `channel_4_delay` already pins. The rest is SameBoy's NR43-write glitch table, whose own
+  comments read *"non-deterministic"* and *"no clue why"*.
+* `channel_1_freq_change_timing-cgb0BC` (1) — **`-cgbDE` and `-A` both pass now**; see the
+  AGB entry in the constants table above. `-cgb0BC` is CPU CGB 0/B/C and needs **two**
+  behaviours at once: the "PCM12/PCM34 report a glitched amplitude if read in the same
+  M-cycle they change" quirk of revisions C and older (SameBoy masks the read on
+  `model <= CGB_C`), *and* a double-speed-only condition on the reload correction — its
+  three differing cells are not all of the same kind. A latch value alone cannot do it:
+  sweeping `SQUARE_RELOAD_LATCH` over `1..=7` never turns the row green at any value.
+* `channel_1_sweep_restart` (1) — down to a **single cell of 144**, and the old diagnosis
+  here was wrong. It is not the re-trigger's delay: tracing both emulators through the
+  failing subtest shows we arrive at the re-trigger **one duty position further on**, having
+  taken one extra step in the ~4100 the channel makes at period 4 T before the sweep event.
+  Our DIV-APU event lands 2 T off the 1 MHz grid the duty steps are on, and on hardware the
+  two come off one counter chain and cannot. Both halves are pinned by rows that pass and
+  neither moves alone or together — the full table is in
+  [`../measured/apu.md`](../measured/apu.md#channel_1_sweep_restart--one-duty-step-in-4100).
 
   (`channel_1_sweep_restart_2` **passes** since the restart hold landed — §17. The note
   that used to sit here, blaming a two-M-cycle DIV-APU phase error, was wrong.)
@@ -369,5 +370,6 @@ the difference, `examples/samesuite.rs::revision_for` picks it from the suffix e
 the `testroms` harness picks `@dmg`/`@cgb` from a cartridge header, and
 `$GB_CGB_REVISION=cgb0|cgbB|cgbC` exposes the same knob to a frontend. The ROM still
 judges itself; the knob picks only which machine it is judging, and `dmg_mode` pins the
-modern rule so a DMG game can never see the bug. `-cgb0BC` / `-cgbDE` are a *different*
-revision axis and are not modelled yet (see the failing list above).
+modern rule so a DMG game can never see the bug. `-cgb0BC` / `-cgbDE` are a *different* revision axis and only
+`-cgbDE` is modelled (see the failing list above); `-A` is not a revision at all but a
+whole console, and `examples/samesuite.rs` boots one for it.

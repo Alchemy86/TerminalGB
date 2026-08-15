@@ -329,15 +329,41 @@ const SQUARE_RESTART_SPEEDUP: u32 = 4;
 /// next expiry" rule gives, and it is the whole of
 /// `channel_1_freq_change_timing`.
 ///
-/// **Measured, not chosen** (`-cgbDE`, which is the CPU CGB revision this
-/// emulator models). The ROM sweeps the write across the expiry one nop at a
+/// **Measured, not chosen** (`-cgbDE`, the CPU CGB revision this emulator
+/// models by default). The ROM sweeps the write across the expiry one nop at a
 /// time and reads PCM12 twice — right after the write, and 16 nops later once
 /// the channel has frozen on the sample it will hold — at single **and**
 /// double speed, so it pins the window from both sides. The passing band is
-/// `5..=6` T-cycles, uniform across both speeds; `4` and below swaps the
-/// verdict onto `-A`, the Game Boy Advance table, and `7` and above fails all
-/// three. **Do not "tidy" this to a round 4.**
+/// `5..=6` T-cycles, uniform across both speeds; `7` and above fails every
+/// variant of the ROM. **Do not "tidy" this to a round 4** — 4 is the *other*
+/// console's answer, [`SQUARE_RELOAD_LATCH_AGB`].
 const SQUARE_RELOAD_LATCH: u32 = 6;
+
+/// The same window on a **Game Boy Advance** — two T-cycles narrower.
+///
+/// The suite ships this measurement as its own ROM,
+/// `channel_1_freq_change_timing-A`, beside `-cgbDE` and `-cgb0BC`; the three
+/// tables are the same program and disagree only about this window, so **no
+/// single machine can pass more than one of them**. That is the same shape as
+/// SameSuite's `-cgb0` / `-cgbB` pair, which this emulator already answers by
+/// booting the console the ROM's filename names (see [`CgbRevision`] and
+/// `examples/samesuite.rs`); an AGB is simply another console, and this
+/// repository already models one for its boot state ([`crate::mode::Model::Agb`]).
+///
+/// The behaviour behind the two numbers is the correction the reload applies to
+/// the duty position when a frequency write drops NRx4's high bits from 7:
+/// SameBoy applies it unconditionally on CPU CGB D and E and makes it depend on
+/// the 2 MHz clock phase on an AGB and on CPU CGB C and older (`Core/apu.c`,
+/// the `GB_IO_NR14` case — *"On an AGB, as well as on CGB C and earlier, it
+/// behaves slightly different on double speed"*). Read there, reimplemented
+/// here as the width of the window itself, which is what this ROM measures.
+///
+/// **Measured the same way, and the two bands do not overlap or touch the
+/// edges of the sweep:** `1..=2` fails both, `3..=4` passes `-A` only, `5..=6`
+/// passes `-cgbDE` only, `7` fails both. Nothing else in the 76-ROM suite moves
+/// anywhere in `1..=6`, so the console selection is the *whole* of the
+/// difference.
+const SQUARE_RELOAD_LATCH_AGB: u32 = 4;
 
 /// How long the sweep unit's recalculation takes, in T-cycles, for a given
 /// NR10 shift.
@@ -484,10 +510,9 @@ impl SquareChannel {
     /// against `period - delay`, which looks equivalent and is not: a channel
     /// that has been triggered but not yet expired sits in that range with no
     /// reload behind it to edit.
-    fn write_freq(&mut self, freq: u16) {
+    fn write_freq(&mut self, freq: u16, latch: u32) {
         let old_period = self.period;
-        let inside_latch =
-            self.enabled && old_period != 0 && self.since_expiry < SQUARE_RELOAD_LATCH;
+        let inside_latch = self.enabled && old_period != 0 && self.since_expiry < latch;
         self.freq = freq;
         self.calculate_period();
         if inside_latch && self.period != 0 {
@@ -1395,6 +1420,12 @@ pub struct Sound {
     /// Machine configuration, not cartridge state — deliberately **not**
     /// serialised, so a save state restores into whatever machine is running.
     cgb_revision: CgbRevision,
+    /// This machine is a Game Boy Advance rather than a Game Boy Color. The
+    /// only APU difference this emulator models is the width of the frequency
+    /// timer's reload window ([`SQUARE_RELOAD_LATCH_AGB`]). Machine
+    /// configuration like `cgb_revision`, and **not** serialised for the same
+    /// reason: a save state restores into whatever machine is running.
+    agb: bool,
     /// Reusable mixing scratch (see [`Mixdown`]).
     mixdown: Mixdown,
 }
@@ -1442,6 +1473,7 @@ impl Sound {
             cpu_frac: 0,
             grid_phase: 0,
             cgb_revision: CgbRevision::from_env(),
+            agb: false,
             mixdown: Mixdown::default(),
         }
     }
@@ -1536,6 +1568,24 @@ impl Sound {
     /// Leave it alone for games: the default is the fixed silicon.
     pub fn set_cgb_revision(&mut self, rev: CgbRevision) {
         self.cgb_revision = rev;
+    }
+
+    /// Tell the APU this machine is a Game Boy Advance. Set from
+    /// `MemoryManagementUnit::console`, so `GB_MODEL=agb` (or an explicit
+    /// [`crate::mode::Model::Agb`]) is the whole of the user-facing knob —
+    /// there is deliberately no second one.
+    pub fn set_agb(&mut self, agb: bool) {
+        self.agb = agb;
+    }
+
+    /// Width of the frequency timer's reload window on this console, in
+    /// T-cycles — see [`SQUARE_RELOAD_LATCH`] / [`SQUARE_RELOAD_LATCH_AGB`].
+    fn reload_latch(&self) -> u32 {
+        if self.agb {
+            SQUARE_RELOAD_LATCH_AGB
+        } else {
+            SQUARE_RELOAD_LATCH
+        }
     }
 
     /// The extra-length-clocking rule in force for one channel. A DMG is
@@ -2020,11 +2070,13 @@ impl Sound {
             }
             0xFF13 => {
                 let f = (self.channel1.freq & 0x700) | (v as u16);
-                self.channel1.write_freq(f);
+                let latch = self.reload_latch();
+                self.channel1.write_freq(f, latch);
             }
             0xFF14 => {
                 let f = (self.channel1.freq & 0xFF) | (((v & 0x7) as u16) << 8);
-                self.channel1.write_freq(f);
+                let latch = self.reload_latch();
+                self.channel1.write_freq(f, latch);
                 let fh = self.first_half();
                 let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
@@ -2055,11 +2107,13 @@ impl Sound {
             }
             0xFF18 => {
                 let f = (self.channel2.freq & 0x700) | (v as u16);
-                self.channel2.write_freq(f);
+                let latch = self.reload_latch();
+                self.channel2.write_freq(f, latch);
             }
             0xFF19 => {
                 let f = (self.channel2.freq & 0xFF) | (((v & 0x7) as u16) << 8);
-                self.channel2.write_freq(f);
+                let latch = self.reload_latch();
+                self.channel2.write_freq(f, latch);
                 let fh = self.first_half();
                 let rule = self.extra_length_rule(false);
                 Self::apply_nrx4_length(
@@ -4738,6 +4792,39 @@ mod tests {
         assert_eq!(snd.channel1.period, 16);
         assert_eq!(snd.channel1.delay, 16 + SQUARE_TRIGGER_DELAY);
         snd
+    }
+
+    /// A Game Boy Advance latches the reload **two T-cycles earlier** than a
+    /// CPU CGB D/E does — [`SQUARE_RELOAD_LATCH_AGB`].
+    ///
+    /// The same timer as `a_frequency_write_just_after_an_expiry_redoes_that_reload`
+    /// above, so the two tests differ in exactly one thing: a write 4 T past
+    /// the expiry at T=38 is inside a CGB D/E's window (6 T) and outside an
+    /// AGB's (4 T), so the CGB re-does the reload and the AGB lets the old
+    /// countdown finish. That is the whole of SameSuite
+    /// `channel_1_freq_change_timing-A` versus `-cgbDE`, neither of which
+    /// `cargo test` runs.
+    ///
+    /// `Model::Auto` never picks an AGB, so nothing here reaches an ordinary
+    /// game: the flag is only set for a machine the user asked for by name.
+    #[test]
+    fn an_agb_latches_its_frequency_reload_two_cycles_earlier() {
+        for (agb, expect_relatch) in [(false, true), (true, false)] {
+            let mut snd = ticking_square();
+            snd.set_agb(agb);
+            snd.channel1.run(0, 42);
+            assert_eq!(snd.channel1.since_expiry, 4, "expiry at 38, write at 42");
+            assert_eq!(snd.channel1.delay, 12, "old countdown had 12 T left");
+
+            snd.wb(0xFF13, 0x00); // frequency $700 -> period 1024 T
+            assert_eq!(snd.channel1.period, 1024);
+            let expected = if expect_relatch { 1024 - 4 } else { 12 };
+            assert_eq!(
+                snd.channel1.delay, expected,
+                "agb={agb}: a CGB D/E re-does the reload from the expiry at 38, \
+                 an AGB does not and the old 12 T countdown finishes"
+            );
+        }
     }
 
     /// The frequency-timer reload latch — [`SQUARE_RELOAD_LATCH`].

@@ -107,6 +107,25 @@ fn revision_for(rom: &Path) -> CgbRevision {
     }
 }
 
+/// One APU ROM names a whole **console** rather than a CPU CGB revision:
+/// `channel_1_freq_change_timing-A` is the Game Boy Advance's answer, and it
+/// contradicts its `-cgbDE` sibling by design — the two tables differ only in
+/// the width of the frequency timer's reload window
+/// (`terminalgb::sound::SQUARE_RELOAD_LATCH_AGB`), so no one machine can pass
+/// both. `A` is Gekkio's own single-letter tag for an AGB and
+/// `examples/mooneye_scout.rs::model_for` already reads it that way; this is
+/// the same rule applied to the same letter.
+///
+/// Everything else runs on `Model::Auto`, which for a CGB-flagged cartridge is
+/// a Game Boy Color — never an AGB, which is a console you ask for by name.
+fn console_for(rom: &Path) -> Model {
+    let stem = rom.file_stem().unwrap_or_default().to_string_lossy();
+    match stem.rsplit_once('-') {
+        Some((_, "A")) => Model::Agb,
+        _ => Model::Auto,
+    }
+}
+
 fn run(rom: &Path, frames: u32, dump: bool) -> (Verdict, Vec<u8>) {
     let data = std::fs::read(rom).unwrap_or_else(|e| panic!("{}: {e}", rom.display()));
     // Run each ROM on the console its own header asks for. The `sgb/` tests
@@ -117,7 +136,7 @@ fn run(rom: &Path, frames: u32, dump: bool) -> (Verdict, Vec<u8>) {
     let model = if data.get(0x146) == Some(&0x03) {
         Model::Sgb
     } else {
-        Model::Auto
+        console_for(rom)
     };
     let mut cpu = Cpu::new_with_model(data, Some(rom.to_path_buf()), model);
     cpu.memory.enable_audio(Box::new(NullPlayer));

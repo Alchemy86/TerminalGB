@@ -163,7 +163,7 @@ generated from the checked-in baselines and verified in CI.
 | In-repo harness (Blargg + dmg-acid2) | <!--score:harness-->46 / 47<!--/score--> | <!--score:harness-->46 / 47<!--/score--> | digital, bus-observable, coarse |
 | Mooneye GB — `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score--> | digital, bus-observable, M-cycle exact |
 | Mooneye GB — `emulator-only` | <!--score:mooneye_emulator_only-->28 / 28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28 / 28<!--/score--> | cartridge mappers |
-| SameSuite | <!--score:samesuite-->72 / 76<!--/score--> | <!--score:samesuite-->72 / 76<!--/score--> | sound chip, sub-sample timing |
+| SameSuite | <!--score:samesuite-->73 / 76<!--/score--> | <!--score:samesuite-->73 / 76<!--/score--> | sound chip, sub-sample timing |
 | **Mealybug Tearoom** | **<!--score:mealybug-->3 / 79<!--/score-->** | **<!--score:mealybug_accurate-->17 / 79<!--/score-->** | **the picture, mid-scanline** |
 
 The shape of that table is the argument of this page, and it is not flattering by accident:

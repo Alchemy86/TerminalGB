@@ -25,7 +25,7 @@ yourself proves nothing.
 | [Mooneye GB](measured/scoreboard.md#mooneye-gb--every-remaining-failure-is-a-ppu-test) — `acceptance` | **67** / 75 | **75** / 75 | core timing, interrupts, boot state |
 | Mooneye GB — `emulator-only` | **28** / 28 | same | cartridge mappers |
 | Mooneye GB — `misc` (CGB) | **8** / 8 | same | Color-specific behaviour |
-| [SameSuite](measured/scoreboard.md) | **72** / 76 | same | audio hardware, DMA, Super Game Boy |
+| [SameSuite](measured/scoreboard.md) | **73** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **17** / 79 | mid-scanline picture timing — pixel-exact rows |
 

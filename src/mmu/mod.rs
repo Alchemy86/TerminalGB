@@ -1683,6 +1683,12 @@ impl<'a> MemoryManagementUnit<'a> {
         // DMG carts get DMG APU semantics (length counters survive power-off
         // etc. — what Blargg's dmg_sound asserts); CGB carts get CGB rules.
         sound.set_mode(self.gbmode != GbMode::Color);
+        // An AGB's frequency timer latches its reload two T-cycles earlier than
+        // a CPU CGB D/E's — the one APU difference between the two consoles
+        // this emulator models, and the whole of SameSuite
+        // `channel_1_freq_change_timing-A`. The console is already resolved
+        // here, so `GB_MODEL=agb` is the only knob it needs.
+        sound.set_agb(self.console == crate::mode::Model::Agb);
         if fresh {
             // The APU is installed after `set_initial` has run (a headless
             // machine may never get one at all), so its share of the post-boot

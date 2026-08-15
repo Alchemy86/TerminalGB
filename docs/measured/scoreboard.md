@@ -36,7 +36,7 @@ tool's docstring records why a regex hunting prose for `N/M` was tried and rejec
 | Mooneye GB `acceptance` | <!--score:mooneye_acceptance:total-->75<!--/score--> | **<!--score:mooneye_acceptance:pass-->67<!--/score-->** | the ROM's own `LD B,B` + Fibonacci register check |
 | Mooneye GB `emulator-only` | <!--score:mooneye_emulator_only:total-->28<!--/score--> | **<!--score:mooneye_emulator_only:pass-->28<!--/score-->** | as above |
 | Mooneye GB `misc` (CGB) | <!--score:mooneye_cgb:total-->8<!--/score--> | **<!--score:mooneye_cgb:pass-->8<!--/score-->** | as above |
-| SameSuite | <!--score:samesuite:total-->76<!--/score--> | **<!--score:samesuite:pass-->72<!--/score-->** | the ROM's own `RESULT_CODE` at `$CFFE` |
+| SameSuite | <!--score:samesuite:total-->76<!--/score--> | **<!--score:samesuite:pass-->73<!--/score-->** | the ROM's own `RESULT_CODE` at `$CFFE` |
 | Mealybug Tearoom | <!--score:mealybug:total-->79<!--/score--> | **<!--score:mealybug:pass-->3<!--/score-->** pixel-exact | the author's hardware photographs |
 | `cpp` (CasualPokePlayer MBC3/RTC + SGB) | <!--score:cpp:total-->4<!--/score--> | **<!--score:cpp:pass-->4<!--/score-->** | the author's reference screenshots |
 | **[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)** | **264** | **223 (84.5 %)** | their screenshot comparison — **5th of 19** (18 published emulators, plus us). *Not baseline-derived — see below* |
@@ -132,7 +132,7 @@ The mode is gated separately (`make test-external-accurate`, against
 | Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** |
 | Mooneye `emulator-only` | <!--score:mooneye_emulator_only-->28/28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28/28<!--/score--> |
 | Mooneye `misc` (CGB) | <!--score:mooneye_cgb-->8/8<!--/score--> | <!--score:mooneye_cgb-->8/8<!--/score--> |
-| SameSuite | <!--score:samesuite-->72/76<!--/score--> | <!--score:samesuite-->72/76<!--/score--> |
+| SameSuite | <!--score:samesuite-->73/76<!--/score--> | <!--score:samesuite-->73/76<!--/score--> |
 | `cpp` | <!--score:cpp-->4/4<!--/score--> | <!--score:cpp-->4/4<!--/score--> |
 | Mealybug — rows pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->17/79<!--/score-->** |
 | Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->630,266<!--/score-->** |
@@ -187,23 +187,36 @@ report's **92/264** is stale by a wide margin. Full method: [`docs/shootout.md`]
 
 ---
 
-## SameSuite — four evidenced reds
+## SameSuite — three evidenced reds
 
-**<!--score:samesuite-->72/76<!--/score-->.** All four reds are APU rows, and each is red for a
-stated reason rather than for want of effort:
+**<!--score:samesuite-->73/76<!--/score-->.** All three reds are APU rows, and each is red for a
+*measured* reason. Every claim in this table was re-opened on 2026-08-15 and checked against
+SameBoy at a pinned commit — run
+[`tools/sameboy-oracle/`](../../tools/sameboy-oracle/README.md) and see for yourself, because
+two of the excuses that used to sit here turned out to be wrong.
 
 | Row | Why it is red |
 |---|---|
-| `apu/channel_4/channel_4_freq_change` | **SameSuite's own `apu/README.md` says SameBoy fails it too**, and the ROM's header says *"the logic behind it is still unclear."* A row the suite's author does not pass has no reference implementation to calibrate against. |
-| `apu/channel_1/channel_1_freq_change_timing-A` | `-A` is a **Game Boy Advance**, a console this emulator does not model. Every CGB stepping tag in the suite is spelled `cgb…`; passing this would be an accident — and we briefly did, which is how the frequency latch's lower bound was found. |
-| `apu/channel_1/channel_1_freq_change_timing-cgb0BC` | CGB revisions ≤ C. It differs in the **PCM12 read-back**, not the frequency timer — a glitch the suite's README lists as understood and documented by nobody. |
-| `apu/channel_1/channel_1_sweep_restart` | **143 of its 144 cells match.** The one that differs wants `SQUARE_RESTART_SPEEDUP = 0`, which was measured: it costs four other green rows. See [apu.md](apu.md#the-constants-and-what-moving-each-one-costs). |
+| `apu/channel_4/channel_4_freq_change` | The ROM's own header says *"the logic behind it is still unclear"*, and it is: the LFSR is clocked from a **free-running 14-bit counter** whose phase survives an NR43 write, plus a table of write glitches SameBoy's source annotates *"non-deterministic"* and *"no clue why"*. An exhaustive search over the clean counter model (both reload policies, every trigger phase, every read offset) reaches **61 of the 64 cells** and no further. |
+| `apu/channel_1/channel_1_freq_change_timing-cgb0BC` | CPU CGB 0/B/C — a **machine we do not boot**, and reachable only by modelling two of its behaviours at once: the PCM12 read-back glitch (SameBoy masks the read on `model <= CGB_C`) *and* a double-speed-only condition on the reload correction. A latch value alone cannot do it: sweeping `SQUARE_RELOAD_LATCH` over `1..=7` never turns this row green at any value. |
+| `apu/channel_1/channel_1_sweep_restart` | **143 of its 144 cells match**, and the cause is *not* the sweep unit and *not* `SQUARE_RESTART_SPEEDUP`. See [apu.md](apu.md#channel_1_sweep_restart--one-duty-step-in-4100). |
+
+Two excuses that used to sit in this table and **did not survive being checked**:
+
+* *"SameSuite's own README says SameBoy fails `channel_4_freq_change` too."* Measured: current
+  SameBoy on CGB-E **passes** it, and passes `channel_1_sweep_restart` as well. That README
+  predates its own emulator. A row a leading implementation passes is a row with a working
+  model behind it, whatever its header says about clarity.
+* *"`-A` is a Game Boy Advance, a console this emulator does not model."* It models one — for
+  its boot state — and now for its APU too: `channel_1_freq_change_timing-A` **passes**, on an
+  AGB, for the same reason `channel_1_extra_length_clocking-cgb0B` passes on a CPU CGB 0. See
+  [apu.md](apu.md#the-frequency-reload-latch-is-narrower-on-an-agb).
 
 And a counterpoint that keeps the first row honest: we **pass**
-`apu/channel_1/channel_1_sweep_restart_2`, which is the *other* test that same README names
-SameBoy as failing. The suite is not simply harder than us in one direction.
+`apu/channel_1/channel_1_sweep_restart_2`, the *other* test that README names SameBoy as
+failing. The suite is not simply harder than us in one direction.
 
-Group totals: `apu` **<!--score:samesuite_apu-->65/69<!--/score-->** · `dma` **<!--score:samesuite_dma-->4/4<!--/score-->** · `ppu` **<!--score:samesuite_ppu-->1/1<!--/score-->** · `sgb` **<!--score:samesuite_sgb-->2/2<!--/score-->**.
+Group totals: `apu` **<!--score:samesuite_apu-->66/69<!--/score-->** · `dma` **<!--score:samesuite_dma-->4/4<!--/score-->** · `ppu` **<!--score:samesuite_ppu-->1/1<!--/score-->** · `sgb` **<!--score:samesuite_sgb-->2/2<!--/score-->**.
 
 ---
 

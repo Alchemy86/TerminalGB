@@ -23,6 +23,146 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — the five "principled reds", re-opened against a running SameBoy (SameSuite 72/76 → 73/76)
+
+Five rows in this repository had been recorded as red-for-a-reason and left alone. The captain
+asked for them to be re-checked rather than taken on trust, with another emulator's source in
+front of the crew. **Two of the five reasons were wrong**, one row is now green, and the other
+four have measurements behind them instead of quotations.
+
+The instrument that made the difference is new and reusable:
+[`tools/sameboy-oracle/`](../tools/sameboy-oracle/README.md) fetches and builds SameBoy at a
+pinned commit and prints the **ROM's own** verdict on any of nine consoles. Nothing is
+vendored and nothing is in CI — it is a hand-run second opinion, like `tools/bgb-interop/`.
+
+### The row that turned green: `channel_1_freq_change_timing-A`
+
+- **Symptom.** An emulator gets the *width* of the frequency timer's reload window wrong for
+  the console it is emulating. A game's mid-note pitch bends land one duty step early or late
+  — inaudible, and measurable to two T-cycles.
+- **Caught by.** SameSuite ships the same program three times, with three
+  `CorrectResults` tables: `channel_1_freq_change_timing-cgbDE`, `-cgb0BC` and `-A`.
+- **Hardware behaviour.** The reload correction a frequency write applies to the duty
+  position when NRx4's high bits drop from 7 is unconditional on CPU CGB D and E, and
+  depends on the 2 MHz clock phase on a **Game Boy Advance** and on CPU CGB C and older —
+  SameBoy `Core/apu.c`, the `GB_IO_NR14` case: *"On an AGB, as well as on CGB C and earlier,
+  it behaves slightly different on double speed."* Reimplemented here in this codebase's
+  idiom as the width of the window itself, which is what the ROM measures:
+  `SQUARE_RELOAD_LATCH` = 6 T on a CPU CGB D/E, `SQUARE_RELOAD_LATCH_AGB` = 4 T on an AGB.
+- **The measurement, and why it is a console and not a knob.** Sweeping the latch across the
+  whole 76-ROM suite:
+
+  | latch | 1 | 2 | **3** | **4** | **5** | **6** | 7 |
+  |---|---|---|---|---|---|---|---|
+  | `-A` | fail | fail | **pass** | **pass** | fail | fail | fail |
+  | `-cgbDE` | fail | fail | fail | fail | **pass** | **pass** | fail |
+  | every other row | — | — | unmoved | unmoved | unmoved | unmoved | −1 |
+
+  Two adjacent 2 T bands that do not overlap, with nothing else in the suite moving anywhere
+  in `1..=6`. So no one machine can pass both — the same shape as the suite's `-cgb0`/`-cgbB`
+  pair, which this emulator already answers by **booting the console the ROM's filename
+  names**. `A` is Gekkio's own single letter for an AGB and `examples/mooneye_scout.rs` has
+  read it that way since the console-revisions work; `examples/samesuite.rs::console_for`
+  now does too, and `Model::Agb` — already modelled here for its *boot state* — reaches the
+  APU through `MemoryManagementUnit::enable_audio`. `GB_MODEL=agb` is the whole of the
+  user-facing knob, and `Model::Auto` still never infers an AGB.
+- **Carries into the tool.** `sound::tests::an_agb_latches_its_frequency_reload_two_cycles_earlier`
+  — device-free, no ROM, teeth proven by widening the AGB constant back to 6. The general
+  check: *a suite that ships several reference tables for one program is telling you there is
+  more than one machine; score each on the machine it names.*
+
+### `oam_bug@cgb` — our red is right, and now corroborated in the detail
+
+The in-repo harness' one red. The standing reason was a Pan Docs quotation ("Color hardware
+does not have the OAM corruption bug"). That is a claim about silicon nobody here owns, so it
+was checked against an independent implementation instead:
+
+- SameBoy on a DMG: `01:ok 02:ok … 08:ok  Passed`.
+- SameBoy on CGB-E: `oam_bug  01:ok 02:02 03:ok 04:03 05:02 06:ok 07:01 08:02  …  Failed #2`
+  — **character for character** what `testharness/baseline.txt` records for
+  `blargg/oam_bug@cgb`.
+- And SameBoy gates the whole defect the same way we do: `GB_trigger_oam_bug` and
+  `GB_trigger_oam_bug_read` (`Core/memory.c`) open with `if (GB_is_cgb(gb)) return;`, which
+  is our `Gpu::oam_bug` returning early unless `gbmode == GbMode::Classic`.
+
+Agreeing with a foreign implementation **sub-test by sub-test** is a far stronger claim than
+"we fail it too". This row must stay red; do not re-litigate it.
+
+### `channel_1_sweep_restart` — the old diagnosis was wrong, and the new one is structural
+
+143 of 144 cells match. The recorded cause was `SQUARE_RESTART_SPEEDUP`, with a note that
+round 1 "wants `SPEEDUP = 0`" at a cost of four rows. **Tracing both emulators through the
+failing subtest says otherwise** (T-cycles, each from its own NR14 write):
+
+| | SameBoy (CGB-E) | here |
+|---|---:|---:|
+| fresh trigger, freq `$7FF` (period 4 T) → first duty step | 12 | 10 |
+| the sweep writes `$7F0` (2nd DIV-APU event) | **16400**, duty index **2** | **16404**, duty index **3** |
+| re-trigger → first duty step | 68, index **4** | 66, index **5** |
+
+The re-trigger is not the problem: duty 2's positions 3 and 4 both output 0, which is why
+SameBoy reads `$00` at 68 T *even though the step happened there*. We arrive at the re-trigger
+**one duty position further on**, having taken one extra 4 T step in the ~4100 the channel
+makes before the sweep event — because our DIV-APU event lands 2 T off the 1 MHz grid the duty
+steps are on. On hardware it cannot: the DIV-APU edge is a multiple of 8192 T from the system
+counter's zero and a period-4 channel steps on every 1 MHz boundary, so both come off one
+counter chain. Neither half moves, alone or together:
+
+| | DIV-APU event unmoved | 4 T earlier | 6 T earlier |
+|---|---:|---:|---:|
+| `SQUARE_TRIGGER_DELAY` 6 (shipped) | **73/76** | 59/76 | 59/76 |
+| 7 | 72/76 | 58/76 | 58/76 |
+| 8 (steps on the M-cycle grid, SameBoy's number) | 47/76 | 39/76 | 39/76 |
+
+Rounding the trigger delay up to the grid, and `SQUARE_TRIGGER_ALIGN = 2`, both give the same
+47/76 — at single speed they are `DELAY = 8` by another name. The residual is a structural 2 T
+offset between where this APU places a bus access and where the 1 MHz grid is, invisible to
+all 75 other rows because every one of them measures a *relative* interval that the offset
+cancels out of. Fixing it re-derives the APU's access phase and re-calibrates every constant
+in `docs/measured/apu.md`'s table; it is not one knob.
+
+### `channel_4_freq_change` — SameBoy passes it now, and the README saying otherwise is stale
+
+The recorded reason was SameSuite's `apu/README.md`: *"SameBoy … passes all tests except
+`channel_4_freq_change` and `channel_1_sweep_restart_2`."* **Measured at the pinned commit:
+SameBoy on CGB-E passes `channel_4_freq_change`, and passes `channel_1_sweep_restart` as
+well.** That README predates its own emulator. *Do not quote a README about another project's
+results; run it.*
+
+The structure this repository has predicted all along is right: the LFSR is clocked from a
+free-running 14-bit counter, ticked every `(NR43 & 7) × 8` T-cycles (4 for code 0), stepping on
+the 0→1 edge of the counter's bit `NR43 >> 4`. Our single `period` countdown is algebraically
+identical to it for a fixed NR43 — which is why ten CH4 rows are green — and differs only
+across an NR43 write, which is the whole of this ROM. What blocks the row is that the *clean*
+counter model is not sufficient: searched exhaustively over both reload policies, every trigger
+countdown in `1..=39` for both divisor codes the ROM uses, and every read-point offset in
+`−8..=8`, the best fit is **61 of the 64 cells**, and the parameters that reach it contradict
+the countdown `channel_4_delay` and `channel_4_frequency_alignment` already pin. The remainder
+is SameBoy's NR43-write glitch table, whose own comments read *"non-deterministic"*, *"this
+quirk seems way too specific"* and *"No clue why that specific bit is tested"* — a calibration
+problem with nothing in the suite to calibrate against.
+
+### `channel_1_freq_change_timing-cgb0BC` — two behaviours, on a machine nothing here boots
+
+CPU CGB 0/B/C. Three of its sixteen cells differ from `-cgbDE` and they are **not all of the
+same kind**: two are the high nibble (the PCM12 read taken in the same M-cycle the amplitude
+changes — the quirk the suite's README lists as understood by nobody, and which SameBoy models
+by masking the read on `model <= CGB_C`), and the third is the *settled* value at double speed,
+a real timing difference. The latch sweep above confirms it from the other side: no value in
+`1..=7` turns this row green. Passing it needs the read glitch, a double-speed condition on the
+reload correction, and `CgbRevision` to stop lumping C with D and E. Scoped, not attempted.
+
+### Verified, before and after, same build
+
+SameSuite **72/76 → 73/76** (`apu` 65/69 → 66/69), one baseline line changed and nothing else.
+Mooneye `standard` 103/103 + `misc` 8/8, `accurate` 103/103, Mealybug `standard` 3/79 and
+`accurate` 17/79 **byte-identical per row**, `cpp` 4/4, in-repo harness **46/47** with the same
+verdict text, `audiocapture` (dmg_sound 12/12 and every hash), `savestate`, `battery` 8/8,
+`ppuengines`, 665 library tests. `make embed` (one third-party dependency), `check-wasm`,
+`lint`, `docs-check`, `test-cross`.
+
+---
+
 ## 2026-08-15 — a mid-M-cycle interrupt reaches a halted CPU late (Mooneye `acceptance` accurate 70/75 → 75/75, Mealybug unmoved at 17/79)
 
 The previous entry closed with `OAM_STROBE_LEAD` recorded as *"the one conflict left, fully
@@ -3221,6 +3361,12 @@ this branch has not measured.
 
 ### 16. `channel_4_freq_change` — evidenced as not worth grinding
 
+*(Superseded on 2026-08-15 — see the newest entry. The evidence below is a quotation of
+SameSuite's `apu/README.md`, and it is out of date: current SameBoy **passes** this row on
+CGB-E. The row is still red here, but for a measured reason — the clean free-running-counter
+model reaches 61 of its 64 cells — not because no implementation passes it. Kept because the
+hardware description below is still correct.)*
+
 This is the one row of the sub-cluster left red, and it is left red
 deliberately.
 
@@ -3307,6 +3453,13 @@ the CH1-sweep sub-cluster was 2 rows, not 3, and the NRx2 sub-cluster was 0.
   register-dump adapter can see.
 
 ### 18. Gap left open: `channel_1_sweep_restart`'s last cell is a square-timing question
+
+*(Superseded on 2026-08-15 — see the newest entry. The cell is real and still red, but the
+cause below is wrong: it is not the re-trigger's reload at all. Tracing SameBoy through the
+same subtest shows the duty position is already one step further on **before** the
+re-trigger, because the DIV-APU sweep event lands 2 T off the 1 MHz grid the duty steps are
+on. `SPEEDUP = 0` does not "fix round 1" — it moves a different error by the same amount.
+Kept because the sweep table below is still an accurate measurement of those two knobs.)*
 
 `channel_1_sweep_restart` now matches in **143 of its 144** cells. The one that
 differs is round 1's last subtest (`SubTest $000f`), and it is worth writing

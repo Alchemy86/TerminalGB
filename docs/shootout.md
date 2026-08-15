@@ -45,7 +45,7 @@ By suite:
 |---|---:|---|
 | `blargg` | **51 / 51** | including `oam_bug` 7/7 and `interrupt_time` |
 | `mooneye` | 89 / 97 | acceptance 58/66 · emulator-only 28/28 · misc 2/2 · manual-only 1/1. **Every one of the 8 reds is PPU** mode-3 / LCD-on timing; nothing else in Mooneye fails |
-| `samesuite` | 66 / 68 | `channel_1_sweep_restart`, `channel_4_freq_change` — both deliberately red, see `docs/conformance-notes.md` §15 and the CH4 section of `CLAUDE.md` |
+| `samesuite` | 66 / 68 | `channel_1_sweep_restart`, `channel_4_freq_change` — both red on measured evidence, see `docs/measured/apu.md` § "Three rows left red, all on evidence" |
 | `cpp` | 4 / 4 | MBC3/RTC + `sgb-ext-test` |
 | `ax6` | 3 / 3 | `rtc3test` |
 | `acid` | 4 / 5 | `cgb-acid-hell` needs mid-scanline writes |

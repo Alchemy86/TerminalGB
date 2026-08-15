@@ -194,7 +194,7 @@ cannot drift away from the tests:
 | Mooneye GB — `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score--> | core timing, interrupt dispatch, boot state |
 | Mooneye GB — `emulator-only` | <!--score:mooneye_emulator_only-->28 / 28<!--/score--> | <!--score:mooneye_emulator_only_accurate-->28 / 28<!--/score--> | cartridge mappers |
 | Mooneye GB — `misc` (Color) | <!--score:mooneye_cgb-->8 / 8<!--/score--> | <!--score:mooneye_cgb-->8 / 8<!--/score--> | Color-specific behaviour |
-| SameSuite | <!--score:samesuite-->72 / 76<!--/score--> | <!--score:samesuite-->72 / 76<!--/score--> | sound hardware, DMA, Super Game Boy |
+| SameSuite | <!--score:samesuite-->73 / 76<!--/score--> | <!--score:samesuite-->73 / 76<!--/score--> | sound hardware, DMA, Super Game Boy |
 | CasualPokePlayer | <!--score:cpp-->4 / 4<!--/score--> | <!--score:cpp-->4 / 4<!--/score--> | cartridge clock, Super Game Boy |
 | **Mealybug Tearoom** | **<!--score:mealybug-->3 / 79<!--/score-->** | **<!--score:mealybug_accurate-->17 / 79<!--/score-->** | **mid-scanline picture timing** |
 

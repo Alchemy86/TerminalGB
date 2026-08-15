@@ -227,8 +227,8 @@ they can only be updated by re-reading the board.)
 
 [LIJI32/SameSuite](https://github.com/LIJI32/SameSuite), by SameBoy's author, is the
 equivalent microscope for audio and Color-specific behaviour — and it reports through a
-result code the ROM writes into work RAM. Score: <!--score:samesuite-->72 / 76<!--/score-->,
-of which the audio group is <!--score:samesuite_apu-->65 / 69<!--/score-->. Two of the four
+result code the ROM writes into work RAM. Score: <!--score:samesuite-->73 / 76<!--/score-->,
+of which the audio group is <!--score:samesuite_apu-->66 / 69<!--/score-->. Two of the four
 red rows are ROMs targeting older Color steppings; one the suite's own author does not pass
 and documents as not understood.
 
