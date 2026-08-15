@@ -189,8 +189,8 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > ladder (**`+`**/**`-`**), a stats overlay (**`t`**), palette cycling (**`[`**), pixel-art
 > upscaler cycling (**`]`** algorithm / **`}`** factor), the
 > [**picture mode**](#two-picture-modes--standard-and-identical) (**`P`**: `standard`, or
-> hardware-exact `identical`), **screenshots** (**`c`** what you see,
-> **`C`** the raw 160×144 frame), the **video stream / webcam** on/off (**`v`**) and a
+> hardware-exact `identical`), **[screenshots](docs/picture.md#4-screenshots--c-and-c)**
+> (**`c`** what you see, **`C`** the raw 160×144 frame), the **video stream / webcam** on/off (**`v`**) and a
 > timestamped **recording** (**`V`**). Audio works here too
 > with `--features audio` (see the ALSA note above).
 >
@@ -221,8 +221,9 @@ cargo run --release --features audio --example terminal -- path/to/game.gb   # w
 > drawing: if the terminal cannot repaint fast enough the *display* drops frames while the
 > game itself stays at exactly 59.7275 fps. Press **t** for live stats — the `Proto` line
 > names the transport in use — and read
-> [**how a frame gets into a terminal**](docs/rendering.md), which explains the whole ladder
-> with measured numbers and a terminal-compatibility table. If your terminal's own scaling
+> [**how the picture reaches you, and how to capture it**](docs/picture.md) for the whole path
+> with example pictures, or [**how a frame gets into a terminal**](docs/rendering.md) for the
+> transport ladder in depth with a terminal-compatibility table. If your terminal's own scaling
 > looks too soft, `transmit_scale = 2` sends more pixels; `render_path = legacy` restores the
 > old path.
 >
@@ -1098,6 +1099,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 |---|---|
 | [audio pipeline & quality](docs/audio.md) | APU → `blip_buf` → `cpal` → speaker, the pacing maths, the latency budget, and what is genuine DMG character |
 | [web audio](docs/web-audio.md) | the browser's half: why the `wasm32` build had no sound *chip*, the Web Audio scheduler, and the three constants a real Chrome run decided |
+| [how the picture reaches you](docs/picture.md) | **start here**: the whole path from the 160×144 framebuffer to your terminal, the four published protocols we implement (and the one we did *not* invent), why it is sharp, and the two screenshot keys — with example pictures |
 | [how a frame gets into a terminal](docs/rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, how it is negotiated, which terminals support what |
 | [the link cable](docs/link-cable.md) | **two consoles, one wire**: start a second copy of the emulator and they find each other and link automatically. The hardware, the lockstep argument, the Gen 1 ↔ Gen 2 Time Capsule rules, and an honest design note on playing over the internet |
 | [terminal render performance](docs/terminal-render.md) | why a large terminal window used to cost frames, and what caps the cost now |

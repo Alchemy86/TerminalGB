@@ -9,7 +9,7 @@
 > around *this tree*. If that assumption is wrong, read
 > [**what an emulator actually is**](emulation/README.md) first — same machine, no code.
 >
-> [README](../README.md) · [what an emulator is](emulation/README.md) · [component index](components/README.md) · [testing](testing.md) · [debugging](debugging.md) · [display](display.md) · [terminal rendering](rendering.md)
+> [README](../README.md) · [what an emulator is](emulation/README.md) · [component index](components/README.md) · [testing](testing.md) · [debugging](debugging.md) · [display](display.md) · [how the picture reaches you](picture.md) · [terminal rendering](rendering.md)
 
 ---
 

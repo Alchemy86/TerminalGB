@@ -1,5 +1,9 @@
 # Pixel-art upscaling
 
+> Related: [How the picture reaches you](picture.md) — where the upscaler sits in the frame
+> path, what each option costs on the wire, and how the upscalers interact with the screenshot
+> keys · [Display scaling](display.md) · [🗺️ Code map](codemap.md)
+
 The DMG framebuffer is 160×144 with four shades. On any modern display that is
 a postage stamp, and plain stretching only makes the blocks bigger. This
 document records the survey of upscaling techniques, why this repo ships the

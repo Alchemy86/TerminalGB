@@ -1,0 +1,147 @@
+{
+  "rom": "dmg-acid2 (vendored, MIT)",
+  "command": "python3 docs/tools/picture_numbers.py --measure (runs examples/render_bench on the vendored dmg-acid2 ROM)",
+  "note": "Every row is --motion (every frame differs) except the dedup row, which is the point of that row. Font 8x16.",
+  "window_independence": [
+    {
+      "cells": "80x24",
+      "display_px": "392x352",
+      "capped_bytes": 1447,
+      "capped_ms": 0.344,
+      "legacy_bytes": 743864,
+      "legacy_ms": 2.32
+    },
+    {
+      "cells": "120x40",
+      "display_px": "672x608",
+      "capped_bytes": 1447,
+      "capped_ms": 0.338,
+      "legacy_bytes": 2201403,
+      "legacy_ms": 5.901
+    },
+    {
+      "cells": "160x50",
+      "display_px": "856x768",
+      "capped_bytes": 1448,
+      "capped_ms": 0.339,
+      "legacy_bytes": 3541590,
+      "legacy_ms": 11.387
+    },
+    {
+      "cells": "213x55",
+      "display_px": "944x848",
+      "capped_bytes": 1448,
+      "capped_ms": 0.332,
+      "legacy_bytes": 4312301,
+      "legacy_ms": 11.461
+    },
+    {
+      "cells": "297x80",
+      "display_px": "1384x1248",
+      "capped_bytes": 1448,
+      "capped_ms": 0.327,
+      "legacy_bytes": 9302888,
+      "legacy_ms": 30.841
+    }
+  ],
+  "frame_path": {
+    "cells": "213x55",
+    "display_px": "944x848",
+    "transmitted_px": "160x144",
+    "emulate_ms": 0.079,
+    "palette_ms": 0.07,
+    "upscale_ms": 0.0,
+    "encode_ms": 0.183,
+    "write_ms": 0.0,
+    "frame_ms": 0.333,
+    "bytes": 1448
+  },
+  "dedup": {
+    "frames": 300,
+    "identical": 299,
+    "bytes": 4.0,
+    "moving_bytes": 1448
+  },
+  "protocols": [
+    {
+      "protocol": "kitty",
+      "capped_bytes": 1448,
+      "capped_ms": 0.333,
+      "legacy_bytes": 4312296,
+      "legacy_ms": 13.867
+    },
+    {
+      "protocol": "iterm2",
+      "capped_bytes": 2022,
+      "capped_ms": 0.327,
+      "legacy_bytes": 29780,
+      "legacy_ms": 30.751
+    }
+  ],
+  "upscalers": [
+    {
+      "algorithm": "nearest",
+      "factor": 1,
+      "px": "160x144",
+      "upscale_ms": 0.0,
+      "encode_ms": 0.181,
+      "bytes": 1448
+    },
+    {
+      "algorithm": "nearest",
+      "factor": 4,
+      "px": "640x576",
+      "upscale_ms": 0.773,
+      "encode_ms": 2.444,
+      "bytes": 4622
+    },
+    {
+      "algorithm": "scale2x",
+      "factor": 2,
+      "px": "320x288",
+      "upscale_ms": 0.241,
+      "encode_ms": 0.737,
+      "bytes": 3071
+    },
+    {
+      "algorithm": "scale2x",
+      "factor": 3,
+      "px": "480x432",
+      "upscale_ms": 0.598,
+      "encode_ms": 1.502,
+      "bytes": 5095
+    },
+    {
+      "algorithm": "mmpx",
+      "factor": 2,
+      "px": "320x288",
+      "upscale_ms": 0.305,
+      "encode_ms": 0.721,
+      "bytes": 2835
+    },
+    {
+      "algorithm": "mmpx",
+      "factor": 4,
+      "px": "640x576",
+      "upscale_ms": 1.238,
+      "encode_ms": 2.558,
+      "bytes": 6680
+    },
+    {
+      "algorithm": "lcd",
+      "factor": 4,
+      "px": "640x576",
+      "upscale_ms": 1.547,
+      "encode_ms": 2.799,
+      "bytes": 5659
+    },
+    {
+      "algorithm": "lcd",
+      "factor": 6,
+      "px": "960x864",
+      "upscale_ms": 3.481,
+      "encode_ms": 5.981,
+      "bytes": 8480
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: gen1-atlas test-gen1-atlas web desktop docs-links docs-check status lint lint-audio test-audio-perf embed test-longplay \
+.PHONY: gen1-atlas test-gen1-atlas web desktop docs-links docs-check status picture-numbers lint lint-audio test-audio-perf embed test-longplay \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
@@ -39,11 +39,23 @@ docs-links:
 
 # Fail if any doc reference is broken: a missing file/dir target, or a line
 # number past the end of its file. Suitable for CI. Also verifies the status
-# page's suite scores still match the checked-in baselines (see `status`).
+# page's suite scores still match the checked-in baselines (see `status`), and
+# that docs/picture.md's generated tables still match the source and the
+# committed measurements (see `picture-numbers`).
 docs-check:
 	python3 docs/tools/codemap_links.py --check
 	python3 docs/tools/status_numbers.py --check
+	python3 docs/tools/picture_numbers.py --check
 	python3 tools/gen1-atlas/render.py --check
+
+# docs/picture.md: re-read the transport ladder, the upscaler table and the
+# picture key bindings out of src/ and rewrite the generated blocks. The
+# *measurements* it also quotes are data, not re-derived here — refresh those
+# deliberately with `--measure`, which needs only the vendored dmg-acid2 ROM
+# and a built `examples/render_bench`. docs-check (in CI) is red until the page
+# agrees with both again.
+picture-numbers:
+	python3 docs/tools/picture_numbers.py
 
 # Status page (docs/status.md + the Pages-ready docs/status/index.html):
 # re-derive every suite score from testharness/*_baseline.txt and rewrite the

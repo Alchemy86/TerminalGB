@@ -2,8 +2,10 @@
 
 > Source: [`src/termimage.rs`](../src/termimage.rs), [`src/shmframe.rs`](../src/shmframe.rs),
 > [`src/deflate.rs`](../src/deflate.rs), [`src/screen/tui.rs`](../src/screen/tui.rs) ·
-> Related: [Terminal render performance](terminal-render.md) · [Display scaling](display.md) ·
-> [Telemetry](telemetry.md) · [Frontends](components/frontends.md) · [🗺️ Code map](codemap.md)
+> Related: [How the picture reaches you](picture.md) — the reader-facing tour of this same
+> path, with pictures · [Terminal render performance](terminal-render.md) ·
+> [Display scaling](display.md) · [Telemetry](telemetry.md) ·
+> [Frontends](components/frontends.md) · [🗺️ Code map](codemap.md)
 
 > The captain, playing in WezTerm with the stats overlay up:
 >

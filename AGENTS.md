@@ -6951,3 +6951,48 @@ carries a **stable code per check** that resolves to a heading on our documentat
 - **After a teeth test, REBUILD before measuring anything else.** `git checkout` restores the
   source, not the binary; a stale `conformance_adapter` reported `GB-CPU-07` failing long after
   the deliberate break was reverted.
+
+## `docs/picture.md` — the reader-facing picture page, and the overclaim it corrects
+
+**The page: [`docs/picture.md`](docs/picture.md); the gate: `docs/tools/picture_numbers.py`,
+wired into `make docs-check` (CI) and refreshed by `make picture-numbers`.** It owns *"how the
+picture gets to you, and how to capture it"* for someone who has never opened the source;
+`rendering.md` still owns the transport ladder in depth, `terminal-render.md` the performance
+fight, `display.md` scaling across the three frontends, `upscaling.md` the algorithms. Cross-link,
+do not restate.
+
+- **WE DID NOT BUILD A FRAME TRANSPORT PROTOCOL, AND THE PAGE SAYS SO IN ITS SECOND SECTION.**
+  An outside reviewer told the captain we had, and a compliment left unchallenged quietly
+  becomes a claim. We **implement four published ones** — the kitty graphics protocol (Kovid
+  Goyal), sixel (DEC), iTerm2 inline images (George Nachman), and the `▀` glyph — probe the
+  terminal, and pick. What *is* ours is the sizing decision (transmit at the picture's
+  resolution, never the window's), writing the sequence outside `ratatui`'s cell buffer, the
+  unchanged-frame hash, and `screen::halfblocks`. **`ratatui`/`ratatui-image` are credited
+  fairly there too** — the half-block smoothing was a default we should have checked, not a
+  fault, and the same crate's sixel encoder does not smooth.
+- **The gate has three tiers and only two are re-derived on every check.** *Source facts* (the
+  `Graphics` ladder order, the `Algorithm` list and `supported_factors`, and that `c`/`C`/`[`/
+  `]`/`}` are still bound to what the page says) are parsed out of `src/` every run — rename a
+  key and `--check` names it. *Measurements* live in `docs/picture/measurements.json` and are
+  **data**: re-running the benchmark inside `--check` would fail CI on ordinary timing noise, so
+  refresh them deliberately with `--measure`. *Terminal captures* are checked for existence only.
+  Teeth proven four ways (a new upscaler factor, a renamed key, a perturbed measurement, a
+  missing image); re-run those if you doubt it.
+- **The blur fix has a fresh, one-key-apart reproduction now**, better than the archived
+  before/after: same binary, same WezTerm window, `protocol = halfblocks` either way, and
+  `render_path = legacy` alone takes the picture area from **5 distinct colours to 184**
+  (`magick shot.png -format '%k unique colours\n' info:`). The 271 figure in `display.md` §1 is
+  the same measurement at 80×24 — quote a size with either.
+- **`c` and `C` are byte-identical at the defaults**, and that surprises people: `grayscale` +
+  `nearest ×1` means the display path is the identity, so 0 of 23,040 pixels differ. They
+  diverge the instant `[`, `]` or `}` is pressed. `c` also uses the **selected** upscale factor,
+  not `transmit_factor` — with `transmit_scale = auto` a `nearest ×4` sends 160×144 on the wire
+  and lets the terminal stretch, which is right for the wire and wrong for a file.
+- **The bench's `--path capped` column is NOT faithful for sixel or half-blocks.**
+  `examples/render_bench.rs` maps every non-iTerm2 protocol to `Wire::Kitty` there, so
+  `--protocol sixel --path capped` measures kitty. Only kitty and iTerm2 use `TermImage` in the
+  product; sixel goes through `ratatui-image` and half-blocks through `screen::halfblocks`. The
+  page therefore takes sixel and half-block figures from a **real terminal** via the status
+  panel, never from that column.
+- **`pkill -f 'http.server 8711'` killed this crew's own shell mid-command**, exactly as the
+  standing `pgrep -f`/`pkill -f` note warns. Kill by the PID you captured at launch.

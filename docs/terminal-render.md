@@ -1,7 +1,8 @@
 # Terminal render performance — why a big window cost frames, and what fixed it
 
 > Source: [`src/screen/tui.rs`](../src/screen/tui.rs), [`src/termimage.rs`](../src/termimage.rs),
-> [`src/screen/frame.rs`](../src/screen/frame.rs) · Related: [Display scaling](display.md) ·
+> [`src/screen/frame.rs`](../src/screen/frame.rs) · Related:
+> [How the picture reaches you](picture.md) · [Display scaling](display.md) ·
 > [Telemetry](telemetry.md) · [Frontends](components/frontends.md) · [🗺️ Code map](codemap.md)
 
 > **Sequel:** this page fixed the *size* of what we transmit. The transport itself — shared
