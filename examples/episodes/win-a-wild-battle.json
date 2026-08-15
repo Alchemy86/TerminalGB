@@ -1,0 +1,11 @@
+{
+  "schema": "gbepisode/1",
+  "name": "win-a-wild-battle",
+  "objective": "Win the wild battle you are standing in",
+  "start_state": "states/wild-encounter.gbss",
+  "success": ["watch:in_battle=0", "party_hp>0"],
+  "failure": ["party_hp=0"],
+  "timeout_frames": 20000,
+  "max_calls": 20,
+  "watch": ["in_battle", "enemy_hp", "enemy_level", "lead_hp"]
+}

@@ -63,6 +63,7 @@ default = [
     "bgblink",
     "portal",
     "gen1-battle",
+    "longplay",
 ]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
@@ -141,6 +142,19 @@ gen1-battle = ["terminalgb-gen1-battle", "plugin-battle-control"]
 # In `default` because it costs no dependency; out of `--no-default-features`
 # so the embedding build and wasm inherit no network code. See docs/portal.md.
 portal = ["plugin-gen1-link", "plugin-agent"]
+# THE LONG-HORIZON RUNNER (`terminalgb::longplay`, `examples/longplay.rs`) — an
+# agent plays a cartridge unattended for hours at headless speed, keeps durable
+# state so a restart resumes, reports meaningful milestones (optionally to a
+# phone over ntfy), notices when the *game* has stopped getting anywhere, and
+# writes an honest scoreboard whose headline is frames-per-model-call.
+#
+# It depends on `plugin-agent` for the same reason `mcp` does: the decision
+# loop, the perception layer and the bounded executor already live there and
+# must not exist twice. It adds **no third-party crate** — the JSON codec is
+# the agent plugin's and the ntfy push is delegated to the system `curl`, the
+# same bar `portal` meets. In `default` because it costs no dependency; out of
+# `--no-default-features` so an embedder inherits no run harness.
+longplay = ["plugin-agent"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
@@ -435,6 +449,14 @@ name = "claude_plays"
 path = "examples/claude_plays.rs"
 required-features = ["image", "plugin-agent"]
 
+# THE LONG-HORIZON RUNNER's front end. Needs only `longplay` (which pulls in
+# `plugin-agent`): screenshots go through the agent's own frame-capture, so
+# there is no `image` dependency here.
+[[example]]
+name = "longplay"
+path = "examples/longplay.rs"
+required-features = ["longplay"]
+
 # Evidence tool for the agent's screen-text channel: drives a real cartridge
 # to several kinds of screen and prints what the observation layer decodes.
 [[example]]
@@ -681,3 +703,13 @@ required-features = ["gen1-battle", "plugin-battle-control", "plugin-trainer"]
 name = "gen1_battle_ai"
 path = "examples/gen1_battle_ai.rs"
 required-features = ["gen1-battle"]
+
+# The LONG-RUN harness: the unattended-run stack end to end — milestones out of
+# a running machine, a durable log, a checkpoint another process resumes from,
+# the per-decision dataset, and the property the whole design rests on (a
+# driver that never answers does not slow the emulator down). No ROM required.
+[[test]]
+name = "longplay"
+path = "testharness/longplay.rs"
+harness = false
+required-features = ["longplay"]

@@ -1,0 +1,11 @@
+{
+  "schema": "gbepisode/1",
+  "name": "leave-the-house",
+  "objective": "Get out of Red's house and into Pallet Town",
+  "start_state": "states/bedroom.gbss",
+  "success": ["map=0x00"],
+  "failure": [],
+  "timeout_frames": 30000,
+  "max_calls": 15,
+  "watch": []
+}

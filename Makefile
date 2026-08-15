@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed \
+.PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed test-longplay \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune \
@@ -140,6 +140,15 @@ test-agent-docs:
 # — and the three binaries named in the script's header.
 agent-docs-capture:
 	python3 tools/agent-docs/capture.py --rom $(ROM) --save $(SAV)
+
+# THE LONG-RUN HARNESS: milestones out of a running machine, a durable log, a
+# checkpoint another process resumes from, the episode primitive's reset loop,
+# the per-decision dataset, the watch/perception separation, and the property
+# the whole design rests on (a driver that never answers does not slow the
+# emulator down). No ROM required, ~20 s. See docs/longplay.md.
+test-longplay:
+	cargo test --release --features longplay --lib longplay
+	cargo test --release --features longplay --test longplay
 
 # Interoperability for the BGB link protocol: drive somebody else's
 # implementation and check bytes cross. NOT in CI — it fetches another

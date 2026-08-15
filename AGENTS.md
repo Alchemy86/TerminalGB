@@ -6530,3 +6530,113 @@ emulates).
   `@devcontainers/cli`, which is the tool Codespaces runs. Unverified until it lands on `main`:
   the badge URL, GitHub's creation flow, and the secret prompt. `docs/quickstart.md` §8 says so
   in the same words; do not let it be quoted as verified.
+
+## Long runs and episodes (`src/longplay/`, `examples/longplay.rs`, `docs/longplay.md`)
+
+**Full page: [`docs/longplay.md`](docs/longplay.md).** An agent plays unattended for hours at
+headless speed and reports in; and an **episode** — a start save state, a success condition, a
+failure/timeout — is reset and repeated so an agent becomes measurable instead of anecdotal.
+Behind the `longplay` feature (in `default`, out of `--no-default-features`), and it adds **no
+third-party crate**: the JSON codec is the agent plugin's and the ntfy push is delegated to the
+system `curl`, the same bar `portal` meets.
+
+- **THE HEADLINE IS FRAMES PER MODEL CALL, AND ON AN UNCAPPED HEADLESS RUN IT IS MOSTLY THINK
+  TIME.** Measured on a real Pokémon Blue run through the `claude` CLI adapter: **92,654
+  frames/call over 45 calls** — and 45 calls in 19m42s is ~26 s each, which at 3,527 emulated
+  fps is ~92,000 frames, i.e. *essentially all of it*. The emulator never blocks on the agent
+  (right, and load-bearing), so headless the world runs a game-day forward while one decision is
+  being made and the plan comes back aimed at a world that moved.
+  `Scoreboard::executing_frames_per_call` and `think_share` are what make the number honest and
+  are both in `report.json`. **Never quote `frames_per_call` from an uncapped headless run
+  without `think_share`.**
+- **THE COUNTERFACTUAL, MEASURED, AND IT IS THE STRONGEST EVIDENCE IN THIS SECTION.** The same
+  episode (out of Oak's Lab, 12,000-frame timeout, ≤5 calls, real model, same start state) run
+  three times each way: **`--pace thinking` 3/3 succeeded at 810 frames/call, median 804;
+  unpaced 0/3, every attempt timing out at 12,000 frames having made exactly one call that had
+  not come back.** Note which column is bigger — **the failing configuration reports the larger
+  frames-per-call**. The runner now prints a warning when an episode's timeout is dwarfed by a
+  call's think time. `--pace thinking` is off by default because "the emulator never waits" is
+  the property the design rests on, but for an **episode** it is almost always what you want.
+- **The agent that spent eight game-hours pinned in Oak's Lab during the long run got out of it
+  in ONE decision, three times out of three, once the segment was isolated.** That is the
+  argument for episodes in one sentence, and the workflow it implies: a long run's
+  `captures/` directory is a list of candidate episodes.
+- **The agent's stuck detector and the game's are different questions and neither substitutes.**
+  `governor::Stuck` fingerprints the world across *decisions*; an agent walking ten steps north
+  then ten south produces a different fingerprint every time and never trips it. `progress::Wall`
+  asks "has the *game* got anywhere?" over **game** time via a score that never falls when the
+  player merely moves. It escalates on a **doubling** ladder (15m → 30m → 1h of game time,
+  observed on the real run) — a linear one still reports every twenty minutes for ever.
+- **"Stuck" is two things and the report must say which.** `pinned` (few distinct tiles — walking
+  into a wall, reopening a menu) vs `wandering` (plenty of ground, no progress — the maze
+  failure). Both observed on one real run: *"going round in 1 tiles"* in Red's house, then
+  *"wandering over 17 tiles"* in Pallet Town. The separator is distinct `(map, x, y)` triples,
+  not distance, so a two-tile shuffle repeated a thousand times still reads as pinned.
+- **MEMORY WATCHES ARE HOST-SIDE REPORTING AND MUST NEVER REACH THE AGENT.** An agent told "the
+  opponent has 4 HP" is reading the answer out of RAM, and the leak would be invisible in the
+  results — every success rate the harness ever produced would be uninterpretable. The two paths
+  are structurally separate (`src/longplay/watch.rs` is read in the *host*; the agent's
+  perception is its own observer inside the plugin) and `testharness/longplay.rs` check [13]
+  proves it by declaring a watch called `secret_oracle` and grepping **every request the driver
+  was handed**. Do not "helpfully" add watches to the snapshot.
+- **A resume is a REWIND and is never silent**: counted in the checkpoint, reported as a `Major`
+  milestone, and printed in the report's `assistance` block beside `memory_writes`,
+  `memory_informed_decisions` and `seed_controlled`. Same rule for an episode's per-attempt
+  reset (`state_resets`). **An undeclared advantage makes every number worthless.**
+- **`Progress::wiped()` is total party HP, NOT `wIsInBattle == $FF`.** That sentinel is set for a
+  moment inside `.allPokemonFainted` and a 10 Hz sampler misses it almost always; total HP is a
+  state, not an edge, so it is still true when the sample lands.
+- **The Pokédex and bag addresses are derived and the walk lands on a verified anchor from BOTH
+  directions**, which is its own proof: forwards from `wPartyCount` `$D163` (+404 bytes of party
+  block) and backwards from `wPlayerMoney` `$D347` (−41 bag −1 count −19 seen −19 owned) both
+  land on **`$D2F7` = `wPokedexOwned` = `wMainDataStart`**. Pinned by
+  `longplay::tests::the_pokedex_walk_lands_on_both_of_its_anchors`.
+- **A per-decision dataset is a by-product, not a project.** `steps.ndjson` is one line per
+  decision — observation, intent, actions, outcome — every field already measured for the report,
+  joined to the agent plugin's own `agent.ndjson` on `decision`. **Fields are omitted when
+  `in_game` is false** rather than written as zeros: a learner cannot tell a real zero from a
+  not-yet-a-game zero.
+- **`AgentPlugin::last_plan()` and `stuck_worst()` were added for this** — additive, read-only.
+  `Executor::start` clears its outcomes, so `last_plan()` is exactly the last plan's and never a
+  running total.
+- **The harness fixture is a cartridge that does NOTHING** (`jr -2`, header `POKEMON BLUE` +
+  checksum `$9D0A` so the Gen 1 reader engages) and the harness pokes the WRAM a real game would
+  write. Far better than a hand-assembled game simulator when what is under test is the
+  *observation and reporting* layer; `testharness/agent.rs` already drives the executor against a
+  moving player. 55 checks, no ROM, ~20 s.
+- **THE TWO-RLIB TRAP BIT THIS WORK TOO.** `testharness/longplay.rs` importing
+  `terminalgb::plugin::Plugin` to call `AgentPlugin::capabilities()` failed with *"the trait
+  `Plugin` is not implemented for `AgentPlugin`"* and *"multiple different versions of crate
+  `terminalgb_plugin_api`"* — the same `panic = 'abort'` dual-rlib problem `testharness/portal.rs`
+  records. The fix was better than the workaround: assert the **observed** behaviour through
+  `Gameboy::plugin_statuses()` (`has_pressed && !has_written`) instead of the declaration.
+- **`--command` swallows the rest of the command line, so it must be LAST** — checked, like
+  `examples/claude_plays.rs`. And **never point a run at `~/roms`**: the runner stages the ROM
+  into the run directory, where its `.sav` belongs to the run.
+- **Prior art was read rather than rediscovered, and it is cited on the docs page**: the harness
+  dominates the model (PokéAgent Challenge `arXiv 2603.15563`: *"without a harness, raw frontier
+  VLMs achieve effectively 0% task completion"*; lmgame-Bench `arXiv 2505.15146`: 40% of
+  un-harnessed runs fail to beat random play vs 86.7% with one), persistent memory is the most
+  dangerous component (Claude 3.7 acting for hours on a false premise it had written down — which
+  is why an **episode carries no memory between attempts, deliberately**), and the knowing–doing
+  gap is a named reproducible failure. Several widely-repeated Twitch Plays Pokémon figures could
+  not be traced to a primary source and are deliberately absent.
+- **The control that makes the think-share claim readable**: the same runner with a *canned*
+  driver on the same cartridge, nine runs of 75,705 frames over three successive
+  emulator revisions, reports **252.35 frames/call and 231.09 executing-frames/call —
+  identical to two decimals on every one of the nine, while the wall clock moved 5% —
+  at 5,411-5,668 emulated fps, 90.6-94.9x real time**, with
+  `think_share` **0.00** and `executing_frames_per_call` 231.09 — with an instant driver the
+  headline is very nearly all real play and the two numbers agree. Different workload from
+  `docs/mcp.md`'s 70x (fresh boot + agent plugin here, an overworld save through MCP there), so
+  quote both with their method rather than treating either as a contradiction.
+- **A RATE MUST DIVIDE BY MILLISECONDS, NOT WHOLE SECONDS, AND THIS PAGE ONCE GOT IT WRONG.**
+  An earlier draft published "4,000 emulated fps" from a *three-second* run — at whole-second
+  resolution 20,000 frames is anywhere from 5,000 to 6,667 fps depending on which side of the
+  second it landed, and the report printed it to four significant figures. `Scoreboard::wall_ms`
+  is what every rate divides by now; `wall_seconds` survives for display and for the checkpoint.
+  Pinned by `a_rate_is_measured_in_milliseconds_not_whole_seconds`. General rule: **never quote
+  a rate from a run shorter than the clock's resolution times a hundred.**
+- **Nothing here has been run for eight hours.** The longest verified session is twenty minutes;
+  the checkpoint/resume path is tested by a second process reading a first's checkpoint. "It
+  survives an overnight run" is a prediction, not a measurement — say so.

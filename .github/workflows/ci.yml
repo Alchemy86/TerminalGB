@@ -62,6 +62,16 @@ jobs:
       # greppable part of the log. ~2 s. See docs/chiptune.md.
       - name: Chiptune renderer
         run: make test-chiptune
+      # The unattended-run harness: milestones out of a running machine, a
+      # durable log, a checkpoint a SECOND PROCESS resumes from, the episode
+      # reset loop, the per-decision dataset, and the two properties that make
+      # a result mean anything — a memory watch never reaches the agent, and a
+      # driver that never answers does not slow the emulator down. No ROM and
+      # no model needed; the fixture is a cartridge that does nothing and the
+      # harness pokes the RAM a real game would write. ~20 s.
+      # See docs/longplay.md.
+      - name: Long-run harness
+        run: make test-longplay
       - name: Make desktop build
         run: cd ./examples/desktop && cargo build
       # The web build. Audio is compiled out on wasm; a fresh clone must keep building it.

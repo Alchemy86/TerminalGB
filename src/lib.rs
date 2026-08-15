@@ -69,6 +69,13 @@ pub mod link;
 /// The World Trade Centre's relay client (see `docs/worldlobby.md`).
 #[cfg(feature = "plugin-gen1-lobby")]
 pub mod lobby;
+/// **The long-horizon runner** — an agent plays unattended for hours at
+/// headless speed and reports in. See [`longplay`] and `docs/longplay.md`.
+/// Behind the `longplay` feature (which is `plugin-agent` plus this module) and
+/// adds **no third-party crate**: the JSON codec is the agent plugin's and the
+/// ntfy push is delegated to the system `curl`, the same bar `portal` meets.
+#[cfg(all(feature = "longplay", not(target_arch = "wasm32")))]
+pub mod longplay;
 mod mbc;
 /// Model Context Protocol server — drive the emulator from any MCP client.
 /// See [`mcp`]. Behind the `mcp` feature and adds no third-party crate.

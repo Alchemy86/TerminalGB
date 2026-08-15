@@ -1133,6 +1133,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | [starting battles on demand](docs/gen1/battle-control.md) | the one byte the engine reads, and how to script what follows |
 | [the trainer view](docs/trainer.md) | the address table, the derivation, and the verification |
 | [Claude plays Pokémon](docs/claude-plays.md) | the agent architecture, the OBS/Twitch recipe, and the honest gaps |
+| [long runs and episodes](docs/longplay.md) | an agent plays unattended for hours at 70x and reports in — durable state, milestones pushed to a phone, a game-level stuck detector, and the **episode** primitive that resets and repeats a chosen segment so an agent becomes measurable |
 
 **Pokémon Generation 2**
 

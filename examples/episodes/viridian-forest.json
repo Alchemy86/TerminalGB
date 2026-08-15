@@ -1,0 +1,11 @@
+{
+  "schema": "gbepisode/1",
+  "name": "out-of-viridian-forest",
+  "objective": "Leave Viridian Forest by the north exit and reach Pewter City",
+  "start_state": "states/forest-south.gbss",
+  "success": ["map=0x02"],
+  "failure": ["party_hp=0"],
+  "timeout_frames": 90000,
+  "max_calls": 60,
+  "watch": ["in_battle", "lead_hp", "lead_level"]
+}

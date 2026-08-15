@@ -236,6 +236,27 @@ impl AgentPlugin {
         self.driver.name()
     }
 
+    /// Outcomes of the plan that most recently ran — what the last decision
+    /// actually *did*, action by action.
+    ///
+    /// Additive and read-only. It exists because a long unattended run doubles
+    /// as a dataset (`src/longplay`): a record of one decision needs the
+    /// observation, the stated intent, the **actions** and the **outcome**, and
+    /// only the plugin knows the middle two. The executor clears these when the
+    /// next plan starts, so this is exactly the last plan's and never a
+    /// running total.
+    pub fn last_plan(&self) -> &[Outcome] {
+        self.exec.outcomes()
+    }
+
+    /// Highest number of consecutive decisions that changed nothing, this
+    /// session — the agent's own repeat-detector high-water mark, for a run
+    /// report. See [`governor::Stuck`], and note it answers a *different*
+    /// question from the game-level wall detector in `src/longplay`.
+    pub fn stuck_worst(&self) -> u32 {
+        self.stuck.worst()
+    }
+
     /// Whether this cartridge is one the observer understands.
     pub fn is_supported(&self) -> bool {
         self.supported
