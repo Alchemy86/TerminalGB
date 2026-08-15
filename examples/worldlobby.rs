@@ -81,8 +81,9 @@ const FRAMES_PER_TICK: u32 = 60 / TICK_HZ as u32;
 /// that four processes act together without any of them being in charge, and so
 /// that a screenshot taken at a given tick really is the same instant on every
 /// screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 enum Phase {
+    #[default]
     Waiting,
     Gather,
     Mingle,
@@ -349,19 +350,18 @@ impl Walker {
         } else {
             want_x == 1
         };
-        let dx = if x < tx {
-            Some(KeypadKey::Right)
-        } else if x > tx {
-            Some(KeypadKey::Left)
-        } else {
-            None
+        // `Ordering` unqualified is the *atomic* one in this file, hence the
+        // full path.
+        use std::cmp::Ordering as Cmp;
+        let dx = match x.cmp(&tx) {
+            Cmp::Less => Some(KeypadKey::Right),
+            Cmp::Greater => Some(KeypadKey::Left),
+            Cmp::Equal => None,
         };
-        let dy = if y < ty {
-            Some(KeypadKey::Down)
-        } else if y > ty {
-            Some(KeypadKey::Up)
-        } else {
-            None
+        let dy = match y.cmp(&ty) {
+            Cmp::Less => Some(KeypadKey::Down),
+            Cmp::Greater => Some(KeypadKey::Up),
+            Cmp::Equal => None,
         };
         let k = if prefer_x { dx.or(dy) } else { dy.or(dx) };
         if let Some(k) = k {
@@ -449,12 +449,6 @@ struct Snapshot {
     seated: usize,
     bodies: usize,
     peers: Vec<Peer>,
-}
-
-impl Default for Phase {
-    fn default() -> Phase {
-        Phase::Waiting
-    }
 }
 
 fn reader_thread(
