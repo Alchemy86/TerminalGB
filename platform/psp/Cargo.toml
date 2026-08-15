@@ -1,0 +1,20 @@
+# TerminalGB on a PlayStation Portable.
+#
+# NOT a workspace member, and it must never become one: it needs Rust nightly,
+# `-Z build-std` and a third-party std overlay, none of which the emulator's own
+# build may depend on. `make embed` and `cargo test` never see this file.
+#
+# Build it with `tools/psp-build.sh`, which pins everything. See
+# platform/psp/README.md for what the pins are and why.
+[package]
+name = "terminalgb-psp"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+# Path is rewritten by tools/psp-build.sh when this directory is staged inside a
+# rust-psp checkout (cargo-psp can only build the std overlay from in there).
+psp = { path = "../../psp", features = ["std"] }
+terminalgb = { path = "../../..", default-features = false }

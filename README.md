@@ -566,11 +566,14 @@ for `wasm32-unknown-unknown` with no changes.
   set `panic = 'abort'`, so there is no unwinding to catch. Use `try_new_with_model` for
   bytes you did not produce.
 
-**Cross-target status.** `cargo check --no-default-features` is clean for
-`x86_64-pc-windows-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin` and
-`wasm32-unknown-unknown`. Those are type-check passes, not linked-and-run: **the only
-platform anything here has actually been executed on is x86-64 Linux.** The frontends are
-another matter — `desktop` needs GL and a windowing system, `tui` needs a kitty-protocol
+**Cross-target status — measured, in [`docs/portability.md`](docs/portability.md).** The
+core does not merely type-check elsewhere: `make test-cross` builds it for
+**aarch64**, **armv7** and **i686** and *runs* a cartridge on each, requiring a
+byte-identical frame and save-state length, and CI does the same. It also runs on a
+**PlayStation Portable** — `tools/psp-build.sh`, ~42 fps on Pokémon Blue under PPSSPP, with
+the same frame hash as the desktop build. Windows is built and smoke-tested on a real
+Windows runner by the release workflow. **macOS is still a type check and nothing has ever
+been run on a big-endian machine.** The frontends are another matter — `desktop` needs GL and a windowing system, `tui` needs a kitty-protocol
 terminal, and the shared-memory frame transport
 ([`docs/rendering.md`](docs/rendering.md)) is POSIX-only and stubs itself out elsewhere.
 

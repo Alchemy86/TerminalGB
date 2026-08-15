@@ -157,13 +157,22 @@ jobs:
             cargo run --release --no-default-features --example headless -- \
             third_party/dmg-acid2/dmg-acid2.gb 240
       # Type-check the core for the platforms we cannot run here. These are
-      # checks, not linked binaries — see the README's honest portability list.
+      # checks, not linked binaries — see docs/portability.md §1.
       - name: Cross-check the core on other targets
         run: |
           for t in wasm32-unknown-unknown x86_64-pc-windows-gnu aarch64-unknown-linux-gnu; do
             rustup target add "$t"
             cargo check --no-default-features --lib --target "$t"
           done
+      # And actually RUN it on other CPU architectures, because a type check
+      # cannot see that a 32-bit machine has no 64-bit atomics — which is
+      # exactly the bug building for a PSP found (docs/portability.md §3.3).
+      # `rust-lld` + musl means no C cross-toolchain is installed; qemu is the
+      # only extra, and a missing one skips loudly rather than passing.
+      - name: Install qemu-user-static
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - name: Run the core on aarch64, armv7 and i686
+        run: make test-cross
 
   testroms:
     name: Test-ROM correctness harness

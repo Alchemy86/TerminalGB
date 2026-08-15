@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := build
 
 .PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed \
+	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
         test-mcp lint-mcp test-chiptune chiptune-demo bgb-interop
 
@@ -78,6 +79,21 @@ embed: check-wasm
 	env -u HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME -u DISPLAY -u WAYLAND_DISPLAY \
 	  cargo run --release --no-default-features --example headless -- \
 	  third_party/dmg-acid2/dmg-acid2.gb 240
+
+# Build the embedding core for other CPU architectures and RUN it, requiring a
+# byte-identical frame and save-state length. Needs `qemu-<arch>-static` (a
+# missing one SKIPS that target loudly, it does not pass it); the linker is
+# rustup's own `rust-lld`, so no C cross-toolchain is installed.
+# See docs/portability.md §2.
+test-cross:
+	./tools/run-cross.sh
+
+# TerminalGB on a PlayStation Portable. Deliberately NOT part of `make test` or
+# CI: it needs a pinned Rust nightly, a third-party std overlay and
+# `-Z build-std`, and it produces an EBOOT nothing here can execute. Everything
+# it fetches is pinned in the script. See docs/portability.md §3.
+psp:
+	./tools/psp-build.sh
 
 # Emulation speed with a host audio player attached — the one thing no other
 # benchmark measures, because they all run headless with no player. Needs the

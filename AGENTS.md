@@ -2644,6 +2644,85 @@ open* were all the same flag. Full write-up in [`docs/video-out.md`](docs/video-
   producer is exactly what makes our sink report `Waiting`. Check `fuser -v /dev/video10` before
   concluding anything about the device.
 
+## Portability: the core RUNS on other architectures, and on a PSP (`docs/portability.md`)
+
+**Full measured report, with the honest gaps: [`docs/portability.md`](docs/portability.md).**
+Read it before quoting any cross-target claim; the README's old "type-check passes, not
+linked-and-run" sentence is superseded and was rewritten.
+
+- **`make test-cross` builds and RUNS the embedding core on aarch64, armv7 and i686** and
+  requires a byte-identical frame hash *and* save-state length against the host. In CI
+  (`embed` job). The linker is rustup's own **`rust-lld`** and the targets are all **musl**
+  (rustup ships their `libc.a`), so **no C cross-toolchain is installed for any of it**;
+  `qemu-<arch>-static` is the only extra and a missing one SKIPS loudly. Teeth proven with a
+  32-bit-only bug the host build accepts.
+- **`state bytes` is 142090 on 32-bit and 64-bit alike** — that is `savestate::Writer::usize`
+  storing a `u32`, observable. A save state written on a phone loads on a desktop.
+- **A TYPE CHECK CANNOT FIND A MISSING ATOMIC.** `sound::host_status` counted errors in an
+  `AtomicU64`; **MIPS32 has no 64-bit atomics and `std::sync::atomic::AtomicU64` does not
+  exist there**, so the *whole emulator* failed to compile for `mipsel-sony-psp` on that one
+  line. armv7 and i686 are 32-bit and both build it fine (`ldrexd`, `cmpxchg8b`), so nothing
+  short of building for the real target catches it. It is `AtomicU32` now, widened on read so
+  the public `Snapshot` is unchanged. **Do not put a 64-bit atomic in the core.**
+- **`riscv64gc-unknown-linux-musl` is deliberately out of `run-cross.sh`**: this package
+  declares `crate-type = ["cdylib", ...]` and a musl target that *supports* `cdylib` then
+  fails to link one against a shared libc rustup does not ship. The other three escape it
+  only because rustc drops `cdylib` for them. A packaging quirk, not a RISC-V finding.
+
+### The PSP — it plays Pokémon, and what that cost
+
+- **`./tools/psp-build.sh` → `target/psp/EBOOT.PBP`; the frontend is `platform/psp/`** (~350
+  lines, public embedding API only). **NOT a workspace member and must never become one** —
+  nightly, `-Z build-std` and a third-party std overlay may not reach `make embed`,
+  `cargo test` or `cargo install`. `make embed` still reports one third-party dependency.
+- **Measured under PPSSPP 1.20.4 at 333 MHz, `standard` picture mode: Pokémon Blue 41.9 fps
+  overworld / 41.2 fps battle, work 23.9 ms/frame of which emulation is 22.4 and the GE
+  present is 1.5.** Budget is 16.743 ms, so ~70 % of full speed and ~1.4x short.
+  **Nobody has run it on real hardware** and PPSSPP does not model the PSP's caches, so
+  hardware is more likely slower than faster.
+- **PPSSPP's `sceKernelGetSystemTimeWide` is CYCLE-derived, not wall clock** — 222 → 333 MHz
+  changed the cost by exactly 1.5000x. That is how you know the host is not the limiter and
+  the figure is a cycle count over a clock.
+- **`opt-level = 3` is MEASURED for this target and the repo's `"s"` is wrong here** (23.4 vs
+  22.4 ms). Fat LTO + one codegen unit is worth ~14 %. `panic = "abort"` is inside the noise.
+  `scePowerSetClockFrequency(333, 333, 166)` is worth exactly 1.5x and is one call.
+- **The frame hash is identical on every frame AND identical to x86-64, aarch64, armv7 and
+  i686.** That is the proof the port is exact rather than close: a Game Boy emulator has a
+  hundred ways to be nearly right and every one of them moves the frame.
+- **`mipsel-sony-psp` is Tier 3 and `no_std` ONLY upstream.** Stock nightly fails *inside
+  `std`* (14 errors), never reaching our code. `std` comes from a sysroot overlay
+  (AndrewAltimit/rust-psp, MIT) rebuilt with `-Z build-std`, and **it rots**: it does not
+  compile on nightly-2026-08-14 and does on `nightly-2026-04-14`, which its own CI pins.
+  Both the nightly and the overlay commit are pinned in `tools/psp-build.sh`. **The PSP is a
+  toolchain you maintain, not a target you add.**
+- **`#![feature(restricted_std)]` is needed only in the BINARY crate**, never in the library
+  — the emulator compiles unmodified.
+- **PPSSPP's default keyboard map is a trap that reads as a broken build**: keyboard `X` is
+  **Circle** and Cross is on **`Z`** (Square `A`, Triangle `S`, Start Space, Select Enter,
+  d-pad arrows). Name the button glyph in any prompt, and accept several buttons in a menu.
+- **`sceCtrlSetSamplingCycle(0)` + `sceCtrlSetSamplingMode(Digital)` before reading the pad**,
+  or `sceCtrlReadBufferPositive` returns buffer garbage — seen as a ROM picker scrolling by
+  itself.
+- **XTEST does not reach the PPSSPP flatpak here**; kernel-level injection does
+  (`ydotoold` on a SHORT socket path — unix paths cap ~108 chars — with `/dev/uinput` group
+  `input`). **Focus the target window first**: a kernel key goes to whatever has focus,
+  including the captain's terminal.
+- **Do not measure a picture's extent by trimming black.** Two hours went into a phantom
+  "the quad renders 30 % narrow" because the Pokémon Center's right-hand columns are dark
+  and `magick -trim` cut them. Measure on a frame that is light at the edges (a battle
+  screen) before concluding anything about geometry.
+- **The PSP's fps came from a save state, not from mashing buttons.** `<rom>.gbss` beside the
+  cartridge is auto-loaded at boot; produce one with `examples/rom_script.rs`'s `state`
+  command (overworld) and `examples/gen1_battle.rs --save-state --save-at` (a battle). That
+  is also the only way overworld and battle are comparable loads.
+- **The cheapest console left is the PS VITA, not the PSP** — `armv7-sony-vita-newlibeabihf`
+  is Tier 3 **with full std upstream**, so there is no overlay to maintain and no nightly to
+  pin. 3DS next (`ctru-rs`, std is `?`); Switch is `no_std` like the PSP.
+- **Big-endian has never been run** (GameCube/Wii/Wii U are BE PowerPC). Audited only: the
+  savestate codec is explicitly little-endian, there is no `transmute` or reinterpreting cast
+  in the core, and `src/upscale/`'s `*_ne_bytes` use is a symmetric pack/unpack that never
+  crosses a boundary. That is a prediction, not a measurement.
+
 - Add durable project-specific notes here as they are discovered through real work.
 
 ## Web audio, and the APU that was missing on wasm (`src/sound.rs` `mod web_audio`, `src/screen/{webaudio,pace,web}.rs`)

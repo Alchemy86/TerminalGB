@@ -3099,7 +3099,7 @@ pub mod web_audio {
 /// Any frontend that attaches its own [`AudioPlayer`] (web, FFI, a custom
 /// backend) may publish its own state here.
 pub mod host_status {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
 
     /// What the host audio path is doing right now.
@@ -3165,7 +3165,16 @@ pub mod host_status {
     // `note_stream_error` runs on cpal's *audio callback* thread, where blocking
     // on a lock is never acceptable. The counter always lands; the text is
     // best-effort via `try_lock`.
-    static STREAM_ERRORS: AtomicU64 = AtomicU64::new(0);
+    //
+    // **`AtomicU32`, not `AtomicU64`, and that is a portability constraint, not
+    // a preference.** This module is compiled on every target — including the
+    // embedding build — and a 32-bit machine need not have 64-bit atomics: on
+    // `mipsel-sony-psp` (a PSP) `std::sync::atomic::AtomicU64` does not exist at
+    // all, and the whole core failed to compile on that one line. `Snapshot`
+    // still reports a `u64` so the published type is unchanged; a counter of
+    // audio-device errors cannot reach 2^32 in a session. See
+    // docs/portability.md.
+    static STREAM_ERRORS: AtomicU32 = AtomicU32::new(0);
     static STATE: Mutex<(State, Option<String>)> = Mutex::new((State::Off, None));
 
     fn with_state<R>(f: impl FnOnce(&mut (State, Option<String>)) -> R) -> Option<R> {
@@ -3181,7 +3190,7 @@ pub mod host_status {
         let (state, last_error) = with_state(|s| (s.0, s.1.clone())).unwrap_or_default();
         Snapshot {
             state,
-            stream_errors: STREAM_ERRORS.load(Ordering::Relaxed),
+            stream_errors: STREAM_ERRORS.load(Ordering::Relaxed).into(),
             last_error,
         }
     }
