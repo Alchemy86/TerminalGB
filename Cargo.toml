@@ -133,6 +133,13 @@ ffi-base64 = ["image", "base64"]
 # default so an embedding build carries none of it; plugin crates switch it on
 # in their `[dev-dependencies]`.
 testing = []
+# MEASUREMENT-ONLY instrumentation (`terminalgb::profile`) — free per-frame
+# counters and switches that remove one component's work so its marginal cost
+# can be timed over whole frames. Off by default and in no shipping build; it
+# adds **no third-party crate**. Built for the PSP profiling campaign, where the
+# only clock costs 0.785 µs a call and quantises to 1 µs, so per-call timing is
+# not available. See `src/profile.rs` and docs/portability.md §3.7.
+profile = []
 
 # --- Plugins ---------------------------------------------------------------
 # Each of ours is a crate under `plugins/`, and each is an OPTIONAL dependency:

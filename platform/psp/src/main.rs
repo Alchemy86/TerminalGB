@@ -135,9 +135,25 @@ fn init_pad() {
     }
 }
 
+/// **`Peek`, not `Read` — and the difference is a whole frame.**
+///
+/// `sceCtrlReadBufferPositive` *blocks* until the pad has been sampled again,
+/// and with `sceCtrlSetSamplingCycle(0)` that sampling happens once per VBlank.
+/// So a loop that calls it spends whatever is left of the display's 16.7 ms
+/// inside it. That was invisible while the emulator took 23.9 ms a frame — the
+/// sample was always already there, and the call returned at once. The moment
+/// the core got fast enough to finish early it started waiting, and the wait
+/// was charged to *emulation* in the per-frame statistics: the frame cost
+/// **8.3 ms of work and reported 15.2**, and the loop was pinned to the panel's
+/// 59.94 Hz rather than to the DMG's 59.7275.
+///
+/// `sceCtrlPeekBufferPositive` returns the latest sample without waiting, which
+/// is what a self-paced loop wants: this one has its own deadline accumulator
+/// and the emulated Game Boy has its own clock. Nothing else changes — the pad
+/// is still sampled every VBlank, and the loop still reads it once a frame.
 fn buttons() -> sys::CtrlButtons {
     let mut pad = sys::SceCtrlData::default();
-    unsafe { sys::sceCtrlReadBufferPositive(&mut pad, 1) };
+    unsafe { sys::sceCtrlPeekBufferPositive(&mut pad, 1) };
     pad.buttons
 }
 
@@ -316,6 +332,238 @@ impl Gpu {
     }
 }
 
+/// A fixed-length benchmark that splits the frame budget by component.
+///
+/// **Measurement only** — `tools/psp-build.sh --profile`; never shipped. It
+/// replaces the interactive loop because a benchmark that a human has to hold a
+/// button through is a benchmark nobody re-runs.
+///
+/// The method, and why it is this one. The PSP's only clock costs **0.785 µs a
+/// call** here and quantises to 1 µs, so timing individual calls is out: one
+/// `bus_tick` is smaller than the measurement of it and there are ~70,000 a
+/// frame. Whole *frames* are ~22,000 µs, where both problems vanish — so every
+/// row below is a whole-frame time, and a component's cost is the difference
+/// between a run that does its work and one that does not
+/// (`terminalgb::profile`). Each configuration replays the **same save state**
+/// from the same frame, and the report carries each run's executed-instruction
+/// count so a reader can see whether two runs were comparable at all.
+#[cfg(feature = "profile")]
+fn bench(gb: &mut Gameboy, gpu: &mut Gpu, report_path: &std::path::Path) -> ! {
+    use terminalgb::profile::{self, Switches};
+
+    const WARM: u32 = 60;
+    // Long enough to cover a whole phase of the game's own cycle. Pokémon
+    // Blue's overworld alternates between a cheap frame and an expensive one and
+    // has a slower period on top of that, so a 240-frame window lands wherever
+    // it lands: measured 8.3 ms a frame over the 240 after a state load against
+    // 15.2 over a run left going. Neither is wrong; only the long one is
+    // comparable with what a player experiences.
+    const RUN: u32 = 400;
+
+    let base = gb.save_state();
+
+    // FNV-1a over the frame, the same hash `examples/headless.rs` prints — it
+    // is what says an optimisation changed the speed and not the picture.
+    fn frame_hash(frame: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in frame {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
+    struct Row {
+        name: &'static str,
+        mean: f32,
+        worst: f32,
+        instructions: u32,
+        halts: u32,
+        batches: u32,
+        reason: [u32; 6],
+        bus_ticks: u32,
+        scanlines: u32,
+        hash: u64,
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
+    let mut present_mean = 0.0f32;
+
+    let configs: [(&'static str, Switches, bool); 9] = [
+        ("baseline", Switches::default(), false),
+        (
+            "no pixels",
+            Switches {
+                no_pixels: true,
+                ..Switches::default()
+            },
+            false,
+        ),
+        (
+            "no bus tick",
+            Switches {
+                no_bus_tick: true,
+                ..Switches::default()
+            },
+            false,
+        ),
+        (
+            "neither",
+            Switches {
+                no_pixels: true,
+                no_bus_tick: true,
+                ..Switches::default()
+            },
+            false,
+        ),
+        (
+            "no idle batch",
+            Switches {
+                no_idle_batch: true,
+                ..Switches::default()
+            },
+            false,
+        ),
+        (
+            "no timer",
+            Switches {
+                no_timer: true,
+                ..Switches::default()
+            },
+            false,
+        ),
+        (
+            "no stat line",
+            Switches {
+                no_stat: true,
+                ..Switches::default()
+            },
+            false,
+        ),
+        ("baseline + present", Switches::default(), true),
+        // Last, because it changes the machine for good: the PSP frontend
+        // installs no `AudioPlayer`, and with none the APU does not run at all
+        // (`Sound::do_cycle` returns immediately) — so this row is what a sound
+        // chip would cost if one were ever wired up.
+        ("+ APU (no output)", Switches::default(), false),
+    ];
+
+    for (name, sw, with_present) in configs {
+        if name.starts_with("+ APU") && !gb.audio_enabled() {
+            gb.enable_audio(std::boxed::Box::new(terminalgb::sound::SilentPlayer));
+        }
+        let _ = gb.load_state(&base);
+        profile::set_switches(sw);
+        for _ in 0..WARM {
+            gb.frame();
+        }
+        let _ = profile::take_counters();
+        let mut total = 0u64;
+        let mut worst = 0u64;
+        for _ in 0..RUN {
+            let t0 = now_us();
+            gb.frame();
+            if with_present {
+                gpu.present(gb.image(), false);
+            }
+            let dt = now_us() - t0;
+            total += dt;
+            if dt > worst {
+                worst = dt;
+            }
+        }
+        let c = profile::take_counters();
+        let mean = total as f32 / RUN as f32;
+        if with_present {
+            present_mean = mean - rows[0].mean;
+        }
+        rows.push(Row {
+            name,
+            mean,
+            worst: worst as f32,
+            instructions: c.instructions / RUN,
+            halts: c.halts / RUN,
+            batches: c.halt_batches / RUN,
+            reason: c.idle_reason,
+            bus_ticks: c.bus_ticks / RUN,
+            scanlines: c.scanlines / RUN,
+            hash: frame_hash(gb.image()),
+        });
+    }
+
+    profile::set_switches(Switches::default());
+
+    let mut out = std::string::String::new();
+    out.push_str("TerminalGB PSP profile — PPSSPP, not real hardware\n");
+    out.push_str(&std::format!("{} frames a row, warm {}\n\n", RUN, WARM));
+    out.push_str(
+        "row                 mean ms  worst ms   instr/f   halt/f  batch/f  bustick/f  lines/f  frame hash\n",
+    );
+    for r in &rows {
+        out.push_str(&std::format!(
+            "{:<18} {:8.2} {:9.2} {:9} {:8} {:8} {:10} {:8} {:#018x}\n",
+            r.name,
+            r.mean / 1000.0,
+            r.worst / 1000.0,
+            r.instructions,
+            r.halts,
+            r.batches,
+            r.bus_ticks,
+            r.scanlines,
+            r.hash
+        ));
+    }
+    out.push_str(&std::format!(
+        "\nidle refusals (dma, serial, irq, no-ppu, timer, batched): {:?}\n",
+        rows[0].reason
+    ));
+    let base_ms = rows[0].mean / 1000.0;
+    let pixels = (rows[0].mean - rows[1].mean) / 1000.0;
+    let bus = (rows[0].mean - rows[2].mean) / 1000.0;
+    let neither = (rows[0].mean - rows[3].mean) / 1000.0;
+    let apu = (rows[8].mean - rows[0].mean) / 1000.0;
+    let unbatched = (rows[4].mean - rows[0].mean) / 1000.0;
+    let timer = (rows[0].mean - rows[5].mean) / 1000.0;
+    let stat = (rows[0].mean - rows[6].mean) / 1000.0;
+    out.push_str(&std::format!(
+        "\nemulation           {:8.2} ms\n\
+         pixel rendering     {:8.2} ms  ({:.0}%)\n\
+         per-access bus      {:8.2} ms  ({:.0}%)\n\
+         both together       {:8.2} ms\n\
+         everything else     {:8.2} ms  ({:.0}%)\n\
+         idle batching saves {:8.2} ms\n\
+         APU if installed    {:8.2} ms\n\
+         timer (diagnostic)  {:8.2} ms  ({:.0}%)\n\
+         STAT line (diag)    {:8.2} ms  ({:.0}%)\n\
+         present (GE)        {:8.2} ms\n",
+        base_ms,
+        pixels,
+        100.0 * pixels / base_ms,
+        bus,
+        100.0 * bus / base_ms,
+        neither,
+        base_ms - neither,
+        100.0 * (base_ms - neither) / base_ms,
+        unbatched,
+        apu,
+        timer,
+        100.0 * timer / base_ms,
+        stat,
+        100.0 * stat / base_ms,
+        present_mean / 1000.0,
+    ));
+    out.push_str(&std::format!(
+        "\nbudget 16.743 ms — need {:.2}x\n",
+        (base_ms + present_mean / 1000.0) / 16.743
+    ));
+    psp::dprintln!("{}", out);
+    let _ = std::fs::write(report_path, out.as_bytes());
+    unsafe { sys::sceKernelExitGame() };
+    loop {
+        unsafe { sys::sceDisplayWaitVblankStart() };
+    }
+}
+
 fn now_us() -> u64 {
     unsafe { sys::sceKernelGetSystemTimeWide() as u64 }
 }
@@ -375,6 +623,9 @@ fn psp_main() {
 
     let mut gpu = Gpu::start();
 
+    #[cfg(feature = "profile")]
+    bench(&mut gb, &mut gpu, &path.with_extension("prof.txt"));
+
     let keys = [
         (sys::CtrlButtons::UP, KeypadKey::Up),
         (sys::CtrlButtons::DOWN, KeypadKey::Down),
@@ -393,6 +644,8 @@ fn psp_main() {
     let mut work_us: u64 = 0;
     let mut emulate_us: u64 = 0;
     let mut window_frames: u64 = 0;
+    let mut over_budget: u64 = 0;
+    let mut stats = std::string::String::new();
     let mut window_start = now_us();
     let mut deadline = now_us();
 
@@ -437,6 +690,9 @@ fn psp_main() {
         if spent > worst_us {
             worst_us = spent;
         }
+        if spent > FRAME_US {
+            over_budget += 1;
+        }
 
         // A deadline accumulator, never a reset to "now" — the same rule the
         // desktop and terminal frontends follow. If the machine cannot keep up
@@ -450,30 +706,50 @@ fn psp_main() {
             deadline = now;
         }
 
-        let elapsed = now_us() - window_start;
+        // The window ends *here*, and the next one starts on the same reading —
+        // no gap. Taking a fresh `now_us()` after writing the report instead
+        // left the report's own I/O outside both windows, and a 32 KiB battery
+        // flush to a memory stick is not free: the frames it delayed were then
+        // counted against a window that had not paid for them, and the loop
+        // reported **61 fps against a 59.7275 Hz** pacer it was in fact keeping.
+        let window_end = now_us();
+        let elapsed = window_end - window_start;
         if elapsed >= 2_000_000 {
             let line = std::format!(
-                "{} fps {:.2} | work {:.1} (emu {:.1} + present {:.1}) ms | worst {:.1} ms | f {}",
+                "{} fps {:.2} | work {:.1} (emu {:.1} + present {:.1}) ms | worst {:.1} ms | over {}/{} | f {}",
                 gb.rom_title(),
                 window_frames as f32 * 1_000_000.0 / elapsed as f32,
                 work_us as f32 / window_frames as f32 / 1000.0,
                 emulate_us as f32 / window_frames as f32 / 1000.0,
                 (work_us - emulate_us) as f32 / window_frames as f32 / 1000.0,
                 worst_us as f32 / 1000.0,
+                over_budget,
+                window_frames,
                 frames
             );
             psp::dprintln!("{}", line);
             // Also to the memory stick. Once the GE owns the framebuffer the
             // debug console is invisible, and a number nobody can read is a
             // number nobody can check — this is what a benchmark run is read
-            // back from.
-            let _ = std::fs::write(&stats_path, line.as_bytes());
+            // back from. **Appended**, not overwritten: a run's *last* window
+            // is whatever the game happened to be doing when the emulator was
+            // stopped, which is not a measurement of anything. The whole series
+            // is, and it is reproducible — a save state, no input and
+            // deterministic emulation replay the same frames every time.
+            // No `flush_battery()` here. `Gameboy::frame` already writes
+            // cartridge RAM out once the game has left it alone for a moment,
+            // so forcing a second write every two seconds bought no durability
+            // and cost a **59 ms frame** on the memory stick — invisible while
+            // the emulator was 1.4x too slow to have a frame budget to blow.
+            stats.push_str(&line);
+            stats.push('\n');
+            let _ = std::fs::write(&stats_path, stats.as_bytes());
             window_frames = 0;
+            over_budget = 0;
             worst_us = 0;
             work_us = 0;
             emulate_us = 0;
-            window_start = now_us();
-            gb.flush_battery();
+            window_start = window_end;
         }
     }
 }

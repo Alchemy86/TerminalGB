@@ -97,6 +97,10 @@ pub mod plugin;
 /// [`PokemonSource`]: terminalgb_plugin_gen1_link::spec::PokemonSource
 #[cfg(all(feature = "portal", not(target_arch = "wasm32"), not(feature = "ffi")))]
 pub mod portal;
+/// Measurement-only instrumentation; see [`profile`]. Behind the `profile`
+/// cargo feature, off by default and in no shipping build.
+#[cfg(feature = "profile")]
+pub mod profile;
 pub mod savestate;
 #[cfg(not(feature = "ffi"))]
 pub mod screen;

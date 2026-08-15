@@ -49,13 +49,25 @@ impl RenderMode {
     /// chosen:** `testharness/ppuengines.rs` times both engines over the same
     /// 400 frames of dmg-acid2 on every `cargo test --release`, and checks this
     /// constant against what it measured — so it cannot quietly become a lie.
-    /// Four consecutive runs here gave 0.221 → 0.461 ms/frame, ratio
-    /// 2.07-2.09x; earlier measurements on other ROMs and boxes reached 2.17x,
-    /// so the figure is approximate and is shown with a `~`.
+    ///
+    /// **It used to be 2.1, and it moved because `standard` got faster, not
+    /// because `identical` got slower.** The PSP work rewrote the
+    /// whole-scanline renderer to fetch once per tile instead of once per pixel
+    /// ([`Gpu::draw_map_run`]) — 3.5x on this box — while `identical`, which
+    /// does not use that path at all, did not move: it measures 0.487-0.496
+    /// ms/frame before and after, and `standard` 0.234 before against
+    /// 0.077-0.080 now.
+    ///
+    /// **A ratio is two numbers and either can move, so re-run the harness
+    /// rather than carrying this one forward.** Five consecutive low-load runs
+    /// give 6.20, 6.31, 6.31, 6.24, 6.21; a run taken while this machine was
+    /// busy gave 7.75, and one while it was very busy gave 5.56 — which is why
+    /// the figure is approximate, is shown with a `~`, and is checked against a
+    /// deliberately wide band. See docs/portability.md §3.7.
     ///
     /// Quoted wherever the choice is offered — a player trading speed for
     /// exactness has to be told the price at the moment they trade.
-    pub const IDENTICAL_COST: f32 = 2.1;
+    pub const IDENTICAL_COST: f32 = 6.3;
 
     /// Every mode, in the order the TUI's `P` key cycles them: the default
     /// first, so a player who taps `P` twice is back where they started.
@@ -781,6 +793,45 @@ impl Gpu {
         }
     }
 
+    /// How many **dots** the whole-scanline engine can be advanced in one step
+    /// without any decision inside [`Gpu::do_cycle`] coming out differently —
+    /// the horizon a halted CPU may be batched over. See
+    /// [`MemoryManagementUnit::idle_mcycles`](crate::mmu::MemoryManagementUnit).
+    ///
+    /// The engine changes state at exactly three dots of a scanline: the first
+    /// dot **above** the mode-2 window, the first **above** mode 3, and the
+    /// line wrap — plus, on Color hardware, the dot the VBlank OAM strobe leads
+    /// by ([`VBLANK_STROBE_LEAD`]). Stopping the batch *on* the change and
+    /// letting the ordinary code make it there is what keeps this exact: the
+    /// interrupt is folded into `IF` on the same absolute M-cycle it would have
+    /// been, so the CPU wakes on the same one.
+    ///
+    /// Returns 0 when there is no horizon to compute (the per-dot engine, which
+    /// has an event on every dot by construction, or the LCD switched off,
+    /// where nothing here advances at all).
+    pub(crate) fn idle_dots(&self) -> u32 {
+        if self.render_mode != RenderMode::Fast || !self.lcd_on {
+            return 0;
+        }
+        let m = self.modeclock;
+        let mut next = if m <= OAM_DOTS {
+            OAM_DOTS + 1
+        } else if m <= OAM_DOTS + DRAW_DOTS {
+            OAM_DOTS + DRAW_DOTS + 1
+        } else {
+            LINE_DOTS
+        };
+        // The Color console's OAM strobe rises before the line wraps, so that
+        // dot is a fourth place the STAT line can move.
+        if !self.gbmode.is_dmg() {
+            let lead = LINE_DOTS - VBLANK_STROBE_LEAD;
+            if m < lead {
+                next = next.min(lead);
+            }
+        }
+        next.saturating_sub(m)
+    }
+
     /// Latch the window's frame-long "Y condition" if this scanline's `LY`
     /// matches `WY`. Independent of LCDC bit 5 — see `change_mode`.
     fn check_wy_trigger(&mut self) {
@@ -823,6 +874,12 @@ impl Gpu {
     /// covers it, and inventing an interrupt there is the more dangerous of
     /// the two guesses.
     fn stat_signal(&self) -> bool {
+        // With no source selected the line is low whatever the PPU is doing,
+        // and this is asked once per instruction: on an in-order MIPS the four
+        // loads and the OR are cheaper than reaching `lyc_signal`/`oam_strobe`.
+        if !(self.lyc_inte || self.m0_inte || self.m1_inte || self.m2_inte) {
+            return false;
+        }
         (self.lyc_inte && self.lyc_signal())
             || (self.lcd_on
                 && ((self.m0_inte && self.hblank_strobe())
@@ -1023,6 +1080,11 @@ impl Gpu {
     /// a mode change, an `LY` increment, and writes to `STAT`, `LYC` and
     /// `LCDC` (which can switch the whole line off).
     fn refresh_stat_line(&mut self) {
+        // Measurement only, compiled out of every shipping build.
+        #[cfg(feature = "profile")]
+        if crate::profile::stat_skipped() {
+            return;
+        }
         let now = self.stat_signal();
         if now && !self.stat_line {
             self.interrupt |= 0x02;
@@ -1367,6 +1429,13 @@ impl Gpu {
     }
 
     fn renderscan(&mut self) {
+        // Measurement only, compiled out of every shipping build. Guest-
+        // invisible: the framebuffer is emulator output and no cartridge can
+        // read it back. See `crate::profile`.
+        #[cfg(feature = "profile")]
+        if crate::profile::pixels_skipped() {
+            return;
+        }
         // STOP mode: the PPU has been cut off from VRAM, so it draws a flat
         // shade rather than the tile map — see `stop_fill`.
         if let Some(shade) = self.stop_fill {
@@ -1376,25 +1445,46 @@ impl Gpu {
             }
             return;
         }
-        for x in 0..WIDTH {
-            self.setcolor(x, 255);
-            self.bgprio[x] = PrioType::Normal;
+        // The white pre-clear exists for the pixels [`Gpu::draw_bg`] declines to
+        // draw, and there are none unless the background is switched off: on a
+        // Color console, or on a DMG with `LCDC` bit 0 set, `draw_bg` writes
+        // every one of the 160 pixels and every `bgprio` entry, so clearing
+        // first is 640 stores a scanline — 92,160 a frame — thrown away. Same
+        // picture either way; the condition is `draw_bg`'s own `drawbg`.
+        if !(self.gbmode == GbMode::Color || self.lcdc0) {
+            for x in 0..WIDTH {
+                self.setcolor(x, 255);
+                self.bgprio[x] = PrioType::Normal;
+            }
         }
         self.draw_bg();
         self.draw_sprites();
     }
 
+    /// Byte offset of the current scanline in [`Gpu::data`].
+    ///
+    /// The `min` is not defensive padding, it is what lets the compiler drop
+    /// the bounds check on every pixel store: `line` is a `u8`, so without it
+    /// the index range the optimiser must consider runs past the end of a
+    /// 160x144 framebuffer and it has to test each write. Rendering only ever
+    /// happens on a visible line, so the clamp can never fire.
+    #[inline(always)]
+    fn row_base(&self) -> usize {
+        (self.line as usize).min(HEIGHT - 1) * WIDTH * 4
+    }
+
     fn setcolor(&mut self, x: usize, color: u8) {
-        self.data[self.line as usize * WIDTH * 4 + x * 4] = color;
-        self.data[self.line as usize * WIDTH * 4 + x * 4 + 1] = color;
-        self.data[self.line as usize * WIDTH * 4 + x * 4 + 2] = color;
+        let base = self.row_base() + x * 4;
+        self.data[base] = color;
+        self.data[base + 1] = color;
+        self.data[base + 2] = color;
     }
 
     fn setrgb(&mut self, x: usize, r: u8, g: u8, b: u8) {
         // Gameboy Color RGB correction
         // Taken from the Gambatte emulator
         // assume r, g and b are between 0 and 1F
-        let baseidx = self.line as usize * WIDTH * 4 + x * 4;
+        let baseidx = self.row_base() + x * 4;
 
         let r = r as u32;
         let g = g as u32;
@@ -1405,6 +1495,131 @@ impl Gpu {
         self.data[baseidx + 2] = ((r * 3 + g * 2 + b * 11) >> 1) as u8;
     }
 
+    /// Draw one horizontal run of background or window pixels from one tilemap.
+    ///
+    /// Split out of [`Gpu::draw_bg`] because a scanline is at most **two** such
+    /// runs — background up to the window's left edge, window from there on —
+    /// and which one a pixel belongs to is therefore decided once a line rather
+    /// than once a pixel. Everything is passed in by disjoint borrow so the
+    /// framebuffer row can be a slice: one bounds check for the line instead of
+    /// three per pixel.
+    ///
+    /// `coord` is the map-space X of `x_start` and advances with `x`; the tile
+    /// changes every eight of them, which is the whole point — the tilemap
+    /// byte, the Color attribute byte and both tile-data bytes are read once
+    /// per tile instead of once per pixel.
+    // Two arrays with different strides are indexed by the same `x` (one entry
+    // of `bgprio`, four bytes of `row`), so an iterator rewrite would need a
+    // zip of chunks and read worse, not better.
+    #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+    fn draw_map_run(
+        row: &mut [u8],
+        bgprio: &mut [PrioType; WIDTH],
+        vram: &[u8],
+        cbgpal: &[[[u8; 3]; 4]; 8],
+        palb: [u8; 4],
+        color: bool,
+        tilebase: u16,
+        tilemapbase: u16,
+        tiley: u16,
+        pixely: u16,
+        tilex_mask: u16,
+        x_start: usize,
+        x_end: usize,
+        coord_at_start: u32,
+    ) {
+        let mut b1 = 0u8;
+        let mut b2 = 0u8;
+        let mut palnr = 0usize;
+        let mut xflip = false;
+        let mut prio = false;
+
+        for x in x_start..x_end {
+            let coord = coord_at_start.wrapping_add((x - x_start) as u32);
+            let pixelx = (coord & 0x07) as u8;
+
+            if pixelx == 0 || x == x_start {
+                let tilex = ((coord >> 3) as u16) & tilex_mask;
+                let mapaddr = (tilemapbase + tiley * 32 + tilex) as usize & 0x1FFF;
+                let tilenr = vram[mapaddr];
+
+                let yflip;
+                let vram1;
+                if color {
+                    let flags = vram[0x2000 + mapaddr] as usize;
+                    palnr = flags & 0x07;
+                    vram1 = flags & (1 << 3) != 0;
+                    xflip = flags & (1 << 5) != 0;
+                    yflip = flags & (1 << 6) != 0;
+                    prio = flags & (1 << 7) != 0;
+                } else {
+                    palnr = 0;
+                    vram1 = false;
+                    xflip = false;
+                    yflip = false;
+                    prio = false;
+                }
+
+                let tileaddress = tilebase
+                    + (if tilebase == 0x8000 {
+                        tilenr as u16
+                    } else {
+                        (tilenr as i8 as i16 + 128) as u16
+                    }) * 16;
+
+                let a0 = match yflip {
+                    false => tileaddress + (pixely * 2),
+                    true => tileaddress + (14 - (pixely * 2)),
+                } as usize
+                    & 0x1FFF;
+                let bank = if vram1 { 0x2000 } else { 0 };
+                b1 = vram[bank + a0];
+                b2 = vram[bank + ((a0 + 1) & 0x1FFF)];
+            }
+
+            let xbit = match xflip {
+                true => pixelx,
+                false => 7 - pixelx,
+            } as u32;
+            let colnr = if b1 & (1 << xbit) != 0 { 1 } else { 0 }
+                | if b2 & (1 << xbit) != 0 { 2 } else { 0 };
+
+            bgprio[x] = if colnr == 0 {
+                PrioType::Color0
+            } else if prio {
+                PrioType::PrioFlag
+            } else {
+                PrioType::Normal
+            };
+
+            let o = x * 4;
+            if color {
+                // The Gambatte correction of `Gpu::setrgb`, inlined so the row
+                // slice can be reused; the arithmetic is that function's.
+                let r = cbgpal[palnr][colnr][0] as u32;
+                let g = cbgpal[palnr][colnr][1] as u32;
+                let b = cbgpal[palnr][colnr][2] as u32;
+                row[o] = ((r * 13 + g * 2 + b) >> 1) as u8;
+                row[o + 1] = ((g * 3 + b) << 1) as u8;
+                row[o + 2] = ((r * 3 + g * 2 + b * 11) >> 1) as u8;
+            } else {
+                let c = palb[colnr];
+                row[o] = c;
+                row[o + 1] = c;
+                row[o + 2] = c;
+            }
+        }
+    }
+
+    /// Draw this scanline's background and window.
+    ///
+    /// **A scanline is two runs, and the fetch is per tile.** Which of the
+    /// background or the window a pixel comes from is decided by one comparison
+    /// against the window's left edge, once a line, rather than by two tests a
+    /// pixel; and eight neighbouring pixels share a tile, so four VRAM reads
+    /// serve them all instead of thirty-two. Same picture, and it was measured:
+    /// pixel rendering on the PSP fell from 8.29 ms a frame to 5.30 with the
+    /// per-tile fetch alone (`docs/portability.md` §3.7).
     fn draw_bg(&mut self) {
         let drawbg = self.gbmode == GbMode::Color || self.lcdc0;
 
@@ -1425,85 +1640,66 @@ impl Gpu {
         let bgy = self.scy.wrapping_add(self.line);
         let bgtiley = (bgy as u16 >> 3) & 31;
 
-        for x in 0..WIDTH {
-            let winx = -((self.winx as i32) - 7) + (x as i32);
-            let bgx = self.scx as u32 + x as u32;
+        // The window owns every pixel from its left edge on; the background
+        // owns the ones before it. `winx0` is that edge in screen coordinates,
+        // and the whole line is the background when the window is not active.
+        let winx0 = self.winx as i32 - 7;
+        let wstart = if winy >= 0 {
+            winx0.clamp(0, WIDTH as i32) as usize
+        } else {
+            WIDTH
+        };
 
-            let (tilemapbase, tiley, tilex, pixely, pixelx) = if winy >= 0 && winx >= 0 {
-                (
-                    self.win_tilemap,
-                    wintiley,
-                    (winx as u16 >> 3),
-                    winy as u16 & 0x07,
-                    winx as u8 & 0x07,
-                )
-            } else if drawbg {
-                (
-                    self.bg_tilemap,
-                    bgtiley,
-                    (bgx as u16 >> 3) & 31,
-                    bgy as u16 & 0x07,
-                    bgx as u8 & 0x07,
-                )
-            } else {
-                continue;
-            };
+        let color = self.gbmode == GbMode::Color;
+        let win_tilemap = self.win_tilemap;
+        let bg_tilemap = self.bg_tilemap;
+        let tilebase = self.tilebase;
+        let scx = self.scx as u32;
+        let palb = self.palb;
+        let base = self.row_base();
 
-            let tilenr: u8 = self.rbvram0(tilemapbase + tiley * 32 + tilex);
+        // Disjoint field borrows: the row slice is `&mut self.data`, the tile
+        // data `&self.vram`, the priority map `&mut self.bgprio`.
+        let vram = &self.vram;
+        let cbgpal = &self.cbgpal;
+        let bgprio = &mut self.bgprio;
+        let row = &mut self.data[base..base + WIDTH * 4];
 
-            let (palnr, vram1, xflip, yflip, prio) = if self.gbmode == GbMode::Color {
-                let flags = self.rbvram1(tilemapbase + tiley * 32 + tilex) as usize;
-                (
-                    flags & 0x07,
-                    flags & (1 << 3) != 0,
-                    flags & (1 << 5) != 0,
-                    flags & (1 << 6) != 0,
-                    flags & (1 << 7) != 0,
-                )
-            } else {
-                (0, false, false, false, false)
-            };
-
-            let tileaddress = self.tilebase
-                + (if self.tilebase == 0x8000 {
-                    tilenr as u16
-                } else {
-                    (tilenr as i8 as i16 + 128) as u16
-                }) * 16;
-
-            let a0 = match yflip {
-                false => tileaddress + (pixely * 2),
-                true => tileaddress + (14 - (pixely * 2)),
-            };
-
-            let (b1, b2) = match vram1 {
-                false => (self.rbvram0(a0), self.rbvram0(a0 + 1)),
-                true => (self.rbvram1(a0), self.rbvram1(a0 + 1)),
-            };
-
-            let xbit = match xflip {
-                true => pixelx,
-                false => 7 - pixelx,
-            } as u32;
-            let colnr = if b1 & (1 << xbit) != 0 { 1 } else { 0 }
-                | if b2 & (1 << xbit) != 0 { 2 } else { 0 };
-
-            self.bgprio[x] = if colnr == 0 {
-                PrioType::Color0
-            } else if prio {
-                PrioType::PrioFlag
-            } else {
-                PrioType::Normal
-            };
-            if self.gbmode == GbMode::Color {
-                let r = self.cbgpal[palnr][colnr][0];
-                let g = self.cbgpal[palnr][colnr][1];
-                let b = self.cbgpal[palnr][colnr][2];
-                self.setrgb(x, r, g, b);
-            } else {
-                let color = self.palb[colnr];
-                self.setcolor(x, color);
-            }
+        if drawbg && wstart > 0 {
+            Self::draw_map_run(
+                row,
+                bgprio,
+                vram,
+                cbgpal,
+                palb,
+                color,
+                tilebase,
+                bg_tilemap,
+                bgtiley,
+                bgy as u16 & 0x07,
+                31,
+                0,
+                wstart,
+                scx,
+            );
+        }
+        if wstart < WIDTH {
+            Self::draw_map_run(
+                row,
+                bgprio,
+                vram,
+                cbgpal,
+                palb,
+                color,
+                tilebase,
+                win_tilemap,
+                wintiley,
+                winy as u16 & 0x07,
+                0xFFFF,
+                wstart,
+                WIDTH,
+                (wstart as i32 - winx0) as u32,
+            );
         }
     }
 
@@ -1515,15 +1711,20 @@ impl Gpu {
         let line = self.line as i32;
         let sprite_size = self.sprite_size as i32;
 
+        // OAM straight from the array, not through `Gpu::rb`: the scan reads two
+        // bytes of each of the forty objects on every visible line, which is
+        // 11,520 address-dispatch calls a frame for four bytes that are always
+        // in `voam`. `Gpu::rb` returns exactly `voam[a - 0xFE00]` for this
+        // range, so the picture cannot differ.
         let mut sprites_to_draw = [(0, 0, 0); 10];
         let mut sidx = 0;
-        for index in 0..40 {
-            let spriteaddr = 0xFE00 + (index as u16) * 4;
-            let spritey = self.rb(spriteaddr) as u16 as i32 - 16;
+        for index in 0..40u8 {
+            let o = index as usize * 4;
+            let spritey = self.voam[o] as i32 - 16;
             if line < spritey || line >= spritey + sprite_size {
                 continue;
             }
-            let spritex = self.rb(spriteaddr + 1) as u16 as i32 - 8;
+            let spritex = self.voam[o + 1] as i32 - 8;
             sprites_to_draw[sidx] = (spritex, spritey, index);
             sidx += 1;
             if sidx >= 10 {
@@ -1541,11 +1742,10 @@ impl Gpu {
                 continue;
             }
 
-            let spriteaddr = 0xFE00 + (i as u16) * 4;
-            let tilenum = (self.rb(spriteaddr + 2)
+            let tilenum = (self.voam[i as usize * 4 + 2]
                 & (if self.sprite_size == 16 { 0xFE } else { 0xFF }))
                 as u16;
-            let flags = self.rb(spriteaddr + 3) as usize;
+            let flags = self.voam[i as usize * 4 + 3] as usize;
             let usepal1: bool = flags & (1 << 4) != 0;
             let xflip: bool = flags & (1 << 5) != 0;
             let yflip: bool = flags & (1 << 6) != 0;

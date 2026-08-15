@@ -55,6 +55,31 @@ rather than replayed. Two supporting facts worth knowing before writing one:
 
 ---
 
+### The same rule from the other side: an input read that waits for the display
+
+A PlayStation Portable samples its pad once per VBlank, and
+`sceCtrlReadBufferPositive` **blocks until it has been sampled again**. So a loop that
+calls it does not merely read the buttons: it waits for the panel, and inherits the panel's
+59.94 Hz rather than the DMG's 59.7275.
+
+*Why it took a fast emulator to find.* At 23.9 ms a frame — 1.4x over the budget — a new
+sample was always already there and the call returned at once. The moment the core reached
+8.3 ms the call started absorbing the other ~7 ms, and because it sat inside the
+frame-timing brackets it reported **15.2 ms of "emulation" for 8.3 ms of work**. Both
+symptoms — a machine locked to the display and a per-frame cost that is mostly waiting —
+came from one line, and neither is visible in a framebuffer.
+
+`sceCtrlPeekBufferPositive` returns the latest sample without waiting, which is what a loop
+with its own deadline accumulator wants. *Conformance candidate:* **nothing inside a frame's
+timing brackets may block on the display**, which is the input-side twin of the rule above
+and of `docs/audio.md` §4c's "an `AudioPlayer` must never block".
+
+Measured in [`docs/portability.md`](../portability.md) §3.8, together with three more
+defects of the same shape that the same speed-up exposed: a statistics window that excluded
+its own I/O and so reported **61 fps against a 59.7275 Hz pacer it was keeping**, a forced
+battery flush every two seconds that cost a **59 ms frame**, and a first launch that refused
+to start because that platform's `std` cannot say "no such file".
+
 ## A build configuration is part of the machine
 
 The `wasm32` build had **no sound chip** — not a quiet one.

@@ -49,6 +49,11 @@ pub struct Timer {
     tma: u8,
     /// Raw `TAC`; only the low 3 bits exist.
     tac: u8,
+    /// `TAC`'s multiplexer output as a bit mask of the system counter, or 0
+    /// when the timer is disabled — so [`Timer::signal`] is one AND instead of
+    /// a table lookup, a shift and two branches. Derived from `tac` alone and
+    /// rebuilt wherever `tac` is set; **never serialise it**, it is not state.
+    tap_mask: u16,
     /// The system counter as it stood at the *start* of the current M-cycle.
     /// A CPU register write reaches this core after the M-cycle's tick, but
     /// hardware latches `TAC` before the counter advances — see [`Timer::wb`].
@@ -78,7 +83,19 @@ impl Timer {
     /// The multiplexer output that `TIMA` counts falling edges of.
     #[inline]
     fn signal(&self) -> bool {
-        self.tac & 0x04 != 0 && self.div & (1 << TAP[(self.tac & 0x03) as usize]) != 0
+        self.div & self.tap_mask != 0
+    }
+
+    /// Rebuild [`Timer::tap_mask`] from `tac`. Every path that assigns `tac`
+    /// must call this — there are three, and they are all in this file.
+    #[inline]
+    fn set_tac(&mut self, tac: u8) {
+        self.tac = tac;
+        self.tap_mask = if tac & 0x04 != 0 {
+            1 << TAP[(tac & 0x03) as usize]
+        } else {
+            0
+        };
     }
 
     /// Apply a new system-counter value, incrementing `TIMA` on a falling edge
@@ -171,7 +188,7 @@ impl Timer {
             }
             0xFF07 => {
                 let was = self.signal();
-                self.tac = v & 0x07;
+                self.set_tac(v & 0x07);
                 if was && !self.signal() {
                     // The ordinary TAC glitch: the gate was open and this write
                     // closed it, which the edge detector sees as a fall.
@@ -218,7 +235,8 @@ impl Timer {
         self.div = r.u16()?;
         self.tima = r.u8()?;
         self.tma = r.u8()?;
-        self.tac = r.u8()?;
+        let tac = r.u8()?;
+        self.set_tac(tac);
         self.prev_div = r.u16()?;
         self.reload_pending = r.bool()?;
         self.reloading = r.bool()?;
@@ -229,7 +247,20 @@ impl Timer {
     /// Advance one M-cycle (4 T-cycles), the finest granularity anything in
     /// this core can observe. Every tap is at bit 3 or above (period ≥ 16 T),
     /// so a 4 T step can never skip an edge.
+    /// Advance exactly one M-cycle — what [`MemoryManagementUnit::bus_tick`]
+    /// wants, without [`Timer::do_cycle`]'s loop and remainder around it. It is
+    /// asked ~17,000 times a frame in a busy game.
+    ///
+    /// [`MemoryManagementUnit::bus_tick`]: crate::mmu::MemoryManagementUnit
     #[inline]
+    pub(crate) fn do_mcycle_now(&mut self) {
+        #[cfg(feature = "profile")]
+        if crate::profile::timer_skipped() {
+            return;
+        }
+        self.do_mcycle();
+    }
+
     fn do_mcycle(&mut self) {
         // The overflow reload lands 4 T after the overflow itself, i.e. at the
         // top of the following M-cycle — before any bus access in it.
@@ -258,7 +289,35 @@ impl Timer {
         std::mem::take(&mut self.serial_edges)
     }
 
+    /// How many **M-cycles** the timer can be advanced in one step before it
+    /// could raise its interrupt — the timer's half of the horizon a halted CPU
+    /// may be batched over. `u32::MAX` means "never, from here".
+    ///
+    /// `TIMA` steps on a falling edge of the tap, which is the M-cycle the
+    /// system counter reaches a multiple of the tap's period, so the distance
+    /// to the next edge is exact arithmetic; overflow needs `0x100 - TIMA` of
+    /// them, and the interrupt lands one M-cycle after the last. A reload
+    /// already pending *is* that next M-cycle.
+    pub(crate) fn idle_mcycles(&self) -> u32 {
+        if self.reload_pending || self.reloading {
+            return 1;
+        }
+        if self.tac & 0x04 == 0 {
+            return u32::MAX;
+        }
+        let period: u32 = 1 << (TAP[(self.tac & 0x03) as usize] + 1);
+        let to_edge = period - (self.div as u32 & (period - 1));
+        let edges = 0x100u32 - self.tima as u32;
+        let dots = to_edge + (edges - 1) * period;
+        dots.div_ceil(4)
+    }
+
     pub fn do_cycle(&mut self, ticks: u32) {
+        // Measurement only, compiled out of every shipping build.
+        #[cfg(feature = "profile")]
+        if crate::profile::timer_skipped() {
+            return;
+        }
         let mut left = ticks;
         while left >= 4 {
             self.do_mcycle();

@@ -50,7 +50,7 @@ emulated machine, so loading somebody else's state must not switch their rendere
 >>>>>>> 7b3b9b3 (fix(ppu): an object's row index wraps inside the tile, it does not clamp)
 | Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |
 
-**~2.1×** — 2.8 % of a 16.7427 ms frame, ~36× real time headless. Reproduce with
+**~6.3×** — 3.0 % of a 16.7427 ms frame, ~34× real time headless. Reproduce with
 `cargo test --release --test ppuengines`, which also **fails if
 `RenderMode::IDENTICAL_COST` — the figure printed to users on the Status row, in the `P` toast
 and in the `?` overlay — stops matching what the two modes actually cost.**

@@ -170,7 +170,7 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
         "**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default"
         " and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline"
         f" dot by dot, scoring **{pa}/{ta}** on Mooneye `acceptance` and **{pm}/{tm}** on Mealybug"
-        " for about **2.1x** the CPU. `same` above means the suite has one baseline because the"
+        " for about **6.3x** the CPU. `same` above means the suite has one baseline because the"
         " mode does not reach what it measures (audio, DMA, mappers, cartridge clocks)."
         " `identical` now **loses no row to the default on any gate**, so what stands between it"
         " and being the default is only its cost"
@@ -234,7 +234,7 @@ def modes_block(n: dict[str, tuple[int, int]]) -> str:
         f'          <tr><td>Mealybug Tearoom &mdash; pixels wrong (lower is better)</td>'
         f'<td class="num">{px_a:,}</td><td class="num">{px_i:,}</td></tr>',
         '          <tr><td>Cost per frame, dmg-acid2</td><td class="num">1.0&times;'
-        '</td><td class="num">~2.1&times;</td></tr>',
+        '</td><td class="num">~6.3&times;</td></tr>',
         "        </tbody>",
         "      </table>",
         "    </div>",

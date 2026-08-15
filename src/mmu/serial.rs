@@ -200,6 +200,27 @@ impl<'a> Serial<'a> {
     /// order. Declining it no longer *cancels* the transfer — an unplugged
     /// cable still shifts eight bits and delivers `$FF`, which is what the
     /// hardware does and what `acceptance/serial/boot_sclk_align` requires.
+    /// Is a transfer actually **in flight** — a shift register with bits still
+    /// to go, or a byte waiting for a plugin partner to answer it?
+    ///
+    /// This is what stops a halted CPU being batched over several M-cycles
+    /// ([`MemoryManagementUnit::idle_mcycles`](crate::mmu::MemoryManagementUnit)),
+    /// because an internally clocked transfer finishes on the timer's shift
+    /// edges and raises `IF.3` when it does.
+    ///
+    /// **`SC` bit 7 alone is not it, and reading it that way costs the whole
+    /// optimisation.** A Game Boy listening for a partner leaves `SC = $80`
+    /// set indefinitely — Pokémon Blue does it in its overworld loop — and that
+    /// console is *idle*: with no internal clock `bits_left` is zero, so
+    /// [`Self::shift_clock`] returns at once and nothing can happen until an
+    /// external clock arrives, which every cable driver delivers between
+    /// `do_cycle` calls and never inside one. Testing the control bit refused
+    /// 2,836,544 of 2,836,544 batches on the PSP; testing the shift register
+    /// refuses none of them.
+    pub(crate) fn transfer_in_flight(&self) -> bool {
+        self.bits_left != 0 || self.pending.is_some()
+    }
+
     pub(crate) fn take_pending(&mut self) -> Option<u8> {
         self.pending.take()
     }

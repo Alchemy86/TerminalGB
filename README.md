@@ -301,7 +301,7 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
-| `ppu` | `standard` / `identical` (aliases: `fast` / `accurate`) | Which **[picture mode](docs/picture-modes.md)** the emulated hardware runs. `standard` (default) draws a whole scanline at a time; `identical` runs the real per-dot pixel pipeline, so a mid-scanline register write lands exactly where a Game Boy puts it — for about **2.1x** the CPU. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way. **`P` toggles it live**; the Status panel's `PPU` row says which is on and what it costs. `$GB_PPU` overrides this for one run. |
+| `ppu` | `standard` / `identical` (aliases: `fast` / `accurate`) | Which **[picture mode](docs/picture-modes.md)** the emulated hardware runs. `standard` (default) draws a whole scanline at a time; `identical` runs the real per-dot pixel pipeline, so a mid-scanline register write lands exactly where a Game Boy puts it — for about **6.3x** the CPU. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way. **`P` toggles it live**; the Status panel's `PPU` row says which is on and what it costs. `$GB_PPU` overrides this for one run. |
 | `volume` | `0`–`100` (a `%` is allowed), or `off` | **Playback volume**, the level a session starts at. Default **`50`** (−12 dB) — deliberately quieter than full scale. `,` / `.` change it in game and `m` mutes; whatever you last set is remembered across sessions, and editing this key overrides that. Attenuation is applied to the audio the *host device* is handed, never to the emulated machine — see below. |
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
@@ -431,7 +431,7 @@ attached:
 | `--features audio`, real device | **0.267 ms** | 16.743 ms |
 | `--no-default-features`, `GB_PPU=identical` | **0.461 ms** | 16.743 ms |
 
-So **audio is nearly free and the picture mode is the real lever** (~2.1×, and still 36× real
+So **audio is nearly free and the picture mode is the real lever** (~6.3×, and still 34× real
 time). Reproduce these with `cargo test --release --test ppuengines` and
 `cargo run --release --features audio,libc --example audio_frame_cost -- <rom>`; CI holds the
 audio number under 4 ms/frame on every push (`make test-audio-perf`).
@@ -570,8 +570,10 @@ for `wasm32-unknown-unknown` with no changes.
 core does not merely type-check elsewhere: `make test-cross` builds it for
 **aarch64**, **armv7** and **i686** and *runs* a cartridge on each, requiring a
 byte-identical frame and save-state length, and CI does the same. It also runs on a
-**PlayStation Portable** — `tools/psp-build.sh`, ~42 fps on Pokémon Blue under PPSSPP, with
-the same frame hash as the desktop build. Windows is built and smoke-tested on a real
+**PlayStation Portable** — `tools/psp-build.sh`, **Pokémon Blue at the DMG's own 59.7275 fps
+with 40 % of the frame budget spare** under PPSSPP, with the same frame hash as the desktop
+build. (A battle text box, where the game busy-polls the joypad and never halts, reaches
+50 fps; that wall is measured in the same page.) Windows is built and smoke-tested on a real
 Windows runner by the release workflow. **macOS is still a type check and nothing has ever
 been run on a big-endian machine.** The frontends are another matter — `desktop` needs GL and a windowing system, `tui` needs a kitty-protocol
 terminal, and the shared-memory frame transport

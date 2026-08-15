@@ -324,7 +324,7 @@ measured rather than pinned as a hash, so `oam_bug` reports which of its eight s
 pass rather than an opaque number. The mode-3-length approximation applies to the **default
 `standard` [picture mode](picture-modes.md)**; the cycle-stepped one is the selectable
 `identical` mode and is gated (`GB_PPU=identical`, and the `external-suites-accurate` job
-below) — it is simply not the default yet, because it costs about 2.1x the CPU, not because it
+below) — it is simply not the default yet, because it costs about 6.3x the CPU, not because it
 is behind on anything. See
 [`docs/measured/ppu.md`](measured/ppu.md). The whole suite runs
 in **~3.6 s** (the twelve `cgb_sound` rows cost about 0.8 s of that).

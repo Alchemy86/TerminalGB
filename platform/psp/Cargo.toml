@@ -18,3 +18,9 @@ publish = false
 # rust-psp checkout (cargo-psp can only build the std overlay from in there).
 psp = { path = "../../psp", features = ["std"] }
 terminalgb = { path = "../../..", default-features = false }
+
+[features]
+# MEASUREMENT ONLY — `tools/psp-build.sh --profile`. Replaces the interactive
+# loop with a fixed-length benchmark that times the same frames under several
+# configurations and writes the table to the memory stick. Never shipped.
+profile = ["terminalgb/profile"]

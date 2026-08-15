@@ -108,7 +108,11 @@ thing that shows a pipeline change getting closer. Both are in the baselines.
 
 ## 4. The cost figure, and how it stays honest
 
-`RenderMode::IDENTICAL_COST` is **2.1**, and it is measured rather than chosen.
+`RenderMode::IDENTICAL_COST` is **6.3**, and it is measured rather than chosen. It used to
+read 2.1: the number moved because `standard` got 3.5x faster (the PSP work rewrote the
+whole-scanline renderer to fetch once per tile instead of once per pixel), not because
+`identical` got slower — that engine does not use the path that changed and still measures
+0.49 ms/frame.
 [`testharness/ppuengines.rs`](../testharness/ppuengines.rs) times both engines over the same 400
 frames of dmg-acid2 on every `cargo test --release` and **fails the build if the constant disagrees
 with what it measured**. Four consecutive runs on the machine this was written on gave 0.221 →

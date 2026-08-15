@@ -38,7 +38,8 @@ PSP_COMMIT=${PSP_COMMIT:-ad92131218406308170a3344786865415aef2995}
 PSP_NIGHTLY=${PSP_NIGHTLY:-nightly-2026-04-14}
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-OUT=${1:-$REPO/target/psp}
+OUT=$REPO/target/psp
+case "${1:-}" in ""|--*) ;; *) OUT=$1 ;; esac
 # Deliberately OUTSIDE the repository: it is a checkout of somebody else's
 # workspace, and a cargo workspace inside `target/` is claimed by ours (cargo
 # refuses to build it). It also survives `cargo clean`, which is the point.
@@ -82,12 +83,21 @@ sed -e "s|path = \"../../..\"|path = \"$REPO\"|" "$REPO/platform/psp/Cargo.toml"
 # desktop binary and wrong here: on the PSP it costs 1 ms a frame (23.4 vs 22.4
 # ms emulating Pokémon Blue). Fat LTO with one codegen unit is worth a further
 # ~14 %. See docs/portability.md §PSP.
+# `--profile` builds the MEASUREMENT binary instead of the shipping one: the
+# interactive loop is replaced by a fixed-length benchmark that splits the frame
+# budget by component and writes the table to the memory stick. See
+# `platform/psp/src/main.rs::bench` and docs/portability.md §3.7.
+FEATURES=""
+for arg in "$@"; do
+    [ "$arg" = "--profile" ] && FEATURES="--features profile"
+done
+
 cd "$STAGE"
 CARGO_PROFILE_RELEASE_OPT_LEVEL=3 \
 CARGO_PROFILE_RELEASE_LTO=fat \
 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
 RUST_PSP_BUILD_STD=1 \
-    cargo +"$PSP_NIGHTLY" psp --release
+    cargo +"$PSP_NIGHTLY" psp --release $FEATURES
 
 BUILT="$WORK/rust-psp/target/mipsel-sony-psp-std/release/terminalgb-psp.EBOOT.PBP"
 mkdir -p "$OUT"

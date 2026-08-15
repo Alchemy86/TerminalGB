@@ -186,6 +186,15 @@ fn ppu_write_commit(
     }
 }
 
+/// The most M-cycles [`MemoryManagementUnit::idle_mcycles`] will ever hand back.
+///
+/// The PPU horizon is never longer than a mode-3 span (172 dots, 43 M-cycles)
+/// anyway, so this only bounds the cases where the PPU imposes nothing. It is
+/// deliberately no larger than a long instruction's reach so that nothing
+/// downstream — the APU's resampler above all — is ever handed a step it does
+/// not already see in ordinary play.
+const IDLE_BATCH_MAX: u32 = 64;
+
 const WRAM_SIZE: usize = 0x8000;
 const ZRAM_SIZE: usize = 0x7F;
 
@@ -769,7 +778,15 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     fn bus_tick(&mut self) {
         if self.bus_tick_enabled {
-            self.timer.do_cycle(4);
+            // Measurement only, compiled out of every shipping build. Returning
+            // here leaves `bus_ticked` at zero, so `do_cycle` applies the whole
+            // instruction's ticks at its end — the totals are unchanged and
+            // only the sub-instruction phase is lost. See `crate::profile`.
+            #[cfg(feature = "profile")]
+            if crate::profile::bus_tick_skipped() {
+                return;
+            }
+            self.timer.do_mcycle_now();
             self.intf |= self.timer.interrupt;
             self.timer.interrupt = 0;
             // The link port's shift clock is divided from the same counter, so
@@ -1098,6 +1115,86 @@ impl<'a> MemoryManagementUnit<'a> {
         // the next launch resurrects the pre-load save.
         self.mbc.battery_dirty();
         Ok(())
+    }
+
+    /// The most M-cycles a **halted** CPU may be advanced in one step without
+    /// any of this machine behaving differently — see [`Self::do_cycle`], which
+    /// is what actually runs them, and `Cpu::exec`, which is the only caller.
+    ///
+    /// **Why this exists.** Pokémon Blue is halted for **11,818 of the 14,322**
+    /// `exec` calls in a frame (measured on the PSP, `crate::profile`), and each
+    /// one of those idle M-cycles pays for the whole per-instruction pipeline —
+    /// the VRAM-DMA test, the HBlank latch, the timer, OAM DMA, the serial
+    /// drain, the PPU, the APU, four interrupt folds — to advance the machine by
+    /// four dots. On a wide out-of-order desktop that is noise; on the PSP's
+    /// in-order MIPS it was two thirds of the frame.
+    ///
+    /// **Why it is exact, and not an approximation.** Nothing is skipped: the
+    /// same peripherals are advanced by the same total, through the same code
+    /// [`Self::do_cycle`] already runs for a six-M-cycle instruction. The only
+    /// thing that moves is *when the CPU looks at `IE & IF`*, so the horizon is
+    /// simply "how far until any of them could set a bit":
+    ///
+    /// * the PPU, [`Gpu::idle_dots`] — its next mode edge or line wrap;
+    /// * the timer, [`Timer::idle_mcycles`] — its next `TIMA` overflow;
+    /// * and a flat refusal to batch at all if anything else is in flight: a
+    ///   VRAM DMA, a link transfer in flight (which finishes on the timer's own
+    ///   shift edges), or an interrupt already waiting to be folded.
+    ///
+    /// The batch stops **on** the edge rather than after it, so the interrupt is
+    /// folded into `IF` on the very M-cycle it would have been and the CPU wakes
+    /// on the same one. [`IDLE_BATCH_MAX`] caps it anyway, so no consumer
+    /// downstream ever sees a step longer than a long instruction's worth.
+    pub(crate) fn idle_mcycles(&self) -> u32 {
+        // Measurement only, compiled out of every shipping build.
+        #[cfg(feature = "profile")]
+        if crate::profile::idle_batch_skipped() {
+            return 1;
+        }
+        if self.hdma_status != DMAType::NoDma {
+            #[cfg(feature = "profile")]
+            crate::profile::count_idle_reason(0);
+            return 1;
+        }
+        if self.serial.transfer_in_flight() {
+            #[cfg(feature = "profile")]
+            crate::profile::count_idle_reason(1);
+            return 1;
+        }
+        if self.keypad.interrupt != 0
+            || self.timer.interrupt != 0
+            || self.gpu.interrupt != 0
+            || self.serial.interrupt != 0
+        {
+            #[cfg(feature = "profile")]
+            crate::profile::count_idle_reason(2);
+            return 1;
+        }
+        let dots = self.gpu.idle_dots();
+        if dots == 0 {
+            #[cfg(feature = "profile")]
+            crate::profile::count_idle_reason(3);
+            // No PPU horizon to work from (LCD off, or the per-dot engine).
+            // Leave the machine stepping one M-cycle at a time rather than
+            // inventing a bound: `Gameboy::frame`'s cycle cap is what ends an
+            // LCD-off frame, and overshooting it would move that boundary.
+            return 1;
+        }
+        // The PPU runs at half the CPU's rate in double speed, so a dot horizon
+        // buys twice as many M-cycles there.
+        let dots_per_mcycle = match self.gbspeed {
+            GbSpeed::Single => 4,
+            GbSpeed::Double => 2,
+        };
+        let t = self.timer.idle_mcycles();
+        #[cfg(feature = "profile")]
+        crate::profile::count_idle_reason(if t < dots.div_ceil(dots_per_mcycle) {
+            4
+        } else {
+            5
+        });
+        let n = dots.div_ceil(dots_per_mcycle).min(t);
+        n.clamp(1, IDLE_BATCH_MAX)
     }
 
     pub fn do_cycle(&mut self, ticks: u32) -> u32 {

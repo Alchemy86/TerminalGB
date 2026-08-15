@@ -359,8 +359,44 @@ fn read_file(path: &path::Path) -> StrResult<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(ref e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        // **A `std` that cannot say "no such file" must not cost a player their
+        // first launch.** The PlayStation Portable's sysroot overlay reports
+        // `ErrorKind::Uncategorized` for a missing file from both `read` and
+        // `metadata` — so `Path::exists` is no help either — and a cartridge
+        // copied to a memory stick with no save beside it yet refused to start
+        // at all: *"could not read the existing save file"*, for a file that
+        // was never there. Measured on the real target, `platform/psp/`.
+        //
+        // The directory listing is the one question that does work there, so
+        // ask that. The safety property is untouched: a save whose **name is on
+        // disk** and which still will not open is a hard error exactly as
+        // before, and so is a directory we cannot even list.
+        Err(_) if !listed_in_parent(path) => Ok(None),
         Err(_) => Err("could not read the existing save file"),
     }
+}
+
+/// Is `path`'s file name present in its directory?
+///
+/// Deliberately **fails towards "yes"**: an unlistable directory, or a path
+/// with no parent, answers `true`, so [`read_file`]'s caller still refuses to
+/// overwrite a save it could not read. Compared case-insensitively because the
+/// filesystem this exists for is a FAT memory stick, and because a false "yes"
+/// only ever means one more honest read attempt.
+fn listed_in_parent(path: &path::Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return true;
+    };
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => path::Path::new("."),
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return true;
+    };
+    entries
+        .flatten()
+        .any(|e| e.file_name().eq_ignore_ascii_case(name))
 }
 
 /// Write `bytes` to `path` without ever leaving a half-written file there: a
@@ -584,6 +620,29 @@ mod tests {
         b.flush(&vec![0u8; 0x2000], None);
         assert!(!dir.join("game.sav").exists());
         assert_eq!(fs::read(dir.join("game.gbsave")).unwrap(), vec![1u8; 4]);
+    }
+
+    /// A directory listing answers "is there a save?" on a platform whose
+    /// `std` cannot classify a missing file — and still refuses when the file
+    /// is really there.
+    ///
+    /// The PSP's sysroot overlay reports `Uncategorized` for a missing file, so
+    /// `read_file`'s `NotFound` arm never fires there and a first launch used to
+    /// die on a save that did not exist. This pins both directions of the
+    /// fallback without needing that platform.
+    #[test]
+    fn a_missing_save_is_absent_and_a_present_one_is_not() {
+        let dir = tmpdir("listed");
+        assert!(!listed_in_parent(&dir.join("nothing.sav")));
+        fs::write(dir.join("something.sav"), b"x").unwrap();
+        assert!(listed_in_parent(&dir.join("something.sav")));
+        // A FAT memory stick is case-insensitive, and the PSP's directory
+        // listing does not preserve the case we asked with.
+        assert!(listed_in_parent(&dir.join("SOMETHING.SAV")));
+        // No parent, and an unlistable directory, both fail towards "present"
+        // so the caller keeps refusing rather than overwriting.
+        assert!(listed_in_parent(path::Path::new("")));
+        assert!(listed_in_parent(&dir.join("no-such-dir").join("x.sav")));
     }
 
     /// The exact byte layout FlashGBX writes and VBA-M/BGB read. Pinned so a

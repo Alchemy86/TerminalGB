@@ -141,7 +141,7 @@ The mode is gated separately (`make test-external-accurate`, against
 the same figure stands in both columns.)
 
 **No row goes the other way**, so the accuracy precondition for making `identical` the default
-is met; what remains is a cost decision — **~2.1x**, 0.221 → 0.461 ms/frame, 36x real time
+is met; what remains is a cost decision — **~6.3x**, 0.079 → 0.494 ms/frame, 34x real time
 headless, re-measured on every `cargo test --release --test ppuengines`.
 
 > This table is where the drift happened. Its Mealybug figure read **12** for as long as it

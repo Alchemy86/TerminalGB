@@ -22,7 +22,7 @@ Everything below was measured on 2026-08-15. Reproduce the Linux rows with
 | `aarch64-unknown-linux-musl` | **runs**, frame-identical | `make test-cross`, under `qemu-aarch64` |
 | `armv7-unknown-linux-musleabihf` | **runs**, frame-identical | `make test-cross`, under `qemu-arm` |
 | `i686-unknown-linux-musl` | **runs**, frame-identical | `make test-cross`, natively |
-| `mipsel-sony-psp` (**PlayStation Portable**) | **runs Pokémon Blue**, ~42 fps | §3, under PPSSPP |
+| `mipsel-sony-psp` (**PlayStation Portable**) | **runs Pokémon Blue at 59.7275 fps** | §3, under PPSSPP |
 | `wasm32-unknown-unknown` | **runs** in a browser, with audio | `docs/web-audio.md` |
 | `x86_64-pc-windows-msvc` | **builds and smoke-tests** on a real Windows runner | `.github/workflows/release.yml` |
 | `x86_64-apple-darwin`, `aarch64-apple-darwin` | **type-checks only** | `cargo check`; nobody has linked or run it |
@@ -89,9 +89,21 @@ repository, not a finding about RISC-V.
 
 ## 3. The PlayStation Portable
 
-**It runs Pokémon Blue.** Aspect-correct and full-height on the 480x272 panel, from the
-memory stick, with the game's own battery save beside it — measured at **41.9 fps in the
-overworld and 41.2 fps in a battle**, against the DMG's 59.7275 Hz.
+**It runs Pokémon Blue at full speed.** Aspect-correct and full-height on the 480x272
+panel, from the memory stick, with the game's own battery save beside it — **59.7275 fps
+locked, with 40 % of the frame budget spare**, where it used to manage 42.
+
+That took **one instrument and two changes to the emulator core**, and both changes leave
+every frame byte-identical to the desktop build:
+
+* a **per-tile background renderer** in place of the per-pixel one (`Gpu::draw_map_run`),
+  which is worth 3.5x on x86-64 as well;
+* **idle-cycle batching** for a halted CPU (`MemoryManagementUnit::idle_mcycles`) — Blue
+  spends 82 % of its `exec` calls sitting in `HALT`, and each of those idle M-cycles was
+  paying for the whole per-instruction pipeline.
+
+It is **not** full speed in every workload, and §3.7 says exactly where the wall is: a
+battle text box, where the game busy-polls the joypad and never halts, reaches 50 fps.
 
 ![dmg-acid2 on a PSP](shots/psp-dmg-acid2.png)
 
@@ -102,31 +114,54 @@ is `0x01acf78fe505f31c` — see §3.2.*
 
 Everything in this section is **PPSSPP 1.20.4 on this desktop, not a PSP**. Nobody here has
 a PlayStation Portable, so **no number below has been seen on real hardware** and that is a
-gap, not a footnote. Two things say the figures are not merely PPSSPP's frame rate:
+gap, not a footnote. Three things say the figures are not merely PPSSPP's frame rate:
 
 * The emulator reads `sceKernelGetSystemTimeWide`, and moving the CPU from 222 MHz to
   333 MHz changed the reported cost by **exactly 1.5000x** (32.537 → 21.681 ms/frame).
-  A wall-clock number would not scale with the emulated clock like that, so PPSSPP is
-  deriving it from emulated cycles and the host is not the limiter.
+  A wall-clock number would not scale with the emulated clock like that.
+* **The benchmark is bit-reproducible.** Two runs of `--profile` on the same build and the
+  same save state produced identical means to the hundredth of a millisecond in every row,
+  on a machine whose load average moved between them. That matters here: this box runs
+  several agents at once, and `docs/link-cable.md` records a *different* measurement on it
+  collapsing from 19/20 to 1/10 as the load went from 5 to 49. A cycle count does not care.
 * Which also means it is a **cycle count divided by a clock**, and PPSSPP does not model
-  the PSP's caches. Our working set (VRAM, WRAM, ROM banks, tables) does not fit in a
-  32 KB / 16 KB cache, so **real hardware is more likely to be slower than these numbers
-  than faster.**
+  the PSP's caches. Our working set does not fit in a 32 KB / 16 KB cache, so **real
+  hardware is more likely to be slower than these numbers than faster.**
+
+**The interactive figures are not in that protected class, and this is worth knowing before
+quoting one.** The in-game statistics line measures a loop that makes PSP syscalls —
+`sceCtrlPeekBufferPositive`, `sceKernelDelayThread`, `sceGuSync` — whose emulated cost
+PPSSPP does not derive purely from cycles. Under host load those windows wander by several
+milliseconds while the `--profile` bench does not move at all. **Quote the bench for
+component costs; quote the interactive line for sustained fps, and say what the load was.**
 
 Configuration: `mipsel-sony-psp`, CPU at 333 MHz, `standard` picture mode (the cheap
-scanline renderer — `identical` was never in play), no APU installed, `opt-level = 3` with
-fat LTO and one codegen unit.
+scanline renderer — `identical` was never in play and would be hopeless here at ~6.3x),
+no APU installed, `opt-level = 3` with fat LTO and one codegen unit.
 
-| Workload | fps | work / frame | of which emulation | worst frame |
-|---|---:|---:|---:|---:|
-| Pokémon Blue, overworld | 41.9 | 23.9 ms | 22.4 ms | 24.7 ms |
-| Pokémon Blue, wild battle | 41.2 | 24.3 ms | 22.8 ms | 24.9 ms |
-| dmg-acid2 | — | — | 21.7 ms | — |
+**Two workloads, both reproducible, both from a save state beside the cartridge**, because
+a benchmark somebody has to hold a button through is a benchmark nobody re-runs:
 
-The budget is **16.743 ms**. So the PSP build is at about **70 % of full speed** and needs
-roughly **1.4x** more. `fps` is under the frontend's own pacer, so it is a floor; `work` is
-measured before the pacer sleeps and is the number that decides whether 59.7275 Hz is
-reachable.
+| | how it is built |
+|---|---|
+| **overworld** | `shiny_hunt --rom blue.gb --make-state route1.gbss` — a new game walked to Route 1, standing in grass |
+| **battle** | `gen1_battle --rom blue.gb --preset charizard-vs-pidgey --save-state battle.gbss --save-at 900` — "Wild PIDGEY appeared!" |
+
+Sustained over real running, load average ~7, uninstrumented shipping build:
+
+| Workload | before | after |
+|---|---|---|
+| overworld | 42.01 fps, work 23.8 ms (emu 22.3 + present 1.5), worst 24.5 ms | **59.73 fps, work 9.4-9.9 ms (emu 7.9-8.5 + present 1.4-1.5), worst 11.5-12.8 ms, 0 of 120 frames over budget in every window** |
+| battle | 40.60 fps, work 24.6 ms (emu 23.2 + present 1.5), worst 25.3 ms | **50.0 fps, work 19.6 ms (emu 18.1 + present 1.5), worst 20.4 ms, every frame over budget** |
+
+The budget is **16.743 ms**. "before" is `main` at `ecee7ef` measured on the same two save
+states through the same frontend; the overworld row reproduces the previous crew's
+published 41.9 fps / 23.9 ms exactly, which is what says the two workloads are equivalent.
+
+**Say which battle.** That state is a battle *text box*: the game is waiting for A, and
+Blue waits by busy-polling the joypad. It never halts — `halt/f` is **0** — and it spends
+16,689 of a frame's 17,556 M-cycles on memory accesses. It is the worst case this emulator
+has, not the average one, and it is quoted because the worst case is the honest number.
 
 ### 3.2 The determinism is the proof the port is exact
 
@@ -248,6 +283,9 @@ first launch can do.
 
 Two more traps worth writing down:
 
+* **`Peek` the pad, do not `Read` it.** `sceCtrlReadBufferPositive` blocks until the next
+  VBlank sample; `sceCtrlPeekBufferPositive` does not. A loop with its own pacer wants the
+  second, and the first cost a whole frame of apparent emulation time — §3.8.
 * **Initialise the pad.** Without `sceCtrlSetSamplingCycle(0)` +
   `sceCtrlSetSamplingMode(Digital)`, `sceCtrlReadBufferPositive` returns whatever the
   buffer held — observed here as a ROM picker scrolling by itself with nobody touching it.
@@ -258,45 +296,120 @@ Two more traps worth writing down:
   window first — a kernel-level key goes to whatever has focus, including the developer's
   own terminal.
 
-### 3.7 What would close the 1.4x
+### 3.7 Where the frame goes now, and where the wall is
 
-Measured, in the order they were tried:
+**A single aggregate cannot be optimised, only guessed at.** The first thing this campaign
+built was the instrument: `tools/psp-build.sh --profile` replaces the interactive loop with
+a fixed-length benchmark (`platform/psp/src/main.rs::bench`) that runs the same frames under
+several configurations and prints the split.
 
-| Change | Emulation, ms/frame |
+**Why it is built that way.** The PSP's only clock costs **0.785 µs a call** here — measured,
+100,000 reads in 78.5 ms — and quantises to 1 µs. One `MemoryManagementUnit::bus_tick` is
+smaller than the measurement of it and there are ~17,000 of them a frame, so per-call
+timing is out; the Allegrex CP0 counter was tried and does not advance usefully under
+PPSSPP. Whole *frames* are ~10,000 µs, where both problems vanish. So every row is a
+whole-frame time and a component's cost is the difference between a run that does its work
+and one that does not (`crate::profile`, behind a cargo feature that is off in every
+shipping build and adds no dependency). Each row also carries the frame's executed-instruction
+count — **an A/B whose instruction counts differ is not an A/B**.
+
+400 frames a row, warm 60:
+
+| | overworld | battle |
+|---|---:|---:|
+| emulation | **8.43 ms** | **18.67 ms** |
+| — pixel rendering | 3.42 (41 %) | 3.41 (18 %) |
+| — per-access bus (`bus_tick`) | 0.90 (11 %) | 3.90 (21 %) |
+| — everything else | 4.10 (49 %) | 11.36 (61 %) |
+| present (the GE) | 1.45 | 1.44 |
+| *of "everything else": the timer* | 1.04 | 1.56 |
+| *of "everything else": the STAT line* | 0.17 | 0.34 |
+| an APU, if one were installed | +1.73 | +3.44 |
+| instructions / frame | 2,177 | 6,719 |
+| halted M-cycles / frame | 13,260 | **0** |
+
+The two "of everything else" rows overlap the one above them — `no timer` removes the
+timer from `bus_tick` as well as from `do_cycle` — so they are marginal costs, not a
+partition, and they move by a tenth of a millisecond between runs on a shared box.
+
+**The finding that decided the campaign: Pokémon Blue's CPU is halted for 13,260 of a
+frame's 17,556 M-cycles in the overworld — 82 % of every `exec` call — and each of those
+idle M-cycles paid the whole per-instruction pipeline** (the VRAM-DMA test, the HBlank
+latch, the timer, OAM DMA, the serial drain, the PPU, four interrupt folds) to advance the
+machine by four dots. On a wide out-of-order desktop that is noise. On an in-order MIPS it
+was two thirds of the frame.
+
+`MemoryManagementUnit::idle_mcycles` computes how far the machine can be advanced before
+any peripheral could raise an interrupt — the PPU's next mode edge, the timer's next `TIMA`
+overflow — and runs that many M-cycles in one step, through the very same code
+`MemoryManagementUnit::do_cycle` already runs for a six-M-cycle instruction. Nothing is
+skipped; the only thing that moves is when the CPU looks at `IE & IF`, and the batch stops
+**on** the edge so it looks at exactly the same M-cycle it always did. Measured: 13,260
+idle M-cycles arrive in **349 batches** instead of 13,260.
+
+**The proof that it changed nothing is in the table the benchmark prints.** The
+`no idle batch` row steps one M-cycle at a time as before, and it reports the *same frame
+hash* as the baseline — `0x93a3ea1446afa04c` — while costing **18.95 ms against 8.43**.
+Same picture, 10.52 ms cheaper.
+
+Attribution on the overworld, all through the same instrument:
+
+| | emulation, ms/frame |
 |---|---:|
-| 222 MHz, no LTO, 16 codegen units | 37.2 |
-| + fat LTO, one codegen unit | 32.5 |
-| + `scePowerSetClockFrequency(333, …)` | **21.7** |
-| `opt-level = "s"` instead of `3` | 23.4 — **worse**, so `"s"` is wrong here |
-| `panic = "abort"` | 22.2 — inside the noise |
+| `main` at `ecee7ef` | 22.3 |
+| + per-tile background renderer | 18.95 |
+| + idle-cycle batching | **8.43** |
 
-The clock and the build flags are spent. What is left:
+**The wall, stated plainly.** A battle text box never halts, so idle batching buys it
+nothing, and 11.36 ms of its 18.67 is the interpreter and the per-instruction MMU tail —
+about **560 MIPS cycles per emulated instruction**. Removing the per-access bus stepping
+entirely would put that workload at 16.2 ms, inside the budget — and that is precisely the
+`mem_timing` accuracy this repository is built on, so it is not available. **50 fps in the
+busiest loop Pokémon Blue has is where this stops without a real interpreter campaign, and
+the next lever is a dispatch-level one, not another structural trick.**
 
-1. **The core itself, profiled on MIPS.** 22.4 ms at 333 MHz is ~7.4 M MIPS cycles per
-   Game Boy frame, ~420 instructions per emulated M-cycle, against ~114 x86 instructions
-   for the same work. Some of that gap is real (in-order single-issue MIPS against a wide
-   out-of-order x86) and some is almost certainly ours — nobody has ever profiled this core
-   on a 32-bit in-order machine, and it is full of `u8`/`u16` arithmetic that MIPS must mask
-   after every operation. **This is the work, and it is a project, not a flag.**
-2. **The present path is already cheap** — 1.5 ms of 23.9. Even making it free leaves
-   22.4 against 16.7.
-3. **Accuracy for speed, if it were ever wanted.** The timer and APU are stepped on every
-   CPU memory access (`MemoryManagementUnit::bus_tick`), which `docs/testing.md` measures at
-   ~15 % on a pure-CPU benchmark and which is what makes Blargg `mem_timing` pass. A
-   handheld build could give that up. **That is a product decision and it is not this
-   crew's to take** — it would make the PSP a different emulator from the one every baseline
-   in this repository describes.
-4. **Real hardware might not agree with any of this.** See §3.1.
+One shape worth recording for whoever takes it: `bus_tick` need only step the peripherals
+before an access that can *observe* them (`$FE00` and above), and could accumulate the rest
+to the next such access or to the instruction's end. That would recover most of the
+non-timer half of the 3.90 ms — but not the timer's own per-M-cycle edge detection, which
+has to run either way, so it is worth ~2 ms and does not on its own close 1.17x.
 
-Honest summary: **the PSP plays Pokémon at ~42 fps, it is smooth and it is exact, and it is
-not full speed.** Closing the last 1.4x is a MIPS profiling campaign on the core.
+### 3.8 Four defects the speed uncovered, all invisible while it was slow
 
----
+Every one of these was harmless at 42 fps and wrong the moment the emulator had a frame
+budget to blow. They are the reason the "after" figures above are what they are.
+
+1. **The frontend blocked on the pad.** `sceCtrlReadBufferPositive` *waits* for the next
+   pad sample, and with `sceCtrlSetSamplingCycle(0)` that is once per VBlank. At 23.9 ms a
+   frame the sample was always already there and the call returned at once; at 8 ms it sat
+   in the remaining ~7 ms, **charged the wait to emulation** (the loop reported 15.2 ms for
+   8.3 ms of work) and pinned the machine to the panel's 59.94 Hz instead of the DMG's
+   59.7275. It is `sceCtrlPeekBufferPositive` now, which is what a self-paced loop wants.
+2. **The statistics line excluded its own I/O.** The window's start was re-read *after* the
+   report was written and the battery flushed, so the frames those delayed were counted
+   against a window that had not paid for them: the loop reported **61 fps against a
+   59.7275 Hz pacer it was in fact keeping**. The next window now begins on the same
+   reading the last one ended on.
+3. **A forced battery flush every two seconds** cost a **59 ms frame** on the memory stick,
+   for no durability `Gameboy::frame`'s own autosave was not already providing. Removed.
+4. **A cartridge with no save file yet refused to start.** `BLUE.GB: could not read the
+   existing save file` — for a file that had never existed. The PSP's `std` overlay reports
+   `ErrorKind::Uncategorized` for a missing file from both `read` *and* `metadata`, so
+   `Path::exists` is no help either, and `src/mbc/battery.rs`'s deliberate "a save that
+   cannot be read is never overwritten" rule caught a save that was not there. It asks the
+   **directory listing** now, which is the one question that does work on that platform,
+   and fails towards "present" so the safety property is untouched. **This was a first-launch
+   bug for every PSP user** and nothing in this repository could have found it: no harness
+   runs on a filesystem whose `std` cannot classify a missing file.
+
+Points 1-3 are host-side and cost nothing on a desktop; point 4 is a one-line change in the
+core with a unit test that needs no PSP.
 
 ## 4. Building and running it yourself
 
 ```sh
 ./tools/psp-build.sh                 # → target/psp/EBOOT.PBP
+./tools/psp-build.sh --profile       # → the same, but a fixed-length benchmark (§3.7)
 ```
 
 Copy `EBOOT.PBP` to `ms0:/PSP/GAME/terminalgb/` and cartridges to

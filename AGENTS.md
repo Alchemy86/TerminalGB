@@ -1693,6 +1693,16 @@ capability must cost only that capability** — the same principle as the adapte
   - *Unofficial ROM-size code.* Symptom: a bootleg, corrupt or 1.1/1.2/1.5 MiB cart crashes
     on its first bank switch. Caught by: nothing; now case 7. Real dumpers never size a cart
     from byte 0x148 either.
+  - *A missing save file that `std` cannot call missing.* Symptom: a cartridge copied to a
+    memory stick with no `.sav` beside it yet refuses to start — `could not read the
+    existing save file`, for a file that never existed. Caught by: nothing, and nothing
+    here could — every harness runs on a filesystem whose `std` classifies a missing file
+    correctly. Found by running the real PSP build (its sysroot overlay reports
+    `ErrorKind::Uncategorized` from both `fs::read` **and** `fs::metadata`, so
+    `Path::exists` is no help either). Fixed by asking the **directory listing**, which
+    does work there, and failing towards "present" so *"a save that cannot be read is never
+    overwritten"* is untouched; `battery::listed_in_parent`, pinned by
+    `a_missing_save_is_absent_and_a_present_one_is_not`.
   - *Undersized cartridge RAM does not mirror* (we allocate a full 8 KiB bank for RAM code
     0x01 = 2 KiB). Not fixed, deliberately — recorded as a conformance check, since mirroring
     is how FlashGBX recovers a cartridge's true save size.
@@ -2857,9 +2867,10 @@ linked-and-run" sentence is superseded and was rewritten.
   lines, public embedding API only). **NOT a workspace member and must never become one** —
   nightly, `-Z build-std` and a third-party std overlay may not reach `make embed`,
   `cargo test` or `cargo install`. `make embed` still reports one third-party dependency.
-- **Measured under PPSSPP 1.20.4 at 333 MHz, `standard` picture mode: Pokémon Blue 41.9 fps
-  overworld / 41.2 fps battle, work 23.9 ms/frame of which emulation is 22.4 and the GE
-  present is 1.5.** Budget is 16.743 ms, so ~70 % of full speed and ~1.4x short.
+- **Measured under PPSSPP 1.20.4 at 333 MHz, `standard` picture mode: Pokémon Blue runs the
+  overworld at the DMG's own 59.7275 fps, work 9.4-9.9 ms of a 16.743 ms budget, 0 of 120
+  frames over budget in every window** (it was 42.0 fps / 23.8 ms before this work). **A
+  battle text box is 50.0 fps / 19.6 ms and that is the wall** — see the next section.
   **Nobody has run it on real hardware** and PPSSPP does not model the PSP's caches, so
   hardware is more likely slower than faster.
 - **PPSSPP's `sceKernelGetSystemTimeWide` is CYCLE-derived, not wall clock** — 222 → 333 MHz
@@ -2883,8 +2894,14 @@ linked-and-run" sentence is superseded and was rewritten.
   **Circle** and Cross is on **`Z`** (Square `A`, Triangle `S`, Start Space, Select Enter,
   d-pad arrows). Name the button glyph in any prompt, and accept several buttons in a menu.
 - **`sceCtrlSetSamplingCycle(0)` + `sceCtrlSetSamplingMode(Digital)` before reading the pad**,
-  or `sceCtrlReadBufferPositive` returns buffer garbage — seen as a ROM picker scrolling by
-  itself.
+  or the pad read returns buffer garbage — seen as a ROM picker scrolling by itself.
+- **PEEK THE PAD IN A GAME LOOP, NEVER READ IT.** `sceCtrlReadBufferPositive` *blocks* until
+  the pad is sampled again, which with sampling cycle 0 is once per VBlank — so a loop that
+  finishes its frame early spends the rest of the display's 16.7 ms inside it, and charges
+  that wait to whatever it is timing. Invisible while a frame cost 23.9 ms (the sample was
+  always already there); the moment the core got fast it reported **15.2 ms for 8.3 ms of
+  work** and locked the machine to the panel's 59.94 Hz instead of the DMG's 59.7275.
+  `sceCtrlPeekBufferPositive` is the call a self-paced loop wants.
 - **XTEST does not reach the PPSSPP flatpak here**; kernel-level injection does
   (`ydotoold` on a SHORT socket path — unix paths cap ~108 chars — with `/dev/uinput` group
   `input`). **Focus the target window first**: a kernel key goes to whatever has focus,
@@ -2893,10 +2910,73 @@ linked-and-run" sentence is superseded and was rewritten.
   "the quad renders 30 % narrow" because the Pokémon Center's right-hand columns are dark
   and `magick -trim` cut them. Measure on a frame that is light at the edges (a battle
   screen) before concluding anything about geometry.
-- **The PSP's fps came from a save state, not from mashing buttons.** `<rom>.gbss` beside the
-  cartridge is auto-loaded at boot; produce one with `examples/rom_script.rs`'s `state`
-  command (overworld) and `examples/gen1_battle.rs --save-state --save-at` (a battle). That
-  is also the only way overworld and battle are comparable loads.
+- **The PSP's fps came from a save state, not from mashing buttons.** `<rom>.gbss` beside
+  the cartridge is auto-loaded at boot. The two that this campaign's numbers are quoted on:
+  `shiny_hunt --rom <blue.gb> --make-state route1.gbss` (a new game walked to Route 1 grass
+  — the overworld) and `gen1_battle --rom <blue.gb> --preset charizard-vs-pidgey
+  --save-state battle.gbss --save-at 900` ("Wild PIDGEY appeared!"). Neither needs a save
+  file, which matters because **there is no real Pokémon Blue battery save on this box** —
+  every `.sav` under `~/roms` is essentially blank (~700 non-zero bytes of 32,768), so a
+  script that expects CONTINUE starts a new game and lands on the title screen instead.
+  Check `sum(1 for b in sav if b)` before believing a save.
+- **A save state does not survive a `savestate::FORMAT_VERSION` bump, and the PSP frontend
+  fails soft** — it prints `state ignored` and boots the cartridge cold, which looks like a
+  working benchmark measuring the title screen. If a workload's `instr/f` suddenly collapses
+  and `halt/f` shoots up, the state stopped loading. Regenerate it.
+
+### Making the PSP fast: the instrument, and what it found
+
+**Full write-up with every number: [`docs/portability.md`](docs/portability.md) §3.7-3.8.**
+Emulation went 22.4 → 8.3 ms/frame on the overworld, every frame byte-identical.
+
+- **BUILD THE INSTRUMENT BEFORE OPTIMISING ANYTHING.** `tools/psp-build.sh --profile`
+  replaces the interactive loop with a fixed-length benchmark (`platform/psp/src/main.rs::
+  bench`) that times the same frames under several configurations and prints the split.
+  `crate::profile` (cargo feature `profile`, off by default, **no dependency**, in no
+  shipping build) supplies free per-frame counters and switches that remove one component's
+  work; a component's cost is `t(normal) - t(without it)`.
+- **Per-call timing is NOT available on a PSP.** `sceKernelGetSystemTimeWide` costs
+  **0.785 µs a call** (measured: 100k reads in 78.5 ms) and quantises to 1 µs — smaller than
+  the thing being measured, ~17,000 times a frame. The Allegrex **CP0 counter (`mfc0 $9`) does
+  not advance usefully under PPSSPP** — two consecutive reads return the same value; do not
+  spend time on it again. Whole *frames* are ~10,000 µs, where both problems vanish, so every
+  row is a whole-frame time.
+- **Print the instruction count in every row. An A/B whose instruction counts differ is not
+  an A/B** — that is what says a switch which *is* guest-visible (`no_bus_tick`) still
+  measured a comparable run, and it is what showed a `no_pixels` row is exact.
+- **THE `--profile` BENCH IS LOAD-INDEPENDENT AND THE INTERACTIVE LINE IS NOT.** Two bench
+  runs on the same build and state gave identical means to the hundredth of a millisecond
+  with the box's load average moving between them: it is a cycle count. The in-game
+  statistics line measures a loop making PSP syscalls whose emulated cost PPSSPP does not
+  derive purely from cycles, and those windows wander by milliseconds under load. **Quote
+  the bench for component costs, the interactive line for sustained fps, and the load average
+  either way.**
+- **THE FINDING: Pokémon Blue's CPU is halted for 82 % of its `exec` calls** (13,260 of
+  17,556 M-cycles a frame in the overworld), and every idle M-cycle paid the whole
+  per-instruction pipeline. `MemoryManagementUnit::idle_mcycles` batches them to the next
+  point a peripheral could raise an interrupt — the PPU's next mode edge, the timer's next
+  `TIMA` overflow — and stops **on** that edge, so the CPU looks at `IE & IF` on the same
+  absolute M-cycle. 13,260 idle M-cycles now arrive in **349 batches**, worth **10.61 ms a
+  frame**, and the bench's `no idle batch` row reports the *same frame hash*.
+- **`Serial::transfer_in_flight`, not `SC` bit 7.** A Game Boy listening for a partner leaves
+  `SC = $80` set indefinitely (Blue does it in its overworld loop) and that console is idle:
+  with no internal clock `bits_left` is zero and nothing can happen until an external clock
+  arrives, which every cable driver delivers between `do_cycle` calls. Testing the control
+  bit refused **2,836,544 of 2,836,544** batches — the optimisation looked completely inert
+  and was one predicate away from working. *Count your refusals before believing a switch is
+  broken.*
+- **The whole-scanline renderer fetched once per PIXEL.** `Gpu::draw_map_run` fetches once
+  per *tile* (four VRAM reads per eight pixels instead of thirty-two), splits the line into
+  at most two runs at the window's left edge instead of testing per pixel, addresses the
+  framebuffer through a row slice (one bounds check instead of three per pixel), reads OAM
+  from `voam` instead of through `Gpu::rb`'s address dispatch (11,520 dispatches a frame),
+  and skips the white pre-clear whenever `draw_bg` will cover every pixel anyway. **Worth
+  3.5x on x86-64 too** — 0.234 → 0.067 ms/frame — which is why `RenderMode::IDENTICAL_COST`
+  moved 2.1 → 6.3 (re-measure it; both halves of a ratio can move). **`identical` did not get slower; `standard` got faster.** Say that
+  wherever the figure is quoted.
+- **`opt-level = 3`, fat LTO, one codegen unit and 333 MHz are all still measured and still
+  correct** — they were spent before this work and none of it changes them.
+
 - **The cheapest console left is the PS VITA, not the PSP** — `armv7-sony-vita-newlibeabihf`
   is Tier 3 **with full std upstream**, so there is no overlay to maintain and no nightly to
   pin. 3DS next (`ctru-rs`, std is `?`); Switch is `no_std` like the PSP.

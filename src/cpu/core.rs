@@ -500,6 +500,8 @@ impl Cpu<'_> {
     }
 
     pub fn exec(&mut self) -> u32 {
+        #[cfg(feature = "profile")]
+        crate::profile::count_instruction();
         // Not executing: either stopped by `STOP` — which is *not* HALT, so an
         // interrupt does not restart it, only one of the P10-P13 lines going
         // low does (Pan Docs, "Using the STOP Instruction") — or locked up by
@@ -525,16 +527,26 @@ impl Cpu<'_> {
         };
 
         if self.halt == 1 {
+            // A halted CPU does nothing until an interrupt arrives, so run as
+            // many idle M-cycles at once as the machine can be advanced without
+            // one becoming possible — often a whole mode-3 span. Exactly
+            // equivalent, and the difference between 42 fps and full speed on a
+            // handheld: see `MemoryManagementUnit::idle_mcycles`.
+            let mut idle = self.memory.idle_mcycles();
             // The HALT a CGB speed switch runs through ends by itself after
-            // `SPEED_SWITCH_HALT_TICKS`, with no interrupt involved.
+            // `SPEED_SWITCH_HALT_TICKS`, with no interrupt involved — so the
+            // countdown is a fourth horizon, and the batch has to stop on the
+            // M-cycle that empties it or the switch would end late.
             if self.speed_switch_halt > 0 {
-                self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4);
+                idle = idle.min(self.speed_switch_halt.div_ceil(4)).max(1);
+                self.speed_switch_halt = self.speed_switch_halt.saturating_sub(4 * idle);
                 if self.speed_switch_halt == 0 {
                     self.halt = 0;
                 }
             }
-            // Emulate an noop instruction
-            1
+            #[cfg(feature = "profile")]
+            crate::profile::count_halt(idle);
+            idle
         } else {
             // An interrupt woke the CPU before the switch countdown expired
             // ("Unless an interrupt occurs before then…" on the STOP chart).
