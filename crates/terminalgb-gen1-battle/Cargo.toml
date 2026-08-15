@@ -1,0 +1,22 @@
+[package]
+name = "terminalgb-gen1-battle"
+version = "0.1.0"
+description = "A faithful, disassembly-grounded model of Generation 1 Pokémon battle mechanics, plus agents that play it"
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/TerminalGB"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+# DEPENDENCY-FREE ON PURPOSE, and it must stay that way.
+#
+# This crate is the same shape as `terminalgb-chiptune`: pure logic that does
+# not depend on `terminalgb`. That is not tidiness, it is the only acyclic
+# arrangement — the differential harness and the CLI live in `terminalgb`, so
+# `terminalgb` must be able to depend on this. It also means the whole engine,
+# every agent and every test runs with no emulator, no ROM and no host.
+#
+# Game DATA (base stats, moves, the type chart, names) is never embedded here.
+# It is read out of the player's own cartridge at run time by `data::load` and
+# handed in. See the licence-boundary section in the repository's CLAUDE.md.
+[dependencies]

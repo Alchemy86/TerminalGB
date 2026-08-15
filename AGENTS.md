@@ -3735,6 +3735,106 @@ the whole area index is [`docs/gen1/`](docs/gen1/README.md).** Read those before
   is something the game sanctions (every byte it changes, it changes through its own code); a
   poke is not. A plugin scripting a sequence should not have to ask for the second.
 
+## The Gen 1 battle ENGINE, and the cartridge as an oracle (`crates/terminalgb-gen1-battle/`)
+
+**Full page: [`docs/gen1/battle-engine.md`](docs/gen1/battle-engine.md).** A model of the
+battle *rules* (damage, crits, accuracy, status, PP, the Gen 1 bugs), a differential harness
+that holds it to the retail cartridge, agents that play it, and an evaluation protocol.
+`cargo test -p terminalgb-gen1-battle` — **136 tests, no ROM on the machine.**
+
+- **`plugins/battle-control` STARTS battles; this REASONS about them, and they are
+  deliberately separate crates.** A `Plugin` is handed a machine during a frame the emulator
+  already decided to run; an engine that searches thousands of hypothetical battles has no
+  machine and no frame. Same conclusion `docs/mcp.md` §7 and `docs/shiny-hunt.md` reached from
+  their own directions. The engine crate is **dependency-free and does not depend on
+  `terminalgb`** — the oracle and the CLI live there, so the edge would otherwise be a cycle
+  (the `terminalgb-plugin-api` / `terminalgb-chiptune` arrangement, for the same reason).
+  `make embed` is unmoved: `gen1-battle` is in `default`, out of `--no-default-features`, and
+  first-party.
+- **THE CARTRIDGE IS THE ORACLE, AND IT EARNED THAT FIVE TIMES IN ONE SITTING.** Every
+  correction below came from a refusal or a disagreement on the retail Blue image, not from
+  reasoning, and each is now a named constant or a modelled behaviour with a citation:
+  - **`PokedexOrder` is 190 entries with 39 zeroes**, not 151 dense ones — internal index
+    numbers are not dense and the holes are the MissingNo slots.
+  - **`BaseStats` is 150 records**: its own line is `assert_table_length NUM_POKEMON - 1 ;
+    discount Mew`, and Mew lives at `MewBaseStats` in another bank.
+  - **`MonsterNames` is 190 too.** Reading 151 loses most species — internal index 1 is
+    RHYDON, not BULBASAUR.
+  - **A CRIT DOES NOT READ THE ENEMY'S STAT, IT RECOMPUTES IT.** `GetEnemyMonStat`
+    (`engine/battle/core.asm`) outside a link battle calls `GetMonHeader` on
+    `wEnemyMonSpecies` and recomputes from base stats, `wEnemyMonDVs` and `wEnemyMonLevel`
+    with **zero stat experience**. Identical for a plain wild Pokémon, which is why it hides;
+    different for a trainer's Pokémon with stat experience. `BattleMon::crit_stats` is that
+    asymmetry — the player's crit reads the party struct, the enemy's is reconstructed.
+  - **`damage * r / 255` TRUNCATES, so it cannot be inverted by dividing back.** The harness's
+    damage check must be a *forward* search over `r ∈ 217..=255`. Dividing back produced a
+    false accusation on the first small hit: a predicted 6 observed as 5 inverts to
+    `5*255/6 = 212` (outside the band) while `6*217/255 = 5` matches exactly. On small figures
+    one output covers a dozen rolls, so the naive inverse accuses the model precisely where it
+    is least likely to be wrong. **General rule: when a harness and a model disagree, suspect
+    the harness first** — it is younger and nobody has run a hundred battles through it.
+- **Two whole classes of check are REFUSED rather than faked, and both are battle-control's
+  doing.** The plugin patches `wEnemyMon` *after* the engine filled `wEnemyMonUnmodified*`
+  from the Pokémon it generated, so from the first stat change the cartridge is calculating
+  with numbers no observer can see. Enemy-side stat recomputation is therefore not checkable
+  at all in a plugin-built battle (it produced four false "disagreements" of the shape "the
+  cartridge behaved as if the unmodified stat were ~8 % lower"), and any damage after a stage
+  has moved is undetermined. **That is a narrowing of what is determinable, never a widening
+  of a tolerance** — the damage band stays exactly `217..=255`.
+- **`Undetermined` is never counted as agreement.** A harness that scored "could not tell" as
+  a pass would have no teeth. Current measurement on retail Blue: **32 checked (2 exact, 30 in
+  band), 51 undetermined, zero disagreements, mean implied roll 236.2 against a band centre of
+  236.** That mean is the number that matters most — every hit passing individually is still
+  consistent with a model wrong by a small constant factor, and only the mean exposes it.
+- **Bugs are behaviour and are reproduced with tests that fail if someone tidies them away**:
+  the Focus Energy *inversion* (it quarters the crit rate), crits reading BASE Speed, crits
+  discarding stat stages on **both** sides (so a crit through your own Swords Dance deals
+  *less*), the 1/256 miss, a resisted move counting as a **miss**, badge boosts compounding, a
+  stat change wiping the burn penalty, Hyper Beam skipping its recharge on a KO, full
+  paralysis being 63/256, the lost wake-up turn, Counter's negative priority.
+- **Dice CONSUMPTION is part of the model.** A turn that reaches the right answer while
+  drawing a different number of random bytes diverges on the *next* turn. `TurnLog::rolls`
+  counts them and the tests assert them: a zero-power move draws no crit die, a decided speed
+  race draws no tie-break die, and `RandomizeDamage` is a rejection loop that can eat several.
+- **What is not modelled SAYS SO, per battle.** `effects::support` classifies all 86 move
+  effects; an episode that touched an unmodelled one carries it, and the report refuses to
+  present an unqualified win rate (`QUALIFIED: only 94.2% of episodes used exclusively
+  modelled effects`). A win rate measured through a silently-dropped Disable is not a win rate.
+- **The evaluation protocol's seed comes from the EPISODE INDEX, never from the agent**, so
+  two agents run on identical dice and nobody can be re-rolled until they win. Both sides of
+  every matchup are played; illegal choices are counted and never silently improved; a run
+  under `Provenance::Foreknowledge` prints "NOT A COMPETITIVE SCORE"; Gen 1 bugs that appeared
+  in a *winning* line are named in the report, because an agent that wins by the 1/256 miss is
+  an interesting result and hiding it would make the number a lie.
+- **MEASURED, 720 episodes (`--seed 2654435769 --episodes 40 --level 30`): random 49.7 %,
+  greedy 72.6 %, expectimax d3/s3 72.2 % vs random and 46.5 % vs greedy.** **Expectimax does
+  NOT beat one-ply greedy**, which is the opposite of what was expected and is written at the
+  top of `ai/expectimax.rs` rather than buried. An earlier 216-episode run read 52.3 % and was
+  noise — which is why every report prints a Wilson interval. Random-vs-random landing on
+  49.7 % is the protocol's own sanity check.
+- **A one-ply agent may be naive; it must not be suicidal.** Greedy first measured *below*
+  random (33 % vs 42 %) because the team builder handed every Pokémon **Explosion** and greedy
+  picked the biggest damage number on the board. `ai::greedy::self_damage` prices what a move
+  costs its user, and the default roster excludes `EXPLODE` and `OHKO` because a roster with
+  either measures a different game. 33 % → 72.6 %.
+- **An external agent is a SUBPROCESS** (`ai::ExternalAgent`, JSON lines on stdin/stdout) —
+  no dependency, language-agnostic, and the network stays out of the engine, the same three
+  reasons `plugins/agent`'s `CommandDriver` chose one. It is never given the dice, the seed or
+  the opposing party's hidden members; stat stages are reported as a **player** reads them
+  (−6..+6), not as the cartridge stores them (1..13). A child that crashes or answers illegally
+  does **not** get its turn replayed — the substitution is counted.
+- **A Gen 1 battle sits at its own menu until a button arrives.** The oracle's first version
+  ran 3000 frames and observed nothing while the plugin cheerfully logged "battle started".
+  Press every `MENU_GAP` (24) frames — `HandleMenuInput` delays several frames after accepting
+  one and does not see a button that arrives inside that delay.
+- **Do not observe for the first ~90 frames of a plugin-built battle.** `BattlePlugin`
+  re-applies its opposition override until it reads back intact, up to `PATCH_WINDOW_FRAMES`
+  (40); a frame taken inside that window holds a half-written struct.
+- **Nothing here is in CI except the unit tests.** The oracle and the evaluation need the
+  player's own cartridge, so they are run by hand — the same rule `tools/sameboy-oracle/` and
+  `tools/bgb-interop/` follow. **No LLM has been measured through the seam**; it exists, is
+  tested against a real child process, and has never had a model on the far end.
+
 ## The Gen 1 mechanics & hacking area (`docs/gen1/`)
 
 - **[`docs/gen1/README.md`](docs/gen1/README.md) is the index and it owns the standards.** Linked

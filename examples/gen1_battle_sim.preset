@@ -1,0 +1,159 @@
+# Battles designed to PRODUCE CHECKABLE OBSERVATIONS, not to be fun to watch.
+#
+# `examples/gen1_battle_sim.rs` loads this file. Every matchup is chosen against
+# one requirement: it must hand the differential harness observations it can
+# actually hold the model to. Four rules shaped it, and every one came from a
+# run that measured less than it looked like it did.
+#
+#  1. **No blowouts.** The built-in `charizard-vs-pidgey` is a level 50 Charizard
+#     against a level 3 Pidgey. It produced exactly ONE observation, and that one
+#     was an overkill clamped to the target's remaining HP — which says nothing
+#     about the model's figure at all.
+#
+#  2. **Small damage against a large HP bar.** A hit is only invertible when it
+#     was not clamped, so the defender must comfortably survive it.
+#
+#  3. **BOTH SIDES' MOVES ARE SPELLED OUT, and none of them changes a stat.**
+#     This is the one that is not obvious. Once any stat stage moves, the
+#     cartridge recomputes from `wEnemyMonUnmodified*` — a block
+#     `plugins/battle-control` does not patch when it swaps the wild Pokémon in
+#     — so from that moment the numbers the game is calculating with are ones
+#     the harness cannot see, and every damage check after it is undetermined.
+#     Leaving the wild side's moveset to the game gave 33 undetermined
+#     observations against 12 checked, because a wild Chansey knows Amnesia and
+#     a wild Snorlax knows Harden.
+#
+#  4. **Each matchup exercises a different arithmetic path.** A hundred samples
+#     of one path is one sample.
+#
+# The Pokémon and moves are named, never numbered — the names are resolved
+# against the player's own cartridge at run time, so nothing here is game data.
+
+# ---------------------------------------------------------------------------
+# The workhorse: no type interaction, no stat moves, no status. What it measures
+# is `CalculateDamage` and `RandomizeDamage`, alone.
+# ---------------------------------------------------------------------------
+[sim-neutral]
+description = Two Snorlax trading Pounds — the damage formula, alone
+
+player   = Snorlax
+level    = 40
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+wild     = Snorlax
+level    = 40
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# Same-type attack bonus and a 4x matchup on every hit — the two truncating
+# multiplications of `AdjustDamageForMoveType`, on a target that survives them.
+# ---------------------------------------------------------------------------
+[sim-super-effective]
+description = Water Gun into a Rock/Ground Golem — STAB and 4x
+
+player   = Vaporeon
+level    = 25
+moves    = Water Gun, Water Gun, Water Gun, Water Gun
+dvs      = 15, 15, 15, 15
+
+wild     = Golem
+level    = 55
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# The other side of the chart. Electric into Ground is `NO_EFFECT`, so this
+# measures the *immunity* path; the filler move is what does the damage.
+# ---------------------------------------------------------------------------
+[sim-resisted]
+description = A Bug move into a Rock/Ground Golem — 0.5x, twice
+
+player   = Beedrill
+level    = 30
+moves    = Twineedle, Fury Attack, Fury Attack, Fury Attack
+dvs      = 15, 15, 15, 15
+
+wild     = Golem
+level    = 50
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# The special side. In Gen 1 the physical/special split is a property of the
+# move's TYPE, not of the move, so a model carrying a separate flag would pass
+# every physical test and fail here.
+# ---------------------------------------------------------------------------
+[sim-special]
+description = Psybeam into a Chansey — the special side of the damage formula
+
+player   = Alakazam
+level    = 25
+moves    = Psybeam, Psybeam, Psybeam, Psybeam
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 50
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# A high-critical-hit move, so `CriticalHitTest`'s eight-times threshold is
+# exercised rather than merely modelled. Slash's rate off Persian's base 115
+# Speed saturates, so roughly every other hit is a crit and both branches of
+# the damage setup are sampled.
+# ---------------------------------------------------------------------------
+[sim-critical]
+description = Slash off a fast attacker — the high-crit branch, saturated
+
+player   = Persian
+level    = 25
+moves    = Slash, Slash, Slash, Slash
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 55
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# STAT STAGES, on the PLAYER's own side — the one place the exact check works.
+#
+# The moves are all self-targeted, because the enemy's unmodified block is not
+# recoverable in a plugin-built battle (see rule 3 above and the note at
+# `check_stats`). Harden and Growth move a stage almost every turn, and every
+# one makes the cartridge recompute a stat the model must reproduce to the
+# point, with no dice anywhere near it.
+# ---------------------------------------------------------------------------
+[sim-stat-stages]
+description = Harden and Growth on the player's own side — recomputation, exactly
+
+player   = Venusaur
+level    = 30
+moves    = Growth, Growth, Growth, Growth
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 40
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# The same, on Defense, and with a burn in play so the penalty ordering is
+# exercised: the cartridge applies the burn at switch-in and then DISCARDS it
+# on the next stat change (`StatModifierUpEffect`'s own comment says so). A
+# model that re-applied it would disagree here and nowhere else.
+# ---------------------------------------------------------------------------
+[sim-defense-curl]
+description = Defense Curl on the player's own side — the second recomputation path
+
+player   = Blastoise
+level    = 30
+moves    = Withdraw, Withdraw, Withdraw, Withdraw
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 40
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15

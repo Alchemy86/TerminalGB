@@ -55,6 +55,13 @@ pub mod cpu;
 /// Minimal DEFLATE compressor for terminal transmission — see [`deflate`].
 pub mod deflate;
 pub mod gameboy;
+/// Reading a **real** Generation 1 battle out of a running cartridge, so the
+/// model in `terminalgb-gen1-battle` can be held to it — see [`gen1battle`].
+///
+/// Not compiled on wasm: it exists to drive a headless differential run against
+/// the player's own cartridge, which a browser build has no business doing.
+#[cfg(all(feature = "gen1-battle", not(target_arch = "wasm32")))]
+pub mod gen1battle;
 mod gpu;
 mod input;
 /// Two consoles, one wire — see [`link::LinkCable`].

@@ -2092,6 +2092,7 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "terminalgb-chiptune",
+ "terminalgb-gen1-battle",
  "terminalgb-plugin-agent",
  "terminalgb-plugin-api",
  "terminalgb-plugin-battle-control",
@@ -2107,6 +2108,10 @@ dependencies = [
 
 [[package]]
 name = "terminalgb-chiptune"
+version = "0.1.0"
+
+[[package]]
+name = "terminalgb-gen1-battle"
 version = "0.1.0"
 
 [[package]]

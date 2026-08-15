@@ -26,6 +26,7 @@ Anything unproven says so.
 | [Memory map](memory-map.md) | Where the game keeps the party, the battle, the screen, the map and the dice — with the symbol name and the derivation for every address | **verified on the retail ROM** |
 | [Authoring an area](authoring-an-area.md) | What a room is made of, how the engine loads one, and the recipe for building a new one in memory and walking into it through an ordinary door — with the ceilings, and Gen 2 scoped | **built and walked on the retail ROM** |
 | [Battle control](battle-control.md) | Starting any battle on demand: wild, trainer, custom teams on both sides, and scripting one as an in-game cinematic | **verified on the retail ROM** |
+| [The battle engine](battle-engine.md) | A model of the battle *rules* — damage, crits, accuracy, status, the Gen 1 bugs — held to the cartridge by a differential harness, plus agents and an evaluation protocol | **32 checkable observations against the retail ROM, zero disagreements** |
 | [Reading the screen](reading-the-screen.md) | Why `wTileMap` reads back as text, and why that is the right way to drive the game | **verified on the retail ROM** |
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
 | [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one | **Gen 1 ↔ Gen 1 and Gen 1 ↔ Gen 2 trades both verified** |
@@ -113,6 +114,8 @@ The techniques here are all implemented in the repository and all runnable:
 * [`crates/terminalgb-plugin-api/`](../../crates/terminalgb-plugin-api/) — the plugin contract ([`docs/plugins.md`](../plugins.md)):
   a plugin declares what it may do and the host enforces it.
 * [`plugins/battle-control/src/`](../../plugins/battle-control/src/) — battle control.
+* [`crates/terminalgb-gen1-battle/`](../../crates/terminalgb-gen1-battle/) — the battle
+  engine, the agents and the evaluation protocol ([`battle-engine.md`](battle-engine.md)).
 * [`plugins/gen1-link/src/`](../../plugins/gen1-link/src/) — the link partner, the party encoding and the
   cartridge table reader.
 * [`plugins/trainer/src/`](../../plugins/trainer/src/) — the read-only live view
