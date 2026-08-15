@@ -6882,8 +6882,8 @@ carries a **stable code per check** that resolves to a heading on our documentat
   change too, and the script asks for the list and the table in `docs/gbselftest.md` to move in
   the same commit. Teeth proven in both directions.
 - **Scores, measured 2026-08-15 and the reason to trust the instrument:** this emulator
-  `identical` **83/84** and `standard` **77/84**; SameBoy DMG and MGB **84/84**, CGB-E and AGB
-  81/84 with three documented skips; Peanut-GB **62/84**. A cartridge that separates our two
+  `identical` **86/87** and `standard` **80/87**; SameBoy DMG and MGB **87/87**, CGB-E and AGB
+  84/87 with three documented skips; Peanut-GB **64/87**. A cartridge that separates our two
   renderers on precisely the rows our own documentation predicts is worth trusting on the rows
   we did not predict. **That spread is the property to protect** — a suite everybody passes
   measures nothing.

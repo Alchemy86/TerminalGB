@@ -213,6 +213,12 @@ TIMA wrapping must reload from TMA and set bit 2 of IF.
 
 the timer watches a bit of the divider's counter and a write that clears that bit is a falling edge.
 
+### GB-TIM-07
+
+**switching the timer off can clock it once more**
+
+what is counted is the watched bit ANDed with the enable, so clearing the enable is itself a falling edge.
+
 ## INT: interrupts
 
 ### GB-INT-01
@@ -274,6 +280,12 @@ returning from a handler with RETI re-enables interrupts with none of EI's delay
 **clearing IF cancels a pending interrupt**
 
 IF is a register a program can write, and clearing a bit before the interrupt is taken takes the request back.
+
+### GB-INT-11
+
+**clearing IE prevents dispatch and keeps the flag**
+
+IE is consulted at the moment of dispatch, and only dispatch clears a flag.
 
 ## MEM: the memory map
 
@@ -416,6 +428,12 @@ the cost is the takeover, not the enable bit.
 **an object off the left edge still costs**
 
 the scan finds it and its row is fetched; only the drawing is thrown away.
+
+### GB-PPU-19
+
+**vertical scrolling costs the fetcher nothing**
+
+only SCX discards fetched pixels; SCY just picks which row of the tile is read.
 
 ## DMA: the object transfer
 

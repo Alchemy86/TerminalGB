@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Score this emulator with the GBSelfTest cartridge, on both picture modes.
 
-`conformance: 0/1` is not a gate. The cartridge runs seventy-six checks and
+`conformance: 0/1` is not a gate. The cartridge runs eighty-seven checks and
 prints one line each, so what is worth gating is WHICH of them fail — and the
 answer differs between the two picture modes in a way that is documented and
 deliberate:
