@@ -282,6 +282,19 @@ party of six Johto species, which `CheckTimeCapsuleCompatibility` refuses wholes
 patch on the staged copy is what made it usable; the gate edits were no-ops. Worth remembering
 before diagnosing a refusal as a flag problem.
 
+**Gold saves TWICE around a Time Capsule trade, and knowing which write you are looking at is the
+difference between "the trade did not happen" and "the trade happened".** On the way in,
+`LinkReceptionistScript_TimeCapsule` (`maps/Pokecenter2F.asm`) runs `Text_MustSaveGame` →
+`special TryQuickSave`; on completion, `LinkTrade` (`engine/link/link.asm`) branches
+`cp LINK_TIMECAPSULE / jr z, .save` straight into `farcall SaveAfterLinkTrade`
+(`engine/menus/save.asm`: `SavePokemonData` + `SaveChecksum` + `SaveBackupPokemonData` +
+`SaveBackupChecksum`) **before** it prints "Trade completed!". `Script_LeftTimeCapsule` saves
+nothing further. So a Gold `.sav` whose party is the *pre*-trade one after a completed trade means
+the second write did not land — not that Gen 2 declines to save. Measured on a real
+hand-driven trade, where Gold's file was a consistent pre-link snapshot standing at (13, 4) below
+the receptionist and the reason the second write was missing is **not established**:
+[`docs/link-cable.md`](../link-cable.md) §8.
+
 **Not established here:**
 
 * **The reverse gate.** Nothing has checked what Gen 2 does about a Gen 1 party containing

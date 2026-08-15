@@ -23,6 +23,90 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-15 — a Gen 1 ↔ Gen 2 trade between two hand-launched emulators, and the two-process path that had no coverage at all
+
+The captain started Pokémon Gold in one terminal window and Pokémon Blue in
+another — by hand, no lobby, no flags, nothing scripted — and the two processes
+paired over the ordinary `link = auto` unix-socket rendezvous and **completed a
+Time Capsule trade**. Everything this repository had previously proved about the
+Gen 1 ↔ Gen 2 chain was proved with both cores *inside one process*
+(`--capsule-trade`), where one program can hold one machine back until the other
+is ready. Full forensics, with the field-by-field table and the file offsets:
+[`docs/link-cable.md`](link-cable.md) §8, "Two independently launched emulators,
+driven by a person".
+
+**Symptom** — two people open the emulator on the same machine and try to trade.
+Either it works and a Pokémon really moves between two save files, or it silently
+does not: both consoles sit at their desks for ever, or the trade "completes" and
+one player is holding a Pokémon whose name has lost its first letters and whose
+level reads 0. Nothing on screen tells the second case from a success until the
+player looks at what arrived.
+
+**Caught by** — **nothing, before this.** Every link test drove both consoles in
+one process: `LinkCable`, `--capsule-trade`, and `testharness/colosseum.rs`'s
+*virtual* partner. `examples/bgb_link.rs` is two processes but over TCP with a
+different transport and a different pairing mechanism, so it exercises none of
+`LinkPeer`'s discovery. The shipping default had no coverage at all, which is the
+same structural blind spot as the render-path and `wIsInBattle == $FF` entries:
+the emulated machine is entirely correct and the defect is in the layer above it,
+so a ROM-driven suite is incapable of seeing it. Now
+`testharness/twoprocess.rs` — the first thing here that launches two processes
+and links them.
+
+**Hardware / contract behaviour** —
+
+* **Gold saves twice around a Time Capsule trade, and only the first write
+  landed.** On the way in, `LinkReceptionistScript_TimeCapsule`
+  (`pokegold/maps/Pokecenter2F.asm`) runs `Text_MustSaveGame` → `special
+  TryQuickSave`; on completion `LinkTrade` (`engine/link/link.asm`) branches
+  `cp LINK_TIMECAPSULE / jr z, .save` into `farcall SaveAfterLinkTrade`
+  (`SavePokemonData` + `SaveChecksum` + `SaveBackupPokemonData` +
+  `SaveBackupChecksum`) *before* printing "Trade completed!". Gold's file holds
+  the pre-trade party in **both** copies, so the second write never reached disk.
+  **Not established: why.** Either the save guard withheld it (a faulted console
+  poisons its battery — the design working, and the Mewtwo really is gone) or
+  Gold's half of the exchange never finished. The artefact that would settle it
+  is the emulator's own `Fault: SAVE NOT WRITTEN` row, which nobody read before
+  closing the window. Gen 1's side is unambiguous: `TradeCenter_Trade` calls
+  `predef SavePartyAndDexData` right after "Trade completed!"
+  (`pokered/engine/link/cable_club.asm`), so Blue's file is post-trade.
+* **Every field the two generations share crosses unchanged; the species index
+  does not.** Gen 2 dex `1` arrived in Blue as internal index `$99` (153) — checked
+  against `PokedexOrder` (`pokered/data/pokemon/dex_order.asm`) read **out of the
+  captain's own cartridge**, where the table occurs exactly once (`$41024`) and
+  holds 151 distinct dex numbers. DVs (`$FF00`), OT id (46116), the OT name's
+  eight raw bytes, level, experience, PP, stat experience and every stat are
+  byte-identical on both sides.
+* **`LinkPeer::discover` (`src/link/peer.rs`) scans the rendezvous directory once
+  and never rescans**, so two instances started in the same instant both advertise
+  and neither ever pairs — measured at 24,000 frames with `transfers = 0` on both.
+  Invisible to a human (the first has bound its socket long before the second
+  scans); it bites anything that launches two processes at once.
+* **A link that has stopped agreeing must fault rather than write** — this
+  repository's own rule (`src/mbc/battery.rs`, `docs/link-cable.md` §5). Measured
+  three times in 130 rounds: a corrupt arrival reached the battery file with `torn = 0`
+  and `fault = none`. The games' resynchronisation is `Serial_ExchangeBytes`
+  re-sending a block's first byte until it *receives* the `$FD` preamble; a
+  byte-shifted party block is that having failed.
+
+**Carries into the tool** — `testharness/twoprocess.rs`, and the general form
+behind it: **a path that only exists between processes must be tested between
+processes.** An in-process stand-in shares a scheduler, a clock and an address
+space with the thing it stands in for, and every one of those differences is
+where the bugs are. The harness's third check is the one an in-process test
+cannot make: read both `.sav` files back off disk and require each to hold the
+other console's Pokémon *and* pass the game's own checksum.
+
+**Honest state of it: 122 of 130 rounds pass** (Gen 1 ↔ Gen 1, this box) — five
+stalls where the two consoles exchange 17,000–22,000 bytes and never finish, and
+three silent corruptions where a party block that had lost a byte off the front
+was written to the save. So the harness is deliberately **not** in CI: at 94 % it
+would be red one run in sixteen, and a test people learn to re-run is a test people learn to ignore.
+The milestone above is a single observation sitting on top of that number, and
+should be quoted as such.
+
+---
+
 ## 2026-08-15 — two defects in our own adapter, exposed only by widening the suite (conformance action 14 → 18 checks)
 
 The conformance action deliberately excluded Blargg's four **screen-only** ROMs

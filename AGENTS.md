@@ -4010,6 +4010,67 @@ The handful of things a crew must know *before* opening any of that:
   happens to give the same answer, which also means a bug in the per-run form would not have
   been caught here. Keep the per-run mapper; do not claim it has been proved necessary.
 
+### Two hand-launched emulators traded across the generations (2026-08-15) — and what that measured
+
+**The milestone: the captain started Gold in one terminal and Blue in another, by hand, no
+lobby, no flags, nothing scripted; `link = auto` paired them and a Time Capsule trade
+completed.** Everything before this was one process driving both cores. Full forensics —
+field-by-field table, file offsets, md5s — [`docs/link-cable.md`](docs/link-cable.md) §8
+"Two independently launched emulators"; conformance record in `docs/conformance-notes.md`.
+
+- **`testharness/twoprocess.rs` is the first thing here that launches two processes and links
+  them** (`cargo test --release --features image,plugin-gen1-link,plugin-trainer --test
+  twoprocess`; skips exit 0 without `POKE_ROM` + `GB_CABLECLUB_SAVE`, like `colosseum.rs`, and
+  like it does **not** fall back to a player's save directory). It re-execs itself as both
+  children — the `basicterm.rs` pattern — so there is no cargo-inside-cargo. Judge three ways:
+  each child checks its arrival field by field, the parent checks `transfers > 0 / torn = 0 /
+  no fault`, **and the parent reads both `.sav` files back off disk**. That third check is the
+  claim only two processes can make and it is the one a person means by "the trade worked".
+- **IT IS NOT IN CI ON PURPOSE. Measured 122/130 rounds** (`GB_TWOPROCESS_REPEAT=N`): five
+  stalls (both consoles pair, exchange 17-22k bytes, never finish) and **three silent
+  corruptions where an arrival that had lost a byte off the front was written to the battery
+  file with `torn = 0` and `fault = none`** (`OCKY` OT `LUE` Lv0, `MMER` with no OT, `LIMMER`
+  OT `ED`). At 94 % it would be red one run in sixteen, and a test people re-run is a test
+  people ignore. **Run it by hand before and after anything touching `src/link/peer.rs`.**
+  Diagnosis is scoped, not done: `LinkPeer` has no `GB_GEN1_LINK_TRACE` equivalent, and a wire
+  log is the first thing to build.
+- **`LinkPeer::discover` scans the rendezvous directory ONCE and never rescans**, so two
+  instances started in the same instant both advertise and neither ever pairs (measured: 24,000
+  frames, `transfers = 0`). A person cannot hit it; anything spawning two processes hits it
+  every time. The harness waits for the first socket to appear. Fix shape, left to the link
+  crew: rescan while `Waiting`, with a deterministic tie-break (lower pid initiates).
+- **`examples/link_two --peer a|b` stages BOTH sides in each process**, so two invocations race
+  on each other's `.sav`. Fine for a human running them seconds apart; the harness stages in the
+  parent instead. Don't copy that pattern.
+- **`GB_LINK_DIR` is mandatory in any automated link test** — `link = auto` is the default, so
+  without a private rendezvous directory the test pairs with the developer's own emulator and
+  drives *their* console into the Cable Club.
+- **GOLD SAVES TWICE AROUND A TIME CAPSULE TRADE.** `TryQuickSave` at the receptionist on the
+  way in, and `LinkTrade`'s `cp LINK_TIMECAPSULE / jr z, .save` → `SaveAfterLinkTrade`
+  (`SavePokemonData` + `SaveChecksum` + both backups) *before* "Trade completed!" is printed.
+  Gen 1 saves once, after ("this allows reset into Pokecenter"). **So a Gold `.sav` holding the
+  pre-trade party after a completed trade means the second write did not land — not that Gen 2
+  declines to save.** That is what happened here and **why is not established**; the artefact
+  that would settle it is the emulator's own `Fault: SAVE NOT WRITTEN` row, which nobody read
+  before closing the window. *Next time two emulators are linked by hand, read the Status panel
+  of the console that looks wrong before closing it.*
+- **Never diff a `.sav` against an "original" without checking it is the immediate ancestor.**
+  `~/roms/goldsave/Pokémon - Gold Version.sav` is the *cartridge's* 2024 save; between it and
+  the trade the party was replaced with Time-Capsule-legal Pokémon and the Johto team boxed, so
+  diffing those two measures the preparation, not the trade. The correct pre-trade snapshot was
+  Gold's own pre-link quick-save — identifiable because `wMapGroup`/`wMapNumber` = 20/1 at
+  (13, 4), the tile below the receptionist.
+- **A Gen 1 party slot replaced by a trade is a 4-run signature in the save**: the species-list
+  byte, the 44-byte struct, the OT name, the nickname — plus the dex owned/seen bit for the
+  arrival and the checksum. Everything below file offset `$2000` is bank 0 "Sprite Buffers"
+  scratch the Cable Club legitimately rewrites (same exclusion `colosseum.rs` makes).
+- **Verify a species conversion against the cartridge, not against memory.** `PokedexOrder`
+  (`pokered/data/pokemon/dex_order.asm`) is findable by its first eight entries
+  (112,115,32,35,21,100,34,80) — exactly one hit in Blue, at `$41024` — and gives internal `$99`
+  → dex 1, internal `$83` → dex 150.
+- **`$E1` is `<PK>` in BOTH charmaps** (`pokered` and `pokegold` `constants/charmap.asm` agree),
+  which is why an OT name containing it renders identically on the receiving console.
+
 ## The trade-portal client (`src/portal/`, `portal` cargo feature)
 
 **Full write-up, the HTTP contract as this client speaks it, and the honest

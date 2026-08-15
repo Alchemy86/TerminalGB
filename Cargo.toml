@@ -578,6 +578,18 @@ path = "testharness/colosseum.rs"
 required-features = ["plugin-gen1-link"]
 harness = false
 
+# Two-process link harness: re-executes itself twice so two independent
+# processes discover each other through the shipping `link = auto` unix-socket
+# rendezvous and trade, then reads both battery files back off disk. This is the
+# only coverage of the two-process path — every other link test drives both
+# consoles inside one process. Skips (exit 0) without a cartridge and a
+# cable-club save. See testharness/twoprocess.rs.
+[[test]]
+name = "twoprocess"
+path = "testharness/twoprocess.rs"
+required-features = ["image", "plugin-gen1-link", "plugin-trainer"]
+harness = false
+
 # Graceful-degradation harness: allocates a pty, *is* the terminal on the other
 # end of it, and answers the frontend's capability queries the way a chosen
 # terminal would — answering the kitty keyboard query in one run and ignoring it
