@@ -6916,7 +6916,7 @@ fn compose_team_strip(
 /// image at the terminal's pixel-per-cell `font` size, plus the effective
 /// scale factor. There is deliberately **no upper cap** — the image grows to
 /// fill the whole panel and re-fits when the terminal is resized.
-fn fit_metrics(
+pub(crate) fn fit_metrics(
     area: Rect,
     img_w: u32,
     img_h: u32,
@@ -7101,7 +7101,7 @@ impl<W: io::Write> io::Write for CountingWriter<W> {
 /// memory". Resolved once by [`probe_shm_support`] before the event loop starts.
 static SHM_OK: AtomicBool = AtomicBool::new(false);
 
-fn shm_supported() -> bool {
+pub(crate) fn shm_supported() -> bool {
     SHM_OK.load(Ordering::Relaxed)
 }
 
@@ -7260,7 +7260,7 @@ fn measure_cpr_floor(tty: &mut std::fs::File) {
 /// Failure in any direction — no reply, an error reply, no `/dev/shm`, a
 /// platform without shared memory — leaves the flag false and the frontend on
 /// the compressed-PNG transport, which works everywhere.
-fn probe_terminal() {
+pub(crate) fn probe_terminal() {
     if !cfg!(unix) {
         return;
     }
@@ -7484,7 +7484,7 @@ const DEFAULT_CELL: (u16, u16) = (10, 20);
 /// It also queries stdout/stdin, which `crossterm` owns; our probe uses
 /// `/dev/tty`, drains stale input and knocks first, for the reasons documented
 /// on [`probe_terminal`].
-fn build_picker() -> Picker {
+pub(crate) fn build_picker() -> Picker {
     let caps = probed_caps();
     // `from_fontsize` seeds the tmux flag and the iTerm2-from-env guess for us —
     // rung three of the ladder — so it is the right base whatever we then decide.

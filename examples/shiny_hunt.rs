@@ -10,6 +10,10 @@
 //! # build a starting position from a fresh game (Route 1 grass)
 //! cargo run --release --example shiny_hunt -- --rom blue.gb --make-state route1.gbss
 //!
+//! # ...and watch it being built, live, at twice real time. The state produced
+//! # is byte-identical to the headless one — see `testharness/watchstate.rs`.
+//! cargo run --release --example shiny_hunt -- --rom blue.gb --make-state route1.gbss --show
+//!
 //! # hunt
 //! cargo run --release --example shiny_hunt -- --rom blue.gb --state route1.gbss
 //!
@@ -60,6 +64,12 @@ Gen 1 shiny hunting: many headless emulators rolling encounters in parallel.
   --rom <path>            Pokémon Red or Blue (required)
   --state <path>          the save state every attempt restarts from
   --make-state <path>     build one: a fresh game walked to Route 1 grass, then exit
+  --show                  with --make-state, watch it happen: the live picture
+                          and a caption saying what the walker is doing. The
+                          state produced is byte-identical to the headless one
+  --show-speed <x>        how fast --show runs, as a multiple of the DMG's own
+                          59.7275 Hz. Default 2 (brisk but followable); `max`
+                          runs flat out; 0.5 is for recording a video
   --target <spec>         what to stop for; default `shiny`
                           shiny | perfect | spc=10 | spd>=14 | atk&2 |
                           total>=70 | species=NIDORAN  (comma or space separated)
@@ -96,6 +106,8 @@ struct Args {
     rom: PathBuf,
     state: Option<PathBuf>,
     make_state: Option<PathBuf>,
+    show: bool,
+    show_speed: Option<f64>,
     target: String,
     shape: Shape,
     watch: Watch,
@@ -117,6 +129,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         rom: PathBuf::new(),
         state: None,
         make_state: None,
+        show: false,
+        // Real time is a two-minute demo; twice that is brisk and still
+        // followable, which is what a first run wants.
+        show_speed: Some(2.0),
         target: "shiny".into(),
         shape: Shape::Grass,
         watch: Watch::Encounter,
@@ -145,6 +161,19 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--rom" => a.rom = PathBuf::from(value()?),
             "--state" => a.state = Some(PathBuf::from(value()?)),
             "--make-state" => a.make_state = Some(PathBuf::from(value()?)),
+            "--show" => a.show = true,
+            "--show-speed" => {
+                let v = value()?;
+                a.show_speed = match v.as_str() {
+                    "max" | "full" => None,
+                    _ => Some(
+                        v.parse::<f64>()
+                            .ok()
+                            .filter(|m| *m > 0.0)
+                            .ok_or("--show-speed wants a positive multiple, or `max`")?,
+                    ),
+                };
+            }
             "--target" => a.target = value()?,
             "--shape" => {
                 let v = value()?;
@@ -223,7 +252,15 @@ fn run(args: &[String]) -> Result<i32, String> {
     let tables = RomTables::new(rom.clone());
 
     if let Some(dest) = &a.make_state {
-        return make_state(&rom, dest).map(|()| 0);
+        let mut stage = stage_for(a.show, a.show_speed)?;
+        let out = make_state(&rom, &tables, dest, stage.as_mut());
+        // The terminal goes back to the caller whatever happened — including on
+        // the error path, where the message has to be readable.
+        stage.finish();
+        return out.map(|()| 0);
+    }
+    if a.show {
+        return Err("--show only means anything with --make-state".into());
     }
 
     let state_path = a
@@ -705,6 +742,9 @@ fn diagnose(
     let mut gb = build(0)?;
     gb.load_state(&cfg.base_state).map_err(|e| e.to_string())?;
     gb.frame();
+    // `--diagnose` narrates itself, line by line; the walker's own
+    // commentary would be a second voice over the top of it.
+    let quiet = &mut Headless { quiet: true };
     println!(
         "start: map ${:02X} at ({}, {}), wIsInBattle {}",
         gb.peek(CUR_MAP),
@@ -796,7 +836,7 @@ fn diagnose(
             let mut escaped = false;
             for _ in 0..60 {
                 for key in [KeypadKey::Right, KeypadKey::Down, KeypadKey::A] {
-                    tap(&mut gb, key, 14);
+                    tap(&mut gb, quiet, key, 14);
                 }
                 if gb.peek(0xD057) == 0 {
                     escaped = true;
@@ -812,7 +852,7 @@ fn diagnose(
                 return Ok(1);
             }
             for _ in 0..6 {
-                tap(&mut gb, KeypadKey::B, 30);
+                tap(&mut gb, quiet, KeypadKey::B, 30);
             }
             <Gameboy as hunt::HuntMachine>::arm(&mut gb);
             println!(
@@ -877,6 +917,130 @@ const EVENT_FLAGS: u16 = 0xD747;
 /// table (`data/wild/maps/Route1.asm`, 25/256 per step).
 const ROUTE_1: u8 = 0x0C;
 const PALLET_TOWN: u8 = 0x00;
+/// `wIsInBattle` — 0 out of battle, `$FF` after a blackout (`ram/wram.asm`
+/// documents four values above the label; `$FF` is "lost battle, this is -1").
+const IS_IN_BATTLE: u16 = 0xD057;
+/// `wEnemyMonSpecies`, the first byte of `wEnemyMon`'s `battle_struct`. An
+/// **internal index**, not a Pokédex number.
+const ENEMY_MON_SPECIES: u16 = 0xCFE5;
+
+// ---------------------------------------------------------------------------
+// Watching the walker
+// ---------------------------------------------------------------------------
+
+/// The walker's one primitive: run an emulated frame.
+///
+/// **This trait is the entire difference between a watched run and a headless
+/// one, and that is deliberate.** Every helper below calls `stage.frame(gb)`
+/// where it used to call `gb.frame()`, so both modes execute the same code in
+/// the same order with the same buttons down on the same frames. Watch mode
+/// adds a sleep and a redraw *around* a frame and changes nothing *inside* one,
+/// which is what makes the produced state byte-identical by construction
+/// instead of by hope. Proved rather than asserted:
+/// `testharness/watchstate.rs` builds one each way and compares the bytes.
+///
+/// Nothing here may read the wall clock on the headless path, and nothing here
+/// may touch the machine. A [`Stage`] observes; the walker drives.
+trait Stage {
+    /// Advance the machine exactly one frame.
+    fn frame(&mut self, gb: &mut Gameboy);
+    /// What the walker is doing now, in a player's words. Printed on the
+    /// headless path, and the live caption in watch mode.
+    fn say(&mut self, what: &str);
+    /// True once the watcher has asked to stop. Always false headless.
+    fn aborted(&self) -> bool {
+        false
+    }
+    /// Hold the current picture so a moment worth seeing is seen. No-op
+    /// headless — there is nothing to look at.
+    fn dwell(&mut self, _gb: &mut Gameboy, _secs: f32) {}
+    /// Give the terminal back **before** anything is printed, or a summary
+    /// lands on the alternate screen and vanishes with it. No-op headless.
+    fn finish(&mut self) {}
+}
+
+/// The original path: run frames as fast as the machine will go.
+struct Headless {
+    /// `--diagnose` narrates itself and does not want a second commentary.
+    quiet: bool,
+}
+
+impl Stage for Headless {
+    fn frame(&mut self, gb: &mut Gameboy) {
+        gb.frame();
+    }
+    fn say(&mut self, what: &str) {
+        if !self.quiet {
+            println!("  {what}");
+        }
+    }
+}
+
+/// The same walk, paced and drawn — see [`terminalgb::screen::watch`].
+///
+/// The machine is still the one [`make_state`] built: no battery, no audio
+/// player, no plugins. That is not an oversight, it is the requirement — an
+/// installed audio player makes the APU visible to the cartridge, and a battery
+/// would write a `.sav` next to somebody's ROM. The viewer only ever reads
+/// `Gameboy::image`.
+#[cfg(feature = "tui")]
+struct Watched {
+    view: terminalgb::screen::watch::Viewer,
+}
+
+#[cfg(feature = "tui")]
+impl Stage for Watched {
+    fn frame(&mut self, gb: &mut Gameboy) {
+        gb.frame();
+        // A live "where is it" line under the caption, so the walk reads as a
+        // walk rather than as a picture that occasionally changes.
+        let (map, y, x) = (gb.peek(CUR_MAP), gb.peek(Y_COORD), gb.peek(X_COORD));
+        let frames = self.view.frames();
+        self.view.note(format!(
+            "map ${map:02X} at ({y}, {x}) · frame {frames} · {:.1}s of emulated time",
+            frames as f64 / 59.7275
+        ));
+        let _ = self.view.pace_and_draw(gb.image());
+    }
+    fn say(&mut self, what: &str) {
+        self.view.say(what);
+    }
+    fn aborted(&self) -> bool {
+        self.view.aborted()
+    }
+    fn dwell(&mut self, gb: &mut Gameboy, secs: f32) {
+        let _ = self.view.draw(gb.image());
+        self.view.linger(Duration::from_secs_f32(secs));
+    }
+    fn finish(&mut self) {
+        self.view.close();
+    }
+}
+
+/// Build the stage `--make-state` will run on.
+///
+/// `--show` without the `tui` feature is refused with the rebuild line rather
+/// than silently downgraded: somebody who asked to watch and got a headless run
+/// would conclude the flag does nothing.
+fn stage_for(show: bool, speed: Option<f64>) -> Result<Box<dyn Stage>, String> {
+    if !show {
+        return Ok(Box::new(Headless { quiet: false }));
+    }
+    #[cfg(feature = "tui")]
+    {
+        let mut view = terminalgb::screen::watch::Viewer::open(
+            "building a save state — a new game walked to Route 1",
+        )
+        .map_err(|e| format!("--show: {e}"))?;
+        view.set_speed(speed);
+        Ok(Box::new(Watched { view }))
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        let _ = speed;
+        Err("--show needs the terminal frontend — rebuild with --features tui".into())
+    }
+}
 
 /// Build a base save state: a **new game** walked to the grass at the southern
 /// end of Route 1.
@@ -896,7 +1060,16 @@ const PALLET_TOWN: u8 = 0x00;
 ///   every header itself.
 /// * **It does not write a `.sav`.** The machine is built with no file path, so
 ///   nothing next to the cartridge is touched.
-fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
+///
+/// `stage` is how it is watched. See [`Stage`]: a headless run and a `--show`
+/// run execute this function identically and differ only in what happens
+/// *between* two frames, which is what makes the two states byte-identical.
+fn make_state(
+    rom: &[u8],
+    tables: &RomTables,
+    dest: &Path,
+    stage: &mut dyn Stage,
+) -> Result<(), String> {
     let mut gb =
         Gameboy::try_new_with_model(rom.to_vec(), None, terminalgb::mode::Model::Auto)
             .map_err(|e| e.to_string())?;
@@ -912,7 +1085,7 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
     // Through the title screen, Oak's speech and the naming screens. Alternating
     // START and A is what gets past both: the naming screen needs START (mashing
     // A types `AAAAA` for ever), and everything else wants A.
-    print!("new game: ");
+    stage.say("mashing START and A through the intro, Oak's speech and the names");
     let mut in_game = false;
     for step in 0..600u32 {
         let key = if step % 2 == 0 {
@@ -920,21 +1093,25 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
         } else {
             KeypadKey::A
         };
-        tap(&mut gb, key, 20);
+        tap(&mut gb, stage, key, 20);
         if gb.peek(CUR_MAP_HEIGHT) > 0 && gb.peek(CUR_MAP_WIDTH) > 0 {
             in_game = true;
             break;
+        }
+        if stage.aborted() {
+            return Err("stopped".into());
         }
     }
     if !in_game {
         return Err("never reached the overworld".into());
     }
-    println!(
-        "in the overworld, map ${:02X} at ({}, {})",
+    stage.say(&format!(
+        "in control — wCurMapHeight/Width are non-zero, map ${:02X} at ({}, {})",
         gb.peek(CUR_MAP),
         gb.peek(Y_COORD),
         gb.peek(X_COORD)
-    );
+    ));
+    stage.dwell(&mut gb, 1.4);
 
     // A brand-new game has no Pokémon, and walking into grass without one hangs
     // the battle. Give it one, and give it the running game's own trainer id and
@@ -942,27 +1119,43 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
     // `wPlayerID` as a *traded* Pokémon, which a badgeless player is only obeyed
     // by up to level 10. (A hunt never fights, but a state a player might pick up
     // and use should not carry a booby trap.)
+    //
+    // The two writes below are the only two in the whole walk, and they are the
+    // interesting part of it — invisible on screen, so they are called out.
+    stage.say(
+        "write 1 of 2: a level 50 PIDGEOT into wPartyMons — an empty party \
+         hangs the first wild battle",
+    );
+    stage.dwell(&mut gb, 1.8);
     let player_id = ((gb.peek(PLAYER_ID) as u16) << 8) | gb.peek(PLAYER_ID + 1) as u16;
     give_a_pokemon(&mut gb, player_id);
     // Skip Oak's "wait, don't go out" script at the north exit.
+    stage.say(
+        "write 2 of 2: EVENT_FOLLOWED_OAK_INTO_LAB, bit 0 of $D747 — \
+         Oak stops blocking the north exit",
+    );
+    stage.dwell(&mut gb, 1.8);
     let flags = gb.peek(EVENT_FLAGS);
     gb.debug_write(EVENT_FLAGS, flags | 1);
 
     // Bedroom -> stairs (`warp_event 7, 1`, data/maps/objects/RedsHouse2F.asm).
-    walk_toward(&mut gb, 1, 7, 60);
+    stage.say("out of the bedroom — steering to the stairs at (1, 7)");
+    walk_toward(&mut gb, stage, 1, 7, 60);
     // Downstairs Mum has something to say before she will let anyone past.
-    clear_text(&mut gb, 6);
+    stage.say("Mum has something to say — B through it, never A");
+    clear_text(&mut gb, stage, 6);
     // Ground floor -> front door (`warp_event 2, 7` and `3, 7`,
     // data/maps/objects/RedsHouse1F.asm). Both sit on row 7, the bottom edge of
     // the map — and a Gen 1 warp on a map *edge* fires when the player walks
     // into the edge, not when they step onto the tile. So arriving at the door
     // is not leaving through it: press Down again once standing there.
-    walk_toward(&mut gb, 7, 2, 120);
+    stage.say("to the front door at (7, 2) — a map-edge warp, so keep pressing Down");
+    walk_toward(&mut gb, stage, 7, 2, 120);
     for _ in 0..6 {
         if gb.peek(CUR_MAP) != 0x25 {
             break;
         }
-        hold(&mut gb, KeypadKey::Down, 24);
+        hold(&mut gb, stage, KeypadKey::Down, 24);
     }
     if gb.peek(CUR_MAP) != PALLET_TOWN {
         return Err(format!(
@@ -974,20 +1167,23 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
     }
     // The player is standing *on* the doorstep, which is the warp back inside
     // (`warp_event 5, 5`) — step off it before heading anywhere.
+    stage.say("out in Pallet Town — off the doorstep, which is the warp back inside");
     for _ in 0..2 {
-        hold(&mut gb, KeypadKey::Down, 24);
+        hold(&mut gb, stage, KeypadKey::Down, 24);
     }
     // Pallet Town's only northern opening is block x = 5 of row 0 in
     // `maps/PalletTown.blk` (`0B` among fences), i.e. tiles x = 10..11. Go east
     // along the bottom path first: north straight off the doorstep walks back
     // through the door.
-    walk_toward(&mut gb, 7, 10, 80);
-    walk_toward(&mut gb, 1, 10, 160);
+    stage.say("east along the bottom path to x = 10, the town's only northern gap");
+    walk_toward(&mut gb, stage, 7, 10, 80);
+    stage.say("north through the gap — this is where Oak would have stopped us");
+    walk_toward(&mut gb, stage, 1, 10, 160);
     for _ in 0..12 {
         if gb.peek(CUR_MAP) == ROUTE_1 {
             break;
         }
-        hold(&mut gb, KeypadKey::Up, 24);
+        hold(&mut gb, stage, KeypadKey::Up, 24);
     }
     if gb.peek(CUR_MAP) != ROUTE_1 {
         return Err(format!(
@@ -1007,18 +1203,38 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
     // stall with no explanation. So: walk, and if a battle starts, run from it
     // and walk again — until the player is standing on the grass tile with
     // `wIsInBattle` clear. That is the state worth saving.
+    stage.say(&format!(
+        "on ROUTE_1 — into the grass, aiming for ({}, {})",
+        GRASS.0, GRASS.1
+    ));
     let mut settled = false;
     let verbose = std::env::var("GB_HUNT_VERBOSE").is_ok();
     for round in 0..40 {
+        if stage.aborted() {
+            return Err("stopped".into());
+        }
         let (y, x) = (gb.peek(Y_COORD), gb.peek(X_COORD));
-        let battle = gb.peek(0xD057);
+        let battle = gb.peek(IS_IN_BATTLE);
         if verbose {
             eprintln!("  settle round {round}: at ({y}, {x}) battle {battle}");
         }
         if battle != 0 {
-            if !flee(&mut gb) {
+            // Naming the Pokémon is not decoration: "ran from a wild RATTATA"
+            // is what tells a watcher that the walk really did reach grass, and
+            // that the state is about to be saved *out* of that battle rather
+            // than in it. The name comes from the player's own cartridge
+            // (`RomTables`) — we ship no species table.
+            stage.say(&format!(
+                "a wild {} appeared — running from it, then walking back in",
+                tables.species_name(gb.peek(ENEMY_MON_SPECIES)).trim()
+            ));
+            if !flee(&mut gb, stage) {
                 return Err("could not get out of a wild battle while positioning".into());
             }
+            stage.say(&format!(
+                "back in the grass — still aiming for ({}, {})",
+                GRASS.0, GRASS.1
+            ));
             continue;
         }
         if (y, x) == GRASS {
@@ -1026,7 +1242,7 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
             break;
         }
         if x != GRASS.1 {
-            walk_toward(&mut gb, GRASS.0, GRASS.1, 40);
+            walk_toward(&mut gb, stage, GRASS.0, GRASS.1, 40);
             continue;
         }
         // The right column, wrong row. **A 24-frame hold is one and a half Gen 1
@@ -1037,6 +1253,7 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
         // exactly one step.
         step(
             &mut gb,
+            stage,
             if y > GRASS.0 {
                 KeypadKey::Up
             } else {
@@ -1052,14 +1269,20 @@ fn make_state(rom: &[u8], dest: &Path) -> Result<(), String> {
             GRASS.1,
             gb.peek(Y_COORD),
             gb.peek(X_COORD),
-            gb.peek(0xD057)
+            gb.peek(IS_IN_BATTLE)
         ));
     }
-    println!(
-        "walked to ROUTE_1, standing in grass at ({}, {}), out of battle",
-        gb.peek(Y_COORD),
-        gb.peek(X_COORD)
-    );
+    let (y, x) = (gb.peek(Y_COORD), gb.peek(X_COORD));
+    stage.say(&format!(
+        "settled in grass at ({y}, {x}), out of battle — writing {}",
+        dest.display()
+    ));
+    stage.dwell(&mut gb, 2.5);
+    // Give the terminal back *before* printing: a summary written onto the
+    // alternate screen vanishes with it.
+    stage.finish();
+
+    println!("walked to ROUTE_1, standing in grass at ({y}, {x}), out of battle");
 
     let state = gb.save_state();
     std::fs::write(dest, &state).map_err(|e| format!("{}: {e}", dest.display()))?;
@@ -1138,28 +1361,28 @@ fn give_a_pokemon(gb: &mut Gameboy, player_id: u16) {
 
 /// Hold a direction long enough for the player to turn *and* take a step. A Gen
 /// 1 step is 16 frames, and a press that only turns the character moves nothing.
-fn hold(gb: &mut Gameboy, key: KeypadKey, frames: u32) {
+fn hold(gb: &mut Gameboy, stage: &mut dyn Stage, key: KeypadKey, frames: u32) {
     gb.keydown(key);
     for _ in 0..frames {
-        gb.frame();
+        stage.frame(gb);
     }
     gb.keyup(key);
     for _ in 0..4 {
-        gb.frame();
+        stage.frame(gb);
     }
 }
 
 /// Exactly one tile. A Gen 1 step takes 16 frames and the game commits to it as
 /// soon as it starts, so a short hold buys one step and one only — where
 /// [`hold`]'s 24 frames buys one *or* two depending on where the walk began.
-fn step(gb: &mut Gameboy, key: KeypadKey) {
+fn step(gb: &mut Gameboy, stage: &mut dyn Stage, key: KeypadKey) {
     gb.keydown(key);
     for _ in 0..10 {
-        gb.frame();
+        stage.frame(gb);
     }
     gb.keyup(key);
     for _ in 0..12 {
-        gb.frame();
+        stage.frame(gb);
     }
 }
 
@@ -1170,47 +1393,53 @@ fn step(gb: &mut Gameboy, key: KeypadKey) {
 /// Afterwards "Got away safely!" is still on screen with `wIsInBattle` already
 /// clear, and **a text box swallows every direction key** — press through it, or
 /// the walk that follows moves nothing.
-fn flee(gb: &mut Gameboy) -> bool {
+fn flee(gb: &mut Gameboy, stage: &mut dyn Stage) -> bool {
     let mut out = false;
     for _ in 0..60 {
         for key in [KeypadKey::Right, KeypadKey::Down, KeypadKey::A] {
-            tap(gb, key, 14);
+            tap(gb, stage, key, 14);
         }
         if gb.peek(0xD057) == 0 {
             out = true;
             break;
         }
     }
-    clear_text(gb, 6);
+    clear_text(gb, stage, 6);
     for _ in 0..60 {
-        gb.frame();
+        stage.frame(gb);
     }
     out
 }
 
 /// Press B a few times to dismiss whatever text box is up. Harmless when there
 /// is none — B in the overworld does nothing at all.
-fn clear_text(gb: &mut Gameboy, times: u32) {
+fn clear_text(gb: &mut Gameboy, stage: &mut dyn Stage, times: u32) {
     for _ in 0..times {
-        tap(gb, KeypadKey::B, 30);
+        tap(gb, stage, KeypadKey::B, 30);
     }
 }
 
-fn tap(gb: &mut Gameboy, key: KeypadKey, gap: u32) {
+fn tap(gb: &mut Gameboy, stage: &mut dyn Stage, key: KeypadKey, gap: u32) {
     gb.keydown(key);
     for _ in 0..4 {
-        gb.frame();
+        stage.frame(gb);
     }
     gb.keyup(key);
     for _ in 0..gap {
-        gb.frame();
+        stage.frame(gb);
     }
 }
 
 /// Greedily walk toward tile `(y, x)` on the current map. Returns when it
 /// arrives, when the map changes, when a battle starts, or when the budget runs
 /// out.
-fn walk_toward(gb: &mut Gameboy, ty: u8, tx: u8, budget: u32) -> u8 {
+fn walk_toward(
+    gb: &mut Gameboy,
+    stage: &mut dyn Stage,
+    ty: u8,
+    tx: u8,
+    budget: u32,
+) -> u8 {
     let map0 = gb.peek(CUR_MAP);
     let mut stuck = 0u32;
     for _ in 0..budget {
@@ -1220,7 +1449,7 @@ fn walk_toward(gb: &mut Gameboy, ty: u8, tx: u8, budget: u32) -> u8 {
             // Let a warp finish: stepping onto a door tile starts a map change
             // that takes a fade and several frames.
             for _ in 0..48 {
-                gb.frame();
+                stage.frame(gb);
             }
             return gb.peek(CUR_MAP);
         }
@@ -1252,9 +1481,9 @@ fn walk_toward(gb: &mut Gameboy, ty: u8, tx: u8, budget: u32) -> u8 {
         // START menu, which then eats every direction key for the rest of the
         // run.
         if stuck > 0 && stuck % order.len() as u32 == 0 {
-            clear_text(gb, 3);
+            clear_text(gb, stage, 3);
         }
-        hold(gb, order[stuck as usize % order.len()], 24);
+        hold(gb, stage, order[stuck as usize % order.len()], 24);
         stuck = if (gb.peek(Y_COORD), gb.peek(X_COORD)) == (y, x) {
             stuck + 1
         } else {

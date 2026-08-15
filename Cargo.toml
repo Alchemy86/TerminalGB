@@ -681,6 +681,17 @@ harness = false
 # it is a TUI test, not a core one.
 required-features = ["tui"]
 
+# Does watching a save state being built change the save state? Runs
+# `examples/shiny_hunt --make-state` headless and again with `--show` on a pty
+# this harness owns, and compares the two files byte for byte. Needs your own
+# cartridge (`POKE_ROM=…`) and skips with exit 0 without one. See
+# testharness/watchstate.rs.
+[[test]]
+name = "watchstate"
+path = "testharness/watchstate.rs"
+harness = false
+required-features = ["tui", "plugin-gen1-shinyhunt"]
+
 # Agent-substrate harness: proves observation, the action executor, the budget
 # cap, the circuit breaker and stuck detection end to end against a
 # hand-assembled Gen-1-shaped cartridge — deterministically, and with no

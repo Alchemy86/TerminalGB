@@ -57,6 +57,11 @@ pub mod tui;
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub mod halfblocks;
 
+/// Watch a **scripted** run — the frontend's drawing half, with no keyboard,
+/// no plugins, no battery and no audio player attached. See [`watch`].
+#[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
+pub mod watch;
+
 /// Layout of the live Gen 1 trainer panel — see [`trainer_view`].
 /// Requires the `tui` feature: it renders ratatui widgets.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]

@@ -6251,6 +6251,52 @@ sprite**. The DVs come out of `wEnemyMonDVs` the instant `LoadEnemyMonData` roll
   target's exact odds — enumerated over all 65,536 DV pairs, never multiplied, because the HP DV
   is derived from the low bit of the other four and the terms are not independent.
 
+### Watching a headless script run (`--show`, `src/screen/watch.rs`)
+
+**The reusable technique, and it is the whole of the design: a watched run must change what
+happens BETWEEN two frames and nothing INSIDE one.** `shiny_hunt --make-state --show` draws the
+walk to Route 1 live; the state it produces is byte-identical to the headless one *by
+construction*, because the walk's one primitive is a `Stage` trait with a single `frame` method
+and every helper calls `stage.frame(gb)` where it used to call `gb.frame()`. Watch mode adds a
+sleep, a redraw and three `peek`s around a frame. Any future "let me watch that script" feature
+should take this shape rather than growing a second copy of the script.
+
+- **The terminal frontend's *game session* is the wrong thing to reuse and `Start::Rom` must not
+  be pressed into this service.** `load_session` builds its machine with `Some(path)` (so a
+  `.sav` appears next to the cartridge), installs an audio player and attaches plugins. Two of
+  those three change what the script produces: `Sound::do_cycle` returns immediately with no
+  player, so a machine without one has **no APU at all**, not a quiet one, and a cartridge that
+  reads `NR52` can tell. What *is* reusable is the frontend's **drawing** half, which is what
+  `screen::watch::Viewer` is.
+- **`Viewer` is handed a framebuffer (`&[u8]`), never the machine.** That is a type-level
+  guarantee that watching cannot perturb emulation, and it is worth keeping when the module
+  grows. It reuses `tui::build_picker` / `fit_metrics` / `probe_terminal` / `shm_supported`
+  (`pub(crate)` **for this module and no other reason** — a merge that makes them private again
+  will fail to compile, which is the intended guard), plus `FramePrep`, `Upscaler`, `TermImage`
+  and `screen::halfblocks`. All three `docs/terminal-render.md` rules apply and are obeyed: cap
+  the transmitted resolution, write the escape sequence after `ratatui` flushes, one image id
+  for the whole run (`0x00676210` — clear of the frontend's four).
+- **Gate the harness on the picture as well as the bytes.** `testharness/watchstate.rs`
+  (`POKE_ROM=<blue.gb> cargo test --release --test watchstate`, skips exit 0 without a
+  cartridge) runs the real example both ways — the watched one on a pty it owns, since `--show`
+  refuses to start without a terminal — and compares the files. It *also* requires the watched
+  run to have put picture bytes on the wire, because "identical" is otherwise satisfied by a
+  `--show` that quietly drew nothing, and requires no `.sav` beside the staged ROM. Teeth
+  proven: a stray `gb.debug_write` in the watched path reddens it at byte 54 with both files
+  still 174,879 bytes; one extra emulated frame per displayed frame breaks the walk outright.
+- **`--watch` was already taken** by the hunt's target selector, hence `--show` / `--show-speed`.
+  The walk is ~3 minutes of emulated time, so the default pace is **2x** (a 90-second demo);
+  `max` is what the harness uses.
+- **A caption box must be sized from its own contents**, never a constant — the live detail line
+  was clipped by a hard-coded 3-row footer on the first run. Same mistake, third time in this
+  repository, after the frontend's status panel twice.
+- **The walker is not the agent, and `docs/shiny-hunt.md` §2b now says so** because watching it
+  reach Route 1 in seconds invites the opposite conclusion. It reads coordinates out of WRAM,
+  steers to a number a human read off `pret/pokered`, and **writes memory twice** (a party
+  Pokémon, and `EVENT_FOLLOWED_OAK_INTO_LAB`); the agent reads the *screen* as text and is
+  refused `WRITE_MEMORY` by the host. A satnav with the postcode typed in versus looking out of
+  the window — and the agent's slowness is the measurement.
+
 ## The status page (`docs/status.md`, `docs/status/index.html`) — scores are generated, not typed
 
 - **`docs/status.md` is the front door** — suite standings, abilities, honest gaps, roadmap —

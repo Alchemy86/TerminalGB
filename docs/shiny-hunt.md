@@ -102,6 +102,106 @@ detects it and says so rather than reporting thousands of silent stalls.
 
 ---
 
+## 2a. Watching a save state being built (`--show`)
+
+`--make-state` finishes in about a second and prints a dozen lines. Add
+**`--show`** and the same walk runs with the picture drawn and the frames paced,
+with a caption under it saying what it is doing:
+
+```bash
+cargo run --release --features plugin-gen1-shinyhunt --example shiny_hunt -- \
+    --rom blue.gb --make-state route1.gbss --show
+```
+
+`--show-speed <x>` sets the pace as a multiple of the DMG's own 59.7275 Hz.
+The default is **2** — the walk is about three minutes of emulated time, so
+twice speed is a ninety-second demo that is still followable. `--show-speed 1`
+is real time and is what to record a video at; `--show-speed max` runs flat out
+and is what the test harness uses. `q`, `Esc` or `Ctrl-C` aborts, and an aborted
+run writes no state.
+
+**The state `--show` produces is byte-identical to the headless one, and that is
+enforced rather than promised.** `testharness/watchstate.rs` runs the real
+example binary both ways — the watched one on a pty it owns, since `--show`
+refuses to start without a terminal — and compares the two files byte for byte.
+It also requires the watched run to have actually *drawn* something, because
+"identical" would otherwise be satisfied by a `--show` that quietly did nothing,
+and requires neither run to leave a `.sav` beside the cartridge. It needs your
+own ROM and skips with exit 0 without one:
+
+```bash
+cargo build --release --example shiny_hunt
+POKE_ROM=blue.gb cargo test --release --test watchstate
+```
+
+Two design points make the identity structural rather than a coincidence:
+
+* **Watch mode changes what happens *between* two frames, never inside one.**
+  The walk's one primitive is a `Stage` trait with a single `frame` method;
+  every helper calls `stage.frame(gb)` where it used to call `gb.frame()`, so
+  both modes execute the same code with the same buttons down on the same
+  frames. Watch mode adds a sleep, a redraw and three `peek`s around a frame.
+* **The viewer is never given the machine.** `screen::watch::Viewer` takes a
+  framebuffer (`&[u8]`), so it cannot write emulated memory even by mistake —
+  and the machine `--make-state` builds still has no battery, no audio player
+  and no plugins. Those are not omissions: an installed audio player makes the
+  APU visible to the cartridge (`Sound::do_cycle` returns immediately with no
+  player, so a machine without one has *no APU at all*, not a quiet one), and a
+  battery would write a `.sav` next to somebody's ROM.
+
+Teeth proven, not assumed: adding a stray `gb.debug_write` to the watched path
+turns the harness red at byte 54 with both files still 174,879 bytes long, and
+adding one extra emulated frame per displayed frame breaks the walk outright.
+
+---
+
+## 2b. What the walker actually does — and why it is not the agent
+
+Watching `--show` reach Route 1 in three emulated minutes, next to
+[the agent](claude-plays.md) taking a dozen model calls to find Oak's lab, invites
+an obvious and wrong conclusion. **They are not the same job and the walker is
+not the better one.** It is a satnav with the postcode already typed in; the
+agent is looking out of the window.
+
+| | the walker (`--make-state`) | the agent (`plugins/agent`) |
+|---|---|---|
+| how it knows where it is | reads `wCurMap` / `wYCoord` / `wXCoord` out of WRAM | decodes `wTileMap` as **text** and works it out |
+| where it is going | a coordinate a human read off `pret/pokered` and hard-coded | whatever it decides the goal is |
+| may it write memory? | **yes, and it does — twice** | **no.** `OBSERVE \| READ_MEMORY \| CONTROL_INPUT`, and the host refuses `Machine::poke` |
+| what it recognises | nothing at all | the screen, the situation, the consequence |
+| what a result means | "the script ran" | "something worked this out" |
+
+The walker's two memory writes are the whole point of the asymmetry, and
+`--show` calls them out on screen as they happen because they are otherwise
+invisible:
+
+* **a level 50 PIDGEOT into `wPartyMons`** — a brand-new game has no Pokémon,
+  and walking into grass without one hangs the first wild battle. Fast and
+  tough on purpose (see §4): a run flees dozens of battles and a party that
+  faints blacks out to a Pokémon Center, where there is no grass.
+* **`EVENT_FOLLOWED_OAK_INTO_LAB`, bit 0 of `$D747`** —
+  `PalletTownDefaultScript` (`scripts/PalletTown.asm`) opens
+  `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`, so setting it is what stops
+  Oak running out to block the north exit. The agent has to *do* the
+  introduction; the walker skips it by decree.
+
+Everything else really is walking. The walker presses buttons at menus, is
+stopped by Mum's send-off downstairs, has to step off its own doorstep before it
+can head north, and runs from whatever the last step into grass rolls — all
+things `--show` makes visible, and all things it gets wrong often enough to need
+the retry loops described in §8. **The one thing it never does is teleport**: it
+does not edit `wCurMap`, because `LoadSAV` sets `BIT_NO_PREVIOUS_MAP` and
+`LoadMapHeader` then returns without loading the header, so a moved map is read
+through the old map's data pointers and the game jumps into `rst $38` within a
+second.
+
+So: the walker is fast because somebody already did the understanding, once, by
+hand, and wrote the answer down. That is a fine way to build a fixture and a
+useless way to measure an emulator's usefulness to a player. **The agent's slowness
+is the measurement.**
+
+---
+
 ## 3. Architecture: a plugin, and the driver beside it
 
 ### The plugin observes and can do nothing else
