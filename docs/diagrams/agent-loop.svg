@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="470" viewBox="0 0 980 470" role="img"
+     aria-label="The agent loop. The emulator runs the cartridge at 59.7 frames a second. When a plan finishes, fails, or the world changes, the observation layer takes a snapshot of the game state and the screen; the governor gates the call against four ceilings and a circuit breaker; the driver is submitted the snapshot and polled once per frame, never awaited; its reply is parsed, every number clamped, and the plan of up to twelve actions is carried out locally over hundreds of frames by the executor, which reports an outcome per action back into the next snapshot. Commentary is sanitised on its way to the panel a viewer sees. The driver never receives a machine handle.">
+  <style>
+    .panel { fill: #ffffff; stroke: #d0d7de; }
+    .title { fill: #1f2328; font: 600 16px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .sub   { fill: #59636e; font: 400 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .box   { stroke: #7d8590; stroke-width: 1; }
+    .lbl   { fill: #1f2328; font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .lbl2  { fill: #1f2328; font: 400 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .mono  { fill: #59636e; font: 400 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .edge  { stroke: #57606a; fill: none; stroke-width: 1.6; }
+    .edgel { fill: #59636e; font: 400 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .slow  { stroke: #b35900; }
+    .slowl { fill: #b35900; font: 600 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .host  { fill: #dbeafe; }
+    .emu   { fill: #dcfce7; }
+    .gov   { fill: #fef3c7; }
+    .drv   { fill: #ffe4e6; }
+    .view  { fill: #ede9fe; }
+    .fence { fill: none; stroke: #b35900; stroke-width: 1.4; stroke-dasharray: 6 5; }
+    @media (prefers-color-scheme: dark) {
+      .panel { fill: #0d1117; stroke: #30363d; }
+      .title { fill: #e6edf3; }
+      .sub   { fill: #9198a1; }
+      .lbl   { fill: #0d1117; }
+      .lbl2  { fill: #0d1117; }
+      .mono  { fill: #9198a1; }
+      .edge  { stroke: #8b949e; }
+      .edgel { fill: #9198a1; }
+      .slow  { stroke: #e8a13a; }
+      .slowl { fill: #e8a13a; }
+      .fence { stroke: #e8a13a; }
+      .box   { stroke: #6e7681; }
+      .host  { fill: #a5c8f5; }
+      .emu   { fill: #a3dcbb; }
+      .gov   { fill: #e8ce8a; }
+      .drv   { fill: #f0aeb6; }
+      .view  { fill: #c4b8f0; }
+    }
+  </style>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arrowslow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b35900"/>
+    </marker>
+  </defs>
+
+  <rect class="panel" x="0.5" y="0.5" width="979" height="469" rx="8"/>
+
+  <text class="title" x="34" y="34">Plan, then execute locally</text>
+  <text class="sub"   x="34" y="54">Everything inside the dashed fence runs at emulator speed. Only the driver is slow, and nothing waits for it.</text>
+
+  <!-- the fence: everything in-process -->
+  <rect class="fence" x="26" y="76" width="600" height="330" rx="10"/>
+  <text class="slowl" x="40" y="96">in-process, per frame</text>
+
+  <!-- emulator -->
+  <rect class="box emu" x="46" y="118" width="200" height="72" rx="6"/>
+  <text class="lbl"  x="66" y="146">emulator</text>
+  <text class="lbl2" x="66" y="164">Gameboy::frame()</text>
+  <text class="lbl2" x="66" y="180">59.7275 fps, never blocked</text>
+
+  <!-- observe -->
+  <rect class="box host" x="46" y="222" width="200" height="72" rx="6"/>
+  <text class="lbl"  x="66" y="250">observe</text>
+  <text class="lbl2" x="66" y="268">game state + screen</text>
+  <text class="lbl2" x="66" y="284">one JSON snapshot</text>
+
+  <!-- governor -->
+  <rect class="box gov" x="46" y="326" width="200" height="60" rx="6"/>
+  <text class="lbl"  x="66" y="352">governor</text>
+  <text class="lbl2" x="66" y="370">4 ceilings + breaker</text>
+
+  <!-- executor -->
+  <rect class="box host" x="404" y="222" width="200" height="72" rx="6"/>
+  <text class="lbl"  x="424" y="250">executor</text>
+  <text class="lbl2" x="424" y="268">walk / goto / advance_text</text>
+  <text class="lbl2" x="424" y="284">hundreds of frames</text>
+
+  <!-- parse + clamp -->
+  <rect class="box host" x="404" y="118" width="200" height="72" rx="6"/>
+  <text class="lbl"  x="424" y="146">parse + clamp</text>
+  <text class="lbl2" x="424" y="164">every number bounded</text>
+  <text class="lbl2" x="424" y="180">unknown verb → complaint</text>
+
+  <!-- commentary -->
+  <rect class="box view" x="404" y="326" width="200" height="60" rx="6"/>
+  <text class="lbl"  x="424" y="352">commentary → panel</text>
+  <text class="lbl2" x="424" y="370">sanitised; public + permanent</text>
+
+  <!-- driver, outside the fence -->
+  <rect class="box drv" x="740" y="140" width="212" height="150" rx="6"/>
+  <text class="lbl"  x="760" y="170">driver</text>
+  <text class="lbl2" x="760" y="192">a model, a script, a walker</text>
+  <text class="lbl2" x="760" y="212">submit() returns at once</text>
+  <text class="lbl2" x="760" y="232">poll() once per frame</text>
+  <text class="lbl2" x="760" y="252">never gets a Machine</text>
+  <text class="slowl" x="760" y="276">seconds</text>
+
+  <!-- edges -->
+  <g class="edge" marker-end="url(#arrow)">
+    <path d="M146 190 V222"/>
+    <path d="M246 258 H404"/>
+    <path d="M504 222 V190"/>
+    <path d="M146 294 V326"/>
+    <path d="M404 356 H310 V294"/>
+  </g>
+  <text class="edgel" x="156" y="212">plan over: finished, failed, or the world changed</text>
+  <text class="edgel" x="262" y="250">plan (≤ 12 actions)</text>
+  <text class="edgel" x="514" y="212">one outcome per action</text>
+  <text class="edgel" x="156" y="318">may I call?</text>
+
+  <!-- across the fence -->
+  <g class="edge slow" marker-end="url(#arrowslow)">
+    <path d="M246 232 H330 V100 H700 V190 H740"/>
+    <path d="M740 240 H648 V150 H604"/>
+  </g>
+  <text class="slowl" x="440" y="94">snapshot</text>
+  <text class="slowl" x="654" y="266">reply</text>
+
+  <text class="sub" x="34" y="432">Snapshot and reply are JSON text, so the same contract serves an in-process driver, a subprocess adapter and — unchanged — the MCP server's tools.</text>
+  <text class="mono" x="34" y="452">plugins/agent/src/{observe,governor,driver,action,commentary}.rs · schema gbagent/1</text>
+</svg>

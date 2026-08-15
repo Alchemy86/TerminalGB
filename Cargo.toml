@@ -631,3 +631,13 @@ name = "agent"
 path = "testharness/agent.rs"
 required-features = ["plugin-agent"]
 harness = false
+
+# Documentation gate: every number, state name and public sentence printed in
+# docs/agent-reference.md is checked against the code that produces it, and the
+# action vocabulary the page advertises is driven through the real parser. A
+# reference page fails silently; this is what makes it fail loudly instead.
+[[test]]
+name = "agentdocs"
+path = "testharness/agentdocs.rs"
+required-features = ["plugin-agent"]
+harness = false

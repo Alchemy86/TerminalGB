@@ -3,7 +3,7 @@
 .PHONY: web desktop docs-links docs-check status lint lint-audio test-audio-perf embed \
 	test-cross psp \
         check-wasm fetch-test-suites test-external test-external-accurate no-plugins \
-        test-mcp lint-mcp test-chiptune chiptune-demo bgb-interop
+        test-mcp lint-mcp test-agent-docs agent-docs-capture test-chiptune chiptune-demo bgb-interop
 
 all: build install
 
@@ -123,6 +123,21 @@ chiptune-demo:
 # testharness/mcp.rs and docs/mcp.md.
 test-mcp:
 	cargo test --release --features mcp --test mcp
+
+# The agent documentation gate: every number, state name, public sentence and
+# action verb printed in docs/agent-reference.md is checked against the code
+# that produces it, and docs/agent-environment.md's frame hash and save-state
+# size are recomputed from the vendored cartridge. Already covered by a plain
+# `cargo test --release` (plugin-agent is a default feature); this target is
+# for running it alone after editing either page. See testharness/agentdocs.rs.
+test-agent-docs:
+	cargo test --release --features plugin-agent --test agentdocs
+
+# Regenerate every worked example under docs/agent/examples/ by driving the real
+# binaries. Needs your own Pokemon Red/Blue cartridge — none is distributed here
+# — and the three binaries named in the script's header.
+agent-docs-capture:
+	python3 tools/agent-docs/capture.py --rom $(ROM) --save $(SAV)
 
 # Interoperability for the BGB link protocol: drive somebody else's
 # implementation and check bytes cross. NOT in CI — it fetches another

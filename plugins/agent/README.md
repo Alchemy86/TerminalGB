@@ -13,6 +13,12 @@ GB_AGENT_OBJECTIVE="Get out of the house and choose a starter Pokemon" \
 
 `A` shows the commentary panel, `G` hands the controller back to a human.
 
+![The commentary panel: CLAUDE PLAYING, a standing GOAL line, a NOW line, and recent history](../../docs/shots/agent-commentary.png)
+
+*The panel, from a real run. A cold viewer gets the goal first, then what is happening now, then
+a little history — never a scrolling log, which has moved on by the time a newcomer has read
+enough of it to orient. Everything in it has been through the sanitiser.*
+
 ## The problem it exists to solve
 
 **The model is slow and the game is not.** A round trip takes seconds; the Game Boy runs at
@@ -68,6 +74,27 @@ A driver error reaches a viewer as *"The agent hit a problem — trying again"* 
 a path, a key or a stack trace. That is a deliberate rule of the commentary layer, not an
 accident of formatting.
 
+## The four seams, and where each is documented
+
+Everything an integrator touches is one of these. Full field tables, clamps and real generated
+payloads for all of them: **[`docs/agent-reference.md`](../../docs/agent-reference.md)**.
+
+| seam | you implement | you receive | reference |
+|---|---|---|---|
+| **`Driver`** | `name` · `submit` · `poll` (· `cancel` · `take_stderr` · `costs_money`) | the snapshot as text; you return reply text | [§5](../../docs/agent-reference.md#5-the-agent-plugin-hooks-and-extension-points) |
+| **a subprocess adapter** | a program: snapshot on stdin, JSON on stdout, exit 0 | the same snapshot | [§5a](../../docs/agent-reference.md#5a-the-subprocess-adapter-contract) |
+| **`Plugin`** | `name` · `capabilities` · `status` · `on_event` | `Event::Frame` / `Event::SerialTransfer`, each with a `&mut Machine` | [`docs/plugins.md`](../../docs/plugins.md) |
+| **`Config`** | nothing — you set fields | budget, limits, objective, log path, history depth | [§5d](../../docs/agent-reference.md#5d-configuration) |
+
+The snapshot is schema `gbagent/1`; the reply is `{goal, say, plan, usage}`. Three real
+snapshots and the replies to them, captured from a running cartridge, are in
+[`docs/agent/examples/agent-snapshots.md`](../../docs/agent/examples/agent-snapshots.md).
+
+The smallest adapter that works is fifteen lines
+([`tools/agent-docs/hello_adapter.sh`](../../tools/agent-docs/hello_adapter.sh)); a working
+skeleton that actually reads the snapshot is seventy
+([`tools/agent-docs/canned_adapter.py`](../../tools/agent-docs/canned_adapter.py)).
+
 ## Layout
 
 | file | what it holds |
@@ -92,6 +119,12 @@ The harness runs against a **hand-assembled Gen-1-shaped cartridge**, determinis
 no commercial ROM — so the budget cap and the circuit breaker are proved in CI rather than
 described.
 
-📖 **[Full design, the OBS/Twitch recipe and the honest gaps →
-`docs/claude-plays.md`](../../docs/claude-plays.md)** ·
-[agent play in Gen 1 terms → `docs/gen1/agent-play.md`](../../docs/gen1/agent-play.md)
+## Where to read next
+
+| | |
+|---|---|
+| 📖 [**the agent reference**](../../docs/agent-reference.md) | **every hook, field and payload**, with real generated examples — start here if you are integrating |
+| 🧪 [as an AI environment](../../docs/agent-environment.md) | determinism, headless throughput, save states as episode resets, recording a dataset, honest scoring |
+| [full design + the OBS/Twitch recipe](../../docs/claude-plays.md) | why it is shaped this way, and the recorded runs |
+| [agent play in Gen 1 terms](../../docs/gen1/agent-play.md) | the cartridge facts behind each primitive |
+| [the MCP server](../../docs/mcp.md) | the same perception and executor, for any MCP client |

@@ -6213,3 +6213,63 @@ denominator. `docs/measured/symptoms.md` indexes symptoms of the *machine*;
 - **`cargo build --release --all-targets` fails deterministically on this repository** and is
   the sharpest reproduction of the multi-`crate-type` + `panic = 'abort'` trap; see the
   chiptune section above and `docs/pitfalls/builds.md`. Build target classes separately.
+
+## The agent/MCP documentation surface (`docs/agent-reference.md`, `docs/agent-environment.md`)
+
+Two new pages sit under the existing three (`docs/mcp.md` install, `docs/claude-plays.md`
+design, `plugins/agent/README.md` overview). **Reference = what you receive and send;
+environment = why this is a good place to run agents.** Both are linked from the README, the
+plugin READMEs and each other; a stranger landing on `plugins/agent/` is now pointed at them.
+
+- **EVERY PAYLOAD IN THE DOCS IS GENERATED, NOT TYPED.** `tools/agent-docs/capture.py` drives
+  the real `terminalgb-mcp`, `claude_plays` and `screen_text` binaries and writes
+  `docs/agent/examples/{mcp-transcript.md,mcp-transcript.jsonl,tools-list.json,
+  agent-snapshots.md,agent-run.txt,screen-tour.txt}`. It needs **your own** Pokémon Red/Blue —
+  none is distributed — and stages ROM+save into `target/` first. `make agent-docs-capture
+  ROM=… SAV=…`. Screenshot base64 is truncated on the way out (a bare game frame as data is
+  not ours to redistribute; a picture of *our UI* with the game incidental is, per the
+  standing licence-boundary rule).
+- **`testharness/agentdocs.rs` is the gate, and it has teeth (proved twice).** 105 checks:
+  every `Limits`/`Budget` default and executor constant **on a line that also names it** (a
+  whole-page number search is too weak — several constants share a value), every
+  `Mode`/`ScreenKind`/`Trust`/`Halt` name string, all five `Halt` public sentences verbatim,
+  every documented action verb and alias **driven through the real parser**, every tool in the
+  captured `tools/list`, and — recomputed from the vendored cartridge —
+  `agent-environment.md`'s frame hash and save-state size. It runs inside a plain
+  `cargo test --release` (`plugin-agent` is a default feature); `make test-agent-docs` runs it
+  alone. Known and documented limitation: a *second, stale* mention of a value it already
+  found elsewhere is not caught.
+- **Measured for those pages, so nobody re-derives them:** headless throughput through the
+  JSON-RPC protocol **3,820 frames/s (64x)** single instance, **12,237 / 23,208 / 34,132
+  frames/s at 4 / 8 / 16 instances** (20 contended cores — sub-linear past 8);
+  `advance_text` through 4 boxes = **291 frames in one call** against 32 for a single
+  `press A`, which is the whole frames-per-model-call argument; a deliberately naive adapter
+  spent **235 calls on 23,772 frames**. `x86_64-unknown-linux-musl` builds a **974 KiB fully
+  static** server that runs under `env -i`; the dynamic one is 880 KiB and links only
+  libc/libm/libgcc_s. `cargo tree --no-default-features --features mcp` is **one** third-party
+  crate.
+- **`make test-cross` was run for real here and all three targets passed** — frame hash
+  `0x01acf78fe505f31c`, state bytes **142091** (not 142090) on x86-64, aarch64, armv7 and i686.
+  The rootless qemu route in `tools/run-cross.sh`'s header works and takes about a minute:
+  `dnf download qemu-user-static-{aarch64,arm}` → `rpm2cpio | cpio -idmu` →
+  `GB_QEMU_DIR=<dir>/usr/bin make test-cross`.
+- **`observe`'s `frame` is a SESSION counter, not machine state.** `reset`/`load_rom` zero it;
+  **`load_state` deliberately does not**. Anything proving a reset landed must compare memory
+  or the structured state — `tools/agent-docs/gb_env.py`'s self-test reads `$C000..$C01F`, and
+  says so out loud when the check proves nothing because that block never moved (dmg-acid2).
+- **A real defect the capture found: the standing-on-an-exit snapshot note carried two runs of
+  eighteen spaces**, from a multi-line string literal written without `\` continuations. Paid
+  for in tokens on every decision and visible in any captured snapshot. Fixed in
+  `plugins/agent/src/lib.rs`; write those notes the way their neighbours are written.
+- **Three runnable artefacts under `tools/agent-docs/`, all stdlib/POSIX:**
+  `hello_adapter.sh` (the minimum driver, 15 lines), `canned_adapter.py` (a working skeleton
+  that branches on `screen.kind` — verified end to end, 62 calls, 0 failures, and it is what
+  produced `docs/shots/agent-panel.png`), `gb_env.py` (a Gym-*shaped*, Gym-*free* client over
+  the MCP stdio transport) and `log_to_dataset.py` (the decision log flattened into
+  observation/action/outcome rows). **No reward function is shipped, deliberately** — a default
+  one becomes everybody's benchmark by accident.
+- **Verifying a doc through GitHub's `/markdown` API has a caveat the existing recipe omits:
+  `mode=gfm` emits NO heading `id=` attributes**, so every in-page `#anchor` looks broken in
+  the preview and none of them is. Check anchors with the slug rule instead (lowercase, drop
+  everything not word/space/hyphen, one hyphen per space, **no collapsing runs**) — a ~15-line
+  Python check over the pages' own headings is what was used here.

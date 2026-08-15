@@ -802,7 +802,14 @@ impl AgentPlugin {
         {
             let dest = observe::map_name(e.to_map);
             w.str_item(&format!(
-                "You are standing ON an exit{}. A door is not opened with A —                  walk one more step in the direction it faces (for a door at                  the bottom of a room, that is down) to go through it.",
+                // Written with `\` continuations like its neighbours: a
+                // literal broken across lines *without* them keeps the source
+                // indentation, and this note shipped for a while with two runs
+                // of eighteen spaces inside it — visible in any captured
+                // snapshot, paid for in tokens on every decision.
+                "You are standing ON an exit{}. A door is not opened with A — \
+                 walk one more step in the direction it faces (for a door at \
+                 the bottom of a room, that is down) to go through it.",
                 if dest.is_empty() {
                     String::new()
                 } else {

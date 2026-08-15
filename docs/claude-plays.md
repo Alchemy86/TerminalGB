@@ -9,6 +9,12 @@ Twitch. The code is [`plugins/agent/src/`](../plugins/agent/src/lib.rs), the pan
 [`examples/claude_plays.rs`](../examples/claude_plays.rs), and the proof is
 [`testharness/agent.rs`](../testharness/agent.rs).
 
+**If you are integrating rather than reading**, two newer pages carry the parts this
+one only describes: [`docs/agent-reference.md`](agent-reference.md) is every hook,
+field and payload with generated examples, and
+[`docs/agent-environment.md`](agent-environment.md) is the headless, at-speed,
+run-agents-against-it case.
+
 **Scope of this milestone.** This is the *substrate*, not an agent that finishes
 the game. The target it was built against and measured on is: from a fresh save,
 get out of the bedroom, downstairs, out of the house, and pick a starter —
@@ -419,6 +425,54 @@ cargo run --release --example claude_plays -- \
 every remaining argument). The ROM is copied into `target/` first — the MBC
 writes a `.sav` next to the ROM, and a demo run must never touch the player's
 library.
+
+### Headless *at speed* — no display, no terminal, no pacing
+
+The command above has `--pace realtime` because it is a demonstration for a
+human. **Drop it and nothing paces the emulator at all** — no window, no
+terminal, no sound device, no `$HOME`, and the machine runs as fast as the CPU
+allows. That is the configuration for an unattended run, a batch of episodes or
+an evaluation:
+
+```sh
+cargo run --release --features image,plugin-agent --example claude_plays -- \
+  --rom target/blue.gb --frames 200000 --log run.ndjson --report \
+  --driver command --command ./my_adapter.py         # --command must be LAST
+```
+
+Measured on a real cartridge with a subprocess adapter answering every call:
+**4,038 emulated fps — 67.6x real time**, with the adapter in the loop. The
+emulator alone does 3,000–4,300 frames a second on a contended box, and sixteen
+instances do 31,000. The MCP server is the same story with a different transport
+(`terminalgb-mcp` is 880 KiB, links only libc, and runs under `env -i`).
+
+**Which means the model is the bottleneck, not the emulator, and the only lever
+that matters is frames per model call.** Measured, one call each:
+
+| | frames | seconds of game |
+|---|---:|---:|
+| `press A` once | 32 | 0.5 |
+| `walk down 1` | 31 | 0.5 |
+| `advance_text` through 4 boxes | 291 | 4.9 |
+| `goto (3,7)`, 11 steps round furniture | 331 | 5.5 |
+| a real model on Blue's opening (§1) | ~1,100 | ~18 |
+
+A deliberately naive adapter that emits single-press plans spent **235 calls on
+23,587 frames** — 100 frames per call. Same emulator, same contract, 10x the
+cost. Batch intentions; do not micro-step.
+
+The whole case for using this as an evaluation environment — determinism across
+architectures, fan-out numbers, save states as episode resets, recording a
+dataset, and the ways an agent will cheat your score — is
+[`docs/agent-environment.md`](agent-environment.md).
+
+### The concrete payloads
+
+This page describes the shapes. **[`docs/agent-reference.md`](agent-reference.md)
+prints them**: three real `gbagent/1` snapshots with the driver replies to them,
+every MCP tool's request and reply, and fourteen decoded screens — all generated
+by running the real binaries (`tools/agent-docs/capture.py`) and committed under
+[`docs/agent/examples/`](agent/examples/).
 
 ---
 

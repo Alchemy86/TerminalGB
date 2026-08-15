@@ -15,7 +15,7 @@ someone to find.
 | [`trainer/`](trainer/README.md) | `trainer` | `plugin-trainer` | live Pokémon R/B party, badges, catch chance, sprites | observe + read |
 | [`gen1-link/`](gen1-link/README.md) | `gen1-link` | `plugin-gen1-link` | a virtual link-cable partner: real trades and Colosseum battles | observe + read + link |
 | [`battle-control/`](battle-control/README.md) | `gen1-battle` | `plugin-battle-control` | start any Gen 1 battle from a preset, and script it | observe + read + write + input |
-| [`agent/`](agent/README.md) | `agent` | `plugin-agent` | an AI that plays the game, under a budget | observe + read + input |
+| [`agent/`](agent/README.md) | `agent` | `plugin-agent` | an AI that plays the game, under a budget — [full reference](../docs/agent-reference.md), [as an AI environment](../docs/agent-environment.md) | observe + read + input |
 | [`gen1-shinyhunt/`](gen1-shinyhunt/README.md) | `gen1-shinyhunt` | `plugin-gen1-shinyhunt` | hunt a Gen 1 DV spread across many headless emulators at once | observe + read |
 
 Note the middle column: **`battle-control` is the crate, `gen1-battle` is the name you put in

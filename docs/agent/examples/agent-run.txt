@@ -1,0 +1,26 @@
+$ target/release/examples/claude_plays --rom target/agentdocs/cart.gb --driver scripted --script target/agentdocs/run/script.ndjson --log target/agentdocs/run/agent.ndjson --frames 3000 --report --state target/agentdocs/states/POKEMON_BLUE.slot9.gbss
+
+loaded save state target/agentdocs/states/POKEMON_BLUE.slot9.gbss
+agent: driver=scripted objective="" caps: 400 calls, $5.00, 3600s wall, 120s/call
+[     21] GOAL  Leave the Pokemon Center
+[     21] think I am in a Pokemon Center. The way out is the pair of doors at the bottom of the room, so I will head for one of them.
+[    382]   do  head for (3,7) — arrived at (3,7) after 12 step(s)
+[    403] think I am standing on the doormat. A door is not opened with A, so I will take one more step down to walk through it.
+[    406]   !   Arrived: Pallet Town.
+[    427] GOAL  Explore Viridian City
+[    427] think Outside now. I will walk north and see what is there.
+[    507]   !   Arrived: Red's house 1F.
+[    527]  sys  The agent has nothing more to say.
+
+--- run summary ---
+stopped because   : the agent stopped
+emulated frames   : 526
+wall clock        : 0.1 s  (3690 emulated fps, 61.8x real time)
+driver            : scripted
+decisions         : 3
+calls             : 3
+failed calls      : 0
+tokens (reported) : 4821
+spend  (reported) : $0.0137
+final position    : map 0x25 (Red's house 1F) at (5,5), 2 in party
+final goal        : Explore Viridian City
