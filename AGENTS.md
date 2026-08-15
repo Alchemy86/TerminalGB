@@ -600,7 +600,12 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   inflater — the upstream reference is 2-bit greyscale) are hand-rolled.
 - `src/cpu/z80` is a non-compiled reference file, not a module. (`src/gpu/old_gpu.rs`,
   961 lines of dead/unreferenced code, was deleted — no `mod old_gpu` ever existed.)
-- The `retrio/gb-test-roms` submodule (`.gitmodules`) is declared but uninitialised.
+- **The `retrio/gb-test-roms` submodule is NOT initialised in a fresh clone or worktree, and
+  `testharness/testroms.rs` PANICS without it** (`cannot read ROM tests/cpu_instrs/…`) — so a
+  `cargo test` run silently proves nothing about the in-repo accuracy harness. Run
+  `git submodule update --init --depth 1 tests` **before** trusting any before/after comparison.
+  Same class as the `dmg_sound` ROMs `audiocapture` wants; the note at the top of this file
+  saying it "is now initialised and wired into CI" is about CI, not about your working copy.
 
 ## Gating the EXTERNAL suites — Mooneye / SameSuite / Mealybug (`make test-external`)
 
@@ -2686,6 +2691,12 @@ linked-and-run" sentence is superseded and was rewritten.
   line. armv7 and i686 are 32-bit and both build it fine (`ldrexd`, `cmpxchg8b`), so nothing
   short of building for the real target catches it. It is `AtomicU32` now, widened on read so
   the public `Snapshot` is unchanged. **Do not put a 64-bit atomic in the core.**
+- **`make test-cross` SKIPs a target when its `qemu-<arch>-static` is missing, and a skip is
+  not a pass.** This box has no `qemu-user-static` package, but the rootless route in
+  `tools/run-cross.sh`'s own header works and takes a minute:
+  `dnf download qemu-user-static-aarch64 qemu-user-static-arm`, `rpm2cpio *.rpm | cpio -idmu`,
+  then `GB_QEMU_DIR=<dir>/usr/bin make test-cross`. With that, all four architectures really do
+  run and really do produce the identical frame hash.
 - **`riscv64gc-unknown-linux-musl` is deliberately out of `run-cross.sh`**: this package
   declares `crate-type = ["cdylib", ...]` and a musl target that *supports* `cdylib` then
   fails to link one against a shared libc rustup does not ship. The other three escape it
