@@ -416,6 +416,14 @@ name = "shiny_hunt"
 path = "examples/shiny_hunt.rs"
 required-features = ["plugin-gen1-shinyhunt"]
 
+# The experiment behind docs/gen1/authoring-an-area.md: build a Gen 1 area in
+# WRAM and walk into it through the cartridge's own door. Needs `image` only
+# for the screenshots.
+[[example]]
+name = "warproom_probe"
+path = "examples/warproom_probe.rs"
+required-features = ["image"]
+
 # The other audio examples deliberately carry a no-`audio` `main()` that
 # prints how to enable the feature, so they stay buildable and are NOT given
 # `required-features`. `audio_frame_cost` is the exception: it times the frame

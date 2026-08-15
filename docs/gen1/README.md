@@ -20,6 +20,7 @@ Anything unproven says so.
 | Page | What it covers | Status |
 |---|---|---|
 | [Memory map](memory-map.md) | Where the game keeps the party, the battle, the screen, the map and the dice — with the symbol name and the derivation for every address | **verified on the retail ROM** |
+| [Authoring an area](authoring-an-area.md) | What a room is made of, how the engine loads one, and the recipe for building a new one in memory and walking into it through an ordinary door — with the ceilings, and Gen 2 scoped | **built and walked on the retail ROM** |
 | [Battle control](battle-control.md) | Starting any battle on demand: wild, trainer, custom teams on both sides, and scripting one as an in-game cinematic | **verified on the retail ROM** |
 | [Reading the screen](reading-the-screen.md) | Why `wTileMap` reads back as text, and why that is the right way to drive the game | **verified on the retail ROM** |
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
@@ -111,5 +112,6 @@ The techniques here are all implemented in the repository and all runnable:
 * [`plugins/trainer/src/`](../../plugins/trainer/src/) — the read-only live view
   ([`docs/trainer.md`](../trainer.md)).
 * [`examples/gen1_battle.rs`](../../examples/gen1_battle.rs),
-  [`examples/gen1_trade.rs`](../../examples/gen1_trade.rs) — headless drivers that prove all of
-  it against a real cartridge.
+  [`examples/gen1_trade.rs`](../../examples/gen1_trade.rs),
+  [`examples/warproom_probe.rs`](../../examples/warproom_probe.rs) — headless drivers that prove
+  all of it against a real cartridge.

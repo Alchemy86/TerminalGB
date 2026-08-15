@@ -5053,3 +5053,71 @@ trade and a real link battle both completed **inside** it.
   are gated on `wLinkState == LINK_STATE_IN_CABLE_CLUB`, where `LinkMenu` has set
   `BIT_LINK_CONNECTED` so `DrawStartMenu` prints RESET and `SaveMainData` cannot run. Every
   ROM and save is staged into `target/` — including the human's.
+
+## Authoring a NEW Gen 1 area and warping into it (`docs/gen1/authoring-an-area.md`)
+
+**Reference page + the recipe: [`docs/gen1/authoring-an-area.md`](docs/gen1/authoring-an-area.md);
+the experiment is [`examples/warproom_probe.rs`](examples/warproom_probe.rs)**
+(`cargo run --release --features image --example warproom_probe -- --rom <blue.gb>
+[--shots <dir>] [--no-latch]`, needs no save file — it starts a new game). The World Trade
+Centre enlarges the room you are *standing in*; this is the other half — a **new
+destination**, entered through the cartridge's own unedited door.
+
+- **`BIT_NO_PREVIOUS_MAP` (bit 7 of `wCurMapTileset`, `constants/ram_constants.asm`) IS THE
+  AUTHORING HOOK, and it is the same latch `docs/gen1/memory-map.md` §4 records as a trap.**
+  `LoadMapHeader` clears it and `ret nz` before reading a single byte of
+  `MapHeaderPointers`, so `LoadMapData` carries on to `LoadTileBlockMap`, which builds the
+  room from **our** `wCurMapDataPtr`. It self-clears, so the next warp loads normally and
+  nothing authored outlives the visit. **Measured both ways:** with the latch, 15 of 15
+  header bytes survive and the live block map is ours; without it, 10 measurably change and
+  the room is the cartridge's.
+- **THE HEADER CANNOT BE INSTALLED BEFORE THE PLAYER STEPS THROUGH THE DOOR — a Gen 1 warp
+  is decided from the SCREEN.** `CheckWarpsNoCollision` matches the coordinates and then
+  asks `IsPlayerStandingOnDoorTileOrWarpTile`, which reads `lda_coord 8, 9` out of
+  `wTileMap` and indexes `WarpTileIDPointers` **by `wCurMapTileset`** — the byte the latch
+  lives in. And `wCurMapWidth` is the stride `RedrawRowOrColumn` repaints the departing room
+  with. Change either early and the staircase stops being a staircase: measured, the player
+  stood on it in the bedroom, unable to leave.
+- **The window is `LoadMapData`'s own first instruction, `call DisableLCD`, which spins
+  until VBlank.** So `wCurMap` has already changed a whole frame boundary before
+  `LoadMapHeader` runs. Measured: stepping into the stairs, `wCurMap` read `$25` on frame 15
+  while `wOverworldMap[0]` still held the bedroom's border block. A host stepping frames
+  polls `wCurMap` and writes on the frame it changes. **This is the general pattern for any
+  write that must land inside `LoadMapData`.**
+- **A WARP NEEDS TWO THINGS: an entry in `wWarpEntries` *and* a tile the tileset itself
+  calls a warp tile** (`WarpTileIDPointers`, `data/tilesets/warp_tile_ids.asm`). Without the
+  second, the only route left is `ExtraWarpCheck`, which also needs a direction **held** at
+  the instant of the check — so a warp entry on a plain floor block does not fire when the
+  player simply steps onto it (measured). The cheap fix: lift the departing room's own
+  staircase block out of its live `wOverworldMap` and place *that*.
+- **The collision probe is the walk tile's BOTTOM-LEFT screen tile, i.e. block-definition
+  indices 4, 6, 12, 14 — not 0, 2, 8, 10.** The two rules agree for uniform blocks and
+  disagree for every mixed one; only bottom-left predicts the game (checked against nine
+  blocks of the real `RedsHouse2` blockset, and Red's bedroom staircase is the worked
+  example: `$0A` at index 10, `$1A` at index 14, and `$1A` is what the game reads). Same
+  anchor the lobby crew's `screen::calibrate` found by brute force (row 8 scores 360/360).
+- **`LoadTilesetTilePatternData` runs AFTER `LoadMapHeader` and the latch does not skip
+  it** — 96 tiles (`$9000-$95FF`) copied from `wTilesetGfxPtr`:`wTilesetBank`
+  unconditionally. Measured: a signature written into VRAM inside the install window is
+  **clobbered**. Re-blit from the host after arrival; it costs no emulated cycles.
+- **`wCurMap` must stay a real map id** — `SwitchToMapRomBank` and
+  `MarkTownVisitedAndLoadToggleableObjects` index ROM tables by it *before* the latch is
+  tested. Leaving it at the door's own destination means every ROM lookup is the intended
+  one and only the header is ours.
+- **The block-map scratch buffer must be outside `wOverworldMap` `$C6E8..$CBFC`** —
+  `LoadTileBlockMap` fills all 1300 bytes with `wMapBackgroundTile` *before* copying, so a
+  source inside it is destroyed mid-copy. `wTileMapBackup2` `$CD81` (360 bytes) is the
+  largest clean gap, which also caps a room at 360 blocks — below the 1300-byte
+  `(W+6)·(H+6)` footprint limit for anything squarer than ~19×19.
+- **Ceilings, all sourced on the page:** 1300-byte block-map buffer (the cartridge's biggest
+  map, `ROUTE_23`/`ROUTE_17` at 10×72, needs 1248); 127 blocks per axis because coordinates
+  are `u8`; 32 warps / 16 signs / 16 declared objects but **15 usable** (slot 0 is the
+  player); 256 blocks and **96 tiles** per tileset.
+- **Gen 2 is scoped, not attempted, and NO GEN 2 ADDRESSES ARE PUBLISHED** — §7 of the page
+  says what the work is (a map is `(group, number)`; find the analogues; establish whether a
+  skip-the-header hook even exists, *first*, because it decides page-versus-project;
+  re-derive the collision rule; re-measure every ceiling) and roughly what it costs.
+- **Reusable pattern: run the host twice and print the diff.** `--no-latch` writes exactly
+  the same bytes with the bit clear, and the "wrote / now / kept-or-clobbered" table is what
+  turns the whole claim from a story into ten lines of evidence. Any host that writes
+  emulated memory and hopes it sticks should do this.
