@@ -147,7 +147,7 @@ And the part that keeps the rest honest, on the suites that hurt:
 Mooneye `acceptance` <!--score:mooneye_acceptance-->67 / 75<!--/score-->, SameSuite's audio
 group <!--score:samesuite_apu-->66 / 69<!--/score-->, and Mealybug Tearoom
 <!--score:mealybug-->3 / 79<!--/score--> in the default picture mode
-(<!--score:mealybug_accurate-->20 / 79<!--/score--> with the per-dot pipeline). Against the
+(<!--score:mealybug_accurate-->22 / 79<!--/score--> with the per-dot pipeline). Against the
 [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264-row manifest we score
 **223** — see [`docs/shootout.md`](shootout.md); that figure is measured through their runner
 and their screenshot comparison, so it is deliberately *not* derived from our baselines and

@@ -27,9 +27,9 @@ yourself proves nothing.
 | Mooneye GB — `misc` (CGB) | **8** / 8 | same | Color-specific behaviour |
 | [SameSuite](measured/scoreboard.md) | **73** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
-| [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **20** / 79 | mid-scanline picture timing — pixel-exact rows |
+| [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **22** / 79 | mid-scanline picture timing — pixel-exact rows |
 
-**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **75/75** on Mooneye `acceptance` and **20/79** on Mealybug for about **2.1x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` now **loses no row to the default on any gate**, so what stands between it and being the default is only its cost ([why](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-now-dominates)).
+**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **75/75** on Mooneye `acceptance` and **22/79** on Mealybug for about **2.1x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` now **loses no row to the default on any gate**, so what stands between it and being the default is only its cost ([why](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-now-dominates)).
 <!-- suite-scores:end -->
 
 These scores are re-derived from the checked-in baselines under

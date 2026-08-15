@@ -827,12 +827,23 @@ impl Gpu {
         let s = self.pipe.scan[self.pipe.obj_i as usize];
         let flags = self.pipe.obj_flags;
         let tall = self.sprite_size == 16;
-        let height = if tall { 16 } else { 8 };
-        let mut row = self.line as i32 - (s.y as i32 - 16);
+        // **The row index is MASKED, not clamped, and Y-flip is an XOR against
+        // the same mask.** `LCDC.2` is read here, live, so the scan may have
+        // accepted this object as sixteen pixels tall and the fetch then find
+        // it eight: the row can be 8-15 with a three-bit mask, and hardware has
+        // no comparator to clamp it — the address lines simply drop the top
+        // bit, wrapping to the top of the tile. SameBoy spells both halves the
+        // same way (`Core/display.c`, `get_object_line_address`:
+        // `tile_y = (gb->current_line - y) & (height_16? 0xF : 7)` and
+        // `if (flags & 0x40) tile_y ^= height_16? 0xF : 7`).
+        // `mealybug/m3_lcdc_obj_size_change_scx` is built out of exactly that
+        // race and is the only ROM that measures it.
+        let mask = if tall { 15 } else { 7 };
+        let mut row = (self.line as i32 - (s.y as i32 - 16)) & mask;
         if flags & 0x40 != 0 {
-            row = height - 1 - row;
+            row ^= mask;
         }
-        let row = row.clamp(0, height - 1) as u16;
+        let row = row as u16;
         let tile = if tall {
             self.pipe.obj_tile & 0xFE
         } else {
@@ -1360,6 +1371,73 @@ mod fetcher_details {
                  tile-number fetch; every other machine re-reads it"
             );
         }
+    }
+
+    /// **An object's row index is masked, never clamped.**
+    ///
+    /// `LCDC.2` is read at the bitplane fetch, not at the OAM scan, so the scan
+    /// can accept an object as sixteen pixels tall and the fetch then find it
+    /// eight — leaving a row index of 8-15 with only three bits to put it in.
+    /// Hardware has no comparator there; the address lines drop the top bit and
+    /// the fetch wraps to the top of the tile. SameBoy, `Core/display.c`,
+    /// `get_object_line_address`:
+    /// `tile_y = (gb->current_line - y) & (height_16? 0xF : 7)`.
+    ///
+    /// Clamping instead pins every one of those rows to row 7, which is what
+    /// `mealybug/m3_lcdc_obj_size_change_scx` photographs: 22,154 pixels out on
+    /// both Color columns (sixteen stray pixels of a shade hardware never
+    /// produces there, which re-ranks the whole frame — docs/mealybug.md 8.8)
+    /// and 298 on the DMG; 0/0/30 with the mask.
+    #[test]
+    fn an_objects_row_index_wraps_inside_the_tile_rather_than_clamping() {
+        let mut gpu = engine(GbMode::Classic, PpuRevision::CgbD);
+        // Tile $10, sixteen rows, each row's low bitplane holding its own
+        // index so a fetched byte says which row it came from.
+        for row in 0..16u16 {
+            gpu.wb(0x8100 + row * 2, row as u8 + 1);
+            gpu.wb(0x8100 + row * 2 + 1, 0);
+        }
+        // One object at Y = 16 (screen line 0), tile $10.
+        for i in 0..40u16 {
+            gpu.wb(0xFE00 + i * 4, 0);
+        }
+        gpu.wb(0xFE00, 16);
+        gpu.wb(0xFE01, 8);
+        gpu.wb(0xFE02, 0x10);
+        gpu.wb(0xFE03, 0);
+        gpu.pipe.scan[0] = super::ScanSprite {
+            y: 16,
+            x: 8,
+            oam: 0,
+        };
+        gpu.pipe.nscan = 1;
+        gpu.pipe.obj_i = 0;
+        gpu.pipe.obj_tile = 0x10;
+        gpu.pipe.obj_flags = 0;
+        for (line, tall, want) in [
+            (0u8, false, 1), // row 0
+            (7, false, 8),   // row 7
+            (9, false, 2),   // row 9 & 7 = 1 — NOT clamped to 7
+            (13, false, 6),  // row 13 & 7 = 5
+            (9, true, 10),   // sixteen tall: row 9 as it stands
+            (13, true, 14),
+        ] {
+            gpu.line = line;
+            gpu.wb(0xFF40, if tall { 0x97 } else { 0x93 });
+            gpu.obj_plane(false);
+            assert_eq!(
+                gpu.pipe.obj_lo,
+                want,
+                "line {line}, {} tall",
+                if tall { 16 } else { 8 }
+            );
+        }
+        // Y-flip is the same mask, applied as an XOR.
+        gpu.line = 0;
+        gpu.wb(0xFF40, 0x93);
+        gpu.pipe.obj_flags = 0x40;
+        gpu.obj_plane(false);
+        assert_eq!(gpu.pipe.obj_lo, 8, "flipped row 0 of eight is row 7");
     }
 
     /// The knob is spelled the way the APU's already is, so one

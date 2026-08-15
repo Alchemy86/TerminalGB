@@ -77,7 +77,7 @@ anything: 60 A presses on CANCEL with the link state pinned, the exchange nybble
 ## Most of a suite's remaining rows can be unwinnable
 
 **Symptom.** A picture-judged suite sits at a low score and refuses to move however correct
-the emulator gets. Today: <!--score:mealybug_accurate-->20 / 79<!--/score--> on the per-dot
+the emulator gets. Today: <!--score:mealybug_accurate-->22 / 79<!--/score--> on the per-dot
 engine.
 
 **What it looks like.** *Everything that is not passing* is work remaining, and an emulator
@@ -96,7 +96,7 @@ three unrelated reasons:
 
 So the reachable ceiling in CI is 79 − 45 = **34**, and at 22 passing the rows actually in play
 were **12**. (The gated baseline on this branch is
-<!--score:mealybug_accurate-->20 / 79<!--/score-->; that crew's work is in flight. The ceiling
+<!--score:mealybug_accurate-->22 / 79<!--/score-->; that crew's work is in flight. The ceiling
 is the number that does not move.)
 
 **Resolution.** Publish the denominator that hurts *and* the one that is honest, and say which
