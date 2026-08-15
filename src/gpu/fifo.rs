@@ -153,6 +153,12 @@ pub(super) struct Pipeline {
     /// The window was drawn somewhere on this line — which is what advances the
     /// window's internal line counter.
     win_drawn: bool,
+    /// Pixels of the window's **first** tile that are left of the screen.
+    /// The window's tile grid is anchored at `WX - 7`; with `WX < 7` that is
+    /// off the left edge, so the first tile is partly invisible. They are
+    /// shifted out and dropped a dot each, exactly like the `SCX & 7` discards
+    /// that follow them. See [`Gpu::check_window_start`].
+    win_skip: u8,
 }
 
 impl Default for Pipeline {
@@ -185,6 +191,7 @@ impl Default for Pipeline {
             discard: 0,
             window: false,
             win_drawn: false,
+            win_skip: 0,
         }
     }
 }
@@ -252,6 +259,7 @@ impl Pipeline {
         w.u8(self.discard);
         w.bool(self.window);
         w.bool(self.win_drawn);
+        w.u8(self.win_skip);
     }
 
     fn save_fifo(w: &mut crate::savestate::Writer, f: &[Pixel; 8]) {
@@ -311,6 +319,7 @@ impl Pipeline {
         self.discard = r.u8()?;
         self.window = r.bool()?;
         self.win_drawn = r.bool()?;
+        self.win_skip = r.u8()?;
         Ok(())
     }
 }
@@ -485,6 +494,7 @@ impl Gpu {
         p.lx = 0;
         p.window = false;
         p.win_drawn = false;
+        p.win_skip = 0;
         p.fetched = 0;
         // Nothing about `SCX` is latched here. Its low three bits decide how
         // many pixels the head of the line throws away, and that comparison is
@@ -546,6 +556,30 @@ impl Gpu {
         self.bg_fetch_dot();
     }
 
+    /// How far the head-of-line prologue has got, as a position **left of
+    /// pixel 0**: `Some(0)` on the last dot of the discarded first fetch,
+    /// counting up to `Some(7)` on the dot the first pixel becomes available,
+    /// and `None` from then on — where `lx` takes over.
+    ///
+    /// Eight positions, because that is how many the second fetch covers: it
+    /// runs for six dots and the FIFO fills at the end of it. A window at
+    /// `WX = n` for `n <= 7` starts at pixel `n - 7`, i.e. at position `n`
+    /// here.
+    fn prologue_pos(&self) -> Option<i16> {
+        if self.pipe.bg_len > 0 {
+            return None;
+        }
+        if self.pipe.first_fetch {
+            // The discarded fetch runs six dots and only its last one is
+            // position 0; the rest are further left still and must stay
+            // negative, or a window at `WX = 7` matches `lx == 0` on the very
+            // first dot of the line and truncates the prologue.
+            Some(self.pipe.fetch_t as i16 - (FETCH_DOTS as i16 - 1))
+        } else {
+            Some(self.pipe.fetch_t as i16 + 1)
+        }
+    }
+
     /// The window takes over the fetcher the moment the output reaches `WX-7`,
     /// provided the frame-long `WY` condition has already latched.
     ///
@@ -575,10 +609,21 @@ impl Gpu {
         // window that started before the palette write and one that started
         // after, which is exactly the six dots of the window's own startup
         // fetch. Without this the boundary sat at the same pixel for every `WX`.
-        if self.pipe.bg_len == 0 {
+        if self.winx > 166 {
             return false;
         }
-        if self.winx > 166 {
+        // Where the output has got to, counting the eight positions left of
+        // pixel 0 that the head-of-line prologue occupies. `prologue_pos`
+        // returns 0..=7 through those and `None` once the first pixel is
+        // available, after which `lx` is the position. A window whose left edge
+        // is at or left of pixel 0 is therefore reached *during* the prologue,
+        // which is the only way its tile grid can be anchored at `WX - 7` and
+        // its first pixel still land on the dot it does.
+        let reached = match self.prologue_pos() {
+            Some(p) => p == self.winx as i16,
+            None => self.pipe.lx as i16 == self.winx as i16 - 7,
+        };
+        if !reached {
             return false;
         }
         // **The comparison is an equality, not a threshold.** The window
@@ -597,17 +642,18 @@ impl Gpu {
         // `WX <= 7` puts the start at or left of the first pixel, where the
         // equality still has to fire: those are the positions
         // `m3_window_timing_wx_0` walks.
-        let start = (self.winx as i16 - 7).max(0);
-        if self.pipe.lx as i16 != start {
-            return false;
-        }
         self.wy_pos += 1;
         let stall = self.winx == 0 && self.scx & 7 != 0;
+        let skip = 7u8.saturating_sub(self.winx);
         let p = &mut self.pipe;
         p.window = true;
         p.win_drawn = true;
         p.fetch_x = 0;
         p.fetch_t = 0;
+        // A takeover inside the prologue truncates the discarded first fetch —
+        // the window's own fetch is what runs from here.
+        p.first_fetch = false;
+        p.win_skip = skip;
         p.bg_clear();
         stall
     }
@@ -943,6 +989,14 @@ impl Gpu {
         }
         let bg = self.pipe.bg_pop();
         let obj = self.pipe.obj_shift();
+        if self.pipe.win_skip > 0 {
+            // The window's first tile begins at `WX - 7`; with `WX < 7` its
+            // leading pixels are left of the screen. They are shifted out a dot
+            // each, which is what makes the takeover's head start early enough
+            // for pixel 0 to land on the dot it does.
+            self.pipe.win_skip -= 1;
+            return;
+        }
         if self.pipe.lx == 0 && self.pipe.discard != self.scx & 7 {
             self.pipe.discard = (self.pipe.discard + 1) & 7;
             return;
@@ -1590,6 +1644,59 @@ mod head_of_line {
                 // then the discards — plus the one extra dot.
                 18 + (scx & 7) as u32 + extra,
                 "SCX={scx}"
+            );
+        }
+    }
+
+    /// **The window's tile grid is anchored at `WX - 7`, even when that is off
+    /// the left edge of the screen.**
+    ///
+    /// Ground truth is `mealybug/m3_lcdc_win_en_change_multiple_wx@DMG`, which
+    /// sets `WX = LY` and takes `LCDC.5` low a few pixels into every line: the
+    /// background resumes at **9, 10, 3, 4, 5, 6, 7, 8** for `WX = 0..7`, which
+    /// is exactly the first `WX - 7 + 8n` at or after the write. Anchoring the
+    /// grid at `max(0, WX - 7)` instead resumes at 16 on every one of them.
+    ///
+    /// The window therefore takes over **inside the head-of-line prologue** for
+    /// `WX <= 6`, and its first tile's off-screen pixels are shifted out and
+    /// dropped a dot each — which is what keeps pixel 0 on dot 18 whatever `WX`
+    /// is (see `a_wx_0_window_costs_an_extra_dot_only_with_fractional_scrolling`
+    /// and `m3_window_timing`, both unmoved by this).
+    #[test]
+    fn the_window_tile_grid_is_anchored_at_wx_minus_7() {
+        for wx in 0..=12u8 {
+            let mut gpu = engine();
+            gpu.wb(0xFF4A, 0); // WY = 0
+            gpu.wb(0xFF4B, wx);
+            gpu.wb(0xFF40, 0xB1); // + LCDC.5
+            while gpu.mode() != 2 {
+                gpu.do_cycle(1);
+            }
+            while gpu.mode() != 3 {
+                gpu.do_cycle(1);
+            }
+            // Let the window take over and paint its first visible pixel, then
+            // withdraw `LCDC.5`. The background resumes at the end of the
+            // window tile being drawn, so where it resumes *is* the grid.
+            while !gpu.pipe.window {
+                gpu.do_cycle(1);
+                assert_eq!(gpu.mode(), 3, "WX={wx}: the window never started");
+            }
+            while gpu.pipe.lx == 0 {
+                gpu.do_cycle(1);
+            }
+            gpu.wb(0xFF40, 0x91); // LCDC.5 off
+            while gpu.pipe.window {
+                gpu.do_cycle(1);
+                assert_eq!(gpu.mode(), 3, "WX={wx}: the window never stopped");
+            }
+            let resume = gpu.pipe.lx as i16;
+            let start = wx as i16 - 7;
+            assert_eq!(
+                (resume - start).rem_euclid(8),
+                0,
+                "WX={wx}: the background resumed at {resume}, which is not on \
+                 the window's own tile grid ({start} + 8n)"
             );
         }
     }

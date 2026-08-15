@@ -118,7 +118,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// layout moved; a v19 state loaded blind would simply mis-drive the first
 /// eight dots of one scanline, which is exactly the kind of silent wrongness a
 /// version is for.
-pub const FORMAT_VERSION: u16 = 20;
+/// v21: the per-dot PPU carries how many pixels of the window's first tile are
+/// left of the screen. The window's tile grid is anchored at `WX - 7`, so with
+/// `WX < 7` the takeover happens inside the head-of-line prologue and those
+/// pixels are shifted out and dropped a dot each — live state for the first
+/// eighteen dots of a scanline.
+pub const FORMAT_VERSION: u16 = 21;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
