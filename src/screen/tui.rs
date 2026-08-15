@@ -1209,6 +1209,23 @@ struct App {
     /// so the terminal's auto-repeat stream cannot fire it thirty times a
     /// second. Unused in [`InputMode::Enhanced`], where `Repeat` is explicit.
     last_control: Option<(KeyCode, Instant)>,
+    /// Was the key now being handled **already waiting** when the previous one
+    /// was handled?
+    ///
+    /// The event loop takes one event per iteration, so the gap
+    /// [`CONTROL_REPEAT_LOCKOUT`] measures is the gap between *our* handling of
+    /// two keys, not between the terminal's delivery of them. On a loaded
+    /// machine one iteration — a whole emulated frame plus a draw — can itself
+    /// exceed the lockout, and then a held key strobes exactly as if there were
+    /// no lockout at all. Measured: `cargo test --test basicterm` failed 2 runs
+    /// in 3 at load average 8-15 and passed when the machine was quiet.
+    ///
+    /// A key that was already queued behind its predecessor cannot be a fresh
+    /// human press, however long we then took to reach it — so this makes the
+    /// suppression independent of our own latency, which is the property the
+    /// wall clock was standing in for. It is a strict addition: the timed rule
+    /// still decides every key that arrives on an idle input queue.
+    input_queued_behind: bool,
 
     // Emulation controls (see the corresponding key handlers).
     /// The [picture mode](crate::gpu::RenderMode) the player last chose with
@@ -1536,6 +1553,7 @@ impl App {
             should_quit: false,
             input: InputMode::default(),
             last_control: None,
+            input_queued_behind: false,
             ppu_choice: None,
             speed: SPEED_NORMAL,
             stats: false,
@@ -2266,7 +2284,15 @@ impl App {
                 }
             };
             if event::poll(timeout)? {
-                match event::read()? {
+                let ev = event::read()?;
+                // Is the *next* event already waiting? If so it was delivered
+                // before we finished with this one, so the gap between the two
+                // is ours and says nothing about the user — see
+                // [`App::input_queued_behind`]. Sampled for every event kind,
+                // not just keys: left set by a key and then consumed by a
+                // resize, a stale `true` would swallow a genuine later press.
+                let backlog = event::poll(Duration::ZERO).unwrap_or(false);
+                match ev {
                     Event::Key(key) => {
                         self.handle_key(key);
                         dirty = true;
@@ -2274,6 +2300,7 @@ impl App {
                     Event::Resize(_, _) => dirty = true,
                     _ => {}
                 }
+                self.input_queued_behind = backlog;
             }
         }
         self.unplug_net_link();
@@ -3295,7 +3322,9 @@ impl App {
                 self.last_control,
                 Some((code, t))
                     if code == key.code
-                        && now.saturating_duration_since(t) < CONTROL_REPEAT_LOCKOUT
+                        && (self.input_queued_behind
+                            || now.saturating_duration_since(t)
+                                < CONTROL_REPEAT_LOCKOUT)
             );
             self.last_control = Some((key.code, now));
             !repeated
@@ -10970,6 +10999,55 @@ mod tests {
             t0 + Duration::from_millis(4000),
         );
         assert_eq!(app.palette, after_first.next().next());
+    }
+
+    /// **A stalled event loop must not turn auto-repeat back into presses.**
+    ///
+    /// The loop takes one event per iteration, so `CONTROL_REPEAT_LOCKOUT`
+    /// measures the gap between our *handling* of two keys. On a loaded machine
+    /// a single iteration — an emulated frame plus a draw — can outlast the
+    /// lockout, and a held key then strobes exactly as if there were none:
+    /// `cargo test --test basicterm` failed 2 runs in 3 at load average 8-15
+    /// and passed on a quiet machine. `App::input_queued_behind` is the fix — a
+    /// key that was already queued behind its predecessor cannot be a fresh
+    /// press, however long we then took to reach it.
+    ///
+    /// Teeth: drop the `input_queued_behind` term from `handle_key`'s `repeated`
+    /// test and this fails with the palette walked all the way round.
+    #[test]
+    fn a_stalled_loop_does_not_unsuppress_auto_repeat() {
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.input = InputMode::Basic;
+        let t0 = Instant::now();
+        app.handle_game_key_at(basic_press(KeyCode::Char('[')), t0);
+        let after_first = app.palette;
+
+        // The terminal's repeat stream, but every event reached us a *second*
+        // apart because the loop was starved — five times the lockout. Each was
+        // already waiting when its predecessor was handled, which is what the
+        // real loop samples with `event::poll(ZERO)`.
+        app.input_queued_behind = true;
+        for n in 1..12u64 {
+            app.handle_game_key_at(
+                basic_press(KeyCode::Char('[')),
+                t0 + Duration::from_secs(n),
+            );
+        }
+        assert_eq!(
+            app.palette, after_first,
+            "a stalled loop must not let auto-repeat through"
+        );
+
+        // And the timed rule still decides a key that arrived on an idle queue:
+        // a genuine press, far past the lockout, acts.
+        app.input_queued_behind = false;
+        app.handle_game_key_at(
+            basic_press(KeyCode::Char('[')),
+            t0 + Duration::from_secs(30),
+        );
+        assert_eq!(app.palette, after_first.next(), "a real press still acts");
     }
 
     #[test]

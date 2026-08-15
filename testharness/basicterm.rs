@@ -274,10 +274,22 @@ fn drive(
         // back on amber (the cycle is three long), so the two outcomes are
         // distinguishable; ten would leave the palette on grayscale either way
         // and the assertion would pass on the broken code.
-        for _ in 0..12 {
-            write_all(master, b"[")?;
-            std::thread::sleep(Duration::from_millis(30));
-        }
+        //
+        // **Written in one go, and that is what makes this check survive a
+        // loaded machine.** It used to be twelve writes with a 30 ms `sleep`
+        // between them — but `sleep(30ms)` on a busy box is however long the
+        // scheduler feels like, so the harness would itself deliver presses far
+        // enough apart to *be* separate presses, and the emulator was then
+        // right to act on them. Measured by the captain: 2 failures in 3 runs
+        // at load average 8-15, green on a quiet machine. A burst on the wire
+        // is what auto-repeat is; how fast this process can pace one is not
+        // part of the claim, so it is taken out of the measurement rather than
+        // tuned. (The 200 ms timed half of the rule is exercised at unit speed
+        // by `auto_repeat_cannot_strobe_a_one_shot_control_key`, which owns its
+        // clock.) The emulator's own half of the same problem — its event loop
+        // takes one event per iteration, so the lockout measured *its* latency
+        // rather than the terminal's — is `App::input_queued_behind`.
+        write_all(master, &[b'['; 12])?;
         std::thread::sleep(Duration::from_millis(800));
         let m1 = mark(screen);
         repaint(master, screen)?;

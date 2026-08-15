@@ -1377,6 +1377,26 @@ accurate-PPU gate). Full record: [`docs/conformance-notes.md`](docs/conformance-
   the same code, not the previous fire) suppresses it — verified live: 12 `[` presses 52 ms
   apart moved the palette exactly one step. Game *buttons* deliberately bypass the lockout;
   a repeat of a button is the evidence the fallback runs on.
+- **A WALL-CLOCK LOCKOUT MEASURES YOUR OWN LATENCY, NOT THE TERMINAL'S — AND ON A LOADED BOX
+  THAT IS THE SAME BUG AS HAVING NO LOCKOUT.** The event loop takes **one event per
+  iteration**, so the gap `CONTROL_REPEAT_LOCKOUT` compares is between *our handling* of two
+  keys; one iteration is an emulated frame plus a draw, and under load it can outlast 200 ms,
+  at which point a held key strobes again. `App::input_queued_behind` closes it: the loop
+  samples `event::poll(ZERO)` after reading each event, and a key that was **already queued
+  behind its predecessor** cannot be a fresh human press however long we then took to reach
+  it. Strict addition — the timed rule still decides every key that arrives on an idle queue.
+  Sampled for *every* event kind, not just keys: set by a key and then consumed by a resize, a
+  stale `true` would swallow a real press. Pinned by
+  `a_stalled_loop_does_not_unsuppress_auto_repeat` (teeth proven).
+- **AND THE OTHER HALF WAS THE HARNESS: `sleep()` IS NOT A CLOCK ON A BUSY MACHINE.**
+  `testharness/basicterm.rs` used to pace its burst with twelve writes 30 ms apart, so under
+  load *it* delivered presses far enough apart to genuinely be presses — and the emulator was
+  then right to act on them. Reported: 2 failures in 3 runs at load average 8-15, green when
+  quiet. It writes all twelve bytes in **one** `write_all` now; a burst on the wire is what
+  auto-repeat is, and how fast the harness can pace one was never part of the claim. Verified
+  3/3 at load average 62-72. **General rule for any pty/subprocess harness here: never encode
+  the property under test in your own `sleep` spacing** — put it in one write and assert on
+  the response.
 - **Say it once, in the four places `config_warnings` already reaches** (stderr scrollback,
   picker footer, a toast on entering a game, the `?` overlay) — that is why
   `BASIC_INPUT_NOTICE` is pushed onto the warnings list rather than printed by hand. Plus an
