@@ -40,8 +40,8 @@ emulated machine, so loading somebody else's state must not switch their rendere
 | Mode 3 length | fixed 172 dots | variable, from the fetcher |
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
 | Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** |
-| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->17/79<!--/score-->** |
-| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->630,266<!--/score--> px** |
+| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->20/79<!--/score-->** |
+| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->629,153<!--/score--> px** |
 | Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |
 
 **~2.1×** — 2.8 % of a 16.7427 ms frame, ~36× real time headless. Reproduce with

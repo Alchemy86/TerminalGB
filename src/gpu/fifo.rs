@@ -143,7 +143,10 @@ pub(super) struct Pipeline {
     /// Read by [`Gpu::hblank_strobe`](super::Gpu::hblank_strobe), which needs
     /// the dot the fetcher finishes rather than the dot `mode` changes on.
     pub(super) lx: u8,
-    /// `SCX & 7` pixels are shifted out and dropped at the head of the line.
+    /// How many pixels have been shifted out and **dropped** at the head of the
+    /// line so far, counted modulo 8. The head-of-line phase ends when this
+    /// reaches `SCX & 7`, which is re-read on every one of those dots — see
+    /// [`Gpu::output_dot`].
     discard: u8,
     /// The fetcher is drawing the window rather than the background.
     window: bool,
@@ -483,12 +486,10 @@ impl Gpu {
         p.window = false;
         p.win_drawn = false;
         p.fetched = 0;
-        // The low three bits of SCX are latched here and nowhere else: they are
-        // read once at the start of the scanline, unlike the high five which
-        // are re-read at every tile fetch (Pan Docs, Scrolling § mid-frame
-        // behavior). `m3_scx_low_3_bits` and `m3_scx_high_5_bits` are exactly
-        // this distinction, one register split into two behaviours.
-        p.discard = self.scx & 7;
+        // Nothing about `SCX` is latched here. Its low three bits decide how
+        // many pixels the head of the line throws away, and that comparison is
+        // made **live, on each of those dots** — see [`Gpu::output_dot`].
+        p.discard = 0;
         // DMG sprite priority is by X first, OAM index second, and hardware
         // gets it for free by fetching sprites in the order the output reaches
         // them. Sorting the scan list the same way, and letting a merge write
@@ -509,7 +510,11 @@ impl Gpu {
     /// fetcher then gets its dot. That ordering is what makes the first pixel
     /// appear on dot 12 and mode 3 come out at 172 dots for `SCX & 7 == 0`.
     fn pipeline_dot(&mut self) {
-        self.check_window_start();
+        if self.check_window_start() {
+            // A `WX = 0` takeover on a line with fractional scrolling spends
+            // this dot and nothing else. See [`Gpu::check_window_start`].
+            return;
+        }
 
         // A sprite fetch in progress owns the dot outright.
         if self.pipe.obj_t > 0 {
@@ -548,9 +553,18 @@ impl Gpu {
     /// row, which is why the line counter is advanced here — at every
     /// activation — rather than once per scanline. Mealybug's
     /// `m3_lcdc_win_en_change_multiple` is built entirely out of that.
-    fn check_window_start(&mut self) {
+    ///
+    /// Returns `true` when the takeover consumed the whole dot: with `WX = 0`
+    /// on a line whose `SCX & 7` is non-zero the window activates **one T-cycle
+    /// later**, which is `m3_window_timing_wx_0`'s own stated subject ("due to
+    /// window activating one T-cycle later when WX = 0 and SCX > 0") and which
+    /// SameBoy charges in the same place — `Core/display.c`, immediately after
+    /// `fifo_clear(&gb->bg_fifo)`: `if (WX == 0 && (SCX & 7) …) { cycles_for_line
+    /// += 1; GB_SLEEP(…, 1); }`. Skipping the fetcher's dot rather than adding a
+    /// counter is the whole of it, so it costs no state.
+    fn check_window_start(&mut self) -> bool {
         if self.pipe.window || !self.win_on || !self.wy_trigger {
-            return;
+            return false;
         }
         // The comparison is made **at the output**, against the pixel about to
         // be shifted out — so it cannot happen before there is one. Checking it
@@ -562,22 +576,24 @@ impl Gpu {
         // after, which is exactly the six dots of the window's own startup
         // fetch. Without this the boundary sat at the same pixel for every `WX`.
         if self.pipe.bg_len == 0 {
-            return;
+            return false;
         }
         if self.winx > 166 {
-            return;
+            return false;
         }
         let start = (self.winx as i16) - 7;
         if (self.pipe.lx as i16) < start {
-            return;
+            return false;
         }
         self.wy_pos += 1;
+        let stall = self.winx == 0 && self.scx & 7 != 0;
         let p = &mut self.pipe;
         p.window = true;
         p.win_drawn = true;
         p.fetch_x = 0;
         p.fetch_t = 0;
         p.bg_clear();
+        stall
     }
 
     /// Turning `LCDC.5` off mid-line does not take effect until the window tile
@@ -882,14 +898,26 @@ impl Gpu {
     // ---------------------------------------------------------------- output
 
     /// Shift one pixel out of the FIFOs and paint it.
+    ///
+    /// The head of the line throws `SCX & 7` pixels away first, one per dot.
+    /// **`SCX` is re-read on every one of those dots rather than latched when
+    /// mode 3 began**, so a write that lands in the gap between the two — and
+    /// every Mealybug handler's does, because five M-cycles of interrupt
+    /// dispatch put it around dot 8 while the first pixel is not shifted until
+    /// dot 12 — still decides how many pixels go. SameBoy spells the same rule
+    /// as a counter compared against the live register
+    /// (`Core/display.c`, `render_pixel_if_possible`:
+    /// `(gb->position_in_line & 7) == (gb->io_registers[GB_IO_SCX] & 7)`), and
+    /// the count wraps at 8 exactly as that comparison does, so `SCX` moving
+    /// *below* the number already dropped costs a further lap.
     fn output_dot(&mut self) {
         if self.pipe.bg_len == 0 {
             return;
         }
         let bg = self.pipe.bg_pop();
         let obj = self.pipe.obj_shift();
-        if self.pipe.discard > 0 {
-            self.pipe.discard -= 1;
+        if self.pipe.lx == 0 && self.pipe.discard != self.scx & 7 {
+            self.pipe.discard = (self.pipe.discard + 1) & 7;
             return;
         }
         let x = self.pipe.lx as usize;
@@ -1347,5 +1375,216 @@ mod fetcher_details {
         }
         assert_eq!(PpuRevision::from_tag("agb"), None);
         assert_eq!(PpuRevision::default(), PpuRevision::CgbD);
+    }
+}
+
+/// The head of a scanline: the `SCX & 7` discard, and what a `WX = 0` window
+/// does to it.
+///
+/// Both behaviours below are `mealybug/m3_window_timing_wx_0`'s subject, stated
+/// in that ROM's own header: *"The stair pattern is visible due to the delay
+/// from the lowest 3 bits of SCX, and due to window activating one T-cycle
+/// later when WX = 0 and SCX > 0."* They are pinned here at unit speed because
+/// the ROM can only show them as a picture.
+#[cfg(test)]
+mod head_of_line {
+    use super::super::{Gpu, RenderMode};
+
+    /// A DMG with the accurate engine, parked at the top of an ordinary
+    /// scanline (past the line the LCD came up on, which has no OAM scan).
+    fn engine() -> Gpu {
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.wb(0xFF40, 0x91); // LCD on, BG on, tile data $8000
+        gpu.do_cycle(super::LINE_DOTS);
+        gpu
+    }
+
+    /// Step to the first dot of mode 3, then run `f` at each dot until the
+    /// first pixel is painted. Returns that dot, counted from mode 3's start.
+    fn first_pixel_dot(gpu: &mut Gpu, mut f: impl FnMut(&mut Gpu, u32)) -> u32 {
+        while gpu.mode() != 2 {
+            gpu.do_cycle(1);
+        }
+        while gpu.mode() != 3 {
+            gpu.do_cycle(1);
+        }
+        for _ in 0..400 {
+            let dot = gpu.modeclock - super::OAM_DOTS;
+            f(gpu, dot);
+            gpu.do_cycle(1);
+            if gpu.pipe.lx > 0 {
+                return dot;
+            }
+        }
+        panic!("no pixel was ever painted");
+    }
+
+    /// With nothing moving, the first pixel lands on dot `12 + (SCX & 7)`: the
+    /// twelve dots of the discarded first fetch, then one dot per pixel thrown
+    /// away.
+    #[test]
+    fn the_first_pixel_waits_for_the_prologue_and_the_discards() {
+        for scx in 0..16u8 {
+            let mut gpu = engine();
+            gpu.wb(0xFF43, scx);
+            assert_eq!(
+                first_pixel_dot(&mut gpu, |_, _| {}),
+                12 + (scx & 7) as u32,
+                "SCX={scx}"
+            );
+        }
+    }
+
+    /// **`SCX & 7` is re-read on every discarded dot, not latched when mode 3
+    /// began.** Every Mealybug handler writes `SCX` around dot 8 — five
+    /// M-cycles of interrupt dispatch and a jump get it no earlier — and the
+    /// first pixel is not shifted until dot 12, so a latch at dot 0 uses the
+    /// *previous* line's value and the whole stair pattern comes out one line
+    /// stale.
+    #[test]
+    fn a_scx_write_before_the_first_pixel_still_decides_the_discard() {
+        for scx in 0..8u8 {
+            let mut gpu = engine();
+            gpu.wb(0xFF43, 7); // whatever the previous line left behind
+            let dot = first_pixel_dot(&mut gpu, |g, dot| {
+                if dot == 8 {
+                    g.wb(0xFF43, scx);
+                }
+            });
+            assert_eq!(dot, 12 + scx as u32, "SCX written at dot 8 as {scx}");
+        }
+    }
+
+    /// A write that lands *after* the discards have begun moves the target the
+    /// counter is running at, and the counter wraps at 8 — so lowering `SCX`
+    /// mid-discard costs a further lap rather than ending the phase early.
+    /// SameBoy reaches the same place from the other side, comparing
+    /// `(position_in_line & 7)` against the live register
+    /// (`Core/display.c`, `render_pixel_if_possible`).
+    #[test]
+    fn lowering_scx_mid_discard_costs_a_whole_lap() {
+        let mut gpu = engine();
+        gpu.wb(0xFF43, 5);
+        // Dots 12,13,14 drop three pixels; at dot 15 the count is 3 and the
+        // target becomes 1, which it can only reach by wrapping through 8.
+        let dot = first_pixel_dot(&mut gpu, |g, dot| {
+            if dot == 15 {
+                g.wb(0xFF43, 1);
+            }
+        });
+        assert_eq!(dot, 12 + 3 + (8 - 3 + 1) as u32);
+    }
+
+    /// **`WX = 0` costs one extra dot when the line has fractional scrolling.**
+    /// The window's takeover spends that dot and the fetcher does not advance
+    /// on it. SameBoy charges it in the same place — `Core/display.c`,
+    /// immediately after `fifo_clear(&gb->bg_fifo)`:
+    /// `if (WX == 0 && (SCX & 7) …) { cycles_for_line += 1; GB_SLEEP(…, 1); }`.
+    #[test]
+    fn a_wx_0_window_costs_an_extra_dot_only_with_fractional_scrolling() {
+        for scx in 0..8u8 {
+            let mut gpu = engine();
+            gpu.wb(0xFF43, scx);
+            gpu.wb(0xFF4A, 0); // WY = 0: the Y condition latches at once
+            gpu.wb(0xFF4B, 0); // WX = 0
+            gpu.wb(0xFF40, 0xB1); // + LCDC.5, the window
+            let extra = u32::from(scx & 7 != 0);
+            assert_eq!(
+                first_pixel_dot(&mut gpu, |_, _| {}),
+                // 12 dots of prologue, the window's own 6-dot startup fetch,
+                // then the discards — plus the one extra dot.
+                18 + (scx & 7) as u32 + extra,
+                "SCX={scx}"
+            );
+        }
+    }
+
+    /// The extra dot is `WX = 0`'s alone: at any other `WX` the window's
+    /// startup costs its six dots and nothing more.
+    #[test]
+    fn no_other_window_position_pays_the_extra_dot() {
+        // `WX <= 7` puts the window's left edge at or before pixel 0, so it
+        // takes the fetcher over before anything is painted and its own 6-dot
+        // startup is all it costs.
+        for wx in [1u8, 7] {
+            let mut gpu = engine();
+            gpu.wb(0xFF43, 3);
+            gpu.wb(0xFF4A, 0);
+            gpu.wb(0xFF4B, wx);
+            gpu.wb(0xFF40, 0xB1);
+            assert_eq!(first_pixel_dot(&mut gpu, |_, _| {}), 18 + 3, "WX={wx}");
+        }
+        // `WX = 8` starts the window at pixel 1, so pixel 0 is a background
+        // pixel and lands on the plain `12 + (SCX & 7)`.
+        let mut gpu = engine();
+        gpu.wb(0xFF43, 3);
+        gpu.wb(0xFF4A, 0);
+        gpu.wb(0xFF4B, 8);
+        gpu.wb(0xFF40, 0xB1);
+        assert_eq!(first_pixel_dot(&mut gpu, |_, _| {}), 12 + 3);
+    }
+}
+
+/// A dot-by-dot trace of one Mealybug ROM, for the campaign that closes the
+/// rest of them. Ignored by default; it needs a ROM this repository does not
+/// ship (see `tools/fetch-test-suites.sh`) and prints rather than asserts.
+///
+/// ```text
+/// GB_PPU=identical SCRATCH_ROM=target/mealybug/m3_scy_change.gb SCRATCH_LINE=8 \
+///     cargo test --release --lib -- --ignored --nocapture mid_line_trace
+/// ```
+///
+/// Every mid-scanline row comes down to *which dot* a register write lands on
+/// against *which dot* a pixel is shifted out, and no picture can show that.
+#[cfg(test)]
+mod tracing {
+    use crate::cpu::core::Cpu;
+    use crate::mode::Model;
+
+    #[test]
+    #[ignore = "needs a Mealybug ROM and prints rather than asserts"]
+    fn mid_line_trace() {
+        let Ok(path) = std::env::var("SCRATCH_ROM") else {
+            return;
+        };
+        let want: u8 = std::env::var("SCRATCH_LINE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        let model = match std::env::var("SCRATCH_MODEL").as_deref() {
+            Ok("cgb") => Model::Cgb,
+            _ => Model::Dmg,
+        };
+        let data = std::fs::read(&path).expect("read the ROM named by SCRATCH_ROM");
+        let mut cpu = Cpu::new_with_model(data, None, model);
+        let (mut frames, mut logged) = (0u32, 0);
+        for _ in 0..40_000_000u64 {
+            let before = cpu.memory.gpu.line;
+            cpu.do_cycle();
+            let g = &cpu.memory.gpu;
+            if before == 143 && g.line == 144 {
+                frames += 1;
+            }
+            if frames >= 8 && g.line == want && logged < 90 {
+                println!(
+                    "dot={:4} mode={} lx={:3} scx={:3} scy={:3} wx={:3} \
+                     lcdc0={} win={} bgp={:?}",
+                    g.modeclock,
+                    g.mode(),
+                    g.pipe.lx,
+                    g.scx,
+                    g.scy,
+                    g.winx,
+                    g.lcdc0,
+                    g.pipe.window,
+                    g.palb,
+                );
+                logged += 1;
+            }
+            if frames >= 9 {
+                break;
+            }
+        }
     }
 }
