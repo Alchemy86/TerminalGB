@@ -921,8 +921,13 @@ where the bugs are.
 ### The regression: `testharness/twoprocess.rs`
 
 ```
-cargo test --release --features image,plugin-gen1-link,plugin-trainer --test twoprocess
+GB_TWOPROCESS_RUN=1 cargo test --release \
+    --features image,plugin-gen1-link,plugin-trainer --test twoprocess
 ```
+
+**`GB_TWOPROCESS_RUN=1` is required and is checked before anything else in the
+harness runs** — see "Not in a plain `cargo test` either" below; this is not
+just "not in CI" any more.
 
 One parent, two children, all three of them the same binary — the child is this
 binary re-executed with `GB_TWOPROCESS_SIDE` set, which is the `basicterm.rs`
@@ -932,10 +937,10 @@ into each staged save, points `GB_LINK_DIR` at a scratch directory, launches bot
 children, and judges them; each child builds exactly one `Gameboy`, calls
 `LinkPeer::discover` — the shipping auto-discovery, not a wired-up pair — drives
 the shared Cable Club bot (`examples/support/gen1_cable_club.rs`, the same one
-`link_two` and `bgb_link` use) and flushes its battery. It **skips with exit 0**
-without a cartridge (`POKE_ROM`, or one in `~/roms`) and a cable-club save
-(`GB_CABLECLUB_SAVE`), and like `colosseum.rs` it deliberately does not fall back
-to scanning a player's save directory.
+`link_two` and `bgb_link` use) and flushes its battery. Once opted in it still
+**skips with exit 0** without a cartridge (`POKE_ROM`, or one in `~/roms`) and a
+cable-club save (`GB_CABLECLUB_SAVE`), and like `colosseum.rs` it deliberately
+does not fall back to scanning a player's save directory.
 
 Four decisions in it are load-bearing:
 
@@ -1038,6 +1043,21 @@ Consequences to act on rather than admire:
   fixed; until then run it by hand with `GB_TWOPROCESS_REPEAT=40` **on an idle
   box, and quote the load average**, before and after anything that touches
   `src/link/peer.rs`.
+* **Not in a plain `cargo test` either — it used to be, by accident, and that
+  was a second bug on top of the first.** `find_save()` falls back to
+  `$TMPDIR/gameboy-gen1-trade/cableclub.sav`, the exact fixture
+  `testharness/colosseum.rs` also looks for; once `gen1_trade --make-save` has
+  ever produced it on a box, it sits there for any later harness to find. So a
+  full `cargo test` run — default features already satisfy this test's
+  `required-features` — could go from "skips cleanly" to "actually launches two
+  processes and judges them" purely because an *unrelated* earlier test left a
+  file behind, on whatever load the machine happened to be under at the time.
+  That is the incidental-coupling shape this whole page is about, reproduced in
+  the harness meant to catch it. `GB_TWOPROCESS_RUN=1`, checked before either
+  fixture search runs, makes the trigger the thing a person typed on purpose,
+  never a side effect of test order or a stale temp file. The verdict itself —
+  field-by-field arrival, zero torn transfers, zero faults, both battery files
+  checksum-verified — is unchanged; only whether the harness runs at all moved.
 * **The single-observation Time Capsule trade above sits on top of this number.**
   It worked; there is no measurement saying it works reliably, and the honest
   reading of the table above is that a person attempting a cross-generation

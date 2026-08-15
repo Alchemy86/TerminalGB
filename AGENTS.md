@@ -4120,9 +4120,13 @@ field-by-field table, file offsets, md5s — [`docs/link-cable.md`](docs/link-ca
 "Two independently launched emulators"; conformance record in `docs/conformance-notes.md`.
 
 - **`testharness/twoprocess.rs` is the first thing here that launches two processes and links
-  them** (`cargo test --release --features image,plugin-gen1-link,plugin-trainer --test
-  twoprocess`; skips exit 0 without `POKE_ROM` + `GB_CABLECLUB_SAVE`, like `colosseum.rs`, and
-  like it does **not** fall back to a player's save directory). It re-execs itself as both
+  them** (`GB_TWOPROCESS_RUN=1 cargo test --release --features
+  image,plugin-gen1-link,plugin-trainer --test twoprocess`; **opt-in, checked before any fixture
+  search** — without `GB_TWOPROCESS_RUN=1` it prints why and skips exit 0, unconditionally, and
+  a plain `cargo test` never runs it at all. See "gate the two-process harness behind an explicit
+  env var" below for why that had to be added on top of the fixture skip. Once opted in it still
+  skips exit 0 without `POKE_ROM` + `GB_CABLECLUB_SAVE`, like `colosseum.rs`, and like it does
+  **not** fall back to a player's save directory). It re-execs itself as both
   children — the `basicterm.rs` pattern — so there is no cargo-inside-cargo. Judge three ways:
   each child checks its arrival field by field, the parent checks `transfers > 0 / torn = 0 /
   no fault`, **and the parent reads both `.sav` files back off disk**. That third check is the
@@ -4151,6 +4155,18 @@ field-by-field table, file offsets, md5s — [`docs/link-cable.md`](docs/link-ca
 - **`GB_LINK_DIR` is mandatory in any automated link test** — `link = auto` is the default, so
   without a private rendezvous directory the test pairs with the developer's own emulator and
   drives *their* console into the Cable Club.
+- **A stray temp file used to be enough to make this run inside a PLAIN `cargo test`, and that
+  was a second bug riding on the first.** `find_save()`'s fallback is
+  `$TMPDIR/gameboy-gen1-trade/cableclub.sav` — the exact fixture `colosseum.rs` also looks for,
+  and `required-features = ["image", "plugin-gen1-link", "plugin-trainer"]` are all satisfied by
+  `default`. So once `gen1_trade --make-save` had ever produced that file on a box, any later
+  full-suite `cargo test` run would find it, find a ROM in `~/roms`, and actually launch two
+  processes into the reliability table above — on whatever load the machine happened to be
+  under, for a bug nobody asked to reproduce. **`GB_TWOPROCESS_RUN=1` is now required and is
+  checked before either fixture search runs**, so the trigger is what a person typed on
+  purpose, never test order or a leftover file. The verdict when it does run — field-by-field
+  arrival, `torn = 0`, no fault, both battery files checksum-verified off disk — is unchanged;
+  gating *whether* it runs must never become an excuse to loosen *what it demands*.
 - **GOLD SAVES TWICE AROUND A TIME CAPSULE TRADE.** `TryQuickSave` at the receptionist on the
   way in, and `LinkTrade`'s `cp LINK_TIMECAPSULE / jr z, .save` → `SaveAfterLinkTrade`
   (`SavePokemonData` + `SaveChecksum` + both backups) *before* "Trade completed!" is printed.
