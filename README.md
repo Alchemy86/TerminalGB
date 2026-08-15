@@ -792,7 +792,14 @@ characters), [driving the link cable](docs/gen1/link-from-outside.md), and the
 It is written to teach the mechanism rather than the recipe, because each of these techniques
 came from understanding a piece of the engine and asking what else touches it.
 
-📖 **[The index → docs/gen1/](docs/gen1/README.md)**
+**Generation 2 has its own area**, deliberately narrower: everything on the path to the
+[Time Capsule](docs/gen2/time-capsule.md) — the [graded memory map](docs/gen2/memory-map.md),
+the [three-run save layout](docs/gen2/the-save-file.md), and the
+[sharp edges](docs/gen2/sharp-edges.md) — is established and cited, and everything off it is
+named as a gap rather than guessed at.
+
+📖 **[The Gen 1 index → docs/gen1/](docs/gen1/README.md)** · **[the Gen 2 index →
+docs/gen2/](docs/gen2/README.md)**
 
 ---
 
@@ -1072,6 +1079,15 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | [starting battles on demand](docs/gen1/battle-control.md) | the one byte the engine reads, and how to script what follows |
 | [the trainer view](docs/trainer.md) | the address table, the derivation, and the verification |
 | [Claude plays Pokémon](docs/claude-plays.md) | the agent architecture, the OBS/Twitch recipe, and the honest gaps |
+
+**Pokémon Generation 2**
+
+| page | what it answers |
+|---|---|
+| [the index](docs/gen2/README.md) | what is established about Pokémon Gold, how each address was graded, and a blunt list of what is not |
+| [the Time Capsule](docs/gen2/time-capsule.md) | the only door between the generations: what Gold refuses, what it requires, and why a relaying cable needs nothing added |
+| [the save file](docs/gen2/the-save-file.md) | three WRAM runs into three SRAM runs, the checksum, and why editing the map does not move the player |
+| [building the disassembly](docs/gen2/building-the-disassembly.md) | making a `pokegold` build byte-identical to the cartridge, so its symbol table is exact |
 
 **Conformance**
 

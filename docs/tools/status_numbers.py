@@ -145,7 +145,7 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
         " mode does not reach what it measures (audio, DMA, mappers, cartridge clocks)."
         " `identical` now **loses no row to the default on any gate**, so what stands between it"
         " and being the default is only its cost"
-        " ([why](measured/scoreboard.md#the-accurate-engine-scores-differently--and-now-dominates)).",
+        " ([why](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-now-dominates)).",
         END,
     ]
     return "\n".join(lines)

@@ -642,12 +642,14 @@ the whole reason the latch is a measurement here instead of a story, and it took
 
 ## 7. Generation 2 — the work, not a guess
 
-**There is no `docs/gen2/` and no Gen 2 addresses appear on this page, deliberately.** Gen 2
-is not Gen 1 with different numbers; the map system was rebuilt. Publishing a table of
-plausible-looking addresses would be worse than publishing nothing, because the failure mode
-is a plausible-looking room that corrupts a save.
+**No Gen 2 addresses appear on this page, deliberately.** Gen 2 is not Gen 1 with different
+numbers; the map system was rebuilt. Publishing a table of plausible-looking addresses would be
+worse than publishing nothing, because the failure mode is a plausible-looking room that
+corrupts a save. There *is* now a [`docs/gen2/`](../gen2/README.md) area — but it covers the
+Time Capsule line only, and it names the map system as unestablished for exactly this reason.
 
-What is **established** about Gen 2 in this repository already, and can be relied on:
+What is **established** about Gen 2 in this repository already, and can be relied on (each is
+written up with its grade in the [Gen 2 area](../gen2/README.md)):
 
 * **The disassembly is [`pret/pokecrystal`](https://github.com/pret/pokecrystal)**, and for
   Gold specifically [`pret/pokegold`](https://github.com/pret/pokegold), which **builds
@@ -663,13 +665,15 @@ What is **established** about Gen 2 in this repository already, and can be relie
   instructions after writing them and a per-frame poke loses the race.
 * **Gen 2's save is three separate WRAM runs into three separate SRAM runs**
   (`wPlayerData` → `sPlayerData`, `wCurMapData` → `sCurMapData`, `wPokemonData` →
-  `sPokemonData`), so a save offset is *not* one base plus an offset, and the 16-bit
-  checksum over `sGameData` is verified, not tolerated.
+  `sPokemonData`), so the mapping is defined per run rather than as one base plus an offset,
+  and the 16-bit checksum over `sGameData` is verified, not tolerated. Full map, and the
+  arithmetic that closes it: [`docs/gen2/the-save-file.md`](../gen2/the-save-file.md).
 * `wTilemap` is `$C3A0` and a tile id is still a character code, so the screen still reads
   back as text — but the **menu cursor is tile `$ED`** and `wMenuCursorY` reads 2 whatever
-  the cursor is doing.
+  the cursor is doing ([`docs/gen2/reading-the-screen.md`](../gen2/reading-the-screen.md)).
 
-All four are from this repository's Time Capsule work; see
+All four are from this repository's Time Capsule work: the game side is
+[the Gen 2 area](../gen2/README.md), the cable side is
 [`docs/link-cable.md`](../link-cable.md) §8.
 
 ### What a Gen 2 equivalent of this page needs

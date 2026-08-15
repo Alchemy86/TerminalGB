@@ -393,6 +393,12 @@ pass the game's own `CalcCheckSum`, and `~/roms` is byte-identical.
 
 ## 8. Gen 1 ↔ Gen 2: the Time Capsule
 
+> **This section is the cable's side of the story** — what the wire carried and what was
+> measured while it did. The *game* side — Gold's prerequisites, its compatibility check, the
+> save layout, the seat byte, and the graded address table behind all of it — is the
+> [Generation 2 area](gen2/README.md), and specifically
+> [`docs/gen2/time-capsule.md`](gen2/time-capsule.md).
+
 **Gen 1 ↔ Gen 2 does not use the ordinary link trade.** Gold/Silver's own trade
 receptionist *refuses* a Gen 1 partner — `LinkReceptionistScript_Trade` reads
 `wOtherPlayerLinkMode` and branches to `.LinkedToFirstGen` → *"You can't link to

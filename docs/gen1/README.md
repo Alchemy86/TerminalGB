@@ -3,6 +3,10 @@
 **How Pokémon Red and Blue keep their state, how to drive them from outside, and what it
 cost us to find out.**
 
+> **Generation 2 has its own area: [`docs/gen2/`](../gen2/README.md)** — Pokémon Gold, and
+> deliberately much narrower. Everything on the path to the [Time Capsule](../gen2/time-capsule.md)
+> is established and cited; everything off it is named as a gap rather than guessed at.
+
 This area exists because the same handful of ideas keeps producing new tricks. Jumping
 straight into a battle, reading dialogue back as text, answering the link cable as a second
 Game Boy, watching a wild encounter's DVs the instant they are rolled — none of these were
@@ -24,7 +28,8 @@ Anything unproven says so.
 | [Battle control](battle-control.md) | Starting any battle on demand: wild, trainer, custom teams on both sides, and scripting one as an in-game cinematic | **verified on the retail ROM** |
 | [Reading the screen](reading-the-screen.md) | Why `wTileMap` reads back as text, and why that is the right way to drive the game | **verified on the retail ROM** |
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
-| [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one. Includes the Gen 1 ↔ Gen 2 Time Capsule rules | **Gen 1 ↔ Gen 1 trade verified; Time Capsule needs a Gold save** |
+| [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one | **Gen 1 ↔ Gen 1 and Gen 1 ↔ Gen 2 trades both verified** |
+| [The Time Capsule](../gen2/time-capsule.md) | The one door to Generation 2: what Gold refuses, what it requires, and why the wire needs nothing added | **a Pokémon crossed it, both directions** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost somebody hours | **verified the hard way** |
 | [Agent play](agent-play.md) | An AI agent that reads game state and presses buttons, with commentary for a stream | **plays the opening on the retail ROM** |
 | [Shiny hunting](../shiny-hunt.md) | Hunting the DV spread that becomes shiny in Gen 2, across many headless emulators at once — including how to decorrelate machines that all start from the same save state | **hunts on the retail ROM** |

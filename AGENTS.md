@@ -3718,58 +3718,43 @@ third-party dependency.
 
 ### Gen 2 / Pokémon Gold
 
-- **`pokegold` builds byte-identical to the captain's cartridge** (SHA-1 `d8b8a360…`, matches
-  its own `roms.sha1`) with **rgbds 1.0.3** — the prebuilt Linux tarball from the gbdev
-  releases; 0.6.1 is too old, the repo demands ≥1.0.0. So `pokegold.sym` is exact, and
-  constants come from `rgbasm -Q8 -P includes.asm -D _GOLD` + `PRINTLN "{d:SYMBOL}"` rather
-  than being counted by hand. **Do this before deriving any Gen 2 address.**
-- **A Gen 2 continue does NOT load map objects.** `MapSetupScript_Continue`'s second command
-  is `LoadMapAttributes_SkipObjects`: it assumes you are on the map you saved on. Editing
-  `wMapGroup` in a save lands you on the right map with the *previous* map's NPCs, no one to
-  talk to and a stale camera — and `wObjectStructs`/`wMapObjects` are inside the saved region
-  too, so the player object must be moved as well, and even then the camera is wrong.
-  **Override the warp destination at run time instead** (`wNextWarp`/`wNextMapGroup`/
-  `wNextMapNumber`, written *between instructions* — the game reads them back a few
-  instructions after writing them, so a per-frame poke loses the race). That takes the full
-  `MAPSETUP_DOOR` path and the game sets everything up itself.
-- **Gen 2's save is three separate WRAM runs into three separate SRAM runs** (`wPlayerData`
-  → `sPlayerData`, `wCurMapData` → `sCurMapData`, `wPokemonData` → `sPokemonData`), so a
-  save offset is **not** one base plus an offset. The checksum is a 16-bit sum of
-  `sGameData`, little-endian at `sChecksum`; a stale one is rejected, not tolerated.
-- **`wTilemap` is `$C3A0` and tile id == character code, exactly as in Gen 1** — the screen
-  reads back as text. But the Gen 2 **menu cursor is tile `$ED` on screen**, and
-  `wMenuCursorY` reads 2 whatever the cursor is doing: drive menus from the cursor tile, not
-  from that byte.
-- **`wMapGroup` is loaded into WRAM *before* the continue panel is dismissed**, so it is not
-  the test for "we are in the game" — stop pressing A there and the game sits on that panel
-  for ever. It also reads as noise on frame 0 (`map 127:211`); require a stable, sane map.
-- **Time Capsule prerequisites** (`LinkReceptionistScript_TimeCapsule`): `EVENT_MET_BILL`
-  clear, the `ENGINE_TIME_CAPSULE` *daily* flag clear, and a party with no species ≥ 152, no
-  move > `STRUGGLE` and no held item. All three Johto starters are Gen 2 species.
-- **THE SHINY RULE IS CONFIRMED AGAINST GOLD ITSELF.** `engine/gfx/color.asm`:
-  `SHINY_ATK_MASK EQU %0010`, `SHINY_DEF_DV`/`SHINY_SPD_DV`/`SHINY_SPC_DV` all `10` — exactly
-  what `plugins/trainer`'s `derived::shiny_if_traded` implements. Reading the rule out of the
-  cartridge covers all 65,536 DV pairs; a trade samples one. **Do not re-litigate this.**
-- **CLOSED: the Gen1↔Gen2 trade completed end to end and verified the shiny prediction in
-  game** (`gen2_timecapsule --capsule-trade`, one process, both cores on `LinkCable`; full
-  record `docs/link-cable.md` §8). GLIMMER the Abra, DVs `$EA$AA`, crossed into the captain's
-  real Gold save and arrived species 63, DVs byte-identical, **drawn in the ROM's own shiny
-  palette** (`PokemonPalettes` shiny pair through `Gpu::setrgb`, matched to the pixel) and
-  quick-saved by Gold itself; Mattia's Pidgey arrived in Blue with OT intact. 2,580 transfers,
-  0 torn. The choreography that closed the old phase gap, each learned the hard way:
-  (1) hold Blue until Gold's bot is at its receptionist — `WaitForLinkedFriend` arms Gold as a
-  `$02`-answering slave for `wLinkTimeoutFrames = $2FF` = 767 frames, which is the whole
-  window, and an ungated Blue handshakes against Gold's *overworld* serial handler and enters
-  the Trade Center alone; (2) a real save fails Gold's RTC check and puts up the clock-set
-  screen — in the Gen 2 overworld the decoded tilemap contains **no letters at all**, so "any
-  letter visible = a dialog owns the joypad, press A (never B — B backs out to the title
-  screen)"; (3) the free Time Capsule seat is decided by `hSerialConnectionStatus` — **`$FFCD`
-  on Gen 2, not Gen 1's `$FFAA`** — because the partner's `SPRITE_CHRIS` avatar occupies one
-  seat tile (`CableClubCheckWhichChris`); guessing from geometry parks the bot against the NPC
-  for ever; (4) Gen 2's trade UI is Gen 1's redrawn (`db "STATS     TRADE@"`,
-  `db "Trade completed!@"` in pokegold `engine/link/link.asm`), so one bot shape drives both
-  ends. Bonus quirk observed: the arrival holds **item 200** — Gen 2 reads the Gen 1
-  catch-rate byte (Abra's is 200) as a held item.
+**Everything Gen 2 now lives in [`docs/gen2/`](docs/gen2/README.md) — one source of truth, do
+not restate it here.** [README](docs/gen2/README.md) (the grades, and a blunt list of what is
+*not* established), [building the disassembly](docs/gen2/building-the-disassembly.md),
+[memory map](docs/gen2/memory-map.md), [the save file](docs/gen2/the-save-file.md),
+[reading the screen](docs/gen2/reading-the-screen.md),
+[the Time Capsule](docs/gen2/time-capsule.md), [sharp edges](docs/gen2/sharp-edges.md). The
+cable-side record of the run stays in `docs/link-cable.md` §8.
+
+The handful of things a crew must know *before* opening any of that:
+
+- **Gen 2 knowledge here is narrow and deep, not a map.** It all came from one project — the
+  Time Capsule — so battles, boxes, the bag, the map system and the RNG are **not established
+  at all**, and the area says so on every page. **A plausible-looking Gen 2 address is worse
+  than no address**: the failure mode is a save that passes its own checksum with a write
+  sitting in the middle of somebody else's data.
+- **Build `pokegold` at rgbds 1.0.3 and check it against `roms.sha1` before deriving any Gen 2
+  address** (SHA-1 `d8b8a360…`; 0.6.1 is too old, the repo demands ≥1.0.0). Constants come from
+  `rgbasm -Q8 -P includes.asm -D _GOLD` + `PRINTLN "{d:SYMBOL}"`, never a hand count.
+- **No Gen 2 address in this repo is signature-verified against the cartridge at run time** —
+  the grade Gen 1's `plugins/battle-control/src/wram.rs` supplies and Gen 2 lacks entirely, so a
+  Gen 2 tool handed Silver, Crystal or a hack writes wherever the transcribed number points.
+  Highest-value gap; do not ship a Gen 2 tool without closing it.
+- **THE SHINY RULE IS CONFIRMED AGAINST GOLD ITSELF** (`CheckShininess`, `engine/gfx/color.asm`:
+  `SHINY_ATK_MASK %0010`, def/spd/spc all `10`) — exactly what `plugins/trainer`'s
+  `derived::shiny_if_traded` implements, and reading it out of the cartridge covers all 65,536
+  DV pairs where a trade samples one. **Do not re-litigate this.**
+- **CLOSED: the Gen1↔Gen2 trade completed end to end** (`gen2_timecapsule --capsule-trade`, one
+  process, both cores on `LinkCable`): DVs byte-identical across the wire, drawn by Gold in the
+  ROM's own shiny palette and quick-saved by Gold itself. 2,580 transfers, 0 torn.
+- **Two facts are INVERTED between the generations and will bite a Gen 1 habit**: dismiss
+  dialogs with **A, never B** (B backs out to the title screen), and `hSerialConnectionStatus`
+  is **`$FFCD`** on Gen 2 against Gen 1's `$FFAA`.
+- **One correction the new pages carry that the old note did not**: "a Gen 2 save offset is not
+  one base plus an offset" is a claim about the *structure* (three separate copies), not about
+  today's arithmetic — on Gold the three runs are contiguous on both sides, so the shortcut
+  happens to give the same answer, which also means a bug in the per-run form would not have
+  been caught here. Keep the per-run mapper; do not claim it has been proved necessary.
 
 ## The trade-portal client (`src/portal/`, `portal` cargo feature)
 
