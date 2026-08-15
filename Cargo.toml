@@ -64,6 +64,7 @@ default = [
     "portal",
     "gen1-battle",
     "longplay",
+    "scenario",
 ]
 
 # Desktop OpenGL window frontend (`Gameboy::render_desktop`, `screen::desktop`).
@@ -155,6 +156,17 @@ portal = ["plugin-gen1-link", "plugin-agent"]
 # same bar `portal` meets. In `default` because it costs no dependency; out of
 # `--no-default-features` so an embedder inherits no run harness.
 longplay = ["plugin-agent"]
+# **Scenarios** (`terminalgb::scenario`) — a declarative goal, rules the HOST
+# enforces rather than the model being asked to honour, the knowledge base an
+# agent plans against, and a run recorded as a file that replays exactly with
+# no model calls at all. See `docs/scenarios.md`.
+#
+# It is `longplay` plus this module: the reset-and-repeat primitive, the
+# condition grammar and the progress sampler already live there and must not
+# exist twice. It adds **no third-party crate**. In `default` because it costs
+# no dependency; out of `--no-default-features` so an embedder inherits none of
+# it.
+scenario = ["longplay"]
 ffi = []
 ffi-base64 = ["image", "base64"]
 # Test support for plugin authors (`terminalgb::testing::TestMachine`). Off by
@@ -459,6 +471,13 @@ name = "claude_plays"
 path = "examples/claude_plays.rs"
 required-features = ["image", "plugin-agent"]
 
+# The scenario front end: check a scenario, run it under its rules, replay a
+# recording for nothing.
+[[example]]
+name = "scenario"
+path = "examples/scenario.rs"
+required-features = ["scenario"]
+
 # THE LONG-HORIZON RUNNER's front end. Needs only `longplay` (which pulls in
 # `plugin-agent`): screenshots go through the agent's own frame-capture, so
 # there is no `image` dependency here.
@@ -700,6 +719,15 @@ required-features = ["tui", "plugin-gen1-shinyhunt"]
 name = "agent"
 path = "testharness/agent.rs"
 required-features = ["plugin-agent"]
+harness = false
+
+# The scenario harness: proves a rule is enforced rather than requested, and
+# that a recorded run replays exactly. No commercial ROM — it drives the same
+# synthetic Gen 1-shaped cartridge the agent harness does.
+[[test]]
+name = "scenario"
+path = "testharness/scenario.rs"
+required-features = ["scenario"]
 harness = false
 
 # The Gen 1 memory atlas. The data is AtlasGB's, vendored as a pinned snapshot

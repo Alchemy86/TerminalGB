@@ -88,6 +88,13 @@ pub mod mode;
 /// behind the `music` cargo feature, so an embedding build carries none of it.
 #[cfg(all(feature = "music", not(target_arch = "wasm32")))]
 pub mod music;
+/// **Scenarios** — a declarative goal, rules the host *enforces*, the knowledge
+/// an agent may plan against, and a run recorded as a file that replays exactly
+/// with no model calls. See [`scenario`] and `docs/scenarios.md`. Behind the
+/// `scenario` feature (`longplay` plus this module) and adds **no third-party
+/// crate**.
+#[cfg(all(feature = "scenario", not(target_arch = "wasm32")))]
+pub mod scenario;
 /// The PPU's public surface: which of the two rendering engines runs.
 ///
 /// The `gpu` module itself stays private — its internals are not an API — but

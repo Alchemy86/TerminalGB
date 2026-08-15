@@ -7249,3 +7249,93 @@ is listed as screenshots and links to the page that explains it?"* — had the a
   terminal's list applies everywhere.
 - Keys `4`-`9` are swallowed by the slot handler and do nothing (there are three slots) —
   recorded on the page so it does not read as a missing feature.
+
+## Scenarios — rules the HOST enforces, and a run that replays for nothing (`src/scenario/`)
+
+**Reader-facing page: [`docs/scenarios.md`](docs/scenarios.md); gate:
+`testharness/scenario.rs` (15 checks, no commercial ROM, in a plain `cargo test`); front end:
+`examples/scenario.rs`.** Behind the `scenario` cargo feature (`longplay` plus this module),
+in `default`, out of `--no-default-features`, **no third-party crate** (`make embed` still
+reports `blip_buf` + first-party `terminalgb-plugin-api`).
+
+- **A RULE IN A PROMPT IS A REQUEST; A RULE THE HOST CAN CHECK IS A RULE.** Every rule is
+  decided from evidence the host owns and nothing on that list can be talked out of:
+  `no_memory_writes` from `Gameboy::host_writes()` **plus** every plugin's `has_written`;
+  `max_calls`/`max_usd`/`max_wall_seconds` from the governor's own counters; `battle
+  flee|fight` from whether battles were won or run from; `forbid`/`require` from observed
+  state. A violation is a **forfeit, not a bad score** — the referee runs *before* the goal is
+  judged, and the report names the rule and the frame.
+- **`Gameboy::debug_write` is COUNTED now (`host_writes`), and that counter is the whole
+  enforcement primitive.** One increment on a path emulation never touches (checked: every
+  caller is an example or a harness), not serialised — it is a property of *this process's
+  conduct*, and a save state carries no claim about how it was produced. A recording carries
+  that claim instead. **Do not add a second back door into the machine without counting it.**
+- **`require` is judged AT THE GOAL, not throughout.** "Must legitimately obtain a Pokémon" is
+  false for the first ten minutes of every legitimate playthrough. `Referee::check` and
+  `Referee::check_requirements` are separate for that reason; collapsing them makes every
+  honest run fail immediately.
+- **A rule the host enforces but never states is a trap.** `Referee::instructions()` puts every
+  *behavioural* rule at the **head** of the agent's `notes`, and the briefing is set **before
+  the first frame**, not on the first map change — the agent's opening decision lands within a
+  handful of frames and a rule it hears about afterwards is one it was judged on unheard.
+  Found by watching the harness: the first snapshot had `notes: []`.
+- **Allowances are declared or the numbers are worthless.** `state_resets`, `rewinds`,
+  `memory_writes`, `battle_advice`, `guided_decisions`, `start_state_supplied` — all printed,
+  and `clean` means no writes, no rewinds, no privileged advice. Resets are the episode, not
+  assistance; everything else is.
+- **A RECORDING IS THE DRIVER'S REPLIES AND NOTHING ELSE, and that is why it is tiny.** Frames
+  and observations are *derivable*; the replies plus four identities (cartridge title + global
+  checksum, start-state hash, scenario hash, final-state hash) are not. 400 decisions over
+  21,887 frames is a few hundred KB. Replay pushes them through `ScriptedDriver`, i.e. the
+  **same** parse-clamp-execute path a live model takes — so a replay *is* the run, not an
+  approximation, and it costs **zero model calls**.
+- **`faithful()` requires final state AND frame count AND ending AND decision count.** An
+  identical final state reached in a different number of frames is not a replay, and reporting
+  it as one would make the artefact meaningless.
+- **Measured on the captain's own Pokémon Blue** (20-core x86-64, headless): the shipped
+  `scenarios/leave-the-pokemon-center.json` reached its goal in **378 frames / 2 decisions,
+  clean, 0 host writes**, and replayed byte-identically (`771b5c43d6066115` both sides, drift
+  0). A 400-decision random walk: **21,887 frames, run 7,709 f/s, replay 7,806 f/s = 130.7x
+  real time**, same final hash, drift 0. **No live model has solved a scenario** — every run
+  measured used a scripted or random driver, which is still only button presses. Say that.
+- **Guidance is LEARNED, never transcribed.** A run records the doors it walked through and
+  merges them into the scenario's guidance file; the next run is handed the route in words with
+  the door coordinate, and is told *"no earlier run has walked from here to the goal — explore"*
+  when it has not. `uses` accumulates, so a door two runs found is better evidenced. Deliberate:
+  a warp table lifted from `pret/pokered` is closer to bulk game data than to a fact, and a
+  graph a console actually walked is *evidence*. **`scenarios/guidance/` is gitignored** — a
+  guidance file is true only of the save it was played from (the run here learned "the Viridian
+  PC door leads to Pallet Town", which is true of that fixture save and of nothing else).
+- **The atlas is loaded from disk, never embedded.** 237 KB of TSV in the published crate and
+  the embedding build would break the `make embed` contract. `$GB_ATLAS`, else the vendored path
+  walked up from the cwd. **An absent source is REPORTED missing, never silently dropped** — a
+  run that planned without the reference it asked for is a different run.
+- **The one privileged source is quarantined by name.** `battle_advice` would read the
+  opponent's true stats out of the live machine; it is off unless asked for, announced as
+  `PRIVILEGED` in the briefing *before* the run, counted per decision in the report, and a
+  scenario that asks for it while forbidding fighting is refused. **It is declared but not
+  wired** — the report deliberately over-counts (every decision) rather than under.
+- **`testharness/support/fake_gen1.rs` is now SHARED** by `testharness/agent.rs` and
+  `testharness/scenario.rs` (`#[path]`-included, the `examples/support/suite_baseline.rs`
+  pattern). It gained a **working door at (8,8)** that changes `wCurMap`, so "leave the room" is
+  a real goal and a map graph is learnable with no commercial ROM. **The staircase at (7,1) was
+  left alone on purpose**: `agent.rs`'s "walks to the exit and presses A" case hard-codes it, and
+  putting the door there makes the agent's own map-change interrupt cancel the plan — measured,
+  it turns that case red. Two warps in the table now; the second is the working one.
+- **The stale-rlib trap bites this work constantly** (`the trait bound AgentPlugin: Plugin is
+  not satisfied`, with rustc listing `AgentPlugin` as implementing it). `touch src/lib.rs` and
+  rebuild — it is the documented `panic = 'abort'` dual-rlib artefact, not your source. Budget
+  for hitting it once per harness build.
+- **`examples/scenario` subcommands `check` and `knowledge` need no cartridge and cost
+  nothing**, and `check` prints the whole cost ceiling (`attempts × max_calls`) before anything
+  is spent. A scenario that could never be judged — no goal, a condition on an undeclared watch,
+  advice it could never act on — is refused *there*, not after a thousand timeouts.
+- **Making a start state from the captain's Blue save, so nobody re-derives it:** the usable
+  save is `~/roms/.backup/Pokemon-Blue.sav.185730-verified` (the `~/roms/*.sav` copy is
+  essentially blank). `rom_script` stages the ROM as `cart.gb`, so the save must be copied in as
+  **`cart.sav`** and `PHASE=relaunch` used, or the run silently starts a new game. The intro
+  needs ~900 idle frames before A reaches the title screen. It lands at **Viridian Pokémon
+  Center (0x29), (11,3), party of 2** — and its exits are `to_map: 255` (return to `wLastMap`),
+  which on that save is **Pallet Town**, not Viridian City. That is why the shipped scenario's
+  goal is `map!=0x29` and not a specific destination: a goal tuned to one save's `wLastMap`
+  would be wrong everywhere else.

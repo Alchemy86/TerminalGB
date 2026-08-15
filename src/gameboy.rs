@@ -5,6 +5,9 @@ pub struct Gameboy {
     cpu: Cpu<'static>,
     pub width: u32,
     pub height: u32,
+    /// Bytes written into the machine from outside the game this session. See
+    /// [`Gameboy::host_writes`]; not serialised, deliberately.
+    host_writes: u64,
 }
 
 pub use self::Target::{GameBoy, GameBoyColor, SuperGameBoy};
@@ -115,6 +118,7 @@ impl Gameboy {
             cpu: Cpu::new(data, filepath),
             width: 160,
             height: 144,
+            host_writes: 0,
         };
 
         gb
@@ -133,6 +137,7 @@ impl Gameboy {
             cpu: Cpu::new_with_model(data, filepath, model),
             width: 160,
             height: 144,
+            host_writes: 0,
         }
     }
 
@@ -151,6 +156,7 @@ impl Gameboy {
             cpu: Cpu::try_new_with_model(data, filepath, model)?,
             width: 160,
             height: 144,
+            host_writes: 0,
         })
     }
 
@@ -172,6 +178,7 @@ impl Gameboy {
             cpu: Cpu::new_with_boot_rom(data, filepath, model, boot),
             width: 160,
             height: 144,
+            host_writes: 0,
         }
     }
 
@@ -902,8 +909,27 @@ impl Gameboy {
 
     /// Write one byte through the memory bus, as the CPU would (so MBC control
     /// registers at 0x0000-0x7FFF behave exactly as for a real write).
+    ///
+    /// **Counted.** See [`Gameboy::host_writes`] — a rule like
+    /// `no_memory_writes` is only worth anything if the host can prove it, and
+    /// this is the one door a host has.
     pub fn debug_write(&mut self, address: u16, value: u8) {
+        self.host_writes = self.host_writes.saturating_add(1);
         self.cpu.memory.wb(address, value)
+    }
+
+    /// How many bytes this session has written into the emulated machine from
+    /// **outside the game** — through [`Gameboy::debug_write`].
+    ///
+    /// The evidence behind `src/scenario`'s `no_memory_writes` rule. A run that
+    /// only pressed buttons reads zero here, and no amount of prompting can
+    /// make a run that poked read zero.
+    ///
+    /// Session state, not machine state: it is not serialised, because it is a
+    /// property of *this process's* conduct and a save state carries no claim
+    /// about how it was produced. A recording carries that claim instead.
+    pub fn host_writes(&self) -> u64 {
+        self.host_writes
     }
 
     /// Currently-selected ROM bank — cheap read for a debug/stats overlay.

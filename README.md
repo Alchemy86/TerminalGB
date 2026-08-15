@@ -1140,6 +1140,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | [the trainer view](docs/trainer.md) | the address table, the derivation, and the verification |
 | [Claude plays Pokémon](docs/claude-plays.md) | the agent architecture, the OBS/Twitch recipe, and the honest gaps |
 | [long runs and episodes](docs/longplay.md) | an agent plays unattended for hours at 70x and reports in — durable state, milestones pushed to a phone, a game-level stuck detector, and the **episode** primitive that resets and repeats a chosen segment so an agent becomes measurable |
+| [scenarios](docs/scenarios.md) | a goal and **rules the host enforces rather than asks for** — a run that pokes memory forfeits and names the rule — plus the knowledge an agent plans against (the memory atlas, and a map graph earlier runs *walked*), and a run recorded as a file that replays byte-exactly with **no model calls** |
 
 **Pokémon Generation 2**
 

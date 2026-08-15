@@ -126,6 +126,20 @@ struct Watch {
     in_battle: bool,
 }
 
+/// A driver reply the host accepted, handed back to whatever is recording the
+/// run.
+///
+/// This is deliberately the **raw text**, not the parsed plan: replaying a
+/// recording means pushing this back through the same parse-clamp-execute path
+/// the live run took, and anything already parsed would be a second
+/// implementation of it. See `src/scenario/record.rs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptedReply {
+    pub decision: u64,
+    pub frame: u64,
+    pub reply: String,
+}
+
 /// One decision, as it goes into the log.
 #[derive(Debug, Clone)]
 struct Record {
@@ -165,6 +179,13 @@ pub struct AgentPlugin {
     enabled: bool,
     /// Complaints about the last reply, fed back to the driver next time.
     complaints: Vec<String>,
+    /// Standing instructions the *host* wants the agent to have, set from
+    /// outside between decisions and emitted at the head of `notes`. See
+    /// [`AgentPlugin::set_briefing`].
+    briefing: Vec<String>,
+    /// Replies accepted since the host last drained them, for a host that is
+    /// recording the run. See [`AgentPlugin::drain_accepted`].
+    accepted: Vec<AcceptedReply>,
     /// Set once the very first snapshot has been sent, so the action reference
     /// is only paid for once.
     sent_help: bool,
@@ -213,6 +234,8 @@ impl AgentPlugin {
             log,
             enabled: true,
             complaints: Vec::new(),
+            briefing: Vec::new(),
+            accepted: Vec::new(),
             sent_help: false,
             settle_hash: 0,
             settle_stable: 0,
@@ -255,6 +278,29 @@ impl AgentPlugin {
     /// question from the game-level wall detector in `src/longplay`.
     pub fn stuck_worst(&self) -> u32 {
         self.stuck.worst()
+    }
+
+    /// Standing instructions from the host, put at the **head** of the
+    /// snapshot's `notes` — before the situational ones, because a rule the
+    /// agent must follow outranks an observation about the current screen.
+    ///
+    /// Additive and host-driven: the plugin has no opinion about what goes in
+    /// here. A scenario runner puts its rules and whatever its knowledge base
+    /// worked out for the current position; a plain session leaves it empty and
+    /// pays nothing. Replaced wholesale each time, so a caller that recomputes
+    /// per decision cannot accumulate stale advice.
+    pub fn set_briefing(&mut self, lines: Vec<String>) {
+        self.briefing = lines;
+    }
+
+    /// Take the replies accepted since this was last called.
+    ///
+    /// Read-only and drain-on-read, so a host that never asks pays one empty
+    /// `Vec` per session. It exists so a run can be *recorded*: the replies in
+    /// order are all a replay needs, since everything downstream of them is
+    /// deterministic.
+    pub fn drain_accepted(&mut self) -> Vec<AcceptedReply> {
+        std::mem::take(&mut self.accepted)
     }
 
     /// Whether this cartridge is one the observer understands.
@@ -572,6 +618,15 @@ impl AgentPlugin {
         let (plan, errors) = action::plan_from_json(items, &self.config.limits);
         self.complaints = errors;
 
+        // Recorded before the plan is judged usable: a reply that parsed but
+        // said nothing to do is still what the driver said, and a replay that
+        // skipped it would ask its script one question out of step.
+        self.accepted.push(AcceptedReply {
+            decision: self.decisions,
+            frame: self.frame,
+            reply: text.clone(),
+        });
+
         self.log_record(Record {
             decision: self.decisions,
             frame: self.frame,
@@ -803,6 +858,12 @@ impl AgentPlugin {
         }
 
         w.arr_field("notes");
+        // The host's standing instructions first: a rule the run is judged on
+        // outranks a remark about the current screen, and a model that reads
+        // only the first few notes must read those.
+        for b in &self.briefing {
+            w.str_item(b);
+        }
         for c in &self.complaints {
             w.str_item(c);
         }

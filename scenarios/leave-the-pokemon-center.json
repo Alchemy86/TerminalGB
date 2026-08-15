@@ -1,0 +1,17 @@
+{
+  "schema": "gbscenario/1",
+  "name": "leave-the-pokemon-center",
+  "objective": "Walk out of the Viridian Pokémon Center. The two exit mats are at the bottom of the room; a door is not opened with A, so step onto a mat and then one more step down to go through it.",
+  "goal": ["map!=0x29"],
+  "failure": ["party_hp=0"],
+  "rules": [
+    "no_memory_writes",
+    "battle flee",
+    "require party>=1",
+    "max_calls 12",
+    "max_wall_seconds 600"
+  ],
+  "knowledge": ["atlas", "guidance"],
+  "guidance": "guidance/viridian.json",
+  "timeout_frames": 12000
+}

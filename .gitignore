@@ -25,3 +25,7 @@ log
 NOTES
 # The conformance runner is Python; keep its bytecode cache out of the tree.
 __pycache__/
+
+# Learned guidance is a run artefact, true only of the save it was played
+# from — see scenarios/README.md.
+scenarios/guidance/
