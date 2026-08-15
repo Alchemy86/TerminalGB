@@ -54,18 +54,24 @@ fn main() {
                 "  --lobby:         THE WORLD TRADE CENTRE — a shared Cable Club room."
             );
             eprintln!(
-                "                   Hosts a room, boots a console to meet, and seats you"
+                "                   Run it in one window, then run it again in another:"
             );
             eprintln!(
-                "                   in it. `--lobby=HOST:PORT` joins somebody else's;"
+                "                   the second finds the first by itself. Walk both to"
             );
             eprintln!(
-                "                   `--lobby-alone` waits for a person instead of booting"
+                "                   the Cable Club and you meet. `--lobby-partner` boots"
             );
             eprintln!(
-                "                   a partner. ROM from the argument, else the most"
+                "                   a driven console to meet instead of a person, and"
             );
-            eprintln!("                   recently played. See docs/worldlobby.md.");
+            eprintln!(
+                "                   `--lobby=HOST:PORT` joins a room by address. ROM from"
+            );
+            eprintln!(
+                "                   the argument, else the most recently played. See"
+            );
+            eprintln!("                   docs/worldlobby.md.");
             eprintln!("video-out (see docs/video-out.md):");
             eprintln!("{}", terminalgb::video::cli_usage());
         }
@@ -83,6 +89,7 @@ fn main() {
             if a == "lobby"
                 || a == "--lobby"
                 || a == "--lobby-alone"
+                || a == "--lobby-partner"
                 || a.starts_with("--lobby=") =>
         {
             std::process::exit(run_lobby(&rest))
@@ -109,7 +116,14 @@ fn run_lobby(args: &[String]) -> i32 {
 
     let flag = args[0].as_str();
     let join = flag.strip_prefix("--lobby=").map(str::to_string);
-    let alone = flag == "--lobby-alone";
+    // **The driven console is opt-in, and the reason is that a cable has two
+    // ends.** Booting one by default fills the second seat before the person
+    // opposite has run the command, and they then cannot reach the Trade Center
+    // at all — the Cable Club receptionist wants a console on the wire, and the
+    // only one there is already taken. `--lobby` twice is the headline case, so
+    // that is what the bare flag does; `--lobby-partner` is the solo demo.
+    // `--lobby-alone` is what that used to be called and still means it.
+    let want_partner = flag == "--lobby-partner";
 
     // The ROM, the way the picker resolves one: an explicit path wins,
     // otherwise the top of the recent list. A person who has never played
@@ -138,6 +152,12 @@ fn run_lobby(args: &[String]) -> i32 {
         eprintln!("terminalgb: --lobby: cannot read {}", rom.display());
         return 2;
     }
+    // **Absolute, before anything else sees it.** The driven partner is a child
+    // process and the room's scratch directory is resolved against the working
+    // directory, so a relative `blue.gb` typed here becomes a path that only
+    // works from one directory — the same trap that spawning a terminal on a
+    // relative binary path already cost this repository.
+    let rom = rom.canonicalize().unwrap_or(rom);
 
     let name = std::env::var("GB_LOBBY_NAME")
         .ok()
@@ -151,7 +171,7 @@ fn run_lobby(args: &[String]) -> i32 {
     let save = save.is_file().then_some(save);
     // Joining somebody else's room means the seats are already spoken for; the
     // partner is only for the person opening one on their own.
-    let partner = (join.is_none() && !alone).then(|| PartnerOptions {
+    let partner = (join.is_none() && want_partner).then(|| PartnerOptions {
         bin: None,
         name: "BLUE".to_string(),
         rom: rom.clone(),
@@ -159,7 +179,10 @@ fn run_lobby(args: &[String]) -> i32 {
         // Twelve hours. The driven partner stops when the frame budget runs
         // out, and nobody plays past that in one sitting.
         frames: 60 * 60 * 60 * 12,
-        verbose: false,
+        // Its output goes to a log file, not to the terminal, so the only cost
+        // of asking for detail is disk — and without the stage transitions
+        // "never reached the Trade Center" says nothing about where it stopped.
+        verbose: std::env::var("GB_LOBBY_QUIET").is_err(),
     });
 
     println!("lobby: {}", rom.display());

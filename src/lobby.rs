@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,6 +33,13 @@ use terminalgb_plugin_gen1_lobby::gen1::Facing;
 /// packet costs one stale frame of somebody else's avatar, never a desync.
 pub const FRAMES_PER_REPORT: u32 = 8;
 
+/// How long to wait for a relay to say hello before deciding whatever is on
+/// that port is not one. Loopback, so this is generous by three orders of
+/// magnitude; it exists so a *foreign* program holding the well-known port
+/// cannot wedge the emulator's startup (the same rule as every other sink here:
+/// nothing may block the frame loop, and nothing may block getting to it).
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(1500);
+
 /// A connection to a lobby relay.
 pub struct LobbyClient {
     sock: TcpStream,
@@ -39,29 +47,72 @@ pub struct LobbyClient {
     id: Arc<Mutex<u32>>,
     alive: Arc<AtomicBool>,
     frames: u32,
+    /// The name the **relay** gave us, which is not always the one we asked
+    /// for — see [`unique_name`].
+    name: String,
 }
 
 impl LobbyClient {
     /// Join a relay. `addr` is `host:port`; the name is what other players see
     /// over your head, and is filtered to what the cartridge can draw.
+    ///
+    /// The relay's `you` line is read **before** this returns, so a port that
+    /// belongs to something else is an `Err` here rather than a room that never
+    /// says anything. The name is read too: two people who both asked to be RED
+    /// cannot both be RED, and the relay is the only party that can see that
+    /// (see [`unique_name`]).
     pub fn join(addr: &str, name: &str) -> std::io::Result<LobbyClient> {
         let mut sock = TcpStream::connect(addr)?;
         sock.set_nodelay(true).ok();
-        writeln!(
-            sock,
-            "join\t{}",
-            terminalgb_plugin_gen1_lobby::gen1::filter_to_charmap(name)
-        )?;
+        sock.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).ok();
+        let asked = terminalgb_plugin_gen1_lobby::gen1::filter_to_charmap(name);
+        writeln!(sock, "join\t{asked}")?;
         writeln!(sock, "ready")?;
+
+        // The buffered reader is built here and *handed to the thread*: a
+        // snapshot can arrive interleaved with the handshake, and a second
+        // reader over the same socket would drop whatever the first had already
+        // pulled into its buffer.
+        let mut reader = BufReader::new(sock.try_clone()?);
+        let mut line = String::new();
+        let mut id = 0u32;
+        let mut given: Option<String> = None;
+        let mut saw_you = false;
+        // `you` comes on accept and `name` comes back from our `join`, so both
+        // are due at once; anything else in between is a snapshot, which is
+        // resent at TICK_HZ and can be dropped without consequence.
+        while given.is_none() {
+            line.clear();
+            if reader.read_line(&mut line)? == 0 {
+                return Err(std::io::Error::other("the relay hung up"));
+            }
+            let f: Vec<&str> = line.trim_end().split('\t').collect();
+            match f.first().copied() {
+                Some("you") => {
+                    saw_you = true;
+                    id = f.get(1).and_then(|v| v.parse().ok()).unwrap_or(0);
+                }
+                Some("name") => given = f.get(1).map(|v| v.to_string()),
+                // Not a relay at all: something else owns this port.
+                _ if !saw_you => {
+                    return Err(std::io::Error::other(
+                        "that port is not a TerminalGB lobby",
+                    ))
+                }
+                _ => {}
+            }
+        }
+        sock.set_read_timeout(None).ok();
+        reader.get_mut().set_read_timeout(None).ok();
+
         let peers: Arc<Mutex<Vec<Peer>>> = Arc::new(Mutex::new(Vec::new()));
-        let id = Arc::new(Mutex::new(0u32));
+        let id = Arc::new(Mutex::new(id));
         let alive = Arc::new(AtomicBool::new(true));
         {
-            let rx = sock.try_clone()?;
             let peers = Arc::clone(&peers);
             let id = Arc::clone(&id);
             let alive = Arc::clone(&alive);
-            std::thread::spawn(move || read_loop(rx, peers, id, alive));
+            std::thread::spawn(move || read_loop(reader, peers, id, alive));
         }
         Ok(LobbyClient {
             sock,
@@ -69,11 +120,17 @@ impl LobbyClient {
             id,
             alive,
             frames: 0,
+            name: given.unwrap_or(asked),
         })
     }
 
     pub fn connected(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    /// The name the relay gave us. Show this, not the one that was asked for.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Everybody else in the room, as of the last snapshot.
@@ -114,12 +171,11 @@ impl LobbyClient {
 }
 
 fn read_loop(
-    rx: TcpStream,
+    reader: BufReader<TcpStream>,
     peers: Arc<Mutex<Vec<Peer>>>,
     id: Arc<Mutex<u32>>,
     alive: Arc<AtomicBool>,
 ) {
-    let reader = BufReader::new(rx);
     let mut building: Vec<Peer> = Vec::new();
     for line in reader.lines() {
         let Ok(line) = line else { break };
@@ -287,6 +343,41 @@ impl Default for RelayOptions {
     }
 }
 
+/// Names to fall back on when two people ask to be the same one. Gen 1's own
+/// cast, so a second console reads as a second *player* rather than as "RED
+/// (2)" — and every one of them survives [`filter_to_charmap`].
+pub const NAME_PALETTE: &[&str] = &[
+    "RED", "BLUE", "GREEN", "YELLOW", "GOLD", "SILVER", "CRYSTAL", "IVY",
+];
+
+/// A name nobody else in the room has.
+///
+/// **The relay decides this, because the relay is the only party that can see
+/// everybody.** Two people running the shipped command both ask to be `RED` —
+/// the default, since neither typed a name — and a room with two REDs in it is
+/// a room you cannot read: the avatar labels are the only thing telling you
+/// which walking figure is the other person.
+pub fn unique_name(want: &str, taken: &[String]) -> String {
+    let want = want.trim();
+    let want = if want.is_empty() { "RED" } else { want };
+    let free = |n: &str| !taken.iter().any(|t| t.eq_ignore_ascii_case(n));
+    if free(want) {
+        return want.to_string();
+    }
+    for n in NAME_PALETTE {
+        if free(n) {
+            return (*n).to_string();
+        }
+    }
+    for i in 2..=99u32 {
+        let c = format!("{want}{i}");
+        if free(&c) {
+            return c;
+        }
+    }
+    want.to_string()
+}
+
 /// A room this process is hosting.
 pub struct Hosted {
     /// What to put in `GB_LOBBY`.
@@ -302,7 +393,16 @@ pub struct Hosted {
 /// `bind` is anything `TcpListener::bind` takes; `127.0.0.1:0` asks the kernel
 /// for a free port and [`Hosted::addr`] reports which.
 pub fn host(bind: &str, opts: RelayOptions) -> std::io::Result<Hosted> {
-    let listener = TcpListener::bind(bind)?;
+    host_on(TcpListener::bind(bind)?, opts)
+}
+
+/// Serve a room on a listener somebody else bound.
+///
+/// Separate from [`host`] because the well-known rendezvous ([`rendezvous`])
+/// has to *bind first* and host second: the bind is what decides who hosts, and
+/// it has to be the same syscall that answers the question, not a second one
+/// taken after a lookup.
+pub fn host_on(listener: TcpListener, opts: RelayOptions) -> std::io::Result<Hosted> {
     let local = listener.local_addr()?;
     let stop = Arc::new(AtomicBool::new(false));
     let hosted = Hosted {
@@ -396,6 +496,9 @@ pub fn serve(listener: TcpListener, opts: RelayOptions, stop: Arc<AtomicBool>) {
             continue;
         }
         let Ok(tx) = stream.try_clone() else { continue };
+        let Ok(mut reply) = stream.try_clone() else {
+            continue;
+        };
         clients.lock().unwrap().push((id, tx));
         let room = Arc::clone(&room);
         std::thread::spawn(move || {
@@ -404,9 +507,27 @@ pub fn serve(listener: TcpListener, opts: RelayOptions, stop: Arc<AtomicBool>) {
                 let Ok(line) = line else { break };
                 let f: Vec<&str> = line.split('\t').collect();
                 let mut l = room.lock().unwrap();
+                if f.first().copied() == Some("join") {
+                    // **Decided under the room lock, answered after it.** Two
+                    // people joining in the same tick must not both race
+                    // against an empty `taken` and be handed the same name; but
+                    // a socket write must not happen with the lock held either,
+                    // or a client that has stopped reading stalls the relay's
+                    // own tick thread.
+                    let taken: Vec<String> = l
+                        .bodies
+                        .iter()
+                        .filter(|(k, _)| **k != id)
+                        .map(|(_, b)| b.name.clone())
+                        .collect();
+                    let given = unique_name(f.get(1).unwrap_or(&"?"), &taken);
+                    l.bodies.entry(id).or_default().name = given.clone();
+                    drop(l);
+                    let _ = writeln!(reply, "name\t{given}");
+                    continue;
+                }
                 let b = l.bodies.entry(id).or_default();
                 match f.first().copied() {
-                    Some("join") => b.name = f.get(1).unwrap_or(&"?").to_string(),
                     Some("ready") => b.ready = true,
                     Some("away") => b.away = f.get(1) == Some(&"1"),
                     Some("seated") => b.seated = true,
@@ -430,6 +551,173 @@ pub fn serve(listener: TcpListener, opts: RelayOptions, stop: Arc<AtomicBool>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The rendezvous: one room per user, decided by a bind rather than by timing.
+// ---------------------------------------------------------------------------
+
+/// Base of the per-user rendezvous port. Below the ephemeral range
+/// (32768-60999 on Linux), so an outgoing connection's local port can never
+/// land on it and make the room disappear for one launch in a thousand.
+pub const LOBBY_PORT_BASE: u16 = 24000;
+
+/// The port this user's room lives on. `$GB_LOBBY_PORT` overrides.
+///
+/// Keyed by uid so two people sharing a machine get two rooms — the same reason
+/// [`crate::link::peer::rendezvous_dir`] keys its fallback directory by uid.
+pub fn rendezvous_port() -> u16 {
+    if let Ok(p) = std::env::var("GB_LOBBY_PORT") {
+        if let Ok(p) = p.trim().parse::<u16>() {
+            return p;
+        }
+        eprintln!("terminalgb: GB_LOBBY_PORT={p:?} is not a port number — ignoring");
+    }
+    LOBBY_PORT_BASE + (uid() % 1000) as u16
+}
+
+fn uid() -> u32 {
+    // No `libc` in the default build, and this is not worth a feature: the
+    // runtime directory is already `/run/user/<uid>`, and `$UID` is exported by
+    // every interactive shell. A wrong answer costs a shared room, not
+    // correctness.
+    if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
+        if let Some(n) = std::path::Path::new(&d)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            return n;
+        }
+    }
+    std::env::var("UID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
+/// The room's own cable rendezvous directory — where the consoles *in this
+/// room* find each other, and nowhere a stray emulator is looking.
+///
+/// `$GB_LOBBY_DIR` overrides.
+pub fn lobby_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("GB_LOBBY_DIR") {
+        return PathBuf::from(d);
+    }
+    if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(d).join("terminalgb/lobby");
+    }
+    std::env::temp_dir().join(format!("terminalgb-lobby-{}", uid()))
+}
+
+/// The result of [`rendezvous`]: the room's address, and the handle that stops
+/// it if this process is the one hosting.
+pub struct Rendezvous {
+    pub addr: String,
+    /// `Some` when we bound the port and are serving the room.
+    pub stop: Option<Arc<AtomicBool>>,
+    pub hosting: bool,
+    /// Set when the well-known port was unusable and we had to fall back to an
+    /// ephemeral one — which means a second instance will **not** find us, so
+    /// it must be said out loud rather than discovered by a lonely player.
+    pub private: bool,
+}
+
+/// Host the user's room, or join it if it already exists.
+///
+/// **The decision is the `bind`, not a lookup.** A rendezvous made of a file
+/// holding a port number has a window between reading it and acting on it, and
+/// two people starting the emulator at the same moment fall into that window
+/// and end up in two rooms of one person each — which is exactly the bug this
+/// replaces. `TcpListener::bind` on a fixed port is decided by the kernel:
+/// precisely one process can hold it, everybody else gets `AddrInUse`, and
+/// there is no stale state to sweep because a port is released when the process
+/// that held it dies.
+///
+/// It is the same shape as the cable's own auto-discovery
+/// ([`crate::link::peer::LinkPeer::discover`]) — first one there waits, the
+/// rest attach — with the sweep-the-corpses step replaced by something the
+/// kernel does for us.
+pub fn rendezvous(opts: RelayOptions) -> std::io::Result<Rendezvous> {
+    let port = rendezvous_port();
+    match decide(port) {
+        Decision::Host(l) => {
+            let h = host_on(l, opts)?;
+            Ok(Rendezvous {
+                addr: h.addr,
+                stop: Some(h.stop),
+                hosting: true,
+                private: false,
+            })
+        }
+        Decision::Join(addr) => Ok(Rendezvous {
+            addr,
+            stop: None,
+            hosting: false,
+            private: false,
+        }),
+        // Something else owns the fixed port, or this machine will not let us
+        // have it (a sandbox, a policy). A room only this process can see still
+        // beats no room, but it is a different promise and says so out loud —
+        // a second instance will not find us.
+        Decision::Private(why) => {
+            eprintln!(
+                "terminalgb: lobby: the shared room port {port} is not usable \
+                 ({why}) — hosting a room only this window can see. Set \
+                 GB_LOBBY_PORT to a free port to share again."
+            );
+            let h = host("127.0.0.1:0", opts)?;
+            Ok(Rendezvous {
+                addr: h.addr,
+                stop: Some(h.stop),
+                hosting: true,
+                private: true,
+            })
+        }
+    }
+}
+
+enum Decision {
+    Host(TcpListener),
+    Join(String),
+    Private(String),
+}
+
+/// Bind, or prove somebody else's room is really there.
+///
+/// The retry is not defensive padding: the holder of the port may have quit in
+/// the microsecond between our failed bind and our connect, and a person whose
+/// second window opened exactly then would otherwise get no room at all with no
+/// way to tell why.
+fn decide(port: u16) -> Decision {
+    let addr = format!("127.0.0.1:{port}");
+    let mut why = String::new();
+    for _ in 0..3 {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => return Decision::Host(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => match probe(&addr) {
+                Ok(()) => return Decision::Join(addr),
+                Err(e) => why = e.to_string(),
+            },
+            Err(e) => return Decision::Private(e.to_string()),
+        }
+    }
+    Decision::Private(why)
+}
+
+/// Is there a lobby on `addr`? Connects, reads the relay's own `you` greeting
+/// and hangs up **without saying anything**, so the room never sees a body for
+/// a connection that was only asking.
+fn probe(addr: &str) -> std::io::Result<()> {
+    let sock = TcpStream::connect(addr)?;
+    sock.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).ok();
+    let mut line = String::new();
+    BufReader::new(sock).read_line(&mut line)?;
+    if line.starts_with("you\t") {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("that port is not a TerminalGB lobby"))
+    }
+}
+
 /// Where to join, from the environment. `GB_LOBBY=host:port`.
 ///
 /// An environment variable rather than a config key on purpose: a lobby
@@ -442,7 +730,18 @@ pub fn from_env(name: &str) -> Option<(LobbyClient, String)> {
         return None;
     }
     match LobbyClient::join(&addr, name) {
-        Ok(c) => Some((c, format!("lobby: joined {addr} as {name}"))),
+        Ok(c) => {
+            let given = c.name().to_string();
+            let note = if given == name {
+                format!("lobby: joined {addr} as {given}")
+            } else {
+                // Never silent: the player asked to be one thing and is another,
+                // and the label over their head is how they find themselves in
+                // a room full of identical sprites.
+                format!("lobby: joined {addr} as {given} ({name} was taken)")
+            };
+            Some((c, note))
+        }
         Err(e) => {
             // An unreachable relay costs the room and nothing else — the
             // emulator still runs the cartridge. Same rule as an unplugged
@@ -591,6 +890,12 @@ pub fn spawn_partner(
     // twice hands it a cartridge whose `.sav` it then cannot find — measured,
     // as a panic in `patch_party`.
     std::fs::create_dir_all(pair_dir)?;
+    // **The log's own directory, explicitly.** It used to be created as a side
+    // effect of the pair directory living under `target/worldlobby/` too; the
+    // cable rendezvous moved out to the runtime directory and this quietly
+    // became "no partner (No such file or directory)" — an error message that
+    // names the log file nowhere and reads like a missing binary.
+    std::fs::create_dir_all(SCRATCH)?;
     let log = std::path::Path::new(SCRATCH).join("partner.log");
     let out = std::fs::File::create(&log)?;
 
@@ -639,11 +944,13 @@ pub fn spawn_partner(
 /// where the keypresses come from, and the emulator cannot tell — both arrive
 /// as `Gameboy::keydown`.
 ///
-/// The two things it *does* arrange are the two that are not the frontend's by
-/// default: the cable must belong to the real second console (so the built-in
-/// virtual trade partner must not claim it), and `link = auto` must find that
-/// console rather than a stranger's, which is what the private pair directory
-/// is for.
+/// The three things it *does* arrange are the three that are not the
+/// frontend's by default: which room this is ([`rendezvous`] — one per user,
+/// decided by a bind so two windows cannot each open their own), which cable
+/// rendezvous the console uses (the room's own, so `link = auto` finds the
+/// person opposite rather than whatever else is running), and that the built-in
+/// *virtual* trade partner does not claim the port the real second console
+/// needs.
 #[cfg(all(not(target_arch = "wasm32"), feature = "tui"))]
 pub fn take_seat(o: SeatOptions) -> std::io::Result<()> {
     use terminalgb_plugin_gen1_lobby::room::DEFAULT_ROOM;
@@ -671,43 +978,69 @@ pub fn take_seat(o: SeatOptions) -> std::io::Result<()> {
     };
 
     // --- the room ---------------------------------------------------------
-    let (addr, stop) = match &o.join {
-        Some(a) => (a.clone(), None),
+    // Two seats when a partner is coming, one when it is not: the relay's clock
+    // starts when everybody *expected* is `ready`, and that signal is what stops
+    // one console racing ahead of the other (`docs/worldlobby.md` §6.4). A room
+    // people walk into on their own schedule must start for the first of them;
+    // waiting for a second person who may never come would leave the first in
+    // `Waiting` for ever.
+    let expect = if o.partner.is_some() { 2 } else { 1 };
+    let opts = RelayOptions {
+        expect,
+        ..RelayOptions::default()
+    };
+    let (addr, stop, hosting) = match &o.join {
+        Some(a) => (a.clone(), None, false),
         None => {
-            // Two seats when a partner is coming, one when it is not: the
-            // relay's clock starts when everybody *expected* is `ready`, and
-            // that signal is what stops one console racing ahead of the other
-            // (`docs/worldlobby.md` §6.4).
-            let expect = if o.partner.is_some() { 2 } else { 1 };
-            let h = host(
-                "127.0.0.1:0",
-                RelayOptions {
-                    expect,
-                    ..RelayOptions::default()
-                },
-            )?;
-            println!("lobby: hosting a room on {}", h.addr);
-            (h.addr, Some(h.stop))
+            let r = rendezvous(opts)?;
+            if r.hosting {
+                eprintln!("lobby: hosting the room on {}", r.addr);
+            } else {
+                eprintln!("lobby: another window already has a room open — joining it");
+            }
+            (r.addr, r.stop, r.hosting)
         }
     };
 
+    // --- the cable --------------------------------------------------------
+    // **The room decides who is on the cable, so put the rendezvous inside the
+    // room.** `link = auto`'s ordinary directory is shared with every other
+    // emulator this user is running, and it pairs in arrival order — so an
+    // unrelated window could take the seat the person opposite you was walking
+    // towards. A directory belonging to *this room* narrows the candidates to
+    // the consoles that are in it.
+    //
+    // The driven partner gets a directory of its own, keyed by **our** pid: it
+    // is a private two-console session and must not be reachable by anybody
+    // else's run. That is the whole of the defect the captain hit — the old
+    // path used one fixed `cable-human` for every launch, so a second `--lobby`
+    // put four consoles in one directory and the wrong two paired.
+    //
+    // **A partner is only ever booted into an empty room.** The cable has two
+    // ends: if somebody else is already here, the seat opposite is theirs, and
+    // a driven console taking it is precisely the crowd that made two `--lobby`
+    // runs race. Joining a room is proof somebody else is here, so the partner
+    // is dropped without ceremony.
+    let want_partner = o.partner.is_some() && hosting;
+    let mut child = None;
+    let pair = if want_partner {
+        lobby_dir().join(format!("cable-{}", std::process::id()))
+    } else {
+        lobby_dir().join("cable")
+    };
+    let _ = std::fs::create_dir_all(&pair);
+    std::env::set_var("GB_LINK_DIR", &pair);
+
     // --- the partner ------------------------------------------------------
-    // A private pair directory when we booted the partner, so `link = auto`
-    // finds exactly that console and not a stranger's emulator on the same
-    // box. Without a partner the ordinary discovery directory is right: that
-    // is how a second *person* running the same command pairs with you.
     let port: u16 = addr
         .rsplit(':')
         .next()
         .and_then(|p| p.parse().ok())
         .unwrap_or(0);
-    let mut child = None;
-    if let Some(p) = &o.partner {
-        let pair = std::path::Path::new(SCRATCH).join("cable-human");
+    if let Some(p) = o.partner.as_ref().filter(|_| want_partner) {
         match spawn_partner(port, &pair, p) {
             Ok((kid, log)) => {
-                println!("lobby: {} is walking in; log: {}", p.name, log.display());
-                std::env::set_var("GB_LINK_DIR", &pair);
+                eprintln!("lobby: {} is walking in; log: {}", p.name, log.display());
                 child = Some(kid);
             }
             // Fail-soft, and the same rule as an unreachable relay: a missing
@@ -715,7 +1048,7 @@ pub fn take_seat(o: SeatOptions) -> std::io::Result<()> {
             // exists, and a second person running the same command fills it.
             Err(e) => eprintln!(
                 "terminalgb: lobby: no partner ({e}). You can still be joined by \
-                 somebody running `terminalgb --lobby={addr}`."
+                 somebody running `terminalgb --lobby`."
             ),
         }
     }
@@ -729,14 +1062,28 @@ pub fn take_seat(o: SeatOptions) -> std::io::Result<()> {
     // also claim it. A cable has two ends and `gen1-link` is one of them.
     std::env::set_var("GB_GEN1_TRADE", "");
 
-    println!();
-    println!(
-        "  You are {}. Walk to the Cable Club receptionist, say yes, and",
-        o.name
-    );
-    println!("  choose TRADE CENTER. Once both consoles are in, the room becomes");
-    println!("  40x28 with our own floor and you will see each other walk about.");
-    println!();
+    // **Stderr, not stdout.** `ratatui` owns stdout the moment `run_terminal`
+    // starts, and it is about to. A line printed to stdout here is cleared by
+    // the alternate screen a few milliseconds later, so the one place these
+    // instructions were guaranteed *not* to be readable was the terminal they
+    // were printed to.
+    eprintln!();
+    eprintln!("  Walk to the Cable Club receptionist, say yes, and choose TRADE");
+    eprintln!("  CENTER. Once both consoles are in, the room becomes 40x28 with our");
+    eprintln!("  own floor and you will see each other walk about.");
+    if child.is_some() {
+        eprintln!("  A driven console is walking in to meet you — the seat opposite");
+        eprintln!("  is taken, so a second person cannot join this room.");
+    } else {
+        // **A cable has two ends and the receptionist checks the wire**, so a
+        // room with nobody else in it is a room you cannot get into. Say which
+        // of the two ways to fill the other seat you want, rather than leaving
+        // somebody standing at a desk wondering.
+        eprintln!("  Run `terminalgb --lobby` again in another window to be the");
+        eprintln!("  second console — it finds this room by itself. On your own,");
+        eprintln!("  `terminalgb --lobby-partner` boots a driven console instead.");
+    }
+    eprintln!();
 
     crate::gameboy::run_terminal(Some(mine));
 
@@ -786,6 +1133,74 @@ fn plugin_list_from(configured: &str) -> String {
         names.push(LOBBY.to_string());
     }
     names.join(",")
+}
+
+#[cfg(test)]
+mod rendezvous_tests {
+    use super::*;
+
+    /// Two people running the shipped command get **one** room, and the second
+    /// one joins rather than opening its own. This is the whole defect: the old
+    /// path bound `127.0.0.1:0` twice and the two windows never saw each other.
+    #[test]
+    fn the_second_instance_joins_the_first_instead_of_hosting() {
+        // A port of our own, so a developer running the emulator beside the
+        // tests does not decide the outcome.
+        let port = 24700 + (std::process::id() % 200) as u16;
+        std::env::set_var("GB_LOBBY_PORT", port.to_string());
+        let first = rendezvous(RelayOptions::default()).expect("first");
+        assert!(first.hosting, "the first instance hosts");
+        assert!(!first.private, "and on the shared port: {}", first.addr);
+
+        let second = rendezvous(RelayOptions::default()).expect("second");
+        assert!(!second.hosting, "the second instance must NOT host its own");
+        assert_eq!(second.addr, first.addr, "and must land in the same room");
+
+        // ...and a real client can reach it and is told who it is.
+        let a = LobbyClient::join(&second.addr, "RED").expect("join");
+        let b = LobbyClient::join(&second.addr, "RED").expect("join");
+        assert_eq!(a.name(), "RED");
+        assert_ne!(
+            b.name(),
+            "RED",
+            "two REDs in one room is a room you cannot read"
+        );
+        assert_eq!(b.name(), "BLUE", "and the second one is Gen 1's second one");
+
+        first.stop.unwrap().store(true, Ordering::Relaxed);
+        std::env::remove_var("GB_LOBBY_PORT");
+    }
+
+    /// A port that belongs to something else must not be mistaken for a room:
+    /// the emulator has to notice and say so, not hang waiting for a greeting
+    /// that is never coming.
+    #[test]
+    fn a_foreign_program_on_the_port_is_not_a_room() {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = format!("127.0.0.1:{}", l.local_addr().unwrap().port());
+        // Accept and say nothing at all, as an unrelated service would.
+        std::thread::spawn(move || {
+            let _keep: Vec<_> = l.incoming().flatten().collect();
+        });
+        assert!(probe(&addr).is_err());
+        assert!(LobbyClient::join(&addr, "RED").is_err());
+    }
+
+    /// The rule the relay applies, on its own, over every shape of collision.
+    #[test]
+    fn nobody_is_given_a_name_somebody_else_already_has() {
+        assert_eq!(unique_name("RED", &[]), "RED");
+        assert_eq!(unique_name("RED", &["RED".into()]), "BLUE");
+        assert_eq!(unique_name("RED", &["RED".into(), "BLUE".into()]), "GREEN");
+        // A name of one's own is kept even when the palette is untouched.
+        assert_eq!(unique_name("ASH", &["RED".into()]), "ASH");
+        // Case is not a difference anybody can see on a Game Boy screen.
+        assert_eq!(unique_name("red", &["RED".into()]), "BLUE");
+        // Past the palette, still unique.
+        let full: Vec<String> = NAME_PALETTE.iter().map(|s| s.to_string()).collect();
+        let n = unique_name("RED", &full);
+        assert!(!full.contains(&n), "{n}");
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "tui"))]

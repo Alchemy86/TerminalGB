@@ -47,8 +47,12 @@
 //!    being `LINK_STATE_IN_CABLE_CLUB`. That is the state in which `LinkMenu`
 //!    has set `BIT_LINK_CONNECTED`, so `DrawStartMenu` prints **RESET** where
 //!    SAVE would be and `StartMenu_SaveReset` jumps to `Init` — `SaveMainData`
-//!    *cannot run*. The five saved-region bytes the room needs (two dimension
-//!    bytes, two view-pointer bytes) therefore cannot reach a `.sav`.
+//!    *cannot run*. The saved-region bytes the room needs therefore cannot
+//!    reach a `.sav`: the map header (two dimension bytes, two view-pointer
+//!    bytes), plus `wNumSprites` and the text ID of each avatar slot beside it,
+//!    which is what hands the crowd to the engine's own sprite machinery (see
+//!    [`avatar::hand_slots_to_the_engine`]). Every one of them is rewritten by
+//!    `LoadMapHeader` on the next map load whatever we leave behind.
 //! 2. **We stop the moment the game wants its buffers back.** At
 //!    `wLinkState >= LINK_STATE_START_TRADE` the trade screen owns everything,
 //!    so the plugin does nothing at all until it is back in the room — and
@@ -123,6 +127,23 @@ pub struct LobbyPlugin {
 impl LobbyPlugin {
     pub fn new(name: &str) -> LobbyPlugin {
         LobbyPlugin::with_room(name, DEFAULT_ROOM)
+    }
+
+    /// Take the name the room gave us.
+    ///
+    /// The plugin is attached before the relay has been spoken to — a plugin
+    /// belongs to a cartridge and the relay belongs to a session — so the name
+    /// it starts with is only what was *asked for*. Two people running the
+    /// shipped command both ask to be RED, and only the relay can see that; it
+    /// answers with something free, and this is how that answer gets to the
+    /// label over the player's own head.
+    pub fn set_name(&mut self, name: &str) {
+        self.name = filter_to_charmap(name);
+    }
+
+    /// What this player is called in the room.
+    pub fn player_name(&self) -> &str {
+        &self.name
     }
 
     pub fn with_room(name: &str, room: Room) -> LobbyPlugin {
@@ -293,7 +314,23 @@ impl LobbyPlugin {
         }
 
         self.me = Presence::read(m);
-        self.drawn = avatar::stream(m, &self.look, &self.me, &self.peers);
+        // **While the player is mid-step the crowd belongs to the engine.**
+        // `AdvancePlayerSprite` shifts every sprite it maintains two pixels
+        // against the player's motion on each of the eight frames of a walk,
+        // which is precisely how the cartridge's own NPCs stay put in the world
+        // while the camera scrolls. `wYCoord`/`wXCoord` do not move until the
+        // step *finishes*, so rewriting an avatar's pixels part-way through
+        // puts it back where it was before the step began — it rides along with
+        // the player and then snaps home when the coordinates finally update.
+        // Standing off for those eight frames is the fix, and
+        // `the_engines_own_shift_lands_where_we_would_have_recomputed` is why
+        // it costs nothing: the two agree byte for byte at every boundary.
+        if !avatar::engine_owns_sprite_positions(m) {
+            self.drawn = avatar::stream(m, &self.look, &self.me, &self.peers);
+            // `wNumSprites` and the text IDs beside it are saved-region bytes,
+            // under exactly the same gate as the map header above.
+            self.wrote_saved_region = true;
+        }
 
         // Speech: mine plus everybody else's, but only for people who are
         // actually on screen — a bubble from someone you cannot see is a

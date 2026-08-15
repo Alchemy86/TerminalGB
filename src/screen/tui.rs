@@ -2340,8 +2340,16 @@ impl App {
             if let Some(l) = s.lobby.as_mut() {
                 use terminalgb_plugin_gen1_lobby::{LobbyPlugin, State};
                 let peers = l.peers();
+                let given = l.name().to_string();
                 let (me, says, state) = match s.gb.plugin_mut::<LobbyPlugin>() {
                     Some(p) => {
+                        // The relay renames anybody who asked for a name
+                        // somebody else already has, so the label over this
+                        // player's own head has to follow it — otherwise the
+                        // room shows two REDs and only one of them is right.
+                        if p.player_name() != given {
+                            p.set_name(&given);
+                        }
                         p.set_peers(peers);
                         (p.me(), p.saying().unwrap_or("").to_string(), p.state())
                     }

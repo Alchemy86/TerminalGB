@@ -395,7 +395,10 @@ fn play(o: PlayOpts) {
         }
         next += period;
         std::thread::sleep(next.saturating_duration_since(Instant::now()));
-        bot.act(&mut gb, false, &o.name);
+        // `--verbose`, not a hard-coded `false`: this is the one loop that can
+        // fail silently — "never reached the Trade Center" says nothing about
+        // *where* it stopped, and the stage transitions are the whole story.
+        bot.act(&mut gb, o.verbose, &o.name);
         peer.run_frame(&mut gb);
         if gb.peek(W_CUR_MAP) == MAP_TRADE_CENTER && gb.peek(W_LINK_STATE) == 0x01 {
             for _ in 0..60 {
@@ -863,7 +866,12 @@ fn party_spec(name: &str) -> String {
         "BLUE" => ("Machop", "ROCKY", 11, 1717),
         "GREEN" => ("Pidgey", "FLAP", 9, 2323),
         "YELLOW" => ("Rattata", "RATTY", 8, 3131),
-        _ => ("Nidoran M", "NIDO", 7, 5151),
+        // **Anything the cartridge's own species table can be asked for.**
+        // This arm used to say `Nidoran M`, which is not how the table spells
+        // it — the gendered names carry `♂`/`♀` — so a fifth player, or a
+        // partner given any name but the four above, panicked in `patch_party`
+        // with `UnknownSpecies` before it had drawn a frame.
+        _ => ("Squirtle", "SHELL", 7, 5151),
     };
     format!(
         "trainer = {name}\n\

@@ -357,6 +357,16 @@ required-features = [
 ]
 
 [[example]]
+name = "lobby_drift"
+path = "examples/lobby_drift.rs"
+required-features = [
+    "image",
+    "plugin-gen1-link",
+    "plugin-trainer",
+    "plugin-gen1-lobby",
+]
+
+[[example]]
 name = "link_two"
 path = "examples/link_two.rs"
 required-features = ["image", "plugin-gen1-link", "plugin-trainer"]

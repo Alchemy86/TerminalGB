@@ -86,6 +86,17 @@ pub const MAP_BORDER: usize = 3;
 /// `wUpdateSpritesEnabled`.
 pub const W_UPDATE_SPRITES_ENABLED: u16 = 0xCFCB;
 
+/// `wWalkCounter` — the player's step animation counter, 7 down to 0 over the
+/// sixteen pixels of one walk tile. **Non-zero means the engine, not us, owns
+/// every sprite's screen position this frame** (see [`crate::avatar`]).
+///
+/// Walked back six `db`s from `wUpdateSpritesEnabled` in `ram/wram.asm`
+/// (`wWalkCounter`, `wTileInFrontOfPlayer`, three audio fade bytes,
+/// `wLastMusicSoundID`) and then **measured on the cartridge**: it counts
+/// 7,7,6,6,…,1,1 across a step and `wYCoord` increments on precisely the frame
+/// it reads 0, which is a claim no arithmetic could have made on its own.
+pub const W_WALK_COUNTER: u16 = 0xCFC5;
+
 // --- the saved region: gated on being in the Cable Club ---------------------
 
 /// `wLinkState`.
@@ -115,6 +126,34 @@ pub const W_X_COORD: u16 = 0xD362;
 pub const W_CUR_MAP_HEIGHT: u16 = 0xD368;
 /// `wCurMapWidth` — in **blocks**.
 pub const W_CUR_MAP_WIDTH: u16 = 0xD369;
+
+/// `wNumSprites` — how many sprite slots the engine believes this map has, and
+/// **the only gate on `AdvancePlayerSprite`'s `.spriteShiftLoop`**
+/// (`home/overworld.asm`), which is what keeps a standing NPC still in the
+/// world while the camera scrolls. Both Cable Club maps declare exactly one
+/// object, so without raising this the room's second and later avatars are
+/// never shifted and drag across the floor with the player.
+///
+/// Walked from `wWarpEntries` (`$D3AF`, verified in
+/// `examples/support/gen1_cable_club.rs`) through `MAX_WARP_EVENTS * 4`,
+/// `wDestinationWarpID`, 128 unused bytes, `wNumSigns`, `MAX_BG_EVENTS * 2`
+/// and `MAX_BG_EVENTS`; the walk continues past `wMapSpriteData` and
+/// `wMapSpriteExtraData` to land exactly on `wCurrentMapHeight2` = `$D524`,
+/// which is the walk's own proof.
+pub const W_NUM_SPRITES: u16 = 0xD4E1;
+/// `wMapSpriteData` — `MAX_OBJECT_EVENTS` pairs of (movement byte 2, text ID),
+/// indexed from slot 1. `DisplayTextID` (`home/text_script.asm`) reads the
+/// **second** byte of the pair for any slot at or below `wNumSprites`, so
+/// raising that count without filling this in would send an A-press at an
+/// avatar off the end of the map's text-pointer table.
+pub const W_MAP_SPRITE_DATA: u16 = 0xD4E4;
+/// `MAX_OBJECT_EVENTS`.
+pub const MAX_OBJECT_EVENTS: usize = 16;
+/// `TEXT_TRADECENTER_OPPONENT` / `TEXT_COLOSSEUM_OPPONENT` — both are the
+/// first and only entry of their map's `def_text_pointers`, so one constant
+/// serves both rooms. It is what the person opposite you says on a real Cable
+/// Club, which is exactly the right line for a stranger in this one.
+pub const OPPONENT_TEXT_ID: u8 = 1;
 
 // --- unsaved again: the second copy of the dimensions, and the tileset ------
 

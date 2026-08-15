@@ -5389,6 +5389,41 @@ trade and a real link battle both completed **inside** it. The way in is
 **`gameboy --lobby`** (see below); `plugin-gen1-lobby` has been in `default` via
 `standard-plugins` since the room landed, so nothing needs rebuilding with extra features.
 
+- **RUN IT TWICE AND THE SECOND WINDOW JOINS THE FIRST — that is the product, and it did
+  not work when it shipped.** Every `--lobby` run opened its own relay on `127.0.0.1:0`, an
+  ephemeral port never surfaced anywhere, and joined *itself*: two windows were two rooms of
+  one person. The rendezvous is now a fixed per-user port (`lobby::rendezvous_port` =
+  `24000 + uid % 1000`, `$GB_LOBBY_PORT` overrides) and **the `bind` IS the decision**:
+  success means we host, `AddrInUse` means somebody else's room is there (proved by reading
+  its `you` greeting and hanging up), anything else means a private room and it says so out
+  loud. A file holding a port number has a read-then-act window that two windows opened in
+  the same second fall into — a port does not, exactly one process can hold it, and there is
+  no corpse to sweep because a port dies with its process. Below the ephemeral range on
+  purpose, so an outgoing connection cannot squat it.
+- **BOTH PLAYERS ASKED TO BE `RED`, AND ONLY THE RELAY CAN SEE THAT.** Nobody types a name,
+  so the default collides with itself, and the label over an avatar's head is the only thing
+  telling you which walking figure is your friend. `lobby::unique_name` hands out the first
+  free name from Gen 1's own cast under the room lock; `LobbyClient::join` reads the answer
+  back before it returns and the frontend pushes it into the plugin with
+  `LobbyPlugin::set_name`. Never silent: `joined … as BLUE (RED was taken)`.
+- **ONE FIXED CABLE PAIR DIRECTORY FOR EVERY LAUNCH IS HOW FOUR CONSOLES CROSS-PAIR.** Every
+  run used `target/worldlobby/cable-human`, so two `--lobby` runs put two player consoles and
+  two driven partners in one directory that pairs in arrival order; the wrong two paired, one
+  quit, and the survivor faulted and **poisoned its battery**. The room's consoles now share
+  `$XDG_RUNTIME_DIR/terminalgb/lobby/cable` (`lobby::lobby_dir`) — narrow enough that an
+  unrelated emulator cannot take the seat — and a **driven partner gets a directory keyed by
+  the frontend's pid**, because it is a private two-console session.
+- **The driven partner is OPT-IN now (`--lobby-partner`), and that is forced by the cable
+  having two ends.** Booting one by default fills the seat the second person was walking
+  towards, which is precisely what made two `--lobby` runs race. A partner is also only ever
+  booted into a room we are *hosting*: joining one is proof somebody else is here. Say which
+  of the two ways to fill the seat you want in the startup text — a solo `--lobby` can never
+  reach the room, since the receptionist checks the wire.
+- **`spawn_partner` used to create its log directory by accident.** `target/worldlobby` came
+  into being as a side effect of `create_dir_all(pair_dir)`; the cable rendezvous moved to
+  the runtime directory and the partner then failed with *"no partner (No such file or
+  directory)"* — an error that names the log file nowhere and reads like a missing binary.
+  Create the directories you write to, explicitly.
 - **`wCurMap` IS NOT "the map is loaded", AND THE ROOM MUST NOT BE INSTALLED UNTIL IT IS.**
   The guard was `wCurMap == TRADE_CENTER && wLinkState == IN_CABLE_CLUB` — two bytes that
   are true for about **thirty frames** before `LoadMapHeader` has run. Install in that window
@@ -5484,9 +5519,43 @@ trade and a real link battle both completed **inside** it. The way in is
   **33,697 unanswered master transfers**, and `.establishConnectionLoop` gives up after 90
   iterations and sits on `PLEASE WAIT!` for ever. The relay reports how many players are at
   a console; both ends start on that.
+- **DO NOT WRITE A SPRITE'S SCREEN PIXELS WHILE THE PLAYER IS MID-STEP — THE ENGINE OWNS
+  THEM.** `wYCoord`/`wXCoord` stand still for the eight frames of a walk while the camera
+  scrolls, so recomputing an avatar's pixels from them writes back the pre-step position and
+  the avatar rides the camera, then snaps when the coordinates catch up. That is the
+  captain's *"moving also moves the other player, then they auto correct"* exactly, and the
+  cartridge already solves it: `AdvancePlayerSprite`'s `.spriteShiftLoop`
+  (`home/overworld.asm`) shifts every sprite it maintains two pixels a frame against the
+  player's motion, *"so that the player appears to move relative to them"*. The gate is one
+  byte, `avatar::engine_owns_sprite_positions` (`wWalkCounter != 0` at **`$CFC5`** — walked
+  six `db`s back from `wUpdateSpritesEnabled` and then **measured**, 7,7,6,6,…,1,1 with
+  `wYCoord` incrementing on the frame it reads 0). The two agree byte for byte at every step
+  boundary, which is what makes standing off free.
+- **`.spriteShiftLoop` IS GATED ON `wNumSprites` (`$D4E1`), AND BOTH CABLE CLUB MAPS DECLARE
+  ONE OBJECT** — so avatars in slots 2..9 were never shifted at all, whatever the plugin did.
+  `avatar::hand_slots_to_the_engine` raises it. **Raising it is not free**: it also puts our
+  slots inside `IsSpriteInFrontOfPlayer` — which is where their solidity comes from *and*
+  where an A-press turns a slot number into a text ID via `wMapSpriteData` (`$D4E4`) — so the
+  same call writes `TEXT_TRADECENTER_OPPONENT` (= 1 on both maps, each has a one-entry
+  `def_text_pointers`) into every slot it claims. Without that, talking to the ninth person
+  in the room walks off the end of the map's text-pointer table. Both addresses are walked
+  from `wWarpEntries` `$D3AF` and land exactly on `wCurrentMapHeight2` `$D524`, which is the
+  walk's own proof. Both are in the **saved** region and ride the same
+  `wLinkState == LINK_STATE_IN_CABLE_CLUB` gate as the map header.
+- **Measure this with `examples/lobby_drift.rs`, not by eye.** Two real consoles on a real
+  cable in the real Trade Center, one synthetic peer, and the invariant *screen pixels plus
+  camera scroll is constant*. Teeth proven by removing the gate: **14 px of drag against
+  2 px**. On failure it reports where each bot stopped, because *"never reached the Trade
+  Center"* on its own cannot tell "the bot could not navigate" from "the save never loaded"
+  — a bot mashing A through a NEW GAME's opening is a bot pressing A, and that cost real
+  time. **A save that gives the frontend a CONTINUE can still send this bot into a new
+  game**: measured on the captain's own `~/roms` Blue save, which offers CONTINUE in a real
+  window (screenshotted) and lands the bot in Red's bedroom with an empty party. Unexplained;
+  do not conclude a save is broken from the bot alone — boot it and look.
 - **Remote avatars are SOLID** (`CollisionCheckOnLand` calls `IsSpriteInFrontOfPlayer`
   before it looks at a tile), so a crowd converging on two consoles blocks itself — which is
-  correct, and why a trade/battle marks you `away`.
+  correct, and why a trade/battle marks you `away`. Note this was only ever true for the
+  *first* avatar until `wNumSprites` was raised; the claim is now what the code does.
 - **`IMAGEBASEOFFSET` stays 0** so `_UpdateSprites` skips the slot (no movement AI) while
   `PrepareOAMData` still draws it. The cost is that the engine's cull is skipped too, so
   `avatar::visible` reimplements `CheckSpriteAvailability`'s window. Cap at **9** remote
@@ -5496,10 +5565,19 @@ trade and a real link battle both completed **inside** it. The way in is
   emulator decided to run; a socket is not that. `plugins/gen1-lobby` is pure memory work
   with no dependency but the plugin API; `src/lobby.rs` is the frontend's socket. Same
   layering reason as `MachineAccess`.
-- **Save safety:** everything is below `wMainDataStart` except five header bytes, and those
-  are gated on `wLinkState == LINK_STATE_IN_CABLE_CLUB`, where `LinkMenu` has set
-  `BIT_LINK_CONNECTED` so `DrawStartMenu` prints RESET and `SaveMainData` cannot run. Every
-  ROM and save is staged into `target/` — including the human's.
+- **Save safety:** everything is below `wMainDataStart` except the map header and the two
+  sprite-count bytes above, and those are gated on
+  `wLinkState == LINK_STATE_IN_CABLE_CLUB`, where `LinkMenu` has set `BIT_LINK_CONNECTED` so
+  `DrawStartMenu` prints RESET and `SaveMainData` cannot run. Every one of them is rewritten
+  by `LoadMapHeader` on the next map load whatever we leave behind. Every ROM and save is
+  staged into `target/` — including the human's, in the demonstration; the shipped
+  `--lobby` deliberately plays the person's own cartridge.
+- **`worldlobby play`'s `party_spec` fallback said `Nidoran M`**, which the cartridge's
+  species table does not spell that way (the gendered names carry `♂`/`♀`), so any partner
+  named something other than RED/BLUE/GREEN/YELLOW panicked in `patch_party` before drawing
+  a frame. Its `bot.act` also hard-coded `verbose = false`, so *"never reached the Trade
+  Center"* said nothing about where it stopped — both fixed, and both are the same lesson:
+  **the failure path of a driven console is the one nobody exercises.**
 
 ## Authoring a NEW Gen 1 area and warping into it (`docs/gen1/authoring-an-area.md`)
 

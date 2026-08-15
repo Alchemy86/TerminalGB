@@ -30,6 +30,54 @@ use terminalgb_plugin_api::Machine;
 /// player is ten, which is exactly the OAM budget.
 pub const MAX_AVATARS: usize = 9;
 
+/// How many pixels the engine shifts every sprite it maintains, per frame of
+/// the player's walk, in the direction opposite the player's motion
+/// (`AdvancePlayerSprite`'s `.scrollBackgroundAndSprites`: the step vector is
+/// ±1 and it is `sla`'d once). Eight frames at two pixels is one 16-pixel walk
+/// tile, which is what makes [`slot_bytes`] and the engine agree at every step
+/// boundary — see `the_engines_own_shift_lands_where_we_would_have_recomputed`.
+pub const ENGINE_SHIFT_PER_FRAME: i32 = 2;
+/// Frames in one walk step, i.e. `wWalkCounter`'s reload value.
+pub const WALK_FRAMES: i32 = 8;
+
+/// **Is the engine moving every sprite this frame?**
+///
+/// `wYCoord`/`wXCoord` do not move until a step *finishes*, so recomputing an
+/// avatar's screen pixels part-way through one writes back the position it had
+/// before the step began — undoing the shift the engine just applied, and
+/// pinning the avatar to the screen so that it appears to travel with the
+/// player and then snap back. That is the whole of the "moving also moves the
+/// other player, then they auto-correct" report.
+///
+/// So while this is true the avatars are the engine's, and we do not touch
+/// them. It costs at most one 133 ms step of staleness in a crowd that is
+/// already sampled at 8 Hz.
+pub fn engine_owns_sprite_positions(m: &mut Machine<'_>) -> bool {
+    m.peek(W_WALK_COUNTER).unwrap_or(0) != 0
+}
+
+/// Tell the engine how many sprite slots this map has, and give each of them a
+/// text ID that is real.
+///
+/// `.spriteShiftLoop` is gated on `wNumSprites` alone and both Cable Club maps
+/// declare **one** object, so an avatar in slot 2 or beyond was never shifted
+/// at all. Raising the count also puts our avatars inside
+/// `IsSpriteInFrontOfPlayer` — which is where their solidity comes from, and
+/// also where an A-press turns a slot number into a text ID — so the text IDs
+/// have to be filled in at the same time or talking to the ninth person in the
+/// room walks off the end of the map's text-pointer table.
+pub fn hand_slots_to_the_engine(m: &mut Machine<'_>, avatars: usize) {
+    // Never below one: the cartridge's own opponent object is slot 1 and the
+    // engine was already maintaining it.
+    let n = avatars.clamp(1, MAX_AVATARS).min(MAX_OBJECT_EVENTS);
+    m.poke(W_NUM_SPRITES, n as u8);
+    for slot in 1..=n {
+        // (movement byte 2, text ID); `DisplayTextID` reads the second.
+        let e = W_MAP_SPRITE_DATA + (slot as u16 - 1) * 2;
+        m.poke(e + 1, OPPONENT_TEXT_ID);
+    }
+}
+
 /// Someone else in the room, as the relay describes them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Peer {
@@ -250,6 +298,7 @@ pub fn stream(
     for slot in (1 + writes.len() as u8)..SPRITE_SLOTS {
         clear_slot(m, slot);
     }
+    hand_slots_to_the_engine(m, writes.len());
     ids
 }
 
@@ -278,6 +327,54 @@ mod tests {
         assert_eq!(w.x_pixels, 0x40 + 16);
         assert_eq!(w.y_pixels, 0x3C);
         assert_eq!((w.map_x, w.map_y), (15, 14));
+    }
+
+    /// **The invariant the whole "leave it to the engine" fix rests on.**
+    ///
+    /// A standing avatar's screen pixels are the engine's between step
+    /// boundaries: it subtracts two per frame for the eight frames of a walk
+    /// (`AdvancePlayerSprite`'s `.spriteShiftLoop`). At the end of the step
+    /// `wYCoord`/`wXCoord` finally move, and what [`slot_bytes`] then
+    /// recomputes must be **byte for byte** what the engine arrived at —
+    /// otherwise handing it over would trade a drift for a jump.
+    ///
+    /// Measured on the cartridge as well as asserted here: slot 1's `YPIXELS`
+    /// walked `$10 $0e $0c … $fc` across one southward step while `wYCoord`
+    /// stayed put, then `wYCoord` incremented on the frame the counter read 0.
+    #[test]
+    fn the_engines_own_shift_lands_where_we_would_have_recomputed() {
+        let look = Appearance::default();
+        let peer = Peer::new(1, "B", 12, 8);
+        for (dx, dy) in [(0i32, 1i32), (0, -1), (1, 0), (-1, 0)] {
+            let before = Presence {
+                x: 10,
+                y: 10,
+                facing: Facing::Down,
+            };
+            let after = Presence {
+                x: (before.x as i32 + dx) as u8,
+                y: (before.y as i32 + dy) as u8,
+                facing: Facing::Down,
+            };
+            let start = slot_bytes(&look, &before, &peer);
+            let end = slot_bytes(&look, &after, &peer);
+            // What the engine does over the step, one frame at a time.
+            let shift = ENGINE_SHIFT_PER_FRAME * WALK_FRAMES;
+            let shifted_y = (start.y_pixels as i32 - dy * shift) as u8;
+            let shifted_x = (start.x_pixels as i32 - dx * shift) as u8;
+            assert_eq!((shifted_y, shifted_x), (end.y_pixels, end.x_pixels));
+        }
+    }
+
+    /// A room with nobody else in it still leaves the engine one slot to
+    /// maintain — the cartridge's own opponent object — and a full room never
+    /// claims more slots than there are.
+    #[test]
+    fn the_slot_count_handed_over_is_never_zero_and_never_past_the_end() {
+        for avatars in 0..=20usize {
+            let n = avatars.clamp(1, MAX_AVATARS).min(MAX_OBJECT_EVENTS);
+            assert!((1..=MAX_AVATARS).contains(&n), "{avatars} -> {n}");
+        }
     }
 
     #[test]

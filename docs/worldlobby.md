@@ -208,15 +208,85 @@ What it does, and why each part is where it is:
 | **the cartridge** | the argument if you gave one, else the top of the recent list — the same machinery every other launch uses (`screen::config::Recent`) |
 | **the save** | whatever sits beside that cartridge, as usual. The seat is an *ordinary launch of your own game*, not a copy |
 | **the plugins** | your configured list, minus anything that would fight a real second console for the cable, plus `gen1-lobby`. So `plugins = gen1-link, trainer` keeps its trainer panel and loses only `gen1-link` |
-| **the room** | hosted here, on `127.0.0.1` and a port the kernel picks |
-| **the partner** | a driven console booted for you, so the room works with one person in it |
+| **the room** | **the one room this user has.** The first window opens it; every window after that finds it and walks in — see §8a |
+| **the partner** | nobody, by default. The other seat is for the second window, or for `--lobby-partner` |
 
 Variations, all single tokens because the launcher only forwards one argument:
 
-- `--lobby=HOST:PORT` — join somebody else's room instead of opening one. No
-  partner is booted; the seats there are already spoken for.
-- `--lobby-alone` — open a room and *don't* boot a partner. For two people at
-  one machine: both run it, and `link = auto` pairs them.
+- `--lobby=HOST:PORT` — join a room by address rather than by rendezvous. For a
+  room on another machine, or a second room on this one.
+- `--lobby-partner` — boot a **driven** console to meet instead of waiting for a
+  person. On your own, this is the only way into the room: a cable has two ends
+  and the Cable Club receptionist will not let either console through until both
+  are at a desk. It fills the second seat, so nobody else can join that room.
+- `--lobby-alone` — what `--lobby` now does anyway. Kept so an older command
+  still works.
+
+### 8a. One room per user, decided by a `bind`
+
+**Two `--lobby` windows used to be two rooms of one person each.** Each run
+opened a relay on `127.0.0.1:0` — an ephemeral port the kernel picked, never
+printed anywhere a person could use — and then joined *itself*. The join form
+existed but the address did not. That is the defect the captain hit, and it is
+the reason the second window showed an empty room while the first showed an
+empty room beside it.
+
+The rendezvous is now a **fixed per-user port**, `lobby::rendezvous_port()` =
+`24000 + uid % 1000` (`$GB_LOBBY_PORT` overrides), and the decision of who hosts
+is the `bind` itself:
+
+- `TcpListener::bind` succeeds → we are the room, and we serve it.
+- `AddrInUse` → somebody else's room is already there. Prove it with a
+  connection that reads the relay's own `you` greeting and hangs up without
+  saying anything, then join.
+- anything else → say so out loud and host a room only this window can see,
+  because a private room beats no room but it is a different promise.
+
+**The `bind` is the decision, not a lookup**, and that is the whole reason to
+prefer it to a file holding a port number: a file has a window between reading it
+and acting on it, and two windows opened in the same second fall into that
+window and open two rooms — which is the bug being replaced. A port is decided by
+the kernel, exactly one process can hold it, and there is no corpse to sweep
+because a port is released when its process dies. It is the same shape as the
+cable's own `link = auto` (`LinkPeer::discover`: first one there waits, the rest
+attach), with the sweep step replaced by something the kernel does for us.
+
+The port is deliberately **below** Linux's ephemeral range (32768–60999) so an
+outgoing connection's own local port can never land on it and make the room
+vanish for one launch in a thousand.
+
+### 8b. Nobody is two people
+
+Two people running the shipped command both ask to be `RED`, because neither
+typed a name — and a room with two REDs in it is a room you cannot read: the
+label over an avatar's head is the only thing telling you which walking figure
+is your friend. Only the relay can see the collision, so the relay decides:
+`lobby::unique_name` hands out the first free name from Gen 1's own cast
+(`RED, BLUE, GREEN, YELLOW, GOLD, SILVER, CRYSTAL, IVY`, then `RED2`, `RED3`…),
+under the room lock so two people joining in the same tick cannot both race
+against an empty list.
+
+The client reads that answer back before `LobbyClient::join` returns and the
+frontend pushes it into the plugin, so the name over your own head is the one
+everybody else sees. It is never silent: the join line says
+`joined 127.0.0.1:24000 as BLUE (RED was taken)`.
+
+### 8c. Which cable, and why the partner is not on the shared one
+
+`link = auto`'s ordinary rendezvous directory is shared with every emulator this
+user is running and pairs in **arrival order**, so an unrelated window could take
+the seat the person opposite you was walking towards. The room therefore has its
+own directory, `$XDG_RUNTIME_DIR/terminalgb/lobby/cable`
+(`lobby::lobby_dir`), which narrows the candidates to the consoles that are
+actually in the room.
+
+A **driven partner** gets a directory of its own again, keyed by the frontend's
+pid. That is the other half of the captain's defect: every launch used one fixed
+`target/worldlobby/cable-human`, so two `--lobby` runs put *four* consoles in one
+directory and the wrong two paired — after which one of them quit and the
+survivor faulted, poisoned its battery and refused to write the save. A partner
+is also only ever booted into an empty room: joining a room is proof somebody
+else is here, and the seat opposite is theirs.
 
 **`plugin-gen1-lobby` has been in the crate's default features since the room
 landed** (`default` → `standard-plugins` → `plugin-gen1-lobby`), so an ordinary
@@ -428,6 +498,57 @@ It is paced now, and its patience is wall-clock. That is not a special case for
 humans — it is §6.4's rule, that the two ends of a cable must run at the same
 speed, applied to the half of the run that was exempt from it. `--speed` scales
 it, so the four-instance demonstration is as quick as it ever was.
+
+### 9.4 The other player rode the camera — and the cartridge already solved it
+
+Reported by the captain, in his own words: *"moving also moves the other player
+initially then they auto correct where they should be… the pokemon overworld has
+bots walking about and they don't suffer from this issue, so clearly the game
+already deals with this better."* Both halves were right, including the second.
+
+**The mechanism.** `wYCoord`/`wXCoord` do not move until a walk step *finishes*;
+for its eight frames the camera scrolls and the player's tile coordinates stand
+still. `avatar::slot_bytes` derives an avatar's screen pixels from those
+coordinates, and the plugin ran every frame — so mid-step it wrote back the
+position the avatar had *before* the step began. In screen space the avatar
+therefore held still, which in world space is exactly "travels with the player",
+and the coordinates catching up at the end is the snap.
+
+**The engine's answer, which we were undoing.** `AdvancePlayerSprite`
+(`pret/pokered`, `home/overworld.asm`, `.scrollBackgroundAndSprites`) shifts
+every sprite it maintains by the player's step vector doubled — two pixels a
+frame, sixteen over a step — *"so that the player appears to move relative to
+them"*. That is why the cartridge's own NPCs stand still while you walk past
+them. Measured on the cartridge before it was believed: slot 1's `YPIXELS`
+walked `$10 $0e $0c … $fc` across one southward step while `wYCoord` stayed put,
+and `wYCoord` incremented on precisely the frame `wWalkCounter` read 0.
+
+Two things were needed, and neither is arithmetic of ours:
+
+1. **Stand off while the engine is working.** `avatar::engine_owns_sprite_positions`
+   is one byte — `wWalkCounter != 0` — and while it is true the plugin writes no
+   sprite slots at all. It costs at most one 133 ms step of staleness in a crowd
+   already sampled at 8 Hz, and the two agree *byte for byte* at every step
+   boundary, which `the_engines_own_shift_lands_where_we_would_have_recomputed`
+   asserts over all four directions.
+2. **Let the engine see our slots.** `.spriteShiftLoop` is gated on
+   `wNumSprites`, and both Cable Club maps declare exactly **one** object — so
+   the second and later avatars were never shifted at all, whatever we did.
+   `avatar::hand_slots_to_the_engine` raises it to the crowd's size. That also
+   puts the avatars inside `IsSpriteInFrontOfPlayer`, which is where their
+   solidity comes from and *also* where an A-press turns a slot number into a
+   text ID — so the same call fills in `wMapSpriteData` with
+   `TEXT_TRADECENTER_OPPONENT`, the line the person opposite you says on a real
+   Cable Club. Raise the count without that and talking to the ninth person in
+   the room walks off the end of the map's text-pointer table.
+
+**Measured, not asserted.** `cargo run --release --example lobby_drift --
+--rom <blue.gb> --save <cable-club.sav>` puts two real consoles on a real cable
+into the real Trade Center, stands one synthetic person next to the player, and
+checks that the avatar's *world* position — screen pixels plus however far the
+camera has scrolled — never moves while the player walks. Teeth proven by
+removing the gate: **14 px of drag** (most of a tile) against **2 px** with it,
+where 2 is the one frame in which `wWalkCounter` and the shift disagree.
 
 ### Dead ends, recorded so nobody repeats them
 
