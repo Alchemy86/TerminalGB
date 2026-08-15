@@ -15,6 +15,10 @@
 - **Probe your machine:** [`examples/audio_probe.rs`](../examples/audio_probe.rs).
 - **Tests:** [`src/sound.rs`](../src/sound.rs) `mod tests` — pitch + sample-rate
   checks that run under a plain `cargo test` (no audio device needed).
+- **In a browser:** the `wasm32` build plays through the Web Audio API instead of
+  `cpal`, and everything from §1 to §6 applies to it except the device layer. Its own
+  page — including why the desktop's cushion sizing is *wrong* there — is
+  **[docs/web-audio.md](web-audio.md)**.
 
 ---
 

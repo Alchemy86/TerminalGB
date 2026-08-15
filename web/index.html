@@ -29,6 +29,15 @@
       z-index: 1000;
     }
 
+    /* Live run state (fps, audio, latency) once a game is loaded. Sits above
+       the fullscreen picture so it is readable while playing. */
+    #status {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1001;
+      padding: 2px 6px; font: 12px/1.4 monospace;
+      color: #9f9; background: rgba(0,0,0,.55);
+      pointer-events: none; white-space: nowrap; overflow: hidden;
+    }
+
     /* Keep every Game Boy pixel a hard square when the canvas is scaled up.
        Without this the browser bilinear-smooths the upscale and blurs it.
        `pixelated` is listed last so modern browsers prefer it; the earlier
@@ -43,6 +52,7 @@
     }
   </style>
   <body>
+    <div id="status" hidden></div>
     <div class="theater"></div>
     <div class="helper">
         <p>

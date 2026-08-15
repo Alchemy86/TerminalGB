@@ -30,7 +30,9 @@
 //!   ([`StateError::RomMismatch`]).
 //! * Variable-length and platform-varying sections (APU, MBC RAM) are
 //!   length-prefixed so a reader can skip what it cannot use — that is what lets
-//!   a state saved on native (with audio) load cleanly on wasm.
+//!   a state saved on a machine that had a sound chip load into one that did not.
+//!   (`wasm32` builds emulate the APU now too, and the format needed no change
+//!   when that happened, which is the point.)
 
 use std::fmt;
 

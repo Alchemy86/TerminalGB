@@ -5,6 +5,17 @@
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
+/// Web Audio playback — see [`webaudio`]. The browser's answer to
+/// `sound::cpal_audio`; the reusable half lives in `sound::web_audio`.
+#[cfg(all(target_arch = "wasm32", not(feature = "ffi")))]
+pub mod webaudio;
+
+/// Browser frame pacing — see [`pace`]. Pure arithmetic over a clock the
+/// caller supplies, so `requestAnimationFrame`'s rate cannot become the
+/// emulator's. Compiled under `cfg(test)` on the host so it has real tests.
+#[cfg(any(target_arch = "wasm32", test))]
+pub mod pace;
+
 /// OpenGL desktop window. Requires the `desktop` feature (glutin + gl).
 #[cfg(all(not(target_arch = "wasm32"), feature = "desktop"))]
 pub mod desktop;

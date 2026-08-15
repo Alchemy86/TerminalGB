@@ -422,7 +422,6 @@ impl Gameboy {
         // Fast-forward tells the audio player to drop its overflow rather than
         // pace the emulator against the sound card (`docs/audio.md` §4c).
         if opts.speed > 1.0 {
-            #[cfg(not(target_arch = "wasm32"))]
             self.set_audio_fast_forward(true);
         }
 
@@ -966,31 +965,26 @@ impl Gameboy {
         self.cpu.plugins.any_pressed_buttons()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Install a host audio sink, creating the APU if the machine has none.
+    ///
+    /// Available on **every** target, `wasm32` included — see
+    /// [`crate::sound::web_audio`] for the browser sink and
+    /// [`crate::sound::SilentPlayer`] for the one to install when there is no
+    /// device, which is still a real sound chip.
     pub fn enable_audio(&mut self, player: Box<dyn crate::sound::AudioPlayer>) {
         self.cpu.memory.enable_audio(player);
     }
 
     /// Is an APU installed? False means the machine has **no sound chip**, not
     /// a quiet one — see `crate::sound::SilentPlayer` for why the difference
-    /// is visible to the cartridge. The `sound` field itself is compiled out on
-    /// `wasm32` (like the whole `sound` module), so this answers `false` there
-    /// rather than not existing: an embedder may always ask.
+    /// is visible to the cartridge.
     pub fn audio_enabled(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.cpu.memory.sound.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        self.cpu.memory.sound.is_some()
     }
 
     /// Frontend hint: emulation is deliberately running faster than real time.
     /// The audio player then drops overflow instead of pacing the emulator
     /// against the audio clock (which would clamp fast-forward back to 1x).
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_audio_fast_forward(&mut self, enabled: bool) {
         self.cpu.memory.set_audio_fast_forward(enabled);
     }

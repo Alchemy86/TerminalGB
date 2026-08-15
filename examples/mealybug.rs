@@ -334,7 +334,8 @@ fn run(
     boot: Option<BootRom>,
 ) -> (Vec<u8>, &'static str) {
     let data = std::fs::read(rom).expect("read staged ROM");
-    // Always pass the path: with `None` this core forces MBC3 for every cart.
+    // Pass the path so cartridge RAM is battery-backed where the ROM expects
+    // it. It does not choose the mapper — that is header byte `$0147`.
     let mut cpu = Cpu::new_with_boot_rom(data, Some(rom.to_path_buf()), model, boot);
     cpu.memory.gpu.set_cgb_ppu_revision(rev);
     let mut cycles: u64 = 0;

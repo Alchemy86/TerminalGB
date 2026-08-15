@@ -105,7 +105,13 @@ pub mod sgb;
 /// Compiles everywhere; the module itself stubs out where shared memory does
 /// not exist, so callers need no `cfg` of their own.
 pub mod shmframe;
-#[cfg(not(target_arch = "wasm32"))]
+/// The APU — see [`sound`]. Compiled on **every** target, `wasm32` included:
+/// a machine with no sound chip is not a quiet Game Boy, it is a different
+/// machine (`NR52` reads back powered off, the frame sequencer never advances,
+/// PCM12/PCM34 report nothing), and cartridges can see the difference. Host
+/// *playback* is what varies: `sound::cpal_audio` behind the `audio` feature
+/// on a native target, [`sound::web_audio`] on `wasm32`,
+/// [`sound::SilentPlayer`] when there is no device at all.
 pub mod sound;
 /// Machine-readable run telemetry (NDJSON) — see [`telemetry`].
 #[cfg(not(target_arch = "wasm32"))]
@@ -136,6 +142,15 @@ unsafe impl Send for crate::gameboy::Gameboy {}
 #[cfg(target_vendor = "apple")]
 unsafe impl Sync for crate::gameboy::Gameboy {}
 
+/// Build the machine from a cartridge image.
+///
+/// `None` is the save path, and it means **only** "do not battery-back
+/// cartridge RAM to a file" — an FFI host has nowhere to put one. It does not
+/// choose the mapper: that comes from cartridge header byte `$0147`
+/// ([`crate::mbc::get_mbc`]). It used to, and every FFI and web caller was
+/// handed an MBC3 whatever the cartridge said; `lib::ffi_tests` drives this
+/// entry point and checks it.
+///
 /// # Safety
 ///
 /// This function is not safe due to from_raw_parts.
@@ -322,4 +337,64 @@ pub extern "C" fn image_base64() -> *const std::os::raw::c_char {
 
     let data = CString::new("").expect("don't fail");
     data.into_raw()
+}
+
+#[cfg(test)]
+mod ffi_tests {
+    use super::*;
+
+    /// A cartridge whose entry code writes `$22` to the ROM bank register and
+    /// then loops. Bank *n* is filled with the byte *n*, so which mapper is
+    /// really installed is readable off the selected bank number.
+    ///
+    /// 32 banks = 512 KiB deliberately: the MBC1 multicart heuristic
+    /// (`src/mbc/mbc1.rs`) only looks at cartridges of exactly 1 MiB, and a
+    /// multicart wires BANK2 two bits lower, which would be a second reason
+    /// for the bank to differ.
+    fn bank_switching_cart(kind: u8) -> Vec<u8> {
+        const BANKS: usize = 32;
+        let mut rom = Vec::with_capacity(BANKS * 0x4000);
+        for b in 0..BANKS {
+            rom.extend(std::iter::repeat_n(b as u8, 0x4000));
+        }
+        rom[0x147] = kind;
+        rom[0x148] = 4; // 32 banks
+        rom[0x149] = 0; // no cartridge RAM
+                        // $0100: ld a,$22 / ld [$2000],a / jr -2
+        rom[0x100..0x107].copy_from_slice(&[0x3E, 0x22, 0xEA, 0x00, 0x20, 0x18, 0xFE]);
+        rom
+    }
+
+    /// **The FFI entry point picks the mapper from the cartridge header.**
+    ///
+    /// Symptom when it does not: a non-MBC3 game embedded through the C ABI
+    /// (or the web build, which constructs the machine the same way) reads the
+    /// wrong 16 KiB ROM bank from its very first bank switch — garbage code,
+    /// an immediate freeze or crash — while the identical ROM is fine in the
+    /// desktop build, which passes a save path. Nothing in the test-ROM suite
+    /// catches it: Blargg, Mooneye and acid2 are all driven with a path, so
+    /// they always took the correct branch.
+    ///
+    /// This drives `load` — the real `extern "C"` symbol — rather than
+    /// re-deriving the construction, because "the core is right" and "the
+    /// entry point is right" are different claims. `GAMEBOY` is a `OnceLock`,
+    /// so exactly one test in this process may use it.
+    #[test]
+    fn the_ffi_entry_point_takes_the_mapper_from_the_cartridge_header() {
+        // MBC1 masks the bank register to five bits, so $22 selects bank 2.
+        // MBC3 uses seven and would select bank $22 (34).
+        let rom = bank_switching_cart(0x01);
+        unsafe { load(rom.as_ptr(), rom.len()) };
+        frame();
+
+        let gb = GAMEBOY.get().expect("load() built a machine");
+        let locked = gb.lock().expect("machine lock");
+        let gb = locked.as_ref().expect("machine present");
+        assert_eq!(
+            gb.debug_rom_bank(),
+            2,
+            "an MBC1 cartridge loaded over the FFI must bank like an MBC1; \
+             34 means the MBC3 fallback is back"
+        );
+    }
 }

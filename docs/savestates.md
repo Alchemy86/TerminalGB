@@ -56,7 +56,7 @@ length-prefixed (`u32` length + bytes) so a reader can skip what it can't use.
 | MMU: WRAM (0x8000), ZRAM (0x7F), HDMA regs, IE/IF, WRAM bank, mode, speed, speed-switch, HDMA status/src/dst/len, undocumented CGB regs | |
 | Serial, Timer, Keypad | register-visible state (serial callback is not state) |
 | PPU | mode/clock/line/LYC, LCDC + STAT flags, scroll/window, DMG + CGB palettes, VRAM (0x4000), OAM (0xA0), palette RAM, VRAM bank, framebuffer | `bgprio` omitted (rebuilt each scanline) |
-| APU block (len-prefixed) | present-flag + logical channel/envelope/length/sweep/LFSR/wave state; the `blip` buffers and host player are runtime plumbing, not state. Absent on `wasm32`. |
+| APU block (len-prefixed) | present-flag + logical channel/envelope/length/sweep/LFSR/wave state; the `blip` buffers and host player are runtime plumbing, not state. Present on every target — the APU is emulated on `wasm32` too — and the flag is `false` only when no player has ever been installed. |
 | MBC block (len-prefixed) | banks, RAM-enable, cartridge RAM, and the **MBC3 RTC** (counters, latch snapshot, **sub-second divider**). ROM is never stored. |
 
 ### Safety rails
@@ -67,8 +67,11 @@ length-prefixed (`u32` length + bytes) so a reader can skip what it can't use.
   Loading a state against a different cartridge fails with `RomMismatch`.
 - **Bounds-checked.** Every read is bounds-checked; a truncated or malformed blob
   returns `Truncated` / `BadField` instead of panicking.
-- **wasm-clean.** No filesystem, no host assumptions; the APU section is
-  skippable so a native-with-audio state loads on wasm.
+- **wasm-clean.** No filesystem, no host assumptions. The APU section is
+  length-prefixed and present-flagged, so a state from a machine that had a sound
+  chip loads into one that does not (and now vice versa: `wasm32` builds emulate the
+  APU as well — see [`docs/web-audio.md`](web-audio.md)). The format did not change
+  when that happened, which is the point of a skippable block.
 
 ### Performance
 

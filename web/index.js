@@ -1,7 +1,7 @@
 import('./gameboy/index.js')
   .catch(console.error);
 
-import { render } from './gameboy/index.js';
+import { render, status } from './gameboy/index.js';
 
 const playButton = document.querySelector('#play');
 const file = document.querySelector('#file');
@@ -16,6 +16,15 @@ playButton.addEventListener('click', function readFile() {
   if (rom) {
     playButton.disabled = true;
     render(rom);
+    // Show what the emulator and its audio path are actually doing. The
+    // browser's autoplay policy can leave the AudioContext suspended, and a
+    // silent emulator with no explanation is indistinguishable from a broken
+    // one — the same reason the terminal frontend has a Status panel.
+    const statusEl = document.querySelector('#status');
+    if (statusEl) {
+      statusEl.hidden = false;
+      setInterval(() => { statusEl.textContent = status(); }, 1000);
+    }
   }
 });
 

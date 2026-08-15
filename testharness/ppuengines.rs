@@ -63,7 +63,8 @@ const CPU_INSTRS: &str = "tests/cpu_instrs/cpu_instrs.gb";
 fn render(rom: &str, mode: RenderMode, frames: u64) -> Vec<u8> {
     let staged = stage(rom);
     let data = std::fs::read(&staged).expect("read staged ROM");
-    // Always pass the path: with `None` this core forces MBC3 on every cart.
+    // Pass the path so cartridge RAM is battery-backed where the ROM expects
+    // it. It does not choose the mapper — that is header byte `$0147`.
     let mut cpu = Cpu::new_with_model(data, Some(staged), Model::Dmg);
     cpu.memory.gpu.set_render_mode(mode);
     let mut cycles: u64 = 0;

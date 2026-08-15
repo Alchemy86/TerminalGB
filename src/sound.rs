@@ -2297,7 +2297,11 @@ impl Sound {
 /// * **Instrumentation.** Underruns, held/dropped counts and depth min/max are
 ///   counted so buffer sizing is measured, not argued. `GB_AUDIO_STATS=1`
 ///   logs a line every ~5 s to stderr.
-#[cfg(any(all(not(target_arch = "wasm32"), feature = "audio"), test))]
+// Also compiled for `wasm32` (whatever the `audio` feature says — that feature
+// means *cpal*, which wasm never has): `web_audio` hands samples over through
+// exactly this queue, so the browser and the sound card share one hand-off
+// policy rather than growing two.
+#[cfg(any(feature = "audio", target_arch = "wasm32", test))]
 pub mod sample_queue {
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -2527,6 +2531,549 @@ pub mod sample_queue {
         pub fn reset_depth_window(&mut self) {
             self.stats.depth_min = self.queue.len();
             self.stats.depth_max = self.queue.len();
+        }
+
+        /// Take exactly `n` samples, or nothing at all.
+        ///
+        /// The counterpart of [`Self::next_sample`] for a consumer that
+        /// *schedules* audio rather than being pulled at the device rate — the
+        /// browser's Web Audio path (see [`super::web_audio`]). Such a consumer
+        /// must never be handed a held/faded sample: it places what it takes on
+        /// a timeline, so a substituted sample would stretch that timeline by a
+        /// sample's worth of time and the clock would drift for the rest of the
+        /// run. "Not enough yet" is therefore `false` and no samples moved, and
+        /// the scheduler simply lets its lead shrink until the producer catches
+        /// up.
+        pub fn drain_block(
+            &mut self,
+            n: usize,
+            left: &mut Vec<f32>,
+            right: &mut Vec<f32>,
+        ) -> bool {
+            if self.queue.len() < n {
+                return false;
+            }
+            left.clear();
+            right.clear();
+            for (l, r) in self.queue.drain(0..n) {
+                left.push(l);
+                right.push(r);
+                self.hold = (l, r);
+            }
+            self.priming = false;
+            self.stats.consumed += n as u64;
+            true
+        }
+    }
+}
+
+/// Playing the APU's output in a browser — the `wasm32` half of
+/// [`AudioPlayer`], and the counterpart of [`cpal_audio`].
+///
+/// # Why the split is where it is
+///
+/// A Web Audio `AudioContext` is a JavaScript object: it is not `Send`, and
+/// [`AudioPlayer`] is (the FFI build parks a whole `Gameboy` in a
+/// `static Mutex`). It also cannot be touched from anywhere but the page's main
+/// thread. So **no JS object goes anywhere near the APU**. What lives here is:
+///
+/// * [`WebAudioPlayer`] — the producer half. It is what
+///   [`crate::gameboy::Gameboy::enable_audio`] is given, it holds nothing but a
+///   [`sample_queue::SampleQueue`], and [`AudioPlayer::play`] is the same
+///   non-blocking hand-off cpal uses (push, then bound latency by *discarding*
+///   the oldest). **It must never wait** — `play` is called from inside
+///   `Cpu::do_cycle`, so anything it does is charged to the emulated frame
+///   (`docs/audio.md` §4c).
+/// * [`Scheduler`] — the consumer half's *decisions*, with no `web-sys` in
+///   sight, so the anti-glitch logic is unit-testable under a plain
+///   `cargo test` on the host instead of only in a browser.
+///
+/// The twenty lines that actually call `AudioContext` live in the frontend
+/// (`crate::screen::web`), where every other host assumption already lives.
+///
+/// # Why blocks are *scheduled* rather than pulled
+///
+/// The browser offers no equivalent of a cpal callback that we may use here:
+/// an `AudioWorklet` runs on the audio thread and would need either a
+/// `SharedArrayBuffer` (which needs COOP/COEP headers a static GitHub Pages
+/// deployment cannot set) or a per-block `postMessage`, and `ScriptProcessorNode`
+/// is deprecated and runs on the main thread anyway. What is left, and what is
+/// the standard technique, is to hand the context short `AudioBuffer`s with an
+/// explicit start time and keep a scheduling cursor a fixed distance ahead of
+/// `AudioContext.currentTime`.
+///
+/// Two properties make that not crackle, and both are this type's job:
+///
+/// 1. **Never schedule in the past.** `start(when)` with `when` already gone
+///    plays *immediately*, so a late block overlaps the one before it — a
+///    click, not a gap. The cursor is therefore reset (and an underrun
+///    counted) the moment it is not strictly ahead of `now`.
+/// 2. **Never substitute samples to fill a block.** The cursor advances by
+///    exactly `block / sample_rate` per block, so it *is* the output clock;
+///    inserting a padded sample would slide it permanently. A short queue means
+///    "schedule nothing this tick", not "schedule something else".
+#[cfg(any(target_arch = "wasm32", test))]
+pub mod web_audio {
+    use super::sample_queue::{self, SampleQueue};
+    use super::AudioPlayer;
+    use std::sync::{Arc, Mutex};
+
+    /// Samples per scheduled `AudioBuffer`: 512 = **11.6 ms** at 44.1 kHz.
+    ///
+    /// Small enough that the lead is quantised finely (the cursor overshoots
+    /// its target by at most one block) and large enough that the page creates
+    /// ~86 `AudioBuffer`/`AudioBufferSourceNode` pairs a second rather than the
+    /// ~172 a 256-sample producer block would cost.
+    pub const SCHEDULE_BLOCK: usize = 512;
+
+    /// How far ahead of `AudioContext.currentTime` the scheduler keeps the
+    /// cursor: 4096 samples = **93 ms** at 44.1 kHz, 85 ms at 48 kHz.
+    ///
+    /// **This is measured, not chosen, and the first value tried was half of
+    /// it.** The desktop cushion is 1792 samples / 40.6 ms, sized to absorb one
+    /// dropped frame — but on the desktop a cpal *callback thread* keeps
+    /// pulling while the frame loop stalls. In a browser there is no second
+    /// thread: `requestAnimationFrame` produces the audio **and** schedules it,
+    /// so one stalled callback starves both halves at once, and the cushion has
+    /// to cover the whole stall.
+    ///
+    /// At 2048 samples a real Chrome run measured **~2 underruns per second**
+    /// with the emulator itself at a perfect 59.6 fps — the page's own
+    /// animation-frame jitter, nothing to do with emulation. The bound that
+    /// matters is [`crate::screen::pace::MAX_CATCHUP`] frames (134 ms), because
+    /// a gap longer than that is resynchronised rather than replayed and no
+    /// cushion can cover it; 4096 samples sits just under that and measured
+    /// **0 underruns**.
+    ///
+    /// The cost is honest latency, and it is the trade the browser forces: a
+    /// gap is heard as a click, 93 ms of delay is heard as nothing at all
+    /// unless you are looking for it.
+    pub const TARGET_LEAD: usize = 4096;
+
+    /// The rate the APU is asked to resample to when the page has not told us
+    /// what its `AudioContext` runs at. Retuned by
+    /// [`super::Sound::set_player`] from [`AudioPlayer::samples_rate`], so the
+    /// only thing that matters is that this is the *truth* about the stream —
+    /// a mismatch is the one thing that makes a tone sharp or flat.
+    pub const FALLBACK_RATE: u32 = super::SAMPLE_RATE;
+
+    /// The hand-off queue between the APU and the scheduler, sized for this
+    /// path.
+    ///
+    /// **Deliberately not `sample_queue::start_fill()`/`high_water()`.** Those
+    /// size a queue that a *device callback* drains at exactly the sample
+    /// rate, where the queue itself is the whole of the latency. Here the
+    /// scheduler owns the latency ([`TARGET_LEAD`]) and the queue is only the
+    /// transfer buffer between two halves of one animation frame — so clipping
+    /// it at the desktop's 2816 samples destroys precisely the backlog the
+    /// scheduler needs to rebuild its cushion after a stall, and (with a lead
+    /// above the ceiling) can stop it ever starting. Measured with the desktop
+    /// sizing: ~2,560 samples discarded **per second** on an otherwise healthy
+    /// browser run. The bound is still real — a hidden tab must not grow the
+    /// queue without limit — just four leads out instead of half of one.
+    pub fn new_queue() -> SampleQueue {
+        SampleQueue::new(TARGET_LEAD, TARGET_LEAD * 4)
+    }
+
+    /// One block of audio, with the time it must start at on the
+    /// `AudioContext` clock.
+    pub struct Block {
+        /// `AudioContext.currentTime` value to `start()` this buffer at.
+        pub when: f64,
+        pub left: Vec<f32>,
+        pub right: Vec<f32>,
+    }
+
+    /// The producer half — what the machine is handed.
+    pub struct WebAudioPlayer {
+        queue: Arc<Mutex<SampleQueue>>,
+        rate: u32,
+    }
+
+    impl WebAudioPlayer {
+        /// Build a player and the queue handle its consumer drains.
+        ///
+        /// `rate` must be the rate the `AudioContext` actually runs at
+        /// (`ctx.sampleRate`), not a guess: the APU emits exactly `rate`
+        /// samples per *emulated* second, so pitch is correct if and only if
+        /// the two agree.
+        pub fn new(rate: u32) -> (WebAudioPlayer, Arc<Mutex<SampleQueue>>) {
+            let queue = Arc::new(Mutex::new(new_queue()));
+            (
+                WebAudioPlayer {
+                    queue: queue.clone(),
+                    rate,
+                },
+                queue,
+            )
+        }
+    }
+
+    impl AudioPlayer for WebAudioPlayer {
+        fn play(&mut self, left: &[f32], right: &[f32]) {
+            sample_queue::hand_off(&self.queue, left, right);
+        }
+
+        fn samples_rate(&self) -> u32 {
+            self.rate
+        }
+
+        fn underflowed(&self) -> bool {
+            // The queue substitutes a decaying hold sample of its own; nothing
+            // upstream needs to know, and answering `true` would only make
+            // `Sound` re-prime on top of a queue that already is.
+            false
+        }
+    }
+
+    /// What the scheduler has had to do — the numbers a browser run is judged
+    /// on, since nobody can hear a headless one.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct SchedulerStats {
+        /// Blocks handed to the `AudioContext`.
+        pub blocks: u64,
+        /// Times the cursor had fallen to or behind `currentTime`, so a gap
+        /// was heard and the lead had to be rebuilt. **This is the crackle
+        /// counter**: zero over a real run is the claim to make.
+        pub underruns: u64,
+        /// Ticks on which the producer had not supplied a whole block yet.
+        /// Harmless on its own — the lead simply shrinks — but a rising count
+        /// beside a flat `blocks` means the emulator is not keeping up.
+        pub starved: u64,
+    }
+
+    /// The consumer half's decisions. No `web-sys`, no clock of its own: the
+    /// caller passes `AudioContext.currentTime` in.
+    pub struct Scheduler {
+        rate: f64,
+        block: usize,
+        target_lead: f64,
+        /// When the next block must start, on the caller's clock. `None` until
+        /// the first block, so the very first tick is not counted as an
+        /// underrun.
+        cursor: Option<f64>,
+        /// Has anything ever been scheduled? Distinguishes "not started yet"
+        /// (prime) from "started and ran dry" (restart at once) — see the
+        /// priming note in [`Scheduler::next_block`].
+        started: bool,
+        stats: SchedulerStats,
+    }
+
+    impl Scheduler {
+        pub fn new(rate: u32) -> Scheduler {
+            Scheduler {
+                rate: rate as f64,
+                block: SCHEDULE_BLOCK,
+                target_lead: TARGET_LEAD as f64 / rate as f64,
+                cursor: None,
+                started: false,
+                stats: SchedulerStats::default(),
+            }
+        }
+
+        pub fn stats(&self) -> SchedulerStats {
+            self.stats
+        }
+
+        /// Seconds of audio already scheduled and not yet played, or 0 before
+        /// anything has been. This is the latency a listener feels, so it is
+        /// worth reporting rather than assuming.
+        pub fn lead(&self, now: f64) -> f64 {
+            self.cursor.map_or(0.0, |c| (c - now).max(0.0))
+        }
+
+        /// The next block to hand to the audio device, or `None` when nothing
+        /// is due — call in a loop until it answers `None`.
+        ///
+        /// `now` is `AudioContext.currentTime`.
+        pub fn next_block(
+            &mut self,
+            now: f64,
+            queue: &Mutex<SampleQueue>,
+        ) -> Option<Block> {
+            // (1) Never schedule in the past. A cursor that has reached `now`
+            //     means the context has already played everything we gave it:
+            //     there is a gap either way, and placing the next block behind
+            //     `now` would make it *overlap* rather than follow — a click,
+            //     not the silence it really is. `start(when)` with `when`
+            //     already gone plays immediately; the browser does not drop it.
+            //
+            //     The cursor is only ever *committed* once a block has really
+            //     been taken (bottom of this function), which is what keeps a
+            //     dry spell to one underrun rather than one per tick.
+            if self.cursor.is_some_and(|c| c <= now) {
+                self.stats.underruns += 1;
+                self.cursor = None;
+            }
+
+            let mut q = match queue.lock() {
+                Ok(q) => q,
+                // A poisoned lock must not take the page down over audio.
+                Err(_) => return None,
+            };
+            q.note_callback();
+
+            // (2) Prime before the *first* block, and never again.
+            //
+            //     Starting the moment a single block exists puts the cursor
+            //     11.6 ms ahead of a producer that only delivers 16.7 ms of
+            //     audio every 16.7 ms — so the first block runs out before the
+            //     second can be filled, and the run opens with an underrun.
+            //     Measured: exactly one, every time, until this was here.
+            //
+            //     **Re-priming after an underrun is the opposite mistake and
+            //     was measured too.** The cushion can only ever be rebuilt out
+            //     of a *backlog*, and after a stall the backlog is exactly what
+            //     exists (the pacer catches the missed frames up in one go).
+            //     Waiting for a full lead before restarting instead adds tens
+            //     of milliseconds of further silence, during which the producer
+            //     keeps filling until the queue's latency bound clips it — so
+            //     one stall became a self-sustaining cycle of underruns and
+            //     dropped audio, ~2 of each per second in a real browser.
+            //     Restart immediately and let the drain rebuild the lead.
+            let need = if self.started {
+                self.block
+            } else {
+                TARGET_LEAD.max(self.block)
+            };
+
+            //     The restart offset is one block, not a whole target lead:
+            //     the cursor is where the next block *starts*, and the caller
+            //     loops until `cursor - now` reaches the target. Restarting at
+            //     `now + target_lead` would satisfy the gate below immediately
+            //     and schedule nothing at all.
+            let cursor = match self.cursor {
+                Some(c) => c,
+                None => now + self.block as f64 / self.rate,
+            };
+            if cursor - now >= self.target_lead {
+                return None; // Far enough ahead already.
+            }
+            if q.len() < need {
+                // (3) Nothing is substituted. The lead shrinks by one tick and
+                //     we try again; padding a block with held samples would
+                //     advance the cursor by time no real audio occupies, and
+                //     the output clock would slide for the rest of the run.
+                self.stats.starved += 1;
+                return None;
+            }
+
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            if !q.drain_block(self.block, &mut left, &mut right) {
+                self.stats.starved += 1;
+                return None;
+            }
+
+            self.cursor = Some(cursor + self.block as f64 / self.rate);
+            self.started = true;
+            self.stats.blocks += 1;
+            Some(Block {
+                when: cursor,
+                left,
+                right,
+            })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::sound::sample_queue::SampleQueue;
+
+        const RATE: u32 = 44_100;
+
+        fn queue(samples: usize) -> Mutex<SampleQueue> {
+            // A band wide enough that `bound_latency` never fires in these
+            // tests: what is under test here is the scheduler, not the clip.
+            let mut q = SampleQueue::new(0, 1 << 20);
+            #[allow(clippy::let_and_return)]
+            let buf = vec![0.25f32; samples];
+            q.push(&buf, &buf);
+            Mutex::new(q)
+        }
+
+        /// Drain everything the scheduler will give at this instant.
+        fn tick(s: &mut Scheduler, now: f64, q: &Mutex<SampleQueue>) -> Vec<Block> {
+            let mut out = Vec::new();
+            while let Some(b) = s.next_block(now, q) {
+                out.push(b);
+            }
+            out
+        }
+
+        /// **The click rule.** `AudioBufferSourceNode.start(when)` with `when`
+        /// already past plays *immediately* rather than being skipped, so a
+        /// late block overlaps its predecessor — which is heard as a click,
+        /// not as the gap it really is. Every block must therefore be placed
+        /// strictly in the future, including on the tick where the pipeline
+        /// has just run dry.
+        #[test]
+        fn a_block_is_never_scheduled_in_the_past() {
+            let q = queue(SCHEDULE_BLOCK * 64);
+            let mut s = Scheduler::new(RATE);
+            let mut now = 0.0f64;
+            let mut placed = Vec::new();
+            for _ in 0..20 {
+                for b in tick(&mut s, now, &q) {
+                    assert!(
+                        b.when >= now,
+                        "block scheduled {:.6}s in the past",
+                        now - b.when
+                    );
+                    placed.push(b.when);
+                }
+                // A stall far longer than anything already scheduled: the
+                // cursor is now behind, which is exactly the case that must
+                // not produce a past-dated block.
+                now += 1.0;
+            }
+            assert!(!placed.is_empty());
+            assert!(
+                s.stats().underruns > 0,
+                "a 1s stall per tick must be reported as an underrun"
+            );
+        }
+
+        /// **The drift rule.** The cursor *is* the output clock, so a block
+        /// must carry exactly `SCHEDULE_BLOCK` real samples and advance the
+        /// cursor by exactly that much time. Padding a short block with
+        /// substituted samples (which is what `SampleQueue::next_sample` does
+        /// for a device callback, correctly) would slide the timeline
+        /// permanently.
+        #[test]
+        fn scheduled_blocks_are_contiguous_and_never_padded() {
+            let q = queue(SCHEDULE_BLOCK * 16);
+            let mut s = Scheduler::new(RATE);
+            let blocks = tick(&mut s, 0.0, &q);
+            assert!(blocks.len() >= 2);
+            let step = SCHEDULE_BLOCK as f64 / f64::from(RATE);
+            for w in blocks.windows(2) {
+                assert_eq!(w[0].left.len(), SCHEDULE_BLOCK);
+                assert_eq!(w[0].right.len(), SCHEDULE_BLOCK);
+                assert!(
+                    (w[1].when - w[0].when - step).abs() < 1e-12,
+                    "gap of {}s between blocks, expected {step}s",
+                    w[1].when - w[0].when
+                );
+            }
+        }
+
+        /// A queue with less than a whole block in it schedules **nothing**,
+        /// and leaves what it has alone for the next tick.
+        #[test]
+        fn a_short_queue_schedules_nothing_and_keeps_its_samples() {
+            let q = queue(SCHEDULE_BLOCK - 1);
+            let mut s = Scheduler::new(RATE);
+            assert!(tick(&mut s, 0.0, &q).is_empty());
+            assert_eq!(s.stats().blocks, 0);
+            assert!(s.stats().starved > 0);
+            assert_eq!(q.lock().unwrap().len(), SCHEDULE_BLOCK - 1);
+        }
+
+        /// The lead is what a listener feels as latency, so it is bounded: a
+        /// bottomless queue must not let one tick schedule minutes of audio.
+        #[test]
+        fn the_lead_is_bounded_even_with_an_unlimited_queue() {
+            let q = queue(SCHEDULE_BLOCK * 4096);
+            let mut s = Scheduler::new(RATE);
+            let target = TARGET_LEAD as f64 / f64::from(RATE);
+            for i in 0..600 {
+                let now = i as f64 * 1.0 / 60.0;
+                tick(&mut s, now, &q);
+                let lead = s.lead(now);
+                assert!(
+                    lead <= target + SCHEDULE_BLOCK as f64 / f64::from(RATE) + 1e-9,
+                    "lead {lead}s exceeded the {target}s target by more than one block"
+                );
+            }
+        }
+
+        /// **The property the whole design exists for: a steady producer must
+        /// not glitch.** Ten seconds of virtual time with the emulator
+        /// delivering one frame's audio every 16.743 ms and the page pumping
+        /// at 60 Hz — the real shape of the browser path. Zero underruns, and
+        /// the latency parked in the designed band.
+        ///
+        /// Teeth: raise `TARGET_LEAD` far above the production burst and this
+        /// still passes; drop the "never schedule in the past" reset and the
+        /// underrun count goes wrong, which is what the first test pins.
+        #[test]
+        fn a_steady_producer_never_underruns_over_ten_seconds() {
+            let q = Mutex::new(new_queue());
+            let mut s = Scheduler::new(RATE);
+            let frame = 16_743.0 / 1_000_000.0f64;
+            // Samples one emulated frame is worth, as the APU produces them.
+            let per_frame = (f64::from(RATE) * frame).round() as usize;
+            let buf = vec![0.1f32; per_frame];
+
+            let mut produced_at = 0.0f64;
+            let mut pump_at = 0.0f64;
+            let mut t = 0.0f64;
+            let mut max_lead: f64 = 0.0;
+            while t < 10.0 {
+                t = produced_at.min(pump_at);
+                if produced_at <= pump_at {
+                    sample_queue::hand_off(&q, &buf, &buf);
+                    produced_at += frame;
+                } else {
+                    tick(&mut s, t, &q);
+                    max_lead = max_lead.max(s.lead(t));
+                    pump_at += 1.0 / 60.0;
+                }
+            }
+            let st = s.stats();
+            assert_eq!(st.underruns, 0, "steady production must not glitch: {st:?}");
+            assert!(
+                st.blocks > 700,
+                "expected ~10s of blocks, got {}",
+                st.blocks
+            );
+            let target = TARGET_LEAD as f64 / f64::from(RATE);
+            assert!(
+                max_lead <= target + SCHEDULE_BLOCK as f64 / f64::from(RATE) + 1e-9,
+                "latency drifted to {max_lead}s"
+            );
+            assert_eq!(
+                q.lock().unwrap().stats.dropped,
+                0,
+                "a producer on the same clock as the consumer must never be clipped"
+            );
+        }
+
+        /// **The queue must be able to hold a whole scheduling lead.** The
+        /// scheduler primes on [`TARGET_LEAD`] samples and the queue's latency
+        /// bound clips above its high watermark: set the second below the
+        /// first and the two deadlock — the queue is clipped every time it
+        /// approaches the depth the scheduler is waiting for, so **not one
+        /// sample is ever played**. Reached exactly that way, by reusing the
+        /// desktop's `start_fill()`/`high_water()` here.
+        #[test]
+        fn the_queue_can_hold_a_whole_scheduling_lead() {
+            let q = Mutex::new(new_queue());
+            let mut s = Scheduler::new(RATE);
+            let buf = vec![0.2f32; TARGET_LEAD * 2];
+            sample_queue::hand_off(&q, &buf, &buf);
+            assert!(
+                q.lock().unwrap().len() >= TARGET_LEAD,
+                "the latency bound clipped below the priming threshold"
+            );
+            assert!(
+                !tick(&mut s, 0.0, &q).is_empty(),
+                "a full queue must be able to start the scheduler"
+            );
+        }
+
+        /// The producer half is what the machine is handed, so it must be
+        /// `Send` — the FFI build parks a whole `Gameboy` in a `static Mutex`.
+        /// This is a compile-time assertion; it exists because holding a
+        /// `web_sys::AudioContext` here (the obvious first design) would break
+        /// it, and the error would appear a long way from the cause.
+        #[test]
+        fn the_player_half_holds_nothing_that_is_not_send() {
+            fn assert_send<T: Send>() {}
+            assert_send::<WebAudioPlayer>();
+            assert_send::<Box<dyn AudioPlayer>>();
         }
     }
 }

@@ -199,6 +199,19 @@ opt-level = 0
 [dependencies]
 terminalgb-plugin-api = { path = "crates/terminalgb-plugin-api", version = "0.1.0" }
 
+# The APU's band-limited resampler, and the core's ONE third-party dependency.
+#
+# **This must stay `>= 0.1.5`, and it must stay in the shared `[dependencies]`
+# block rather than the not-wasm32 one.** 0.1.4 was a binding to the C
+# `blip_buf` library (`blip_buf-sys` + `libc`, built by a `cc` build script),
+# which is why the whole APU used to be `#[cfg(not(target_arch = "wasm32"))]`
+# and the web build shipped a Game Boy with *no sound chip at all* — not a
+# quiet one (see `crate::sound::SilentPlayer`). 0.1.5 is a pure-Rust rewrite
+# with no dependencies and no build script, so it cross-compiles to
+# `wasm32-unknown-unknown` like any other crate. Dropping back to 0.1.4 would
+# silently reintroduce a C toolchain requirement on every target.
+blip_buf = "0.1.5"
+
 # The chiptune renderer's music half: score/`.vgm`/register-script parsing, the
 # `Apu` trait and the WAV encoder. Dependency-free, and it deliberately does
 # **not** depend on `terminalgb` — the emulated sound chip reaches it through the
@@ -230,7 +243,6 @@ icy_sixel = { version = "^0.1.1", optional = true }
 image = { version = "^0.25.1", default-features = false, features = ["jpeg", "png"], optional = true }
 ratatui-image = { version = "4.2.0", optional = true }
 base64 = { version = "0.21.7", optional = true }
-blip_buf = "0.1.4"
 cpal = { version = "0.16.0", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -246,6 +258,18 @@ web-sys = {version = "0.3.4", features = [
   'ImageData',
   'Window',
   'KeyboardEvent',
+  # Web Audio — the browser's playback path (`screen::webaudio`). `web-sys` is
+  # one crate however many of these are enabled; each only adds generated
+  # bindings.
+  'AudioBuffer',
+  'AudioBufferSourceNode',
+  'AudioContext',
+  'AudioContextState',
+  'AudioDestinationNode',
+  'AudioNode',
+  'AudioParam',
+  'BaseAudioContext',
+  'GainNode',
 ]}
 
 #'WebGlBuffer',

@@ -74,8 +74,8 @@ fn main() {
             std::process::exit(2);
         }
     };
-    // Always pass the path: with `None` this core forces MBC3 for every
-    // cartridge and mis-drives the rest (a documented sharp edge).
+    // Pass the path so cartridge RAM is battery-backed where the ROM expects
+    // it. It does not choose the mapper — that is header byte `$0147`.
     let mut cpu = Cpu::new(data, Some(rom_path.clone()));
 
     // Serial capture. The contract asks for the raw bytes the ROM sends to the

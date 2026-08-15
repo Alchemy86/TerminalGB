@@ -7529,8 +7529,9 @@ fn window_title(game: Option<&str>) -> String {
 
 /// Build a [`Gameboy`], its [`RomEntry`] and its audio hold from a ROM on disk.
 ///
-/// NOTE: always pass `Some(path)` to `Gameboy::new` so the MBC is detected from
-/// the header — with `None`, `get_mbc` forces MBC3 and mis-drives other carts.
+/// NOTE: always pass `Some(path)` — that is what battery-backs cartridge RAM to
+/// `<rom>.sav`. It does **not** choose the mapper (that is header byte `$0147`);
+/// it used to, which is why this note existed. See `crate::mbc::get_mbc`.
 /// What [`load_session`] hands back: the machine, its ROM entry, the audio
 /// hold, the plugin-attach notes, and any portal trade that was armed.
 type LoadedSession = (

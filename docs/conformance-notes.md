@@ -138,6 +138,97 @@ runner is wrong.
 
 ---
 
+## 2026-08-15 — the web build had no sound chip, and was paced by the display
+
+Full write-up, with the browser design and the measured numbers:
+[`docs/web-audio.md`](web-audio.md). Three items; the third is a *verification* of a fix
+that had already landed, because the roadmap still listed it as open.
+
+### 1. The APU was compiled out of the `wasm32` build
+
+*Symptom* — the browser build is silent, and beyond that any cartridge that waits on the
+sound chip stalls. `$FF10-$FF3F` read back `$FF` and `$FF76`/`$FF77` read back `$00`
+whatever the program writes, so `NR52` never reports itself powered on, a sound-driver
+initialisation loop spins for ever, and the game appears to hang on its title screen. A
+player reads that as "the emulator is broken", not as "there is no sound".
+
+*Caught by* — **nothing here, and nothing could.** Every test-ROM harness, every
+external-suite scout and all 646 unit tests run on the host target, where the APU was
+always present; `make check-wasm` type-checks the build, and a type-check cannot see a
+missing peripheral. **That coverage gap is still open** — there is no `wasm32` test
+runner in this repository. What exists now is the browser measurement in
+`docs/web-audio.md` §5 and the host-side scheduler tests.
+
+*Hardware behaviour* — the APU is part of the DMG/CGB silicon, and `NR52` bit 7 reflects
+the power state a program writes to it (Pan Docs,
+[NR52](https://gbdev.io/pandocs/Audio_Registers.html#ff26--nr52-audio-master-control)).
+A console with no sound chip does not exist. This repository already had the argument
+written down for the *native* case — `sound::SilentPlayer` exists because "a machine
+always has an APU, sound card or not" — and had simply never applied it to `wasm32`.
+
+*Root cause worth remembering* — a **stale dependency pin**, not a design decision.
+`blip_buf` 0.1.4 is a binding to the C library (`blip_buf-sys` + `libc`, built through a
+`cc` build script) and does not cross-compile to `wasm32-unknown-unknown`; **0.1.5 is a
+pure-Rust rewrite with no dependencies and no build script**, and the lockfile had
+resolved to it long ago. The `cfg` that removed the sound chip outlived its reason by
+however long that took. The requirement is now `"0.1.5"` with the reason written at the
+declaration, because dropping back silently reintroduces a C toolchain requirement on
+every target.
+
+*Carries into the tool* — **a conformance adapter must be able to say which target it
+was built for.** Two builds of one emulator that differ by a `cfg` are two emulators, and
+this one differed by a whole peripheral. Any check that reads `NR52` back after a power-on
+write is a one-line detector for the whole class.
+
+### 2. Emulation was paced by `requestAnimationFrame`
+
+*Symptom* — on a 120 Hz display the game runs at **double speed** (144 Hz: 2.4×): music,
+animation and timers all wrong, and no setting to change it. On an ordinary 60 Hz display
+it is 0.46 % fast, which is inaudible alone and is exactly enough to make an audio queue
+shed a cushion's worth of samples on a timer — an audible skip every few seconds.
+
+*Caught by* — no test ROM, and none can: the emulated machine is entirely correct and a
+framebuffer hash is identical whatever rate the frames are produced at. Same blind spot as
+the terminal render defects. Now
+`screen::pace::tests::a_fast_display_does_not_speed_the_machine_up`, which reads 1200
+emulated frames per 10 s against the old loop and ~597 against the fixed one.
+
+*Contract violated* — `requestAnimationFrame` is specified as running its callbacks before
+the next **repaint**
+([HTML, "Animation frames"](https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#animation-frames)),
+i.e. at the display's rate. It is not a timer and never was. A DMG frame is
+70224 cycles / 4.194304 MHz = **59.7275 Hz**.
+
+*Carries into the tool* — **an emulator's frame rate must come from a clock, never from a
+presentation callback.** Detectable from outside: run a known number of emulated frames
+and compare against wall time.
+
+### 3. The web/FFI mapper — verified, not re-fixed
+
+`mbc::get_mbc` used to return an **MBC3 for any cartridge** when given no save path, which
+is always the case for the web and FFI builds, so a non-MBC3 game was mis-banked from its
+first bank switch — garbage code or a freeze in the browser while the identical ROM was
+fine on the desktop. That was fixed when persistence and mapper selection were separated,
+and the README roadmap had simply not been updated; it is corrected now.
+
+What this work added is the **end-to-end** check.
+`mbc::test::the_mapper_is_chosen_from_the_header_with_or_without_a_save_path` proves the
+core is right; `lib::ffi_tests::the_ffi_entry_point_takes_the_mapper_from_the_cartridge_header`
+drives the real `extern "C" load()` symbol with a hand-assembled MBC1 cartridge that
+executes a bank switch, because *"the core is right"* and *"the entry point is right"* are
+different claims and only the second is what an embedder gets. The web path constructs its
+machine with the identical `Gameboy::new(rom, None)` call.
+
+*Hardware behaviour* — the mapper is cartridge header byte `$0147` (Pan Docs,
+[The Cartridge Header](https://gbdev.io/pandocs/The_Cartridge_Header.html)); nothing about
+whether the host can write a save file changes it.
+
+*Carries into the tool* — **the same cartridge must behave identically however the
+emulator was configured.** A check that bank-switches and reads back is trivial to write
+and would have caught this on every affected build.
+
+---
+
 ## 2026-08-14 — the OAM strobe asked `mode`, not `LY` (Mealybug accurate 6/79 → 12/79)
 
 Two defects in the **accurate** engine's STAT path and register-write timing. The default

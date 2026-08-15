@@ -101,9 +101,13 @@ output stream. The desktop frontend wires it up in `render_desktop`
 
 ### Honest approximations & caveats
 
-- **No sound on web.** The whole module is `#[cfg(not(target_arch = "wasm32"))]`
-  ([`src/lib.rs:17`](https://github.com/Alchemy86/TerminalGB/blob/main/src/lib.rs#L17)), so the browser build reads `0xFF10–0xFF3F` as
-  `0xFF` and is silent. The terminal frontend also runs without audio.
+- ~~**No sound on web.**~~ **Fixed.** The whole module used to be
+  `#[cfg(not(target_arch = "wasm32"))]`, so the browser build read `0xFF10–0xFF3F` as
+  `0xFF`, dropped every write and had **no sound chip at all** — not a quiet one, which
+  a cartridge waiting on `NR52` can tell apart. The APU is compiled on every target now
+  and the browser plays it through the Web Audio API; see
+  [`docs/web-audio.md`](../web-audio.md) for the design, the measured numbers, and why the
+  `cfg` was there (a `blip_buf` version that bound to a C library).
 - **Register accuracy is measured: Blargg `dmg_sound` passes 12 of 12 subtests**,
   per the offline audio harness
   ([`testharness/audiocapture.rs`](../../testharness/audiocapture.rs)), which reads the

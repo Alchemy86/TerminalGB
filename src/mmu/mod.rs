@@ -9,7 +9,6 @@ use crate::mmu::oamdma::OamDma;
 use crate::mmu::serial::Serial;
 use crate::mmu::timer::Timer;
 use crate::mode::{GbMode, GbSpeed, PpuRevision};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::sound::Sound;
 use std::path;
 
@@ -359,7 +358,9 @@ pub struct MemoryManagementUnit<'a> {
     /// game programmatically, and **not** part of a save state.
     pub input_queue: InputQueue,
     pub gpu: Gpu,
-    #[cfg(not(target_arch = "wasm32"))]
+    /// The APU, once a frontend has installed a player. `None` is **not** a
+    /// quiet Game Boy — see [`crate::sound::SilentPlayer`]. Present on every
+    /// target including `wasm32`.
     pub sound: Option<Sound>,
     hdma_status: DMAType,
     /// HDMA1/2 and HDMA3/4 are not a shadow of the registers — they *are* the
@@ -486,7 +487,6 @@ impl<'a> MemoryManagementUnit<'a> {
             sgb: None,
             input_queue: InputQueue::default(),
             gpu: Gpu::new(),
-            #[cfg(not(target_arch = "wasm32"))]
             sound: None,
             mbc: mmu_mbc,
             gbmode: GbMode::Classic,
@@ -781,7 +781,6 @@ impl<'a> MemoryManagementUnit<'a> {
             // access lands on its exact sub-instruction cycle (Blargg
             // dmg_sound 09/10/12 measure this to 2 T-cycles). Synthesis stays
             // event-driven; this only moves the "now" that catch_up syncs to.
-            #[cfg(not(target_arch = "wasm32"))]
             if let Some(ref mut sound) = self.sound {
                 sound.do_cycle(4);
             }
@@ -1020,19 +1019,12 @@ impl<'a> MemoryManagementUnit<'a> {
 
         // APU block (present flag + payload), length-prefixed & skippable.
         let mut apu = crate::savestate::Writer::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            match &self.sound {
-                Some(s) => {
-                    apu.bool(true);
-                    s.save_state(&mut apu);
-                }
-                None => apu.bool(false),
+        match &self.sound {
+            Some(s) => {
+                apu.bool(true);
+                s.save_state(&mut apu);
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            apu.bool(false);
+            None => apu.bool(false),
         }
         w.blob(&apu.buf);
 
@@ -1087,7 +1079,6 @@ impl<'a> MemoryManagementUnit<'a> {
         // APU block. Parse only if this build has a Sound instance to restore
         // into; otherwise the whole block is skipped (its length was consumed).
         let apu = r.blob()?;
-        #[cfg(not(target_arch = "wasm32"))]
         {
             let mut ar = crate::savestate::Reader::new(&apu);
             let present = ar.bool()?;
@@ -1096,10 +1087,6 @@ impl<'a> MemoryManagementUnit<'a> {
                     s.load_state(&mut ar)?;
                 }
             }
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = apu;
         }
 
         // MBC block.
@@ -1158,7 +1145,6 @@ impl<'a> MemoryManagementUnit<'a> {
         // Like the timer, the APU already advanced `bus_ticked` T-cycles
         // during this instruction's accesses (bus_tick); apply only the
         // remainder so the per-instruction total is unchanged.
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref mut sound) = self.sound {
             sound.do_cycle(timerticks);
         }
@@ -1251,13 +1237,10 @@ impl<'a> MemoryManagementUnit<'a> {
                 // Catch the APU up to "now" first: NR52 status, length and
                 // sweep state are otherwise evaluated lazily in ~45 ms blocks
                 // and read stale (see Sound::catch_up).
-                #[cfg(not(target_arch = "wasm32"))]
-                return self.sound.as_mut().map_or(0xFF, |s| {
+                self.sound.as_mut().map_or(0xFF, |s| {
                     s.catch_up();
                     s.rb(address)
-                });
-                #[cfg(target_arch = "wasm32")]
-                0xFF
+                })
             }
             // `$FF4F` (VBK) is deliberately absent from this list: the PPU
             // answers it, because a Color console in compatibility mode still
@@ -1294,15 +1277,10 @@ impl<'a> MemoryManagementUnit<'a> {
             // CGB PCM12/PCM34: the live 4-bit digital output of each
             // channel, low nibble first (CH1/CH3 low, CH2/CH4 high). Sample
             // accurate, so the APU has to be caught up to this very cycle.
-            0xFF76..=0xFF77 => {
-                #[cfg(not(target_arch = "wasm32"))]
-                return self.sound.as_mut().map_or(0x00, |s| {
-                    s.catch_up();
-                    s.rb(address)
-                });
-                #[cfg(target_arch = "wasm32")]
-                0x00
-            }
+            0xFF76..=0xFF77 => self.sound.as_mut().map_or(0x00, |s| {
+                s.catch_up();
+                s.rb(address)
+            }),
             0xFF80..=0xFFFE => self.zram[address as usize & 0x007F],
             0xFFFF => self.inte,
             // Prohibited region FEA0-FEFF and any unmapped I/O read back 0xFF.
@@ -1470,7 +1448,6 @@ impl<'a> MemoryManagementUnit<'a> {
                 // while that bit is set clocks it (Sound::div_write). The APU
                 // must be caught up to this cycle first, exactly as for a
                 // direct NRxx access.
-                #[cfg(not(target_arch = "wasm32"))]
                 if address == 0xFF04 {
                     if let Some(ref mut sound) = self.sound {
                         sound.catch_up();
@@ -1482,7 +1459,6 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF10..=0xFF3F => {
                 // Catch-up before the write so the frame-sequencer position
                 // the write interacts with is current (see Sound::catch_up).
-                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(ref mut sound) = self.sound {
                     sound.catch_up();
                     sound.wb(address, value);
@@ -1562,7 +1538,6 @@ impl<'a> MemoryManagementUnit<'a> {
             // The APU is wired to the unmodified 4.194304 MHz clock, so it
             // must halve the CPU T-cycles it is handed at double speed —
             // otherwise every sound plays an octave high in CGB fast mode.
-            #[cfg(not(target_arch = "wasm32"))]
             if let Some(ref mut sound) = self.sound {
                 sound.set_double_speed(self.gbspeed == GbSpeed::Double);
             }
@@ -1678,7 +1653,6 @@ impl<'a> MemoryManagementUnit<'a> {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn enable_audio(&mut self, player: Box<dyn crate::sound::AudioPlayer>) {
         let fresh = self.sound.is_none();
         if fresh {
@@ -1701,7 +1675,6 @@ impl<'a> MemoryManagementUnit<'a> {
 
     /// Tell the audio player whether the frontend is running faster than real
     /// time (fast-forward). See `AudioPlayer::set_fast_forward`.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_audio_fast_forward(&mut self, enabled: bool) {
         if let Some(ref mut sound) = self.sound {
             sound.set_fast_forward(enabled);

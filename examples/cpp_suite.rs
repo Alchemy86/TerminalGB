@@ -141,8 +141,9 @@ fn run(rom: &Path, frames: u32) -> Vec<u8> {
     } else {
         Model::Auto
     };
-    // Always pass the path: with `None` this core forces MBC3 for every cart,
-    // which would quietly rig the three MBC3 tests.
+    // Pass the path so cartridge RAM is battery-backed where the ROM expects
+    // it — these three MBC3/RTC tests need a real `.sav` to measure. It does
+    // not choose the mapper; that is header byte `$0147`.
     let mut cpu = Cpu::new_with_model(data, Some(rom.to_path_buf()), model);
     let mut done = 0;
     while done < frames {

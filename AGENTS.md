@@ -64,8 +64,10 @@ lines per fix, not a process document.
     nothing in the repo — do not add ALSA to `Cargo.toml`.
 - Toolchain is pinned to Rust **1.83.0** via `rust-toolchain`. `make lint` = `cargo fmt
   --check` + `cargo clippy --all-targets -D warnings`.
-- WASM build: `cargo build --release --target wasm32-unknown-unknown` (audio is compiled
-  out on wasm).
+- WASM build: `cargo build --release --target wasm32-unknown-unknown`. **The APU is
+  emulated on wasm and plays through the Web Audio API** — see the "Web audio" section
+  below and [`docs/web-audio.md`](docs/web-audio.md). The `audio` cargo feature means
+  *cpal*, which wasm never has, so it is irrelevant there.
 
 ## Documentation
 
@@ -123,8 +125,14 @@ lines per fix, not a process document.
   that day's work: the 5-cycle dispatch fix supplies the correct 13 cycles, the APU
   base-clock fix lets the ROM see the double-speed switch it makes halfway through.
   Neither turns it green alone.
-- `get_mbc` (`src/mbc/mod.rs`) returns MBC3 for **any** cartridge when built without a
-  filepath — always the case for the web and FFI builds, so non-MBC3 games are mis-driven.
+- ~~`get_mbc` returns MBC3 for **any** cartridge when built without a filepath~~ —
+  **fixed, and this note was stale for a long time after it was.** `get_mbc`
+  (`src/mbc/mod.rs`) takes the save path *only* to decide whether cartridge RAM is
+  battery-backed; the mapper is header byte `$0147` on every path. Proved end to end by
+  `mbc::test::the_mapper_is_chosen_from_the_header_with_or_without_a_save_path` (the core)
+  and `lib::ffi_tests::the_ffi_entry_point_takes_the_mapper_from_the_cartridge_header`
+  (the real `extern "C" load()` symbol, which is what an FFI or web embedder actually
+  gets). Do not re-add "always pass `Some(path)` or you get an MBC3" to any comment.
 - `src/gpu/old_gpu.rs` (961 lines) is dead/unreferenced; `src/cpu/z80` is a non-compiled
   reference file, not a module.
 - The `retrio/gb-test-roms` submodule (`.gitmodules`) holds the Blargg ROMs; it is now
@@ -2596,6 +2604,91 @@ open* were all the same flag. Full write-up in [`docs/video-out.md`](docs/video-
   concluding anything about the device.
 
 - Add durable project-specific notes here as they are discovered through real work.
+
+## Web audio, and the APU that was missing on wasm (`src/sound.rs` `mod web_audio`, `src/screen/{webaudio,pace,web}.rs`)
+
+**Full page: [`docs/web-audio.md`](docs/web-audio.md); conformance record in
+`docs/conformance-notes.md` (2026-08-15).** Read the page before changing any constant here
+— every one of them was measured in a real browser and the first value tried was wrong.
+
+- **THE WEB BUILD HAD NO SOUND CHIP, NOT A QUIET ONE.** `MemoryManagementUnit::sound` and the
+  whole `sound` module were `#[cfg(not(target_arch = "wasm32"))]`, so `$FF10-$FF3F` read back
+  `$FF`, `$FF76`/`$FF77` read `$00` and every write was dropped. A cartridge can tell: `NR52`
+  never reports itself powered on, so a sound-driver init loop spins for ever and the game
+  looks *hung*, not silent. Same argument `sound::SilentPlayer` already made for native
+  builds, never applied to wasm.
+- **The cause was a stale dependency pin, and it is now a one-line trap to reintroduce.**
+  `blip_buf` **0.1.4** binds the C library (`blip_buf-sys` + `libc` + a `cc` build script) and
+  cannot cross-compile to `wasm32-unknown-unknown`; **0.1.5 is a pure-Rust rewrite with no
+  dependencies and no build script**, and the lockfile had resolved to it long before. The
+  requirement is `"0.1.5"` in the **shared** `[dependencies]` block with the reason written at
+  the declaration — do not move it back under `cfg(not(wasm32))` and do not relax the version.
+  `make embed` still shows exactly `blip_buf` + first-party `terminalgb-plugin-api`.
+- **`requestAnimationFrame` IS NOT A CLOCK.** The old loop stepped one emulated frame per
+  callback, i.e. at the *display's* refresh: +0.46 % on 60 Hz and **double speed on 120 Hz**.
+  `screen::pace::FramePacer` is the deadline accumulator (same rule as the TUI: advance by
+  exact periods, never reset to "now"), capped at `MAX_CATCHUP = 8` frames so a backgrounded
+  tab is resynchronised rather than replayed. **`std::time::Instant` panics on
+  `wasm32-unknown-unknown`** — the clock is passed in, which is also what lets the loop pace
+  on `AudioContext.currentTime` and share ONE clock with the audio consumer (zero structural
+  drift).
+- **No JS object may go near the APU.** `AudioPlayer: Send` (the FFI build parks a `Gameboy`
+  in a `static Mutex`) and `web_sys::AudioContext` is not `Send`. So `WebAudioPlayer` holds
+  only a `SampleQueue`, `Scheduler` holds only arithmetic (both in `src/sound.rs`, both
+  compiled under `cfg(test)` on the host so they have real tests), and the ~20 lines that
+  touch `AudioContext` live in `src/screen/webaudio.rs`.
+- **There is no usable callback thread in a browser.** `AudioWorklet` + `SharedArrayBuffer`
+  needs COOP/COEP headers a static GitHub Pages deployment cannot set; `ScriptProcessorNode`
+  is deprecated *and* runs on the main thread. So blocks are **scheduled**:
+  `AudioBufferSourceNode.start(when)` with a cursor kept a fixed distance ahead of
+  `currentTime`. Two rules, both tested: **never schedule in the past** (a late `start()`
+  plays *immediately* and overlaps — a click, not the gap it really is) and **never pad a
+  block with substituted samples** (the cursor is the output clock; padding slides it for
+  ever). `SampleQueue::drain_block` exists for the second — all of `n` or none of it.
+- **Three constants, all measured, all wrong the first time:**
+  - `TARGET_LEAD = 4096` (93 ms @44.1k). At 2048 — the desktop cushion's size — Chrome
+    measured **~2 underruns per second** at a perfect 59.6 fps. The desktop analogy fails
+    because there a cpal callback thread keeps pulling while the frame loop stalls; in a
+    browser one rAF callback produces *and* schedules, so the cushion must cover the whole
+    stall. The ceiling is `pace::MAX_CATCHUP` (134 ms) — beyond that the audio is never
+    produced and no lead can hide it.
+  - **The queue is `TARGET_LEAD` / `4 × TARGET_LEAD`, NOT `sample_queue::start_fill()` /
+    `high_water()`.** Those size a queue a device callback drains; here the scheduler owns
+    the latency and the queue is only the transfer buffer, so clipping at the desktop's 2816
+    destroys the backlog the scheduler needs after a stall (**~2,560 samples/s discarded on a
+    healthy run**) — and with the lead above the ceiling the two *deadlock* and nothing ever
+    plays. `the_queue_can_hold_a_whole_scheduling_lead` pins it.
+  - **Prime once, NEVER re-prime after an underrun.** A cushion is rebuilt out of a backlog,
+    and after a stall the backlog is exactly what the pacer's catch-up supplies. Waiting for
+    a full lead instead adds silence, lets the queue overflow, and turns one stall into a
+    self-sustaining ~2 underruns + ~2,560 dropped samples per second.
+- **Measured, in Chrome, tapping the destination so the numbers are what was *played*:** 311 s,
+  **0 underruns, 0 drops**, 59.6 fps, lead stable 85-96 ms, one 96 ms priming silence at start
+  and none after, pitch 439.7 Hz against the ROM's programmed 439.84 (the estimator is diluted
+  by that startup silence — 439.84 × (311−0.096)/311 = 439.70, exact). dmg-acid2 in the same
+  browser returns the four DMG shades with histogram `3749/188/6254/12849`, **identical to the
+  hardware reference PNG**.
+- **NOTHING IN CI CAN SEE ANY OF THIS AND THAT IS A STANDING GAP.** Every harness, scout and
+  unit test runs on the host, where the APU was always present; `make check-wasm` type-checks
+  and a type-check cannot see a missing peripheral. There is no `wasm32` test runner here.
+  Reproduce by hand: build the lib for wasm, run `wasm-bindgen --target web`, serve a page that
+  imports `{ render, status }`. `status()` is exported for exactly this and the shipped page
+  shows it above the picture — a browser silently refuses to start audio until a user gesture
+  ([autoplay policy](https://developer.chrome.com/blog/autoplay/#webaudio)), and "silent" must
+  never look like "broken".
+- **A matching `wasm-bindgen` CLI can be fetched prebuilt** from the rustwasm releases
+  (`wasm-bindgen-<version>-x86_64-unknown-linux-musl.tar.gz`); the version must equal the
+  `wasm-bindgen` crate version in `Cargo.lock` exactly. No `wasm-pack` needed to test.
+- **Save-state format did NOT change**, and that is the point of the skippable APU block: a
+  state from a machine with a sound chip now loads into one without and vice versa, with no
+  `FORMAT_VERSION` bump.
+- **The mapper roadmap item was already fixed and only the README was stale.** `mbc::get_mbc`
+  takes the save path *only* to decide whether to write a `.sav`; the mapper is header byte
+  `$0147`. What was added is the end-to-end proof —
+  `lib::ffi_tests::the_ffi_entry_point_takes_the_mapper_from_the_cartridge_header` drives the
+  real `extern "C" load()` symbol with an MBC1 cartridge that bank-switches, because "the core
+  is right" and "the entry point is right" are different claims. The web path uses the
+  identical `Gameboy::new(rom, None)`.
 
 ## Licence boundary: format knowledge is ours, game assets are not
 

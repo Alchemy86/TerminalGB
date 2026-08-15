@@ -336,8 +336,23 @@ npm run serve     # dev server; open the printed localhost URL and choose a ROM
 ```
 
 To produce an optimized bundle: `make build-wasm` (requires
-[`wasm-opt`](https://github.com/WebAssembly/binaryen)). The web build has **no audio yet** —
-see [Status & accuracy](#status--accuracy).
+[`wasm-opt`](https://github.com/WebAssembly/binaryen)).
+
+**The web build has sound.** The APU is emulated on `wasm32` like every other target and its
+output is played through the Web Audio API — no plugin, no `SharedArrayBuffer`, no
+cross-origin-isolation headers, so it works from a plain static host such as GitHub Pages.
+Measured in Chrome on a five-minute run of a tone cartridge: **0 underruns, 0 dropped samples,
+59.6 emulated fps, 85–96 ms of end-to-end latency**, and the pitch the ROM asked for
+(439.8 Hz) to a tenth of a hertz. A status line above the picture reports fps, the
+`AudioContext` rate and state, the current latency and the underrun count — a browser will
+quietly refuse to start audio until you press a key ([autoplay
+policy](https://developer.chrome.com/blog/autoplay/#webaudio)), and a silent emulator with no
+explanation is worse than a loud one. Details and the design:
+[`docs/web-audio.md`](docs/web-audio.md).
+
+The same change fixed a second thing worth knowing about: the emulator used to step one frame
+per `requestAnimationFrame`, i.e. at *the display's* refresh rate — so a game ran 0.46 % fast
+on a 60 Hz screen and at **double speed on a 120 Hz one**. It is paced on a real clock now.
 
 ---
 
@@ -358,7 +373,7 @@ copy-pasteable and was run to produce this table.
 | **the core, for embedding or an agent** | `cargo build --release --no-default-features` | **One** third-party crate (`blip_buf`). No window, no terminal, no audio device, no image codecs, no `$HOME`. See [Embedding the core](#-embedding-the-core). |
 | **a headless run right now** | `cargo run --release --no-default-features --example headless -- third_party/dmg-acid2/dmg-acid2.gb 240` | Runs a cartridge, round-trips a save state and prints the frame as ASCII. |
 | **any Claude client to drive it** | `cargo build --release --no-default-features --features mcp` | The `terminalgb-mcp` [MCP server](#-mcp-server--drive-it-from-claude-desktop-or-claude-code). Adds **no third-party crate**. |
-| **the browser build** | `cargo build --release --target wasm32-unknown-unknown` | Audio is compiled out on `wasm32`; `make build-wasm` also runs `wasm-opt`. |
+| **the browser build** | `cargo build --release --target wasm32-unknown-unknown` | Video, input and [sound](docs/web-audio.md) — the APU is emulated here too and plays through Web Audio, with no `audio` feature and no `cpal`. `make build-wasm` also runs `wasm-opt`. |
 | **a C / Go static library** | `make ffi-build` | `--no-default-features --features ffi` + `cbindgen` → `libterminalgb.a` and `terminalgb.h`. |
 
 ### The features
@@ -1005,7 +1020,7 @@ behaviours phrased as future tests.**
 | **PPU (GPU)** | [`src/gpu/mod.rs`](src/gpu/mod.rs) · [`fifo.rs`](src/gpu/fifo.rs) | **Two picture modes**, switchable live — a whole-scanline renderer (`standard`) and a per-dot pixel FIFO (`identical`). The mode cycle, background/window/sprites, DMG + CGB palettes, STAT/LYC timing, and the DMG OAM-corruption bug. | **[docs](docs/components/ppu.md)** · **[picture modes](docs/picture-modes.md)** |
 | **MMU** | [`src/mmu/mod.rs`](src/mmu/mod.rs) | The 64 KB memory bus — address routing, OAM DMA, CGB HDMA/GDMA, and the `IF`/`IE` interrupt wiring. | **[docs](docs/components/mmu.md)** |
 | **Cartridges (MBC)** | [`src/mbc/`](src/mbc) | Bank switching for MBC0/1/2/3/5, MBC3's real-time clock, battery-backed saves. | **[docs](docs/components/mbc.md)** |
-| **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal`. *Native only.* | **[registers](docs/components/apu.md)** · **[audio pipeline & quality](docs/audio.md)** |
+| **APU (Sound)** | [`src/sound.rs`](src/sound.rs) | Four channels (2 square + wave + noise), the 512 Hz frame sequencer, `blip_buf` → `cpal` natively and → Web Audio in the browser. Emulated on **every** target. | **[registers](docs/components/apu.md)** · **[audio pipeline & quality](docs/audio.md)** · **[web audio](docs/web-audio.md)** |
 | **Timer & Divider** | [`src/mmu/timer.rs`](src/mmu/timer.rs) | `DIV`/`TIMA`/`TMA`/`TAC` — the programmable interrupt heartbeat. | **[docs](docs/components/timer.md)** |
 | **Serial** | [`src/mmu/serial.rs`](src/mmu/serial.rs) | The link cable — and the channel Blargg test ROMs report results through. | **[docs](docs/components/serial.md)** |
 | **Super Game Boy** | [`src/sgb.rs`](src/sgb.rs) | The ICD2 command-packet receiver on `$FF00` and the `MLT_REQ` multiplayer joypad index — everything of an SGB a cartridge can observe. | **[docs](docs/components/sgb.md)** |
@@ -1046,6 +1061,7 @@ Nothing below is repeated here — this README is the index, those are the sourc
 | page | what it answers |
 |---|---|
 | [audio pipeline & quality](docs/audio.md) | APU → `blip_buf` → `cpal` → speaker, the pacing maths, the latency budget, and what is genuine DMG character |
+| [web audio](docs/web-audio.md) | the browser's half: why the `wasm32` build had no sound *chip*, the Web Audio scheduler, and the three constants a real Chrome run decided |
 | [how a frame gets into a terminal](docs/rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, how it is negotiated, which terminals support what |
 | [the link cable](docs/link-cable.md) | **two consoles, one wire**: start a second copy of the emulator and they find each other and link automatically. The hardware, the lockstep argument, the Gen 1 ↔ Gen 2 Time Capsule rules, and an honest design note on playing over the internet |
 | [terminal render performance](docs/terminal-render.md) | why a large terminal window used to cost frames, and what caps the cost now |
@@ -1397,7 +1413,7 @@ consume the same stream. Full guide, measured costs, platform limits and the cap
 |---|---|
 | Desktop (glutin/GL) | ✅ Working; audio with `--features audio` |
 | Terminal (ratatui) | ✅ Working in **any** terminal — it degrades rather than refusing ([which terminals give you what](#which-terminals-give-you-what)); audio with `--features audio` |
-| Web (WASM) | 🟡 Video + input work; **no audio yet**, and cartridges are still forced to MBC3 |
+| Web (WASM) | ✅ Video, input **and sound** ([Web Audio](docs/web-audio.md)); the mapper comes from the cartridge header. No battery saves — a browser has no filesystem |
 | FFI (C/Go) | 🟡 Static lib + header build; the Go example takes a ROM path |
 | [MCP server](#-mcp-server--drive-it-from-claude-desktop-or-claude-code) | ✅ Working; `--features mcp`, driven end to end from a real MCP client |
 
@@ -1645,9 +1661,9 @@ read the table above, which is measured, not remembered.
   (`GB_PPU=identical`) and is structurally right but not yet calibrated — the sprite penalty,
   the window's WX penalty and the exact dot a CPU write becomes visible are the open work.
   This is what Mealybug is waiting on.
-- Web build has no sound and always treats cartridges as MBC3.
 - Battery saves work only on the native (filepath) path — the web and FFI builds have no
-  filesystem, so in-game saves are not persisted there. **Save states are implemented** in the
+  filesystem, so in-game saves are not persisted there. This is the *only* thing the save
+  path decides: the mapper comes from cartridge header byte `$0147` on every path. **Save states are implemented** in the
   core (versioned, ROM-checked `GBSS` format; byte-identical round-trip proof) and exposed in
   the terminal frontend as quick-save/-load slots — see [`docs/savestates.md`](docs/savestates.md).
 
@@ -1768,7 +1784,11 @@ Near-term, in priority order:
 - **Every remaining Mooneye red is a mid-scanline PPU row** and belongs with the pixel FIFO
   above. The named-machine rows that used to sit here — SGB, MGB, DMG0, CGB0, AGB boot state —
   are all green: see [Platforms](#platforms).
-- **Web audio** and correct **web/FFI MBC detection** (both currently forced to MBC3).
+- ~~**Web audio** and correct **web/FFI MBC detection**~~ — **both done.** The mapper has
+  come from cartridge header byte `$0147` on every path since persistence and mapper choice
+  were separated (`mbc::get_mbc` takes the save path *only* to decide whether to write a
+  `.sav`); the web build now emulates the APU and plays it through Web Audio. See
+  [Web (WebAssembly)](#-web-webassembly).
 
 Done since this list was last written, and now gated in CI rather than promised: the timer as
 the real hardware circuit, 5-M-cycle interrupt dispatch, timed OAM DMA, the DMG OAM-corruption
