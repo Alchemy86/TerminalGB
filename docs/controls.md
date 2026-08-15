@@ -36,7 +36,7 @@ The first screen, and where `L` takes you back to. Opens on the ROM you played l
 | <kbd>r</kbd> | rescan `rom_dir` | [Where your ROMs go](quickstart.md) |
 | <kbd>.</kbd> | resume the cartridge you played last — works even when that cartridge lives outside `rom_dir`, so it is not in the list | — |
 | <kbd>g G</kbd> <kbd>Home End</kbd> | jump to the top or the bottom | — |
-| <kbd>M</kbd> | open music mode | [Music mode](music-mode.md) |
+| <kbd>M</kbd> | open music mode — the same key as in game — you do not have to come back here first | [Music mode](music-mode.md) |
 | <kbd>@</kbd> | sign in to the trade portal — the same key as in game; do it before or after loading a cartridge | [The trade portal](portal.md) |
 | <kbd>?</kbd> | the help overlay | — |
 | <kbd>q</kbd> <kbd>Esc</kbd> | quit | — |
@@ -65,7 +65,8 @@ The emulator itself, while a game is running.
 | <kbd>t</kbd> | the stats overlay — it does not pause the game | [Telemetry](telemetry.md) |
 | <kbd>,</kbd> <kbd><</kbd> <kbd>.</kbd> <kbd>></kbd> | quieter / louder — **playback only** — the emulated machine's own master volume (`NR50`) is untouched, so no test ROM, save state or capture can see this | [Why this is not NR50](audio.md) |
 | <kbd>m</kbd> | mute — remembers the level you were at | [Audio](audio.md) |
-| <kbd>L</kbd> | back to the ROM picker | — |
+| <kbd>L</kbd> | back to the ROM picker — music mode is `M`, from here or from the picker | — |
+| <kbd>M</kbd> | open music mode — puts the cartridge down first, exactly as <kbd>L</kbd> does; the same key opens the shelf from the picker | [Music mode](music-mode.md) |
 | <kbd>f</kbd> | fullscreen — the picture, without the panels — <kbd>Esc</kbd> leaves it again | [Scaling and fit](display.md) |
 | <kbd>Esc</kbd> | leave fullscreen — does nothing otherwise — it is not a second quit key | [Scaling and fit](display.md) |
 | <kbd>?</kbd> | the help overlay | — |
@@ -77,7 +78,7 @@ Three slots per cartridge, held outside the game's own save so they cannot damag
 
 | Key | What it does | Read more |
 |---|---|---|
-| <kbd>1 2 3</kbd> | choose the slot `F5`/`F8` will use — <kbd>4</kbd>-<kbd>9</kbd> are swallowed and do nothing — there are three slots | [Save states](savestates.md) |
+| <kbd>1 2 3</kbd> | choose the slot `F5`/`F8` will use — there are three; <kbd>4</kbd>-<kbd>9</kbd> say so rather than doing nothing, and a digit you have bound to a button stays that button | [Save states](savestates.md) |
 | <kbd>F5</kbd> | quick-save to the active slot — a state is refused by a different cartridge, and by a build whose state format has moved on | [Save states](savestates.md) |
 | <kbd>F8</kbd> | quick-load the active slot | [Save states](savestates.md) |
 
@@ -150,7 +151,7 @@ Asynchronous trades with friends over HTTPS. Needs `portal = <url>` and `plugins
 
 ### Music mode
 
-A separate screen (`M` from the picker, or `terminal music`). It plays cartridges as albums and **never opens a save file**.
+A separate screen: `M` — from the picker **or from a running game** — or `terminal music` from the shell. It plays cartridges as albums and **never opens a save file**.
 
 | Key | What it does | Read more |
 |---|---|---|

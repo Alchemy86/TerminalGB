@@ -1,6 +1,6 @@
 # Music mode — cartridges as albums
 
-> **Keys:** `M` from the picker to get here; then `←`/`→` browse, `Enter` play, `w` export a WAV, `c` next cover, `g` play it properly. [Every control →](controls.md)
+> **Keys:** `M` gets you here — from the picker **or from a running game**; then `←`/`→` browse, `Enter` play, `w` export a WAV, `c` next cover, `g` play it properly. [Every control →](controls.md)
 
 <!-- codemap:asof -->
 > 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
@@ -288,6 +288,47 @@ shelf may only claim what it did.
 `silence_is_reported_as_silence_not_as_an_absent_apu`, and the two save-safety
 tests in §6. Conformance candidate: **a tool that selects from emulator output
 must be tested on what it selects, not only on what the emulator produced.**
+
+## 13a. The cover in a terminal with no image protocol
+
+**For as long as music mode existed, the cover was blank outside Kitty and
+iTerm2** — and the panel beside it still printed `▦ cover 1/4 · … · c to
+change`, so the shelf offered a picture it had no way to draw. Reported as a
+regression; it never worked. The captain is on Ptyxis, which is VTE-family:
+no kitty graphics, and Fedora builds VTE without sixel.
+
+The cause is one branch. [`App::new_cover_image`](../src/screen/tui.rs) returns
+`None` for any protocol that is not Kitty or iTerm2 — correctly, since those are
+the two that can place an image over a *cell rectangle* — and
+`place_panel_image` returns immediately when it has no image. The **game**
+picture has had a fallback since [`screen::halfblocks`](../src/screen/halfblocks.rs)
+landed; the cover simply never grew one.
+
+It has one now, and it is the same one: two flat colours per character cell via
+the `▀` glyph, sampled nearest-neighbour at pixel centres. So the cover draws in
+**every** terminal.
+
+* **Cost was measured rather than assumed, and it is not a reason to weigh.**
+  One integer pass over the cell grid, no allocation: **7.8 µs** for a 40×25
+  cover, **14.0 µs** at 56×34, **27.9 µs** at 80×48 (release, best of 5,000
+  draws each). Against a 16.743 ms frame that is 0.05–0.17 %, it is paid only on
+  a frame the shelf actually redraws, and the game picture does the same work
+  over a larger rectangle at 59.7275 Hz. **The game's own frame path is
+  untouched** — `render_display` and `step_frame` are not changed by this.
+* **On a sixel terminal the cover is half-blocks while the game picture is real
+  pixels**, which is a visible difference and is deliberate. Sixel has no
+  cell-addressed placement, so it would need `ratatui-image`'s resize protocol —
+  which writes its whole payload into a single cell symbol, the defect
+  [`docs/rendering.md`](rendering.md) §2 records as re-emitting the entire
+  screen. For a still sleeve that trade is not worth taking; a crisp,
+  lower-resolution cover that always works is the better answer.
+* **`c to change` is no longer offered when nothing can be shown.** The one
+  remaining case is a window too narrow for a legible sleeve, where
+  [`layout`](../src/screen/music_view.rs) drops the cover rather than smear it.
+  The panel now says the sleeve is hidden and why, instead of naming a key whose
+  effect is invisible — `music_view::cover_line` is the only place that wording
+  is decided and `the_panel_never_offers_a_cover_key_it_cannot_honour` renders
+  it. Silence was the bug; a smaller silence would still have been one.
 
 ## 14. Known, and not fixed here
 

@@ -315,6 +315,41 @@ pub fn source_lines(album: &Album, playing: bool) -> Vec<String> {
     out
 }
 
+/// The cover's own line in the panel: which sleeve this is, where it came from,
+/// and — the part that matters — **whether it is on screen at all**.
+///
+/// `shown` is false only when the window has no room for a legible sleeve
+/// ([`layout`] drops the cover below [`MIN_COVER_COLS`]×[`MIN_COVER_ROWS`]
+/// rather than smear it). Every terminal can draw one now: a cell-addressed
+/// protocol places a real image, and everything else gets half-blocks, the same
+/// fallback the game picture uses.
+///
+/// **`c to change` is never offered when nothing can be shown.** Offering a key
+/// whose effect is invisible is the same defect as a key that does nothing —
+/// the rule this frontend already keeps for the cable key. When the sleeve is
+/// hidden the line says so and names the remedy instead.
+pub fn cover_line(album: &Album, shown: bool) -> String {
+    let n = album.covers.len();
+    if n == 0 {
+        return "▦ no cover — the game drew nothing usable".to_string();
+    }
+    if !shown {
+        return format!(
+            "▦ cover {}/{n} · hidden — the window is too narrow to show it",
+            album.cover_idx + 1
+        );
+    }
+    // The scene's *start*, not the frame the cover was taken from: that is
+    // where the music begins, so it is the number that agrees with the clock
+    // above.
+    let at = mmss(album.start().seconds());
+    format!(
+        "▦ cover {}/{n} · from {at} into the boot{}",
+        album.cover_idx + 1,
+        if n > 1 { " · c to change" } else { "" }
+    )
+}
+
 /// A four-cell meter of which sound channels are on, from `NR52`'s low nibble.
 ///
 /// It is read straight off the emulated machine, so it is evidence rather than
@@ -457,6 +492,46 @@ mod tests {
         assert!(source_lines(&a, false)
             .join(" ")
             .contains("fault in the emulator"));
+    }
+
+    /// **A key whose effect is invisible is the defect this frontend already
+    /// names for the cable key.** The panel printed `c to change` beside a
+    /// cover area it could not draw into; every terminal can draw one now, so
+    /// the only case left is a window with no room, and it must say so rather
+    /// than offer the key.
+    #[test]
+    fn the_panel_never_offers_a_cover_key_it_cannot_honour() {
+        let mut a = album("TESTGAME");
+        a.covers = vec![Default::default(), Default::default()];
+
+        let shown = cover_line(&a, true);
+        assert!(
+            shown.contains("c to change"),
+            "two covers and room to show them: {shown}"
+        );
+
+        let hidden = cover_line(&a, false);
+        assert!(
+            !hidden.contains("c to change"),
+            "offered a key for a picture nobody can see: {hidden}"
+        );
+        assert!(
+            hidden.contains("hidden") && hidden.contains("too narrow"),
+            "a hidden cover must say so and say why: {hidden}"
+        );
+        // It still says *which* cover it would be, so the count is not lost.
+        assert!(hidden.contains("1/2"), "{hidden}");
+
+        // A single cover never offers the key either — there is nothing to
+        // change to. That was already true and must stay true.
+        let mut one = album("X");
+        one.covers = vec![Default::default()];
+        assert!(!cover_line(&one, true).contains("c to change"));
+
+        // No cover at all is its own message, in both cases.
+        let none = album("Y");
+        assert!(cover_line(&none, true).contains("no cover"));
+        assert!(!cover_line(&none, false).contains("c to change"));
     }
 
     #[test]

@@ -3388,6 +3388,18 @@ impl App {
                     self.back_to_picker();
                     return;
                 }
+                // **`M` goes straight to the shelf from a running game.** It
+                // was bound only in the picker, so pressing it mid-game did
+                // nothing at all and said nothing about why — the defect this
+                // frontend's own cable-key comment names: a key that does
+                // nothing is worse than no key at all. `L` then `M` still
+                // works; this removes the detour, and the two are labelled as
+                // the pair they are in the panel and the `?` overlay.
+                #[cfg(feature = "music")]
+                KeyCode::Char('M') => {
+                    self.enter_music();
+                    return;
+                }
                 KeyCode::Char('f') => {
                     self.fullscreen = !self.fullscreen;
                     return;
@@ -3555,11 +3567,25 @@ impl App {
                     return;
                 }
                 // Save-slot select.
-                KeyCode::Char(c @ '1'..='9') => {
+                //
+                // Two things this used to get wrong, both silent. It matched
+                // `1..=9` and returned **unconditionally**, so `4`-`9` were
+                // swallowed and did nothing whatever — and it carried no
+                // `is_game_button` guard, unlike every one of its neighbours
+                // above, so a digit bound as `key_a`/`key_b`/`key_start`/
+                // `key_select` never reached the game either. A key that does
+                // nothing is worse than no key at all: a digit past the last
+                // slot now says how many there are, and a digit the player has
+                // bound to a button falls through to be that button.
+                KeyCode::Char(c @ '1'..='9') if !self.is_game_button(&key.code) => {
                     let n = c as u32 - '0' as u32;
                     if (1..=NUM_SLOTS).contains(&n) {
                         self.slot = n;
                         self.set_toast(format!("Slot {n}"));
+                    } else {
+                        self.set_toast(format!(
+                            "There are {NUM_SLOTS} save slots — press 1-{NUM_SLOTS}"
+                        ));
                     }
                     return;
                 }
@@ -5649,7 +5675,12 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from("  1-3       save slot    F5/F8   save / load"),
-            Line::from("  R         reset       L       load ROM"),
+            // `L` and `M` are a pair and now say so. `L` was labelled "load
+            // ROM", which hid that it is the way back to the picker; `M` was
+            // bound in the picker only, so pressing it here did nothing and
+            // explained nothing. Both go on the one line rather than taking a
+            // new one — see the note on `f/esc` below.
+            Line::from("  R         reset       L/M     picker / music"),
             // `esc` was bound as long as fullscreen has been and named
             // nowhere until the controls registry went looking. It rides the
             // same line rather than taking one of its own: this overlay does
@@ -6148,7 +6179,17 @@ impl App {
     /// Open the shelf. Scanning is instant (headers only); the covers and the
     /// verdicts arrive from a worker thread, so the library is browsable from
     /// the first frame.
+    /// Open the shelf, from the picker **or from a running game**.
+    ///
+    /// A live cartridge is put down first, exactly as `L` does: music mode
+    /// boots its own machine per album, and `autoplay_when_ready` refuses to
+    /// drop the needle while `session` is occupied — so entering the shelf
+    /// without this teardown would show a shelf that never plays anything.
     fn enter_music(&mut self) {
+        if self.session.is_some() {
+            self.unplug_net_link();
+            self.session = None;
+        }
         let dir = music_dir(&self.config);
         let seconds = self.config.music_export_seconds;
         let opts = crate::music::library::ProbeOptions::default();
@@ -6577,7 +6618,12 @@ impl App {
         );
 
         let channels = self.live_channels();
-        self.render_album_panel(f, l.panel, channels);
+        // Whether the sleeve has room to be drawn, decided once here and used
+        // by both the panel's wording and `render_cover` itself, so the words
+        // and the picture can never disagree.
+        let cover_rect = mv::fit_cover(l.cover, font_w, font_h);
+        let cover_shown = cover_rect.width > 0 && cover_rect.height > 0;
+        self.render_album_panel(f, l.panel, channels, cover_shown);
         self.render_shelf_strip(f, l.strip, sel);
 
         let footer = " ←/→ browse · ⏎ play · w save WAV · c cover · space pause · \
@@ -6619,16 +6665,29 @@ impl App {
             self.erase_cover();
             return;
         }
-        // **A modal overlay must be able to paint where the cover is.** The
-        // cover is a *still*, so its placement is deduplicated to "unchanged"
-        // every frame and its cells are therefore marked `skip` — which tells
-        // ratatui's diff to leave them alone, and the help overlay then draws
-        // only the part of itself that misses the picture. The game picture
-        // never hit this because a running game changes every frame.
+        // Whether this terminal has a cell-addressed image protocol at all.
+        // Kitty and iTerm2 do; everything else draws the cover out of `▀`
+        // glyphs below, exactly as the game picture already does.
+        let placed = self
+            .music
+            .as_ref()
+            .map(|m| m.image.is_some())
+            .unwrap_or(false);
+        // **A modal overlay must be able to paint where the cover is.** A
+        // *placed* cover is a still, so its placement is deduplicated to
+        // "unchanged" every frame and its cells are therefore marked `skip` —
+        // which tells ratatui's diff to leave them alone, and the help overlay
+        // then draws only the part of itself that misses the picture. The game
+        // picture never hit this because a running game changes every frame.
         //
         // So while a popup is up the cover is taken off the terminal entirely
         // and put back (re-transmitted, see `erase_cover`) when it closes.
-        if self.overlay != Overlay::None {
+        //
+        // The half-block path has no such problem and therefore does not take
+        // this exit: its cells are ordinary buffer cells with `skip` clear, the
+        // overlay is rendered *after* the shelf (see [`App::render`]), and
+        // ratatui's `Clear` resets whatever it covers.
+        if placed && self.overlay != Overlay::None {
             self.erase_cover();
             return;
         }
@@ -6667,6 +6726,29 @@ impl App {
         let Some(m) = self.music.as_mut() else {
             return;
         };
+        if m.image.is_none() {
+            // **No image protocol: draw the sleeve out of half-blocks**, the
+            // same path and the same sampler the game picture falls back to
+            // (`screen::halfblocks`). Before this the cover simply did not
+            // exist outside Kitty and iTerm2 — `new_cover_image` is `None` for
+            // every other terminal and `place_panel_image` returns on a missing
+            // image — so a VTE-family terminal got a blank rectangle under a
+            // panel that offered `c to change`.
+            //
+            // Nothing is transmitted and nothing is placed, so `cover_shown`
+            // stays false: there is no terminal-side placement to delete, and
+            // ratatui's own per-cell diff erases these cells when the layout
+            // moves.
+            crate::screen::halfblocks::render(
+                &rgba,
+                crate::gpu::WIDTH as u32,
+                crate::gpu::HEIGHT as u32,
+                rect,
+                f.buffer_mut(),
+            );
+            m.cover_shown = false;
+            return;
+        }
         let mut wire = std::mem::take(&mut m.pending_wire);
         let drawn = place_panel_image(
             f,
@@ -6684,11 +6766,15 @@ impl App {
         m.cover_shown = drawn.is_some();
     }
 
+    /// `cover_shown` is whether the sleeve has room to be drawn beside this
+    /// panel — the panel must not offer `c to change` for a picture nobody can
+    /// see. See [`mv::cover_line`].
     fn render_album_panel(
         &mut self,
         f: &mut Frame<'_>,
         area: Rect,
         channels: Option<u8>,
+        cover_shown: bool,
     ) {
         if area.width < 4 || area.height < 2 {
             return;
@@ -6755,29 +6841,10 @@ impl App {
         }
 
         lines.push(Line::from(""));
-        match album.covers.len() {
-            0 => lines.push(Line::from(Span::styled(
-                truncate("▦ no cover — the game drew nothing usable", w),
-                Style::default().fg(Color::DarkGray),
-            ))),
-            n => {
-                // The scene's *start*, not the frame the cover was taken from:
-                // that is where the music begins, so it is the number that
-                // agrees with the clock above.
-                let at = mv::mmss(album.start().seconds());
-                lines.push(Line::from(Span::styled(
-                    truncate(
-                        &format!(
-                            "▦ cover {}/{n} · from {at} into the boot{}",
-                            album.cover_idx + 1,
-                            if n > 1 { " · c to change" } else { "" }
-                        ),
-                        w,
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-        }
+        lines.push(Line::from(Span::styled(
+            truncate(&mv::cover_line(album, cover_shown), w),
+            Style::default().fg(Color::DarkGray),
+        )));
 
         if let Some(n) = m.notice.as_ref() {
             lines.push(Line::from(""));
@@ -9300,6 +9367,11 @@ mod tests {
             "Arrows  move",
             "p pause     R reset",
             ", . volume  m mute",
+            // `L` and `M` share a row **and say what they are**. `L` used to
+            // read "load ROM", which named where it leads rather than what it
+            // does and hid that it is the route to the shelf; `M` was not in
+            // the panel at all, because it was not bound in game.
+            "L picker    M music",
             "1-3 slot",
             "[ palette",
             "P picture mode",
@@ -9817,7 +9889,14 @@ mod tests {
     /// worker: [`Library::from_roms`] over a hand-assembled cartridge.
     #[cfg(feature = "music")]
     fn shelf_app() -> Option<App> {
-        let mut app = test_app(ProtocolType::Kitty, RenderPath::Fast)?;
+        shelf_app_on(ProtocolType::Kitty)
+    }
+
+    /// The same shelf on a chosen protocol. **`Halfblocks` is the case that was
+    /// broken** — see `the_cover_is_drawn_in_a_terminal_with_no_image_protocol`.
+    #[cfg(feature = "music")]
+    fn shelf_app_on(protocol: ProtocolType) -> Option<App> {
+        let mut app = test_app(protocol, RenderPath::Fast)?;
         let rom = crate::music::testrom::tone_rom();
         let entry = romlib::entry_from_bytes(Path::new("/x/tone.gb"), &rom);
         let lib = crate::music::Library::from_roms(
@@ -10005,6 +10084,141 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The captain's report, at unit speed.** On Ptyxis — VTE-family, no
+    /// kitty graphics, Fedora builds it without sixel — the shelf printed
+    /// `▦ cover 1/4 · … · c to change` over an entirely blank cover area.
+    ///
+    /// It was never a regression: [`App::new_cover_image`] is `None` for any
+    /// protocol that is not Kitty or iTerm2, and [`place_panel_image`] returns
+    /// immediately when it has no image, so the cover had no fallback at all
+    /// while the *game* picture has had one since `screen::halfblocks` landed.
+    ///
+    /// The assertion is on **rendered output**: a cover that exists must put
+    /// its own shades into its own rectangle.
+    #[cfg(feature = "music")]
+    #[test]
+    fn the_cover_is_drawn_in_a_terminal_with_no_image_protocol() {
+        use ratatui::backend::TestBackend;
+        for (cols, rows) in [(100u16, 30u16), (150, 45), (213, 55)] {
+            let Some(mut app) = shelf_app_on(ProtocolType::Halfblocks) else {
+                return;
+            };
+            let (fw, fh) = app.picker.font_size();
+            let cover = mv::fit_cover(
+                mv::layout(Rect::new(0, 0, cols, rows), fw, fh).cover,
+                fw,
+                fh,
+            );
+            assert!(
+                cover.width > 0,
+                "{cols}x{rows} must have room for a cover or this proves nothing"
+            );
+            let mut terminal = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+            terminal.draw(|f| app.render(f)).unwrap();
+
+            let buf = terminal.backend().buffer().clone();
+            let mut painted = 0usize;
+            for y in cover.y..cover.bottom() {
+                for x in cover.x..cover.right() {
+                    let Some(cell) = buf.cell((x, y)) else {
+                        continue;
+                    };
+                    // A half-block cell is either the glyph, or a space whose
+                    // *background* carries the shade. Both are paint; an
+                    // untouched cell is a `Reset` background.
+                    if cell.symbol() == crate::screen::halfblocks::UPPER_HALF
+                        || matches!(cell.bg, Color::Rgb(..))
+                    {
+                        painted += 1;
+                    }
+                }
+            }
+            let area = cover.width as usize * cover.height as usize;
+            assert!(
+                painted * 2 >= area,
+                "{cols}x{rows}: only {painted} of {area} cover cells were painted \
+                 — the shelf offers a cover it never draws"
+            );
+        }
+    }
+
+    /// **`M` reaches music mode from a running game.**
+    ///
+    /// It was bound in the picker's handler only, so mid-game it did nothing at
+    /// all and said nothing about why — the captain pressed it, got silence,
+    /// and had to be told that `L` goes back to the picker first. Driven
+    /// through the real dispatcher, because a key that is "bound" in a registry
+    /// and not in the handler is exactly the drift these tests exist to catch.
+    #[cfg(feature = "music")]
+    #[test]
+    fn m_opens_music_mode_from_a_running_game() {
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        assert!(matches!(app.screen, Screen::Playing));
+        assert!(app.session.is_some(), "a cartridge is running");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('M')));
+
+        assert!(
+            matches!(app.screen, Screen::Shelf),
+            "`M` in game must reach the shelf, not do nothing"
+        );
+        assert!(app.music.is_some(), "the shelf has no library");
+        // The cartridge is put down, exactly as `L` does. Without this the
+        // shelf shows and `autoplay_when_ready` never drops the needle,
+        // because it refuses to start while `session` is occupied — a shelf
+        // that is visibly there and permanently silent.
+        assert!(
+            app.session.is_none(),
+            "the running cartridge must be put down or the shelf never plays"
+        );
+    }
+
+    /// **`4`-`9` used to be swallowed**: the slot handler matched `1..=9` and
+    /// returned unconditionally, so six keys did nothing whatever and said
+    /// nothing. And it carried no `is_game_button` guard, unlike every one of
+    /// its neighbours, so a digit bound as a pad button never reached the game
+    /// either.
+    #[test]
+    fn a_digit_past_the_last_slot_says_so_and_a_bound_digit_still_plays() {
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        // A real slot selects, and says which.
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        assert_eq!(app.slot, 2);
+        assert!(
+            app.toast_text().unwrap_or_default().contains("Slot 2"),
+            "{:?}",
+            app.toast_text()
+        );
+
+        // A digit past the last slot leaves the slot alone and *explains
+        // itself* rather than vanishing.
+        app.handle_key(KeyEvent::from(KeyCode::Char('7')));
+        assert_eq!(app.slot, 2, "an out-of-range digit must not move the slot");
+        let said = app.toast_text().unwrap_or_default().to_string();
+        assert!(
+            said.contains(&NUM_SLOTS.to_string()) && said.contains("slot"),
+            "`7` said nothing about there being {NUM_SLOTS} slots: {said:?}"
+        );
+
+        // And a digit the player has bound to a button is that button: the
+        // slot handler must not eat it.
+        let Some(mut app) = test_app(ProtocolType::Halfblocks, RenderPath::Fast) else {
+            return;
+        };
+        app.config.keys.a = '1';
+        app.slot = 3;
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(
+            app.slot, 3,
+            "`key_a = 1` must press A, not silently change the save slot"
+        );
     }
 
     fn test_app(protocol: ProtocolType, path: RenderPath) -> Option<App> {

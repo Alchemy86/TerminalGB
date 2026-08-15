@@ -149,8 +149,9 @@ impl Group {
                  `portal = <url>` and `plugins = gen1-link`."
             }
             Group::Music => {
-                "A separate screen (`M` from the picker, or `terminal music`). \
-                 It plays cartridges as albums and **never opens a save file**."
+                "A separate screen: `M` — from the picker **or from a running \
+                 game** — or `terminal music` from the shell. It plays \
+                 cartridges as albums and **never opens a save file**."
             }
             Group::Overlay => {
                 "Keys that only exist while a dialog is up. Every one of them \
@@ -282,6 +283,7 @@ pub const CONTROLS: &[Control] = &[
         )
     },
     Control {
+        note: Some("the same key as in game — you do not have to come back here first"),
         help: Some("M         music mode"),
         ..c(
             "M",
@@ -451,14 +453,35 @@ pub const CONTROLS: &[Control] = &[
             None,
         )
     },
+    // `L` and `M` are a pair, and they are adjacent here so the panel packs
+    // them onto one row. `L` used to be labelled "load ROM", which is what it
+    // leads to rather than what it does, and hid that it is the way back to
+    // the picker — the captain read the panel, could not find a route to the
+    // shelf, and had to be told that `L` was it.
     Control {
-        help: Some("L       load ROM"),
+        note: Some("music mode is `M`, from here or from the picker"),
+        help: Some("L/M     picker / music"),
         ..c(
             "L",
             Group::Game,
             "back to the ROM picker",
             None,
-            Slot::Half("L load ROM"),
+            Slot::Half("L picker"),
+            None,
+        )
+    },
+    Control {
+        note: Some(
+            "puts the cartridge down first, exactly as <kbd>L</kbd> does; the \
+             same key opens the shelf from the picker",
+        ),
+        help: Some("L/M     picker / music"),
+        ..c(
+            "M",
+            Group::Game,
+            "open music mode",
+            Some(("Music mode", "music-mode.md")),
+            Slot::Half("M music"),
             None,
         )
     },
@@ -505,8 +528,8 @@ pub const CONTROLS: &[Control] = &[
     // ---- save states ------------------------------------------------------
     Control {
         note: Some(
-            "<kbd>4</kbd>-<kbd>9</kbd> are swallowed and do nothing — there are \
-             three slots",
+            "there are three; <kbd>4</kbd>-<kbd>9</kbd> say so rather than doing \
+             nothing, and a digit you have bound to a button stays that button",
         ),
         help: Some("1-3       save slot"),
         ..c(

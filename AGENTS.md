@@ -2289,6 +2289,75 @@ wezterm is looking good, we have corrected that before"*.
   `Scale` in the status panel fluctuates between runs when the capability probe does (measured
   3.4x once, 9.6x on three re-runs of the same binary); re-run before reading anything into it.
 
+### EVERY picture needs the half-block fallback, not just the game picture
+
+- **`new_term_image()` returns `None` for anything that is not Kitty or iTerm2, and
+  `place_panel_image` returns immediately on a missing image — so any panel picture built on
+  that pair is INVISIBLE in a VTE-family terminal and says nothing about it.** The music-mode
+  cover was exactly that for its whole life (reported as a regression; it never worked), while
+  the panel beside it still printed `▦ cover 1/4 · … · c to change`. The game picture had had
+  `screen::halfblocks` since the blurriness work; the cover simply never grew one, and neither
+  did anything else that copies the `place_panel_image` shape. **When you add a picture to a
+  panel, add its `m.image.is_none()` arm in the same commit** — `halfblocks::render` is a free
+  function over `(rgba, w, h, rect, buf)` and needs no state.
+- **A half-block picture must NOT take the `erase_cover`-under-a-popup exit.** That exit exists
+  because a *placed* still is deduplicated and its cells marked `skip`, which eats a popup drawn
+  across it. Half-block cells are ordinary buffer cells with `skip` clear and the overlay is
+  rendered after the screen, so ratatui's `Clear` handles it. Gate that early return on
+  "there is a placed image", not on the overlay alone.
+- **Sixel gets half-blocks for a panel picture, deliberately.** It has no cell-addressed
+  placement, so the alternative is `ratatui-image`'s resize protocol, which puts the whole
+  payload in one cell symbol — render-conformance defect #2, the whole screen re-emitted. For a
+  *still* sleeve a crisp lower-resolution picture that always works is the better trade; say so
+  rather than leaving the inconsistency unexplained.
+- **Cost, measured (release, best of 5,000 draws): 7.8 µs at 40×25 cells, 14.0 at 56×34, 27.9 at
+  80×48** — 0.05-0.17 % of a 16.743 ms frame, paid only on a frame that screen redraws. The
+  game's frame path (`render_display`, `step_frame`) is not on this route at all.
+- **The colour count is the end-to-end proof, and it is categorical.** Measured on the real
+  frontend forced to `protocol = halfblocks`, cropping the cover rectangle out of an `import`
+  screenshot: **before 1 distinct colour** (the terminal's own background — the area is empty),
+  **after exactly 4**, and they are `000000/606060/c0c0c0/ffffff`, our DMG shades to the byte.
+  `magick <crop>.png -format '%k' info:` is the whole measurement. Same rule as
+  `no_colour_appears_that_was_not_in_the_framebuffer`, applied through a real terminal.
+
+### A key bound on one screen and not the other is a silent dead key
+
+- **`M` was bound only in the picker's handler**, so pressing it in a running game did nothing
+  whatever — the defect this frontend's own cable-key comment names ("a key that does nothing is
+  worse than no key at all"). It is bound in game now and **`enter_music` puts the cartridge
+  down first** (`unplug_net_link` + `session = None`, exactly as `L` does): `autoplay_when_ready`
+  refuses to drop the needle while `session` is occupied, so without that teardown the shelf
+  appears and is permanently silent.
+- **`L` was labelled `load ROM`** — where it leads, not what it does — which hid that it is the
+  route back to the picker. It is `L picker` beside `M music` now, adjacent in `CONTROLS` so the
+  panel packs them onto one row. Cost: the Game group goes 10 → 11 `Half` entries, i.e. **one
+  more panel row**, so at ~34 rows `q quit` is clipped where it used to fit (it is still on the
+  top bar). At 44 rows nothing is lost and `the_controls_panel_is_rendered_from_the_registry`
+  pins the whole list.
+- **The `?` overlay does not scroll and is already longer than its popup, so fold a new key onto
+  an existing line.** `R reset  L/M picker / music` costs no line; a new line silently deletes
+  one at the bottom and reddens `the_help_says_the_feed_is_game_only_and_where_to_go_instead`.
+- **A digit range that `return`s unconditionally swallows the whole range.** The save-slot arm
+  matched `'1'..='9'` with only three slots, so `4`-`9` did nothing and said nothing; it also
+  carried no `is_game_button` guard, unlike every neighbour beside it, so a digit bound as
+  `key_a`/`key_b`/`key_start`/`key_select` never reached the game either. Both fixed. **When you
+  add a control key to that match, copy the `if !self.is_game_button(&key.code)` guard** — the
+  four pad keys are configurable and any character can be one.
+
+### Driving the real frontend for before/after screenshots — two traps that cost a run each
+
+- **`WEZTERM_UNIX_SOCKET` cannot be chosen: the socket is named after the GUI pid.** Exporting a
+  made-up path makes `wezterm cli send-text` fail silently, every key is dropped, and the
+  screenshots then "prove" that a key does nothing — which is indistinguishable from the bug you
+  are testing. Launch first, then `ls -t /run/user/$(id -u)/wezterm/gui-sock-* | head -1`, and
+  **always send a control key with a visible effect first** (`[` cycles the palette: greyscale →
+  `#E0F8D0/#88C070/#081820`) to prove delivery before believing any negative result.
+- **`--config enable_kitty_keyboard=false` is the right setting for this**, not a compromise: it
+  is VTE's real behaviour, so it reproduces the captain's input path (`Input basic · autorepeat`
+  in the Status panel) *and* it is the mode `send-text` drives reliably.
+- A toast lasts ~2.5 s, so sleep well under that between the key and `import` or the row is
+  empty and reads as "nothing happened".
+
 ## Graphics-protocol selection (`src/screen/termcaps.rs`, `tui::probe_graphics`, `tui::build_picker`)
 
 - **The ladder is kitty → sixel → iTerm2 → half-blocks, and half-blocks is the LAST resort**,
