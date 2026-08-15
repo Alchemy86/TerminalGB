@@ -84,25 +84,30 @@ engine.
 that is a long way from correct. Subtracting one score from the other is the trap.
 
 **Root cause.** A characterisation of every failing row — by the crew that owns
-[`docs/mealybug.md`](../mealybug.md), measured mid-campaign with 22 rows passing and 57
-failing — found that **45 of those 57 cannot be made pixel-exact by any PPU work at all**, for
-three unrelated reasons:
+[`docs/mealybug.md`](../mealybug.md) — found that **42 of the 53 still failing cannot be made
+pixel-exact by any PPU work at all**, for three unrelated reasons:
 
 | group | rows | why not |
 |---|---:|---|
-| the boot ROM's `®` glyph | 30 | ten ROMs place objects whose tile is `$19`, the `®` the DMG boot ROM leaves in VRAM. We do not ship that glyph — a register value is a fact about hardware, a **glyph bitmap is expressive content**, and this repository must stay freely distributable |
+| the boot ROM's `®` glyph | 27 | nine ROMs place objects whose tile is `$19`, the `®` the DMG boot ROM leaves in VRAM. We do not ship that glyph — a register value is a fact about hardware, a **glyph bitmap is expressive content**, and this repository must stay freely distributable |
 | colour references | 8 | those references carry 125 distinct luminances (a Color console colourising a DMG cartridge from its boot ROM's title-hash palette) against four or fewer everywhere else |
 | `*2` ROMs | 7 | the shipped ROM and its reference are **different machines** |
 
-So the reachable ceiling in CI is 79 − 45 = **34**, and at 22 passing the rows actually in play
-were **12**. (The gated baseline on this branch is
-<!--score:mealybug_accurate-->26 / 79<!--/score-->; that crew's work is in flight. The ceiling
-is the number that does not move.)
+So the reachable ceiling in CI is 79 − 42 = **37**, and at
+<!--score:mealybug_accurate:pass-->26<!--/score--> passing the rows actually in play are
+**eleven**. The ceiling is the number that does not move.
+
+**And the first cut of that table was itself half a row-group wrong**, which is worth knowing
+before trusting any such classification: `grep -l '$19'` finds **ten** ROMs and only nine are
+blocked, because `m3_wx_4_change_sprites` places its objects with that tile and then fills
+every tile with `$FF` before it starts, so the glyph never reaches its screen. Those three rows
+were counted as unwinnable and are pixel-exact now. **Referencing the blocker is a first pass,
+not a verdict** — check whether the ROM overwrites it.
 
 **Resolution.** Publish the denominator that hurts *and* the one that is honest, and say which
-is which. "62 rows to go" is the wrong number; "12 rows are in play, 45 are structurally out
-of reach and here is why each is" is the right one. Note also that the unwinnable rows **still
-repay work** — their residual after the missing glyph is real mid-scanline error, and it is
+is which. "53 rows to go" is the wrong number; "eleven rows are in play, 42 are structurally
+out of reach and here is why each is" is the right one. Note also that the unwinnable rows
+**still repay work** — their residual after the missing glyph is real mid-scanline error, and it is
 the same error as the winnable groups.
 
 **Side effects and blast radius.** Getting the denominator wrong in either direction is
