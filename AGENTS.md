@@ -7764,3 +7764,38 @@ report, so a run that crossed the forest said it was in a Pokémon Center. Fixed
 `plugins/agent/src/observe.rs` with `every_named_map_is_the_map_the_cartridge_says_it_is` pinning
 the whole table against `constants/map_constants.asm`'s const-list indices. **An unnamed map is
 honest; a wrongly named one is not.**
+
+### The swarm film — five things that were not obvious (`tools/pewter-chain/swarm_film.py`)
+
+Full description: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §11. Inspired by
+Peter Whidden's swarm view; the credit is his and stays.
+
+1. **A film drawn from `wXCoord`/`wYCoord` TELEPORTS BY CONSTRUCTION.** Measured from the tracks:
+   `wWalkCounter` ($CFC5) runs 7,6,5,4,3,2,1 with each value held two frames — fourteen frames —
+   and the coordinate updates on the frame it reaches 0. **During a step the coordinate is still
+   the tile being left.** Reading the sub-tile offset out of WRAM fixes it only at sampling rates
+   fine enough to catch it; **interpolating between consecutive recorded tiles fixes it at every
+   rate**, needs no re-simulation, and is what `pwhiddy/pokerl-map-viz`'s `visualizer_live.js`
+   does. Measured before/after over 120 agents: ≥12 px snaps **68% → 0.0%**, sub-4 px slides
+   **25% → 100.0%**. One refinement: run the progress fraction over the **last 14 frames before
+   the arrival**, not the whole gap, or an agent that stood still for a thousand frames drifts
+   the whole time instead of standing still and then stepping.
+2. **HALF A CHAIN DOES NOT HAPPEN ON A MAP.** The starter, the rival battle, the parcel and the
+   Pokédex are all indoors and a battle has no map position at all, so a pure overworld view shows
+   only the walking between them and every staged link reads as "go north". Interiors are panels
+   **beside the door they belong to**, which is a *lookup* — the cartridge's warp table says
+   `warp_event 12,11, OAKS_LAB, 2`, so Oak's Lab goes next to Oak's Lab's front step.
+3. **Colour the AGENTS, not the world.** A Game Boy frame is four shades already, so nothing has
+   to be desaturated; the hue is **how trodden the tile under the agent's feet is**, from the same
+   visitation count the heat maps use. The frontier then lights up on its own. **Declare it as an
+   exception to the categorical colour guard** — the guard still applies to the map layer.
+4. **Sample from the emulated time to cover, never a round number**, and say the ratio on screen.
+   A chain is tens of emulated minutes; compositing every frame plays at real time and is dull.
+   Two films rather than one compromise: a showcase at ~2x where the walk cycle is visible, and an
+   overview at ~52x labelled a timelapse.
+5. **A camera that follows the majority must say who it left behind.** Fit the 5th–95th percentile
+   of agent positions (a mean would be dragged backwards by stragglers into an empty town; the
+   full extent would zoom out for ever on one lost agent) and draw a persistent count of how many
+   agents are off frame. `pewter_chain sprites` reads the player's own sprite out of OAM+VRAM —
+   tiles at `$8000 + 16 * tile`, palette `OBP0`, colour index 0 transparent by the hardware's own
+   rule — so the crowd is the game's character rather than a dot.
