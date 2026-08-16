@@ -102,35 +102,69 @@ battle, because the projection is an estimate and a bad one should not spiral.
 
 ## 3. Measured
 
-The certification run of `05-the-rival-battle` — 3,000 attempts from 3,000
-held-out entry states, on the captain's Pokémon Blue. This is the report the
-standing order asks for, beside the pass rate rather than instead of it.
+The certification runs of `05-the-rival-battle` and `06-cross-route-1` — 3,000
+attempts each from 3,000 held-out entry states, on the captain's Pokémon Blue.
+This is the report the standing order asks for, beside the pass rate rather than
+instead of it, and the two links exercise opposite halves of the policy: 05 is
+one trainer battle that cannot be fled, 06 is a route full of wild ones that
+must be.
 
 ```text
-3000 of 3000 reached the goal (100.0%)
-battles 3000: won 2275 (75.8%), lost 725 (24.2%), fled 0 (0.0%); 17.4 turns each
-  HP left when it ended: 32.7% of max (3000 samples); faints 725; items used 0
-  ran because: 0 the leg forbids a win, 0 one hit from fainting,
-               0 the lead is already trained; 0 escapes failed
-  turns spent lowering a stat: 3164
-  damage predictions: 22362 checked, 80.5% inside the roll range,
-                      2581 under, 1788 over (a critical hit lands over)
+05  3000 of 3000 reached the goal (100.0%)
+    battles 3000: won 2294 (76.5%), lost 706 (23.5%), fled 0 (0.0%); 8.9 turns each
+      HP left when it ended: 32.4% of max (3000 samples); faints 706; items used 0
+      ran because: 0 the leg forbids a win, 0 one hit from fainting,
+                   0 the lead is already trained; 0 escapes failed
+      turns spent lowering a stat: 2450
+      damage predictions: 22680 checked, 81.3% inside the roll range,
+                          2482 under, 1767 over (a critical hit lands over)
+
+06  3000 of 3000 reached the goal (100.0%)
+    battles 5288: won 0, lost 0, fled 5288 (100.0%); 1.0 turns each
+      HP left when it ended: 99.7% of max (5288 samples); faints 0; items used 0
+      ran because: 5372 the leg forbids a win, 0 one hit from fainting,
+                   0 the lead is already trained; 84 escapes failed
+      turns spent lowering a stat: 0
 ```
 
+**Running is cheap and it is not free**, which is the point of measuring it: a
+Route 1 encounter costs one turn and 0.3% of the lead's HP, and **84 of 5,372
+escape attempts failed** — Gen 1's own run check, not a defect, and a cost that
+would be invisible without the counter.
+
 **Against the old always-press-the-first-move policy: 30.6% of these battles
-were lost, and now 24.2% are.** That is the honest size of it — a real gain,
+were lost, and now 23.5% are.** That is the honest size of it — a real gain,
 measured the same way on the same entry pool, and not a transformation. At level
 5 the player has one damaging move and one status move, so there is very little
 for a policy to be clever with; the gain is one well-timed GROWL.
 
 **The damage model is right, and the residual is explained rather than
-excused.** 80.5% of 22,362 predictions land inside Gen 1's 217..255 roll range.
+excused.** 81.3% of 22,680 predictions land inside Gen 1's 217..255 roll range.
 The 8.0% *over* are critical hits, which the estimate deliberately excludes —
 a level-5 starter's crit rate is base-speed/2 out of 256, 8.8% for Bulbasaur and
 12.7% for Charmander, so that column landing where it does is itself a check.
 The 11.5% *under* are mostly the rival's own GROWL:
 the prediction is made from `wBattleMon`'s Attack at the moment the move is
 chosen, and a GROWL landing before ours resolves lowers it.
+
+### The counters had to be fixed twice before they could be believed
+
+Both are worth knowing, because a battle metric is exactly the sort of number
+nobody checks:
+
+- **Fed only from the menu branch, the tally never saw a party at 0 HP** — the
+  knock-out happens during the text a turn produces — and reported **300 of 300
+  battles won** where the exit states said 218. It watches every decision now.
+- **Counting an action on every decision counts the keypresses that walked to
+  it.** 1,048 wild battles reported *3,158* runs and 3,158 failed escapes: one
+  battle's `down`, `right`, `a`. Worse, that count feeds the policy's own cap on
+  stat moves, so `MAX_STAT_TURNS` of two was really about one. An action is
+  counted where it is *committed* — the press of A — and nowhere else.
+
+The second one is the reason to prefer a metric that can be cross-checked: the
+independent read of the exit states (a lead at level 6 won, at level 5 lost) is
+what caught the first, and the arithmetic `3158 ≈ 3 × 1048` is what caught the
+second.
 
 ### What is not exercised
 

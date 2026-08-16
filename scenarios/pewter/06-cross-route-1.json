@@ -23,6 +23,8 @@
   "guidance": "guidance/06-cross-route-1.json",
   "timeout_frames": 120000,
   "evidence": [
-    "map=0x01 — wCurMap $D35E. VIRIDIAN_CITY is const index 1. No event flag records arriving in Viridian."
+    "map=0x01 — wCurMap $D35E. VIRIDIAN_CITY is const index 1, which the cartridge's own map table states: `map_const VIRIDIAN_CITY, 20, 18 ; $01` in constants/map_constants.asm. No event flag records arriving in Viridian, so the position is the most exact record there is.",
+    "failure party_hp=0 — a judgement, and deliberately a different one from link 05's. On Route 1 the cartridge really does black the player out: HandlePlayerBlackOut's `cp OAKS_LAB / ret z` early return needs wCurOpponent to be OPP_RIVAL1, and a wild Pokemon is a species, so the branch is not taken, PlayerBlackedOutText2 is printed and the player is warped to wLastBlackoutMap with money halved. That undoes the leg — back to Pallet Town, before Route 1 — so an attempt that blacks out has not crossed Route 1. What is a cartridge fact is that the blackout happens; scoring it as a failed attempt rather than letting the run walk it again on the same budget is the scenario's choice, and it is stated as one.",
+    "battle flee — Route 1's wild Pokemon are not worth the turns on this leg and the rule forfeits on a win, so the shared battle policy (docs/agent/battle-policy.md) is given may_fight_wild = false and runs from every encounter. Running is available because these are wild battles: a trainer battle sets wIsInBattle = 2 and cannot be fled, which is the flee trap and is why the policy tests for it rather than treating RUN as a fallback."
   ]
 }

@@ -8035,12 +8035,17 @@ re-certified against it, exactly as a driver change forces.
   battle metric has the same trap. And hold a damage prediction until their HP actually moves —
   taking it on the next decision threw every check away and printed a healthy-looking
   "0 checked".
+- **AN ESCAPE THAT FAILED IS NOT THE SAME AS AN ESCAPE.** Checking "did the battle continue?"
+  on the next *observation* counts every run as a failure, because a run attempt is always
+  followed by the text reporting it: 5,288 fled battles reported 5,372 failed escapes. Check it
+  on the next *committed action* instead — 84, which is Gen 1's own run check.
 - **Report the battle beside the pass rate**: win rate, HP left at the end, runs by the reason
   given, escapes that failed, faints, item spend, and how many damage predictions landed inside
   Gen 1's 217..255 roll range. A link can pass while the policy is quietly awful. Measured on
-  the rival battle: 73.8% won, 31.7% HP left, 80.8% of 4,427 predictions in range, 7.8% over
+  the rival battle: 76.5% won, 32.4% HP left, 81.3% of 22,680 predictions in range, 7.8% over
   (critical hits, which the estimate excludes on purpose — and the rate matching Gen 1's
-  base-speed/2-in-256 is itself a check).
+  base-speed/2-in-256 is itself a check). On Route 1, where every battle is fled: one turn and
+  0.3% of the lead's HP per encounter.
 - **Item use and switching are implemented and never fire in the Pewter chain** — the party is
   one Pokémon from link 04 to 14 and the chain never buys a potion. Say that rather than
   implying they are exercised.
@@ -8179,6 +8184,21 @@ final-state hash, three thousand times**. A duplicated corpus and an honest one 
   hands the binary one enormous argument, and the four corpus runs that followed produced no
   index file and a stack of confusing `FileNotFoundError`s. Use an array, or write the flags
   out.
+- **KILLING THE WORKERS DOES NOT KILL THE LOOP.** `pkill -f 'examples/pewter_chain corpus'`
+  matches the binary and not the `for` loop that spawns it, so the shell calmly moves on to the
+  next link — and if you then start a fresh run whose first act is `rm -rf target/cert`, the two
+  race and you get `rm: cannot remove …: Directory not empty` and a pool of 593 states where
+  3,000 were asked for. Stop a background chain run with `TaskStop`, then check
+  `ps -eo pid,args | awk '/pewter_chain/ && !/awk/'` is empty *before* wiping anything.
+- **A REBASE THAT MOVES THE TRAJECTORY HASH HAS NOT NECESSARILY MOVED BEHAVIOUR — DECOMPOSE IT
+  BEFORE CONCLUDING.** Rebasing onto the perf work made links 02-05 reproduce **0 of 150**
+  certified trajectories, which reads as a catastrophe. Comparing the *fields* instead: same
+  decisions, same frames and same end position for all 150 of each, and only the final-state
+  hash different — `ScenarioRun::collecting` turns pixel rendering off when there is no video
+  sink, and the framebuffer is in the save state. The emulated game was untouched. The
+  certification still has to be re-run so every artefact belongs to one binary, but "the hash
+  moved" and "the game moved" are different findings and the index carries enough to tell them
+  apart.
 - **CHANGING SHARED DRIVER CODE INVALIDATES EVERY LINK ALREADY CERTIFIED, AND THEY MUST BE
   RE-RUN IN THE SAME COMMIT.** A trajectory is a function of the driver, so certifying a new
   link on a driver the earlier ones were never measured against is a claim about neither
@@ -8190,10 +8210,9 @@ final-state hash, three thousand times**. A duplicated corpus and an honest one 
 - **Give a link a pool as large as its attempt count when you can.** Links 01-04 are certified
   with 3,000 *distinct* entry states, so no two attempts even start from the same world; that
   costs nothing extra, because `--exits 3000` is the same run that certifies the link before.
-- **Measured, 2026-08-16, on the captain's Pokémon Blue:** `01-new-game`, `02-leave-the-house`,
-  `03-oak-takes-you-to-the-lab` and `04-take-a-starter` each **3000/3000 = 100.0%
-  (95% CI 99.87-100%), 3000 distinct trajectories**, entry pools 1 / 3000 / 3000 / 3000, phase
-  spread 3001, load average 13-18. Zero failures in 3000 bounds the failure rate
+- **Measured, 2026-08-16, on the captain's Pokémon Blue:** links **01 to 06** each
+  **3000/3000 = 100.0% (95% CI 99.87-100%), 3000 distinct trajectories**, entry pools
+  1 / 3000 × 5, phase spread 3001, load average 8-33. Zero failures in 3000 bounds the failure rate
   at about 0.10% by the rule of three. **This repo's link 03 has never failed** — the "17
   budget failures on link 03" in circulation are AgentGB's link 03, a different harness with a
   60-decision cap and a 70-tile start pool, in another repository.

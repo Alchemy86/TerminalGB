@@ -220,7 +220,7 @@ figure — the map-settle change measured below takes it to 90.8% — and link 0
 was re-run at 600 attempts for the showcase film, which is why it carries the
 larger denominator.
 
-**Links 01-05 are superseded by the certified table below**; the rest of this
+**Links 01-06 are superseded by the certified table below**; the rest of this
 one is what the chain did while it was being built. Nothing here is at the bar
 — see §7 — and two of the remaining rows are a long way from it. Multiplied
 out, the chain end to end at these rates was about **6%**, and that is the
@@ -241,38 +241,57 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 02 | leave-the-house | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 8 |
 | 03 | oak-takes-you-to-the-lab | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 14 |
 | 04 | take-a-starter | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 26 |
-| 05 | the-rival-battle | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 60 |
+| 05 | the-rival-battle | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 64 |
+| 06 | cross-route-1 | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 49 |
 
 Measured 2026-08-16 on the captain's Pokémon Blue, 12 workers, load average
-8-18 with other work on the box. Wall clock 264 s, 84 s, 191 s, 386 s and
-487 s. Zero failures in 3,000 bounds each link's failure rate at about
+8-33 with other work on the box. Wall clock 264 s, 82 s, 189 s, 405 s, 564 s
+and 395 s. Zero failures in 3,000 bounds each link's failure rate at about
 **0.10%** by the rule of three, which is the bar and not better than it.
 
-**All five were re-certified together against the shared battle policy.** That
-is the standing rule and not a courtesy: the policy is code every link runs, so
-a link certified against the previous one is a claim about a machine that no
-longer exists. Links 01-04 have no battle in them and their trajectories were
+**All six were certified in one run against the shared battle policy.** That is
+the standing rule and not a courtesy: the policy is code every link runs, so a
+link certified against a previous version of it is a claim about a machine that
+no longer exists. Links 01-04 have no battle in them and their trajectories were
 checked to be unchanged as well — but "it cannot have moved" is an argument, and
 3,000 attempts is a measurement.
 
+**And they were run again after a rebase, for a reason worth writing down.**
+Landing on the perf work made links 02-05 reproduce **0 of 150** certified
+trajectories, which reads as a catastrophe. Decomposing the hash instead of
+believing it: same decisions, same frames and same end position for all 150 of
+each, and only the final-state hash different — `ScenarioRun::collecting` turns
+pixel rendering off when there is no video sink, and the framebuffer is in the
+save state. The emulated game was untouched. The run was repeated anyway, so
+every rate, pool and hash on this page belongs to one binary; but *"the hash
+moved"* and *"the game moved"* are different findings and the index carries
+enough to tell them apart.
+
 **The battle report goes beside the pass rate, because a link can pass while the
-battle policy is quietly awful.** Link 05's 3,000 attempts are 3,000 battles:
+battle policy is quietly awful.** Link 05's 3,000 attempts are 3,000 trainer
+battles and link 06's are 5,288 wild ones — the same policy, opposite jobs:
 
 ```text
-battles 3000: won 2275 (75.8%), lost 725 (24.2%), fled 0 (0.0%); 17.4 turns each
-  HP left when it ended: 32.7% of max (3000 samples); faints 725; items used 0
-  ran because: 0 the leg forbids a win, 0 one hit from fainting,
-               0 the lead is already trained; 0 escapes failed
-  turns spent lowering a stat: 3164
-  damage predictions: 22362 checked, 80.5% inside the roll range,
-                      2581 under, 1788 over (a critical hit lands over)
+05  battles 3000: won 2294 (76.5%), lost 706 (23.5%), fled 0; 8.9 turns each
+      HP left when it ended: 32.4% of max; faints 706; items used 0
+      turns spent lowering a stat: 2450
+      damage predictions: 22680 checked, 81.3% inside the roll range,
+                          2482 under, 1767 over (a critical hit lands over)
+
+06  battles 5288: won 0, lost 0, fled 5288 (100.0%); 1.0 turns each
+      HP left when it ended: 99.7% of max; faints 0; items used 0
+      ran because: 5372 the leg forbids a win; 84 escapes failed
 ```
 
-The 8.0% *over* are critical hits, which the damage estimate deliberately
-excludes, and the rate landing on Gen 1's own base-speed/2-in-256 is itself a
-check on the model. The full account, including what a screen-only student would
-not have and what is implemented but never fires, is
-[the battle policy](battle-policy.md).
+Link 06 is the flee side of the same policy and it is cheap: a wild encounter
+costs one turn and 0.3% of the lead's HP, and **84 of 5,372 escapes failed**,
+which is Gen 1's run check and not a policy defect. The 7.8% of link 05's
+predictions that land *over* the roll range are critical hits, which the damage
+estimate deliberately excludes, and the rate landing on Gen 1's own
+base-speed/2-in-256 is itself a check on the model. The full account — including
+what a screen-only student would not have, what is implemented but never fires,
+and the two counter bugs that had to be fixed before any of these numbers could
+be believed — is [the battle policy](battle-policy.md).
 
 **Every attempt varies all three independence axes**, and the run says so
 itself rather than being trusted: a held-out entry state (each link's pool is
@@ -557,8 +576,8 @@ attempts** are needed to support a 99.9% claim. Every rate on this page is
 written with its N and its interval for that reason, and `corpus` prints the
 bound itself so it cannot be quoted without one.
 
-**Links 01 to 05 have had them** — 3,000 attempts each, zero failures, 3,000
-distinct trajectories each, tabulated in §5. **Links 06 to 14 have not**, and
+**Links 01 to 06 have had them** — 3,000 attempts each, zero failures, 3,000
+distinct trajectories each, tabulated in §5. **Links 07 to 14 have not**, and
 several are visibly a long way from the bar; their failure modes are §8. The
 chain is finished when all fourteen are certified and not before, and the
 end-to-end figure stays what the weakest link makes it.
@@ -1274,8 +1293,8 @@ not exist:
   pool of entry states and the chain keeps every winning seed's exit state, so
   "how far off nominal can a link start and still succeed" is one command away.
   It has not been run.
-- **Nine of the fourteen links have no 3,000-attempt run**, so their rates are
-  not certified against the bar. Links 01-05 are (§5); 06 onwards are the work.
+- **Eight of the fourteen links have no 3,000-attempt run**, so their rates are
+  not certified against the bar. Links 01-06 are (§5); 07 onwards are the work.
 
 ## 14. Related pages
 

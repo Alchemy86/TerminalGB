@@ -1017,8 +1017,8 @@ impl ChainDriver {
         // The party list, reached either on purpose (a switch) or by a
         // mispress. B is the one button that can only ever back out of a menu.
         if s.said("CHOOSE A POK") {
-            if let Action::Switch { to, .. } = action {
-                return self.menu_to(view.menu_item, to as u8, "the bench");
+            if let Action::Switch { to, why } = action {
+                return self.menu_to(view.menu_item, to as u8, why);
             }
             return self.one("Back out of the party list.", "b");
         }
@@ -1044,7 +1044,6 @@ impl ChainDriver {
             // wCurrentMenuItem`. Measured before it was believed — the cursor
             // reads 1 with `▶` drawn on the first move.
             if let Action::Fight { slot, why } = action {
-                self.tally.note(why);
                 return self.menu_to(view.menu_item.saturating_sub(1), slot as u8, why);
             }
             // Some other list we did not ask for.
@@ -1057,8 +1056,17 @@ impl ChainDriver {
             Action::Run { .. } => "RUN",
             Action::Switch { .. } => "PKMN",
         };
-        self.tally.note(action.why());
         if sel.contains(want) {
+            // **Committed.** Everything above this line is navigation, and
+            // counting a decision to run or a stat move there counts the
+            // keypresses that walked to it: measured, 1,048 wild battles
+            // reported 3,158 runs and 3,158 failed escapes, all of them one
+            // battle's `down`, `right`, `a`. Worse, the count feeds the
+            // policy's own cap on stat moves, so `MAX_STAT_TURNS` of two was
+            // really about one.
+            if !matches!(action, Action::Fight { .. }) {
+                self.tally.note(action.why());
+            }
             return self.one(action.why(), "a");
         }
         // FIGHT PKMN
@@ -1094,7 +1102,12 @@ impl ChainDriver {
         match at.cmp(&want) {
             std::cmp::Ordering::Less => self.one(&say, "down"),
             std::cmp::Ordering::Greater => self.one(&say, "up"),
-            std::cmp::Ordering::Equal => self.one(&say, "a"),
+            // Committed: this is the press that spends the turn, and the only
+            // place a turn may be counted.
+            std::cmp::Ordering::Equal => {
+                self.tally.note(why);
+                self.one(&say, "a")
+            }
         }
     }
 
@@ -1499,11 +1512,6 @@ impl BattleTally {
                 std::cmp::Ordering::Equal => {}
             }
         }
-        // A RUN that did not escape: the battle is still here a turn later.
-        if self.ran_last_turn {
-            tally::bump(&tally::RUN_FAILED, 1);
-            self.ran_last_turn = false;
-        }
         self.last = Some(v.clone());
         let _ = Relaxed;
     }
@@ -1519,6 +1527,14 @@ impl BattleTally {
         // A turn is an action chosen, not a decision spent — most decisions in
         // a battle go on reading the text a turn produced.
         self.turns += 1;
+        // **An escape failed if we are choosing again in the same battle.**
+        // Checking it on the next *observation* instead counted every run as a
+        // failure, because a run attempt is always followed by the text that
+        // reports it: 5,288 fled battles reported 5,372 failed escapes. The
+        // real figure is the 84 that had to try twice.
+        if self.ran_last_turn {
+            tally::bump(&tally::RUN_FAILED, 1);
+        }
         if why.contains("must not win") {
             self.ran = true;
             tally::bump(&tally::RUN_FORBIDDEN, 1);
@@ -1577,6 +1593,7 @@ impl BattleTally {
         self.predicted = None;
         self.turns = 0;
         self.stat_turns = 0;
+        self.ran_last_turn = false;
     }
 }
 
