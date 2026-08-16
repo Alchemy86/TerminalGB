@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`851c0c6`](https://github.com/Alchemy86/TerminalGB/tree/851c0c6e6b0f8f8412ffd95f11e8115d616246c3) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -72,6 +72,18 @@ described in §5.
 **Counting** — `do_cycle` advances in 4 T-cycle (M-cycle) steps. Each step first retires a
 pending overflow reload (`TIMA = TMA`, `IF` bit 2 set — 4 T-cycles after the overflow
 itself), then advances the counter and re-checks the tap edge.
+
+**A span of M-cycles with nothing to observe it is counted rather than stepped**
+(`Timer::batch_mcycles`). A halted CPU is batched up to 64 M-cycles at a time, so most of
+those steps used to be a loop iteration adding four to the counter. `TIMA` counts falling
+edges of a bit whose period is at least 16 T against a 4 T step, so an edge is exactly a
+crossing of a multiple of that period and the number of them in a span is a difference of
+two divisions; the serial shift clock is the same argument at 512 T, one M-cycle ahead.
+It is a shortcut, never an approximation: a reload in flight, a `TIMA` overflow anywhere in
+the span, or a counter off the 4 T grid all fall back to the loop, and
+`timer::tests::the_batch_matches_the_loop_everywhere_it_is_taken` holds the two together
+over 133,120 starting states. Worth about 17 % of an emulated frame —
+[`docs/throughput.md`](../throughput.md) §12.2.
 
 ### Sub-instruction access timing (why `mem_timing` passes)
 

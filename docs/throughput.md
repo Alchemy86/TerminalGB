@@ -22,6 +22,12 @@ clock in the filesystem** writing battery saves and staged cartridges nothing re
 worker went **23.0 s → 9.5 s** on the same twenty attempts, and the emulation share of a swarm
 frame went from about half to about ninety-nine per cent.
 
+**§12–§13 are the round after that**, and they are the first where the time was inside the
+emulator rather than around it: the timer's per-M-cycle loop, and the pixel loop. Short version:
+**+19-22 % on a collector's frame and +24-25 % on a frame with the picture on**, from two
+changes that are exactly equivalent to what they replace rather than opt-in trades — plus four experiments that
+came back negative, including three separate attempts at the pixel loop.
+
 ---
 
 ## 1. The two units, and why both
@@ -642,3 +648,294 @@ certification on the same twenty cores, which is exactly the condition that prod
 comparison here is **interleaved A/B** — the only shape that survives steady contention.
 
 No cartridge ships with this repository; every command above needs your own.
+
+---
+
+## 12. Round three: the timer's loop, and the pixels a word at a time
+
+§8–§10 removed the work nobody consumed. What was left really was the emulator, so this round
+starts with a profile of it and lets the profile choose.
+
+### 12.1 Where the time was, before anything changed
+
+`perf` is not installed on this box; the profile is `eu-stack` sampled 800 times against one worker
+and attributed **by source line** (`addr2line` over a `debug = 1` build, whose line table follows
+inlining), then grouped. Pokémon Blue, an overworld save state, the collector's own configuration
+(`--audio --no-pixels --no-audio-out`):
+
+| group | share | what it is |
+|---|---:|---|
+| the CPU interpreter | 24.0 % | `Cpu::operation`, `get_byte`, the flag helpers |
+| **the timer** | **15.5 %** | `Timer::do_mcycle`, per M-cycle |
+| the PPU's mode machine | 12.8 % | `Gpu::do_cycle`, `stat_signal` — *not* pixels, which are off |
+| MMU address dispatch | 13.4 % | `rb`/`wb`/`read_rom` |
+| `bus_tick`'s own frame | 8.1 % | the per-access hook itself |
+| the APU | 7.6 % | `Sound::do_cycle` and the channel synthesis |
+| the mapper | 7.1 % | `MBC3::readrom` — every opcode fetch |
+| OAM DMA | 3.4 % | the "is a transfer running?" test |
+
+**It is flat.** There is no 40 % item left, which is itself the finding: round two's work landed,
+and this round is a set of changes worth ten to thirty per cent each rather than one worth a
+factor.
+
+The other instrument — `core_bench --breakdown`, which removes one component's work and times whole
+frames — agrees and is sharper, because it measures a *marginal cost* rather than a sample count.
+It gained three rows here (`no timer batch`, `no apu`, `no oam dma`) and it now takes the run's own
+configuration as its baseline, so `--breakdown --audio --no-pixels --no-audio-out` breaks down the
+machine a **collector** runs rather than a bare `Gameboy`:
+
+| row | ms/frame | delta | guest-visible? |
+|---|---:|---:|---|
+| baseline (collector) | 0.0720 | — | — |
+| no bus tick | 0.0591 | +21.9 % | yes |
+| **no apu** | **0.0592** | **+21.6 %** | yes |
+| no timer | 0.0630 | +14.3 % | yes |
+| **no timer batch** | 0.0844 | **−14.6 %** | no — the honest "before" for §12.2 |
+| no oam dma | 0.0710 | +1.4 % | yes |
+| no stat line | 0.0704 | +2.3 % | yes |
+| no idle batch | 0.2084 | −65.4 % | no |
+
+and with the picture **on**, on the same frames: **pixels +56.8 %**, apu +20.3 %, bus tick +11.9 %.
+
+It also prints the idle batch's own shape now, which answers a question the counters were already
+collecting and nobody was reading:
+
+```text
+halted 13275 M-cycles a frame in 349 batches (38.0 each); could not batch because
+[dma 0 serial 0 irq 0 no-ppu-horizon 0], bounded by [timer 0 ppu 1048430]
+```
+
+**Every batch is bounded by the PPU's next mode edge — never by the timer, never by a refusal, and
+never by `IDLE_BATCH_MAX`.** So the cap is not the constraint and raising it would buy nothing.
+
+### 12.2 The timer's loop was three quarters of the timer — closed form, +17 %
+
+A halted CPU is batched up to 64 M-cycles at a time and Pokémon Blue is halted for four fifths of
+its frame, so of the ~17,500 `Timer::do_mcycle` calls a frame about **13,300 are iterations of
+`Timer::do_cycle`'s `while left >= 4` loop** whose only job is to add four to a counter. The batch
+already guarantees nothing *observes* the timer inside that span; what it did not do was tell the
+timer.
+
+[`Timer::batch_mcycles`](../src/mmu/timer.rs) counts what the span produces instead of stepping it.
+Two facts make that exact rather than approximate:
+
+* `TIMA` counts **falling edges of one bit** of the system counter, whose period `P` is at least
+  16 T, and the step is exactly 4 T — so the bit can only fall on the M-cycle that carries the
+  counter across a multiple of `P`, and the number of those telescopes to `(start + span)/P −
+  start/P`. `P` divides 65536, so the counter's own 16-bit wrap is one of them and 32-bit
+  arithmetic counts it correctly.
+* The serial shift clock is the same argument with a period of 512 T, taken one M-cycle ahead
+  (`Timer::observed_counter` — get that wrong and `acceptance/serial/boot_sclk_align` fails by one
+  instruction, which is what the old note in `AGENTS.md` records).
+
+**It declines rather than approximating.** A reload already in flight, a `TIMA` overflow anywhere in
+the span, or a counter off the 4 T grid all fall back to the loop, which stays the definition. Those
+are a handful of M-cycles a frame.
+
+`timer::tests::the_batch_matches_the_loop_everywhere_it_is_taken` is the proof and it is exhaustive
+in the dimensions that matter: **133,120 starting states** — every phase of the longest tap, every
+`TAC` including the disabled ones, the `TIMA` values either side of an overflow, and the counter's
+own wrap — each stepped both ways and compared field by field, with an assertion that the batch was
+actually *taken* on more than 100,000 of them so the test cannot degenerate into checking the loop
+against itself. Teeth: count crossings of `P/2` instead of `P`, drop the grid guard, or take the
+serial edge from `div` rather than `observed_counter`, and it goes red.
+
+**Measured: `no timer batch` is −14.6 % on an overworld state and −10.0 % on a cold boot**, i.e. the
+batch is worth +17.1 % and +11.1 % of those frames respectively. The difference is how much the game
+halts.
+
+### 12.3 A monochrome tile, eight pixels at a time — +31 % of the renderer
+
+With the picture on, **pixels are 56.8 % of the frame** and essentially all of that is
+`Gpu::draw_map_run`'s pixel loop. That loop is not doing wasted work — it is doing necessary work a
+byte at a time: two bit tests, a palette lookup off the stack, three byte stores into the
+framebuffer and one into the priority map, 23,040 times a frame.
+
+[`Gpu::blit_dmg_tile`](../src/gpu/mod.rs) does a whole monochrome tile at once:
+
+* a 256-entry `BIT_SPREAD` table turns a tile-data byte into eight bytes, one per pixel, so two
+  reads and a shifted OR give all eight colour indices;
+* the palette is applied by **mask** rather than by lookup — `x * 0xFF` over bytes that are 0 or 1
+  gives `0x00`/`0xFF` per byte, and four masked ORs select between the four broadcast shades;
+* the framebuffer is written **two pixels at a time**, read-modify-write so the alpha byte keeps
+  whatever it held. Alpha is not ours to choose: `Gpu::clear_screen` writes 255 into it and
+  `make test-cross` pins a hash of the whole buffer, so it is preserved rather than assumed.
+
+Everything it cannot handle — a Color tile, a flip, the partial tile at either end of a run — falls
+through to the pixel loop, which is unchanged. `gpu::tests::the_word_blit_draws_what_the_pixel_loop_draws`
+checks the two against each other over **all 65,536 tile-data pairs** and four palettes, including
+the alpha byte it may not touch.
+
+### 12.4 The headline
+
+Pokémon Blue, an overworld save state, **pinned to one P-core** so the measurement is not the
+scheduler's choice of core, thread CPU clock, interleaved against a binary built from the parent
+commit, best of twelve rounds of 15,000 frames. Load average 19–27 throughout: another crew held
+twelve to sixteen of the twenty cores for this whole session.
+
+| configuration | before | after | |
+|---|---:|---:|---:|
+| collector — `--audio --no-pixels --no-audio-out` | 0.0722 ms/frame | **0.0608** | **+18.8 %** |
+| player — picture on | 0.1208 ms/frame | **0.0974** | **+24.0 %** |
+| the renderer alone (`baseline − --no-pixels`, same binaries) | 0.0486 ms/frame | **0.0366** | **+32.8 %** |
+
+A second twelve-round run gives +22.2 %, +25.1 % and +30.0 % — so the honest claim is **about a
+fifth off a collector's frame, about a quarter off a player's, and about a third off the
+renderer.**
+
+**In the swarm's own unit**, `pewter_chain corpus` on link 01 of the Pewter chain, 20 workers, 200
+attempts, 987,736 emulated frames — and this is where the box's other occupant hurts most, because
+a fan-out figure is wall clock by definition. Four interleaved rounds **alternating which binary
+runs first**, because the load was climbing through the run and a fixed order charges that drift to
+one side:
+
+| round | before | after | |
+|---|---:|---:|---:|
+| 1 | 40,666 | 47,577 | +17.0 % |
+| 2 | 42,026 | 45,621 | +8.6 % |
+| 3 | 43,231 | 44,692 | +3.4 % |
+| 4 | 43,333 | 47,161 | +8.8 % |
+
+**Best round against best round, 43,333 → 47,577 frames/s, +9.8 %; median +8.7 %.** An earlier
+six-round run in fixed order gave 36,890–44,277 against 43,763–46,618, which is the same answer
+with a wider spread. The contention-immune version of the same thing — one worker pinned to one
+core, **user CPU seconds**, eight interleaved rounds — is **12.95 s → 12.06 s, +7.4 %**.
+
+**Say why that is +7 % where the emulator is +19 %, because the gap is the interesting part:**
+
+1. **Link 01 is a cold boot, not gameplay.** `--breakdown` measures the timer batch at −10.0 % there
+   against −14.6 % on an overworld state: the intro halts the CPU less, and the batch is worth what
+   the halting is worth.
+2. **About 18 % of a `corpus` attempt is outside `Gameboy::frame`** — `corpus` prints the split
+   itself (27.1 s emulating inside 32.7 s of worker time on the run that produced these digests).
+3. **The renderer change, the larger of the two, buys a collector nothing at all.** A collector has
+   already declared it does not want pixels (§8b). That change is for the frontends and for the
+   screen-only student, and it is measured as such above.
+
+**Nothing the cartridge can see moved, and here that is stronger than usual**: a 40-attempt corpus
+run under both builds is **identical in every recorded field except `wall_ms`** — every decision
+list, every frame count, every ending, and both the `start_state` and `final_state` digests. Round
+two's pixel skip moved those digests (§8c); this round's changes do not, because they are
+equivalences rather than declarations.
+
+### 12.5 How it scales
+
+The scaling curve §9 established — silicon-limited, the first eight workers delivering 60 % more
+each than the other twelve because that is the P-core to E-core ratio — **could not be re-measured
+this session and the honest thing is to say so**: with twelve to sixteen of the twenty cores
+belonging to another crew all day, a 1-to-20 sweep measures the scheduler. What *is* measurable
+under contention is the interleaved pair at each width, and it answers the question this round
+actually raises — does the gain survive fan-out?
+
+| workers | before, ms/frame | after, ms/frame |
+|---:|---:|---:|
+| 1 | 0.1006 | 0.0846 |
+| 2 | 0.1045 | 0.0830 |
+| 8 | 0.1036 | 0.0854 |
+| 12 | 0.1072 | 0.0884 |
+| 16 | 0.1029 | 0.0866 |
+| 20 | 0.1031 | 0.0890 |
+
+**The per-instance figure is flat in both columns and the gap is the same at twenty workers as at
+one** — the change adds no shared state and no contention, which is the property round two's
+`--features profile` disaster is a warning about. (The aggregate at 20 workers was 81,258 → 94,349
+in the same run, but that number belongs to a box carrying somebody else's certification and should
+not be quoted as this machine's throughput.)
+
+`tools/perf/swarm.sh` was run anyway, because its own design says what to do with a drifting box —
+every point measured once ascending and once descending, and both printed:
+
+| workers | up | down | x vs 1 |
+|---:|---:|---:|---:|
+| 1 | 6,006 | 7,515 | 1.00x |
+| 2 | 14,363 | 12,415 | 1.91x |
+| 4 | 24,641 | 23,682 | 3.28x |
+| 8 | 35,921 | 35,085 | 4.78x |
+| 12 | 42,390 | 42,825 | 5.70x |
+| 16 | 43,771 | 43,566 | 5.82x |
+| 20 | 44,667 | 44,052 | 5.94x |
+
+**Read that as a measurement of the box, not of the emulator, and the table says so itself.** The
+two directions agree to 2 % from four workers up and disagree by 25 % and 16 % at one and two — a
+single worker is a small enough slice of an oversubscribed machine to be at the scheduler's mercy,
+which is precisely the condition the up/down sweep exists to expose. And it **saturates at twelve
+workers**, gaining 5 % from twelve to twenty where §9's quiet-box sweep gained 46 %: that is what
+"about five of the twenty cores are actually free" looks like. §9's curve — silicon-limited, the
+first eight workers delivering 60 % more each than the other twelve because that is the P-core to
+E-core ratio — is still the shape, and nothing in this round introduces sharing that could change
+it. Re-run the sweep on a quiet box before quoting a scaling number from this one.
+
+---
+
+## 13. Four more negative results
+
+Each with the command, because a negative result saves the next person the afternoon — and three of
+these four are attempts at the *pixel loop*, which is the most attractive-looking target on the
+page.
+
+**Devirtualising the mapper buys nothing, and boxing it does not rescue it.** Every opcode fetch is
+a ROM read through `Box<dyn MemoryBankController>`, which is an indirect call that also stops LLVM
+inlining a two-line array read into `MemoryManagementUnit::rb`. Replacing it with a closed
+`enum Cartridge` that delegates to the same trait — a small, contained change, the trait object
+appears in one file — measured **4 % slower** on the collector configuration (0.0599 against 0.0574
+ms/frame), and `Box<Cartridge>`, which devirtualises *and* keeps the MMU struct small, measured
+0.0611. Both were interleaved against the same third binary in the same runs and both lost twice.
+The branch predictor sees one answer for a whole session either way, and inlining the mapper into
+`rb` grows the emulator's hottest function. Reverted.
+
+> **And a measurement trap that produced a spectacularly wrong answer first.** An unpinned run of
+> that same comparison reported the boxed enum **35 % faster**. This box has 8 P-cores at 5.3 GHz
+> and 12 E-cores at 4.6 GHz, and a fresh process lands on whichever the scheduler picks — so the
+> per-instance figure, *even though it is CPU time*, moves by 15 % or more between invocations of
+> the identical binary. **Pin single-worker comparisons to one core** (`taskset -c 4`). Every figure
+> in §12 is pinned; the ones in §8–§9 were taken on a quieter box where this was smaller.
+
+**Three restructurings of the pixel loop all measured worse.** Before the word blit of §12.3, the
+obvious shapes were tried and each was interleaved against the same baseline:
+
+| variant | render component |
+|---|---:|
+| unchanged | 0.0445 ms/frame |
+| outputs sliced to the run once (removes four bounds checks a pixel) | 0.0470 |
+| per-tile outer loop + `split_at_mut` + a const-generic console | 0.0476 |
+| flat loop over `chunks_exact_mut(4)` zipped with the priority map | 0.0472 |
+
+The disassembly says why: LLVM had already hoisted almost everything those changes were aimed at,
+and what is left per pixel is the byte traffic. **That is the reason the word blit works and these
+do not** — it removes stores rather than branches.
+
+**The APU's per-M-cycle call is not the APU's cost.** `Sound::do_cycle(4)` runs before every memory
+access, and it looked like an obvious candidate to accumulate in the MMU and flush lazily at the
+points that observe it. Sized first, by simply moving it to the end of the instruction and measuring
+the upper bound: **0.0409 → 0.0403 ms/frame, about 1.5 %.** The `no apu` row's 21.6 % is almost all
+`Sound::run` — the channel synthesis loops, which still advance duty positions, wave positions and
+the LFSR when `set_render_audio(false)` has switched the samples off, because those *are*
+guest-visible. Not attempted; recorded as the largest named target left in a collector's frame.
+
+**And two things that were considered and left alone with a reason.** Extending the idle batch past
+the PPU's next mode edge when no STAT source is enabled is sound in principle — the counters above
+say every batch is PPU-bounded — but it is capped by `IDLE_BATCH_MAX` at 64 M-cycles against a
+current average of 38, so it is worth about 3 % and it changes when a STAT edge is sampled.
+Merging `Gpu::do_cycle`'s 80-dot chunks up to `Gpu::idle_dots` is the same trade for the same size.
+
+### Reproducing §12 and §13
+
+```sh
+# the breakdown, in the collector's own configuration
+cargo run --release --features profile --example core_bench -- \
+    --rom blue.gb --state overworld.gbss --audio --no-pixels --no-audio-out --breakdown
+
+# the before/after pair: build the parent commit's core_bench into
+# target/perf/bin/before, this one into .../after, then round-robin them
+POKE_ROM=blue.gb POKE_STATE=overworld.gbss tools/perf/measure.sh 12 --frames 15000
+
+# the timer batch against the loop it replaces, exhaustively
+cargo test --lib the_batch_matches_the_loop_everywhere_it_is_taken
+
+# the word blit against the pixel loop, all 65,536 tile-data pairs
+cargo test --lib the_word_blit_draws_what_the_pixel_loop_draws
+```
+
+**Pin it.** `taskset -c <a P-core>` on every single-worker figure, and interleave; without both, the
+run-to-run spread on this box is larger than everything §12 measures.
+

@@ -307,13 +307,20 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
 fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
     use terminalgb::profile::{self, Switches};
 
-    let rows: [(&str, Switches, &str); 6] = [
-        ("baseline", Switches::default(), "everything on"),
+    // The rows are additive on top of the run's own configuration, so
+    // `--breakdown --audio --no-pixels --no-audio-out` breaks down the machine a
+    // *collector* runs rather than a bare `Gameboy`.
+    let base = Switches {
+        no_pixels: a.no_pixels,
+        ..Switches::default()
+    };
+    let rows: [(&str, Switches, &str); 9] = [
+        ("baseline", base, "everything on"),
         (
             "no pixels",
             Switches {
                 no_pixels: true,
-                ..Switches::default()
+                ..base
             },
             "guest-INVISIBLE",
         ),
@@ -321,7 +328,7 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
             "no bus tick",
             Switches {
                 no_bus_tick: true,
-                ..Switches::default()
+                ..base
             },
             "guest-visible",
         ),
@@ -329,7 +336,7 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
             "no timer",
             Switches {
                 no_timer: true,
-                ..Switches::default()
+                ..base
             },
             "guest-visible",
         ),
@@ -337,7 +344,7 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
             "no stat line",
             Switches {
                 no_stat: true,
-                ..Switches::default()
+                ..base
             },
             "guest-visible",
         ),
@@ -345,9 +352,33 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
             "no idle batch",
             Switches {
                 no_idle_batch: true,
-                ..Switches::default()
+                ..base
             },
             "guest-invisible",
+        ),
+        (
+            "no timer batch",
+            Switches {
+                no_timer_batch: true,
+                ..base
+            },
+            "guest-invisible",
+        ),
+        (
+            "no apu",
+            Switches {
+                no_apu: true,
+                ..base
+            },
+            "guest-visible",
+        ),
+        (
+            "no oam dma",
+            Switches {
+                no_oam_dma: true,
+                ..base
+            },
+            "guest-visible",
         ),
     ];
 
@@ -356,15 +387,23 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
         "row", "ms/frame", "delta", "instr/frame", "scanlines", "note"
     );
     let mut base_ms = 0.0f64;
+    let mut base_counters = profile::Counters::default();
     for (name, sw, note) in rows {
         let mut best = f64::INFINITY;
         let mut counters = profile::Counters::default();
         for _ in 0..a.repeat.max(1) {
             let mut gb = Gameboy::new(rom.to_vec(), None);
+            // Same machine `one_worker` builds: a collector's has a sound chip
+            // and a bare `Gameboy` does not, which a cartridge can tell.
+            if a.audio {
+                gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+            }
+            gb.set_render_audio(a.audio_out);
             if let Some(bytes) = state {
                 gb.load_state(bytes).expect("save state did not load");
             }
-            profile::set_switches(Switches::default());
+            gb.set_render_pixels(!a.no_pixels);
+            profile::set_switches(base);
             for _ in 0..a.warmup {
                 gb.frame();
             }
@@ -381,10 +420,11 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
                 counters = c;
             }
         }
-        profile::set_switches(Switches::default());
+        profile::set_switches(base);
         let ms = best / a.frames as f64 * 1e3;
         if name == "baseline" {
             base_ms = ms;
+            base_counters = counters;
         }
         let delta = if name == "baseline" {
             "  —".to_string()
@@ -398,6 +438,20 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
         );
     }
     println!();
+    println!(
+        "halted {} M-cycles a frame in {} batches ({:.1} each); \
+         could not batch because [dma {} serial {} irq {} no-ppu-horizon {}], \
+         bounded by [timer {} ppu {}]",
+        base_counters.halts / a.frames.max(1),
+        base_counters.halt_batches / a.frames.max(1),
+        base_counters.halts as f64 / base_counters.halt_batches.max(1) as f64,
+        base_counters.idle_reason[0],
+        base_counters.idle_reason[1],
+        base_counters.idle_reason[2],
+        base_counters.idle_reason[3],
+        base_counters.idle_reason[4],
+        base_counters.idle_reason[5],
+    );
     println!("A row whose instr/frame differs from the baseline's is NOT an A/B.");
 }
 

@@ -282,6 +282,16 @@ impl Timer {
         }
     }
 
+    /// Is there a serial shift-clock edge waiting to be drained?
+    ///
+    /// [`Timer::take_serial_edges`] writes the field whether or not there was
+    /// one, so a per-M-cycle caller that drains unconditionally dirties a cache
+    /// line ~17,000 times a frame for an event that happens 137 times.
+    #[inline]
+    pub fn serial_edge_pending(&self) -> bool {
+        self.serial_edges != 0
+    }
+
     /// Take the serial shift-clock edges accumulated since the last call.
     /// Always drain this in the same step that advanced the counter.
     #[inline]
@@ -312,6 +322,71 @@ impl Timer {
         dots.div_ceil(4)
     }
 
+    /// Advance `n` whole M-cycles in **closed form**, or decline.
+    ///
+    /// [`Timer::do_cycle`]'s loop is the emulator's most-called piece of
+    /// arithmetic — a halted CPU is batched up to `IDLE_BATCH_MAX` M-cycles at
+    /// a time and Pokémon Blue is halted for about four fifths of its frame, so
+    /// three quarters of every `do_mcycle` in a run is a loop iteration whose
+    /// only job is to add four to a counter. Nothing in that span is *observed*
+    /// per M-cycle: the two things a step can produce are a `TIMA` increment and
+    /// a serial shift edge, and both are counted by arithmetic.
+    ///
+    /// The counting rests on one fact about the circuit and one about the step.
+    /// `TIMA` counts falling edges of system-counter bit `TAP[tac & 3]`, whose
+    /// period `P` is at least 16 T; the step is exactly 4 T; so the bit can only
+    /// fall on the M-cycle that carries the counter across a multiple of `P`,
+    /// and the number of those in a span telescopes to a difference of two
+    /// divisions. `P` divides 65536, so the counter's own wrap is one of them
+    /// and 32-bit arithmetic counts it correctly. The serial clock is the same
+    /// argument with a period of 512 T, one M-cycle ahead
+    /// ([`Timer::observed_counter`]).
+    ///
+    /// It **declines** — leaving the caller to run the loop — whenever a step
+    /// inside the span would do more than that: a reload already in flight, or
+    /// a `TIMA` overflow anywhere in the span, both of which are stateful. Those
+    /// are rare (a few M-cycles a frame), so the loop still exists and is still
+    /// the definition; this only skips it when it provably has nothing to say.
+    /// `timer::tests::the_batch_matches_the_loop_everywhere_it_is_taken`
+    /// exhausts that claim against the loop itself.
+    #[inline]
+    fn batch_mcycles(&mut self, n: u32) -> bool {
+        // A reload is a two-M-cycle state machine; leave it to the loop. The
+        // counter must also be on the 4 T grid the step assumes — it always is,
+        // but `do_cycle`'s partial-cycle path could in principle leave it off.
+        if n < 2 || self.reload_pending || self.reloading || self.div & 3 != 0 {
+            return false;
+        }
+        let start = self.div as u32;
+        let span = 4 * n;
+
+        let edges = if self.tap_mask == 0 {
+            0
+        } else {
+            // The tap's full period: the bit is high for the top half of it and
+            // falls when the counter crosses a multiple.
+            let p = (self.tap_mask as u32) << 1;
+            (start + span) / p - start / p
+        };
+        // An overflow is stateful (`TIMA` reads $00 for one M-cycle, then `TMA`
+        // lands and the interrupt is raised): decline and let the loop do it.
+        if edges + self.tima as u32 > 0xFF {
+            return false;
+        }
+        self.tima += edges as u8;
+
+        // The serial clock is bit 8 of the counter **as a bus access observes
+        // it**, which is one M-cycle ahead of the raw field.
+        let serial = (start + 4 + span) / 512 - (start + 4) / 512;
+        if serial != 0 {
+            self.serial_edges = self.serial_edges.saturating_add(serial.min(255) as u8);
+        }
+
+        self.prev_div = (start + span - 4) as u16;
+        self.div = (start + span) as u16;
+        true
+    }
+
     pub fn do_cycle(&mut self, ticks: u32) {
         // Measurement only, compiled out of every shipping build.
         #[cfg(feature = "profile")]
@@ -319,6 +394,15 @@ impl Timer {
             return;
         }
         let mut left = ticks;
+        // Measurement only, compiled out of every shipping build: the honest
+        // "before" for the closed form is the loop underneath it.
+        #[cfg(feature = "profile")]
+        let batch = !crate::profile::timer_batch_skipped();
+        #[cfg(not(feature = "profile"))]
+        let batch = true;
+        if batch && self.batch_mcycles(left / 4) {
+            left &= 3;
+        }
         while left >= 4 {
             self.do_mcycle();
             left -= 4;
@@ -461,6 +545,77 @@ mod tests {
         t.do_cycle(4);
         t.wb(0xFF07, 0x04);
         assert_eq!(t.rb(0xFF05), 1);
+    }
+
+    /// Everything the closed-form batch claims, checked against the loop it
+    /// replaces — the loop stays the definition.
+    ///
+    /// One M-cycle at a time always declines the batch (`n < 2`), so the
+    /// right-hand machine below is the old code exactly. 133,120 starting
+    /// states cover every phase of the longest tap (1024 T), every `TAC`
+    /// including the disabled ones, the `TIMA` values either side of an
+    /// overflow, and the counter's own 16-bit wrap. Teeth: drop the `& 3` grid
+    /// guard, count crossings of `P/2` instead of `P`, or take the serial edge
+    /// from `div` rather than `observed_counter`, and this goes red.
+    #[test]
+    fn the_batch_matches_the_loop_everywhere_it_is_taken() {
+        fn state(t: &Timer) -> (u16, u8, u8, u8, u16, u16, u8, bool, bool, u8) {
+            (
+                t.div,
+                t.tima,
+                t.tma,
+                t.tac,
+                t.tap_mask,
+                t.prev_div,
+                t.serial_edges,
+                t.reload_pending,
+                t.reloading,
+                t.interrupt,
+            )
+        }
+        fn seed(start: u16, tac: u8, tima: u8) -> Timer {
+            let mut t = Timer::default();
+            t.wb(0xFF06, 0x33);
+            t.wb(0xFF07, tac);
+            t.wb(0xFF05, tima);
+            t.div = start;
+            t.prev_div = start;
+            t
+        }
+
+        let mut batched = 0u32;
+        for phase in 0..256u16 {
+            for &wrap in &[0u16, 0xFC00] {
+                let start = wrap.wrapping_add(phase * 4);
+                for tac in 0..8u8 {
+                    for &tima in &[0u8, 1, 0xFD, 0xFE, 0xFF] {
+                        for &n in &[2u32, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 63, 64] {
+                            let mut whole = seed(start, tac, tima);
+                            let mut step = seed(start, tac, tima);
+                            if whole.batch_mcycles(n) {
+                                batched += 1;
+                            } else {
+                                for _ in 0..n {
+                                    whole.do_mcycle();
+                                }
+                            }
+                            for _ in 0..n {
+                                step.do_cycle(4);
+                            }
+                            assert_eq!(
+                                state(&whole),
+                                state(&step),
+                                "start {start:#06x} tac {tac:#04x} \
+                                 tima {tima:#04x} n {n}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // The batch must actually be *taken* on the overwhelming majority of
+        // those states, or the test is only checking the loop against itself.
+        assert!(batched > 100_000, "batch taken only {batched} times");
     }
 
     /// `TAC` reads back with the unused top five bits set.

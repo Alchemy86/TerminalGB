@@ -799,21 +799,45 @@ impl<'a> MemoryManagementUnit<'a> {
                 return;
             }
             self.timer.do_mcycle_now();
-            self.intf |= self.timer.interrupt;
-            self.timer.interrupt = 0;
+            // Every one of these is a *test* before a store, not a store. This
+            // runs once per memory access of every instruction and the answer
+            // is almost always "nothing happened": an unconditional
+            // read-modify-write of `intf` and an unconditional `mem::take` of
+            // the serial edges are four dirty cache lines a bus cycle for two
+            // events that occur a handful of times a frame.
+            if self.timer.interrupt != 0 {
+                self.intf |= self.timer.interrupt;
+                self.timer.interrupt = 0;
+            }
             // The link port's shift clock is divided from the same counter, so
             // it has to be drained here, *before* the access — otherwise an
             // `SC` write landing on an edge M-cycle would consume that edge and
             // finish a shift too early.
-            self.serial_shift();
+            if self.timer.serial_edge_pending() {
+                self.serial_shift();
+            }
             // The APU clock advances per-access too, so a wave-RAM or NR5x
             // access lands on its exact sub-instruction cycle (Blargg
             // dmg_sound 09/10/12 measure this to 2 T-cycles). Synthesis stays
             // event-driven; this only moves the "now" that catch_up syncs to.
-            if let Some(ref mut sound) = self.sound {
-                sound.do_cycle(4);
+            #[cfg(feature = "profile")]
+            let (apu, dma) = (
+                !crate::profile::apu_skipped(),
+                !crate::profile::oam_dma_skipped(),
+            );
+            #[cfg(not(feature = "profile"))]
+            let (apu, dma) = (true, true);
+            if apu {
+                if let Some(ref mut sound) = self.sound {
+                    sound.do_cycle(4);
+                }
             }
-            self.oam_dma_tick();
+            // `oam_dma_tick` returns immediately when nothing is running, but
+            // *reaching* it is a call and a load from the far end of a 150 KiB
+            // struct. Asking here keeps the common M-cycle straight-line.
+            if dma && !self.oam_dma.idle() {
+                self.oam_dma_tick();
+            }
             // The accurate PPU is a per-dot machine, so it has to advance
             // per-access too — the whole point of it is that a write to
             // `BGP`/`SCX`/`LCDC`/`WX` lands on the exact dot the program put it
@@ -824,8 +848,13 @@ impl<'a> MemoryManagementUnit<'a> {
             // In double speed the PPU runs at half the CPU's rate, matching the
             // `ticks / cpudivider` division in `do_cycle`; 4 / 2 is exact, so
             // no phase is lost across the split.
-            if self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
-                || self.ppu_ticks_with_the_bus
+            //
+            // The MMU's own flag is tested first deliberately: it is false and
+            // in cache, whereas `Gpu::render_mode` is a load from another
+            // structure that the whole-scanline engine otherwise never touches
+            // here. Same answer either way — both sides are plain reads.
+            if self.ppu_ticks_with_the_bus
+                || self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
             {
                 let step = match self.gbspeed {
                     GbSpeed::Single => 4,
@@ -1235,7 +1264,13 @@ impl<'a> MemoryManagementUnit<'a> {
         let timerticks = cputicks.saturating_sub(self.bus_ticked);
         self.bus_ticked = 0;
         self.timer.do_cycle(timerticks);
-        self.oam_dma_cycles(timerticks);
+        #[cfg(feature = "profile")]
+        let dma = !crate::profile::oam_dma_skipped();
+        #[cfg(not(feature = "profile"))]
+        let dma = true;
+        if dma {
+            self.oam_dma_cycles(timerticks);
+        }
         self.intf |= self.timer.interrupt;
         self.timer.interrupt = 0;
         self.serial_shift();
@@ -1254,8 +1289,14 @@ impl<'a> MemoryManagementUnit<'a> {
         // Like the timer, the APU already advanced `bus_ticked` T-cycles
         // during this instruction's accesses (bus_tick); apply only the
         // remainder so the per-instruction total is unchanged.
-        if let Some(ref mut sound) = self.sound {
-            sound.do_cycle(timerticks);
+        #[cfg(feature = "profile")]
+        let apu = !crate::profile::apu_skipped();
+        #[cfg(not(feature = "profile"))]
+        let apu = true;
+        if apu {
+            if let Some(ref mut sound) = self.sound {
+                sound.do_cycle(timerticks);
+            }
         }
 
         self.intf |= self.serial.interrupt;

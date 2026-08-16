@@ -58,6 +58,22 @@ pub struct Switches {
     /// honest "before" for it, measured by the same instrument on the same
     /// frames.
     pub no_idle_batch: bool,
+    /// Advance the timer one M-cycle at a time, as [`Timer::do_cycle`] did
+    /// before `Timer::batch_mcycles` existed. **Guest-invisible** — the closed
+    /// form is exactly equivalent, and `timer::tests` proves it against the
+    /// loop — so this row is that batch's honest "before".
+    ///
+    /// [`Timer::do_cycle`]: crate::mmu::timer::Timer::do_cycle
+    pub no_timer_batch: bool,
+    /// Skip the APU (`Sound::do_cycle`, everywhere). **Guest-visible**: the
+    /// frame sequencer, the length counters and `NR52` freeze. Diagnostic only
+    /// — it sizes what a machine with a sound chip pays *for having one*, which
+    /// `Gameboy::set_render_audio` deliberately does not skip.
+    pub no_apu: bool,
+    /// Skip the OAM DMA's per-M-cycle tick. **Guest-visible**: a transfer never
+    /// advances. Diagnostic only — it sizes the "is a transfer running?" test
+    /// that every M-cycle pays whether or not one is.
+    pub no_oam_dma: bool,
 }
 
 /// What a frame cost in events rather than in time.
@@ -90,6 +106,9 @@ static mut STATE: State = State {
         no_timer: false,
         no_stat: false,
         no_idle_batch: false,
+        no_timer_batch: false,
+        no_apu: false,
+        no_oam_dma: false,
     },
     counters: Counters {
         instructions: 0,
@@ -155,6 +174,21 @@ pub(crate) fn idle_batch_skipped() -> bool {
 #[inline(always)]
 pub(crate) fn timer_skipped() -> bool {
     state().switches.no_timer
+}
+
+#[inline(always)]
+pub(crate) fn timer_batch_skipped() -> bool {
+    state().switches.no_timer_batch
+}
+
+#[inline(always)]
+pub(crate) fn apu_skipped() -> bool {
+    state().switches.no_apu
+}
+
+#[inline(always)]
+pub(crate) fn oam_dma_skipped() -> bool {
+    state().switches.no_oam_dma
 }
 
 #[inline(always)]

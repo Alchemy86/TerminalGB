@@ -3231,13 +3231,131 @@ shape that survives steady contention.
   measured frames by a wall clock that also contains the warmup and understates itself by 13 % at
   the defaults.
 
-### `RenderMode::IDENTICAL_COST` moved 6.3 → 6.8, and again it is `standard` that moved
+### `RenderMode::IDENTICAL_COST` moved 6.3 → 6.8 → 8.8, and every time it is `standard` that moved
 
-The profile change is worth more to the whole-scanline renderer (a branchy loop an optimiser is
-good at) than to the per-dot pipeline (which inlines less). Four low-load runs give 6.72–6.78
-against 6.20–6.31 before. **The figure is hard-coded in `docs/tools/status_numbers.py`** as well as
-in `src/gpu/mod.rs` and five prose pages — `make status` will silently put the old one back if you
-only edit the constant.
+The profile change was worth more to the whole-scanline renderer (a branchy loop an optimiser is
+good at) than to the per-dot pipeline (which inlines less); the word-at-a-time monochrome tile blit
+below is worth more to it again, and `identical`'s pixels come out of the fetcher so it never sees
+either. Twelve interleaved samples give 7.03–10.00 (median 8.5) against 5.57–6.38 for the *same
+harness on the parent commit in the same session*, whose published figure was 6.8 — so both ends
+are depressed by the same contention and the constant is that median scaled onto the old one.
+**The figure is hard-coded in `docs/tools/status_numbers.py`** as well as in `src/gpu/mod.rs` and
+five prose pages — `make status` will silently put the old one back if you only edit the constant.
+
+### Round three: the emulator itself (`docs/throughput.md` §12-§13)
+
+Rounds one and two removed work nobody consumed. This one profiled what was left and found it
+**flat** — no item above 25 % — which is itself the result to carry forward. Measured pinned to one
+P-core, interleaved against the parent commit, best of twelve 15,000-frame rounds, load 19-27:
+**collector 0.0722 → 0.0608 ms/frame (+18.8 %), player 0.1208 → 0.0974 (+24.0 %), the renderer
+alone 0.0486 → 0.0366 (+32.8 %)**; a second run gives +22.2/+25.1/+30.0. In the swarm's own unit
+(link 01, 20 workers, four rounds alternating which binary runs first) the best round is
+43,333 → 47,577 frames/s (+9.8 %, median +8.7 %) and the contention-immune single-worker CPU
+figure is 12.95 s → 12.06 s (+7.4 %).
+
+- **`Timer::do_cycle`'s loop was three quarters of the timer, and it is closed form now
+  (`Timer::batch_mcycles`).** A halted CPU is batched up to 64 M-cycles and Pokémon Blue is halted
+  four fifths of its frame, so ~13,300 of ~17,500 `do_mcycle` calls a frame were loop iterations
+  adding four to a counter with nothing observing them. `TIMA` counts falling edges of one counter
+  bit whose period is ≥ 16 T against a 4 T step, so an edge is exactly a crossing of a multiple of
+  the period and the count telescopes to a difference of two divisions; the period divides 65536,
+  so the counter's own wrap is one of them and 32-bit arithmetic gets it right. The serial shift
+  clock is the same argument at period 512 T taken **one M-cycle ahead**
+  (`Timer::observed_counter` — from `div` instead and `boot_sclk_align` fails by one instruction).
+  **It declines rather than approximating**: a reload in flight, a `TIMA` overflow anywhere in the
+  span, or a counter off the 4 T grid all fall back to the loop, which stays the definition.
+  Worth **+17.1 %** of an overworld frame and **+11.1 %** of a cold boot — the difference is how
+  much the game halts. Pinned by `the_batch_matches_the_loop_everywhere_it_is_taken`, 133,120
+  starting states, with an assertion that the batch is actually *taken* on 100,000 of them so it
+  cannot degenerate into checking the loop against itself.
+- **`Gpu::blit_dmg_tile` draws a whole monochrome background tile with word arithmetic** — a
+  256-entry `BIT_SPREAD` table for the colour indices, a mask-select for the palette, and a
+  two-pixels-at-a-time read-modify-write of the framebuffer. **Alpha is preserved, not chosen**:
+  `clear_screen` writes 255 into it and `make test-cross` pins a hash of the whole buffer.
+  A Color tile, a flip, or the partial tile at either end of a run falls through to the pixel loop,
+  unchanged. Checked against that loop over **all 65,536 tile-data pairs**.
+- **THREE EARLIER RESTRUCTURINGS OF THE PIXEL LOOP ALL MEASURED WORSE — do not repeat them.**
+  Slicing the outputs to the run once (which removes four bounds checks a pixel), a per-tile outer
+  loop with `split_at_mut` and a const-generic console, and a flat `chunks_exact_mut(4)` zip all
+  came in at 0.0470-0.0476 ms/frame against 0.0445 unchanged. LLVM had already hoisted what they
+  were aimed at. **The word blit works because it removes stores, not branches.**
+- **Devirtualising the mapper is a negative result, in both shapes.** `Box<dyn
+  MemoryBankController>` costs an indirect call on every opcode fetch; a closed `enum Cartridge`
+  delegating to the same trait measured **4 % slower** and `Box<Cartridge>` (which devirtualises
+  *and* keeps the MMU struct small) worse still, both interleaved and both losing twice. The
+  predictor sees one answer for a whole session either way, and inlining a mapper into `rb` grows
+  the emulator's hottest function.
+- **The APU's per-M-cycle call is not the APU's cost — 1.5 %, sized before attempting it.**
+  Moving `Sound::do_cycle(4)` out of `bus_tick` to the end of the instruction (the upper bound on
+  any lazy-accumulation scheme) gives 0.0409 → 0.0403. The `no apu` row's **21.6 %** is almost all
+  `Sound::run`: the channel synthesis loops, which keep advancing duty positions, wave positions
+  and the LFSR with samples switched off because those *are* guest-visible. **That is the largest
+  named target left in a collector's frame**, and it is the most calibrated code in the repository.
+- **THE SCALING CURVE COULD NOT BE RE-MEASURED THIS SESSION, AND THE SWEEP SAYS SO ITSELF.**
+  With twelve to sixteen of the twenty cores belonging to another crew all day, `tools/perf/
+  swarm.sh` reports 1 → 20 workers as only **5.94x** and **saturates at twelve** (5 % more from
+  twelve to twenty, where §9's quiet-box sweep gained 46 %) — that is what "about five cores are
+  free" looks like, not a scaling regression. Its ascending and descending passes agree to 2 %
+  from four workers up and disagree by **25 % at one worker**, which is exactly the condition the
+  two-direction sweep exists to expose. What *is* measurable under contention is the interleaved
+  before/after pair at each width, and it answers the question this round raises: the per-instance
+  figure is flat (0.1006 → 0.0846 at one worker, 0.1031 → 0.0890 at twenty), so **the gain survives
+  fan-out and the change adds no sharing**.
+- **`core_bench --breakdown` takes the run's own configuration as its baseline now** — so
+  `--breakdown --audio --no-pixels --no-audio-out` breaks down the machine a *collector* runs
+  rather than a bare `Gameboy` — and gained `no timer batch`, `no apu` and `no oam dma` rows plus a
+  line of idle-batch counters. **Those counters answer a question worth knowing: every idle batch
+  is bounded by the PPU's next mode edge, never by the timer and never by `IDLE_BATCH_MAX`**, so
+  raising the cap buys nothing.
+- **Nothing the cartridge can see moved, and here it is provable in a way round two's was not.**
+  A 40-attempt `pewter_chain corpus` run under both builds is identical in **every** recorded field
+  except `wall_ms` — decisions, frame counts, endings, and both the `start_state` and `final_state`
+  digests. Round two's pixel skip moved those digests because it was a declaration; these two are
+  equivalences.
+
+#### PIN A SINGLE-WORKER COMPARISON TO ONE CORE, OR IT MEASURES CORE PLACEMENT
+
+This box is 8 P-cores at 5.3 GHz and 12 E-cores at 4.6 GHz, and a fresh process lands on whichever
+the scheduler picks — so the per-instance figure moves by 15 % or more between invocations of the
+**identical binary**, *even though it is CPU time*. Unpinned, the boxed-enum mapper experiment above
+reported **35 % faster**; pinned with `taskset -c 4`, in the same session, it reported 4 % slower and
+reproduced that twice. `/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq` identifies the cores
+(0-7 are 5.3 GHz here, 12-13 are 6.5 GHz preferred cores, the rest 4.6). Everything in
+`docs/throughput.md` §12 is pinned.
+
+#### A between-binary difference under 2 % is code layout, not your change
+
+With fat LTO, a change in one function moves everything after it. Measured repeatedly here: two
+binaries that differ only in `draw_map_run` reported **pixels-off** figures 2 % apart, on a path
+that never calls it. So an isolated component's cost has to be measured as a *difference within
+each binary* (`baseline − --no-pixels` is exact, because `--no-pixels` has identical instruction
+counts) and a sub-2 % whole-frame difference between two binaries is not evidence of anything.
+
+#### `pkill -f` AND `pgrep -f` MATCH YOUR OWN SHELL — this cost two runs in one session
+
+Already recorded further up for `pgrep`; it bit twice more here, and `pkill -f 'no-pixels'` and
+`pkill -f quiet_runs.sh` each killed the command that ran them, losing the run in progress. Kill by
+the PID you captured at launch.
+
+#### `docs/components/ppu.md`'s line references were ALREADY POINTING AT THE WRONG CODE
+
+Not caused by this round, and worth knowing because `make docs-check` is green either way. Checked
+on the parent commit: `mod.rs:570`, documented as `renderscan`, was a palette comment;
+`mod.rs:702`, documented as `draw_sprites`, was inside `load_state`. The whole of §4.1 had drifted
+by roughly a thousand lines, because `make docs-links` rewrites a reference's *URL* from its
+`path:line` text and never re-anchors the text by content — which is exactly the failure this file
+already warns about, observed again. §4.1's references are re-anchored here (verified line by
+line); **the rest of that page has not been checked and should be assumed stale.** The general
+rule stands and is worth repeating: after editing source that moves line numbers, `make docs-links`
+followed by `make docs-check` proves only that the numbers are *in range*.
+
+#### The dual-rlib artefact fires between test targets — build them in one invocation
+
+`cargo test --release --test a` followed by `--test b` reliably produces the panic-strategy wall
+`docs/pitfalls/builds.md` catalogues, because the first rebuilds the abort rlib. `touch src/lib.rs`
+clears it, but the reliable shape is **one invocation listing every test target**
+(`cargo test --release --test savestate --test audiocapture --test ppuengines …`), which builds the
+rlib once.
 
 ### `make no-plugins` was RED on main before any of this, and the cause is a documented trap
 

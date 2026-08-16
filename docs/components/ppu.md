@@ -6,7 +6,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`6c20451`](https://github.com/Alchemy86/TerminalGB/tree/6c20451306663018288d34253c199fad507ae6f6) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`851c0c6`](https://github.com/Alchemy86/TerminalGB/tree/851c0c6e6b0f8f8412ffd95f11e8115d616246c3) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## 1. What it is
 
@@ -103,7 +103,7 @@ Status panel's `PPU` row. The pre-rename spellings `fast`/`accurate` still parse
 The two are **not** an appearance choice — palettes and upscaling live in `src/screen/`, above
 the PPU, and are identical either way. The axis is exactness against speed: measured 0.221 vs
 0.461 ms/frame on dmg-acid2, and both are pixel-exact against its reference image. `identical`
-now **loses no row to `standard` on any gate**; what keeps it opt-in is the ~6.8x cost. Where it
+now **loses no row to `standard` on any gate**; what keeps it opt-in is the ~8.8x cost. Where it
 stands against the suite that motivates it is [`docs/mealybug.md`](../mealybug.md) §7. Both modes
 are held against each other in CI by
 [`testharness/ppuengines.rs`](../../testharness/ppuengines.rs).
@@ -113,31 +113,41 @@ are held against each other in CI by
 Structure closely follows rboy's PPU (per-pixel `PrioType` priority tracking, the Gambatte
 RGB-correction curve, `dmg_sprite_order`/`cgb_sprite_order`).
 
-**The `Gpu` struct** — [`src/gpu/mod.rs:17`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L17). Key fields: `mode`,
+**The `Gpu` struct** — [`src/gpu/mod.rs:253`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L253). Key fields: `mode`,
 `modeclock`, `line` (LY), `lyc`, the RGBA framebuffer `data`
-([`mod.rs:55`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L55), `160*144*4` bytes), the `updated` flag the frame
+([`mod.rs:291`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L291), `160*144*4` bytes), the `updated` flag the frame
 loop polls, `vram` (`0x4000` = two banks), `voam` (OAM), DMG palettes `palb/pal0/pal1`,
 CGB palette RAM `cbgpal`/`csprit`, and per-pixel `bgprio` for BG-over-sprite priority.
 
-**The mode cycle** — `do_cycle` ([`src/gpu/mod.rs:244`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L244)) accumulates
+**The mode cycle** — `do_cycle` ([`src/gpu/mod.rs:833`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L833)) accumulates
 ticks into `modeclock` and steps modes with these thresholds:
 
 ```
-line advances every 456 ticks     (mod.rs:261)   line = (line + 1) % 154   (mod.rs:263)
-mode 2 (OAM):  modeclock <= 80                    (mod.rs:276)
-mode 3 (draw): modeclock <= 80 + 172  // 252      (mod.rs:280-281)
-mode 0 (HBlank): remaining 204                    (mod.rs:286-287)
-line >= 144  → mode 1 (VBlank)                    (mod.rs:267)
+line advances every 456 ticks     (mod.rs:857)   line = (line + 1) % 154   (mod.rs:858)
+mode 2 (OAM):  modeclock <= 80                    (mod.rs:873)
+mode 3 (draw): modeclock <= 80 + 172  // 252      (mod.rs:882)
+mode 0 (HBlank): remaining 204                    (mod.rs:888)
+line >= 144  → mode 1 (VBlank)                    (mod.rs:864)
 ```
 
-`renderscan` ([`mod.rs:570`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L570)) runs when the line's drawing completes;
-it calls `draw_bg` ([`mod.rs:600`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L600), window folded in) then
-`draw_sprites` ([`mod.rs:702`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L702)). VBlank sets the `0x01` interrupt and
-`updated = true` ([`mod.rs:323`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L323)).
+`renderscan` ([`mod.rs:1537`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1537)) runs when the line's drawing completes;
+it calls `draw_bg` ([`mod.rs:1862`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1862), window folded in) then
+`draw_sprites` ([`mod.rs:1939`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1939)). VBlank sets the `0x01` interrupt and
+`updated = true` ([`mod.rs:1257`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1257)).
+
+**A whole monochrome background tile is drawn with word arithmetic** — `Gpu::blit_dmg_tile`
+expands the two tile-data bytes into eight colour indices with a lookup table, applies the
+palette by mask, and writes the framebuffer two pixels at a time (read-modify-write, so the
+alpha byte keeps whatever it held). A Color tile, a flip and the partial tile at either end
+of a run fall through to the pixel loop, which is unchanged; the two are held together over
+all 65,536 tile-data pairs by
+`gpu::tests::the_word_blit_draws_what_the_pixel_loop_draws`. It draws exactly the same
+picture and is worth about a third of the renderer —
+[`docs/throughput.md`](../throughput.md) §12.3.
 
 **The 10-sprite limit IS modelled** — `draw_sprites` collects into a 10-slot array and
-breaks once full ([`mod.rs:710`,`721`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L710)). 8×16 mode masks the tile
-LSB ([`mod.rs:737`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L737)).
+breaks once full ([`mod.rs:1952`,`1963`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1952)). 8×16 mode masks the tile
+LSB ([`mod.rs:1979`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L1979)).
 
 **STAT/LYC** — there is **one interrupt line**, not four triggers. `stat_signal`
 ([`mod.rs:344`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L344)) ORs the enabled sources together and
@@ -158,7 +168,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
 > **These describe the default `standard` picture mode.** The per-dot pixel FIFO of §4.0
 > (`identical`, `GB_PPU=identical`, [`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) does all three of
 > the first bullets properly — variable mode 3, per-dot stepping, per-pixel output — and is gated
-> in CI by `make test-external-accurate`. It is not the default because it costs about 6.8x the
+> in CI by `make test-external-accurate`. It is not the default because it costs about 8.8x the
 > CPU, not because it is behind on anything; the measured trade is in
 > [`docs/picture-modes.md`](../picture-modes.md) and
 > [`docs/measured/ppu.md`](../measured/ppu.md). Read what follows as *"what you get by
@@ -167,13 +177,13 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
 - **Mode 3 is fixed at 172 dots.** Real mode 3 is **variable (172–289)** — it lengthens with
   `SCX` fine-scroll, window activation, and sprite count, stealing time from HBlank. The fast
   engine uses a flat `80 / 172 / 204` split
-  ([`mod.rs:276–286`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L276)) with no penalty model, so games that time raster
+  ([`mod.rs:873–888`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L873)) with no penalty model, so games that time raster
   effects to mode-3 length will drift. *(No longer a non-goal: the accurate engine derives it
   from the fetcher and charges Pan Docs' OBJ penalty explicitly. dmg-acid2 cannot prove either
   way — it is a static single-frame composition and **already renders pixel-correct** on both
   engines, see §6.12 — which is why Mealybug Tearoom is wired as the yardstick instead.)*
 - **Line stepping is coarse (≤80-tick chunks), not per-dot.** `do_cycle` consumes ticks in
-  blocks ([`mod.rs:255`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L255)); a mid-scanline register read may see a
+  blocks ([`mod.rs:846`](https://github.com/Alchemy86/TerminalGB/blob/main/src/gpu/mod.rs#L846)); a mid-scanline register read may see a
   slightly stale mode/`LY`.
 - **The whole scanline is rendered in one shot** at the end of mode 3, so a mid-line write
   to `SCX`/palette during mode 3 is not reflected within that line (no per-pixel FIFO).

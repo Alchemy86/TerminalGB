@@ -225,6 +225,12 @@ impl Cpu<'_> {
     /// (Mooneye `acceptance/di_timing-GS`: "DI is expected to disable
     /// interrupts immediately"), so it is applied by the opcode itself.
     fn updateime(&mut self) {
+        // Test before storing. This runs once per instruction and the counter
+        // is zero in all but the two after an `EI`, so the unconditional
+        // write-back was a store to the CPU's hottest cache line for nothing.
+        if self.setei == 0 {
+            return;
+        }
         self.setei = match self.setei {
             2 => 1,
             1 => {

@@ -66,6 +66,15 @@ impl RenderMode {
     /// inlines less. Four consecutive low-load runs on the new profile give
     /// 6.72, 6.72, 6.77, 6.78, against 6.20-6.31 on the old one.
     ///
+    /// **And a third time, 6.8 → 8.8, for the same reason yet again.**
+    /// [`Gpu::blit_dmg_tile`] draws a whole monochrome background tile with
+    /// word arithmetic, which `identical` — whose pixels come out of the
+    /// fetcher — again does not use. Twelve interleaved samples of the harness
+    /// give 7.03-10.00 (median 8.5); the *same* instrument on the parent
+    /// commit, in the same session, gives 5.57-6.38 against its published 6.8,
+    /// so both ends are depressed by the same contention and the honest new
+    /// figure is that median scaled onto the old one: 6.8 x (8.5 / 6.4).
+    ///
     /// **A ratio is two numbers and either can move, so re-run the harness
     /// rather than carrying this one forward.** A run taken while this machine
     /// was busy gave 7.75, and one while it was very busy gave 5.56 — which is
@@ -74,7 +83,7 @@ impl RenderMode {
     ///
     /// Quoted wherever the choice is offered — a player trading speed for
     /// exactness has to be told the price at the moment they trade.
-    pub const IDENTICAL_COST: f32 = 6.8;
+    pub const IDENTICAL_COST: f32 = 8.8;
 
     /// Every mode, in the order the TUI's `P` key cycles them: the default
     /// first, so a player who taps `P` twice is back where they started.
@@ -211,6 +220,27 @@ const VBLANK_STROBE_LEAD: u32 = 4;
 /// is why SameBoy's "1 T-cycle" and docboy's dot 452/453 are the same model as
 /// ours. Only `0` — a boundary-aligned strobe — is a different machine.
 const OAM_STROBE_LEAD: u32 = 4;
+
+/// `BIT_SPREAD[b]` has byte *k* set to bit `7 - k` of `b` — one tile-data byte
+/// expanded to one byte per pixel, leftmost pixel in the lowest lane. See
+/// [`Gpu::blit_dmg_tile`].
+static BIT_SPREAD: [u64; 256] = {
+    let mut t = [0u64; 256];
+    let mut b = 0usize;
+    while b < 256 {
+        let mut v = 0u64;
+        let mut k = 0;
+        while k < 8 {
+            if (b >> (7 - k)) & 1 != 0 {
+                v |= 1u64 << (8 * k);
+            }
+            k += 1;
+        }
+        t[b] = v;
+        b += 1;
+    }
+    t
+};
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 enum PrioType {
@@ -1627,7 +1657,8 @@ impl Gpu {
         let mut xflip = false;
         let mut prio = false;
 
-        for x in x_start..x_end {
+        let mut x = x_start;
+        while x < x_end {
             let coord = coord_at_start.wrapping_add((x - x_start) as u32);
             let pixelx = (coord & 0x07) as u8;
 
@@ -1670,6 +1701,23 @@ impl Gpu {
                 b2 = vram[bank + ((a0 + 1) & 0x1FFF)];
             }
 
+            // A whole monochrome tile, on the tile grid, entirely inside this
+            // run: draw its eight pixels with word arithmetic. See
+            // [`Gpu::blit_dmg_tile`]. Everything it cannot handle — a Color
+            // tile, a flip, the partial tile at either end of a run — falls
+            // through to the pixel loop below, which is unchanged.
+            if !color && pixelx == 0 && x + 8 <= x_end {
+                Self::blit_dmg_tile(
+                    &mut row[x * 4..x * 4 + 32],
+                    &mut bgprio[x..x + 8],
+                    b1,
+                    b2,
+                    palb,
+                );
+                x += 8;
+                continue;
+            }
+
             let xbit = match xflip {
                 true => pixelx,
                 false => 7 - pixelx,
@@ -1701,6 +1749,85 @@ impl Gpu {
                 row[o + 1] = c;
                 row[o + 2] = c;
             }
+            x += 1;
+        }
+    }
+
+    /// Draw one whole monochrome background tile — eight pixels — with word
+    /// arithmetic instead of eight trips round the pixel loop.
+    ///
+    /// This is the emulator's innermost loop with the picture on: 23,040
+    /// pixels a frame, and per pixel the old path spent two bit tests, a
+    /// palette lookup off the stack, three byte stores into the framebuffer
+    /// and one into the priority map. None of that is wasted work — it is
+    /// simply being done a byte at a time when the machine can do eight.
+    /// Measured on Pokémon Blue's overworld, this is **+21 % of the whole
+    /// renderer** and **+25 % of a frame with the picture on**; three earlier
+    /// attempts that only reshaped the pixel loop (per-tile outer loop,
+    /// sliced outputs, a const-generic console) all measured *worse*, which is
+    /// what says the cost is the byte traffic and not the branches.
+    /// See [`docs/throughput.md`](../../docs/throughput.md) §12.
+    ///
+    /// Three tricks, and each is exact rather than approximate:
+    ///
+    /// * **[`BIT_SPREAD`] turns a tile-data byte into eight bytes**, one per
+    ///   pixel, leftmost first. Two table reads and a shifted OR give all eight
+    ///   two-bit colour indices at once.
+    /// * **The palette is applied by mask**, not by lookup: `x * 0xFF` over
+    ///   bytes that are 0 or 1 gives `0x00`/`0xFF` per byte, and four masked
+    ///   ORs select between the four broadcast shades.
+    /// * **The framebuffer is written two pixels at a time**, read-modify-write
+    ///   so the alpha byte keeps whatever it held. Alpha is *not* ours to
+    ///   choose — `Gpu::clear_screen` writes `255` into it and `make
+    ///   test-cross` pins a hash of the whole buffer — so it is preserved
+    ///   rather than assumed.
+    ///
+    /// `_le_bytes` on both sides deliberately: byte 0 of the slice is pixel
+    /// 0's red on every target, which a native-endian round trip would not
+    /// guarantee.
+    #[inline]
+    fn blit_dmg_tile(
+        row: &mut [u8],
+        bgprio: &mut [PrioType],
+        b1: u8,
+        b2: u8,
+        palb: [u8; 4],
+    ) {
+        /// One byte set in each of the eight lanes.
+        const ONES: u64 = 0x0101_0101_0101_0101;
+        /// The alpha byte of both pixels in a 64-bit pair.
+        const ALPHA: u64 = 0xFF00_0000_FF00_0000;
+        /// A shade byte in each of a pixel's three colour lanes.
+        const RGB: u64 = 0x0001_0101;
+
+        // Eight two-bit colour indices, one per byte, leftmost pixel first.
+        let colnr = BIT_SPREAD[b1 as usize] | (BIT_SPREAD[b2 as usize] << 1);
+        let m0 = (colnr & ONES).wrapping_mul(0xFF);
+        let m1 = ((colnr >> 1) & ONES).wrapping_mul(0xFF);
+        let broadcast = |v: u8| (v as u64).wrapping_mul(ONES);
+        let shades = (!m1 & !m0 & broadcast(palb[0]))
+            | (!m1 & m0 & broadcast(palb[1]))
+            | (m1 & !m0 & broadcast(palb[2]))
+            | (m1 & m0 & broadcast(palb[3]));
+
+        for (k, pair) in row.chunks_exact_mut(8).enumerate() {
+            let s0 = (shades >> (16 * k)) & 0xFF;
+            let s1 = (shades >> (16 * k + 8)) & 0xFF;
+            let old = u64::from_le_bytes(pair.try_into().unwrap());
+            let new = (old & ALPHA) | (s0 * RGB) | ((s1 * RGB) << 32);
+            pair.copy_from_slice(&new.to_le_bytes());
+        }
+
+        // Colour index 0 is the only thing a sprite can be drawn over here:
+        // the Color attribute's priority bit does not exist on a DMG, which is
+        // why this tile is eligible for the fast path at all.
+        let nonzero = m0 | m1;
+        for (k, p) in bgprio.iter_mut().enumerate() {
+            *p = if (nonzero >> (8 * k)) & 0xFF == 0 {
+                PrioType::Color0
+            } else {
+                PrioType::Normal
+            };
         }
     }
 
@@ -2560,6 +2687,61 @@ mod tests {
     /// rendering touches. After every scanline, everything the machine can
     /// observe must be byte-identical.
     ///
+    /// The word-at-a-time monochrome tile against the pixel loop it replaces —
+    /// **all 65,536 tile-data pairs**, four palettes, and the alpha byte it is
+    /// not allowed to touch.
+    ///
+    /// The two paths meet at every tile of every DMG frame, so "the picture
+    /// looks right" is not evidence: one wrong lane in one of 65,536 bit
+    /// patterns is a handful of pixels somewhere in a game nobody is running.
+    /// Exhaustive is cheap here and is the only honest check.
+    ///
+    /// Teeth: swap `s0`/`s1`, drop the `& ALPHA` term, or build `BIT_SPREAD`
+    /// least-significant-bit first, and this fails.
+    #[test]
+    fn the_word_blit_draws_what_the_pixel_loop_draws() {
+        for palb in [
+            [255u8, 192, 96, 0],
+            [0, 0, 0, 0],
+            [96, 255, 0, 192],
+            [1, 2, 3, 4],
+        ] {
+            for pair in 0..=0xFFFFu32 {
+                let (b1, b2) = ((pair >> 8) as u8, pair as u8);
+
+                // What the per-pixel path in `draw_map_run` produces, written
+                // out longhand so the two cannot share a bug.
+                let mut want_row = [0u8; 32];
+                let mut want_prio = [PrioType::Normal; 8];
+                for (k, want) in want_prio.iter_mut().enumerate() {
+                    let xbit = 7 - k as u32;
+                    let colnr = if b1 & (1 << xbit) != 0 { 1 } else { 0 }
+                        | if b2 & (1 << xbit) != 0 { 2 } else { 0 };
+                    let c = palb[colnr];
+                    want_row[k * 4] = c;
+                    want_row[k * 4 + 1] = c;
+                    want_row[k * 4 + 2] = c;
+                    want_row[k * 4 + 3] = 0xA5; // alpha: untouched
+                    *want = if colnr == 0 {
+                        PrioType::Color0
+                    } else {
+                        PrioType::Normal
+                    };
+                }
+
+                let mut row = [0u8; 32];
+                for k in 0..8 {
+                    row[k * 4 + 3] = 0xA5;
+                }
+                let mut prio = [PrioType::PrioFlag; 8];
+                Gpu::blit_dmg_tile(&mut row, &mut prio, b1, b2, palb);
+
+                assert_eq!(row, want_row, "b1 {b1:#04x} b2 {b2:#04x} {palb:?}");
+                assert_eq!(prio, want_prio, "b1 {b1:#04x} b2 {b2:#04x}");
+            }
+        }
+    }
+
     /// Teeth: delete the `advance_window_line()` call from `renderscan`'s skip
     /// path and this fails at the first line the window is on.
     #[test]

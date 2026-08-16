@@ -110,19 +110,23 @@ thing that shows a pipeline change getting closer. Both are in the baselines.
 
 ## 4. The cost figure, and how it stays honest
 
-`RenderMode::IDENTICAL_COST` is **6.8**, and it is measured rather than chosen. **It has moved
-twice, and both times because `standard` got faster — never because `identical` got slower.**
-First 2.1 → 6.3, when the PSP work rewrote the whole-scanline renderer to fetch once per tile
-instead of once per pixel; then 6.3 → 6.8, when the shipping profile stopped optimising for size
-([`docs/throughput.md`](throughput.md)). A branchy whole-scanline loop is exactly the shape an
-optimiser is good at, and the per-dot pipeline inlines less, so the same flag change moves the two
-engines by different amounts.
+`RenderMode::IDENTICAL_COST` is **8.8**, and it is measured rather than chosen. **It has moved
+three times, and every time because `standard` got faster — never because `identical` got
+slower.** First 2.1 → 6.3, when the PSP work rewrote the whole-scanline renderer to fetch once per
+tile instead of once per pixel; then 6.3 → 6.8, when the shipping profile stopped optimising for
+size; then 6.8 → 8.8, when `Gpu::blit_dmg_tile` started drawing a whole monochrome tile with word
+arithmetic ([`docs/throughput.md`](throughput.md) §12). A branchy whole-scanline loop is exactly
+the shape an optimiser — or a human — can do something with, while the per-dot engine's pixels
+come out of the fetcher and none of those three changes touches it.
 
 [`testharness/ppuengines.rs`](../testharness/ppuengines.rs) times both engines over the same 400
 frames of dmg-acid2 on every `cargo test --release` and **fails the build if the constant disagrees
-with what it measured**. Four consecutive low-load runs on the machine this was last measured on
-gave **0.0534 → 0.3610 ms/frame, a ratio of 6.72–6.78×**; a run on a busy box gave 7.75 and one on
-a very busy box 5.56, which is why the figure is shown with a `~` and checked against a wide band.
+with what it measured**. Twelve interleaved runs on the machine this was last measured on gave
+**7.03–10.00×, median 8.5** (fast 0.056–0.078 ms/frame, accurate 0.545–0.666); the *same harness on
+the parent commit, in the same session*, gave **5.57–6.38× against its published 6.8**, so both
+ends were depressed by the same contention and the new constant is the median scaled onto the old
+one. An earlier low-load session gave 6.72–6.78 where a busy box gave 7.75 and a very busy one
+5.56, which is why the figure is shown with a `~` and checked against a wide band.
 
 That check exists because this repository has been bitten by a stale performance number before —
 "audio costs ~8 ms a frame" outlived the fix by months and kept being quoted. A figure printed on a

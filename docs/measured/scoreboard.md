@@ -140,9 +140,11 @@ The mode is gated separately (`make test-external-accurate`, against
 (Rows with one baseline are scored once: the picture mode does not reach what they measure, so
 the same figure stands in both columns.)
 
-**On these six gates no row goes the other way**, and the cost is **~6.8x** — 0.053 → 0.361
-ms/frame, 46x real time headless, re-measured on every `cargo test --release --test
-ppuengines`.
+**On these six gates no row goes the other way**, and the cost is **~8.8x** — 0.058 → 0.546
+ms/frame, 30x real time headless, re-measured on every `cargo test --release --test
+ppuengines`. (It was ~6.8x until `standard` learnt to draw a monochrome tile with word arithmetic;
+a ratio is two numbers, and this one has only ever moved because the *default* engine got faster —
+[`docs/throughput.md`](../throughput.md) §12.)
 
 > **Correction, 2026-08-15: rows DO go the other way, on gates this table did not have.**
 > The thirteen [c-sp suites](#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time)

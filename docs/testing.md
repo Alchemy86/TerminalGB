@@ -7,7 +7,7 @@
 ---
 
 <!-- codemap:asof -->
-> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`72a5454`](https://github.com/Alchemy86/TerminalGB/tree/72a545438d2a2422f1b55c3452032d76259993be) · regenerate with `make docs-links`, verify with `make docs-check`.
+> 🗺️ **Code map** · source links target [`main`](https://github.com/Alchemy86/TerminalGB/tree/main); line references documented as of commit [`851c0c6`](https://github.com/Alchemy86/TerminalGB/tree/851c0c6e6b0f8f8412ffd95f11e8115d616246c3) · regenerate with `make docs-links`, verify with `make docs-check`.
 
 ## Why this page exists
 
@@ -324,7 +324,7 @@ measured rather than pinned as a hash, so `oam_bug` reports which of its eight s
 pass rather than an opaque number. The mode-3-length approximation applies to the **default
 `standard` [picture mode](picture-modes.md)**; the cycle-stepped one is the selectable
 `identical` mode and is gated (`GB_PPU=identical`, and the `external-suites-accurate` job
-below) — it is simply not the default yet, because it costs about 6.8x the CPU, not because it
+below) — it is simply not the default yet, because it costs about 8.8x the CPU, not because it
 is behind on anything. See
 [`docs/measured/ppu.md`](measured/ppu.md). The whole suite runs
 in **~3.6 s** (the twelve `cgb_sound` rows cost about 0.8 s of that).
