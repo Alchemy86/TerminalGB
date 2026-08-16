@@ -69,6 +69,14 @@ INTERIOR = {
 # Where a panel sits relative to its door, in tiles, and the gap it leaves.
 PANEL_GAP = 2 * TILE
 
+# Short names for the HUD; the full table lives in the agent plugin.
+MAP_LABEL = {
+    0x00: "Pallet Town", 0x01: "Viridian City", 0x02: "Pewter City",
+    0x0C: "Route 1", 0x0D: "Route 2", 0x25: "Red's 1F", 0x26: "bedroom",
+    0x28: "Oak's Lab", 0x29: "Viridian PC", 0x2A: "Viridian Mart",
+    0x2F: "forest N gate", 0x32: "forest S gate", 0x33: "Viridian Forest",
+}
+
 FACING = {0: "down", 4: "up", 8: "left", 12: "right"}
 # **Measured on the cartridge, from the tracks themselves.** `wWalkCounter`
 # ($CFC5, atlas `rom,live`) runs 7,6,5,4,3,2,1 with each value held two frames —
@@ -259,6 +267,7 @@ def main():
     ap.add_argument("--seconds", type=float, default=70.0)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--width", type=int, default=960)
+    ap.add_argument("--title", default="THE PEWTER CHAIN")
     ap.add_argument("--cohort", type=int, default=16,
                     help="how many agents carry a number. At 24 everybody can; "
                          "at 500 numbers are noise, so a named cohort stays "
@@ -332,6 +341,8 @@ def main():
 
     os.makedirs(a.out, exist_ok=True)
     OUT_W, OUT_H = a.width, int(a.width * 9 / 16)
+    HUD_W = max(210, OUT_W // 5)
+    VIEW_W = OUT_W - HUD_W
     font = load_font(max(12, OUT_W // 62))
     num_font = load_font(max(10, OUT_W // 90))
     tints = [(255, 96, 96), (96, 200, 255), (140, 255, 140), (255, 220, 90),
@@ -376,7 +387,7 @@ def main():
                 continue
             lk, lname, _ = link_at(spans.get(n, []), gbf)
             here.append((n, wp[0] - X0, wp[1] - Y0, wp[2], facing, battle, lk,
-                         lname, heat_band(m, x, y)))
+                         lname, heat_band(m, x, y), m))
         positions.append(here)
 
     # --- the camera ---------------------------------------------------------
@@ -396,9 +407,9 @@ def main():
     def spread(vals):
         vals = sorted(vals)
         n = len(vals)
-        lo = vals[max(0, int(0.15 * n))]
-        hi = vals[min(n - 1, int(0.85 * n))]
-        return lo, hi, vals[n // 2]
+        lo = vals[max(0, int(0.05 * n))]
+        hi = vals[min(n - 1, int(0.95 * n))]
+        return lo, hi, (lo + hi) / 2
 
     cams, prev = [], None
     for here in positions:
@@ -406,15 +417,15 @@ def main():
             lx, hx_, mx = spread([p[1] for p in here])
             ly, hy_, my = spread([p[2] for p in here])
             cx, cy = mx, my
-            need = max(MIN_W, (hx_ - lx) * 1.6,
-                       (hy_ - ly) * 1.6 * OUT_W / OUT_H)
+            need = max(MIN_W, (hx_ - lx) * 1.25,
+                       (hy_ - ly) * 1.25 * VIEW_W / OUT_H)
         elif prev:
             cx, cy, need = prev
         else:
             cx, cy, need = world.width / 2, world.height / 2, MIN_W
         need = min(need, world.width * 1.0)
         if prev:
-            k = 0.08
+            k = 0.14
             cx = prev[0] + (cx - prev[0]) * k
             cy = prev[1] + (cy - prev[1]) * k
             need = prev[2] + (need - prev[2]) * k
@@ -422,8 +433,6 @@ def main():
         cams.append(prev)
 
     tinted = {}
-    HUD_W = max(210, OUT_W // 5)
-    VIEW_W = OUT_W - HUD_W
     for i, (here, (cx, cy, cw)) in enumerate(zip(positions, cams)):
         ch = cw * OUT_H / VIEW_W
         x0 = int(round(cx - cw / 2))
@@ -435,7 +444,7 @@ def main():
         img.paste(crop.resize((VIEW_W, OUT_H), Image.NEAREST), (0, 0))
         d = ImageDraw.Draw(img)
         sw = max(8, int(16 * scale))
-        for (n, px, py, indoors, facing, battle, lk, lname, band) in here:
+        for (n, px, py, indoors, facing, battle, lk, lname, band, _m) in here:
             sx = int((px - x0) * scale)
             sy = int((py - y0) * scale)
             if not (-sw <= sx <= VIEW_W + sw and -sw <= sy <= OUT_H + sw):
@@ -469,8 +478,9 @@ def main():
         ]
         if offscreen:
             behind = min(p[6] for p in offscreen)
-            warn = (f"{len(offscreen)} agent(s) off frame, "
-                    f"furthest behind at link {behind}")
+            warn = f"{len(offscreen)} agent(s) off frame"
+            if spans:
+                warn += f", furthest behind at link {behind}"
             bb = num_font.getbbox(warn)
             d.rectangle([0, OUT_H - bb[3] - 10, VIEW_W, OUT_H],
                         fill=(40, 16, 16))
@@ -481,7 +491,7 @@ def main():
         gbf = max(1, i * step)
         hx = VIEW_W + 10
         d.rectangle([VIEW_W, 0, OUT_W, OUT_H], fill=(10, 12, 16))
-        d.text((hx, 8), "THE PEWTER CHAIN", fill=(240, 244, 248), font=font)
+        d.text((hx, 8), a.title, fill=(240, 244, 248), font=font)
         rows = [
             f"{len(here)}/{len(tracks)} agents live",
             f"{gbf / FPS_GB / 60:.1f} emulated minutes",
@@ -493,20 +503,36 @@ def main():
             d.text((hx, y), t, fill=(170, 185, 200), font=num_font)
             y += int(num_font.size * 1.5)
 
-        # How many agents are on each link — the shape of the chain's attrition.
+        # How many agents are on each link — the shape of the chain's
+        # attrition. Only on a whole-chain film; a showcase of one link would
+        # draw fourteen empty bars and say nothing.
         y += 6
-        d.text((hx, y), "link of 14", fill=(200, 215, 230), font=num_font)
-        y += int(num_font.size * 1.7)
-        per = collections.Counter(p[6] for p in here)
-        top = max(per.values()) if per else 1
-        bw = OUT_W - hx - 12
-        for lk in range(1, 15):
-            c = per.get(lk, 0)
-            d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
-                        fill=(60, 120, 190) if c else (34, 40, 48))
-            d.text((hx + 2, y), f"{lk:2d}  {c}", fill=(225, 232, 240),
+        if spans:
+            d.text((hx, y), "link of 14", fill=(200, 215, 230), font=num_font)
+            y += int(num_font.size * 1.7)
+            per = collections.Counter(p[6] for p in here)
+            top = max(per.values()) if per else 1
+            bw = OUT_W - hx - 12
+            for lk in range(1, 15):
+                c = per.get(lk, 0)
+                d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
+                            fill=(60, 120, 190) if c else (34, 40, 48))
+                d.text((hx + 2, y), f"{lk:2d}  {c}", fill=(225, 232, 240),
+                       font=num_font)
+                y += num_font.size + 3
+        else:
+            d.text((hx, y), "agents by map", fill=(200, 215, 230),
                    font=num_font)
-            y += num_font.size + 3
+            y += int(num_font.size * 1.7)
+            per = collections.Counter(p[9] for p in here)
+            top = max(per.values()) if per else 1
+            bw = OUT_W - hx - 12
+            for mp, c in per.most_common(8):
+                d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
+                            fill=(60, 120, 190))
+                d.text((hx + 2, y), f"{MAP_LABEL.get(mp, hex(mp))[:16]}  {c}",
+                       fill=(235, 240, 245), font=num_font)
+                y += num_font.size + 3
 
         # The colour scale itself, so the film explains its own encoding.
         y += 8
@@ -526,12 +552,15 @@ def main():
         y += 8
         d.text((hx, y), "tracked", fill=(200, 215, 230), font=num_font)
         y += int(num_font.size * 1.7)
-        for (n, _, _, _, _, _, lk, lname, band) in sorted(here, key=lambda p: p[0]):
-            if n not in cohort or y > OUT_H - num_font.size:
+        for (n, _, _, _, _, _, lk, lname, band, _m) in sorted(
+                here, key=lambda p: p[0]):
+            if n not in cohort or y > OUT_H - num_font.size * 2:
                 continue
             c = HEAT_HUE[band]
             d.rectangle([hx, y + 2, hx + 6, y + num_font.size - 1], fill=c)
-            d.text((hx + 10, y), f"{n:3d}  L{lk:02d} {lname[3:][:14]}",
+            label = f"L{lk:02d} {lname[3:][:14]}" if spans else \
+                MAP_LABEL.get(_m, hex(_m))[:16]
+            d.text((hx + 10, y), f"{n:3d}  {label}",
                    fill=(215, 225, 235), font=num_font)
             y += num_font.size + 2
         img.save(os.path.join(a.out, f"f{i:05d}.png"))
