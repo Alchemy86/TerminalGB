@@ -1,7 +1,7 @@
 {
   "schema": "gbscenario/1",
   "name": "04-take-a-starter",
-  "objective": "Take a starter Pokemon from one of the three Poke Balls on the table in Oak's laboratory. They sit at (6,3), (7,3) and (8,3); stand below one, face up, press A and answer YES. Oak's speech has to finish first, and walking at the table too early makes him call you back.",
+  "objective": "Take a starter Pokemon from one of the three Poke Balls on the table in Oak's laboratory. They sit at (6,3), (7,3) and (8,3); stand below one on row 4, face up, press A and answer YES. Oak's speech has to finish first. Stay on rows 3 and 4 until you have one: row 6 makes Oak call you back, and standing in rows 5-6 during this scene can lock the game up for good (docs/gen1/sharp-edges.md).",
   "start_state": "states/03.gbss",
   "goal": [
     "watch:got_starter!=0",
@@ -29,7 +29,7 @@
     }
   ],
   "evidence": [
-    "watch:got_starter!=0 — EVENT_GOT_STARTER, event index 34, wEventFlags $D74B bit 2. Set by OaksLabRivalChoosesStarterScript after the rival takes his.",
-    "party>=1 — wPartyCount $D163 (atlas, rom+live+inv)."
+    "watch:got_starter!=0 — EVENT_GOT_STARTER, event index 34, so wEventFlags $D74B bit 2, mask $04. The index was walked out of pokered's constants/event_constants.asm const list (const_def/const_skip/const_next), and the same walk puts EVENT_FOLLOWED_OAK_INTO_LAB at index 0 byte 0 bit 0, which is what says the walk is right. SetEvent EVENT_GOT_STARTER is the last thing OaksLabRivalChoosesStarterScript does (pokered scripts/OaksLab.asm) before it hands over to SCRIPT_OAKSLAB_RIVAL_CHALLENGES_PLAYER, so the flag records the whole starter scene finishing — the player choosing, then the rival taking his — which is exactly the state link 05 needs. The player's own half is a separate record, wStatusFlags4 bit BIT_GOT_STARTER, set by OaksLabMonChoiceMenu beside its AddPartyMon call.",
+    "party>=1 — wPartyCount $D163 (atlas, rom+live+inv). A second, independent address: the flag alone says the scene ran, and this says the player is the one holding a Pokemon."
   ]
 }

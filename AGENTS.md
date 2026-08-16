@@ -7838,6 +7838,52 @@ links from the Nintendo logo to standing in Pewter City, an expert solver
    recordings, as did 2 and 3, and **no success rate would ever have shown it**. Mix the seed
    first, then force the low bit. Measuring diversity is what found it.
 
+### THE GAME CAN SOFT-LOCK, AND A FROZEN PICTURE IS NOT ALWAYS A FROZEN EMULATOR
+
+**Pokémon Blue locks up for good if the player stands in rows 5-6 of Oak's laboratory during
+the starter scene** — the screen keeps being drawn, the play-time counter keeps ticking, and no
+button does anything ever again. Measured: 53 of 600 link-04 attempts, every one of them frozen
+at `(5,5)`. It is the cartridge's own `PrepareOAMData` overflowing a 40-entry buffer whose end
+**is** `wTileMap`, and the collision check then reads the stamped `$A0` as a wall in every
+direction. Full mechanism with the pokered citations:
+[`docs/gen1/sharp-edges.md`](docs/gen1/sharp-edges.md); the route repair and the numbers:
+[`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §8.10.
+
+- **The recipe for telling the two kinds of hang apart, because it took hours the first time.**
+  Sample `Gameboy::debug_pc` over many frames — but know that Gen 1 spends most of every frame
+  in `DelayFrame`'s spin at `$20B4`, so **PC parked there proves nothing on its own**; a
+  *healthy* machine reports it too. Then compare `wPlayTime` (`$DA41`-`$DA45`) against a healthy
+  machine: same rate means the game is alive and is refusing input, and the fault is in game
+  state. `Gameboy::debug_ime` (added for this) separates the other case — a game genuinely stuck
+  in `DelayFrame` reads `IME` low with the VBlank bit set in both `IE` and `IF`.
+- **THE TOOL THAT ACTUALLY FOUND IT: diff a frozen machine against a healthy one ON THE SAME
+  TILE, then delta-debug the difference down to a minimal set.** Copy the healthy value of a
+  candidate byte into the frozen machine, test whether the player can move, and shrink. It went
+  from 565 differing bytes to **one** — `$C434`, which is `wTileMap` row 7 column 8, which is
+  `GetTileAndCoordsInFrontOfPlayer`'s `lda_coord 8, 7`. Reasoning about which flag "should" be
+  wrong got nowhere for an hour; the bisect took two minutes. **Include VRAM and OAM in the
+  snapshot** — a first pass over work RAM and high RAM alone reported "copying every differing
+  byte does not unfreeze it", which was true and useless.
+- **A cluster is a diagnosis.** All 53 failures ended on one tile, and the one classified
+  `Stuck` rather than out-of-calls printed the four tiles it was orbiting. Read the endings
+  before reading the code.
+
+### A WANDER CAN CHANGE THE ROUTE, and the comment saying it cannot was wrong
+
+`GoTo` is greedy on the larger remaining delta and commits to a run along the other axis when it
+is blocked, so **where it starts from decides which obstacle it meets**. The diversity wander was
+documented as something that "changes the trajectory and cannot change the route"; measured, one
+wandered step up from `(5,4)` to `(5,3)` put a Poké Ball sprite between the player and Oak's
+table, the detour ran south into the soft-lock above, and the attempt was over — twice in 600, at
+a bar of one in a thousand. A wander now steps **towards** the waypoint on an axis that still has
+distance on it, so it cannot leave the rectangle the `goto` was going to cross anyway, and 3,000
+distinct trajectories in 3,000 attempts say the diversity survived. Same class as the older
+"never skip a waypoint" finding, one level further out.
+
+**And a waypoint one tile from a hazard is a waypoint pointing at it.** `(4,4)` sits behind the
+rival's sprite; the only way to it is round, and round is south. The turning point of the path
+that actually exists — `(5,4)` — is a tile that no detour is ever needed to reach.
+
 ### Scale, determinism and the bar
 
 - **`pewter_chain corpus` fans out across threads and `verify` proves determinism under it** —
@@ -7939,9 +7985,27 @@ final-state hash, three thousand times**. A duplicated corpus and an honest one 
 - **`--exits N` keeps the first N *successful* exits as the next link's pool.** Only
   successes: a pool seeded from failures certifies the following link against worlds no real
   run reaches, which is the whole defect an end-to-end chain figure exists to expose.
-- **Measured, 2026-08-16, on the captain's Pokémon Blue:** `01-new-game`, `02-leave-the-house`
-  and `03-oak-takes-you-to-the-lab` each **3000/3000 = 100.0%, 3000 distinct trajectories**,
-  entry pools 1 / 600 / 600, phase spread 3001. Zero failures in 3000 bounds the failure rate
+- **Reproducing one failing attempt: `solve --start <pool sorted by name>[seed % len] --seed
+  N`.** `entry_pool` sorts the paths, so the entry a seed used is `index.ndjson`'s `entry`
+  field and nothing else needs recording. **Do not build that path with `$(ls …)`** — `ls` is
+  proxied here and prints a size beside every name, so the array is filename/size pairs and
+  every index is doubled; the trace you get is a *different* seed's, and it may well pass.
+  `printf 'dir/%05d.gbss' $SEED`, or `find`.
+- **CHANGING SHARED DRIVER CODE INVALIDATES EVERY LINK ALREADY CERTIFIED, AND THEY MUST BE
+  RE-RUN IN THE SAME COMMIT.** A trajectory is a function of the driver, so certifying a new
+  link on a driver the earlier ones were never measured against is a claim about neither
+  machine. Links 01-04 were re-certified together for exactly this reason (the wander and the
+  stuck-recovery sidestep changed), on one binary, and a rebuild from the source as committed
+  was checked to reproduce 200 of 200 certified trajectories byte for byte before the numbers
+  were written down. Budget for the re-run: 3,000 attempts of a link is 1.5-7 minutes at 12
+  workers.
+- **Give a link a pool as large as its attempt count when you can.** Links 01-04 are certified
+  with 3,000 *distinct* entry states, so no two attempts even start from the same world; that
+  costs nothing extra, because `--exits 3000` is the same run that certifies the link before.
+- **Measured, 2026-08-16, on the captain's Pokémon Blue:** `01-new-game`, `02-leave-the-house`,
+  `03-oak-takes-you-to-the-lab` and `04-take-a-starter` each **3000/3000 = 100.0%
+  (95% CI 99.87-100%), 3000 distinct trajectories**, entry pools 1 / 3000 / 3000 / 3000, phase
+  spread 3001, load average 13-18. Zero failures in 3000 bounds the failure rate
   at about 0.10% by the rule of three. **This repo's link 03 has never failed** — the "17
   budget failures on link 03" in circulation are AgentGB's link 03, a different harness with a
   60-decision cap and a 70-tile start pool, in another repository.

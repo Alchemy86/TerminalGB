@@ -264,10 +264,22 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             );
             r.insert(OAKS_LAB, vec![stage(&[], Finish::Arrive)]);
         }
+        // **(4,4) is behind the rival, and reaching for it walks into a
+        // cartridge soft-lock.** Oak's escort ends at (5,3); the rival stands
+        // at (4,3), so the first press of a `goto (4,4)` only turns the player
+        // and `GoTo` commits to a downward detour that overshoots row 4 into
+        // row 6 — where `OaksLabPlayerDontGoAwayScript` fires. Standing in rows
+        // 5-6 of the laboratory is what triggers Pokémon Blue's own
+        // `PrepareOAMData` overflow (see `docs/gen1/sharp-edges.md`), and the
+        // game then locks up for good. Measured: 53 of 600 attempts, every one
+        // of them ending frozen at (5,5).
+        //
+        // (5,4) is the turning point of the real walkable path — one step down,
+        // then straight along row 4 — so nothing detours and nothing goes south.
         "04-take-a-starter" => {
             r.insert(
                 OAKS_LAB,
-                vec![stage(&[(4, 4), (ball_x, 4)], Finish::Talk("up"))],
+                vec![stage(&[(5, 4), (ball_x, 4)], Finish::Talk("up"))],
             );
         }
         // **The rival challenges you at `wYCoord == 6` and nowhere else.**
@@ -1098,18 +1110,22 @@ impl ChainDriver {
             // Sidestep along the axis with the *least* left to cover: the
             // obstacle is almost always across the long axis, so committing
             // to the short one is what gets round a building.
+            //
+            // **And on that axis, go the way the waypoint is.** The direction
+            // used to be a coin flip whichever way the waypoint lay, so half
+            // the escapes walked away from it — which in Oak's laboratory means
+            // walking back into the rows that soft-lock the cartridge
+            // (`docs/gen1/sharp-edges.md`), over and over, at even odds. A
+            // sidestep that also closes distance is strictly the better one;
+            // the coin flip is kept for the case where that axis is already
+            // level, which is the only case where neither direction is better.
             let dx = wx as i32 - s.x as i32;
             let dy = wy as i32 - s.y as i32;
+            let r = self.roll(2);
             let d = if dx.abs() >= dy.abs() {
-                if self.roll(2) == 0 {
-                    "up"
-                } else {
-                    "down"
-                }
-            } else if self.roll(2) == 0 {
-                "left"
+                toward("up", "down", dy, r)
             } else {
-                "right"
+                toward("left", "right", dx, r)
             };
             let n = 2 + self.roll(3) as u32;
             return Plan::new("Walls in the way — go round.")
@@ -1127,12 +1143,44 @@ impl ChainDriver {
             // corridor. Measured on Viridian City, whose row 27 is
             // `#.###.##############` — two gaps in twenty tiles — where
             // skipping (19,28) left the solver oscillating on row 28 for 600
-            // decisions. A wander before the same goto changes the trajectory
-            // and cannot change the route.
+            // decisions.
+            //
+            // **But a wander in ANY direction can change the route, and that
+            // claim used to be made here without one.** `GoTo` is greedy on the
+            // larger remaining delta and commits to a run along the other axis
+            // when it is blocked, so where it starts from decides which
+            // obstacle it meets. Measured in Oak's laboratory: one wandered
+            // step from (5,4) up to (5,3) put a Poké Ball sprite between the
+            // player and the table, the detour that followed ran south into the
+            // rows that soft-lock the cartridge (`docs/gen1/sharp-edges.md`),
+            // and the attempt was over — twice in 600, at a bar of one in a
+            // thousand.
+            //
+            // So a wander steps **towards** the waypoint, never past it and
+            // never away: it picks one of the axes that still has distance on
+            // it and walks part of the way. That is a genuinely different route
+            // where the ground is open — which axis is walked first, and how
+            // far — and it cannot leave the rectangle the `goto` was going to
+            // cross anyway, so it cannot introduce an obstacle the direct path
+            // would not have met.
             let p = Plan::new(&format!("Head for ({wx},{wy})."));
             let p = if self.roll(6) == 0 {
-                let d = ["up", "down", "left", "right"][self.roll(4) as usize];
-                p.walk(d, 1 + self.roll(3) as u32)
+                let dx = wx as i32 - s.x as i32;
+                let dy = wy as i32 - s.y as i32;
+                let mut axes: Vec<(&str, u32)> = Vec::new();
+                if dx != 0 {
+                    axes.push((if dx > 0 { "right" } else { "left" }, dx.unsigned_abs()));
+                }
+                if dy != 0 {
+                    axes.push((if dy > 0 { "down" } else { "up" }, dy.unsigned_abs()));
+                }
+                match axes.len() {
+                    0 => p,
+                    n => {
+                        let (d, room) = axes[self.roll(n as u64) as usize];
+                        p.walk(d, 1 + self.roll(room.min(3) as u64) as u32)
+                    }
+                }
             } else {
                 p
             };
@@ -1195,6 +1243,17 @@ impl ChainDriver {
                     .finish()
             }
         }
+    }
+}
+
+/// Which way to step on one axis: towards the waypoint while there is any
+/// distance left on it, and only then the coin flip `r`.
+fn toward(neg: &'static str, pos: &'static str, delta: i32, r: u64) -> &'static str {
+    match (delta.signum(), r) {
+        (-1, _) => neg,
+        (1, _) => pos,
+        (_, 0) => neg,
+        _ => pos,
     }
 }
 

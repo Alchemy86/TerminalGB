@@ -220,13 +220,70 @@ figure — the map-settle change measured below takes it to 90.8% — and link 0
 was re-run at 600 attempts for the showcase film, which is why it carries the
 larger denominator.
 
-**Not one of these is at the bar**, including the 100%s — see §7 — and three
-are a long way from it. Multiplied out, the chain end to end at these rates is
-about **6%**: link 05 alone (41.7%) and link 11 (44.2%) between them cost an
-order of magnitude, and that is the compounding argument made concrete rather
-than asserted. It is also why the chain is played link by link from a carried
-state rather than end to end — which is exactly what the save-state chain is
-for.
+**Links 01-04 are superseded by the certified table below**; the rest of this
+one is what the chain did while it was being built. Nothing here is at the bar
+— see §7 — and three of the remaining rows are a long way from it. Multiplied
+out, the chain end to end at these rates is about **6%**: link 05 alone (41.7%)
+and link 11 (44.2%) between them cost an order of magnitude, and that is the
+compounding argument made concrete rather than asserted. It is also why the
+chain is played link by link from a carried state rather than end to end —
+which is exactly what the save-state chain is for.
+
+### Certified: links 01-04
+
+The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
+
+| # | link | attempts | reached | rate, 95% CI | distinct trajectories | entry pool | median decisions |
+|---|---|---|---|---|---|---|---|
+| 01 | new-game | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 1 (cold cartridge) | 18 |
+| 02 | leave-the-house | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 8 |
+| 03 | oak-takes-you-to-the-lab | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 14 |
+| 04 | take-a-starter | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 26 |
+
+Measured 2026-08-16 on the captain's Pokémon Blue, 12 workers, load average
+13-18 with other work on the box. Wall clock 275 s, 84 s, 198 s and 395 s.
+Zero failures in 3,000 bounds each link's failure rate at about **0.10%** by
+the rule of three, which is the bar and not better than it.
+
+**Every attempt varies all three independence axes**, and the run says so
+itself rather than being trusted: a held-out entry state (each link's pool is
+3,000 *different* winning exits of the link before it, so no two attempts even
+start from the same world), the driver seed, and the idle-frame phase. 3,000
+distinct trajectories in 3,000 attempts, and `report_independence` exits
+non-zero on a single collision. Distinct final states: 2,959 / 2,993 / 3,000 /
+3,000 — link 01's 41 collisions are two cold boots that made the same choices
+converging on the same bytes, which is a weaker statement than the trajectory
+and is why the trajectory is what the gate counts.
+
+**The earlier certification of 01-03 does not carry over and was re-run.** Two
+of the fixes below are in shared driver code, so every link's trajectories
+changed; certifying 04 on a driver the earlier links had not been measured
+against would have been a claim about neither. The four rates above are all on
+one binary, and a rebuild from the source as committed reproduces 200 of 200
+certified trajectories byte for byte. Determinism under fan-out is checked, not
+assumed: `verify` plays five seeds serially and across five workers and requires
+identical final-state hashes and frame counts, and they are identical.
+
+**And the same driver change was checked against the links that are not
+certified**, because a fix that quietly cost link 08 its route would be a poor
+trade. 120 attempts each, carried forward from the certified link-04 exits:
+
+| link | before (recon) | after |
+|---|---|---|
+| 05 the-rival-battle | 41.7% (600) | **67.5%** (120) |
+| 06 cross-route-1 | 99.8% (600) | **100.0%** (120) |
+| 07 collect-oaks-parcel | 99.5% (200) | **100.0%** (120) |
+| 08 carry-it-back-to-pallet | 90.8% post-fix (120) | **100.0%** (120) |
+| 09 receive-the-pokedex | 98.0% (200) | **100.0%** (120) |
+| 10 back-to-viridian | 100.0% (300) | **100.0%** (120) |
+
+Nothing regressed, and **link 05's jump is not a repair and must not be read as
+one** — it is a different measurement: a 3,000-state entry pool where the recon
+had a handful, 120 attempts where it had 600, and the same coin flip underneath.
+Link 05 is still the next link to certify and still nowhere near the bar. Links
+11-14 were not re-measured; the slow one (11, a median of 878 decisions) costs
+more than the check is worth at this point, and that is stated rather than
+quietly skipped.
 
 ### The adjustment log
 
@@ -238,6 +295,9 @@ The interesting record is what changed and what it bought.
 | 13 | party fainting in the forest | insert link 11, threshold read from `BugCatcherData` | unsolvable → solved |
 | 05, 12 | wild encounters fought in the forest at ~15 decisions each for almost no experience | run from wild in the forest, fight on the routes | budget exhausted → crossed |
 | all | seeds 0/1 and 2/3 byte-identical | mix the seed before forcing its low bit | half the corpus duplicated → 390 distinct end states of 400 |
+| 04 | **53 of 600 failures, every one of them frozen on the same tile** — `(5,5)` in Oak's laboratory, the game still drawing and no button doing anything. §8.10. | route to the table along row 4 from `(5,4)`, not via `(4,4)` behind the rival | **91.2% → 99.7%** (600 attempts) |
+| all | the two survivors were the same trap reached through a *random wander*: one step up put a Poké Ball sprite between the player and the table | a wander steps **towards** the waypoint, so it cannot leave the rectangle the `goto` was going to cross | **99.7% → 100.0%** (600), then 3,000/3,000 |
+| all | the stuck-recovery sidestep chose its direction by coin flip whichever way the waypoint lay | go the way the waypoint is when that axis is not already level | half the escapes stopped walking back into the hazard |
 
 **Link 05 has no adjustment, and that is the finding.** All 350 failures are
 the party being wiped at (4,6)/(5,6) — the rival battle tile. At level 5 both
@@ -447,12 +507,15 @@ several of these links sit at it is 49%.
 **A 400-attempt run cannot demonstrate 99.9%.** By the rule of three, zero
 failures in N bounds the failure rate at about 3/N, so 400 clean attempts
 support only ≤0.75% — nine times worse than the bar. Roughly **3,000 clean cold
-attempts** are needed to support a 99.9% claim, and no link here has had them.
-Every rate on this page is written with its N and its interval for that reason,
-and `corpus` prints the bound itself so it cannot be quoted without one.
+attempts** are needed to support a 99.9% claim. Every rate on this page is
+written with its N and its interval for that reason, and `corpus` prints the
+bound itself so it cannot be quoted without one.
 
-**Links 04, 05, 09, 11 and 13 are below the bar and are therefore unfinished.**
-Their failure modes are §8.
+**Links 01, 02, 03 and 04 have had them** — 3,000 attempts each, zero failures,
+3,000 distinct trajectories each, tabulated in §5. **Links 05 to 14 have not**,
+and five of them are visibly a long way from the bar; their failure modes are
+§8. The chain is finished when all fourteen are certified and not before, and
+the end-to-end figure stays what the weakest link makes it.
 
 ---
 
@@ -552,6 +615,60 @@ Fighting the forest's own wild Pokémon makes it worse, not better: Caterpie,
 Weedle and their cocoons give almost no experience and cost about fifteen
 decisions to beat against four to run from. Measured — fighting them spent the
 entire budget without leaving the maze.
+
+### 8.10 Link 04 was walking the game into a soft-lock, and the cluster said so
+
+Every one of link 04's 53 failures in 600 ended on **the same tile** — `(5,5)`
+in Oak's laboratory — and one of them, classified `Stuck` rather than
+out-of-calls, printed the diagnosis itself: *"the last 24 moves covered 4
+tile(s): 0x28(5,3) 0x28(5,4) 0x28(5,5) 0x28(5,6)"*. A hundred and eighty
+decisions of walking with nothing moving.
+
+**It was not the solver being stuck; the cartridge was.** `Gameboy::debug_pc`
+put the CPU in `DelayFrame`'s wait loop — which is where a Game Boy spends most
+of every frame, so that on its own means nothing — but the play-time counter
+advanced at exactly the healthy rate, so the game was alive and simply refusing
+every button. Copying the whole of work RAM and high RAM from a healthy machine
+standing on the same tile did not unfreeze it. Copying **one byte** did:
+`$C434`, which is `wTileMap` row 7 column 8, which is
+`GetTileAndCoordsInFrontOfPlayer`'s `lda_coord 8, 7` — the tile the game reads
+when the player faces up. A healthy machine has `$11`, floor. This one had
+`$A0`.
+
+`$A0` was stamped into every fourth byte of the tilemap for twelve rows, and
+the four bytes at `$C3A0` were a well-formed OAM quad. That is Pokémon Blue's
+own `PrepareOAMData` writing an eleventh sprite past the end of a forty-entry
+buffer whose end **is** `wTileMap`, and then clearing "unused" OAM from there to
+the end of the next page. The full mechanism, with the pokered citations and the
+reason Oak's Lab runs one sprite under the limit, is
+[`docs/gen1/sharp-edges.md`](../gen1/sharp-edges.md#standing-in-the-wrong-two-rows-of-oaks-laboratory-locks-the-game-up-for-good).
+Both picture engines produce it identically, and nothing outside the ROM writes
+OAM-shaped data into work RAM, so it is the cartridge and not us.
+
+**How the solver got there is the part that was ours.** The leg's first waypoint
+was `(4,4)`, and `(4,3)` is the rival — a solid sprite. So the first press of
+`goto (4,4)` from `(5,3)` only turned the player, `GoTo` did what it is designed
+to do and committed to a run along the other axis, and that run went south
+through row 5 into row 6. Row 6 is where
+`OaksLabPlayerDontGoAwayScript` fires, and rows 5-6 are where the sprite count
+tips over. The waypoint was one tile from the hazard and pointed at it.
+
+`(5,4)` is the turning point of the path that actually exists — one step down
+from where Oak's escort leaves you, then straight along row 4 to the balls — and
+with it nothing detours and nothing goes south. **91.2% → 99.7%.**
+
+**The last two failures were the same trap reached a different way, and they
+falsified a claim this page used to make.** The diversity wander is documented
+here as something that "changes the trajectory and cannot change the route".
+It can: `GoTo` is greedy on the larger remaining delta, so where it starts from
+decides which obstacle it meets. One wandered step from `(5,4)` up to `(5,3)`
+put a Poké Ball sprite between the player and the table, the detour ran south,
+and the attempt was over. A wander now steps *towards* the waypoint — it picks
+an axis that still has distance on it and walks part of the way — so it varies
+which axis is walked first and how far, and cannot leave the rectangle the
+`goto` was going to cross anyway. **99.7% → 100.0%,** with 3,000 distinct
+trajectories in 3,000 attempts, so the diversity the wander was there for
+survived.
 
 ---
 
@@ -1029,8 +1146,8 @@ not exist:
   pool of entry states and the chain keeps every winning seed's exit state, so
   "how far off nominal can a link start and still succeed" is one command away.
   It has not been run.
-- **No link has 3,000 cold attempts**, so no link's rate is certified against
-  the bar.
+- **Ten of the fourteen links have no 3,000-attempt run**, so their rates are
+  not certified against the bar. Links 01-04 are (§5); 05 onwards are the work.
 
 ## 14. Related pages
 

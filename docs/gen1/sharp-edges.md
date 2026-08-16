@@ -107,6 +107,46 @@ character costs a step and moves nothing, so blind alternation drifts.
 **`wCurMap` is populated by `TryLoadSaveFile` at the top of the main menu**, long before
 CONTINUE is chosen. It cannot mean "we are in the game".
 
+### Standing in the wrong two rows of Oak's laboratory locks the game up for good
+
+Between Oak's "choose one!" speech and taking a starter, walking down to rows 5 or 6 of the
+laboratory can **soft-lock the cartridge**: the picture keeps being drawn, the play-time counter
+keeps ticking, and no button does anything ever again. Measured on the captain's Pokémon Blue,
+53 of 600 attempts, every one of them frozen at `(5,5)`.
+
+It is the game's own OAM buffer overflowing into the tilemap, and pokered says so in its own
+source:
+
+- `wShadowOAM` is 40 entries — 160 bytes — and **`wShadowOAMEnd` is `wTileMap`**
+  (`ram/wram.asm`; the same adjacency the World Trade Centre work already records).
+- `PrepareOAMData` (`engine/gfx/sprite_oam.asm`) walks all sixteen sprite slots and writes four
+  OAM entries for each one that survives `CheckSpriteAvailability`, tracking the write position
+  in the 8-bit `hOAMBufferOffset`. Nothing bounds it at 40.
+- Its clear-unused-OAM loop then walks from that offset in steps of four and stops **only on
+  `cp l / ret z` against `LOW(wShadowOAMEnd)`**. Start past `$A0` and `l` never equals `$A0`
+  again until the next page, so it stamps `$A0` — `SCREEN_HEIGHT_PX + OAM_Y_OFS`, the
+  hide-a-sprite Y — into every fourth byte of `wTileMap` for 256 bytes.
+- `GetTileAndCoordsInFrontOfPlayer` reads the tile the player is about to walk into straight out
+  of `wTileMap` (`lda_coord 8, 7` facing up is `$C434`). `$A0` is not walkable, in any
+  direction, and the player is now standing in a box.
+
+Oak's Lab runs one sprite under the limit. Eleven of its twelve object slots plus the player is
+44 entries; at rows 3-4 the camera culls enough of the lower half to leave ten, and at rows 5-6
+it does not — and whether it does depends on where the **girl NPC has paced to**, which is why
+the same tile is safe most of the time and fatal some of it.
+
+Proof that it is the cartridge and not the emulator: the four bytes at `$C3A0` in a frozen
+machine are a well-formed OAM quad — Y, X, tile, attributes — and the `$A0`s run away from it on
+a four-byte lattice to exactly `$C4A0`. Nothing outside the ROM writes OAM-shaped data into work
+RAM. Both picture engines produce it identically.
+
+**So keep the player in rows 3-4 until the starter is taken**, which is also the shortest route:
+Oak's escort ends at `(5,3)`, one step down is `(5,4)`, and the three Poké Balls are reached
+along row 4. Aiming at `(4,4)` instead puts the rival's sprite in the way, and the detour that
+follows goes south. `Gameboy::debug_ime` and `Gameboy::peek` are enough to tell this hang from
+the other kind — a game waiting in `DelayFrame` with interrupts off reads `IME` low with the
+VBlank bit set in both `IE` and `IF`, and this one does not.
+
 ---
 
 ## Reading the screen

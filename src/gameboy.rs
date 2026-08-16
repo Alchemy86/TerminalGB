@@ -888,6 +888,19 @@ impl Gameboy {
         self.cpu.registers.pc
     }
 
+    /// The interrupt master enable.
+    ///
+    /// **A game that stops responding while its picture is still being drawn is
+    /// almost always this.** Gen 1's `DelayFrame` sets `hVBlankOccurred` and
+    /// spins until the VBlank handler clears it, so with `IME` low and `IE`/`IF`
+    /// both carrying the VBlank bit the loop can never end — the exact hang
+    /// `docs/agent/pewter-chain.md` records at Oak's table. `IE`, `IF` and `LY`
+    /// are all readable through [`Gameboy::peek`]; this is the one bit of the
+    /// picture that was not, which is why it is here.
+    pub fn debug_ime(&self) -> bool {
+        self.cpu.ime
+    }
+
     /// Which of the two rendering engines the PPU is running — see
     /// [`crate::gpu::RenderMode`]. A frontend shows this so a player can tell
     /// which machine they are looking at; it is not a picture-quality setting.
