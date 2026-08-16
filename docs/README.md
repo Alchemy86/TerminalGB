@@ -147,6 +147,7 @@ and that had quietly happened to more than half of this directory.
 | [as an agent environment](agent-environment.md) | determinism across architectures, headless throughput, save states as episode resets, and how an agent will cheat your score |
 | [example: MCP transcript](agent/examples/mcp-transcript.md) | every tool, request and reply, captured from the real server |
 | [example: agent snapshots](agent/examples/agent-snapshots.md) | what a driver is actually handed, captured from a real run |
+| [the Pewter chain](agent/pewter-chain.md) | fourteen scenarios from a cold cartridge to Pewter City, goals read out of the cartridge, the corpus they produced — and the link that scored 100% on the wrong task |
 | [the swarm view](swarm-view.md) | twenty-four emulators from one save state drawn as dots on a map — the null-model baseline a trained agent has to beat, and an object lesson in what the rest of this tooling adds up to |
 | [shiny hunting](shiny-hunt.md) | N emulators hunting one DV pattern in parallel, and the decorrelation problem that makes it hard |
 

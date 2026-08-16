@@ -71,6 +71,30 @@ pub struct RunResult {
     /// [`RunResult::capture`] exists — and it is the same bytes
     /// [`Recording::final_state`] is the hash of.
     pub final_state_bytes: Vec<u8>,
+    /// Where the player was on **every emulated frame**, when the run was
+    /// asked to track it.
+    ///
+    /// Sampled per frame rather than per decision on purpose: a decision is
+    /// tens of frames apart and a film built from one point per decision is a
+    /// slideshow of teleports, while a heat map built from one is a scatter of
+    /// waypoints rather than a picture of where the time went. Five bus reads
+    /// a frame, and only when [`ScenarioRun::tracking`] asked for it.
+    pub path: Vec<PathPoint>,
+}
+
+/// One frame of where the player was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathPoint {
+    pub frame: u32,
+    pub map: u8,
+    pub x: u8,
+    pub y: u8,
+    /// 0 down, 4 up, 8 left, 12 right — the game's own encoding.
+    pub facing: u8,
+    /// Non-zero while a step animation is in progress, which is what tells a
+    /// film that the character is walking rather than standing still.
+    pub walking: u8,
+    pub in_battle: u8,
 }
 
 impl RunResult {
@@ -167,6 +191,7 @@ pub struct ScenarioRun {
     /// Written by every run that asked for guidance; merged into whatever was
     /// there before.
     guidance_file: Option<PathBuf>,
+    track: bool,
 }
 
 impl ScenarioRun {
@@ -219,7 +244,14 @@ impl ScenarioRun {
             capture_failures: true,
             pace_while_thinking: false,
             guidance_file,
+            track: false,
         })
+    }
+
+    /// Record the player's position on every frame. See [`RunResult::path`].
+    pub fn tracking(mut self, on: bool) -> Self {
+        self.track = on;
+        self
     }
 
     pub fn quiet(mut self) -> Self {
@@ -297,6 +329,7 @@ impl ScenarioRun {
         let mut prev: Option<Progress> = None;
         let mut next_frame = Instant::now() + FRAME_TIME;
         let mut guided = 0u64;
+        let mut path: Vec<PathPoint> = Vec::new();
 
         // **Brief before the first frame, not on the first map change.** The
         // agent's opening decision is taken within a handful of frames, and a
@@ -323,6 +356,9 @@ impl ScenarioRun {
         let ending = loop {
             self.gb.frame();
             frames += 1;
+            if self.track {
+                path.push(self.point(frames as u32));
+            }
             if self.pace_while_thinking && self.thinking() {
                 let now = Instant::now();
                 if now < next_frame {
@@ -494,7 +530,27 @@ impl ScenarioRun {
             wall_ms,
             capture,
             final_state_bytes,
+            path,
         }
+    }
+
+    /// Five bus reads. `wSpritePlayerStateData1FacingDirection` is the player
+    /// sprite's own facing byte and `wWalkCounter` is non-zero for the eight
+    /// frames of a step, which is how a film knows the difference between
+    /// walking and turning on the spot.
+    fn point(&mut self, frame: u32) -> PathPoint {
+        self.gb
+            .with_machine(Capability::OBSERVE | Capability::READ_MEMORY, |m| {
+                PathPoint {
+                    frame,
+                    map: m.peek(0xD35E).unwrap_or(0),
+                    y: m.peek(0xD361).unwrap_or(0),
+                    x: m.peek(0xD362).unwrap_or(0),
+                    facing: m.peek(0xC109).unwrap_or(0),
+                    walking: m.peek(0xCFC5).unwrap_or(0),
+                    in_battle: m.peek(0xD057).unwrap_or(0),
+                }
+            })
     }
 
     /// Replay a recording into this machine and say whether it reproduced.
@@ -568,6 +624,7 @@ impl ScenarioRun {
             wall_ms: t.elapsed().as_millis(),
             capture: None,
             final_state_bytes: Vec::new(),
+            path: Vec::new(),
         }
     }
 

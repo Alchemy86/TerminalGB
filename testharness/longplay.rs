@@ -905,6 +905,7 @@ fn main() {
             addr: tr::PLAYER_MONEY,
             len: 1,
             big_endian: false,
+            mask: 0,
         }]);
         let mut r = make_runner(&dir, walker(), cfg);
         World {

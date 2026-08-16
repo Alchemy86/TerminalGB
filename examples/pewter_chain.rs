@@ -669,7 +669,15 @@ impl ChainDriver {
         ChainDriver {
             route: route_for(scenario, seed),
             on_route: on_route(scenario),
-            rng: seed | 1,
+            // **Not `seed | 1`.** That is the idiom `RandomDriver` uses to
+            // avoid a zero state, and it maps every even seed onto its odd
+            // neighbour — so half the corpus is a duplicate of the other half.
+            // Measured: seeds 0 and 1 produced byte-identical recordings, as
+            // did 2 and 3. Mix first, then force the low bit.
+            rng: seed
+                .wrapping_add(0x9E37_79B9_7F4A_7C15)
+                .wrapping_mul(0xBF58_476D_1CE4_E5B9)
+                | 1,
             idx: 0,
             completed: false,
             stage: HashMap::new(),
@@ -1173,9 +1181,16 @@ impl Driver for ChainDriver {
         // TRACE=1` is how every finding in `docs/agent/pewter-chain.md` was
         // arrived at.
         if std::env::var_os("GB_CHAIN_TRACE").is_some() {
+            let text = s
+                .text
+                .replace('\n', " | ")
+                .chars()
+                .take(220)
+                .collect::<String>();
+            let short = reply.chars().take(110).collect::<String>();
             eprintln!(
                 "  [{:3}] map 0x{:02X} ({:2},{:2}) stage {} idx {} kind {:8} lv{} \
-                 hp{}/{} :: {}",
+                 hp{}/{} :: [{text}] {short}",
                 self.calls,
                 s.map,
                 s.x,
@@ -1186,15 +1201,6 @@ impl Driver for ChainDriver {
                 s.lead_level,
                 s.lead_hp,
                 s.lead_max_hp,
-                format!(
-                    "[{}] {}",
-                    s.text
-                        .replace('\n', " | ")
-                        .chars()
-                        .take(220)
-                        .collect::<String>(),
-                    reply.chars().take(110).collect::<String>()
-                )
             );
         }
         self.pending = Some(reply);
@@ -1234,8 +1240,18 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       Play the whole chain, carrying each link's finish forward as the next
       link's start. Writes states/NN.gbss and one recording per attempt.
 
-  corpus --rom R --scenario S --start FILE --runs N [--out DIR] [--seed0 N]
-      Many divergent attempts at one link. Successes and failures both kept.
+  corpus --rom R --scenario S --start FILE --runs N [options]
+      Many divergent attempts at one link, fanned out across threads.
+      Successes and failures are both kept.
+      --seed0 N     first seed (default 0)
+      --workers N   default: cores - 4, because other things share this box
+      --primitive   one button per decision, which is the shape a learner needs
+      --start-dir D a pool of entry states; a seed takes `seed % pool`
+      --paths       also write where the player was, per frame, per run
+
+  verify --rom R --scenario S [--start FILE] [--runs N] [--primitive]
+      Play the same seeds serially and in parallel and require identical
+      final states. Determinism outranks everything else in flight.
 ";
 
 #[derive(Default)]
@@ -1251,6 +1267,10 @@ struct Args {
     from: usize,
     to: usize,
     quiet: bool,
+    workers: u32,
+    primitive: bool,
+    paths: bool,
+    start_dir: Option<PathBuf>,
 }
 
 fn parse(args: &[String]) -> Args {
@@ -1259,7 +1279,8 @@ fn parse(args: &[String]) -> Args {
         seeds: 1,
         runs: 1,
         from: 1,
-        to: 12,
+        to: 99,
+        workers: default_workers(),
         ..Default::default()
     };
     let mut i = 0;
@@ -1274,6 +1295,7 @@ fn parse(args: &[String]) -> Args {
             "--rom" => a.rom = Some(PathBuf::from(next(i))),
             "--scenario" => a.scenario = Some(PathBuf::from(next(i))),
             "--start" => a.start = Some(PathBuf::from(next(i))),
+            "--start-dir" => a.start_dir = Some(PathBuf::from(next(i))),
             "--out" => a.out = Some(PathBuf::from(next(i))),
             "--seed" => a.seed = next(i).parse().unwrap_or(1),
             "--seed0" => a.seed0 = next(i).parse().unwrap_or(0),
@@ -1281,8 +1303,19 @@ fn parse(args: &[String]) -> Args {
             "--seeds" => a.seeds = next(i).parse().unwrap_or(1).max(1),
             "--from" => a.from = next(i).parse().unwrap_or(1),
             "--to" => a.to = next(i).parse().unwrap_or(12),
+            "--workers" => a.workers = next(i).parse().unwrap_or(1).max(1),
             "--quiet" => {
                 a.quiet = true;
+                i += 1;
+                continue;
+            }
+            "--primitive" => {
+                a.primitive = true;
+                i += 1;
+                continue;
+            }
+            "--paths" => {
+                a.paths = true;
                 i += 1;
                 continue;
             }
@@ -1321,6 +1354,7 @@ struct Outcome {
     wall_ms: u128,
     state: Vec<u8>,
     recording: Recording,
+    path: Vec<terminalgb::scenario::run::PathPoint>,
 }
 
 fn play(
@@ -1330,6 +1364,8 @@ fn play(
     seed: u64,
     out: &Path,
     quiet: bool,
+    primitive: bool,
+    track: bool,
 ) -> Outcome {
     let s = Scenario::load(scenario_path).unwrap_or_else(|e| {
         eprintln!("{}: {e}", scenario_path.display());
@@ -1357,7 +1393,7 @@ fn play(
         ..Config::default()
     };
     gb.add_plugin(Box::new(AgentPlugin::new(
-        Box::new(ChainDriver::new(&s.name, seed)),
+        Box::new(ChainDriver::new(&s.name, seed).primitive(primitive)),
         cfg,
     )))
     .expect("attach the agent");
@@ -1367,7 +1403,8 @@ fn play(
             .unwrap_or_else(|e| {
                 eprintln!("{e}");
                 exit(1);
-            });
+            })
+            .tracking(track);
     if quiet {
         run = run.quiet().without_captures();
     }
@@ -1384,6 +1421,7 @@ fn play(
         wall_ms: r.wall_ms,
         state: r.final_state_bytes.clone(),
         recording: r.recording,
+        path: r.path,
     }
 }
 
@@ -1398,12 +1436,78 @@ fn main() {
         "solve" => cmd_solve(&a),
         "chain" => cmd_chain(&a),
         "corpus" => cmd_corpus(&a),
+        "verify" => cmd_verify(&a),
         "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
             eprintln!("unknown subcommand {other:?}\n\n{USAGE}");
             exit(2);
         }
     }
+}
+
+/// **Leave a couple of cores.** Other crews share this box, and past the core
+/// count extra workers only queue.
+fn default_workers() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() as u32).saturating_sub(4).max(1))
+        .unwrap_or(4)
+}
+
+/// The entry states an attempt may begin from: `--start-dir`'s `.gbss` files
+/// if given, else the single `--start`, else nothing (a cold cartridge).
+fn entry_pool(a: &Args) -> Vec<Option<Vec<u8>>> {
+    if let Some(d) = &a.start_dir {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d)
+            .unwrap_or_else(|e| {
+                eprintln!("cannot read {}: {e}", d.display());
+                exit(1);
+            })
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|x| x == "gbss").unwrap_or(false))
+            .collect();
+        v.sort();
+        if v.is_empty() {
+            eprintln!("no .gbss files in {}", d.display());
+            exit(1);
+        }
+        return v
+            .iter()
+            .map(|p| Some(std::fs::read(p).expect("entry state")))
+            .collect();
+    }
+    vec![a.start.as_ref().map(|p| {
+        std::fs::read(p).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", p.display());
+            exit(1);
+        })
+    })]
+}
+
+/// Where the player was, one row per **change**.
+///
+/// A row is written whenever any of map, position, facing, the walk counter or
+/// the battle flag moves, so a standing character costs one row and a walking
+/// one costs a row per frame — which is exactly the resolution a film needs and
+/// no more. `frame` is the emulated frame the row begins at.
+fn write_path(path: &Path, pts: &[terminalgb::scenario::run::PathPoint]) {
+    let mut out = String::from("frame,map,x,y,facing,walking,battle\n");
+    let mut last: Option<terminalgb::scenario::run::PathPoint> = None;
+    for p in pts {
+        let same = last.map(|l| {
+            (l.map, l.x, l.y, l.facing, l.walking, l.in_battle)
+                == (p.map, p.x, p.y, p.facing, p.walking, p.in_battle)
+        });
+        if same == Some(true) {
+            continue;
+        }
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{}\n",
+            p.frame, p.map, p.x, p.y, p.facing, p.walking, p.in_battle
+        ));
+        last = Some(*p);
+    }
+    let _ = std::fs::write(path, out);
 }
 
 fn need_rom(a: &Args) -> PathBuf {
@@ -1429,8 +1533,20 @@ fn cmd_solve(a: &Args) {
             exit(1);
         })
     });
-    let o = play(&rom, &sp, start, a.seed, &out, a.quiet);
+    let o = play(
+        &rom,
+        &sp,
+        start,
+        a.seed,
+        &out,
+        a.quiet,
+        a.primitive,
+        a.paths,
+    );
     report(&o, a.seed);
+    if a.paths {
+        write_path(&out.join(format!("path-{:05}.csv", a.seed)), &o.path);
+    }
     let _ = o.recording.save(&out.join(format!("run-{}.json", a.seed)));
     let _ = std::fs::write(out.join("final.gbss"), &o.state);
 }
@@ -1487,12 +1603,32 @@ fn cmd_chain(a: &Args) {
         let mut solved = None;
         for k in 0..a.seeds {
             let seed = 1 + k as u64;
-            let o = play(&rom, &sp, carried.clone(), seed, &dir, true);
+            let o = play(
+                &rom,
+                &sp,
+                carried.clone(),
+                seed,
+                &dir,
+                true,
+                a.primitive,
+                a.paths,
+            );
             report(&o, seed);
             let _ = o.recording.save(&dir.join(format!("run-{seed}.json")));
-            if o.goal && solved.is_none() {
-                solved = Some(o.state.clone());
-                let _ = std::fs::write(states.join(format!("{link:02}.gbss")), &o.state);
+            if o.goal {
+                // **Every winning seed's exit state is kept, not just the
+                // first.** A link's entry tolerance is the interesting
+                // question — how far off nominal can it start and still work?
+                // — and it cannot be asked at all from a single state.
+                let _ = std::fs::write(
+                    states.join(format!("{link:02}-s{seed}.gbss")),
+                    &o.state,
+                );
+                if solved.is_none() {
+                    solved = Some(o.state.clone());
+                    let _ =
+                        std::fs::write(states.join(format!("{link:02}.gbss")), &o.state);
+                }
             }
         }
         match solved {
@@ -1513,6 +1649,16 @@ fn cmd_chain(a: &Args) {
 }
 
 /// Many divergent attempts at one link, successes and failures both kept.
+///
+/// **Fanned out across threads, and determinism is not traded for it.** A run
+/// is a function of (start state, scenario, seed) and nothing else — the
+/// driver's randomness is a seeded xorshift, the emulator is deterministic, and
+/// no two workers share anything but the read-only cartridge bytes. So the
+/// same seed produces the same recording whatever the worker count, which
+/// `--verify-determinism` checks rather than assumes.
+///
+/// Each worker gets its own directory because the MBC writes a `.sav` beside
+/// the cartridge it was handed.
 fn cmd_corpus(a: &Args) {
     let rom = need_rom(a);
     let sp = a.scenario.clone().unwrap_or_else(|| {
@@ -1525,37 +1671,210 @@ fn cmd_corpus(a: &Args) {
         .clone()
         .unwrap_or_else(|| PathBuf::from("target/pewter-chain/corpus").join(&name));
     std::fs::create_dir_all(&out).expect("output directory");
-    let start = a.start.as_ref().map(|p| {
-        std::fs::read(p).unwrap_or_else(|e| {
-            eprintln!("cannot read {}: {e}", p.display());
-            exit(1);
-        })
-    });
-    let mut goals = 0u32;
-    let mut index = String::new();
-    for k in 0..a.runs {
-        let seed = a.seed0 + k as u64;
-        let o = play(&rom, &sp, start.clone(), seed, &out, true);
-        report(&o, seed);
-        if o.goal {
-            goals += 1;
-        }
-        let file = format!("run-{seed:04}.json");
-        let _ = o.recording.save(&out.join(&file));
-        index.push_str(&format!(
-            "{{\"seed\":{seed},\"file\":\"{file}\",\"goal\":{},\"ending\":\"{}\",\
-             \"frames\":{},\"decisions\":{},\"wall_ms\":{},\"map\":{},\"x\":{},\
-             \"y\":{}}}\n",
-            o.goal, o.ending, o.frames, o.decisions, o.wall_ms, o.map, o.x, o.y
-        ));
-    }
-    std::fs::write(out.join("index.ndjson"), &index).expect("write the index");
+    // A pool of entry states rather than one, when the caller has them. Every
+    // attempt takes `seed % pool.len()`, so which state a seed used is
+    // recoverable from the seed alone and the corpus stays reproducible.
+    let pool = entry_pool(a);
+    let workers = a.workers.max(1);
     println!(
-        "\n{goals} of {} attempts reached the goal ({:.1}%) — {}",
-        a.runs,
-        goals as f64 * 100.0 / a.runs as f64,
-        out.display()
+        "entry states: {}",
+        if pool.len() > 1 {
+            format!("{} of them, one per seed modulo the pool", pool.len())
+        } else {
+            "1".into()
+        }
     );
+    println!(
+        "{}: {} attempt(s) from seed {}, {workers} worker(s)",
+        name, a.runs, a.seed0
+    );
+    let t = std::time::Instant::now();
+    let next = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, String)>::new()));
+    let peak = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let live = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+    std::thread::scope(|sc| {
+        for w in 0..workers {
+            let (next, results, peak, live) =
+                (next.clone(), results.clone(), peak.clone(), live.clone());
+            let (rom, sp, out, pool) =
+                (rom.clone(), sp.clone(), out.clone(), pool.clone());
+            let runs = a.runs;
+            let seed0 = a.seed0;
+            let primitive = a.primitive;
+            let paths = a.paths;
+            sc.spawn(move || {
+                use std::sync::atomic::Ordering::Relaxed;
+                let dir = out.join(format!("w{w}"));
+                let n = live.fetch_add(1, Relaxed) + 1;
+                peak.fetch_max(n, Relaxed);
+                loop {
+                    let k = next.fetch_add(1, Relaxed);
+                    if k >= runs {
+                        break;
+                    }
+                    let seed = seed0 + k as u64;
+                    let entry = pool[(seed as usize) % pool.len()].clone();
+                    let o = play(&rom, &sp, entry, seed, &dir, true, primitive, paths);
+                    let file = format!("run-{seed:05}.json");
+                    let _ = o.recording.save(&out.join(&file));
+                    if paths {
+                        write_path(&out.join(format!("path-{seed:05}.csv")), &o.path);
+                    }
+                    let row = format!(
+                        "{{\"seed\":{seed},\"file\":\"{file}\",\"goal\":{},\
+                         \"ending\":\"{}\",\"frames\":{},\"decisions\":{},\
+                         \"wall_ms\":{},\"map\":{},\"x\":{},\"y\":{},\
+                         \"final_state\":\"{:016x}\"}}",
+                        o.goal,
+                        o.ending,
+                        o.frames,
+                        o.decisions,
+                        o.wall_ms,
+                        o.map,
+                        o.x,
+                        o.y,
+                        o.recording.final_state
+                    );
+                    results.lock().unwrap().push((seed, row));
+                }
+                live.fetch_sub(1, Relaxed);
+            });
+        }
+    });
+
+    let mut rows = results.lock().unwrap().clone();
+    rows.sort_by_key(|(s, _)| *s);
+    let goals = rows
+        .iter()
+        .filter(|(_, r)| r.contains("\"goal\":true"))
+        .count();
+    let index: String = rows.iter().map(|(_, r)| format!("{r}\n")).collect();
+    std::fs::write(out.join("index.ndjson"), &index).expect("write the index");
+
+    let secs = t.elapsed().as_millis() as f64 / 1000.0;
+    // The rule of three: no failures in N attempts bounds the failure rate at
+    // roughly 3/N, so a "100%" without an N beside it is not a measurement.
+    let bound = if goals as u32 == a.runs {
+        format!(
+            " — zero failures in {} bounds the failure rate at about {:.2}% \
+             (rule of three); {} attempts would be needed for a 99.9% claim",
+            a.runs,
+            300.0 / a.runs as f64,
+            3000
+        )
+    } else {
+        String::new()
+    };
+    println!(
+        "{goals} of {} reached the goal ({:.1}%){bound}",
+        a.runs,
+        goals as f64 * 100.0 / a.runs as f64
+    );
+    println!(
+        "{:.1} s wall, {:.2} episodes/second, peak concurrency {}",
+        secs,
+        a.runs as f64 / secs.max(0.001),
+        peak.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    println!("{}", out.join("index.ndjson").display());
+}
+
+/// Same seed, same answer, whatever the worker count.
+///
+/// **This is the property the whole corpus rests on**, so it is checked rather
+/// than assumed: the same three seeds are played once serially and once across
+/// the workers, and every final-state hash must agree.
+fn cmd_verify(a: &Args) {
+    let rom = need_rom(a);
+    let sp = a.scenario.clone().unwrap_or_else(|| {
+        eprintln!("--scenario is required");
+        exit(2);
+    });
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/pewter-chain/verify"));
+    let start = a
+        .start
+        .as_ref()
+        .map(|p| std::fs::read(p).expect("start state"));
+    let seeds: Vec<u64> = (0..a.runs.max(3) as u64).map(|k| a.seed0 + k).collect();
+
+    let serial: Vec<(u64, u64, u64)> = seeds
+        .iter()
+        .map(|&seed| {
+            let o = play(
+                &rom,
+                &sp,
+                start.clone(),
+                seed,
+                &out.join("s"),
+                true,
+                a.primitive,
+                false,
+            );
+            (seed, o.recording.final_state, o.frames)
+        })
+        .collect();
+
+    let par = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    std::thread::scope(|sc| {
+        for (i, &seed) in seeds.iter().enumerate() {
+            let (rom, sp, out, start, par) = (
+                rom.clone(),
+                sp.clone(),
+                out.clone(),
+                start.clone(),
+                par.clone(),
+            );
+            let primitive = a.primitive;
+            sc.spawn(move || {
+                let o = play(
+                    &rom,
+                    &sp,
+                    start,
+                    seed,
+                    &out.join(format!("p{i}")),
+                    true,
+                    primitive,
+                    false,
+                );
+                par.lock()
+                    .unwrap()
+                    .push((seed, o.recording.final_state, o.frames));
+            });
+        }
+    });
+    let mut par = par.lock().unwrap().clone();
+    par.sort_by_key(|r| r.0);
+
+    let mut bad = 0;
+    for (s, p) in serial.iter().zip(par.iter()) {
+        let ok = s == p;
+        if !ok {
+            bad += 1;
+        }
+        println!(
+            "seed {:5}  serial {:016x}/{:6} frames   parallel {:016x}/{:6}   {}",
+            s.0,
+            s.1,
+            s.2,
+            p.1,
+            p.2,
+            if ok { "same" } else { "DIFFERENT" }
+        );
+    }
+    if bad == 0 {
+        println!(
+            "\nDETERMINISTIC — {} seed(s) identical serially and in parallel",
+            seeds.len()
+        );
+    } else {
+        eprintln!("\n{bad} seed(s) DIFFER. Determinism is broken; nothing else matters.");
+        exit(1);
+    }
 }
 
 fn chain_files() -> Vec<String> {
