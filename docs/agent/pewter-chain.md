@@ -189,9 +189,49 @@ link's finish forward as the next link's start:
 | 14 | arrive in Pewter | 6/6 | 7 | 1,152 |
 
 **Six seeds cannot certify anything** and this table is not offered as a solve
-rate; it is what the chain did while it was being built. The per-link numbers
-that mean something are in the corpus below, and even those are two orders of
-magnitude short of the bar — see §7.
+rate; it is what the chain did while it was being built.
+
+### The corpus, per link
+
+Attempts fanned across eight workers, each from a pool of entry states taken
+from *different winning seeds* of the previous link — so a link is not measured
+against one arrival but against several. Every attempt, successful or not, is
+in `/home/aaron/pokemon-run/corpus/<link>/`.
+
+| # | link | reached | rate | median decisions | how the rest ended |
+|---|---|---|---|---|---|
+| 01 | new-game | 120/120 | 100.0% | 18 | — |
+| 02 | leave-the-house | 120/120 | 100.0% | 6 | — |
+| 03 | oak-takes-you-to-the-lab | 400/400 | 100.0% | 13 | — |
+| 04 | take-a-starter | 372/400 | 93.0% | 35 | out-of-calls ×28 |
+| 05 | the-rival-battle | 250/600 | **41.7%** | 46 | party wiped ×350 |
+| 06 | cross-route-1 | 400/400 | 100.0% | 49 | — |
+| 07 | collect-oaks-parcel | 199/200 | 99.5% | 10 | out-of-calls ×1 |
+| 08 | carry-it-back-to-pallet | 225/300 | 75.0% | 56 | timeout ×74 |
+| 09 | receive-the-pokedex | 196/200 | 98.0% | 22 | timeout ×3, out-of-calls ×1 |
+| 10 | back-to-viridian | 300/300 | 100.0% | 69 | — |
+
+**Not one of these is at the bar**, including the 100%s — see §7 — and two are
+a long way from it. Compounding over fourteen links at these rates puts an
+end-to-end run well under 30%.
+
+### The adjustment log
+
+The interesting record is what changed and what it bought.
+
+| link | diagnosis | change | before → after |
+|---|---|---|---|
+| 08 | 74 timeouts clustered on Viridian City row 28, x=27–32. The trace showed the mart exit reporting `(3,7)` — the *mart's* coordinate — with the map already reading Viridian City, so the first `goto` was aimed from where the player had been and walked past the one gap in row 27. | wait 24 frames on the first decision after a map change, so the observation has settled | **75.0% → 90.8%** (120 attempts) |
+| 13 | party fainting in the forest | insert link 11, threshold read from `BugCatcherData` | unsolvable → solved |
+| 05, 12 | wild encounters fought in the forest at ~15 decisions each for almost no experience | run from wild in the forest, fight on the routes | budget exhausted → crossed |
+| all | seeds 0/1 and 2/3 byte-identical | mix the seed before forcing its low bit | half the corpus duplicated → 390 distinct end states of 400 |
+
+**Link 05 has no adjustment, and that is the finding.** All 350 failures are
+the party being wiped at (4,6)/(5,6) — the rival battle tile. At level 5 both
+starters have a damaging move and a status move and neither type matters, so it
+is close to a coin flip *by the game's design*. It is not a routing bug, and
+more episodes will not move it: the repair, if there is one, is a precondition
+(a stronger party) that the game does not make available before this point.
 
 ### Throughput, and determinism under it
 

@@ -372,7 +372,7 @@ impl ScenarioRun {
             }
             if let Some(v) = &mut self.video {
                 let img = self.gb.image();
-                v.frame(&img, 160, 144, Instant::now());
+                v.frame(img, 160, 144, Instant::now());
             }
             if self.pace_while_thinking && self.thinking() {
                 let now = Instant::now();

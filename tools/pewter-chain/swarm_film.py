@@ -48,27 +48,83 @@ WORLD = {
     0x0D: (10, -144),    # Route 2          20x72
     0x02: (-10, -180),   # Pewter City      40x36
 }
-INDOOR_DOOR = {         # where an agent went in, so it can be drawn dimmed
-    0x28: (0x00, 12, 11),   # Oak's Lab          <- Pallet Town
-    0x25: (0x00, 5, 5),     # Red's house 1F     <- Pallet Town
-    0x26: (0x00, 5, 5),     # Red's house 2F
-    0x2A: (0x01, 29, 19),   # Viridian Mart      <- Viridian City
-    0x29: (0x01, 23, 25),   # Viridian PC        <- Viridian City
-    0x32: (0x0D, 3, 43),    # Forest south gate  <- Route 2
-    0x33: (0x0D, 3, 43),    # Viridian Forest
-    0x2F: (0x0D, 3, 11),    # Forest north gate  <- Route 2
+# **Interiors are laid out beside the door they belong to**, not scattered.
+# The placement is a lookup rather than a search, because the cartridge carries
+# the warp table: `warp_event 12,11, OAKS_LAB, 2` in
+# `data/maps/objects/PalletTown.asm` says exactly which door leads where, so a
+# panel can be put next to its own door and a reader can see that the
+# laboratory sits beside the laboratory's front step.
+#
+#   interior map id -> (outdoor map, door x, door y, which side of the door)
+INTERIOR = {
+    0x26: (0x00, 5, 5, "left"),    # Red's house 2F   (via 1F)
+    0x25: (0x00, 5, 5, "left"),    # Red's house 1F   <- Pallet Town
+    0x28: (0x00, 12, 11, "right"), # Oak's Lab        <- Pallet Town
+    0x2A: (0x01, 29, 19, "right"), # Viridian Mart    <- Viridian City
+    0x29: (0x01, 23, 25, "left"),  # Viridian PC      <- Viridian City
+    0x32: (0x0D, 3, 43, "left"),   # Forest south gate<- Route 2
+    0x33: (0x0D, 3, 43, "left"),   # Viridian Forest  (through the gate)
+    0x2F: (0x0D, 3, 11, "left"),   # Forest north gate<- Route 2
 }
+# Where a panel sits relative to its door, in tiles, and the gap it leaves.
+PANEL_GAP = 2 * TILE
+
 FACING = {0: "down", 4: "up", 8: "left", 12: "right"}
 # `wWalkCounter` counts 7 down to 0 across a 16 px step, so a frame is 2 px.
 STEP_PX = 2
 
 BG = (16, 18, 22)
 
+# **The world stays grey and the agents carry the colour.** That is what makes
+# a crowd readable without labels: the eye separates agent from world instantly
+# and the colour carries the meaning. A Game Boy frame is four shades already,
+# so nothing has to be desaturated to get there.
+#
+# The hue encodes **progress** — which of the fourteen links an agent is on —
+# so the frontier of the swarm is visible as a colour gradient rather than
+# having to be read off a table. Cold at the start, warm at the leading edge.
+#
+# **This is a declared exception to the categorical colour guard**, not a
+# silent one. That guard says no colour may appear that was not in the source
+# framebuffer, and it still applies **to the map layer**: the map art is
+# reproduced exactly. The agent overlay is deliberately outside it.
+LINK_HUE = [
+    (70, 110, 210), (70, 130, 215), (70, 150, 220), (70, 175, 215),
+    (70, 195, 195), (80, 205, 160), (110, 210, 120), (150, 215, 90),
+    (195, 210, 70), (225, 195, 65), (240, 165, 60), (245, 130, 60),
+    (250, 100, 70), (255, 80, 110),
+]
+
+
+def tint(sprite, rgb, Image):
+    """Recolour a four-shade sprite onto one hue, keeping its own shading and
+    its alpha. Nothing is invented: the luminance ramp is the sprite's."""
+    px = sprite.load()
+    out = Image.new("RGBA", sprite.size)
+    op = out.load()
+    for y in range(sprite.height):
+        for x in range(sprite.width):
+            r, g, b, al = px[x, y]
+            if al == 0:
+                op[x, y] = (0, 0, 0, 0)
+                continue
+            # 0 = the sprite's darkest ink, 1 = its lightest.
+            t = r / 255.0
+            op[x, y] = (
+                int(rgb[0] * (0.35 + 0.65 * t)),
+                int(rgb[1] * (0.35 + 0.65 * t)),
+                int(rgb[2] * (0.35 + 0.65 * t)),
+                al,
+            )
+    return out
+
 
 def load_tracks(d):
     out = {}
     for name in sorted(os.listdir(d)):
         if not (name.startswith("agent-") and name.endswith(".csv")):
+            continue
+        if name.endswith(".links.csv"):
             continue
         n = int(name[6:-4])
         with open(os.path.join(d, name)) as f:
@@ -80,23 +136,47 @@ def load_tracks(d):
     return out
 
 
-def world_pos(map_id, x, y, facing, walking):
-    """Pixel position on the stitched outdoor world, sub-tile during a step.
+def build_layout(sheets, maps_dir, Image):
+    """Outdoor maps at their connection offsets, interiors beside their doors.
 
-    An agent inside a building is drawn at the door it went in by, so it stays
-    on screen and its absence from the outdoors is legible rather than a
-    disappearance.
+    Returns `origin[map_id] = (x, y)` in world pixels, and the sheets it
+    loaded. Panels are placed left or right of their door and are never
+    allowed to overlap an outdoor map, which is what keeps the layout readable
+    rather than arbitrary.
     """
-    dim = False
-    if map_id in INDOOR_DOOR:
-        map_id, x, y = INDOOR_DOOR[map_id]
-        walking = 0
-        dim = True
-    if map_id not in WORLD:
+    origin = {m: (WORLD[m][0] * TILE, WORLD[m][1] * TILE) for m in sheets}
+    ox0 = min(x for x, _ in origin.values())
+    ox1 = max(origin[m][0] + sheets[m].width for m in sheets)
+    for m, (host, dx, dy, side) in INTERIOR.items():
+        if host not in origin:
+            continue
+        for name in os.listdir(maps_dir):
+            if name.startswith(f"{m:03d}-") and name.endswith(".png"):
+                sheets[m] = Image.open(os.path.join(maps_dir, name)).convert("RGB")
+                break
+        if m not in sheets:
+            continue
+        hx, hy = origin[host]
+        w, h = sheets[m].size
+        door_y = hy + dy * TILE
+        if side == "left":
+            x = ox0 - w - PANEL_GAP
+            ox0 = x
+        else:
+            x = ox1 + PANEL_GAP
+            ox1 = x + w
+        origin[m] = (x, door_y - h // 2)
+    return origin
+
+
+def world_pos(origin, map_id, x, y, facing, walking):
+    """Pixel position, sub-tile during a step. `None` if the map has no panel —
+    a battle, which genuinely has no map position at all."""
+    if map_id not in origin:
         return None
-    ox, oy = WORLD[map_id]
-    px = (ox + x) * TILE
-    py = (oy + y) * TILE
+    ox, oy = origin[map_id]
+    px = ox + x * TILE
+    py = oy + y * TILE
     if walking:
         # The coordinate updates at the *start* of a step, so a walking agent
         # is drawn behind its coordinate by however much of the step is left.
@@ -105,7 +185,31 @@ def world_pos(map_id, x, y, facing, walking):
                   "left": (back, 0), "right": (-back, 0)}[FACING.get(facing, "down")]
         px += dx
         py += dy
-    return px, py, dim
+    return px, py, map_id not in WORLD
+
+
+def load_links(d):
+    """agent -> [(link, name, start, end, goal)], so the film can say which of
+    the fourteen an agent is on. Half the links happen on the same map, so a
+    position track alone cannot answer it."""
+    out = {}
+    for name in sorted(os.listdir(d)):
+        if not name.endswith(".links.csv"):
+            continue
+        n = int(name.split("-")[1].split(".")[0])
+        with open(os.path.join(d, name)) as f:
+            r = csv.reader(f)
+            next(r, None)
+            out[n] = [(int(a), b, int(c), int(e), g == "true")
+                      for a, b, c, e, g in (row for row in r if row)]
+    return out
+
+
+def link_at(spans, frame):
+    for link, name, start, end, goal in spans:
+        if start <= frame <= end:
+            return link, name, goal
+    return (spans[-1][0], spans[-1][1], spans[-1][4]) if spans else (0, "", False)
 
 
 def state_at(rows, frame):
@@ -131,6 +235,10 @@ def main():
     ap.add_argument("--seconds", type=float, default=70.0)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--width", type=int, default=960)
+    ap.add_argument("--cohort", type=int, default=16,
+                    help="how many agents carry a number. At 24 everybody can; "
+                         "at 500 numbers are noise, so a named cohort stays "
+                         "followable inside an anonymous crowd")
     ap.add_argument("--cover", type=float, default=0.6,
                     help="fraction of agents whose whole run must fit in the "
                          "film; the rest are simply still going when it ends")
@@ -140,6 +248,8 @@ def main():
     tracks = load_tracks(a.tracks)
     if not tracks:
         sys.exit(f"no agent-*.csv in {a.tracks}")
+    spans = load_links(a.tracks)
+    cohort = set(sorted(tracks)[: a.cohort])
     # **The timeline is not the longest agent.** A few agents stall and pace a
     # patch of grass for half a million frames, and letting them set the length
     # compresses the journey every other agent made into the first seconds.
@@ -164,28 +274,28 @@ def main():
             if name.startswith(f"{m:03d}-") and name.endswith(".png"):
                 sheets[m] = Image.open(os.path.join(a.maps, name)).convert("RGB")
                 break
-    xs = [WORLD[m][0] * TILE for m in sheets]
-    ys = [WORLD[m][1] * TILE for m in sheets]
-    xe = [WORLD[m][0] * TILE + sheets[m].width for m in sheets]
-    ye = [WORLD[m][1] * TILE + sheets[m].height for m in sheets]
-    X0, Y0, X1, Y1 = min(xs), min(ys), max(xe), max(ye)
+    origin = build_layout(sheets, a.maps, Image)
+    X0 = min(x for x, _ in origin.values())
+    Y0 = min(y for _, y in origin.values())
+    X1 = max(origin[m][0] + sheets[m].width for m in sheets)
+    Y1 = max(origin[m][1] + sheets[m].height for m in sheets)
     world = Image.new("RGB", (X1 - X0, Y1 - Y0), BG)
     for m, im in sheets.items():
-        world.paste(im, (WORLD[m][0] * TILE - X0, WORLD[m][1] * TILE - Y0))
-    print(f"world {world.width}x{world.height} px from {len(sheets)} sheets")
+        world.paste(im, (origin[m][0] - X0, origin[m][1] - Y0))
+    print(f"world {world.width}x{world.height} px from {len(sheets)} sheets "
+          f"({len(sheets) - len(WORLD)} interior panels beside their own doors)")
 
     # A real font, so the caption is legible at 1280 rather than six pixels
     # tall. Falls back to PIL's bitmap font when none is installed.
     def load_font(px):
+        from PIL import ImageFont
         for f in ("/usr/share/fonts/adwaita-mono-fonts/AdwaitaMono-Bold.ttf",
                   "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf"):
             if os.path.exists(f):
                 try:
-                    from PIL import ImageFont
                     return ImageFont.truetype(f, px)
                 except Exception:
                     pass
-        from PIL import ImageFont
         return ImageFont.load_default()
 
     sprites = {}
@@ -215,10 +325,12 @@ def main():
             if st is None:
                 continue
             _, m, x, y, facing, walking, battle = st
-            wp = world_pos(m, x, y, facing, walking)
+            wp = world_pos(origin, m, x, y, facing, walking)
             if wp is None:
                 continue
-            here.append((n, wp[0] - X0, wp[1] - Y0, wp[2], facing, battle))
+            lk, lname, _ = link_at(spans.get(n, []), gbf)
+            here.append((n, wp[0] - X0, wp[1] - Y0, wp[2], facing, battle, lk,
+                         lname))
         positions.append(here)
 
     # --- the camera --------------------------------------------------------
@@ -248,42 +360,89 @@ def main():
         prev = (cx, cy, need)
         cams.append(prev)
 
+    tinted = {}
+    HUD_W = max(210, OUT_W // 5)
+    VIEW_W = OUT_W - HUD_W
     for i, (here, (cx, cy, cw)) in enumerate(zip(positions, cams)):
-        ch = cw * OUT_H / OUT_W
+        ch = cw * OUT_H / VIEW_W
         x0 = int(round(cx - cw / 2))
         y0 = int(round(cy - ch / 2))
         crop = Image.new("RGB", (int(round(cw)), int(round(ch))), BG)
         crop.paste(world, (-x0, -y0))
-        scale = OUT_W / cw
-        img = crop.resize((OUT_W, OUT_H), Image.NEAREST)
+        scale = VIEW_W / cw
+        img = Image.new("RGB", (OUT_W, OUT_H), (10, 12, 16))
+        img.paste(crop.resize((VIEW_W, OUT_H), Image.NEAREST), (0, 0))
         d = ImageDraw.Draw(img)
         sw = max(8, int(16 * scale))
-        for (n, px, py, dim, facing, battle) in here:
+        for (n, px, py, indoors, facing, battle, lk, lname) in here:
             sx = int((px - x0) * scale)
             sy = int((py - y0) * scale)
-            if not (-sw <= sx <= OUT_W + sw and -sw <= sy <= OUT_H + sw):
+            if not (-sw <= sx <= VIEW_W + sw and -sw <= sy <= OUT_H + sw):
                 continue
-            sp = sprites.get(FACING.get(facing, "down"),
-                             next(iter(sprites.values())))
-            sp = sp.resize((sw, sw), Image.NEAREST)
-            if dim:
-                sp = sp.copy()
-                sp.putalpha(sp.getchannel("A").point(lambda v: v // 3))
+            key = (FACING.get(facing, "down"), min(max(lk, 1), 14), sw)
+            sp = tinted.get(key)
+            if sp is None:
+                base_sp = sprites.get(key[0], next(iter(sprites.values())))
+                sp = tint(base_sp, LINK_HUE[key[1] - 1], Image)
+                sp = sp.resize((sw, sw), Image.NEAREST)
+                tinted[key] = sp
             img.paste(sp, (sx - sw // 2, sy - sw // 2), sp)
-            c = tints[n % len(tints)]
             r = sw // 2 + 2
-            d.ellipse([sx - r, sy - r, sx + r, sy + r],
-                      outline=(255, 80, 80) if battle else c, width=2)
-            d.text((sx + r + 1, sy - r - 1), str(n), fill=c, font=num_font,
-                   stroke_width=1, stroke_fill=(0, 0, 0))
+            # **A ring for state, a number only for the cohort.** At two dozen
+            # agents everybody can carry a number; at several hundred they are
+            # noise, and the density *is* the visualisation. A named cohort
+            # keeps an individual followable inside a real crowd.
+            if battle:
+                d.ellipse([sx - r, sy - r, sx + r, sy + r],
+                          outline=(255, 80, 80), width=2)
+            elif n in cohort:
+                d.text((sx + r + 1, sy - r - 1), str(n),
+                       fill=(240, 244, 248), font=num_font,
+                       stroke_width=1, stroke_fill=(0, 0, 0))
+
+        # --- the HUD, in the space the crop does not use ---------------------
         gbf = max(1, i * step)
-        cap = (f"{len(here)}/{len(tracks)} agents   "
-               f"{gbf / FPS_GB / 60:5.1f} emulated minutes   "
-               f"{step * a.fps / FPS_GB:.0f}x   "
-               f"{int(cw / TILE)} tiles across")
-        bar = font.getbbox(cap)
-        d.rectangle([0, 0, OUT_W, bar[3] + 12], fill=(10, 12, 16))
-        d.text((10, 6), cap, fill=(235, 240, 245), font=font)
+        hx = VIEW_W + 10
+        d.rectangle([VIEW_W, 0, OUT_W, OUT_H], fill=(10, 12, 16))
+        d.text((hx, 8), "THE PEWTER CHAIN", fill=(240, 244, 248), font=font)
+        rows = [
+            f"{len(here)}/{len(tracks)} agents live",
+            f"{gbf / FPS_GB / 60:.1f} emulated minutes",
+            f"{step * a.fps / FPS_GB:.0f}x timelapse",
+            f"{int(cw / TILE)} tiles across",
+        ]
+        y = 8 + int(font.size * 1.8)
+        for t in rows:
+            d.text((hx, y), t, fill=(170, 185, 200), font=num_font)
+            y += int(num_font.size * 1.5)
+
+        # How many agents are on each link — the shape of the chain's attrition.
+        y += 6
+        d.text((hx, y), "link of 14", fill=(200, 215, 230), font=num_font)
+        y += int(num_font.size * 1.7)
+        per = collections.Counter(p[6] for p in here)
+        top = max(per.values()) if per else 1
+        bw = OUT_W - hx - 12
+        for lk in range(1, 15):
+            c = per.get(lk, 0)
+            d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
+                        fill=LINK_HUE[lk - 1] if c else (34, 40, 48))
+            d.text((hx + 2, y), f"{lk:2d}  {c}", fill=(225, 232, 240),
+                   font=num_font)
+            y += num_font.size + 3
+
+        # And where the tracked cohort actually is.
+        y += 8
+        d.text((hx, y), "tracked", fill=(200, 215, 230), font=num_font)
+        y += int(num_font.size * 1.7)
+        for (n, _, _, _, _, _, lk, lname) in sorted(here, key=lambda p: p[0]):
+            if n not in cohort or y > OUT_H - num_font.size:
+                continue
+            c = LINK_HUE[min(max(lk, 1), 14) - 1]
+            d.rectangle([hx, y + 2, hx + 6, y + num_font.size - 1], fill=c)
+            d.text((hx + 10, y), f"{n:3d}  L{lk:02d} {lname[3:][:14]}",
+                   fill=(215, 225, 235), font=num_font)
+            y += num_font.size + 2
         img.save(os.path.join(a.out, f"f{i:05d}.png"))
     print(f"wrote {frames_out} frames to {a.out}")
     print("ffmpeg -y -framerate %d -i %s/f%%05d.png -c:v libopenh264 -b:v 6M out.mp4"

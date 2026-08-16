@@ -1006,6 +1006,14 @@ impl ChainDriver {
             self.idx = 0;
             self.barren = 0;
             self.completed = false;
+            // **The first observation after a warp is stale.** The map id
+            // changes a frame before the coordinates do, so a plan built on
+            // this snapshot is aimed from where the player *was*. Measured on
+            // link 08: leaving the Viridian Mart reported (3,7) — the mart's
+            // own coordinate — with the map already reading Viridian City, and
+            // the goto that followed walked past the one gap in row 27 and
+            // could not get back, 74 times in 300.
+            return Plan::new("Let the new map settle.").wait(24).finish();
         }
         let table = if self.healing {
             &self.heal_route
