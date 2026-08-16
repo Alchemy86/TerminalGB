@@ -275,18 +275,24 @@ pub struct Volatile {
 }
 
 impl Volatile {
-    /// What `SwitchPlayerMon` clears — everything except the screens, which in
-    /// Gen 1 belong to the *side* rather than the Pokémon and survive a switch.
+    /// What sending out a Pokémon clears: **everything, screens included.**
     ///
-    /// Reflect and Light Screen surviving a switch is a Gen 1 behaviour, not an
-    /// oversight here; `wPlayerBattleStatus3`'s screen bits are cleared only by
-    /// the end of the battle or by Haze.
+    /// `SendOutMon` (and `EnemySendOut`, and `EnemySendOutFirstMon`) writes zero
+    /// to five consecutive bytes from `wPlayerStatsToDouble` /
+    /// `wEnemyStatsToDouble`, which is `$D060`-`$D064` and `$D065`-`$D069` —
+    /// **all three `BattleStatus` bytes**, so `HAS_REFLECT_UP` and
+    /// `HAS_LIGHT_SCREEN_UP` go with the rest.
+    ///
+    /// This used to preserve the two screens, on the stated belief that in
+    /// Gen 1 they belong to the *side*. They do not — that is a Generation 3
+    /// behaviour — and the note had a unit test underneath it pinning the wrong
+    /// value. Measured on the retail cartridge, driving a real voluntary switch:
+    /// `wPlayerBattleStatus3` reads `$04` with Reflect up and `$00` the moment
+    /// the reserve is out. See
+    /// [`docs/gen1/paper-claims.md`](../../../docs/gen1/paper-claims.md) §5.1
+    /// for the measurement and §6 for how the wrong note survived so long.
     pub fn on_switch_out(&mut self) {
-        let reflect = self.reflect;
-        let light_screen = self.light_screen;
         *self = Volatile::default();
-        self.reflect = reflect;
-        self.light_screen = light_screen;
     }
 
     /// Whether this Pokémon is committed to a move and cannot be given a fresh
@@ -887,10 +893,16 @@ mod tests {
         assert_eq!(m.raw_pp(), 0b1100_1111);
     }
 
-    /// Reflect and Light Screen belong to the side in Gen 1 and survive a
-    /// switch; everything else on the Pokémon does not.
+    /// **A switch clears the screens too.**
+    ///
+    /// `SendOutMon` zeroes `$D060`-`$D064`, which is all three `BattleStatus`
+    /// bytes; Reflect and Light Screen live in the third. This test used to
+    /// assert the opposite and was wrong — see
+    /// `docs/gen1/paper-claims.md` §6, and
+    /// `testharness/paperclaims.rs::a_screen_does_not_survive_a_switch`, which
+    /// checks the same thing against the cartridge instead of against us.
     #[test]
-    fn a_switch_clears_the_volatiles_but_not_the_screens() {
+    fn a_switch_clears_the_volatiles_including_the_screens() {
         let mut v = Volatile {
             confused: true,
             confusion_turns: 3,
@@ -900,11 +912,7 @@ mod tests {
             ..Volatile::default()
         };
         v.on_switch_out();
-        assert!(!v.confused);
-        assert_eq!(v.confusion_turns, 0);
-        assert_eq!(v.substitute_hp, None);
-        assert!(v.reflect);
-        assert!(v.light_screen);
+        assert_eq!(v, Volatile::default());
     }
 
     /// `CalcStats` at level 100 with perfect DVs and no stat experience.

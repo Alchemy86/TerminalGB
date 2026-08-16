@@ -33,7 +33,11 @@ Blue; the full table, method and provenance are
 [`docs/gen1/paper-claims.md`](gen1/paper-claims.md). **Most of them hold.** Two
 findings belong in this corpus.
 
-### The finding that matters: our own engine had Reflect and Light Screen backwards
+### The finding that matters: we went to check their claims and found our bug
+
+**On this point the paper was right and we were not.** `terminalgb-gen1-battle`
+had Reflect and Light Screen surviving a switch, which is a Generation 3
+behaviour, and the appendix under review had it correct.
 
 - **Symptom.** In a battle simulated by `terminalgb-gen1-battle`, a Pokémon that
   switches out leaves its Reflect or Light Screen standing for whatever comes
@@ -58,6 +62,20 @@ findings belong in this corpus.
   `$D065`-`$D069` — all three status bytes included. Measured on the cartridge:
   `wPlayerBattleStatus3` reads `$04` with Reflect up and `$00` immediately after
   a switch, with the opponent's copy at `$00` throughout.
+- **Blast radius, reasoned out before landing rather than asserted after.**
+  *The emulator:* nothing — `terminalgb-gen1-battle` is a dependency-free crate
+  modelling the battle *rules*, no emulation path calls it, every
+  `testharness/` baseline is byte-identical and the test-ROM harness still
+  reports 46/47. *The engine's own tests:* 136 of 136, one renamed and its
+  assertion tightened to `v == Volatile::default()`. *The published agent
+  evaluation* (`docs/gen1/battle-engine.md` §5, 720 episodes): **provably**
+  unaffected — `examples/gen1_battle_ai.rs::build` filters a team's moves on
+  `m.power > 0` in both the typed picks and the filler, and the two screens are
+  zero-power, so no evaluated episode could ever have had one up and none could
+  have reached the code that was wrong. That argument is what made the fix safe
+  to land immediately rather than hold: without it the honest move would have
+  been to re-measure 720 episodes first. *Callers:* one, `sim.rs`'s switch
+  handler; `Volatile` is unreachable from outside the crate.
 - **Carries into the tool.** A conformance candidate that is not about the
   Game Boy at all: **a comment that asserts a behaviour is a claim, and a claim
   with no test is a guess.** The wrong note was confident, cited-sounding and had
@@ -65,7 +83,8 @@ findings belong in this corpus.
   as `a_slave_that_disarms_mid_transfer_...` in `src/link.rs`, and the same
   lesson. When you check somebody else's claim, check it against your own code
   too; the row where they were right is worth more than the rows where they were
-  not.
+  not. And *keeping* a model you know is wrong is worse than shipping one you do
+  not: it has stopped being a claim about the cartridge at all.
 
 ### The measurement finding: a missed trapping move leaves its counter standing
 
@@ -100,8 +119,6 @@ Disagreements: the badly-poisoned residual is `max(1, floor(maxHP/16)) x N`, not
 **0 of 240** with the second; and the toxic counter has no bound in the code
 while a plain battle cannot push it past 6 (measured max 5, and 10 against a
 target that heals).
-
----
 
 ---
 

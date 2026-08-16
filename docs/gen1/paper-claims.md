@@ -10,11 +10,13 @@ OU from a list of asserted mechanics. Those assertions are testable on hardware
 behaviour, and this repository has a cartridge-driven Gen 1 battle harness, so we
 tested them.
 
-**The headline is that most of them are right**, including one detail —
+**The headline is that most of them are right.** That includes one detail —
 Reflect and Light Screen being per-Pokémon volatiles rather than field-wide
 screens — that a great many Pokémon references get wrong, and that **this
-project's own battle engine got wrong**. That last part is the most valuable
-thing on this page and it is written up in §6.
+project's own battle engine also had backwards**. We went looking at their
+claims and came back with our bug; on that point the paper was right and we were
+not. It is the most valuable result here, and §6 has it with the fix and its
+blast radius.
 
 The paper published its gap list, released its code and data, and is careful
 about what it is estimating. Nothing here is a takedown; it is a second
@@ -377,8 +379,10 @@ and counted separately (72 of them).
 
 ## 6. What we got wrong ourselves
 
-**This project's Gen 1 battle engine had the Reflect/Light Screen claim
-backwards, and the paper had it right.**
+**We set out to check their claims and found our own bug. On this point the
+paper was right and we were not.** That is the most valuable result on this
+page, and it is worth more than every row where the measurement went the other
+way.
 
 `Volatile::on_switch_out` in
 [`crates/terminalgb-gen1-battle/src/state.rs`](../../crates/terminalgb-gen1-battle/src/state.rs)
@@ -398,8 +402,38 @@ asked the cartridge about — which is exactly the failure this repository's
 standing rule about the cartridge being the oracle exists to catch, applied to a
 corner of the model the differential harness had never reached.
 
-The fix and its handling are recorded in
-[`docs/conformance-notes.md`](../conformance-notes.md).
+### The fix, and its blast radius
+
+`on_switch_out` now clears the whole struct, which is what `SendOutMon` does; the
+unit test that pinned the old behaviour is rewritten as
+`a_switch_clears_the_volatiles_including_the_screens`, and the cartridge-side
+check is `a_screen_does_not_survive_a_switch` in the gate.
+
+**What that touches, reasoned out rather than asserted:**
+
+* **The emulator: nothing.** `terminalgb-gen1-battle` is a dependency-free crate
+  that models the battle *rules*; no emulation path calls it. Every baseline in
+  `testharness/` is byte-identical, and the in-repo test-ROM harness still reports
+  46/47 rows matching.
+* **The engine's own tests: 136 of 136 still pass**, with one renamed and its
+  assertion tightened from four field checks to `v == Volatile::default()`.
+* **The published agent evaluation in
+  [`battle-engine.md`](battle-engine.md) §5: provably unaffected**, and this is
+  the part that made the fix safe to land rather than hold. `build` in
+  [`examples/gen1_battle_ai.rs`](../../examples/gen1_battle_ai.rs) selects a
+  team's four moves by filtering on `m.power > 0` — in both the typed picks and
+  the filler — so a zero-power move can never enter an evaluated team, and Reflect
+  and Light Screen are zero-power. No episode in the 720 that produced those
+  numbers could have had a screen up, so no episode could have reached the code
+  that was wrong. The numbers do not need re-measuring.
+* **Who else calls it**: one site, `sim.rs`'s switch handler. Nothing outside the
+  crate can reach `Volatile` at all.
+* **Anyone who had already built on the old behaviour** would have been building
+  on a game that does not exist; there is no compatibility to preserve.
+
+The alternative was to document the bug and keep shipping the wrong engine, which
+is worse: a model that is knowingly wrong is worse than one that is unknowingly
+wrong, because it has stopped being a claim about the cartridge.
 
 **The general lesson, and it is not about Pokémon**: a claim in a paper you are
 checking is also a claim about *you*. Two of the eleven rows above came out of

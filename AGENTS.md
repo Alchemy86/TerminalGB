@@ -4137,6 +4137,69 @@ that holds it to the retail cartridge, agents that play it, and an evaluation pr
   player's own cartridge, so they are run by hand — the same rule `tools/sameboy-oracle/` and
   `tools/bgb-interop/` follow. **No LLM has been measured through the seam**; it exists, is
   tested against a real child process, and has never had a model on the far end.
+
+## Checking somebody else's Gen 1 claims — and the corner of our own model it exposed
+
+**Full page: [`docs/gen1/paper-claims.md`](docs/gen1/paper-claims.md)** (the table, the
+provenance, the sample sizes); conformance record in `docs/conformance-notes.md`
+(2026-08-16). Instrument: `examples/gen1_paper_claims.rs` + its `.preset`; gate:
+`testharness/paperclaims.rs` (`POKE_ROM=… cargo test --release --features
+plugin-battle-control,plugin-trainer --test paperclaims`, skips exit 0 without a cartridge,
+**not in CI**). Both share `examples/support/paperclaims.rs` so the instrument and the gate
+cannot drift.
+
+- **THE ORACLE NEVER SWITCHES, AND THAT HID A REAL BUG FOR THE WHOLE LIFE OF THE ENGINE.**
+  `gen1_battle_sim` compares stats and damage inside one battle, so nothing checked which
+  volatiles survive a Pokémon leaving the field — and `Volatile::on_switch_out` **preserved
+  Reflect and Light Screen**, with a confident comment calling that a Gen 1 behaviour and a
+  unit test underneath pinning it. `SendOutMon`, `EnemySendOut` and `EnemySendOutFirstMon`
+  each zero five bytes from `wPlayerStatsToDouble` / `wEnemyStatsToDouble` — `$D060`-`$D064`
+  and `$D065`-`$D069`, **all three `BattleStatus` bytes** — so the screens go with everything
+  else. Measured on the cartridge through a real menu-driven switch. **The evaluation numbers
+  are unaffected and that was checked, not assumed**: `examples/gen1_battle_ai.rs::build`
+  only ever picks moves with `power > 0`, so a 0-power screen can never be in an evaluated
+  team.
+- **A comment that asserts a behaviour is a claim, and a claim with no test is a guess.**
+  Same shape as `src/link.rs`'s torn-byte note: prose, code and a green test all agreeing
+  with each other and disagreeing with the cartridge. When you check somebody else's claims,
+  check them against your own code too — the row where they were right was worth more than
+  the rows where they were not.
+- **KEY AN EPISODE ON THE FLAG, NOT THE COUNTER.** `MoveHitTest`'s `.moveMissed` does
+  `res USING_TRAPPING_MOVE` and leaves `wPlayerNumAttacksLeft` standing, and `TrappingEffect`
+  runs *before* the hit test — so a missed Wrap sets both and clears only the flag, and the
+  next Wrap's fresh roll reads as a decrement of the old one. The first version of this
+  harness recorded a counter going `4 -> 2` and would have published a duration the game has
+  never rolled. 73 of 371 trapping locks and 39 of 161 thrash locks end early like this
+  (thrash's are self-confusion damage, which clears the whole of `wPlayerBattleStatus1`).
+- **The measured rolls, so nobody re-derives them:** confusion **2-5** (97 episodes), Disable
+  **1-8** with the slot uniform over 1-4 (136), thrash **2-3** (161), Bide **2-3** (281),
+  partial trapping **1-4** in the source's 3/8-3/8-1/8-1/8 shape (371). Every countdown steps
+  down by one and the effect ends when it reaches zero, so "turns remaining after this one"
+  is `roll - 1` for confusion and Disable and `roll` for the three that share
+  `wPlayerNumAttacksLeft`. Badly-poisoned residual is `max(1, floor(maxHP/16)) * N` —
+  200/200 unclamped ticks — and the counter has **no bound in the code** while a plain battle
+  cannot push it past 6 (measured max 5; **10** against a target that heals every turn).
+- **The critical-hit rate is measured against an ABSOLUTE prediction, not a ratio.** For a
+  level 5 Electrode (base Speed 140, the highest in the game, which is what makes a few
+  hundred attacks enough) `CriticalHitTest` gives 70/256 without Focus Energy and 17/256
+  with; measured **0.2604** (250/960) and **0.0612** (36/588), both inside their 95 %
+  intervals. A ratio alone would pass a model with both halves wrong by the same factor.
+- **The crit measurement makes the OPPOSITION the attacker, deliberately.** A harness that
+  advances a battle by pressing A always takes move slot 1, so a player-side Focus Energy
+  could never be followed by an attack; a wild Pokémon picks one of its four slots uniformly
+  (`SelectEnemyMove`, `.chooseRandomMove`), so Focus Energy in slot 1 lands early and stays
+  up while the other three keep attacking. **One battle is worth ~40 attacks and no more** —
+  the player's Splash has the game's maximum 40 PP and the move menu then refuses it and the
+  battle stands still (20 attacks in 12,000 frames, 40 in 60,000, still 40 in 120,000), so
+  the sample comes from many battles.
+- **The Gen 1 battle menu is `FIGHT PKMN` over `ITEM RUN`** — PKMN is to the **right** of
+  FIGHT. Pressing Down opens the bag, whose `CANCEL` entry looks enough like a party list to
+  fool a needle search, which is exactly what the first version of the switch route did.
+- **`terminalgb::KeypadKey`, never `terminalgb_plugin_api::KeypadKey`, in a `harness = false`
+  test.** The second spelling can resolve to a different rlib and the error reads like a
+  broken `Gameboy::keydown` signature. Same family as the `BattlePlugin: Plugin` failure that
+  `touch src/lib.rs` clears (`docs/pitfalls/builds.md`).
+
 ## The Gen 1 memory atlas — AtlasGB owns the data, this repo produces the evidence
 
 **The atlas moved out.** It lives at **<https://github.com/Alchemy86/AtlasGB>** (MIT, its own

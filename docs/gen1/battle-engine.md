@@ -168,6 +168,26 @@ happens in a Gen 1 battle is not observable from outside without addresses this
 repository has not derived. Raising the checked fraction is the obvious next
 piece of work; §7 says how.
 
+### And here is what the oracle was NOT looking at
+
+The harness above compares stats and damage **inside one battle**, and it never
+switches. So the whole switch path — which volatiles survive a Pokémon leaving
+the field — had no check on it at all, and the model was wrong about it:
+`Volatile::on_switch_out` preserved Reflect and Light Screen, with a confident
+comment saying that was a Gen 1 behaviour, and a unit test underneath pinning it.
+It is not. `SendOutMon` zeroes all three `BattleStatus` bytes, and the cartridge
+says so the moment you ask it.
+
+That was found by checking somebody else's published claims and discovering they
+were right and we were not — [`paper-claims.md`](paper-claims.md) §6 —
+and it is fixed, with
+[`testharness/paperclaims.rs`](../../testharness/paperclaims.rs) now driving a
+real voluntary switch on the real cartridge to keep it fixed.
+
+**The evaluation numbers in §5 are unaffected**, and that is checked rather than
+assumed: `build` in `examples/gen1_battle_ai.rs` only ever picks moves with
+`power > 0`, so Reflect and Light Screen cannot appear in an evaluated team.
+
 ---
 
 ## 3. Bugs are behaviour
