@@ -621,7 +621,92 @@ heat-06-cross-route-1-map28.png    Oak's Lab
 
 ---
 
-## 11. Reproducing it
+## 11. The films
+
+Two, because they cannot be one: an overview has to compress tens of emulated
+minutes to be watchable, and a showcase has to *not* compress if the walk cycle
+is to be visible. Both come out of the same compositor
+([`tools/pewter-chain/swarm_film.py`](../../tools/pewter-chain/swarm_film.py)),
+and both are in `/home/aaron/pokemon-run/training/`.
+
+| film | what it is |
+|---|---|
+| `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The walk cycle is visible; the columns, the bottlenecks and the ledges are the picture. |
+| `pewter-chain-swarm-24agents.mp4` | the whole fourteen-link chain at 52×, 60 s, clearly labelled a timelapse. |
+
+Peter Whidden's *Training AI to Play Pokémon with Reinforcement Learning* is
+where the swarm view comes from and the credit is his. What differs here is a
+property of the substrate rather than a flourish:
+
+- **The map art is photographed from the running cartridge** (PixelGB), not
+  reconstructed from data files.
+- **The agents are the game's own player sprite**, read out of OAM and VRAM
+  with the hardware's own transparency rule (colour index 0), facing the way
+  the game says they face.
+- **The interiors are panels beside the door they belong to** — a lookup, not a
+  search, because the cartridge carries the warp table. `warp_event 12,11,
+  OAKS_LAB, 2` places Oak's Lab next to Oak's Lab's front step. That matters
+  because **half the chain does not happen on a map**: the starter, the rival,
+  the parcel and the Pokédex are all indoors, and a pure map view shows only
+  the walking between them.
+- **The whole thing is deterministic**, so the film regenerates from the seeds.
+
+### The colour is the heat map, and it is a declared exception
+
+The world stays grey — a Game Boy frame is four shades already, so nothing has
+to be desaturated to get there — and the agents carry the colour. The hue is
+**how trodden the tile under an agent's feet is**, weighted by frames, from the
+same visitation count `corpus_report.py` draws its heat maps from. So the
+frontier lights up on its own: an agent doing something genuinely new stands
+apart from the crowd milling in well-worn ground, and the colour *is* the
+count-based exploration signal an RL agent would be rewarded on.
+
+That is **a declared exception to the categorical colour guard**, not a silent
+one. The guard — no colour on screen that was not in the source framebuffer —
+still applies to the map layer, which is reproduced exactly. The agent overlay
+is deliberately outside it.
+
+### What made it smooth, which was not the compression
+
+Lowering the compression was the obvious answer and it was not the cause. The
+compositor positioned agents from `wXCoord`/`wYCoord`, **and those do not move
+during a walk** — measured from the tracks themselves, `wWalkCounter` runs
+7,6,5,4,3,2,1 with each value held two frames, and the coordinate updates on
+the frame it reaches 0. So an agent drawn from coordinates teleports tile to
+tile *by construction*, at any compression and any frame rate.
+
+Reading that sub-tile offset out of WRAM fixes it only at sampling rates fine
+enough to catch it. **Interpolating between consecutive recorded tiles fixes it
+at every rate** — it is the same four lines Peter Whidden's own map visualiser
+uses (`pwhiddy/pokerl-map-viz`, `visualizer_live.js`), it needs no re-simulation
+because the tracks are already on disk, and it is far less work. One refinement
+on top: the progress fraction runs over the **last fourteen frames before the
+arrival** rather than the whole gap between tiles, so an agent that stood still
+for a thousand frames and then took one step does exactly that instead of
+drifting the whole time.
+
+Measured over 120 agents at the showcase's own sampling rate, before and after:
+
+| | ≥12 px snaps | <4 px slides |
+|---|---:|---:|
+| positioned from the tile coordinate | 68% | 25% |
+| interpolated between recorded tiles | **0.0%** | **100.0%** |
+
+### The camera follows the majority, and says who it left behind
+
+A link is not left behind until nearly every agent clears it, so the mass is
+guaranteed to advance and the story is wherever the mass is — the certification
+gate *is* the camera track, with no hand-authored shot list. It fits the
+5th–95th percentile of agent positions rather than the full extent, so a
+handful of stragglers cannot force a permanent zoom-out.
+
+**And it must not hide them.** A persistent line says how many agents are off
+frame and how far behind the furthest is, because a clean-looking crowd must
+never be mistakable for a clean run.
+
+---
+
+## 12. Reproducing it
 
 Nothing here needs anything that is not in the repository except a cartridge.
 
@@ -660,7 +745,7 @@ point of the chain. The corpus, the heat maps and the films live under
 
 ---
 
-## 12. What is designed and not built
+## 13. What is designed and not built
 
 Written down because several of these were asked for, are good ideas, and do
 not exist:
@@ -692,7 +777,7 @@ not exist:
 - **No link has 3,000 cold attempts**, so no link's rate is certified against
   the bar.
 
-## 13. Related pages
+## 14. Related pages
 
 - [scenarios](../scenarios.md) — the goal/rules/knowledge machinery this is
   built on, and the recording format.

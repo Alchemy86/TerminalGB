@@ -91,6 +91,8 @@ FACING = {0: "down", 4: "up", 8: "left", 12: "right"}
 # 14 px at counter 1 — a sixteen-pixel tile crossed in eight steps of two.
 STEP_PX = 2
 WALK_STEPS = 8
+# Frames a step takes, measured above. Used by the renderer's interpolation.
+WALK_FRAMES = 14
 
 BG = (16, 18, 22)
 
@@ -202,22 +204,13 @@ def build_layout(sheets, maps_dir, Image):
     return origin
 
 
-def world_pos(origin, map_id, x, y, facing, walking):
-    """Pixel position, sub-tile during a step. `None` if the map has no panel —
-    a battle, which genuinely has no map position at all."""
+def world_pos(origin, map_id, x, y):
+    """Pixel position from a **fractional** tile coordinate. `None` if the map
+    has no panel — a battle, which genuinely has no map position at all."""
     if map_id not in origin:
         return None
     ox, oy = origin[map_id]
-    px = ox + x * TILE
-    py = oy + y * TILE
-    if walking:
-        # Forwards from the tile being left — see WALK_STEPS above.
-        fwd = (WALK_STEPS - walking) * STEP_PX
-        dx, dy = {"up": (0, -fwd), "down": (0, fwd),
-                  "left": (-fwd, 0), "right": (fwd, 0)}[FACING.get(facing, "down")]
-        px += dx
-        py += dy
-    return px, py, map_id not in WORLD
+    return ox + x * TILE, oy + y * TILE, map_id not in WORLD
 
 
 def load_links(d):
@@ -242,6 +235,60 @@ def link_at(spans, frame):
         if start <= frame <= end:
             return link, name, goal
     return (spans[-1][0], spans[-1][1], spans[-1][4]) if spans else (0, "", False)
+
+
+def tile_path(rows):
+    """The tile changes only: `(frame, map, x, y, facing)` each time the
+    coordinate moves. This is what the renderer interpolates along."""
+    out = []
+    for r in rows:
+        key = (r[1], r[2], r[3])
+        if not out or (out[-1][1], out[-1][2], out[-1][3]) != key:
+            out.append((r[0], r[1], r[2], r[3], r[4]))
+    return out
+
+
+def interpolate(path, frame):
+    """Where an agent is, between the tile it left and the tile it is going to.
+
+    **Renderer-side interpolation, not a memory read.** Positioning from
+    `wXCoord`/`wYCoord` alone teleports by construction — the coordinate does
+    not move during a walk, it snaps at the end of it — and reading the
+    sub-tile offset out of WRAM only helps at sampling rates fine enough to
+    catch it. Lerping between consecutive *recorded* tiles is independent of
+    the sampling rate entirely, works on tracks already on disk, and is the
+    same four lines Peter Whidden's own map visualiser uses
+    (`pwhiddy/pokerl-map-viz`, `visualizer_live.js`).
+
+    The one refinement: the progress fraction is taken over the **last
+    `WALK_FRAMES` before the arrival** rather than over the whole gap between
+    tiles, so an agent that stood still for a thousand frames and then took one
+    step does exactly that, instead of drifting slowly the whole time.
+    """
+    lo, hi = 0, len(path) - 1
+    if frame <= path[0][0]:
+        return path[0][1], float(path[0][2]), float(path[0][3]), path[0][4]
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if path[mid][0] <= frame:
+            lo = mid
+        else:
+            hi = mid - 1
+    cur = path[lo]
+    if lo + 1 >= len(path):
+        return cur[1], float(cur[2]), float(cur[3]), cur[4]
+    nxt = path[lo + 1]
+    # Only between adjacent tiles on the same map. A warp is a jump, not a walk.
+    if nxt[1] != cur[1] or abs(nxt[2] - cur[2]) + abs(nxt[3] - cur[3]) != 1:
+        return cur[1], float(cur[2]), float(cur[3]), cur[4]
+    t = (frame - (nxt[0] - WALK_FRAMES)) / float(WALK_FRAMES)
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return (
+        cur[1],
+        cur[2] + (nxt[2] - cur[2]) * t,
+        cur[3] + (nxt[3] - cur[3]) * t,
+        nxt[4] if t > 0 else cur[4],
+    )
 
 
 def state_at(rows, frame):
@@ -281,6 +328,7 @@ def main():
     tracks = load_tracks(a.tracks)
     if not tracks:
         sys.exit(f"no agent-*.csv in {a.tracks}")
+    paths = {n: tile_path(r) for n, r in tracks.items()}
     spans = load_links(a.tracks)
     cohort = set(sorted(tracks)[: a.cohort])
     # **The timeline is not the longest agent.** A few agents stall and pace a
@@ -381,13 +429,14 @@ def main():
             st = state_at(tracks[n], gbf)
             if st is None:
                 continue
-            _, m, x, y, facing, walking, battle = st
-            wp = world_pos(origin, m, x, y, facing, walking)
+            battle = st[6]
+            m, x, y, facing = interpolate(paths[n], gbf)
+            wp = world_pos(origin, m, x, y)
             if wp is None:
                 continue
             lk, lname, _ = link_at(spans.get(n, []), gbf)
             here.append((n, wp[0] - X0, wp[1] - Y0, wp[2], facing, battle, lk,
-                         lname, heat_band(m, x, y), m))
+                         lname, heat_band(m, round(x), round(y)), m))
         positions.append(here)
 
     # --- the camera ---------------------------------------------------------
