@@ -80,15 +80,23 @@ BG = (16, 18, 22)
 # and the colour carries the meaning. A Game Boy frame is four shades already,
 # so nothing has to be desaturated to get there.
 #
-# The hue encodes **progress** — which of the fourteen links an agent is on —
-# so the frontier of the swarm is visible as a colour gradient rather than
-# having to be read off a table. Cold at the start, warm at the leading edge.
+# **The hue is the heat map, read at the agent's own feet** — how many
+# agent-frames the swarm has already spent on the tile it is standing on. Not
+# progress: novelty. Standing where thousands have already been is one end of
+# the scale, standing on rarely-trodden ground is the other, so **the frontier
+# lights up on its own** and an agent doing something genuinely new stands
+# apart from the crowd milling around Pallet Town.
+#
+# It is the same visitation count `corpus_report.py` draws its heat maps from —
+# one computation, one source of truth — and it is count-based exploration
+# novelty made visible: the colour *is* the signal an RL agent would be
+# rewarded on.
 #
 # **This is a declared exception to the categorical colour guard**, not a
 # silent one. That guard says no colour may appear that was not in the source
 # framebuffer, and it still applies **to the map layer**: the map art is
 # reproduced exactly. The agent overlay is deliberately outside it.
-LINK_HUE = [
+HEAT_HUE = [
     (70, 110, 210), (70, 130, 215), (70, 150, 220), (70, 175, 215),
     (70, 195, 195), (80, 205, 160), (110, 210, 120), (150, 215, 90),
     (195, 210, 70), (225, 195, 65), (240, 165, 60), (245, 130, 60),
@@ -313,6 +321,28 @@ def main():
     tints = [(255, 96, 96), (96, 200, 255), (140, 255, 140), (255, 220, 90),
              (220, 140, 255), (255, 160, 60), (120, 255, 220), (255, 120, 190)]
 
+    # --- pass zero: the visitation count, which is the colour scale ---------
+    # Weighted by frames, exactly as `corpus_report.py` weights its heat maps:
+    # a tile the swarm hesitates on is hotter than one it walks through.
+    visits = collections.Counter()
+    for n, rows in tracks.items():
+        for r0, r1 in zip(rows, rows[1:]):
+            visits[(r0[1], r0[2], r0[3])] += max(1, r1[0] - r0[0])
+    hottest = max(visits.values()) if visits else 1
+    print(f"{len(visits)} distinct tiles visited; hottest carries "
+          f"{hottest} agent-frames")
+
+    def heat_band(map_id, x, y):
+        """Which of the fourteen colour bands this tile falls in. Log-scaled,
+        because visitation is heavy-tailed — a linear scale puts everything
+        except Pallet Town in the first band."""
+        import math
+        v = visits.get((map_id, x, y), 0)
+        if v <= 0:
+            return 0
+        t = math.log1p(v) / math.log1p(hottest)
+        return min(13, int((1.0 - t) * 14))
+
     # --- pass one: where everybody is, per output frame --------------------
     positions = []
     for i in range(frames_out):
@@ -330,7 +360,7 @@ def main():
                 continue
             lk, lname, _ = link_at(spans.get(n, []), gbf)
             here.append((n, wp[0] - X0, wp[1] - Y0, wp[2], facing, battle, lk,
-                         lname))
+                         lname, heat_band(m, x, y)))
         positions.append(here)
 
     # --- the camera --------------------------------------------------------
@@ -374,16 +404,16 @@ def main():
         img.paste(crop.resize((VIEW_W, OUT_H), Image.NEAREST), (0, 0))
         d = ImageDraw.Draw(img)
         sw = max(8, int(16 * scale))
-        for (n, px, py, indoors, facing, battle, lk, lname) in here:
+        for (n, px, py, indoors, facing, battle, lk, lname, band) in here:
             sx = int((px - x0) * scale)
             sy = int((py - y0) * scale)
             if not (-sw <= sx <= VIEW_W + sw and -sw <= sy <= OUT_H + sw):
                 continue
-            key = (FACING.get(facing, "down"), min(max(lk, 1), 14), sw)
+            key = (FACING.get(facing, "down"), band, sw)
             sp = tinted.get(key)
             if sp is None:
                 base_sp = sprites.get(key[0], next(iter(sprites.values())))
-                sp = tint(base_sp, LINK_HUE[key[1] - 1], Image)
+                sp = tint(base_sp, HEAT_HUE[key[1]], Image)
                 sp = sp.resize((sw, sw), Image.NEAREST)
                 tinted[key] = sp
             img.paste(sp, (sx - sw // 2, sy - sw // 2), sp)
@@ -426,19 +456,33 @@ def main():
         for lk in range(1, 15):
             c = per.get(lk, 0)
             d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
-                        fill=LINK_HUE[lk - 1] if c else (34, 40, 48))
+                        fill=(60, 120, 190) if c else (34, 40, 48))
             d.text((hx + 2, y), f"{lk:2d}  {c}", fill=(225, 232, 240),
                    font=num_font)
             y += num_font.size + 3
+
+        # The colour scale itself, so the film explains its own encoding.
+        y += 8
+        d.text((hx, y), "colour = how trodden", fill=(200, 215, 230),
+               font=num_font)
+        y += int(num_font.size * 1.6)
+        cwid = (OUT_W - hx - 12) / 14
+        for b in range(14):
+            d.rectangle([hx + b * cwid, y, hx + (b + 1) * cwid,
+                         y + num_font.size], fill=HEAT_HUE[b])
+        y += num_font.size + 2
+        d.text((hx, y), "well-trodden        new", fill=(150, 165, 180),
+               font=num_font)
+        y += int(num_font.size * 1.6)
 
         # And where the tracked cohort actually is.
         y += 8
         d.text((hx, y), "tracked", fill=(200, 215, 230), font=num_font)
         y += int(num_font.size * 1.7)
-        for (n, _, _, _, _, _, lk, lname) in sorted(here, key=lambda p: p[0]):
+        for (n, _, _, _, _, _, lk, lname, band) in sorted(here, key=lambda p: p[0]):
             if n not in cohort or y > OUT_H - num_font.size:
                 continue
-            c = LINK_HUE[min(max(lk, 1), 14) - 1]
+            c = HEAT_HUE[band]
             d.rectangle([hx, y + 2, hx + 6, y + num_font.size - 1], fill=c)
             d.text((hx + 10, y), f"{n:3d}  L{lk:02d} {lname[3:][:14]}",
                    fill=(215, 225, 235), font=num_font)
