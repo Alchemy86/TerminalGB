@@ -31,6 +31,8 @@
     }
   ],
   "evidence": [
-    "watch:got_oaks_parcel!=0 — EVENT_GOT_OAKS_PARCEL, event index 57, wEventFlags $D74E bit 1. Set by ViridianMartOaksParcelScript beside the `GiveItem OAKS_PARCEL` that puts the parcel in the bag, so the flag and the bag cannot disagree."
+    "watch:got_oaks_parcel!=0 — EVENT_GOT_OAKS_PARCEL, event index 57, so wEventFlags $D74E bit 1, mask $02, walked out of pokered's constants/event_constants.asm const list. ViridianMartOaksParcelScript (scripts/ViridianMart.asm) reads `lb bc, OAKS_PARCEL, 1 / call GiveItem / SetEvent EVENT_GOT_OAKS_PARCEL` — the flag is set beside the call that puts the parcel in the bag, so the two cannot disagree and the flag is the stronger of the two to watch.",
+    "the leg really is 'walk in' — ViridianMartDefaultScript fires on entry with no CheckEvent guarding it, prints the clerk's line, and then walks the player to the counter itself with a simulated PAD_LEFT 1 / PAD_UP 2. So the solver needs no waypoint inside the shop, and the objective's claim is the script's own behaviour rather than an observation about one playthrough.",
+    "failure party_hp=0 — the same judgement as link 06, for the same reason: Viridian City has grass on its western edge and a blackout there is a real one (HandlePlayerBlackOut's OAKS_LAB early return needs OPP_RIVAL1), warping the player away with money halved."
   ]
 }

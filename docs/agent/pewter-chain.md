@@ -220,7 +220,7 @@ figure — the map-settle change measured below takes it to 90.8% — and link 0
 was re-run at 600 attempts for the showcase film, which is why it carries the
 larger denominator.
 
-**Links 01-06 are superseded by the certified table below**; the rest of this
+**Links 01-07 are superseded by the certified table below**; the rest of this
 one is what the chain did while it was being built. Nothing here is at the bar
 — see §7 — and two of the remaining rows are a long way from it. Multiplied
 out, the chain end to end at these rates was about **6%**, and that is the
@@ -243,10 +243,11 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 04 | take-a-starter | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 26 |
 | 05 | the-rival-battle | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 64 |
 | 06 | cross-route-1 | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 49 |
+| 07 | collect-oaks-parcel | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 12 |
 
 Measured 2026-08-16 on the captain's Pokémon Blue, 12 workers, load average
 8-33 with other work on the box. Wall clock 264 s, 82 s, 189 s, 405 s, 564 s
-and 395 s. Zero failures in 3,000 bounds each link's failure rate at about
+395 s and 201 s. Zero failures in 3,000 bounds each link's failure rate at about
 **0.10%** by the rule of three, which is the bar and not better than it.
 
 **All six were certified in one run against the shared battle policy.** That is
@@ -282,6 +283,10 @@ battles and link 06's are 5,288 wild ones — the same policy, opposite jobs:
       HP left when it ended: 99.7% of max; faints 0; items used 0
       ran because: 5372 the leg forbids a win; 84 escapes failed
 ```
+
+**Link 07 has no battle at all** — the walk from Viridian's southern entrance to
+the mart never crosses grass — so it carries no battle report, which is the
+honest thing for a report to do when there is nothing to report.
 
 Link 06 is the flee side of the same policy and it is cheap: a wild encounter
 costs one turn and 0.3% of the lead's HP, and **84 of 5,372 escapes failed**,
@@ -576,8 +581,8 @@ attempts** are needed to support a 99.9% claim. Every rate on this page is
 written with its N and its interval for that reason, and `corpus` prints the
 bound itself so it cannot be quoted without one.
 
-**Links 01 to 06 have had them** — 3,000 attempts each, zero failures, 3,000
-distinct trajectories each, tabulated in §5. **Links 07 to 14 have not**, and
+**Links 01 to 07 have had them** — 3,000 attempts each, zero failures, 3,000
+distinct trajectories each, tabulated in §5. **Links 08 to 14 have not**, and
 several are visibly a long way from the bar; their failure modes are §8. The
 chain is finished when all fourteen are certified and not before, and the
 end-to-end figure stays what the weakest link makes it.
@@ -1293,8 +1298,8 @@ not exist:
   pool of entry states and the chain keeps every winning seed's exit state, so
   "how far off nominal can a link start and still succeed" is one command away.
   It has not been run.
-- **Eight of the fourteen links have no 3,000-attempt run**, so their rates are
-  not certified against the bar. Links 01-06 are (§5); 07 onwards are the work.
+- **Seven of the fourteen links have no 3,000-attempt run**, so their rates are
+  not certified against the bar. Links 01-07 are (§5); 08 onwards are the work.
 
 ## 14. Related pages
 
