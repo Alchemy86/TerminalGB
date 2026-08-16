@@ -203,17 +203,30 @@ in `/home/aaron/pokemon-run/corpus/<link>/`.
 | 01 | new-game | 120/120 | 100.0% | 18 | — |
 | 02 | leave-the-house | 120/120 | 100.0% | 6 | — |
 | 03 | oak-takes-you-to-the-lab | 400/400 | 100.0% | 13 | — |
-| 04 | take-a-starter | 372/400 | 93.0% | 35 | out-of-calls ×28 |
+| 04 | take-a-starter | 372/400 | 93.0% | 35 | out of calls ×28 |
 | 05 | the-rival-battle | 250/600 | **41.7%** | 46 | party wiped ×350 |
-| 06 | cross-route-1 | 400/400 | 100.0% | 49 | — |
-| 07 | collect-oaks-parcel | 199/200 | 99.5% | 10 | out-of-calls ×1 |
-| 08 | carry-it-back-to-pallet | 225/300 | 75.0% | 56 | timeout ×74 |
-| 09 | receive-the-pokedex | 196/200 | 98.0% | 22 | timeout ×3, out-of-calls ×1 |
+| 06 | cross-route-1 | 599/600 | **99.8%** | 49 | timeout ×1 |
+| 07 | collect-oaks-parcel | 199/200 | 99.5% | 10 | out of calls ×1 |
+| 08 | carry-it-back-to-pallet | 225/300 | 75.0% | 56 | timeout ×74, out of calls ×1 |
+| 09 | receive-the-pokedex | 196/200 | 98.0% | 22 | timeout ×3, out of calls ×1 |
 | 10 | back-to-viridian | 300/300 | 100.0% | 69 | — |
+| 11 | train-for-the-forest | 53/120 | **44.2%** | 878 | timeout ×67 |
+| 12 | heal-and-climb-route-2 | 260/300 | 86.7% | 61 | timeout ×36, out of calls ×4 |
+| 13 | cross-viridian-forest | 248/300 | 82.7% | 93 | out of calls ×32, party wiped ×16 |
+| 14 | arrive-in-pewter | 197/200 | 98.5% | 20 | party wiped ×3 |
 
-**Not one of these is at the bar**, including the 100%s — see §7 — and two are
-a long way from it. Compounding over fourteen links at these rates puts an
-end-to-end run well under 30%.
+**4,140 attempts across the fourteen links.** Link 08's row is the *pre*-fix
+figure — the map-settle change measured below takes it to 90.8% — and link 06
+was re-run at 600 attempts for the showcase film, which is why it carries the
+larger denominator.
+
+**Not one of these is at the bar**, including the 100%s — see §7 — and three
+are a long way from it. Multiplied out, the chain end to end at these rates is
+about **6%**: link 05 alone (41.7%) and link 11 (44.2%) between them cost an
+order of magnitude, and that is the compounding argument made concrete rather
+than asserted. It is also why the chain is played link by link from a carried
+state rather than end to end — which is exactly what the save-state chain is
+for.
 
 ### The adjustment log
 
@@ -512,16 +525,28 @@ forward opened the start menu, and link 02 spent its whole budget in the
 OPTION screen changing the text speed. The introduction presses A only now, and
 the solver has a start-menu detector that answers with B.
 
-### 8.8 The forest, which is genuinely hard
+### 8.8 The training link is the slowest thing in the chain
+
+Link 11 is 44.2% over 120 attempts and a median of **878 decisions** — an order
+of magnitude more than any other link. Every failure is a timeout. It is doing
+the only thing available: pacing Route 1's grass beating level 2–4 Pidgey and
+Rattata for a level 6 starter, walking back to Viridian to heal whenever it
+drops below half, and repeating until the lead reaches 10.
+
+That is a real cost of the repair rather than a defect in it — the game offers
+no faster experience before the forest — but it is where an agent would gain
+most from something better than "pace and fight everything".
+
+### 8.9 The forest, which is genuinely hard
 
 Link 13 is the one that still fails, and it fails two ways:
 
-- **the party faints** — three compulsory bug catchers, six Pokémon, top level
-  9, no healing between them, and tall grass throwing wild encounters the whole
-  way. Observed ending at (1,18) and (26,19), which are the third and second
-  trainers.
-- **it runs out of decisions** — 1,200 spent in the maze, observed ending at
-  (6,30) and (6,22).
+- **it runs out of decisions** — 32 of the 52 failures over 300 attempts, the
+  1,200-call ceiling spent in the maze.
+- **the party faints** — the other 16. Three compulsory bug catchers, six
+  Pokémon, top level 9, no healing between them, and tall grass throwing wild
+  encounters the whole way. Observed ending at (1,18) and (26,19), which are
+  the third and second trainers.
 
 Fighting the forest's own wild Pokémon makes it worse, not better: Caterpie,
 Weedle and their cocoons give almost no experience and cost about fifteen
