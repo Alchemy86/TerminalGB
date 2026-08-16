@@ -3091,11 +3091,127 @@ across every configuration measured.
 - **The per-dot engine ignores it, deliberately**: under `identical` the fetcher *is* the timing.
   `Gpu::pixels_effective` reports what is actually happening, so a caller cannot believe it saved
   something it is still paying for.
-- **The APU needs no equivalent and never will**: `Sound::do_cycle` returns immediately with no
-  player installed, so a headless machine has no APU at all — there is nothing to skip.
+- ~~**The APU needs no equivalent and never will**~~ — **WRONG, and it cost a 14 % saving until it
+  was checked.** `Sound::do_cycle` does return immediately with no player installed, but every
+  scenario, longplay and swarm run **installs a `SilentPlayer` on purpose**, because a machine with
+  no sound chip is one a cartridge can tell apart (Pokémon Blue's Pokémon Center healing sequence
+  never finishes without one). So a collector has a full APU and pays for a band-limited resample
+  it throws away. `Gameboy::set_render_audio(false)` is the sibling — see the swarm section below.
 - **`terminalgb-mcp --no-pixels`** wires it up, and **removes `screenshot` from `tools/list` and
   refuses it if called anyway**. Not politeness: the framebuffer holds whatever was last drawn, so
   answering would return a stale frame *as if it were current*. Same rule as `write_memory`.
+
+### The SWARM is not the emulator — measure the fan-out, not one core (`docs/throughput.md` §8-§10)
+
+**Full record with every table: [`docs/throughput.md`](docs/throughput.md) §8-§10.** Instruments:
+`pewter_chain corpus`'s own last line (emulated frames/s aggregate + the emulate/loop split),
+[`tools/perf/swarm.sh`](tools/perf/swarm.sh), `core_bench --audio --no-pixels --no-audio-out
+--reset-every N`.
+
+**Headline, interleaved A/B against the parent commit, Pokémon Blue link 01, load stated because
+another crew held twelve of the twenty cores for most of the session:** twenty workers, 200
+attempts, 987,736 emulated frames — **72,900 → 103,900 frames/s on the typical round (1.43x)**,
+100,311 → 120,409 on the best. One worker pinned to one core: **CPU time 17.69 → 12.42 s (1.42x,
+contention-immune)** and wall 19.35 → 12.45 s; on a quiet box earlier the same pair was 23.0 →
+9.7 s (2.37x), because the filesystem half was larger then. Goal counts and frame counts identical
+in every run.
+
+- **THE UNIT IS EMULATED FRAMES PER SECOND OF WALL CLOCK ACROSS THE FAN-OUT, not episodes per
+  second.** An episode is however long it is, so episodes/s is not comparable between links or
+  against anybody else's harness. `corpus` prints both now, plus how much of the attempt clock was
+  inside `Gameboy::frame` (`RunResult::emulate_ms`, two clock reads a frame = 0.04 %) — because
+  "which half of the loop does the next hour belong to" is otherwise a guess.
+- **THE PER-FRAME HARNESS WAS NEVER THE PROBLEM AND EVERYONE ASSUMES IT IS.** Two instruments
+  agree: `emulate_ms` says 7.5 s of a 7.5 s run loop is inside the emulator, and an `eu-stack`
+  profile puts **every agent-plugin frame together at 0.6 %**. The plugin dispatch, the six-frame
+  sample, the referee and the guidance are noise. What was expensive was work nobody consumed.
+- **A COLLECTOR MUST NOT WRITE A BATTERY SAVE — 1.87x on its own, and the A/B needs no code
+  change.** `pewter_chain::play` staged the cartridge to `<out>/cart.gb` every attempt and built
+  the machine with that path, so a 3,000-attempt run wrote 3 GB of identical copies and then
+  `fsync`ed a `.sav` (file **and** directory, `Battery::write_atomic`) beside each, from twenty
+  workers. **No attempt has ever read a `.sav`** — state arrives and leaves as a save state.
+  Measured by pointing `--out` at `/dev/shm`, where `fsync` is a no-op: **23.0 s wall on disk
+  against 12.4 s on tmpfs for identical CPU time (12.25 vs 12.33 s)** — the filesystem was 46 % of
+  a single-worker run. Trajectory and final-state digests byte-identical either way.
+  *(It also removed a coupling: attempt k+1 inherited attempt k's `.sav`.)*
+- **`Gameboy::set_render_audio(false)` — the sibling of the pixel skip, and the construction is
+  DELIBERATELY NARROW.** Skipped: `blip_buf::add_delta`, `end_frame`, the mixdown, the hand-off.
+  **Kept, because the guest can see them**: the frame sequencer, length counters, sweep and
+  envelope units, duty and wave positions, the LFSR, `since_fetch`, the `NR52` enable flip-flops,
+  and `last_amp`. Every *serialised* field therefore holds the value it would have held, so the
+  claim is the strongest available: **a save state taken with samples off is byte-identical to one
+  taken with them on**, which is what
+  `gameboy::tests::skipping_samples_changes_nothing_the_cartridge_can_see` asserts. `blip` is not
+  serialised, which is what makes it possible. Teeth both ways: make the setter a no-op, or make
+  `Sound::do_output` return early instead of calling `Sound::run` — the obvious next
+  "optimisation", and the wrong one, since that is where the channel state machines advance.
+- **Measured on the machine a collector runs (an APU INSTALLED), one worker, Pokémon Blue:**
+  12,012 fps with both on, 18,219 with pixels off (**+51.7 %**), **20,695 with both off (1.72x)** —
+  and the **WRAM hash is identical across all three**, which is the end-to-end evidence rather
+  than a claim.
+- **DECLARE IT BEFORE THE PHASE OFFSET, NOT ONLY IN THE RUNNER.** A `corpus` attempt burns
+  `phase_for(seed, spread)` frames before the agent is attached — averaging 1,500 against an
+  attempt's 3,500, i.e. **a third of everything the program emulates** — and those frames happen
+  before `ScenarioRun` exists. Leaving the declaration to `ScenarioRun::collecting()` left that
+  third drawing pixels for nobody.
+- **`ScenarioRun::collecting()` is opt-in and `filming()` wins over it**, resolved together at the
+  top of `play()` so the two commute. **`examples/scenario.rs` and `examples/longplay.rs` are
+  deliberately NOT collectors**: both are paced by a live model, so the emulator is not their
+  bottleneck, and both write a failure save state a human then looks at.
+- **A COLLECTOR'S SAVE STATE CARRIES A STALE PICTURE, and that moves the corpus digests.** A save
+  state holds the framebuffer. Measured on link 02 with the same entry pool under both builds:
+  every decision list, every frame count and every ending **identical**; `final_state` and
+  `start_state` hashes **different on all 40 attempts**. The runs played the same game button for
+  button; only the picture bytes inside the state differ. Nothing commits those digests and
+  `pewter_chain verify` is green — but say it out loud rather than letting someone find it.
+- **SCALING IS SILICON-LIMITED, NOT CONTENTION-LIMITED, and the arithmetic proves it.** This box is
+  8 P-cores + 12 E-cores, no SMT. 20 workers give 13.72x, which reads like a 31 % loss and is not
+  one: the first eight workers deliver 18,502 steps/s each and workers 9-20 deliver 11,155 each —
+  **60 %, the P/E ratio** — and `8 × 18,502 + 12 × 11,155 = 281,876` against a measured 281,879.
+  Per-instance cost rises only 26 % from one worker to twenty. **There is no throughput to win in
+  contention on this box; there is throughput to win in cores.**
+- **About 3.3 MiB per agent, so cores bind two hundred times sooner than memory.** Peak RSS 7 MiB
+  at one worker, 56 MiB at sixteen — ~4.5 MiB base plus 3.27 MiB an agent (a megabyte of it the
+  cloned cartridge). ~9,000 agents would fit in 30 GiB. **That is why the cartridge is NOT shared**
+  between agents: an `Arc<[u8]>` through all six mappers, the save-state codec and the FFI to save
+  a megabyte of something nothing is short of.
+- **A reset is not a cost: ~0.3-0.5 ms, four to seven frames' worth.** `core_bench --reset-every N`
+  measures it in the unit an episode is measured in: +0.14 % at 3500, +0.72 % at 1000, +1.58 % at
+  300, and *negative* at 100 and 30 (i.e. under the noise). Against a 3,500-frame episode that is
+  0.01 %. **An episode would have to be under about fifty frames before it mattered.**
+- **NEGATIVE, with the command: an allocator swap buys nothing.** Tested without adding a
+  dependency at all — `LD_PRELOAD=/lib64/libtcmalloc_minimal.so.4` on the real corpus, which is the
+  fair test to run *before* proposing a crate. Two interleaved rounds each: glibc 57,916 / 49,761
+  frames/s, tcmalloc 52,481 / 56,934 — ranges overlap completely, and the profile predicted it
+  (`_int_malloc` + `_int_free_chunk` = 0.3 % of samples).
+
+#### NEVER MEASURE THROUGHPUT WITH `--features profile` ENABLED
+
+`src/profile.rs`'s counters are a single `static mut` **by design** (its own docs say
+single-threaded), so at twenty workers every retired instruction writes the same cache line.
+Measured: **12,686 aggregate steps/s with the feature on against 246,376 with it off — a factor of
+nineteen**, and it reads exactly like a catastrophic scaling collapse in the emulator. Build a
+separate binary for `--breakdown` and never quote a throughput number from it.
+
+#### Profiling without `perf`, and the two traps in doing it
+
+There is no `perf` on this box, but **`eu-stack` is installed** and a poor-man's sampler is enough:
+build with `cargo build --release --config 'profile.release.debug=1' --config
+'profile.release.strip=false'` (no manifest edit), then loop `eu-stack -p <pid> -n 60`. Two traps
+that produced wrong answers first: **attribute per THREAD, not per sample** (the parked main thread
+otherwise reads as 50 % blocked in `syscall`), and **filter to the thread that is actually inside
+the work** (`pewter_chain::play` appears in the worker's stack and nowhere else).
+
+#### A swarm figure is wall-clock by definition, so state the load average and interleave
+
+Measured while doing this work: the identical single-worker command read **10,646 frames/s on a
+quiet box and 7,405 after fifteen minutes of twenty-thread runs** — 30 %, all in one direction.
+`tools/perf/swarm.sh` therefore measures every point twice, ascending and descending, and prints
+both; if the two disagree by more than a few per cent the box was drifting and the sweep is not a
+measurement. **Another crew was running a twelve-worker certification on the same twenty cores for
+most of this session** (check `readlink /proc/<pid>/cwd` before blaming your own change), which is
+exactly the condition that produces it — so every comparison is an **interleaved A/B**, the only
+shape that survives steady contention.
 
 ### Measuring on this box at all — three traps, each of which produced a wrong answer first
 

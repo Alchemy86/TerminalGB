@@ -34,12 +34,29 @@
 //! optimisation. Compare the hashes across an A/B before believing any
 //! millisecond figure.
 //!
-//! ## `--no-pixels`
+//! ## Modelling a collector's machine: `--audio`, `--no-pixels`, `--no-audio-out`
 //!
-//! Declares that the caller will not read the framebuffer, so the PPU may skip
-//! pixel generation. Guest-invisible by construction (see
-//! `Gameboy::set_render_pixels`), which is why the CPU-side hash is printed
-//! separately: it must not move.
+//! `--no-pixels` declares that the caller will not read the framebuffer, so the
+//! PPU may skip pixel generation. `--no-audio-out` declares that nobody is
+//! listening, so the APU may skip the band-limited resample. Both are
+//! guest-invisible by construction (see `Gameboy::set_render_pixels` and
+//! `Gameboy::set_render_audio`), which is why the CPU-side WRAM hash is printed
+//! separately: it must not move across either.
+//!
+//! **`--audio` is what makes the figure a collector's figure.** A bare
+//! `Gameboy` has `sound` at `None`, which is a machine with *no sound chip*
+//! rather than a quiet one — a difference a cartridge can see — so every
+//! scenario, longplay and swarm run installs a `SilentPlayer`. Without
+//! `--audio` this example is measuring a machine none of them run, and the APU
+//! is worth about 14 % of their frame. The WRAM hash moves when `--audio` is
+//! added, and should: the machine really is different.
+//!
+//! ## `--reset-every N`
+//!
+//! Reload the start state every N frames — the shape of a certification run,
+//! which is thousands of attempts and so thousands of `load_state` calls.
+//! Answers "is an episode long enough to amortise its own reset?" by doing it
+//! and timing whole frames, rather than by timing one call.
 //!
 //! ## `--breakdown` (needs `--features profile`)
 //!
@@ -105,6 +122,9 @@ struct Args {
     workers: usize,
     repeat: u32,
     no_pixels: bool,
+    audio: bool,
+    audio_out: bool,
+    reset_every: u32,
     json: bool,
     breakdown: bool,
 }
@@ -119,6 +139,9 @@ impl Default for Args {
             workers: 1,
             repeat: 3,
             no_pixels: false,
+            audio: false,
+            audio_out: true,
+            reset_every: 0,
             json: false,
             breakdown: false,
         }
@@ -163,13 +186,20 @@ fn parse() -> Args {
                 a.repeat = next(i).parse().unwrap_or(a.repeat);
                 i += 1;
             }
+            "--reset-every" => {
+                a.reset_every = next(i).parse().unwrap_or(0);
+                i += 1;
+            }
             "--no-pixels" => a.no_pixels = true,
+            "--audio" => a.audio = true,
+            "--no-audio-out" => a.audio_out = false,
             "--json" => a.json = true,
             "--breakdown" => a.breakdown = true,
             "-h" | "--help" => {
                 println!(
                     "core_bench --rom PATH [--state PATH] [--frames N] [--warmup N]\n\
-                                [--workers N] [--repeat N] [--no-pixels] [--json]\n\
+                                [--workers N] [--repeat N] [--no-pixels] [--audio]\n\
+                                [--no-audio-out] [--reset-every N] [--json]\n\
                                 [--breakdown]   (needs --features profile)"
                 );
                 std::process::exit(0);
@@ -201,6 +231,15 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
     // `None` for the save path: a benchmark must never write a `.sav` beside
     // somebody's cartridge (`src/mbc/battery.rs`).
     let mut gb = Gameboy::new(rom.to_vec(), None);
+    // **A collector's machine has an APU and a bare `Gameboy` does not.** With
+    // `sound` at `None` the chip is absent rather than quiet, which a cartridge
+    // can tell (`sound::SilentPlayer`), so every scenario, longplay and swarm
+    // run installs one. Without `--audio` this bench is measuring a machine
+    // none of them run.
+    if a.audio {
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+    }
+    gb.set_render_audio(a.audio_out);
     if let Some(bytes) = state {
         gb.load_state(bytes).expect("save state did not load");
     }
@@ -218,10 +257,27 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
     // our own disfavour as well as our favour.
     start.wait();
 
+    // **What an episode's reset costs, in the unit an episode is measured in.**
+    // A certification run is thousands of attempts and every one of them is a
+    // `load_state`, so if restoring is expensive relative to a short episode
+    // that is swarm throughput spent on setup rather than on play. Measured
+    // the same way as everything else here: by doing it and timing whole
+    // frames, never by timing one call.
+    let episode = if a.reset_every > 0 {
+        Some(gb.save_state())
+    } else {
+        None
+    };
+
     let c0 = thread_cpu_nanos();
     let t0 = Instant::now();
-    for _ in 0..a.frames {
+    for f in 0..a.frames {
         gb.frame();
+        if let Some(bytes) = &episode {
+            if (f + 1) % a.reset_every == 0 {
+                gb.load_state(bytes).expect("reset");
+            }
+        }
     }
     let seconds = t0.elapsed().as_secs_f64();
     let cpu_seconds = match (c0, thread_cpu_nanos()) {
@@ -409,6 +465,9 @@ fn main() {
                 workers: 1,
                 repeat: 1,
                 no_pixels: a.no_pixels,
+                audio: a.audio,
+                audio_out: a.audio_out,
+                reset_every: a.reset_every,
                 json: a.json,
                 breakdown: false,
             };
@@ -471,10 +530,10 @@ fn main() {
             "{{\"ms_per_frame\":{best_ms:.4},\"fps_per_instance\":{per_core_fps:.1},\
              \"x_realtime\":{realtime:.1},\"aggregate_sps\":{best_sps:.0},\
              \"wall_ms_per_frame\":{best_wall_ms:.4},\"cpu_clock\":{on_cpu_clock},\
-             \"workers\":{},\"frames\":{},\"no_pixels\":{},\
+             \"workers\":{},\"frames\":{},\"no_pixels\":{},\"audio\":{},\"audio_out\":{},\
              \"frame_hash\":\"{frame_hash:#018x}\",\"wram_hash\":\"{wram_hash:#018x}\",\
              \"deterministic\":{hashes_agree}}}",
-            a.workers, a.frames, a.no_pixels
+            a.workers, a.frames, a.no_pixels, a.audio, a.audio_out
         );
     } else {
         println!("rom            {rom_path}");
@@ -486,6 +545,14 @@ fn main() {
             a.workers, a.frames, a.repeat
         );
         println!("pixels         {}", if a.no_pixels { "off" } else { "on" });
+        println!(
+            "apu            {}",
+            match (a.audio, a.audio_out) {
+                (false, _) => "not installed (a machine a cartridge can tell apart)",
+                (true, true) => "installed, samples produced",
+                (true, false) => "installed, samples skipped (--no-audio-out)",
+            }
+        );
         println!();
         println!(
             "clock          {}",

@@ -109,6 +109,15 @@ pub struct RunResult {
     /// Emulated frames per second of wall clock, this run.
     pub frames_per_second: f64,
     pub wall_ms: u128,
+    /// Of [`RunResult::wall_ms`], how much was inside [`Gameboy::frame`].
+    ///
+    /// **The number that says whether a swarm is emulating or bookkeeping.**
+    /// The rest is this loop plus the agent: the per-frame plugin dispatch, the
+    /// six-frame sample, the referee and the guidance. Measured with two clock
+    /// reads a frame, which is ~50 ns against a frame that costs tens of
+    /// microseconds — 0.04 %, and worth it, because "how much of a step is
+    /// emulation" is otherwise a guess.
+    pub emulate_ms: u128,
     /// Where the failing machine was saved, when it was worth saving.
     pub capture: Option<PathBuf>,
     /// The machine exactly as the run left it.
@@ -247,6 +256,8 @@ pub struct ScenarioRun {
     /// Headless there is no draw at all, and the point of a film of a solved
     /// scenario is that every emulated frame is in it.
     video: Option<crate::video::VideoOut>,
+    /// Nobody is watching — see [`ScenarioRun::collecting`].
+    collecting: bool,
 }
 
 impl ScenarioRun {
@@ -301,6 +312,7 @@ impl ScenarioRun {
             guidance_file,
             track: false,
             video: None,
+            collecting: false,
         })
     }
 
@@ -313,6 +325,34 @@ impl ScenarioRun {
     /// Record the player's position on every frame. See [`RunResult::path`].
     pub fn tracking(mut self, on: bool) -> Self {
         self.track = on;
+        self
+    }
+
+    /// **Nobody is watching this run**, so the machine may stop producing the
+    /// two things only a watcher consumes: pixels and samples.
+    ///
+    /// Both are emulator *output* and neither is reachable from any address a
+    /// cartridge can name, so this changes nothing the game can see — see
+    /// [`Gameboy::set_render_pixels`] and [`Gameboy::set_render_audio`] for the
+    /// constructions. The agent's perception is `wTileMap` decoded out of
+    /// memory and a handful of WRAM reads; it has never looked at the
+    /// framebuffer, and nothing anywhere in a scenario listens.
+    ///
+    /// [`ScenarioRun::filming`] is the exception and wins: a video sink is a
+    /// watcher, so **pixels** come back on for a filmed run however this was
+    /// called. Order does not matter — the two are resolved together at the top
+    /// of [`ScenarioRun::play`]. Samples do not come back, because the sink is
+    /// `rawvideo` and carries no audio; if one ever does, that is the line to
+    /// change.
+    ///
+    /// Worth 1.7x on this box, measured on the machine a collector actually
+    /// runs (an APU installed, because a machine with *no* sound chip is one a
+    /// cartridge can tell apart): 12,012 frames/s with both on against 20,695
+    /// with both off, and the WRAM hash identical across the pair. Left off by
+    /// default so a library caller that does read `image()` is never surprised;
+    /// every headless front end asks for it.
+    pub fn collecting(mut self) -> Self {
+        self.collecting = true;
         self
     }
 
@@ -348,6 +388,13 @@ impl ScenarioRun {
 
     /// Play it once.
     pub fn play(mut self) -> RunResult {
+        // Resolved here rather than in the builders so the two declarations
+        // commute: a filmed run keeps its pixels whichever order they arrive
+        // in. See [`ScenarioRun::collecting`].
+        if self.collecting {
+            self.gb.set_render_pixels(self.video.is_some());
+            self.gb.set_render_audio(false);
+        }
         let t = Instant::now();
         let start_hash = fnv1a(&self.start);
         let rom_title = self.gb.with_machine(Capability::OBSERVE, |m| m.rom_title());
@@ -418,8 +465,11 @@ impl ScenarioRun {
             p.in_game.then_some(p.map)
         };
 
+        let mut emulating = Duration::ZERO;
         let ending = loop {
+            let f0 = Instant::now();
             self.gb.frame();
+            emulating += f0.elapsed();
             frames += 1;
             if self.track {
                 path.push(self.point(frames as u32));
@@ -611,6 +661,7 @@ impl ScenarioRun {
             learned,
             final_progress: last,
             wall_ms,
+            emulate_ms: emulating.as_millis(),
             capture,
             final_state_bytes,
             path,
@@ -705,6 +756,7 @@ impl ScenarioRun {
             final_progress: Progress::default(),
             frames_per_second: 0.0,
             wall_ms: t.elapsed().as_millis(),
+            emulate_ms: 0,
             capture: None,
             final_state_bytes: Vec::new(),
             path: Vec::new(),

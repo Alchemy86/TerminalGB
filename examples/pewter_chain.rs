@@ -1450,15 +1450,25 @@ fn parse(args: &[String]) -> Args {
 
 /// **Never run against a ROM where it lives** — the MBC writes a `.sav` beside
 /// it, and the captain's cartridges are on this machine.
-fn stage_rom(rom: &Path, out: &Path) -> PathBuf {
-    std::fs::create_dir_all(out).expect("create output directory");
-    let dest = out.join("cart.gb");
-    let bytes = std::fs::read(rom).unwrap_or_else(|e| {
-        eprintln!("cannot read {}: {e}", rom.display());
-        exit(1);
-    });
-    std::fs::write(&dest, &bytes).expect("stage the cartridge");
-    dest
+/// The cartridge image, read **once** for a whole command.
+///
+/// It used to be read from the player's own `~/roms` and written back out to
+/// `<out>/cart.gb` on **every attempt**, so a 3,000-attempt certification moved
+/// six gigabytes to produce three thousand identical copies of one megabyte.
+/// The copy existed for one reason — `Gameboy::new(.., Some(path))` writes
+/// `<rom>.sav` beside the cartridge, and a benchmark must never write beside
+/// somebody's game — and no attempt has ever read a `.sav`: an attempt's state
+/// arrives as a save state and leaves as one. So there is nothing to stage.
+#[derive(Clone)]
+struct Cart(std::sync::Arc<Vec<u8>>);
+
+fn load_cart(rom: &Path) -> Cart {
+    Cart(std::sync::Arc::new(std::fs::read(rom).unwrap_or_else(
+        |e| {
+            eprintln!("cannot read {}: {e}", rom.display());
+            exit(1);
+        },
+    )))
 }
 
 struct Outcome {
@@ -1471,6 +1481,10 @@ struct Outcome {
     x: u8,
     y: u8,
     wall_ms: u128,
+    /// Of `wall_ms`, how much was inside the emulator. See
+    /// `RunResult::emulate_ms`.
+    emulate_ms: u128,
+    frames_total: u64,
     state: Vec<u8>,
     recording: Recording,
     path: Vec<terminalgb::scenario::run::PathPoint>,
@@ -1572,7 +1586,7 @@ fn phase_start(gb: &mut Gameboy, start: Option<Vec<u8>>, idle: u32) -> Option<Ve
 /// the agent is allowed its first decision. See [`phase_start`].
 #[allow(clippy::too_many_arguments)]
 fn play(
-    rom: &Path,
+    rom: &Cart,
     scenario_path: &Path,
     start: Option<Vec<u8>>,
     seed: u64,
@@ -1586,9 +1600,17 @@ fn play(
         eprintln!("{}: {e}", scenario_path.display());
         exit(1);
     });
-    let staged = stage_rom(rom, out);
-    let data = std::fs::read(&staged).expect("read staged cartridge");
-    let mut gb = Gameboy::new(data, Some(staged));
+    std::fs::create_dir_all(out).expect("create output directory");
+    // **No save path, so no battery.** Cartridge RAM comes in and goes out
+    // inside the save state; a `.sav` beside a staged copy is a file nobody
+    // reads, and `Battery::flush` writes it through `write_atomic`, which
+    // fsyncs the file *and* its directory. Measured on this box, one worker,
+    // twenty attempts of link 01: the whole run is 23.0 s with the output
+    // directory on disk and 12.4 s with it on tmpfs, for identical CPU time
+    // (12.25 s against 12.33 s) — the filesystem was 46 % of the wall clock.
+    // The mapper still comes from header `$0147` either way (`mbc::get_mbc`),
+    // and the trajectory hashes are unchanged, checked in both directions.
+    let mut gb = Gameboy::new(rom.0.as_ref().clone(), None);
     // **A machine always has an APU, and a cartridge can tell.** The Pokémon
     // Center's healing sequence never finishes without one: `Gameboy::new`
     // leaves `MMU.sound` at `None`, which is a machine with **no sound chip**
@@ -1599,6 +1621,15 @@ fn play(
     // machine without an APU — and it costs nothing here, because
     // `SilentPlayer` throws the samples away.
     gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+    // **Declared here, not in `ScenarioRun`, because the phase is emulated
+    // before the run exists.** A phase offset averages half the spread — 1,500
+    // frames against an attempt's 3,500 — so a third of everything this program
+    // emulates happens in `phase_start`, and leaving the declaration to the
+    // runner left that third drawing pixels and resampling audio for nobody.
+    // Both skips are guest-invisible; `ScenarioRun::collecting` below repeats
+    // them for the run itself and is what a caller who did not phase gets.
+    gb.set_render_pixels(false);
+    gb.set_render_audio(false);
     // **Phase the world before the agent is attached, never after.** Burning
     // the frames here means the plugin does not exist yet and so cannot act
     // during them; the machine is simply left `idle` frames further on, and
@@ -1624,7 +1655,12 @@ fn play(
                 eprintln!("{e}");
                 exit(1);
             })
-            .tracking(track);
+            .tracking(track)
+            // Nothing in this program looks at the picture or listens to the
+            // sound: the solver reads `wTileMap` and a handful of WRAM bytes,
+            // and a film is stitched from the position tracks. Both skips are
+            // guest-invisible — see `ScenarioRun::collecting`.
+            .collecting();
     if quiet {
         run = run.quiet().without_captures();
     }
@@ -1639,6 +1675,11 @@ fn play(
         x: r.final_progress.x,
         y: r.final_progress.y,
         wall_ms: r.wall_ms,
+        emulate_ms: r.emulate_ms,
+        // The phase offset is emulated too — with no plugin attached, so those
+        // frames are pure emulation — and a throughput figure that leaves them
+        // out is measuring less work than the run did.
+        frames_total: r.recording.frames + idle as u64,
         state: r.final_state_bytes.clone(),
         recording: r.recording,
         path: r.path,
@@ -1740,7 +1781,7 @@ fn need_rom(a: &Args) -> PathBuf {
 }
 
 fn cmd_solve(a: &Args) {
-    let rom = need_rom(a);
+    let rom = load_cart(&need_rom(a));
     let sp = a.scenario.clone().unwrap_or_else(|| {
         eprintln!("--scenario is required");
         exit(2);
@@ -1795,7 +1836,7 @@ fn report(o: &Outcome, seed: u64) {
 /// the Nintendo logo. Every state after it is derived by playing forward, so
 /// the whole chain is reproducible from nothing but the cartridge.
 fn cmd_chain(a: &Args) {
-    let rom = need_rom(a);
+    let rom = load_cart(&need_rom(a));
     let out = a
         .out
         .clone()
@@ -1884,7 +1925,7 @@ fn cmd_chain(a: &Args) {
 /// Each worker gets its own directory because the MBC writes a `.sav` beside
 /// the cartridge it was handed.
 fn cmd_corpus(a: &Args) {
-    let rom = need_rom(a);
+    let rom = load_cart(&need_rom(a));
     let sp = a.scenario.clone().unwrap_or_else(|| {
         eprintln!("--scenario is required");
         exit(2);
@@ -1916,6 +1957,13 @@ fn cmd_corpus(a: &Args) {
     let next = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let results =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, String, u64)>::new()));
+    // Totals for the throughput line. Emulated frames, and how many of the
+    // milliseconds spent on them were inside the emulator rather than around
+    // it — a swarm figure that does not separate the two cannot say which half
+    // to work on.
+    let tot_frames = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let tot_emu_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let tot_wall_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let spread = a.idle_spread;
     let exits = a.exits;
     let exit_dir = out.join("exits");
@@ -1929,6 +1977,8 @@ fn cmd_corpus(a: &Args) {
         for w in 0..workers {
             let (next, results, peak, live) =
                 (next.clone(), results.clone(), peak.clone(), live.clone());
+            let (tot_frames, tot_emu_ms, tot_wall_ms) =
+                (tot_frames.clone(), tot_emu_ms.clone(), tot_wall_ms.clone());
             let (rom, sp, out, pool) =
                 (rom.clone(), sp.clone(), out.clone(), pool.clone());
             let exit_dir = exit_dir.clone();
@@ -1988,6 +2038,9 @@ fn cmd_corpus(a: &Args) {
                         (seed as usize) % pool.len(),
                         o.recording.final_state
                     );
+                    tot_frames.fetch_add(o.frames_total, Relaxed);
+                    tot_emu_ms.fetch_add(o.emulate_ms as u64, Relaxed);
+                    tot_wall_ms.fetch_add(o.wall_ms as u64, Relaxed);
                     results.lock().unwrap().push((seed, row, traj));
                 }
                 live.fetch_sub(1, Relaxed);
@@ -2033,6 +2086,25 @@ fn cmd_corpus(a: &Args) {
         a.runs as f64 / secs.max(0.001),
         peak.load(std::sync::atomic::Ordering::Relaxed)
     );
+    // **The swarm's own unit.** Episodes per second depends on how long an
+    // episode is and so cannot be compared between links or against anybody
+    // else's harness; emulated frames per second of wall clock can. The
+    // emulation share says which half of the loop the next hour belongs to.
+    {
+        use std::sync::atomic::Ordering::Relaxed;
+        let frames = tot_frames.load(Relaxed);
+        let emu = tot_emu_ms.load(Relaxed) as f64;
+        let wall = tot_wall_ms.load(Relaxed) as f64;
+        println!(
+            "{:.0} emulated frames/s aggregate ({} frames); {:.1} s emulating, \
+             {:.1} s in the run loop, {:.1} s of worker time outside it",
+            frames as f64 / secs.max(0.001),
+            frames,
+            emu / 1000.0,
+            wall / 1000.0,
+            (secs * workers as f64) - wall / 1000.0
+        );
+    }
     println!("{}", out.join("index.ndjson").display());
     let dupes = report_independence(&rows, pool.len(), spread);
     if dupes > 0 {
@@ -2100,7 +2172,7 @@ fn report_independence(rows: &[(u64, String, u64)], pool: usize, spread: u32) ->
 /// than assumed: the same three seeds are played once serially and once across
 /// the workers, and every final-state hash must agree.
 fn cmd_verify(a: &Args) {
-    let rom = need_rom(a);
+    let rom = load_cart(&need_rom(a));
     let sp = a.scenario.clone().unwrap_or_else(|| {
         eprintln!("--scenario is required");
         exit(2);
@@ -2207,15 +2279,16 @@ fn cmd_verify(a: &Args) {
 /// stores three and flips one, and why this writes what it finds rather than
 /// assuming four distinct pictures exist.
 fn cmd_sprites(a: &Args) {
-    let rom = need_rom(a);
+    let rom = load_cart(&need_rom(a));
     let out = a
         .out
         .clone()
         .unwrap_or_else(|| PathBuf::from("target/pewter-chain/sprites"));
     std::fs::create_dir_all(&out).expect("output directory");
-    let staged = stage_rom(&rom, &out);
-    let data = std::fs::read(&staged).expect("read staged cartridge");
-    let mut gb = Gameboy::new(data, Some(staged));
+    // No save path: this reads OAM and VRAM out of a supplied state and
+    // presses four buttons. Nothing here wants a battery beside the player's
+    // own cartridge, and nothing reads one.
+    let mut gb = Gameboy::new(rom.0.as_ref().clone(), None);
     gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let start = a.start.as_ref().unwrap_or_else(|| {
         eprintln!("sprites needs --start FILE (a state standing in the overworld)");
@@ -2326,7 +2399,7 @@ fn write_rgba(path: &Path, w: usize, h: usize, rgba: &[u8]) {
 /// agents diverge for the same reason a swarm does and the divergence is the
 /// picture.
 fn cmd_film(a: &Args) {
-    let rom = need_rom(a);
+    let rom = load_cart(&need_rom(a));
     let out = a
         .out
         .clone()

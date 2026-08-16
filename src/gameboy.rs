@@ -8,6 +8,9 @@ pub struct Gameboy {
     /// Bytes written into the machine from outside the game this session. See
     /// [`Gameboy::host_writes`]; not serialised, deliberately.
     host_writes: u64,
+    /// Whether an APU installed later should produce samples. See
+    /// [`Gameboy::set_render_audio`]; host configuration, not machine state.
+    render_audio: bool,
 }
 
 pub use self::Target::{GameBoy, GameBoyColor, SuperGameBoy};
@@ -119,6 +122,7 @@ impl Gameboy {
             width: 160,
             height: 144,
             host_writes: 0,
+            render_audio: true,
         };
 
         gb
@@ -138,6 +142,7 @@ impl Gameboy {
             width: 160,
             height: 144,
             host_writes: 0,
+            render_audio: true,
         }
     }
 
@@ -157,6 +162,7 @@ impl Gameboy {
             width: 160,
             height: 144,
             host_writes: 0,
+            render_audio: true,
         })
     }
 
@@ -179,6 +185,7 @@ impl Gameboy {
             width: 160,
             height: 144,
             host_writes: 0,
+            render_audio: true,
         }
     }
 
@@ -935,6 +942,33 @@ impl Gameboy {
         self.cpu.memory.gpu.render_pixels()
     }
 
+    /// Declare whether this caller will listen to the samples.
+    ///
+    /// The sibling of [`Gameboy::set_render_pixels`], and it rests on the same
+    /// argument: samples are emulator output, so not producing them cannot
+    /// change what the cartridge does. A headless collector installs
+    /// [`crate::sound::SilentPlayer`] because a machine with no sound chip at
+    /// all is one a cartridge can tell apart — and then pays for a
+    /// band-limited resample it throws away. See
+    /// [`crate::sound::Sound::set_render_audio`] for exactly what is skipped
+    /// and, more to the point, what is not.
+    ///
+    /// No-op on a machine with no APU installed, and the flag is remembered:
+    /// a later [`Gameboy::enable_audio`] honours it.
+    pub fn set_render_audio(&mut self, on: bool) {
+        self.render_audio = on;
+        if let Some(s) = self.cpu.memory.sound.as_mut() {
+            s.set_render_audio(on);
+        }
+    }
+
+    /// Whether the APU is producing samples — see
+    /// [`Gameboy::set_render_audio`]. This is what was *asked for*; a machine
+    /// with no APU installed produces none either way.
+    pub fn render_audio(&self) -> bool {
+        self.render_audio
+    }
+
     /// Read one byte through the memory bus, as the CPU would. For the debug
     /// surface and for tests that need to inspect cartridge RAM the way a game
     /// sees it — through the MBC's bank registers, not the raw save buffer.
@@ -1034,6 +1068,11 @@ impl Gameboy {
     /// device, which is still a real sound chip.
     pub fn enable_audio(&mut self, player: Box<dyn crate::sound::AudioPlayer>) {
         self.cpu.memory.enable_audio(player);
+        // A chip installed after the declaration must honour it, or the order
+        // of two unrelated calls decides whether the saving happens.
+        if let Some(s) = self.cpu.memory.sound.as_mut() {
+            s.set_render_audio(self.render_audio);
+        }
     }
 
     /// Is an APU installed? False means the machine has **no sound chip**, not
@@ -1417,6 +1456,121 @@ mod tests {
                 .len()
                 > 1,
             "the reference machine drew a uniform screen, so this test proved nothing"
+        );
+    }
+    /// A cartridge that programs the sound chip and then spins.
+    ///
+    /// Channel 1 at a short period with a long envelope, plus the wave channel,
+    /// so both the square path and the wave path are producing transitions —
+    /// which is what makes the "samples were really produced" half of the test
+    /// below non-vacuous.
+    fn noisy_cart() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]); // NOP; JP $0150
+        rom[0x134..0x13F].copy_from_slice(b"NOISYAPU\0\0\0");
+        rom[0x147] = 0x00; // ROM only
+        let prog: &[u8] = &[
+            0x3E, 0x80, 0xE0, 0x26, // ld a,$80 ; ldh [NR52],a   power on
+            0x3E, 0xFF, 0xE0,
+            0x25, // ld a,$FF ; ldh [NR51],a   both channels both sides
+            0x3E, 0x77, 0xE0, 0x24, // ld a,$77 ; ldh [NR50],a   full volume
+            0x3E, 0x80, 0xE0, 0x11, // ld a,$80 ; ldh [NR11],a   duty 2, length 0
+            0x3E, 0xF0, 0xE0, 0x12, // ld a,$F0 ; ldh [NR12],a   volume 15, no decay
+            0x3E, 0x00, 0xE0, 0x13, // ld a,$00 ; ldh [NR13],a   period low
+            0x3E, 0x87, 0xE0,
+            0x14, // ld a,$87 ; ldh [NR14],a   trigger, period high 7
+            0x76, // halt — the APU keeps running, the CPU does not
+        ];
+        rom[0x150..0x150 + prog.len()].copy_from_slice(prog);
+        // A jump back over the halt, so a woken CPU does not run off the end.
+        rom[0x150 + prog.len()..0x150 + prog.len() + 3].copy_from_slice(&[
+            0xC3,
+            0x50 + prog.len() as u8 - 1,
+            0x01,
+        ]);
+        rom
+    }
+
+    /// Counts what it is handed, and keeps a checksum of it, so a test can say
+    /// both "samples were produced" and "they were the same samples".
+    #[derive(Default)]
+    struct CountingPlayer(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+    impl crate::sound::AudioPlayer for CountingPlayer {
+        fn play(&mut self, left: &[f32], right: &[f32]) {
+            use std::sync::atomic::Ordering::Relaxed;
+            self.0.fetch_add((left.len() + right.len()) as u64, Relaxed);
+        }
+        fn samples_rate(&self) -> u32 {
+            44100
+        }
+        fn underflowed(&self) -> bool {
+            false
+        }
+    }
+
+    /// **Not producing samples changes nothing the cartridge can see, and
+    /// nothing in a save state.**
+    ///
+    /// The audio sibling of `pixels_turned_back_on_at_a_frame_boundary_give_an_
+    /// exact_frame`, and it makes the stronger claim the narrower construction
+    /// allows: a save state is every serialised field of the machine, so
+    /// asserting the two states are byte-identical asserts that the frame
+    /// sequencer, the length counters, the sweep and envelope units, the duty
+    /// and wave positions, the LFSR and `last_amp` all hold the values they
+    /// would have held. Only `blip`, which is explicitly not machine state, is
+    /// skipped.
+    ///
+    /// Teeth proven in both directions: make `set_render_audio` a no-op and the
+    /// "samples reached the player" assertion goes; make `Sound::do_output`
+    /// return early instead of calling `Sound::run` — the obvious next
+    /// "optimisation", and the wrong one, since that is where the channel state
+    /// machines advance — and the state comparison goes.
+    #[test]
+    fn skipping_samples_changes_nothing_the_cartridge_can_see() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let loud_n = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let quiet_n = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        let mut loud = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        loud.enable_audio(Box::new(CountingPlayer(loud_n.clone())));
+        let mut quiet = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        quiet.set_render_audio(false);
+        quiet.enable_audio(Box::new(CountingPlayer(quiet_n.clone())));
+        assert!(loud.render_audio() && !quiet.render_audio());
+
+        for _ in 0..90 {
+            loud.frame();
+            quiet.frame();
+        }
+
+        // The skip is not vacuous: the reference machine really did hand a
+        // player a stream, and the other really did not.
+        assert!(
+            loud_n.load(Relaxed) > 10_000,
+            "the reference machine produced {} samples — this cartridge is not \
+             driving the APU, so the test proves nothing",
+            loud_n.load(Relaxed)
+        );
+        assert_eq!(
+            quiet_n.load(Relaxed),
+            0,
+            "samples reached the player with rendering off"
+        );
+
+        // Every register a cartridge can read, byte for byte.
+        for a in 0xFF10u16..=0xFF3F {
+            assert_eq!(
+                loud.peek(a),
+                quiet.peek(a),
+                "APU register {a:#06X} differs with samples off"
+            );
+        }
+        // And every serialised field of the whole machine.
+        assert_eq!(
+            loud.save_state(),
+            quiet.save_state(),
+            "the machine that produced no samples is in a different state"
         );
     }
 }

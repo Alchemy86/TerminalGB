@@ -456,6 +456,10 @@ struct SquareChannel {
     /// shadow reads zero ([`SWEEP_RESTART_HOLD`]).
     sweep_hold: u32,
     blip: BlipBuf,
+    /// Whether waveform transitions reach `blip` at all. See
+    /// [`Sound::set_render_audio`]; never serialised, because it is a property
+    /// of the host, not of the machine.
+    render: bool,
     last_amp: i32,
 }
 
@@ -485,6 +489,7 @@ impl SquareChannel {
             sweep_addend: 0,
             sweep_hold: 0,
             blip,
+            render: true,
             last_amp: 0,
         }
     }
@@ -525,6 +530,17 @@ impl SquareChannel {
     /// Advance the channel over `[start_time, end_time)`, splitting the window
     /// at a pending sweep overflow check so the channel goes quiet on the
     /// exact cycle hardware kills it (see [`SquareChannel::sweep_calc_delay`]).
+    /// Hand a waveform transition to the band-limited resampler — unless
+    /// [`Sound::set_render_audio`] has been turned off, in which case the
+    /// transition is still computed and `last_amp` still updated, and only the
+    /// *output* is dropped. See that method for why that is guest-invisible.
+    #[inline(always)]
+    fn delta(&mut self, time: u32, amount: i32) {
+        if self.render {
+            self.blip.add_delta(time, amount);
+        }
+    }
+
     fn run(&mut self, start_time: u32, end_time: u32) {
         // A pending calculation is *paused*, not cancelled, while NR10's shift
         // field reads zero — there is nothing for the shifter to do, so it
@@ -560,7 +576,7 @@ impl SquareChannel {
     fn run_span(&mut self, start_time: u32, end_time: u32) {
         if !self.enabled || self.period == 0 {
             if self.last_amp != 0 {
-                self.blip.add_delta(start_time, -self.last_amp);
+                self.delta(start_time, -self.last_amp);
                 self.last_amp = 0;
                 self.delay = 0;
             }
@@ -578,7 +594,7 @@ impl SquareChannel {
                 self.duty_out = pattern[self.duty_pos as usize] != 0;
                 let amp = if self.duty_out { vol } else { -vol };
                 if amp != self.last_amp {
-                    self.blip.add_delta(time, amp - self.last_amp);
+                    self.delta(time, amp - self.last_amp);
                     self.last_amp = amp;
                 }
 
@@ -841,6 +857,10 @@ struct WaveChannel {
     /// cycle when this is read.
     since_fetch: u32,
     blip: BlipBuf,
+    /// Whether waveform transitions reach `blip` at all. See
+    /// [`Sound::set_render_audio`]; never serialised, because it is a property
+    /// of the host, not of the machine.
+    render: bool,
     last_amp: i32,
 }
 
@@ -876,6 +896,7 @@ impl WaveChannel {
             sample_latch: 0,
             since_fetch: u32::MAX,
             blip,
+            render: true,
             last_amp: 0,
         }
     }
@@ -922,10 +943,21 @@ impl WaveChannel {
         }
     }
 
+    /// Hand a waveform transition to the band-limited resampler — unless
+    /// [`Sound::set_render_audio`] has been turned off, in which case the
+    /// transition is still computed and `last_amp` still updated, and only the
+    /// *output* is dropped. See that method for why that is guest-invisible.
+    #[inline(always)]
+    fn delta(&mut self, time: u32, amount: i32) {
+        if self.render {
+            self.blip.add_delta(time, amount);
+        }
+    }
+
     fn run(&mut self, start_time: u32, end_time: u32) {
         if !self.enabled || !self.dac_enabled || self.period == 0 {
             if self.last_amp != 0 {
-                self.blip.add_delta(start_time, -self.last_amp);
+                self.delta(start_time, -self.last_amp);
                 self.last_amp = 0;
                 self.delay = 0;
             }
@@ -965,7 +997,7 @@ impl WaveChannel {
                 let amp = ((sample << 2) >> volshift) as i32;
 
                 if amp != self.last_amp {
-                    self.blip.add_delta(time, amp - self.last_amp);
+                    self.delta(time, amp - self.last_amp);
                     self.last_amp = amp;
                 }
 
@@ -1059,6 +1091,10 @@ struct NoiseChannel {
     period: u32,
     delay: u32,
     blip: BlipBuf,
+    /// Whether waveform transitions reach `blip` at all. See
+    /// [`Sound::set_render_audio`]; never serialised, because it is a property
+    /// of the host, not of the machine.
+    render: bool,
     last_amp: i32,
 }
 
@@ -1076,6 +1112,7 @@ impl NoiseChannel {
             period: 8,
             delay: 0,
             blip,
+            render: true,
             last_amp: 0,
         }
     }
@@ -1114,10 +1151,21 @@ impl NoiseChannel {
         }
     }
 
+    /// Hand a waveform transition to the band-limited resampler — unless
+    /// [`Sound::set_render_audio`] has been turned off, in which case the
+    /// transition is still computed and `last_amp` still updated, and only the
+    /// *output* is dropped. See that method for why that is guest-invisible.
+    #[inline(always)]
+    fn delta(&mut self, time: u32, amount: i32) {
+        if self.render {
+            self.blip.add_delta(time, amount);
+        }
+    }
+
     fn run(&mut self, start_time: u32, end_time: u32) {
         if !self.enabled {
             if self.last_amp != 0 {
-                self.blip.add_delta(start_time, -self.last_amp);
+                self.delta(start_time, -self.last_amp);
                 self.last_amp = 0;
                 self.delay = 0;
             }
@@ -1140,7 +1188,7 @@ impl NoiseChannel {
                 };
 
                 if amp != self.last_amp {
-                    self.blip.add_delta(time, amp - self.last_amp);
+                    self.delta(time, amp - self.last_amp);
                     self.last_amp = amp;
                 }
 
@@ -1428,6 +1476,10 @@ pub struct Sound {
     agb: bool,
     /// Reusable mixing scratch (see [`Mixdown`]).
     mixdown: Mixdown,
+    /// Whether the *samples* are produced at all — see
+    /// [`Sound::set_render_audio`]. Host configuration like `cgb_revision`
+    /// and `agb`, and **not** serialised for the same reason.
+    render_audio: bool,
 }
 
 impl Default for Sound {
@@ -1452,6 +1504,7 @@ impl Sound {
 
         Sound {
             on: false,
+            render_audio: true,
             channel1: SquareChannel::new(ch1_blip),
             channel2: SquareChannel::new(ch2_blip),
             channel3: WaveChannel::new(ch3_blip),
@@ -1476,6 +1529,46 @@ impl Sound {
             agb: false,
             mixdown: Mixdown::default(),
         }
+    }
+
+    /// Whether the APU produces **samples**. `true` in every ordinary build.
+    ///
+    /// The exact sibling of [`crate::gpu::Gpu::set_render_pixels`], and it
+    /// rests on the same argument: samples are emulator *output*. No address a
+    /// cartridge can reach carries them, they are not in a save state (the
+    /// `blip` buffers are explicitly runtime plumbing — see
+    /// [`Sound::save_state`]), and the only consumer is the host
+    /// [`AudioPlayer`]. A headless collector that installs
+    /// [`SilentPlayer`] — which every scenario, longplay and swarm run does,
+    /// because a machine with *no* APU is a machine a cartridge can tell apart
+    /// — is paying for a band-limited resample it then throws away.
+    ///
+    /// **Guest-invisible by construction, and the construction is narrow on
+    /// purpose.** Everything that decides what the guest can read still runs
+    /// unchanged: the frame sequencer, the length counters, the sweep and
+    /// envelope units, the duty and wave positions, the LFSR, `since_fetch`,
+    /// the channel-enable flip-flops behind `NR52`, and `last_amp`. Every
+    /// serialised field therefore holds the same value it would have held —
+    /// so a save state taken with rendering off is byte-identical to one taken
+    /// with it on. What is skipped is `blip_buf::add_delta`, `end_frame`, and
+    /// with them the mixdown and the hand-off in
+    /// [`Sound::play_samples`], which returns at its own sample-count guard.
+    ///
+    /// Safe to toggle at any time: with rendering off blip sits idle at offset
+    /// zero, so turning it back on resumes into an empty resampler. The audio
+    /// either side of the gap is correct; the gap itself is silence, which is
+    /// the honest thing for output nobody asked for.
+    pub fn set_render_audio(&mut self, on: bool) {
+        self.render_audio = on;
+        self.channel1.render = on;
+        self.channel2.render = on;
+        self.channel3.render = on;
+        self.channel4.render = on;
+    }
+
+    /// Whether the APU is producing samples — see [`Sound::set_render_audio`].
+    pub fn render_audio(&self) -> bool {
+        self.render_audio
     }
 
     pub fn set_player(&mut self, player: Box<dyn AudioPlayer>) {
@@ -1739,11 +1832,17 @@ impl Sound {
     fn do_output(&mut self) {
         self.run();
 
-        // End frame for all channels
-        self.channel1.blip.end_frame(self.output_period);
-        self.channel2.blip.end_frame(self.output_period);
-        self.channel3.blip.end_frame(self.output_period);
-        self.channel4.blip.end_frame(self.output_period);
+        // End frame for all channels. Skipped with rendering off: with no
+        // deltas going in, ending a frame would still advance blip's own clock,
+        // so `samples_avail` would climb until the buffer overflowed. Left
+        // alone, blip sits idle at offset 0 and `play_samples` returns at its
+        // own `sample_count < OUTPUT_SAMPLE_COUNT` guard.
+        if self.render_audio {
+            self.channel1.blip.end_frame(self.output_period);
+            self.channel2.blip.end_frame(self.output_period);
+            self.channel3.blip.end_frame(self.output_period);
+            self.channel4.blip.end_frame(self.output_period);
+        }
 
         // Adjust timing
         self.time -= self.output_period;
