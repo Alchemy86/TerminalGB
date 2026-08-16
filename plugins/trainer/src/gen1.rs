@@ -124,6 +124,16 @@ pub mod addr {
     pub const ENEMY_STAT_MODS: u16 = 0xCD2E;
     /// `wPlayerMonStatMods`.
     pub const PLAYER_STAT_MODS: u16 = 0xCD1A;
+    /// `wCurrentMenuItem` — the live cursor index of whatever menu is open,
+    /// zero-based. In a battle's move list that is the move slot.
+    pub const CURRENT_MENU_ITEM: u16 = 0xCC26;
+    /// `wNumBagItems` — how many distinct items the bag holds.
+    pub const NUM_BAG_ITEMS: u16 = 0xD31D;
+    /// `wBagItems` — id/quantity pairs, terminated by `$FF`.
+    pub const BAG_ITEMS: u16 = 0xD31E;
+    /// `BAG_ITEM_CAPACITY` (`constants/menu_constants.asm`), which is what
+    /// `wBagItems: ds BAG_ITEM_CAPACITY * 2 + 1` is sized from.
+    pub const MAX_BAG_ITEMS: usize = 20;
 }
 
 /// `party_struct`, `wPartyMon2 - wPartyMon1 = $D197 - $D16B`.

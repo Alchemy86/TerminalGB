@@ -220,16 +220,18 @@ figure — the map-settle change measured below takes it to 90.8% — and link 0
 was re-run at 600 attempts for the showcase film, which is why it carries the
 larger denominator.
 
-**Links 01-04 are superseded by the certified table below**; the rest of this
+**Links 01-05 are superseded by the certified table below**; the rest of this
 one is what the chain did while it was being built. Nothing here is at the bar
-— see §7 — and three of the remaining rows are a long way from it. Multiplied
-out, the chain end to end at these rates is about **6%**: link 05 alone (41.7%)
-and link 11 (44.2%) between them cost an order of magnitude, and that is the
+— see §7 — and two of the remaining rows are a long way from it. Multiplied
+out, the chain end to end at these rates was about **6%**, and that is the
 compounding argument made concrete rather than asserted. It is also why the
 chain is played link by link from a carried state rather than end to end —
 which is exactly what the save-state chain is for.
 
-### Certified: links 01-04
+**Link 05's 41.7% was not a solve rate at all** — it was a scenario failing
+itself on a state the cartridge does not treat as a failure. §8.11.
+
+### Certified: links 01-05
 
 The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 
@@ -239,11 +241,38 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 02 | leave-the-house | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 8 |
 | 03 | oak-takes-you-to-the-lab | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 14 |
 | 04 | take-a-starter | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 26 |
+| 05 | the-rival-battle | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 60 |
 
 Measured 2026-08-16 on the captain's Pokémon Blue, 12 workers, load average
-13-18 with other work on the box. Wall clock 275 s, 84 s, 198 s and 395 s.
-Zero failures in 3,000 bounds each link's failure rate at about **0.10%** by
-the rule of three, which is the bar and not better than it.
+8-18 with other work on the box. Wall clock 264 s, 84 s, 191 s, 386 s and
+487 s. Zero failures in 3,000 bounds each link's failure rate at about
+**0.10%** by the rule of three, which is the bar and not better than it.
+
+**All five were re-certified together against the shared battle policy.** That
+is the standing rule and not a courtesy: the policy is code every link runs, so
+a link certified against the previous one is a claim about a machine that no
+longer exists. Links 01-04 have no battle in them and their trajectories were
+checked to be unchanged as well — but "it cannot have moved" is an argument, and
+3,000 attempts is a measurement.
+
+**The battle report goes beside the pass rate, because a link can pass while the
+battle policy is quietly awful.** Link 05's 3,000 attempts are 3,000 battles:
+
+```text
+battles 3000: won 2275 (75.8%), lost 725 (24.2%), fled 0 (0.0%); 17.4 turns each
+  HP left when it ended: 32.7% of max (3000 samples); faints 725; items used 0
+  ran because: 0 the leg forbids a win, 0 one hit from fainting,
+               0 the lead is already trained; 0 escapes failed
+  turns spent lowering a stat: 3164
+  damage predictions: 22362 checked, 80.5% inside the roll range,
+                      2581 under, 1788 over (a critical hit lands over)
+```
+
+The 8.0% *over* are critical hits, which the damage estimate deliberately
+excludes, and the rate landing on Gen 1's own base-speed/2-in-256 is itself a
+check on the model. The full account, including what a screen-only student would
+not have and what is implemented but never fires, is
+[the battle policy](battle-policy.md).
 
 **Every attempt varies all three independence axes**, and the run says so
 itself rather than being trusted: a held-out entry state (each link's pool is
@@ -251,9 +280,9 @@ itself rather than being trusted: a held-out entry state (each link's pool is
 start from the same world), the driver seed, and the idle-frame phase. 3,000
 distinct trajectories in 3,000 attempts, and `report_independence` exits
 non-zero on a single collision. Distinct final states: 2,959 / 2,993 / 3,000 /
-3,000 — link 01's 41 collisions are two cold boots that made the same choices
-converging on the same bytes, which is a weaker statement than the trajectory
-and is why the trajectory is what the gate counts.
+3,000 / 3,000 — link 01's 41 collisions are two cold boots that made the same
+choices converging on the same bytes, which is a weaker statement than the
+trajectory and is why the trajectory is what the gate counts.
 
 **The earlier certification of 01-03 does not carry over and was re-run.** Two
 of the fixes below are in shared driver code, so every link's trajectories
@@ -298,13 +327,30 @@ The interesting record is what changed and what it bought.
 | 04 | **53 of 600 failures, every one of them frozen on the same tile** — `(5,5)` in Oak's laboratory, the game still drawing and no button doing anything. §8.10. | route to the table along row 4 from `(5,4)`, not via `(4,4)` behind the rival | **91.2% → 99.7%** (600 attempts) |
 | all | the two survivors were the same trap reached through a *random wander*: one step up put a Poké Ball sprite between the player and the table | a wander steps **towards** the waypoint, so it cannot leave the rectangle the `goto` was going to cross | **99.7% → 100.0%** (600), then 3,000/3,000 |
 | all | the stuck-recovery sidestep chose its direction by coin flip whichever way the waypoint lay | go the way the waypoint is when that axis is not already level | half the escapes stopped walking back into the hazard |
+| 05 | **166 of 216 failures were not failures**: the scenario declared `party_hp=0` a loss, and `HandlePlayerBlackOut` refuses to black the player out of this one fight. §8.11 | delete the failure rule, with the citation in the scenario's `evidence` | 166 of the 216 |
+| 05 | the other 50, every one a seed ≡ 1 (mod 12): the approach tile `(8,4)` is where the rival parks when the player took the Squirtle ball | put the four approach tiles on row 5, which no sprite ever stands on | the other 50 |
+| all | a battle was "press FIGHT, then A on the first move" | [a shared battle policy](battle-policy.md) reading the cartridge's type chart, move table, HP, PP and bag | rival battle **30.6% → 26.2%** lost |
 
-**Link 05 has no adjustment, and that is the finding.** All 350 failures are
-the party being wiped at (4,6)/(5,6) — the rival battle tile. At level 5 both
-starters have a damaging move and a status move and neither type matters, so it
-is close to a coin flip *by the game's design*. It is not a routing bug, and
-more episodes will not move it: the repair, if there is one, is a precondition
-(a stronger party) that the game does not make available before this point.
+**Link 05's two fixes were made together and measured together — 64.0% → 100.0%
+over 600 attempts — and the split above is an attribution, not two runs.** It is
+a sound one, because the endings classify themselves: 166 `failed` on the battle
+tile and 50 `timeout` on seeds ≡ 1 (mod 12), with no overlap. Where a number in
+this table is a separate measurement it says so with its N.
+
+~~**Link 05 has no adjustment, and that is the finding.**~~ **Withdrawn, and
+it was wrong twice over.** It read: *"All 350 failures are the party being wiped
+at (4,6)/(5,6) — the rival battle tile. At level 5 both starters have a damaging
+move and a status move and neither type matters, so it is close to a coin flip
+by the game's design. It is not a routing bug, and more episodes will not move
+it: the repair, if there is one, is a precondition (a stronger party) that the
+game does not make available before this point."*
+
+Wrong about the failure: **the cartridge does not treat losing that battle as a
+loss at all**, and the scenario was failing the episode on a state the game
+repairs two seconds later. Wrong about the odds: it is **not** a coin flip, it
+is 14.7%, 23.0% or 54.0% depending on which Poké Ball was taken, and base stats
+read out of the ROM say why. Both are §8.11, and it is a fair warning about
+this page: a paragraph that explains a number is not evidence for it.
 
 ### Throughput, and determinism under it
 
@@ -511,11 +557,11 @@ attempts** are needed to support a 99.9% claim. Every rate on this page is
 written with its N and its interval for that reason, and `corpus` prints the
 bound itself so it cannot be quoted without one.
 
-**Links 01, 02, 03 and 04 have had them** — 3,000 attempts each, zero failures,
-3,000 distinct trajectories each, tabulated in §5. **Links 05 to 14 have not**,
-and five of them are visibly a long way from the bar; their failure modes are
-§8. The chain is finished when all fourteen are certified and not before, and
-the end-to-end figure stays what the weakest link makes it.
+**Links 01 to 05 have had them** — 3,000 attempts each, zero failures, 3,000
+distinct trajectories each, tabulated in §5. **Links 06 to 14 have not**, and
+several are visibly a long way from the bar; their failure modes are §8. The
+chain is finished when all fourteen are certified and not before, and the
+end-to-end figure stays what the weakest link makes it.
 
 ---
 
@@ -615,6 +661,88 @@ Fighting the forest's own wild Pokémon makes it worse, not better: Caterpie,
 Weedle and their cocoons give almost no experience and cost about fifteen
 decisions to beat against four to run from. Measured — fighting them spent the
 entire budget without leaving the maze.
+
+### 8.11 Link 05 was failing itself on a state the cartridge repairs
+
+**216 of 600 attempts failed, and 166 of them were not failures.** They ended
+`Ending::Failed("party_hp=0")` on the rival battle tile, about two seconds
+before the goal would have fired.
+
+The scenario declared `party_hp=0` a failure. Its own objective said the
+opposite — *"the cartridge sets EVENT_BATTLED_RIVAL_IN_OAKS_LAB after the battle
+either way and heals your party, so the goal is that the battle happened, not
+that it was won"* — and the cartridge agrees with the objective.
+`HandlePlayerBlackOut` (`engine/battle/core.asm`) special-cases this one fight:
+
+```asm
+	ld a, [wCurOpponent]
+	cp OPP_RIVAL1
+	jr nz, .notRival1Battle
+	...
+	ld hl, Rival1WinText
+	call PrintText
+	ld a, [wCurMap]
+	cp OAKS_LAB
+	ret z            ; starter battle in oak's lab: don't black out
+```
+
+The rival says *"Yeah! Am I great or what?"*, the player stays in the
+laboratory, `OaksLabRivalEndBattleScript` heals the party on the next map-script
+tick and sets the flag. **Reproduced end to end** on a seed that had been
+failing: the run reaches the goal at 55 decisions with the party back at 19/19,
+money untouched at ₽3000 (a blackout halves it), and `wOaksLabCurScript` at
+`SCRIPT_OAKSLAB_RIVAL_STARTS_EXIT` — the same state a win leaves.
+
+So the rule was judging a state the game explicitly refuses to treat as a loss,
+and it is gone. **This is the link-03 error again in a different coat**: not a
+goal authored from a plausible idea this time, but a *failure* authored from
+one, and the giveaway was the same — the scenario contradicted itself and
+nobody had read it against the disassembly.
+
+**The other 50 failures were a deterministic route bug, and the seeds said so.**
+Every one was a seed ≡ 1 (mod 12), which is what `seed % 4` (the approach tile)
+and `seed % 3` (which Poké Ball link 04 took) mean together. The approach list
+held `(8,4)`, and `OaksLabChoseStarterScript` walks the rival to the ball *he*
+takes and leaves him standing under it — measured on the certified link-04
+exits, at `(7,4)`, `(8,4)` and `(6,4)` for a player who took Charmander,
+Squirtle and Bulbasaur. A sprite is solid, so those attempts aimed for ever at a
+tile the rival was standing on. Row 5 has no sprite on it and every one of its
+ten tiles is reachable in a single `goto` from all three starter positions
+(checked), so the approaches live there now.
+
+### The rival battle is not a coin flip, and the odds are in the base stats
+
+This page used to say the fight was *"close to a coin flip by the game's
+design"*. It is not. Measured over 900 certified exits, by which ball link 04
+took:
+
+| player | rival takes | lost |
+|---|---|---:|
+| SQUIRTLE | BULBASAUR | **14.7%** |
+| CHARMANDER | SQUIRTLE | **23.0%** |
+| BULBASAUR | CHARMANDER | **54.0%** |
+
+The type chart is irrelevant — at level 5 every starter's damaging move is
+Normal — so it is decided by base stats, read out of the cartridge:
+
+```text
+             HP  Atk  Def  Spd  Spc
+BULBASAUR    45   49   49   45   65
+CHARMANDER   39   52   43   65   50
+SQUIRTLE     44   48   65   43   50
+```
+
+Bulbasaur draws Charmander, which is **faster at every level** (65 against 45,
+so it moves first every turn and lands the last hit) and hits harder (52) into a
+softer target (49) for six more HP. Squirtle draws Bulbasaur and simply tanks
+it: Defense 65 against Attack 49, at a near speed tie. That is a fact about the
+cartridge, it is one query away from `gen1_tables.py`, and it was sitting behind
+a sentence of plausible reasoning.
+
+**It is also why the chain's exit pool is not one population.** 30.6% of link
+05's exits carry a level-5 lead that lost, against level 6 for one that won, and
+every link after it inherits the mix. That is the honest population — a real
+playthrough loses sometimes — and link 11 trains to level 10 regardless.
 
 ### 8.10 Link 04 was walking the game into a soft-lock, and the cluster said so
 
@@ -1146,8 +1274,8 @@ not exist:
   pool of entry states and the chain keeps every winning seed's exit state, so
   "how far off nominal can a link start and still succeed" is one command away.
   It has not been run.
-- **Ten of the fourteen links have no 3,000-attempt run**, so their rates are
-  not certified against the bar. Links 01-04 are (§5); 05 onwards are the work.
+- **Nine of the fourteen links have no 3,000-attempt run**, so their rates are
+  not certified against the bar. Links 01-05 are (§5); 06 onwards are the work.
 
 ## 14. Related pages
 

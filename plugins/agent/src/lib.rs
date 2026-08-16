@@ -47,6 +47,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub mod action;
+pub mod battle;
 pub mod commentary;
 pub mod driver;
 pub mod governor;
@@ -794,6 +795,12 @@ impl AgentPlugin {
                     w.num_field("hp", o.hp as f64);
                     w.num_field("max_hp", o.max_hp as f64);
                     w.end_obj();
+                }
+                // Everything the shared battle policy decides from. Absent
+                // while the engine is still filling the battle structs, which
+                // is the honest report of "nothing to decide from yet".
+                if let Some(a) = &game.arena {
+                    a.write(&mut w);
                 }
                 w.end_obj();
             }

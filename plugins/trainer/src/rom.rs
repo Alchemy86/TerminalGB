@@ -80,7 +80,6 @@ mod base {
 mod move_entry {
     #[allow(dead_code)] // kept for symmetry with the entry layout
     pub const ANIMATION: usize = 0;
-    #[allow(dead_code)]
     pub const EFFECT: usize = 1;
     pub const POWER: usize = 2;
     pub const TYPE: usize = 3;
@@ -289,6 +288,149 @@ impl RomTables {
     }
 }
 
+/// `TypeEffects` — `0F:6474`. Rows of three bytes, attacker type, defender
+/// type and the multiplier in tenths, terminated by `$FF`
+/// (`data/types/type_matchups.asm`).
+const TYPE_EFFECTS: (usize, u16) = (0x0F, 0x6474);
+/// `Moves` — the same `0E:4000` [`MOVES`] points at, as a bank pair.
+const MOVES_BANK: (usize, u16) = (0x0E, 0x4000);
+/// `NUM_ATTACKS` is `$A5`, so the table is that many [`MOVE_LENGTH`] entries.
+const MOVES_BYTES: usize = super::gen1::NUM_ATTACKS as usize * MOVE_LENGTH;
+/// Gen 1 stops looking for more rows well before this; the cap only stops a
+/// cartridge that is not this one from being read for ever.
+const MAX_TYPE_ROWS: usize = 256;
+/// `SPECIAL EQU $14` (`constants/type_constants.asm`). A move whose type is at
+/// or above it uses the Special stat on both sides; below it, Attack and
+/// Defense. Gen 1 splits by *type*, not per move.
+pub const FIRST_SPECIAL_TYPE: u8 = 0x14;
+
+/// The two cartridge tables a battle decision needs, pulled through a banked
+/// read rather than out of a whole ROM image.
+///
+/// **Why this exists beside [`RomTables`], which can already do both.** That
+/// one is handed the cartridge image because a tracker wants sprites and names
+/// and would otherwise pull a megabyte a byte at a time. A battle needs 1.6 KiB
+/// — the move table and the type chart — and the agent plugin has a
+/// [`terminalgb_plugin_api::Machine`] and no ROM, so it reads exactly those two
+/// through `peek_bank` once per session.
+///
+/// **Nothing here is a table typed into Rust.** The bank/address pairs are the
+/// ones `pokeblue.sym` gives for `Moves` and `TypeEffects`, and
+/// [`BattleTables::verified`] re-checks the chart's first rows against the
+/// cartridge before any of it is believed — the same "derive the address, then
+/// confirm it live" rule `plugins/battle-control`'s WRAM reader follows.
+#[derive(Debug, Clone, Default)]
+pub struct BattleTables {
+    moves: Vec<u8>,
+    chart: Vec<(u8, u8, u8)>,
+}
+
+impl BattleTables {
+    /// Read both tables with `byte(bank, address)`.
+    pub fn read(mut byte: impl FnMut(usize, u16) -> u8) -> BattleTables {
+        let (mb, ma) = MOVES_BANK;
+        let moves = (0..MOVES_BYTES)
+            .map(|i| byte(mb, ma.wrapping_add(i as u16)))
+            .collect();
+        let (cb, ca) = TYPE_EFFECTS;
+        let mut chart = Vec::new();
+        for row in 0..MAX_TYPE_ROWS {
+            let at = ca.wrapping_add((row * 3) as u16);
+            let a = byte(cb, at);
+            if a == 0xFF {
+                break;
+            }
+            chart.push((a, byte(cb, at + 1), byte(cb, at + 2)));
+        }
+        BattleTables { moves, chart }
+    }
+
+    /// Does the chart we read look like Gen 1's?
+    ///
+    /// Checks the six rows `data/types/type_matchups.asm` opens with, which are
+    /// distinctive enough to say we are reading the table and not some bytes
+    /// that happen to live at that address in another cartridge. The rows
+    /// themselves are *not* the data — they are how the location is confirmed,
+    /// exactly as `tools/gen1-tables/gen1_tables.py` finds the same table by
+    /// searching for them.
+    pub fn verified(&self) -> bool {
+        const HEAD: [(u8, u8, u8); 6] = [
+            (0x15, 0x14, 20), // WATER    FIRE     super
+            (0x14, 0x16, 20), // FIRE     GRASS    super
+            (0x14, 0x19, 20), // FIRE     ICE      super
+            (0x16, 0x15, 20), // GRASS    WATER    super
+            (0x17, 0x15, 20), // ELECTRIC WATER    super
+            (0x15, 0x05, 20), // WATER    ROCK     super
+        ];
+        self.chart.len() > HEAD.len() && self.chart[..6] == HEAD
+    }
+
+    fn field(&self, id: u8, off: usize) -> u8 {
+        if id == 0 {
+            return 0;
+        }
+        self.moves
+            .get((id as usize - 1) * MOVE_LENGTH + off)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Base power. Zero is a status move, which is a fact and not a gap.
+    pub fn power(&self, id: u8) -> u8 {
+        self.field(id, move_entry::POWER)
+    }
+
+    /// The move's own type, which is often not its user's.
+    pub fn kind(&self, id: u8) -> u8 {
+        self.field(id, move_entry::TYPE)
+    }
+
+    /// The move's effect id — an index into a jump table of code, so what it
+    /// *means* is not readable from the ROM. See `crate::battle`'s `effect`.
+    pub fn effect(&self, id: u8) -> u8 {
+        self.field(id, move_entry::EFFECT)
+    }
+
+    /// Accuracy as a percentage of the cartridge's 0-255 byte, rounded down.
+    /// Gen 1's separate 1-in-256 miss belongs to the engine, not the move, and
+    /// is not folded in.
+    pub fn accuracy_percent(&self, id: u8) -> u8 {
+        ((self.field(id, move_entry::ACCURACY) as u16 * 100) / 255) as u8
+    }
+
+    /// Whether a move of this type is resolved with Special on both sides.
+    pub fn is_special(&self, id: u8) -> bool {
+        self.kind(id) >= FIRST_SPECIAL_TYPE
+    }
+
+    /// Type effectiveness as a percentage, 100 being neutral.
+    ///
+    /// **Every matching row is applied in turn**, which is what makes a dual
+    /// type multiply out — and is also how Gen 1 gets its 0x, since a row can
+    /// be `NO_EFFECT`. Pass the defender's second type as its first when it has
+    /// only one, exactly as the cartridge stores it.
+    pub fn multiplier(&self, attack: u8, def1: u8, def2: u8) -> u32 {
+        let mut m: u32 = 100;
+        for &(a, d, x) in &self.chart {
+            if a != attack {
+                continue;
+            }
+            if d == def1 {
+                m = m * x as u32 / 10;
+            }
+            if def2 != def1 && d == def2 {
+                m = m * x as u32 / 10;
+            }
+        }
+        m
+    }
+
+    /// How many rows the chart has — the cheap way to see it was read at all.
+    pub fn chart_rows(&self) -> usize {
+        self.chart.len()
+    }
+}
+
 /// Which ROM bank holds a Pokémon's picture.
 ///
 /// Transcribed from the range test at the top of `UncompressMonSprite`
@@ -429,6 +571,90 @@ mod tests {
         assert_eq!((slot.power, slot.accuracy), (0, 0));
         assert!(slot.type_name.is_empty());
         assert!(r.front_sprite(0x99).is_none());
+    }
+
+    /// A hand-built cartridge whose two battle tables sit where the symbols
+    /// say, so the reader is exercised without a commercial ROM.
+    fn fake_tables() -> super::BattleTables {
+        // id -> (animation, effect, power, type, accuracy, pp), as the six-byte
+        // `move` macro lays them out. The real values for these three.
+        const MOVES: [(u8, [u8; 6]); 3] = [
+            (1, [1, 0, 40, 0x00, 255, 35]), // POUND      40 NORMAL 100% 35
+            (56, [56, 0, 120, 0x15, 204, 5]), // HYDRO PUMP 120 WATER  80%  5
+            (45, [45, 43, 0, 0x00, 255, 40]), // GROWL       0 NORMAL 100% 40
+        ];
+        const CHART: [(u8, u8, u8); 8] = [
+            (0x15, 0x14, 20),
+            (0x14, 0x16, 20),
+            (0x14, 0x19, 20),
+            (0x16, 0x15, 20),
+            (0x17, 0x15, 20),
+            (0x15, 0x05, 20),
+            (0x04, 0x02, 0), // GROUND FLYING no effect
+            (0x15, 0x15, 5), // WATER  WATER  not very
+        ];
+        super::BattleTables::read(|bank, addr| {
+            let off = (addr as usize) & 0x3FFF;
+            if bank == 0x0E {
+                let (i, f) = (off / 6 + 1, off % 6);
+                return match MOVES.iter().find(|(id, _)| *id as usize == i) {
+                    Some((_, m)) => m[f],
+                    None => 0,
+                };
+            }
+            if bank == 0x0F && off >= 0x2474 {
+                let k = off - 0x2474;
+                let (i, f) = (k / 3, k % 3);
+                return match CHART.get(i) {
+                    Some(r) => [r.0, r.1, r.2][f],
+                    None => 0xFF,
+                };
+            }
+            0xFF
+        })
+    }
+
+    #[test]
+    fn the_battle_tables_read_moves_and_the_type_chart_out_of_the_banks() {
+        let t = fake_tables();
+        assert!(t.verified(), "the chart head did not match");
+        assert_eq!(t.chart_rows(), 8);
+        assert_eq!(
+            (t.power(1), t.kind(1), t.accuracy_percent(1)),
+            (40, 0x00, 100)
+        );
+        assert_eq!(t.power(56), 120);
+        assert_eq!(t.accuracy_percent(56), 80);
+        assert!(t.is_special(56), "WATER is a special type");
+        assert!(!t.is_special(1), "NORMAL is a physical type");
+        assert_eq!(
+            t.power(45),
+            0,
+            "a status move has no power, and that is a fact"
+        );
+    }
+
+    #[test]
+    fn type_effectiveness_multiplies_every_matching_row() {
+        let t = fake_tables();
+        assert_eq!(t.multiplier(0x15, 0x14, 0x14), 200, "WATER into FIRE");
+        assert_eq!(t.multiplier(0x15, 0x15, 0x15), 50, "WATER into WATER");
+        assert_eq!(
+            t.multiplier(0x04, 0x02, 0x02),
+            0,
+            "GROUND cannot touch FLYING"
+        );
+        assert_eq!(t.multiplier(0x00, 0x14, 0x15), 100, "no row, so neutral");
+        // A dual type applies both rows: WATER into a WATER/ROCK is 0.5 x 2.
+        assert_eq!(t.multiplier(0x15, 0x15, 0x05), 100);
+        // ... and a mon whose two types are the same must not be counted twice.
+        assert_eq!(t.multiplier(0x15, 0x05, 0x05), 200, "WATER into ROCK, once");
+    }
+
+    #[test]
+    fn a_chart_that_is_not_gen_1s_is_refused() {
+        let t = super::BattleTables::read(|_, _| 0x00);
+        assert!(!t.verified());
     }
 
     #[test]

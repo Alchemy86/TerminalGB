@@ -289,9 +289,24 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         // the laboratory is two tiles wide**: the block map makes `####..####`
         // of it, so only x=4 and x=5 exist and aiming at x=6 is a wall.
         // Diversity has to come from the approach, not from the tile.
+        //
+        // **And the approach may not be on row 4, because row 4 is where the
+        // rival parks.** `OaksLabChoseStarterScript` walks him to the ball he
+        // takes and leaves him standing under it — measured on the certified
+        // link-04 exits, at (7,4), (8,4) and (6,4) for a player who took
+        // Charmander, Squirtle and Bulbasaur — and a sprite is solid. The old
+        // list held (8,4), so every attempt whose player took the Squirtle ball
+        // *and* drew that approach aimed at the tile the rival was standing on:
+        // seed ≡ 1 (mod 12), which is exactly the 50 of 600 that timed out,
+        // deterministically, walking round and round a tile it could never
+        // reach.
+        //
+        // Row 5 has no sprite on it at all, and every one of its ten tiles is
+        // reachable in a single `goto` from all three starter positions
+        // (checked, x = 0..9 from each). So the approaches live there.
         "05-the-rival-battle" => {
             let x = 4 + (seed % 2) as u8;
-            let approach = [(2u8, 4u8), (8, 4), (2, 5), (8, 5)][(seed % 4) as usize];
+            let approach = [(2u8, 5u8), (8, 5), (4, 5), (6, 5)][(seed % 4) as usize];
             r.insert(OAKS_LAB, vec![stage(&[approach, (x, 6)], Finish::Arrive)]);
         }
         "06-cross-route-1" => {
@@ -488,6 +503,9 @@ struct Snap {
     lead_hp: u32,
     lead_max_hp: u32,
     battle: Option<String>,
+    /// The battle facts the shared policy decides from. `None` outside a
+    /// battle, and also inside one whose structs the engine has not filled yet.
+    arena: Option<terminalgb_plugin_agent::battle::View>,
     kind: String,
     trust: String,
     text: String,
@@ -537,6 +555,7 @@ impl Snap {
             }
             if let Some(b) = g.get("battle") {
                 s.battle = Some(b.str_field("kind").unwrap_or("trainer").to_string());
+                s.arena = terminalgb_plugin_agent::battle::View::parse(b);
             }
             if let Some(e) = g.get("exits").and_then(|e| e.as_array()) {
                 for x in e {
@@ -653,6 +672,13 @@ pub struct ChainDriver {
     barren: u32,
     /// Consecutive battle turns, so a fight that will not end is escaped.
     battle_turns: u32,
+    /// The action the shared policy chose for the turn now being worked
+    /// through the menus. Held so the walk from the main menu to the move list
+    /// cannot change its mind halfway and leave the cursor somewhere odd.
+    plan_this_turn: Option<terminalgb_plugin_agent::battle::Action>,
+    /// Battle telemetry, printed with the run's verdict — a link can pass while
+    /// the battle policy is quietly awful.
+    tally: BattleTally,
     /// One primitive button per decision instead of a compound plan. See
     /// [`ChainDriver::primitive`].
     primitive: bool,
@@ -706,6 +732,8 @@ impl ChainDriver {
             at_map: None,
             barren: 0,
             battle_turns: 0,
+            plan_this_turn: None,
+            tally: BattleTally::default(),
             primitive: false,
             trail: None,
             text_tries: 0,
@@ -771,6 +799,16 @@ impl ChainDriver {
     }
 
     fn decide(&mut self, s: &Snap) -> String {
+        // **Watch the battle on every decision, not only on the ones that open
+        // a menu.** The knock-out happens during the text that follows a turn,
+        // so a tally fed only from the menu branch never sees a party at 0 HP
+        // and scores every battle a win. Measured: it reported 300 of 300 won
+        // where the exit states said 218.
+        if let Some(a) = &s.arena {
+            self.tally.observe(a);
+        }
+        // Score a battle the moment it is over, from the last state it was in.
+        self.tally.tick(s.battle.is_some());
         // 1. Not in the game yet, or the map header is not loaded: this is the
         //    introduction, a warp or a cutscene, and the only useful verbs are
         //    menu ones.
@@ -938,73 +976,126 @@ impl ChainDriver {
         Plan::new("Say yes.").press("a", 1).text(8).finish()
     }
 
-    /// Battle policy. A trainer battle cannot be run from, so it is fought; a
-    /// wild one is run from, which is also what the `battle flee` rule on the
-    /// route legs requires.
+    /// **The battle policy is not here.** It is
+    /// [`terminalgb_plugin_agent::battle`], one implementation shared by every
+    /// link that meets a battle, deciding fight/item/switch/run from the
+    /// cartridge's own state — the type chart and move table read out of the
+    /// ROM, both sides' HP and stats out of the two battle structs, the bag out
+    /// of `wBagItems`. What is here is the *menus*: turning that decision into
+    /// keypresses without going out of phase.
     fn fight(&mut self, s: &Snap) -> String {
+        use terminalgb_plugin_agent::battle::Action;
         self.battle_turns += 1;
         let sel = s.selected.to_ascii_uppercase();
-        // A submenu nothing here wants. B is the one button that can only ever
-        // back out of one.
-        if s.said("CHOOSE A POK") {
-            return self.one("Back out of the party list.", "b");
-        }
         if s.waiting || s.kind == "dialogue" || s.kind == "text" {
+            // Between turns. The next menu gets a fresh decision.
+            self.plan_this_turn = None;
             if self.primitive {
                 return self.one("Let the battle text finish.", "a");
             }
             return Plan::new("Let the battle text finish.").text(20).finish();
         }
-        let wild = s.battle.as_deref() == Some("wild");
-        // **Fighting is a rule, not a preference.** A `battle flee` leg
-        // forfeits the moment a battle is *won*, so on those legs the answer
-        // is always RUN whatever the party looks like. Where fighting is
-        // allowed, a wild Pokémon is worth beating only while the lead is
-        // under-levelled and healthy enough to take the hits.
-        let train = self.fight_wild
-            && s.lead_level < self.train_to
-            && s.lead_hp * 2 > s.lead_max_hp;
-        let running = wild && !train;
+        let Some(view) = s.arena.as_ref() else {
+            // The engine has not filled the battle structs yet; there is
+            // nothing to decide from, so let it.
+            return Plan::new("Let the battle settle.").wait(16).finish();
+        };
+        let intent = terminalgb_plugin_agent::battle::Intent {
+            may_fight_wild: self.fight_wild,
+            train_to: self.train_to as u8,
+        };
+        // How many turns have already gone on a stat move is the driver's
+        // count; the cartridge keeps none, so the view carries ours.
+        let mut view = view.clone();
+        view.stat_turns = self.tally.stat_turns;
+        let view = &view;
+        let action = self
+            .plan_this_turn
+            .get_or_insert_with(|| terminalgb_plugin_agent::battle::decide(view, &intent))
+            .clone();
 
-        // **Navigate the battle menu one key at a time, off the cursor.**
-        // The menu is FIGHT / PKMN on the top row and ITEM / RUN on the
-        // bottom, so "down then right" reaches RUN from FIGHT — except that
-        // Gen 1's `HandleMenuInput` delays several frames after accepting a
-        // press, so the *first* of a burst is routinely swallowed and the
-        // rest land one step out of phase. Measured: a run policy that fired
-        // down/right/A blind opened the party list instead, over and over,
-        // for 2,500 decisions. Reading `▶` and pressing one key cannot go out
-        // of phase, because a swallowed press simply repeats.
-        if s.kind == "menu" {
-            let on_main = s.said("FIGHT");
-            if !on_main {
-                // The move list. Its first slot is the damaging one on every
-                // Gen 1 starter at these levels.
-                return self.one("Use the first move.", "a");
+        // The party list, reached either on purpose (a switch) or by a
+        // mispress. B is the one button that can only ever back out of a menu.
+        if s.said("CHOOSE A POK") {
+            if let Action::Switch { to, .. } = action {
+                return self.menu_to(view.menu_item, to as u8, "the bench");
             }
-            if running {
-                return if sel.contains("RUN") {
-                    self.one("Run.", "a")
-                } else if sel.contains("FIGHT") {
-                    self.one("Down towards RUN.", "down")
-                } else if sel.contains("ITEM") {
-                    self.one("Right to RUN.", "right")
-                } else {
-                    self.one("Down towards RUN.", "down")
-                };
+            return self.one("Back out of the party list.", "b");
+        }
+        if s.kind != "menu" {
+            if self.primitive {
+                return self.one("Let the battle run on.", "a");
             }
-            return if sel.contains("FIGHT") {
-                self.one("Fight.", "a")
-            } else if sel.contains("ITEM") || sel.contains("RUN") {
-                self.one("Up to FIGHT.", "up")
+            return Plan::new("Let the battle run on.").text(20).finish();
+        }
+
+        // **Navigate off the cursor, one key per decision.** Gen 1's
+        // `HandleMenuInput` delays several frames after accepting a press, so
+        // the first of a burst is routinely swallowed and the rest land out of
+        // phase. Measured: a run policy that fired down/right/A blind opened
+        // the party list instead, 2,500 decisions of it. A swallowed press
+        // simply repeats when each decision is one key.
+        let on_main = s.said("FIGHT");
+        if !on_main {
+            // The move list. **Its cursor is 1-based and the main menu's is
+            // not**, which the cartridge says itself: `MoveSelectionMenu`
+            // (`engine/battle/core.asm`) opens with
+            // `ld a, [wPlayerMoveListIndex] / inc a / ld [hli], a ;
+            // wCurrentMenuItem`. Measured before it was believed — the cursor
+            // reads 1 with `▶` drawn on the first move.
+            if let Action::Fight { slot, why } = action {
+                self.tally.note(why);
+                return self.menu_to(view.menu_item.saturating_sub(1), slot as u8, why);
+            }
+            // Some other list we did not ask for.
+            return self.one("Back out of this list.", "b");
+        }
+        // The main menu: FIGHT / PKMN over ITEM / RUN.
+        let want = match &action {
+            Action::Fight { .. } => "FIGHT",
+            Action::Item { .. } => "ITEM",
+            Action::Run { .. } => "RUN",
+            Action::Switch { .. } => "PKMN",
+        };
+        self.tally.note(action.why());
+        if sel.contains(want) {
+            return self.one(action.why(), "a");
+        }
+        // FIGHT PKMN
+        // ITEM  RUN
+        let here = ["FIGHT", "PKMN", "ITEM", "RUN"]
+            .iter()
+            .position(|w| sel.contains(w))
+            .unwrap_or(0);
+        let there = ["FIGHT", "PKMN", "ITEM", "RUN"]
+            .iter()
+            .position(|w| *w == want)
+            .unwrap_or(0);
+        let key = if here / 2 != there / 2 {
+            if there / 2 > here / 2 {
+                "down"
             } else {
-                self.one("Left to FIGHT.", "left")
-            };
+                "up"
+            }
+        } else if there % 2 > here % 2 {
+            "right"
+        } else {
+            "left"
+        };
+        self.one(&format!("towards {want}"), key)
+    }
+
+    /// Step a menu cursor one row towards `want`, or press A when it is there.
+    ///
+    /// `wCurrentMenuItem` is the live index, so this cannot drift: a swallowed
+    /// press leaves the index where it was and the next decision repeats it.
+    fn menu_to(&mut self, at: u8, want: u8, why: &str) -> String {
+        let say = format!("{why} (slot {})", want + 1);
+        match at.cmp(&want) {
+            std::cmp::Ordering::Less => self.one(&say, "down"),
+            std::cmp::Ordering::Greater => self.one(&say, "up"),
+            std::cmp::Ordering::Equal => self.one(&say, "a"),
         }
-        if self.primitive {
-            return self.one("Let the battle run on.", "a");
-        }
-        Plan::new("Let the battle run on.").text(20).finish()
     }
 
     /// Follow the route on the current map.
@@ -1257,6 +1348,248 @@ fn toward(neg: &'static str, pos: &'static str, delta: i32, r: u64) -> &'static 
     }
 }
 
+// ---------------------------------------------------------------------------
+// battle telemetry
+// ---------------------------------------------------------------------------
+
+/// What the battle policy actually did, aggregated across every attempt in a
+/// run.
+///
+/// **A link can pass while the battle policy is quietly awful**, so the pass
+/// rate is not enough: a win at 2 HP is a loss on the next link, a policy that
+/// wins by burning every potion has solved nothing, and running is only a
+/// decision if somebody checks whether it was the right one. The counters are
+/// process-global and relaxed because they are read once, at the end, and
+/// `corpus` fans attempts across threads.
+mod tally {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    macro_rules! counters {
+        ($($n:ident),* $(,)?) => {
+            $(pub static $n: AtomicU64 = AtomicU64::new(0);)*
+        };
+    }
+    counters!(
+        BATTLES,
+        WON,
+        LOST,
+        FLED,
+        FAINTS,
+        ITEMS,
+        RUN_FORBIDDEN,
+        RUN_FAINTING,
+        RUN_TRAINED,
+        RUN_FAILED,
+        HP_LEFT_PERMILLE,
+        HP_SAMPLES,
+        DMG_CHECKED,
+        DMG_IN_RANGE,
+        DMG_UNDER,
+        DMG_OVER,
+        TURNS,
+        STAT_TURNS,
+    );
+
+    pub fn bump(c: &AtomicU64, by: u64) {
+        c.fetch_add(by, Relaxed);
+    }
+    pub fn get(c: &AtomicU64) -> u64 {
+        c.load(Relaxed)
+    }
+
+    /// One line, printed beside the pass rate.
+    pub fn report() -> Option<String> {
+        let n = get(&BATTLES);
+        if n == 0 {
+            return None;
+        }
+        let pct = |a: u64| 100.0 * a as f64 / n as f64;
+        let hp = if get(&HP_SAMPLES) > 0 {
+            get(&HP_LEFT_PERMILLE) as f64 / get(&HP_SAMPLES) as f64 / 10.0
+        } else {
+            0.0
+        };
+        let checked = get(&DMG_CHECKED).max(1);
+        Some(format!(
+            "battles {n}: won {} ({:.1}%), lost {} ({:.1}%), fled {} ({:.1}%); \
+             {:.1} turns each\n  \
+             HP left when it ended: {hp:.1}% of max ({} sample(s)); faints {}; \
+             items used {}\n  \
+             ran because: {} the leg forbids a win, {} one hit from fainting, \
+             {} the lead is already trained; {} escapes failed\n  \
+             turns spent lowering a stat: {}\n  \
+             damage predictions: {} checked, {:.1}% inside the roll range, \
+             {} under, {} over (a critical hit lands over)",
+            get(&WON),
+            pct(get(&WON)),
+            get(&LOST),
+            pct(get(&LOST)),
+            get(&FLED),
+            pct(get(&FLED)),
+            get(&TURNS) as f64 / n as f64,
+            get(&HP_SAMPLES),
+            get(&FAINTS),
+            get(&ITEMS),
+            get(&RUN_FORBIDDEN),
+            get(&RUN_FAINTING),
+            get(&RUN_TRAINED),
+            get(&RUN_FAILED),
+            get(&STAT_TURNS),
+            get(&DMG_CHECKED),
+            100.0 * get(&DMG_IN_RANGE) as f64 / checked as f64,
+            get(&DMG_UNDER),
+            get(&DMG_OVER),
+        ))
+    }
+}
+
+/// Per-driver battle bookkeeping, folded into the global counters as it goes.
+#[derive(Default)]
+struct BattleTally {
+    /// The last view seen, so the end of a battle can be recognised by its
+    /// absence and scored from what it looked like just before.
+    last: Option<terminalgb_plugin_agent::battle::View>,
+    /// The damage range we predicted for the move just chosen, and their HP
+    /// when we chose it — the pair a prediction is checked against.
+    predicted: Option<(u16, u16, u16)>,
+    turns: u64,
+    /// Turns of this battle already spent lowering a stat.
+    stat_turns: u8,
+    ran: bool,
+    /// A RUN was chosen on the turn just gone; if the battle is still here on
+    /// the next one, the escape failed and cost a turn.
+    ran_last_turn: bool,
+}
+
+impl BattleTally {
+    /// Called once per battle decision with the state it was made from.
+    fn observe(&mut self, v: &terminalgb_plugin_agent::battle::View) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.last.is_none() {
+            tally::bump(&tally::BATTLES, 1);
+            self.turns = 0;
+            self.stat_turns = 0;
+            self.ran = false;
+            self.ran_last_turn = false;
+        }
+        // **Check the prediction against what happened.** A prediction nobody
+        // verified is a guess with a decimal point.
+        //
+        // **Held until their HP actually moves**, because `observe` runs on
+        // every decision and a move takes several of them to resolve — taking
+        // the prediction on the first one threw every single check away, and
+        // the report said "0 checked" while looking perfectly healthy.
+        if let Some((lo, hi, before)) = self.predicted {
+            match v.theirs.hp.cmp(&before) {
+                std::cmp::Ordering::Less => {
+                    self.predicted = None;
+                    let dealt = before - v.theirs.hp;
+                    tally::bump(&tally::DMG_CHECKED, 1);
+                    tally::bump(
+                        match dealt {
+                            d if d < lo => &tally::DMG_UNDER,
+                            d if d > hi => &tally::DMG_OVER,
+                            _ => &tally::DMG_IN_RANGE,
+                        },
+                        1,
+                    );
+                }
+                // They were healed or replaced; the prediction is stale.
+                std::cmp::Ordering::Greater => self.predicted = None,
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+        // A RUN that did not escape: the battle is still here a turn later.
+        if self.ran_last_turn {
+            tally::bump(&tally::RUN_FAILED, 1);
+            self.ran_last_turn = false;
+        }
+        self.last = Some(v.clone());
+        let _ = Relaxed;
+    }
+
+    /// Called with the reason string of whatever was chosen.
+    ///
+    /// **Runs are counted by the reason the policy gave, not graded.** The
+    /// policy only ever runs for three reasons and all three are legitimate by
+    /// construction, so a right/wrong column would be vacuous; what a reader
+    /// needs is the mix, plus how often the escape failed, which costs a turn
+    /// and is the real price of the decision.
+    fn note(&mut self, why: &str) {
+        // A turn is an action chosen, not a decision spent — most decisions in
+        // a battle go on reading the text a turn produced.
+        self.turns += 1;
+        if why.contains("must not win") {
+            self.ran = true;
+            tally::bump(&tally::RUN_FORBIDDEN, 1);
+        } else if why.contains("not worth it") {
+            self.ran = true;
+            tally::bump(&tally::RUN_FAINTING, 1);
+        } else if why.contains("only a cost") {
+            self.ran = true;
+            tally::bump(&tally::RUN_TRAINED, 1);
+        }
+        self.ran_last_turn = why.contains("must not win")
+            || why.contains("not worth it")
+            || why.contains("only a cost");
+        if why.contains("bag can outrun") {
+            tally::bump(&tally::ITEMS, 1);
+        }
+        if why.contains("lower what it hits with") {
+            self.stat_turns = self.stat_turns.saturating_add(1);
+            tally::bump(&tally::STAT_TURNS, 1);
+        }
+        if let Some(v) = &self.last {
+            if let Some(m) = v.moves.iter().find(|m| m.damaging() && m.usable()) {
+                if why.contains("knocks it out")
+                    || why.contains("most damage")
+                    || why.contains("ends it first")
+                {
+                    self.predicted = Some((m.min, m.max, v.theirs.hp));
+                }
+            }
+        }
+    }
+
+    /// Called every decision; scores a battle the moment it is over.
+    fn tick(&mut self, in_battle: bool) {
+        if in_battle {
+            return;
+        }
+        let Some(v) = self.last.take() else { return };
+        tally::bump(&tally::TURNS, self.turns);
+        if self.ran {
+            tally::bump(&tally::FLED, 1);
+        } else if v.ours.hp == 0 {
+            tally::bump(&tally::LOST, 1);
+            tally::bump(&tally::FAINTS, 1);
+        } else {
+            tally::bump(&tally::WON, 1);
+        }
+        // HP left at the end, which is what the next link inherits.
+        if v.ours.max_hp > 0 {
+            tally::bump(
+                &tally::HP_LEFT_PERMILLE,
+                (v.ours.hp as u64 * 1000 / v.ours.max_hp as u64).min(1000),
+            );
+            tally::bump(&tally::HP_SAMPLES, 1);
+        }
+        self.predicted = None;
+        self.turns = 0;
+        self.stat_turns = 0;
+    }
+}
+
+/// **Score the last battle even when the run ends inside it.** A link whose
+/// goal fires on the turn a battle ends — which is exactly what link 05's does
+/// — would otherwise contribute nothing to the battle report, and the report
+/// would quietly describe a smaller sample than the run.
+impl Drop for ChainDriver {
+    fn drop(&mut self) {
+        self.tally.tick(false);
+    }
+}
+
 fn dist(a: (u8, u8), b: (u8, u8)) -> u32 {
     (a.0 as i32 - b.0 as i32).unsigned_abs() + (a.1 as i32 - b.1 as i32).unsigned_abs()
 }
@@ -1284,9 +1617,29 @@ impl Driver for ChainDriver {
                 .take(220)
                 .collect::<String>();
             let short = reply.chars().take(110).collect::<String>();
+            let arena = match &s.arena {
+                Some(a) => format!(
+                    " {{us {}/{} spd{} | them {}/{} spd{} | cursor {} | in {}/{} | \
+                     moves {:?}}}",
+                    a.ours.hp,
+                    a.ours.max_hp,
+                    a.ours.speed,
+                    a.theirs.hp,
+                    a.theirs.max_hp,
+                    a.theirs.speed,
+                    a.menu_item,
+                    a.incoming_expected,
+                    a.incoming_max,
+                    a.moves
+                        .iter()
+                        .map(|m| (m.slot, m.id, m.pp, m.min, m.max))
+                        .collect::<Vec<_>>()
+                ),
+                None => String::new(),
+            };
             eprintln!(
                 "  [{:3}] map 0x{:02X} ({:2},{:2}) stage {} idx {} kind {:8} lv{} \
-                 hp{}/{} :: [{text}] {short}",
+                 hp{}/{} ::{arena} [{text}] {short}",
                 self.calls,
                 s.map,
                 s.x,
@@ -1808,6 +2161,9 @@ fn cmd_solve(a: &Args) {
         phase_for(a.seed, a.idle_spread),
     );
     report(&o, a.seed);
+    if let Some(b) = tally::report() {
+        println!("{b}");
+    }
     if a.paths {
         write_path(&out.join(format!("path-{:05}.csv", a.seed)), &o.path);
     }
@@ -2104,6 +2460,11 @@ fn cmd_corpus(a: &Args) {
             wall / 1000.0,
             (secs * workers as f64) - wall / 1000.0
         );
+    }
+    // How the battles inside those episodes went. A link can pass while the
+    // battle policy is quietly awful; see `docs/agent/battle-policy.md`.
+    if let Some(b) = tally::report() {
+        println!("{b}");
     }
     println!("{}", out.join("index.ndjson").display());
     let dupes = report_independence(&rows, pool.len(), spread);

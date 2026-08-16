@@ -8000,6 +8000,74 @@ distinct trajectories in 3,000 attempts say the diversity survived. Same class a
 rival's sprite; the only way to it is round, and round is south. The turning point of the path
 that actually exists — `(5,4)` — is a tile that no detour is ever needed to reach.
 
+### THE BATTLE POLICY IS A SHARED CAPABILITY, AND IMPROVING IT RE-CERTIFIES EVERY LINK
+
+**Full page: [`docs/agent/battle-policy.md`](docs/agent/battle-policy.md).** Fight, switch,
+item or run, decided from the cartridge's own state by
+[`plugins/agent/src/battle.rs`](plugins/agent/src/battle.rs) — one implementation links 05, 11,
+13 and everything after share. The observer reads the facts into the snapshot; `ChainDriver::fight`
+works the *menus* and nothing else. **No link may carry a battle decision of its own**, and the
+standing order is explicit: when the policy improves, every already-certified link is
+re-certified against it, exactly as a driver change forces.
+
+- **`BattleTables` (`plugins/trainer/src/rom.rs`) pulls the two tables a battle needs through
+  `Machine::peek_bank`** — `Moves` at `0E:4000` and `TypeEffects` at `0F:6474`, 1.6 KiB, once
+  per session — so a plugin that never loaded the cartridge image still decides from the
+  cartridge. `verified()` re-checks the chart's opening rows before any of it is believed. Do
+  **not** slurp the whole ROM for this; the trainer plugin does that because it wants sprites.
+- **The stats come out of `wBattleMon`/`wEnemyMon`, never the party.** Gen 1 copies the active
+  Pokémon in and applies stat stages *there*, so those are the numbers it is fighting with and
+  nothing has to re-apply a stage table.
+- **THE BATTLE MOVE MENU'S CURSOR IS 1-BASED AND THE MAIN MENU'S IS NOT.** `MoveSelectionMenu`
+  (`engine/battle/core.asm`) opens with `ld a, [wPlayerMoveListIndex] / inc a / ld [hli], a ;
+  wCurrentMenuItem`, so `wCurrentMenuItem` reads 1 with `▶` on the first move. **Getting it
+  wrong is silent** — the cursor already equals the target, A fires on the wrong move, and the
+  policy's choice is thrown away with nothing in the trace to say so. Measured before it was
+  believed.
+- **A stat move must FLIP THE RACE, not merely be available.** An ungated "lower their attack
+  while losing" spent six GROWLs of a twelve-turn fight and still lost. The rule projects one
+  stage down (`StatModifierRatios`' `db 66, 100`) and spends the turn only if they then need
+  more turns than we do after paying one; plus a hard cap of two a battle, because the
+  projection is an estimate.
+- **WATCH THE BATTLE ON EVERY DECISION, NOT ONLY THE ONES THAT OPEN A MENU.** The knock-out
+  happens during the text a turn produces, so a tally fed from the menu branch alone never sees
+  a party at 0 HP: it reported **300 of 300 battles won** where the exit states said 218. Any
+  battle metric has the same trap. And hold a damage prediction until their HP actually moves —
+  taking it on the next decision threw every check away and printed a healthy-looking
+  "0 checked".
+- **Report the battle beside the pass rate**: win rate, HP left at the end, runs by the reason
+  given, escapes that failed, faints, item spend, and how many damage predictions landed inside
+  Gen 1's 217..255 roll range. A link can pass while the policy is quietly awful. Measured on
+  the rival battle: 73.8% won, 31.7% HP left, 80.8% of 4,427 predictions in range, 7.8% over
+  (critical hits, which the estimate excludes on purpose — and the rate matching Gen 1's
+  base-speed/2-in-256 is itself a check).
+- **Item use and switching are implemented and never fire in the Pewter chain** — the party is
+  one Pokémon from link 04 to 14 and the chain never buys a potion. Say that rather than
+  implying they are exercised.
+
+### A LOST RIVAL BATTLE IS NOT A LOSS, AND THE CARTRIDGE SAYS SO
+
+`HandlePlayerBlackOut` (`engine/battle/core.asm`) special-cases the Oak's Lab starter battle:
+`cp OPP_RIVAL1` … then after printing `Rival1WinText`, `ld a,[wCurMap] / cp OAKS_LAB / ret z`,
+whose own comment is *"starter battle in oak's lab: don't black out"*. The player stays in the
+laboratory, `OaksLabRivalEndBattleScript` heals the party and sets
+`EVENT_BATTLED_RIVAL_IN_OAKS_LAB` whoever won. Link 05 used to declare `party_hp=0` a failure
+and ended **166 of 600 attempts about two seconds before the goal fired** — the link-03 error
+in a different coat, a *failure* authored from a plausible idea rather than a goal, and again
+the scenario contradicted its own objective text.
+
+- **The rival parks on ROW 4 after the starter scene** — `(7,4)`, `(8,4)` or `(6,4)` for a
+  player who took Charmander, Squirtle or Bulbasaur — and a sprite is solid. An approach
+  waypoint on row 4 is therefore sometimes a tile nobody can reach: 50 of 600 attempts timed
+  out, every one a seed ≡ 1 (mod 12), which is `seed % 4` (the approach) and `seed % 3` (the
+  ball) together. Row 5 carries no sprite at all.
+- **The fight is decided by base stats, not by type, and it is not a coin flip.** At level 5
+  every starter's damaging move is Normal. Measured over 900 certified exits: Squirtle loses
+  **14.7%**, Charmander **23.0%**, Bulbasaur **54.0%** — because Bulbasaur draws Charmander,
+  which is faster at every level (65 against 45, so it lands the last hit) and hits 52 into 49.
+  One `gen1_tables.py` query away, and it sat behind a sentence of plausible reasoning for
+  months.
+
 ### Scale, determinism and the bar
 
 - **`pewter_chain corpus` fans out across threads and `verify` proves determinism under it** —
@@ -8106,7 +8174,11 @@ final-state hash, three thousand times**. A duplicated corpus and an honest one 
   field and nothing else needs recording. **Do not build that path with `$(ls …)`** — `ls` is
   proxied here and prints a size beside every name, so the array is filename/size pairs and
   every index is doubled; the trace you get is a *different* seed's, and it may well pass.
-  `printf 'dir/%05d.gbss' $SEED`, or `find`.
+  `printf 'dir/%05d.gbss' $SEED`, or `find`. **And this shell is zsh, which does NOT
+  word-split an unquoted `$VAR`** — building up `A="--start-dir X --out Y"` and passing `$A`
+  hands the binary one enormous argument, and the four corpus runs that followed produced no
+  index file and a stack of confusing `FileNotFoundError`s. Use an array, or write the flags
+  out.
 - **CHANGING SHARED DRIVER CODE INVALIDATES EVERY LINK ALREADY CERTIFIED, AND THEY MUST BE
   RE-RUN IN THE SAME COMMIT.** A trajectory is a function of the driver, so certifying a new
   link on a driver the earlier ones were never measured against is a claim about neither

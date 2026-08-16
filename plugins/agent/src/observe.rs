@@ -716,6 +716,9 @@ pub struct GameState {
     pub party: Vec<PartyMon>,
     pub battle: BattleKind,
     pub opponent: Option<PartyMon>,
+    /// Everything the shared battle policy decides from, when a battle is up.
+    /// See [`crate::battle`].
+    pub arena: Option<crate::battle::View>,
     /// Doors and staircases on this map, from its warp table.
     pub exits: Vec<Exit>,
     /// The current map's size **in the same units as `x` and `y`**, or `None`
@@ -732,6 +735,13 @@ pub struct GameState {
 /// here, with their symbols cited.
 pub struct Gen1Observer {
     ok: bool,
+    /// The move table and the type chart, pulled out of the cartridge's banks
+    /// once and kept. 1.6 KiB of `peek_bank`, on the first battle only.
+    ///
+    /// Behind a `RefCell` so [`Gen1Observer::read`] can stay `&self`: the
+    /// executor in [`crate::action`] holds the observer by shared reference
+    /// while it walks, and a cache is not a reason to change that.
+    tables: std::cell::RefCell<Option<terminalgb_plugin_trainer::rom::BattleTables>>,
 }
 
 /// `wCurMap` (`ram/wram.asm`). Cross-checked at run time by
@@ -769,7 +779,24 @@ pub const W_CUR_MAP_WIDTH: u16 = 0xD369;
 
 impl Gen1Observer {
     pub fn new(supported: bool) -> Gen1Observer {
-        Gen1Observer { ok: supported }
+        Gen1Observer {
+            ok: supported,
+            tables: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// The cartridge's move table and type chart, read on first use.
+    ///
+    /// **Not at construction**: the plugin is registered before the machine
+    /// exists, and a cartridge that is not Gen 1 must not be scanned at all.
+    fn fill_tables(&self, m: &mut Machine) {
+        if self.tables.borrow().is_some() {
+            return;
+        }
+        let t = terminalgb_plugin_trainer::rom::BattleTables::read(|bank, addr| {
+            m.peek_bank(bank, addr).unwrap_or(0xFF)
+        });
+        *self.tables.borrow_mut() = Some(t);
     }
 
     pub fn read(&self, m: &mut Machine) -> GameState {
@@ -861,9 +888,149 @@ impl Gen1Observer {
                 max_hp: m.peek_be16(tr::ENEMY_MON + b::MAX_HP).unwrap_or(0),
                 status: None,
             });
+            st.arena = self.arena(m, &st);
         }
         st
     }
+
+    /// Read everything the battle policy decides from.
+    ///
+    /// Both sides come out of the two 28-byte battle structs rather than the
+    /// party — Gen 1 copies the active Pokémon into `wBattleMon` and applies
+    /// stat stages *there*, so these are the numbers the cartridge is actually
+    /// fighting with.
+    fn arena(&self, m: &mut Machine, st: &GameState) -> Option<crate::battle::View> {
+        use crate::battle;
+        use terminalgb_plugin_trainer::gen1::battle as b;
+        self.fill_tables(m);
+        let cache = self.tables.borrow();
+        let t = cache.as_ref().expect("just filled");
+        let ours =
+            read_side(m, tr::BATTLE_MON, tr::BATTLE_MON_NICK, tr::PLAYER_STAT_MODS);
+        let theirs = read_side(m, tr::ENEMY_MON, tr::ENEMY_MON_NICK, tr::ENEMY_STAT_MODS);
+        // The struct is uninitialised until the engine has filled it; a level
+        // of zero is the tell, and acting on it would be acting on noise.
+        if ours.level == 0 || theirs.level == 0 || ours.max_hp == 0 {
+            return None;
+        }
+        let mut moves = Vec::new();
+        for slot in 0..terminalgb_plugin_trainer::gen1::NUM_MOVES {
+            let id = m.peek(tr::BATTLE_MON + b::MOVES + slot as u16).unwrap_or(0);
+            if id == 0 {
+                continue;
+            }
+            // The battle struct's PP bytes carry the PP Ups in their top two
+            // bits, exactly as the party struct's do.
+            let pp = m.peek(tr::BATTLE_MON + b::PP + slot as u16).unwrap_or(0) & 0x3F;
+            let kind = t.kind(id);
+            let mut mv = battle::Move {
+                slot,
+                id,
+                name: String::new(),
+                power: t.power(id),
+                kind,
+                effect: t.effect(id),
+                accuracy: t.accuracy_percent(id),
+                pp,
+                effect_pct: t.multiplier(kind, theirs.types.0, theirs.types.1),
+                stab: kind == ours.types.0 || kind == ours.types.1,
+                min: 0,
+                max: 0,
+            };
+            let (lo, hi) = battle::damage(t, &mv, &ours, &theirs);
+            mv.min = lo;
+            mv.max = hi;
+            moves.push(mv);
+        }
+        // What we expect to take. The opponent's move list is in its own battle
+        // struct; a player would have to learn it by being hit, and the
+        // module docs say so.
+        let (mut worst, mut expected) = (0u16, 0u16);
+        for slot in 0..terminalgb_plugin_trainer::gen1::NUM_MOVES {
+            let id = m.peek(tr::ENEMY_MON + b::MOVES + slot as u16).unwrap_or(0);
+            if id == 0 {
+                continue;
+            }
+            let kind = t.kind(id);
+            let their_move = battle::Move {
+                id,
+                power: t.power(id),
+                kind,
+                accuracy: t.accuracy_percent(id),
+                pp: 1,
+                effect_pct: t.multiplier(kind, ours.types.0, ours.types.1),
+                stab: kind == theirs.types.0 || kind == theirs.types.1,
+                ..Default::default()
+            };
+            let (_, hi) = battle::damage(t, &their_move, &theirs, &ours);
+            worst = worst.max(hi);
+            expected = expected.max(hi * their_move.accuracy as u16 / 100);
+        }
+        let items = read_bag(m);
+        Some(battle::View {
+            trainer: st.battle == BattleKind::Trainer,
+            ours,
+            theirs,
+            moves,
+            items,
+            party_alive: st.party.iter().filter(|p| p.hp > 0).count().max(1),
+            incoming_max: worst,
+            incoming_expected: expected,
+            // How many turns have gone on a stat move is the driver's count,
+            // not a memory read — the cartridge does not keep one.
+            stat_turns: 0,
+            menu_item: m.peek(tr::CURRENT_MENU_ITEM).unwrap_or(0),
+        })
+    }
+}
+
+/// One side of a battle out of its 28-byte struct.
+fn read_side(m: &mut Machine, base: u16, nick: u16, mods: u16) -> crate::battle::Side {
+    use terminalgb_plugin_trainer::gen1::battle as b;
+    let mut name = [0u8; 11];
+    m.peek_into(nick, &mut name);
+    let mut stages = [crate::battle::NEUTRAL_STAGE; 4];
+    for (i, s) in stages.iter_mut().enumerate() {
+        // Uninitialised WRAM reads as anything; only 1..13 is a stage.
+        let raw = m
+            .peek(mods + i as u16)
+            .unwrap_or(crate::battle::NEUTRAL_STAGE);
+        if (1..=13).contains(&raw) {
+            *s = raw;
+        }
+    }
+    crate::battle::Side {
+        name: terminalgb_plugin_trainer::text::decode(&name),
+        species: m.peek(base + b::SPECIES).unwrap_or(0),
+        level: m.peek(base + b::LEVEL).unwrap_or(0),
+        hp: m.peek_be16(base + b::HP).unwrap_or(0),
+        max_hp: m.peek_be16(base + b::MAX_HP).unwrap_or(0),
+        status: m.peek(base + b::STATUS).unwrap_or(0),
+        types: (
+            m.peek(base + b::TYPE1).unwrap_or(0),
+            m.peek(base + b::TYPE2).unwrap_or(0),
+        ),
+        attack: m.peek_be16(base + b::ATTACK).unwrap_or(0),
+        defense: m.peek_be16(base + b::DEFENSE).unwrap_or(0),
+        speed: m.peek_be16(base + b::SPEED).unwrap_or(0),
+        special: m.peek_be16(base + b::SPECIAL).unwrap_or(0),
+        stages,
+    }
+}
+
+/// The bag: `wNumBagItems` then id/quantity pairs.
+fn read_bag(m: &mut Machine) -> Vec<crate::battle::Item> {
+    let n = m.peek(tr::NUM_BAG_ITEMS).unwrap_or(0) as usize;
+    (0..n.min(tr::MAX_BAG_ITEMS))
+        .map(|i| {
+            let at = tr::BAG_ITEMS + (i * 2) as u16;
+            crate::battle::Item {
+                id: m.peek(at).unwrap_or(0),
+                count: m.peek(at + 1).unwrap_or(0),
+            }
+        })
+        .filter(|it| it.id != 0 && it.id != 0xFF)
+        .collect()
 }
 
 /// Work out what the game is doing from the screen and the battle flag.
