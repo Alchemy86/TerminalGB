@@ -7963,3 +7963,31 @@ The same trap link 01's own goal condition guards against by requiring `wCurMapW
 an edge is shown half off; and **wrap a caption to the panel, never let the panel cut it** —
 the certification line read `links 01/02/03 each certified 3000` and stopped mid-number, and a
 truncated measurement is worse than none because a reader cannot tell it was cut.
+
+#### What the film compositor needs from the world atlas (`mapgb-atlas-w7`)
+
+The layout in `swarm_film.py` — `WORLD`, `INTERIOR`, `build_layout` and the connector lines —
+is **being replaced** by the proper Kanto atlas and its manifest. Everything else in the
+compositor is layout-independent and stays: the camera stabilisation, the tile interpolation,
+the heat colouring, the link-progress bars, the tracked cohort and the off-frame honesty line.
+
+The whole surface the rest of the compositor touches is four things, so the swap is small if
+the manifest answers them:
+
+1. **`origin[map_id] -> (x, y)` in one global pixel space**, plus that space's total size.
+   `world_pos` and the camera work in nothing else.
+2. **The sheet image per map**, by path in the manifest rather than by filename prefix — the
+   current `f"{m:03d}-"` discovery is a guess about somebody else's naming.
+3. **A per-map `scale`, honoured in the tile→pixel conversion.** This is the one real change,
+   and it is worth settling before anything is written: today `world_pos` assumes `TILE = 16`
+   px **everywhere**, so an atlas that draws interiors smaller than the overworld silently
+   puts every indoor agent in the wrong place. If `scale` can vary per map, the conversion
+   becomes `origin + tile * 16 * scale[map]` and the marker radius should scale with it too.
+4. **An explicit answer for a map the atlas does not place.** Tracks contain transients — map
+   `$FC` appears for a few frames at power-on — and the compositor already counts unplaced
+   agents in the off-frame line. A missing key must mean "not placed", never "place it at the
+   origin", which is the failure that put six hundred agents on Pallet Town's corner.
+
+`parent map` and `connecting warp` are not needed by the compositor: it draws agents at world
+pixels and nothing else. They are useful for *labelling*, and grouping interiors by proximity
+and colour removes the connector lines entirely.
