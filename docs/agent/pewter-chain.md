@@ -851,23 +851,27 @@ needs a stride of 12, comfortably inside a 17-frame step, and the ceiling rises
 to 17.08×. Measured on the same tracks, 12×/60 fps beats 8×/30 fps on *every*
 motion figure while being half as long again:
 
-| | 8× at 30 fps | **12× at 60 fps** |
-|---|---:|---:|
-| stride, emulated frames per output frame | 16 | **12** |
-| walking agent, source px per output frame | 15.1 | **11.3** |
-| whole-tile quantisation | 0.0% | **0.0%** |
-| `>=12 px` snaps | 20.8% | **1.25%** |
-| `<4 px` slides | 62.8% | **67.2%** |
-| camera coverage | 98.3% | **98.8%** |
+| on the same tracks and the same atlas | 8× at 30 fps | 12× at 30 fps | **12× at 60 fps** |
+|---|---:|---:|---:|
+| stride, emulated frames per output frame | 16 | 24 | **12** |
+| walking agent, source px per output frame | 15.1 | 22.6 | **11.3** |
+| whole-tile quantisation | 0.0% | 18.0% | **0.0%** |
+| `>=12 px` snaps | 20.8% | 31.5% | **1.25%** |
+| `<4 px` slides | 62.8% | 55.4% | **67.2%** |
+| camera coverage | 98.1% | 96.6% | **98.6%** |
 
-On the shipped 12× cut, 65,001 moving samples of 91,082:
+The middle column is the ceiling being crossed, and it costs on every row at
+once — including the camera, which has the same deadzone and pan cap to work
+with and twice the ground to cover per frame.
+
+On the shipped 12× cut, 163,041 samples of which 65,001 are moving:
 
 ```text
 agent displacement per output frame, in source pixels (a walk tile is 16):
-  median 0.00  p90 11.29  p99 192.00  max 449.14
+  median 0.00  p90 11.29  p99 144.89  max 244.75
   >=12 px (a snap) 1.25%   <4 px (a slide) 67.17%
   whole-tile quantisation 0.0% of 65001 moving samples land on the tile grid
-camera coverage: mean 98.8% of live agents on screen
+camera coverage: mean 98.6% of live agents on screen, worst frame 59 with 250 of 600 off
 ```
 
 The tail past 40 px is warps, and a warp is a jump — `interpolate` refuses to

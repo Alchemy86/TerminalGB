@@ -8211,10 +8211,12 @@ cut was already leaning on.
   at 8x.
 - **THE WAY PAST IT IS FRAME RATE, NOT A SLOWER FILM.** At 60 fps the ceiling is **17.08x**, so
   the original dot film's 12x needs a stride of 12 and is comfortably smooth. Measured on the
-  same tracks, **12x/60 fps beats 8x/30 fps on every motion figure while being half as long
-  again**: stride 12 vs 16, walking agent 11.3 vs 15.1 source px per output frame, quantisation
-  0.0% both, `>=12 px` snaps **1.25%** vs 20.8%, `<4 px` slides 67.2% vs 62.8%, camera coverage
-  98.8% vs 98.3%. Speed and smoothness are not the trade they look like.
+  same tracks and the same atlas, **12x/60 fps beats 8x/30 fps on every motion figure while
+  being half as long again**: stride 12 vs 16, walking agent 11.3 vs 15.1 source px per output
+  frame, quantisation 0.0% both, `>=12 px` snaps **1.25%** vs 20.8%, `<4 px` slides 67.2% vs
+  62.8%, camera coverage 98.6% vs 98.1%. Speed and smoothness are not the trade they look like.
+  Crossing the ceiling (12x at 30 fps) costs every row at once, the camera included — 96.6%
+  coverage, because it has the same deadzone and pan cap and twice the ground per frame.
 - **The original film's pace was 12.05x and it is in the repository, not folklore**:
   `examples/swarm_view.rs --sample 24` at 30 fps, 36,000 emulated frames per agent -> 1,500
   output frames, 50 s (`docs/swarm-view.md`). Its stride of 24 is *longer* than a walk step, so
@@ -8250,3 +8252,12 @@ atlas, every hypothesis differs by ~36% and the best is arbitrary — it announc
 (3x) or above `MAX_MISMATCH` (10%) and names the scene that works: a ROM with no `.sav` beside
 it starts a new game in Red's bedroom, which has no NPC in shot. Any future sweep-shaped
 measurement in this repository needs the same guard.
+
+#### A shorter longest warp is how you check a map layout landed
+
+The corrected Kanto atlas puts each Pallet Town interior on the side its door is actually on
+(Red's House left, Blue's House and Oak's Lab right) instead of bundling all of them to the
+left of the town. Nothing in the compositor changed, and **the longest displacement in the film
+fell from 449.14 to 244.75 source px** — a warp's jump *is* the distance between a door and the
+room behind it, so the film's own motion tail is an independent check that a layout is right.
+`p99` moved 192.00 -> 144.89 with it. Cheap, and it needs no eye on a picture.
