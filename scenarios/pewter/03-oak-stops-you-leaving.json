@@ -1,0 +1,31 @@
+{
+  "schema": "gbscenario/1",
+  "name": "03-oak-stops-you-leaving",
+  "objective": "Walk to the north exit of Pallet Town. Professor Oak's own map script fires when wYCoord reaches 1 and he walks you into his laboratory — so the goal is not the exit, it is being inside the lab with the introduction under way.",
+  "start_state": "states/02.gbss",
+  "goal": [
+    "map=0x28",
+    "watch:oak_appeared_in_pallet!=0"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "max_calls 150",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/03-oak-stops-you-leaving.json",
+  "timeout_frames": 60000,
+  "watch": [
+    {
+      "name": "oak_appeared_in_pallet",
+      "addr": "0xD74B",
+      "len": 1,
+      "mask": "0x80"
+    }
+  ]
+}

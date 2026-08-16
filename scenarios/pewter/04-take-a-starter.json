@@ -1,0 +1,31 @@
+{
+  "schema": "gbscenario/1",
+  "name": "04-take-a-starter",
+  "objective": "Take a starter Pokemon from one of the three Poke Balls on the table in Oak's laboratory. They sit at (6,3), (7,3) and (8,3); stand below one, face up, press A and answer YES. Oak's speech has to finish first, and walking at the table too early makes him call you back.",
+  "start_state": "states/03.gbss",
+  "goal": [
+    "watch:got_starter!=0",
+    "party>=1"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "max_calls 200",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/04-take-a-starter.json",
+  "timeout_frames": 80000,
+  "watch": [
+    {
+      "name": "got_starter",
+      "addr": "0xD74B",
+      "len": 1,
+      "mask": "0x04"
+    }
+  ]
+}

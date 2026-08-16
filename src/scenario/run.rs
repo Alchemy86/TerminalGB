@@ -61,6 +61,16 @@ pub struct RunResult {
     pub wall_ms: u128,
     /// Where the failing machine was saved, when it was worth saving.
     pub capture: Option<PathBuf>,
+    /// The machine exactly as the run left it.
+    ///
+    /// **This is what makes a chain of scenarios possible**: link *n*'s finish
+    /// is link *n+1*'s start, so a twelve-link playthrough can be built by
+    /// playing forward once and every link afterwards can be attempted
+    /// instantly without replaying the game. Present whatever the ending was —
+    /// a failed run's machine is worth reloading too, which is why
+    /// [`RunResult::capture`] exists — and it is the same bytes
+    /// [`Recording::final_state`] is the hash of.
+    pub final_state_bytes: Vec<u8>,
 }
 
 impl RunResult {
@@ -461,13 +471,14 @@ impl ScenarioRun {
         }
 
         let wall_ms = t.elapsed().as_millis();
+        let final_state_bytes = self.gb.save_state();
         let recording = Recording {
             scenario: self.scenario.name.clone(),
             scenario_hash: self.scenario.hash(),
             rom_title,
             rom_checksum,
             start_state: start_hash,
-            final_state: fnv1a(&self.gb.save_state()),
+            final_state: fnv1a(&final_state_bytes),
             driver,
             decisions,
             frames,
@@ -482,6 +493,7 @@ impl ScenarioRun {
             final_progress: last,
             wall_ms,
             capture,
+            final_state_bytes,
         }
     }
 
@@ -555,6 +567,7 @@ impl ScenarioRun {
             frames_per_second: 0.0,
             wall_ms: t.elapsed().as_millis(),
             capture: None,
+            final_state_bytes: Vec::new(),
         }
     }
 

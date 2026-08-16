@@ -924,9 +924,15 @@ pub fn map_name(id: u8) -> &'static str {
         0x2B => "Viridian School",
         0x2C => "Viridian House",
         0x2D => "Viridian Gym",
-        0x33 => "Pewter Pokémon Center",
+        0x2E => "Diglett's Cave (Route 2)",
+        0x2F => "Viridian Forest north gate",
+        0x30 => "Route 2 trade house",
+        0x31 => "Route 2 gate",
+        0x32 => "Viridian Forest south gate",
+        0x33 => "Viridian Forest",
+        0x34 => "Pewter Museum 1F",
         0x36 => "Pewter Gym",
-        0x3B => "Viridian Forest",
+        0x3A => "Pewter Pokémon Center",
         0xEF => "Trade Center",
         _ => "",
     }
@@ -952,6 +958,43 @@ mod tests {
         s.chars()
             .map(|c| terminalgb_plugin_gen1_link::text::encode_char(c).unwrap())
             .collect()
+    }
+
+    /// **A map name is a fact about the cartridge, so a wrong one is a lie
+    /// told with the same confidence as the truth.** Two of these were wrong
+    /// for as long as the table existed: `$33` was labelled "Pewter Pokémon
+    /// Center" when `constants/map_constants.asm` makes it `VIRIDIAN_FOREST`,
+    /// and `$3B` was labelled "Viridian Forest" when it is `MT_MOON_1F`. The
+    /// effect is not cosmetic — the name goes to the agent in its snapshot and
+    /// into every report, so a run that crossed Viridian Forest said it was in
+    /// a Pokémon Center. Found by driving the Pewter chain through it.
+    ///
+    /// The values are the const-list indices `map_constants.asm` assigns, and
+    /// nothing here may be added without deriving it the same way.
+    #[test]
+    fn every_named_map_is_the_map_the_cartridge_says_it_is() {
+        for (id, want) in [
+            (0x00, "Pallet Town"),
+            (0x01, "Viridian City"),
+            (0x02, "Pewter City"),
+            (0x0C, "Route 1"),
+            (0x0D, "Route 2"),
+            (0x25, "Red's house 1F"),
+            (0x26, "Red's house 2F (bedroom)"),
+            (0x28, "Oak's Lab"),
+            (0x29, "Viridian Pokémon Center"),
+            (0x2A, "Viridian Mart"),
+            (0x2F, "Viridian Forest north gate"),
+            (0x32, "Viridian Forest south gate"),
+            (0x33, "Viridian Forest"),
+            (0x36, "Pewter Gym"),
+            (0x3A, "Pewter Pokémon Center"),
+        ] {
+            assert_eq!(map_name(id), want, "map ${id:02X}");
+        }
+        // Mt Moon's first floor used to be labelled Viridian Forest. An
+        // unnamed map is honest; a wrongly named one is not.
+        assert_eq!(map_name(0x3B), "");
     }
 
     /// The battle menu spells "PKMN" with the two ligature tiles `<PK><MN>`

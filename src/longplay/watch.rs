@@ -44,6 +44,19 @@ pub struct Watch {
     /// Gen 1 multi-byte fields are big-endian; that is the default here for
     /// exactly that reason.
     pub big_endian: bool,
+    /// Bits to keep, ANDed with the value read. `0` means "the whole value",
+    /// which is what every watch written before this existed meant.
+    ///
+    /// **This is what makes a single event flag watchable.** Gen 1's story is
+    /// 2,560 single-bit events packed into the 320 bytes at `wEventFlags`
+    /// ($D747), so eight unrelated milestones share one byte: `$D74B` alone
+    /// carries "Oak asked you to choose", "you took a starter", "you fought the
+    /// rival" and "you were given the Pokédex". A byte comparison cannot name
+    /// one of them — `>= 32` is true for four different reasons — so without a
+    /// mask a goal about an event flag is a goal about something else. With one
+    /// it is exact: `{"name":"got_pokedex","addr":"0xD74B","mask":"0x20"}` and
+    /// the condition `watch:got_pokedex!=0`.
+    pub mask: u32,
 }
 
 /// The built-in names, each pointing at an address another crate derived.
@@ -79,13 +92,14 @@ impl Watch {
                 addr: *addr,
                 len: *len,
                 big_endian: *be,
+                mask: 0,
             })
     }
 
     /// Parse one watch out of an episode file's `watch` array.
     ///
     /// Two forms: `"enemy_hp"` (a built-in) or
-    /// `{"name":"flag","addr":"0xD747","len":1}`.
+    /// `{"name":"flag","addr":"0xD747","len":1,"mask":"0x01"}`.
     pub fn from_json(v: &json::Json) -> Result<Watch, String> {
         if let Some(s) = v.as_str() {
             return Watch::named(s).ok_or_else(|| {
@@ -118,6 +132,20 @@ impl Watch {
         if !matches!(len, 1 | 2 | 4) {
             return Err(format!("watch {name:?}: len must be 1, 2 or 4, not {len}"));
         }
+        let mask = match v.get("mask") {
+            Some(m) => parse_mask(m).map_err(|e| format!("watch {name:?}: {e}"))?,
+            None => 0,
+        };
+        // A mask outside the bytes actually read can only ever report zero, and
+        // a goal that can never be true is the expensive mistake this whole
+        // module is careful about. Name it here rather than at attempt 1,000.
+        let width = 8 * len as u32;
+        if mask != 0 && width < 32 && mask >> width != 0 {
+            return Err(format!(
+                "watch {name:?}: mask {mask:#X} has bits above the {len} byte(s) it \
+                 reads, so it could only ever be zero"
+            ));
+        }
         Ok(Watch {
             name,
             addr,
@@ -126,6 +154,7 @@ impl Watch {
                 .get("big_endian")
                 .and_then(|b| b.as_bool())
                 .unwrap_or(true),
+            mask,
         })
     }
 
@@ -135,6 +164,9 @@ impl Watch {
         w.str_field("addr", &format!("{:#06X}", self.addr));
         w.num_field("len", self.len as f64);
         w.bool_field("big_endian", self.big_endian);
+        if self.mask != 0 {
+            w.str_field("mask", &format!("{:#04X}", self.mask));
+        }
         w.end_obj();
     }
 
@@ -151,7 +183,30 @@ impl Watch {
                 v = (v << 8) | *b as u32;
             }
         }
+        if self.mask != 0 {
+            v &= self.mask;
+        }
         v
+    }
+}
+
+/// `"0x20"`, `"$20"` or `32`. Shares the address parser's refusal of a bare
+/// `"20"`: decimal or hex is not a guess worth making about a bit pattern.
+fn parse_mask(v: &json::Json) -> Result<u32, String> {
+    if let Some(n) = v.as_u64() {
+        return u32::try_from(n).map_err(|_| format!("{n} is not a 32-bit mask"));
+    }
+    let s = v
+        .as_str()
+        .ok_or("mask must be a number or a string")?
+        .trim();
+    let hex = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .or_else(|| s.strip_prefix('$'));
+    match hex {
+        Some(h) => u32::from_str_radix(h, 16).map_err(|_| format!("{s:?} is not a mask")),
+        None => s.parse().map_err(|_| format!("{s:?} is not a mask")),
     }
 }
 
@@ -270,11 +325,70 @@ mod tests {
             addr: 0xD747,
             len: 2,
             big_endian: false,
+            mask: 0x0140,
         };
         let mut out = json::Writer::new();
         w.to_json(&mut out);
         let back = Watch::from_json(&json::parse(&out.finish()).unwrap()).unwrap();
         assert_eq!(w, back);
+    }
+
+    /// Eight unrelated milestones share `$D74B`, so a byte comparison cannot
+    /// name one of them. The mask is what turns "the story so far" into a
+    /// single checkable fact — which is the whole reason a scenario's goal may
+    /// be an event flag rather than a coordinate somebody guessed.
+    #[test]
+    fn a_mask_isolates_one_bit_of_a_byte_that_holds_eight_events() {
+        let v = json::parse(
+            r#"{"name":"got_pokedex","addr":"0xD74B","len":1,"mask":"0x20"}"#,
+        )
+        .unwrap();
+        let w = Watch::from_json(&v).unwrap();
+        assert_eq!(w.mask, 0x20);
+        // EVENT_GOT_STARTER (0x04) and EVENT_BATTLED_RIVAL_IN_OAKS_LAB (0x08)
+        // are set and the Pokédex is not: the byte reads 0x0C, which is >= 4
+        // and would satisfy any plain comparison a person might reach for.
+        assert_eq!(0x0C_u32 & w.mask, 0, "the dex bit is not set yet");
+        assert_eq!(0x2C_u32 & w.mask, 0x20, "now it is");
+    }
+
+    /// A mask nothing could ever satisfy is the expensive mistake — every
+    /// attempt times out and the bill is real. Refused where it is written.
+    #[test]
+    fn a_mask_above_the_bytes_it_reads_is_refused_rather_than_always_zero() {
+        let v = json::parse(r#"{"name":"x","addr":"0xD74B","len":1,"mask":"0x100"}"#)
+            .unwrap();
+        assert!(Watch::from_json(&v)
+            .unwrap_err()
+            .contains("could only ever be zero"));
+        // Two bytes really can carry it.
+        let v = json::parse(r#"{"name":"x","addr":"0xD74B","len":2,"mask":"0x100"}"#)
+            .unwrap();
+        assert_eq!(Watch::from_json(&v).unwrap().mask, 0x100);
+    }
+
+    /// Every watch written before the mask existed means "the whole value",
+    /// and must keep meaning it.
+    #[test]
+    fn a_watch_with_no_mask_reads_the_whole_value_as_it_always_did() {
+        let v = json::parse(r#"{"name":"x","addr":"0xD163","len":1}"#).unwrap();
+        assert_eq!(Watch::from_json(&v).unwrap().mask, 0);
+        assert_eq!(Watch::named("enemy_hp").unwrap().mask, 0);
+    }
+
+    /// A bare `"20"` is decimal or hex and guessing is worse than refusing —
+    /// the same rule the address parser already applies, for the same reason.
+    #[test]
+    fn a_bare_mask_is_refused_and_every_spelled_form_is_accepted() {
+        for (spelling, expect) in [("\"0x20\"", 0x20), ("\"$20\"", 0x20), ("32", 32)] {
+            let text = format!(r#"{{"name":"x","addr":"0xD74B","mask":{spelling}}}"#);
+            let v = json::parse(&text).unwrap();
+            assert_eq!(Watch::from_json(&v).unwrap().mask, expect, "{spelling}");
+        }
+        let v = json::parse(r#"{"name":"x","addr":"0xD74B","mask":"20"}"#).unwrap();
+        assert!(Watch::from_json(&v).unwrap().mask == 20);
+        let v = json::parse(r#"{"name":"x","addr":"0xD74B","mask":"zz"}"#).unwrap();
+        assert!(Watch::from_json(&v).is_err());
     }
 
     #[test]

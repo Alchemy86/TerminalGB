@@ -478,6 +478,13 @@ name = "scenario"
 path = "examples/scenario.rs"
 required-features = ["scenario"]
 
+# The Pewter chain: twelve scenarios from a cold cartridge to Pewter City, the
+# scripted expert that solves them, and the corpus that comes out.
+[[example]]
+name = "pewter_chain"
+path = "examples/pewter_chain.rs"
+required-features = ["scenario"]
+
 # THE LONG-HORIZON RUNNER's front end. Needs only `longplay` (which pulls in
 # `plugin-agent`): screenshots go through the agent's own frame-capture, so
 # there is no `image` dependency here.

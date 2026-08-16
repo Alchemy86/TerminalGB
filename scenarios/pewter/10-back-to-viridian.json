@@ -1,0 +1,25 @@
+{
+  "schema": "gbscenario/1",
+  "name": "10-back-to-viridian",
+  "objective": "Leave Oak's laboratory with the Pokedex and walk back up Route 1 to Viridian City. Nothing earlier in the chain earns any experience at all, so the wild Pokemon in the grass on the way are the only training there is before the forest's bug catchers, whose battles cannot be run from.",
+  "start_state": "states/09.gbss",
+  "goal": [
+    "map=0x01"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 500",
+    "max_wall_seconds 1200"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/10-back-to-viridian.json",
+  "timeout_frames": 200000
+}

@@ -1,0 +1,29 @@
+{
+  "schema": "gbscenario/1",
+  "name": "01-new-game",
+  "objective": "Power on a fresh cartridge and start a new game: press through the title screen, choose NEW GAME, sit through Oak's introduction, pick a name for yourself and for your rival, and end up standing in Red's bedroom with the map header loaded. The name screens offer preset names as menu items, so the keyboard can be avoided entirely; on the keyboard itself A types a letter and START confirms.",
+  "goal": [
+    "map=0x26",
+    "watch:map_width>0"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "max_calls 120",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/01-new-game.json",
+  "timeout_frames": 60000,
+  "watch": [
+    {
+      "name": "map_width",
+      "addr": "0xD369",
+      "len": 1
+    }
+  ]
+}

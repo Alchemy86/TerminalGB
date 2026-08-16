@@ -1,0 +1,33 @@
+{
+  "schema": "gbscenario/1",
+  "name": "09-receive-the-pokedex",
+  "objective": "Go into Oak's laboratory and talk to him with the parcel in your bag. He takes it, your rival arrives, and Oak gives you both the Pokedex — one script sets EVENT_GOT_POKEDEX and EVENT_OAK_GOT_PARCEL together. The Pokedex is what makes the old man in Viridian move aside, so this leg is the real gate on the road north.",
+  "start_state": "states/08.gbss",
+  "goal": [
+    "watch:got_pokedex!=0"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 250",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/09-receive-the-pokedex.json",
+  "timeout_frames": 120000,
+  "watch": [
+    {
+      "name": "got_pokedex",
+      "addr": "0xD74B",
+      "len": 1,
+      "mask": "0x20"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "gbscenario/1",
+  "name": "11-heal-and-climb-route-2",
+  "objective": "Heal at the Viridian Pokemon Center, then head north past the old man who used to block the road, up Route 2, and in through the south gate of Viridian Forest. Route 2's southern half and its northern half are not connected on foot: the forest is the only way between them.",
+  "start_state": "states/10.gbss",
+  "goal": [
+    "map=0x33"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 700",
+    "max_wall_seconds 1800"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/11-heal-and-climb-route-2.json",
+  "timeout_frames": 300000
+}

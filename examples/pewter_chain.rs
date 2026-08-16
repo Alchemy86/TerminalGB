@@ -1,0 +1,1356 @@
+//! **The Pewter chain** — twelve scenarios from a cold cartridge to Pewter
+//! City, an expert solver that gets through them, and the corpus that comes out.
+//!
+//! Reader-facing page: [`docs/agent/pewter-chain.md`](../docs/agent/pewter-chain.md).
+//!
+//! ```text
+//! cargo run --release --features scenario --example pewter_chain -- \
+//!     chain --rom <blue.gb> --seeds 8
+//! ```
+//!
+//! # What this is, and the one thing it is not
+//!
+//! [`ChainDriver`] is a **scripted solver**. It implements
+//! [`terminalgb_plugin_agent::driver::Driver`] — the same seam a live model
+//! plugs into, taking the same JSON snapshot and returning the same JSON plan
+//! through the same parse-clamp-execute path — and it satisfies
+//! `no_memory_writes` for the same reason a model would: it can only press
+//! buttons. **It is not a model, and nothing it produces is evidence about
+//! one.** It knows the route because a person wrote the route down.
+//!
+//! That is exactly the role the PokéAgent Challenge winner gave its scripted
+//! policies: solve each subgoal, and distil the trajectories. Here the
+//! trajectories are what is wanted; the distillation is somebody else's job.
+//!
+//! # Where the route came from
+//!
+//! Not from a walkthrough. Every waypoint is a turning point of a
+//! breadth-first path over a walkability grid built from the cartridge's own
+//! data — `maps/<Name>.blk` block ids, the tileset's blockset, and the
+//! tileset's collision tile list — with the collision probe on the walk tile's
+//! **bottom-left** 8x8 tile (block-definition indices 4, 6, 12, 14). Two
+//! things fell out of that grid that a walkthrough would not have told you,
+//! and both are load-bearing:
+//!
+//! * Route 1 northbound and southbound are **different paths**. Its ledges are
+//!   one-way, so the climb is not the descent reversed.
+//! * Route 2's southern half and its northern half are **not connected on
+//!   foot** — separate components of the walkability graph. Viridian Forest is
+//!   the only way between them, which is why the chain has to cross it.
+//!
+//! # Diversity is the product, so it is seeded and it is measured
+//!
+//! A corpus of one trajectory replayed teaches nothing. Every run takes a seed
+//! and the seed moves: which of three preset names, which of three starters,
+//! which Poké Ball on the table, which battle move, how many waypoints get
+//! dropped so the executor has to path further on its own, and how far the
+//! solver wanders before resuming. What that bought is measured in
+//! `docs/agent/pewter-chain.md` rather than asserted here.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::exit;
+
+use terminalgb::gameboy::Gameboy;
+use terminalgb::scenario::record::Recording;
+use terminalgb::scenario::run::ScenarioRun;
+use terminalgb::scenario::Scenario;
+use terminalgb_plugin_agent::driver::{Driver, Poll};
+use terminalgb_plugin_agent::governor::Budget;
+use terminalgb_plugin_agent::json;
+use terminalgb_plugin_agent::{AgentPlugin, Config};
+
+// ---------------------------------------------------------------------------
+// the route
+// ---------------------------------------------------------------------------
+
+/// What to do once the waypoints on a map have been walked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Finish {
+    /// Arriving is the whole of it — a warp tile fires under your feet.
+    Arrive,
+    /// Hold a direction until the map changes. A map connection, and a Gen 1
+    /// door: `CheckWarpsCollision` fires a door warp when you walk *into* the
+    /// blocked tile, which is why the gates' row 0 is not walkable and is
+    /// still the way out.
+    Step(&'static str),
+    /// Turn to face something and press A. Twice, because a press in a
+    /// direction you are not facing only turns you.
+    Talk(&'static str),
+}
+
+/// One thing to do on one map: walk a chain of waypoints, then finish.
+#[derive(Debug, Clone)]
+struct Stage {
+    via: Vec<(u8, u8)>,
+    finish: Finish,
+}
+
+fn stage(via: &[(u8, u8)], finish: Finish) -> Stage {
+    Stage {
+        via: via.to_vec(),
+        finish,
+    }
+}
+
+/// **A map's stages are a program counter that survives leaving it.**
+///
+/// Viridian City is walked twice in one leg — once into the Pokémon Center and
+/// once out of the top of the map — and "which of the two am I doing?" is not
+/// answerable from the position, the party or the screen. So a completed stage
+/// advances when the map is left, and coming back resumes at the next one. A
+/// stage that was *not* completed (bumped into the wrong building, pushed out
+/// by a script) does not advance, so an accident cannot skip a leg.
+type MapPlan = Vec<Stage>;
+
+const REDS_HOUSE_2F: u8 = 0x26;
+const REDS_HOUSE_1F: u8 = 0x25;
+const PALLET_TOWN: u8 = 0x00;
+const OAKS_LAB: u8 = 0x28;
+const ROUTE_1: u8 = 0x0C;
+const VIRIDIAN_CITY: u8 = 0x01;
+const VIRIDIAN_MART: u8 = 0x2A;
+const ROUTE_2: u8 = 0x0D;
+const FOREST_SOUTH_GATE: u8 = 0x32;
+const VIRIDIAN_FOREST: u8 = 0x33;
+const FOREST_NORTH_GATE: u8 = 0x2F;
+const VIRIDIAN_POKECENTER: u8 = 0x29;
+
+/// Route 1 climbing north. Turning points of the shortest walkable path; the
+/// ledges make this different from the descent below.
+const R1_NORTH: &[(u8, u8)] = &[
+    (10, 28),
+    (8, 28),
+    (8, 24),
+    (12, 24),
+    (12, 20),
+    (9, 20),
+    (9, 14),
+    (14, 14),
+    (14, 2),
+    (11, 2),
+    (11, 0),
+];
+/// Route 1 going south. Not the reverse of the climb.
+const R1_SOUTH: &[(u8, u8)] = &[
+    (10, 4),
+    (14, 4),
+    (14, 18),
+    (9, 18),
+    (9, 22),
+    (12, 22),
+    (12, 26),
+    (8, 26),
+    (8, 31),
+    (10, 31),
+    (10, 35),
+];
+/// Pallet Town, wherever you start on it, up to the northern gap at x=10.
+const PALLET_NORTH: &[(u8, u8)] = &[(9, 12), (9, 2), (10, 2), (10, 1)];
+/// Pallet Town to the laboratory door at (12,11).
+const PALLET_TO_LAB: &[(u8, u8)] = &[(10, 7), (9, 7), (9, 12), (12, 12), (12, 11)];
+/// Route 2 southern half: down to the forest's south gate at (3,43).
+const R2_TO_FOREST: &[(u8, u8)] = &[
+    (8, 62),
+    (7, 62),
+    (7, 57),
+    (5, 57),
+    (5, 56),
+    (4, 56),
+    (4, 48),
+    (8, 48),
+    (8, 44),
+    (3, 44),
+    (3, 43),
+];
+/// Viridian Forest, south entrance to north exit. Sixteen turning points and
+/// 131 steps: the longest single-map leg in the chain by a wide margin.
+const FOREST: &[(u8, u8)] = &[
+    (16, 44),
+    (17, 44),
+    (17, 43),
+    (18, 43),
+    (18, 41),
+    (25, 41),
+    (25, 12),
+    (26, 12),
+    (26, 9),
+    (18, 9),
+    (18, 16),
+    (13, 16),
+    (13, 3),
+    (8, 3),
+    (8, 22),
+    (2, 22),
+    (2, 19),
+    (1, 19),
+    (1, 1),
+];
+
+/// The Viridian Pokémon Center: heal, then leave.
+///
+/// The nurse stands at (3,1) behind a counter, and (3,2) is solid. Gen 1's
+/// counter tiles are looked *through* — `DisplayTextID` reaches two tiles when
+/// the tile in front is one of the tileset's counter tiles — so the place to
+/// stand is (3,3) facing up, not next to her.
+const POKECENTER: &[Stage2] = &[
+    Stage2 {
+        via: &[(3, 5), (3, 3)],
+        finish: Finish::Talk("up"),
+    },
+    Stage2 {
+        via: &[(3, 6), (3, 7)],
+        finish: Finish::Step("down"),
+    },
+];
+
+/// A `const`-friendly [`Stage`]: the same thing with a borrowed waypoint list,
+/// because a `Vec` cannot be built in a `const`.
+struct Stage2 {
+    via: &'static [(u8, u8)],
+    finish: Finish,
+}
+
+impl Stage2 {
+    fn to_vec(list: &[Stage2]) -> Vec<Stage> {
+        list.iter()
+            .map(|s| Stage {
+                via: s.via.to_vec(),
+                finish: s.finish,
+            })
+            .collect()
+    }
+}
+/// The route for one scenario: what to do on each map it can be standing on.
+fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
+    let mut r: HashMap<u8, MapPlan> = HashMap::new();
+    // Which Poké Ball to take. The three starters are the same three objects
+    // on the table, so this is a one-tile difference that changes the whole
+    // rest of the playthrough.
+    let ball_x = 6 + (seed % 3) as u8;
+    match scenario {
+        "01-new-game" => {}
+        "02-leave-the-house" => {
+            r.insert(
+                REDS_HOUSE_2F,
+                vec![stage(&[(4, 6), (4, 1), (7, 1)], Finish::Arrive)],
+            );
+            r.insert(
+                REDS_HOUSE_1F,
+                vec![stage(&[(7, 7), (3, 7)], Finish::Step("down"))],
+            );
+        }
+        "03-oak-stops-you-leaving" => {
+            r.insert(
+                PALLET_TOWN,
+                vec![stage(
+                    &[(5, 6), (8, 6), (8, 2), (10, 2), (10, 1)],
+                    Finish::Arrive,
+                )],
+            );
+            r.insert(OAKS_LAB, vec![stage(&[], Finish::Arrive)]);
+        }
+        "04-take-a-starter" => {
+            r.insert(
+                OAKS_LAB,
+                vec![stage(&[(4, 4), (ball_x, 4)], Finish::Talk("up"))],
+            );
+        }
+        // **The rival challenges you at `wYCoord == 6` and nowhere else.**
+        // `OaksLabRivalChallengesPlayerScript` opens `ld a,[wYCoord] / cp 6 /
+        // ret nz`, so standing by the table after taking a starter waits for
+        // ever — measured, 250 decisions of nothing at (7,5). And **row 6 of
+        // the laboratory is two tiles wide**: the block map makes `####..####`
+        // of it, so only x=4 and x=5 exist and aiming at x=6 is a wall.
+        // Diversity has to come from the approach, not from the tile.
+        "05-the-rival-battle" => {
+            let x = 4 + (seed % 2) as u8;
+            let approach = [(2u8, 4u8), (8, 4), (2, 5), (8, 5)][(seed % 4) as usize];
+            r.insert(OAKS_LAB, vec![stage(&[approach, (x, 6)], Finish::Arrive)]);
+        }
+        "06-cross-route-1" => {
+            r.insert(
+                OAKS_LAB,
+                vec![stage(&[(4, 10), (4, 11)], Finish::Step("down"))],
+            );
+            r.insert(PALLET_TOWN, vec![stage(PALLET_NORTH, Finish::Step("up"))]);
+            r.insert(ROUTE_1, vec![stage(R1_NORTH, Finish::Step("up"))]);
+        }
+        "07-collect-oaks-parcel" => {
+            r.insert(
+                VIRIDIAN_CITY,
+                vec![stage(
+                    &[(20, 28), (19, 28), (19, 20), (29, 20), (29, 19)],
+                    Finish::Arrive,
+                )],
+            );
+        }
+        "08-carry-it-back-to-pallet" => {
+            r.insert(
+                VIRIDIAN_MART,
+                vec![stage(&[(3, 6), (3, 7)], Finish::Step("down"))],
+            );
+            r.insert(
+                VIRIDIAN_CITY,
+                vec![stage(
+                    &[(29, 26), (19, 26), (19, 30), (20, 30), (20, 35)],
+                    Finish::Step("down"),
+                )],
+            );
+            r.insert(ROUTE_1, vec![stage(R1_SOUTH, Finish::Step("down"))]);
+        }
+        "09-receive-the-pokedex" => {
+            r.insert(PALLET_TOWN, vec![stage(PALLET_TO_LAB, Finish::Arrive)]);
+            r.insert(OAKS_LAB, vec![stage(&[(4, 3), (5, 3)], Finish::Talk("up"))]);
+        }
+        // Back up Route 1, fighting on the way: this is the only training in
+        // the chain, and a level 5 starter does not beat a bug catcher.
+        "10-back-to-viridian" => {
+            r.insert(
+                OAKS_LAB,
+                vec![stage(&[(4, 10), (4, 11)], Finish::Step("down"))],
+            );
+            r.insert(PALLET_TOWN, vec![stage(PALLET_NORTH, Finish::Step("up"))]);
+            r.insert(ROUTE_1, vec![stage(R1_NORTH, Finish::Step("up"))]);
+        }
+        "11-heal-and-climb-route-2" => {
+            // Viridian City twice: into the Pokémon Center to heal whatever
+            // the climb and the training cost, then out of the top of the map.
+            r.insert(
+                VIRIDIAN_CITY,
+                vec![
+                    stage(
+                        &[(20, 28), (19, 28), (19, 26), (23, 26), (23, 25)],
+                        Finish::Arrive,
+                    ),
+                    stage(
+                        &[(21, 26), (21, 18), (19, 18), (19, 2), (18, 2), (18, 0)],
+                        Finish::Step("up"),
+                    ),
+                ],
+            );
+            r.insert(VIRIDIAN_POKECENTER, Stage2::to_vec(POKECENTER));
+            r.insert(ROUTE_2, vec![stage(R2_TO_FOREST, Finish::Arrive)]);
+            r.insert(
+                FOREST_SOUTH_GATE,
+                vec![stage(&[(5, 1)], Finish::Step("up"))],
+            );
+        }
+        "12-cross-viridian-forest" => {
+            r.insert(
+                FOREST_SOUTH_GATE,
+                vec![stage(&[(5, 1)], Finish::Step("up"))],
+            );
+            r.insert(VIRIDIAN_FOREST, vec![stage(FOREST, Finish::Step("up"))]);
+        }
+        "13-arrive-in-pewter" => {
+            r.insert(
+                FOREST_NORTH_GATE,
+                vec![stage(&[(5, 1)], Finish::Step("up"))],
+            );
+            r.insert(
+                ROUTE_2,
+                vec![stage(
+                    &[(3, 11), (3, 2), (8, 2), (8, 0)],
+                    Finish::Step("up"),
+                )],
+            );
+        }
+        _ => {}
+    }
+    r
+}
+
+/// Should this leg's solver fight wild Pokémon, or run from them?
+///
+/// **A `battle flee` rule forfeits a run that won a battle**, so this must
+/// agree with the scenario file. The legs that allow fighting are the ones
+/// where the party has to grow: nothing before Viridian Forest earns any
+/// experience at all, and a level 5 starter does not beat a bug catcher.
+fn may_fight_wild(scenario: &str) -> bool {
+    matches!(
+        scenario,
+        "05-the-rival-battle"
+            | "10-back-to-viridian"
+            | "11-heal-and-climb-route-2"
+            | "12-cross-viridian-forest"
+    )
+}
+
+/// Where each leg is trying to get to, so an off-route map can be recognised
+/// as off-route rather than merely unknown.
+fn on_route(scenario: &str) -> Vec<u8> {
+    route_for(scenario, 0).keys().copied().collect()
+}
+
+// ---------------------------------------------------------------------------
+// the snapshot, as the driver sees it
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Clone)]
+struct Snap {
+    in_game: bool,
+    loaded: bool,
+    map: u8,
+    x: u8,
+    y: u8,
+    party: usize,
+    party_hp: u32,
+    lead_level: u32,
+    lead_hp: u32,
+    lead_max_hp: u32,
+    battle: Option<String>,
+    kind: String,
+    trust: String,
+    text: String,
+    selected: String,
+    waiting: bool,
+    cursor_row: i64,
+    /// `(x, y, to_map)` of every door the observer can see on this map.
+    exits: Vec<(u8, u8, u8)>,
+    last: Vec<String>,
+}
+
+impl Snap {
+    fn parse(request: &str) -> Snap {
+        let mut s = Snap::default();
+        let Ok(v) = json::parse(request) else {
+            return s;
+        };
+        if let Some(g) = v.get("game") {
+            s.in_game = g.get("in_game").and_then(|b| b.as_bool()).unwrap_or(false);
+            if let Some(m) = g.get("map") {
+                s.map = m.u64_field("id").unwrap_or(0) as u8;
+                s.x = m.u64_field("x").unwrap_or(0) as u8;
+                s.y = m.u64_field("y").unwrap_or(0) as u8;
+                // The observer sends `loaded:false` instead of a size when no
+                // map header is loaded, which is the real "am I in control?"
+                // test — `wCurMap` reads the bedroom all through the intro.
+                s.loaded = m.u64_field("width").is_some();
+            }
+            s.party = g
+                .get("party")
+                .and_then(|p| p.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            s.party_hp = g
+                .get("party")
+                .and_then(|p| p.as_array())
+                .map(|a| a.iter().filter_map(|m| m.u64_field("hp")).sum::<u64>() as u32)
+                .unwrap_or(0);
+            if let Some(lead) = g
+                .get("party")
+                .and_then(|p| p.as_array())
+                .and_then(|a| a.first())
+            {
+                s.lead_level = lead.u64_field("level").unwrap_or(0) as u32;
+                s.lead_hp = lead.u64_field("hp").unwrap_or(0) as u32;
+                s.lead_max_hp = lead.u64_field("max_hp").unwrap_or(1) as u32;
+            }
+            if let Some(b) = g.get("battle") {
+                s.battle = Some(b.str_field("kind").unwrap_or("trainer").to_string());
+            }
+            if let Some(e) = g.get("exits").and_then(|e| e.as_array()) {
+                for x in e {
+                    s.exits.push((
+                        x.u64_field("x").unwrap_or(0) as u8,
+                        x.u64_field("y").unwrap_or(0) as u8,
+                        x.u64_field("to_map").unwrap_or(255) as u8,
+                    ));
+                }
+            }
+        }
+        if let Some(sc) = v.get("screen") {
+            s.kind = sc.str_field("kind").unwrap_or("").to_string();
+            s.trust = sc.str_field("trust").unwrap_or("").to_string();
+            s.text = sc.str_field("text").unwrap_or("").to_string();
+            s.selected = sc.str_field("selected").unwrap_or("").to_string();
+            s.waiting = sc
+                .get("waiting_for_input")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
+            s.cursor_row = sc
+                .get("menu_cursor_row")
+                .and_then(|r| r.as_u64())
+                .map(|r| r as i64)
+                .unwrap_or(-1);
+        }
+        if let Some(a) = v.get("last_actions").and_then(|a| a.as_array()) {
+            for o in a {
+                s.last.push(o.str_field("result").unwrap_or("").to_string());
+            }
+        }
+        s
+    }
+
+    fn said(&self, needle: &str) -> bool {
+        self.text.to_ascii_uppercase().contains(needle)
+    }
+
+    fn stuck_last(&self) -> bool {
+        self.last.iter().any(|r| r.starts_with("stuck at"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the driver
+// ---------------------------------------------------------------------------
+
+/// A plan, as JSON, built one action at a time.
+struct Plan {
+    say: String,
+    acts: Vec<String>,
+}
+
+impl Plan {
+    fn new(say: &str) -> Plan {
+        Plan {
+            say: say.to_string(),
+            acts: Vec::new(),
+        }
+    }
+    fn press(mut self, b: &str, times: u32) -> Plan {
+        self.acts.push(format!(
+            "{{\"do\":\"press\",\"button\":\"{b}\",\"times\":{times}}}"
+        ));
+        self
+    }
+    fn walk(mut self, d: &str, steps: u32) -> Plan {
+        self.acts.push(format!(
+            "{{\"do\":\"walk\",\"dir\":\"{d}\",\"steps\":{steps}}}"
+        ));
+        self
+    }
+    fn goto(mut self, x: u8, y: u8, max_steps: u32) -> Plan {
+        self.acts.push(format!(
+            "{{\"do\":\"goto\",\"x\":{x},\"y\":{y},\"max_steps\":{max_steps}}}"
+        ));
+        self
+    }
+    fn text(mut self, n: u32) -> Plan {
+        self.acts
+            .push(format!("{{\"do\":\"advance_text\",\"max_presses\":{n}}}"));
+        self
+    }
+    fn wait(mut self, frames: u32) -> Plan {
+        self.acts
+            .push(format!("{{\"do\":\"wait\",\"frames\":{frames}}}"));
+        self
+    }
+    fn finish(self) -> String {
+        let mut w = json::Writer::new();
+        w.begin_obj();
+        w.str_field("say", &self.say);
+        w.end_obj();
+        // Hand-assembled rather than through the writer, because the plan is a
+        // list of pre-rendered objects and the writer has no raw-item escape.
+        let head = w.finish();
+        let head = head.trim_end_matches('}');
+        format!("{head},\"plan\":[{}]}}", self.acts.join(","))
+    }
+}
+
+pub struct ChainDriver {
+    route: HashMap<u8, MapPlan>,
+    on_route: Vec<u8>,
+    rng: u64,
+    /// Which waypoint on the current stage is next.
+    idx: usize,
+    /// Every waypoint on the current stage has been reached.
+    completed: bool,
+    /// Per map: which stage of its plan is current. See [`MapPlan`].
+    stage: HashMap<u8, usize>,
+    at_map: Option<u8>,
+    /// Consecutive decisions on the same map with no waypoint progress.
+    barren: u32,
+    /// Consecutive battle turns, so a fight that will not end is escaped.
+    battle_turns: u32,
+    /// Consecutive decisions spent pressing through the same unchanged screen.
+    text_tries: u32,
+    last_text: String,
+    /// Whether this leg's rules allow winning a battle at all.
+    fight_wild: bool,
+    /// The level the solver trains its lead up to before it stops picking
+    /// fights. Nothing before Viridian Forest earns any experience, and a
+    /// level 5 starter does not beat a bug catcher.
+    train_to: u32,
+    pending: Option<String>,
+    busy: bool,
+    calls: u32,
+}
+
+impl ChainDriver {
+    pub fn new(scenario: &str, seed: u64) -> ChainDriver {
+        ChainDriver {
+            route: route_for(scenario, seed),
+            on_route: on_route(scenario),
+            rng: seed | 1,
+            idx: 0,
+            completed: false,
+            stage: HashMap::new(),
+            at_map: None,
+            barren: 0,
+            battle_turns: 0,
+            text_tries: 0,
+            last_text: String::new(),
+            fight_wild: may_fight_wild(scenario),
+            train_to: 13,
+            pending: None,
+            busy: false,
+            calls: 0,
+        }
+    }
+
+    fn next(&mut self) -> u64 {
+        // xorshift64*, so a run is reproducible from its seed.
+        self.rng ^= self.rng >> 12;
+        self.rng ^= self.rng << 25;
+        self.rng ^= self.rng >> 27;
+        self.rng.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn roll(&mut self, n: u64) -> u64 {
+        self.next() % n.max(1)
+    }
+
+    fn decide(&mut self, s: &Snap) -> String {
+        // 1. Not in the game yet, or the map header is not loaded: this is the
+        //    introduction, a warp or a cutscene, and the only useful verbs are
+        //    menu ones.
+        if !s.in_game || !s.loaded {
+            return self.intro(s);
+        }
+        // 2. A battle owns the screen until it is over.
+        if s.battle.is_some() {
+            return self.fight(s);
+        }
+        self.battle_turns = 0;
+        // 3. A menu or a conversation. `advance_text` refuses to press A on the
+        //    naming keyboard and says so, which is why that case is first.
+        if s.kind == "naming-keyboard" {
+            return Plan::new("Confirm the name with START.")
+                .press("start", 1)
+                .finish();
+        }
+        if s.kind == "yes-no" {
+            return self.yes_no(s);
+        }
+        // The start menu, or the options screen behind it. Nothing in this
+        // chain wants either, and A in a menu chooses something — so the only
+        // safe answer is B, which is the one button that can never open a menu.
+        if s.said("OPTION") && (s.said("EXIT") || s.said("TEXT SPEED")) {
+            return Plan::new("Close the menu.").press("b", 2).finish();
+        }
+        // **`text` blocks movement exactly as `dialogue` does, and only the
+        // kind says so.** The Pokémon Center nurse's box carries no `▼`, so
+        // the observer classifies it `text` with `waiting_for_input` false —
+        // and a solver that treats "nothing is asking for a button" as "I may
+        // walk" issues 800 walk plans into a box that swallows every one of
+        // them. Measured: link 10 spent its entire call budget at (3,3) with
+        // "OK. We'll need your POKéMON." on screen. The overworld reports
+        // `no-text`, so pressing through `text` costs nothing where it is not
+        // needed.
+        if s.waiting || matches!(s.kind.as_str(), "dialogue" | "menu" | "text") {
+            if s.text == self.last_text {
+                self.text_tries += 1;
+            } else {
+                self.text_tries = 0;
+                self.last_text = s.text.clone();
+            }
+            // **And it has to be bounded, or the cure is the same deadlock.**
+            // Gen 1 redraws the tilemap when the player *moves*, so a box the
+            // script has already finished with stays on screen until you walk
+            // — and a solver that answers "there is text" with "press A" then
+            // never walks, so the text never clears. Measured at the Pokémon
+            // Center nurse: healed, done, and 850 decisions of A into "OK.
+            // We'll need your POKéMON." Three tries at an unchanged screen and
+            // then walk anyway, which clears it.
+            if self.text_tries < 3 {
+                return Plan::new("Read what the game is saying.").text(24).finish();
+            }
+        } else {
+            self.text_tries = 0;
+        }
+        // 4. The overworld.
+        self.travel(s)
+    }
+
+    /// The title screen, NEW GAME, Oak's speech and the two name menus.
+    fn intro(&mut self, s: &Snap) -> String {
+        // The name menus are the one place where mashing A is actively wrong:
+        // the cursor starts on NEW NAME, which opens the keyboard, and on the
+        // keyboard A types a letter for ever.
+        if s.said("NEW NAME") {
+            // Presets sit below NEW NAME; picking one skips the keyboard
+            // entirely, and which one is a free axis of diversity.
+            let want = 1 + self.roll(3) as u32;
+            let down = want.saturating_sub(s.cursor_row.max(0) as u32);
+            let p = Plan::new("Take a preset name rather than the keyboard.");
+            let p = if down > 0 { p.press("down", down) } else { p };
+            return p.press("a", 1).finish();
+        }
+        if s.kind == "naming-keyboard" {
+            return Plan::new("Confirm with START.").press("start", 1).finish();
+        }
+        if s.said("NEW GAME") {
+            // NEW GAME is the first item on a fresh cartridge; on a cartridge
+            // with a save it is the second. Aim at the row that says it.
+            let up = s.cursor_row.max(0) as u32;
+            let p = Plan::new("Start a new game.");
+            let p = if up > 0 { p.press("up", up) } else { p };
+            return p.press("a", 1).finish();
+        }
+        // **A only.** START is what gets past the title screen, and A does
+        // that too — but a START that lands after the game has begun opens the
+        // start menu, and a state captured with it held carries the menu into
+        // the *next* link. Measured: link 2 booted into OPTION and spent its
+        // whole budget changing the text speed.
+        Plan::new("Press on through the introduction.")
+            .press("a", 8)
+            .finish()
+    }
+
+    fn yes_no(&mut self, s: &Snap) -> String {
+        // Every yes/no on this chain wants YES: taking a starter, and the
+        // nurse. The cursor starts on YES, so A is the answer.
+        let _ = s;
+        Plan::new("Say yes.").press("a", 1).text(8).finish()
+    }
+
+    /// Battle policy. A trainer battle cannot be run from, so it is fought; a
+    /// wild one is run from, which is also what the `battle flee` rule on the
+    /// route legs requires.
+    fn fight(&mut self, s: &Snap) -> String {
+        self.battle_turns += 1;
+        let wild = s.battle.as_deref() == Some("wild");
+        if s.waiting || s.kind == "dialogue" {
+            return Plan::new("Let the battle text finish.").text(20).finish();
+        }
+        // **Fighting is a rule, not a preference.** A `battle flee` leg
+        // forfeits the moment a battle is *won*, so on those legs the answer
+        // is always RUN whatever the party looks like. Where fighting is
+        // allowed, a wild Pokémon is worth beating only while the lead is
+        // under-levelled and healthy enough to take the hits — and that is the
+        // only place in the chain experience comes from.
+        let train = self.fight_wild
+            && s.lead_level < self.train_to
+            && s.lead_hp * 2 > s.lead_max_hp;
+        if wild && !train {
+            // FIGHT top-left, ITEM top-right, PKMN bottom-left, RUN
+            // bottom-right. From FIGHT that is down then right.
+            return Plan::new("Run from a wild Pokemon.")
+                .press("down", 1)
+                .press("right", 1)
+                .press("a", 1)
+                .text(16)
+                .finish();
+        }
+        // FIGHT, then the first move. **Slot 0 and no other.** A Gen 1
+        // starter's second slot at level 5 is GROWL or TAIL WHIP, and a run
+        // that spends its turns on a status move loses the rival battle — at
+        // which point the player blacks out and `EVENT_BATTLED_RIVAL_IN_OAKS_
+        // LAB` is never set at all. Diversity has to come from somewhere that
+        // cannot cost the leg.
+        Plan::new("Fight.")
+            .press("a", 1)
+            .wait(20)
+            .press("a", 1)
+            .text(24)
+            .finish()
+    }
+
+    /// Follow the route on the current map.
+    fn travel(&mut self, s: &Snap) -> String {
+        if self.at_map != Some(s.map) {
+            // Leaving a map having reached the *last* leg of its current
+            // stage advances that map's program counter, so coming back does
+            // the next thing rather than repeating the last one. Bumping into
+            // the wrong building, or being pushed out by a script, does not
+            // advance: an accident must never skip a leg.
+            //
+            // **The test is "on the last leg", not "completed".** A stage that
+            // ends on a warp tile can never report completion, because
+            // standing on the tile *is* the warp and there is no decision
+            // afterwards to notice it. Measured: Viridian City's Pokémon
+            // Center stage ends on (23,25), so the city's counter never moved
+            // and the solver healed, walked out, and went straight back in,
+            // for 469 decisions.
+            if let Some(prev) = self.at_map {
+                let last_leg = self
+                    .route
+                    .get(&prev)
+                    .and_then(|st| {
+                        let n = *self.stage.get(&prev).unwrap_or(&0);
+                        st.get(n)
+                    })
+                    .map(|st| self.idx + 1 >= st.via.len())
+                    .unwrap_or(false);
+                if last_leg {
+                    let e = self.stage.entry(prev).or_insert(0);
+                    *e += 1;
+                }
+            }
+            self.at_map = Some(s.map);
+            self.idx = 0;
+            self.barren = 0;
+            self.completed = false;
+        }
+        let Some(stages) = self.route.get(&s.map).cloned() else {
+            return self.off_route(s);
+        };
+        let n = *self.stage.get(&s.map).unwrap_or(&0);
+        // Past the end of the list: keep doing the last thing rather than
+        // falling off it, because the last thing is usually "leave".
+        let st = match stages.get(n).or_else(|| stages.last()) {
+            Some(st) => st.clone(),
+            None => return self.off_route(s),
+        };
+
+        // **A waypoint counts as reached only when it is stood on.** An
+        // earlier version allowed a tile of slack, on the reasoning that a
+        // `goto` stopping beside its target had arrived for practical
+        // purposes. It had not, twice over. The last waypoint is the thing the
+        // leg is *for* — the tile Oak's script watches, the tile a warp sits on
+        // — so a tile of slack there parks the run one step short for ever
+        // (measured: link 3 at (10,2) with the trigger on (10,1)). And every
+        // other waypoint is a turning point of a breadth-first path, which is
+        // to say the place where the way through lines up: Viridian City's row
+        // 27 is `#.###.##############`, and standing one tile from (19,28) is
+        // standing in front of a wall. Measured there too — 430 decisions
+        // oscillating between (20,28) and (21,28).
+        let before = self.idx;
+        while self.idx < st.via.len() && (s.x, s.y) == st.via[self.idx] {
+            self.idx += 1;
+        }
+        if self.idx > before {
+            self.barren = 0;
+        } else {
+            self.barren += 1;
+        }
+        self.completed = self.idx >= st.via.len();
+
+        // Stuck: the executor said walls are in the way, or several decisions
+        // have bought no progress. Commit to a lateral run and try again — the
+        // same escape `GoTo`'s own detour uses, one level up.
+        //
+        // **Only while there are waypoints left.** A map whose stage is empty
+        // (the rival challenges you where you stand; Oak walks you in) makes
+        // no waypoint progress by definition, so an unguarded barren counter
+        // reads a scripted cutscene as being stuck and walks away from it.
+        // Measured: link 5 wandered to (4,6) and lost the battle it was
+        // supposed to be standing still for.
+        if !self.completed && (s.stuck_last() || self.barren >= 5) {
+            self.barren = 0;
+            let (wx, wy) = st.via[self.idx];
+            // Sidestep along the axis with the *least* left to cover: the
+            // obstacle is almost always across the long axis, so committing
+            // to the short one is what gets round a building.
+            let dx = wx as i32 - s.x as i32;
+            let dy = wy as i32 - s.y as i32;
+            let d = if dx.abs() >= dy.abs() {
+                if self.roll(2) == 0 {
+                    "up"
+                } else {
+                    "down"
+                }
+            } else if self.roll(2) == 0 {
+                "left"
+            } else {
+                "right"
+            };
+            let n = 2 + self.roll(3) as u32;
+            return Plan::new("Walls in the way — go round.")
+                .walk(d, n)
+                .finish();
+        }
+
+        if !self.completed {
+            let (wx, wy) = st.via[self.idx];
+            let budget = (dist((s.x, s.y), (wx, wy)) + 6 + self.roll(5) as u32).min(24);
+            // **Diversity by detour, never by skipping a waypoint.** An
+            // earlier version dropped a turning point at random so the
+            // executor would path the corner itself; on open ground that is
+            // free variety, and in a corridor the turning point *is* the
+            // corridor. Measured on Viridian City, whose row 27 is
+            // `#.###.##############` — two gaps in twenty tiles — where
+            // skipping (19,28) left the solver oscillating on row 28 for 600
+            // decisions. A wander before the same goto changes the trajectory
+            // and cannot change the route.
+            let p = Plan::new(&format!("Head for ({wx},{wy})."));
+            let p = if self.roll(6) == 0 {
+                let d = ["up", "down", "left", "right"][self.roll(4) as usize];
+                p.walk(d, 1 + self.roll(3) as u32)
+            } else {
+                p
+            };
+            return p.goto(wx, wy, budget).finish();
+        }
+
+        match st.finish {
+            Finish::Arrive => Plan::new("Wait for the map to change.")
+                .wait(40)
+                .text(8)
+                .finish(),
+            Finish::Step(d) => Plan::new(&format!("Step {d} out of here."))
+                .walk(d, 2)
+                .finish(),
+            // A talk finishes its stage the moment it is performed: the next
+            // thing on this map is whatever comes after the conversation.
+            Finish::Talk(d) => {
+                let e = self.stage.entry(s.map).or_insert(0);
+                *e += 1;
+                self.idx = 0;
+                self.completed = false;
+                Plan::new(&format!("Face {d} and talk."))
+                    .press(d, 2)
+                    .press("a", 1)
+                    .text(24)
+                    .finish()
+            }
+        }
+    }
+
+    /// Somewhere the route does not mention. The exits the observer can see
+    /// are enough to get back: take the one that leads to a map on the route,
+    /// and failing that the one that leads anywhere at all.
+    fn off_route(&mut self, s: &Snap) -> String {
+        let back = s
+            .exits
+            .iter()
+            .find(|(_, _, to)| self.on_route.contains(to))
+            .or_else(|| s.exits.first());
+        match back {
+            Some(&(x, y, _)) => Plan::new("Off the route — back out through the door.")
+                .goto(x, y, 20)
+                .walk("down", 2)
+                .finish(),
+            None => {
+                let dirs = ["up", "down", "left", "right"];
+                let d = dirs[self.roll(4) as usize];
+                Plan::new("Off the route with no door in sight — explore.")
+                    .walk(d, 4)
+                    .finish()
+            }
+        }
+    }
+}
+
+fn dist(a: (u8, u8), b: (u8, u8)) -> u32 {
+    (a.0 as i32 - b.0 as i32).unsigned_abs() + (a.1 as i32 - b.1 as i32).unsigned_abs()
+}
+
+impl Driver for ChainDriver {
+    fn name(&self) -> &str {
+        "expert-route"
+    }
+
+    fn submit(&mut self, request: &str) -> bool {
+        if self.busy {
+            return false;
+        }
+        let s = Snap::parse(request);
+        let reply = self.decide(&s);
+        // A stuck leg is diagnosed from where it was standing and what it
+        // thought it was doing, and neither is in the recording. `GB_CHAIN_
+        // TRACE=1` is how every finding in `docs/agent/pewter-chain.md` was
+        // arrived at.
+        if std::env::var_os("GB_CHAIN_TRACE").is_some() {
+            eprintln!(
+                "  [{:3}] map 0x{:02X} ({:2},{:2}) stage {} idx {} kind {:8} lv{} \
+                 hp{}/{} :: {}",
+                self.calls,
+                s.map,
+                s.x,
+                s.y,
+                self.stage.get(&s.map).copied().unwrap_or(0),
+                self.idx,
+                s.kind,
+                s.lead_level,
+                s.lead_hp,
+                s.lead_max_hp,
+                format!(
+                    "[{}] {}",
+                    s.text
+                        .replace('\n', " | ")
+                        .chars()
+                        .take(220)
+                        .collect::<String>(),
+                    reply.chars().take(110).collect::<String>()
+                )
+            );
+        }
+        self.pending = Some(reply);
+        self.busy = true;
+        self.calls += 1;
+        true
+    }
+
+    fn poll(&mut self) -> Poll {
+        if !self.busy {
+            return Poll::Idle;
+        }
+        self.busy = false;
+        match self.pending.take() {
+            Some(r) => Poll::Ready(r),
+            None => Poll::Idle,
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.busy = false;
+        self.pending = None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// front end
+// ---------------------------------------------------------------------------
+
+const USAGE: &str = "\
+pewter_chain — twelve scenarios from a cold cartridge to Pewter City
+
+  solve --rom R --scenario S [--start FILE] [--seed N] [--out DIR] [--quiet]
+      Play one link with the expert solver and write its recording.
+
+  chain --rom R [--seeds N] [--out DIR] [--from N] [--to N]
+      Play the whole chain, carrying each link's finish forward as the next
+      link's start. Writes states/NN.gbss and one recording per attempt.
+
+  corpus --rom R --scenario S --start FILE --runs N [--out DIR] [--seed0 N]
+      Many divergent attempts at one link. Successes and failures both kept.
+";
+
+#[derive(Default)]
+struct Args {
+    rom: Option<PathBuf>,
+    scenario: Option<PathBuf>,
+    start: Option<PathBuf>,
+    out: Option<PathBuf>,
+    seed: u64,
+    seed0: u64,
+    runs: u32,
+    seeds: u32,
+    from: usize,
+    to: usize,
+    quiet: bool,
+}
+
+fn parse(args: &[String]) -> Args {
+    let mut a = Args {
+        seed: 1,
+        seeds: 1,
+        runs: 1,
+        from: 1,
+        to: 12,
+        ..Default::default()
+    };
+    let mut i = 0;
+    while i < args.len() {
+        let next = |i: usize| -> String {
+            args.get(i + 1).cloned().unwrap_or_else(|| {
+                eprintln!("{} needs a value", args[i]);
+                exit(2);
+            })
+        };
+        match args[i].as_str() {
+            "--rom" => a.rom = Some(PathBuf::from(next(i))),
+            "--scenario" => a.scenario = Some(PathBuf::from(next(i))),
+            "--start" => a.start = Some(PathBuf::from(next(i))),
+            "--out" => a.out = Some(PathBuf::from(next(i))),
+            "--seed" => a.seed = next(i).parse().unwrap_or(1),
+            "--seed0" => a.seed0 = next(i).parse().unwrap_or(0),
+            "--runs" => a.runs = next(i).parse().unwrap_or(1).max(1),
+            "--seeds" => a.seeds = next(i).parse().unwrap_or(1).max(1),
+            "--from" => a.from = next(i).parse().unwrap_or(1),
+            "--to" => a.to = next(i).parse().unwrap_or(12),
+            "--quiet" => {
+                a.quiet = true;
+                i += 1;
+                continue;
+            }
+            other => {
+                eprintln!("unknown option {other:?}\n\n{USAGE}");
+                exit(2);
+            }
+        }
+        i += 2;
+    }
+    a
+}
+
+/// **Never run against a ROM where it lives** — the MBC writes a `.sav` beside
+/// it, and the captain's cartridges are on this machine.
+fn stage_rom(rom: &Path, out: &Path) -> PathBuf {
+    std::fs::create_dir_all(out).expect("create output directory");
+    let dest = out.join("cart.gb");
+    let bytes = std::fs::read(rom).unwrap_or_else(|e| {
+        eprintln!("cannot read {}: {e}", rom.display());
+        exit(1);
+    });
+    std::fs::write(&dest, &bytes).expect("stage the cartridge");
+    dest
+}
+
+struct Outcome {
+    goal: bool,
+    frames: u64,
+    decisions: usize,
+    ending: String,
+    detail: String,
+    map: u8,
+    x: u8,
+    y: u8,
+    wall_ms: u128,
+    state: Vec<u8>,
+    recording: Recording,
+}
+
+fn play(
+    rom: &Path,
+    scenario_path: &Path,
+    start: Option<Vec<u8>>,
+    seed: u64,
+    out: &Path,
+    quiet: bool,
+) -> Outcome {
+    let s = Scenario::load(scenario_path).unwrap_or_else(|e| {
+        eprintln!("{}: {e}", scenario_path.display());
+        exit(1);
+    });
+    let staged = stage_rom(rom, out);
+    let data = std::fs::read(&staged).expect("read staged cartridge");
+    let mut gb = Gameboy::new(data, Some(staged));
+    // **A machine always has an APU, and a cartridge can tell.** The Pokémon
+    // Center's healing sequence never finishes without one: `Gameboy::new`
+    // leaves `MMU.sound` at `None`, which is a machine with **no sound chip**
+    // rather than a quiet one, and the game's own audio engine then waits for
+    // a jingle that can never end. Measured: 700 decisions parked at (3,3)
+    // with "OK. We'll need your POKéMON." on screen and every walk refused.
+    // The same rule `testharness/testroms.rs` records — never build a test
+    // machine without an APU — and it costs nothing here, because
+    // `SilentPlayer` throws the samples away.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+    let cfg = Config {
+        budget: Budget {
+            max_calls: s.episode().max_calls,
+            ..Budget::default()
+        },
+        objective: s.objective.clone(),
+        ..Config::default()
+    };
+    gb.add_plugin(Box::new(AgentPlugin::new(
+        Box::new(ChainDriver::new(&s.name, seed)),
+        cfg,
+    )))
+    .expect("attach the agent");
+
+    let mut run =
+        ScenarioRun::new(gb, s.clone(), scenario_path, out.to_path_buf(), start)
+            .unwrap_or_else(|e| {
+                eprintln!("{e}");
+                exit(1);
+            });
+    if quiet {
+        run = run.quiet().without_captures();
+    }
+    let r = run.play();
+    Outcome {
+        goal: r.reached_goal(),
+        frames: r.recording.frames,
+        decisions: r.recording.decisions.len(),
+        ending: r.recording.ending.tag().to_string(),
+        detail: r.lines().first().cloned().unwrap_or_default(),
+        map: r.final_progress.map,
+        x: r.final_progress.x,
+        y: r.final_progress.y,
+        wall_ms: r.wall_ms,
+        state: r.final_state_bytes.clone(),
+        recording: r.recording,
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.is_empty() {
+        println!("{USAGE}");
+        exit(2);
+    }
+    let a = parse(&args[1..]);
+    match args[0].as_str() {
+        "solve" => cmd_solve(&a),
+        "chain" => cmd_chain(&a),
+        "corpus" => cmd_corpus(&a),
+        "-h" | "--help" | "help" => println!("{USAGE}"),
+        other => {
+            eprintln!("unknown subcommand {other:?}\n\n{USAGE}");
+            exit(2);
+        }
+    }
+}
+
+fn need_rom(a: &Args) -> PathBuf {
+    a.rom.clone().unwrap_or_else(|| {
+        eprintln!("--rom is required");
+        exit(2);
+    })
+}
+
+fn cmd_solve(a: &Args) {
+    let rom = need_rom(a);
+    let sp = a.scenario.clone().unwrap_or_else(|| {
+        eprintln!("--scenario is required");
+        exit(2);
+    });
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/pewter-chain/solve"));
+    let start = a.start.as_ref().map(|p| {
+        std::fs::read(p).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", p.display());
+            exit(1);
+        })
+    });
+    let o = play(&rom, &sp, start, a.seed, &out, a.quiet);
+    report(&o, a.seed);
+    let _ = o.recording.save(&out.join(format!("run-{}.json", a.seed)));
+    let _ = std::fs::write(out.join("final.gbss"), &o.state);
+}
+
+fn report(o: &Outcome, seed: u64) {
+    println!(
+        "seed {seed}: {} — {} frames, {} decisions, {} ms, ended on map 0x{:02X} \
+         ({}) at ({}, {})",
+        if o.goal { "GOAL" } else { &o.detail },
+        o.frames,
+        o.decisions,
+        o.wall_ms,
+        o.map,
+        terminalgb::longplay::map_name(o.map),
+        o.x,
+        o.y
+    );
+}
+
+/// The whole chain, carrying each link's finish forward.
+///
+/// **Link 1 has no start state at all** — it boots the cartridge cold, from
+/// the Nintendo logo. Every state after it is derived by playing forward, so
+/// the whole chain is reproducible from nothing but the cartridge.
+fn cmd_chain(a: &Args) {
+    let rom = need_rom(a);
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/pewter-chain"));
+    let states = out.join("states");
+    std::fs::create_dir_all(&states).expect("states directory");
+
+    let files = chain_files();
+    let mut carried: Option<Vec<u8>> = if a.from > 1 {
+        let p = states.join(format!("{:02}.gbss", a.from - 1));
+        Some(std::fs::read(&p).unwrap_or_else(|e| {
+            eprintln!("link {} needs {}: {e}", a.from, p.display());
+            exit(1);
+        }))
+    } else {
+        None
+    };
+
+    for (n, f) in files.iter().enumerate() {
+        let link = n + 1;
+        if link < a.from || link > a.to {
+            continue;
+        }
+        let sp = PathBuf::from(f);
+        let name = sp.file_stem().unwrap().to_string_lossy().to_string();
+        println!("\n=== link {link}: {name}");
+        let dir = out.join(&name);
+        let mut solved = None;
+        for k in 0..a.seeds {
+            let seed = 1 + k as u64;
+            let o = play(&rom, &sp, carried.clone(), seed, &dir, true);
+            report(&o, seed);
+            let _ = o.recording.save(&dir.join(format!("run-{seed}.json")));
+            if o.goal && solved.is_none() {
+                solved = Some(o.state.clone());
+                let _ = std::fs::write(states.join(format!("{link:02}.gbss")), &o.state);
+            }
+        }
+        match solved {
+            Some(st) => {
+                println!("  link {link} solved; state carried forward");
+                carried = Some(st);
+            }
+            None => {
+                eprintln!(
+                    "  link {link} was NOT solved in {} attempt(s) — the chain stops \
+                     here rather than shortcutting past it",
+                    a.seeds
+                );
+                exit(1);
+            }
+        }
+    }
+}
+
+/// Many divergent attempts at one link, successes and failures both kept.
+fn cmd_corpus(a: &Args) {
+    let rom = need_rom(a);
+    let sp = a.scenario.clone().unwrap_or_else(|| {
+        eprintln!("--scenario is required");
+        exit(2);
+    });
+    let name = sp.file_stem().unwrap().to_string_lossy().to_string();
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/pewter-chain/corpus").join(&name));
+    std::fs::create_dir_all(&out).expect("output directory");
+    let start = a.start.as_ref().map(|p| {
+        std::fs::read(p).unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", p.display());
+            exit(1);
+        })
+    });
+    let mut goals = 0u32;
+    let mut index = String::new();
+    for k in 0..a.runs {
+        let seed = a.seed0 + k as u64;
+        let o = play(&rom, &sp, start.clone(), seed, &out, true);
+        report(&o, seed);
+        if o.goal {
+            goals += 1;
+        }
+        let file = format!("run-{seed:04}.json");
+        let _ = o.recording.save(&out.join(&file));
+        index.push_str(&format!(
+            "{{\"seed\":{seed},\"file\":\"{file}\",\"goal\":{},\"ending\":\"{}\",\
+             \"frames\":{},\"decisions\":{},\"wall_ms\":{},\"map\":{},\"x\":{},\
+             \"y\":{}}}\n",
+            o.goal, o.ending, o.frames, o.decisions, o.wall_ms, o.map, o.x, o.y
+        ));
+    }
+    std::fs::write(out.join("index.ndjson"), &index).expect("write the index");
+    println!(
+        "\n{goals} of {} attempts reached the goal ({:.1}%) — {}",
+        a.runs,
+        goals as f64 * 100.0 / a.runs as f64,
+        out.display()
+    );
+}
+
+fn chain_files() -> Vec<String> {
+    let dir = Path::new("scenarios/pewter");
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", dir.display());
+            exit(1);
+        })
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().to_string_lossy().to_string())
+        .filter(|p| p.ends_with(".json"))
+        .collect();
+    v.sort();
+    v
+}

@@ -878,6 +878,7 @@ mod tests {
             addr: 0xC000,
             len: 1,
             big_endian: false,
+            mask: 0,
         }]);
         assert!(ep.validate().is_ok());
         ep.timeout_frames = 0;
