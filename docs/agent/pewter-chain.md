@@ -236,7 +236,7 @@ the scripted driver   the remaining 1.4%, including thread and file overhead
 **This substrate is environment-bound, not policy-bound, and by a wide margin.**
 A purpose-built C toy environment reaches ~200M steps/second and its own
 authors conclude that the *policy* is the cap there — a small MLP at roughly
-650k inferences/second. Ours is ~4,200 frames/second per core, so we are
+650k inferences/second. Ours is ~4,400 frames/second per core, so we are
 env-bound by something like **150×** relative to that.
 
 Stated plainly, both halves: that is the price of running the real cartridge —
@@ -244,18 +244,116 @@ their environment has no PPU, no battles, and no game logic — and it means
 **optimising the policy's inference cost here would be wasted effort**. If a
 round needs to be faster, the emulator or the number of cores is the lever.
 
+### In the unit the community reports, and we are not the fastest
+
+The convention elsewhere is aggregate steps per second across environments, so
+here it is in that unit rather than in ms/frame:
+
+| | measured |
+|---|---|
+| per worker | **4,423 frames/s** (0.226 ms/frame) |
+| 8 workers, load average ~12 | **34,894 frames/s aggregate** |
+| 8 workers, load average ~40 | 2.25 episodes/s — **half** the above |
+
+Hardware: 20-core x86-64, headless, no audio. **The load average belongs beside
+every one of these**: this box is shared, and the same 160-attempt run at 4, 8
+and 16 workers under load 37–45 gave 1.40, 2.25 and 3.47 episodes/second — real
+scaling, but against a contended machine. A clean 20-worker figure was not
+measured, so none is quoted.
+
+**We are not the fastest and should never claim to be.** `pok2gpu-plus` runs
+8,192 environments on a GPU at roughly 160k steps/second, about twice what this
+does across twenty cores. The claim here is accuracy and verifiability; an
+indefensible speed claim would only undermine the defensible ones.
+
+### The directly comparable published work, and what the paper actually says
+
+**SENSEI** (Sancaktar et al., *Semantic Exploration Guided by Foundation Models
+to Learn Versatile World Models*, ICML 2025,
+[arXiv:2503.01584](https://arxiv.org/abs/2503.01584),
+[code](https://github.com/martius-lab/sensei)) plays **Pokémon Red from
+pixels**, and its evaluation is this page's evaluation under other names: it
+partitions the map into numbered segments from the start (**0 = Oak's Lab**,
+**6 = Viridian Forest**, **9 = Brock's Gym**) and plots *the percentage of
+random seeds that reach each segment*. That is a chain of links and a per-link
+success rate.
+
+It compares against **DreamerV3** and **Plan2Explore**, and reports that *"only
+Sensei reaches the first Gym"*.
+
+**One correction, from reading the paper rather than the summary of it.** A
+widely repeated version of this result is "first gym badge within 2M steps of
+exploration". The paper does not say that. Section 4.4 claims reaching the
+Gym; the badge appears only after *a second round of VLM annotations refined
+the reward* and the run was continued for a further 200 episodes. Cite the
+paper.
+
+**The contrast is the useful part, and it cuts both ways.** SENSEI's
+exploration reward is a **model's semantic judgement** — a VLM prompted to rank
+pairs of observations by interestingness, distilled into a reward. Ours is a
+**bit the cartridge sets**. That is the olmOCR-2 distinction — ground truth
+that does not depend on a model's opinion — applied against a directly
+comparable system on the same game.
+
+But: **theirs works, from pixels, and is published; ours is not trained at
+all.** And their method **generalises to games where no atlas exists**, because
+a VLM can rank observations anywhere; ours needs the memory archaeology done
+first, per game, before it can express a single goal. That is a real limitation
+of this approach and not a small one.
+
+SENSEI is the comparison target for the screen-only student, when there is one.
+(If this repository grows a `docs/prior-art.md`, this section belongs there.)
+
+### On native ports, fairly
+
+A view worth engaging with is that *"moving away from emulation to a native
+port is the real way to make gains"*. For raw speed that is simply true, and
+if approximate dynamics are acceptable it is a reasonable engineering choice.
+
+But a native port is a **reimplementation**, and a reimplementation has no
+ground truth: you are training against somebody's copy of Pokémon rather than
+Pokémon. The people proposing it say the operational half themselves — that a
+recompilation *"would probably break hooks and timing may be off"* (community
+reporting) — which is the same objection from the inside. Every reward on this page is a bit the cartridge sets, which is a
+guarantee a port cannot offer about itself — the same reconstruct-versus-
+photograph argument the map art makes, applied to the environment. The two
+goals are incompatible rather than one being wrong.
+
 ### One thing this is not a claim to
 
-**Being first.** As of June 2026, community reporting has two people beating
-Pokémon end to end with RL agents, with Peter Whidden confirming it as "beat it
-with caveats" — the stated caveat being that the run skips Lt Surge and Erika
-most of the time — and others past the third gym. Anything citing "no
-open-source model has completed a Pokémon RPG" as an opportunity is out of
-date. *(Community reporting, June 2026; treated as true and attributed.)*
+**Being first.** Community reporting (Discord, June 2026) has people claiming
+Pokémon beaten end to end with RL agents, with Peter Whidden's own line being
+*"beat it with caveats! im working on a new vid that explains more"*, and
+others reported past the third gym. **The video explaining the caveats is not
+out, so the nature of the achievement is not public.** The only concrete
+caveat visible is from a *different* person about a *different* run — that it
+"does skip lt surge and erika most of the time" — and nothing says whether the
+completing run was one trained policy end to end, a chain of specialists,
+heavily shaped, hand-helped at gates, or skipping content.
 
-The differentiator here was never priority. It is that a goal is a bit the
-cartridge sets, that `no_memory_writes` is enforced rather than requested, and
-that the same seed gives the same run.
+So: the claims exist and are attributed and dated; their content is unknown;
+and **no argument here rests on either reading**. Anything still citing "no
+open-source model has completed a Pokémon RPG" as an open opportunity should
+stop, but the opposite claim is not available either.
+
+The differentiator here was never priority, and it is not decomposition
+either. **Decomposition is not our idea and it has already won**: the PokéAgent
+Challenge winner generated subgoals with explicit success predicates, solved
+each with a scripted policy and distilled the result, and third place used
+deterministic pathfinding — two of the top three decomposed. The community has
+also built real tooling: `poke-rl`, a map visualiser, twenty million battle
+trajectories.
+
+**The gap is narrower and duller than "nobody thought of this".** Investment
+has gone into the *learner* and into *environment speed*, and very little into
+the **game-truth layer**: an atlas with per-address evidence, map art verified
+against the running cartridge, a battle engine checked against it. That layer
+is what makes a reward a bit the cartridge set, `no_memory_writes` an enforced
+rule rather than a request, and a seed reproduce a run.
+
+That is a contribution to the substrate, not to the idea — and it is worth
+saying without any smugness, because the people doing the other half publish
+their own gap lists and release their code, which is more than most.
 
 ## 6. Diversity, measured rather than claimed
 
@@ -466,7 +564,10 @@ closing on a real gate.
 
 `corpus_report.py` draws where the corpus actually spent its time, over
 [PixelGB](https://github.com/Alchemy86/PixelGB)'s map art, per map, from the
-per-frame position track. Dwell is weighted by *frames*, not by steps, so a
+per-frame position track. (Parallel work worth crediting: Philo Groves has been
+extracting Gen 1's ROM resources — text, images, UI, audio — and re-rendering
+them in Rust *with the game's own logic*, which is the same idea from the other
+end and a useful comparison whenever PixelGB's art is discussed.) Dwell is weighted by *frames*, not by steps, so a
 corner the solver hesitates at is visibly hotter than one it walks through.
 
 Written to `/home/aaron/pokemon-run/scenarios/` (game art, so not in the

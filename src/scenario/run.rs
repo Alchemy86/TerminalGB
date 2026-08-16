@@ -421,6 +421,8 @@ impl ScenarioRun {
                         rewinds: 0,
                         battles_won: battles.won,
                         battles_fled: battles.fled,
+                        // `wIsInBattle`: 1 wild, 2 trainer, $FF blacked out.
+                        in_trainer_battle: iw.get("in_battle") == Some(2),
                     };
                     // The referee first: a run that broke a rule forfeited, it
                     // did not reach the goal.

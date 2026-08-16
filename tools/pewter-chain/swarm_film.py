@@ -131,19 +131,29 @@ def main():
     ap.add_argument("--seconds", type=float, default=70.0)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--width", type=int, default=960)
+    ap.add_argument("--cover", type=float, default=0.6,
+                    help="fraction of agents whose whole run must fit in the "
+                         "film; the rest are simply still going when it ends")
     a = ap.parse_args()
     from PIL import Image, ImageDraw
 
     tracks = load_tracks(a.tracks)
     if not tracks:
         sys.exit(f"no agent-*.csv in {a.tracks}")
-    last = max(r[-1][0] for r in tracks.values())
+    # **The timeline is not the longest agent.** A few agents stall and pace a
+    # patch of grass for half a million frames, and letting them set the length
+    # compresses the journey every other agent made into the first seconds.
+    # Cover most agents' whole run; the rest are still going when it ends, and
+    # the caption says so.
+    ends = sorted(r[-1][0] for r in tracks.values())
+    last = ends[min(len(ends) - 1, int(a.cover * len(ends)))]
     frames_out = int(a.seconds * a.fps)
     # **Sampling derived, not picked**: cover the whole run in the length
     # wanted, and say what that ratio came out at.
     step = max(1, last // max(1, frames_out))
-    print(f"{len(tracks)} agents, {last} emulated frames "
-          f"({last/FPS_GB/60:.1f} emulated minutes)")
+    print(f"{len(tracks)} agents; longest run {ends[-1]} frames, filming to "
+          f"{last} ({last/FPS_GB/60:.1f} emulated minutes) so "
+          f"{int(a.cover*100)}% of runs finish inside the film")
     print(f"{frames_out} output frames at {a.fps} fps -> every {step}th emulated "
           f"frame, a {step*a.fps/FPS_GB:.0f}x timelapse")
 
@@ -196,7 +206,7 @@ def main():
     # --- pass one: where everybody is, per output frame --------------------
     positions = []
     for i in range(frames_out):
-        gbf = i * step
+        gbf = max(1, i * step)
         here = []
         for n in sorted(tracks):
             if gbf > tracks[n][-1][0]:
@@ -266,7 +276,7 @@ def main():
                       outline=(255, 80, 80) if battle else c, width=2)
             d.text((sx + r + 1, sy - r - 1), str(n), fill=c, font=num_font,
                    stroke_width=1, stroke_fill=(0, 0, 0))
-        gbf = i * step
+        gbf = max(1, i * step)
         cap = (f"{len(here)}/{len(tracks)} agents   "
                f"{gbf / FPS_GB / 60:5.1f} emulated minutes   "
                f"{step * a.fps / FPS_GB:.0f}x   "

@@ -321,6 +321,12 @@ pub struct Observed {
     /// — see [`super::run`].
     pub battles_won: u32,
     pub battles_fled: u32,
+    /// A **trainer** battle is in progress. `wIsInBattle` reads 2 for one and
+    /// 1 for a wild encounter, and `TryRunningFromBattle` branches on exactly
+    /// that: `ld a,[wIsInBattle] / dec a / jr nz, .trainerBattle`, which
+    /// prints "No! There's no running from a trainer battle!" and gives the
+    /// turn away. See [`Referee::check`].
+    pub in_trainer_battle: bool,
 }
 
 /// Holds the rules and decides.
@@ -442,6 +448,21 @@ impl Referee {
                     "{} battle(s) were won, and the policy is to flee",
                     o.battles_won
                 )),
+                // **A trainer battle cannot be fled, so a `battle flee` leg
+                // that has walked into one is already lost.** Naming it here
+                // is the whole point: otherwise it shows up as a timeout, and
+                // a timeout says nothing about why. This is the failure the
+                // community reports as a policy that "learned to insta run
+                // from battles and consequently get stuck in trainer battles"
+                // — a navigation reward plus permission to flee teaches
+                // fleeing, and then the game declines.
+                Rule::Battle(BattlePolicy::Flee) if o.in_trainer_battle => Some(
+                    "a trainer battle is in progress and the policy is to flee, \
+                     but a trainer battle cannot be fled — TryRunningFromBattle \
+                     branches on wIsInBattle and prints \"No! There's no running \
+                     from a trainer battle!\""
+                        .to_string(),
+                ),
                 Rule::Battle(BattlePolicy::Fight) if o.battles_fled > 0 => Some(format!(
                     "{} battle(s) were run from, and the policy is to fight",
                     o.battles_fled
@@ -650,6 +671,38 @@ mod tests {
         let mut flee2 = Referee::new(vec![Rule::Battle(BattlePolicy::Flee)]);
         assert_eq!(
             flee2.check(&fled, &Progress::default(), &Sample::default()),
+            Verdict::Ok
+        );
+    }
+
+    /// **A `battle flee` leg standing in a trainer battle is already lost**,
+    /// and it has to be *named* rather than left to expire as a timeout — the
+    /// exact failure the community reports as a policy that learned to run
+    /// from everything and then met somebody it could not run from.
+    #[test]
+    fn a_trainer_battle_forfeits_a_flee_policy_and_a_wild_one_does_not() {
+        let mut flee = Referee::new(vec![Rule::Battle(BattlePolicy::Flee)]);
+        let trainer = Observed {
+            in_trainer_battle: true,
+            ..obs()
+        };
+        let v = flee.check(&trainer, &Progress::default(), &Sample::default());
+        match v {
+            Verdict::Violated(x) => {
+                assert!(x.detail.contains("cannot be fled"), "{}", x.detail)
+            }
+            _ => panic!("a trainer battle must forfeit a flee policy"),
+        }
+        // A wild encounter is fleeable, so it is not a violation.
+        let mut flee2 = Referee::new(vec![Rule::Battle(BattlePolicy::Flee)]);
+        assert_eq!(
+            flee2.check(&obs(), &Progress::default(), &Sample::default()),
+            Verdict::Ok
+        );
+        // And a leg that allows fighting is untouched by it.
+        let mut decide = Referee::new(vec![Rule::Battle(BattlePolicy::Decide)]);
+        assert_eq!(
+            decide.check(&trainer, &Progress::default(), &Sample::default()),
             Verdict::Ok
         );
     }
