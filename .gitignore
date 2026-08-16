@@ -29,6 +29,7 @@ __pycache__/
 # Learned guidance is a run artefact, true only of the save it was played
 # from — see scenarios/README.md.
 scenarios/guidance/
+scenarios/*/guidance/
 
 # The Pewter chain's derived save states. **Never committed**: a Game Boy save
 # state is a dump of the machine's RAM and VRAM, so it carries the cartridge's
