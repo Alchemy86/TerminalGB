@@ -223,20 +223,133 @@ standard-plugins = [
     "plugin-gen1-lobby",
 ]
 
+# **The shipping profile optimises for SPEED, and that is a change made on a
+# measurement.** It said `opt-level = "s"` from 2022 until 2026: upstream
+# raphamorim/gameboy set `z`, then `s`, before this fork existed and before any
+# of the constrained targets did. Nothing here ever chose it, and the one target
+# that *did* think about size chose against it — `tools/psp-build.sh` overrides
+# it to 3 with the note that "s" costs the PSP 1 ms a frame.
+#
+# What it was costing everything else, measured on Pokémon Blue running from a
+# real overworld save state (`examples/core_bench.rs` through
+# `tools/perf/measure.sh`, eight interleaved 25,000-frame rounds, best round,
+# Intel Core Ultra 7 265, 20 cores — see docs/throughput.md for the whole table,
+# the second independent run that reproduces it to ~1 %, and the **three**
+# experiments that came back negative):
+#
+#   opt-level | lto  | ms/frame | vs "s"
+#   s (was)   | thin |  0.1133  |    —
+#   2         | thin |  0.0988  | +14.7 %
+#   3         | thin |  0.0928  | +22.1 %
+#   3 (now)   | fat  |  0.0912  | +24.2 %
+#
+# Almost all of it is `opt-level`, and that is worth knowing before anyone
+# reaches for a more exotic knob: `s` **with** fat LTO and `-Ctarget-cpu=native`
+# is 0.1084, i.e. +4.5 %. The instrument is wrong, not the settings around it.
+#
+# A Game Boy emulator is a branchy interpreter in a hot loop; `opt-level = "s"`
+# is the wrong instrument for one. Every consumer of this profile is a native
+# binary where that matters — `cargo install terminalgb`, the Windows release
+# zip, the accuracy harnesses, the scouts, and the reinforcement-learning
+# fan-out, which is currently bounded by exactly this number.
+#
+# Frame and WRAM hashes are byte-identical across every configuration in that
+# table, checked by `tools/perf/measure.sh` on every round. An emulator
+# "optimisation" that changes behaviour is a bug, not an optimisation.
+#
+# `codegen-units = 1` stays, and the honest reason is caution rather than a
+# measurement: **16 is not measurably slower here** (0.0891 against 0.0912, i.e.
+# marginally *ahead*, reproduced across two runs) and builds in half the time
+# (30.9 s against 66.7 s cold). What it costs is a guarantee — after fat LTO the
+# merged module is partitioned by an LLVM heuristic, so "the hot loop happened to
+# stay in one partition" is a property of today's source, not of the setting.
+# This is the shipping build and it is built rarely; compile time is bought in
+# `[profile.quick]` below, where it is bought unconditionally. If a future crew
+# wants the two minutes back, the measurement is already done — re-run
+# `tools/perf/measure.sh` and decide deliberately.
 [profile.release]
-opt-level = "s"
-lto = "thin"
+opt-level = 3
+lto = "fat"
 strip = true
 debug = 0
 panic = 'abort'
 codegen-units = 1
 incremental = false
 
+# **Size, for the one target where bytes are the currency** — and the settings
+# are the ones that measured smallest, which are not the ones you would guess.
+#
+# Measured on the `wasm32-unknown-unknown` `cdylib` that `make build-wasm`
+# actually produces, before `wasm-opt`, five combinations from the same source:
+#
+#   opt=3 lto=fat    7,864     opt=3 lto=thin   17,764
+#   opt=s lto=fat    7,864     opt=s lto=thin   16,997
+#   opt=z lto=fat    7,515
+#
+# Two findings, both against expectation. **`opt-level` moves nothing at all**
+# between 3 and "s" — byte for byte identical — so the size argument that kept
+# `[profile.release]` on "s" for four years does not hold for wasm either.
+# **LTO is the whole term**, and thin LTO more than *doubles* the module; an
+# earlier draft of this profile set `lto = "thin"` and so produced a bigger
+# artefact than the profile it was meant to shrink. `z` + fat is the smallest
+# combination measured, and it is 4.4 % under plain `[profile.release]`.
+#
+# **What could NOT be measured here, and is therefore not claimed:** `web/`'s
+# real module goes through `wasm-pack`, which is not installed on this box, and
+# it takes `[profile.release]` — i.e. the fast one, which is a defensible
+# default for an emulator running in a browser, since that is CPU-bound too.
+# Anyone shipping the web build who cares about bytes should re-measure through
+# `wasm-pack` before assuming these proportions carry over.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+
 [profile.dev]
 split-debuginfo = "unpacked"
 lto = false
 incremental = true
 opt-level = 0
+
+# **`[profile.dev.package."*"] opt-level = 2` WAS TRIED HERE AND DOES NOTHING —
+# do not re-add it on the usual argument.** Optimising dependencies in a debug
+# build is standard advice and it is wrong for this crate, because the debug
+# build's cost is *our own* code: the emulator core is a local crate, so it
+# stays at `opt-level = 0` either way, and the dependencies are not on the
+# emulation path at all (`blip_buf` alone, and `Sound::do_cycle` returns
+# immediately with no player installed).
+#
+# Measured, same tree, same box: `cargo test --lib` **3.10 s with it against
+# 3.07 s without** — nothing, and inside the noise — for **+1.2 s on a cold
+# build** (33.4 vs 32.2). The mechanism that does work is `[profile.quick]`
+# below, which optimises *everything* including our own code and still rebuilds
+# in 1.7 s. See docs/throughput.md §5.
+
+# **The iteration profile.** Fast enough to run a harness, cheap enough to
+# rebuild after a one-line change: no LTO, sixteen codegen units, incremental
+# on. Use it when you are changing code, not when you are measuring it —
+# `cargo test --profile quick`, `cargo run --profile quick --example …`.
+#
+# It is deliberately NOT `release` with the knobs loosened: a number measured
+# under `quick` is not a number this project publishes, and giving it a
+# different name is what stops one being quoted as if it were. Measured build
+# times are in docs/throughput.md.
+#
+# **It unwinds, and that is the second reason to use it.** `[profile.release]`
+# aborts on panic (load-bearing — see `src/mbc/battery.rs`), but `cargo test`
+# forces the test targets to unwind, so a `cargo test --release` run builds this
+# crate's rlib **twice** and intermittently links the wrong one. That is the
+# recurring failure `docs/pitfalls/builds.md` catalogues: "the trait bound X: Y
+# is not satisfied" for a type that plainly implements it, "perhaps two
+# different versions of crate X", `unresolved import` for a module that is
+# there. One strategy across the whole profile means one rlib and none of it.
+[profile.quick]
+inherits = "release"
+opt-level = 2
+lto = false
+codegen-units = 16
+incremental = true
+strip = false
+panic = "unwind"
 
 # The plugin contract. Dependency-free and tiny, and it is what makes the
 # emulator extensible without knowing anything about its extensions: plugin
@@ -372,6 +485,14 @@ required-features = ["tui"]
 [[example]]
 name = "headless"
 path = "examples/headless.rs"
+
+# Pure-emulation throughput, in both units: this project's ms/frame and the
+# reinforcement-learning community's aggregate steps-per-second across a
+# fan-out. Public embedding API only, so it builds with no features and
+# measures the core with nothing bolted to it. See docs/throughput.md.
+[[example]]
+name = "core_bench"
+path = "examples/core_bench.rs"
 
 # Examples that reach for a frontend crate declare it, so they are skipped
 # rather than broken on a minimal build.

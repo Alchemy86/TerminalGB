@@ -111,6 +111,14 @@ printf '%s\n' \
 
 60,000 frames is 16.7 minutes of console time; here it takes **16–18 seconds**.
 
+**`--no-pixels` if your observation comes out of memory.** An agent driving `observe` and
+`read_memory` never looks at the framebuffer, and on a headless machine the PPU is about half the
+frame — so declaring that you will not read the picture is worth **1.25–1.55x**, measured on a real
+cartridge, and it is guest-invisible: every byte of memory an observation reads is unchanged, hash
+for hash. It removes the `screenshot` tool rather than letting it answer with a stale frame. The
+whole argument, both units, and the three build-configuration experiments that came back negative
+are in [`docs/throughput.md`](throughput.md).
+
 For the in-process agent plugin the equivalent is `examples/claude_plays` with **no** `--pace`
 flag — the flag is what slows it to real time:
 

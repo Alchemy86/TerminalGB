@@ -110,16 +110,19 @@ thing that shows a pipeline change getting closer. Both are in the baselines.
 
 ## 4. The cost figure, and how it stays honest
 
-`RenderMode::IDENTICAL_COST` is **6.3**, and it is measured rather than chosen. It used to
-read 2.1: the number moved because `standard` got 3.5x faster (the PSP work rewrote the
-whole-scanline renderer to fetch once per tile instead of once per pixel), not because
-`identical` got slower — that engine does not use the path that changed and still measures
-0.49 ms/frame.
+`RenderMode::IDENTICAL_COST` is **6.8**, and it is measured rather than chosen. **It has moved
+twice, and both times because `standard` got faster — never because `identical` got slower.**
+First 2.1 → 6.3, when the PSP work rewrote the whole-scanline renderer to fetch once per tile
+instead of once per pixel; then 6.3 → 6.8, when the shipping profile stopped optimising for size
+([`docs/throughput.md`](throughput.md)). A branchy whole-scanline loop is exactly the shape an
+optimiser is good at, and the per-dot pipeline inlines less, so the same flag change moves the two
+engines by different amounts.
+
 [`testharness/ppuengines.rs`](../testharness/ppuengines.rs) times both engines over the same 400
 frames of dmg-acid2 on every `cargo test --release` and **fails the build if the constant disagrees
-with what it measured**. Four consecutive runs on the machine this was written on gave 0.221 →
-0.461 ms/frame, a ratio of 2.07–2.09×; earlier measurements on other ROMs and other boxes reached
-2.17×, which is why the figure is shown with a `~`.
+with what it measured**. Four consecutive low-load runs on the machine this was last measured on
+gave **0.0534 → 0.3610 ms/frame, a ratio of 6.72–6.78×**; a run on a busy box gave 7.75 and one on
+a very busy box 5.56, which is why the figure is shown with a `~` and checked against a wide band.
 
 That check exists because this repository has been bitten by a stale performance number before —
 "audio costs ~8 ms a frame" outlived the fix by months and kept being quoted. A figure printed on a

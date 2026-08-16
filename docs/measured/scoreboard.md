@@ -140,8 +140,8 @@ The mode is gated separately (`make test-external-accurate`, against
 (Rows with one baseline are scored once: the picture mode does not reach what they measure, so
 the same figure stands in both columns.)
 
-**On these six gates no row goes the other way**, and the cost is **~6.3x** — 0.079 → 0.494
-ms/frame, 34x real time headless, re-measured on every `cargo test --release --test
+**On these six gates no row goes the other way**, and the cost is **~6.8x** — 0.053 → 0.361
+ms/frame, 46x real time headless, re-measured on every `cargo test --release --test
 ppuengines`.
 
 > **Correction, 2026-08-15: rows DO go the other way, on gates this table did not have.**

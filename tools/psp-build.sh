@@ -78,11 +78,17 @@ mkdir -p "$STAGE"
 cp -r "$REPO/platform/psp/src" "$STAGE/src"
 sed -e "s|path = \"../../..\"|path = \"$REPO\"|" "$REPO/platform/psp/Cargo.toml" > "$STAGE/Cargo.toml"
 
-# `opt-level = 3` and one codegen unit are MEASURED, not assumed. The
-# emulator's own `[profile.release]` is `opt-level = "s"`, which is right for a
-# desktop binary and wrong here: on the PSP it costs 1 ms a frame (23.4 vs 22.4
-# ms emulating Pokémon Blue). Fat LTO with one codegen unit is worth a further
-# ~14 %. See docs/portability.md §PSP.
+# `opt-level = 3`, fat LTO and one codegen unit are MEASURED, not assumed: on
+# the PSP `opt-level = "s"` costs 1 ms a frame (23.4 vs 22.4 emulating Pokémon
+# Blue) and fat LTO with one codegen unit is worth a further ~14 %. See
+# docs/portability.md §PSP.
+#
+# **These three now agree with the emulator's own `[profile.release]`, which
+# they used to override.** That is the right way round and worth knowing: this
+# was the ONE target in the project that had ever measured the question, and it
+# chose against "s" — which is most of the argument that finally moved the
+# shipping profile (docs/throughput.md §2). They are still set explicitly so a
+# PSP build cannot be quietly changed by an edit to the workspace default.
 # `--profile` builds the MEASUREMENT binary instead of the shipping one: the
 # interactive loop is replaced by a fixed-length benchmark that splits the frame
 # budget by component and writes the table to the memory stick. See

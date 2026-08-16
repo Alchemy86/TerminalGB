@@ -192,11 +192,20 @@ const TOOLS: &[Tool] = &[
 ];
 
 /// The tools this launch exposes. `write_memory` is filtered out unless the
-/// operator turned it on, so a client is never shown a tool that will refuse.
+/// operator turned it on, and `screenshot` when `--no-pixels` says nobody is
+/// going to look — so a client is never shown a tool that will refuse.
+///
+/// The second is not politeness: with the PPU not generating pixels the
+/// framebuffer holds whatever was last drawn, so a `screenshot` that answered
+/// anyway would return a stale frame **as if it were the current one**. Absent
+/// beats confidently wrong, the same rule the screen decoder follows when it
+/// cannot trust what it read.
 fn visible(o: &Options) -> impl Iterator<Item = &'static Tool> + '_ {
-    TOOLS
-        .iter()
-        .filter(move |t| t.name != "write_memory" || o.allow_write_memory)
+    TOOLS.iter().filter(move |t| match t.name {
+        "write_memory" => o.allow_write_memory,
+        "screenshot" => o.pixels,
+        _ => true,
+    })
 }
 
 /// Run the server against the given streams until the client closes stdin.
@@ -352,10 +361,14 @@ fn call_tool(host: &mut Host, id: &Json, params: &Json) -> String {
     let name = params.str_field("name").unwrap_or_default().to_string();
     let args = params.get("arguments").cloned().unwrap_or(Json::Null);
     if !visible(&host.options).any(|t| t.name == name) {
-        let hint = if name == "write_memory" {
-            " — this server was not started with --allow-write-memory"
-        } else {
-            ""
+        let hint = match name.as_str() {
+            "write_memory" => " — this server was not started with --allow-write-memory",
+            "screenshot" => {
+                " — this server was started with --no-pixels, so the PPU is not \
+                 generating a picture and the framebuffer holds a stale frame. \
+                 Restart without that flag to use screenshot."
+            }
+            _ => "",
         };
         return error_response(
             id,
@@ -443,6 +456,13 @@ fn run_tool(host: &mut Host, name: &str, args: &Json) -> ToolOut {
             }
         }
         "screenshot" => {
+            if !host.options.pixels {
+                return ToolOut::err(
+                    "this server was started with --no-pixels, so the PPU is not \
+                     generating a picture and the framebuffer holds a stale frame. \
+                     Restart without that flag to use screenshot.",
+                );
+            }
             let scale = args
                 .u64_field("scale")
                 .unwrap_or(host.options.screenshot_scale as u64)
@@ -963,6 +983,53 @@ mod tests {
         )
         .unwrap();
         assert!(r.contains("--allow-write-memory"), "{r}");
+    }
+
+    /// **A stale picture is worse than no picture.** With `--no-pixels` the
+    /// framebuffer holds whatever was last drawn, so `screenshot` must not be
+    /// offered and must not answer — the same rule `write_memory` follows, and
+    /// the same rule the screen decoder follows when it cannot trust a read.
+    ///
+    /// Teeth: drop the `"screenshot" => o.pixels` arm from `visible` and the
+    /// first assertion fails; drop the guard in the handler and the last one
+    /// does.
+    #[test]
+    fn screenshot_is_absent_and_refused_when_nobody_is_going_to_look() {
+        let names = |o: Options| -> Vec<String> {
+            let mut h = Host::new(o);
+            let r =
+                handle_line(&mut h, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+                    .unwrap();
+            json_of(&r)
+                .get("result")
+                .and_then(|r| r.get("tools"))
+                .and_then(|t| t.as_array())
+                .unwrap()
+                .iter()
+                .map(|t| t.str_field("name").unwrap().to_string())
+                .collect()
+        };
+        let on = names(Options::default());
+        assert!(on.contains(&"screenshot".to_string()), "{on:?}");
+        let off = names(Options {
+            pixels: false,
+            ..Options::default()
+        });
+        assert!(!off.contains(&"screenshot".to_string()), "{off:?}");
+        // Everything else is still there: this removes one tool, not a mode.
+        assert!(off.contains(&"observe".to_string()), "{off:?}");
+        assert!(off.contains(&"read_memory".to_string()), "{off:?}");
+
+        let mut h = Host::new(Options {
+            pixels: false,
+            ..Options::default()
+        });
+        let r = handle_line(
+            &mut h,
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"screenshot","arguments":{}}}"#,
+        )
+        .unwrap();
+        assert!(r.contains("--no-pixels"), "{r}");
     }
 
     /// A tool that fails must come back as a *successful* call carrying

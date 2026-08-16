@@ -124,6 +124,23 @@ pub struct Options {
     /// 160x144, which is a few kilobytes of base64; 2 or 3 makes it legible in
     /// a chat transcript at four to nine times the tokens.
     pub screenshot_scale: u32,
+    /// Whether the PPU generates pixels at all.
+    ///
+    /// **On by default, and the picture is the product** — this exists only so
+    /// a caller whose observation comes out of memory can declare that it will
+    /// not read the framebuffer and stop paying for one. Measured on a real
+    /// cartridge from an overworld save state, that is **0.0927 → 0.0599
+    /// ms/frame, a 1.55x**; in a battle, where the CPU has more to do, 1.25x.
+    /// Guest-invisible by construction — see
+    /// [`crate::gameboy::Gameboy::set_render_pixels`] — and the WRAM hash is
+    /// identical either way, so nothing an observation reads can move.
+    ///
+    /// With it off, `screenshot` is **removed from `tools/list` and refused if
+    /// called anyway**, exactly as `write_memory` is when it was not granted. A
+    /// tool that answered with the last picture drawn before the flag took
+    /// effect would be returning a stale frame as if it were the current one,
+    /// which is worse than not offering it.
+    pub pixels: bool,
 }
 
 impl Default for Options {
@@ -142,6 +159,7 @@ impl Default for Options {
             allow_write_memory: false,
             log: None,
             screenshot_scale: 1,
+            pixels: true,
         }
     }
 }
@@ -197,6 +215,13 @@ DEBUGGING
     --allow-write-memory  Expose the `write_memory` tool. Off by default: an
                           agent that pokes RAM is editing the game, not playing
                           it, and it will corrupt the save.
+    --no-pixels           Declare that this client will not read the picture,
+                          so the PPU may skip generating one. 1.25-1.55x faster
+                          on a real cartridge, and guest-invisible: every byte
+                          of memory an observation reads is unchanged. Removes
+                          the `screenshot` tool, which would otherwise answer
+                          with a stale frame.
+
     --log <PATH>          NDJSON log of every request and response.
 
     -h, --help            This text
@@ -235,6 +260,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Option<Options>,
                     .ok_or_else(|| format!("unknown model '{v}' (auto|dmg|cgb)"))?;
             }
             "--no-battery" => o.battery = false,
+            "--no-pixels" => o.pixels = false,
             "--state-dir" => o.state_dir = Some(PathBuf::from(value!("--state-dir"))),
             "--audio" => o.audio = true,
             "--video-out" => o.video_out = Some(value!("--video-out")),

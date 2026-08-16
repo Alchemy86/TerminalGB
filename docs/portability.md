@@ -136,7 +136,7 @@ milliseconds while the `--profile` bench does not move at all. **Quote the bench
 component costs; quote the interactive line for sustained fps, and say what the load was.**
 
 Configuration: `mipsel-sony-psp`, CPU at 333 MHz, `standard` picture mode (the cheap
-scanline renderer — `identical` was never in play and would be hopeless here at ~6.3x),
+scanline renderer — `identical` was never in play and would be hopeless here at ~6.8x),
 no APU installed, `opt-level = 3` with fat LTO and one codegen unit.
 
 **Two workloads, both reproducible, both from a save state beside the cartridge**, because

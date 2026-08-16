@@ -3025,6 +3025,112 @@ open* were all the same flag. Full write-up in [`docs/video-out.md`](docs/video-
   producer is exactly what makes our sink report `Waiting`. Check `fuser -v /dev/video10` before
   concluding anything about the device.
 
+## Build profiles & throughput — the shipping build optimised for SIZE for four years
+
+**Full page, both units, every negative result: [`docs/throughput.md`](docs/throughput.md).**
+Instrument [`examples/core_bench.rs`](examples/core_bench.rs), scripts [`tools/perf/`](tools/perf/).
+Nothing here changed an emulated byte: all 18 external baselines, the 15 accurate-engine
+baselines, `testroms`, both picture engines and all four architectures are byte-identical
+across every configuration measured.
+
+- **`[profile.release]` said `opt-level = "s"` from 2022 to 2026 and nobody here ever chose it.**
+  Upstream `raphamorim/gameboy` set `z`, then `s`, before this fork or any of the constrained
+  targets existed. It is `3` + **fat LTO** now, worth **+24 %** on a real cartridge. **The one
+  target that had ever measured the question chose against "s"** — `tools/psp-build.sh` overrides
+  it to 3 with a note that "s" costs the PSP 1 ms a frame — and that is most of the argument.
+- **`opt-level` is nearly the whole term, so do not reach for an exotic knob first.** `"s"` *with*
+  fat LTO *and* `-Ctarget-cpu=native` is +4.5 %, against +24 % for changing the one setting.
+- **THREE EXPERIMENTS CAME BACK NEGATIVE — do not repeat them.** (1) **`-Ctarget-cpu=native` buys
+  nothing measurable** (0.0895 vs 0.0912, inside the spread), so there is deliberately **no
+  `.cargo/config.toml`** — which is a good outcome, since a flag file would have silently made
+  released artefacts non-portable. (2) **PGO made it 4.3 % SLOWER** against its fair comparator
+  (o3/thin — `-Cprofile-use` and fat LTO **do not combine on the pinned rustc 1.83**:
+  `module flag identifiers must be unique … !"CG Profile"`). `tools/perf/pgo.sh` is kept so the
+  experiment is one command, and is wired into no build target. (3) **`[profile.dev.package."*"]
+  opt-level = 2` does nothing here** — 3.10 s vs 3.07 s on `cargo test --lib` for +1.2 s cold —
+  because the debug build's cost is *our own* code, a local crate that stays at `opt-level = 0`
+  either way, and no dependency is on the emulation path.
+- **`codegen-units = 16` is not measurably slower than 1 and halves the cold build (30.9 s vs
+  66.7 s). It stays at 1 anyway, on caution not a number**: after fat LTO the merged module is
+  partitioned by an LLVM heuristic, so "the hot loop stayed in one partition" is a property of
+  today's source. The measurement is done if anyone wants those two minutes back.
+- **`[profile.quick]` is where compile time is bought: a one-line change is 1.7 s against
+  `--release`'s 32.9 — nineteen times faster** — and it still runs fast enough to drive a harness.
+  It is **not** `release` with the knobs loosened and has its own name on purpose, so a number
+  measured under it cannot be quoted as one this project publishes. **It unwinds**, which is the
+  second reason to use it: `[profile.release]` aborts, `cargo test` forces test targets to unwind,
+  so `cargo test --release` builds this crate's rlib twice and intermittently links the wrong one
+  — the whole family of failures in `docs/pitfalls/builds.md`.
+- **`[profile.wasm-release]` exists for the one size-sensitive target, and its settings are NOT the
+  ones you would guess.** Measured on the artefact `make build-wasm` actually produces:
+  `opt-level` moves **nothing at all** between `3` and `"s"` (byte-identical), **LTO is the whole
+  term**, and **thin LTO more than doubles the module** — an earlier draft set `lto = "thin"` and
+  so produced a *bigger* artefact than the profile it was meant to shrink. It is `opt-level = "z"`
+  inheriting fat LTO, 4.4 % under `[profile.release]`. `web/`'s real module goes through
+  `wasm-pack`, which is not installed here and was **not** measured; do not assume the proportions
+  carry over.
+
+### The PPU renders frames nobody reads — `Gameboy::set_render_pixels`
+
+- **Measured, and it is bigger than every build flag put together: pixels are 50.9 % of an
+  overworld frame**, with instruction counts identical either way (2529 vs 2529 — an exact A/B).
+  `set_render_pixels(false)` is **1.55x** on the overworld and **1.25x** in a battle, where the CPU
+  has more to do so pixels are a smaller share of a larger frame.
+- **Skippable, NEVER unavailable.** Pixels are on for every frontend, harness and default build —
+  the picture is the product and the screen-only student needs it. This only lets a caller that has
+  *declared* it will not read the framebuffer stop paying.
+- **The cartridge cannot tell, and that is proved rather than argued.** The framebuffer is emulator
+  *output*, reachable from no address. The one non-output thing rendering advances is the window's
+  internal line counter (`Gpu::advance_window_line`, called from the skip path and from `draw_bg`,
+  which is why it is a function — **the two call sites must not drift**). End to end on a real
+  cartridge the **WRAM hash is identical** with pixels on and off, on both workloads.
+- **Turn pixels back on at a frame boundary and the next frame is EXACT** — byte-identical to a
+  machine that never stopped drawing. That is what action repetition rests on: skip the
+  intermediate frames, ask for the one the policy will look at. Toggling *mid*-frame leaves that
+  frame half-drawn, so toggle between `frame()` calls, never inside one.
+- **The per-dot engine ignores it, deliberately**: under `identical` the fetcher *is* the timing.
+  `Gpu::pixels_effective` reports what is actually happening, so a caller cannot believe it saved
+  something it is still paying for.
+- **The APU needs no equivalent and never will**: `Sound::do_cycle` returns immediately with no
+  player installed, so a headless machine has no APU at all — there is nothing to skip.
+- **`terminalgb-mcp --no-pixels`** wires it up, and **removes `screenshot` from `tools/list` and
+  refuses it if called anyway**. Not politeness: the framebuffer holds whatever was last drawn, so
+  answering would return a stale frame *as if it were current*. Same rule as `write_memory`.
+
+### Measuring on this box at all — three traps, each of which produced a wrong answer first
+
+- **SHORT ROUNDS MEASURE THE FREQUENCY GOVERNOR, NOT THE BINARY.** 2,000-frame rounds (~0.3 s)
+  reordered the seven variants **between runs, twice** — `o3-fat-cu16` read +24.0 % in one run and
+  −2.8 % in the next. At 25,000 frames two independent runs agree to ~1 %. Interleaving and
+  min-of-N do not rescue a sample that is mostly process start-up.
+- **A wall clock on a shared box measures the box's afternoon.** The same binary read 0.0918
+  ms/frame quiet and 0.1336 with eight cores busy elsewhere — a 44 % error, larger than every
+  effect being measured. `core_bench` takes the per-instance figure from
+  **`/proc/thread-self/schedstat`** (thread CPU nanoseconds, no `libc`, so it still builds on
+  `--no-default-features`) and prints the wall figure beside it so the gap is visible. The
+  *aggregate* figure stays wall-clock — that one is wall-clock by definition.
+  **CPU time does not fix frequency scaling**, which is what the contention actually costs here;
+  only a quiet box does. Always report the load average.
+- **A fan-out benchmark must start its clock behind a barrier.** Without one the aggregate divides
+  measured frames by a wall clock that also contains the warmup and understates itself by 13 % at
+  the defaults.
+
+### `RenderMode::IDENTICAL_COST` moved 6.3 → 6.8, and again it is `standard` that moved
+
+The profile change is worth more to the whole-scanline renderer (a branchy loop an optimiser is
+good at) than to the per-dot pipeline (which inlines less). Four low-load runs give 6.72–6.78
+against 6.20–6.31 before. **The figure is hard-coded in `docs/tools/status_numbers.py`** as well as
+in `src/gpu/mod.rs` and five prose pages — `make status` will silently put the old one back if you
+only edit the constant.
+
+### `make no-plugins` was RED on main before any of this, and the cause is a documented trap
+
+`fit_bar` in `src/screen/tui.rs` was used unconditionally and defined under
+`#[cfg(feature = "plugin-trainer")]` — because a function was inserted between an orphaned doc
+comment and its attribute, so the `#[cfg]` landed on the wrong item. Exactly the hazard this file
+already records for `load_session`'s `#[cfg_attr]`. Fixed by deleting the orphan. **When you insert
+an item in `tui.rs`, check what attribute is immediately above it.**
+
 ## Portability: the core RUNS on other architectures, and on a PSP (`docs/portability.md`)
 
 **Full measured report, with the honest gaps: [`docs/portability.md`](docs/portability.md).**

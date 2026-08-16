@@ -129,8 +129,12 @@ impl Host {
         } else {
             None
         };
-        let gb = Gameboy::try_new_with_model(data.clone(), save_path, self.options.model)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut gb =
+            Gameboy::try_new_with_model(data.clone(), save_path, self.options.model)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        // The operator's declaration about the picture, applied before the
+        // first frame — see `Options::pixels`.
+        gb.set_render_pixels(self.options.pixels);
         let mut session = Session {
             title: gb.rom_title(),
             gb,
@@ -410,6 +414,9 @@ impl Session {
         let save = if o.battery { Some(path.clone()) } else { None };
         self.gb = Gameboy::try_new_with_model(data.clone(), save, o.model)
             .map_err(|e| format!("{}: {e}", path.display()))?;
+        // A reset rebuilds the machine, so the declaration has to be reapplied
+        // — otherwise `reset` silently turns the picture back on.
+        self.gb.set_render_pixels(o.pixels);
         self.exec = Executor::new(Limits::default());
         self.frame = 0;
         self.notes.clear();

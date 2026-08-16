@@ -900,6 +900,28 @@ impl Gameboy {
         self.cpu.memory.gpu.set_render_mode(mode)
     }
 
+    /// Declare whether this caller will read the framebuffer.
+    ///
+    /// `false` lets the PPU stop generating pixels — the largest saving
+    /// available to a headless caller whose observation comes out of memory,
+    /// and **guest-invisible by construction**. Pixels are on by default and
+    /// nothing here makes them unavailable; see
+    /// [`crate::gpu::Gpu::set_render_pixels`] for the whole argument, the one
+    /// piece of state the skip still advances, and why the per-dot engine
+    /// ignores it.
+    ///
+    /// With pixels off, [`Gameboy::image`] returns whatever was last drawn.
+    pub fn set_render_pixels(&mut self, on: bool) {
+        self.cpu.memory.gpu.set_render_pixels(on)
+    }
+
+    /// Whether pixels are being generated — see
+    /// [`Gameboy::set_render_pixels`]. This is what was *asked for*;
+    /// [`crate::gpu::Gpu::pixels_effective`] is what is actually happening.
+    pub fn render_pixels(&self) -> bool {
+        self.cpu.memory.gpu.render_pixels()
+    }
+
     /// Read one byte through the memory bus, as the CPU would. For the debug
     /// surface and for tests that need to inspect cartridge RAM the way a game
     /// sees it — through the MBC's bank registers, not the raw save buffer.
@@ -1269,5 +1291,119 @@ mod tests {
         assert!(Gameboy::try_new_with_model(cart, None, Model::Dmg).is_err());
         // ...and a good one still works.
         assert!(Gameboy::try_new_with_model(rom_only_cart(), None, Model::Dmg).is_ok());
+    }
+
+    /// A cartridge that switches the LCD **on** over a scrolling background, so
+    /// every frame draws a different picture and a missed scanline shows.
+    ///
+    /// `SCX` is advanced from the loop, which is what makes consecutive frames
+    /// differ; the tile data is a diagonal so the shift is visible in the
+    /// pixels rather than only in a counter.
+    fn scrolling_picture_cart() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]); // NOP; JP $0150
+        rom[0x134..0x13F].copy_from_slice(b"SCROLLPIC\0\0");
+        rom[0x147] = 0x00; // ROM only
+        let prog: &[u8] = &[
+            // Tile 1: eight rows of alternating bits, written straight into VRAM.
+            0x21, 0x10, 0x80, // LD HL, $8010     (tile 1)
+            0x3E, 0x3C, // LD A, $3C
+            0x06, 0x10, // LD B, 16
+            // .fill:
+            0x22, // LD [HL+], A
+            0xEE, 0xFF, // XOR $FF   (so the two bitplanes differ)
+            0x05, // DEC B
+            0x20, 0xFA, // JR NZ, .fill
+            // Tile map: every cell tile 1.
+            0x21, 0x00, 0x98, // LD HL, $9800
+            0x01, 0x00, 0x04, // LD BC, $0400
+            0x3E, 0x01, // LD A, 1
+            // .map:
+            0x22, // LD [HL+], A
+            0x0B, // DEC BC
+            0x78, // LD A, B
+            0xB1, // OR C
+            0x3E, 0x01, // LD A, 1
+            0x20, 0xF9, // JR NZ, .map
+            // Palette, then LCD on with the background enabled.
+            0x3E, 0xE4, // LD A, $E4
+            0xE0, 0x47, // LDH [$FF47], A
+            0x3E, 0x91, // LD A, $91
+            0xE0, 0x40, // LDH [$FF40], A
+            // .spin: scroll one pixel a pass, forever.
+            0xF0, 0x43, // LDH A, [$FF43]
+            0x3C, // INC A
+            0xE0, 0x43, // LDH [$FF43], A
+            0x18, 0xF9, // JR .spin
+        ];
+        rom[0x150..0x150 + prog.len()].copy_from_slice(prog);
+        rom
+    }
+
+    fn frame_hash(gb: &Gameboy) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in gb.image() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    /// **The guarantee action repetition rests on**: turn pixels back on at a
+    /// frame boundary and the very next frame is byte-identical to one from a
+    /// machine that never stopped drawing.
+    ///
+    /// That is what lets a caller pay for the picture only at the decision
+    /// points — skip the intermediate frames, ask for the one the policy will
+    /// actually look at. Without it, "skippable" would mean "and then you get a
+    /// half-drawn frame", which is no use to a screen-only student.
+    ///
+    /// Teeth: make the skip path in `Gpu::renderscan` return without advancing
+    /// the window line and this still passes (there is no window here) — the
+    /// window case is covered by
+    /// `gpu::tests::skipping_pixels_changes_nothing_the_cartridge_can_see`.
+    /// Make `set_render_pixels` a no-op and the `assert_ne!` below fails
+    /// instead, so neither direction can rot silently.
+    #[test]
+    fn pixels_turned_back_on_at_a_frame_boundary_give_an_exact_frame() {
+        let mut drawing =
+            Gameboy::new_with_model(scrolling_picture_cart(), None, Model::Dmg);
+        let mut skipping =
+            Gameboy::new_with_model(scrolling_picture_cart(), None, Model::Dmg);
+        skipping.set_render_pixels(false);
+        assert!(drawing.render_pixels() && !skipping.render_pixels());
+
+        // Long enough for the ROM to have built its picture and be scrolling.
+        for _ in 0..40 {
+            drawing.frame();
+            skipping.frame();
+        }
+        assert_ne!(
+            frame_hash(&drawing),
+            frame_hash(&skipping),
+            "the skipping machine drew the same picture — the skip did nothing"
+        );
+
+        // The observation frame: declare the picture wanted, then step once.
+        skipping.set_render_pixels(true);
+        drawing.frame();
+        skipping.frame();
+        assert_eq!(
+            frame_hash(&drawing),
+            frame_hash(&skipping),
+            "a frame drawn after re-enabling pixels is not the frame hardware would have drawn"
+        );
+
+        // And it is a real picture, not two identically blank ones.
+        assert!(
+            drawing
+                .image()
+                .chunks(4)
+                .map(|p| p[1])
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                > 1,
+            "the reference machine drew a uniform screen, so this test proved nothing"
+        );
     }
 }

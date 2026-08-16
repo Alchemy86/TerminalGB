@@ -103,7 +103,7 @@ Status panel's `PPU` row. The pre-rename spellings `fast`/`accurate` still parse
 The two are **not** an appearance choice — palettes and upscaling live in `src/screen/`, above
 the PPU, and are identical either way. The axis is exactness against speed: measured 0.221 vs
 0.461 ms/frame on dmg-acid2, and both are pixel-exact against its reference image. `identical`
-now **loses no row to `standard` on any gate**; what keeps it opt-in is the ~6.3x cost. Where it
+now **loses no row to `standard` on any gate**; what keeps it opt-in is the ~6.8x cost. Where it
 stands against the suite that motivates it is [`docs/mealybug.md`](../mealybug.md) §7. Both modes
 are held against each other in CI by
 [`testharness/ppuengines.rs`](../../testharness/ppuengines.rs).
@@ -158,7 +158,7 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
 > **These describe the default `standard` picture mode.** The per-dot pixel FIFO of §4.0
 > (`identical`, `GB_PPU=identical`, [`src/gpu/fifo.rs`](../../src/gpu/fifo.rs)) does all three of
 > the first bullets properly — variable mode 3, per-dot stepping, per-pixel output — and is gated
-> in CI by `make test-external-accurate`. It is not the default because it costs about 6.3x the
+> in CI by `make test-external-accurate`. It is not the default because it costs about 6.8x the
 > CPU, not because it is behind on anything; the measured trade is in
 > [`docs/picture-modes.md`](../picture-modes.md) and
 > [`docs/measured/ppu.md`](../measured/ppu.md). Read what follows as *"what you get by

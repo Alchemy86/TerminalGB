@@ -113,9 +113,13 @@ atlas-evidence:
 atlas-upstream:
 	tools/fetch-atlas.sh --check-upstream
 
+# `--profile wasm-release`, not `--release`: the shipping profile optimises for
+# SPEED (opt-level 3, fat LTO) because every native consumer of it is CPU-bound,
+# and this is the one target where bytes are the currency. See the two profiles'
+# comments in Cargo.toml for both measurements.
 build-wasm:
-	cargo build --release --target wasm32-unknown-unknown
-	wasm-opt -O4 ./target/wasm32-unknown-unknown/release/terminalgb.wasm -o terminalgb.wasm && du -h terminalgb.wasm
+	cargo build --profile wasm-release --target wasm32-unknown-unknown
+	wasm-opt -O4 ./target/wasm32-unknown-unknown/wasm-release/terminalgb.wasm -o terminalgb.wasm && du -h terminalgb.wasm
 
 test:
 	cargo test --release

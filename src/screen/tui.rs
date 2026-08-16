@@ -5988,21 +5988,6 @@ fn render_quit(f: &mut Frame<'_>) {
 // Pure helpers (unit-tested)
 // ---------------------------------------------------------------------------
 
-/// Turn a decoded Gen 1 picture — one palette index per pixel — into the RGBA
-/// the terminal image path takes, **with the page behind the Pokémon made
-/// transparent** so the panel shows through instead of a pasted-on white box.
-///
-/// Which pixels count as the page is
-/// [`sprite::background_mask`](terminalgb_plugin_trainer::sprite::background_mask): a
-/// flood fill from the border, *not* a colour key — Gen 1 art uses the lightest
-/// shade inside the figure too, and keying on it punches holes through the
-/// middle of the Pokémon.
-///
-/// Transparent pixels keep their opaque colour in RGB and only carry `A = 0`.
-/// That is what makes the fallback safe: a transport that drops alpha (the
-/// `GB_TERM_IMAGE=rgb` escape hatch, or a truecolour PNG) renders exactly the
-/// opaque picture it renders today rather than a hole full of undefined colour.
-#[cfg(feature = "plugin-trainer")]
 /// Fit a bar of segments into `width`, shrinking each through **its own ladder
 /// of shorter forms** before any of it is dropped.
 ///

@@ -122,6 +122,7 @@ and that had quietly happened to more than half of this directory.
 | [telemetry](telemetry.md) | machine-readable NDJSON run data — fps, per-stage breakdown, emulated speed |
 | [debug tooling](debugging.md) | how to inspect, step and capture the running machine, and the surface external tools emit from |
 | [portability](portability.md) | what the core actually runs on, byte-identically — including a PSP that plays Pokémon |
+| [throughput](throughput.md) | how fast the core is in both units, what the build profile was costing, skippable rendering — and the three optimisations that measured worse |
 | [brand assets](brand/README.md) | the mark, and the rule that it is generated from a script with no font embedded |
 
 ## The link cable
