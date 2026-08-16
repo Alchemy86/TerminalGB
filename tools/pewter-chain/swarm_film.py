@@ -70,8 +70,19 @@ INTERIOR = {
 PANEL_GAP = 2 * TILE
 
 FACING = {0: "down", 4: "up", 8: "left", 12: "right"}
-# `wWalkCounter` counts 7 down to 0 across a 16 px step, so a frame is 2 px.
+# **Measured on the cartridge, from the tracks themselves.** `wWalkCounter`
+# ($CFC5, atlas `rom,live`) runs 7,6,5,4,3,2,1 with each value held two frames —
+# fourteen frames of animation — and `wXCoord`/`wYCoord` ($D362/$D361) update on
+# the frame it reaches 0. So **during a step the coordinate is still the tile
+# being left**, and the sprite is somewhere between it and the next one.
+#
+# That is the whole reason a film drawn from coordinates alone teleports, at
+# any compression and any frame rate: the coordinate does not move during the
+# walk, it snaps at the end of it. The offset from the coordinate towards the
+# facing direction is `(8 - counter) * 2` pixels, which is 2 px at counter 7 and
+# 14 px at counter 1 — a sixteen-pixel tile crossed in eight steps of two.
 STEP_PX = 2
+WALK_STEPS = 8
 
 BG = (16, 18, 22)
 
@@ -130,11 +141,17 @@ def tint(sprite, rgb, Image):
 def load_tracks(d):
     out = {}
     for name in sorted(os.listdir(d)):
-        if not (name.startswith("agent-") and name.endswith(".csv")):
+        # `agent-NNN.csv` from a whole-chain film run, or `path-NNNNN.csv`
+        # from a corpus of one link — the same format either way, and a
+        # showcase of one busy stretch wants the second.
+        if name.endswith(".links.csv") or not name.endswith(".csv"):
             continue
-        if name.endswith(".links.csv"):
+        if name.startswith("agent-"):
+            n = int(name[6:-4])
+        elif name.startswith("path-"):
+            n = int(name[5:-4])
+        else:
             continue
-        n = int(name[6:-4])
         with open(os.path.join(d, name)) as f:
             r = csv.reader(f)
             next(r, None)
@@ -186,11 +203,10 @@ def world_pos(origin, map_id, x, y, facing, walking):
     px = ox + x * TILE
     py = oy + y * TILE
     if walking:
-        # The coordinate updates at the *start* of a step, so a walking agent
-        # is drawn behind its coordinate by however much of the step is left.
-        back = walking * STEP_PX
-        dx, dy = {"up": (0, back), "down": (0, -back),
-                  "left": (back, 0), "right": (-back, 0)}[FACING.get(facing, "down")]
+        # Forwards from the tile being left — see WALK_STEPS above.
+        fwd = (WALK_STEPS - walking) * STEP_PX
+        dx, dy = {"up": (0, -fwd), "down": (0, fwd),
+                  "left": (-fwd, 0), "right": (fwd, 0)}[FACING.get(facing, "down")]
         px += dx
         py += dy
     return px, py, map_id not in WORLD
@@ -363,27 +379,42 @@ def main():
                          lname, heat_band(m, x, y)))
         positions.append(here)
 
-    # --- the camera --------------------------------------------------------
-    # **It follows the swarm and pulls back as it spreads**, which is the whole
-    # point of the view: twenty-four agents in one room is a close shot, and
-    # twenty-four agents strung down Route 1 is a wide one. Smoothed over time,
-    # because a camera that snaps per frame is unwatchable.
-    MIN_W = 22 * TILE
+    # --- the camera ---------------------------------------------------------
+    # **It follows the majority, and the certification gate is what makes that
+    # the right shot**: a link is not left behind until nearly every agent
+    # clears it, so the mass is guaranteed to advance and the story is wherever
+    # the mass is. No hand-authored shot list.
+    #
+    # Median rather than mean, and the interquartile spread rather than the
+    # full extent — a handful of stragglers left in Pallet Town would drag a
+    # mean backwards and park the camera in an empty town, and one lost agent
+    # would force a permanent zoom-out. Outliers are allowed to leave frame,
+    # **and the HUD says how many did**, which is the condition for this being
+    # honest rather than flattering.
+    MIN_W = 26 * TILE
+
+    def spread(vals):
+        vals = sorted(vals)
+        n = len(vals)
+        lo = vals[max(0, int(0.15 * n))]
+        hi = vals[min(n - 1, int(0.85 * n))]
+        return lo, hi, vals[n // 2]
+
     cams, prev = [], None
     for here in positions:
         if here:
-            xs = [p[1] for p in here]
-            ys = [p[2] for p in here]
-            cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-            need = max(MIN_W, (max(xs) - min(xs)) * 1.5,
-                       (max(ys) - min(ys)) * 1.5 * OUT_W / OUT_H)
+            lx, hx_, mx = spread([p[1] for p in here])
+            ly, hy_, my = spread([p[2] for p in here])
+            cx, cy = mx, my
+            need = max(MIN_W, (hx_ - lx) * 1.6,
+                       (hy_ - ly) * 1.6 * OUT_W / OUT_H)
         elif prev:
             cx, cy, need = prev
         else:
             cx, cy, need = world.width / 2, world.height / 2, MIN_W
         need = min(need, world.width * 1.0)
         if prev:
-            k = 0.10
+            k = 0.08
             cx = prev[0] + (cx - prev[0]) * k
             cy = prev[1] + (cy - prev[1]) * k
             need = prev[2] + (need - prev[2]) * k
@@ -429,6 +460,22 @@ def main():
                 d.text((sx + r + 1, sy - r - 1), str(n),
                        fill=(240, 244, 248), font=num_font,
                        stroke_width=1, stroke_fill=(0, 0, 0))
+
+        # **The camera follows the majority; it must not hide the minority.**
+        offscreen = [
+            p for p in here
+            if not (0 <= (p[1] - x0) * scale <= VIEW_W
+                    and 0 <= (p[2] - y0) * scale <= OUT_H)
+        ]
+        if offscreen:
+            behind = min(p[6] for p in offscreen)
+            warn = (f"{len(offscreen)} agent(s) off frame, "
+                    f"furthest behind at link {behind}")
+            bb = num_font.getbbox(warn)
+            d.rectangle([0, OUT_H - bb[3] - 10, VIEW_W, OUT_H],
+                        fill=(40, 16, 16))
+            d.text((8, OUT_H - bb[3] - 6), warn, fill=(255, 190, 190),
+                   font=num_font)
 
         # --- the HUD, in the space the crop does not use ---------------------
         gbf = max(1, i * step)
