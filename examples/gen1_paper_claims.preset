@@ -1,0 +1,268 @@
+# Battles built to MEASURE ONE MECHANIC EACH, on the retail cartridge.
+#
+# `examples/gen1_paper_claims.rs` loads this file. Every preset here exists to
+# put one volatile counter into WRAM where the harness can watch it — not to be
+# a fair fight, and not to produce damage observations.
+#
+# Three rules shaped every entry, and each came from a run that measured less
+# than it looked like it did:
+#
+#  1. **The move under test is in slot 1.** The harness advances the battle by
+#     pressing A on a fixed cadence, which takes FIGHT and then the first move.
+#     A move in slot 2 is never used.
+#
+#  2. **Neither side may faint.** A sample ends when the battle does, so both
+#     Pokémon want a large HP bar and the opposition wants a weak, non-status,
+#     non-stat-changing move. Chansey is the bulkiest thing in the game and
+#     Pound is the most boring move in it.
+#
+#  3. **The opposition's moves are spelled out.** A wild Chansey's own level-up
+#     set contains Sing and Defense Curl; a sleeping player never uses the move
+#     under test again, and a stat change is a second variable.
+#
+# The Pokémon and moves are named, never numbered — they are resolved against
+# the player's own cartridge at run time, so nothing here is game data.
+
+# ---------------------------------------------------------------------------
+# TOXIC. Player poisons a bulky opponent badly and then keeps pressing A;
+# `Toxic` on an already-poisoned target fails, so the only thing that changes
+# after the first turn is the residual tick. The harness reads
+# `wEnemyToxicCounter` and the enemy's HP each frame.
+#
+# Chansey at level 60 has a four-figure HP bar, which is what lets the counter
+# climb far enough to test for a cap.
+# ---------------------------------------------------------------------------
+[claim-toxic]
+description = Toxic into a Chansey — the badly-poisoned residual, tick by tick
+
+player   = Gengar
+level    = 50
+moves    = Toxic, Toxic, Toxic, Toxic
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 60
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# TOXIC, AGAIN, AGAINST A TARGET THAT HEALS.
+#
+# The counter's *range* cannot be measured in the preset above, and the reason
+# is arithmetic rather than emulation: the cumulative residual after N ticks is
+# floor(maxHP/16) * N(N+1)/2, which reaches maxHP at N = 6 whatever the HP bar
+# is. So a plain battle can never show what the counter does past 6 — the target
+# is dead.
+#
+# Softboiled restores half of max HP, so a Chansey that heals every turn keeps
+# the counter climbing until the tick outgrows the heal. That is the only way to
+# ask the cartridge whether anything caps the counter, and it needs no
+# intervention from the harness: the counter is still the game's.
+# ---------------------------------------------------------------------------
+[claim-toxic-heal]
+description = Toxic into a Chansey that heals — how far the counter climbs
+
+player   = Gengar
+level    = 50
+moves    = Toxic, Toxic, Toxic, Toxic
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 60
+moves    = Softboiled, Softboiled, Softboiled, Softboiled
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# CONFUSION. Confuse Ray has 10 PP, and a fresh application is refused while
+# the target is still confused — so one battle yields as many samples of the
+# duration roll as the confusion happens to expire times. The harness watches
+# `wEnemyConfusedCounter` and records every 0 -> n transition.
+# ---------------------------------------------------------------------------
+[claim-confusion]
+description = Confuse Ray into a Chansey — the confusion counter, roll by roll
+
+player   = Gengar
+level    = 50
+moves    = Confuse Ray, Confuse Ray, Confuse Ray, Confuse Ray
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 60
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# DISABLE. Same shape. `wEnemyDisabledMove` packs the slot in its high nibble
+# and the turns left in its low nibble, so one byte carries both halves of the
+# claim.
+#
+# The target needs FOUR moves with PP, because `DisableEffect` rerolls until it
+# lands on a non-empty slot — a one-move target would make the slot half of the
+# measurement vacuous.
+# ---------------------------------------------------------------------------
+[claim-disable]
+description = Disable into a Chansey — the disable counter and the slot it picks
+
+player   = Gengar
+level    = 50
+moves    = Disable, Disable, Disable, Disable
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 60
+moves    = Pound, Tackle, Scratch, Cut
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# THRASH. The player is the user this time, so the counter is
+# `wPlayerNumAttacksLeft` and the flag is THRASHING_ABOUT in
+# `wPlayerBattleStatus1`.
+#
+# Thrash is Normal and Chansey is Normal, so nothing is resisted; a level 50
+# Nidoking against a level 70 Chansey does not finish it inside a lock.
+# ---------------------------------------------------------------------------
+#
+# A level 10 attacker against a level 100 Chansey that only knows Splash is the
+# shape every lock preset here wants: the opposition cannot faint the user, and
+# the user cannot faint the opposition inside a battle's worth of PP. Thrash
+# spends PP only on the turn it starts, so 20 PP is 20 whole locks per battle.
+[claim-thrash]
+description = Thrash into a Chansey — the lock counter and how many turns it runs
+
+player   = Nidoking
+level    = 10
+moves    = Thrash, Thrash, Thrash, Thrash
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 100
+moves    = Splash, Splash, Splash, Splash
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# BIDE. Same counter byte, different flag (STORING_ENERGY). The opposition has
+# to keep hitting for something to store, and has to hit softly enough that the
+# player survives several Bides.
+# ---------------------------------------------------------------------------
+[claim-bide]
+description = Bide against a Chansey — the storing counter and the release turn
+
+player   = Snorlax
+level    = 60
+moves    = Bide, Bide, Bide, Bide
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 40
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# PARTIAL TRAPPING. Wrap, again on the player's side. Wrap does almost no
+# damage, which is what makes a long battle possible.
+# ---------------------------------------------------------------------------
+[claim-trapping]
+description = Wrap into a Chansey — the trapping counter and how many turns it runs
+
+player   = Dragonair
+level    = 10
+moves    = Wrap, Wrap, Wrap, Wrap
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 100
+moves    = Splash, Splash, Splash, Splash
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# REFLECT. One preset, two questions: is the flag a per-active volatile bit
+# (`wPlayerBattleStatus3`), and does the cartridge keep it across a switch?
+#
+# The party has TWO Pokémon so the harness can drive PKMN -> switch and watch
+# what happens to the bit.
+# ---------------------------------------------------------------------------
+[claim-reflect]
+description = Reflect, then a switch — where the screen lives and whether it survives
+
+player   = Snorlax
+level    = 50
+moves    = Reflect, Reflect, Reflect, Reflect
+dvs      = 15, 15, 15, 15
+
+player   = Chansey
+level    = 50
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 60
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# LIGHT SCREEN. The other screen, so the claim is checked on both bits rather
+# than generalised from one.
+# ---------------------------------------------------------------------------
+[claim-light-screen]
+description = Light Screen, then a switch — the same two questions for bit 1
+
+player   = Chansey
+level    = 50
+moves    = Light Screen, Light Screen, Light Screen, Light Screen
+dvs      = 15, 15, 15, 15
+
+player   = Snorlax
+level    = 50
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+wild     = Chansey
+level    = 60
+moves    = Pound, Pound, Pound, Pound
+dvs      = 15, 15, 15, 15
+
+# ---------------------------------------------------------------------------
+# FOCUS ENERGY, and the critical-hit rate.
+#
+# **The OPPOSITION is the attacker here, and that is the whole trick.** The
+# harness advances a battle by pressing A, which always takes move slot 1, so a
+# player-side Focus Energy could never be followed by an attack. A wild Pokémon
+# instead picks one of its four slots uniformly at random (`SelectEnemyMove`,
+# `.chooseRandomMove`), so a Focus Energy in slot 1 lands within a few turns and
+# stays up — nothing clears `GETTING_PUMPED` short of a switch — while the other
+# three slots keep attacking. The two presets differ in exactly that one slot.
+#
+# Electrode is the attacker because the crit rate is base Speed / 2 out of 256
+# and 140 is the highest base Speed in the game: 27.3% against 6.6%, which a few
+# hundred attacks separate beyond argument. At level 5 its Swift does 2-3 to a
+# level 100 Chansey, so the Chansey's 640 HP is about 250 attacks of sample.
+#
+# Swift never misses, so every attack is counted; and it is not in
+# `SetDamageEffects`, so it goes through `CriticalHitTest` like any other move.
+# The player's Splash cannot damage anything, so nothing ends the battle early.
+# ---------------------------------------------------------------------------
+[claim-crit-baseline]
+description = A level 5 Electrode attacking with no Focus Energy — the baseline rate
+
+player   = Chansey
+level    = 100
+moves    = Splash, Splash, Splash, Splash
+dvs      = 15, 15, 15, 15
+
+wild     = Electrode
+level    = 5
+moves    = Swift, Swift, Swift, Swift
+dvs      = 15, 15, 15, 15
+
+[claim-crit-focus-energy]
+description = The same Electrode with Focus Energy in slot 1 — the same rate again
+
+player   = Chansey
+level    = 100
+moves    = Splash, Splash, Splash, Splash
+dvs      = 15, 15, 15, 15
+
+wild     = Electrode
+level    = 5
+moves    = Focus Energy, Swift, Swift, Swift
+dvs      = 15, 15, 15, 15

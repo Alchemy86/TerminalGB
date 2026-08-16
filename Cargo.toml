@@ -675,6 +675,15 @@ path = "testharness/colosseum.rs"
 required-features = ["plugin-gen1-link"]
 harness = false
 
+# The GATE for docs/gen1/paper-claims.md: re-asks the cartridge the questions
+# that page answers, so its figures cannot rot unnoticed. Skips (exit 0) without
+# POKE_ROM. See testharness/paperclaims.rs.
+[[test]]
+name = "paperclaims"
+path = "testharness/paperclaims.rs"
+required-features = ["plugin-battle-control", "plugin-trainer"]
+harness = false
+
 # Two-process link harness: re-executes itself twice so two independent
 # processes discover each other through the shipping `link = auto` unix-socket
 # rendezvous and trade, then reads both battery files back off disk. This is the
@@ -773,6 +782,14 @@ required-features = ["gen1-battle", "plugin-battle-control", "plugin-trainer"]
 name = "gen1_battle_ai"
 path = "examples/gen1_battle_ai.rs"
 required-features = ["gen1-battle"]
+
+# Measure the Gen 1 mechanics an outside paper asserted, ON THE CARTRIDGE. Reads
+# no model of ours at all — every figure it prints is a byte the game wrote to
+# its own work RAM. See docs/gen1/paper-claims.md.
+[[example]]
+name = "gen1_paper_claims"
+path = "examples/gen1_paper_claims.rs"
+required-features = ["plugin-battle-control", "plugin-trainer"]
 
 # The LONG-RUN harness: the unattended-run stack end to end — milestones out of
 # a running machine, a durable log, a checkpoint another process resumes from,

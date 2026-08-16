@@ -23,6 +23,88 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-16 — an outside paper's Gen 1 claims, measured; and the one our own engine had backwards
+
+The captain's order was to challenge the figures in Appendix G of *The PokéAgent
+Challenge* ([arXiv 2603.15563v2](https://arxiv.org/abs/2603.15563)) rather than
+take them on trust, since this repository has a cartridge-driven Gen 1 battle
+harness and can settle them. Eleven statements were measured on retail Pokémon
+Blue; the full table, method and provenance are
+[`docs/gen1/paper-claims.md`](gen1/paper-claims.md). **Most of them hold.** Two
+findings belong in this corpus.
+
+### The finding that matters: our own engine had Reflect and Light Screen backwards
+
+- **Symptom.** In a battle simulated by `terminalgb-gen1-battle`, a Pokémon that
+  switches out leaves its Reflect or Light Screen standing for whatever comes
+  in. On the cartridge the screen is gone. Any agent scored against that model
+  was being asked to play a game where screens are a free side-wide investment
+  rather than a per-Pokémon one — a different game, and a strictly easier one to
+  set up.
+- **Caught by.** **Nothing before this.** The differential oracle
+  (`examples/gen1_battle_sim.rs`) compares stats and damage inside one battle
+  and never switches, so a whole corner of the volatile model had no check on
+  it at all. That is the coverage gap, and it is the finding as much as the bug
+  is. It is caught now by
+  [`testharness/paperclaims.rs`](../testharness/paperclaims.rs)'s
+  `a_screen_does_not_survive_a_switch`, which drives the real battle menu to a
+  real voluntary switch on the real cartridge, and by the engine's own
+  `a_switch_clears_the_volatiles_including_the_screens`.
+- **Hardware behaviour.** `HAS_LIGHT_SCREEN_UP` and `HAS_REFLECT_UP` are bits 1
+  and 2 of `wPlayerBattleStatus3` (`constants/battle_constants.asm`), the
+  per-active volatile block; `SendOutMon`, `EnemySendOut` and
+  `EnemySendOutFirstMon` each write zero to the five bytes from
+  `wPlayerStatsToDouble` / `wEnemyStatsToDouble`, which is `$D060`-`$D064` and
+  `$D065`-`$D069` — all three status bytes included. Measured on the cartridge:
+  `wPlayerBattleStatus3` reads `$04` with Reflect up and `$00` immediately after
+  a switch, with the opponent's copy at `$00` throughout.
+- **Carries into the tool.** A conformance candidate that is not about the
+  Game Boy at all: **a comment that asserts a behaviour is a claim, and a claim
+  with no test is a guess.** The wrong note was confident, cited-sounding and had
+  a passing unit test underneath it that pinned the wrong value — the same shape
+  as `a_slave_that_disarms_mid_transfer_...` in `src/link.rs`, and the same
+  lesson. When you check somebody else's claim, check it against your own code
+  too; the row where they were right is worth more than the rows where they were
+  not.
+
+### The measurement finding: a missed trapping move leaves its counter standing
+
+- **Symptom.** A harness that watches `wPlayerNumAttacksLeft` to time a Wrap
+  reads a counter going `4 -> 2` in one step and reports a lock duration the
+  game has never rolled.
+- **Caught by.** No test ROM, and none could — the cartridge is entirely
+  correct. This is a *consumer of emulated state* defect, the same blind spot as
+  the `wIsInBattle == $FF` reader bug of 2026-08-14.
+- **Hardware behaviour.** `MoveHitTest`'s `.moveMissed` does
+  `res USING_TRAPPING_MOVE` and **does not clear the counter**; `TrappingEffect`
+  runs *before* the hit test (its own comment says so), so a first-turn miss
+  sets both and then clears only the flag. 73 of 371 measured trapping locks and
+  39 of 161 thrash locks ended that way — consistent with Wrap's 85 % accuracy
+  and with Gen 1's rule that hurting yourself in confusion clears a thrash.
+- **Carries into the tool.** Key an episode on the **flag**, not on the counter,
+  whenever a mechanic has both. Written into the harness where the mistake was
+  made.
+
+### What was measured, in one line each
+
+Confirmed: the screens as per-Pokémon volatiles; confusion 1-4 acting turns
+(counter rolls 2-5, 97 episodes); thrash 3 counter states (rolls 2-3, 161);
+partial trapping 4 counter states (rolls 1-4 in the source's own 3/8-3/8-1/8-1/8
+shape, 371); Focus Energy as a one-bit volatile; and the critical-hit arithmetic
+itself — measured **0.2604** (250/960) against a predicted 70/256 and **0.0612**
+(36/588) against 17/256, both inside their 95 % intervals, so Focus Energy really
+does quarter the rate.
+
+Disagreements: the badly-poisoned residual is `max(1, floor(maxHP/16)) x N`, not
+`floor(N/16) x maxHP` — **200 of 200** unclamped ticks agree with the first and
+**0 of 240** with the second; and the toxic counter has no bound in the code
+while a plain battle cannot push it past 6 (measured max 5, and 10 against a
+target that heals).
+
+---
+
+---
+
 ## 2026-08-15 — the trainer panel had no pictures at all in a VTE terminal (presentation)
 
 The trainer panel was redesigned for density and hierarchy, and the redesign turned up two
