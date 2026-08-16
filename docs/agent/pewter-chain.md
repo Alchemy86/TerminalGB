@@ -656,8 +656,37 @@ and both are in `/home/aaron/pokemon-run/training/`.
 
 | film | what it is |
 |---|---|
-| `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The walk cycle is visible; the columns, the bottlenecks and the ledges are the picture. |
+| `pewter-chain-atlas-3links-600agents.mp4` | the three certified links in **one continuous cut**, 600 agents, 1280x720, 11 s at **8×**. Placed on PixelGB's Kanto atlas. |
+| `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The columns, the bottlenecks and the ledges are the picture. |
 | `pewter-chain-swarm-24agents.mp4` | the whole fourteen-link chain at 52×, 60 s, clearly labelled a timelapse. |
+
+```sh
+python3 tools/pewter-chain/chain_tracks.py --out target/chain/tracks \
+    01-new-game:target/cert/01 02-leave-the-house:target/cert/02 \
+    03-oak-takes-you-to-the-lab:target/cert/03
+python3 tools/pewter-chain/swarm_film.py target/chain/tracks \
+    --out target/chain/frames --seconds 11 --fps 30 --cover 0.99 --width 1280 \
+    --method "links 01/02/03 each certified 3000/3000, 3000 distinct trajectories, failure rate under 0.10%"
+ffmpeg -y -framerate 30 -i target/chain/frames/f%05d.png \
+    -c:v libopenh264 -b:v 6M -pix_fmt yuv420p pewter-chain-atlas-3links-600agents.mp4
+```
+
+### Runtime and speed are not independent, and this chain is short
+
+**`seconds_out × speed = the emulated time there is.`** That is the whole
+constraint and it decides both numbers, so neither is a taste call. The three
+certified links run 86 emulated seconds for 99% of agents (154 for the single
+slowest), which gives 11 s at 8× — a 70-second cut at 8× would need **9.3
+emulated minutes** and the chain does not contain them. The fourteen-link
+chain's 52× timelapse is not a different aesthetic, it is a different amount of
+material.
+
+**`--cover` is the other half and it matters more than it looks.** The swarm is
+essentially finished by frame 4,000: at 40% through a `--cover 1.0` timeline
+only 50 of 600 agents are still running, and at 50% only 8. Covering the single
+longest straggler therefore spends **60% of the runtime on fewer than ten
+agents** — measured, and visible as a film that empties out and then keeps
+playing. `--cover 0.99` ends shortly after the mass does.
 
 Peter Whidden's *Training AI to Play Pokémon with Reinforcement Learning* is
 where the swarm view comes from and the credit is his. What differs here is a
@@ -668,13 +697,41 @@ property of the substrate rather than a flourish:
 - **The agents are the game's own player sprite**, read out of OAM and VRAM
   with the hardware's own transparency rule (colour index 0), facing the way
   the game says they face.
-- **The interiors are panels beside the door they belong to** — a lookup, not a
-  search, because the cartridge carries the warp table. `warp_event 12,11,
-  OAKS_LAB, 2` places Oak's Lab next to Oak's Lab's front step. That matters
-  because **half the chain does not happen on a map**: the starter, the rival,
-  the parcel and the Pokédex are all indoors, and a pure map view shows only
-  the walking between them.
+- **The world is read out of PixelGB's atlas manifest**, and out of nothing
+  else. An agent at `(map, x, y)` is drawn at `rect.x + x * tile_px`; that is
+  the whole of the placement. Outdoor maps sit where the cartridge's own
+  connection records put them and interiors are grouped into blocks beside
+  their own area. That matters because **half the chain does not happen on a
+  map**: the starter, the rival, the parcel and the Pokédex are all indoors,
+  and a pure overworld view shows only the walking between them.
 - **The whole thing is deterministic**, so the film regenerates from the seeds.
+
+### The layout used to be a guess, and the guess is deleted
+
+Before the atlas existed the compositor carried its own: five outdoor origins
+transcribed from the map headers' `connection` lines, a table putting each
+interior beside its own door, a gutter-packer, and a connector line drawn from
+each panel back to the door it belonged to. It was an honest stand-in and it
+looked like one — a floating panel, a void between the two halves of the world,
+and threads across the gap.
+
+All of it is gone. `WORLD`, `INTERIOR`, `PANEL_GAP` and `build_layout` are
+deleted rather than kept as a fallback, because two ways to place a map is one
+way too many, and the per-map short-name table went with them (the manifest
+names all 226).
+
+**The swap immediately found something the guess had been hiding.** Every one
+of the 600 agents carries exactly one row reading `OAKS_LAB (12,11)` — and
+(12,11) is Pallet Town's own `warp_event 12,11, OAKS_LAB, 2`, while Oak's Lab
+is ten tiles wide. A warp changes `wCurMap` one frame before it changes
+`wXCoord`/`wYCoord`, so on that frame a track names the destination map and the
+*departure's* door tile. It is the same trap `chain_tracks.py::settle` handles
+at boot, arriving mid-track instead of at the head. The old layout hid it
+because the stray point landed on top of a neighbouring sheet; the atlas has
+real gaps, so an agent stood in one. `Atlas.holds` drops any row whose
+coordinate is not on the map it names, the count is printed, and the agent
+holds its last real tile until the destination arrives — which is what a warp
+is.
 
 ### The colour is the heat map, and it is a declared exception
 
@@ -717,6 +774,81 @@ Measured over 120 agents at the showcase's own sampling rate, before and after:
 | positioned from the tile coordinate | 68% | 25% |
 | interpolated between recorded tiles | **0.0%** | **100.0%** |
 
+**The compositor measures this itself now, on every run, dry or not** — the
+figure above was read off a screenshot once, which is exactly the kind of claim
+that goes stale unnoticed. It prints the displacement distribution and the
+camera's coverage before it renders a single frame.
+
+**And the 14-frame window was wrong for the data.** It was reasoned from
+`wWalkCounter` and is right about the cartridge; measured over the certified
+chain, **no adjacent-tile arrival is ever that close together** — the gaps are
+17 frames (34%), 27–31 (40%) and 52–55 (9%), because a track is sampled every
+2–3 frames and the solver's own decision cadence sits between some steps. A
+14-frame glide inside a 17-frame gap freezes the agent for 3 frames before
+*every* step, and inside a 31-frame gap for 17. That is precisely the reported
+"agents jump then pause", and it is a constant that was never checked against
+the tracks it was applied to. `walk_span` measures the modal step time from the
+tracks in hand — 17 here — and the glide never exceeds the gap.
+
+**Interpolation is what lets the cut be fast *and* smooth, and that is
+measurable rather than asserted.** A walking agent covers 16 px per step, so at
+a timelapse factor X it covers about 1.9·X source pixels per output frame: at
+1× that is 1.9 px and sub-4px steps are 99.7% of all motion; at 8× it is 15 px
+**by construction**, and no amount of interpolation can make a fast film move
+in small steps. What interpolation removes at speed is the *quantisation*:
+
+| at 8×, of 46,936 walking steps | land exactly on a whole-tile multiple |
+|---|---:|
+| positioned from the recorded tile | **99.5%** |
+| interpolated between recorded tiles | **7.6%** |
+
+Without it an agent teleports 0, 16 or 32 px depending on how the stride lands
+against the step; with it the phase is right and the motion is continuous. That
+is the entire reason the compression can go back up.
+
+On the shipped 11-second cut, 122,219 samples:
+
+```text
+agent displacement per output frame, in source pixels (a walk tile is 16):
+  median 0.00  p90 15.06  p99 192.00  max 449.14
+camera coverage: mean 98.3% of live agents on screen
+```
+
+The tail past 40 px is warps, and a warp is a jump — `interpolate` refuses to
+lerp across one by design.
+
+### Where an agent is drawn, measured against the cartridge
+
+Reported as agents sitting left of a path's centre line, straddling its edge.
+It was a real anchor bug and it was settled by measurement, not by reasoning
+about OAM — [`tools/pewter-chain/measure_anchor.py`](../../tools/pewter-chain/measure_anchor.py)
+reproduces it in one command.
+
+The method needs only two things we already have. `terminalgb-mcp` gives a real
+game screen (`screenshot`) and the player's exact tile (`observe`); PixelGB's
+four-shade atlas is photographed from the same cartridge, so **its tile grid is
+the game's and its shades are the game's four**. Sweep the hypothesis "the
+player's tile top-left is at screen `(ax, ay)`" over the whole frame and count
+disagreeing pixels in the overlap:
+
+```text
+screen ( 64, 64)     153 of 12288 px differ =  1.25%
+screen ( 64, 56)    1297 of 11264 px differ = 11.51%
+screen ( 64, 48)    1469 of 10240 px differ = 14.35%
+```
+
+One answer, by a 9.2× margin, and the 153 pixels that do differ are the player
+— absent from the atlas. Their bounding box is x 65..78, **y 60..75**: sixteen
+tall, four pixels *above* the 64..79 tile box. So an agent stands in the middle
+of its tile and its sprite is lifted a quarter of a tile. The compositor was
+returning the tile's *corner* and then centring the sprite on it, which is half
+a tile up and to the left — exactly what was reported.
+
+**Both halves of a wrong answer can look like one bug.** The same pass found
+the camera genuinely lagging *and* the off-frame count overstating it, and the
+anchor error was independent of the atlas swap and would have survived onto any
+corrected placement.
+
 ### The camera follows the majority, and says who it left behind
 
 A link is not left behind until nearly every agent clears it, so the mass is
@@ -728,6 +860,24 @@ handful of stragglers cannot force a permanent zoom-out.
 **And it must not hide them.** A persistent line says how many agents are off
 frame and how far behind the furthest is, because a clean-looking crowd must
 never be mistakable for a clean run.
+
+**A steady shot of the wrong place is not a good shot.** The five smoothing
+rules — a slow EMA, a deadzone, a quantised zoom, a pan cap and an axis bias —
+are every one of them calibrated for *jitter*, and when the swarm genuinely
+walks somewhere else they are calibrated for the wrong thing. Measured on this
+chain: the picture was perfectly steady and **78.7%** covered, with stretches
+of hundreds of frames where most of the swarm was outside the frame. A sixth
+rule keys a catch-up on how far the 5th–95th box pokes past the view, which is
+*exactly zero* whenever the swarm is already on screen — so it is provably a
+no-op on every frame that was already right. Coverage 78.7% → **98.9%**, and
+smoothness held: one direction reversal in seventy seconds, 81% of frames with
+the camera perfectly still on X, three distinct zoom levels in the whole cut.
+
+**And part of that 78.7% was the measurement, not the shot.** The off-frame
+test compared an agent's *centre* against the boundary, so seventy-one agents
+sitting 0.15 px outside the left edge — drawn, plainly, half in frame — were
+reported missing. It is judged by the sprite now. Both halves were real: the
+camera was lagging *and* the number overstated it.
 
 ---
 

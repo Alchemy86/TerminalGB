@@ -7883,14 +7883,17 @@ Peter Whidden's swarm view; the credit is his and stays.
    fine enough to catch it; **interpolating between consecutive recorded tiles fixes it at every
    rate**, needs no re-simulation, and is what `pwhiddy/pokerl-map-viz`'s `visualizer_live.js`
    does. Measured before/after over 120 agents: ≥12 px snaps **68% → 0.0%**, sub-4 px slides
-   **25% → 100.0%**. One refinement: run the progress fraction over the **last 14 frames before
-   the arrival**, not the whole gap, or an agent that stood still for a thousand frames drifts
-   the whole time instead of standing still and then stepping.
+   **25% → 100.0%**. Run the progress fraction over the last `span` frames before the arrival,
+   not the whole gap, or an agent that stood still for a thousand frames drifts the whole time —
+   **but `span` is MEASURED from the tracks, never a constant. See "the glide span" below: the
+   hard-coded 14 was right about the cartridge and wrong about the data, and it is what "agents
+   jump then pause" was.**
 2. **HALF A CHAIN DOES NOT HAPPEN ON A MAP.** The starter, the rival battle, the parcel and the
    Pokédex are all indoors and a battle has no map position at all, so a pure overworld view shows
-   only the walking between them and every staged link reads as "go north". Interiors are panels
-   **beside the door they belong to**, which is a *lookup* — the cartridge's warp table says
-   `warp_event 12,11, OAKS_LAB, 2`, so Oak's Lab goes next to Oak's Lab's front step.
+   only the walking between them and every staged link reads as "go north". The interiors are
+   placed by **PixelGB's atlas manifest**, which is now the only source of any map's position —
+   see "The world comes from the atlas manifest" below. *(This item used to describe a
+   hand-written interior table keyed on the cartridge's warp records; that table is deleted.)*
 3. **Colour the AGENTS, not the world.** A Game Boy frame is four shades already, so nothing has
    to be desaturated; the hue is **how trodden the tile under the agent's feet is**, from the same
    visitation count the heat maps use. The frontier then lights up on its own. **Declare it as an
@@ -8070,30 +8073,123 @@ an edge is shown half off; and **wrap a caption to the panel, never let the pane
 the certification line read `links 01/02/03 each certified 3000` and stopped mid-number, and a
 truncated measurement is worse than none because a reader cannot tell it was cut.
 
-#### What the film compositor needs from the world atlas (`mapgb-atlas-w7`)
+#### The world comes from the atlas manifest, and the hand-written layout is DELETED
 
-The layout in `swarm_film.py` — `WORLD`, `INTERIOR`, `build_layout` and the connector lines —
-is **being replaced** by the proper Kanto atlas and its manifest. Everything else in the
-compositor is layout-independent and stays: the camera stabilisation, the tile interpolation,
-the heat colouring, the link-progress bars, the tracked cohort and the off-frame honesty line.
+**PixelGB's Kanto atlas landed and `swarm_film.py` reads it.** `WORLD`, `INTERIOR`,
+`PANEL_GAP`, `build_layout`, `world_pos`, the connector lines and the per-map `MAP_LABEL`
+table are **gone, not kept as a fallback** — two ways to place a map is one way too many, and
+every one of them was a presentation guess standing in for a layout that did not exist. Nothing
+else moved: the camera, the interpolation, the heat colouring, the link bars, the cohort and
+the off-frame line are layout-independent and were untouched by the swap.
 
-The whole surface the rest of the compositor touches is four things, so the swap is small if
-the manifest answers them:
+- **`Atlas` (`tools/pewter-chain/swarm_film.py`) is the whole interface.** `--atlas` names
+  `atlas.json` (226 maps, `id`/`name`/`kind`/`scale`/`tile_px`/`rect`/`tiles`), `--rendering`
+  and `--atlas-scale` pick which published image, and `place(map, x, y)` is
+  `rect.x + x * tile_px`. **Honour each entry's own `scale` and `tile_px`** rather than
+  assuming 16: this atlas is uniform and states it, and the manifest repeats the fields per map
+  precisely so a future one that draws interiors smaller cannot silently misplace them.
+- **The manifest's image paths are its own publication layout, not a local filename.** It says
+  `pokemon-blue/atlas/region-tint/1x/kanto.png` and the local copy is
+  `pokemon-blue_atlas_region-tint_1x_kanto.png`. `Atlas._pick_image` tries the stated path, the
+  flattened form, the bare name and any file ending in the flattened stem, and prints every
+  candidate on failure.
+- **Carry only as much atlas as the tracks reach.** It is 7520x8048 here; the three-link cut
+  visits four maps that sit in a 656x336 px cluster. The window is the union of the visited
+  maps plus `--margin` tiles, so memory, crop cost and the camera's clamp are all set by the
+  film rather than by geography nobody visits — and what was dropped is printed.
+- **A map the atlas does not place is UNPLACED and drawn nowhere**, counted per frame and
+  reported on the same line as the off-frame count. Never the origin: that is the failure that
+  once put six hundred agents on Pallet Town's corner.
 
-1. **`origin[map_id] -> (x, y)` in one global pixel space**, plus that space's total size.
-   `world_pos` and the camera work in nothing else.
-2. **The sheet image per map**, by path in the manifest rather than by filename prefix — the
-   current `f"{m:03d}-"` discovery is a guess about somebody else's naming.
-3. **A per-map `scale`, honoured in the tile→pixel conversion.** This is the one real change,
-   and it is worth settling before anything is written: today `world_pos` assumes `TILE = 16`
-   px **everywhere**, so an atlas that draws interiors smaller than the overworld silently
-   puts every indoor agent in the wrong place. If `scale` can vary per map, the conversion
-   becomes `origin + tile * 16 * scale[map]` and the marker radius should scale with it too.
-4. **An explicit answer for a map the atlas does not place.** Tracks contain transients — map
-   `$FC` appears for a few frames at power-on — and the compositor already counts unplaced
-   agents in the off-frame line. A missing key must mean "not placed", never "place it at the
-   origin", which is the failure that put six hundred agents on Pallet Town's corner.
+**THE SWAP IMMEDIATELY FOUND A DEFECT THE GUESS HAD BEEN HIDING, AND IT IS A GENERAL ONE: a
+warp changes `wCurMap` one frame before it changes `wXCoord`/`wYCoord`.** Every one of the 600
+agents carries exactly one row reading `OAKS_LAB (12,11)` — and (12,11) is *Pallet Town's* own
+`warp_event 12,11, OAKS_LAB, 2`, while Oak's Lab is ten tiles wide. It is the same trap
+`chain_tracks.py::settle` handles at boot, arriving mid-track instead of at the head. The old
+layout hid it because the stray point landed on top of a neighbouring sheet; the atlas has real
+gaps, so an agent stood in one, visibly, in the finished film. `Atlas.holds` drops any row whose
+coordinate is not on the map it names, prints the count, and the agent holds its last real tile
+until the destination arrives — which is what a warp is, and `interpolate` already refuses to
+lerp across one. **Any consumer of a position track needs this, not only the compositor.**
 
-`parent map` and `connecting warp` are not needed by the compositor: it draws agents at world
-pixels and nothing else. They are useful for *labelling*, and grouping interiors by proximity
-and colour removes the connector lines entirely.
+#### The compositor measures its own film now (`report_motion`)
+
+Two numbers decide whether a cut is any good and both were previously read off a screenshot,
+which is exactly how a figure goes stale unnoticed. They are printed on every run, `--dry-run`
+included, before a frame is rendered.
+
+- **Agent displacement per output frame, in source pixels.** On the three-link cut over 975,476
+  samples: median 0.00, p90 2.29, p99 2.29, **≥12 px 0.26%, <4 px 99.74%**. The 0.26% are warps
+  and a warp is a jump.
+- **Camera coverage** — the fraction of live agents on screen, plus the worst frame.
+
+**A STEADY SHOT OF THE WRONG PLACE IS NOT A GOOD SHOT.** The five smoothing rules are every one
+of them calibrated for *jitter*; when the swarm genuinely walks somewhere else they are
+calibrated for the wrong thing. Measured here: a perfectly steady picture at **78.7%** coverage,
+with stretches of hundreds of frames where most of the swarm was outside the frame. Rule 6
+keys a catch-up (a larger pan cap, the X bias released, the deadzone suspended) on how far the
+5th–95th box pokes past the view — **exactly zero whenever the swarm is already on screen**, so
+it is provably a no-op on every frame that was already right. 78.7% → **98.9%**, with smoothness
+held: one direction reversal in seventy seconds, 81% of frames still on X, three zoom levels in
+the whole cut. A margin (`CAM_INSET`) keeps the mass off the boundary, because a cluster
+balanced exactly on the edge is a stable equilibrium the camera will happily sit in.
+
+**And part of that 78.7% was the MEASUREMENT, not the shot.** The off-frame test compared an
+agent's *centre* against the boundary, so seventy-one agents sitting 0.15 px outside the left
+edge — drawn, plainly, half in frame — were reported missing, and one frame claimed 362 of 592
+lost from a picture showing nearly all of them. `on_screen` judges by the sprite. Both halves
+were real, and fixing only one of them would have left a wrong number looking right.
+
+**THE PAN CAP IS A FRACTION OF WALKING PACE, NOT A PIXEL COUNT.** It was 1.6 world px per
+*output* frame, which is a glide at 1x and a crawl at 8x — each output frame covers eight times
+the ground, so the camera cannot keep up with its own subject and coverage fell to 92.5%. Tied
+to `walk_px` (`16 / span * step`) it scales with the compression for free and reproduces the
+tuned 1.6 exactly at 1x. **And the catch-up has to lift the EMA GAIN, not only the cap**:
+`CAM_K` is 2.8% of the error per frame, so a bigger cap alone changes nothing while the gain is
+what binds. 92.5% → **98.0% at 8x**, and 1x improved to 99.6% as well.
+
+#### The glide span, and the sprite anchor — two constants that were never checked against data
+
+Both were reported by the captain as visible defects in a cut, both had a plausible derivation
+behind them, and both were wrong. **A constant derived from the cartridge is not thereby correct
+for the tracks you apply it to.**
+
+- **THE GLIDE SPAN WAS 14 FRAMES AND NO STEP IN THE CORPUS IS THAT SHORT.** It came from
+  `wWalkCounter` (7..1, each held two frames) and is right about the console. Measured over the
+  certified chain, adjacent-tile arrival gaps are **17 frames (34%), 27-31 (40%), 52-55 (9%)** —
+  a track is sampled every 2-3 frames and the solver's decision cadence sits between some steps.
+  So a 14-frame glide froze every agent for 3 frames before *every* step and 17 before some:
+  "agents jump then pause". `walk_span` takes the modal gap from the tracks in hand (17 here) and
+  the glide never exceeds the gap.
+- **AN AGENT STANDS IN THE MIDDLE OF ITS TILE AND ITS SPRITE IS LIFTED A QUARTER OF ONE.**
+  `Atlas.place` returned the tile's *corner* and the renderer centred the sprite on it, i.e. half
+  a tile up and left — reported as sprites straddling the left edge of a path instead of walking
+  down it. **Measured, not reasoned about:** `tools/pewter-chain/measure_anchor.py` drives the
+  real cartridge through `terminalgb-mcp` (`observe` for the tile, `screenshot` for the frame),
+  matches the frame against PixelGB's **four-shade** atlas — photographed from the same
+  cartridge, so its tile grid *is* the game's — and sweeps "the player's tile top-left is at
+  screen (ax, ay)". One answer by a **9.2x** margin (1.25% of pixels differ at (64,64) against
+  11.51% at the runner-up), and the 153 that differ are the player, bounding box x 65..78,
+  **y 60..75**: sixteen tall, four above the 64..79 tile box. Hence `SPRITE_LIFT = 4/16`.
+  **This technique generalises**: anything that needs to know where the game draws something
+  relative to its own tile can be settled this way in one command, because the atlas and the
+  emulator are two independent views of one cartridge.
+
+#### Runtime and speed are not independent: `seconds_out x speed = the emulated time there is`
+
+Worth stating as an identity, because it was argued about twice in one sitting. The three
+certified links are **86 emulated seconds** for 99% of agents (154 for the slowest single one),
+so 8x gives an 11-second film and a 70-second cut at 8x would need 9.3 emulated minutes that do
+not exist. The fourteen-link chain's 52x is not a different taste, it is more material.
+
+**`--cover` decides how much of the runtime is empty.** The swarm is essentially finished by
+frame 4,000: at 40% through a `--cover 1.0` timeline only 50 of 600 agents are still running and
+at 50% only 8, so covering the slowest straggler spends **60% of the film on fewer than ten
+agents**. Measured, and it looks exactly like a film that has ended and kept playing. `0.99`.
+
+**Sub-4px steps and a fast cut are mutually exclusive, and the arithmetic says so.** A walking
+agent covers 16 px per step, so at timelapse factor X it moves ~1.9·X source px per output
+frame: 1.9 px at 1x (99.7% of motion under 4 px) and 15 px at 8x, *by construction*. What
+interpolation buys at speed is not small steps, it is the removal of quantisation — at 8x,
+**99.5%** of walking steps land exactly on a whole-tile multiple without it and **7.6%** with it.
+Quote that pair, not "<4px", whenever a fast cut is being judged.
