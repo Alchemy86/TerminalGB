@@ -8191,5 +8191,62 @@ agents**. Measured, and it looks exactly like a film that has ended and kept pla
 agent covers 16 px per step, so at timelapse factor X it moves ~1.9·X source px per output
 frame: 1.9 px at 1x (99.7% of motion under 4 px) and 15 px at 8x, *by construction*. What
 interpolation buys at speed is not small steps, it is the removal of quantisation — at 8x,
-**99.5%** of walking steps land exactly on a whole-tile multiple without it and **7.6%** with it.
-Quote that pair, not "<4px", whenever a fast cut is being judged.
+**100.0%** of moving samples land exactly on a whole-tile multiple without it and **0.0%** with
+it. Quote that pair, not "<4px", whenever a fast cut is being judged. *(The 99.5%/7.6% this
+entry used to carry was a one-off script's figure; `report_motion` measures it on every run
+now, and the ceiling that makes the pair move at all is the next section but two.)*
+
+#### THE SMOOTHNESS CEILING IS `stride <= one walk step`, and frame rate is the only lever
+
+The identity above says how *long* a film is; this one says how *fast* it may be, and until
+now it was unstated — which is why 8x looked like a taste call rather than a wall the previous
+cut was already leaning on.
+
+- **`stride = speed x 59.7275 / fps` emulated frames per output frame, and `interpolate` can
+  only place an agent inside a step while `stride <= span`.** `span` is the step time measured
+  from the tracks in hand (`walk_span`), **17** emulated frames on the certified chain. So at
+  30 fps the ceiling is `17 x 30 / 59.7275` = **8.54x**, and the shipped 8x cut was sitting
+  four percent underneath it. Past the ceiling an output frame swallows a whole step and the
+  agent lands back on the tile grid: 12x at 30 fps measures **18.0%** quantised against 0.0%
+  at 8x.
+- **THE WAY PAST IT IS FRAME RATE, NOT A SLOWER FILM.** At 60 fps the ceiling is **17.08x**, so
+  the original dot film's 12x needs a stride of 12 and is comfortably smooth. Measured on the
+  same tracks, **12x/60 fps beats 8x/30 fps on every motion figure while being half as long
+  again**: stride 12 vs 16, walking agent 11.3 vs 15.1 source px per output frame, quantisation
+  0.0% both, `>=12 px` snaps **1.25%** vs 20.8%, `<4 px` slides 67.2% vs 62.8%, camera coverage
+  98.8% vs 98.3%. Speed and smoothness are not the trade they look like.
+- **The original film's pace was 12.05x and it is in the repository, not folklore**:
+  `examples/swarm_view.rs --sample 24` at 30 fps, 36,000 emulated frames per agent -> 1,500
+  output frames, 50 s (`docs/swarm-view.md`). Its stride of 24 is *longer* than a walk step, so
+  it teleported by construction — and did not care, because **a dot has no walk cycle to
+  contradict**. Drawing the cartridge's own sprite is what made the stride start mattering.
+  Runtime is the part that does not carry over: 602 emulated seconds against this chain's 86.3.
+
+#### `report_motion`'s `>=12 px` line CANNOT judge a fast cut — quote the quantisation instead
+
+A walking agent clears 12 px per output frame above about 6x *by construction*, so the snap
+figure saturates at "the swarm is walking" exactly where a pace decision gets made. It is a
+teleport detector for 1-2x cuts and nothing else. The scale-free measure is **what fraction of
+moving samples land on the tile grid**, which `report_motion` prints now; warps are excluded
+(a warp really is a whole-tile jump, and counting them credits the renderer for the
+cartridge's own teleports). Teeth proven by neutralising `interpolate`: **100.0%** at both 8x
+and 12x, against 0.0% and 18.0% with it.
+
+#### The anchor was right and the ATLAS was the lie — and a sweep must be allowed to fail
+
+Reported a second time as *"the sprites are over to the left a little"*. Re-run,
+`measure_anchor.py` reproduces to the pixel — screen (64, 64), 1.25%, **9.2x margin**, player
+box **x 65..78**, whose centre 71.5 is the tile's own centre of 72. **The sprite is dead centre
+on its tile by measurement**; there is no leftward bias to find, and the measurement never
+consults where a map is *placed*, so it is structurally immune to a layout change. What the
+report was looking at was a stale atlas bundling every Pallet Town interior to the left of the
+town whatever side its door is on.
+
+**And the tool printed a confident wrong answer on the way to establishing that.** Pointed at a
+save that continues into the Viridian Pokémon Center, whose NPCs are in the frame and not in the
+atlas, every hypothesis differs by ~36% and the best is arbitrary — it announced
+`SPRITE_LIFT = 0.0000` at a **1.0x** margin in the same sentence shape as the real measurement.
+**A sweep always has a winner and a winner is not an answer.** It refuses below `MIN_MARGIN`
+(3x) or above `MAX_MISMATCH` (10%) and names the scene that works: a ROM with no `.sav` beside
+it starts a new game in Red's bedroom, which has no NPC in shot. Any future sweep-shaped
+measurement in this repository needs the same guard.

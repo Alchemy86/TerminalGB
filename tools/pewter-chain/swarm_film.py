@@ -449,7 +449,7 @@ def on_screen(px, py, x0, y0, cw, ch):
     return (x0 - h <= px <= x0 + cw + h) and (y0 - h <= py <= y0 + ch + h)
 
 
-def report_motion(positions, cams, lost, n_agents, out_h, view_w):
+def report_motion(positions, cams, lost, n_agents, out_h, view_w, tile=TILE):
     """What the film actually does, measured — never asserted.
 
     Two numbers decide whether a cut is any good and both were previously read
@@ -457,14 +457,33 @@ def report_motion(positions, cams, lost, n_agents, out_h, view_w):
     (a teleport is a step of most of a tile in one frame, which is what drawing
     from `wXCoord`/`wYCoord` alone produces), and how much of the swarm the
     camera is not showing. Printed on every run, dry or not.
+
+    **The absolute `>=12 px` threshold cannot judge a fast cut, and quoting it
+    as if it could is how a pace argument goes wrong.** A walking agent covers
+    `16 / span * step` source pixels per output frame — 15 px at 8x and 23 px
+    at 12x — so above about 6x *every walking sample* clears 12 px by
+    construction and the figure saturates at "the swarm is walking". It still
+    earns its place at 1-2x, where it is the teleport detector it was built as.
+
+    What separates a teleport from a fast glide at any compression is whether
+    the displacement lands on the tile grid. Drawing straight from
+    `wXCoord`/`wYCoord` puts *every* moving sample on a whole-tile multiple,
+    because those bytes only ever hold whole tiles; interpolating across the
+    step leaves only the samples that happen to coincide. So the quantised
+    fraction is scale-free, and it is the number a compression decision turns
+    on. Warps are excluded — a warp really is a jump, and it is a whole-tile
+    multiple, so counting them would credit the renderer for the cartridge's
+    own teleports.
     """
-    steps = []
+    steps, deltas = [], []
     for a, b in zip(positions, positions[1:]):
         prev = {p[0]: (p[1], p[2]) for p in a}
         for p in b:
             q = prev.get(p[0])
             if q is not None:
-                steps.append(math.hypot(p[1] - q[0], p[2] - q[1]))
+                dx, dy = p[1] - q[0], p[2] - q[1]
+                steps.append(math.hypot(dx, dy))
+                deltas.append((dx, dy))
     if steps:
         steps.sort()
         def q(f):
@@ -472,11 +491,25 @@ def report_motion(positions, cams, lost, n_agents, out_h, view_w):
         snaps = sum(1 for s in steps if s >= 12) / len(steps)
         slides = sum(1 for s in steps if s < 4) / len(steps)
         print(f"agent displacement per output frame over {len(steps)} samples, "
-              f"in source pixels (a walk tile is 16):")
+              f"in source pixels (a walk tile is {tile:g}):")
         print(f"  median {q(0.5):.2f}  p90 {q(0.9):.2f}  p99 {q(0.99):.2f}  "
               f"max {steps[-1]:.2f}")
         print(f"  >=12 px (a snap) {snaps*100:.2f}%   <4 px (a slide) "
               f"{slides*100:.2f}%")
+
+        def on_grid(v):
+            return abs(v / tile - round(v / tile)) * tile <= 0.25
+
+        # A warp crosses maps and is several tiles at once; a walk is at most
+        # one tile per emulated step, so anything past two tiles in a frame is
+        # the cartridge teleporting, not the renderer failing to interpolate.
+        walk = [(dx, dy) for dx, dy in deltas
+                if 0.5 <= math.hypot(dx, dy) <= 2 * tile]
+        if walk:
+            grid = sum(1 for dx, dy in walk if on_grid(dx) and on_grid(dy))
+            print(f"  whole-tile quantisation {100*grid/len(walk):.1f}% of "
+                  f"{len(walk)} moving samples land on the tile grid "
+                  f"(drawn from wXCoord/wYCoord alone it is 100%)")
 
     off = []
     for (here, (cx, cy, cw)) in zip(positions, cams):
@@ -866,7 +899,11 @@ def main():
                 fh.write(f"{i},{cx},{cy},{cw:.4f}\n")
         print(f"camera trace: {a.camera_trace} ({len(cams)} frames)")
 
-    report_motion(positions, cams, lost, len(tracks), OUT_H, VIEW_W)
+    # The grid a displacement is measured against is the atlas's own, not this
+    # file's constant — an atlas published at a different scale draws a walk
+    # tile at a different number of world pixels.
+    report_motion(positions, cams, lost, len(tracks), OUT_H, VIEW_W,
+                  tile=TILE * atlas.mul)
     if a.dry_run:
         return
 

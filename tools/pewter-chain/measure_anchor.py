@@ -48,6 +48,11 @@ import subprocess
 import sys
 
 
+# The sweep must be allowed to fail. See the refusal in `main`.
+MIN_MARGIN = 3.0
+MAX_MISMATCH = 0.10
+
+
 class Mcp:
     def __init__(self, server, rom):
         self.p = subprocess.Popen(
@@ -176,7 +181,27 @@ def main():
         print(f"  screen ({ax:3d},{ay:3d})  {bad:6d} of {n:6d} px differ "
               f"= {frac*100:5.2f}%")
     _, _, _, ax, ay = results[0]
-    print(f"\nmargin over the runner-up: {results[1][0]/max(results[0][0],1e-9):.1f}x")
+    margin = results[1][0] / max(results[0][0], 1e-9)
+    print(f"\nmargin over the runner-up: {margin:.1f}x")
+
+    # **A sweep always has a winner, and a winner is not an answer.** The
+    # method only decides anything when the right hypothesis makes the
+    # background line up exactly and every other one disagrees everywhere — a
+    # 9.2x margin on the bedroom. Run it on a scene the atlas cannot match and
+    # the sweep still ranks something first: pointed at a save that continues
+    # into the Viridian Pokémon Center, whose NPCs are in the frame and not in
+    # the atlas, every hypothesis differs by ~36% and the best of them is
+    # arbitrary. It then printed `SPRITE_LIFT = 0.0000` in the same confident
+    # sentence as the real measurement. Refuse instead, and say what scene
+    # works: a new game lands in Red's bedroom, which has no NPC in shot.
+    if margin < MIN_MARGIN or results[0][0] > MAX_MISMATCH:
+        sys.exit(
+            f"\nthe sweep did not resolve: best hypothesis differs by "
+            f"{results[0][0]*100:.2f}% at only a {margin:.1f}x margin "
+            f"(needs <{MAX_MISMATCH*100:.0f}% at >{MIN_MARGIN:.0f}x).\n"
+            f"This scene has something in it the atlas does not draw — an NPC, "
+            f"an open menu, or a mid-step frame. Measure on an empty room: a "
+            f"ROM with no .sav beside it starts a new game in Red's bedroom.")
 
     ox, oy = r["x"] + pos["x"] * T - ax, r["y"] + pos["y"] * T - ay
     x0, x1 = max(ox, r["x"]), min(ox + frame.width, r["x"] + r["width"])

@@ -656,7 +656,7 @@ and both are in `/home/aaron/pokemon-run/training/`.
 
 | film | what it is |
 |---|---|
-| `pewter-chain-atlas-3links-600agents.mp4` | the three certified links in **one continuous cut**, 600 agents, 1280x720, 11 s at **8×**. Placed on PixelGB's Kanto atlas. |
+| `pewter-chain-01-03-600agents.mp4` | the three certified links in **one continuous cut**, 600 agents, 1280x720, 7.2 s at **12×, 60 fps** — the original swarm film's own compression. Placed on PixelGB's Kanto atlas. |
 | `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The columns, the bottlenecks and the ledges are the picture. |
 | `pewter-chain-swarm-24agents.mp4` | the whole fourteen-link chain at 52×, 60 s, clearly labelled a timelapse. |
 
@@ -665,21 +665,39 @@ python3 tools/pewter-chain/chain_tracks.py --out target/chain/tracks \
     01-new-game:target/cert/01 02-leave-the-house:target/cert/02 \
     03-oak-takes-you-to-the-lab:target/cert/03
 python3 tools/pewter-chain/swarm_film.py target/chain/tracks \
-    --out target/chain/frames --seconds 11 --fps 30 --cover 0.99 --width 1280 \
+    --out target/chain/frames --seconds 7.2 --fps 60 --cover 0.99 --width 1280 \
     --method "links 01/02/03 each certified 3000/3000, 3000 distinct trajectories, failure rate under 0.10%"
-ffmpeg -y -framerate 30 -i target/chain/frames/f%05d.png \
-    -c:v libopenh264 -b:v 6M -pix_fmt yuv420p pewter-chain-atlas-3links-600agents.mp4
+ffmpeg -y -framerate 60 -i target/chain/frames/f%05d.png \
+    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p pewter-chain-01-03-600agents.mp4
 ```
 
 ### Runtime and speed are not independent, and this chain is short
 
 **`seconds_out × speed = the emulated time there is.`** That is the whole
 constraint and it decides both numbers, so neither is a taste call. The three
-certified links run 86 emulated seconds for 99% of agents (154 for the single
-slowest), which gives 11 s at 8× — a 70-second cut at 8× would need **9.3
-emulated minutes** and the chain does not contain them. The fourteen-link
+certified links run 86.3 emulated seconds for 99% of agents (154 for the single
+slowest), which gives **7.2 s at 12×** — a 50-second cut at 12× would need
+**10 emulated minutes** and this chain does not contain them. The fourteen-link
 chain's 52× timelapse is not a different aesthetic, it is a different amount of
 material.
+
+**So the film's runtime is not a pace decision and cannot be fixed by one.**
+The original swarm film ran 50 s because it filmed ten emulated minutes, not
+because it was paced differently — it used the same 12×. Measured side by side:
+
+| | original dot film | this cut |
+|---|---:|---:|
+| compression | 12.05× | **12.05×** |
+| stride, emulated frames per output frame | 24 | **12** |
+| frame rate | 30 fps | **60 fps** |
+| material filmed | 602 emulated s | **86.3 emulated s** |
+| output | 1,500 frames, 50 s | **432 frames, 7.2 s** |
+
+The original's stride of 24 is *longer* than a 17-frame walk step, so it
+teleported by construction — it had no interpolation and did not need one,
+because a dot has no walk cycle to contradict. Drawing the cartridge's own
+sprite is what makes the stride matter, and 60 fps is what buys the same
+compression back.
 
 **`--cover` is the other half and it matters more than it looks.** The swarm is
 essentially finished by frame 4,000: at 40% through a `--cover 1.0` timeline
@@ -797,25 +815,64 @@ a timelapse factor X it covers about 1.9·X source pixels per output frame: at
 **by construction**, and no amount of interpolation can make a fast film move
 in small steps. What interpolation removes at speed is the *quantisation*:
 
-| at 8×, of 46,936 walking steps | land exactly on a whole-tile multiple |
+| of the moving samples in the 8× cut | land exactly on a whole-tile multiple |
 |---|---:|
-| positioned from the recorded tile | **99.5%** |
-| interpolated between recorded tiles | **7.6%** |
+| positioned from the recorded tile | **100.0%** |
+| interpolated between recorded tiles | **0.0%** |
 
 Without it an agent teleports 0, 16 or 32 px depending on how the stride lands
 against the step; with it the phase is right and the motion is continuous. That
 is the entire reason the compression can go back up.
 
-On the shipped 11-second cut, 122,219 samples:
+**The compositor prints that figure itself now, on every run** — see
+`report_motion`. It matters more than the `>=12 px` line beside it, and the two
+must not be confused: the absolute threshold saturates above about 6× (a
+walking agent clears 12 px by construction) and is a teleport detector for slow
+cuts only, whereas the quantised fraction is scale-free and is what a
+compression decision actually turns on. Teeth proven by neutralising
+`interpolate` — 100.0% at both 8× and 12×, against 0.0% and 18.0% with it.
+
+### A cut is smooth only while its stride is shorter than one walk step
+
+This is the ceiling, it is arithmetic, and it decides the compression:
+
+> `stride = speed × 59.7275 / fps` emulated frames per output frame, and
+> interpolation can only place an agent *inside* a step while `stride ≤ span`.
+
+`span` is the step time measured from the tracks — **17** emulated frames on
+this chain — so at 30 fps nothing above **8.54×** can be smooth, and the 8× cut
+was sitting just underneath it without that being said. Push to 12× at 30 fps
+and each output frame swallows a whole step: **18.0%** of moving samples land
+back on the tile grid, which is the teleporting the interpolation exists to
+remove.
+
+**The way past it is frame rate, not a slower film.** At 60 fps the same 12×
+needs a stride of 12, comfortably inside a 17-frame step, and the ceiling rises
+to 17.08×. Measured on the same tracks, 12×/60 fps beats 8×/30 fps on *every*
+motion figure while being half as long again:
+
+| | 8× at 30 fps | **12× at 60 fps** |
+|---|---:|---:|
+| stride, emulated frames per output frame | 16 | **12** |
+| walking agent, source px per output frame | 15.1 | **11.3** |
+| whole-tile quantisation | 0.0% | **0.0%** |
+| `>=12 px` snaps | 20.8% | **1.25%** |
+| `<4 px` slides | 62.8% | **67.2%** |
+| camera coverage | 98.3% | **98.8%** |
+
+On the shipped 12× cut, 65,001 moving samples of 91,082:
 
 ```text
 agent displacement per output frame, in source pixels (a walk tile is 16):
-  median 0.00  p90 15.06  p99 192.00  max 449.14
-camera coverage: mean 98.3% of live agents on screen
+  median 0.00  p90 11.29  p99 192.00  max 449.14
+  >=12 px (a snap) 1.25%   <4 px (a slide) 67.17%
+  whole-tile quantisation 0.0% of 65001 moving samples land on the tile grid
+camera coverage: mean 98.8% of live agents on screen
 ```
 
 The tail past 40 px is warps, and a warp is a jump — `interpolate` refuses to
-lerp across one by design.
+lerp across one by design, and the quantisation figure excludes them so the
+renderer is not credited for the cartridge's own teleports.
 
 ### Where an agent is drawn, measured against the cartridge
 
@@ -848,6 +905,25 @@ a tile up and to the left — exactly what was reported.
 the camera genuinely lagging *and* the off-frame count overstating it, and the
 anchor error was independent of the atlas swap and would have survived onto any
 corrected placement.
+
+**Reported a second time as "still over to the left a little" — and that one
+was the atlas, not the anchor.** Re-run against the cartridge it reproduces to
+the pixel: screen (64, 64), 1.25%, a 9.2× margin, player box x 65..78. Its
+horizontal centre is 71.5 against the tile's own centre of 72, so the sprite is
+**dead centre on its tile by measurement** and there is no leftward bias left to
+find. What the second report was looking at is a stale atlas that bundled every
+Pallet Town interior to the *left* of the town regardless of which side its door
+is on. The measurement is also structurally independent of that: it compares one
+game frame against one map's own art and never consults where the map is placed,
+so a layout change cannot move it.
+
+**And the sweep is allowed to fail now, because it quietly did not.** Pointed at
+a save that continues into the Viridian Pokémon Center — whose NPCs are in the
+frame and not in the atlas — every hypothesis differs by ~36%, the best of them
+is arbitrary at a 1.0× margin, and it printed `SPRITE_LIFT = 0.0000` in the same
+confident sentence as the real measurement. A sweep always has a winner and a
+winner is not an answer: it refuses below a 3× margin or above 10% mismatch and
+names the scene that works.
 
 ### The camera follows the majority, and says who it left behind
 
