@@ -139,6 +139,20 @@ pub struct Scenario {
     pub guidance_file: Option<PathBuf>,
     pub timeout_frames: u64,
     pub watches: Watches,
+    /// One line per goal condition saying **which address or flag defines
+    /// success and where it is defined in the cartridge**, so the reward is
+    /// auditable by a reader rather than taken on trust.
+    ///
+    /// Optional, and additive to the schema — a scenario without it hashes
+    /// exactly as it did before this field existed. But
+    /// [`Scenario::briefing`] says so loudly when it is missing, because the
+    /// whole claim this project makes over guide-derived work is that its
+    /// goals come from the cartridge. **A goal nobody can check is back to
+    /// being a proxy** — and one link in the Pewter chain was authored from a
+    /// plausible assumption (walk to the laboratory) rather than from the flag
+    /// the escort sets, which is exactly the class of error this field exists
+    /// to make visible.
+    pub evidence: Vec<String>,
     /// A map id the agent is told it is heading for, so the knowledge base can
     /// hand it a route. Derived from a `map=` goal when there is exactly one.
     goal_map: Option<u8>,
@@ -157,6 +171,7 @@ impl Default for Scenario {
             guidance_file: None,
             timeout_frames: 60_000,
             watches: Watches::default(),
+            evidence: Vec::new(),
             goal_map: None,
         }
     }
@@ -229,6 +244,13 @@ impl Scenario {
             guidance_file: v.str_field("guidance").map(PathBuf::from),
             timeout_frames: v.u64_field("timeout_frames").unwrap_or(60_000),
             watches,
+            evidence: v
+                .get("evidence")
+                .and_then(|a| a.as_array())
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(|e| e.as_str().map(str::to_string))
+                .collect(),
             goal_map: None,
         };
         s.goal_map = s.derive_goal_map();
@@ -275,6 +297,15 @@ impl Scenario {
             watch.to_json(&mut w);
         }
         w.end_arr();
+        // Written only when present, so a scenario that predates the field
+        // hashes exactly as it always did and its recordings still replay.
+        if !self.evidence.is_empty() {
+            w.arr_field("evidence");
+            for e in &self.evidence {
+                w.str_item(e);
+            }
+            w.end_arr();
+        }
         w.end_obj();
         w.finish()
     }
@@ -525,6 +556,18 @@ impl Scenario {
         }
         if r.battle_policy() != rules::BattlePolicy::Decide {
             v.push(format!("battles: {}", r.battle_policy().name()));
+        }
+        if self.evidence.is_empty() {
+            v.push(
+                "evidence: NONE STATED — nothing in this file says which address \
+                 defines success, so a reader cannot check the goal is the game's \
+                 own record of the milestone rather than somebody's idea of it"
+                    .into(),
+            );
+        } else {
+            for e in &self.evidence {
+                v.push(format!("evidence: {e}"));
+            }
         }
         v
     }

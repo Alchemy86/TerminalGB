@@ -77,6 +77,19 @@ enum Finish {
     /// Turn to face something and press A. Twice, because a press in a
     /// direction you are not facing only turns you.
     Talk(&'static str),
+    /// Pace up and down a patch of tall grass until the goal fires.
+    ///
+    /// **This is what a remedial link looks like from the driver's side.** A
+    /// scenario whose goal is a party read rather than a place has no
+    /// destination to walk to; what it needs is to keep meeting wild Pokémon,
+    /// and Gen 1 rolls an encounter per step taken on a grass tile.
+    ///
+    /// **A patrol between two anchors, not a direction.** Pacing by direction
+    /// drifts: "walk up 3, walk down 3" is only symmetric while both are
+    /// clear, and the first time one is walled the walk becomes one-way.
+    /// Measured — 900 decisions of it left the player twenty-two tiles south
+    /// of the grass it was supposed to be standing in.
+    Grind((u8, u8), (u8, u8)),
 }
 
 /// One thing to do on one map: walk a chain of waypoints, then finish.
@@ -240,7 +253,7 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
                 vec![stage(&[(7, 7), (3, 7)], Finish::Step("down"))],
             );
         }
-        "03-oak-stops-you-leaving" => {
+        "03-oak-takes-you-to-the-lab" => {
             r.insert(
                 PALLET_TOWN,
                 vec![stage(
@@ -313,9 +326,36 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             r.insert(PALLET_TOWN, vec![stage(PALLET_NORTH, Finish::Step("up"))]);
             r.insert(ROUTE_1, vec![stage(R1_NORTH, Finish::Step("up"))]);
         }
-        "11-heal-and-climb-route-2" => {
+        // **A remedial link, and its number came out of the cartridge.**
+        // Viridian Forest's three bug catchers are unavoidable — pathing the
+        // forest with their sight cones blocked at four, five and six tiles
+        // gives no route at any of them — and the ROM's own
+        // `BugCatcherData` rosters for the forest are level 6 (Weedle,
+        // Caterpie), level 7 (Weedle, Kakuna, Weedle) and level 9 (Weedle):
+        // six Pokémon, top level 9, and nowhere to heal in between. A lead at
+        // level 6 does not survive that, which is what the runs measured. So
+        // the precondition is a lead above their top level, and this link
+        // exists to satisfy it.
+        "11-train-for-the-forest" => {
+            r.insert(
+                VIRIDIAN_CITY,
+                vec![stage(&[(20, 30), (20, 35)], Finish::Step("down"))],
+            );
+            r.insert(
+                ROUTE_1,
+                vec![stage(
+                    &[(10, 4), (14, 4), (14, 7)],
+                    Finish::Grind((11, 6), (17, 9)),
+                )],
+            );
+        }
+        "12-heal-and-climb-route-2" => {
+            r.insert(
+                ROUTE_1,
+                vec![stage(&[(14, 2), (11, 2), (11, 0)], Finish::Step("up"))],
+            );
             // Viridian City twice: into the Pokémon Center to heal whatever
-            // the climb and the training cost, then out of the top of the map.
+            // the training cost, then out of the top of the map.
             r.insert(
                 VIRIDIAN_CITY,
                 vec![
@@ -336,14 +376,14 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
                 vec![stage(&[(5, 1)], Finish::Step("up"))],
             );
         }
-        "12-cross-viridian-forest" => {
+        "13-cross-viridian-forest" => {
             r.insert(
                 FOREST_SOUTH_GATE,
                 vec![stage(&[(5, 1)], Finish::Step("up"))],
             );
             r.insert(VIRIDIAN_FOREST, vec![stage(FOREST, Finish::Step("up"))]);
         }
-        "13-arrive-in-pewter" => {
+        "14-arrive-in-pewter" => {
             r.insert(
                 FOREST_NORTH_GATE,
                 vec![stage(&[(5, 1)], Finish::Step("up"))],
@@ -361,6 +401,37 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
     r
 }
 
+/// The detour a leg takes when the party is too hurt to go on.
+///
+/// **A remedial link needs this and an ordinary one does not.** Route 1's
+/// grass is the only experience available before the forest, and a lead below
+/// half health runs from every encounter — so without somewhere to heal, a
+/// "train to level 10" link runs from everything for ever and gains nothing.
+/// Measured: 2,500 decisions parked at 5/21 HP without a single fight.
+///
+/// The Pokémon Center is free and full and costs the walk; a Potion is instant
+/// and consumes the bag. This takes the Center because the walk is four map
+/// transitions the solver already knows and the bag is empty — and that is a
+/// choice worth stating rather than a default.
+fn heal_route(scenario: &str) -> HashMap<u8, MapPlan> {
+    let mut r: HashMap<u8, MapPlan> = HashMap::new();
+    if scenario == "11-train-for-the-forest" {
+        r.insert(
+            ROUTE_1,
+            vec![stage(&[(14, 2), (11, 2), (11, 0)], Finish::Step("up"))],
+        );
+        r.insert(
+            VIRIDIAN_CITY,
+            vec![stage(
+                &[(20, 28), (19, 28), (19, 26), (23, 26), (23, 25)],
+                Finish::Arrive,
+            )],
+        );
+        r.insert(VIRIDIAN_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
+    r
+}
+
 /// Should this leg's solver fight wild Pokémon, or run from them?
 ///
 /// **A `battle flee` rule forfeits a run that won a battle**, so this must
@@ -368,12 +439,16 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
 /// where the party has to grow: nothing before Viridian Forest earns any
 /// experience at all, and a level 5 starter does not beat a bug catcher.
 fn may_fight_wild(scenario: &str) -> bool {
+    // **Not in the forest**, and that is a measured choice rather than a
+    // squeamish one. Route 1 and Route 2 are Pidgey and Rattata, which are
+    // worth beating; Viridian Forest is Caterpie, Weedle and their cocoons,
+    // which give almost no experience and cost about fifteen decisions each
+    // to fight against four to run from. Measured: fighting them spent the
+    // whole 2,500-call budget without leaving the maze, and left the party
+    // worn down for the bug catcher who cannot be run from.
     matches!(
         scenario,
-        "05-the-rival-battle"
-            | "10-back-to-viridian"
-            | "11-heal-and-climb-route-2"
-            | "12-cross-viridian-forest"
+        "05-the-rival-battle" | "10-back-to-viridian" | "11-train-for-the-forest"
     )
 }
 
@@ -565,11 +640,21 @@ pub struct ChainDriver {
     barren: u32,
     /// Consecutive battle turns, so a fight that will not end is escaped.
     battle_turns: u32,
+    /// One primitive button per decision instead of a compound plan. See
+    /// [`ChainDriver::primitive`].
+    primitive: bool,
+    /// Where every decision is written, one JSON line each: the observation
+    /// the driver saw and the action it chose.
+    trail: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>,
     /// Consecutive decisions spent pressing through the same unchanged screen.
     text_tries: u32,
     last_text: String,
     /// Whether this leg's rules allow winning a battle at all.
     fight_wild: bool,
+    /// Where to go when the party is too hurt to keep training, and whether
+    /// that is what is happening right now.
+    heal_route: HashMap<u8, MapPlan>,
+    healing: bool,
     /// The level the solver trains its lead up to before it stops picking
     /// fights. Nothing before Viridian Forest earns any experience, and a
     /// level 5 starter does not beat a bug catcher.
@@ -591,14 +676,48 @@ impl ChainDriver {
             at_map: None,
             barren: 0,
             battle_turns: 0,
+            primitive: false,
+            trail: None,
             text_tries: 0,
             last_text: String::new(),
             fight_wild: may_fight_wild(scenario),
+            heal_route: heal_route(scenario),
+            healing: false,
             train_to: 13,
             pending: None,
             busy: false,
             calls: 0,
         }
+    }
+
+    /// **One button per decision, and nothing compound.**
+    ///
+    /// The compound plans (`goto` a waypoint, `advance_text` through a
+    /// conversation) are what make the expert fast, and they are exactly what
+    /// makes its trajectories useless as demonstrations: `goto (19,26)` is not
+    /// an action a policy without the route table could ever emit. In
+    /// primitive mode every decision is one of nine things a player can do —
+    /// the eight buttons plus "press through the text" — so an
+    /// observation/action pair is a pair somebody could learn from and a
+    /// student can be evaluated on the same footing.
+    ///
+    /// It works because a waypoint chain is the *turning points* of a
+    /// breadth-first path, and the runs between turning points are axis
+    /// aligned. Stepping toward the next waypoint on whichever axis still has
+    /// distance left therefore walks the same path the `goto` would have,
+    /// one tile at a time.
+    pub fn primitive(mut self, on: bool) -> Self {
+        self.primitive = on;
+        self
+    }
+
+    /// Write one JSON line per decision to `path`.
+    pub fn trailing_to(
+        mut self,
+        f: std::sync::Arc<std::sync::Mutex<std::fs::File>>,
+    ) -> Self {
+        self.trail = Some(f);
+        self
     }
 
     fn next(&mut self) -> u64 {
@@ -611,6 +730,12 @@ impl ChainDriver {
 
     fn roll(&mut self, n: u64) -> u64 {
         self.next() % n.max(1)
+    }
+
+    /// The one action this decision is, in primitive mode. Everything that
+    /// would have been a compound plan collapses to its first button.
+    fn one(&self, say: &str, button: &str) -> String {
+        Plan::new(say).press(button, 1).finish()
     }
 
     fn decide(&mut self, s: &Snap) -> String {
@@ -639,6 +764,9 @@ impl ChainDriver {
         // chain wants either, and A in a menu chooses something — so the only
         // safe answer is B, which is the one button that can never open a menu.
         if s.said("OPTION") && (s.said("EXIT") || s.said("TEXT SPEED")) {
+            if self.primitive {
+                return self.one("Close the menu.", "b");
+            }
             return Plan::new("Close the menu.").press("b", 2).finish();
         }
         // **`text` blocks movement exactly as `dialogue` does, and only the
@@ -671,7 +799,31 @@ impl ChainDriver {
         } else {
             self.text_tries = 0;
         }
-        // 4. The overworld.
+        // 4. The overworld. Before routing, decide whether this is a walk to
+        //    the goal or a walk to the nurse: below a third of full health the
+        //    lead runs from everything, so training cannot resume until it is
+        //    healed.
+        //
+        //    **The heal threshold has to be the fight threshold**, or the
+        //    policy has a band where it does neither. Measured with healing at
+        //    a third and fighting at a half: the lead settled at 8 of 23 HP —
+        //    too hurt to pick a fight, not hurt enough to go and get healed —
+        //    and ran from everything for 2,402 decisions.
+        if !self.heal_route.is_empty() && s.lead_max_hp > 0 {
+            let hurt = s.lead_hp * 2 <= s.lead_max_hp;
+            let full = s.lead_hp >= s.lead_max_hp;
+            if !self.healing && hurt {
+                self.healing = true;
+                self.stage.clear();
+                self.idx = 0;
+                self.at_map = None;
+            } else if self.healing && full {
+                self.healing = false;
+                self.stage.clear();
+                self.idx = 0;
+                self.at_map = None;
+            }
+        }
         self.travel(s)
     }
 
@@ -685,6 +837,13 @@ impl ChainDriver {
             // entirely, and which one is a free axis of diversity.
             let want = 1 + self.roll(3) as u32;
             let down = want.saturating_sub(s.cursor_row.max(0) as u32);
+            if self.primitive {
+                return if down > 0 {
+                    self.one("Move down the name list.", "down")
+                } else {
+                    self.one("Take this name.", "a")
+                };
+            }
             let p = Plan::new("Take a preset name rather than the keyboard.");
             let p = if down > 0 { p.press("down", down) } else { p };
             return p.press("a", 1).finish();
@@ -696,6 +855,13 @@ impl ChainDriver {
             // NEW GAME is the first item on a fresh cartridge; on a cartridge
             // with a save it is the second. Aim at the row that says it.
             let up = s.cursor_row.max(0) as u32;
+            if self.primitive {
+                return if up > 0 {
+                    self.one("Up the menu towards NEW GAME.", "up")
+                } else {
+                    self.one("Start a new game.", "a")
+                };
+            }
             let p = Plan::new("Start a new game.");
             let p = if up > 0 { p.press("up", up) } else { p };
             return p.press("a", 1).finish();
@@ -705,6 +871,9 @@ impl ChainDriver {
         // start menu, and a state captured with it held carries the menu into
         // the *next* link. Measured: link 2 booted into OPTION and spent its
         // whole budget changing the text speed.
+        if self.primitive {
+            return self.one("Press on through the introduction.", "a");
+        }
         Plan::new("Press on through the introduction.")
             .press("a", 8)
             .finish()
@@ -714,6 +883,9 @@ impl ChainDriver {
         // Every yes/no on this chain wants YES: taking a starter, and the
         // nurse. The cursor starts on YES, so A is the answer.
         let _ = s;
+        if self.primitive {
+            return self.one("Say yes.", "a");
+        }
         Plan::new("Say yes.").press("a", 1).text(8).finish()
     }
 
@@ -722,41 +894,68 @@ impl ChainDriver {
     /// route legs requires.
     fn fight(&mut self, s: &Snap) -> String {
         self.battle_turns += 1;
-        let wild = s.battle.as_deref() == Some("wild");
-        if s.waiting || s.kind == "dialogue" {
+        let sel = s.selected.to_ascii_uppercase();
+        // A submenu nothing here wants. B is the one button that can only ever
+        // back out of one.
+        if s.said("CHOOSE A POK") {
+            return self.one("Back out of the party list.", "b");
+        }
+        if s.waiting || s.kind == "dialogue" || s.kind == "text" {
+            if self.primitive {
+                return self.one("Let the battle text finish.", "a");
+            }
             return Plan::new("Let the battle text finish.").text(20).finish();
         }
+        let wild = s.battle.as_deref() == Some("wild");
         // **Fighting is a rule, not a preference.** A `battle flee` leg
         // forfeits the moment a battle is *won*, so on those legs the answer
         // is always RUN whatever the party looks like. Where fighting is
         // allowed, a wild Pokémon is worth beating only while the lead is
-        // under-levelled and healthy enough to take the hits — and that is the
-        // only place in the chain experience comes from.
+        // under-levelled and healthy enough to take the hits.
         let train = self.fight_wild
             && s.lead_level < self.train_to
             && s.lead_hp * 2 > s.lead_max_hp;
-        if wild && !train {
-            // FIGHT top-left, ITEM top-right, PKMN bottom-left, RUN
-            // bottom-right. From FIGHT that is down then right.
-            return Plan::new("Run from a wild Pokemon.")
-                .press("down", 1)
-                .press("right", 1)
-                .press("a", 1)
-                .text(16)
-                .finish();
+        let running = wild && !train;
+
+        // **Navigate the battle menu one key at a time, off the cursor.**
+        // The menu is FIGHT / PKMN on the top row and ITEM / RUN on the
+        // bottom, so "down then right" reaches RUN from FIGHT — except that
+        // Gen 1's `HandleMenuInput` delays several frames after accepting a
+        // press, so the *first* of a burst is routinely swallowed and the
+        // rest land one step out of phase. Measured: a run policy that fired
+        // down/right/A blind opened the party list instead, over and over,
+        // for 2,500 decisions. Reading `▶` and pressing one key cannot go out
+        // of phase, because a swallowed press simply repeats.
+        if s.kind == "menu" {
+            let on_main = s.said("FIGHT");
+            if !on_main {
+                // The move list. Its first slot is the damaging one on every
+                // Gen 1 starter at these levels.
+                return self.one("Use the first move.", "a");
+            }
+            if running {
+                return if sel.contains("RUN") {
+                    self.one("Run.", "a")
+                } else if sel.contains("FIGHT") {
+                    self.one("Down towards RUN.", "down")
+                } else if sel.contains("ITEM") {
+                    self.one("Right to RUN.", "right")
+                } else {
+                    self.one("Down towards RUN.", "down")
+                };
+            }
+            return if sel.contains("FIGHT") {
+                self.one("Fight.", "a")
+            } else if sel.contains("ITEM") || sel.contains("RUN") {
+                self.one("Up to FIGHT.", "up")
+            } else {
+                self.one("Left to FIGHT.", "left")
+            };
         }
-        // FIGHT, then the first move. **Slot 0 and no other.** A Gen 1
-        // starter's second slot at level 5 is GROWL or TAIL WHIP, and a run
-        // that spends its turns on a status move loses the rival battle — at
-        // which point the player blacks out and `EVENT_BATTLED_RIVAL_IN_OAKS_
-        // LAB` is never set at all. Diversity has to come from somewhere that
-        // cannot cost the leg.
-        Plan::new("Fight.")
-            .press("a", 1)
-            .wait(20)
-            .press("a", 1)
-            .text(24)
-            .finish()
+        if self.primitive {
+            return self.one("Let the battle run on.", "a");
+        }
+        Plan::new("Let the battle run on.").text(20).finish()
     }
 
     /// Follow the route on the current map.
@@ -776,8 +975,12 @@ impl ChainDriver {
             // and the solver healed, walked out, and went straight back in,
             // for 469 decisions.
             if let Some(prev) = self.at_map {
-                let last_leg = self
-                    .route
+                let table = if self.healing {
+                    &self.heal_route
+                } else {
+                    &self.route
+                };
+                let last_leg = table
                     .get(&prev)
                     .and_then(|st| {
                         let n = *self.stage.get(&prev).unwrap_or(&0);
@@ -795,7 +998,12 @@ impl ChainDriver {
             self.barren = 0;
             self.completed = false;
         }
-        let Some(stages) = self.route.get(&s.map).cloned() else {
+        let table = if self.healing {
+            &self.heal_route
+        } else {
+            &self.route
+        };
+        let Some(stages) = table.get(&s.map).cloned() else {
             return self.off_route(s);
         };
         let n = *self.stage.get(&s.map).unwrap_or(&0);
@@ -896,6 +1104,16 @@ impl ChainDriver {
                 .finish(),
             // A talk finishes its stage the moment it is performed: the next
             // thing on this map is whatever comes after the conversation.
+            Finish::Grind(a, b) => {
+                let (x, y) = if dist((s.x, s.y), a) > dist((s.x, s.y), b) {
+                    a
+                } else {
+                    b
+                };
+                Plan::new("Pace the grass looking for a fight.")
+                    .goto(x, y, 20)
+                    .finish()
+            }
             Finish::Talk(d) => {
                 let e = self.stage.entry(s.map).or_insert(0);
                 *e += 1;

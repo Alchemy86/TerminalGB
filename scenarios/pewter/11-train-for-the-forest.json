@@ -1,0 +1,31 @@
+{
+  "schema": "gbscenario/1",
+  "name": "11-train-for-the-forest",
+  "objective": "Train the lead Pokemon in the tall grass on Route 1 until it is above the level of everything Viridian Forest will make it fight. THIS LINK IS A REPAIR. It was not in the first chain; it was inserted after link 13 failed by fainting, and the level it aims at was derived from the cartridge rather than chosen: pathing the forest with the three bug catchers' sight cones blocked gives no route at four, five or six tiles, so all three fights are compulsory; the ROM's BugCatcherData rosters for the forest are level 6 (Weedle, Caterpie), level 7 (Weedle, Kakuna, Weedle) and level 9 (Weedle); and there is nowhere to heal between them.",
+  "start_state": "states/10.gbss",
+  "goal": [
+    "watch:lead_level>=10"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 2500",
+    "max_wall_seconds 2400"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/11-train-for-the-forest.json",
+  "timeout_frames": 600000,
+  "watch": [
+    "lead_level"
+  ],
+  "evidence": [
+    "watch:lead_level>=10 - wPartyMon1Level, wPartyMons $D16B + 33 (party_struct offset LEVEL), a built-in watch resolving to an address terminalgb_plugin_trainer::gen1 derived. The threshold is max(forest BugCatcherData level) + 1 = 10, read out of the ROM by tools/gen1-tables/gen1_tables.py; it is not a round number somebody liked."
+  ]
+}

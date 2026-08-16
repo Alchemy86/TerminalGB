@@ -21,5 +21,8 @@
     "guidance"
   ],
   "guidance": "guidance/06-cross-route-1.json",
-  "timeout_frames": 120000
+  "timeout_frames": 120000,
+  "evidence": [
+    "map=0x01 — wCurMap $D35E. VIRIDIAN_CITY is const index 1. No event flag records arriving in Viridian."
+  ]
 }

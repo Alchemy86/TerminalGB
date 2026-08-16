@@ -25,5 +25,9 @@
       "addr": "0xD369",
       "len": 1
     }
+  ],
+  "evidence": [
+    "map=0x26 — wCurMap $D35E (atlas, rom+live+inv). REDS_HOUSE_2F is const index 38 in pokered constants/map_constants.asm.",
+    "watch:map_width>0 — wCurMapWidth $D369 (atlas, rom+live+inv). LoadSAV sets bit 7 of wCurMapTileset and LoadMapHeader returns without loading anything while it is set, so wCurMap reads the bedroom all through the introduction; a non-zero header width is the cartridge's own 'a map is loaded'. No event flag records the end of the introduction."
   ]
 }

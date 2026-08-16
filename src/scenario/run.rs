@@ -654,6 +654,16 @@ fn rate(frames: u64, wall_ms: u128) -> f64 {
 /// business rather than a battle policy's.
 #[derive(Debug, Clone, Default)]
 struct Battles {
+    /// The first sample only *records*. A run whose start state was captured
+    /// mid-battle would otherwise be charged with its outcome — and a `battle
+    /// flee` leg then forfeits, at three decisions, for a fight it did not
+    /// have. Measured: link 11's exit state is taken wherever the lead reached
+    /// level 10, which is inside a battle about half the time, and link 12
+    /// forfeited on every seed because of it.
+    primed: bool,
+    /// The battle the priming sample found already in progress. Its outcome
+    /// belongs to whoever produced the start state, not to this run.
+    inherited: bool,
     in_battle: bool,
     last_enemy_hp: u32,
     won: u32,
@@ -665,6 +675,13 @@ impl Battles {
     fn observe(&mut self, w: &Sample, party_hp: u32) {
         let now = w.get("in_battle").unwrap_or(0) != 0;
         let enemy_hp = w.get("enemy_hp").unwrap_or(0);
+        if !self.primed {
+            self.primed = true;
+            self.in_battle = now;
+            self.inherited = now;
+            self.last_enemy_hp = enemy_hp;
+            return;
+        }
         if now {
             self.in_battle = true;
             self.last_enemy_hp = enemy_hp;
@@ -672,6 +689,10 @@ impl Battles {
         }
         if self.in_battle {
             self.in_battle = false;
+            if self.inherited {
+                self.inherited = false;
+                return;
+            }
             if party_hp == 0 {
                 self.lost += 1;
             } else if self.last_enemy_hp == 0 {
@@ -687,6 +708,14 @@ impl Battles {
 mod tests {
     use super::*;
 
+    /// Every test below drives a run that begins *out* of a battle, which is
+    /// what the priming sample represents.
+    fn fresh() -> Battles {
+        let mut b = Battles::default();
+        b.observe(&s(0, 0), 100);
+        b
+    }
+
     fn s(in_battle: u32, enemy_hp: u32) -> Sample {
         Sample(vec![
             ("in_battle".into(), in_battle),
@@ -699,14 +728,14 @@ mod tests {
     /// rule rests on getting that right.
     #[test]
     fn a_win_and_an_escape_are_told_apart_by_the_opponent() {
-        let mut b = Battles::default();
+        let mut b = fresh();
         b.observe(&s(1, 20), 100);
         b.observe(&s(1, 4), 100);
         b.observe(&s(1, 0), 100); // knocked out
         b.observe(&s(0, 0), 100);
         assert_eq!((b.won, b.fled, b.lost), (1, 0, 0));
 
-        let mut b = Battles::default();
+        let mut b = fresh();
         b.observe(&s(1, 20), 100);
         b.observe(&s(1, 18), 100);
         b.observe(&s(0, 18), 100); // walked away, opponent still standing
@@ -717,7 +746,7 @@ mod tests {
     /// would break a `battle flee` run for the wrong reason.
     #[test]
     fn a_blackout_is_neither_a_win_nor_an_escape() {
-        let mut b = Battles::default();
+        let mut b = fresh();
         b.observe(&s(1, 20), 40);
         b.observe(&s(0, 20), 0);
         assert_eq!((b.won, b.fled, b.lost), (0, 0, 1));
@@ -727,11 +756,25 @@ mod tests {
     /// outcome — the first samples of a run are exactly that.
     #[test]
     fn never_being_in_a_battle_produces_no_outcomes() {
-        let mut b = Battles::default();
+        let mut b = fresh();
         for _ in 0..10 {
             b.observe(&s(0, 0), 100);
         }
         assert_eq!((b.won, b.fled, b.lost), (0, 0, 0));
+    }
+
+    /// A start state captured mid-battle is not a battle this attempt had.
+    #[test]
+    fn a_battle_already_under_way_at_the_start_is_not_this_run_s() {
+        let mut b = Battles::default();
+        b.observe(&s(1, 12), 100); // the very first sample: already fighting
+        b.observe(&s(1, 0), 100);
+        b.observe(&s(0, 0), 100); // and it ends in a knockout
+        assert_eq!(
+            (b.won, b.fled, b.lost),
+            (0, 0, 0),
+            "the run inherited the battle, it did not have it"
+        );
     }
 
     #[test]

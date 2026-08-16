@@ -1,0 +1,28 @@
+{
+  "schema": "gbscenario/1",
+  "name": "13-cross-viridian-forest",
+  "objective": "Cross Viridian Forest from the south entrance to the north exit. It is a maze of trees with three bug catchers in it whose battles cannot be run from - pathing the forest with their sight cones blocked gives no route at all - and tall grass throwing wild encounters the whole way.",
+  "start_state": "states/12.gbss",
+  "goal": [
+    "map=0x2F"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 1200",
+    "max_wall_seconds 1800"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/13-cross-viridian-forest.json",
+  "timeout_frames": 400000,
+  "evidence": [
+    "map=0x2F — wCurMap $D35E. VIRIDIAN_FOREST_NORTH_GATE is const index 47. The forest's three bug catchers each have a flag (EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_0..2, wEventFlags $D7F3 bits 2,3,4), but none of them is crossing it: the route past them is avoidable and beating them is not the milestone."
+  ]
+}

@@ -21,5 +21,8 @@
     "guidance"
   ],
   "guidance": "guidance/10-back-to-viridian.json",
-  "timeout_frames": 200000
+  "timeout_frames": 200000,
+  "evidence": [
+    "map=0x01 — wCurMap $D35E. No event flag records the second climb."
+  ]
 }

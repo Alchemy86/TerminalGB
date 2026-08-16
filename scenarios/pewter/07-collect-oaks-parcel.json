@@ -29,5 +29,8 @@
       "len": 1,
       "mask": "0x02"
     }
+  ],
+  "evidence": [
+    "watch:got_oaks_parcel!=0 — EVENT_GOT_OAKS_PARCEL, event index 57, wEventFlags $D74E bit 1. Set by ViridianMartOaksParcelScript beside the `GiveItem OAKS_PARCEL` that puts the parcel in the bag, so the flag and the bag cannot disagree."
   ]
 }

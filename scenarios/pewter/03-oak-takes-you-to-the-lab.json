@@ -1,0 +1,33 @@
+{
+  "schema": "gbscenario/1",
+  "name": "03-oak-takes-you-to-the-lab",
+  "objective": "Walk north out of Pallet Town into the tall grass at the top of the map. Oak's own map script fires the moment wYCoord reaches 1 and he ESCORTS you into his laboratory - the player does not walk there. So the goal is the flag his escort sets when it finishes, not arriving at a building.",
+  "start_state": "states/02.gbss",
+  "goal": [
+    "watch:followed_oak_into_lab!=0"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "max_calls 150",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/03-oak-takes-you-to-the-lab.json",
+  "timeout_frames": 60000,
+  "watch": [
+    {
+      "name": "followed_oak_into_lab",
+      "addr": "0xD747",
+      "len": 1,
+      "mask": "0x01"
+    }
+  ],
+  "evidence": [
+    "watch:followed_oak_into_lab!=0 — EVENT_FOLLOWED_OAK_INTO_LAB, event index 0, so wEventFlags $D747 bit 0 (atlas, rom+live). Set by OaksLabFollowedOakScript (pokered scripts/OaksLab.asm) once the simulated PAD_UP x8 walk that Oak's escort performs has finished, i.e. inside the laboratory with the introduction under way. The trigger that starts it is PalletTownDefaultScript's `ld a,[wYCoord] / cp 1 ; is player near north exit?`, and the two tiles at x=10,11 on rows 0 and 1 of Pallet Town are tileset tile $52, the Overworld grass tile."
+  ]
+}

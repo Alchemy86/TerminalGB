@@ -29,5 +29,8 @@
       "len": 1,
       "mask": "0x20"
     }
+  ],
+  "evidence": [
+    "watch:got_pokedex!=0 — EVENT_GOT_POKEDEX, event index 37, wEventFlags $D74B bit 5. Set by OaksLabOakGivesPokedexScript together with EVENT_OAK_GOT_PARCEL. This is the flag ViridianCityCheckGotPokedexScript tests before it lets the player past the old man, so it is the real gate on the road north."
   ]
 }

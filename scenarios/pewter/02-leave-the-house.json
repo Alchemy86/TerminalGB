@@ -18,5 +18,8 @@
     "guidance"
   ],
   "guidance": "guidance/02-leave-the-house.json",
-  "timeout_frames": 30000
+  "timeout_frames": 30000,
+  "evidence": [
+    "map=0x00 — wCurMap $D35E. PALLET_TOWN is const index 0. The cartridge sets no event flag for walking out of the house, so the map id is the most exact record there is."
+  ]
 }

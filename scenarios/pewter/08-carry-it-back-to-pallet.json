@@ -21,5 +21,8 @@
     "guidance"
   ],
   "guidance": "guidance/08-carry-it-back-to-pallet.json",
-  "timeout_frames": 120000
+  "timeout_frames": 120000,
+  "evidence": [
+    "map=0x00 — wCurMap $D35E. No event flag records the walk back."
+  ]
 }

@@ -1,8 +1,8 @@
 {
   "schema": "gbscenario/1",
-  "name": "13-arrive-in-pewter",
+  "name": "14-arrive-in-pewter",
   "objective": "Out of the forest's north gate onto the top of Route 2 and north into Pewter City, where Brock's gym is.",
-  "start_state": "states/12.gbss",
+  "start_state": "states/13.gbss",
   "goal": [
     "map=0x02"
   ],
@@ -20,6 +20,9 @@
     "atlas",
     "guidance"
   ],
-  "guidance": "guidance/13-arrive-in-pewter.json",
-  "timeout_frames": 120000
+  "guidance": "guidance/14-arrive-in-pewter.json",
+  "timeout_frames": 120000,
+  "evidence": [
+    "map=0x02 — wCurMap $D35E. PEWTER_CITY is const index 2. EVENT_BEAT_BROCK (wEventFlags $D755 bit 7) is the gym, which is the link after this one."
+  ]
 }

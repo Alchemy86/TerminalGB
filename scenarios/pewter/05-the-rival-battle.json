@@ -28,5 +28,8 @@
       "len": 1,
       "mask": "0x08"
     }
+  ],
+  "evidence": [
+    "watch:battled_rival_in_lab!=0 — EVENT_BATTLED_RIVAL_IN_OAKS_LAB, event index 35, wEventFlags $D74B bit 3. Set by OaksLabRivalEndBattleScript, right after `predef HealParty`, so it records that the battle happened rather than that it was won."
   ]
 }
