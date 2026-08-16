@@ -29,6 +29,7 @@
 //! none of it can make a replay diverge. That asymmetry is deliberate: guidance
 //! may improve a live run without ever being able to invalidate a recorded one.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -48,6 +49,55 @@ const SAMPLE_EVERY: u64 = 6;
 
 /// One emulated frame of wall clock.
 const FRAME_TIME: Duration = Duration::from_micros(16_743);
+
+/// Tile changes kept, to decide afterwards whether a run was going anywhere.
+///
+/// Twenty-four is generous: a run that has genuinely moved twenty-four times
+/// has walked a long way, and a route that doubles back through a doorway is
+/// still well clear of [`LOOP_TILES`].
+const LOOP_VISITS: usize = 24;
+/// Distinct tiles those changes must cover to count as travel rather than
+/// oscillation. Four is a two-by-two shuffle, or a pair of tiles bounced
+/// between with a turn on each — the shape every one of these has taken.
+const LOOP_TILES: usize = 4;
+
+/// Was the run going round in circles when its budget ran out?
+///
+/// **A budget failure and a stuck failure are different findings, and calling
+/// both "budget" is what hid a family of defects.** A run that spends its
+/// whole allowance covering ground was given too little allowance; a run that
+/// spends it revisiting the same four tiles is looping, and a bigger allowance
+/// buys only a longer loop. They are indistinguishable in a pass rate and
+/// indistinguishable in a reason histogram that has one bucket for both — so
+/// the tail of the walk is examined and the two are named separately.
+///
+/// The evidence this exists for: seventeen failures of one link all reported
+/// "budget", all having used *exactly* the cap, on a route the expert walks in
+/// fourteen steps against a sixty-step cap. Forty-six steps of headroom is not
+/// a budget problem. The same signature appears in the chain report as
+/// "oscillated between (20,28) and (21,28) for 430 decisions", where it was
+/// found by a human reading a trace rather than by anything automatic.
+fn looping(visits: &VecDeque<(u8, u8, u8)>) -> Option<String> {
+    if visits.len() < LOOP_VISITS {
+        return None;
+    }
+    let mut distinct: Vec<(u8, u8, u8)> = visits.iter().copied().collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() > LOOP_TILES {
+        return None;
+    }
+    let where_ = distinct
+        .iter()
+        .map(|(m, x, y)| format!("0x{m:02X}({x},{y})"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!(
+        "the last {} moves covered {} tile(s): {where_}",
+        visits.len(),
+        distinct.len()
+    ))
+}
 
 /// Everything one play produced.
 #[derive(Debug, Clone)]
@@ -122,6 +172,7 @@ impl RunResult {
                     Ending::Failed(d) => format!("failed — {d}"),
                     Ending::TimedOut => "timed out".to_string(),
                     Ending::OutOfCalls => "ran out of model calls".to_string(),
+                    Ending::Stuck(d) => format!("went round in circles — {d}"),
                     Ending::Faulted(d) => format!("the emulator faulted — {d}"),
                 },
                 r.frames,
@@ -341,6 +392,9 @@ impl ScenarioRun {
         let mut next_frame = Instant::now() + FRAME_TIME;
         let mut guided = 0u64;
         let mut path: Vec<PathPoint> = Vec::new();
+        // Where the run has been lately, one entry per *change* of tile. See
+        // `looping`.
+        let mut visits: VecDeque<(u8, u8, u8)> = VecDeque::new();
 
         // **Brief before the first frame, not on the first map change.** The
         // agent's opening decision is taken within a handful of frames, and a
@@ -410,6 +464,12 @@ impl ScenarioRun {
                         }
                     }
                     battles.observe(&iw, p.party_hp);
+                    if visits.back() != Some(&(p.map, p.x, p.y)) {
+                        visits.push_back((p.map, p.x, p.y));
+                        if visits.len() > LOOP_VISITS {
+                            visits.pop_front();
+                        }
+                    }
                     prev = Some(p.clone());
 
                     let observed = Observed {
@@ -476,13 +536,19 @@ impl ScenarioRun {
                 break Ending::Faulted(f.to_string());
             }
             if frames >= self.scenario.timeout_frames {
-                break Ending::TimedOut;
+                break match looping(&visits) {
+                    Some(d) => Ending::Stuck(d),
+                    None => Ending::TimedOut,
+                };
             }
             // A halted agent cannot make progress; ending here rather than
             // burning the timeout is what keeps a thousand runs affordable in
             // wall clock.
             if self.agent_stopped() {
-                break Ending::OutOfCalls;
+                break match looping(&visits) {
+                    Some(d) => Ending::Stuck(d),
+                    None => Ending::OutOfCalls,
+                };
             }
         };
 
@@ -855,5 +921,35 @@ mod tests {
     fn a_rate_never_divides_by_a_zero_clock() {
         assert_eq!(rate(1000, 0), 0.0);
         assert!((rate(4200, 1000) - 4200.0).abs() < 0.001);
+    }
+
+    /// **A stuck run and a run out of budget are different findings.**
+    ///
+    /// Teeth: the oscillation case is the exact shape seventeen failures of one
+    /// link took — a pair of tiles bounced between until the cap — and it was
+    /// reported as "budget" every time. The travelling case is the control: a
+    /// run that really did walk somewhere must keep its honest budget verdict,
+    /// or the new bucket swallows the old one and nothing is gained.
+    #[test]
+    fn oscillation_is_not_a_budget_failure() {
+        let mut bounce: VecDeque<(u8, u8, u8)> = VecDeque::new();
+        for i in 0..LOOP_VISITS {
+            bounce.push_back((0x00, 20 + (i % 2) as u8, 28));
+        }
+        let d = looping(&bounce).expect("a two-tile shuffle is a loop");
+        assert!(d.contains("2 tile(s)"), "{d}");
+
+        let mut walked: VecDeque<(u8, u8, u8)> = VecDeque::new();
+        for i in 0..LOOP_VISITS {
+            walked.push_back((0x00, 10, 30 - i as u8));
+        }
+        assert!(looping(&walked).is_none(), "a straight walk is not a loop");
+
+        // Too little evidence is not evidence: a short run that happens to
+        // have revisited a tile has not been shown to be looping.
+        let mut brief: VecDeque<(u8, u8, u8)> = VecDeque::new();
+        brief.push_back((0, 1, 1));
+        brief.push_back((0, 1, 2));
+        assert!(looping(&brief).is_none(), "two moves prove nothing");
     }
 }

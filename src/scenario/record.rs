@@ -78,6 +78,17 @@ pub enum Ending {
     Failed(String),
     TimedOut,
     OutOfCalls,
+    /// The budget ran out **while the run was going round in circles**.
+    ///
+    /// A separate ending from [`Ending::OutOfCalls`] because they are separate
+    /// findings and lumping them together hides the more interesting one. A
+    /// run that spent its budget covering ground was given too small a budget;
+    /// a run that spent it revisiting four tiles was *looping*, and raising
+    /// the budget would only make it loop for longer. The two are
+    /// indistinguishable in a pass rate and indistinguishable in a
+    /// reason-of-failure histogram that calls both "budget" — which is exactly
+    /// how a whole family of observation-aliasing defects stayed hidden.
+    Stuck(String),
     Violated(String),
     Faulted(String),
 }
@@ -89,6 +100,7 @@ impl Ending {
             Ending::Failed(_) => "failed",
             Ending::TimedOut => "timeout",
             Ending::OutOfCalls => "out-of-calls",
+            Ending::Stuck(_) => "stuck",
             Ending::Violated(_) => "violated",
             Ending::Faulted(_) => "fault",
         }
@@ -96,7 +108,10 @@ impl Ending {
 
     pub fn detail(&self) -> &str {
         match self {
-            Ending::Failed(d) | Ending::Violated(d) | Ending::Faulted(d) => d,
+            Ending::Failed(d)
+            | Ending::Stuck(d)
+            | Ending::Violated(d)
+            | Ending::Faulted(d) => d,
             _ => "",
         }
     }
@@ -106,6 +121,7 @@ impl Ending {
             "goal" => Ending::Goal,
             "failed" => Ending::Failed(detail.into()),
             "out-of-calls" => Ending::OutOfCalls,
+            "stuck" => Ending::Stuck(detail.into()),
             "violated" => Ending::Violated(detail.into()),
             "fault" => Ending::Faulted(detail.into()),
             _ => Ending::TimedOut,

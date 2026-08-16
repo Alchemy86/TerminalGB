@@ -28,6 +28,7 @@ emulated time to cover and the length wanted**, not picked.
 import argparse
 import collections
 import csv
+import math
 import os
 import sys
 
@@ -291,6 +292,21 @@ def interpolate(path, frame):
     )
 
 
+def wrap_hud(text, font, width):
+    """Break `text` onto as many lines as the HUD column can hold."""
+    out, line = [], ""
+    for word in text.split():
+        trial = f"{line} {word}".strip()
+        if line and font.getbbox(trial)[2] > width:
+            out.append(line)
+            line = word
+        else:
+            line = trial
+    if line:
+        out.append(line)
+    return out
+
+
 def state_at(rows, frame):
     """The row in force at `frame`. Rows are change points, ascending."""
     lo, hi = 0, len(rows) - 1
@@ -319,6 +335,16 @@ def main():
                     help="how many agents carry a number. At 24 everybody can; "
                          "at 500 numbers are noise, so a named cohort stays "
                          "followable inside an anonymous crowd")
+    ap.add_argument("--method", default=None,
+                    help="one line of method, stated on screen. A film of a "
+                         "measurement should carry the measurement.")
+    ap.add_argument("--camera-trace", default=None,
+                    help="write the per-frame camera to CSV and, with "
+                         "--dry-run, stop there. The camera is judged by "
+                         "measuring this, never by watching and asserting.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="compute positions and camera, write any trace, and "
+                         "stop before rendering")
     ap.add_argument("--cover", type=float, default=0.6,
                     help="fraction of agents whose whole run must fit in the "
                          "film; the rest are simply still going when it ends")
@@ -330,6 +356,7 @@ def main():
         sys.exit(f"no agent-*.csv in {a.tracks}")
     paths = {n: tile_path(r) for n, r in tracks.items()}
     spans = load_links(a.tracks)
+    n_links = max((lk for v in spans.values() for lk, *_ in v), default=0)
     cohort = set(sorted(tracks)[: a.cohort])
     # **The timeline is not the longest agent.** A few agents stall and pace a
     # patch of grass for half a million frames, and letting them set the length
@@ -341,7 +368,12 @@ def main():
     frames_out = int(a.seconds * a.fps)
     # **Sampling derived, not picked**: cover the whole run in the length
     # wanted, and say what that ratio came out at.
-    step = max(1, last // max(1, frames_out))
+    # **Round the stride UP, or the film stops short of its own subject.**
+    # Flooring gives step 1 for any length past half the run, and the film then
+    # ends at `frames_out` emulated frames with the journey unfinished — a
+    # 2,310-frame cut of a 4,122-frame chain, silently missing the last 44%
+    # including the cutscene it exists to show. Measured on this chain.
+    step = max(1, -(-last // max(1, frames_out)))
     print(f"{len(tracks)} agents; longest run {ends[-1]} frames, filming to "
           f"{last} ({last/FPS_GB/60:.1f} emulated minutes) so "
           f"{int(a.cover*100)}% of runs finish inside the film")
@@ -363,8 +395,26 @@ def main():
     world = Image.new("RGB", (X1 - X0, Y1 - Y0), BG)
     for m, im in sheets.items():
         world.paste(im, (origin[m][0] - X0, origin[m][1] - Y0))
+    # **A connector per panel, from its own door to its own edge.** A panel in
+    # a gutter is only "beside its door" if a reader can see which door — and
+    # the cartridge answers that exactly, because the warp table in
+    # `data/maps/objects/*.asm` names the tile. Drawn into the map layer so it
+    # crops, pans and zooms with everything else rather than floating over it.
+    cd = ImageDraw.Draw(world)
+    for m, (host, dx, dy, side) in INTERIOR.items():
+        if m not in sheets or host not in origin:
+            continue
+        hx, hy = origin[host]
+        door = (hx + dx * TILE + TILE // 2 - X0, hy + dy * TILE + TILE // 2 - Y0)
+        px, py = origin[m][0] - X0, origin[m][1] - Y0
+        w, h = sheets[m].size
+        edge = (px + w if side == "left" else px, py + h // 2)
+        cd.line([edge, (door[0], edge[1]), door], fill=(64, 76, 90), width=2)
+        cd.ellipse([door[0] - 4, door[1] - 4, door[0] + 4, door[1] + 4],
+                   outline=(120, 140, 160), width=2)
     print(f"world {world.width}x{world.height} px from {len(sheets)} sheets "
-          f"({len(sheets) - len(WORLD)} interior panels beside their own doors)")
+          f"({len(sheets) - len(WORLD)} interior panels beside their own doors, "
+          f"each joined to its door by a connector)")
 
     # A real font, so the caption is legible at 1280 rather than six pixels
     # tall. Falls back to PIL's bitmap font when none is installed.
@@ -460,32 +510,121 @@ def main():
         hi = vals[min(n - 1, int(0.95 * n))]
         return lo, hi, (lo + hi) / 2
 
+    # **The map is the focus element: the world is steady and the camera
+    # drifts over it.** Reported as "it basically vibrates right now ... move
+    # slowly up/down with the mass, not vibrate up and down / side to side
+    # rapidly", and every one of the five causes below is a standard one.
+    #
+    # 1. THE TARGET IS SMOOTHED, and slowly. The old follow was an EMA at
+    #    k = 0.14, i.e. a time constant of about seven frames — a quarter of a
+    #    second at 30 fps, which is fast enough to reproduce most of the
+    #    per-frame jitter of the median it was chasing. `CAM_K` is a ~1.2 s
+    #    constant instead, so the camera lags the mass and glides.
+    # 2. A DEADZONE. Below it the camera does not move at all, so the pixel or
+    #    two the median wanders every frame produces no movement whatever.
+    # 3. THE ZOOM IS QUANTISED AND HELD. This is the one that is easy to miss
+    #    and was the loudest: `scale = VIEW_W / cw` was recomputed from a
+    #    continuously-varying width, so *every* frame resampled the pixel art
+    #    at a slightly different ratio and the whole picture shimmered — not
+    #    only the moving part. The width now snaps to a ladder and changes only
+    #    when it must (hysteresis), so a run of frames shares one exact scale.
+    # 4. THE PAN SPEED IS CAPPED, so nothing the mass does can make the camera
+    #    lurch.
+    # 5. AXIS BIAS. Route 1 is a vertical corridor; the shot wants Y tracked
+    #    and X nearly fixed. Chasing both axes is what turns a corridor walk
+    #    into side-to-side sway.
+    CAM_K = 0.028          # EMA per frame: tau ~= 36 frames ~= 1.2 s at 30 fps
+    CAM_DEAD = 0.16        # of the viewport, per axis, before anything moves
+    CAM_MAX_PAN = 1.6      # world pixels per frame — a glide, never a lurch
+    CAM_X_TRACK = 0.22     # how much of the X drift to follow at all
+    CAM_STEP = 1.10        # zoom ladder ratio
+    CAM_GROW = 1.06        # widen only when the mass needs this much more
+    CAM_SHRINK = 0.74      # tighten only when it needs this much less
+
+    def quantise(w):
+        """Snap a wanted width onto a fixed geometric ladder.
+
+        Anchored on MIN_W rather than on the frame, so the same wanted width
+        always yields the same exact scale — which is the property that stops
+        the resample ratio moving under the picture.
+        """
+        k = max(0, round(math.log(max(w, MIN_W) / MIN_W) / math.log(CAM_STEP)))
+        return MIN_W * (CAM_STEP ** k)
+
     cams, prev = [], None
     for here in positions:
         if here:
             lx, hx_, mx = spread([p[1] for p in here])
             ly, hy_, my = spread([p[2] for p in here])
-            cx, cy = mx, my
-            need = max(MIN_W, (hx_ - lx) * 1.25,
+            tx, ty = mx, my
+            want = max(MIN_W, (hx_ - lx) * 1.25,
                        (hy_ - ly) * 1.25 * VIEW_W / OUT_H)
         elif prev:
-            cx, cy, need = prev
+            tx, ty, want = prev
         else:
-            cx, cy, need = world.width / 2, world.height / 2, MIN_W
-        need = min(need, world.width * 1.0)
-        if prev:
-            k = 0.14
-            cx = prev[0] + (cx - prev[0]) * k
-            cy = prev[1] + (cy - prev[1]) * k
-            need = prev[2] + (need - prev[2]) * k
-        prev = (cx, cy, need)
-        cams.append(prev)
+            tx, ty, want = world.width / 2, world.height / 2, MIN_W
+        want = min(want, world.width * 1.0)
+
+        if prev is None:
+            prev = (float(tx), float(ty), quantise(want))
+            cams.append((round(prev[0]), round(prev[1]), prev[2]))
+            continue
+
+        px, py, pw = prev
+        # (3) hold the zoom unless the mass genuinely outgrew or fell well
+        # inside it, then snap to the ladder.
+        cw = pw
+        if want > pw * CAM_GROW or want < pw * CAM_SHRINK:
+            cw = quantise(want)
+        cw = min(cw, world.width * 1.0)
+        chh = cw * OUT_H / VIEW_W
+
+        # (2) deadzone, per axis, in world pixels
+        dx = tx - px
+        dy = ty - py
+        if abs(dx) < cw * CAM_DEAD:
+            dx = 0.0
+        if abs(dy) < chh * CAM_DEAD:
+            dy = 0.0
+        # (5) axis bias: the corridor is vertical, so X barely moves
+        dx *= CAM_X_TRACK
+        # (1) smooth, then (4) cap
+        vx = max(-CAM_MAX_PAN, min(CAM_MAX_PAN, dx * CAM_K))
+        vy = max(-CAM_MAX_PAN, min(CAM_MAX_PAN, dy * CAM_K))
+        # **The accumulator stays a float and only the OUTPUT is rounded.**
+        # Rounding the accumulator instead looks like the same thing and is a
+        # deadlock: a drift just outside the deadzone yields a step well under
+        # half a pixel, `round` throws it away, and the camera is stuck there
+        # for ever — visibly, since the mass keeps walking out of frame.
+        prev = (px + vx, py + vy, cw)
+        # (3, again) whole world pixels, so the crop lands on the same lattice
+        # every frame and a held camera is bit-identical frame to frame.
+        cams.append((round(prev[0]), round(prev[1]), cw))
+
+    if a.camera_trace:
+        with open(a.camera_trace, "w") as fh:
+            fh.write("frame,cx,cy,cw\n")
+            for i, (cx, cy, cw) in enumerate(cams):
+                fh.write(f"{i},{cx},{cy},{cw:.4f}\n")
+        print(f"camera trace: {a.camera_trace} ({len(cams)} frames)")
+    if a.dry_run:
+        return
 
     tinted = {}
     for i, (here, (cx, cy, cw)) in enumerate(zip(positions, cams)):
         ch = cw * OUT_H / VIEW_W
+        # **Clamp the crop to the world.** Reported as an interior panel
+        # running off the left edge with the agents inside it cut in half:
+        # the camera centres on the mass, the mass is inside a panel in the
+        # gutter, and an unclamped crop then hangs past the world's edge and
+        # takes the panel's outer half with it. Clamping pulls the view back
+        # inside, which shows the whole panel and costs nothing anywhere else.
         x0 = int(round(cx - cw / 2))
         y0 = int(round(cy - ch / 2))
+        if cw < world.width:
+            x0 = max(0, min(x0, world.width - int(round(cw))))
+        if ch < world.height:
+            y0 = max(0, min(y0, world.height - int(round(ch))))
         crop = Image.new("RGB", (int(round(cw)), int(round(ch))), BG)
         crop.paste(world, (-x0, -y0))
         scale = VIEW_W / cw
@@ -547,6 +686,13 @@ def main():
             f"{step * a.fps / FPS_GB:.0f}x timelapse",
             f"{int(cw / TILE)} tiles across",
         ]
+        if a.method:
+            # **Wrap it, never let the panel cut it.** It read "links
+            # 01/02/03 each certified 3000" and stopped mid-number — a
+            # truncated measurement is worse than none, because a reader
+            # cannot tell it was cut. Same rule the status panel's
+            # `fit_bar` follows: shorten deliberately or wrap, never clip.
+            rows.extend(wrap_hud(a.method, num_font, OUT_W - hx - 12))
         y = 8 + int(font.size * 1.8)
         for t in rows:
             d.text((hx, y), t, fill=(170, 185, 200), font=num_font)
@@ -557,12 +703,16 @@ def main():
         # draw fourteen empty bars and say nothing.
         y += 6
         if spans:
-            d.text((hx, y), "link of 14", fill=(200, 215, 230), font=num_font)
+            # **The count comes from the tracks, never from a constant.** A
+            # film of three links that says "link of 14" is describing a
+            # different measurement from the one on screen.
+            d.text((hx, y), f"link of {n_links}", fill=(200, 215, 230),
+                   font=num_font)
             y += int(num_font.size * 1.7)
             per = collections.Counter(p[6] for p in here)
             top = max(per.values()) if per else 1
             bw = OUT_W - hx - 12
-            for lk in range(1, 15):
+            for lk in range(1, n_links + 1):
                 c = per.get(lk, 0)
                 d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
                             fill=(60, 120, 190) if c else (34, 40, 48))

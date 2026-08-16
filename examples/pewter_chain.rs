@@ -650,6 +650,15 @@ pub struct ChainDriver {
     /// Consecutive decisions spent pressing through the same unchanged screen.
     text_tries: u32,
     last_text: String,
+    /// The name menu, held across the decisions it takes to work it.
+    ///
+    /// `row0` is the **screen row** the cursor sat on when the menu first
+    /// appeared, i.e. NEW NAME's row; `want` is how far down the preset list
+    /// this attempt is aiming. Both are needed because the observer reports a
+    /// screen row and not a menu index, and subtracting one from the other is
+    /// what silently made every attempt pick NEW NAME.
+    name_row0: Option<u8>,
+    name_want: u8,
     /// Whether this leg's rules allow winning a battle at all.
     fight_wild: bool,
     /// Where to go when the party is too hurt to keep training, and whether
@@ -689,6 +698,8 @@ impl ChainDriver {
             trail: None,
             text_tries: 0,
             last_text: String::new(),
+            name_row0: None,
+            name_want: 0,
             fight_wild: may_fight_wild(scenario),
             heal_route: heal_route(scenario),
             healing: false,
@@ -844,19 +855,36 @@ impl ChainDriver {
         if s.said("NEW NAME") {
             // Presets sit below NEW NAME; picking one skips the keyboard
             // entirely, and which one is a free axis of diversity.
-            let want = 1 + self.roll(3) as u32;
-            let down = want.saturating_sub(s.cursor_row.max(0) as u32);
-            if self.primitive {
-                return if down > 0 {
-                    self.one("Move down the name list.", "down")
-                } else {
-                    self.one("Take this name.", "a")
-                };
+            //
+            // **One key per decision, off the cursor's own row.** Two things
+            // were wrong here and each on its own made every attempt pick NEW
+            // NAME — which opens the keyboard, so the name became whatever the
+            // burst typed, identically, for every seed. First, `menu_cursor_row`
+            // is the **screen row** the `▶` is drawn on, not the menu item's
+            // index, so subtracting it from an item index compared two
+            // different quantities: on the rival's menu it gave zero and A fell
+            // on NEW NAME. Second, `down` and `a` in one plan is a burst in a
+            // Gen 1 menu, and `HandleMenuInput` delays several frames after
+            // accepting a press, so the first of a burst is routinely swallowed
+            // and A lands one item early. Anchoring on the row the menu opened
+            // at and pressing one key per decision is immune to both: a
+            // swallowed press leaves the row where it was and simply repeats.
+            let row = s.cursor_row.max(0) as u8;
+            let row0 = match self.name_row0 {
+                Some(r) => r,
+                None => {
+                    self.name_want = 1 + self.roll(3) as u8;
+                    self.name_row0 = Some(row);
+                    row
+                }
+            };
+            if row.saturating_sub(row0) < self.name_want {
+                return self.one("Down the name list.", "down");
             }
-            let p = Plan::new("Take a preset name rather than the keyboard.");
-            let p = if down > 0 { p.press("down", down) } else { p };
-            return p.press("a", 1).finish();
+            return self.one("Take this preset name.", "a");
         }
+        // Off the menu: the next one gets its own target and its own anchor.
+        self.name_row0 = None;
         if s.kind == "naming-keyboard" {
             return Plan::new("Confirm with START.").press("start", 1).finish();
         }
@@ -1256,6 +1284,12 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       --workers N   default: cores - 4, because other things share this box
       --primitive   one button per decision, which is the shape a learner needs
       --start-dir D a pool of entry states; a seed takes `seed % pool`
+      --idle-spread N  frames of phase to spread attempts over (default 3001,
+                    0 disables). Attempts that differ in nothing the cartridge
+                    can see are one attempt counted N times; the run fails
+                    loudly if any two trajectories match.
+      --exits N     keep the first N successful exits as <out>/exits/*.gbss,
+                    which is the next link's entry pool
       --paths       also write where the player was, per frame, per run
 
   film --rom R --agents N [--out DIR] [--workers N]
@@ -1289,6 +1323,11 @@ struct Args {
     primitive: bool,
     paths: bool,
     start_dir: Option<PathBuf>,
+    /// Frames of phase to spread attempts over; 0 disables the axis.
+    idle_spread: u32,
+    /// How many of a corpus's successful exits to keep as `.gbss`, for the
+    /// next link to use as its entry pool.
+    exits: u32,
 }
 
 fn parse(args: &[String]) -> Args {
@@ -1299,6 +1338,7 @@ fn parse(args: &[String]) -> Args {
         from: 1,
         to: 99,
         workers: default_workers(),
+        idle_spread: IDLE_SPREAD,
         ..Default::default()
     };
     let mut i = 0;
@@ -1314,6 +1354,8 @@ fn parse(args: &[String]) -> Args {
             "--scenario" => a.scenario = Some(PathBuf::from(next(i))),
             "--start" => a.start = Some(PathBuf::from(next(i))),
             "--start-dir" => a.start_dir = Some(PathBuf::from(next(i))),
+            "--idle-spread" => a.idle_spread = next(i).parse().unwrap_or(IDLE_SPREAD),
+            "--exits" => a.exits = next(i).parse().unwrap_or(0),
             "--out" => a.out = Some(PathBuf::from(next(i))),
             "--seed" => a.seed = next(i).parse().unwrap_or(1),
             "--seed0" => a.seed0 = next(i).parse().unwrap_or(0),
@@ -1375,11 +1417,100 @@ struct Outcome {
     path: Vec<terminalgb::scenario::run::PathPoint>,
 }
 
+/// Everything an attempt *did*, in one number.
+///
+/// The decision replies in order, the frame each landed on, how long the run
+/// was and where it ended. Two attempts sharing this played the same game: not
+/// merely the same verdict, the same buttons at the same moments.
+fn trajectory_hash(o: &Outcome) -> u64 {
+    // FNV-1a, hand-rolled like every other hash in this repository — the
+    // dependency count is a contract `make embed` measures.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |bytes: &[u8]| {
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x1000_0000_01b3);
+        }
+    };
+    eat(&o.frames.to_le_bytes());
+    eat(&(o.decisions as u64).to_le_bytes());
+    eat(&[o.map, o.x, o.y]);
+    eat(o.ending.as_bytes());
+    eat(&o.recording.final_state.to_le_bytes());
+    for d in &o.recording.decisions {
+        eat(&d.frame.to_le_bytes());
+        eat(d.reply.as_bytes());
+    }
+    h
+}
+
+/// Frames of phase a certification run spreads its attempts over.
+///
+/// **3001, and it is a measurement rather than a round number.** AgentGB
+/// reached the same constant from the other end and wrote down why: every
+/// state in a start pool is frozen during one traversal, so the town's
+/// wandering people are in nearly the same place in all of them, and a hundred
+/// frames is not long enough for anyone to move. Same policy, same tile, same
+/// 150 attempts scored **100% under a 0-96 frame offset and 52.7% under a
+/// 0-3000 one**, with 6 distinct people-layouts seen against 22. A prime, so
+/// `seed * PHASE_STRIDE % IDLE_SPREAD` is a bijection and 3000 seeds give 3000
+/// distinct phases.
+const IDLE_SPREAD: u32 = 3001;
+/// Coprime with [`IDLE_SPREAD`], so consecutive seeds land far apart.
+const PHASE_STRIDE: u32 = 337;
+
+/// The phase offset attempt `seed` runs at.
+///
+/// One expression, used by every subcommand, so `solve --seed N` reproduces
+/// `corpus`'s seed N exactly and `verify` exercises the phased path rather
+/// than a special-cased unphased one.
+fn phase_for(seed: u64, spread: u32) -> u32 {
+    if spread == 0 {
+        return 0;
+    }
+    (seed as u32).wrapping_mul(PHASE_STRIDE) % spread
+}
+
+/// Advance the machine `idle` frames and take the state it reaches.
+///
+/// **This is what makes two attempts independent, and without it a corpus is
+/// one attempt copied N times.** Emulation here is a pure function of (start
+/// state, scenario, seed) — that is the property `verify` exists to defend —
+/// so a certification loop that holds the first two fixed and varies only a
+/// seed the driver may never consult produces N byte-identical runs. Measured:
+/// the first 3000-attempt run of `01-new-game` reported 3000 of 3000 and was
+/// **one** attempt, 18 decisions and a single final-state hash, 3000 times.
+/// The rule of three bounds nothing when the sample size is really one.
+///
+/// A phase offset is the axis that always exists. A start tile needs a pool
+/// and a seed needs the driver to reach a seeded branch, but every scenario
+/// can be entered a few frames later than last time — which is what a person
+/// does, and which moves `rDIV`, the frame counter, and therefore every draw
+/// Gen 1's `Random_` makes and every NPC in the town.
+fn phase_start(gb: &mut Gameboy, start: Option<Vec<u8>>, idle: u32) -> Option<Vec<u8>> {
+    if idle == 0 {
+        return start;
+    }
+    if let Some(bytes) = &start {
+        if let Err(e) = gb.load_state(bytes) {
+            eprintln!("the start state was rejected while phasing: {e:?}");
+            exit(1);
+        }
+    }
+    for _ in 0..idle {
+        gb.frame();
+    }
+    Some(gb.save_state())
+}
+
 /// Play one attempt.
 ///
-/// Eight arguments, and they stay eight: the alternative is a struct whose
+/// Nine arguments, and they stay nine: the alternative is a struct whose
 /// fields are set positionally at the call site anyway, and every one of these
 /// is named at every call.
+///
+/// `idle` is the **phase offset**: frames burned from the start state before
+/// the agent is allowed its first decision. See [`phase_start`].
 #[allow(clippy::too_many_arguments)]
 fn play(
     rom: &Path,
@@ -1390,6 +1521,7 @@ fn play(
     quiet: bool,
     primitive: bool,
     track: bool,
+    idle: u32,
 ) -> Outcome {
     let s = Scenario::load(scenario_path).unwrap_or_else(|e| {
         eprintln!("{}: {e}", scenario_path.display());
@@ -1408,6 +1540,11 @@ fn play(
     // machine without an APU — and it costs nothing here, because
     // `SilentPlayer` throws the samples away.
     gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+    // **Phase the world before the agent is attached, never after.** Burning
+    // the frames here means the plugin does not exist yet and so cannot act
+    // during them; the machine is simply left `idle` frames further on, and
+    // that state becomes the attempt's start. See [`phase_start`].
+    let start = phase_start(&mut gb, start, idle);
     let cfg = Config {
         budget: Budget {
             max_calls: s.episode().max_calls,
@@ -1568,6 +1705,7 @@ fn cmd_solve(a: &Args) {
         a.quiet,
         a.primitive,
         a.paths,
+        phase_for(a.seed, a.idle_spread),
     );
     report(&o, a.seed);
     if a.paths {
@@ -1638,6 +1776,7 @@ fn cmd_chain(a: &Args) {
                 true,
                 a.primitive,
                 a.paths,
+                phase_for(seed, a.idle_spread),
             );
             report(&o, seed);
             let _ = o.recording.save(&dir.join(format!("run-{seed}.json")));
@@ -1716,7 +1855,14 @@ fn cmd_corpus(a: &Args) {
     );
     let t = std::time::Instant::now();
     let next = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, String)>::new()));
+    let results =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, String, u64)>::new()));
+    let spread = a.idle_spread;
+    let exits = a.exits;
+    let exit_dir = out.join("exits");
+    if exits > 0 {
+        std::fs::create_dir_all(&exit_dir).expect("exits directory");
+    }
     let peak = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let live = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
@@ -1726,6 +1872,7 @@ fn cmd_corpus(a: &Args) {
                 (next.clone(), results.clone(), peak.clone(), live.clone());
             let (rom, sp, out, pool) =
                 (rom.clone(), sp.clone(), out.clone(), pool.clone());
+            let exit_dir = exit_dir.clone();
             let runs = a.runs;
             let seed0 = a.seed0;
             let primitive = a.primitive;
@@ -1742,16 +1889,34 @@ fn cmd_corpus(a: &Args) {
                     }
                     let seed = seed0 + k as u64;
                     let entry = pool[(seed as usize) % pool.len()].clone();
-                    let o = play(&rom, &sp, entry, seed, &dir, true, primitive, paths);
+                    // The three independence axes, one expression each: which
+                    // held-out entry state, which driver seed, and how far
+                    // into the world the attempt starts.
+                    let idle = phase_for(seed, spread);
+                    let o =
+                        play(&rom, &sp, entry, seed, &dir, true, primitive, paths, idle);
+                    // The next link's entry pool. Only successful exits: a
+                    // pool seeded from failures would certify the following
+                    // link against worlds no real run ever reaches, which is
+                    // the whole defect the chain figure exists to expose.
+                    if o.goal && exits > 0 && seed < seed0 + exits as u64 {
+                        let _ = std::fs::write(
+                            exit_dir.join(format!("{seed:05}.gbss")),
+                            &o.state,
+                        );
+                    }
                     let file = format!("run-{seed:05}.json");
                     let _ = o.recording.save(&out.join(&file));
                     if paths {
                         write_path(&out.join(format!("path-{seed:05}.csv")), &o.path);
                     }
+                    let traj = trajectory_hash(&o);
                     let row = format!(
                         "{{\"seed\":{seed},\"file\":\"{file}\",\"goal\":{},\
                          \"ending\":\"{}\",\"frames\":{},\"decisions\":{},\
                          \"wall_ms\":{},\"map\":{},\"x\":{},\"y\":{},\
+                         \"idle\":{idle},\"entry\":{},\
+                         \"trajectory\":\"{traj:016x}\",\
                          \"final_state\":\"{:016x}\"}}",
                         o.goal,
                         o.ending,
@@ -1761,9 +1926,10 @@ fn cmd_corpus(a: &Args) {
                         o.map,
                         o.x,
                         o.y,
+                        (seed as usize) % pool.len(),
                         o.recording.final_state
                     );
-                    results.lock().unwrap().push((seed, row));
+                    results.lock().unwrap().push((seed, row, traj));
                 }
                 live.fetch_sub(1, Relaxed);
             });
@@ -1771,13 +1937,13 @@ fn cmd_corpus(a: &Args) {
     });
 
     let mut rows = results.lock().unwrap().clone();
-    rows.sort_by_key(|(s, _)| *s);
+    rows.sort_by_key(|(s, _, _)| *s);
     let goals = rows
         .iter()
-        .filter(|(_, r)| r.contains("\"goal\":true"))
+        .filter(|(_, r, _)| r.contains("\"goal\":true"))
         .count();
     let mut index = String::new();
-    for (_, r) in &rows {
+    for (_, r, _) in &rows {
         index.push_str(r);
         index.push('\n');
     }
@@ -1809,6 +1975,64 @@ fn cmd_corpus(a: &Args) {
         peak.load(std::sync::atomic::Ordering::Relaxed)
     );
     println!("{}", out.join("index.ndjson").display());
+    let dupes = report_independence(&rows, pool.len(), spread);
+    if dupes > 0 {
+        exit(3);
+    }
+}
+
+/// Refuse to call a corpus a measurement until its attempts are distinct.
+///
+/// **This guard is worth more than the bug that prompted it.** A certification
+/// loop that varies nothing the game can see produces N copies of one attempt
+/// and reports them as N successes, and every summary downstream — the pass
+/// rate, the rule-of-three bound, the end-to-end chain figure — is then a
+/// statement about a sample of one wearing a sample of N's clothes. It is
+/// invisible in the verdict: a duplicated corpus and an honest one both print
+/// "3000 of 3000". Only the trajectories can tell them apart, so they are
+/// counted here, on every run, and a collision is a non-zero exit rather than
+/// a line of prose somebody might not read.
+///
+/// Returns the number of attempts that duplicated an earlier one.
+fn report_independence(rows: &[(u64, String, u64)], pool: usize, spread: u32) -> usize {
+    let mut seen: HashMap<u64, u64> = HashMap::new();
+    let mut collisions: Vec<(u64, u64)> = Vec::new();
+    for (seed, _, traj) in rows {
+        match seen.get(traj) {
+            Some(first) => collisions.push((*first, *seed)),
+            None => {
+                seen.insert(*traj, *seed);
+            }
+        }
+    }
+    println!(
+        "independence: {} distinct trajectories in {} attempts, \
+         {pool} entry state(s), phase spread {spread}",
+        seen.len(),
+        rows.len()
+    );
+    if collisions.is_empty() {
+        return 0;
+    }
+    eprintln!(
+        "\nINDEPENDENCE FAILURE — {} of {} attempts repeat an earlier one \
+         exactly.\n\
+         This is NOT a measurement of {} attempts. Emulation here is a pure \
+         function of (start state, scenario, seed), so identical trajectories \
+         mean the attempts differed in nothing the cartridge could see.\n\
+         Vary all three axes: --start-dir for the entry pool, distinct --seed0 \
+         offsets, and --idle-spread for the phase (0 disables it).",
+        collisions.len(),
+        rows.len(),
+        rows.len()
+    );
+    for (first, dup) in collisions.iter().take(5) {
+        eprintln!("  seed {dup} played exactly the same game as seed {first}");
+    }
+    if collisions.len() > 5 {
+        eprintln!("  ... and {} more", collisions.len() - 5);
+    }
+    collisions.len()
 }
 
 /// Same seed, same answer, whatever the worker count.
@@ -1844,6 +2068,7 @@ fn cmd_verify(a: &Args) {
                 true,
                 a.primitive,
                 false,
+                phase_for(seed, a.idle_spread),
             );
             (seed, o.recording.final_state, o.frames)
         })
@@ -1860,6 +2085,7 @@ fn cmd_verify(a: &Args) {
                 par.clone(),
             );
             let primitive = a.primitive;
+            let spread = a.idle_spread;
             sc.spawn(move || {
                 let o = play(
                     &rom,
@@ -1870,6 +2096,7 @@ fn cmd_verify(a: &Args) {
                     true,
                     primitive,
                     false,
+                    phase_for(seed, spread),
                 );
                 par.lock()
                     .unwrap()
@@ -2063,6 +2290,7 @@ fn cmd_film(a: &Args) {
             let (next, done) = (next.clone(), done.clone());
             let (rom, out, files) = (rom.clone(), out.clone(), files.clone());
             let primitive = a.primitive;
+            let spread = a.idle_spread;
             sc.spawn(move || loop {
                 let ag = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if ag >= agents {
@@ -2085,6 +2313,7 @@ fn cmd_film(a: &Args) {
                         true,
                         primitive,
                         true,
+                        phase_for(seed, spread),
                     );
                     for mut p in o.path {
                         p.frame += base;

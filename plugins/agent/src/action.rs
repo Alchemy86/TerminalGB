@@ -34,7 +34,7 @@ use terminalgb_plugin_api::KeypadKey;
 use terminalgb_plugin_api::Machine;
 
 use super::json::Json;
-use super::observe::{Facing, Gen1Observer, Position, Screen};
+use super::observe::{Facing, Gen1Observer, Position, Screen, ScreenKind};
 
 /// Frames a direction is held for one overworld step. A Gen 1 step animation
 /// is 16 frames; holding for the whole of it is what makes one press mean one
@@ -236,6 +236,11 @@ enum Step {
     Press {
         left: u8,
         hold: u16,
+        /// How many presses this burst asked for. A burst of one is a
+        /// deliberate single choice; a burst of several is "hold this down
+        /// through whatever comes", and that is the one that must not walk
+        /// into a menu. See the guard in `advance`.
+        want: u8,
     },
     Wait {
         left: u16,
@@ -389,7 +394,11 @@ impl Executor {
 
     fn begin(&self, action: &Action, m: &mut Machine, obs: &Gen1Observer) -> Step {
         match *action {
-            Action::Press { times, hold, .. } => Step::Press { left: times, hold },
+            Action::Press { times, hold, .. } => Step::Press {
+                left: times,
+                hold,
+                want: times,
+            },
             Action::Wait { frames } => Step::Wait { left: frames },
             Action::Walk { dir, steps } => Step::Walk {
                 dir,
@@ -439,13 +448,47 @@ impl Executor {
         match &mut self.step {
             Step::Idle => None,
 
-            Step::Press { left, hold } => {
+            Step::Press { left, hold, want } => {
                 if *left == 0 {
                     return Some(Outcome {
                         action: label,
                         result: "done".to_string(),
                         changed: true,
                     });
+                }
+                // **A burst of A must stop the moment a menu appears.** The
+                // third guard of the same family as `advance_text`'s naming
+                // keyboard and yes/no stops, and it was earned the same way:
+                // A in a menu CHOOSES something, so a burst that crosses a
+                // menu makes a choice the driver never saw and cannot have
+                // meant. Measured on the Pewter chain's first link — the
+                // introduction fired `press a x8`, the "YOUR NAME?" and
+                // "RIVAL's NAME?" preset menus opened and were answered inside
+                // that burst, and all 3000 certification attempts came out
+                // byte-identical because the one seeded choice in the link was
+                // never reachable.
+                //
+                // Scoped to multi-press A, deliberately. `times: 1` is a
+                // deliberate single choice and is how every menu in this
+                // codebase is navigated; a burst of a *direction* key moves a
+                // cursor and chooses nothing.
+                if *want > 1 {
+                    if let Action::Press { button, .. } = action {
+                        if *button == KeypadKey::A
+                            && Screen::read(m).kind() == ScreenKind::Menu
+                        {
+                            let done = want.saturating_sub(*left);
+                            return Some(Outcome {
+                                action: label,
+                                result: format!(
+                                    "stopped after {done} press(es): a menu is \
+                                     up, and A here CHOOSES an item instead of \
+                                     advancing. Read it and pick deliberately."
+                                ),
+                                changed: done > 0,
+                            });
+                        }
+                    }
                 }
                 if let Action::Press { button, .. } = action {
                     m.press(*button, *hold, MENU_GAP);

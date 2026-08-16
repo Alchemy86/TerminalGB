@@ -7799,3 +7799,167 @@ Peter Whidden's swarm view; the credit is his and stays.
    agents are off frame. `pewter_chain sprites` reads the player's own sprite out of OAM+VRAM —
    tiles at `$8000 + 16 * tile`, palette `OBP0`, colour index 0 transparent by the hardware's own
    rule — so the crowd is the game's character rather than a dot.
+
+### Certifying a link — independence is the measurement, and it is GATED now
+
+**A certification run that varies nothing the cartridge can see is one attempt counted N
+times, and it is invisible in the verdict.** Measured: the first 3,000-attempt run of
+`01-new-game` reported `3000 of 3000` and was **a single attempt, 18 decisions, one
+final-state hash, three thousand times**. A duplicated corpus and an honest one both print
+"3000 of 3000"; only the trajectories tell them apart. So they are counted on every run.
+
+- **THREE AXES, AND A SEED ALONE IS THE WEAKEST OF THEM.** `pewter_chain corpus` varies the
+  **entry state** (`--start-dir`, a pool the previous link produced), the **driver seed**, and
+  the **idle-frame phase** (`--idle-spread`, default `IDLE_SPREAD` = 3001). The phase is the
+  axis that always exists: a start pool needs a previous link and a seed needs the driver to
+  reach a seeded branch, but any scenario can be entered a few frames later than last time,
+  which moves `rDIV` and therefore every draw `Random_` makes. **3001 is AgentGB's measured
+  constant, not a round number** — it recorded 100% under a 0-96 frame offset against 52.7%
+  under a 0-3000 one, because every state in a pool is frozen during one traversal and a
+  hundred frames is not long enough for a town's people to move. It is prime, so
+  `seed * 337 % 3001` is a bijection and 3000 seeds give 3000 distinct phases.
+- **`phase_start` burns the frames BEFORE the plugin is attached**, so the agent cannot act
+  during them. `phase_for(seed, spread)` is one expression shared by `solve`, `chain`,
+  `verify` and `corpus`, so `solve --seed N` reproduces `corpus`'s seed N and `verify`
+  exercises the phased path rather than a special-cased unphased one.
+- **THE GUARD IS WORTH MORE THAN THE BUG.** `report_independence` hashes every attempt's
+  trajectory — the decision replies, the frame each landed on, the length, the ending, the
+  final state — and **exits 3** on any collision, naming the colliding seeds. Teeth proven
+  both ways: `--idle-spread 0` gives 4 distinct trajectories in 40 attempts and exit 3;
+  the default gives 40 in 40 and exit 0.
+- **`--exits N` keeps the first N *successful* exits as the next link's pool.** Only
+  successes: a pool seeded from failures certifies the following link against worlds no real
+  run reaches, which is the whole defect an end-to-end chain figure exists to expose.
+- **Measured, 2026-08-16, on the captain's Pokémon Blue:** `01-new-game`, `02-leave-the-house`
+  and `03-oak-takes-you-to-the-lab` each **3000/3000 = 100.0%, 3000 distinct trajectories**,
+  entry pools 1 / 600 / 600, phase spread 3001. Zero failures in 3000 bounds the failure rate
+  at about 0.10% by the rule of three. **This repo's link 03 has never failed** — the "17
+  budget failures on link 03" in circulation are AgentGB's link 03, a different harness with a
+  60-decision cap and a 70-tile start pool, in another repository.
+- **AgentGB's own certifications were audited and are SOUND — nothing to retract.** Its
+  `eval_specs` varies held-out start tile, seed and idle phase, and its published corpora
+  contain 3000 distinct `(tile, phase, path)` triples for 3000 records. The decisive control
+  is that `random-cold` scores 541/3000 and `openloop-cold` 2437/3000 on the identical
+  harness: a harness replaying one attempt gives 0 or N, never an intermediate number.
+
+### A burst of A must stop at a menu (`plugins/agent/src/action.rs`)
+
+**The third guard of the family that already stops `advance_text` at the naming keyboard and
+at a yes/no box, and it was earned the same way.** A in a menu **chooses** something, so a
+burst that crosses a menu makes a choice the driver never saw. `Step::Press` now stops a
+multi-press `A` the moment `Screen::kind()` is `Menu`, and reports how many presses it had
+spent. Scoped to `times > 1` deliberately: `times: 1` is a deliberate single choice and is how
+every menu in this codebase is navigated, and a burst of a *direction* key moves a cursor and
+chooses nothing.
+
+*Symptom* — the Pewter chain's introduction fired `press a x8`; the "YOUR NAME?" and
+"RIVAL's NAME?" preset menus opened and were answered **inside** that burst, so the rival was
+named `AAAAA` from the same loop, the driver's one seeded choice in the link was never
+reachable, and every certification attempt was byte-identical. *Caught by* — nothing: no test
+ROM can see it (the emulator was entirely correct) and the pass rate was 100% throughout. The
+independence guard above is what makes it visible.
+
+- **`menu_cursor_row` is a SCREEN row, not a menu item index** (`observe.rs` sets it from the
+  tilemap row the `▶` is drawn on). Subtracting it from an item index compares two different
+  quantities; on the rival's menu it gave zero and A fell on NEW NAME. The name menu is worked
+  **one key per decision, anchored on the row the menu opened at** — immune to that and to
+  Gen 1's swallowed first press, because a swallowed press leaves the row where it was.
+
+### A stuck run and a run out of budget are different findings (`src/scenario/run.rs`)
+
+`Ending::Stuck` joins the taxonomy, decided by `looping()`: the last `LOOP_VISITS` (24) tile
+changes covering `LOOP_TILES` (4) or fewer distinct tiles. **A budget failure means the
+allowance was too small; a stuck failure means a bigger allowance buys a longer loop.** They
+are indistinguishable in a pass rate and indistinguishable in a reason histogram with one
+bucket for both, which is how a family of observation-aliasing defects stayed hidden — the
+evidence being seventeen failures that all used *exactly* the cap on a route the expert walks
+in fourteen steps against a sixty-step cap. Pinned by
+`oscillation_is_not_a_budget_failure`, whose control case is a straight walk that must keep
+its honest budget verdict.
+
+### The chain film — stitched from the certification runs themselves
+
+- **`tools/pewter-chain/chain_tracks.py` joins several links' `path-*.csv` into one continuous
+  track per agent**, plus the `agent-NNN.links.csv` span file `swarm_film.py` reads. It is a
+  real chain and not three clips: with `--exits N`, link *n+1*'s attempt `s` enters from pool
+  slot `s % N`, so for every seed below `N` the mapping is the identity and agent `s` is one
+  playthrough that actually happened. **Seeds at or above `N` are dropped rather than
+  stitched** — splicing two strangers' runs would show a playthrough that never occurred.
+- **ROUND THE FILM'S STRIDE UP, NEVER DOWN.** `step = last // frames_out` floors to 1 for any
+  length past half the run, and the film then ends at `frames_out` emulated frames with the
+  journey unfinished. Measured: a 2,310-frame cut of a 4,122-frame chain, silently missing the
+  last 44% **including the cutscene the film exists to show**.
+- **`swarm_view.rs` names map `40` as ROUTE_22 and it is Oak's Lab** (`0x28`, and
+  `plugins/agent/src/observe.rs`'s table is gated against the cartridge). Same class as the two
+  map names corrected in `observe.rs`: an unnamed map is honest, a wrongly named one is not.
+
+#### The camera: five fixes, and the loudest one is not the one you would guess
+
+Reported as *"it basically vibrates ... make the MAP the focus element and we MOVE slowly
+up/down with the mass"*. Measured on the same 600-agent Route 1 tracks, old against new:
+
+| | old | new |
+|---|---:|---:|
+| distinct crop widths in 2,490 frames | **1,348** | **7** |
+| frames where the resample ratio changed | 1,449 (58.2%) | 15 (0.6%) |
+| X direction reversals | 0.96/s | **0.00/s** |
+| frames the camera is completely still (X / Y) | 19.5% / 12.6% | **86.9% / 86.8%** |
+| largest single-frame jump (X) | 35.8 px | **2.0 px** |
+
+- **The zoom width was the loudest cause and it is invisible if you only think about
+  movement.** `scale = VIEW_W / cw` was recomputed from a continuously varying width, so the
+  pixel art was resampled at a *different ratio on 58% of frames* and the whole picture
+  shimmered whether or not the camera moved. The width now snaps to a fixed geometric ladder
+  anchored on `MIN_W` and changes only on hysteresis, so a run of frames shares one exact
+  scale.
+- The other four: an EMA at `CAM_K = 0.028` (τ ≈ 1.2 s at 30 fps, against the old 0.14 ≈
+  0.24 s, fast enough to reproduce most of the jitter it was chasing); a deadzone of 0.16 of
+  the viewport per axis; a pan cap of 1.6 world px/frame; and `CAM_X_TRACK = 0.22` so a
+  vertical corridor tracks Y and holds X nearly fixed.
+- **The accumulator stays a float and only the OUTPUT is rounded.** Rounding the accumulator
+  looks like the same thing and is a deadlock: a drift just outside the deadzone yields a step
+  well under half a pixel, `round` throws it away, and the camera is stuck there for ever while
+  the mass walks out of frame.
+- **Judge a camera by measuring its track, never by watching and asserting.**
+  `--camera-trace <csv> --dry-run` writes the per-frame camera without rendering, so old and
+  new are compared on the real code path in seconds. The signature to look at is *direction
+  reversals per second* and *fraction of frames completely still*, not mean displacement — a
+  camera that drifts steadily and one that vibrates have similar mean displacement.
+
+#### Debt, recorded so it is not lost
+
+- **THREE COMPOSITORS EXIST AND TWO ARE REIMPLEMENTATIONS**: `examples/swarm_view.rs` (Rust,
+  the original), `tools/pewter-chain/swarm_film.py` and AgentGB's `chain.py`. The AgentGB
+  crew's own note says why: *"AgentGB composites its own ONLY because it is not allowed to
+  edit TerminalGB from this worktree."* A worktree permission rule caused a rewrite, the
+  rewrite lost qualities of the original, and it then happened again. **Consolidating onto
+  `swarm_view.rs` is deferred, not cancelled.** What the Rust original has that the rewrites
+  do not: map origins derived from **seams measured on the running cartridge at single-step
+  granularity** (watching per *sample* instead let an agent walk one to three tiles in first,
+  and Pallet Town landed two tiles under Route 1); map sizes read from `wCurMapWidth`/`Height`
+  rather than a table, so a wrong map id cannot produce a plausible rectangle;
+  `assert_no_new_colours` after every scaling step; `--verify-determinism`, which runs the
+  swarm twice in one process and compares; and backgrounds stitched from the agent's own
+  framebuffers rather than taken from a separate art pipeline.
+
+#### The intro has no map, and a film drawn from `wCurMap` believes it does
+
+**`wCurMap` is not "the map is loaded", and this is the fourth thing in the repository to be
+caught by it.** Through the whole of link 01 — 825 frames, fourteen seconds of a 1x cut —
+`LoadMapHeader` has not run, so the position bytes are whatever WRAM held: map `$FC` at
+(26,8) for a few frames, then **map 0 at (0,0)** until the header lands. Drawn literally, all
+six hundred agents stand in Pallet Town's top-left corner for the opening fourteen seconds,
+the camera parks on that corner, and the bedroom panel they are actually in sits just off the
+edge of frame with its agents cut in half.
+
+That was reported as *"the interior panel is clipped off the left edge"* and it is not a
+layout fault. `chain_tracks.py::settle` back-fills the leading run with the first position the
+cartridge genuinely reports — the player is in Red's bedroom the whole time, only the header
+is missing — which is both true and what puts the camera on the room the film opens in. Only
+the **leading** run is touched, so a later legitimate visit to a map's corner is untouched.
+The same trap link 01's own goal condition guards against by requiring `wCurMapWidth > 0`.
+
+**Two general rules from the same cut:** clamp a camera's crop to the world, or a subject at
+an edge is shown half off; and **wrap a caption to the panel, never let the panel cut it** —
+the certification line read `links 01/02/03 each certified 3000` and stopped mid-number, and a
+truncated measurement is worse than none because a reader cannot tell it was cut.
