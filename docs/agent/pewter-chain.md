@@ -222,6 +222,41 @@ two workers share anything but the read-only cartridge bytes.
 
 ---
 
+### Where the wall clock actually goes
+
+Measured over the same 400-episode round: 2,522,856 emulated frames took
+570,395 ms of worker time against 578,400 ms of worker capacity (72.3 s × 8).
+
+```text
+per worker            4,423 frames/second = 0.226 ms/frame
+emulation             98.6% of the round's worker capacity
+the scripted driver   the remaining 1.4%, including thread and file overhead
+```
+
+**This substrate is environment-bound, not policy-bound, and by a wide margin.**
+A purpose-built C toy environment reaches ~200M steps/second and its own
+authors conclude that the *policy* is the cap there — a small MLP at roughly
+650k inferences/second. Ours is ~4,200 frames/second per core, so we are
+env-bound by something like **150×** relative to that.
+
+Stated plainly, both halves: that is the price of running the real cartridge —
+their environment has no PPU, no battles, and no game logic — and it means
+**optimising the policy's inference cost here would be wasted effort**. If a
+round needs to be faster, the emulator or the number of cores is the lever.
+
+### One thing this is not a claim to
+
+**Being first.** As of June 2026, community reporting has two people beating
+Pokémon end to end with RL agents, with Peter Whidden confirming it as "beat it
+with caveats" — the stated caveat being that the run skips Lt Surge and Erika
+most of the time — and others past the third gym. Anything citing "no
+open-source model has completed a Pokémon RPG" as an opportunity is out of
+date. *(Community reporting, June 2026; treated as true and attributed.)*
+
+The differentiator here was never priority. It is that a goal is a bit the
+cartridge sets, that `no_memory_writes` is enforced rather than requested, and
+that the same seed gives the same run.
+
 ## 6. Diversity, measured rather than claimed
 
 A corpus of one trajectory replayed teaches nothing, and "we varied the seed"

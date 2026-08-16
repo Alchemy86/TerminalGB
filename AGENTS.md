@@ -7646,3 +7646,121 @@ reports `blip_buf` + first-party `terminalgb-plugin-api`).
   `docs/media/`) and links back here; `docs/swarm-view.md` now links forward. Publishing a null
   model as *the floor* is the point — "our agent reached Viridian City" says very little until
   somebody has measured that undirected walking never does.
+
+## The Pewter chain — fourteen scenarios from a cold cartridge (`scenarios/pewter/`)
+
+**Reader-facing page: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md).** Fourteen
+links from the Nintendo logo to standing in Pewter City, an expert solver
+(`examples/pewter_chain.rs`) that gets through all of them, and the corpus that comes out.
+**Nothing is trained**; the solver is scripted and says so everywhere it is described.
+
+- **Every goal that has an event flag uses the flag, and the ones that do not say why.** Nine of
+  the fourteen milestones have no flag behind them at all and use `wCurMap` — the cartridge's own
+  most exact record of them. Scenarios gained an optional **`evidence`** list naming the address
+  and citation per goal condition; it is additive, so a scenario without it hashes exactly as it
+  did before, and `scenario check` prints `evidence: NONE STATED` when it is missing.
+- **`Watch` gained a `mask`, and it is what makes an event flag expressible.** `wEventFlags`
+  ($D747) is 2,560 bits in 320 bytes, so eight unrelated milestones share `$D74B` — "Oak asked
+  you to choose", "you took a starter", "you fought the rival", "you were given the Pokédex". A
+  byte comparison cannot name one of them (`>= 32` is true for four different reasons). A mask
+  above the bytes the watch reads is **refused where it is written**, not at attempt 1,000.
+- **THE ERROR WORTH KEEPING: the Oak link scored 100% on a task the game does not ask for.** Its
+  first goal was `map=0x28 AND watch:oak_appeared_in_pallet!=0` — a position plus the flag that
+  *arms* the encounter. The cartridge records the milestone itself:
+  `PalletTownDefaultScript` fires on `ld a,[wYCoord] / cp 1 ; is player near north exit?`
+  (and the tiles at x=10,11 rows 0-1 are tileset tile `$52`, the Overworld grass tile), Oak then
+  **escorts** the player, and `OaksLabFollowedOakScript` sets `EVENT_FOLLOWED_OAK_INTO_LAB` when
+  the simulated `PAD_UP` x8 walk finishes. The player never walks to the lab at that point. It
+  was caught by a human reading the results, not by any check we had — which is why `evidence`
+  exists now. The frozen wrong version is at
+  `/home/aaron/pokemon-run-versions/v001-prefix-oak-goal-error/`; **a wrong version is evidence.**
+- **The route came out of a walkability grid built from the cartridge**, not a walkthrough:
+  `maps/<Name>.blk` block ids + the tileset's blockset + its collision list, with the probe on the
+  walk tile's **bottom-left** 8x8 tile (block indices 4, 6, 12, 14). Two findings no guide states:
+  **Route 1 northbound and southbound are different paths** (one-way ledges), and **Route 2's two
+  halves are separate components of the walkable graph** — Viridian Forest is the only way
+  between them. A third from the same grid plus the map's object list: **the forest's three bug
+  catchers are unavoidable**, because blocking their sight cones at 4, 5 and 6 tiles gives no
+  route at any of them.
+- **A REPAIR, AND ITS NUMBER CAME OUT OF THE ROM.** The forest link kept ending in a faint.
+  `BugCatcherData` read from the cartridge gives the forest's rosters as level 6 (Weedle,
+  Caterpie), 7 (Weedle, Kakuna, Weedle) and 9 (Weedle) — six Pokémon, no healing between — so the
+  precondition is a lead above their top level and `11-train-for-the-forest` exists to satisfy
+  `watch:lead_level>=10`. Threshold derived, not chosen.
+- **`tools/gen1-tables/gen1_tables.py` reads the type chart, the wild encounter tables, the base
+  stats, `PokedexOrder` and `MonsterNames` OUT OF THE CARTRIDGE**, located by signature (the same
+  technique `plugins/battle-control/src/wram.rs` uses for WRAM). `PokedexOrder` lands at `$41024`,
+  which is where this file already records it — that agreement is what says the signatures are on
+  the right tables. So *"what beats Rock and where do I get one"* is a query. **Its answer for
+  Brock on Blue is a negative one**: nothing super-effective against Rock is catchable before
+  Pewter (Route 22 in Blue is Rattata/Spearow/Nidoran, not Red's Mankey), so that precondition
+  has to be satisfied at the *starter* — Squirtle is Water, Bulbasaur is Grass.
+
+### Eight things that cost real time, and every one is a general rule
+
+1. **A machine with no APU hangs in the Pokémon Center.** `Gameboy::new` leaves `MMU.sound` at
+   `None`, which is a machine with **no sound chip** rather than a quiet one. The nurse's healing
+   sequence never finishes: the party heals, "OK. We'll need your POKéMON." stays up, and the game
+   accepts no input again — measured, 700 decisions parked at (3,3). Same rule
+   `testharness/testroms.rs` records; `sound::SilentPlayer` costs nothing. **Any harness that
+   builds a `Gameboy` directly must install one.**
+2. **`screen.kind == "text"` blocks movement exactly as `dialogue` does.** A box the script has
+   finished with carries no `▼`, so the observer reports `text` with `waiting_for_input` false —
+   and a solver that reads that as "I may walk" issues walk plans into a box that swallows them.
+   **And the cure needs a bound**: Gen 1 redraws the tilemap when the player *moves*, so pressing
+   A at a finished box never clears it either. Three tries at an unchanged screen, then walk.
+3. **Never navigate a Gen 1 menu with a burst of presses.** `HandleMenuInput` delays several
+   frames after accepting one, so the first of a burst is routinely swallowed and the rest land
+   out of phase. A `down, right, A` run policy opened the party list instead — 2,500 decisions of
+   it. Read the `▶` cursor and press **one key per decision**: a swallowed press simply repeats.
+4. **A heal threshold must BE the fight threshold.** With fighting above half health and healing
+   below a third, the lead settled at 8 of 23 HP — too hurt to fight, not hurt enough to heal —
+   and ran from everything for 2,402 decisions. Any two-sided policy with a gap between its
+   thresholds has a state it cannot leave.
+5. **A waypoint is reached when it is stood on, never "near enough".** One tile of slack broke two
+   links in opposite ways: one parked at (10,2) with Oak's trigger on (10,1), and one oscillated
+   for 430 decisions because Viridian City's row 27 is `#.###.##############` and the waypoint it
+   skipped *was* the gap. A turning point of a BFS path is the alignment tile by construction.
+6. **A stage that ends on a warp tile can never report completion**, because standing on the tile
+   *is* the warp and there is no decision afterwards. Advance a per-map program counter on "was
+   on the last leg", not on "completed", or a two-visit map repeats its first visit for ever.
+7. **A start state captured mid-battle charges the NEXT run with the battle's outcome.** A
+   `battle flee` leg then forfeits at three decisions for a fight it never had.
+   `scenario::run::Battles` primes on its first sample and disowns an inherited battle.
+8. **`seed | 1` collapses half a corpus.** It is `RandomDriver`'s idiom for avoiding a zero state
+   and it maps every even seed onto its odd neighbour — seeds 0 and 1 produced byte-identical
+   recordings, as did 2 and 3, and **no success rate would ever have shown it**. Mix the seed
+   first, then force the low bit. Measuring diversity is what found it.
+
+### Scale, determinism and the bar
+
+- **`pewter_chain corpus` fans out across threads and `verify` proves determinism under it** —
+  the same seeds played serially and in parallel must give identical final-state hashes and frame
+  counts. Measured: 400 attempts at Route 1 in 72.3 s on 8 workers, **5.53 episodes/second** at
+  757% CPU. A run is a function of (entry state, scenario, seed) and nothing else.
+- **Quote a rate with its N and its bound.** By the rule of three, zero failures in N bounds the
+  failure rate at about 3/N, so 400 clean attempts support only ≤0.75% — nine times worse than the
+  99.9% per-link bar, which needs ~3,000. `corpus` prints the bound itself so a "100%" cannot be
+  quoted without it.
+- **Diversity is measured, not asserted**: 390 distinct end states of 400, 344 distinct routes by
+  the set of tiles stood on, mean pairwise Jaccard 0.699.
+  `tools/pewter-chain/corpus_report.py` reports it and draws heat maps over PixelGB's map art,
+  weighted by **frames** rather than steps so a corner the solver hesitates at is visibly hotter.
+- **A film is sampled, and the ratio is derived from the emulated time it covers**, never picked —
+  a chain is tens of emulated minutes and compositing every frame gives a film that plays at real
+  time and is dull. `tools/pewter-chain/swarm_film.py` prints the ratio it chose. **Watch the file
+  before shipping it.**
+- **`pewter_chain sprites` reads the player's own overworld sprite out of OAM and VRAM** (tiles
+  from `$8000 + 16 * tile`, palette `OBP0`, colour index 0 transparent by the hardware's own
+  rule), so a swarm film draws the game's character rather than a dot. `wWalkCounter` ($CFC5)
+  counts 7 down to 0 across a 16 px step, which is 2 px a frame and is what makes the motion
+  continuous instead of snapping.
+
+### Two map names in the shipped table were wrong
+
+`$33` was labelled "Pewter Pokémon Center" and is **VIRIDIAN_FOREST**; `$3B` was labelled
+"Viridian Forest" and is **MT_MOON_1F**. The name goes to the agent in its snapshot and into every
+report, so a run that crossed the forest said it was in a Pokémon Center. Fixed in
+`plugins/agent/src/observe.rs` with `every_named_map_is_the_map_the_cartridge_says_it_is` pinning
+the whole table against `constants/map_constants.asm`'s const-list indices. **An unnamed map is
+honest; a wrongly named one is not.**

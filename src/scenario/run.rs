@@ -192,6 +192,10 @@ pub struct ScenarioRun {
     /// there before.
     guidance_file: Option<PathBuf>,
     track: bool,
+    /// A raw video sink fed from the **emulated** frame, not from a draw.
+    /// Headless there is no draw at all, and the point of a film of a solved
+    /// scenario is that every emulated frame is in it.
+    video: Option<crate::video::VideoOut>,
 }
 
 impl ScenarioRun {
@@ -245,7 +249,14 @@ impl ScenarioRun {
             pace_while_thinking: false,
             guidance_file,
             track: false,
+            video: None,
         })
+    }
+
+    /// Stream every emulated frame to a raw video sink.
+    pub fn filming(mut self, v: crate::video::VideoOut) -> Self {
+        self.video = Some(v);
+        self
     }
 
     /// Record the player's position on every frame. See [`RunResult::path`].
@@ -358,6 +369,10 @@ impl ScenarioRun {
             frames += 1;
             if self.track {
                 path.push(self.point(frames as u32));
+            }
+            if let Some(v) = &mut self.video {
+                let img = self.gb.image();
+                v.frame(&img, 160, 144, Instant::now());
             }
             if self.pace_while_thinking && self.thinking() {
                 let now = Instant::now();

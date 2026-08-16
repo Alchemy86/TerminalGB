@@ -52,6 +52,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use terminalgb::gameboy::Gameboy;
+use terminalgb::plugin::Capability as Cap;
 use terminalgb::scenario::record::Recording;
 use terminalgb::scenario::run::ScenarioRun;
 use terminalgb::scenario::Scenario;
@@ -1249,6 +1250,15 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       --start-dir D a pool of entry states; a seed takes `seed % pool`
       --paths       also write where the player was, per frame, per run
 
+  film --rom R --agents N [--out DIR] [--workers N]
+      Play the WHOLE chain once per agent, each agent carrying its own exit
+      state forward, and write one continuous per-frame position track each.
+      An agent that fails a link stops there, which is the honest picture.
+
+  sprites --rom R --start FILE --out DIR
+      Read the player's own overworld sprite out of OAM and VRAM, four
+      facings, as transparent PNGs. Game art: write it outside the repository.
+
   verify --rom R --scenario S [--start FILE] [--runs N] [--primitive]
       Play the same seeds serially and in parallel and require identical
       final states. Determinism outranks everything else in flight.
@@ -1357,6 +1367,12 @@ struct Outcome {
     path: Vec<terminalgb::scenario::run::PathPoint>,
 }
 
+/// Play one attempt.
+///
+/// Eight arguments, and they stay eight: the alternative is a struct whose
+/// fields are set positionally at the call site anyway, and every one of these
+/// is named at every call.
+#[allow(clippy::too_many_arguments)]
 fn play(
     rom: &Path,
     scenario_path: &Path,
@@ -1437,6 +1453,8 @@ fn main() {
         "chain" => cmd_chain(&a),
         "corpus" => cmd_corpus(&a),
         "verify" => cmd_verify(&a),
+        "sprites" => cmd_sprites(&a),
+        "film" => cmd_film(&a),
         "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
             eprintln!("unknown subcommand {other:?}\n\n{USAGE}");
@@ -1750,7 +1768,11 @@ fn cmd_corpus(a: &Args) {
         .iter()
         .filter(|(_, r)| r.contains("\"goal\":true"))
         .count();
-    let index: String = rows.iter().map(|(_, r)| format!("{r}\n")).collect();
+    let mut index = String::new();
+    for (_, r) in &rows {
+        index.push_str(r);
+        index.push('\n');
+    }
     std::fs::write(out.join("index.ndjson"), &index).expect("write the index");
 
     let secs = t.elapsed().as_millis() as f64 / 1000.0;
@@ -1875,6 +1897,217 @@ fn cmd_verify(a: &Args) {
         eprintln!("\n{bad} seed(s) DIFFER. Determinism is broken; nothing else matters.");
         exit(1);
     }
+}
+
+/// The player's own overworld sprite, read out of the running machine.
+///
+/// **Not drawn, not vendored, not guessed.** Gen 1 puts the player in OAM
+/// slots 0-3 as four 8x8 tiles around screen (64,64); the tile numbers are in
+/// OAM, the pixels are in VRAM at `$8000 + 16 * tile`, and the sprite palette
+/// is `OBP0` at `$FF48`. Colour index 0 of a sprite is transparent, which is
+/// what makes the cut-out exact rather than a colour key — the same reasoning
+/// the trainer panel's flood fill uses for a Pokémon.
+///
+/// The facing byte is `wSpritePlayerStateData1FacingDirection` ($C109): 0 down,
+/// 4 up, 8 left, 12 right. Right is the mirror of left, which is why the game
+/// stores three and flips one, and why this writes what it finds rather than
+/// assuming four distinct pictures exist.
+fn cmd_sprites(a: &Args) {
+    let rom = need_rom(a);
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/pewter-chain/sprites"));
+    std::fs::create_dir_all(&out).expect("output directory");
+    let staged = stage_rom(&rom, &out);
+    let data = std::fs::read(&staged).expect("read staged cartridge");
+    let mut gb = Gameboy::new(data, Some(staged));
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+    let start = a.start.as_ref().unwrap_or_else(|| {
+        eprintln!("sprites needs --start FILE (a state standing in the overworld)");
+        exit(2);
+    });
+    let bytes = std::fs::read(start).expect("start state");
+    gb.load_state(&bytes).expect("load the start state");
+
+    // Face each way in turn and grab what the machine draws. A press in a
+    // direction you are not facing only turns you, which is exactly what is
+    // wanted here.
+    for (name, key) in [
+        ("down", terminalgb_plugin_api::KeypadKey::Down),
+        ("up", terminalgb_plugin_api::KeypadKey::Up),
+        ("left", terminalgb_plugin_api::KeypadKey::Left),
+        ("right", terminalgb_plugin_api::KeypadKey::Right),
+    ] {
+        // Two taps: a press in a direction you are not facing only turns
+        // you, and the second one is what makes the turn stick when the tile
+        // ahead is walkable and the first press stepped instead.
+        for _ in 0..2 {
+            gb.queue_press(key, 16, 8);
+        }
+        for _ in 0..60 {
+            gb.frame();
+        }
+        let (facing, px) = gb.with_machine(Cap::OBSERVE | Cap::READ_MEMORY, |m| {
+            (m.peek(0xC109).unwrap_or(0), player_sprite(m))
+        });
+        let path = out.join(format!("player-{name}-f{facing}.png"));
+        write_rgba(&path, 16, 16, &px);
+        println!("{} facing {facing} -> {}", name, path.display());
+    }
+}
+
+/// OAM slots 0-3, laid out as a 16x16 RGBA cut-out with colour 0 transparent.
+fn player_sprite(m: &mut terminalgb_plugin_api::Machine) -> Vec<u8> {
+    let obp0 = m.peek(0xFF48).unwrap_or(0xE4);
+    let shade = |i: u8| -> u8 {
+        match (obp0 >> (2 * i)) & 3 {
+            0 => 255,
+            1 => 192,
+            2 => 96,
+            _ => 0,
+        }
+    };
+    let mut out = vec![0u8; 16 * 16 * 4];
+    // The four slots' screen origin is the minimum of their own coordinates,
+    // so the cut-out is aligned however the game happens to have placed them.
+    let mut ent = Vec::new();
+    for slot in 0..4u16 {
+        let b = 0xFE00 + slot * 4;
+        ent.push((
+            m.peek(b).unwrap_or(0) as i32 - 16,
+            m.peek(b + 1).unwrap_or(0) as i32 - 8,
+            m.peek(b + 2).unwrap_or(0),
+            m.peek(b + 3).unwrap_or(0),
+        ));
+    }
+    let oy = ent.iter().map(|e| e.0).min().unwrap_or(0);
+    let ox = ent.iter().map(|e| e.1).min().unwrap_or(0);
+    for (sy, sx, tile, attr) in ent {
+        let base = 0x8000 + 16 * tile as u16;
+        for row in 0..8u16 {
+            let lo = m.peek(base + 2 * row).unwrap_or(0);
+            let hi = m.peek(base + 2 * row + 1).unwrap_or(0);
+            for col in 0..8u16 {
+                let bit = 7 - col;
+                let c = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
+                if c == 0 {
+                    continue; // transparent, by the hardware's own rule
+                }
+                let (mut dx, mut dy) = (col as i32, row as i32);
+                if attr & 0x20 != 0 {
+                    dx = 7 - dx;
+                }
+                if attr & 0x40 != 0 {
+                    dy = 7 - dy;
+                }
+                let (px, py) = (sx - ox + dx, sy - oy + dy);
+                if !(0..16).contains(&px) || !(0..16).contains(&py) {
+                    continue;
+                }
+                let g = shade(c);
+                let o = ((py * 16 + px) * 4) as usize;
+                out[o] = g;
+                out[o + 1] = g;
+                out[o + 2] = g;
+                out[o + 3] = 255;
+            }
+        }
+    }
+    out
+}
+
+/// A minimal RGBA PNG, using the encoder the terminal transport already has.
+fn write_rgba(path: &Path, w: usize, h: usize, rgba: &[u8]) {
+    let mut png = Vec::new();
+    terminalgb::termimage::png_into(rgba, w as u32, h as u32, &mut png);
+    let _ = std::fs::write(path, png);
+}
+
+/// One agent plays the whole chain, and its track is continuous.
+///
+/// **Not one film per link.** A link is eight steps of a bedroom; a chain is
+/// Pallet to Pewter, and only the second is worth watching. Each agent carries
+/// its *own* exit state from link to link rather than a shared one, so the
+/// agents diverge for the same reason a swarm does and the divergence is the
+/// picture.
+fn cmd_film(a: &Args) {
+    let rom = need_rom(a);
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/pewter-chain/film"));
+    std::fs::create_dir_all(&out).expect("output directory");
+    let files = chain_files();
+    let agents = a.runs.max(1);
+    let workers = a.workers.max(1);
+    println!(
+        "{agents} agent(s) over {} link(s), {workers} worker(s)",
+        files.len()
+    );
+
+    let t = std::time::Instant::now();
+    let next = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let done =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u32, usize, u64)>::new()));
+    std::thread::scope(|sc| {
+        for _ in 0..workers {
+            let (next, done) = (next.clone(), done.clone());
+            let (rom, out, files) = (rom.clone(), out.clone(), files.clone());
+            let primitive = a.primitive;
+            sc.spawn(move || loop {
+                let ag = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if ag >= agents {
+                    break;
+                }
+                let seed = 1 + ag as u64;
+                let dir = out.join(format!("w{ag}"));
+                let mut carried: Option<Vec<u8>> = None;
+                let mut track: Vec<terminalgb::scenario::run::PathPoint> = Vec::new();
+                let mut base = 0u32;
+                let mut reached = 0usize;
+                for (n, f) in files.iter().enumerate() {
+                    let sp = PathBuf::from(f);
+                    let o = play(
+                        &rom,
+                        &sp,
+                        carried.clone(),
+                        seed,
+                        &dir,
+                        true,
+                        primitive,
+                        true,
+                    );
+                    for mut p in o.path {
+                        p.frame += base;
+                        track.push(p);
+                    }
+                    base = track.last().map(|p| p.frame).unwrap_or(base);
+                    if !o.goal {
+                        break;
+                    }
+                    reached = n + 1;
+                    carried = Some(o.state);
+                }
+                write_path(&out.join(format!("agent-{ag:02}.csv")), &track);
+                let _ = std::fs::remove_dir_all(&dir);
+                done.lock().unwrap().push((ag, reached, base as u64));
+            });
+        }
+    });
+    let mut rows = done.lock().unwrap().clone();
+    rows.sort();
+    for (ag, reached, frames) in &rows {
+        println!(
+            "agent {ag:2} reached link {reached:2} of {} ({frames} frames)",
+            files.len()
+        );
+    }
+    let full = rows.iter().filter(|r| r.1 == files.len()).count();
+    println!(
+        "{full} of {agents} agent(s) finished the chain; {:.1} s wall",
+        t.elapsed().as_millis() as f64 / 1000.0
+    );
 }
 
 fn chain_files() -> Vec<String> {
