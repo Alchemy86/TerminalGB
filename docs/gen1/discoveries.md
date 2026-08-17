@@ -56,6 +56,7 @@ correct its body and say so in it — that is what the "our own belief" rows bel
 | [two map names in our own table were wrong](#two-map-names-in-our-own-table-were-wrong) | an agent was told it was in a Pokémon Center | **our own belief** | [`wCurMap`][wCurMap] |
 | [a screen does not survive a switch](#a-screen-does-not-survive-a-switch) | our battle engine had a Gen 3 rule in it | **our own belief** | [`wPlayerBattleStatus3`][wPlayerBattleStatus3] |
 | [a cartridge can tell there is no sound chip](#a-cartridge-can-tell-there-is-no-sound-chip) | the nurse's healing sequence never finishes | emulator | — |
+| [the learnset table is indexed by internal number, not by dex number](#the-learnset-table-is-indexed-by-internal-number-not-by-dex-number) | reading the first 151 slots loses all three starters | cartridge mechanic | — |
 | [a link that scored 100 per cent on the wrong task](#a-link-that-scored-100-per-cent-on-the-wrong-task) | a goal authored from a plausible idea | **our own belief** | — |
 | [the silent dead band](#the-silent-dead-band) | two components deciding the same thing | **our own belief** | — |
 
@@ -995,6 +996,78 @@ back spins for ever. `sound::SilentPlayer` is the fix and it costs nothing.
 machine without an APU* — restated by an entirely different consumer. The emulator's own test-ROM
 harness had learned it long before the Gen 1 work rediscovered it, which is worth noting on its
 own: **a rule written down in one harness does not reach the next one.**
+
+---
+
+## Reading the cartridge's own tables
+
+### The learnset table is indexed by internal number, not by dex number
+
+**Kind: a cartridge mechanic, and the trap it sets for every reader of it.**
+
+**What it is.** `EvosMovesPointerTable` has **190 slots**, and they are indexed by a species'
+*internal* index — the number the engine uses on the bus — not by its Pokédex number. Internal
+index 1 is **RHYDON**, not BULBASAUR. 39 of the 190 slots belong to no species at all; the table
+that says which is `PokedexOrder`, and a zero there is what everybody calls MissingNo.
+
+So there are two ways to get this wrong and they are not the same mistake. Reading *190* slots is
+fine. Reading *the first 151* is not — and it is the one that looks right.
+
+**How it showed up.** It has now bitten more than once, most recently firstmate itself, reading
+the first 151 pointers and reporting **580 level-up learn entries and 56 evolutions** for the
+cartridge. Both numbers parse cleanly, both are plausible, and both are wrong: the true figures
+are **728** and **72**. Nothing about the shape of the answer says so.
+
+**What is actually happening**, measured on the retail cartridge:
+
+| read | learn entries | evolutions | by level | by stone | by trade |
+|---|---:|---:|---:|---:|---:|
+| the first 151 slots | 580 | 56 | 40 | 12 | 4 |
+| `PokedexOrder`-filtered, the 151 real species | **728** | **72** | **52** | **16** | **4** |
+| all 190 slots, unfiltered | 728 | 72 | 52 | 16 | 4 |
+
+The third row is the part that names the mistake precisely. **Every one of the 39 MissingNo slots
+has its own distinct pointer and every one of those records is empty** — no evolution bytes, no
+learnset — so walking all 190 gives exactly the right totals. The error is not reading too many
+slots. It is reading *the wrong 151*.
+
+**And what the wrong 151 loses is not a fringe.** 27 real species sit at an internal index above
+151, and the first 151 slots contain 27 MissingNo in their place. Among the 27 lost:
+**BULBASAUR (internal 153), CHARMANDER (176) and SQUIRTLE (177)** — all three starters and their
+whole evolution lines, plus ODDISH, BELLSPROUT, RATTATA, GEODUDE, PONYTA, AERODACTYL and PORYGON.
+A drill built on the naive read would report that Charmander learns nothing at all, ever.
+
+**The check that catches it.** Gen 1 has **16 stone evolutions**. The naive read produces 12, and
+that is the discriminating number. **Trade evolutions are not a check** — there are 4, and the
+wrong read also produces 4, because all four (KADABRA, MACHOKE, GRAVELER, HAUNTER) happen to sit
+below internal index 152. A check built on the trade count alone would have passed.
+
+**The memory.** None — this is ROM. `EvosMovesPointerTable` is located by property rather than by
+a remembered address (`tools/gen1-tables/gen1_tables.py`, `EvosMoves`): the only offset whose 190
+consecutive little-endian words all land in `$4000-$7FFF` *and* whose BULBASAUR slot dereferences
+to that species' known first evolution bytes. `PokedexOrder` is found the same way and is at
+`$41024` on this cartridge.
+
+**Evidence.** Reproduce both rows of the table in one command — the tool prints the correct
+figures and the constants it used, so a disagreement is visible rather than silent:
+
+```sh
+python3 tools/gen1-tables/learn_table.py --rom "$ROM"
+#   level-up learn entries, all told   728
+#   evolution entries                  72   52 by level, 16 by stone, 4 by trade
+```
+
+The same trap is recorded from the consuming side in
+[learning moves](learning-moves.md) and [the battle engine](battle-engine.md); this entry is here
+because those are pages you read once you already know the subject, and this is a number somebody
+computes on their way in.
+
+**An open question, not work in progress.** Nobody here has looked at what is *in* the 39 zero
+slots. They are empty in the evolution and learnset table, but that is one table of many, and the
+same 39 indices are what the community's MissingNo folklore is built on. **What those records
+contain across the cartridge's other tables, and whether any of it is reachable or interesting,
+is its own subject and is deliberately not started.** Recording it here so it is a question with
+a home rather than a rumour.
 
 ---
 
