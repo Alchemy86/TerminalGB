@@ -4703,6 +4703,289 @@ right page for *why* — it is task-shaped and explains mechanisms. The atlas is
   starts from a save, fights something and opens the storage system would move them from "no
   evidence" to observed. The machinery exists; only the script is missing.
 
+## The TEST RIG — one command, two players, the same fight (`pewter_chain ab`)
+
+**Reader-facing page: [`docs/agent/test-rig.md`](docs/agent/test-rig.md); the
+measured first result: [`docs/agent/test-rig-results.md`](docs/agent/test-rig-results.md).**
+Reusable half `examples/support/abrig.rs` (pure, unit-tested, no cartridge);
+front end `cmd_ab`/`cmd_abfilm` in `examples/pewter_chain.rs`; host-side battle
+observation `scenario::run::{Battles, BattleSummary}`.
+
+- **THE POINT IS THE INSTRUMENT, NOT THE FIRST ANSWER.** Every number this
+  project has published — the four-emulator conformance score, 81-84 % damage
+  agreement, the null ablations, fourteen certified links — came from code
+  written once and left behind, so **no two claims are strictly comparable,
+  nothing is re-runnable by somebody who was not there, and every new question
+  cost a new harness**. This is the harness once, with the question as a
+  `gbtestrig/1` plan file. A committed plan is a test somebody else can re-run.
+- **AN ARM IS A DRIVER AND NOTHING ELSE.** `play_with` is `play` with the
+  driver lifted out, so the entry state, phase offset, scenario, referee,
+  sampling clock and battle bookkeeping are **literally the same code** for
+  every player. A comparison whose two halves ran through different harnesses is
+  not a comparison, and one code path is the only cheap guarantee.
+- **THE ARMS ARE PAIRED, SO THE TEST IS McNEMAR'S, NOT TWO PROPORTIONS.** Which
+  entry state, which driver seed and which phase offset are all functions of the
+  seed alone, so two arms at seed N play the same fight. **A gap between arms
+  that did not play the same seeds is REFUSED, never approximated by an unpaired
+  comparison** — the pairing is the whole design and silently dropping it
+  produces a number that looks the same and means something else.
+- **`sqrt(b+c)/n`, NOT the maximum-likelihood `(b + c − (b−c)²/n)/n²`.** The
+  corrected form degenerates to **zero** when every discordant pair falls the
+  same way, so two attempts print a hundred-point gap with a zero-width
+  interval — certainty manufactured from an artefact. The conventional McNemar
+  error is slightly conservative and cannot do that. Consequence to expect: a
+  gap interval may exceed 100 points at the boundary.
+- **Wilson, never the normal approximation.** At a rate near 1.0 the normal one
+  puts the upper bound above 100 %, and at a rate of 0 it returns `[0,0]` —
+  certainty from no evidence. Both boundaries are pinned by tests, one of them
+  against this project's own published 2999/3000.
+- **SUBJECTS ARE NEVER AVERAGED, and when there are two the rig tests whether
+  the GAPS differ.** Pooling two fights with different ceilings is a number
+  about the mixture and about neither fight. Same gap on both ⇒ the distillation
+  is subject-independent and the fights merely have different ceilings; the gap
+  itself moving ⇒ something subject-specific in the player. Two subjects are
+  independent samples so the difference of their paired gaps has variance equal
+  to the sum, and **the report says plainly when the sample cannot separate
+  them** rather than picking the flattering reading.
+- **A PLAN WITHOUT A `split` IS REFUSED.** `seen` (trained on this fight —
+  measures distillation quality, NOT generalisation), `unseen` (trained
+  elsewhere — measures whether it learned to battle or memorised a fight),
+  `n/a` (no trained player). Printed in capitals at the top of every report,
+  because a `seen` number quoted as generalisation is the worst thing this rig
+  could produce. **Nothing in the published literature runs the `unseen`
+  control**: the competition benchmark is a fixed route, so a memoriser and a
+  battler score identically there and the question never arises.
+
+### THE MEASURED EVENT FOR MOVE LEARNING IS A PROMPT, AND THE CORPUS CONTRACT IS TWO FILES
+
+**The rig's subject is level-up move learning, not battles.** A level-up prompt
+is a *closed* problem — `docs/gen1/learning-moves.md` enumerates 840 distinct
+decisions across 151 species — so it has one right answer per case, which is
+exactly what a distillation can be scored on. The unit is a **prompt**: what was
+held, what was offered, what each player did, and whether they agree.
+
+- **A producer owes the rig two files per prompt and nothing else**: a
+  `<pool>/NNNNN.gbss` save state, and beside it a `gbtestprompt/1`
+  `<pool>/NNNNN.expect.json` naming `correct_moves`. The state→action training
+  corpus never touches the rig. That division is deliberate — a rig that also
+  knew about corpus formats would need changing every time one did.
+- **What a player chose is read off the party it left behind**
+  (`wPartyMon1Moves`, via the `lead_move1..4` named watches), so nothing is
+  inferred from a recording and every player is scored identically. One machine
+  per attempt, no emulated frames.
+- **SLOT ORDER IS PART OF THE ANSWER.** Gen 1 replaces a forgotten move in
+  place, so a set comparison would score a wrong choice as right whenever the
+  multiset matched. Pinned by
+  `a_prompt_is_answered_in_slot_order_not_as_a_set`.
+- **AGREEING WITH THE TEACHER AND BEING RIGHT ARE DIFFERENT QUESTIONS, and the
+  report carries both.** Two players can each be wrong *and wrong the same way* —
+  a student that faithfully learnt its teacher's mistake, which is a success for
+  the distillation and a failure for the criterion, and is invisible in a
+  correctness column alone. `Cell::agreement`,
+  `agreeing_with_the_teacher_is_not_the_same_as_being_right`.
+- **An entry with no expectation beside it is in NEITHER column.** A pool that
+  is half annotated measures its annotated half rather than marking the rest
+  wrong.
+- **A species difference cannot come from the decision itself.** Of the 840
+  decisions there are 581 distinct (four held, offered) pairs and the number
+  whose answer differs by species is **zero**, so a student that does better on
+  one starter is not doing so because of the move-learning decision. Say that
+  rather than letting a reader infer a skill the task does not contain.
+- Per-attempt rows go to `<out>/<subject>-<arm>/attempts.ndjson` with the four
+  moves each attempt left. **A summary cannot be debugged**: when a prompt
+  scores wrong the only useful question is which four moves the player chose.
+
+### IT SAYS HOW FAR IT HAS GOT, BY DEFAULT — and where the wall clock went
+
+- **Progress to stderr every 5 s, plus the same tick in `<out>/progress.ndjson`.**
+  On by default with `--quiet` to silence it, never a flag to enable it: a run
+  that prints nothing until it finishes cannot be told from a wedged one, and an
+  hour went on checking process tables for exactly that reason. stdout stays the
+  report; the file is written whether or not the human line is.
+- **`WHERE THE WALL CLOCK WENT` splits an arm's attempts into emulating, setup
+  and the rest**, because a rig like this is worth having only if it is fast and
+  somebody has to know which part to attack. `setup` is the per-attempt tax an
+  *episode* pays — machine, phase offset, start state — and is the number that
+  decides whether short episodes are affordable. Measured on a short link:
+  **89.6 % emulating / 10.2 % setup for an expert attempt, 97.1 % / 2.7 %
+  overall.**
+- **THE REMAINDER IS NOT THE PLAYER'S THINK TIME AND READING IT AS SUCH IS THE
+  TRAP.** The emulator never blocks on a driver, so a subprocess arm's
+  spawn-and-decide happens while the machine keeps running and is charged to
+  `emulating`. **A slow player shows up as more FRAMES per attempt**, which is
+  why the frame count sits in the table beside the shares.
+
+### THE PASS RATE IS BLIND TO THE FIGHT UNDER IT — found on a BATTLE run, which is not the deliverable
+
+- Link 05's goal is that the rival battle **happened**: `HandlePlayerBlackOut`
+  special-cases it (`cp OPP_RIVAL1` … `cp OAKS_LAB / ret z`) and
+  `OaksLabRivalEndBattleScript` sets the flag whoever won. So the expert passes
+  **300/300 with every starter** while *losing* that battle at very different
+  rates. A rig reporting only the goal would have said the three starters were
+  identical. Hence `abrig::Outcome`: goal **and** battle-won, each with its own
+  rate, interval and paired gap. **`Outcome::BattleWon` is `None` for an attempt
+  that never fought** — "did not fight" is not "lost" — and those attempts are
+  dropped from the pairing rather than counted as failures.
+- The battle column **independently reproduces a figure this project already
+  had** (900 certified exits: Squirtle 14.7 %, Charmander 23.0 %, Bulbasaur
+  54.0 % lost, because Bulbasaur draws Charmander, faster at every level).
+  Two independent measurements agreeing is the check; disagreeing would have
+  been the finding.
+
+### `RunResult::battles` is HOST-side, and that is what makes any arm scoreable
+
+- **The battle numbers this project published came from `ChainDriver`'s own
+  bookkeeping, which only the scripted expert can produce** — so a comparison
+  against anything else had no battle column at all. `scenario::run::Battles`
+  already observed win/fled/lost host-side for the referee; it now also carries
+  wild/trainer, frames in battle and the lead's HP at each ending, and is
+  exposed as `RunResult::battles`. Read on the run's own sampling clock through
+  named watches, so every player produces it by the same work.
+- Driver-side bookkeeping keeps its place — it can see *why* a move was chosen,
+  which nothing outside the driver can — but **only host-side numbers are
+  comparable between players**.
+- **`wIsInBattle` is a RAW BYTE and `$FF` means blacked out, not fighting.**
+  Third time this repository has been bitten by a catch-all over that byte (the
+  first was `plugins/trainer/src/encounter.rs`, which drew a whole stale battle
+  panel in the overworld). Pinned by `a_blackout_sentinel_is_not_a_battle`.
+  **This byte also feeds the REFEREE** (`Observed::battles_won`/`battles_fled`,
+  and so the `battle flee|fight` rules), so the fix was checked to be
+  verdict-neutral rather than assumed to be: `$FF` is written inside
+  `.allPokemonFainted`, which runs with the party already at zero HP, so a
+  sample landing on it ends the battle as `lost` under both the old `!= 0` test
+  and the new one — the old test merely deferred the same verdict by a sample.
+  The empirical check is the host-versus-driver agreement below, which is exact
+  on a link whose battles are trainer battles.
+- New named watch `lead_species` (`tr::PARTY_MONS`, the **internal** index).
+  Verified against the cartridge rather than recalled: 176 CHARMANDER, 153
+  BULBASAUR, 177 SQUIRTLE, and `RomTables::species_name` is the only thing that
+  turns one into a name — no species table is written down anywhere here.
+
+### A PLAYER THAT LOOKS AT THE SCREEN MUST BE GIVEN ONE
+
+- **The snapshot has always been able to carry the frame** (`Config::frame_capture`
+  → `frame_png`), and `pewter_chain` never set it *and* switched pixels off via
+  `ScenarioRun::collecting`. A machine that is not drawing hands a screen-only
+  policy whatever was last in the buffer, which is not a failure any rate would
+  explain. The pixel skip is now conditional on nobody wanting the picture and
+  **the arm that wants it pays for it**, per worker so two threads cannot
+  overwrite each other's frame. Verified end to end: a subprocess arm receives a
+  real 160×144, 4-shade, 130-distinct-byte PNG of the live frame.
+- **That is the piece TerminalGB lacked for the student**, and it is why the
+  `command` arm is the whole integration surface — the student must not be
+  copied into this repository.
+
+### WHERE THE RIG BELONGS — AgentGB owns the student, and the two harnesses differ
+
+- **The trained network lives in AgentGB** (`/home/aaron/Github/firstmate/projects/agentgb`,
+  `agentgb evaluate`, `src/agentgb/convnet.py`), which already depends on
+  TerminalGB as its environment — it drives `terminalgb-mcp` over JSON-RPC
+  (`src/agentgb/mcp.py`, a deliberate *copy* of `tools/agent-docs/gb_env.py`'s
+  shape so AgentGB needs no TerminalGB checkout) — and already has the shape of
+  this comparison in `src/agentgb/baselines.py`: teacher, random, open-loop and
+  student on the same starts.
+- **The difficulty is that they are two harnesses.** AgentGB's `LinkEnv` presses
+  buttons over MCP with its own settle frames, press timing and goal judgement;
+  `ScenarioRun` has its own sampling clock, referee and budget. So one of them
+  must be *the* harness. Two workable arrangements: **(1) the student comes here
+  as a `command` arm** — landed, and needs nothing further from either side; or
+  **(2) the teacher goes there**, which needs the piece TerminalGB still owes:
+  AgentGB's own teacher is a *navigator* (`src/agentgb/expert.py`, shortest path
+  over a walked graph) and its `battle.py` only *detects* battles, so it has no
+  move-choosing policy at all. **TerminalGB owns the battle brain
+  (`plugins/agent/src/battle.rs`) and it is reachable only from a Rust plugin
+  inside the emulator.** Making it callable from outside — "what would the expert
+  do in this battle?" — is that owed piece, and it is also what AgentGB needs to
+  label battle states for a DAgger round.
+
+### The side-by-side cut (`pewter_chain abfilm`)
+
+- **The swarm compositor is deliberately NOT reused.** `examples/swarm_view.rs`
+  draws agents on the world atlas from position tracks, which is right for six
+  hundred agents crossing Kanto and wrong for a battle: a battle has no map
+  position, so every agent is a motionless dot. A fight needs the framebuffer.
+- Each arm plays **one** attempt at the same seed from the same entry state with
+  pixels on, streaming to a raw RGBA file through the existing
+  `ScenarioRun::filming` sink at `Pace::Emulated` (so the cut is a function of
+  the run, not of how busy the box was); the panes are composed left to right at
+  integer zoom with `video::card::Canvas` for the captions. It reads instantly:
+  in the first cut the teacher had finished, `mash-a` was standing in the lab
+  and `random` had stumbled into the battle — a judgement no table supports.
+- **The stride is derived from the emulated time to cover and ROUNDED UP**, and
+  the ratio is printed. The arms differ in length by an order of magnitude here
+  (6,558 frames against 79,669), so a fixed stride gives a five-minute film of
+  one arm flailing, and flooring loses the ending.
+- **A short arm is held on its last frame, never blanked** — they do not finish
+  together, and an emptying panel reads as a crash rather than as "finished
+  first", which is the opposite of what happened.
+- **Captions shorten through complete forms and are never clipped** (`fit_caption`,
+  the `fit_bar` rule) — the first cut printed `250 DECISIO`, and a truncated
+  measurement is worse than none because a reader cannot tell it was cut.
+
+### THE HOST-SIDE SUMMARY REPRODUCES THE DRIVER-SIDE TALLY EXACTLY — check it, do not assume it
+
+On the same 60 seeds of link 05, `ab` reports **60 battles, 42 won, 18 lost,
+28.9 % HP left** and `corpus`'s `ChainDriver` tally reports *"battles 60: won 42
+(70.0 %), lost 18 (30.0 %) … 28.9 % of max"* — **identical on every field**.
+That agreement is the whole warrant for the new observer: it measures the same
+thing the project already trusts, while being available to a player that is not
+the expert. **Re-run that comparison after touching `Battles`** — it is one
+`ab` and one `corpus` at the same `--runs`, `--seed0` and `--idle-spread`, and
+it is the cheapest possible check that the two have not drifted.
+
+### THE PUBLISHED CHARMANDER LOSS RATE NO LONGER DESCRIBES THE EXPERT
+
+`docs/agent/pewter-chain.md` records link 05's loss rates over 900 certified
+exits as SQUIRTLE 14.7 %, CHARMANDER 23.0 %, BULBASAUR 54.0 %. Measured through
+the rig on 300 attempts each: **14.0 %, 5.7 %, 48.3 %** — two agree closely and
+**Charmander does not, by seventeen points**.
+
+- **The cause is measured, not guessed: the expert fights differently now.** A
+  link-05 corpus today spends **49 stat-lowering turns across 60 battles**, i.e.
+  roughly one turn in eight on GROWL. That rule landed with the shared battle
+  policy *after* the certification the published table came from, along with the
+  crit-aware faint rule and the accuracy-stage scaling. Lowering the opponent's
+  Attack helps a glass cannon most, and Charmander is the glass cannon — 39 HP
+  and Defense 43 against Squirtle's Attack 48, with Speed 65 against 43 buying
+  the extra turns to spend it.
+- **Settling it is a RE-CERTIFICATION of link 05 and belongs to the chain crew**,
+  under that page's own standing rule that changing shared driver code
+  invalidates every link already certified. What the rig establishes is that the
+  published figure is stale and that the two rates which still agree are evidence
+  the disagreement is real rather than a harness difference.
+- **The general lesson, and this project keeps re-learning it:** a measured
+  number is true of the code that produced it. Two independent measurements
+  agreeing is the check; when they disagree, that *is* the finding, and taking
+  the flattering one would have shipped a stale figure as a current one.
+
+### Running it, and two things that cost time
+
+- Entry states come from `corpus --exits N` chained through the earlier links:
+  **700 exits through links 01-04 in 2 m 27 s** at ten workers, 700/700 each,
+  splitting 234/233/233 by starter because link 04's ball is `6 + seed % 3`.
+- **Reading a lead species out of a state costs one machine and no emulated
+  frames** — the state carries the party. That is the whole of "a different
+  starter is a flag rather than a rewrite".
+- **A subprocess arm is the expensive one by a wide margin**: one process per
+  decision times a 250-call budget times the attempts. On this box the two
+  screen-blind arms are most of the wall clock while the expert finishes in ~66
+  decisions. Budget for it, and do not read a slow cell as a bug.
+- **USE `pgrep -a`, NOT `ps | grep`, TO ASK WHETHER A BACKGROUND RUN IS ALIVE
+  HERE.** `ps -eo pid,args | grep pewter` returned *nothing* for a process that
+  `pgrep -a` listed seconds later, twice, which read as "the run died" — and
+  acting on it cost a healthy 25-minute run that was killed and restarted for no
+  reason. The standing `pkill -f`/`pgrep -f` warning is about matching your own
+  shell; this is the opposite failure and it is worse, because a false negative
+  makes you destroy something.
+- **`VAR=value cmd "$VAR"` PASSES THE OLD VALUE.** A prefix assignment applies to
+  the command's environment, not to the expansion of its own arguments, so
+  `ROM=... prog --rom "$ROM"` launched with an **empty** ROM path and died
+  instantly with `cannot read : No such file or directory`. `export` on its own
+  line, then launch.
+- **`--out` defaults under `target/`, and the film's raw streams are large**
+  (160×144×4 per frame, ~4.6 MB per thousand frames per arm). Nothing here is
+  committed; the plan file and the report are.
+
 ## Catching — the gate, the discriminator, and the ball (`plugins/agent/src/catch.rs`)
 
 **Full page with every measurement and the commands: [`docs/gen1/catching.md`](docs/gen1/catching.md).**

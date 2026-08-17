@@ -6,6 +6,12 @@ the first slot. This is the thing that replaces it — fight, switch, use an ite
 or run, chosen from the cartridge's own state, by one implementation every link
 uses.
 
+> **Measuring it against anything else:** the battle numbers below are
+> *driver-side*, so only this policy can produce them. For a comparison
+> between two players — the same fight, the same start states, the same seeds,
+> host-side battle outcomes and a paired gap — see
+> [the test rig](test-rig.md).
+
 - **The policy**: [`plugins/agent/src/battle.rs`](../../plugins/agent/src/battle.rs)
   — pure, unit-tested, no machine and no emulator.
 - **The facts it decides from**: [`plugins/agent/src/observe.rs`](../../plugins/agent/src/observe.rs)
