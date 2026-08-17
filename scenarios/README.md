@@ -8,6 +8,17 @@ the knowledge the agent may plan with. Full explanation:
 cargo run --release --example scenario -- check scenarios/leave-the-pokemon-center.json
 ```
 
+`testrig/` — **test plans**, a different thing: a scenario says what one attempt
+must achieve, a plan (`gbtestrig/1`) says which scenario to run, from which
+starting states, how many times, and *who plays*. Checked in for the same reason
+— a test is a specification — and described in
+[`docs/agent/test-rig.md`](../docs/agent/test-rig.md).
+
+```sh
+cargo run --release --features scenario --example pewter_chain -- \
+    ab --rom <blue.gb> --plan scenarios/testrig/starter-rival-battle.json
+```
+
 ## What is in here, and what is not
 
 `*.json` — scenario files. Checked in, because a scenario is a specification.

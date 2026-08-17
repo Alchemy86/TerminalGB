@@ -1,0 +1,26 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "starter-rival-battle",
+  "question": "The rival battle in Oak's lab, one subject per starter. How much of the expert's rate does a player that cannot see the machine get, and is the shortfall the same on every starter?",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/05-the-rival-battle.json",
+  "entry_pool": "target/abrig-states/04-take-a-starter/exits",
+  "runs": 300,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [
+    { "name": "CHARMANDER", "lead_species": 176 },
+    { "name": "BULBASAUR", "lead_species": 153 },
+    { "name": "SQUIRTLE", "lead_species": 177 }
+  ],
+  "arms": [
+    { "name": "teacher", "player": "expert" },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    },
+    { "name": "random", "player": "random", "seed_base": 2654435769 }
+  ]
+}

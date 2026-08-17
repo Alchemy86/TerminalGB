@@ -61,6 +61,12 @@ use terminalgb_plugin_agent::governor::Budget;
 use terminalgb_plugin_agent::json;
 use terminalgb_plugin_agent::{AgentPlugin, Config};
 
+/// The rig's reusable half: the plan, the statistics and the report. Shared by
+/// `#[path]` because examples are separate crates — the same arrangement
+/// `examples/support/suite_baseline.rs` uses.
+#[path = "support/abrig.rs"]
+mod abrig;
+
 // ---------------------------------------------------------------------------
 // the route
 // ---------------------------------------------------------------------------
@@ -1863,6 +1869,28 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       Read the player's own overworld sprite out of OAM and VRAM, four
       facings, as transparent PNGs. Game art: write it outside the repository.
 
+  ab --rom R [--plan FILE] [--scenario S] [--start-dir D] [--runs N]
+     [--lead NAME|N ...] [--split seen|unseen|n/a] [--student \"CMD ARGS\"]
+      THE TEST RIG. The same fight, from the same entry states, at the same
+      seeds and the same phase offsets, played by two or more players, with
+      the rates, the intervals and the paired gap between them.
+      --plan FILE   a `gbtestrig/1` plan; every field below overrides it
+      --lead X      one subject per lead species (a name or an index); repeat
+      --split S     seen | unseen | n/a — REQUIRED for a trained player, and
+                    printed at the top, because a \"trained on this fight\"
+                    number quoted as generalisation is the worst outcome here
+      --student CMD add a subprocess arm (see plugins/agent/src/subprocess.rs)
+
+  abfilm --rom R --plan FILE [--seed N] [--lead X] [--runs FRAMES] [--out DIR]
+      The same fight, the same entry state, the same seed, every arm side by
+      side, as a PNG sequence. A table says a player is behind; only a picture
+      says whether it is battling badly or standing in a doorway.
+      --runs FRAMES  how many output frames to aim for (default 600, i.e. 20 s
+                     at 30 fps). The stride is derived from the LONGEST arm and
+                     rounded up, and the timelapse ratio is printed — the arms
+                     differ in length by an order of magnitude, so a fixed
+                     stride gives a five-minute film of one of them flailing.
+
   verify --rom R --scenario S [--start FILE] [--runs N] [--primitive]
       Play the same seeds serially and in parallel and require identical
       final states. Determinism outranks everything else in flight.
@@ -1890,6 +1918,14 @@ struct Args {
     /// How many of a corpus's successful exits to keep as `.gbss`, for the
     /// next link to use as its entry pool.
     exits: u32,
+    /// A `gbtestrig/1` plan file for `ab`.
+    plan: Option<PathBuf>,
+    /// One `ab` subject per entry, each a lead species.
+    leads: Vec<String>,
+    /// `seen`, `unseen` or `n/a`; see `abrig::Split`.
+    split: Option<String>,
+    /// A subprocess arm for `ab`: the program and its arguments, one string.
+    student: Option<String>,
 }
 
 fn parse(args: &[String]) -> Args {
@@ -1918,6 +1954,10 @@ fn parse(args: &[String]) -> Args {
             "--start-dir" => a.start_dir = Some(PathBuf::from(next(i))),
             "--idle-spread" => a.idle_spread = next(i).parse().unwrap_or(IDLE_SPREAD),
             "--exits" => a.exits = next(i).parse().unwrap_or(0),
+            "--plan" => a.plan = Some(PathBuf::from(next(i))),
+            "--lead" => a.leads.push(next(i)),
+            "--split" => a.split = Some(next(i)),
+            "--student" => a.student = Some(next(i)),
             "--out" => a.out = Some(PathBuf::from(next(i))),
             "--seed" => a.seed = next(i).parse().unwrap_or(1),
             "--seed0" => a.seed0 = next(i).parse().unwrap_or(0),
@@ -1987,8 +2027,17 @@ struct Outcome {
     /// Of `wall_ms`, how much was inside the emulator. See
     /// `RunResult::emulate_ms`.
     emulate_ms: u128,
+    /// Building the machine, burning the phase offset and loading the start
+    /// state — the per-attempt tax an *episode* pays, and the number that says
+    /// whether short episodes are affordable. Measured around exactly that work
+    /// and nothing else.
+    setup_ms: u128,
     frames_total: u64,
     state: Vec<u8>,
+    /// How the battles went, as the **host** saw them — so an arm that is not
+    /// the scripted expert still has a battle column. See
+    /// `terminalgb::scenario::run::BattleSummary`.
+    battles: terminalgb::scenario::run::BattleSummary,
     recording: Recording,
     path: Vec<terminalgb::scenario::run::PathPoint>,
 }
@@ -2032,6 +2081,13 @@ fn trajectory_hash(o: &Outcome) -> u64 {
 /// `seed * PHASE_STRIDE % IDLE_SPREAD` is a bijection and 3000 seeds give 3000
 /// distinct phases.
 const IDLE_SPREAD: u32 = 3001;
+/// How often the rig says how far it has got.
+///
+/// **Five seconds, and it is on by default.** A long run that prints nothing
+/// until it finishes cannot be told from a wedged one, and this rig exists to
+/// be driven by things that are not people. `--quiet` silences the human line;
+/// `<out>/progress.ndjson` is written either way.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 /// Coprime with [`IDLE_SPREAD`], so consecutive seeds land far apart.
 const PHASE_STRIDE: u32 = 337;
 
@@ -2099,10 +2155,44 @@ fn play(
     track: bool,
     idle: u32,
 ) -> Outcome {
+    play_with(
+        rom,
+        scenario_path,
+        start,
+        out,
+        quiet,
+        track,
+        idle,
+        &|name| Box::new(ChainDriver::new(name, seed).primitive(primitive)),
+        None,
+    )
+}
+
+/// Play one attempt with **whatever** is pressing the buttons.
+///
+/// [`play`] is this with the scripted expert wired in. The split exists for the
+/// A/B rig: an arm is a driver and nothing else, so the entry state, the phase
+/// offset, the scenario, the referee, the sampling clock and the battle
+/// bookkeeping are all literally the same code for every player. **A comparison
+/// whose two halves ran through different harnesses is not a comparison**, and
+/// the cheapest way to guarantee they did not is to have one harness.
+#[allow(clippy::too_many_arguments)]
+fn play_with(
+    rom: &Cart,
+    scenario_path: &Path,
+    start: Option<Vec<u8>>,
+    out: &Path,
+    quiet: bool,
+    track: bool,
+    idle: u32,
+    driver: &dyn Fn(&str) -> Box<dyn Driver>,
+    frames_dir: Option<&Path>,
+) -> Outcome {
     let s = Scenario::load(scenario_path).unwrap_or_else(|e| {
         eprintln!("{}: {e}", scenario_path.display());
         exit(1);
     });
+    let setup_at = std::time::Instant::now();
     std::fs::create_dir_all(out).expect("create output directory");
     // **No save path, so no battery.** Cartridge RAM comes in and goes out
     // inside the save state; a `.sav` beside a staged copy is a file nobody
@@ -2131,26 +2221,34 @@ fn play(
     // runner left that third drawing pixels and resampling audio for nobody.
     // Both skips are guest-invisible; `ScenarioRun::collecting` below repeats
     // them for the run itself and is what a caller who did not phase gets.
-    gb.set_render_pixels(false);
+    // **A player that looks at the screen must be given one.** The pixel skip
+    // below is worth about half a frame's cost and is right for every player
+    // this repository has: the expert reads WRAM and a baseline reads nothing.
+    // A trained policy reads pixels, and a machine that is not drawing hands it
+    // whatever was last in the buffer — which is not a failure a rate would
+    // ever explain. So the skip is conditional on nobody wanting the picture,
+    // and the arm that wants it pays for it.
+    gb.set_render_pixels(frames_dir.is_some());
     gb.set_render_audio(false);
     // **Phase the world before the agent is attached, never after.** Burning
     // the frames here means the plugin does not exist yet and so cannot act
     // during them; the machine is simply left `idle` frames further on, and
     // that state becomes the attempt's start. See [`phase_start`].
     let start = phase_start(&mut gb, start, idle);
+    let setup_ms = setup_at.elapsed().as_millis();
     let cfg = Config {
         budget: Budget {
             max_calls: s.episode().max_calls,
             ..Budget::default()
         },
         objective: s.objective.clone(),
+        // The snapshot carries `frame_png` when this is set, which is the
+        // whole of what a screen-only player needs from this side.
+        frame_capture: frames_dir.map(|d| d.to_path_buf()),
         ..Config::default()
     };
-    gb.add_plugin(Box::new(AgentPlugin::new(
-        Box::new(ChainDriver::new(&s.name, seed).primitive(primitive)),
-        cfg,
-    )))
-    .expect("attach the agent");
+    gb.add_plugin(Box::new(AgentPlugin::new(driver(&s.name), cfg)))
+        .expect("attach the agent");
 
     let mut run =
         ScenarioRun::new(gb, s.clone(), scenario_path, out.to_path_buf(), start)
@@ -2164,6 +2262,12 @@ fn play(
             // and a film is stitched from the position tracks. Both skips are
             // guest-invisible — see `ScenarioRun::collecting`.
             .collecting();
+    if frames_dir.is_some() {
+        // `collecting()` turns the picture off; an arm that reads it turns it
+        // back on. Guest-invisible either way, and byte-identical at a frame
+        // boundary — `Gameboy::set_render_pixels`.
+        run.gameboy_mut().set_render_pixels(true);
+    }
     if quiet {
         run = run.quiet().without_captures();
     }
@@ -2177,13 +2281,15 @@ fn play(
         map: r.final_progress.map,
         x: r.final_progress.x,
         y: r.final_progress.y,
-        wall_ms: r.wall_ms,
+        wall_ms: r.wall_ms + setup_ms,
         emulate_ms: r.emulate_ms,
+        setup_ms,
         // The phase offset is emulated too — with no plugin attached, so those
         // frames are pure emulation — and a throughput figure that leaves them
         // out is measuring less work than the run did.
         frames_total: r.recording.frames + idle as u64,
         state: r.final_state_bytes.clone(),
+        battles: r.battles,
         recording: r.recording,
         path: r.path,
     }
@@ -2197,6 +2303,8 @@ fn main() {
     }
     let a = parse(&args[1..]);
     match args[0].as_str() {
+        "ab" => cmd_ab(&a),
+        "abfilm" => cmd_abfilm(&a),
         "solve" => cmd_solve(&a),
         "chain" => cmd_chain(&a),
         "corpus" => cmd_corpus(&a),
@@ -3071,4 +3179,1340 @@ fn chain_files() -> Vec<String> {
         .collect();
     v.sort();
     v
+}
+
+// ---------------------------------------------------------------------------
+// The A/B test rig
+// ---------------------------------------------------------------------------
+
+/// Read the lead's **internal** species index out of a saved state.
+///
+/// One machine, one `load_state`, four bus reads: the state carries the party,
+/// so no frames need to be emulated to find out what is in it. Zero means the
+/// state has no party — which is a legitimate answer for a link before the
+/// starter, and is why a subject that asks for a species simply finds no
+/// entries rather than failing.
+fn lead_species(rom: &Cart, state: &[u8]) -> u8 {
+    use terminalgb::longplay::watch::{Watch, Watches};
+    let mut gb = Gameboy::new(rom.0.as_ref().clone(), None);
+    if gb.load_state(state).is_err() {
+        return 0;
+    }
+    let w = Watches(
+        ["lead_species"]
+            .iter()
+            .filter_map(|n| Watch::named(n))
+            .collect(),
+    );
+    gb.with_machine(Cap::READ_MEMORY, |m| w.read(m))
+        .get("lead_species")
+        .unwrap_or(0) as u8
+}
+
+/// The four moves the lead is holding in a saved state, in slot order.
+///
+/// The same one-machine, no-frames read as [`lead_species`]: the state carries
+/// the party, so what a player chose at a prompt is legible from the state it
+/// left behind without replaying anything.
+fn lead_moves(rom: &Cart, state: &[u8]) -> [u8; 4] {
+    use terminalgb::longplay::watch::{Watch, Watches};
+    let mut gb = Gameboy::new(rom.0.as_ref().clone(), None);
+    if gb.load_state(state).is_err() {
+        return [0; 4];
+    }
+    let w = Watches(
+        ["lead_move1", "lead_move2", "lead_move3", "lead_move4"]
+            .iter()
+            .filter_map(|n| Watch::named(n))
+            .collect(),
+    );
+    let sample = gb.with_machine(Cap::READ_MEMORY, |m| w.read(m));
+    let mut out = [0u8; 4];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = sample.get(&format!("lead_move{}", i + 1)).unwrap_or(0) as u8;
+    }
+    out
+}
+
+/// A species name from the cartridge's own `MonsterNames`, when the trainer
+/// plugin is compiled in. **Never a table written down here** — the anti-drift
+/// rule in `AGENTS.md` exists because nine files once held their own copy of
+/// `wCurMap` and nothing could say whether they agreed.
+#[cfg(feature = "plugin-trainer")]
+fn species_name(rom: &Cart, index: u8) -> String {
+    let n = terminalgb_plugin_trainer::rom::RomTables::new(rom.0.as_ref().clone())
+        .species_name(index);
+    if n.is_empty() {
+        format!("#{index}")
+    } else {
+        n
+    }
+}
+
+#[cfg(not(feature = "plugin-trainer"))]
+fn species_name(_rom: &Cart, index: u8) -> String {
+    format!("#{index}")
+}
+
+/// Resolve a `--lead` argument: a decimal or `0x` index, or a species name
+/// looked up in the cartridge.
+fn lead_arg(rom: &Cart, s: &str) -> Option<u8> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        return u8::from_str_radix(hex, 16).ok();
+    }
+    if let Ok(n) = s.parse::<u8>() {
+        return Some(n);
+    }
+    let want = s.to_ascii_uppercase();
+    (1u8..=190).find(|&i| species_name(rom, i).to_ascii_uppercase() == want)
+}
+
+/// How an arm makes its driver, given the scenario's name.
+///
+/// A factory rather than a driver because the expert wants the scenario name
+/// and nothing else does, and because a fresh driver is built per attempt.
+type DriverFactory = Box<dyn Fn(&str) -> Box<dyn Driver>>;
+
+/// The driver for a non-expert arm. The expert needs the scenario name, so it
+/// is built at the call site instead.
+fn make_driver(p: &abrig::Player, seed: u64) -> Box<dyn Driver> {
+    match p {
+        abrig::Player::Random { seed_base } => Box::new(
+            terminalgb_plugin_agent::driver::RandomDriver::new(seed_base ^ seed),
+        ) as Box<dyn Driver>,
+        abrig::Player::Command { program, args } => Box::new(
+            terminalgb_plugin_agent::subprocess::CommandDriver::new(
+                program,
+                args.clone(),
+            )
+            .with_name("student"),
+        ) as Box<dyn Driver>,
+        abrig::Player::Expert => {
+            unreachable!("the expert arm is built where the scenario name is known")
+        }
+    }
+}
+
+fn cmd_ab(a: &Args) {
+    let rom = load_cart(&need_rom(a));
+    let plan = build_plan(a, &rom);
+    let out = a
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/testrig").join(&plan.name));
+    std::fs::create_dir_all(&out).expect("output directory");
+
+    // --- the pool, once, and split by subject ------------------------------
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&plan.pool)
+        .unwrap_or_else(|e| {
+            eprintln!("cannot read the entry pool {}: {e}", plan.pool.display());
+            exit(1);
+        })
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "gbss").unwrap_or(false))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        eprintln!("no .gbss files in {}", plan.pool.display());
+        exit(1);
+    }
+    // Each entry, and — when the pool's producer supplied one — what the right
+    // answer to its prompt is. See `abrig::Expectation`: a state with no file
+    // beside it is simply not scored on that outcome.
+    let mut annotated = 0usize;
+    let states: Vec<(Vec<u8>, Option<abrig::Expectation>)> = files
+        .into_iter()
+        .map(|p| {
+            let b = std::fs::read(&p).expect("entry state");
+            let e = std::fs::read_to_string(p.with_extension("expect.json"))
+                .ok()
+                .map(|t| {
+                    abrig::Expectation::parse(&t).unwrap_or_else(|e| {
+                        eprintln!("{}: {e}", p.with_extension("expect.json").display());
+                        exit(1);
+                    })
+                });
+            if e.is_some() {
+                annotated += 1;
+            }
+            (b, e)
+        })
+        .collect();
+    if annotated > 0 {
+        println!(
+            "prompts    {annotated} of {} entry state(s) carry an expected answer",
+            states.len()
+        );
+    }
+    // Reading the lead out of every state costs one machine each; on a 700
+    // state pool it is under a second and it is the whole of "a different
+    // starter is a flag rather than a rewrite".
+    let leads: Vec<u8> = states.iter().map(|(b, _)| lead_species(&rom, b)).collect();
+
+    let mut subjects = plan.subjects.clone();
+    if subjects.is_empty() {
+        subjects.push(abrig::Subject {
+            name: "all".into(),
+            lead_species: None,
+        });
+    }
+
+    println!("{}", banner(&plan, &out));
+    let mut cells: HashMap<(String, String), abrig::Cell> = HashMap::new();
+    let mut pool_sizes: HashMap<String, usize> = HashMap::new();
+    let workers = if plan.workers == 0 {
+        default_workers()
+    } else {
+        plan.workers
+    };
+
+    // **Progress is on by default and silenced by a flag, never the reverse.**
+    // Attempts that could actually run: a subject whose pool is empty is
+    // skipped below, so it is not in the denominator.
+    let live_total = subjects
+        .iter()
+        .filter(|s| {
+            leads
+                .iter()
+                .any(|l| s.lead_species.map(|w| *l == w).unwrap_or(true))
+        })
+        .count() as u32
+        * plan.arms.len() as u32
+        * plan.runs;
+    let live = std::sync::Arc::new(abrig::Live::new(live_total));
+    let began = std::time::Instant::now();
+    let ticker = {
+        let live = live.clone();
+        let path = out.join("progress.ndjson");
+        let quiet = a.quiet;
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            use std::sync::atomic::Ordering::Relaxed;
+            let mut f = std::fs::File::create(&path).ok();
+            let emit = |live: &abrig::Live, f: &mut Option<std::fs::File>| {
+                let (human, json) = live.lines(began.elapsed().as_secs_f64());
+                // stderr, so stdout stays the report; the same tick also goes
+                // to the file, so something other than a person can follow it.
+                if !quiet {
+                    eprintln!("{human}");
+                }
+                if let Some(f) = f.as_mut() {
+                    let _ = writeln!(f, "{json}");
+                    let _ = f.flush();
+                }
+            };
+            let mut next = std::time::Instant::now() + PROGRESS_EVERY;
+            while !live.stop.load(Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if std::time::Instant::now() >= next {
+                    emit(&live, &mut f);
+                    next += PROGRESS_EVERY;
+                }
+            }
+            // One final tick, so the line and the file both end on the truth.
+            emit(&live, &mut f);
+        })
+    };
+
+    for sub in &subjects {
+        let kept: Vec<&(Vec<u8>, Option<abrig::Expectation>)> = states
+            .iter()
+            .zip(&leads)
+            .filter(|(_, l)| sub.lead_species.map(|w| **l == w).unwrap_or(true))
+            .map(|(st, _)| st)
+            .collect();
+        let pool: Vec<Vec<u8>> = kept.iter().map(|(b, _)| b.clone()).collect();
+        let expect: Vec<Option<abrig::Expectation>> =
+            kept.iter().map(|(_, e)| e.clone()).collect();
+        pool_sizes.insert(sub.name.clone(), pool.len());
+        if pool.is_empty() {
+            eprintln!(
+                "subject {:?}: no entry state in the pool has that lead — skipped",
+                sub.name
+            );
+            continue;
+        }
+        for arm in &plan.arms {
+            let dir = out.join(format!("{}-{}", sub.name, arm.name));
+            std::fs::create_dir_all(&dir).ok();
+            live.begin(&format!("{}/{}", sub.name, arm.name), plan.runs);
+            let cell = run_arm(
+                &rom,
+                &plan,
+                arm,
+                &pool,
+                &expect,
+                &dir,
+                workers,
+                a.primitive,
+                &live,
+            );
+            println!(
+                "  {:<12} {:<10} {:>4}/{:<4} {}",
+                sub.name,
+                arm.name,
+                cell.goals(),
+                cell.n(),
+                abrig::pct_ci(cell.goals(), cell.n())
+            );
+            cells.insert((sub.name.clone(), arm.name.clone()), cell);
+        }
+    }
+
+    live.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _ = ticker.join();
+    let text = render(&plan, &subjects, &cells, &pool_sizes)
+        + &breakdown(
+            &plan,
+            &subjects,
+            &cells,
+            workers,
+            began.elapsed().as_secs_f64(),
+        );
+    println!("\n{text}");
+    std::fs::write(out.join("report.txt"), &text).ok();
+    std::fs::write(
+        out.join("report.json"),
+        report_json(&plan, &subjects, &cells, &pool_sizes),
+    )
+    .ok();
+    println!("{}", out.join("report.txt").display());
+}
+
+/// The plan, from a file if one was named and from flags otherwise. Flags
+/// always win, so a committed plan can be re-run with one field changed
+/// without editing it.
+fn build_plan(a: &Args, rom: &Cart) -> abrig::Plan {
+    let mut p = match &a.plan {
+        Some(f) => {
+            let text = std::fs::read_to_string(f).unwrap_or_else(|e| {
+                eprintln!("cannot read {}: {e}", f.display());
+                exit(1);
+            });
+            abrig::Plan::parse(&text).unwrap_or_else(|e| {
+                eprintln!("{}: {e}", f.display());
+                exit(1);
+            })
+        }
+        None => abrig::Plan {
+            name: "adhoc".into(),
+            question: String::new(),
+            split: abrig::Split::NotApplicable,
+            scenario: PathBuf::new(),
+            pool: PathBuf::new(),
+            subjects: Vec::new(),
+            arms: vec![
+                abrig::ArmSpec {
+                    name: "teacher".into(),
+                    player: abrig::Player::Expert,
+                },
+                abrig::ArmSpec {
+                    name: "random".into(),
+                    player: abrig::Player::Random {
+                        seed_base: 0x9E37_79B9,
+                    },
+                },
+            ],
+            runs: 200,
+            seed0: 0,
+            idle_spread: IDLE_SPREAD,
+            workers: 0,
+        },
+    };
+    if let Some(s) = &a.scenario {
+        p.scenario = s.clone();
+    }
+    if let Some(d) = &a.start_dir {
+        p.pool = d.clone();
+    }
+    if a.runs > 1 {
+        p.runs = a.runs;
+    }
+    if a.seed0 != 0 {
+        p.seed0 = a.seed0;
+    }
+    if a.idle_spread != IDLE_SPREAD {
+        p.idle_spread = a.idle_spread;
+    }
+    if a.workers != default_workers() {
+        p.workers = a.workers;
+    }
+    if let Some(s) = &a.split {
+        p.split = abrig::Split::parse(s).unwrap_or_else(|| {
+            eprintln!("--split must be seen, unseen or n/a");
+            exit(2);
+        });
+    }
+    if !a.leads.is_empty() {
+        p.subjects = a
+            .leads
+            .iter()
+            .map(|s| {
+                let idx = lead_arg(rom, s).unwrap_or_else(|| {
+                    eprintln!(
+                        "--lead {s:?}: not a number and not a species in this cartridge"
+                    );
+                    exit(2);
+                });
+                abrig::Subject {
+                    name: species_name(rom, idx),
+                    lead_species: Some(idx),
+                }
+            })
+            .collect();
+    }
+    if let Some(c) = &a.student {
+        let mut it = c.split_whitespace();
+        let program = it.next().unwrap_or("").to_string();
+        let args: Vec<String> = it.map(|s| s.to_string()).collect();
+        p.arms.push(abrig::ArmSpec {
+            name: "student".into(),
+            player: abrig::Player::Command { program, args },
+        });
+    }
+    if p.scenario.as_os_str().is_empty() {
+        eprintln!("--scenario (or a plan with one) is required");
+        exit(2);
+    }
+    if p.pool.as_os_str().is_empty() {
+        eprintln!("--start-dir (or a plan's entry_pool) is required");
+        exit(2);
+    }
+    p
+}
+
+/// Play one arm over the whole subject pool, fanned out across workers.
+#[allow(clippy::too_many_arguments)]
+fn run_arm(
+    rom: &Cart,
+    plan: &abrig::Plan,
+    arm: &abrig::ArmSpec,
+    pool: &[Vec<u8>],
+    expect: &[Option<abrig::Expectation>],
+    dir: &Path,
+    workers: u32,
+    primitive: bool,
+    live: &abrig::Live,
+) -> abrig::Cell {
+    let next = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let rows = std::sync::Arc::new(std::sync::Mutex::new(Vec::<abrig::Attempt>::new()));
+    let tot = std::sync::Arc::new([
+        std::sync::atomic::AtomicU64::new(0), // wall
+        std::sync::atomic::AtomicU64::new(0), // emulate
+        std::sync::atomic::AtomicU64::new(0), // setup
+        std::sync::atomic::AtomicU64::new(0), // frames
+    ]);
+    std::thread::scope(|sc| {
+        for w in 0..workers {
+            let (next, rows, tot) = (next.clone(), rows.clone(), tot.clone());
+            let (rom, sp) = (rom.clone(), plan.scenario.clone());
+            let dir = dir.join(format!("w{w}"));
+            let (runs, seed0, spread) = (plan.runs, plan.seed0, plan.idle_spread);
+            let player = arm.player.clone();
+            let pool = pool.to_vec();
+            let expect = expect.to_vec();
+            sc.spawn(move || {
+                use std::sync::atomic::Ordering::Relaxed;
+                loop {
+                    let k = next.fetch_add(1, Relaxed);
+                    if k >= runs {
+                        break;
+                    }
+                    let seed = seed0 + k as u64;
+                    // **The three axes, identical for every arm.** Which entry
+                    // state, which driver seed, how far into the world the
+                    // attempt starts — all a function of the seed alone, so
+                    // two arms at seed N play the same fight.
+                    let entry = pool[(seed as usize) % pool.len()].clone();
+                    let idle = phase_for(seed, spread);
+                    let mk: DriverFactory = match &player {
+                        abrig::Player::Expert => Box::new(move |name: &str| {
+                            Box::new(ChainDriver::new(name, seed).primitive(primitive))
+                                as Box<dyn Driver>
+                        }),
+                        other => {
+                            let other = other.clone();
+                            Box::new(move |_: &str| make_driver(&other, seed))
+                        }
+                    };
+                    // A subprocess arm may be a screen-only policy, so it is
+                    // given a picture; the expert and the random baseline are
+                    // not, and keep the pixel skip. Per worker, so two threads
+                    // cannot overwrite each other's frame.
+                    let frames = matches!(player, abrig::Player::Command { .. })
+                        .then(|| dir.join("frames"));
+                    let o = play_with(
+                        &rom,
+                        &sp,
+                        Some(entry),
+                        &dir,
+                        true,
+                        false,
+                        idle,
+                        mk.as_ref(),
+                        frames.as_deref(),
+                    );
+                    let b = o.battles;
+                    // What the player left the party holding, and whether the
+                    // pool says that is right. One machine, no emulated frames.
+                    let moves = lead_moves(&rom, &o.state);
+                    let correct = expect[(seed as usize) % pool.len()]
+                        .as_ref()
+                        .map(|e| e.satisfied_by(&moves));
+                    tot[0].fetch_add(o.wall_ms as u64, Relaxed);
+                    tot[1].fetch_add(o.emulate_ms as u64, Relaxed);
+                    tot[2].fetch_add(o.setup_ms as u64, Relaxed);
+                    tot[3].fetch_add(o.frames_total, Relaxed);
+                    live.tick();
+                    rows.lock().unwrap().push(abrig::Attempt {
+                        seed,
+                        goal: o.goal,
+                        ending: o.ending.clone(),
+                        frames: o.frames,
+                        decisions: o.decisions as u32,
+                        battles: b.battles,
+                        won: b.won,
+                        fled: b.fled,
+                        lost: b.lost,
+                        frames_in_battle: b.frames_in_battle,
+                        hp_permille: b.hp_left_permille,
+                        hp_samples: b.hp_samples,
+                        moves,
+                        correct,
+                    });
+                }
+            });
+        }
+    });
+    let mut attempts = std::sync::Arc::try_unwrap(rows)
+        .expect("workers are done")
+        .into_inner()
+        .unwrap();
+    attempts.sort_by_key(|a| a.seed);
+    // One row per attempt, beside the cell. **A summary cannot be debugged**:
+    // when a prompt scores wrong the only useful question is which four moves
+    // the player left, and that is here rather than reachable only by replay.
+    // Same idiom as `longplay`'s `steps.ndjson`.
+    {
+        let mut out = String::new();
+        for a in &attempts {
+            out.push_str(&format!(
+                "{{\"seed\":{},\"goal\":{},\"ending\":{:?},\"frames\":{},\
+                 \"decisions\":{},\"battles\":{},\"won\":{},\"lost\":{},\
+                 \"fled\":{},\"moves\":[{},{},{},{}],\"correct\":{}}}\n",
+                a.seed,
+                a.goal,
+                a.ending,
+                a.frames,
+                a.decisions,
+                a.battles,
+                a.won,
+                a.lost,
+                a.fled,
+                a.moves[0],
+                a.moves[1],
+                a.moves[2],
+                a.moves[3],
+                match a.correct {
+                    Some(v) => v.to_string(),
+                    None => "null".into(),
+                }
+            ));
+        }
+        let _ = std::fs::write(dir.join("attempts.ndjson"), out);
+    }
+    use std::sync::atomic::Ordering::Relaxed;
+    let timing = abrig::Timing {
+        attempts: attempts.len() as u32,
+        wall_ms: tot[0].load(Relaxed),
+        emulate_ms: tot[1].load(Relaxed),
+        setup_ms: tot[2].load(Relaxed),
+        frames: tot[3].load(Relaxed),
+    };
+    abrig::Cell { attempts, timing }
+}
+
+fn banner(p: &abrig::Plan, out: &Path) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("\n{}\n", "=".repeat(78)));
+    s.push_str(&format!("TEST RIG — {}\n", p.name));
+    if !p.question.is_empty() {
+        s.push_str(&format!("{}\n", p.question));
+    }
+    s.push_str(&format!(
+        "SPLIT: {} — {}\n",
+        p.split.word(),
+        p.split.meaning()
+    ));
+    s.push_str(&format!("{}\n", "=".repeat(78)));
+    s.push_str(&format!(
+        "scenario {}\nentries  {}\nattempts {} per arm per subject, seed {}.., phase spread {}\n\
+         output   {}\n",
+        p.scenario.display(),
+        p.pool.display(),
+        p.runs,
+        p.seed0,
+        p.idle_spread,
+        out.display()
+    ));
+    s
+}
+
+/// The whole report, as the text file and as what is printed.
+fn render(
+    plan: &abrig::Plan,
+    subjects: &[abrig::Subject],
+    cells: &HashMap<(String, String), abrig::Cell>,
+    pools: &HashMap<String, usize>,
+) -> String {
+    let mut s = String::new();
+    let reference = plan
+        .arms
+        .first()
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    let get = |sub: &str, arm: &str| cells.get(&(sub.to_string(), arm.to_string()));
+
+    for sub in subjects {
+        let Some(&pool) = pools.get(&sub.name) else {
+            continue;
+        };
+        s.push_str(&format!(
+            "\n── {} ─────────────────────────────────────────────\n\
+             {pool} entry state(s) in the pool\n\n",
+            sub.name
+        ));
+        s.push_str(
+            "  arm          goal              battles  won    fled   lost   \
+             HP left  decisions\n",
+        );
+        for arm in &plan.arms {
+            let Some(c) = get(&sub.name, &arm.name) else {
+                continue;
+            };
+            let b = c.battles().max(1) as f64;
+            s.push_str(&format!(
+                "  {:<12} {:<17} {:>7}  {:>5.1}% {:>5.1}% {:>5.1}% {:>7.1}% {:>9.1}\n",
+                arm.name,
+                abrig::pct_ci(c.goals(), c.n()),
+                c.battles(),
+                100.0 * c.won() as f64 / b,
+                100.0 * c.fled() as f64 / b,
+                100.0 * c.lost() as f64 / b,
+                c.hp_left(),
+                c.mean_decisions(),
+            ));
+        }
+        // How each arm failed, which a rate cannot say.
+        for arm in &plan.arms {
+            let Some(c) = get(&sub.name, &arm.name) else {
+                continue;
+            };
+            let e = c.endings();
+            if e.len() > 1 || e.first().map(|x| x.0.as_str()) != Some("goal") {
+                let list: Vec<String> =
+                    e.iter().map(|(k, v)| format!("{k} {v}")).collect();
+                s.push_str(&format!(
+                    "  {:<12} endings: {}\n",
+                    arm.name,
+                    list.join(", ")
+                ));
+            }
+        }
+        // The move-learning prompts, when the pool carried expected answers.
+        // **The unit of a move-learning test is a prompt**, not an episode: what
+        // was held, what was offered, what each player did, and whether they
+        // agree — see `docs/agent/test-rig.md` § "Measuring move learning".
+        if plan
+            .arms
+            .iter()
+            .filter_map(|arm| get(&sub.name, &arm.name))
+            .any(|c| c.prompts().1 > 0)
+        {
+            s.push_str("\n  arm          prompts answered correctly\n");
+            for arm in &plan.arms {
+                let Some(c) = get(&sub.name, &arm.name) else {
+                    continue;
+                };
+                let (k, n) = c.prompts();
+                s.push_str(&format!(
+                    "  {:<12} {:>4} of {:<4} {}\n",
+                    arm.name,
+                    k,
+                    n,
+                    abrig::pct_ci(k, n)
+                ));
+            }
+            for arm in plan.arms.iter().skip(1) {
+                let (Some(r), Some(c)) =
+                    (get(&sub.name, &reference), get(&sub.name, &arm.name))
+                else {
+                    continue;
+                };
+                let (same, pairs) = r.agreement(c);
+                if pairs > 0 {
+                    s.push_str(&format!(
+                        "  AGREEMENT {reference} vs {}: {} of {pairs} prompts left the \
+                         same four moves ({})\n",
+                        arm.name,
+                        same,
+                        abrig::pct_ci(same, pairs)
+                    ));
+                }
+            }
+        }
+        // The battle underneath the pass rate, per arm, with its own interval.
+        // On the very first subject this rig was pointed at, this column moved
+        // by fifty points while the goal column did not move at all.
+        s.push_str("\n  arm          battles won (of the attempts that fought)\n");
+        for arm in &plan.arms {
+            let Some(c) = get(&sub.name, &arm.name) else {
+                continue;
+            };
+            let (k, n) = c.tally(abrig::Outcome::BattleWon);
+            s.push_str(&format!(
+                "  {:<12} {:>4} of {:<4} {}\n",
+                arm.name,
+                k,
+                n,
+                abrig::pct_ci(k, n)
+            ));
+        }
+        // The gaps, against the first arm, on both outcomes.
+        s.push('\n');
+        for arm in plan.arms.iter().skip(1) {
+            let (Some(r), Some(c)) =
+                (get(&sub.name, &reference), get(&sub.name, &arm.name))
+            else {
+                continue;
+            };
+            for o in [
+                abrig::Outcome::Goal,
+                abrig::Outcome::PromptCorrect,
+                abrig::Outcome::BattleWon,
+            ] {
+                match abrig::gap_on(r, c, o) {
+                    Some(g) => {
+                        let (lo, hi) = g.interval();
+                        s.push_str(&format!(
+                            "  GAP [{}] {reference} \u{2212} {}: {:+.1} points \
+                             [{:+.1},{:+.1}] over {} pair(s)  ({} only {reference}, \
+                             {} only {}; McNemar p={:.4})\n",
+                            o.label(),
+                            arm.name,
+                            g.points,
+                            lo,
+                            hi,
+                            g.pairs,
+                            g.only_reference,
+                            g.only_arm,
+                            arm.name,
+                            g.p
+                        ));
+                    }
+                    None if o == abrig::Outcome::Goal => s.push_str(&format!(
+                        "  GAP [goal] {reference} \u{2212} {}: refused \u{2014} the two arms \
+                         did not play the same seeds, so there is no pairing to test\n",
+                        arm.name
+                    )),
+                    None => s.push_str(&format!(
+                        "  GAP [{}] {reference} \u{2212} {}: no pairs \u{2014} {}\n",
+                        o.label(),
+                        arm.name,
+                        match o {
+                            abrig::Outcome::BattleWon =>
+                                "the two arms never both fought on the same seed",
+                            abrig::Outcome::PromptCorrect =>
+                                "no entry state carried an expected answer, so there                                  were no prompts to score",
+                            abrig::Outcome::Goal => "there is no pairing",
+                        }
+                    )),
+                }
+            }
+        }
+    }
+
+    // Is the gap the same on every subject? Never an average — see the module
+    // docs of `examples/support/abrig.rs`.
+    if subjects.len() > 1 && plan.arms.len() > 1 {
+        s.push_str("\nIS THE GAP THE SAME ON EVERY SUBJECT?\n");
+        for arm in plan.arms.iter().skip(1) {
+            for o in [
+                abrig::Outcome::Goal,
+                abrig::Outcome::PromptCorrect,
+                abrig::Outcome::BattleWon,
+            ] {
+                let mut gs: Vec<(String, abrig::Gap)> = Vec::new();
+                for sub in subjects {
+                    if let (Some(r), Some(c)) =
+                        (get(&sub.name, &reference), get(&sub.name, &arm.name))
+                    {
+                        if let Some(g) = abrig::gap_on(r, c, o) {
+                            gs.push((sub.name.clone(), g));
+                        }
+                    }
+                }
+                for pair in gs.windows(2) {
+                    let (d, se, p) = abrig::gaps_differ(&pair[0].1, &pair[1].1);
+                    let verdict = if p < 0.05 {
+                        "THE GAP ITSELF DIFFERS \u{2014} something subject-specific is \
+                         happening in this arm"
+                    } else {
+                        "cannot be separated at this sample size \u{2014} consistent with \
+                         one gap and two different ceilings"
+                    };
+                    s.push_str(&format!(
+                        "  [{}] {} : {} vs {} \u{2014} gaps {:+.1} and {:+.1}, difference \
+                         {:+.1} (se {:.1}, p={:.3})\n    {verdict}\n",
+                        o.label(),
+                        arm.name,
+                        pair[0].0,
+                        pair[1].0,
+                        pair[0].1.points,
+                        pair[1].1.points,
+                        d,
+                        se,
+                        p
+                    ));
+                }
+            }
+        }
+    }
+
+    s.push_str(&format!(
+        "\nWHAT THIS CANNOT TELL YOU\n  \
+         The split is {}. {}\n  \
+         The gap is paired on the seed, so it is a within-fight difference and \
+         says nothing\n  about a different link, a different opponent or a \
+         different cartridge.\n  \
+         The battle columns are what the host could see: outcomes, not \
+         reasoning. Whether a\n  move was well chosen is not in them.\n",
+        plan.split.word(),
+        plan.split.meaning()
+    ));
+    s
+}
+
+/// Where the wall clock went, per arm.
+///
+/// **A rig like this is worth having only if it is fast**, so it says which
+/// part to attack rather than leaving anyone to guess. The three buckets add
+/// up to the attempts' own wall clock; the run's total is larger by whatever
+/// the workers were not all busy for.
+fn breakdown(
+    plan: &abrig::Plan,
+    subjects: &[abrig::Subject],
+    cells: &HashMap<(String, String), abrig::Cell>,
+    workers: u32,
+    run_seconds: f64,
+) -> String {
+    let mut s = String::from("\nWHERE THE WALL CLOCK WENT\n");
+    s.push_str(
+        "  arm          attempts    frames   worker-s  emulating   setup            deciding/loop\n",
+    );
+    let mut grand = abrig::Timing::default();
+    for arm in &plan.arms {
+        let mut t = abrig::Timing::default();
+        for sub in subjects {
+            if let Some(c) = cells.get(&(sub.name.clone(), arm.name.clone())) {
+                t.attempts += c.timing.attempts;
+                t.wall_ms += c.timing.wall_ms;
+                t.emulate_ms += c.timing.emulate_ms;
+                t.setup_ms += c.timing.setup_ms;
+                t.frames += c.timing.frames;
+            }
+        }
+        if t.attempts == 0 {
+            continue;
+        }
+        s.push_str(&format!(
+            "  {:<12} {:>8} {:>9} {:>9.1} {:>7.1}% {:>7.1}% {:>13.1}%\n",
+            arm.name,
+            t.attempts,
+            t.frames,
+            t.wall_ms as f64 / 1000.0,
+            t.share(t.emulate_ms),
+            t.share(t.setup_ms),
+            t.share(t.other_ms()),
+        ));
+        grand.attempts += t.attempts;
+        grand.wall_ms += t.wall_ms;
+        grand.emulate_ms += t.emulate_ms;
+        grand.setup_ms += t.setup_ms;
+        grand.frames += t.frames;
+    }
+    s.push_str(&format!(
+        "  {:<12} {:>8} {:>9} {:>9.1} {:>7.1}% {:>7.1}% {:>13.1}%\n",
+        "ALL",
+        grand.attempts,
+        grand.frames,
+        grand.wall_ms as f64 / 1000.0,
+        grand.share(grand.emulate_ms),
+        grand.share(grand.setup_ms),
+        grand.share(grand.other_ms()),
+    ));
+    let busy = grand.wall_ms as f64 / 1000.0;
+    s.push_str(&format!(
+        "  {} of wall clock on {workers} worker(s) = {:.1} worker-seconds, of which \
+         {:.1} were inside an attempt ({:.0}% busy)\n  \
+         {:.0} emulated frames/s aggregate; setup is {:.0} ms per attempt\n  \
+         `deciding/loop` is the run loop, the referee and the plugin. **It is \
+         NOT the player's think time**: the emulator never\n  blocks on a \
+         driver, so a subprocess arm's spawn-and-decide happens while the \
+         machine keeps running and is\n  charged to `emulating`. A slow player \
+         shows up as more frames per attempt, not as a bigger share here.\n",
+        abrig::hms(run_seconds),
+        run_seconds * workers as f64,
+        busy,
+        100.0 * busy / (run_seconds * workers as f64).max(0.001),
+        grand.frames as f64 / run_seconds.max(0.001),
+        grand.setup_ms as f64 / grand.attempts.max(1) as f64,
+    ));
+    s
+}
+
+fn report_json(
+    plan: &abrig::Plan,
+    subjects: &[abrig::Subject],
+    cells: &HashMap<(String, String), abrig::Cell>,
+    pools: &HashMap<String, usize>,
+) -> String {
+    let mut out = String::from("{\n");
+    out.push_str(&format!(
+        "  \"schema\": \"gbtestrig-report/1\",\n  \"name\": {:?},\n  \
+         \"question\": {:?},\n  \"split\": {:?},\n  \"scenario\": {:?},\n  \
+         \"entry_pool\": {:?},\n  \"runs\": {},\n  \"seed0\": {},\n  \
+         \"idle_spread\": {},\n  \"subjects\": [\n",
+        plan.name,
+        plan.question,
+        plan.split.word(),
+        plan.scenario.display().to_string(),
+        plan.pool.display().to_string(),
+        plan.runs,
+        plan.seed0,
+        plan.idle_spread
+    ));
+    let reference = plan
+        .arms
+        .first()
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    let mut first_sub = true;
+    for sub in subjects {
+        let Some(&pool) = pools.get(&sub.name) else {
+            continue;
+        };
+        if !first_sub {
+            out.push_str(",\n");
+        }
+        first_sub = false;
+        out.push_str(&format!(
+            "    {{\"name\": {:?}, \"lead_species\": {}, \"pool\": {pool}, \"arms\": [\n",
+            sub.name,
+            sub.lead_species
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "null".into())
+        ));
+        let mut first_arm = true;
+        for arm in &plan.arms {
+            let Some(c) = cells.get(&(sub.name.clone(), arm.name.clone())) else {
+                continue;
+            };
+            if !first_arm {
+                out.push_str(",\n");
+            }
+            first_arm = false;
+            let (lo, hi) = abrig::wilson(c.goals(), c.n());
+            let one = |o: abrig::Outcome| -> String {
+                if arm.name == reference {
+                    return "null".into();
+                }
+                match cells
+                    .get(&(sub.name.clone(), reference.clone()))
+                    .and_then(|r| abrig::gap_on(r, c, o))
+                {
+                    Some(g) => {
+                        let (glo, ghi) = g.interval();
+                        format!(
+                            "{{\"points\": {:.3}, \"lo\": {:.3}, \"hi\": {:.3}, \
+                             \"pairs\": {}, \"only_reference\": {}, \"only_arm\": {}, \
+                             \"p\": {:.6}}}",
+                            g.points,
+                            glo,
+                            ghi,
+                            g.pairs,
+                            g.only_reference,
+                            g.only_arm,
+                            g.p
+                        )
+                    }
+                    None => "null".into(),
+                }
+            };
+            let g = one(abrig::Outcome::Goal);
+            let gb = one(abrig::Outcome::BattleWon);
+            let gp = one(abrig::Outcome::PromptCorrect);
+            let (pk, pn) = c.prompts();
+            let (agree, apairs) = cells
+                .get(&(sub.name.clone(), reference.clone()))
+                .map(|r| r.agreement(c))
+                .unwrap_or((0, 0));
+            let (bk, bn) = c.tally(abrig::Outcome::BattleWon);
+            let (blo, bhi) = abrig::wilson(bk, bn);
+            out.push_str(&format!(
+                "      {{\"name\": {:?}, \"player\": {:?}, \"n\": {}, \"goals\": {}, \
+                 \"rate\": {:.5}, \"ci_lo\": {:.5}, \"ci_hi\": {:.5}, \
+                 \"battles\": {}, \"won\": {}, \"fled\": {}, \"lost\": {}, \
+                 \"hp_left_percent\": {:.2}, \"mean_decisions\": {:.2}, \
+                 \"mean_frames\": {:.1}, \"battle_won\": {bk}, \
+                 \"battle_fought\": {bn}, \"battle_ci_lo\": {blo:.5}, \
+                 \"battle_ci_hi\": {bhi:.5}, \"prompts\": {pn}, \
+                 \"prompts_correct\": {pk}, \"agreed_with_reference\": {agree}, \
+                 \"agreement_pairs\": {apairs}, \"wall_ms\": {}, \
+                 \"emulate_ms\": {}, \"setup_ms\": {}, \"gap\": {g}, \
+                 \"gap_prompt\": {gp}, \"gap_battle\": {gb}}}",
+                arm.name,
+                arm.player.kind(),
+                c.n(),
+                c.goals(),
+                c.rate(),
+                lo,
+                hi,
+                c.battles(),
+                c.won(),
+                c.fled(),
+                c.lost(),
+                c.hp_left(),
+                c.mean_decisions(),
+                c.mean_frames(),
+                c.timing.wall_ms,
+                c.timing.emulate_ms,
+                c.timing.setup_ms
+            ));
+        }
+        out.push_str("\n    ]}");
+    }
+    out.push_str("\n  ]\n}\n");
+    out
+}
+
+// ---------------------------------------------------------------------------
+// The side-by-side cut
+// ---------------------------------------------------------------------------
+
+/// The Game Boy's own picture, in pixels.
+const GB_W: usize = 160;
+const GB_H: usize = 144;
+/// How much to magnify each arm's picture. Integer, nearest-neighbour, so no
+/// colour appears that was not in the framebuffer — the categorical guard
+/// `screen::halfblocks` and `examples/swarm_view.rs` both apply.
+const AB_ZOOM: usize = 3;
+/// Rows above each picture for its label, and below for the caption.
+const AB_HEAD: usize = 36;
+const AB_FOOT: usize = 22;
+const AB_PAD: usize = 8;
+
+/// **The picture beside the number.** Two or more arms playing the *same* fight
+/// from the *same* entry state at the *same* seed, laid out left to right, one
+/// PNG per sampled frame.
+///
+/// A table says a player is forty points behind; it cannot say whether it is
+/// battling badly or standing in a doorway pressing A, and those want completely
+/// different work. Judging that is what a person does in ten seconds of footage
+/// and cannot do from any summary.
+///
+/// **The swarm compositor is deliberately not reused.** `examples/swarm_view.rs`
+/// draws agents as sprites on the world atlas from their position tracks, which
+/// is exactly right for six hundred agents crossing Kanto and exactly wrong for
+/// a battle: a battle has no map position at all, so every agent would be a
+/// motionless dot. What a fight needs is the framebuffer itself.
+fn cmd_abfilm(a: &Args) {
+    let rom = load_cart(&need_rom(a));
+    let plan = build_plan(a, &rom);
+    let out = a.out.clone().unwrap_or_else(|| {
+        PathBuf::from("target/testrig")
+            .join(&plan.name)
+            .join("film")
+    });
+    std::fs::create_dir_all(&out).expect("output directory");
+    // How many output frames to aim for, not a stride: the arms differ in
+    // length by an order of magnitude on this link, so a fixed stride gives a
+    // five-minute film of one of them flailing. `swarm_film.py` reached the
+    // same rule from the other end — sample from the emulated time to cover,
+    // and print the ratio on screen.
+    let frames_out = if a.runs > 1 { a.runs as usize } else { 600 };
+
+    // The pool, filtered to the subject the caller named — or the whole pool.
+    let want = a.leads.first().and_then(|s| lead_arg(&rom, s));
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&plan.pool)
+        .unwrap_or_else(|e| {
+            eprintln!("cannot read the entry pool {}: {e}", plan.pool.display());
+            exit(1);
+        })
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "gbss").unwrap_or(false))
+        .collect();
+    files.sort();
+    let pool: Vec<Vec<u8>> = files
+        .iter()
+        .map(|p| std::fs::read(p).expect("entry state"))
+        .filter(|b| want.map(|w| lead_species(&rom, b) == w).unwrap_or(true))
+        .collect();
+    if pool.is_empty() {
+        eprintln!("no entry state in the pool matches");
+        exit(1);
+    }
+    let seed = a.seed;
+    let entry = pool[(seed as usize) % pool.len()].clone();
+    let idle = phase_for(seed, plan.idle_spread);
+    let subject = a
+        .leads
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "any starter".into());
+
+    // One arm at a time, each writing its own raw stream. Sequential on
+    // purpose: this is one attempt each, and the frames must line up.
+    let mut streams: Vec<(String, Vec<u8>, String)> = Vec::new();
+    for arm in &plan.arms {
+        let dir = out.join(&arm.name);
+        std::fs::create_dir_all(&dir).ok();
+        let raw = dir.join("frames.rgba");
+        let _ = std::fs::remove_file(&raw);
+        let mut spec = terminalgb::video::VideoSpec::new(
+            terminalgb::video::Destination::Path(raw.clone()),
+        );
+        // Emulated pacing, not wall clock: a cut of a scripted run must be a
+        // function of the run and not of how busy the box was.
+        spec.pace = terminalgb::video::Pace::Emulated;
+        let video = {
+            let (v, warn) = terminalgb::video::VideoOut::open(spec);
+            if let Some(w) = warn {
+                eprintln!("{}: {w}", arm.name);
+            }
+            v
+        };
+        let mk: DriverFactory = match &arm.player {
+            abrig::Player::Expert => Box::new(move |name: &str| {
+                Box::new(ChainDriver::new(name, seed)) as Box<dyn Driver>
+            }),
+            other => {
+                let other = other.clone();
+                Box::new(move |_: &str| make_driver(&other, seed))
+            }
+        };
+        let frames_dir =
+            matches!(arm.player, abrig::Player::Command { .. }).then(|| dir.join("snap"));
+        let o = play_filmed(
+            &rom,
+            &plan.scenario,
+            Some(entry.clone()),
+            &dir,
+            idle,
+            mk.as_ref(),
+            frames_dir.as_deref(),
+            video,
+        );
+        let bytes = std::fs::read(&raw).unwrap_or_default();
+        let caption = format!(
+            "{} - {} frames - {} decisions",
+            o.ending, o.frames, o.decisions
+        );
+        println!(
+            "  {:<12} {:>7} frames  {}",
+            arm.name,
+            bytes.len() / (GB_W * GB_H * 4),
+            caption
+        );
+        streams.push((arm.name.clone(), bytes, caption));
+    }
+
+    compose_side_by_side(&out, &streams, &plan.name, &subject, seed, frames_out);
+}
+
+/// [`play_with`] with a video sink attached and the picture left on.
+#[allow(clippy::too_many_arguments)]
+fn play_filmed(
+    rom: &Cart,
+    scenario_path: &Path,
+    start: Option<Vec<u8>>,
+    out: &Path,
+    idle: u32,
+    driver: &dyn Fn(&str) -> Box<dyn Driver>,
+    frames_dir: Option<&Path>,
+    video: terminalgb::video::VideoOut,
+) -> Outcome {
+    let s = Scenario::load(scenario_path).unwrap_or_else(|e| {
+        eprintln!("{}: {e}", scenario_path.display());
+        exit(1);
+    });
+    std::fs::create_dir_all(out).ok();
+    let mut gb = Gameboy::new(rom.0.as_ref().clone(), None);
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
+    gb.set_render_pixels(true);
+    gb.set_render_audio(false);
+    let start = phase_start(&mut gb, start, idle);
+    let cfg = Config {
+        budget: Budget {
+            max_calls: s.episode().max_calls,
+            ..Budget::default()
+        },
+        objective: s.objective.clone(),
+        frame_capture: frames_dir.map(|d| d.to_path_buf()),
+        ..Config::default()
+    };
+    gb.add_plugin(Box::new(AgentPlugin::new(driver(&s.name), cfg)))
+        .expect("attach the agent");
+    let run = ScenarioRun::new(gb, s.clone(), scenario_path, out.to_path_buf(), start)
+        .unwrap_or_else(|e| {
+            eprintln!("{e}");
+            exit(1);
+        })
+        .quiet()
+        .without_captures()
+        .filming(video);
+    let r = run.play();
+    Outcome {
+        goal: r.reached_goal(),
+        frames: r.recording.frames,
+        decisions: r.recording.decisions.len(),
+        ending: r.recording.ending.tag().to_string(),
+        detail: String::new(),
+        map: r.final_progress.map,
+        x: r.final_progress.x,
+        y: r.final_progress.y,
+        wall_ms: r.wall_ms,
+        emulate_ms: r.emulate_ms,
+        setup_ms: 0,
+        frames_total: r.recording.frames + idle as u64,
+        state: r.final_state_bytes.clone(),
+        battles: r.battles,
+        recording: r.recording,
+        path: r.path,
+    }
+}
+
+/// The longest complete form of a caption that fits, never a truncation.
+fn fit_caption(full: &str, width: u32, scale: u32) -> String {
+    use terminalgb::video::card::text_width;
+    if text_width(full, scale) <= width {
+        return full.to_string();
+    }
+    // Drop trailing clauses one at a time. Every intermediate form is a whole
+    // sentence, so a reader is never shown half a number.
+    let parts: Vec<&str> = full.split(" - ").collect();
+    for keep in (1..parts.len()).rev() {
+        let short = parts[..keep].join(" - ");
+        if text_width(&short, scale) <= width {
+            return short;
+        }
+    }
+    // Even the first clause is too wide: drop a scale instead of cutting it.
+    parts[0].to_string()
+}
+
+/// Lay the arms out left to right, one PNG per sampled frame.
+///
+/// **A short arm is held on its last frame rather than going blank.** They do
+/// not finish together — one may reach the goal in a third of the other's
+/// decisions — and a panel that empties reads as a crash rather than as
+/// "finished earlier", which is the opposite of what happened.
+fn compose_side_by_side(
+    out: &Path,
+    streams: &[(String, Vec<u8>, String)],
+    plan: &str,
+    subject: &str,
+    seed: u64,
+    frames_out: usize,
+) {
+    use terminalgb::video::card::Canvas;
+    let frame_bytes = GB_W * GB_H * 4;
+    let counts: Vec<usize> = streams
+        .iter()
+        .map(|(_, b, _)| b.len() / frame_bytes)
+        .collect();
+    let longest = counts.iter().copied().max().unwrap_or(0);
+    if longest == 0 {
+        eprintln!("no frames were captured — was the picture on?");
+        exit(1);
+    }
+    let pane_w = GB_W * AB_ZOOM;
+    let pane_h = GB_H * AB_ZOOM;
+    let w = streams.len() * pane_w + (streams.len() + 1) * AB_PAD;
+    let h = AB_HEAD + pane_h + AB_FOOT;
+    let bg = [16u8, 18, 22, 255];
+    let ink = [232u8, 236, 240, 255];
+    let dim = [140u8, 148, 158, 255];
+
+    // **Round the stride UP, never down.** Flooring gives a film that stops
+    // before the longest arm finishes, with the ending — the part worth
+    // watching — missing and nothing saying so.
+    let every = longest.div_ceil(frames_out.max(1)).max(1);
+    let dir = out.join("frames");
+    std::fs::create_dir_all(&dir).expect("frames directory");
+    let mut written = 0usize;
+    let mut i = 0usize;
+    while i < longest {
+        let mut buf = vec![0u8; w * h * 4];
+        {
+            let mut c = Canvas::new(&mut buf, w as u32, h as u32);
+            c.fill(0, 0, w as u32, h as u32, bg);
+            c.text(
+                AB_PAD as i64,
+                3,
+                &format!("{plan} - {subject} - seed {seed}"),
+                1,
+                dim,
+            );
+        }
+        for (k, (name, bytes, caption)) in streams.iter().enumerate() {
+            // Hold the last frame rather than blanking a finished arm.
+            let idx = i.min(counts[k].saturating_sub(1));
+            let src = &bytes[idx * frame_bytes..(idx + 1) * frame_bytes];
+            let x0 = AB_PAD + k * (pane_w + AB_PAD);
+            for y in 0..pane_h {
+                let sy = y / AB_ZOOM;
+                for x in 0..pane_w {
+                    let sx = x / AB_ZOOM;
+                    let s = (sy * GB_W + sx) * 4;
+                    let d = ((AB_HEAD + y) * w + x0 + x) * 4;
+                    buf[d..d + 4].copy_from_slice(&src[s..s + 4]);
+                }
+            }
+            let mut c = Canvas::new(&mut buf, w as u32, h as u32);
+            c.text(x0 as i64, 13, &name.to_uppercase(), 3, ink);
+            let tail = if idx + 1 >= counts[k] && counts[k] > 0 {
+                caption.clone()
+            } else {
+                format!("frame {}", idx)
+            };
+            // **Shorten through complete forms; never clip.** A truncated
+            // caption is worse than a short one, because a reader cannot tell
+            // it was cut — the same rule `fit_bar` follows in the frontend.
+            c.text(
+                x0 as i64,
+                (AB_HEAD + pane_h + 5) as i64,
+                &fit_caption(&tail, pane_w as u32, 2),
+                2,
+                dim,
+            );
+        }
+        write_rgba(&dir.join(format!("{written:06}.png")), w, h, &buf);
+        written += 1;
+        i += every;
+    }
+    println!(
+        "\n{written} frame(s) at {w}x{h}, one per {every} emulated frames \
+         ({:.1}x timelapse at 30 fps)\n{}\n\n\
+         ffmpeg -y -framerate 30 -i {}/%06d.png -c:v libopenh264 -b:v 4M \\\n  \
+         -pix_fmt yuv420p {}\n\
+         (this box's ffmpeg is built without libx264 — libopenh264 is the \
+          substitute, and -crf is not accepted there)",
+        every as f64 * 30.0 / 59.7275,
+        dir.display(),
+        dir.display(),
+        out.join("cut.mp4").display()
+    );
 }
