@@ -30,8 +30,20 @@ means a hack or a translation is detected as a mismatch rather than silently
 mis-read.
 
 Nothing here is committed as data. No table is vendored; the tool needs a ROM.
+
+How the output is shaped
+------------------------
+An agent drives this by shell, so stdout is **TOON** (a table header naming its
+columns, then one row per line) and every error is on stdout too, in the same
+shape, with a suggestion attached — an agent does not read stderr, so an error
+sent there is an error it cannot act on. `--json` is there for anything that
+would rather parse than read. Exit codes: 0 success, 1 the cartridge or the
+query failed, 2 the command line was wrong.
 """
 import argparse
+import difflib
+import json as _json
+import os
 import sys
 
 # --- constants (facts, cited) ------------------------------------------------
@@ -94,6 +106,153 @@ def find_all(hay, needle):
         out.append(i)
         i = hay.find(needle, i + 1)
     return out
+
+
+# --- agent-facing output -----------------------------------------------------
+#
+# TOON on stdout: `name[count]{col,col}:` then one indented row per line. Errors
+# go to stdout in the same shape, because an agent reads stdout and nothing
+# else; an error on stderr is an error it cannot act on. `--json` emits the same
+# structures for anything that would rather parse.
+
+_JSON = False
+_BLOCKS = []
+
+
+def _cell(v):
+    """Quote a TOON cell only when it would otherwise be ambiguous."""
+    s = "" if v is None else str(v)
+    if s == "" or s != s.strip() or any(c in s for c in ',":\n'):
+        return '"' + s.replace('"', '\\"') + '"'
+    return s
+
+
+def table(name, rows, fields, total=None):
+    """One TOON table. `rows` are dicts; `fields` names the columns, in order."""
+    if _JSON:
+        _BLOCKS.append((name, [{f: r.get(f) for f in fields} for r in rows]))
+        return
+    if total is not None and total != len(rows):
+        print(f"{name}: {len(rows)} of {total} total")
+    print(f"{name}[{len(rows)}]{{{','.join(fields)}}}:")
+    for r in rows:
+        print("  " + ",".join(_cell(r.get(f)) for f in fields))
+
+
+def obj(name, pairs):
+    """One TOON object: `name:` then `  key: value` lines."""
+    if _JSON:
+        _BLOCKS.append((name, dict(pairs)))
+        return
+    print(f"{name}:")
+    for k, v in pairs:
+        print(f"  {k}: {v}")
+
+
+def note(text):
+    """A one-line statement — a definitive empty state, or a measured fact."""
+    if _JSON:
+        _BLOCKS.append(("note", text))
+        return
+    print(text)
+
+
+def helps(lines):
+    """Contextual next steps. Complete commands, placeholders not guesses."""
+    if _JSON or not lines:
+        return
+    print(f"help[{len(lines)}]:")
+    for line in lines:
+        print(f"  {line}")
+
+
+def flush_json():
+    if not _JSON:
+        return
+    out = {}
+    for name, payload in _BLOCKS:
+        if name in out and isinstance(out[name], list):
+            out[name].extend(payload)
+        else:
+            out[name] = payload
+    print(_json.dumps(out, indent=2))
+
+
+def die(message, *suggestions, code=1):
+    """A structured error on **stdout**, with what to run instead."""
+    if _JSON:
+        print(_json.dumps({"error": message, "help": list(suggestions)}, indent=2))
+    else:
+        print(f"error: {message}")
+        for s in suggestions:
+            print(f"help: {s}")
+    sys.exit(code)
+
+
+def near(word, candidates, n=4):
+    """Close matches, so a typo is answered rather than merely refused."""
+    return difflib.get_close_matches(word.upper(), list(candidates), n=n, cutoff=0.5)
+
+
+SELF = "python3 tools/gen1-tables/gen1_tables.py"
+
+
+def home_path():
+    p = os.path.abspath(__file__)
+    home = os.path.expanduser("~")
+    return "~" + p[len(home):] if p.startswith(home + os.sep) else p
+
+
+def resolve_type(word):
+    """A type by name, in any case. Refuse with the list, never a KeyError."""
+    key = word.strip().upper().replace(" ", "")
+    if key in BY_NAME:
+        return BY_NAME[key]
+    if key.isdigit() or key.startswith("0X"):
+        try:
+            n = int(key, 0)
+        except ValueError:
+            n = None
+        if n in TYPES:
+            return n
+    suggest = near(key, BY_NAME) or sorted(BY_NAME)
+    die(f"{word!r} is not a Gen 1 type",
+        f"types are: {', '.join(sorted(BY_NAME))}",
+        f"did you mean: {', '.join(suggest)}",
+        code=2)
+
+
+def resolve_species(word, names):
+    """A species by name (any case, spaces ignored) or by internal index.
+
+    The number is the **internal** index, not the Pokedex number — the two
+    differ throughout Gen 1 — so a name is what a caller should normally pass
+    and a number is accepted for the caller that already has one.
+    """
+    key = str(word).strip().upper().replace(" ", "").replace("_", "")
+    by_name = {v.upper().replace(" ", ""): k for k, v in names.items()}
+    if key in by_name:
+        return by_name[key]
+    try:
+        n = int(str(word), 0)
+    except ValueError:
+        n = None
+    if n is not None and n in names:
+        return n
+    if n is not None:
+        die(f"internal index {n} names no species in this cartridge",
+            f"Run `{SELF} --rom <rom> --species <name-or-part>` to look one up",
+            code=2)
+    suggest = near(key, by_name)
+    die(f"no species named {word!r} in this cartridge",
+        (f"did you mean: {', '.join(names[by_name[s]] for s in suggest)}"
+         if suggest else
+         f"Run `{SELF} --rom <rom> --species <part-of-a-name>` to search"),
+        code=2)
+
+
+def map_label(m):
+    return MAP_NAMES.get(m, f"map 0x{m:02X}")
 
 
 # --- type chart --------------------------------------------------------------
@@ -878,91 +1037,286 @@ def plan(rom, opponents, max_level, chart, wild, names, dex_of, stats, moves,
     return threats, wanted_types, out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--rom", required=True)
-    ap.add_argument("--report", action="store_true")
-    ap.add_argument("--effective-against")
-    ap.add_argument("--where", type=lambda s: int(s, 0))
-    ap.add_argument("--encounters", type=lambda s: int(s, 0))
-    ap.add_argument("--catch-for", help="TYPE to beat, e.g. rock")
-    ap.add_argument("--max-level", type=int, default=12)
-    ap.add_argument("--trainer", help="a trainer class, e.g. brock")
+EPILOG = f"""\
+examples:
+  {SELF} --report
+  {SELF} --effective-against rock
+  {SELF} --where pikachu
+  {SELF} --encounters 0x33
+  {SELF} --plan brock,misty --max-level 12
+  {SELF} --can-learn pikachu --json
+
+the cartridge:
+  --rom is required, or set POKE_ROM once and leave it out. Nothing here is
+  vendored: every table is read out of the cartridge you supply, located by the
+  signature its own bytes make, so a hack or a translation is refused rather
+  than silently mis-read.
+
+output:
+  TOON on stdout (a `name[n]{{col,col}}:` header, then one row per line), or
+  --json. Errors are on stdout too, with a suggestion. Exit 0 success,
+  1 the query failed, 2 the command line was wrong.
+"""
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse's own errors go to stderr and name its internals. Both are
+    useless to an agent — `invalid <lambda> value: 'pikachu'` says nothing it
+    can act on — so they are re-emitted on stdout with a suggestion."""
+
+    def error(self, message):
+        die(message, f"Run `{SELF} --help` for every flag and three examples",
+            code=2)
+
+
+def build_parser():
+    ap = Parser(
+        prog="gen1_tables.py",
+        description="Answer questions about Pokemon Red/Blue by reading the "
+                    "cartridge's own tables: the type chart, the wild "
+                    "encounter tables, trainer parties, marts, TMs and "
+                    "learnsets.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--rom", metavar="FILE",
+                    help="the cartridge to read (default: $POKE_ROM)")
+    ap.add_argument("--json", action="store_true",
+                    help="emit JSON instead of TOON")
+    ap.add_argument("--report", action="store_true",
+                    help="where every table was found in this cartridge")
+    ap.add_argument("--species", metavar="TEXT",
+                    help="search species names, e.g. 'nido'")
+    ap.add_argument("--effective-against", metavar="TYPE",
+                    help="which types beat TYPE, e.g. rock")
+    ap.add_argument("--where", metavar="SPECIES",
+                    help="every map a species appears on, by name or "
+                         "internal index, e.g. pikachu")
+    ap.add_argument("--encounters", metavar="MAP",
+                    help="what appears in one map's grass, e.g. 0x33")
+    ap.add_argument("--catch-for", metavar="TYPE",
+                    help="what is catchable that beats TYPE, e.g. rock")
+    ap.add_argument("--max-level", type=int, default=12, metavar="N",
+                    help="level ceiling for --catch-for and --plan "
+                         "(default 12)")
+    ap.add_argument("--trainer", metavar="CLASS",
+                    help="one trainer class's parties, e.g. brock")
     ap.add_argument("--gyms", action="store_true",
                     help="every gym leader's own party, from the cartridge")
     ap.add_argument("--marts", action="store_true",
                     help="every mart's stock and the price of a ball")
-    ap.add_argument("--plan", help="comma-separated trainer classes to plan for")
-    ap.add_argument("--maps", help="comma-separated map ids to restrict to")
+    ap.add_argument("--plan", metavar="CLASSES",
+                    help="comma-separated trainer classes to plan for, "
+                         "e.g. brock,misty")
+    ap.add_argument("--maps", metavar="IDS",
+                    help="comma-separated map ids to restrict --plan to")
     ap.add_argument("--tms", action="store_true",
                     help="every TM and HM, and the move it teaches")
-    ap.add_argument("--items-on",
+    ap.add_argument("--items-on", metavar="IDS",
                     help="comma-separated map ids: what is lying on each")
-    ap.add_argument("--can-learn",
+    ap.add_argument("--can-learn", metavar="SPECIES",
                     help="a species: every TM and HM it can be taught")
-    a = ap.parse_args()
+    return ap
 
-    rom = read_rom(a.rom)
-    names, names_at = species_names(rom)
-    dex_of, order_at = pokedex_order(rom)
-    stats, stats_at = base_stats(rom, dex_of)
-    stats["_at"] = stats_at
-    chart = TypeChart(rom)
-    wild = Wild(rom, names)
+
+QUERIES = ("report", "species", "effective_against", "where", "encounters",
+           "catch_for", "trainer", "gyms", "marts", "plan", "tms", "items_on",
+           "can_learn")
+
+HOME_HELP = [
+    f"Run `{SELF} --report` for where every table sits in this cartridge",
+    f"Run `{SELF} --effective-against <type>` — types: "
+    + ", ".join(sorted(BY_NAME)).lower(),
+    f"Run `{SELF} --where <species>` for every map it appears on",
+    f"Run `{SELF} --encounters <map-id>` for one map's grass, e.g. 0x33",
+    f"Run `{SELF} --plan <trainer>,<trainer>` for what the fights ahead need",
+    f"Run `{SELF} --help` for every flag",
+]
+
+
+def main():
+    global _JSON
+    ap = build_parser()
+    a = ap.parse_args()
+    _JSON = a.json
+
+    rom_path = a.rom or os.environ.get("POKE_ROM")
+    asked = any(getattr(a, q) for q in QUERIES)
+
+    if not rom_path:
+        obj("bin", [("path", home_path()),
+                    ("description", "Gen 1 cartridge queries — the type "
+                                    "chart, wild encounters, trainer parties, "
+                                    "marts, TMs and learnsets, read out of "
+                                    "the ROM")])
+        die("no cartridge — this tool ships no game data and reads every "
+            "table out of one you supply",
+            f"Run `{SELF} --rom <path-to-blue.gb> --report`",
+            "or set POKE_ROM=<path-to-blue.gb> once and leave --rom out",
+            code=2)
+    try:
+        rom = read_rom(rom_path)
+    except OSError as e:
+        die(f"cannot read the cartridge {rom_path}: {e.strerror}",
+            "check the path, or set POKE_ROM to a Pokemon Red or Blue ROM",
+            code=1)
+
+    # Every table is located by the signature its own bytes make, and each
+    # locator raises SystemExit with a sentence when it cannot find one. Those
+    # sentences go to stderr, which an agent does not read — so they are caught
+    # and re-emitted here as a structured error with what to do about it.
+    try:
+        names, names_at = species_names(rom)
+        dex_of, order_at = pokedex_order(rom)
+        stats, stats_at = base_stats(rom, dex_of)
+        stats["_at"] = stats_at
+        chart = TypeChart(rom)
+        wild = Wild(rom, names)
+    except SystemExit as e:
+        die(f"{rom_path} is not a cartridge this tool reads: {e}",
+            "it needs Pokemon Red or Blue (English, unmodified) — a hack, a "
+            "translation or another game is refused rather than mis-read",
+            f"Run `{SELF} --rom <blue.gb> --report` to see where the tables "
+            f"land in a cartridge it does understand",
+            code=1)
+
+    # Content first: with no query, say what cartridge this is and what can be
+    # asked of it, rather than printing a manual.
+    if not asked:
+        obj("bin", [("path", home_path()),
+                    ("description", "Gen 1 cartridge queries — the type "
+                                    "chart, wild encounters, trainer parties, "
+                                    "marts, TMs and learnsets, read out of "
+                                    "the ROM")])
+        obj("cartridge", [("path", rom_path), ("version", wild.version),
+                          ("species", len(names)),
+                          ("maps_with_grass",
+                           sum(1 for e in wild.maps.values()
+                               if e["grass_rate"]))])
+        helps(HOME_HELP)
+        flush_json()
+        return 0
 
     if a.report:
-        print(f"cartridge {a.rom}")
-        print(f"  MonsterNames      @ 0x{names_at:06X}  {len(names)} names")
-        print(f"  PokedexOrder      @ 0x{order_at:06X}")
-        print(f"  BaseStats         @ 0x{stats_at:06X}")
-        print(f"  TypeEffects       @ 0x{chart.addr:06X}  {len(chart.rows)} rows")
-        print(f"  WildDataPointers  @ 0x{wild.table:06X}  bank {wild.bank} "
-              f"({wild.version}), "
-              f"{sum(1 for e in wild.maps.values() if e['grass_rate'])} maps with grass")
+        obj("cartridge", [
+            ("path", rom_path),
+            ("version", wild.version),
+        ])
+        table("tables", [
+            {"table": "MonsterNames", "at": f"0x{names_at:06X}",
+             "detail": f"{len(names)} names"},
+            {"table": "PokedexOrder", "at": f"0x{order_at:06X}", "detail": "-"},
+            {"table": "BaseStats", "at": f"0x{stats_at:06X}",
+             "detail": f"{len(stats) - 1} records"},
+            {"table": "TypeEffects", "at": f"0x{chart.addr:06X}",
+             "detail": f"{len(chart.rows)} rows"},
+            {"table": "WildDataPointers", "at": f"0x{wild.table:06X}",
+             "detail": f"bank {wild.bank}, "
+                       f"{sum(1 for e in wild.maps.values() if e['grass_rate'])}"
+                       f" maps with grass"},
+        ], ["table", "at", "detail"])
+
+    if a.species:
+        want = a.species.strip().upper().replace(" ", "")
+        hits = [{"species": v, "internal": k, "dex": dex_of.get(k, 0)}
+                for k, v in sorted(names.items())
+                if want in v.upper().replace(" ", "")]
+        if not hits:
+            note(f"species: 0 names in this cartridge contain "
+                 f"{a.species!r}")
+            helps([f"Run `{SELF} --species <shorter-fragment>`"])
+        else:
+            table("species", hits, ["species", "internal", "dex"])
+            helps([f"Run `{SELF} --where <species>` for every map one appears "
+                   f"on"])
 
     if a.effective_against:
-        d = BY_NAME[a.effective_against.upper()]
-        print(f"super effective against {TYPES[d]}: "
-              f"{', '.join(chart.super_effective_against(d))}")
+        d = resolve_type(a.effective_against)
+        beats = chart.super_effective_against(d)
+        if not beats:
+            note(f"effective_against: nothing in the chart is super effective "
+                 f"against {TYPES[d]}")
+        else:
+            table("effective_against",
+                  [{"target": TYPES[d], "attacking_type": t} for t in beats],
+                  ["target", "attacking_type"])
+            helps([f"Run `{SELF} --catch-for {TYPES[d].lower()} "
+                   f"--max-level <n>` for what you can actually get"])
 
-    if a.where is not None:
-        sp = a.where
-        print(f"{names.get(sp, '?')} (internal {sp}):")
-        for m, kind, lo, hi, rate, slots in wild.where(sp):
-            print(f"  {MAP_NAMES.get(m, f'map 0x{m:02X}'):20s} {kind:5s} "
-                  f"lv {lo}-{hi}  {slots}/10 slots, encounter rate {rate}")
+    if a.where:
+        sp = resolve_species(a.where, names)
+        rows = [{"map": map_label(m), "map_id": f"0x{m:02X}", "kind": kind,
+                 "level_lo": lo, "level_hi": hi, "slots": f"{slots}/10",
+                 "encounter_rate": rate}
+                for m, kind, lo, hi, rate, slots in wild.where(sp)]
+        obj("where", [("species", names.get(sp, "?")), ("internal", sp),
+                      ("dex", dex_of.get(sp, 0))])
+        if not rows:
+            note(f"maps: 0 — {names.get(sp, '?')} is in no wild encounter "
+                 f"table in this cartridge, so it is a gift, a trade, a "
+                 f"fossil, a purchase or a fishing encounter")
+        else:
+            table("maps", rows,
+                  ["map", "map_id", "kind", "level_lo", "level_hi", "slots",
+                   "encounter_rate"])
 
-    if a.encounters is not None:
-        e = wild.maps.get(a.encounters)
-        m = MAP_NAMES.get(a.encounters, f"map 0x{a.encounters:02X}")
-        print(f"{m} grass rate {e['grass_rate']}:")
+    if a.encounters:
+        try:
+            m = int(a.encounters, 0)
+        except ValueError:
+            die(f"{a.encounters!r} is not a map id",
+                "a map id is a number, decimal or 0x-prefixed, e.g. 0x33",
+                code=2)
+        e = wild.maps.get(m)
+        if e is None:
+            die(f"map 0x{m:02X} is not in this cartridge's encounter table",
+                f"map ids run 0x00 to 0x{max(wild.maps):02X}", code=1)
+        obj("map", [("name", map_label(m)), ("id", f"0x{m:02X}"),
+                    ("grass_rate", e["grass_rate"])])
         seen = {}
         for lv, sp in e["grass"]:
             seen.setdefault(sp, []).append(lv)
-        for sp, lv in sorted(seen.items(), key=lambda kv: -len(kv[1])):
-            print(f"  {names.get(sp,'?'):12s} lv {min(lv)}-{max(lv)}  "
-                  f"{len(lv)}/10 slots")
+        rows = [{"species": names.get(sp, "?"), "internal": sp,
+                 "level_lo": min(lv), "level_hi": max(lv),
+                 "slots": f"{len(lv)}/10"}
+                for sp, lv in sorted(seen.items(), key=lambda kv: -len(kv[1]))]
+        if not rows:
+            note(f"grass: 0 — {map_label(m)} has no grass encounters")
+        else:
+            table("grass", rows,
+                  ["species", "internal", "level_lo", "level_hi", "slots"])
 
     if a.catch_for:
-        d = BY_NAME[a.catch_for.upper()]
+        d = resolve_type(a.catch_for)
         cands = candidates_against(rom, d, a.max_level, chart, wild, names,
                                    dex_of, stats)
-        print(f"to beat {TYPES[d]}, catchable at level <= {a.max_level}:")
-        for c in cands[:20]:
-            print(f"  {c['species']:12s} {'/'.join(c['types']):16s} "
-                  f"{c['map_name']:18s} {c['kind']:5s} lv {c['levels'][0]}-"
-                  f"{c['levels'][1]}  {c['slots']}/10 slots")
+        obj("catch_for", [("target", TYPES[d]), ("max_level", a.max_level)])
         if not cands:
-            print("  nothing in the encounter tables satisfies that")
+            note("candidates: 0 — nothing in the encounter tables beats "
+                 f"{TYPES[d]} at level <= {a.max_level}, which is a finding "
+                 "rather than an empty result")
+            helps([f"Run `{SELF} --catch-for {TYPES[d].lower()} --max-level "
+                   f"<higher>` to widen it"])
+        else:
+            table("candidates", [
+                {"species": c["species"], "types": "/".join(c["types"]),
+                 "map": c["map_name"], "kind": c["kind"],
+                 "level_lo": c["levels"][0], "level_hi": c["levels"][1],
+                 "slots": f"{c['slots']}/10"}
+                for c in cands[:20]],
+                ["species", "types", "map", "kind", "level_lo", "level_hi",
+                 "slots"], total=len(cands))
 
     if a.marts:
         lists, at = marts(rom)
         prices, prices_at = item_prices(rom)
-        print(f"marts @ 0x{at:06X}, ItemPrices @ 0x{prices_at:06X}")
-        print(f"  a POKE BALL costs {prices[POKE_BALL_ITEM]}")
-        for i, items in enumerate(lists):
-            mark = " <- sells POKE BALLs" if POKE_BALL_ITEM in items else ""
-            print(f"  mart {i}: items {items}{mark}")
+        obj("marts", [("at", f"0x{at:06X}"),
+                      ("ItemPrices_at", f"0x{prices_at:06X}"),
+                      ("poke_ball_price", prices[POKE_BALL_ITEM])])
+        table("mart_stock", [
+            {"mart": i, "items": " ".join(str(x) for x in items),
+             "sells_poke_balls": "yes" if POKE_BALL_ITEM in items else "no"}
+            for i, items in enumerate(lists)],
+            ["mart", "items", "sells_poke_balls"])
 
     if a.tms or a.items_on or a.can_learn:
         tms, tms_at = technical_machines(rom)
@@ -977,60 +1331,78 @@ def main():
                     else items.get(i, f"item 0x{i:02X}"))
 
     if a.tms:
-        print(f"TechnicalMachines @ 0x{tms_at:06X}, ItemNames @ 0x{items_at:06X}")
-        for n in sorted(tms):
-            kind = f"TM{n:02d}" if n <= TM_COUNT else f"HM{n - TM_COUNT:02d}"
-            print(f"  {kind}  item 0x{tm_item_id(n):02X}  {moves.name(tms[n])}")
+        obj("machines_at", [("TechnicalMachines", f"0x{tms_at:06X}"),
+                            ("ItemNames", f"0x{items_at:06X}")])
+        table("machines", [
+            {"machine": (f"TM{n:02d}" if n <= TM_COUNT
+                         else f"HM{n - TM_COUNT:02d}"),
+             "item_id": f"0x{tm_item_id(n):02X}", "move": moves.name(tms[n])}
+            for n in sorted(tms)], ["machine", "item_id", "move"])
 
     if a.items_on:
         banks = _map_header_banks(rom)
-        print(f"MapHeaderPointers @ 0x{MAP_HEADER_POINTERS:06X}, "
-              f"MapHeaderBanks @ 0x{banks:06X}")
+        obj("headers_at", [("MapHeaderPointers", f"0x{MAP_HEADER_POINTERS:06X}"),
+                           ("MapHeaderBanks", f"0x{banks:06X}")])
+        rows = []
         for spec in a.items_on.split(","):
-            m = int(spec, 0)
+            try:
+                m = int(spec.strip(), 0)
+            except ValueError:
+                die(f"{spec.strip()!r} is not a map id",
+                    "--items-on takes comma-separated numbers, e.g. 0x3B,0x3D",
+                    code=2)
             got = map_items(rom, m, banks)
-            print(f"  map 0x{m:02X} "
-                  f"{MAP_NAMES.get(m, ''):18s} "
-                  f"{', '.join(label(i) for i in got) or '(nothing)'}")
+            rows.append({"map": map_label(m), "map_id": f"0x{m:02X}",
+                         "items": ", ".join(label(i) for i in got) or "none"})
+        table("map_items", rows, ["map", "map_id", "items"])
 
     if a.can_learn:
-        want = a.can_learn.upper().replace(" ", "")
-        i = next((k for k, v in names.items()
-                  if v.upper().replace(" ", "") == want), None)
-        if i is None:
-            raise SystemExit(f"no species named {a.can_learn!r} in this cartridge")
+        i = resolve_species(a.can_learn, names)
         dex = dex_of[i]
         got = [n for n in sorted(tms) if can_learn(rom, stats_at, dex, n)]
-        print(f"{names[i]} (dex {dex}) can be taught {len(got)} of "
-              f"{TM_COUNT + HM_COUNT}:")
-        for n in got:
-            kind = f"TM{n:02d}" if n <= TM_COUNT else f"HM{n - TM_COUNT:02d}"
-            print(f"  {kind} {moves.name(tms[n])}")
+        obj("can_learn", [("species", names[i]), ("dex", dex),
+                          ("taught", len(got)),
+                          ("of", TM_COUNT + HM_COUNT)])
         if not got:
-            print("  (nothing at all)")
+            note(f"machines: 0 — {names[i]} can be taught none of the "
+                 f"{TM_COUNT + HM_COUNT} machines")
+        else:
+            table("machines", [
+                {"machine": (f"TM{n:02d}" if n <= TM_COUNT
+                             else f"HM{n - TM_COUNT:02d}"),
+                 "move": moves.name(tms[n])} for n in got],
+                ["machine", "move"])
 
     if a.gyms or a.trainer or a.plan:
         trainers = Trainers(rom, names)
         moves = Moves(rom)
 
     if a.gyms or a.trainer:
-        print(f"TrainerNames @ 0x{trainers.names_at:06X}, "
-              f"TrainerDataPointers @ 0x{trainers.table:06X} (bank {trainers.bank})")
+        obj("trainers_at", [("TrainerNames", f"0x{trainers.names_at:06X}"),
+                            ("TrainerDataPointers", f"0x{trainers.table:06X}"),
+                            ("bank", trainers.bank)])
         which = ([a.trainer.upper().replace(" ", "").replace(".", "")]
                  if a.trainer else
                  ["BROCK", "MISTY", "LTSURGE", "ERIKA", "KOGA", "SABRINA",
                   "BLAINE", "GIOVANNI"])
+        rows = []
         for w in which:
             cls = trainers.by_name.get(w)
             if cls is None:
-                print(f"  {w}: no such trainer class in this cartridge")
-                continue
+                suggest = near(w, trainers.by_name)
+                die(f"no trainer class named {w!r} in this cartridge",
+                    (f"did you mean: {', '.join(suggest)}" if suggest else
+                     f"Run `{SELF} --gyms` for the eight gym leaders"),
+                    code=2)
             for r, team in enumerate(trainers.rosters(cls), 1):
-                shown = ", ".join(
-                    f"{names.get(sp,'?')} Lv{lv} "
-                    f"({'/'.join(sorted({TYPES[t] for t in stats[dex_of[sp]]['types']}))})"
-                    for lv, sp in team)
-                print(f"  {trainers.names[cls]} #{r}: {shown}")
+                for lv, sp in team:
+                    kinds = "/".join(sorted(
+                        {TYPES[t] for t in stats[dex_of[sp]]["types"]}))
+                    rows.append({"trainer": trainers.names[cls], "roster": r,
+                                 "species": names.get(sp, "?"), "level": lv,
+                                 "types": kinds})
+        table("parties", rows, ["trainer", "roster", "species", "level",
+                                "types"])
 
     if a.plan:
         opponents = []
@@ -1038,27 +1410,36 @@ def main():
             key = w.strip().upper().replace(" ", "").replace(".", "")
             cls = trainers.by_name.get(key)
             if cls is None:
-                raise SystemExit(f"no trainer class named {w!r} in this cartridge")
+                suggest = near(key, trainers.by_name)
+                die(f"no trainer class named {w.strip()!r} in this cartridge",
+                    (f"did you mean: {', '.join(suggest)}" if suggest else
+                     f"Run `{SELF} --gyms` for the eight gym leaders"),
+                    code=2)
             opponents.append((trainers.names[cls], cls, 1))
         only = None
         if a.maps:
-            only = {int(x, 0) for x in a.maps.split(",")}
+            try:
+                only = {int(x.strip(), 0) for x in a.maps.split(",")}
+            except ValueError:
+                die(f"--maps {a.maps!r} is not a comma-separated list of map "
+                    "ids", "e.g. --maps 0x33,0x0C", code=2)
         threats, wanted, cands = plan(
             rom, opponents, a.max_level, chart, wild, names, dex_of, stats,
             moves, trainers, only)
-        print("what is ahead:")
-        for th in threats:
-            print(f"  {th['who']:<10} {th['species']:<12} Lv{th['level']:<3} "
-                  f"{'/'.join(th['types']):<16} beaten by "
-                  f"{', '.join(TYPES[t] for t in th['beaten_by']) or '(nothing)'}")
-        print(f"so the useful attacking types are: "
-              f"{', '.join(TYPES[t] for t in wanted)}")
+        table("threats", [
+            {"trainer": th["who"], "species": th["species"],
+             "level": th["level"], "types": "/".join(th["types"]),
+             "beaten_by": " ".join(TYPES[t] for t in th["beaten_by"]) or "none"}
+            for th in threats],
+            ["trainer", "species", "level", "types", "beaten_by"])
+        obj("wanted", [("attacking_types",
+                        " ".join(TYPES[t] for t in wanted) or "none")])
         # **Which starter the run took changes what it still needs**, and the
         # Pewter chain varies that by seed, so the answer is per starter rather
         # than one list. Read each starter's own type and starting moves out of
         # the same records the candidates use.
-        print("what the starter already answers:")
         by_name = {v: k for k, v in names.items()}
+        starter_rows = []
         for s in ("BULBASAUR", "CHARMANDER", "SQUIRTLE"):
             internal = by_name.get(s)
             if internal is None:
@@ -1068,6 +1449,7 @@ def main():
             mvs = starting_moves(rom, stats_at, dex)
             has_now = {moves.rows[m]["type"] for m in mvs
                        if moves.rows[m]["power"] > 0}
+
             def hits(kinds):
                 return sorted({th["who"] + "/" + th["species"] for th in threats
                                if kinds & set(th["beaten_by"])})
@@ -1076,27 +1458,40 @@ def main():
             # Bulbasaur is GRASS and so *will* beat Brock — with VINE WHIP,
             # which it does not have at level 5. What it arrives with is
             # TACKLE, a NORMAL move that beats nothing on the list.
-            print(f"  {s:<11} {'/'.join(sorted(TYPES[t] for t in own)):<13} "
-                  f"arrives with "
-                  f"{', '.join(moves.name(m) for m in mvs) or '(nothing)'}")
-            print(f"      with the moves it has: "
-                  f"{', '.join(now) or 'NOTHING on this list'}")
-            print(f"      by its own type, once it learns one: "
-                  f"{', '.join(later) or 'NOTHING on this list'}")
-        print(f"catchable at level <= {a.max_level}"
-              f"{' on maps ' + a.maps if a.maps else ''}:")
+            starter_rows.append({
+                "starter": s,
+                "types": "/".join(sorted(TYPES[t] for t in own)),
+                "arrives_with": " ".join(moves.name(m) for m in mvs) or "none",
+                "beats_now": " ".join(now) or "nothing",
+                "beats_by_type_later": " ".join(later) or "nothing"})
+        table("starters", starter_rows,
+              ["starter", "types", "arrives_with", "beats_now",
+               "beats_by_type_later"])
+        obj("catchable", [("max_level", a.max_level),
+                          ("maps", a.maps or "any")])
         if not cands:
-            print("  NOTHING — the encounter tables offer no answer under those "
-                  "constraints, which is a finding rather than an empty result")
-        for c in cands[:24]:
-            arrives = ", ".join(f"{m} ({t} {p})" for m, t, p in c["arrives_with"])
-            print(f"  {c['species']:<12} {'/'.join(c['types']):<14} "
-                  f"{c['map_name']:<18} {c['kind']:<5} lv {c['levels'][0]}-"
-                  f"{c['levels'][1]:<3} {c['slots']}/10 slots  "
-                  f"catch rate {c['catch_rate']:<3}")
-            print(f"      internal #{c['internal']}, arrives with: "
-                  f"{arrives or '(no effective move at level 1)'}")
-            print(f"      answers: {', '.join(c['answers']) or '(by type only)'}")
+            note("candidates: 0 — the encounter tables offer no answer under "
+                 "those constraints, which is a finding rather than an empty "
+                 "result")
+            helps([f"Run `{SELF} --plan {a.plan} --max-level <higher>` to "
+                   f"widen it"])
+        else:
+            table("candidates", [
+                {"species": c["species"], "internal": c["internal"],
+                 "types": "/".join(c["types"]), "map": c["map_name"],
+                 "kind": c["kind"], "level_lo": c["levels"][0],
+                 "level_hi": c["levels"][1], "slots": f"{c['slots']}/10",
+                 "catch_rate": c["catch_rate"],
+                 "arrives_with": ", ".join(f"{m} ({t} {p})"
+                                           for m, t, p in c["arrives_with"])
+                                 or "no effective move at level 1",
+                 "answers": " ".join(c["answers"]) or "by type only"}
+                for c in cands[:24]],
+                ["species", "internal", "types", "map", "kind", "level_lo",
+                 "level_hi", "slots", "catch_rate", "arrives_with", "answers"],
+                total=len(cands))
+
+    flush_json()
     return 0
 
 

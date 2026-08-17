@@ -19,6 +19,11 @@ Three things stacked, and only the first two are new:
                           the run ──▶ recording.json ──▶ replay, 0 model calls
 ```
 
+- **Writing one**: [`docs/writing-a-scenario.md`](writing-a-scenario.md) builds
+  a small real scenario end to end — pick a goal, find the byte that proves it,
+  write the watch, check it, run it, replay it — and shows the ways it goes
+  wrong. Start there if you have not written one before; this page is the
+  reference behind it.
 - **Code**: [`src/scenario/`](../src/scenario/mod.rs) — `rules.rs`,
   `knowledge.rs`, `record.rs`, `run.rs`.
 - **Front end**: [`examples/scenario.rs`](../examples/scenario.rs).
@@ -147,7 +152,7 @@ gets misused.
 ### Everything with a cost is on screen before anything is spent
 
 ```console
-$ cargo run --release --example scenario -- check scenarios/leave-the-pokemon-center.json
+$ cargo run --release --example scenario -- check scenarios/leave-the-pokemon-center.json --prose
 scenario "leave-the-pokemon-center": Walk out of the Viridian Pokémon Center. …
 goal: map!=0x29
 fails on: party_hp=0
@@ -155,6 +160,7 @@ rules: no_memory_writes, battle flee, require party>=1, max_calls 12, max_wall_s
 cost ceiling: 1 attempt(s) × 12 calls = 12 model calls worst case, 12000 emulated frames worst case
 knowledge: atlas, guidance
 battles: flee
+evidence: NONE STATED — nothing in this file says which address defines success, …
   knowledge available: atlas (2891 addresses)
   knowledge available: guidance (new, will be written to scenarios/guidance/viridian.json)
 
@@ -164,6 +170,11 @@ the agent will be told:
 
 OK
 ```
+
+(`--prose` is the paragraph form above; without it `check` prints the same
+thing as TOON, which is what an agent driving the tool by shell reads. Every
+subcommand's output is TOON by default and every error is on stdout — see the
+module docs of [`examples/scenario.rs`](../examples/scenario.rs).)
 
 `check` loads no cartridge and costs nothing. A scenario that could never be
 judged — no goal, a condition on a watch nobody declared, advice it could never
@@ -189,12 +200,19 @@ Two sources, and the line between them matters.
 
 ```console
 $ cargo run --release --example scenario -- knowledge --search wEventFlags
-wEventFlags at $D747 (320 bytes) [rom,live] — **The story, in 320 bytes.** A flag
-array of 2,560 single-bit events: every gift taken, every trainer beaten, every
-door unlocked
+atlas:
+  addresses: 2891
+  from: third_party/atlasgb/pokemon-rb/atlas.tsv
+matches[1]{symbol,addr,bytes,evidence,what it is}:
+  wEventFlags,$D747,320,"rom,live","**The story, in 320 bytes.** A flag array of
+  2,560 single-bit events: every gift taken, every trainer beaten, every door
+  unlocked. …"
 
 $ cargo run --release --example scenario -- knowledge --at 0xD35E
-$D35E is inside wCurMap at $D35E [rom,live,inv] — The map you are standing on
+query:
+  address: $D35E
+covers[1]{symbol,addr,bytes,evidence,what it is}:
+  wCurMap,$D35E,1,"rom,live,inv","The map you are standing on. …"
 ```
 
 It is **loaded from disk, never embedded** — 237 KB of TSV in the published
@@ -217,8 +235,11 @@ scenario's guidance file, and the next run is handed it:
 
 ```console
 $ cargo run --release --example scenario -- guidance scenarios/guidance/viridian.json
-guidance for "POKEMON BLUE"
-  Viridian Pokémon Center (41) --(4,7)--> Pallet Town (0)  ×2
+guidance:
+  file: scenarios/guidance/viridian.json
+  rom: POKEMON BLUE
+links[1]{from,from_id,door_x,door_y,to,to_id,uses}:
+  Viridian Pokémon Center,0x29,4,7,Pallet Town,0x00,2
 ```
 
 `uses` is evidence: a door two runs found is better evidenced than one seen
@@ -413,5 +434,7 @@ Also honestly absent:
   what it may send back.
 - [`docs/gen1/`](gen1/README.md) — the Gen 1 mechanics area, including
   [`memory-map.md`](gen1/memory-map.md) and the atlas pointer page.
+- [`docs/writing-a-scenario.md`](writing-a-scenario.md) — the walkthrough: one
+  small scenario built from an empty file, and the ways it goes wrong.
 - [`docs/mcp.md`](mcp.md) — driving the emulator from an MCP client, which is
   the other way an agent reaches it.

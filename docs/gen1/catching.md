@@ -239,11 +239,11 @@ python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --plan brock,misty --ma
 ```
 
 ```
-what is ahead:
-  BROCK      GEODUDE      Lv12  GROUND/ROCK      beaten by FIGHTING, GROUND, WATER, GRASS, ICE
-  BROCK      ONIX         Lv14  GROUND/ROCK      beaten by FIGHTING, GROUND, WATER, GRASS, ICE
-  MISTY      STARYU       Lv18  WATER            beaten by GRASS, ELECTRIC
-  MISTY      STARMIE      Lv21  PSYCHIC/WATER    beaten by BUG, GRASS, ELECTRIC
+threats[4]{trainer,species,level,types,beaten_by}:
+  BROCK,GEODUDE,12,GROUND/ROCK,FIGHTING GROUND WATER GRASS ICE
+  BROCK,ONIX,14,GROUND/ROCK,FIGHTING GROUND WATER GRASS ICE
+  MISTY,STARYU,18,WATER,GRASS ELECTRIC
+  MISTY,STARMIE,21,PSYCHIC/WATER,BUG GRASS ELECTRIC
 ```
 
 | species | where | levels | slots | catch rate | arrives with | answers |

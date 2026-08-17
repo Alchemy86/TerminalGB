@@ -1413,11 +1413,15 @@ is a mismatch rather than a silent mis-read.
 
 ```console
 $ python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --report
-  MonsterNames      @ 0x01C21E  190 names
-  PokedexOrder      @ 0x041024
-  BaseStats         @ 0x0383DE
-  TypeEffects       @ 0x03E474  82 rows
-  WildDataPointers  @ 0x00CEEB  bank 3 (BLUE), 55 maps with grass
+cartridge:
+  path: <blue.gb>
+  version: BLUE
+tables[5]{table,at,detail}:
+  MonsterNames,0x01C21E,190 names
+  PokedexOrder,0x041024,-
+  BaseStats,0x0383DE,150 records
+  TypeEffects,0x03E474,82 rows
+  WildDataPointers,0x00CEEB,"bank 3, 55 maps with grass"
 ```
 
 `PokedexOrder` at `$41024` is where `AGENTS.md` independently records it, which
@@ -1428,13 +1432,22 @@ lookup:
 
 ```console
 $ … --effective-against rock
-super effective against ROCK: FIGHTING, GRASS, GROUND, WATER
+effective_against[4]{target,attacking_type}:
+  ROCK,FIGHTING
+  ROCK,GRASS
+  ROCK,GROUND
+  ROCK,WATER
 
 $ … --catch-for rock --max-level 12
-  TENTACOOL    POISON/WATER     map 0x1E   water lv 5-40   10/10 slots
-  SANDSHREW    GROUND           Route 4    grass lv 6-12    4/10 slots
-  GEODUDE      GROUND/ROCK      Mt Moon 1F grass lv 8-10    2/10 slots
-  PARAS        BUG/GRASS        Mt Moon 1F grass lv 8-8     1/10 slots
+catch_for:
+  target: ROCK
+  max_level: 12
+candidates[15]{species,types,map,kind,level_lo,level_hi,slots}:
+  TENTACOOL,POISON/WATER,map 0x1E,water,5,40,10/10
+  SANDSHREW,GROUND,Route 4,grass,6,12,4/10
+  GEODUDE,GROUND/ROCK,Mt Moon 1F,grass,8,10,2/10
+  PARAS,BUG/GRASS,Mt Moon 1F,grass,8,8,1/10
+  …
 ```
 
 **And the derived answer for Brock is a negative one worth having.** Every map
