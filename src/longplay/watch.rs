@@ -74,11 +74,26 @@ pub const NAMED: &[(&str, u16, u8, bool)] = &[
     ("enemy_hp", tr::ENEMY_MON + 1, 2, true),
     ("enemy_level", tr::ENEMY_MON + 14, 1, false),
     ("trainer_class", tr::TRAINER_CLASS, 1, false),
+    // `party_struct::Species` is offset 0 into `wPartyMon1`, and it is the
+    // **internal** index number rather than a Pokédex number — `$B0` is
+    // CHARMANDER, `$99` BULBASAUR, `$B1` SQUIRTLE. `RomTables::species_name`
+    // turns one into a name using the cartridge's own `MonsterNames`; do not
+    // convert it with a table written down anywhere else.
+    ("lead_species", tr::PARTY_MONS, 1, false),
     // `party_struct::HP` is offset 1 into `wPartyMon1`, big-endian.
     ("lead_hp", tr::PARTY_MONS + 1, 2, true),
     ("lead_max_hp", tr::PARTY_MONS + 34, 2, true),
     ("lead_level", tr::PARTY_MONS + 33, 1, false),
     ("lead_status", tr::PARTY_MONS + 4, 1, false),
+    // `party_struct::Moves` is offset 8 into `wPartyMon1` — four internal move
+    // ids, `$00` for an empty slot. Named because a scenario about *learning* a
+    // move has to be able to say "the right move is held" without inventing an
+    // address; `plugins/trainer/src/gen1.rs` pins `base + party::MOVES` at
+    // `wPartyMon1Moves` `$D173`, so nothing here is a second copy of it.
+    ("lead_move1", tr::PARTY_MONS + 8, 1, false),
+    ("lead_move2", tr::PARTY_MONS + 9, 1, false),
+    ("lead_move3", tr::PARTY_MONS + 10, 1, false),
+    ("lead_move4", tr::PARTY_MONS + 11, 1, false),
 ];
 
 impl Watch {

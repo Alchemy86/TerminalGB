@@ -130,6 +130,21 @@ pub struct RunResult {
     /// [`RunResult::capture`] exists — and it is the same bytes
     /// [`Recording::final_state`] is the hash of.
     pub final_state_bytes: Vec<u8>,
+    /// How the battles inside this run went, observed by the **host**.
+    ///
+    /// **This is here so that two different players can be scored the same
+    /// way.** The battle numbers this project has published so far come from
+    /// `ChainDriver`'s own bookkeeping, which is driver-side: only the scripted
+    /// expert can be measured by it, so a comparison between the expert and
+    /// anything else — a trained network, a baseline, a live model — has no
+    /// battle column at all. These figures are read off the machine on the
+    /// run's own sampling clock and are therefore identical work whoever is
+    /// pressing the buttons. See [`BattleSummary`].
+    ///
+    /// Driver-side bookkeeping still has its place: it can see *why* a move was
+    /// chosen, which nothing outside the driver can. The two are complementary
+    /// and the numbers below are the ones that are comparable.
+    pub battles: BattleSummary,
     /// Where the player was on **every emulated frame**, when the run was
     /// asked to track it.
     ///
@@ -139,6 +154,73 @@ pub struct RunResult {
     /// waypoints rather than a picture of where the time went. Five bus reads
     /// a frame, and only when [`ScenarioRun::tracking`] asked for it.
     pub path: Vec<PathPoint>,
+}
+
+/// What happened in the battles of one run, as the host saw them.
+///
+/// Every field is read from the machine on the run's own sampling clock
+/// ([`SAMPLE_EVERY`] frames) through named watches another crate derived, so a
+/// scripted expert, a trained policy, a live model and a random baseline all
+/// produce these numbers by exactly the same work. That is the whole point:
+/// **a battle figure that only one player can produce cannot be compared.**
+///
+/// What it deliberately does **not** carry is anything about *reasoning* — why
+/// a move was picked, whether a damage estimate landed inside Gen 1's roll
+/// range, how often an escape was refused. Those are properties of a policy
+/// that publishes them, not of a machine, and asking a network for them would
+/// be asking it to explain itself. `ChainDriver`'s own tally still reports them
+/// for the expert.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BattleSummary {
+    /// Battles that began *and ended* inside this run. A battle already in
+    /// progress at the first sample belongs to whoever produced the start
+    /// state and is excluded from every field here.
+    pub battles: u32,
+    /// The opponent was at zero HP when the battle ended.
+    pub won: u32,
+    /// The battle ended with both sides standing.
+    pub fled: u32,
+    /// The party was at zero HP when the battle ended.
+    pub lost: u32,
+    /// Battles whose `wIsInBattle` read 1 when they began.
+    pub wild: u32,
+    /// Battles whose `wIsInBattle` read 2 when they began. A trainer battle
+    /// cannot be fled, which is why the two are counted apart.
+    pub trainer: u32,
+    /// Emulated frames spent inside a battle. Rounded to the sampling clock,
+    /// so it is a proportion rather than an exact count.
+    pub frames_in_battle: u64,
+    /// The lead's HP as a permille of its maximum, summed over battle endings.
+    /// Divide by [`BattleSummary::hp_samples`] for the mean.
+    pub hp_left_permille: u64,
+    /// How many battle endings supplied an HP reading. Zero when the lead had
+    /// no maximum HP to divide by, which is what an empty party looks like.
+    pub hp_samples: u32,
+}
+
+impl BattleSummary {
+    /// Mean HP the lead had left when a battle ended, as a percentage of its
+    /// maximum. Zero battles is reported as zero rather than as a division by
+    /// zero.
+    pub fn hp_left_percent(&self) -> f64 {
+        if self.hp_samples == 0 {
+            return 0.0;
+        }
+        self.hp_left_permille as f64 / self.hp_samples as f64 / 10.0
+    }
+
+    /// Fold another run's battles in, for a corpus total.
+    pub fn merge(&mut self, o: &BattleSummary) {
+        self.battles += o.battles;
+        self.won += o.won;
+        self.fled += o.fled;
+        self.lost += o.lost;
+        self.wild += o.wild;
+        self.trainer += o.trainer;
+        self.frames_in_battle += o.frames_in_battle;
+        self.hp_left_permille += o.hp_left_permille;
+        self.hp_samples += o.hp_samples;
+    }
 }
 
 /// One frame of where the player was.
@@ -286,10 +368,13 @@ impl ScenarioRun {
             None => gb.save_state(),
         };
         // `in_battle` and `enemy_hp` are how a battle's *outcome* is observed —
-        // the flag alone cannot tell a win from an escape. Both are built-in
-        // named watches, so nothing here invents an address.
+        // the flag alone cannot tell a win from an escape. `lead_hp` and
+        // `lead_max_hp` are how expensively it was won: a leg can pass every
+        // attempt while every battle underneath it ends on a sliver, and only
+        // the second pair can say so. All four are built-in named watches, so
+        // nothing here invents an address.
         let internal = Watches(
-            ["in_battle", "enemy_hp"]
+            ["in_battle", "enemy_hp", "lead_hp", "lead_max_hp"]
                 .iter()
                 .filter_map(|n| Watch::named(n))
                 .collect(),
@@ -664,6 +749,7 @@ impl ScenarioRun {
             emulate_ms: emulating.as_millis(),
             capture,
             final_state_bytes,
+            battles: battles.summary(),
             path,
         }
     }
@@ -759,6 +845,7 @@ impl ScenarioRun {
             emulate_ms: 0,
             capture: None,
             final_state_bytes: Vec::new(),
+            battles: BattleSummary::default(),
             path: Vec::new(),
         }
     }
@@ -861,22 +948,54 @@ struct Battles {
     won: u32,
     fled: u32,
     lost: u32,
+    /// `wIsInBattle` as it stood in the battle now running: 1 wild, 2 trainer.
+    kind: u32,
+    wild: u32,
+    trainer: u32,
+    /// Samples spent inside a battle this run did not inherit, so
+    /// `frames_in_battle` below is a real fraction of the run.
+    battle_samples: u64,
+    /// The lead's HP as a permille of its maximum, summed over battle
+    /// *endings*, and how many endings supplied one.
+    hp_permille: u64,
+    hp_samples: u32,
+    /// The lead's HP and maximum as they stood at the last sample, so an
+    /// ending can be scored from what the battle looked like just before it
+    /// disappeared.
+    lead_hp: u32,
+    lead_max_hp: u32,
 }
 
 impl Battles {
     fn observe(&mut self, w: &Sample, party_hp: u32) {
-        let now = w.get("in_battle").unwrap_or(0) != 0;
+        let flag = w.get("in_battle").unwrap_or(0);
+        // `wIsInBattle`: 1 wild, 2 trainer, `$FF` blacked out. The sentinel is
+        // *not* a battle, and a catch-all arm that treats it as one is the
+        // defect `plugins/trainer/src/encounter.rs` records — see
+        // `a_blackout_sentinel_is_not_a_battle` below.
+        let now = flag == 1 || flag == 2;
         let enemy_hp = w.get("enemy_hp").unwrap_or(0);
+        let lead_hp = w.get("lead_hp").unwrap_or(0);
+        let lead_max = w.get("lead_max_hp").unwrap_or(0);
         if !self.primed {
             self.primed = true;
             self.in_battle = now;
             self.inherited = now;
             self.last_enemy_hp = enemy_hp;
+            self.kind = flag;
             return;
         }
         if now {
+            if !self.in_battle {
+                self.kind = flag;
+            }
             self.in_battle = true;
             self.last_enemy_hp = enemy_hp;
+            self.lead_hp = lead_hp;
+            self.lead_max_hp = lead_max;
+            if !self.inherited {
+                self.battle_samples += 1;
+            }
             return;
         }
         if self.in_battle {
@@ -885,6 +1004,16 @@ impl Battles {
                 self.inherited = false;
                 return;
             }
+            if self.kind == 2 {
+                self.trainer += 1;
+            } else {
+                self.wild += 1;
+            }
+            if self.lead_max_hp > 0 {
+                self.hp_permille += (self.lead_hp.min(self.lead_max_hp) as u64 * 1000)
+                    / self.lead_max_hp as u64;
+                self.hp_samples += 1;
+            }
             if party_hp == 0 {
                 self.lost += 1;
             } else if self.last_enemy_hp == 0 {
@@ -892,6 +1021,20 @@ impl Battles {
             } else {
                 self.fled += 1;
             }
+        }
+    }
+
+    fn summary(&self) -> BattleSummary {
+        BattleSummary {
+            battles: self.won + self.fled + self.lost,
+            won: self.won,
+            fled: self.fled,
+            lost: self.lost,
+            wild: self.wild,
+            trainer: self.trainer,
+            frames_in_battle: self.battle_samples * SAMPLE_EVERY,
+            hp_left_permille: self.hp_permille,
+            hp_samples: self.hp_samples,
         }
     }
 }
@@ -909,9 +1052,16 @@ mod tests {
     }
 
     fn s(in_battle: u32, enemy_hp: u32) -> Sample {
+        hp(in_battle, enemy_hp, 20, 20)
+    }
+
+    /// The same sample with the lead's own HP stated, for the cost figures.
+    fn hp(in_battle: u32, enemy_hp: u32, lead: u32, lead_max: u32) -> Sample {
         Sample(vec![
             ("in_battle".into(), in_battle),
             ("enemy_hp".into(), enemy_hp),
+            ("lead_hp".into(), lead),
+            ("lead_max_hp".into(), lead_max),
         ])
     }
 
@@ -967,6 +1117,71 @@ mod tests {
             (0, 0, 0),
             "the run inherited the battle, it did not have it"
         );
+    }
+
+    /// **`wIsInBattle` is a raw byte and `$FF` means blacked out, not
+    /// fighting.** Third instance of the same class in this repository — the
+    /// first was `plugins/trainer/src/encounter.rs`, whose catch-all arm drew a
+    /// whole stale battle panel in the overworld. Teeth: with `!= 0` the wipe
+    /// below reads as a battle beginning and then never ending, so the run
+    /// reports a battle it never had and no HP figure at all.
+    #[test]
+    fn a_blackout_sentinel_is_not_a_battle() {
+        let mut b = fresh();
+        b.observe(&hp(1, 20, 12, 20), 12);
+        b.observe(&hp(1, 20, 0, 20), 0); // the lead goes down
+        b.observe(&hp(0xFF, 20, 0, 20), 0); // wIsInBattle == $FF: blacked out
+        b.observe(&hp(0, 0, 20, 20), 20); // and we wake up in a Pokémon Center
+        let s = b.summary();
+        assert_eq!((s.battles, s.lost), (1, 1), "one battle, and it was lost");
+    }
+
+    /// A wild battle and a trainer battle are different situations — one can be
+    /// fled and one cannot — so they are counted apart, and the kind is taken
+    /// when the battle *begins* rather than when it ends, because by then the
+    /// flag has already gone.
+    #[test]
+    fn a_wild_battle_and_a_trainer_battle_are_counted_apart() {
+        let mut b = fresh();
+        b.observe(&s(1, 20), 100);
+        b.observe(&s(0, 18), 100);
+        b.observe(&s(2, 30), 100);
+        b.observe(&s(2, 0), 100);
+        b.observe(&s(0, 0), 100);
+        let sum = b.summary();
+        assert_eq!((sum.wild, sum.trainer), (1, 1));
+        assert_eq!((sum.fled, sum.won), (1, 1));
+    }
+
+    /// **A leg can pass every attempt while every battle under it ends on a
+    /// sliver.** The pass rate cannot see that and the HP figure is the whole
+    /// reason it is reported beside it.
+    #[test]
+    fn how_much_hp_a_battle_cost_is_read_at_the_ending() {
+        let mut b = fresh();
+        b.observe(&hp(1, 20, 19, 20), 19);
+        b.observe(&hp(1, 0, 5, 20), 5); // won it, but only just
+        b.observe(&hp(0, 0, 5, 20), 5);
+        let sum = b.summary();
+        assert_eq!(sum.hp_samples, 1);
+        assert!(
+            (sum.hp_left_percent() - 25.0).abs() < 0.01,
+            "5 of 20 is 25%, got {}",
+            sum.hp_left_percent()
+        );
+        assert_eq!(sum.frames_in_battle, 2 * SAMPLE_EVERY);
+    }
+
+    /// An inherited battle contributes to nothing at all, not merely to the
+    /// win column: counting its frames or its HP would charge this run for a
+    /// fight the previous link had.
+    #[test]
+    fn an_inherited_battle_contributes_to_no_field() {
+        let mut b = Battles::default();
+        b.observe(&hp(1, 12, 3, 20), 3);
+        b.observe(&hp(1, 0, 3, 20), 3);
+        b.observe(&hp(0, 0, 3, 20), 3);
+        assert_eq!(b.summary(), BattleSummary::default());
     }
 
     #[test]
