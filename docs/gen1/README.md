@@ -34,6 +34,7 @@ Anything unproven says so.
 | [Two consoles, one wire](../link-cable.md) | The other approach: relay bytes between two real cores instead of impersonating one | **Gen 1 ↔ Gen 1 and Gen 1 ↔ Gen 2 trades both verified** |
 | [The Time Capsule](../gen2/time-capsule.md) | The one door to Generation 2: what Gold refuses, what it requires, and why the wire needs nothing added | **a Pokémon crossed it, both directions** |
 | [Leaving the Cable Club](leaving-the-cable-club.md) | Why cancelling needs *both* players, why the Trade Center has no door, and the button that actually gets you out | **measured on the retail ROM** |
+| [**Discoveries**](discoveries.md) | Every fault and quirk this project found in Pokémon Blue, with the reasoning trail for each — including the wrong turns, and including the entries where the wrong belief was ours. Slugs are a permanent contract so [AtlasGB](https://github.com/Alchemy86/AtlasGB) can link back to them | **measured on the retail ROM** |
 | [Sharp edges](sharp-edges.md) | The traps. Every one of these cost somebody hours | **verified the hard way** |
 | [Agent play](agent-play.md) | An AI agent that reads game state and presses buttons, with commentary for a stream | **plays the opening on the retail ROM** |
 | [Shiny hunting](../shiny-hunt.md) | Hunting the DV spread that becomes shiny in Gen 2, across many headless emulators at once — including how to decorrelate machines that all start from the same save state | **hunts on the retail ROM** |
@@ -61,6 +62,12 @@ Two investigations are live as this area is created, and each has a home waiting
 Anything else: put it on the page whose *mechanism* it belongs to. A new page is warranted
 when there is a mechanism nobody has written down yet, not when there is a new trick built on
 an old one.
+
+**A *fault* or a corrected belief goes on [`discoveries.md`](discoveries.md)** — the reasoning
+trail, the wrong turns, the citation and the evidence — and the one-line warning form of it goes
+on [`sharp-edges.md`](sharp-edges.md), grouped by what you were doing when it bit. The two are
+deliberately different documents: one is how it was found, the other is how to avoid it. A
+discovery entry's heading is a **permanent slug**, because AtlasGB links back to it.
 
 ---
 

@@ -333,10 +333,11 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             );
             // **Turn west on the row the mart door opens onto, not six rows
             // down it.** `(29,26)` is one tile above a one-way ledge —
-            // measured, `(29,27)` walking down lands on `(29,29)` — so a `goto`
-            // that overshoots it by two is over the ledge and can never get
-            // back: from row 28 nothing reaches row 26, and the leg then spends
-            // its whole budget sliding along row 28. That was 17 of 600
+            // measured, walking down from `(29,26)` lands on `(29,28)`, a
+            // two-tile jump over row 27, and stepping up from row 28 goes
+            // nowhere — so a `goto` that overshoots it is over the ledge and
+            // can never get back, and the leg then spends its whole budget
+            // sliding along row 28. That was 17 of 600
             // attempts, every one of them there, and it is the same shape as
             // link 04's `(4,4)` and link 05's row 4 — **a waypoint whose
             // overshoot is unrecoverable is a waypoint pointing at a trap.**

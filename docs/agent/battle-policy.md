@@ -115,7 +115,7 @@ Link 10 is the first leg where the policy *fights* wild Pokémon at scale:
 - **A move's accuracy is not the number in the move table.** `MoveHitTest`
   multiplies it by the attacker's accuracy ratio and by the inverse of the
   defender's evasion ratio, both out of `StatModifierRatios` — so a Pidgey's
-  SAND-ATTACK takes a 94% TACKLE to 62% and then 47%. The policy was reading 94
+  SAND-ATTACK takes a 95% TACKLE to 62% and then 47%. The policy was reading 95
   off the ROM and, at 2 HP against a Pokémon on 1 HP, choosing to swing rather
   than escape because *"a good roll ends it first"*. It was a coin flip taken in
   place of an escape that also removes the incoming hit. Effective accuracy is
@@ -385,9 +385,20 @@ move. Measured before it was believed, and it is why the driver reads
 it wrong is silent: the cursor is already where you wanted, so A fires on the
 wrong move and the policy's choice is thrown away.
 
-**`TACKLE`'s accuracy byte is 240, not 242.** That is 94%, where the community
-usually quotes 95%. The cartridge is the authority and the reader converts
-`byte * 100 / 255`; nothing here rounds it up to a nicer number.
+**`TACKLE`'s accuracy byte is 242, which is 94.9% — the community's 95% is
+right.** This section used to claim the opposite (*"the byte is 240, not 242 …
+that is 94%"*) and it was wrong: 94% of 255 is 239.7, so 240 is the byte you get
+by *computing it from a percentage you already believed* rather than reading one.
+The code was never affected — `rom::move_accuracy_percent` rounds to nearest and
+has always reported 95 — only the prose was. Re-read off the retail cartridge at
+`Moves` `0E:4000`, six bytes a move, with POUND, SCRATCH, VINE WHIP, HYPER BEAM
+and HYDRO PUMP checked in the same pass so the offset and stride are not in
+doubt. Full working:
+[discoveries](../gen1/discoveries.md#tackle-is-95-per-cent-and-we-said-94).
+
+> **When you write down a number the cartridge holds, write down the command that
+> reads it.** A confident, cited-sounding sentence with no command behind it is a
+> guess wearing a citation's clothes.
 
 ---
 
@@ -402,3 +413,7 @@ usually quotes 95%. The cartridge is the authority and the reader converts
   battle; that one simulates hypothetical ones.
 - [sharp edges](../gen1/sharp-edges.md) — including the soft-lock next door to
   where this fight happens.
+- [discoveries](../gen1/discoveries.md) — every battle finding on this page, and
+  the rest of the campaign's, written as *how it was found* with the wrong turns
+  kept: the critical hit, the accuracy scaling, the 1-based cursor, the escape
+  that is not free, and the two numbers of ours that turned out to be wrong.

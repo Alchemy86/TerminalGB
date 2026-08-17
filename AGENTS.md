@@ -7987,6 +7987,32 @@ reports `blip_buf` + first-party `terminalgb-plugin-api`).
   model as *the floor* is the point — "our agent reached Viridian City" says very little until
   somebody has measured that undirected walking never does.
 
+## The discovery record — `docs/gen1/discoveries.md`, and its slugs are a CONTRACT
+
+**Every fault, quirk and corrected belief this campaign found in Pokémon Blue, with the reasoning
+trail for each.** It is the one door for *"what has this project discovered about the game"*; the
+findings used to be scattered across `docs/gen1/sharp-edges.md`, `docs/agent/pewter-chain.md`,
+`docs/agent/battle-policy.md`, `docs/conformance-notes.md` and commit messages.
+
+- **A HEADING'S SLUG IS PERMANENT ONCE PUBLISHED**, exactly like a `TGB-` code in
+  `docs/pitfalls/codes.md`: **[AtlasGB](https://github.com/Alchemy86/AtlasGB) links back to
+  `discoveries.md#<slug>` from the addresses these findings involve**, so a reworded heading
+  breaks somebody else's index. Adding is free; renaming is forbidden. If an entry turns out to be
+  wrong, correct its *body* and say so in it.
+- **Write headings with no em dash and no ` / `.** GitHub's slug rule replaces each space with a
+  hyphen *without collapsing runs*, so ` — ` leaves a **double** hyphen and the slug stops being
+  guessable. Backticks, quotes and apostrophes are dropped in place and are safe.
+- **`discoveries.md` and `sharp-edges.md` are deliberately two documents.** One is how it was
+  found — the messy symptom, the wrong turns, the citation, the evidence; the other is the
+  one-line warning, grouped by what you were doing when it bit. A finding earns a place on both.
+- **An entry that corrects one of OUR beliefs is as valuable as one about the cartridge, and the
+  page says which it is.** Eight of the twenty-one are ours, and two of them were found *while
+  writing the page* by re-running a measurement instead of copying the number: the TACKLE accuracy
+  byte, and the ledge row in link 08's own source comment.
+- Link into the atlas by **symbol** (`…/by-name.md#s-<symbol>`, `#a-<ADDR>` for an address), and
+  use the `/tree/main/` URL form — `codemap_links.py --check` rejects a `/blob/` link into a repo
+  that is not ours.
+
 ## The Pewter chain — fourteen scenarios from a cold cartridge (`scenarios/pewter/`)
 
 **Reader-facing page: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md).** Fourteen
@@ -8044,12 +8070,15 @@ links from the Nintendo logo to standing in Pewter City, an expert solver
   its **bottom-left** 8x8 (block indices 4, 6, 12, 14 — the rule `docs/gen1/authoring-an-area.md`
   records). Two of the chain's own objective claims were verified with it, and both came back
   *stronger* than they were written: Route 2's halves are genuinely two disjoint components (245
-  tiles over rows 43-71, 86 over rows 0-11, neither containing the other's gate), and Viridian
-  Forest's three bug catchers are unavoidable at a sight cone of **one** tile, not the four to six
-  that had been recorded. **Their bodies alone do not sever the map** — which is as it must be,
-  since they are still standing there once beaten — so the compulsion is the cones, and it does
-  not depend on knowing the view range the map script sets. The direction is in the object data:
-  movement `$FF` (`STAY`) and range `$D0/$D1/$D2/$D3` = down/up/left/right.
+  tiles over rows 43-71, 86 over rows 0-11, neither containing the other's gate), and **exactly
+  one** of Viridian Forest's three bug catchers is unavoidable — measured per trainer at every
+  sight range 1-8, with and without line of sight, only the one at `(2,18)` severs the map on its
+  own. Blocking all three severs it too, which is what an earlier note over-read as "all three are
+  unavoidable"; a 3,000-attempt certified run settles it at **exactly one trainer battle per
+  attempt**. **Their bodies alone do not sever the map** — which is as it must be, since they are
+  still standing there once beaten — so the compulsion is the cones, and it does not depend on
+  knowing the view range the map script sets. The direction is in the object data: movement `$FF`
+  (`STAY`) and range `$D0/$D1/$D2/$D3` = down/up/left/right.
 - **`tools/gen1-tables/gen1_tables.py` reads the type chart, the wild encounter tables, the base
   stats, `PokedexOrder` and `MonsterNames` OUT OF THE CARTRIDGE**, located by signature (the same
   technique `plugins/battle-control/src/wram.rs` uses for WRAM). `PokedexOrder` lands at `$41024`,
@@ -8211,9 +8240,16 @@ re-certified against it, exactly as a driver change forces.
   the other 6 of 600. Gate it on the battle being *wild*: there is no running from a trainer and
   a rule that leaves the policy with nothing to do is worse than no rule. (3) **A move's
   accuracy is not the number in the move table** — `MoveHitTest` scales it by the attacker's
-  accuracy stage and the defender's evasion, so a Pidgey's SAND-ATTACK takes a 94% TACKLE to
-  47%, and a policy reading 94 keeps swinging instead of escaping. **That one only appeared at
+  accuracy stage and the defender's evasion, so a Pidgey's SAND-ATTACK takes a 95% TACKLE to
+  47%, and a policy reading 95 keeps swinging instead of escaping. **That one only appeared at
   3,000 attempts; 600 was clean twice.**
+- **`TACKLE`'s accuracy byte is 242 = 95%, and the note here that said "240, not 242 … that is
+  94%" was WRONG.** 94% of 255 is 239.7, so 240 is the byte you get by computing it from a
+  percentage you already believed rather than reading one; `rom::move_accuracy_percent` rounds to
+  nearest and has always reported 95, so only the prose was affected. Re-read at `Moves`
+  `0E:4000`, six bytes a move, with POUND/SCRATCH/VINE WHIP/HYPER BEAM/HYDRO PUMP checked in the
+  same pass so the offset and stride are not in doubt. **When you write down a number the
+  cartridge holds, write down the command that reads it.**
 - **AN ESCAPE IS NOT FREE, SO A FINISHER BEATS IT — but the finisher must be the WORST roll and it
   only applies when the escape is the unreliable half.** A level 5 Bulbasaur on 10 of 20 ran from a
   level 3 Rattata on **2 of 14** that its own TACKLE kills outright; the escape failed, the Rattata

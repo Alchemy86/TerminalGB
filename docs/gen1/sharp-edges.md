@@ -1,9 +1,14 @@
 # Sharp edges
 
-[← Gen 1 area](README.md)
+[← Gen 1 area](README.md) · [discoveries](discoveries.md)
 
 Everything here cost somebody hours. They are grouped by what you were trying to do when they
 bit, because that is how you will be looking for them.
+
+> **This page is the warning; [`discoveries.md`](discoveries.md) is the reasoning.** Where a trap
+> below is a *fault* or a corrected belief, the discovery record carries how it was found — the
+> messy symptom, the wrong turns, the citation and the evidence — under a slug that is a permanent
+> link target. A finding earns a place on both pages, in different words.
 
 ---
 
@@ -139,6 +144,10 @@ Proof that it is the cartridge and not the emulator: the four bytes at `$C3A0` i
 machine are a well-formed OAM quad — Y, X, tile, attributes — and the `$A0`s run away from it on
 a four-byte lattice to exactly `$C4A0`. Nothing outside the ROM writes OAM-shaped data into work
 RAM. Both picture engines produce it identically.
+
+The whole reasoning trail — the delta-debug from 565 differing bytes to one, and why the CPU
+being parked in `DelayFrame` proves nothing — is
+[discoveries: the Oak's Lab soft-lock](discoveries.md#the-oaks-lab-soft-lock).
 
 **So keep the player in rows 3-4 until the starter is taken**, which is also the shortest route:
 Oak's escort ends at `(5,3)`, one step down is `(5,4)`, and the three Poké Balls are reached

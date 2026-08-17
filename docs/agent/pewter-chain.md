@@ -123,9 +123,15 @@ walkthrough would have said:
 
 And a third, from the same grid plus the map's object list:
 
-- **The forest's three bug catchers are unavoidable.** Blocking their sight
-  cones at four, five and six tiles and re-pathing gives **no route at any of
-  them**. That is what makes link 11 necessary.
+- **One of the forest's three bug catchers is unavoidable, and it is the one at
+  `(2,18)`.** Blocking all three sight cones and re-pathing gives no route at
+  any range from one to eight tiles — but taken *individually* only that one
+  severs the map, and the other two are each avoidable. (This bullet used to
+  read *"the forest's three bug catchers are unavoidable"*, which over-read the
+  same grid; a 3,000-attempt run settles it at **exactly one trainer battle per
+  attempt**.) The compulsory fight is roster 3, a single level 9 Weedle — which
+  is still what makes link 11 necessary, because the threshold is that
+  trainer's level plus one.
 
 ---
 
@@ -590,11 +596,15 @@ attempts** are needed to support a 99.9% claim. Every rate on this page is
 written with its N and its interval for that reason, and `corpus` prints the
 bound itself so it cannot be quoted without one.
 
-**Links 01 to 10 have had them** — 3,000 attempts each, zero failures, 3,000
-distinct trajectories each, tabulated in §5. **Links 11 to 14 have not**, and
-several are visibly a long way from the bar; their failure modes are §8. The
-chain is finished when all fourteen are certified and not before, and the
-end-to-end figure stays what the weakest link makes it.
+**Thirteen of the fourteen have had them** — links 01-10 and 12-14, 3,000
+attempts each, zero failures, 3,000 distinct trajectories each, tabulated in §5.
+**Link 11 has not.** It measures 2,999 of 3,000, which bounds its failure rate at
+about 0.16% and does not clear 99.9% under this page's zero-failure convention;
+it was *accepted by decision* rather than certified, and §7b is the evidence that
+decision was made on. So the chain is not finished: the end-to-end figure stays
+what the weakest link makes it, and the weakest link is the one that has not
+cleared the bar. The failure modes of every link, including the ones that now
+pass, are §8.
 
 ---
 
@@ -858,16 +868,22 @@ headroom over the worst case measured, and the fact that it is only 20% is
 stated rather than hidden. It is still where an agent would gain most from
 something better than "pace and fight everything".
 
-### 8.9 The forest, which is genuinely hard
+### 8.9 The forest, which was genuinely hard
 
-Link 13 is the one that still fails, and it fails two ways:
+**Link 13 is certified now** — 3,000 of 3,000, a median of 82 decisions, 94.4% of
+the lead's HP left and not one faint — and neither thing that fixed it was a
+change to link 13 (see §7b's closing table). This is what it looked like before
+that, kept because it is the entry the repair loop of §9 was built for.
 
-- **it runs out of decisions** — 32 of the 52 failures over 300 attempts, the
-  1,200-call ceiling spent in the maze.
-- **the party faints** — the other 16. Three compulsory bug catchers, six
-  Pokémon, top level 9, no healing between them, and tall grass throwing wild
-  encounters the whole way. Observed ending at (1,18) and (26,19), which are
-  the third and second trainers.
+At 300 attempts it failed two ways:
+
+- **it ran out of decisions** — 32 of the 52 failures, the 1,200-call ceiling
+  spent in the maze.
+- **the party fainted** — the other 16. Bug catchers with six Pokémon between
+  them, top level 9, no healing anywhere in the map, and tall grass throwing
+  wild encounters the whole way. Observed ending at (1,18) and (26,19), which
+  are two of the three trainers. (Only the one at `(2,18)` is compulsory — §3 —
+  but a route that walks into the others' sight lines fights them anyway.)
 
 Fighting the forest's own wild Pokémon makes it worse, not better: Caterpie,
 Weedle and their cocoons give almost no experience and cost about fifteen
@@ -1031,12 +1047,21 @@ Link 08 lost 17 of 600 attempts and every one of them was on Viridian City's row
 28, sliding between x=26 and x=32 with the leg's first waypoint at `(29,26)`
 unreachable above it.
 
-Measured on the cartridge, one step at a time: walking down from `(29,27)` lands
-on `(29,29)` — a two-tile jump over row 28 — and from row 28 nothing reaches row
-26. So `(29,26)` sits one tile above a **one-way** ledge, and a `goto` that
-overshoots it by two is over the ledge for good. The overshoot itself is
-ordinary: an NPC standing on the target tile, or a detour, and the walk carries
-on past it.
+Measured on the cartridge, one step at a time: **row 27 is a wall across the
+whole city with exactly two gaps, at x=15 and x=19**, and walking down from
+`(29,26)` lands on `(29,28)` — a two-tile jump over row 27 — while stepping up
+from `(29,28)` goes nowhere. So `(29,26)` sits one tile above a **one-way**
+ledge, and a `goto` that overshoots it is over the ledge for good: simulated
+below it, the walker stops at `(32,28)`, `(27,28)` and `(31,28)` from three
+different starts, which is the x=26 to x=32 slide the corpus reported. The
+overshoot itself is ordinary: an NPC standing on the target tile, or a detour,
+and the walk carries on past it.
+
+*(This paragraph used to say the jump was `(29,27)` → `(29,29)`, which
+contradicted the paragraph three below it and put the ledge one row low. Row 27
+is the ledge and is not standable. Re-measured with `route_audit.py`'s own `Map`
+over the retail cartridge; the working is in
+[discoveries](../gen1/discoveries.md#the-one-way-ledge-trap).)*
 
 The repair is not a bigger budget. Row 20 — the row the mart door opens onto —
 crosses the city cleanly from x=29 to x=19 (checked), sits six rows above the
@@ -1916,8 +1941,10 @@ not exist:
   pool of entry states and the chain keeps every winning seed's exit state, so
   "how far off nominal can a link start and still succeed" is one command away.
   It has not been run.
-- **Four of the fourteen links have no 3,000-attempt run**, so their rates are
-  not certified against the bar. Links 01-10 are (§5); 11 onwards are the work.
+- **One of the fourteen links has not cleared the bar.** Links 01-10 and 12-14
+  certify at 3,000/3,000 each (§5); link 11 measures 2,999 of 3,000 and is
+  *accepted by decision* rather than certified (§7b). The chain's end-to-end
+  figure is what that link makes it.
 
 ## 14. Related pages
 
@@ -1928,5 +1955,9 @@ not exist:
   beat, and where the film work continues.
 - [Gen 1 mechanics](../gen1/README.md) — the memory map, battle control and the
   citation standard these goals follow.
+- [discoveries](../gen1/discoveries.md) — the faults and corrected beliefs this
+  chain turned up, written as *how each was found*: the soft-lock in §8.10, the
+  ledge shape in §8.12, the blackout carve-out in §8.11 and the dead band in
+  §8.14, each under a permanent slug the memory atlas links back to.
 - [as an agent environment](../agent-environment.md) — determinism, throughput
   and save states as episode resets.

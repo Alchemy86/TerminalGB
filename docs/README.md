@@ -176,6 +176,7 @@ and that had quietly happened to more than half of this directory.
 | [leaving the Cable Club](gen1/leaving-the-cable-club.md) | the report that was not our bug, measured against the cartridge |
 | [authoring an area](gen1/authoring-an-area.md) | a new destination reached through the cartridge's own unedited door |
 | [agent play](gen1/agent-play.md) | reading state and pressing buttons — the Gen 1 facts an agent needs |
+| [discoveries](gen1/discoveries.md) | every fault and quirk this campaign found in Pokémon Blue, with the reasoning that found it — a thirty-year-old soft-lock, mechanics the community states one way and the cartridge another, and the corrections of our own beliefs |
 | [sharp edges](gen1/sharp-edges.md) | the Gen 1 traps that produce plausible-but-wrong data |
 
 ## Pokémon Generation 2

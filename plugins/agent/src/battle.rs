@@ -178,8 +178,8 @@ pub struct Move {
     /// attacker's accuracy ratio, then the inverse of the defender's evasion
     /// ratio, both out of `StatModifierRatios`.
     ///
-    /// **Not the ROM value.** A Pidgey's SAND-ATTACK takes a 94% TACKLE to 62%
-    /// and then 47%, and a policy reading 94 off the move table walks into a
+    /// **Not the ROM value.** A Pidgey's SAND-ATTACK takes a 95% TACKLE to 62%
+    /// and then 47%, and a policy reading 95 off the move table walks into a
     /// fight it is no longer winning — measured, that is exactly how three of
     /// 3,000 attempts at link 10 died.
     pub accuracy: u8,
