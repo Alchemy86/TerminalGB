@@ -1,0 +1,91 @@
+# Battles for `examples/gen1_catch_drill.rs`.
+#
+# Two shapes, in matched pairs, so a discriminator can be measured against both
+# without anything else moving: the same challenger, the same map, the same
+# start state, and only `wild =` versus `trainer =` different. That matching is
+# the whole design — a discriminator scored on wild battles taken from one
+# save and trainer battles taken from another is measuring the saves.
+#
+# No `player =` line appears in the pairs that only need an opposition, so the
+# save's own party is left alone. Where a challenger is named it is one that
+# survives long enough for the drill to throw several balls.
+
+# ---------------------------------------------------------------------------
+# The matched pair. RATTATA is Route 1's commonest wild Pokémon; a YOUNGSTER's
+# first roster is the same species, which is what makes the pair fair: the
+# *opponent* is identical and only the battle's kind differs.
+# ---------------------------------------------------------------------------
+[pair-wild]
+description = A wild RATTATA, for the discriminator's wild half
+
+player   = Charmander
+level    = 20
+moves    = Scratch, Growl
+nickname = DRILLMON
+
+wild     = Rattata
+level    = 5
+
+[pair-trainer]
+description = A YOUNGSTER whose first roster is the same RATTATA
+
+player   = Charmander
+level    = 20
+moves    = Scratch, Growl
+nickname = DRILLMON
+
+trainer  = Youngster
+roster   = 1
+
+# ---------------------------------------------------------------------------
+# The catching targets the chain's own route offers, at the levels it offers
+# them. Each is a wild battle and each is a real species the encounter tables
+# put on the road to Pewter — see `docs/gen1/catching.md`.
+# ---------------------------------------------------------------------------
+[wild-pikachu]
+description = Viridian Forest's PIKACHU, 2 of 10 grass slots
+
+player   = Charmander
+level    = 20
+moves    = Scratch, Growl
+nickname = DRILLMON
+
+wild     = Pikachu
+level    = 4
+
+[wild-nidoran-m]
+description = Route 22's NIDORAN male
+
+player   = Charmander
+level    = 20
+moves    = Scratch, Growl
+nickname = DRILLMON
+
+wild     = NidoranM
+level    = 4
+
+[wild-caterpie]
+description = Viridian Forest's CATERPIE, the commonest thing on the route
+
+player   = Charmander
+level    = 20
+moves    = Scratch, Growl
+nickname = DRILLMON
+
+wild     = Caterpie
+level    = 4
+
+# ---------------------------------------------------------------------------
+# A wild Pokémon with a *hard* catch rate, so the drill's odds check is not
+# measured only where the answer is near certain.
+# ---------------------------------------------------------------------------
+[wild-mewtwo]
+description = A level 70 MEWTWO — catch rate 3, the far end of the range
+
+player   = Charizard
+level    = 60
+moves    = Scratch, Growl
+nickname = DRILLMON
+
+wild     = Mewtwo
+level    = 70

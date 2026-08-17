@@ -171,6 +171,7 @@ and that had quietly happened to more than half of this directory.
 | [reading the screen as text](gen1/reading-the-screen.md) | the tilemap trick that lets a headless bot navigate menus |
 | [starting a battle from outside](gen1/battle-control.md) | the one byte the engine polls, and how to script what follows |
 | [the battle engine](gen1/battle-engine.md) | a model of the battle rules held to the retail cartridge as an oracle, and agents that play it |
+| [catching](gen1/catching.md) | whether an encounter is worth a ball — the capability's gate measured on the chain's own states, a wild-versus-trainer discriminator established twice, and the catch rate against the odds we predict |
 | [a paper's Gen 1 claims, checked](gen1/paper-claims.md) | eleven asserted mechanics measured on the cartridge — what held, what did not, and the one our own engine had backwards |
 | [driving the link cable from outside](gen1/link-from-outside.md) | impersonating the far end of the wire, and what the protocol actually carries |
 | [leaving the Cable Club](gen1/leaving-the-cable-club.md) | the report that was not our bug, measured against the cartridge |

@@ -48,6 +48,8 @@ use std::time::Instant;
 
 pub mod action;
 pub mod battle;
+pub mod battlekind;
+pub mod catch;
 pub mod commentary;
 pub mod driver;
 pub mod governor;

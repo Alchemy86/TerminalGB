@@ -78,7 +78,41 @@ pub enum Ball {
     Safari,
 }
 
+/// The bag item id of each ball, **taken from the routine's own comparisons**
+/// rather than from a transcribed constant list.
+///
+/// `ItemUsePokeBall` compares `wcf91` against `MASTER_BALL` at `03:5702`,
+/// `POKE_BALL` at `03:5707` and `GREAT_BALL` at `03:5711`, and the immediates
+/// in those three `cp`s are 1, 4 and 3 — the same bytes the module transcript
+/// above records. `ULTRA_BALL` is 2, the remaining id below `GREAT_BALL` that
+/// falls through to `03:5715`; `SAFARI_BALL` is 8 and reaches `03:5715` too,
+/// which is why it and the Ultra Ball share a threshold here.
+pub const ITEM_IDS: [(u8, Ball); 5] = [
+    (1, Ball::Master),
+    (2, Ball::Ultra),
+    (3, Ball::Great),
+    (4, Ball::Poke),
+    (8, Ball::Safari),
+];
+
+/// Which ball a bag item id is, or `None` if it is not a ball at all.
+///
+/// **One mapping, in one place.** A second copy in a caller is how a policy and
+/// the odds it quotes end up talking about different items.
+pub fn ball_for_item(item: u8) -> Option<Ball> {
+    ITEM_IDS.iter().find(|(i, _)| *i == item).map(|(_, b)| *b)
+}
+
 impl Ball {
+    /// The bag item id to select for this ball.
+    pub fn item_id(self) -> u8 {
+        ITEM_IDS
+            .iter()
+            .find(|(_, b)| *b == self)
+            .map(|(i, _)| *i)
+            .expect("every Ball has an item id")
+    }
+
     pub fn short(self) -> &'static str {
         match self {
             Ball::Master => "MSTR",
@@ -418,6 +452,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The item ids and the balls are one mapping, both ways round. A caller
+    /// that kept its own copy would eventually disagree with the routine the
+    /// odds are computed from.
+    #[test]
+    fn every_ball_round_trips_through_its_item_id() {
+        for (id, ball) in ITEM_IDS {
+            assert_eq!(ball_for_item(id), Some(ball));
+            assert_eq!(ball.item_id(), id);
+        }
+        // The three the routine names by hand, spelled out so a renumbering
+        // would be caught here rather than in a run.
+        assert_eq!(ball_for_item(1), Some(Ball::Master));
+        assert_eq!(ball_for_item(3), Some(Ball::Great));
+        assert_eq!(ball_for_item(4), Some(Ball::Poke));
+        // A potion is not a ball, and nor is anything else.
+        assert_eq!(ball_for_item(0x14), None);
+        assert_eq!(ball_for_item(0), None);
     }
 
     /// A catch rate of zero can still be caught, but only by the status bonus —

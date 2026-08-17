@@ -28,6 +28,7 @@ Anything unproven says so.
 | [Authoring an area](authoring-an-area.md) | What a room is made of, how the engine loads one, and the recipe for building a new one in memory and walking into it through an ordinary door — with the ceilings, and Gen 2 scoped | **built and walked on the retail ROM** |
 | [Battle control](battle-control.md) | Starting any battle on demand: wild, trainer, custom teams on both sides, and scripting one as an in-game cinematic | **verified on the retail ROM** |
 | [The battle engine](battle-engine.md) | A model of the battle *rules* — damage, crits, accuracy, status, the Gen 1 bugs — held to the cartridge by a differential harness, plus agents and an evaluation protocol | **32 checkable observations against the retail ROM, zero disagreements** |
+| [Catching](catching.md) | Is this encounter worth a ball: the capability's gate, wild-versus-trainer told apart from memory *and* from the screen, the catch odds held to the cartridge, and a target list derived from the fights ahead | **measured on the retail ROM: 251 throws, 61.0 % caught against 59.8 % predicted** |
 | [A paper's Gen 1 claims, checked](paper-claims.md) | Eleven asserted mechanics from an outside state-space derivation, measured on the cartridge: the toxic formula, five duration counters, the screens, and the critical-hit rate | **measured on the retail ROM; most of the claims hold, and one of ours did not** |
 | [Reading the screen](reading-the-screen.md) | Why `wTileMap` reads back as text, and why that is the right way to drive the game | **verified on the retail ROM** |
 | [Driving the link cable](link-from-outside.md) | Being the console on the other end: the trade protocol, the role handshake, and how a battle can start down the same wire | **trade verified; link *battle* under investigation** |
@@ -129,6 +130,9 @@ The techniques here are all implemented in the repository and all runnable:
   cartridge table reader.
 * [`plugins/trainer/src/`](../../plugins/trainer/src/) — the read-only live view
   ([`docs/trainer.md`](../trainer.md)).
+* [`plugins/agent/src/catch.rs`](../../plugins/agent/src/catch.rs) and
+  [`battlekind.rs`](../../plugins/agent/src/battlekind.rs) — is this encounter worth a ball,
+  and is it even a wild one ([`catching.md`](catching.md)).
 * [`examples/gen1_battle.rs`](../../examples/gen1_battle.rs),
   [`examples/gen1_trade.rs`](../../examples/gen1_trade.rs),
   [`examples/warproom_probe.rs`](../../examples/warproom_probe.rs) — headless drivers that prove

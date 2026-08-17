@@ -4703,6 +4703,100 @@ right page for *why* — it is task-shaped and explains mechanisms. The atlas is
   starts from a save, fights something and opens the storage system would move them from "no
   evidence" to observed. The machinery exists; only the script is missing.
 
+## Catching — the gate, the discriminator, and the ball (`plugins/agent/src/catch.rs`)
+
+**Full page with every measurement and the commands: [`docs/gen1/catching.md`](docs/gen1/catching.md).**
+Instrument: `examples/gen1_catch_drill.rs` + its `.preset`. Modules:
+`plugins/agent/src/catch.rs` (the policy), `plugins/agent/src/battlekind.rs` (wild-vs-trainer
+from the screen), `plugins/trainer/src/capture.rs` (the odds, extended with `ball_for_item`).
+Query: `tools/gen1-tables/gen1_tables.py --plan|--gyms|--marts`. **Not in CI** — it needs a
+commercial cartridge, the `tools/sameboy-oracle/` rule; the 18 unit tests across `catch.rs` and
+`battlekind.rs` need none and run in a plain `cargo test`.
+
+- **CATCHING IS A CAPABILITY THAT STARTS AT ZERO, AND THE PEWTER CHAIN NEVER OPENS IT.**
+  Measured on the chain's own carried-forward states: **the bag is empty at every one of links
+  01 to 10**, and `EVENT_GOT_POKEBALLS_FROM_OAK` (`$D74B` bit 4, the bit below link 09's own
+  `EVENT_GOT_POKEDEX`) is still clear at 09 and 10. So the honest answer to "which link opens
+  it" is **none of them**. Two doors, both read out of the cartridge and both one interaction
+  away: Oak's scripted gift of five (`07:52D9` — `ld hl,$D74B / bit 4,[hl] / set 4,[hl] /
+  jr nz / ld bc,POKE_BALL:5 / call GiveItem`, text at `0x9506D`), and a **purchase** — Viridian
+  is the first mart list (`POKE_BALL ANTIDOTE PARLYZ_HEAL BURN_HEAL`, marts at `0x02442`),
+  `ItemPrices` (`0x4608`) says ¥200, and the chain already walks into that shop at link 07 with
+  ¥3175. Opening it belongs with whoever owns `examples/pewter_chain.rs`.
+- **`Verdict::Unavailable` is NOT `Verdict::No`, and that distinction is the captain's
+  constraint made checkable.** A policy with no ball has weighed nothing. Measured: 40
+  encounters with an empty bag give **40 `unavailable`, 0 decisions**; the same 40 with balls
+  give 40 decisions. It also means a student trained on these runs never sees a catch attempt
+  before the capability exists, so it cannot learn to try one.
+- **A FINDING FOR THE CHAIN CREW: link 09's exit state is captured INSIDE the cutscene.** Its
+  goal is the flag and `OaksLabOakGivesPokedexScript` sets the flag before handing control back,
+  so the state has **`wJoyIgnore = $FF`** and discards every button. A probe that starts pressing
+  there measures nothing and reports its negative result with total confidence — which is what
+  the first version of the gift probe did. Link 10's solver survives it by running frames until
+  control returns. **Wait for `wJoyIgnore` ($CD6B) to clear before driving any state.**
+- **THE SCREEN ONLY SAYS WILD-OR-TRAINER ONCE, AND THE MEASUREMENT IS THE POINT.** Traced frame
+  by frame over a matched pair (one save, one challenger, only `wild =` vs `trainer =`
+  different): **no cell differs on all 1200 paired frames**; the fewest that differ on any is
+  **2**, and they are the level digits. The `Wild <NAME> appeared!` line is on screen for **9
+  frames** and `<NAME> wants to fight!` for **11**. So at the battle menu — the moment a policy
+  decides — the two are the same picture. `battlekind::Watcher` is therefore a **latch**: read
+  the first line, remember it, `reset()` when the battle ends. Scored at the menu over 50
+  battles of each kind: **latched 0/100 wrong, stateless 100/100 unknown**.
+- **THE SAMPLING RATE IS PART OF THE DISCRIMINATOR.** Measured as the fraction of sampling
+  *phases* that never land in the window: every interval **up to 8 frames catches it from every
+  phase**; at 12 frames 3 of 12 phases miss the wild line, at 24 frames 15 of 24 do. The agent
+  plugin samples every 6 frames, so it is inside — but only just, and anything that slows to a
+  12-frame cadence starts losing battles silently.
+- **A BALL THROWN IN A TRAINER BATTLE IS REFUSED AND KEPT — a free safety net.** `ItemUseBall`
+  branches to `ThrowBallAtTrainerMon`, prints `TrainerBlockedText` ("The trainer blocked the
+  BALL! / Don't be a thief!", `0xA6B0B`) and returns without touching the bag. Measured: **64
+  throws in trainer battles, 64 blocked, 64 balls kept, 0 spent.** So a wrong discriminator
+  costs a *turn*, never a ball — which is why declining an *uncertain* screen is cheap and is
+  the default.
+- **The closed form in `capture.rs` agrees with the cartridge: 251 throws, 61.0 % caught against
+  59.8 % predicted, z = +0.36** (1 s.e. = 3.09 %), swept across HP, status and three balls.
+  Report the per-bucket curve beside the aggregate — an aggregate can be right on average while
+  being wrong everywhere — but quote the aggregate, because the buckets are small-n by design.
+- **WHICH BALL IS A DERIVATION, NOT A TUNED MARGIN.** A dearer ball's advantage is bounded: the
+  resampling loop is worth at most 1.27x (Great) and 1.70x (Ultra), and the Great Ball's smaller
+  HP divisor at most a further 1.5x — against price ratios of **3x and 6x**. So **a Poké Ball
+  always wins on chance per ¥**, swept over 735 states by
+  `a_poke_ball_is_always_the_better_value`. The dearer balls are reached for only when even the
+  cheap one is under a third, i.e. when a *turn* rather than ¥400 is the scarce thing. A first
+  version used a "within 90 % of the best chance" margin and measured as spending a Great Ball
+  on nineteen of twenty Pikachu; three times the price for 27 % more chance is a bad trade
+  nobody had written down as one.
+- **THE TARGET LIST IS DERIVED FROM THE FIGHTS AHEAD AND CHECKS THE MOVES, NOT ONLY THE TYPE.**
+  `gen1_tables.py --plan brock,misty` reads the leaders' own parties, their types, what beats
+  them, the candidates' **starting moves** (`BaseStats` offset 15 holds `db MOVE1..MOVE4`) and
+  where they live. It reaches **PIKACHU, Viridian Forest, levels 3-5, 2/10 grass slots, catch
+  rate 190, arrives with THUNDERSHOCK** without being told. The move check is what separates it
+  from a type query: a level-6 SANDSHREW is GROUND and will beat Brock eventually, but it
+  arrives with SCRATCH.
+- **NO STARTER ARRIVES WITH A MOVE THAT BEATS ANYTHING ON THAT LIST** (Bulbasaur TACKLE/GROWL,
+  Charmander SCRATCH/GROWL, Squirtle TACKLE/TAIL WHIP), so the target list is **the same for all
+  three starters** through Brock and Misty and the per-starter difference is urgency, not
+  contents. `--plan` prints "with the moves it has" and "by its own type, once it learns one"
+  **separately**, because conflating them says a level-5 Bulbasaur beats Brock — it does, with
+  VINE WHIP, at level 13.
+- **`TrainerDataPointers` MUST BE ANCHORED ON REAL PARTY DATA AND ITS ROSTERS BOUNDED BY THE NEXT
+  CLASS'S POINTER.** A scan for "a long run of in-bank little-endian words" finds a *different*
+  table in this cartridge and answers with LT.SURGE fielding a level-1 RHYHORN; and asking for a
+  roster a class does not have walks into the next class's data — the first version reported
+  BROCK #2 as MISTY #1. Anchor on `BugCatcherData`'s three forest rosters (level 6
+  WEEDLE/CATERPIE, 7 WEEDLE/KAKUNA/WEEDLE, 9 WEEDLE), which is the table's **second** entry, and
+  the answer is `0x39D3B` — Brock is GEODUDE Lv12 + ONIX Lv14, Misty STARYU Lv18 + STARMIE Lv21.
+- **`TrainerNames` HAS TWO CANDIDATE RUNS IN THIS CARTRIDGE** and the shorter one is missing
+  SAILOR, HIKER, BIKER and every gym leader. Carry SAILOR in the signature; only the real table
+  (`0x399FF`, 47 classes) has it.
+- **Rotation (`Action::Switch`) is deliberately NOT built.** The chain carries one Pokémon and
+  the bag is empty, so a switch rule could never fire and could not be tested. It waits for a
+  bench, which waits for the gate above.
+- **Two things the "tens of thousands of synthesised battles" task will want from here**: the
+  preset's **matched pairs** (a discriminator scored on wild battles from one save and trainer
+  battles from another is measuring the saves), and `Moves`/`starting_moves` (a synthesised
+  opponent is only interesting if you know what it can do at the level it is generated at).
+
 ## The Gen 1 mechanics & hacking area (`docs/gen1/`)
 
 - **[`docs/gen1/README.md`](docs/gen1/README.md) is the index and it owns the standards.** Linked
