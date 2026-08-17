@@ -249,6 +249,31 @@ still lost** — each one buys less and costs a whole turn. The rule now has to
 we need after paying one turn for the privilege. Plus a hard cap of two turns a
 battle, because the projection is an estimate and a bad one should not spiral.
 
+### And the estimate it reads is a KNOWN DEFECT, measured and deliberately not fixed
+
+**`View::incoming_expected` is not an expectation.** It is the maximum over the
+opponent's moves of the top damage roll — a near-worst case, which is what
+`incoming_max` and `incoming_crit` already carry, so the view holds three worst
+cases where one of them is meant to be a mean. Both of its readers ask an
+expectation question: `theirs_turns` is how many turns until we faint at the
+ordinary rate, and the rule above asks whether one stage down buys more turns than
+the turn it costs. `SelectEnemyMove`'s `.chooseRandomMove` picks a wild Pokémon's
+move uniformly, so an honest figure is a mean over its moves as well as over the
+217..255 roll — roughly **half** what the field reports. A Caterpie with TACKLE
+4-5 at 95% and STRING SHOT is priced at **4**; the truth is **2.14**.
+
+It is left alone because it is **not** a link-11-local change. This rule is
+reached by trainer battles too — link 05 spends 2,450 turns on stat moves in its
+3,000 certified attempts — so correcting it re-opens the certification of links
+05, 11 and 13, and link 11 is signed off. The full record, with both candidate
+arithmetics, the 3,000-attempt measurements and the trap that the obvious
+correction trades one factor-of-two bias for another, is
+[`pewter-chain.md` §7c](pewter-chain.md).
+
+**So read the numbers in §3 knowing that**: the stat-move rule fires more often
+than an honest expectation would justify, and the 2,450 turns below are that
+figure, not a tuned one.
+
 ---
 
 ## 3. Measured

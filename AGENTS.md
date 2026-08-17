@@ -8206,6 +8206,27 @@ works the *menus* and nothing else. **No link may carry a battle decision of its
 standing order is explicit: when the policy improves, every already-certified link is
 re-certified against it, exactly as a driver change forces.
 
+- **"WILD-ONLY" IS ALMOST NEVER TRUE OF A POLICY CHANGE — WORK OUT THE BLAST RADIUS FROM WHICH
+  RULE THE FIELD FEEDS, NOT FROM WHERE THE SYMPTOM WAS.** `decide`'s first statement is
+  `if wild && !intent.may_fight_wild { return Run { FORBIDDEN } }`, and `may_fight_wild` is true
+  for **link 05 and link 11 only** — so on every other leg a wild battle is decided before any
+  damage figure is read, and a wild-only change really is link-11-only. But a **trainer** battle
+  never meets that guard, so anything feeding rules 3 or 4 reaches links 05 and 13 as well:
+  link 05 spends **2,450 turns on stat moves** in its 3,000 certified attempts, which is rule 3
+  reading `incoming_expected`. A change was very nearly landed on the reasoning "this is inside
+  the wild-battle branch"; it was true of the *rule* being withdrawn and false of the
+  *estimate* being kept, and the two sat in one commit. **Trace the field to its readers.**
+- **`View::incoming_expected` IS NOT AN EXPECTATION, AND FIXING IT IS A THREE-LINK JOB — do not
+  start it casually.** It is the maximum over the opponent's moves of the top damage roll, i.e.
+  a near-worst case, which is what `incoming_max` and `incoming_crit` already carry; both of its
+  readers (`theirs_turns`, `useful_stat_move`) ask expectation questions, and
+  `SelectEnemyMove`'s `.chooseRandomMove` picks a wild Pokémon's move uniformly, so an honest
+  figure is about **half** what it reports. Measured, unlanded, and written up with its numbers
+  in [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §7c — including the trap that
+  the obvious correction trades one factor-of-two bias for another (flooring the roll mean, the
+  accuracy and the move mean in turn reads **1** where the truth is **2.14**; accumulate at
+  200x and divide once, rounded). Left alone because link 11 is signed off and correcting it
+  re-opens 05 and 13.
 - **`BattleTables` (`plugins/trainer/src/rom.rs`) pulls the two tables a battle needs through
   `Machine::peek_bank`** — `Moves` at `0E:4000` and `TypeEffects` at `0F:6474`, 1.6 KiB, once
   per session — so a plugin that never loaded the cartridge image still decides from the
@@ -8277,6 +8298,20 @@ re-certified against it, exactly as a driver change forces.
   143 exactly as designed, and took the pass rate 2,999 → **2,997**. Each variant's surviving
   failure was a different seed. Four variants gave 5, 3, 1, 1 failures; the floor is ~1 in 3,000
   and it is a tail, not a defect. Revert, and say so.
+- **AND THAT QUESTION IS NOW CLOSED WITH FOURTEEN SEEDS: eight measured configurations, fourteen
+  distinct failing seeds, not one of them ever failing twice.** A defect reproduces; this does
+  not. The counts (1, 3, 4, 5, 7 per 3,000) are a Poisson tail, and **2,999 against 2,996 is
+  two-sided p = 0.375** — at equal exposure the conditional test of 1 against 4 failures is
+  `Binomial(5, 0.5)`, so the pass rate cannot separate variants at this event rate however many
+  times it is re-run. Use the precursor counters (`NEAR_DEATH`, `DOUBLE_FAIL`, `RUN_FAILED`),
+  which have ~100x the event rate; move the *outcome* by changing what the leg **has** (a second
+  Pokémon, a different route), not how it fights. **Do not re-measure link 11 to settle a
+  policy question** — the captain signed it off at 2,999, accepted and not certified.
+- **`tally::FAINTS` UNDERCOUNTS BY EXACTLY THE DEATHS THAT END A RUN.** A battle's outcome is
+  scored when the battle is seen to *end*, and a party wipe ends the episode on the spot — so a
+  run reporting four `party_hp=0` endings printed `faints 1`. Every configuration has the same
+  gap so comparisons hold, but **the authoritative death count is the scenario's own ruling**
+  (`ending_detail == "party_hp=0"` in `index.ndjson`), never the battle report.
 - **NO POTION IS PURCHASABLE BEFORE PEWTER, AND THAT IS READ OUT OF THE CARTRIDGE.** The mart
   inventory table at `$02442` is `$FE`-framed count + items + `$FF`: Viridian sells
   `POKE_BALL ANTIDOTE PARLYZ_HEAL BURN_HEAL`, and the first list containing `POTION` is Pewter's.

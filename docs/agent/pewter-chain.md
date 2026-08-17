@@ -655,14 +655,102 @@ Worked example — seed 1682, 182 decisions, Route 1 (11,6):
 | finisher on `min`, gated `!faster()` | 2,999 | 162 | 0 faints; **kept** |
 | + grind box narrowed toward the exit | 2,997 | 143 | **worse**; reverted |
 | + retreat threshold `2 * incoming_max` | 2,999 | 111 | best secondaries; **kept** |
+| + leave a race we are losing ("rule 3b") | 2,996 | 147 | **not landed**; 1,755 extra departures, and a departure is another escape roll — §7c |
+| + honest `incoming_expected`, floored | 2,993 | — | measured with rule 3b still in, so it isolates nothing — §7c |
+| + honest `incoming_expected`, rounded | 2,996 | 116 | **not landed** — a real defect, but it moves links 05 and 13 too; §7c |
 
 Kept: the speed-gated worst-roll finisher, and the two-ordinary-hits retreat
 threshold. Both are written up in [the battle policy](battle-policy.md) with
-their measurements.
+their measurements. **The last three rows are not in the shipped policy** — §7c
+says what they are and why.
 
 **The narrowed grind box is the cautionary one**: it cut failed escapes exactly
 as designed and made the pass rate worse. Each variant's surviving failure is a
 different seed. That is variance, not cause.
+
+### 7c. Two candidates measured and NOT landed, kept because the measurements are paid for
+
+**Link 11 is signed off. Nothing in this section is in the shipped policy**, and
+neither candidate should be re-measured to settle a pass rate — both are recorded
+so the next person inherits the evidence instead of the forty minutes.
+
+**The finding worth keeping: `View::incoming_expected` is not an expectation.**
+It is the maximum over the opponent's moves of the top damage roll — a near-worst
+case, which is what the two fields beside it already carry (`incoming_max` is the
+worst ordinary hit, `incoming_crit` the worst including a critical). So the view
+holds *three* worst cases where one of them is supposed to be a mean, and both of
+that field's readers ask an expectation question: `theirs_turns` is how many turns
+until we faint at the ordinary rate, and `useful_stat_move` asks whether one stage
+down buys more turns than the turn it costs. `SelectEnemyMove`'s
+`.chooseRandomMove` picks a wild Pokémon's move uniformly — the same fact the
+critical-hit measurement in [the paper claims](../gen1/paper-claims.md) is built
+on — so an honest figure is a mean over its moves as well as over the 217..255
+roll, which is roughly **half** what the field reports today.
+
+**Why it is not landed, and this is the whole reason.** It is not confined to
+link 11. `incoming_expected` feeds rule 3, the stat-move rule, and a *trainer*
+battle reaches rule 3 like any other — link 05 spends **2,450 turns on stat
+moves** in its 3,000 certified attempts, and link 13's bug catcher is a trainer
+battle too. So correcting it re-opens the certification of links 05, 11 and 13,
+and the chain is closed. (The withdrawn rule 3b below really was wild-only, so
+*its* blast radius was link 11 alone — the two must not be conflated, and an
+earlier note did conflate them.)
+
+**If anyone does return to it: the arithmetic is half the work, because the
+obvious correction trades one factor-of-two bias for another.** Computing
+`(lo + hi) / 2 * acc / 100` per move and then dividing by the move count floors
+three times, on numbers that are single digits. Measured on the Pokémon link 13
+meets, a Caterpie with TACKLE 4-5 at 95% and STRING SHOT:
+
+| | reads |
+|---|---:|
+| today — worst move at its best roll | 4 |
+| floored mean | 1 |
+| rounded mean | 2 |
+| the truth | 2.14 |
+
+Accumulate at 200x and divide **once**, rounded. The floored form was measured at
+2,993 on link 11 and the rounded form at 2,996, both against the same pool.
+
+**What the rounded form actually measured, since the run was made:** 2,996 of
+3,000, 3,000 distinct trajectories, 2,010 s at 16 workers. Three failures more
+than the banked 2,999 — and **the two are not distinguishable**: at equal
+exposure the conditional test of 1 against 4 is `Binomial(5, 0.5)`, two-sided
+**p = 0.375**. This page already says so in its own words about a 1-versus-3
+(*"1-versus-3 cannot decide anything"*), and this is a 1-versus-4. On the
+instrument §7b exists to build — the death precursors, at about a hundred times
+the event rate — it measured *better*, on a battle count within 0.2% of the
+baseline's:
+
+| per 3,000 attempts | banked | rounded estimate | |
+|---|---:|---:|---|
+| battles | 64,689 | 64,809 | +0.2% |
+| escapes failed | 126 | 116 | −8% |
+| battles with two escape failures | 30 | 23 | −23% |
+| battles that left the lead one hit from death | 216 | 157 | −27% |
+
+Turns spent on a stat move fall 2,085 → 1,516, which is the rule the field feeds
+and the direction an honest expectation predicts; the floored version crushed them
+to 279, which is how far wrong that arithmetic was. **None of this makes the
+change safe to land without re-certifying 05 and 13**, which is the point.
+
+**The withdrawn rule, and why a measured negative result is worth its space.**
+Reading the surviving failure at seed 2243 gave a real diagnosis: the policy said
+"losing the race on damage" at 21 of 21, spent its two stat turns, fought on at
+21, 18, 15, 12, and first tried to run at 9 — where an escape failure is fatal.
+Every other reason to run asks how *hurt* we are; none asked whether we were going
+to lose. A rule to leave a losing race fixed that seed and measured **2,996**,
+four failures against one, and the counters said why: near-deaths halved
+(216 → 110) while failed escapes rose (126 → 147), because it added **1,755 extra
+departures** and every departure is another escape roll at about one per cent.
+**Running is not free, so a rule that runs more often has to pay for itself in
+escapes, and this one did not.**
+
+**The margin the policy would actually want, if anyone reopens this.** Not "am I
+losing this race" but "can I afford to finish this fight" — projected damage over
+the remaining turns against current HP, with a stated allowance for a critical.
+That uses an honest expectation and *declares* its safety margin instead of
+borrowing one by accident from a broken estimate. Unbuilt and unmeasured.
 
 ### Facts established, so they are not re-derived
 
@@ -750,7 +838,43 @@ GB_CHAIN_TRACE=1 ./target/release/examples/pewter_chain solve \
 
 Failing seeds seen so far, each against `target/cert2/10/exits` unless noted:
 **1682** (against `target/cert/10/exits`), **353**, **968**, **1148**, **2147**,
-**2351**, **767**, **2153**, **2902**, **2243**.
+**2351**, **767**, **2153**, **2902**, **2243**, and from the unlanded rounded
+estimate of §7c, **167**, **938**, **1026**, **1742**.
+
+### The residual is a tail, and fourteen seeds is enough to close the question
+
+**Fourteen distinct failing seeds across eight measured configurations, and not
+one of them has ever failed twice.** That is the answer to "is there a defect left
+in link 11", and it is why the link is signed off rather than still open. A defect
+reproduces: it would keep the same seed red while the variants moved around it.
+Instead every configuration surfaces its own one-to-seven failures on seeds no
+other configuration failed on, and the counts (1, 3, 4, 5, 7) sit where a Poisson
+tail with a mean of a few per 3,000 puts them. Several of the eight differ from
+each other by less than their own noise — 2,999 against 2,996 is two-sided
+**p = 0.375**.
+
+Every failure, in every configuration, is `party_hp=0` on Route 1 in the grass —
+the shape §7b opens with, and the one this page already explains: the lead refuses
+a fight, sets off for the Pokémon Center, and Gen 1's run check fails twice on the
+way out. **No failing trace contains a wrong decision.** The route has no shorter
+way out of the grass, the party is one Pokémon so `Switch` has nothing to reach
+for, no Potion is purchasable before Pewter, and the budget is not the constraint.
+What is left is Gen 1's own escape roll.
+
+So: **further variants measured by pass rate will keep producing 1s and 4s in
+whichever order the seeds fall**, and none of it is evidence about the policy. The
+instrument to use is the precursor counters, which have about a hundred times the
+event rate. The way to move the *outcome* is to change what the leg **has** — a
+second Pokémon, a different training route — not how it fights. Those are the
+candidates below, and they are preconditions, not policy.
+
+**One instrument gap, found while classifying four of those seeds.** The battle
+report said `faints 1` where the scenario recorded four `party_hp=0` endings: a
+death that wipes the party ends the episode on the spot, so three of the four were
+never observed as a *battle* ending and were not scored as one. Comparisons are
+unaffected — every configuration has the same gap and the counters that matter are
+per battle — but **`faints` undercounts by exactly the deaths that end a run**, and
+the authoritative death count is the scenario's own ruling, not the battle report.
 
 ---
 
