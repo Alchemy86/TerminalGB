@@ -43,6 +43,9 @@ correct its body and say so in it — that is what the "our own belief" rows bel
 | [the battle move menu cursor is 1-based](#the-battle-move-menu-cursor-is-1-based) | and the main menu's is not | cartridge mechanic | [`wCurrentMenuItem`][wCurrentMenuItem] |
 | [an escape is not free](#an-escape-is-not-free) | a failed run costs the same hit as a swing | cartridge mechanic | [`wEnemyMon`][wEnemyMon] |
 | [the rival battle is not a coin flip](#the-rival-battle-is-not-a-coin-flip) | base stats decide it, and we had said otherwise | **our own belief** | — |
+| [crossing two levels loses the move in between](#crossing-two-levels-loses-the-move-in-between) | one battle, one level-up message, one learnset check | cartridge mechanic | [`wPartyMon1Level`][wPartyMon1Level] |
+| [cancelling an evolution costs one level and nothing else](#cancelling-an-evolution-costs-one-level-and-nothing-else) | it is re-offered at the very next level-up | cartridge mechanic | [`wPartyMon1Species`][wPartyMon1Species] |
+| [BubbleBeam is not in Mt Moon](#bubblebeam-is-not-in-mt-moon) | a plausible route plan, checked against the item tables | **an outside belief** | — |
 | [the one-way ledge trap](#the-one-way-ledge-trap) | a waypoint whose overshoot cannot be undone | route shape | [`wXCoord`][wXCoord] · [`wYCoord`][wYCoord] |
 | [the forest is not a scenic route](#the-forest-is-not-a-scenic-route) | Route 2's halves do not connect on foot | route shape | [`wCurMap`][wCurMap] |
 | [only one of the forest's three trainers is compulsory](#only-one-of-the-forests-three-trainers-is-compulsory) | we over-read our own grid | **our own belief** | — |
@@ -65,6 +68,8 @@ correct its body and say so in it — that is what the "our own belief" rows bel
 [wIsInBattle]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wIsInBattle
 [wCurOpponent]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wCurOpponent
 [wBattleMon]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wBattleMon
+[wPartyMon1Level]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wPartyMon1Level
+[wPartyMon1Species]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wPartyMon1Species
 [wEnemyMon]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wEnemyMon
 [wCurrentMenuItem]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wCurrentMenuItem
 [wPlayerMonStatMods]: https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/by-name.md#s-wPlayerMonStatMods
@@ -493,6 +498,108 @@ number. And a consequence worth stating: **the chain's exit pool is not one popu
 of that link's exits carry a level-5 lead that lost, against level 6 for one that won, and every
 link after it inherits the mix. That is the honest population; a real playthrough loses
 sometimes.
+
+---
+
+### Crossing two levels loses the move in between
+
+**Kind: a cartridge mechanic.**
+
+**What it is.** Gen 1 announces **one** level per battle and checks the learnset for the level it
+*ended* on. So a Pokémon that gains enough experience in a single battle to cross two level
+boundaries is never offered the move belonging to the one it skipped — and there is no second
+chance, because the check is keyed on the level reached, not on the levels passed.
+
+**How it showed up.** A level 6 BULBASAUR was pointed at one level 5 CHANSEY — 182 experience, the
+highest base-experience Pokémon in the cartridge — to make it learn LEECH SEED at level 7. It
+reported `LEARNER grew to level 8!` and no learn prompt of any kind. The first version of
+`gen1_learn_drill` read that as "the prompt does not fire" and went looking for a bug in itself.
+
+**How it was fixed.** Not by fixing anything — by choosing the arithmetic so exactly one boundary
+falls inside the run. The drill starts its BULBASAUR at level 12 and feeds it two CHANSEY: 973
+experience for level 12, +182 → 1155 (still 12), +182 → 1337, which is level 13 and VINE WHIP.
+
+**The memory.** [`wPartyMon1Level` `$D18C`][wPartyMon1Level], and the experience triple below it.
+
+**Evidence.** The measurement and the full prompt trace:
+[learning moves](learning-moves.md). The general rule it earns: **when a harness reports that
+something never happens, check that the harness put the game in the state where it could.**
+
+---
+
+### Cancelling an evolution costs one level and nothing else
+
+**Kind: a cartridge mechanic.**
+
+**What it is.** The game offers a B press to cancel an evolution, and refusing it is not a
+decision with a permanent cost. Two measurements together:
+
+- **Nothing is ever lost by evolving.** Across all **52** level evolutions in the cartridge,
+  the number that lose a move the evolved form never learns is **zero**. **44 of 52** *delay* one,
+  and the longest delay any of them costs is **11 levels** — SOLARBEAM, 54 → 65, when an IVYSAUR
+  becomes a VENUSAUR.
+- **And a cancelled evolution is offered again at the very next level-up.** Measured on the
+  cartridge: a level 15 BULBASAUR levelled to 16 with B pulsed through the animation prints
+  `Huh? LEARNER stopped evolving!` and stays a BULBASAUR; levelled once more, pressing nothing
+  but A, it prints `What? LEARNER is evolving!` and becomes an IVYSAUR at 17.
+
+So the whole cost of one cancel is one level of the evolved form's base stats.
+
+**How it was found.** By trying to cancel one and failing twice. **B has to be pulsed through the
+evolution animation, not tapped once and not held**: Gen 1 reads some buttons through a routine
+that only sees a transition, so a held button registers exactly once, and a four-frame pulse aimed
+at the *text* is long gone by the time the animation asks. Both wrong versions reported
+"cancelling does not work" with complete confidence — the Pokémon evolved anyway.
+
+**Related, from the same trace.** Four places in the cartridge have an evolution and a level-up
+move on the same level (ABRA → KADABRA at 16 with CONFUSION at 16, MAGIKARP → GYARADOS at 20 with
+BITE at 20, SLOWPOKE → SLOWBRO at 37, CHARMELEON → CHARIZARD at 36). Measured on the ABRA: **the
+evolution runs first and the evolved form's move for that level is then offered.** Evolving does
+not cost you the move.
+
+**The memory.** [`wPartyMon1Species` `$D16B`][wPartyMon1Species] — the species byte is what says
+whether the B landed.
+
+**Evidence.** [learning moves](learning-moves.md), which turns both measurements into the simplest
+rule this campaign has produced: never press B on that prompt.
+
+---
+
+### BubbleBeam is not in Mt Moon
+
+**Kind: a correction of an outside belief.**
+
+**What it is.** A route plan arrived from outside this project: *a Magikarp is obtainable around
+Mt Moon, it evolves into Gyarados at level 20, and a BubbleBeam TM is available there.* Three of
+the four parts hold and the TM does not.
+
+**How it showed up.** Sweeping every one of the 248 maps' object lists and every mart's stock
+list, **TM11 BUBBLEBEAM lies on no map and is sold in no shop.** What Mt Moon holds is
+
+| map | items |
+|---|---|
+| MT_MOON_1F `$3B` | POTION, MOON STONE, RARE CANDY, ESCAPE ROPE, POTION, **TM12 WATER GUN** |
+| MT_MOON_B2F `$3D` | HP UP, **TM01 MEGA PUNCH** |
+
+and the cartridge's own line for TM11 — *"TM11 teaches BUBBLEBEAM! Use it on an aquatic
+POKéMON!"* — sits immediately before *"The CASCADEBADGE makes all POKéMON up to L30 obey!"*, which
+is the Cerulean Gym guide's. So it is Misty's gift, **after** Mt Moon.
+
+**What did hold.** MAGIKARP's `EvosMoves` record is `01 14 16` — evolve at level 20 into internal
+index 22, GYARADOS. GYARADOS can be taught 23 machines including both TM11 and TM12. And a
+Magikarp really is buyable near there: the text at file offset `0x08A977` reads *"MAN: Hello,
+there! … I'll let you have a swell MAGIKARP for just ¥500!"*
+
+**What the plan did not price.** MAGIKARP is on the **slow** experience curve, so level 5 to 20 is
+**9,844 experience** — and it cannot earn a point of it by fighting. Its only move is SPLASH
+(power 0) until TACKLE at 15, and it **can be taught none of the 55 machines**, checked against
+its own `BaseStats` bitfield. Every one of those 9,844 has to come from switching it into battles
+something else wins.
+
+**Evidence.** [learning moves §6a](learning-moves.md), with the commands. Two grades worth
+keeping honest: which script prints the TM11 text, and which map sells the Magikarp, were **not**
+established here — only that both texts are in the cartridge and that the item tables do not put
+TM11 anywhere.
 
 ---
 

@@ -112,6 +112,18 @@ character costs a step and moves nothing, so blind alternation drifts.
 **`wCurMap` is populated by `TryLoadSaveFile` at the top of the main menu**, long before
 CONTINUE is chosen. It cannot mean "we are in the game".
 
+**Cancelling an evolution needs B *pulsed*, not tapped and not held.** Gen 1 reads some buttons
+through a routine that only sees a transition, so a held button registers exactly once and a
+four-frame pulse aimed at the text is long gone by the time the animation asks. Two versions of
+one drill pressed B and reported "cancelling does not work"; the Pokémon evolved both times.
+[Discoveries](discoveries.md#cancelling-an-evolution-costs-one-level-and-nothing-else).
+
+**A battle that crosses two levels loses the move in between.** The game announces one level per
+battle and checks the learnset for the level it *ended* on. Feed a level 6 BULBASAUR one CHANSEY
+and it lands on level 8 with level 7's LEECH SEED never offered — which reads exactly like the
+prompt not firing. Choose the experience so one boundary falls inside the battle.
+[Discoveries](discoveries.md#crossing-two-levels-loses-the-move-in-between).
+
 ### Standing in the wrong two rows of Oak's laboratory locks the game up for good
 
 Between Oak's "choose one!" speech and taking a starter, walking down to rows 5 or 6 of the

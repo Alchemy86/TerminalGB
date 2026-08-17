@@ -894,6 +894,12 @@ def main():
                     help="every mart's stock and the price of a ball")
     ap.add_argument("--plan", help="comma-separated trainer classes to plan for")
     ap.add_argument("--maps", help="comma-separated map ids to restrict to")
+    ap.add_argument("--tms", action="store_true",
+                    help="every TM and HM, and the move it teaches")
+    ap.add_argument("--items-on",
+                    help="comma-separated map ids: what is lying on each")
+    ap.add_argument("--can-learn",
+                    help="a species: every TM and HM it can be taught")
     a = ap.parse_args()
 
     rom = read_rom(a.rom)
@@ -957,6 +963,51 @@ def main():
         for i, items in enumerate(lists):
             mark = " <- sells POKE BALLs" if POKE_BALL_ITEM in items else ""
             print(f"  mart {i}: items {items}{mark}")
+
+    if a.tms or a.items_on or a.can_learn:
+        tms, tms_at = technical_machines(rom)
+        moves = Moves(rom)
+        items, items_at = item_names(rom)
+        tm_of_item = {tm_item_id(n): n for n in tms}
+
+        def label(i):
+            n = tm_of_item.get(i)
+            return (f"TM{n:02d} {moves.name(tms[n])}" if n and n <= TM_COUNT
+                    else f"HM{n - TM_COUNT:02d} {moves.name(tms[n])}" if n
+                    else items.get(i, f"item 0x{i:02X}"))
+
+    if a.tms:
+        print(f"TechnicalMachines @ 0x{tms_at:06X}, ItemNames @ 0x{items_at:06X}")
+        for n in sorted(tms):
+            kind = f"TM{n:02d}" if n <= TM_COUNT else f"HM{n - TM_COUNT:02d}"
+            print(f"  {kind}  item 0x{tm_item_id(n):02X}  {moves.name(tms[n])}")
+
+    if a.items_on:
+        banks = _map_header_banks(rom)
+        print(f"MapHeaderPointers @ 0x{MAP_HEADER_POINTERS:06X}, "
+              f"MapHeaderBanks @ 0x{banks:06X}")
+        for spec in a.items_on.split(","):
+            m = int(spec, 0)
+            got = map_items(rom, m, banks)
+            print(f"  map 0x{m:02X} "
+                  f"{MAP_NAMES.get(m, ''):18s} "
+                  f"{', '.join(label(i) for i in got) or '(nothing)'}")
+
+    if a.can_learn:
+        want = a.can_learn.upper().replace(" ", "")
+        i = next((k for k, v in names.items()
+                  if v.upper().replace(" ", "") == want), None)
+        if i is None:
+            raise SystemExit(f"no species named {a.can_learn!r} in this cartridge")
+        dex = dex_of[i]
+        got = [n for n in sorted(tms) if can_learn(rom, stats_at, dex, n)]
+        print(f"{names[i]} (dex {dex}) can be taught {len(got)} of "
+              f"{TM_COUNT + HM_COUNT}:")
+        for n in got:
+            kind = f"TM{n:02d}" if n <= TM_COUNT else f"HM{n - TM_COUNT:02d}"
+            print(f"  {kind} {moves.name(tms[n])}")
+        if not got:
+            print("  (nothing at all)")
 
     if a.gyms or a.trainer or a.plan:
         trainers = Trainers(rom, names)

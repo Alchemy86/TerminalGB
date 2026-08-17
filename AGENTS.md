@@ -4797,6 +4797,106 @@ commercial cartridge, the `tools/sameboy-oracle/` rule; the 18 unit tests across
   battles from another is measuring the saves), and `Moves`/`starting_moves` (a synthesised
   opponent is only interesting if you know what it can do at the level it is generated at).
 
+## Learning moves is a CLOSED TABLE, and so is evolving (`tools/gen1-tables/learn_table.py`)
+
+**Full pages: [`docs/gen1/learning-moves.md`](docs/gen1/learning-moves.md) (the enumeration, the
+rule, the prompts) and [`docs/gen1/battling.md`](docs/gen1/battling.md) (the map of the subject,
+and what a battle screen shows).** Instruments: `learn_table.py` and
+`examples/gen1_learn_drill.rs`. **Not in CI** — both need the player's own cartridge, the
+`tools/sameboy-oracle/` rule. The drill starts a NEW GAME and needs no save.
+
+- **THE WHOLE ARGUMENT IS THAT THE QUESTION IS FINITE. Measure it, never estimate it.** 151
+  species, every level-up learnset fixed data: **728 level-up learn entries**, learns per species
+  `0:12 1:3 2:4 3:7 4:11 5:51 6:49 7:9 8:5` (at most 8), **72 evolutions = 52 level + 16 stone +
+  4 trade**. Two crews parsed it independently and agreed to the digit; Gen 1 having exactly 4
+  trade and 16 stone evolutions is the check that falls out for free.
+- **`EvosMovesPointerTable` IS AT `0x03B05C` (bank `$0E`) AND HAS 190 SLOTS INDEXED BY INTERNAL
+  INDEX, NOT 151.** Reading the first 151 gives a mix of real species and MissingNo and
+  undercounts; `PokedexOrder` (`0x41024`) is what filters it. Located by property — the only run
+  of 190 in-bank pointers whose BULBASAUR entry dereferences to `01 10 09` — never by a
+  remembered address.
+- **728 IS THE CEILING ON *EVENTS*, NOT ON DECISIONS: the first four slots fill for free.** The
+  real number needs the starting move set, and Gen 1 is unusually kind there — **a caught
+  Pokémon's four moves are a function of its species and its level and of nothing else**
+  (`WriteMonMoves`). Verified against the cartridge on three species (TENTACOOL@40, NIDORINO@40,
+  PIDGEOTTO@30, all exact). So the starting states are enumerable: 151 x 100 levels x every
+  stone/trade branch = 17,100 trajectories walked to level 100 → **840 DISTINCT DECISIONS**
+  (species, the four held, the offer), 236 on the from-level-1 walk of the 79 base forms.
+- **THE RULE IS OURS AND IT IS STATED SO IT CAN BE ARGUED WITH** (`learn_table.py`, top): rule 0
+  protect the moves the table cannot price, rule 1 never forget the last damaging move, rule 2
+  damage outranks status, rule 3 order by `power x accuracy/255 x STAB`, rule 4 status moves are
+  NOT ranked against each other. Answers over the 840: refuse 209, status-victim 573,
+  damage-victim 58, **coverage-loss 11 (1.3 %)**, status-tie 551, unpriced-present 85, no-answer 0.
+- **RULE 0 FELL OUT OF THE CARTRIDGE AND IS THE ONE THAT MATTERS.** Grouping every move whose
+  power byte is 0 or 1 by its effect byte gives **effect 38 = OHKO (GUILLOTINE/HORN DRILL/
+  FISSURE), 40 = SUPER FANG, 41 = fixed damage (SONICBOOM/SEISMIC TOSS/DRAGON RAGE/NIGHT SHADE/
+  PSYWAVE)** — seven moves whose power byte is a placeholder. Without the clause the rule has
+  PRIMEAPE forgetting SEISMIC TOSS for a POUND. **Never price a Gen 1 move on `power` without
+  checking its effect first.**
+- **THE PARTY-CONTEXT QUESTION IS MEASURED: 11 of 840 = 1.3 %.** Those are the decisions where
+  the rule drops a damaging move that was the holder's last of its type, so a second Pokémon
+  covering it, or the route ahead, could reasonably change the answer. On the other 98.7 % the
+  party cannot.
+- **AND THE STUDENT NEEDS NOTHING THE PROMPT DOES NOT SHOW IT.** 840 decisions collapse to **581
+  distinct (four held, offered) pairs, and the number whose answer differs by species is ZERO.**
+  The move menu shows four **names** and no power, type, accuracy or PP; the offered move's name
+  is in the box two screens earlier; the species is never on screen (the box uses the nickname).
+  So the perception problem is recognition, not reasoning.
+- **NEVER CANCEL AN EVOLUTION, and the cost of being wrong is measured.** Across all 52 level
+  evolutions, **0 lose a move** the evolved form never learns and **44 delay one**, longest 11
+  levels (SOLARBEAM 54→65, IVYSAUR→VENUSAUR). And a cancelled evolution is **re-offered at the
+  very next level-up** — measured: B pulsed at 16 prints `Huh? LEARNER stopped evolving!` and it
+  stays a BULBASAUR; one more level and it becomes an IVYSAUR at 17. Whole cost: one level of the
+  evolved form's stats.
+- **B HAS TO BE *PULSED* THROUGH THE EVOLUTION ANIMATION — not tapped, not held.** Gen 1 reads
+  some buttons through a routine that only sees a transition. Two versions of the drill pressed B
+  and reported "cancelling does not work"; the Pokémon evolved both times.
+- **A BATTLE THAT CROSSES TWO LEVELS LOSES THE MOVE IN BETWEEN.** One level-up message per battle
+  and one learnset check, on the level it *ended* on. A level 6 BULBASAUR fed one CHANSEY lands
+  on level 8 and level 7's LEECH SEED is never offered — which reads exactly like the prompt not
+  firing, and is what made the first drill report nothing.
+- **The two modal interruptions are NOT confusable, and every one is easy to sample.** Evolution:
+  `What? X is evolving!` 599 frames, `X evolved into Y!` 245. Move-learn: six boxes of 23-158
+  frames. No phrase is shared, and **every sampling interval up to 24 frames catches every prompt
+  from every phase** — far more forgiving than catching's 9-frame wild/trainer line.
+  **When both land on the same level (4 places in the cartridge), the EVOLUTION runs first and
+  the evolved form's move for that level is then offered** — measured on ABRA→KADABRA/CONFUSION.
+- **The prompt never arises before Pewter.** First four-move prompt raising from level 1:
+  BULBASAUR 22, CHARMANDER 24, SQUIRTLE 24, CATERPIE 16 (the earliest on the route). The chain's
+  training leg targets `lead_level>=10`.
+- **`BattlePlugin` RESTORES THE PARTY WHEN THE BATTLE ENDS, so experience cannot accumulate
+  across battles from a `player =` preset.** The drill snapshots the party mid-battle and writes
+  it back — and **snapshots on "there is a party", not "we are in a battle"**, because the
+  evolution and the move-learn happen after `wIsInBattle` has gone back to zero and a
+  battle-gated snapshot puts the pre-evolution form back. It also tops PP up on the same pass: a
+  drill that fights a dozen battles on one HYPER BEAM runs out of its 5 PP and parks the battle
+  menu for ever. Later rounds arm an **opponent-only** preset (no `player =` line ⇒ nothing to
+  restore).
+- **`text::decode_screen` returns ONE FLAT 360-CHARACTER STRING**, so a caller that wants rows
+  has to cut the tiles up 20 at a time; and a Gen 1 sentence wraps across rows padded with
+  spaces, so a phrase is only contiguous after collapsing whitespace. Both cost this drill a run.
+
+### Four more cartridge tables, and the route claim they settled
+
+- **`TechnicalMachines`, the TM/HM compatibility bitfield (`BaseStats` offset 20, 7 bytes),
+  `ItemNames` and a map's item balls** are all in `gen1_tables.py` now: `--tms`, `--can-learn
+  <species>`, `--items-on <maps>`. Map items come through `MapHeaderPointers` (`$01AE`) +
+  `MapHeaderBanks` (`0x00C23D`), the same walk `tools/pewter-chain/route_audit.py` established.
+- **A ROUTE PLAN CHECKED AGAINST THE CARTRIDGE, AND ONE QUARTER OF IT WAS FALSE.** *"Magikarp
+  near Mt Moon, Gyarados at 20, BubbleBeam TM there."* Magikarp→Gyarados at level 20: **true**
+  (`01 14 16`). Gyarados can learn TM11: **true** (23 machines). A BubbleBeam TM in Mt Moon:
+  **FALSE** — TM11 lies on **no map** and is in **no mart**; Mt Moon 1F (`$3B`) holds **TM12
+  WATER GUN** (plus a RARE CANDY and a MOON STONE) and B2F (`$3D`) holds TM01 MEGA PUNCH. TM11's
+  own text sits beside the CASCADEBADGE line, i.e. it is Misty's gift, after Mt Moon.
+- **MAGIKARP IS IN NO WILD ENCOUNTER SLOT ANYWHERE** — Gen 1 keeps fishing in a separate table.
+  The Old Rod's routine is `ld bc, $0585` at `0x00E252` (bank 3): level 5, MAGIKARP,
+  unconditionally. And the cartridge sells one for ¥500 (text at `0x08A977`). **Which map sells
+  it, and where the Old Rod comes from, were NOT established.**
+- **And the plan's real cost is a number nobody had computed: MAGIKARP is on the SLOW curve, so
+  level 5→20 is 9,844 experience** — about 128 level-10 Zubat — **and it can earn none of it by
+  fighting**: SPLASH (power 0) until TACKLE at 15, and **it can be taught none of the 55
+  machines**. All of it has to come from switching it into battles something else wins.
+
 ## The Gen 1 mechanics & hacking area (`docs/gen1/`)
 
 - **[`docs/gen1/README.md`](docs/gen1/README.md) is the index and it owns the standards.** Linked

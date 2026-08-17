@@ -98,15 +98,6 @@ fn oneline(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// One line of the screen, so a report can quote what a player sees.
-fn flat(s: &str) -> String {
-    s.split('\n')
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join(" / ")
-}
-
 /// The text box: Gen 1 draws dialogue on the bottom rows, so that is where
 /// every prompt this drill is looking for lives.
 fn textbox(s: &str) -> String {
@@ -237,7 +228,9 @@ fn restore_party(gb: &mut Gameboy, snap: &[u8]) {
 fn read_enemy_moves(gb: &mut Gameboy) -> [u8; 4] {
     let mut moves = [0u8; 4];
     for (i, m) in moves.iter_mut().enumerate() {
-        *m = gb.peek(tr::ENEMY_MON + terminalgb_plugin_trainer::gen1::battle::MOVES + i as u16);
+        *m = gb.peek(
+            tr::ENEMY_MON + terminalgb_plugin_trainer::gen1::battle::MOVES + i as u16,
+        );
     }
     moves
 }
@@ -291,7 +284,11 @@ impl Arena {
     /// Pressing A on the cadence the menus accept is all the policy there is:
     /// A on the top menu opens FIGHT, A again takes move slot 1, and A carries
     /// every text box. The preset puts the strong move in slot 1.
-    fn fight(&mut self, limit: u32, cancel_evolution: bool) -> (Vec<(u32, String)>, Option<Vec<u8>>) {
+    fn fight(
+        &mut self,
+        limit: u32,
+        cancel_evolution: bool,
+    ) -> (Vec<(u32, String)>, Option<Vec<u8>>) {
         let mut out = Vec::new();
         let mut cancelled = false;
         let mut snap: Option<Vec<u8>> = None;
@@ -334,12 +331,16 @@ impl Arena {
             // move-learn happen *after* `wIsInBattle` has gone back to zero,
             // so a snapshot gated on being in a battle captures the Pokemon
             // one moment too early and puts the pre-evolution form back.
-            if f % 8 == 0 && self.gb.peek(tr::PARTY_COUNT) > 0
+            if f % 8 == 0
+                && self.gb.peek(tr::PARTY_COUNT) > 0
                 && self.gb.peek(tr::PARTY_SPECIES) != 0
             {
                 snap = Some(snapshot_party(&mut self.gb));
             }
-            if f > 60 && self.gb.peek(tr::IS_IN_BATTLE) == 0 && f % MENU_GAP == MENU_GAP - 1 {
+            if f > 60
+                && self.gb.peek(tr::IS_IN_BATTLE) == 0
+                && f % MENU_GAP == MENU_GAP - 1
+            {
                 // Out of battle and the screen has settled: give the
                 // post-battle prompts room to appear and be answered.
                 if out
@@ -383,9 +384,12 @@ fn windows(trace: &[(u32, String)]) -> BTreeMap<&'static str, (u32, u32, usize, 
     for (f, s) in trace {
         for (needle, label) in PHRASES {
             if oneline(s).contains(*needle) {
-                let e = out
-                    .entry(label)
-                    .or_insert((*f, *f, 0, oneline(s).chars().take(150).collect()));
+                let e = out.entry(label).or_insert((
+                    *f,
+                    *f,
+                    0,
+                    oneline(s).chars().take(150).collect(),
+                ));
                 e.1 = *f;
                 e.2 += 1;
             }
@@ -458,7 +462,9 @@ fn report_windows(trace: &[(u32, String)]) {
         let miss: Vec<String> = [1u32, 2, 4, 6, 8, 12, 16, 24, 32, 48]
             .iter()
             .map(|iv| {
-                let missed = (0..*iv).filter(|ph| !frames.iter().any(|f| f % iv == *ph)).count();
+                let missed = (0..*iv)
+                    .filter(|ph| !frames.iter().any(|f| f % iv == *ph))
+                    .count();
                 format!("{iv}:{missed}/{iv}")
             })
             .collect();
@@ -489,7 +495,11 @@ fn levels_to(
         }
         // Round 0 sets the party up; every round after it is the opponent
         // alone, so the experience the party has gained is not written over.
-        a.arm(if round == 0 && setup { scenario } else { "chansey" })?;
+        a.arm(if round == 0 && setup {
+            scenario
+        } else {
+            "chansey"
+        })?;
         a.await_battle(4000)?;
         if round == 0 {
             let m = read_mon(&mut a.gb);
@@ -520,7 +530,10 @@ fn levels_to(
             for (f, t) in &trace {
                 let one = textbox(t);
                 if one != last {
-                    println!("      f{f:<5} {}", one.chars().take(120).collect::<String>());
+                    println!(
+                        "      f{f:<5} {}",
+                        one.chars().take(120).collect::<String>()
+                    );
                     last = one;
                 }
             }
@@ -538,9 +551,17 @@ fn cmd_trace(rom: &Path) -> Result<(), String> {
     let ps = presets()?;
 
     for (scenario, target, what) in [
-        ("learn-bulbasaur", 13u8, "a move-learn prompt and nothing else"),
+        (
+            "learn-bulbasaur",
+            13u8,
+            "a move-learn prompt and nothing else",
+        ),
         ("evolve-bulbasaur", 16, "an evolution and nothing else"),
-        ("evolve-and-learn-abra", 16, "an evolution AND a move at the same level"),
+        (
+            "evolve-and-learn-abra",
+            16,
+            "an evolution AND a move at the same level",
+        ),
     ] {
         println!("== {scenario}: {what} ==");
         let mut a = Arena::boot(&staged, &bytes, &ps)?;
@@ -564,7 +585,10 @@ fn cmd_cancel(rom: &Path) -> Result<(), String> {
     let mut a = Arena::boot(&staged, &bytes, &ps)?;
     let trace = levels_to(&mut a, "evolve-bulbasaur", 16, true, true)?;
     let m = read_mon(&mut a.gb);
-    println!("    after pressing B: species {} level {}", m.species, m.level);
+    println!(
+        "    after pressing B: species {} level {}",
+        m.species, m.level
+    );
     report_windows(&trace);
     println!("    -- now level it once more, pressing nothing but A --");
     // **No setup preset this time.** Re-arming the scenario would inject a
@@ -572,7 +596,10 @@ fn cmd_cancel(rom: &Path) -> Result<(), String> {
     // point is what happens to the Pokemon that just refused.
     let trace2 = levels_to(&mut a, "evolve-bulbasaur", m.level + 1, false, false)?;
     let m2 = read_mon(&mut a.gb);
-    println!("    after the next level-up: species {} level {}", m2.species, m2.level);
+    println!(
+        "    after the next level-up: species {} level {}",
+        m2.species, m2.level
+    );
     report_windows(&trace2);
     Ok(())
 }
@@ -589,19 +616,17 @@ fn cmd_moveset(rom: &Path) -> Result<(), String> {
     println!("== what a wild Pokemon at a level actually holds ==");
     println!("   (compare with `learn_table.py`'s `moveset_at`, which is what");
     println!("    makes the decision table finite)");
-    for name in [
-        "moveset-tentacool",
-        "moveset-nidorino",
-        "moveset-pidgeotto",
-    ] {
+    for name in ["moveset-tentacool", "moveset-nidorino", "moveset-pidgeotto"] {
         let mut a = Arena::boot(&staged, &bytes, &ps)?;
         a.arm(name)?;
         a.await_battle(4000)?;
         run(&mut a.gb, 240);
-        let lv = a
-            .gb
-            .peek(tr::ENEMY_MON + terminalgb_plugin_trainer::gen1::battle::LEVEL);
-        println!("    {name:<20} level {lv:<3} moves {:?}", read_enemy_moves(&mut a.gb));
+        let lv =
+            a.gb.peek(tr::ENEMY_MON + terminalgb_plugin_trainer::gen1::battle::LEVEL);
+        println!(
+            "    {name:<20} level {lv:<3} moves {:?}",
+            read_enemy_moves(&mut a.gb)
+        );
     }
     Ok(())
 }
