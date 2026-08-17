@@ -1437,6 +1437,8 @@ mod tally {
         RUN_TRAINED,
         RUN_HURT,
         RUN_FAILED,
+        DOUBLE_FAIL,
+        NEAR_DEATH,
         HP_LEFT_PERMILLE,
         HP_SAMPLES,
         DMG_CHECKED,
@@ -1476,7 +1478,8 @@ mod tally {
              items used {}\n  \
              ran because: {} the leg forbids a win, {} one hit from fainting, \
              {} the lead is already trained, {} too hurt to pick a fight; \
-             {} escapes failed\n  \
+             {} escapes failed, {} battle(s) had two fail in a row, {} battle(s) \
+             left the lead one hit from death\n  \
              turns spent lowering a stat: {}\n  \
              damage predictions: {} landed short of a knockout, {:.1}% inside \
              the roll range, {} under, {} over (a critical hit lands over); \
@@ -1497,6 +1500,8 @@ mod tally {
             get(&RUN_TRAINED),
             get(&RUN_HURT),
             get(&RUN_FAILED),
+            get(&DOUBLE_FAIL),
+            get(&NEAR_DEATH),
             get(&STAT_TURNS),
             get(&DMG_CHECKED),
             100.0 * get(&DMG_IN_RANGE) as f64 / checked as f64,
@@ -1524,6 +1529,10 @@ struct BattleTally {
     /// A RUN was chosen on the turn just gone; if the battle is still here on
     /// the next one, the escape failed and cost a turn.
     ran_last_turn: bool,
+    /// Escapes that failed in *this* battle, so a run of two can be counted.
+    fails_here: u8,
+    /// Has this battle already been counted as a near-death?
+    near_here: bool,
     /// Has this driver made a decision yet?
     primed: bool,
     /// This battle was already in progress when the run started, so it is the
@@ -1554,6 +1563,8 @@ impl BattleTally {
             self.stat_turns = 0;
             self.ran = false;
             self.ran_last_turn = false;
+            self.fails_here = 0;
+            self.near_here = false;
         }
         // **Check the prediction against what happened.** A prediction nobody
         // verified is a guess with a decimal point.
@@ -1604,6 +1615,15 @@ impl BattleTally {
                 std::cmp::Ordering::Equal => {}
             }
         }
+        // **The precursors, not the outcome.** A death needs the lead one hit
+        // from dying AND an escape failing twice in the same battle, and both
+        // happen roughly a hundred times more often than a death does. At about
+        // one failure per 3,000 attempts no variant can be told from another by
+        // its pass rate; these can be compared on hundreds of events.
+        if !self.near_here && v.ours.hp > 0 && v.ours.hp <= v.incoming_max {
+            self.near_here = true;
+            tally::bump(&tally::NEAR_DEATH, 1);
+        }
         self.last = Some(v.clone());
         let _ = Relaxed;
     }
@@ -1626,6 +1646,10 @@ impl BattleTally {
         // real figure is the 84 that had to try twice.
         if self.ran_last_turn {
             tally::bump(&tally::RUN_FAILED, 1);
+            self.fails_here += 1;
+            if self.fails_here == 2 {
+                tally::bump(&tally::DOUBLE_FAIL, 1);
+            }
         }
         // **Match the policy's named reason, not a fragment of its prose.**
         // These were substring guesses, which is tolerable for a report and was

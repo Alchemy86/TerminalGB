@@ -231,7 +231,7 @@ which is exactly what the save-state chain is for.
 **Link 05's 41.7% was not a solve rate at all** — it was a scenario failing
 itself on a state the cartridge does not treat as a failure. §8.11.
 
-### Certified: links 01-10 (link 11 has NOT cleared — see §7b)
+### Certified: links 01-10; link 11 accepted at one failure (§7b)
 
 The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 
@@ -247,7 +247,7 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 08 | carry-it-back-to-pallet | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 46 |
 | 09 | receive-the-pokedex | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 24 |
 | 10 | back-to-viridian | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 47 |
-| 11 | train-for-the-forest | 3,000 | 2,999 | 99.97%, 99.81-100% — **NOT CERTIFIED**, see §7b | 3,000 | 3,000 | 631 |
+| 11 | train-for-the-forest | 3,000 | 2,999 | 99.97%, 99.81-100% — **accepted by decision, not a zero-failure pass**, see §7b | 3,000 | 3,000 | 631 |
 
 Measured on the captain's Pokémon Blue, 12 workers, load average 8-55 with
 other work on the box. Zero failures in 3,000 bounds each link's failure rate at
@@ -595,21 +595,21 @@ end-to-end figure stays what the weakest link makes it.
 
 ---
 
-## 7b. OPEN WORK — link 11 has not cleared (working state)
+## 7b. Link 11 — accepted at one failure, and why that is not a pass
 
-**This section is live working state, not a finding.** Delete it when link 11
-certifies. It exists so the work survives a restart: what the bar needs, what has
-been tried, what the failures look like, and how to reproduce any of it.
+**The measurement stands as measured; the acceptance is a decision on top of it,
+and the two must not be merged.** `11-train-for-the-forest` measures **2,999 of
+3,000**. One failure bounds the rate at about **0.16%** at 95% confidence, which
+does **not** clear 99.9% under §7's zero-failure convention. The captain accepted
+it on that basis on **2026-08-17**.
 
-### Where it stands
+So this link is *accepted*, not *certified*. It is not a zero-failure
+3,000/3,000 result and must never be recorded as one — if a later run of the
+chain reports link 11 green, that is a different claim and needs its own
+measurement. Everything below is the evidence the acceptance was made on, kept
+because a decision without its evidence is just a number.
 
-`11-train-for-the-forest` measures **2,999 of 3,000**. One failure bounds the
-rate at about **0.16%** at 95% confidence, which does not clear 99.9% under §7's
-zero-failure convention. Links 01-10 certify at 3,000/3,000 each on the same
-binary. **Links 12-14 have only ever been RECONNAISSANCE** — they have never been
-certified, because the gate is that a link clears before the next is scored, and
-any 12-14 number in this repository until that changes is a recon figure and must
-be labelled as one.
+Links 01-10 certify at 3,000/3,000 each on the same binary.
 
 ### What the failure looks like
 
@@ -676,9 +676,32 @@ different seed. That is variance, not cause.
 - **The budget is not the constraint**: median 631 decisions, p99 1,164, worst
   1,615 against a 2,500 ceiling.
 
-### Candidates not yet tried
+### The instrument that was being built when the chain moved on
 
-Ranked by how much of the mechanism they remove:
+Comparing variants by pass rate is hopeless at ~1 event per 3,000 attempts: the
+run above and the two before it all read "1 failure", and each was a different
+seed. So the driver counts the two things a death actually *needs*, both of
+which happen about a hundred times more often:
+
+- **a battle where an escape failed twice** (`DOUBLE_FAIL`), and
+- **a battle that left the lead one hit from death** (`NEAR_DEATH`).
+
+Baseline, 1,000 attempts on the accepted policy: 21,563 battles, 42 failed
+escapes, **10 battles with two failures in a row**, **72 battles that left the
+lead one hit from death** — against zero deaths in that sample. Ten and
+seventy-two are numbers two variants can be told apart on; one is not.
+
+Both counters are in the standard battle report, so anyone returning to this can
+compare a change in twenty minutes instead of forty and get a signal rather than
+a coin flip. **That is the method to reach for next**, and it is the reason the
+narrowed grind box (2,997 against 2,999) should not be treated as settled either
+way — 1-versus-3 cannot decide anything.
+
+### Candidates not tried, kept for whoever returns to it
+
+Ranked by how much of the mechanism they remove. **The chain moved on to links
+12-14 by captain decision before these were attempted**, so none of them is
+ruled out — they are unexplored, not exhausted.
 
 1. **Carry a second Pokemon.** Removes the failure condition outright (one faint
    is no longer `party_hp=0`) and gives the policy's `Switch` branch something to

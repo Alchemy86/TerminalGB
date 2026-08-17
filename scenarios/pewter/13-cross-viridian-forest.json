@@ -1,7 +1,7 @@
 {
   "schema": "gbscenario/1",
   "name": "13-cross-viridian-forest",
-  "objective": "Cross Viridian Forest from the south entrance to the north exit. It is a maze of trees with three bug catchers in it whose battles cannot be run from - pathing the forest with their sight cones blocked gives no route at all - and tall grass throwing wild encounters the whole way.",
+  "objective": "Cross Viridian Forest from the south entrance to the north exit. It is a maze of trees with three bug catchers in it, at least one of whom cannot be avoided - blocking all three of their sight lines leaves no route at all, and the one at (2,18) severs the map on its own - and their battles cannot be run from. Tall grass throws wild encounters the whole way.",
   "start_state": "states/12.gbss",
   "goal": [
     "map=0x2F"
@@ -25,6 +25,6 @@
   "evidence": [
     "map=0x2F - wCurMap $D35E. VIRIDIAN_FOREST_NORTH_GATE is const index 47, and the forest's own object data names it: map $33's warps at (1,0) and (2,0) both lead to map $2F, which is the only northern exit. Map $2F decodes as tileset 9, 5x4 blocks - a gate building - with warps back to the forest at (4,7)/(5,7) and out to $FF (the last map, i.e. Route 2) at (4,0)/(5,0).",
     "The forest's three bug catchers each have a flag (EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_0..2, wEventFlags $D7F3 bits 2,3,4), but none of them is crossing it: beating them is not the milestone.",
-    "That the three fights are compulsory is measured on the forest's own walkability grid rather than asserted. Their bodies alone do not sever the map - which is as it must be, since they are still standing there after they are beaten - but blocking each trainer's facing direction by a SINGLE tile already leaves no route from the southern entrance (15..18,47) to the northern exit, and so does every range up to eight. All three stand facing LEFT (the object-data range byte is $D2, the STAY direction encoding), at (30,33), (30,19) and (2,18). So the compulsion does not depend on knowing the view range the map script sets, which is the reason this can be stated at all."
+    "Which of the three fights are compulsory is measured on the forest's own walkability grid, and the answer is ONE, not three. All three stand facing LEFT (the object-data range byte is $D2, the STAY direction encoding) at (30,33), (30,19) and (2,18). Blocking all three facing directions by a single tile leaves no route from the southern entrance (15..18,47) to the northern exit, so at least one fight cannot be avoided - but taken individually only the trainer at (2,18) severs the map at every range from 1 to 8, with or without line of sight modelled. The other two are each avoidable on their own; between them they cover every route, which is why blocking all three severs it. A 3000-attempt reconnaissance run agrees: exactly one trainer battle per attempt, and the party leaves the forest with 94.4% of its HP. The compulsory fight is therefore roster 3, a single level 9 WEEDLE - which is still what sets link 11's level-10 precondition, since the threshold is that trainer's level plus one."
   ]
 }
