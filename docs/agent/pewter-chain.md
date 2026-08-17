@@ -1322,50 +1322,151 @@ heat-06-cross-route-1-map28.png    Oak's Lab
 
 ## 11. The films
 
-Two, because they cannot be one: an overview has to compress tens of emulated
-minutes to be watchable, and a showcase has to *not* compress if the walk cycle
-is to be visible. Both come out of the same compositor
+Two kinds, because they cannot be one: an overview has to compress tens of
+emulated minutes to be watchable, and a showcase has to *not* compress if the
+walk cycle is to be visible. All of them come out of the same compositor
 ([`tools/pewter-chain/swarm_film.py`](../../tools/pewter-chain/swarm_film.py)),
-and both are in `/home/aaron/pokemon-run/training/`.
+and **the videos** live in `/home/aaron/pokemon-run/` (the older ones under
+`training/`) rather than in the repository — a 190 MB artefact does not belong in
+git whatever is in it. **Stills do**, and §11a is them: everything above and
+below this line was a number until then, and a reader could not see the thing it
+describes.
 
 | film | what it is |
 |---|---|
-| `pewter-chain-01-03-600agents.mp4` | the three certified links in **one continuous cut**, 600 agents, 1280x720, 7.2 s at **12×, 60 fps** — the original swarm film's own compression. Placed on PixelGB's Kanto atlas. |
+| `pewter-chain-01-11-600agents.mp4` | **links 01 to 11 in one continuous cut**, 600 agents, 1280x720, 3 min 36 s at **12×, 60 fps**. The current one. Battles carry a halo, so the frozen crowd link 11 produces has its reason on screen. |
+| `pewter-chain-01-10-600agents.mp4` | the same cut over the ten links that certify at 3,000/3,000, 47.6 s — the shorter half of the length question below. |
+| `pewter-chain-01-03-600agents.mp4` | the three-link cut this all started from, 7.2 s, superseded. |
 | `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The columns, the bottlenecks and the ledges are the picture. |
 | `pewter-chain-swarm-24agents.mp4` | the whole fourteen-link chain at 52×, 60 s, clearly labelled a timelapse. |
 
 ```sh
-python3 tools/pewter-chain/chain_tracks.py --out target/chain/tracks \
-    01-new-game:target/cert/01 02-leave-the-house:target/cert/02 \
-    03-oak-takes-you-to-the-lab:target/cert/03
-python3 tools/pewter-chain/swarm_film.py target/chain/tracks \
-    --out target/chain/frames --seconds 7.2 --fps 60 --cover 0.99 --width 1280 \
-    --method "links 01/02/03 each certified 3000/3000, 3000 distinct trajectories, failure rate under 0.10%"
-ffmpeg -y -framerate 60 -i target/chain/frames/f%05d.png \
-    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p pewter-chain-01-03-600agents.mp4
+# one 600-attempt corpus per link, each entering from the previous link's exit
+# pool, with per-frame position tracks. `--exits 600` is what makes agent `s`
+# of every link the same playthrough — see chain_tracks.py's own header.
+prev=
+for l in 01-new-game 02-leave-the-house 03-oak-takes-you-to-the-lab \
+         04-take-a-starter 05-the-rival-battle 06-cross-route-1 \
+         07-collect-oaks-parcel 08-carry-it-back-to-pallet \
+         09-receive-the-pokedex 10-back-to-viridian 11-train-for-the-forest; do
+  cargo run --release --features scenario --example pewter_chain -- corpus \
+      --rom <blue.gb> --scenario scenarios/pewter/$l.json --runs 600 --exits 600 \
+      --workers 6 --paths --out target/film11/${l%%-*} ${prev:+--start-dir $prev}
+  prev=target/film11/${l%%-*}/exits
+done
+python3 tools/pewter-chain/chain_tracks.py --out target/film11/tracks \
+    01-new-game:target/film11/01 … 11-train-for-the-forest:target/film11/11
+# --speed states the PACE and lets the runtime fall out of the material, which
+# is the right direction round. See below.
+python3 tools/pewter-chain/swarm_film.py target/film11/tracks \
+    --out target/film11/frames --speed 12 --fps 60 --cover 0.99 --width 1280 \
+    --title "THE PEWTER CHAIN 01-11" --method "…"
+ffmpeg -y -framerate 60 -i target/film11/frames/f%05d.png \
+    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p pewter-chain-01-11-600agents.mp4
 ```
 
-### Runtime and speed are not independent, and this chain is short
+### 11a. What it looks like
+
+Six stills from the eleven-link cut, in
+[`chain-stills/`](chain-stills/) — because everything else on this page is a
+number, and a reader could not see the swarm at all. They are frames of the
+film, downscaled to 900 px and quantised to 64 colours so the set is 752 KB
+rather than 5 MB; the videos stay out of git.
+
+![600 agents crossing Route 1 as a column, wild-battle halos in the grass](chain-stills/3-route-1-crossing.png)
+
+*Route 1, 5.2 emulated minutes in: 73 agents on link 06, 150 on link 07 and 372
+on link 08 at the same time, 112 of them in a wild battle. The camera is at 74
+tiles across because that is how spread out the field is, not because anybody
+framed it.*
+
+**On the licence line, since it is the same one `docs/link-trade/` sits on:**
+these are our compositor's own output — the HUD, the heat colouring, the battle
+halos, the link bars and 600 of our sprites over a cropped camera view. The test
+is *our interface, doing something, with the game incidental*, and that is what
+these are. They are not an asset comparison (which is why
+`docs/upscale-samples/` stays MIT-ROM-only) and nothing here can be read back as
+game data.
+
+| | what it shows |
+|---|---|
+| [1 — the two houses](chain-stills/1-the-houses.png) | 0.2 emulated minutes in. **Interiors are panels beside their own town**, drawn from PixelGB's manifest, and the swarm is *inside* one of them — Red's bedroom, with the ground floor as the panel above it and Pallet Town down the right-hand side. 25 agents are still on link 01, 575 already on link 02. The line at the foot says 90 are out of shot and how far behind the furthest is. |
+| [2 — the rival battle](chain-stills/2-the-rival-battle.png) | **All 600 agents in one trainer battle, in one room.** Every trainer battle in links 01-11 is this one, which is why wild and trainer are coloured apart: `in a battle: 600 trainer`, and the orange halo is why the crowd standing on two tiles is legible instead of inexplicable. |
+| [3 — Route 1, mid-crossing](chain-stills/3-route-1-crossing.png) | The picture the film exists for: the swarm as a **column** up the route, 73 agents on link 06, 150 on 07 and 372 on 08 at once, red halos where wild encounters caught them, and Viridian's interiors as insets top right. |
+| [4 — pulled back over Route 1](chain-stills/4-route-1-pulled-back.png) | The camera at **67 tiles across**, the whole route in frame with 309 agents in wild battles. Nobody authored this shot — it fits the 5th-95th percentile of the swarm, so the zoom *is* how spread out the field is. |
+| [5 — the training grind](chain-stills/5-the-training-grind.png) | Link 11, and the reason it owns the runtime: **396 of 597 agents in wild battles at once**, a solid red mass in one patch of Route 1's grass, with a thin stream walking north to heal at the Pokémon Center inset. Without the halo this frame is a swarm frozen for no reason. |
+| [6 — the thinning tail](chain-stills/6-the-thinning-tail.png) | 41 emulated minutes in, **12 of 600 still running**. The honest half of the `--cover` finding below: the back of this cut is a draining crowd, because link 11's own length is long-tailed. |
+
+### Runtime and speed are not independent, and one link owns the runtime
 
 **`seconds_out × speed = the emulated time there is.`** That is the whole
 constraint and it decides both numbers, so neither is a taste call. The three
 certified links run 86.3 emulated seconds for 99% of agents (154 for the single
 slowest), which gives **7.2 s at 12×** — a 50-second cut at 12× would need
-**10 emulated minutes** and this chain does not contain them. The fourteen-link
+**10 emulated minutes** and three links do not contain them. The fourteen-link
 chain's 52× timelapse is not a different aesthetic, it is a different amount of
 material.
 
-**So the film's runtime is not a pace decision and cannot be fixed by one.**
+Eleven links do contain them, and then some. Summed **per seed** across the
+3,000-attempt runs — the identity mapping (`--exits 3000`) means seed `s`'s
+eleven links really are one playthrough, so this is a distribution over 2,999
+whole chains and not a sum of medians:
+
+| chained, 3,000 attempts a link | p50 | p99 | longest |
+|---|---:|---:|---:|
+| links 01-10 | 10.7 emulated min | **12.3 min** | 13.6 min |
+| links 01-11 | 28.7 emulated min | **45.2 min** | 57.7 min |
+| link 11 alone | 18.0 min | 34.6 min | 55.4 min |
+
+**Link 11 is 63% of the median chain and 77% of the p99 one**, so at the chosen
+pace it is also 63-77% of the film: minutes of Route 1's grass being paced,
+which is exactly what §8.8 says that link is. That is not a fault in the film
+and there is no pace that fixes it — 12× is the compression the original swarm
+film used and the runtime is the material. It is a genuine choice about what
+the cut is *for*, so both cuts exist and the numbers are here rather than one
+of them being picked quietly:
+
+- **01-10 is the run of links that certify at 3,000/3,000** (§5), and it is
+  inside the 50-90 s the film-regression note asks for.
+- **01-11 is the whole journey to the forest's door.** Link 11 is *accepted at
+  one failure* rather than certified (§7b), which the caption says rather than
+  rounding up, and the cut is minutes longer because the training grind really
+  is that long.
+
+**Links 12-14 certified while this was being cut**, so a fourteen-link film to
+Pewter City is now possible and is not this one. Its length follows from the same
+identity and nothing else: the fourteen-link chain adds link 12's 19,050, link
+13's 13,794 and link 14's 1,152 median frames, so roughly **another 9 emulated
+minutes and about 45 s of film** on top of 01-11 — the shape of the problem is
+unchanged, because link 11 still owns the runtime.
+
+The two films' own figures, from the 600-attempt run they are made of — a
+smaller sample than the certification, so its p99 is shorter and the film's
+length is the film's rather than the chain's:
+
+| the cut | material at p99 | output at 12×, 60 fps |
+|---|---:|---:|
+| links 01-10 | 34,291 frames, 9.6 emulated min | **2,858 frames, 47.6 s** |
+| links 01-11 | 155,584 frames, 43.4 emulated min | **12,966 frames, 3 min 36 s** |
+
+**Neither is a pace decision and neither can be fixed by one.**
 The original swarm film ran 50 s because it filmed ten emulated minutes, not
 because it was paced differently — it used the same 12×. Measured side by side:
 
-| | original dot film | this cut |
-|---|---:|---:|
-| compression | 12.05× | **12.05×** |
-| stride, emulated frames per output frame | 24 | **12** |
-| frame rate | 30 fps | **60 fps** |
-| material filmed | 602 emulated s | **86.3 emulated s** |
-| output | 1,500 frames, 50 s | **432 frames, 7.2 s** |
+| | original dot film | 01-03 cut | **01-11 cut** |
+|---|---:|---:|---:|
+| compression | 12.05× | 12.05× | **12.05×** |
+| stride, emulated frames per output frame | 24 | 12 | **12** |
+| frame rate | 30 fps | 60 fps | **60 fps** |
+| material filmed | 602 emulated s | 86.3 s | **2,605 s** |
+| output | 1,500 frames, 50 s | 432 frames, 7.2 s | **12,966 frames, 216 s** |
+
+**`--speed 12` is how that is spelled now, not `--seconds`.** `step` is a whole
+number of emulated frames, so typing a runtime to hit a pace does not work:
+`--seconds 29.7` at 60 fps over the six-link stitch lands on step 13 and a
+13.06× cut while the caption says 12×. Measured, and only noticed because the
+tool prints the ratio it chose. State the pace and let the runtime fall out —
+which is the identity above used as an interface.
 
 The original's stride of 24 is *longer* than a 17-frame walk step, so it
 teleported by construction — it had no interpolation and did not need one,
@@ -1374,11 +1475,31 @@ sprite is what makes the stride matter, and 60 fps is what buys the same
 compression back.
 
 **`--cover` is the other half and it matters more than it looks.** The swarm is
-essentially finished by frame 4,000: at 40% through a `--cover 1.0` timeline
-only 50 of 600 agents are still running, and at 50% only 8. Covering the single
-longest straggler therefore spends **60% of the runtime on fewer than ten
-agents** — measured, and visible as a film that empties out and then keeps
-playing. `--cover 0.99` ends shortly after the mass does.
+essentially finished by frame 4,000 of the three-link chain: at 40% through a
+`--cover 1.0` timeline only 50 of 600 agents are still running, and at 50% only
+8. Covering the single longest straggler therefore spends **60% of the runtime
+on fewer than ten agents** — measured, and visible as a film that empties out
+and then keeps playing. `--cover 0.99` ends shortly after the mass does.
+
+**And on the eleven-link cut it is the sharper half of the length question, not
+the pace.** How full the frame is, measured on the two cuts' own tracks at
+`--cover 0.99`:
+
+| through the film | 01-10, agents still running | 01-11 |
+|---|---:|---:|
+| 50% | 600/600 | 478/600 |
+| 60% | 600/600 | **282/600** |
+| 70% | 587/600 | 145/600 |
+| 80% | 420/600 | 61/600 |
+
+The ten-link cut holds the whole swarm for **70%** of its runtime and drains in
+the last third. The eleven-link cut is under **half** the swarm by 60% through,
+because link 11's own length is long-tailed — median 63,574 frames against a
+p99 near 124,000, so agents do not cross a finish line together, they dribble.
+So the honest statement of the cost is not "63% of the film is grinding" but
+**the back half of it is a thinning crowd**, and that is a property of the
+training link and not of the film. The dial that moves it is `--cover`, not the
+pace: `--cover 0.6` would end the cut where 40% are still going.
 
 Peter Whidden's *Training AI to Play Pokémon with Reinforcement Learning* is
 where the swarm view comes from and the credit is his. What differs here is a
@@ -1440,6 +1561,43 @@ one. The guard — no colour on screen that was not in the source framebuffer �
 still applies to the map layer, which is reproduced exactly. The agent overlay
 is deliberately outside it.
 
+### A fighting agent is not walking anywhere, and the film has to say so
+
+Links 05 and 11 are the first battles any chain film has contained, and a battle
+has no map position at all: the agent stands on the tile it entered from until
+the fight is over. Drawn as positions alone, **the single most misleading frame
+this cut can produce is a swarm frozen across Route 1 with no reason on screen**
+— and link 11 is nothing but pacing grass and fighting what comes out of it, so
+that frame is most of the film.
+
+So a fighting agent gets a **halo underneath it**, and the HUD carries a live
+count and a two-swatch legend. Underneath rather than over: the sprite is 16
+source pixels and already carries the heat colour, so a mark on top of it fights
+the encoding the legend explains, and the two-pixel outline ring that was there
+before is invisible in a crowd of six hundred at this zoom. Alpha, so the map
+still reads through it — the halo says *something is happening here*, the map
+says where. And drawn in one overlay pass before any sprite, so a halo can never
+land on top of a neighbour.
+
+**Two colours, because `wIsInBattle` is not a boolean and a catch-all arm over
+it is a defect.** The track carries `$D057` verbatim: **1 is a wild encounter, 2
+is a trainer, and `$FF` means the player blacked out** — which is the end of the
+run, not a fight. The old `if battle:` was truthy for all three. That is the
+same defect `plugins/agent`'s own reader shipped once, where a catch-all `_ =>
+Trainer` put a whole stale battle panel in the overworld
+([`encounter.rs`](../../plugins/trainer/src/encounter.rs)); only 0, 1 and 2
+occur in the corpus today, and the point is that the fourth value cannot quietly
+become a battle marker. Wild and trainer are separately coloured because on this
+chain one of them is a story beat: every trainer battle in links 01-11 is the
+rival in Oak's lab, and **250 agents turning orange together in one room** is
+the picture.
+
+What is deliberately *not* built is the framebuffer collage — an agent's own
+160x144 screen composited at its world position, which is the only thing that
+can show a lab, a menu or a battle as itself. It is scoped in
+`/home/aaron/pokemon-run/FILM-STAGES.md` and it is a different project from
+placing a marker honestly.
+
 ### What made it smooth, which was not the compression
 
 Lowering the compression was the obvious answer and it was not the cause. The
@@ -1480,7 +1638,10 @@ chain, **no adjacent-tile arrival is ever that close together** — the gaps are
 *every* step, and inside a 31-frame gap for 17. That is precisely the reported
 "agents jump then pause", and it is a constant that was never checked against
 the tracks it was applied to. `walk_span` measures the modal step time from the
-tracks in hand — 17 here — and the glide never exceeds the gap.
+tracks in hand — 17 on the three-link chain, **29 on the eleven-link one** — and
+the glide never exceeds the gap. That the span *moves between corpora* is the
+argument for measuring it: with a hand-written 14 the long cut would freeze for
+15 frames before every step, and with a hard-coded 17 for 12.
 
 **Interpolation is what lets the cut be fast *and* smooth, and that is
 measurable rather than asserted.** A walking agent covers 16 px per step, so at
@@ -1513,17 +1674,19 @@ This is the ceiling, it is arithmetic, and it decides the compression:
 > `stride = speed × 59.7275 / fps` emulated frames per output frame, and
 > interpolation can only place an agent *inside* a step while `stride ≤ span`.
 
-`span` is the step time measured from the tracks — **17** emulated frames on
-this chain — so at 30 fps nothing above **8.54×** can be smooth, and the 8× cut
-was sitting just underneath it without that being said. Push to 12× at 30 fps
-and each output frame swallows a whole step: **18.0%** of moving samples land
-back on the tile grid, which is the teleporting the interpolation exists to
-remove.
+`span` is the step time measured from the tracks — **17** emulated frames on the
+three-link chain, **29** on the eleven-link one, which is why it is measured and
+not written down — so at 30 fps nothing above **8.54×** can be smooth on the
+short chain, and the 8× cut was sitting just underneath it without that being
+said. Push to 12× at 30 fps and each output frame swallows a whole step:
+**18.0%** of moving samples land back on the tile grid, which is the teleporting
+the interpolation exists to remove.
 
 **The way past it is frame rate, not a slower film.** At 60 fps the same 12×
 needs a stride of 12, comfortably inside a 17-frame step, and the ceiling rises
-to 17.08×. Measured on the same tracks, 12×/60 fps beats 8×/30 fps on *every*
-motion figure while being half as long again:
+to 17.08× (and to 28.9× on the eleven-link chain's longer span). Measured on the
+same tracks, 12×/60 fps beats 8×/30 fps on *every* motion figure while being
+half as long again:
 
 | on the same tracks and the same atlas | 8× at 30 fps | 12× at 30 fps | **12× at 60 fps** |
 |---|---:|---:|---:|
@@ -1538,19 +1701,37 @@ The middle column is the ceiling being crossed, and it costs on every row at
 once — including the camera, which has the same deadzone and pan cap to work
 with and twice the ground to cover per frame.
 
-On the shipped 12× cut, 163,041 samples of which 65,001 are moving:
+On the **shipped eleven-link cut**, 4,786,076 samples of which 1,401,034 are
+moving — and every figure printed by the compositor itself, before it renders a
+frame:
 
 ```text
+600 agents; longest run 173901 frames, filming to 155584 (43.4 emulated minutes)
+12966 output frames at 60 fps -> every 12th emulated frame, a 12x timelapse
+glide span 29 emulated frames, measured from these tracks
 agent displacement per output frame, in source pixels (a walk tile is 16):
-  median 0.00  p90 11.29  p99 144.89  max 244.75
-  >=12 px (a snap) 1.25%   <4 px (a slide) 67.17%
-  whole-tile quantisation 0.0% of 65001 moving samples land on the tile grid
-camera coverage: mean 98.6% of live agents on screen, worst frame 59 with 250 of 600 off
+  median 0.00  p90 6.62  p99 9.60  max 825.82
+  >=12 px (a snap) 0.53%   <4 px (a slide) 73.66%
+  whole-tile quantisation 0.7% of 1401034 moving samples land on the tile grid
+camera coverage: mean 99.3% of live agents on screen, worst frame 236 with 365 of 600 off
+  p1 93.5%  p5 96.2%  median 100.0%; 52 frame(s) (0.4%) below 90% covered
+camera over 12966 frames (216.1 s): 15 distinct crop width(s), resample ratio
+  changed on 65 frame(s) (0.5%)
+  still 93.7% of frames in x, 91.4% in y; direction reversals 0.16/s in x, 0.17/s in y
+  largest single-frame pan 42 px in x, 17 px in y; width 416-1580 px
 ```
 
 The tail past 40 px is warps, and a warp is a jump — `interpolate` refuses to
 lerp across one by design, and the quantisation figure excludes them so the
-renderer is not credited for the cartridge's own teleports.
+renderer is not credited for the cartridge's own teleports. The 825 px maximum
+is Viridian Mart's panel against Viridian City, which is the longest door in
+this chain.
+
+The three-link cut for comparison, on 163,041 samples of which 65,001 move:
+`median 0.00, p90 11.29, p99 144.89, max 244.75; snaps 1.25%, slides 67.17%,
+quantisation 0.0%; coverage 98.6%`. **Every motion and camera figure is as good
+or better on the long cut**, which is the answer to the worry that rules tuned
+over four rooms would not survive Pallet to Viridian and back three times.
 
 ### Where an agent is drawn, measured against the cartridge
 
@@ -1632,6 +1813,38 @@ test compared an agent's *centre* against the boundary, so seventy-one agents
 sitting 0.15 px outside the left edge — drawn, plainly, half in frame — were
 reported missing. It is judged by the sprite now. Both halves were real: the
 camera was lagging *and* the number overstated it.
+
+**A mean and a worst frame cannot tell a transient from a stretch**, and over a
+long journey that is the whole question — a swarm splitting between two
+interiors at a warp loses half the crowd for a handful of frames and recovers,
+while a camera calibrated for the wrong scale loses it for hundreds, and both
+report the same mean. So the coverage line carries percentiles and a count of
+frames below 90% now, printed on every run beside the smoothness figures the
+five rules were tuned against. On the eleven-link cut the rules **held with no
+change**: the ones tuned over four rooms are the same ones that follow Pallet to
+Viridian and back three times, and the long cut is *better* covered than the
+short one (1.2% of frames below par against 4.9%) because the mass is spread
+over open ground rather than split between two panels.
+
+### A raw row list cannot hold an eleven-link chain
+
+Measured rather than feared. A track row is written whenever the position, the
+facing, the walk counter or the battle flag moves, so a *walking* agent costs a
+row every couple of frames — and link 11 paces grass for tens of emulated
+minutes: **65,463 raw rows per agent for that link alone, 39.3M across 600
+agents**, about 5 GB of Python tuples on a box whose free memory is measured in
+single-figure gigabytes because several crews share it. The three-link film got
+away with holding everything because three links is 5,156 frames.
+
+`Corpus` reduces each track *as it streams past* instead of after: the
+tile-change list the renderer interpolates along (**8,004 rows per agent for the
+same link, 4.8M across the swarm**), the change points of the battle flag, and
+the visitation count. Peak is one agent's rows rather than six hundred agents'.
+It is a reduction and not a sampling — every figure is still computed from the
+raw rows, the visitation count still weighted by the gap between consecutive
+*raw* rows, and the three-link cut reproduces bit-identically: same 600
+straddles, same 119 tiles, same 558,614 agent-frames on the hottest, same
+motion figures, same 98.6% coverage.
 
 ---
 

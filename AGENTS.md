@@ -8748,3 +8748,123 @@ left of the town. Nothing in the compositor changed, and **the longest displacem
 fell from 449.14 to 244.75 source px** — a warp's jump *is* the distance between a door and the
 room behind it, so the film's own motion tail is an independent check that a layout is right.
 `p99` moved 192.00 -> 144.89 with it. Cheap, and it needs no eye on a picture.
+
+#### ONE LINK OWNS THE RUNTIME OF AN ELEVEN-LINK CUT, AND `--cover` CANNOT HIDE IT
+
+Summed **per seed** over the certified 3,000-attempt runs (the `--exits 3000` identity mapping
+means seed `s`'s eleven links really are one playthrough, so this is a distribution over 2,999
+whole chains and not a sum of medians): **links 01-10 are 10.7 emulated minutes at p50 and 12.3
+at p99 → a 61 s film at 12x; links 01-11 are 28.7 and 45.2 → 3 min 46 s.** Link 11 alone is
+18.0 min at p50, i.e. **63% of the median chain and 77% of the p99 one**, so it is also 63-77%
+of the film. That is the training grind `docs/agent/pewter-chain.md` §8.8 describes and there is
+no pace that fixes it — the identity `seconds_out x speed = the emulated time there is` says the
+runtime is the material. **Report both cuts with the split rather than picking one**; 01-10 is
+also the chain that is actually certified (link 11 measures 2,999/3,000).
+
+**`--speed 12` NOW, NOT `--seconds`.** `step = ceil(last / frames_out)` is a whole number of
+emulated frames, so typing a runtime to hit a pace does not work: `--seconds 29.7` at 60 fps
+over the six-link stitch lands on step 13 and a 13.06x cut while the caption says 12x. Measured,
+and only caught because the tool prints the ratio it chose — so **read the `Nx timelapse` line
+every time** whichever flag you use. `--speed` inverts it exactly (`frames_out = ceil(last /
+stride)`) and is the identity used as an interface.
+
+**AND `--cover` IS THE SHARPER HALF OF THE LENGTH QUESTION, NOT THE PACE.** How full the frame
+is, measured on the two cuts' own tracks at `--cover 0.99`: at 60% through, **01-10 still has
+600/600 agents running and 01-11 has 282/600**; at 80%, 420 against 61. The ten-link cut holds
+the whole swarm for 70% of its runtime; the eleven-link one is under half by 60% through,
+because link 11's own length is long-tailed (median 63,574 frames against a p99 near 124,000) so
+agents dribble rather than crossing a finish line together. So the honest statement of the cost
+is **"the back half is a thinning crowd"**, not "63% of it is grinding" — and the dial that
+moves it is `--cover`, not the pace.
+
+**`walk_span` MOVES BETWEEN CORPORA and that is the argument for measuring it**: 17 emulated
+frames on the three-link chain, **29** on the eleven-link one. A hard-coded 14 would freeze the
+long cut for 15 frames before every step and a hard-coded 17 for 12 — which is exactly the
+"agents jump then pause" report, one corpus later.
+
+#### `wIsInBattle` IN A TRACK IS THE RAW BYTE — `if battle:` IS A DEFECT
+
+A path row's last column is `$D057` verbatim (`src/scenario/run.rs`, `PathPoint::in_battle`):
+**1 wild, 2 trainer, `$FF` blacked out** — and `$FF` is the *end of the run*, not a fight. The
+compositor's `if battle:` was truthy for all three, which is the third instance in this
+repository of the same class (`plugins/trainer/src/encounter.rs`'s catch-all `_ => Trainer` drew
+a whole stale battle panel in the overworld; `BattleKind::from_flag` now enumerates). Only 0, 1
+and 2 occur in the corpus today — the point is that the fourth value cannot quietly become a
+battle marker. `BATTLE_KIND` maps the two that are battles and everything else is not one.
+
+**And a fighting agent needs the reason on screen, not just a mark.** A battle has no map
+position, so links 05 and 11 draw a swarm frozen on its tiles; link 11 is *nothing but* pacing
+grass and fighting, so that is most of the film. A halo **under** the sprite (the sprite is 16
+source px and already carries the heat colour, so a mark on top fights the encoding the legend
+explains, and a 2 px outline ring is invisible in a crowd of 600), alpha so the map still reads,
+drawn in one overlay pass before any sprite so a halo cannot land on a neighbour, plus a live
+HUD count and a two-swatch legend. Wild and trainer are coloured apart because on this chain
+every trainer battle is the rival in Oak's lab and **250 agents turning orange in one room** is
+the picture. What is *not* built is the framebuffer collage (`/home/aaron/pokemon-run/
+FILM-STAGES.md`) — that is the only thing that can show a lab or a battle as itself, and it is a
+different project from placing a marker honestly.
+
+#### A RAW ROW LIST CANNOT HOLD AN ELEVEN-LINK CHAIN — REDUCE AS YOU READ
+
+A track row is written whenever position, facing, the walk counter or the battle flag moves, so
+a *walking* agent costs a row every couple of frames. Measured: **65,463 raw rows per agent for
+link 11 alone, 39.3M across 600 agents**, about 5 GB of Python tuples — on a box whose free
+memory is single-figure gigabytes because several crews share it. The three-link film got away
+with holding everything because three links is 5,156 frames. `Corpus` reduces each file as it
+streams: the tile-change list (**8,004 rows per agent for the same link, 4.8M across the
+swarm**), the battle flag's change points, and the visitation count. **It is a reduction, not a
+sampling** — every figure is still computed from the raw rows, the visitation count still
+weighted by the gap between consecutive *raw* rows, and the three-link cut reproduces
+bit-identically (same 600 straddles, 119 tiles, 558,614 agent-frames on the hottest, same motion
+figures, same 98.6% coverage). That equality is the check to repeat after touching the loader.
+`positions` is then the ceiling: 13,560 output frames x 600 agents is **1.75 GB measured**, so a
+much longer cut needs the camera folded into the position pass (it is already causal) rather
+than a bigger box.
+
+#### A MEAN AND A WORST FRAME CANNOT TELL A TRANSIENT FROM A STRETCH
+
+A swarm splitting between two interiors at a warp loses half the crowd for a handful of frames
+and recovers; a camera calibrated for the wrong scale loses it for hundreds. **Both report the
+same mean and the same worst frame.** So the coverage line carries percentiles and a count of
+frames below 90% now, and `report_camera` prints the five smoothness figures the camera rules
+were tuned against (distinct crop widths, frames the resample ratio changed, frames still per
+axis, direction reversals per second, largest single-frame pan) — they lived in a one-off script,
+which is exactly how "1,348 distinct crop widths in 2,490 frames" becomes unverifiable.
+**The rules tuned over four rooms needed no change for eleven links**, and the long cut is
+*better* covered than the short one — 1.2% of frames below 90% against 4.9%, median 100% both —
+because the mass is spread over open ground rather than split between two panels. Measure before
+retuning a camera for a bigger journey; the intuition that it must need it is wrong here.
+
+#### THE STILLS ARE IN GIT AND THE VIDEOS ARE NOT (`docs/agent/chain-stills/`)
+
+The captain's gap, and it was real: *"the repo has the numbers but no PICTURES"* — every film and
+still lived in his media folder, so a reader of `docs/agent/pewter-chain.md` could read what
+happened and not see it. Six stills from the eleven-link cut are committed now (§11a describes
+each), and **the mp4s deliberately are not**: a 190 MB artefact does not belong in git whatever
+is in it, and the two-line ffmpeg recipe regenerates it.
+
+**It sits on the line `docs/link-trade/` already established, not past it.** These are the
+compositor's *own* output — HUD, heat colouring, battle halos, link bars and 600 of our sprites
+over a cropped camera view — so the test *"our interface, doing something, with the game
+incidental"* is met. They are not an asset comparison, which is why `docs/upscale-samples/` stays
+MIT-ROM-only, and nothing in them can be read back as game data. Do not widen this to a gallery
+of game frames.
+
+**Sizing, following `docs/shots`' own budget (744 KB for ten):** extract from the mp4, then
+`magick <f> -resize 900x -strip -colors 64 PNG8:<out>` — 1280x720 film frames come out ~100-170 KB
+each and the HUD text stays fully legible, against ~5 MB raw. **Image directories here carry no
+README** — the descriptions go in the page that references them, which is also where the captain
+asked for them. And embed *one* inline as a hero plus a table of links: six 900 px images in
+table cells is unreadable on GitHub, and a page with no inline picture does not fix the gap.
+
+#### EVERY HUD ROW WRAPS — the rule belongs to the row list, not to one row
+
+The `--method` line was wrapped once because it read *"links 01/02/03 each certified 3000"* and
+stopped mid-number. Two more rows then went the same way in one sitting, both caught by *looking
+at a frame* and by nothing else: the title (`THE PEWTER CHAIN 01-1`, cut at a digit) was the one
+string drawn at a fixed position and never measured, and the new battle count came out as *"in a
+battle: 69 trainer, 117 w"*. **A truncated measurement is worse than none, because a reader
+cannot tell it was cut** — so `wrap_hud` is applied to the whole row list and to the title, not
+to whichever row last embarrassed us. Same rule as the status panel's `fit_bar`: shorten
+deliberately or wrap, never clip. And **crop the HUD out of a rendered frame and read it** before
+shipping a caption; no test in this repository can see a clipped string.

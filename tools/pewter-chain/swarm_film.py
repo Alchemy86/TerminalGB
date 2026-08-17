@@ -153,12 +153,15 @@ def tint(sprite, rgb, Image):
     return out
 
 
-def load_tracks(d):
+def track_files(d):
+    """`agent -> path`, for every track file in a directory.
+
+    `agent-NNN.csv` from a whole-chain film run, or `path-NNNNN.csv` from a
+    corpus of one link — the same format either way, and a showcase of one busy
+    stretch wants the second.
+    """
     out = {}
     for name in sorted(os.listdir(d)):
-        # `agent-NNN.csv` from a whole-chain film run, or `path-NNNNN.csv`
-        # from a corpus of one link — the same format either way, and a
-        # showcase of one busy stretch wants the second.
         if name.endswith(".links.csv") or not name.endswith(".csv"):
             continue
         if name.startswith("agent-"):
@@ -167,13 +170,115 @@ def load_tracks(d):
             n = int(name[5:-4])
         else:
             continue
-        with open(os.path.join(d, name)) as f:
-            r = csv.reader(f)
-            next(r, None)
-            rows = [tuple(int(v) for v in row) for row in r if row]
-        if rows:
-            out[n] = rows
+        out[n] = os.path.join(d, name)
     return out
+
+
+class Corpus:
+    """Every track, reduced as it is read rather than after.
+
+    **A raw row list cannot hold an eleven-link chain, and the number says so
+    rather than the fear.** A row is written whenever the position, the facing,
+    the walk counter or the battle flag moves, so a *walking* agent costs a row
+    every couple of frames — and link 11 paces Route 1's grass for tens of
+    emulated minutes. Measured over the corpus: **65,463 raw rows per agent for
+    that link alone, which is 39.3M rows across 600 agents** and about 5 GB of
+    Python tuples, on a box whose free memory is measured in single-figure
+    gigabytes because several crews share it. The three-link film got away with
+    holding everything because three links is 5,156 frames.
+
+    Nothing downstream wants those rows, which is what makes this a reduction
+    and not a sampling. Three things are: the tile-change list the renderer
+    interpolates along (**8,004 rows per agent for the same link — 4.8M across
+    the swarm**), the change points of the battle flag, and the visitation
+    count. Each is accumulated as the file streams past, so peak memory is one
+    agent's rows rather than six hundred agents'.
+
+    Every number is computed from the raw rows exactly as it was before — the
+    visitation count in particular is weighted by the frame gap between
+    consecutive *raw* rows, not between tile changes, so the heat map's colours
+    do not move because the loader changed.
+    """
+
+    def __init__(self, d, holds):
+        self.paths = {}          # agent -> [(frame, map, x, y, facing)]
+        self.fights = {}         # agent -> [(frame, battle flag)] change points
+        self.end = {}            # agent -> last frame in the track
+        self.visits = collections.Counter()
+        self.visited = set()     # every map named, placeable or not
+        self.straddles = 0
+        self.dropped = []
+        for n, p in track_files(d).items():
+            path, fights, last, rows = [], [], None, 0
+            prev = None
+            with open(p) as f:
+                r = csv.reader(f)
+                next(r, None)
+                for row in r:
+                    if not row:
+                        continue
+                    fr, m, x, y, facing, _walk, battle = (int(v) for v in row)
+                    rows += 1
+                    self.visited.add(m)
+                    if prev is not None and holds(prev[1], prev[2], prev[3]):
+                        self.visits[(prev[1], prev[2], prev[3])] += max(
+                            1, fr - prev[0])
+                    prev = (fr, m, x, y)
+                    last = fr
+                    if not fights or fights[-1][1] != battle:
+                        fights.append((fr, battle))
+                    # A row whose coordinate is not on the map it names is the
+                    # one-frame warp straddle. Dropping it rather than drawing
+                    # it is what makes the agent hold its last real tile until
+                    # the destination arrives, which is what a warp is: a jump,
+                    # and `interpolate` already refuses to lerp across one.
+                    if not holds(m, x, y):
+                        self.straddles += 1
+                        continue
+                    if not path or (path[-1][1], path[-1][2],
+                                    path[-1][3]) != (m, x, y):
+                        path.append((fr, m, x, y, facing))
+            if not rows or not path:
+                # Every row named a map the atlas cannot vouch for. Dropping
+                # the agent is right, and saying so is the point of the count.
+                self.dropped.append(n)
+                continue
+            self.paths[n] = path
+            self.fights[n] = fights
+            self.end[n] = last
+
+
+def flag_at(pairs, frame):
+    """The battle flag in force at `frame`, from its change points.
+
+    Zero before the track starts, which is "not in a battle" and is what the
+    renderer wants for an agent that has not entered the film yet.
+    """
+    if not pairs or frame < pairs[0][0]:
+        return 0
+    lo, hi = 0, len(pairs) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if pairs[mid][0] <= frame:
+            lo = mid
+        else:
+            hi = mid - 1
+    return pairs[lo][1]
+
+
+# **`wIsInBattle` is not a boolean and a catch-all arm over it is a defect.**
+# The track carries `$D057` verbatim: 1 is a wild encounter, 2 is a trainer,
+# and **`$FF` means the player blacked out** — which is the end of the run, not
+# a fight (`plugins/agent`'s own reader had exactly this bug, and displayed a
+# whole stale battle panel in the overworld because of it). Anything that is
+# not 1 or 2 is therefore drawn as *not fighting* rather than swept into the
+# truthy branch. Measured over the corpus, only 0, 1 and 2 occur today; the
+# point is that the fourth value cannot quietly become a battle marker.
+BATTLE_KIND = {1: "wild", 2: "trainer"}
+# Two colours because the two are different events, and on this chain one of
+# them is a story beat: every trainer battle in links 01-11 is the rival in
+# Oak's lab, and the swarm turning red together in one room is the picture.
+BATTLE_HUE = {"wild": (255, 90, 90), "trainer": (255, 170, 60)}
 
 
 class Atlas:
@@ -306,27 +411,6 @@ def link_at(spans, frame):
     return (spans[-1][0], spans[-1][1], spans[-1][4]) if spans else (0, "", False)
 
 
-def tile_path(rows, holds=None):
-    """The tile changes only: `(frame, map, x, y, facing)` each time the
-    coordinate moves. This is what the renderer interpolates along.
-
-    `holds(map, x, y)` drops a row whose coordinate is not on the map it names
-    — the one-frame warp straddle. Dropping it rather than drawing it is what
-    makes the agent hold its last real tile until the destination arrives,
-    which is what a warp is: a jump, and `interpolate` already refuses to lerp
-    across one.
-    """
-    out, dropped = [], 0
-    for r in rows:
-        if holds is not None and not holds(r[1], r[2], r[3]):
-            dropped += 1
-            continue
-        key = (r[1], r[2], r[3])
-        if not out or (out[-1][1], out[-1][2], out[-1][3]) != key:
-            out.append((r[0], r[1], r[2], r[3], r[4]))
-    return out, dropped
-
-
 def walk_span(paths, lo=8, hi=48, fallback=WALK_FRAMES):
     """How long one step takes, **measured from the tracks in hand**.
 
@@ -422,20 +506,6 @@ def wrap_hud(text, font, width):
     return out
 
 
-def state_at(rows, frame):
-    """The row in force at `frame`. Rows are change points, ascending."""
-    lo, hi = 0, len(rows) - 1
-    if frame < rows[0][0]:
-        return None
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if rows[mid][0] <= frame:
-            lo = mid
-        else:
-            hi = mid - 1
-    return rows[lo]
-
-
 def on_screen(px, py, x0, y0, cw, ch):
     """Is any of this agent's sprite in frame?
 
@@ -447,6 +517,49 @@ def on_screen(px, py, x0, y0, cw, ch):
     """
     h = TILE / 2.0
     return (x0 - h <= px <= x0 + cw + h) and (y0 - h <= py <= y0 + ch + h)
+
+
+def report_camera(cams, fps):
+    """How the camera moves, measured — the other half of "is this cut good".
+
+    **A camera is judged by measuring its track, never by watching it and
+    asserting.** The five smoothing rules were all tuned that way and the
+    numbers used to live in a one-off script, which is exactly how a figure
+    goes stale: the tuning that produced "1,348 distinct crop widths in 2,490
+    frames" cannot be re-checked from a screenshot, and a later change to the
+    zoom ladder would not show up in anything printed. So they are printed on
+    every run now, dry or not, beside the coverage they trade against.
+
+    The signature that separates a drifting camera from a vibrating one is
+    **direction reversals per second** and **the fraction of frames it is
+    completely still** — not mean displacement, which is similar for both. And
+    the zoom's own figure is separate and was the loudest cause of shimmer:
+    a crop width that changes at all resamples the pixel art at a new ratio,
+    so what matters is how few distinct widths a run contains.
+    """
+    if len(cams) < 2:
+        return
+    n = len(cams)
+    widths = [c[2] for c in cams]
+    zoom_changes = sum(1 for a, b in zip(cams, cams[1:]) if a[2] != b[2])
+    jumps = [(b[0] - a[0], b[1] - a[1]) for a, b in zip(cams, cams[1:])]
+    still_x = sum(1 for dx, _ in jumps if dx == 0) / len(jumps)
+    still_y = sum(1 for _, dy in jumps if dy == 0) / len(jumps)
+    def reversals(vals):
+        signs = [(1 if v > 0 else -1 if v < 0 else 0) for v in vals]
+        signs = [s for s in signs if s]
+        return sum(1 for a, b in zip(signs, signs[1:]) if a != b)
+    secs = n / float(fps)
+    print(f"camera over {n} frames ({secs:.1f} s): "
+          f"{len(set(widths))} distinct crop width(s), "
+          f"resample ratio changed on {zoom_changes} frame(s) "
+          f"({100*zoom_changes/len(jumps):.1f}%)")
+    print(f"  still {100*still_x:.1f}% of frames in x, {100*still_y:.1f}% in y; "
+          f"direction reversals {reversals([j[0] for j in jumps])/secs:.2f}/s in "
+          f"x, {reversals([j[1] for j in jumps])/secs:.2f}/s in y")
+    print(f"  largest single-frame pan {max(abs(j[0]) for j in jumps)} px in x, "
+          f"{max(abs(j[1]) for j in jumps)} px in y; width "
+          f"{min(widths):.0f}-{max(widths):.0f} px")
 
 
 def report_motion(positions, cams, lost, n_agents, out_h, view_w, tile=TILE):
@@ -523,6 +636,20 @@ def report_motion(positions, cams, lost, n_agents, out_h, view_w, tile=TILE):
     print(f"camera coverage: mean {100*(1-sum(frac)/max(1,len(frac))):.1f}% of "
           f"live agents on screen, worst frame {worst} with {off[worst]} of "
           f"{live[worst]} off; {sum(lost)} agent-frame(s) unplaced by the atlas")
+    # **A mean and a worst frame cannot tell a transient from a stretch, and
+    # over a long journey that is the whole question.** A swarm splitting
+    # between two interiors at a warp loses half the crowd for a handful of
+    # frames and recovers; a camera calibrated for the wrong scale loses it for
+    # hundreds. Both report the same mean and the same worst frame. So: how
+    # many frames are actually below par, which is the number a coverage claim
+    # over eleven links has to rest on.
+    if frac:
+        cov = sorted(1 - f for f in frac)
+        bad = sum(1 for c in cov if c < 0.9)
+        print(f"  p1 {100*cov[max(0, int(0.01*len(cov)))]:.1f}%  "
+              f"p5 {100*cov[max(0, int(0.05*len(cov)))]:.1f}%  "
+              f"median {100*cov[len(cov)//2]:.1f}%; "
+              f"{bad} frame(s) ({100*bad/len(cov):.1f}%) below 90% covered")
 
 
 def main():
@@ -542,7 +669,14 @@ def main():
                          "actually visit. The atlas is a whole region; a film "
                          "of four rooms should not carry Kanto in memory")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--seconds", type=float, default=70.0)
+    ap.add_argument("--seconds", type=float, default=70.0,
+                    help="how long the film should be; the compression then "
+                         "falls out of it. Prefer --speed.")
+    ap.add_argument("--speed", type=float, default=None,
+                    help="the compression to film at, e.g. 12 for 12x real "
+                         "time. The runtime then falls out of how much "
+                         "emulated time there is, which is the honest "
+                         "direction: overrides --seconds")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--width", type=int, default=960)
     ap.add_argument("--title", default="THE PEWTER CHAIN")
@@ -566,32 +700,37 @@ def main():
     a = ap.parse_args()
     from PIL import Image, ImageDraw
 
-    tracks = load_tracks(a.tracks)
-    if not tracks:
-        sys.exit(f"no agent-*.csv in {a.tracks}")
+    # The atlas comes first because the loader needs `holds` to reduce as it
+    # reads — see `Corpus`, and the 39.3M rows that made that necessary.
     atlas = Atlas(a.atlas, a.atlas_image, a.rendering, a.atlas_scale)
-    paths, straddles = {}, 0
-    for n, r in list(tracks.items()):
-        p, d = tile_path(r, atlas.holds)
-        straddles += d
-        if p:
-            paths[n] = p
-        else:
-            # Every row named a map the atlas cannot vouch for. Dropping the
-            # agent is right, and saying so is the point of the count above.
-            del tracks[n]
+    corpus = Corpus(a.tracks, atlas.holds)
+    paths, fights, straddles = corpus.paths, corpus.fights, corpus.straddles
+    if not paths:
+        sys.exit(f"no agent-*.csv in {a.tracks}")
     span = walk_span(paths)
     spans = load_links(a.tracks)
     n_links = max((lk for v in spans.values() for lk, *_ in v), default=0)
-    cohort = set(sorted(tracks)[: a.cohort])
+    cohort = set(sorted(paths)[: a.cohort])
     # **The timeline is not the longest agent.** A few agents stall and pace a
     # patch of grass for half a million frames, and letting them set the length
     # compresses the journey every other agent made into the first seconds.
     # Cover most agents' whole run; the rest are still going when it ends, and
     # the caption says so.
-    ends = sorted(r[-1][0] for r in tracks.values())
+    ends = sorted(corpus.end.values())
     last = ends[min(len(ends) - 1, int(a.cover * len(ends)))]
-    frames_out = int(a.seconds * a.fps)
+    # **`--speed` states the pace and lets the runtime be the material**, which
+    # is the identity `seconds_out x speed = the emulated time there is` used as
+    # an interface rather than as arithmetic somebody does by hand. Typing a
+    # runtime to hit a pace does not work: `step` is a whole number of emulated
+    # frames, so `--seconds 29.7` at 60 fps over this chain lands on step 13 and
+    # a 13.06x cut while the caption says 12x — measured, on the six-link
+    # stitch, and only noticed because the timelapse line is printed. Solving
+    # the other way is exact: `frames_out = ceil(last / stride)`.
+    if a.speed:
+        stride = max(1, int(round(a.speed * FPS_GB / a.fps)))
+        frames_out = -(-last // stride)
+    else:
+        frames_out = int(a.seconds * a.fps)
     # **Sampling derived, not picked**: cover the whole run in the length
     # wanted, and say what that ratio came out at.
     # **Round the stride UP, or the film stops short of its own subject.**
@@ -600,9 +739,12 @@ def main():
     # 2,310-frame cut of a 4,122-frame chain, silently missing the last 44%
     # including the cutscene it exists to show. Measured on this chain.
     step = max(1, -(-last // max(1, frames_out)))
-    print(f"{len(tracks)} agents; longest run {ends[-1]} frames, filming to "
+    print(f"{len(paths)} agents; longest run {ends[-1]} frames, filming to "
           f"{last} ({last/FPS_GB/60:.1f} emulated minutes) so "
           f"{int(a.cover*100)}% of runs finish inside the film")
+    if corpus.dropped:
+        print(f"  {len(corpus.dropped)} agent(s) dropped: every row named a map "
+              f"the atlas does not place")
     print(f"{frames_out} output frames at {a.fps} fps -> every {step}th emulated "
           f"frame, a {step*a.fps/FPS_GB:.0f}x timelapse")
     # How fast an agent walks, in world pixels per OUTPUT frame. The camera is
@@ -614,7 +756,7 @@ def main():
           f"per output frame)")
 
     # --- the world, read out of PixelGB's atlas ----------------------------
-    visited = {r[1] for rows in tracks.values() for r in rows}
+    visited = corpus.visited
     placed = {m for m in visited if m in atlas.origin}
     unplaced = sorted(visited - placed)
     if not placed:
@@ -680,14 +822,12 @@ def main():
     tints = [(255, 96, 96), (96, 200, 255), (140, 255, 140), (255, 220, 90),
              (220, 140, 255), (255, 160, 60), (120, 255, 220), (255, 120, 190)]
 
-    # --- pass zero: the visitation count, which is the colour scale ---------
+    # --- the visitation count, which is the colour scale --------------------
     # Weighted by frames, exactly as `corpus_report.py` weights its heat maps:
     # a tile the swarm hesitates on is hotter than one it walks through.
-    visits = collections.Counter()
-    for n, rows in tracks.items():
-        for r0, r1 in zip(rows, rows[1:]):
-            if atlas.holds(r0[1], r0[2], r0[3]):
-                visits[(r0[1], r0[2], r0[3])] += max(1, r1[0] - r0[0])
+    # Accumulated by `Corpus` as the tracks streamed past, from the same raw
+    # rows and the same frame gaps it always used.
+    visits = corpus.visits
     hottest = max(visits.values()) if visits else 1
     print(f"{len(visits)} distinct tiles visited; hottest carries "
           f"{hottest} agent-frames")
@@ -711,13 +851,10 @@ def main():
     for i in range(frames_out):
         gbf = max(1, i * step)
         here, gone = [], 0
-        for n in sorted(tracks):
-            if gbf > tracks[n][-1][0]:
+        for n in sorted(paths):
+            if gbf > corpus.end[n]:
                 continue
-            st = state_at(tracks[n], gbf)
-            if st is None:
-                continue
-            battle = st[6]
+            battle = BATTLE_KIND.get(flag_at(fights[n], gbf))
             m, x, y, facing = interpolate(paths[n], gbf, span)
             wp = atlas.place(m, x, y)
             if wp is None:
@@ -902,8 +1039,9 @@ def main():
     # The grid a displacement is measured against is the atlas's own, not this
     # file's constant — an atlas published at a different scale draws a walk
     # tile at a different number of world pixels.
-    report_motion(positions, cams, lost, len(tracks), OUT_H, VIEW_W,
+    report_motion(positions, cams, lost, len(paths), OUT_H, VIEW_W,
                   tile=TILE * atlas.mul)
+    report_camera(cams, a.fps)
     if a.dry_run:
         return
 
@@ -929,6 +1067,37 @@ def main():
         scale = VIEW_W / cw
         img = Image.new("RGB", (OUT_W, OUT_H), (10, 12, 16))
         img.paste(crop.resize((VIEW_W, OUT_H), Image.NEAREST), (0, 0))
+
+        # **A fighting agent is not walking anywhere, and a film that only
+        # draws positions shows it standing still with no explanation.** Links
+        # 05 and 11 are half battle by emulated time — link 11 is nothing but
+        # pacing grass and fighting what comes out of it — so a swarm frozen
+        # across Route 1 is the single most misleading thing this cut can show
+        # if the reason is not on screen.
+        #
+        # A halo UNDER the sprite rather than a mark over it: the sprite is 16
+        # source pixels and already carries the heat colour, so anything drawn
+        # on top of it fights the encoding the legend explains, and a two-pixel
+        # outline ring is invisible in a crowd of six hundred at this zoom.
+        # Alpha, so the map underneath still reads — the halo says "something
+        # is happening here", the map says where. Drawn in one overlay pass
+        # before any sprite, so a halo can never land on top of a neighbour.
+        fighting = [p for p in here if p[5]]
+        if fighting:
+            halo = Image.new("RGBA", (OUT_W, OUT_H), (0, 0, 0, 0))
+            hd = ImageDraw.Draw(halo)
+            for (_n, px, py, _i, _f, battle, _lk, _ln, _b, _m) in fighting:
+                sw = max(8, int(atlas.tile_px[_m] * scale))
+                sx = int((px - x0) * scale)
+                sy = int((py - y0) * scale)
+                r = sw
+                hue = BATTLE_HUE[battle]
+                for k, alpha in ((1.0, 70), (0.62, 130)):
+                    rr = int(r * k)
+                    hd.ellipse([sx - rr, sy - rr, sx + rr, sy + rr],
+                               fill=hue + (alpha,))
+            img = Image.alpha_composite(img.convert("RGBA"), halo).convert("RGB")
+
         d = ImageDraw.Draw(img)
         for (n, px, py, indoors, facing, battle, lk, lname, band, _m) in here:
             # The sprite is drawn at the size of the walk tile it stands on, so
@@ -958,7 +1127,7 @@ def main():
             # keeps an individual followable inside a real crowd.
             if battle:
                 d.ellipse([sx - r, sy - r, sx + r, sy + r],
-                          outline=(255, 80, 80), width=2)
+                          outline=BATTLE_HUE[battle], width=2)
             elif n in cohort:
                 d.text((sx + r + 1, sy - r - 1), str(n),
                        fill=(240, 244, 248), font=num_font,
@@ -986,24 +1155,42 @@ def main():
         gbf = max(1, i * step)
         hx = VIEW_W + 10
         d.rectangle([VIEW_W, 0, OUT_W, OUT_H], fill=(10, 12, 16))
-        d.text((hx, 8), a.title, fill=(240, 244, 248), font=font)
+        # **The title wraps too.** It was the one string in the panel drawn at
+        # a fixed position and never measured, so "THE PEWTER CHAIN 01-10" came
+        # out as "THE PEWTER CHAIN 01-1" — a film whose own caption is cut at a
+        # digit, which is the same defect the `--method` line was fixed for one
+        # commit above it. Caught by looking at a frame, not by any test.
+        ty = 8
+        for t in wrap_hud(a.title, font, OUT_W - hx - 12):
+            d.text((hx, ty), t, fill=(240, 244, 248), font=font)
+            ty += int(font.size * 1.25)
         rows = [
-            f"{len(here)}/{len(tracks)} agents live",
+            f"{len(here)}/{len(paths)} agents live",
             f"{gbf / FPS_GB / 60:.1f} emulated minutes",
             f"{step * a.fps / FPS_GB:.0f}x timelapse",
             f"{int(cw / TILE)} tiles across",
         ]
+        # The count is what turns the halos from decoration into a reading.
+        # Only when there are any: a permanent "0 in a battle" row on a film of
+        # links with no battle in them is a row that says nothing.
+        if fighting:
+            kinds = collections.Counter(p[5] for p in fighting)
+            rows.append("in a battle: " + " ".join(
+                f"{c} {k}" for k, c in sorted(kinds.items())))
         if a.method:
-            # **Wrap it, never let the panel cut it.** It read "links
-            # 01/02/03 each certified 3000" and stopped mid-number — a
-            # truncated measurement is worse than none, because a reader
-            # cannot tell it was cut. Same rule the status panel's
-            # `fit_bar` follows: shorten deliberately or wrap, never clip.
-            rows.extend(wrap_hud(a.method, num_font, OUT_W - hx - 12))
-        y = 8 + int(font.size * 1.8)
-        for t in rows:
-            d.text((hx, y), t, fill=(170, 185, 200), font=num_font)
-            y += int(num_font.size * 1.5)
+            rows.append(a.method)
+        # **Wrap EVERY row, never let the panel cut one.** The `--method` line
+        # was wrapped for this reason — it read "links 01/02/03 each certified
+        # 3000" and stopped mid-number — and then the battle count went the same
+        # way: "in a battle: 69 trainer, 117 w". A truncated measurement is
+        # worse than none because a reader cannot tell it was cut, so the rule
+        # belongs to the row list and not to one row. Same rule the status
+        # panel's `fit_bar` follows: shorten deliberately or wrap, never clip.
+        y = ty + int(font.size * 0.55)
+        for row in rows:
+            for t in wrap_hud(row, num_font, OUT_W - hx - 12):
+                d.text((hx, y), t, fill=(170, 185, 200), font=num_font)
+                y += int(num_font.size * 1.5)
 
         # How many agents are on each link — the shape of the chain's
         # attrition. Only on a whole-chain film; a showcase of one link would
@@ -1053,6 +1240,19 @@ def main():
         d.text((hx, y), "well-trodden        new", fill=(150, 165, 180),
                font=num_font)
         y += int(num_font.size * 1.6)
+
+        # **And what the halos are.** A mark nobody can decode is worse than no
+        # mark: it reads as a rendering fault. Two swatches rather than one
+        # because the two events are different, and the wording says the
+        # cartridge's own distinction rather than "fighting".
+        y += 4
+        for kind in ("wild", "trainer"):
+            d.rectangle([hx, y + 2, hx + 6, y + num_font.size - 1],
+                        fill=BATTLE_HUE[kind])
+            d.text((hx + 10, y), f"halo = {kind} battle",
+                   fill=(150, 165, 180), font=num_font)
+            y += num_font.size + 2
+        y += int(num_font.size * 0.6)
 
         # And where the tracked cohort actually is.
         y += 8
