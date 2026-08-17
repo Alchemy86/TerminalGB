@@ -84,6 +84,8 @@ Each step is a fact about the state, not a preference.
 
 ### Three rules that link 10 found, and it took 3,000 attempts to find the third
 
+*(A fourth, from link 11, is below.)*
+
 Link 10 is the first leg where the policy *fights* wild Pokémon at scale:
 
 - **A critical hit is the worst case, not the top of the roll range.** Gen 1
@@ -126,6 +128,103 @@ Link 10 is the first leg where the policy *fights* wild Pokémon at scale:
 Together: link 10 went 98.3% → 99.0% → 99.9% → **100.0%**, and its battle report
 from **no faints at all** and 62.6% of the lead's HP left, against 6 faints and
 56.9% before.
+
+### The fourth rule: an escape is not free, so a finisher beats it
+
+**The only failure in 3,000 attempts of link 11**, and the sharpest illustration
+on this page of why "run" has to be a decision:
+
+```text
+lv5 BULBASAUR 10/20  vs  lv3 RATTATA 2/14 (faster)
+  -> RUN  "too hurt to pick a fight"     -> Can't escape!  -> took 5, now 5/20
+  -> RUN  "one more hit and we faint"    -> Can't escape!  -> took 5, dead
+```
+
+The Rattata was on **2 of 14** and our TACKLE does 4-5. It was one press from
+over. The policy ran instead, twice, and the hits it did not dodge killed it.
+**Running does not dodge the incoming hit — it dodges it only if it works**, and
+162 of 3,000 attempts had an escape fail. A failed escape and a swing cost the
+same hit; only one of them removes the opponent.
+
+It took three goes to state that correctly, and both wrong versions are worth
+keeping because each was plausible:
+
+| the rule | link 11, 3,000 attempts |
+|---|---|
+| no rule at all | 2,999, and the fatal battle above |
+| `max >= their HP` — *a good roll ends it* | **2,995**, three faints |
+| `min >= their HP`, any speed | 2,999, but two runs that had walked away safely now died |
+| `min >= their HP` **and they are at least as fast as us** | 2,999, **zero faints** |
+
+- **The worst roll has to kill, not the best.** At 10 of 20 against a Rattata on
+  6 of 16 with a 5-6 TACKLE, `max >= hp` said "one hit from finishing it"; the
+  faster Rattata hit first, our roll came up 5, and it survived on 1. A
+  maybe-kill bought nothing and cost the hit. With the worst roll killing, the
+  swing *ends* the battle — this is rule 1 with its `accuracy == 100` relaxed to
+  "more likely than not", and that relaxation is the whole difference, because
+  a 95% TACKLE is not a certainty and was falling through to the run.
+- **Only when the escape is the unreliable half, which is when they are at
+  least as fast as us.** `TryRunningFromBattle` scales the odds by our speed
+  against theirs, steeply, and always succeeds once ours over four overflows a
+  byte. Against something slower, running is very nearly free and the argument
+  does not apply — ungated, the rule broke two runs that had been walking away
+  from Pidgeys perfectly safely.
+
+> **When two choices cost the same, prefer the one that ends the situation** —
+> and check that it really does end it.
+
+### The retreat threshold is two ORDINARY hits, not two critical ones
+
+The rule above changed *which* fights are declined. This changed how many.
+
+`hp <= 2 * incoming_crit` reads as "a lead that cannot survive two worst-case
+hits is in trouble", and for a level 5 starter on Route 1 that evaluates to
+14-18 of a 19 HP bar — so **the lead refused a fight after roughly one hit**.
+Measured: 5.2 walks to the Pokémon Center per attempt, 16,000 fled battles and
+162 failed escapes in 3,000 runs. And it is on those walks, fleeing through tall
+grass, that the lead dies.
+
+A critical is about one turn in eleven; two in a row is one in 121. Reading
+"two worst-case hits" as two *ordinary* ones leaves the critical to the faint
+rule, which already tests exactly that — and measures better on every secondary
+figure:
+
+| | `2 * crit` | `2 * max` |
+|---|---:|---:|
+| reached the goal | 2,999 / 3,000 | 2,999 / 3,000 |
+| battles won | 76.3% | **79.0%** |
+| escapes that failed | 162 | **111** |
+| battles fled | 15,999 | **13,601** |
+| decisions, p99 / worst | 1,489 / 1,952 | **1,164 / 1,615** |
+
+The `2 * incoming_crit` form came from link 10's last two failures, and link 10
+no longer fights wild battles at all — so nothing certified depended on it.
+**Check whether a constant's justification still applies before treating it as
+settled.**
+
+### And then link 11 found the cost of the second one
+
+A threat-relative "too hurt" refuses more fights than a flat half does, and on a
+link whose *whole job* is to earn experience that has a consequence a flee leg
+could never show. **The lead settled at 12 of 23 HP — above the flat half, so no
+walk to the nurse — and the policy, weighing a level 3 Rattata's critical hit,
+declined 94 of 100 encounters.** It paced the grass for 2,500 decisions and
+gained nothing.
+
+That is [§8.4's dead band](pewter-chain.md) exactly, re-opened by the policy
+getting cleverer, and the fix is the one that closes it for good rather than for
+now: **the heal decision no longer computes a threshold at all.** The policy's
+own refusal is the trigger — when `decide` returns
+`Action::Run { why: why::TOO_HURT }`, the solver's next overworld decision walks
+to the Pokémon Center. The flat half stays only as a floor, for a lead that is
+hurt and has not been attacked yet.
+
+**The general rule, and it is worth more than the fix: when one component
+decides whether an action is safe, no other component may decide the same thing
+from its own arithmetic.** Two thresholds that agree today are two thresholds
+that will disagree the next time either is improved, and the gap between them is
+silent — nothing fails, the run simply stops making progress. Link 11 went
+99.3% → **100.0%** on it, and won 74.4% of its battles against 59.4%.
 
 ### Running is a decision
 
@@ -199,10 +298,10 @@ The 11.5% *under* are mostly the rival's own GROWL:
 the prediction is made from `wBattleMon`'s Attack at the moment the move is
 chosen, and a GROWL landing before ours resolves lowers it.
 
-### The counters had to be fixed twice before they could be believed
+### The counters had to be fixed four times before they could be believed
 
-Both are worth knowing, because a battle metric is exactly the sort of number
-nobody checks:
+All four are worth knowing, because a battle metric is exactly the sort of
+number nobody checks:
 
 - **Fed only from the menu branch, the tally never saw a party at 0 HP** — the
   knock-out happens during the text a turn produces — and reported **300 of 300
@@ -213,10 +312,42 @@ nobody checks:
   stat moves, so `MAX_STAT_TURNS` of two was really about one. An action is
   counted where it is *committed* — the press of A — and nowhere else.
 
+- **A knockout censors the damage observation, and comparing it anyway scored
+  every overkill as the model being wrong.** HP stops at zero, so a hit that was
+  going to do 12 to a Pokémon with 5 left is only ever *seen* as 5. Link 11 wins
+  three fights in four and read 73.9% inside the roll range where link 05, whose
+  battles are trainer battles with the same overkills spread over far more
+  turns, read 81.3%. The true statement about a knockout is "at least the HP
+  they had", so it agrees with the model exactly when the model's own maximum
+  reached that far — and it is now counted and reported **apart**, not folded in
+  to flatter the percentage.
+
+- **A battle inherited from the previous link is counted twice unless it is
+  disowned.** Link 11's goal is `lead_level>=10`, which fires the instant the
+  level ticks over — and that happens *inside* the battle that earned it. So
+  every link 12 run opens on "CHARMANDER grew to level 10!" with the opponent
+  already at 0 HP, and the tally scored it: **60 wins on a leg that runs from
+  everything**, 47.6% "won". The referee already makes exactly this call
+  (`scenario::run::Battles` primes on its first sample and disowns an inherited
+  battle); the report has to make it too. Disowned, link 12 reads 66 battles,
+  all fled, 93.9% of the lead's HP left.
+
 The second one is the reason to prefer a metric that can be cross-checked: the
 independent read of the exit states (a lead at level 6 won, at level 5 lost) is
 what caught the first, and the arithmetic `3158 ≈ 3 × 1048` is what caught the
-second.
+second. The third was caught by two links disagreeing about the same model,
+which is the same shape: *when a harness and a model disagree, suspect the
+harness first.*
+
+### The reasons are named, because one of them steers a decision
+
+`Action::Run` carries a sentence saying why, and callers read it back. That
+started as `why.contains("too hurt")`, which is tolerable for a report and stops
+being tolerable the moment a reason drives behaviour — which it now does, in
+[link 11](pewter-chain.md). The four are `battle::why::{FORBIDDEN, FAINTING,
+TRAINED, TOO_HURT}`; the policy names them, callers match the name, and the
+compiler guarantees the two texts are one string rather than two that agree
+today.
 
 ### What is not exercised
 

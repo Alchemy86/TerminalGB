@@ -23,6 +23,8 @@
   "guidance": "guidance/13-cross-viridian-forest.json",
   "timeout_frames": 400000,
   "evidence": [
-    "map=0x2F — wCurMap $D35E. VIRIDIAN_FOREST_NORTH_GATE is const index 47. The forest's three bug catchers each have a flag (EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_0..2, wEventFlags $D7F3 bits 2,3,4), but none of them is crossing it: the route past them is avoidable and beating them is not the milestone."
+    "map=0x2F - wCurMap $D35E. VIRIDIAN_FOREST_NORTH_GATE is const index 47, and the forest's own object data names it: map $33's warps at (1,0) and (2,0) both lead to map $2F, which is the only northern exit. Map $2F decodes as tileset 9, 5x4 blocks - a gate building - with warps back to the forest at (4,7)/(5,7) and out to $FF (the last map, i.e. Route 2) at (4,0)/(5,0).",
+    "The forest's three bug catchers each have a flag (EVENT_BEAT_VIRIDIAN_FOREST_TRAINER_0..2, wEventFlags $D7F3 bits 2,3,4), but none of them is crossing it: beating them is not the milestone.",
+    "That the three fights are compulsory is measured on the forest's own walkability grid rather than asserted. Their bodies alone do not sever the map - which is as it must be, since they are still standing there after they are beaten - but blocking each trainer's facing direction by a SINGLE tile already leaves no route from the southern entrance (15..18,47) to the northern exit, and so does every range up to eight. All three stand facing LEFT (the object-data range byte is $D2, the STAY direction encoding), at (30,33), (30,19) and (2,18). So the compulsion does not depend on knowing the view range the map script sets, which is the reason this can be stated at all."
   ]
 }

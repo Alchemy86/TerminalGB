@@ -222,6 +222,30 @@ pub struct Intent {
     pub train_to: u8,
 }
 
+/// The four reasons the policy declines a fight, named.
+///
+/// **A caller that acts on a reason must match a name, not a substring of a
+/// sentence.** The reasons started as prose and were read back with
+/// `why.contains("too hurt")`, which is fine for a report and not fine for a
+/// decision — and one of them steers a decision now: the solver's walk to the
+/// Pokémon Center is triggered by the policy having refused a fight, because
+/// *the heal threshold has to be the fight threshold* and the fight threshold
+/// is no longer a number anybody outside a battle can compute. Measured with
+/// the two derived separately: a lead at 12 of 23 HP was too hurt to pick a
+/// fight and not hurt enough to go and get healed, and ran from 94 of 100
+/// encounters while the level it was sent to earn stood still.
+pub mod why {
+    /// The leg's scenario forbids winning a wild battle.
+    pub const FORBIDDEN: &str = "this leg must not win a wild battle";
+    /// One more hit — a critical one — and the lead faints.
+    pub const FAINTING: &str =
+        "one more hit and we faint, and this fight is not worth it";
+    /// The lead has reached the level the leg was sent to earn.
+    pub const TRAINED: &str = "the lead is trained; this encounter is only a cost";
+    /// Hurt enough that picking this fight risks the lead, with no healing to hand.
+    pub const TOO_HURT: &str = "too hurt to pick a fight, and nothing here to heal with";
+}
+
 /// The decision, and the reason, because a policy nobody can audit is a policy
 /// nobody can debug.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,7 +398,7 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
     // fallback taken because nothing else was tried.
     if wild && !intent.may_fight_wild {
         return Action::Run {
-            why: "this leg must not win a wild battle",
+            why: why::FORBIDDEN,
         };
     }
     let best = v.best_damaging();
@@ -432,9 +456,7 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
             }
         }
         if wild && v.can_run() {
-            return Action::Run {
-                why: "one more hit and we faint, and this fight is not worth it",
-            };
+            return Action::Run { why: why::FAINTING };
         }
         if v.party_alive > 1 {
             return Action::Switch {
@@ -447,9 +469,7 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
     // A wild fight we are not being paid for: the lead is already trained, so
     // the encounter is a cost. Run rather than spend the turns.
     if wild && v.ours.level >= intent.train_to && v.can_run() {
-        return Action::Run {
-            why: "the lead is trained; this encounter is only a cost",
-        };
+        return Action::Run { why: why::TRAINED };
     }
     // **Too hurt to pick a fight.** Experience is only worth having if the
     // Pokémon collecting it survives, and on a leg with no Pokémon Center on
@@ -470,11 +490,65 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
     // fails twice and the lead is dead. Two of 3,000, and the only two left.
     if wild
         && v.can_run()
-        && (v.ours.hp * 2 <= v.ours.max_hp || v.ours.hp <= v.incoming_crit * 2)
+        && (v.ours.hp * 2 <= v.ours.max_hp || v.ours.hp <= v.incoming_max * 2)
     {
-        return Action::Run {
-            why: "too hurt to pick a fight, and nothing here to heal with",
-        };
+        // **Unless the thing in front of us is one hit from death.** Running
+        // does not dodge the incoming hit — it dodges it only if it *works*,
+        // and Gen 1's run check against a faster opponent often does not:
+        // measured, 255 of 3,000 link 11 attempts had an escape fail. Both
+        // choices therefore cost the same hit; only one of them removes the
+        // opponent. So a move that ends the battle and is likely to land beats
+        // an escape that is not.
+        //
+        // Measured, and it is the only failure in 3,000: a level 5 Bulbasaur on
+        // 10 of 20 ran from a level 3 Rattata on **2 of 14** that its own
+        // TACKLE kills outright. The escape failed, the Rattata hit for 5; at
+        // 5 HP the faint rule ran again, that escape failed too, and the lead
+        // was dead — beaten by something it could have removed twice over.
+        //
+        // **The WORST roll has to kill, not the best — and the first version of
+        // this rule used the best, which made link 11 worse rather than
+        // better: 2,999 of 3,000 became 2,995, with three faints where there
+        // had been none.** Measured: at 10 of 20 against a Rattata on 6 of 16
+        // with a 5-6 damage TACKLE, `max >= hp` said "one hit from finishing
+        // it", the Rattata (faster) hit first for 5, our roll came up 5, and it
+        // survived on 1 — leaving us at 5 HP in the fight we had tried to end.
+        // A maybe-kill bought nothing and cost the hit.
+        //
+        // With the worst roll killing, swinging *ends* the battle, so it
+        // dominates: both choices cost at most one hit and only one of them is
+        // certain to be the last. This is rule 1 with its `accuracy == 100`
+        // relaxed to "more likely than not", which is the whole difference —
+        // a 95% TACKLE is not a certainty and was falling through to the run.
+        //
+        // **And only when the escape is the unreliable half, which is when
+        // they are at least as fast as us.** `TryRunningFromBattle` scales the
+        // escape odds by our speed against theirs — steeply, and it always
+        // succeeds once ours divided by four overflows a byte — so against a
+        // slower opponent running is very nearly free and the argument above
+        // does not apply. Measured, and it is the difference between a rule
+        // that helps and one that does not: ungated, this fixed the lead that
+        // ran from a *faster* Rattata on 2 HP and broke two runs that had been
+        // walking away from *slower* Pidgeys perfectly safely, one of which
+        // then missed three 95% TACKLEs in a row and died. Net one failure for
+        // two. Gated on speed, both cases come out right.
+        //
+        // Reaching here means `doomed` was false, so the worst incoming hit
+        // leaves us standing; the test is written out anyway rather than left
+        // as a consequence of a branch fifty lines up.
+        if let Some(m) = best {
+            if !v.faster()
+                && m.min >= v.theirs.hp
+                && m.accuracy >= 50
+                && v.ours.hp > v.incoming_crit
+            {
+                return Action::Fight {
+                    slot: m.slot,
+                    why: "the worst roll finishes it, and running does not dodge the hit",
+                };
+            }
+        }
+        return Action::Run { why: why::TOO_HURT };
     }
 
     // 3. Losing the race, with a turn to spare and a move that changes it.
@@ -834,7 +908,7 @@ mod tests {
         assert_eq!(
             decide(&v, &FLEE),
             Action::Run {
-                why: "this leg must not win a wild battle"
+                why: why::FORBIDDEN
             }
         );
     }
@@ -926,12 +1000,7 @@ mod tests {
         v.incoming_max = 6;
         v.incoming_crit = 6;
         v.moves[0].accuracy = 47;
-        assert_eq!(
-            decide(&v, &TRAIN),
-            Action::Run {
-                why: "one more hit and we faint, and this fight is not worth it"
-            }
-        );
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::FAINTING });
         // With the move still connecting, the swing is right.
         v.moves[0].accuracy = 94;
         assert_eq!(
@@ -952,12 +1021,7 @@ mod tests {
         v.ours.hp = 12;
         v.incoming_max = 5;
         v.incoming_crit = 13;
-        assert_eq!(
-            decide(&v, &TRAIN),
-            Action::Run {
-                why: "one more hit and we faint, and this fight is not worth it"
-            }
-        );
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::FAINTING });
         // ... and with no critical in range it fights on. The crit has to
         // drop below half our HP too, or the two-worst-hits rule takes over —
         // which is a different rule with its own test.
@@ -981,20 +1045,51 @@ mod tests {
 
     #[test]
     fn a_fight_two_worst_hits_would_lose_is_not_picked_at_any_fraction() {
-        // Comfortably over half, and still two critical hits from dead.
+        // Comfortably over half, and still two ordinary hits from dead.
         let mut v = view(false);
         v.ours.hp = 12;
         v.ours.max_hp = 20;
-        v.incoming_crit = 7;
-        assert_eq!(
-            decide(&v, &TRAIN),
-            Action::Run {
-                why: "too hurt to pick a fight, and nothing here to heal with"
-            }
-        );
+        v.theirs.hp = 19; // out of reach, so the finisher rule stays out of it
+        v.incoming_max = 7;
+        v.incoming_expected = 7;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
         // The same fraction against something that cannot hurt us is a fight.
-        v.incoming_crit = 2;
+        v.incoming_max = 2;
+        v.incoming_expected = 2;
         assert!(matches!(decide(&v, &TRAIN), Action::Fight { .. }));
+    }
+
+    /// **Two ORDINARY hits, not two critical ones — and the difference is the
+    /// whole character of the leg.** A critical is about one turn in eleven, so
+    /// requiring the lead to survive two of them retreats after roughly a
+    /// single hit: measured on link 11, that is 5.2 walks to the Pokémon Center
+    /// per attempt, 16,000 fled battles and 162 failed escapes in 3,000 runs —
+    /// and it is on those walks, fleeing through tall grass, that the lead
+    /// dies. Reading it as two ordinary hits leaves the critical to the faint
+    /// rule, which already tests exactly that, and measures better on every
+    /// secondary figure: failed escapes 162 -> 111, battles won 76.3% ->
+    /// 79.0%, worst-case decisions 1,952 -> 1,615.
+    ///
+    /// The `2 * incoming_crit` form came from link 10, which no longer fights
+    /// wild battles at all, so nothing certified depends on it.
+    #[test]
+    fn the_retreat_threshold_is_two_ordinary_hits_and_the_crit_is_the_faint_rules() {
+        let mut v = view(false);
+        v.ours.max_hp = 20;
+        v.theirs.hp = 19; // nothing to finish
+        v.incoming_max = 5;
+        v.incoming_expected = 5;
+        v.incoming_crit = 9;
+        // 12 survives two ordinary hits, so it fights — where two *crits*
+        // would have sent it home.
+        v.ours.hp = 12;
+        assert!(matches!(decide(&v, &TRAIN), Action::Fight { .. }));
+        // 10 does not, so it retreats.
+        v.ours.hp = 10;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
+        // And a single critical still ends it, which is the faint rule's job.
+        v.ours.hp = 9;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::FAINTING });
     }
 
     #[test]
@@ -1002,12 +1097,59 @@ mod tests {
         let mut v = view(false);
         v.ours.hp = 9; // of 19, so under half
         v.incoming_crit = 1;
-        assert_eq!(
-            decide(&v, &TRAIN),
-            Action::Run {
-                why: "too hurt to pick a fight, and nothing here to heal with"
-            }
+        // Well out of reach, so there is nothing to finish.
+        v.theirs.hp = 19;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
+    }
+
+    /// **The only failure in 3,000 attempts of link 11** — and then the three
+    /// faints the first repair caused, which is why the finisher is the *worst*
+    /// roll and not the best. A hurt lead ran from something one hit from
+    /// death, the escape failed, and the hit it did not dodge killed it, twice
+    /// over. Running costs the same hit as swinging whenever it fails, so a
+    /// finisher beats an unlikely escape — but only a real finisher does.
+    #[test]
+    fn a_hurt_lead_finishes_something_that_is_one_hit_from_death() {
+        let mut v = view(false);
+        v.ours.hp = 9; // under half, so "too hurt" would otherwise run
+        v.incoming_crit = 5; // ... and we survive the worst of it
+                             // 95, so rule 1 (which demands 100) declines and this rule decides.
+        v.moves[0].accuracy = 95;
+        // **They are faster**, which is what makes the escape the unreliable
+        // half of the choice. Against something slower, running is nearly free
+        // and this rule must keep its hands off — the case below.
+        v.ours.speed = 9;
+        v.theirs.speed = 10;
+        v.theirs.hp = 3; // our move does 3-4, so the WORST roll kills
+        assert!(
+            matches!(decide(&v, &TRAIN), Action::Fight { .. }),
+            "a 3-4 damage move against 3 HP ends the battle whatever it rolls; \
+             an escape might not"
         );
+        // **A maybe-kill is not a finisher.** At 4 the worst roll leaves it
+        // standing, the hit has been taken and nothing has been bought — this
+        // exact case cost link 11 three faints.
+        v.theirs.hp = 4;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
+        // Out of reach altogether, and it runs.
+        v.theirs.hp = 9;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
+        // In reach, but the worst incoming hit would kill us first — that is
+        // the faint rule's business and it must still get there.
+        v.theirs.hp = 3;
+        v.incoming_crit = 9;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::FAINTING });
+        // In reach, survivable, but the move will probably miss.
+        v.incoming_crit = 5;
+        v.moves[0].accuracy = 30;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
+        // **And against something SLOWER it runs, because the escape is
+        // reliable there.** Measured: overriding the run here cost two runs
+        // that had been walking away from Pidgeys safely.
+        v.moves[0].accuracy = 95;
+        v.ours.speed = 12;
+        v.theirs.speed = 8;
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TOO_HURT });
     }
 
     #[test]
@@ -1026,12 +1168,7 @@ mod tests {
     fn a_wild_fight_is_left_once_the_lead_is_trained() {
         let mut v = view(false);
         v.ours.level = 13;
-        assert_eq!(
-            decide(&v, &TRAIN),
-            Action::Run {
-                why: "the lead is trained; this encounter is only a cost"
-            }
-        );
+        assert_eq!(decide(&v, &TRAIN), Action::Run { why: why::TRAINED });
     }
 
     #[test]

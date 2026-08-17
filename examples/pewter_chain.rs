@@ -721,6 +721,10 @@ pub struct ChainDriver {
     /// that is what is happening right now.
     heal_route: HashMap<u8, MapPlan>,
     healing: bool,
+    /// Set when the battle policy declined a fight because the lead is too
+    /// hurt, and cleared when the walk to the nurse begins. **The one place
+    /// the solver learns the fight threshold rather than guessing at it.**
+    refused_a_fight: bool,
     /// The level the solver trains its lead up to before it stops picking
     /// fights. Nothing before Viridian Forest earns any experience, and a
     /// level 5 starter does not beat a bug catcher.
@@ -761,6 +765,7 @@ impl ChainDriver {
             fight_wild: may_fight_wild(scenario),
             heal_route: heal_route(scenario),
             healing: false,
+            refused_a_fight: false,
             train_to: 13,
             pending: None,
             busy: false,
@@ -893,15 +898,22 @@ impl ChainDriver {
         //    healed.
         //
         //    **The heal threshold has to be the fight threshold**, or the
-        //    policy has a band where it does neither. Measured with healing at
-        //    a third and fighting at a half: the lead settled at 8 of 23 HP —
-        //    too hurt to pick a fight, not hurt enough to go and get healed —
-        //    and ran from everything for 2,402 decisions.
+        //    policy has a band where it does neither. Measured twice, two
+        //    years of this rule apart in spirit: with healing at a third and
+        //    fighting at a half the lead settled at 8 of 23 HP and ran from
+        //    everything for 2,402 decisions; and then, once the shared policy
+        //    learned to weigh a critical hit, at 12 of 23 — above the flat
+        //    half, so no heal — where it refused 94 of 100 encounters. So the
+        //    trigger is no longer a number here at all. `refused_a_fight` is
+        //    set by the policy itself, in `fight`, when it declines because
+        //    the lead is too hurt; the flat half stays only as a floor for the
+        //    case where the lead is hurt and nothing has attacked it yet.
         if !self.heal_route.is_empty() && s.lead_max_hp > 0 {
-            let hurt = s.lead_hp * 2 <= s.lead_max_hp;
+            let hurt = self.refused_a_fight || s.lead_hp * 2 <= s.lead_max_hp;
             let full = s.lead_hp >= s.lead_max_hp;
             if !self.healing && hurt {
                 self.healing = true;
+                self.refused_a_fight = false;
                 self.stage.clear();
                 self.idx = 0;
                 self.at_map = None;
@@ -1084,6 +1096,19 @@ impl ChainDriver {
             // really about one.
             if !matches!(action, Action::Fight { .. }) {
                 self.tally.note(action.why());
+            }
+            // **The heal threshold IS the fight threshold, and this is where
+            // the two are made one thing rather than two numbers that agree
+            // for a while.** The policy's "too hurt" is threat-relative — it
+            // weighs our HP against what the thing in front of us hits for on
+            // a critical — and nothing outside a battle can compute it, so a
+            // solver that re-derives a flat fraction re-opens the dead band
+            // every time the policy gets cleverer. Instead the refusal itself
+            // is the signal: if the policy just declined a fight because the
+            // lead is too hurt, the lead is too hurt, and the next overworld
+            // decision walks to the nurse.
+            if action.why() == terminalgb_plugin_agent::battle::why::TOO_HURT {
+                self.refused_a_fight = true;
             }
             return self.one(action.why(), "a");
         }
@@ -1418,6 +1443,8 @@ mod tally {
         DMG_IN_RANGE,
         DMG_UNDER,
         DMG_OVER,
+        DMG_KO_OK,
+        DMG_KO_SHORT,
         TURNS,
         STAT_TURNS,
     );
@@ -1451,8 +1478,10 @@ mod tally {
              {} the lead is already trained, {} too hurt to pick a fight; \
              {} escapes failed\n  \
              turns spent lowering a stat: {}\n  \
-             damage predictions: {} checked, {:.1}% inside the roll range, \
-             {} under, {} over (a critical hit lands over)",
+             damage predictions: {} landed short of a knockout, {:.1}% inside \
+             the roll range, {} under, {} over (a critical hit lands over); \
+             {} knocked the target out, where the hit is only seen as the HP it \
+             had left — {} of those were short of the model's own maximum",
             get(&WON),
             pct(get(&WON)),
             get(&LOST),
@@ -1473,6 +1502,8 @@ mod tally {
             100.0 * get(&DMG_IN_RANGE) as f64 / checked as f64,
             get(&DMG_UNDER),
             get(&DMG_OVER),
+            get(&DMG_KO_OK) + get(&DMG_KO_SHORT),
+            get(&DMG_KO_SHORT),
         ))
     }
 }
@@ -1493,6 +1524,11 @@ struct BattleTally {
     /// A RUN was chosen on the turn just gone; if the battle is still here on
     /// the next one, the escape failed and cost a turn.
     ran_last_turn: bool,
+    /// Has this driver made a decision yet?
+    primed: bool,
+    /// This battle was already in progress when the run started, so it is the
+    /// *previous* link's and counting it here would report it twice.
+    inherited: bool,
 }
 
 impl BattleTally {
@@ -1500,7 +1536,20 @@ impl BattleTally {
     fn observe(&mut self, v: &terminalgb_plugin_agent::battle::View) {
         use std::sync::atomic::Ordering::Relaxed;
         if self.last.is_none() {
-            tally::bump(&tally::BATTLES, 1);
+            // **Disown a battle that was already running at the first
+            // decision** — the same call `scenario::run::Battles` makes for the
+            // referee, and for the same reason. Link 11's goal is
+            // `lead_level>=10`, which fires the instant the level ticks over,
+            // and that happens inside the battle that earned it: so every link
+            // 12 run opens on "CHARMANDER grew to level 10!" with the opponent
+            // already at 0 HP. Counted here, that battle is reported twice —
+            // once by the link that fought it and once by the link that
+            // inherited it, which read as **60 wins on a leg that runs from
+            // everything**.
+            self.inherited = !self.primed;
+            if !self.inherited {
+                tally::bump(&tally::BATTLES, 1);
+            }
             self.turns = 0;
             self.stat_turns = 0;
             self.ran = false;
@@ -1518,15 +1567,37 @@ impl BattleTally {
                 std::cmp::Ordering::Less => {
                     self.predicted = None;
                     let dealt = before - v.theirs.hp;
-                    tally::bump(&tally::DMG_CHECKED, 1);
-                    tally::bump(
-                        match dealt {
-                            d if d < lo => &tally::DMG_UNDER,
-                            d if d > hi => &tally::DMG_OVER,
-                            _ => &tally::DMG_IN_RANGE,
-                        },
-                        1,
-                    );
+                    // **A knockout censors the observation.** HP stops at zero,
+                    // so a hit that was going to do 12 to a Pokémon with 5 left
+                    // is only ever seen as 5 — and comparing that against the
+                    // model's minimum scores every overkill as the model being
+                    // wrong. It read 73.9% in range on a leg that wins three
+                    // fights in four, against 81.3% on a leg of trainer battles
+                    // where the same overkills are a smaller share. The true
+                    // statement about a knockout is "at least `before`", so it
+                    // agrees with the model exactly when the model's own
+                    // maximum reached that far, and it is counted apart rather
+                    // than folded in to flatter the percentage.
+                    if v.theirs.fainted() {
+                        tally::bump(
+                            if hi >= before {
+                                &tally::DMG_KO_OK
+                            } else {
+                                &tally::DMG_KO_SHORT
+                            },
+                            1,
+                        );
+                    } else {
+                        tally::bump(&tally::DMG_CHECKED, 1);
+                        tally::bump(
+                            match dealt {
+                                d if d < lo => &tally::DMG_UNDER,
+                                d if d > hi => &tally::DMG_OVER,
+                                _ => &tally::DMG_IN_RANGE,
+                            },
+                            1,
+                        );
+                    }
                 }
                 // They were healed or replaced; the prediction is stale.
                 std::cmp::Ordering::Greater => self.predicted = None,
@@ -1556,23 +1627,22 @@ impl BattleTally {
         if self.ran_last_turn {
             tally::bump(&tally::RUN_FAILED, 1);
         }
-        if why.contains("must not win") {
+        // **Match the policy's named reason, not a fragment of its prose.**
+        // These were substring guesses, which is tolerable for a report and was
+        // not once one of them started steering the walk to the nurse.
+        use terminalgb_plugin_agent::battle::why as w;
+        let counter = match why {
+            w::FORBIDDEN => Some(&tally::RUN_FORBIDDEN),
+            w::FAINTING => Some(&tally::RUN_FAINTING),
+            w::TRAINED => Some(&tally::RUN_TRAINED),
+            w::TOO_HURT => Some(&tally::RUN_HURT),
+            _ => None,
+        };
+        if let Some(c) = counter {
             self.ran = true;
-            tally::bump(&tally::RUN_FORBIDDEN, 1);
-        } else if why.contains("not worth it") {
-            self.ran = true;
-            tally::bump(&tally::RUN_FAINTING, 1);
-        } else if why.contains("only a cost") {
-            self.ran = true;
-            tally::bump(&tally::RUN_TRAINED, 1);
-        } else if why.contains("too hurt") {
-            self.ran = true;
-            tally::bump(&tally::RUN_HURT, 1);
+            tally::bump(c, 1);
         }
-        self.ran_last_turn = why.contains("must not win")
-            || why.contains("not worth it")
-            || why.contains("only a cost")
-            || why.contains("too hurt");
+        self.ran_last_turn = counter.is_some();
         if why.contains("bag can outrun") {
             tally::bump(&tally::ITEMS, 1);
         }
@@ -1594,10 +1664,23 @@ impl BattleTally {
 
     /// Called every decision; scores a battle the moment it is over.
     fn tick(&mut self, in_battle: bool) {
+        // Every decision runs through here, which is what makes it the right
+        // place to record that the run has started — `observe` only sees the
+        // decisions that have a battle in them, so priming there would disown
+        // the first real battle of any run that begins in the overworld.
+        self.primed = true;
         if in_battle {
             return;
         }
         let Some(v) = self.last.take() else { return };
+        if self.inherited {
+            self.inherited = false;
+            self.predicted = None;
+            self.turns = 0;
+            self.stat_turns = 0;
+            self.ran_last_turn = false;
+            return;
+        }
         tally::bump(&tally::TURNS, self.turns);
         if self.ran {
             tally::bump(&tally::FLED, 1);
@@ -2094,6 +2177,7 @@ fn main() {
         "corpus" => cmd_corpus(&a),
         "verify" => cmd_verify(&a),
         "sprites" => cmd_sprites(&a),
+        "routes" => cmd_routes(),
         "film" => cmd_film(&a),
         "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
@@ -2880,6 +2964,73 @@ fn cmd_film(a: &Args) {
         "{full} of {agents} agent(s) finished the chain; {:.1} s wall",
         t.elapsed().as_millis() as f64 / 1000.0
     );
+}
+
+/// Print every route the solver will walk, as JSON, for
+/// `tools/pewter-chain/route_audit.py`.
+///
+/// **The audit has to read the routes the solver actually uses**, not a copy of
+/// them scraped out of this file: a regex over `const X: &[(u8, u8)]` misses
+/// anything built at run time, and a route the auditor cannot see is exactly
+/// the route that will contain the next trap. Both the seeded variants (link
+/// 05's four approaches) and the heal detour are included, and each is labelled
+/// with the seed it belongs to so a failure names something reproducible.
+fn cmd_routes() {
+    let mut out = String::from("[\n");
+    let mut first = true;
+    let mut emit =
+        |scenario: &str, seed: u64, kind: &str, plans: &HashMap<u8, MapPlan>| {
+            let mut maps: Vec<_> = plans.iter().collect();
+            maps.sort_by_key(|(m, _)| **m);
+            for (map, stages) in maps {
+                for (i, st) in stages.iter().enumerate() {
+                    if !first {
+                        out.push_str(",\n");
+                    }
+                    first = false;
+                    let via: Vec<String> =
+                        st.via.iter().map(|(x, y)| format!("[{x},{y}]")).collect();
+                    let finish = match st.finish {
+                        Finish::Arrive => "arrive".to_string(),
+                        Finish::Step(d) => format!("step {d}"),
+                        Finish::Talk(d) => format!("talk {d}"),
+                        Finish::Grind(a, b) => format!("grind {a:?} {b:?}"),
+                    };
+                    out.push_str(&format!(
+                    "  {{\"scenario\":\"{scenario}\",\"seed\":{seed},\"kind\":\"{kind}\",\
+                     \"map\":{map},\"stage\":{i},\"finish\":\"{finish}\",\"via\":[{}]}}",
+                    via.join(",")
+                ));
+                }
+            }
+        };
+    for f in chain_files() {
+        let name = Path::new(&f)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        // Link 05 picks its approach from the seed; every other leg is the
+        // same route for all of them, and emitting four copies would only
+        // make the audit slower.
+        for seed in 0..4u64 {
+            let r = route_for(&name, seed);
+            let key = |p: &HashMap<u8, MapPlan>| {
+                let mut v: Vec<_> = p.iter().map(|(m, s)| (*m, s.clone())).collect();
+                v.sort_by_key(|(m, _)| *m);
+                format!("{v:?}")
+            };
+            if seed > 0 && key(&r) == key(&route_for(&name, 0)) {
+                continue;
+            }
+            emit(&name, seed, "route", &r);
+        }
+        let h = heal_route(&name);
+        if !h.is_empty() {
+            emit(&name, 0, "heal", &h);
+        }
+    }
+    out.push_str("\n]\n");
+    println!("{out}");
 }
 
 fn chain_files() -> Vec<String> {

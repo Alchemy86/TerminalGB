@@ -231,7 +231,7 @@ which is exactly what the save-state chain is for.
 **Link 05's 41.7% was not a solve rate at all** — it was a scenario failing
 itself on a state the cartridge does not treat as a failure. §8.11.
 
-### Certified: links 01-05
+### Certified: links 01-10 (link 11 has NOT cleared — see §7b)
 
 The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 
@@ -247,6 +247,7 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 08 | carry-it-back-to-pallet | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 46 |
 | 09 | receive-the-pokedex | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 24 |
 | 10 | back-to-viridian | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 47 |
+| 11 | train-for-the-forest | 3,000 | 2,999 | 99.97%, 99.81-100% — **NOT CERTIFIED**, see §7b | 3,000 | 3,000 | 631 |
 
 Measured on the captain's Pokémon Blue, 12 workers, load average 8-55 with
 other work on the box. Zero failures in 3,000 bounds each link's failure rate at
@@ -594,6 +595,129 @@ end-to-end figure stays what the weakest link makes it.
 
 ---
 
+## 7b. OPEN WORK — link 11 has not cleared (working state)
+
+**This section is live working state, not a finding.** Delete it when link 11
+certifies. It exists so the work survives a restart: what the bar needs, what has
+been tried, what the failures look like, and how to reproduce any of it.
+
+### Where it stands
+
+`11-train-for-the-forest` measures **2,999 of 3,000**. One failure bounds the
+rate at about **0.16%** at 95% confidence, which does not clear 99.9% under §7's
+zero-failure convention. Links 01-10 certify at 3,000/3,000 each on the same
+binary. **Links 12-14 have only ever been RECONNAISSANCE** — they have never been
+certified, because the gate is that a link clears before the next is scored, and
+any 12-14 number in this repository until that changes is a recon figure and must
+be labelled as one.
+
+### What the failure looks like
+
+Every failing trace is one shape, and **no failing trace contains a wrong
+decision**:
+
+```text
+  the lead refuses a fight (too hurt), sets off for the Pokemon Center,
+  and meets one or two more encounters before it clears the grass;
+  Gen 1's run check fails twice; the second hit kills it.
+```
+
+Worked example — seed 1682, 182 decisions, Route 1 (11,6):
+
+```text
+  lv5 BULBASAUR 10/20  vs  lv3 RATTATA 2/14, and the Rattata is faster
+    RUN  "too hurt to pick a fight"    -> Can't escape!  -> took 5, now 5/20
+    RUN  "one more hit and we faint"   -> Can't escape!  -> took 5, dead
+```
+
+### What has been tried, with numbers
+
+3,000 attempts each, same 3,000-state entry pool, ~40 minutes apiece:
+
+| variant | reached | escapes failed | note |
+|---|---:|---:|---|
+| no finisher rule | 2,999 | — | the seed-1682 shape |
+| finisher on `max >= their HP` | 2,995 | — | **worse**; 3 faints, fires on a *maybe*-kill |
+| finisher on `min`, any speed | 2,999 | — | broke two runs that had walked away from *slower* Pidgeys |
+| finisher on `min`, gated `!faster()` | 2,999 | 162 | 0 faints; **kept** |
+| + grind box narrowed toward the exit | 2,997 | 143 | **worse**; reverted |
+| + retreat threshold `2 * incoming_max` | 2,999 | 111 | best secondaries; **kept** |
+
+Kept: the speed-gated worst-roll finisher, and the two-ordinary-hits retreat
+threshold. Both are written up in [the battle policy](battle-policy.md) with
+their measurements.
+
+**The narrowed grind box is the cautionary one**: it cut failed escapes exactly
+as designed and made the pass rate worse. Each variant's surviving failure is a
+different seed. That is variance, not cause.
+
+### Facts established, so they are not re-derived
+
+- **No Potion is purchasable before Pewter.** The mart inventory table at
+  `$02442` is `$FE`-framed count + items + `$FF`. Viridian sells
+  `POKE_BALL ANTIDOTE PARLYZ_HEAL BURN_HEAL`; the first list containing `POTION`
+  is Pewter's, which is where the chain is going.
+- **No item balls on Route 1 or in Viridian City** (map object data). Route 2 has
+  two, and they belong to link 12's territory.
+- **No grass in Viridian City**, so training cannot be moved next to the nurse
+  there.
+- **Route 1's grass patch IS the grind box** (x 10-17, y 6-9) and the only gap in
+  the wall above it is x 14-17, so a retreat crosses three to seven grass tiles:
+
+  ```text
+    y= 5 ...###########....#.
+    y= 6 ...#.....#GGGGGGGG#.
+    y= 7 ...#.....#GGGGGGGG#.
+    y= 8 ...#.....#GGGGGGGG#.
+    y= 9 ...#######GGGGGGGG#.
+  ```
+- **The party is one Pokemon**, so `Action::Switch` has nothing to reach for and
+  a single faint is `party_hp=0`.
+- **The budget is not the constraint**: median 631 decisions, p99 1,164, worst
+  1,615 against a 2,500 ceiling.
+
+### Candidates not yet tried
+
+Ranked by how much of the mechanism they remove:
+
+1. **Carry a second Pokemon.** Removes the failure condition outright (one faint
+   is no longer `party_hp=0`) and gives the policy's `Switch` branch something to
+   do. Viridian Mart *does* sell `POKE_BALL`, and the player has money — so this
+   is buy + catch, and it is what a player does. Cost: shop-menu navigation and a
+   catch routine, neither of which the chain has.
+2. **Train on Route 22 instead of Route 1** — it adjoins Viridian City, so the
+   retreat may be shorter. **Unmeasured**: check its grass tiles, its encounter
+   levels, and the walking distance to the Pokemon Center door at (23,25).
+3. **Retreat less often still.** The threshold has moved once with a measured
+   gain; whether there is more in it is unknown.
+4. **Reconsider `party_hp=0` as this link's failure condition.** A Gen 1 blackout
+   heals the party, keeps all experience and teleports to the last Pokemon
+   Center, so the cartridge does not treat it as failure — the same shape as the
+   link 05 correction (§8.11). **Deliberately not taken**: for a *training* link,
+   fainting is a real setback and redefining it green would be the §4 error.
+   Recorded so the next person weighs it rather than rediscovers it.
+
+### Reproducing
+
+```bash
+ROM=~/roms/'Pokemon - Blue Version (USA, Europe) (SGB Enhanced).gb'
+# one attempt, with a full decision trace
+printf -v S 'target/cert2/10/exits/%05d.gbss' 1682
+GB_CHAIN_TRACE=1 ./target/release/examples/pewter_chain solve \
+    --rom "$ROM" --scenario scenarios/pewter/11-train-for-the-forest.json \
+    --seed 1682 --start "$S"
+# the measurement, ~40 minutes on a free box at 16 workers
+./target/release/examples/pewter_chain corpus --rom "$ROM" \
+    --scenario scenarios/pewter/11-train-for-the-forest.json \
+    --runs 3000 --workers 16 --start-dir target/cert2/10/exits --out target/probe11
+```
+
+Failing seeds seen so far, each against `target/cert2/10/exits` unless noted:
+**1682** (against `target/cert/10/exits`), **353**, **968**, **1148**, **2147**,
+**2351**, **767**, **2153**, **2902**, **2243**.
+
+---
+
 ## 8. Where it gets stuck — with the evidence
 
 Every one of these was found by running the chain and reading
@@ -639,6 +763,8 @@ lead settled at **8 of 23 HP** — too hurt to pick a fight, not hurt enough to
 go and get healed — and ran from everything for 2,402 decisions. The heal
 threshold has to *be* the fight threshold.
 
+**It re-opened, and §8.14 is why that matters more than the fix did.**
+
 ### 8.5 A waypoint is not "near enough"
 
 Allowing one tile of slack on waypoint arrival broke two links in opposite
@@ -665,15 +791,19 @@ the solver has a start-menu detector that answers with B.
 
 ### 8.8 The training link is the slowest thing in the chain
 
-Link 11 is 44.2% over 120 attempts and a median of **878 decisions** — an order
-of magnitude more than any other link. Every failure is a timeout. It is doing
-the only thing available: pacing Route 1's grass beating level 2–4 Pidgey and
-Rattata for a level 6 starter, walking back to Viridian to heal whenever it
-drops below half, and repeating until the lead reaches 10.
+Link 11 is the longest link in the chain by an order of magnitude, and that is
+a real cost of the repair rather than a defect in it: the game offers no faster
+experience before the forest. It paces Route 1's grass beating level 2-4 Pidgey
+and Rattata, walks back to Viridian whenever the lead is too hurt to go on, and
+repeats until level 10.
 
-That is a real cost of the repair rather than a defect in it — the game offers
-no faster experience before the forest — but it is where an agent would gain
-most from something better than "pace and fight everything".
+Certified it is **100.0% over 3,000 attempts** with a median of 661 decisions,
+a p99 of 1,558 and a worst case of 2,071 against a 2,500 ceiling. The
+distribution is long-tailed because the walk to the nurse is a round trip of
+four map transitions and a run may need several of them; the ceiling has
+headroom over the worst case measured, and the fact that it is only 20% is
+stated rather than hidden. It is still where an agent would gain most from
+something better than "pace and fight everything".
 
 ### 8.9 The forest, which is genuinely hard
 
@@ -723,6 +853,125 @@ exactly that. **The lead therefore arrives at link 11 a level or so lower and
 link 11 has to make it up**, which is a real trade and is written here rather
 than buried in a diff.
 
+### 8.15 The last failure in 3,000, and the floor underneath it
+
+Link 11's certification came back **2,999 of 3,000**. Reading that one run found
+a real defect; four rounds of trying to remove the *rest* found a floor.
+
+**The defect.** Seed 1682, 182 decisions, Route 1 (11,6):
+
+```text
+  lv5 BULBASAUR 10/20  vs  lv3 RATTATA 2/14, and the Rattata is faster
+    RUN  "too hurt to pick a fight"    -> Can't escape!  -> took 5, now 5/20
+    RUN  "one more hit and we faint"   -> Can't escape!  -> took 5, dead
+```
+
+The Rattata was on **2 of 14** and our TACKLE does 4-5. Running does not dodge
+the incoming hit unless it works, and 162 escapes failed across those 3,000
+attempts — so a failed escape and a swing cost the same hit, and only one of
+them removes the opponent. The rule and the two wrong versions of it are in
+[the battle policy](battle-policy.md); the short form is that the finisher must
+be the **worst** roll, and only worth taking when the escape is the unreliable
+half, which is when they are at least as fast as us.
+
+**The floor.** Four variants, 3,000 attempts each from the same 3,000-state
+pool, ~40 minutes apiece:
+
+| variant | reached | escapes failed |
+|---|---:|---:|
+| no finisher | 2,999 | — |
+| finisher on `max >= their HP` | 2,995, 3 faints | — |
+| finisher on `min`, speed-gated | 2,999, 0 faints | 162 |
+| …plus a grind box narrowed to the half of the grass nearest the exit | **2,997** | 143 |
+| …plus the retreat threshold at two ordinary hits | 2,999, 0 faints | **111** |
+
+The narrowed grind box is the one to learn from: it did exactly what it was
+designed to do — **fewer** failed escapes — and produced **more** failures. A
+change that moves the mechanism the right way and the outcome the wrong way is
+variance, not cause, and each variant's surviving failure is a different seed.
+
+**What the residual is.** Every failing trace is the same shape and none of them
+contains a wrong decision: the lead refuses a fight, sets off for the Pokémon
+Center, and meets one or two more encounters before it clears the grass, with
+Gen 1's run check failing twice. Route 1's grass patch **is** the grind box —
+
+```text
+  y= 5 ...###########....#.     <- the only gap north is x 14-17
+  y= 6 ...#.....#GGGGGGGG#.
+  y= 7 ...#.....#GGGGGGGG#.
+  y= 8 ...#.....#GGGGGGGG#.
+  y= 9 ...#######GGGGGGGG#.
+```
+
+— so a retreat is three to seven grass tiles, each able to roll another
+encounter.
+
+**And it cannot be bought off, which is settled from the cartridge rather than
+assumed.** Route 1 and Viridian City have no item balls at all, and the mart
+inventory table (`$02442`, `$FE`-framed lists of count + items + `$FF`) reads:
+
+```text
+  Viridian: POKE_BALL ANTIDOTE PARLYZ_HEAL BURN_HEAL          <- no POTION
+  Pewter:   POKE_BALL POTION ESCAPE_ROPE ANTIDOTE ...
+```
+
+**The first mart in the game that sells a Potion is Pewter's, which is where
+this chain is going.** So links 11, 12 and 13 have no purchasable healing, the
+policy's `Action::Item` branch has nothing to reach for, and the party is one
+Pokémon so there is nothing to switch to either. The lead has exactly two
+options in every one of these battles and it takes the better one.
+
+**Status: link 11 is at 2,999/3,000.** One failure bounds the rate at about
+0.16% at 95% confidence, which does **not** clear the 99.9% bar under this
+project's zero-failure convention (§7) — and saying so is the point of having
+the convention. What would remove it is a second party member or purchasable
+healing, and neither exists before Pewter.
+
+### 8.14 The dead band re-opened, because the policy got cleverer
+
+§8.4 closed a dead band between "too hurt to fight" and "hurt enough to heal" by
+making the two thresholds the same number. Link 11 re-opened it, and the way it
+re-opened is the finding.
+
+The shared battle policy's "too hurt" is no longer a fraction. It is
+**threat-relative** — it weighs the lead's HP against what the Pokémon in front
+of it hits for on a critical (§2 of [the battle
+policy](battle-policy.md)) — and nothing outside a battle can compute it,
+because outside a battle there is no opponent. The solver's walk to the nurse
+was still a flat half. So a lead at **12 of 23 HP** against a level 3 Rattata
+was too hurt to pick a fight and, being above half, not hurt enough to go and
+get healed:
+
+```text
+seed 98: 100 battles, won 6, fled 94 — 94 of them "too hurt to pick a fight"
+         2,500 decisions, lead still level 7, ended walking into the Pokémon
+         Center it should have walked into 2,000 decisions earlier
+```
+
+**Nothing failed.** No rule was broken, no assertion fired, the party never
+fainted, and the run looked healthy right up to the budget. That is what makes
+this class expensive: a dead band is silent, and the only symptom is that the
+number the link exists to move stops moving.
+
+The repair does not pick a better threshold, because the next improvement to the
+policy would break that one too. **It removes the second threshold.** The
+policy's own refusal is the signal — when `decide` returns
+`Action::Run { why: why::TOO_HURT }` the solver's next overworld decision walks
+to the nurse — and the flat half survives only as a floor, for a lead that is
+hurt and has not been attacked yet.
+
+> **When one component decides whether an action is safe, no other component may
+> decide the same thing from its own arithmetic.** Two thresholds that agree
+> today are two thresholds that will disagree the next time either is improved,
+> and the gap between them is silent.
+
+Link 11 went **99.3% → 100.0%** on it, and its win rate 59.4% → **74.4%**.
+
+Reading the reason back also had to stop being a substring guess. It was
+`why.contains("too hurt")`, which is fine for a report and not fine for a
+decision, so the four run reasons are named constants — `battle::why::{FORBIDDEN,
+FAINTING, TRAINED, TOO_HURT}` — matched by name.
+
 ### 8.12 A waypoint above a one-way ledge, and the rule that is now three-for-three
 
 Link 08 lost 17 of 600 attempts and every one of them was on Viridian City's row
@@ -754,6 +1003,40 @@ a rule rather than three anecdotes:
 **A waypoint whose overshoot is unrecoverable is a waypoint pointing at a trap.**
 Prefer the turning point with slack around it, and prefer a route whose later
 waypoints still work if an earlier one is missed.
+
+**`tools/pewter-chain/route_audit.py` is that rule made checkable** — 
+`pewter_chain routes` dumps every route the solver will actually walk, and the
+audit replays each one over a walkability grid built from the cartridge. Two
+things had to be modelled before it could catch the trap it was written for, and
+both were wrong first:
+
+- **The ledge, exactly.** `(29,26)` is topologically fine — there is a 13-step
+  path back to the next waypoint crossing no warp tile, and a flood fill says so
+  cheerfully. The trap is that stepping *down* off row 26 does not land on row
+  27, it **jumps** to row 28. That is `LedgeTiles` in the cartridge (`06:66CF`,
+  found by its own shape), and the one-wayness is in the data: eight entries,
+  for facing down, left and right, and **none for up**.
+- **The walker, exactly.** `Action::GoTo` is not a path-finder — it is greedy on
+  the larger remaining delta with committed sideways detours — and below a
+  one-way ledge it slides along the wall, which is what the 17 failing runs did
+  between x=27 and x=31. A single `goto` call is *also* too pessimistic a model,
+  because the solver re-issues one every decision until it arrives; only when
+  the retries **cycle** has it really failed.
+
+**And it is a design aid, not a gate, which is worth stating rather than
+glossing.** It answers *"if the walker ended up here, could it recover?"*, and
+two things it does not model make it over-report: it cannot say whether an
+overshoot is *reachable* (that needs the map's NPCs, and an NPC blocking the
+walk is what pushed link 08 over its ledge), and it has no **stuck-sidestep** —
+the real driver notices a `goto` reporting "stuck at …", or five barren
+decisions, and wanders a randomised few steps towards the waypoint before
+resuming, so a corner it shakes itself out of reads here as a dead end. Between
+them: 21 fragile waypoints across a chain every link of which is certified at
+100% over 3,000 attempts. It fails only on the two unambiguous things, a
+waypoint you cannot stand on and a waypoint unreachable from the one before it.
+Read the rest as *the brittle points of this route* — useful when drawing one,
+and the first place to look when a link starts failing. The forest's three are
+exactly where link 13 historically ran out of decisions.
 
 ### 8.11 Link 05 was failing itself on a state the cartridge repairs
 

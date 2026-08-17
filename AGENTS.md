@@ -8027,6 +8027,29 @@ links from the Nintendo logo to standing in Pewter City, an expert solver
   Caterpie), 7 (Weedle, Kakuna, Weedle) and 9 (Weedle) — six Pokémon, no healing between — so the
   precondition is a lead above their top level and `11-train-for-the-forest` exists to satisfy
   `watch:lead_level>=10`. Threshold derived, not chosen.
+- **THE MAP TABLES ARE REACHABLE FROM THE CARTRIDGE ALONE, AND FINDING THEM BY PROPERTY BEATS
+  RECALLING THEIR ADDRESSES.** `MapHeaderPointers` is **the only** offset in bank 0 whose 248
+  consecutive little-endian words all land in `$4000-$7FFF`, which identifies it uniquely; the
+  bank table beside it is `$C23D`, picked out of three neighbouring candidates by which one makes
+  map `$33` decode to a sane header. From there a map's header gives its tileset and block map,
+  and its object data gives warps, signs and objects — a trainer object carrying **opponent id +
+  roster index**, which is what ties a map to a party in `TrainerDataPointers` (`0E:5D3B`). That
+  chain is how link 11's threshold is now cited end to end: Viridian Forest declares three
+  trainers with opponent `202` (= 200 + `BUG_CATCHER`) and rosters 1-3, and those three parties
+  are contiguous at `0E:5DCE`. **My first attempt read the connection blocks' *last* byte as the
+  destination map and produced nonsense** (`$C6`-`$C9`, which are pointer high bytes); the map id
+  is the **first** byte of an 11-byte block.
+- **A WALKABILITY GRID COSTS TWENTY LINES AND SETTLES CLAIMS PROSE CANNOT.** Block map + the
+  tileset's blockset + its `$FF`-terminated walkable-tile list, probing each 16x16 walk tile at
+  its **bottom-left** 8x8 (block indices 4, 6, 12, 14 — the rule `docs/gen1/authoring-an-area.md`
+  records). Two of the chain's own objective claims were verified with it, and both came back
+  *stronger* than they were written: Route 2's halves are genuinely two disjoint components (245
+  tiles over rows 43-71, 86 over rows 0-11, neither containing the other's gate), and Viridian
+  Forest's three bug catchers are unavoidable at a sight cone of **one** tile, not the four to six
+  that had been recorded. **Their bodies alone do not sever the map** — which is as it must be,
+  since they are still standing there once beaten — so the compulsion is the cones, and it does
+  not depend on knowing the view range the map script sets. The direction is in the object data:
+  movement `$FF` (`STAY`) and range `$D0/$D1/$D2/$D3` = down/up/left/right.
 - **`tools/gen1-tables/gen1_tables.py` reads the type chart, the wild encounter tables, the base
   stats, `PokedexOrder` and `MonsterNames` OUT OF THE CARTRIDGE**, located by signature (the same
   technique `plugins/battle-control/src/wram.rs` uses for WRAM). `PokedexOrder` lands at `$41024`,
@@ -8036,7 +8059,7 @@ links from the Nintendo logo to standing in Pewter City, an expert solver
   Pewter (Route 22 in Blue is Rattata/Spearow/Nidoran, not Red's Mankey), so that precondition
   has to be satisfied at the *starter* — Squirtle is Water, Bulbasaur is Grass.
 
-### Eight things that cost real time, and every one is a general rule
+### Ten things that cost real time, and every one is a general rule
 
 1. **A machine with no APU hangs in the Pokémon Center.** `Gameboy::new` leaves `MMU.sound` at
    `None`, which is a machine with **no sound chip** rather than a quiet one. The nurse's healing
@@ -8053,10 +8076,18 @@ links from the Nintendo logo to standing in Pewter City, an expert solver
    frames after accepting one, so the first of a burst is routinely swallowed and the rest land
    out of phase. A `down, right, A` run policy opened the party list instead — 2,500 decisions of
    it. Read the `▶` cursor and press **one key per decision**: a swallowed press simply repeats.
-4. **A heal threshold must BE the fight threshold.** With fighting above half health and healing
-   below a third, the lead settled at 8 of 23 HP — too hurt to fight, not hurt enough to heal —
-   and ran from everything for 2,402 decisions. Any two-sided policy with a gap between its
-   thresholds has a state it cannot leave.
+4. **A heal threshold must BE the fight threshold — and the general form is stronger than the
+   rule it came from.** With fighting above half health and healing below a third, the lead
+   settled at 8 of 23 HP — too hurt to fight, not hurt enough to heal — and ran from everything
+   for 2,402 decisions. **Making the two numbers equal did not close it for good**: once the
+   shared battle policy learned to weigh a *critical* hit, its "too hurt" became threat-relative
+   and stopped being a number anything outside a battle could compute, and the band re-opened at
+   12 of 23 — above the flat half, so no heal — where it declined 94 of 100 encounters on the one
+   link whose entire job is to earn experience. **When one component decides whether an action is
+   safe, no other component may decide the same thing from its own arithmetic.** The solver's walk
+   to the nurse is now triggered by the policy's own refusal (`Action::Run { why: why::TOO_HURT }`),
+   not by a threshold beside it. Corollary that fell out: a caller acting on a reason must match a
+   **named constant**, never `why.contains("too hurt")` — fine for a report, not for a decision.
 5. **A waypoint is reached when it is stood on, never "near enough".** One tile of slack broke two
    links in opposite ways: one parked at (10,2) with Oak's trigger on (10,1), and one oscillated
    for 430 decisions because Viridian City's row 27 is `#.###.##############` and the waypoint it
@@ -8071,6 +8102,24 @@ links from the Nintendo logo to standing in Pewter City, an expert solver
    and it maps every even seed onto its odd neighbour — seeds 0 and 1 produced byte-identical
    recordings, as did 2 and 3, and **no success rate would ever have shown it**. Mix the seed
    first, then force the low bit. Measuring diversity is what found it.
+9. **A KNOCKOUT CENSORS A DAMAGE MEASUREMENT, so a model checked against it is scored wrong
+   exactly where it is doing best.** HP stops at zero, so a hit that was going to do 12 to a
+   Pokémon with 5 left is only ever *seen* as 5 — and comparing that against the model's minimum
+   scores every overkill as a miss. The link that wins three fights in four read 73.9% inside the
+   roll range; the one whose battles are trainer battles read 81.3%; the model was the same. Split
+   the knockouts out (a knockout agrees with the model when the model's own **maximum** reached
+   their remaining HP) and it is 89.5% in range, 0.6% under, and the 9.9% over is Gen 1's own
+   critical-hit rate for a base-speed-45 lead. **When a harness and a model disagree, suspect the
+   harness first** — it is younger and nobody has run a hundred battles through it.
+10. **A METRIC THAT SPANS LINKS MUST DISOWN WHAT IT INHERITED.** A chain link starts from the
+   previous link's exit state, and a goal that fires mid-event hands the next link the tail of
+   that event. Link 11's goal is `lead_level>=10`, which fires the instant the level ticks over —
+   inside the battle that earned it — so every link 12 run opens on "CHARMANDER grew to level
+   10!" with the opponent already at 0 HP, and the battle report claimed **60 wins on a leg that
+   runs from everything**. The *referee* already disowns it (`scenario::run::Battles` primes on
+   its first sample); the reporting did not. Prime on the first **decision**, not on the first
+   observation of the thing being counted, or a run that starts in the overworld disowns its
+   first real battle instead.
 
 ### THE GAME CAN SOFT-LOCK, AND A FROZEN PICTURE IS NOT ALWAYS A FROZEN EMULATOR
 
@@ -8165,6 +8214,39 @@ re-certified against it, exactly as a driver change forces.
   accuracy stage and the defender's evasion, so a Pidgey's SAND-ATTACK takes a 94% TACKLE to
   47%, and a policy reading 94 keeps swinging instead of escaping. **That one only appeared at
   3,000 attempts; 600 was clean twice.**
+- **AN ESCAPE IS NOT FREE, SO A FINISHER BEATS IT — but the finisher must be the WORST roll and it
+  only applies when the escape is the unreliable half.** A level 5 Bulbasaur on 10 of 20 ran from a
+  level 3 Rattata on **2 of 14** that its own TACKLE kills outright; the escape failed, the Rattata
+  hit for 5, the faint rule ran the same play at 5 HP, that escape failed too, and the lead was
+  dead. **Running does not dodge the incoming hit — it dodges it only if it works** (162 failed
+  escapes in 3,000 link 11 attempts), so a failed escape and a swing cost the same hit and only one
+  removes the opponent. **Two wrong versions, both measured:** on `max >= their HP` it fires on a
+  *maybe*-kill and link 11 went 2,999 → **2,995 with three faints**; ungated by speed it broke two
+  runs that had been walking away from *slower* Pidgeys safely, because `TryRunningFromBattle`
+  scales the odds by our speed against theirs and running from something slower is nearly free.
+  Correct form: `min >= their HP && accuracy >= 50 && !faster()`, which is rule 1 with its
+  `accuracy == 100` relaxed to "more likely than not". Generally: **when two choices cost the same,
+  prefer the one that ends the situation — and check that it really ends it.**
+- **THE RETREAT THRESHOLD IS TWO *ORDINARY* HITS, NOT TWO CRITICAL ONES.** `hp <= 2 * incoming_crit`
+  evaluates to 14-18 of a level 5 starter's 19 HP bar on Route 1, so the lead refused a fight after
+  roughly **one hit**: 5.2 walks to the Pokémon Center per attempt, 16,000 fled battles and 162
+  failed escapes in 3,000 runs — and the deaths all happen on those walks, fleeing through grass.
+  A critical is one turn in eleven; two in a row is one in 121, which is the faint rule's business
+  and it already tests it. `2 * incoming_max` measures better on every secondary figure (won 76.3 →
+  **79.0 %**, failed escapes 162 → **111**, worst-case decisions 1,952 → **1,615**) at the same pass
+  rate. **The `2 * crit` form came from link 10, which no longer fights wild battles at all — check
+  whether a constant's justification still applies before treating it as settled.**
+- **A CHANGE THAT MOVES THE MECHANISM THE RIGHT WAY AND THE OUTCOME THE WRONG WAY IS VARIANCE.**
+  Narrowing link 11's grind box to the half of the grass nearest the exit cut failed escapes 162 →
+  143 exactly as designed, and took the pass rate 2,999 → **2,997**. Each variant's surviving
+  failure was a different seed. Four variants gave 5, 3, 1, 1 failures; the floor is ~1 in 3,000
+  and it is a tail, not a defect. Revert, and say so.
+- **NO POTION IS PURCHASABLE BEFORE PEWTER, AND THAT IS READ OUT OF THE CARTRIDGE.** The mart
+  inventory table at `$02442` is `$FE`-framed count + items + `$FF`: Viridian sells
+  `POKE_BALL ANTIDOTE PARLYZ_HEAL BURN_HEAL`, and the first list containing `POTION` is Pewter's.
+  Route 1 and Viridian City have no item balls either. So links 11-13 have no healing but the
+  Pokémon Center, `Action::Item` has nothing to reach for, and a one-Pokémon party has nothing to
+  switch to — which is why link 11's residual cannot be engineered away.
 - **`StatModifierRatios` IS READABLE — do not transcribe it.** `0F:76CB`, thirteen
   (numerator, denominator) pairs, and its opening bytes `25,100,28,100,…` occur exactly once in
   the cartridge, so the address is found rather than believed. Same treatment as `TypeEffects`:

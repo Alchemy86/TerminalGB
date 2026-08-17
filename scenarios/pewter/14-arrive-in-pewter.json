@@ -23,6 +23,8 @@
   "guidance": "guidance/14-arrive-in-pewter.json",
   "timeout_frames": 120000,
   "evidence": [
-    "map=0x02 — wCurMap $D35E. PEWTER_CITY is const index 2. EVENT_BEAT_BROCK (wEventFlags $D755 bit 7) is the gym, which is the link after this one."
+    "map=0x02 - wCurMap $D35E. PEWTER_CITY is const index 2, and map $02's header decodes as tileset 0, 20x18 blocks = 40x36 tiles with seven warps into its buildings, which is Pewter City.",
+    "Pewter is reached by a map CONNECTION and not a warp, which is why the goal is the map and there is no warp to name. Map $02's connection byte is 0101 and map $0D's (Route 2) is 1100. The bit order was derived from the cartridge rather than recalled, by reading each connection block's own destination map id: Pallet Town ($00) has bit 3 -> $0C Route 1 and bit 2 -> $20 Route 21, so bit 3 is north and bit 2 is south; Viridian City ($01) adds bit 1 -> $21 Route 22, so bit 1 is west; and Pewter's other bit, 0, is $0E Route 3, so bit 0 is east. Pewter therefore connects south to Route 2 and east to Route 3, and Route 2 connects north to Pewter and south to Viridian - so walking off the top of Route 2 crosses into Pewter with no warp involved.",
+    "EVENT_BEAT_BROCK (wEventFlags $D755 bit 7) is the gym, which is the link after this one."
   ]
 }

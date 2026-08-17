@@ -23,6 +23,8 @@
   "guidance": "guidance/12-heal-and-climb-route-2.json",
   "timeout_frames": 250000,
   "evidence": [
-    "map=0x33 — wCurMap $D35E. VIRIDIAN_FOREST is const index 51. No event flag records entering the forest."
+    "map=0x33 - wCurMap $D35E. VIRIDIAN_FOREST is const index 51. No event flag records entering the forest, so the milestone is the map itself.",
+    "The map identity is checked rather than recalled: map $33's header (MapHeaderPointers $01AE, bank from MapHeaderBanks $C23D) reads tileset 3 and 17x24 blocks = 34x48 tiles, which is Viridian Forest's size, and its object data holds the three bug catchers this chain's link 11 is a precondition for.",
+    "The objective's claim that Route 2's two halves are not connected on foot is measured, not assumed. Building Route 2's walkability grid from the cartridge - map $0D's block map, the OVERWORLD blockset at 19:45E0, and the tileset's own $FF-terminated walkable-tile list, probing each 16x16 walk tile at its bottom-left 8x8 (block indices 4, 6, 12, 14) - and flood-filling from each gate's warp tile gives two disjoint components: 245 tiles spanning rows 43-71 from the south gate, 86 tiles spanning rows 0-11 from the north gate, and neither contains the other's gate. The forest is the only way between them."
   ]
 }
