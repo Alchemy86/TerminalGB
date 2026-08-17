@@ -15,6 +15,7 @@ linked, not repeated.
 | what to **do** on a turn — fight, switch, item or run | [the battle policy](../agent/battle-policy.md) |
 | whether the encounter is **worth a ball** | [catching](catching.md) |
 | what happens **after** the battle — a new move, an evolution | [learning moves](learning-moves.md) |
+| **playing** a level-up out on the cartridge, and the corpus it makes | [the level-up move drill](level-up-drill.md) |
 | every **fault and corrected belief** found on the way | [discoveries](discoveries.md) |
 
 Everything below is what did *not* have a home: what the battle screen shows,

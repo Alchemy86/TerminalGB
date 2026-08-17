@@ -173,6 +173,7 @@ and that had quietly happened to more than half of this directory.
 | [the battle engine](gen1/battle-engine.md) | a model of the battle rules held to the retail cartridge as an oracle, and agents that play it |
 | [battling](gen1/battling.md) | the map of the subject, and the one thing that had no home: what a battle screen shows, what it withholds, and for how long |
 | [learning moves, and evolving](gen1/learning-moves.md) | every move-learning decision the game can ever ask, counted — 728 learn entries, 840 distinct decisions — with a stated rule for each, and why a student should never cancel an evolution |
+| [the level-up move drill](gen1/level-up-drill.md) | that rule played out on the cartridge: every level-up on the Charmander and Bulbasaur lines triggered directly, the prompt answered or declined, the party read back as the verdict, and the whole thing recorded as training data |
 | [catching](gen1/catching.md) | whether an encounter is worth a ball — the capability's gate measured on the chain's own states, a wild-versus-trainer discriminator established twice, and the catch rate against the odds we predict |
 | [a paper's Gen 1 claims, checked](gen1/paper-claims.md) | eleven asserted mechanics measured on the cartridge — what held, what did not, and the one our own engine had backwards |
 | [driving the link cable from outside](gen1/link-from-outside.md) | impersonating the far end of the wire, and what the protocol actually carries |

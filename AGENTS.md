@@ -4876,6 +4876,62 @@ and what a battle screen shows).** Instruments: `learn_table.py` and
   has to cut the tiles up 20 at a time; and a Gen 1 sentence wraps across rows padded with
   spaces, so a phrase is only contiguous after collapsing whitespace. Both cost this drill a run.
 
+### The drill proper — play the level-up out, and record it (`gen1_learn_drill drill`)
+
+**Full page: [`docs/gen1/level-up-drill.md`](docs/gen1/level-up-drill.md).** The rule above,
+carried out on the cartridge one level-up at a time, with the corpus a student trains from as its
+output. `learn_table.py --drill-plan <species>` emits the plan;
+`gen1_learn_drill drill --plan <p.json>` plays it. **Not in CI** (it needs the player's own
+cartridge), ~6.4 s a line, starts a NEW GAME so it needs no save.
+
+- **Measured on retail Blue, both lines 7 of 7 events verified against the cartridge:**
+  **CHARMANDER → CHARMELEON → CHARIZARD** 7 events (2 free, 1 already-held, **4 decisions**, 1 of
+  them a decline), 16 corpus rows; **BULBASAUR → IVYSAUR → VENUSAUR** 7 events (2 free, **5
+  decisions**, 2 declines), 17 rows. The three forms of each line hold **18** and **21** learnset
+  entries between them — the walked count and the table count are different questions and the
+  page states both.
+- **THE DRILL DECIDES NOTHING.** The criterion is `learn_table.py`'s `decide()` and the plan
+  arrives with the answer already in it. Same split as the battle policy, same reason: two
+  implementations of one rule disagree the moment either is improved, silently.
+- **TRIGGER A LEVEL-UP BY WRITING THE EXPERIENCE, NOT BY PICKING AN OPPONENT.**
+  `wPartyMon1Exp` (`$D179`, three bytes big-endian, offset 14 into `party_struct`) set to
+  `romdata::experience_for_level(growth, level) - 1` — *the same function the preset used* — then
+  one **level 2 MAGIKARP** (5 experience, SPLASH only). That makes the arithmetic identical for
+  an event at level 9 and one at level 65, instead of the per-event CHANSEY tuning the `trace`
+  scenarios need to dodge the two-levels-in-one-battle trap.
+- **A TAP SHORTER THAN `MENU_GAP` IS SWALLOWED, AND ON A MOVE LIST THAT FORGETS THE WRONG MOVE
+  WITH NO COMPLAINT.** Measured: three 12-frame taps moved the cursor **two** slots, so RAGE
+  replaced EMBER where the rule chose LEER and the screen looked perfect throughout. **Read the
+  cursor back (`Screen::selected()`) and press Down only while it is not on the target** — never
+  count presses. The party read-back is what caught it; nothing else could have.
+- **A YES/NO BOX SCROLLS ITS OWN QUESTION OFF THE SCREEN.** `Delete an older move to make room
+  for FIRE SPIN?` is three lines and Gen 1 holds two, so when the box is finally up the only
+  words left are `move to make room`. Matching the opening words made the box invisible, the
+  drill fell through to "press A", **and A there means YES** — a decline silently became a
+  replacement. General rule: **a phrase that identifies a screen must still be on it when the
+  screen asks you something.**
+- **THE PARTY-SNAPSHOT RULE ABOVE IS NOT ENOUGH FOR A MULTI-EVENT RUN.** "Snapshot on there is a
+  party" captures the party `BattlePlugin` **restored** — measured, every event after the first
+  read back the previous event's state. Keep the **best-scoring** snapshot instead, scored on the
+  three things the verdict checks (level, species, the four moves), sampled **every frame**
+  rather than once per settle.
+- **AN EVOLUTION CANNOT BE VERIFIED THROUGH AN INJECTED PARTY.** `step_fighting` restores the
+  moment `wIsInBattle` reads 0, and that lands **between the evolution's animation and its
+  commit**: on CHARMELEON at 36 the screen prints `LEARNER evolved into CHARIZARD!`,
+  `wPartyMon1Species` reads 178 on every frame to the restore, and with the drill's write-back
+  disabled the party ends **empty**. Reported as `ok (form unchecked)` and counted, never papered
+  over. It costs nothing here: **no decision on either line falls on an evolution level.**
+- **The corpus is the emulator's own agent NDJSON** — observation in `request`, the teacher's plan
+  in `reply` — so `tools/agent-docs/log_to_dataset.py` flattens it unmodified and a `command` arm
+  of the A/B rig speaks the same protocol. **No new format, and no second comparison harness.**
+  The `label` object beside the observation is ground truth and is *not* what a player sees; a
+  pipeline wanting a strictly observable input drops it.
+- **`GB_LEARN_DRILL_DUMP=1` prints the decoded screen, the cursor, what it points at and the live
+  party at every settle.** All four findings above came out of it; reach for it first when a
+  prompt is not being answered the way you expect. `--level N` runs one event alone.
+- **NOT DONE, and named on the page:** Magikarp (parked by the captain), TMs, refusing an
+  evolution, and **no model has been through this corpus**.
+
 ### Four more cartridge tables, and the route claim they settled
 
 - **`TechnicalMachines`, the TM/HM compatibility bitfield (`BaseStats` offset 20, 7 bytes),

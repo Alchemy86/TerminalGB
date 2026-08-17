@@ -499,6 +499,10 @@ battle menu for ever.
 
 ## See also
 
+* [The level-up move drill](level-up-drill.md) — the rule on this page **played
+  out on the cartridge**: every level-up on the Charmander and Bulbasaur lines
+  triggered directly, the prompt answered or declined, the party read back as
+  the verdict, and the whole thing recorded as training data.
 * [Battling](battling.md) — what the battle screen shows and withholds.
 * [Catching](catching.md) — the same treatment applied to the wild-versus-trainer
   question, and where the sampling-window method comes from.
