@@ -159,6 +159,7 @@ and that had quietly happened to more than half of this directory.
 
 | page | what it is |
 |---|---|
+| [writing a scenario](writing-a-scenario.md) | zero to a running scenario: pick a goal, find the byte that proves it, write the watch, check it, run it — and the five ways it goes wrong, with the output each one prints |
 | [writing a plugin](writing-a-plugin.md) | zero to a working plugin for someone who has never seen this codebase |
 | [the plugin contract](plugins.md) | what a plugin may do, how you can tell one is attached, the trust model, the version boundary |
 | [the live trainer view](trainer.md) | the read-only plugin that reads a running Pokémon cartridge — the address table, the derivation, the verification |

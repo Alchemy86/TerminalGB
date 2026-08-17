@@ -1,0 +1,38 @@
+{
+  "schema": "gbscenario/1",
+  "name": "town-map",
+  "objective": "Get the Town Map from your rival's sister. She is sitting at the table in Blue's house, the left-hand house in Pallet Town, and the door is at (13,5) on the town map. Inside, she is at (2,3) facing right; stand beside her and press A. A Gen 1 door fires when you step *through* it, so standing on the mat is not going in. She hands the map over only once you already have the Pokedex.",
+  "goal": [
+    "watch:got_town_map!=0"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 60",
+    "max_wall_seconds 600"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/town-map.json",
+  "timeout_frames": 40000,
+  "watch": [
+    {
+      "name": "got_town_map",
+      "addr": "0xD74A",
+      "len": 1,
+      "mask": "0x01"
+    }
+  ],
+  "evidence": [
+    "watch:got_town_map!=0 — EVENT_GOT_TOWN_MAP, event index 24 in pokered's constants/event_constants.asm const list, so wEventFlags ($D747, atlas rom+live) byte 24/8 = 3 and bit 24%8 = 0: $D74A, mask $01. BluesHouseDaisySittingText (scripts/BluesHouse.asm) sets it in its .give_town_map branch, and only after `call GiveItem` returns carry — so a bag that is full prints BluesHouseDaisyBagFullText and the flag stays clear. The flag therefore records the map actually changing hands, not the conversation.",
+    "the mask is load-bearing, and $D74A is the reason. EVENT_ENTERED_BLUES_HOUSE is index 25, the very next bit of the same byte, and BluesHouseDefaultScript sets it on the frame the map loads. Without `mask: 0x01` the condition watch:got_town_map!=0 is true from the doorway, so the run would report the goal reached for walking in.",
+    "require party>=1 — the cartridge's own precondition, stated as a rule the host checks. BluesHouseDaisySittingText opens `CheckEvent EVENT_GOT_TOWN_MAP / jr nz` then `CheckEvent EVENT_GOT_POKEDEX / jr nz, .give_town_map`: with no Pokedex Daisy says her brother is at the lab and gives nothing. A start state before the Pokedex can therefore never reach this goal, whatever the agent does, and party>=1 is the observable that comes with it.",
+    "failure party_hp=0 — Pallet Town's northern approach carries grass, so a party that faints on the way is a real blackout and not a timeout worth paying for."
+  ]
+}

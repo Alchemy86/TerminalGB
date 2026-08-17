@@ -2,7 +2,9 @@
 
 A **scenario** is a small JSON file: a goal, the rules it is judged under, and
 the knowledge the agent may plan with. Full explanation:
-[`docs/scenarios.md`](../docs/scenarios.md).
+[`docs/scenarios.md`](../docs/scenarios.md). Never written one?
+[`docs/writing-a-scenario.md`](../docs/writing-a-scenario.md) builds
+[`tutorial/town-map.json`](tutorial/town-map.json) from an empty file.
 
 ```sh
 cargo run --release --example scenario -- check scenarios/leave-the-pokemon-center.json
@@ -30,6 +32,12 @@ door leads to Pallet Town, which is true of the save it was played from and of
 no other. Learned knowledge belongs to whoever ran it. A scenario naming a
 guidance file that does not exist yet is the normal beginning of one, and the
 runner says so rather than complaining.
+
+`tutorial/` — the one [`docs/writing-a-scenario.md`](../docs/writing-a-scenario.md)
+builds, plus the two `*.script.jsonl` route scripts it plays with. A script is
+one JSON reply per line, the same shape a model returns, and it goes through the
+identical parse-clamp-execute path a live model's reply does — so a route that
+works scripted works with a model behind it, and costs nothing to iterate on.
 
 Recordings are not in here either — they go to the run's output directory
 (`target/scenario/<name>/` by default). A recording carries the identity of the

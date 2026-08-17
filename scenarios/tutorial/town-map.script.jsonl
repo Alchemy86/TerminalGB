@@ -1,0 +1,14 @@
+{"goal":"Walk to the laboratory door","plan":[{"do":"goto","x":5,"y":10}]}
+{"goal":"Step out of the laboratory","plan":[{"do":"walk","dir":"down","steps":2}]}
+{"goal":"Let Pallet Town finish loading","plan":[{"do":"wait","frames":120}]}
+{"goal":"Get off the laboratory doorstep","plan":[{"do":"goto","x":16,"y":12}]}
+{"goal":"Walk up the east side of town","plan":[{"do":"goto","x":16,"y":7}]}
+{"goal":"Walk to Blue's front door","plan":[{"do":"goto","x":13,"y":6}]}
+{"goal":"Step into Blue's house","plan":[{"do":"walk","dir":"up","steps":2}]}
+{"goal":"Let the house finish loading","plan":[{"do":"wait","frames":120}]}
+{"goal":"Stand beside Daisy","plan":[{"do":"goto","x":2,"y":4}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"press","button":"up"},{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}

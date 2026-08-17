@@ -8452,6 +8452,110 @@ reports `blip_buf` + first-party `terminalgb-plugin-api`).
   goal is `map!=0x29` and not a specific destination: a goal tuned to one save's `wLastMap`
   would be wrong everywhere else.
 
+### The walkthrough is `docs/writing-a-scenario.md`, and its example is real
+
+`docs/scenarios.md` is the reference — what a rule is, how a goal is judged, what a recording
+holds. It is not a tutorial, and a stranger could not get from an empty file to a running
+scenario with it. The walkthrough builds
+[`scenarios/tutorial/town-map.json`](scenarios/tutorial/town-map.json) end to end: pick a goal,
+find the byte, write the watch, write the rules, `check`, get a start state, run, replay, and
+five failure modes with the output each actually prints. Every command in it was run in the
+order given.
+
+- **The example is chosen because the mask is load-bearing in it, and provably so.**
+  `EVENT_GOT_TOWN_MAP` is event index 24 → `$D74A` bit 0; `EVENT_ENTERED_BLUES_HOUSE` is index
+  25, **the next bit of the same byte**, and `BluesHouseDefaultScript` sets it on the frame the
+  map loads. Measured both ways from one start state: with `"mask": "0x01"` the run reaches the
+  goal after **1662 frames / 10 decisions at (2,4)** beside Daisy; without it, **1116 frames /
+  8 decisions at (2,7)** — the doormat. `check` says `verdict: OK` for both, because nothing in
+  the file can tell it that bit 1 is a different milestone.
+- **Derive an event index by counting the `const_def` / `const_skip` list, then CROSS-CHECK it
+  against a flag somebody else derived.** The same count gives `EVENT_GOT_POKEDEX` index 37 →
+  `$D74B` bit 5, which is exactly what the shipped `09-receive-the-pokedex.json` declares.
+  Agreeing with a file you did not write is what says the counting is right.
+- **A goal can be unreachable because the cartridge has a precondition, and the run looks
+  perfect while it fails.** `BluesHouseDaisySittingText` checks `EVENT_GOT_POKEDEX` before it
+  gives anything. Started from link 08's exit the run walks the whole route, stands beside
+  Daisy, talks to her, and the screen reads *"RED is out at Grandpa's lab."* — the flag never
+  moves. **Read the screen text in `<out>/agent-N.ndjson` before blaming the route.**
+- **A start state for a walkthrough is one command:** `pewter_chain chain --rom <rom> --seeds 1
+  --to 9 --out <dir>` plays from a cold cartridge with the expert solver in **~4 seconds** and
+  writes `<dir>/states/09.gbss` — Oak's Lab, Pokédex in hand. That is reproducible for any
+  reader with their own cartridge, which a save state in the repository would not be.
+- **Three route facts, and none is specific to Pallet Town** (all four wrong attempts are in the
+  page): **a map change cancels the rest of the plan**, so a `wait` in the same plan as the walk
+  that triggers a warp never runs — give the settling its own decision; **never plan from an
+  observation taken during a warp** — if the map's reported `width`/`height` do not match the
+  map its `id` names, the world is mid-change; and **`goto` walks, it does not navigate** —
+  break a route at its turning points, or it stalls against a building.
+- **`scenarios/tutorial/guidance/` is gitignored** by the existing `scenarios/*/guidance/` rule,
+  so the walkthrough's own learned doors are not committed. The two `*.script.jsonl` route
+  scripts *are* — a script is a specification, and it is what makes the run half runnable.
+
+### The agent-facing front ends are held to the AXI standard, and stderr is the trap
+
+`examples/scenario.rs` and `tools/gen1-tables/gen1_tables.py` are driven by agents through a
+shell, so they follow the Agent eXperience Interface: **TOON on stdout** (a
+`name[n]{col,col}:` header then one row per line, or a `name:` block of `key: value`), a
+**content-first home view** with no arguments, `help <command>` / `--help` per subcommand with
+its own flags and examples, contextual `help[n]:` next steps, definitive empty states, and exit
+codes 0 / 1 (the work failed) / 2 (the command line was wrong).
+
+- **AN ERROR ON STDERR IS AN ERROR AN AGENT CANNOT ACT ON, AND THAT WAS THE WHOLE PROBLEM.**
+  Both tools used to print every complaint with `eprintln!` / argparse, so `scenario run` with
+  no `--rom` and `gen1_tables.py --where pikachu` both produced **nothing on stdout** and a
+  non-zero exit. Every error is now `error:` plus one or more `help:` lines on stdout naming the
+  command that fixes it. `argparse` is subclassed for exactly this — its own message
+  (`invalid <lambda> value: 'pikachu'`) names its internals and helps nobody.
+- **A resolver refuses with what it *did* understand.** `--where`, `--can-learn`,
+  `--effective-against`, `--catch-for`, `--trainer` and `--plan` take a name in any case (or an
+  internal index / type number), and a miss answers with `difflib` near-matches or the full list
+  — `'stone' is not a Gen 1 type / did you mean: POISON`, `no species named 'pikchu' / did you
+  mean: PIKACHU, RAICHU`.
+- **`POKE_ROM` is the repo's own convention and `gen1_tables.py` reads it**, so `--rom` is
+  optional and a bare invocation can show live content (which cartridge, which version, how many
+  maps have grass) rather than a manual.
+- **A signature locator's `SystemExit` had to be caught and re-emitted.** Every table is found by
+  the bytes it starts with and each locator dies with a sentence *to stderr*; pointing the tool
+  at the wrong file is the most likely mistake there is, so `main` wraps the whole locating block
+  and reports it as a structured error naming what the tool does read.
+- **`scenario`'s home view lists the scenarios it can find** (`scenarios/`, two levels, sorted)
+  with goal / rule count / evidence count. **`guidance/` is skipped by name**: a guidance file is
+  a `gbguidance/1` document a *run* wrote, and scanning it as a scenario put fourteen rows of red
+  beside a repository where nothing was wrong.
+- **`check` takes a directory** and prints one row per file plus a summary — the shape wanted
+  after editing a shared field. It still exits 1 if any is refused.
+- **`--prose` keeps the old paragraph output** for `check`, `run` and `replay`, which is what
+  `docs/scenarios.md` §2's console block now shows; `knowledge` and `guidance` are TOON only and
+  their blocks on that page were re-captured. The two `gen1_tables.py` output blocks in
+  `docs/agent/pewter-chain.md` and `docs/gen1/catching.md` were re-captured for the same reason.
+  **Nothing machine-parses either tool's output** — checked before changing it; only docs quote
+  them, and `docs/agent/pewter-chain.md`'s check loop reads the exit code.
+- **Not done, deliberately:** AXI §7 (a session hook injecting ambient context) — these are
+  repository scripts a crew runs from a checkout, not an installed CLI with a setup command, and
+  a hook that fires in every session for a tool most sessions never touch is a token cost with no
+  reader. And `scenario` has no `--json`; `gen1_tables.py` does.
+
+### What the A/B rig should adopt when it lands (`gameboy-abrig-k7`)
+
+Not applied here — that crew was mid-measurement — but the same six changes are what made the
+two front ends drivable, and they are cheap:
+
+1. **Every error on stdout**, as `error: <what> / help: <the command that fixes it>`, with exit
+   2 for a bad command line and 1 for work that failed. This is the one that actually breaks an
+   agent; the rest are efficiency.
+2. **No arguments prints live content**, not usage: what runs exist, what state they are in.
+   `bin:` (path with `$HOME` collapsed to `~`) and a one-line `description:` above it.
+3. **TOON for anything tabular** — `name[n]{col,col}:` then one row per line — and a `name:`
+   block of `key: value` for a single object. Roughly 40 % fewer tokens than JSON and it reads.
+4. **`help <subcommand>`** with that subcommand's flags, defaults and two or three examples.
+   Not the whole manual.
+5. **A definitive empty state**: `runs: 0 — nothing has been measured yet`, so an agent does not
+   re-run with different flags to check whether the silence meant success.
+6. **`help[n]:` next steps on lists and mutations**, as complete commands with `<placeholders>`
+   rather than guessed values — that is how an agent discovers the surface without reading the
+   source.
+
 ## The documentation has an index now, and it is GATED (`docs/README.md`, `docs/tools/docs_index.py`)
 
 - **`docs/README.md` is the complete index; the top-level `README.md`'s *"Every page, and what

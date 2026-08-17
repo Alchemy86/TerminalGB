@@ -1,0 +1,12 @@
+{"goal":"Come down into Pallet Town","plan":[{"do":"goto","x":10,"y":2}]}
+{"goal":"Cross to the east side","plan":[{"do":"goto","x":16,"y":2}]}
+{"goal":"Walk down to Blue's front door","plan":[{"do":"goto","x":16,"y":6}]}
+{"goal":"Stand on Blue's doorstep","plan":[{"do":"goto","x":13,"y":6}]}
+{"goal":"Step into Blue's house","plan":[{"do":"walk","dir":"up","steps":2}]}
+{"goal":"Let the house finish loading","plan":[{"do":"wait","frames":120}]}
+{"goal":"Stand beside Daisy","plan":[{"do":"goto","x":2,"y":4}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"press","button":"up"},{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
+{"goal":"Ask Daisy for the Town Map","plan":[{"do":"advance_text"}]}
