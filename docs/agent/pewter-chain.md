@@ -231,7 +231,7 @@ which is exactly what the save-state chain is for.
 **Link 05's 41.7% was not a solve rate at all** — it was a scenario failing
 itself on a state the cartridge does not treat as a failure. §8.11.
 
-### Certified: links 01-10; link 11 accepted at one failure (§7b)
+### Certified: links 01-10 and 12-14; link 11 accepted at one failure (§7b)
 
 The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 
@@ -248,6 +248,9 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 09 | receive-the-pokedex | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 24 |
 | 10 | back-to-viridian | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 47 |
 | 11 | train-for-the-forest | 3,000 | 2,999 | 99.97%, 99.81-100% — **accepted by decision, not a zero-failure pass**, see §7b | 3,000 | 3,000 | 631 |
+| 12 | heal-and-climb-route-2 | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 2,999 | 64 |
+| 13 | cross-viridian-forest | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 82 |
+| 14 | arrive-in-pewter | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 20 |
 
 Measured on the captain's Pokémon Blue, 12 workers, load average 8-55 with
 other work on the box. Zero failures in 3,000 bounds each link's failure rate at
@@ -740,6 +743,33 @@ Failing seeds seen so far, each against `target/cert2/10/exits` unless noted:
 **2351**, **767**, **2153**, **2902**, **2243**.
 
 ---
+
+### Links 12-14, and what the forest actually costs
+
+Certified on one binary, chained from link 11's exits, each with its own
+determinism check (24 seeds identical serially and across workers):
+
+| link | battles | won | fled | HP left | notes |
+|---|---:|---:|---:|---:|---|
+| 12 heal-and-climb-route-2 | 2,999 | 0 | 2,999 | 95.3% | one wild encounter per attempt, all fled, **no escape failed** |
+| 13 cross-viridian-forest | 9,885 | 3,000 | 6,885 | 94.4% | **exactly one trainer per attempt**; 3 escapes failed, no faints |
+| 14 arrive-in-pewter | 2,721 | 0 | 2,721 | 82.3% | all fled, no escape failed |
+
+**Link 13 was the link this chain was most afraid of** — §8.9 records it failing
+two ways at 300 attempts, running out of decisions in the maze and fainting to
+the bug catchers. It now crosses on a median of 82 decisions with 94.4% of the
+lead's HP intact and not one faint in 3,000 attempts. Two things did that and
+neither is a change to link 13: link 11 exists, so the lead arrives at level 10
+instead of 6; and the shared battle policy flees the forest's own wild Caterpie
+and Weedle rather than fighting them for almost no experience.
+
+**One observation left open**, recorded rather than chased because the link
+passes with no faints: 19.1% of link 13's damage predictions land *over* the
+roll range, against about 10% on link 11. The `over` column is critical hits and
+a level 10 starter's crit rate is 8-13%, so something else is contributing.
+The formula matches `CalculateDamage` including STAB and the type multiplier's
+order, so this is a question about the estimate's inputs rather than its
+arithmetic. Worth a look before the policy is used as a distillation target.
 
 ## 8. Where it gets stuck — with the evidence
 
