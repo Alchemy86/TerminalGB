@@ -216,6 +216,18 @@ Three things about it that are deliberate:
 
 `events.csv` beside it is one line per event with the verdict, for a glance.
 
+**The corpus is NOT committed, and must not be.** Its `screen.text` is the game's own text decoded
+out of the tilemap — `Which move should be forgotten?`, `SCRATCH`, `GROWL` — which is game data,
+and game data is not ours to redistribute whatever the size. It is generated from the reader's own
+cartridge into `target/`, by two commands, exactly as
+[`docs/gen1/README.md`](README.md)'s licence line requires and for the same reason
+`docs/upscale-samples/` is MIT-ROM-only. **The plan is derived from the cartridge too and is not
+committed either.**
+
+**It is byte-for-byte reproducible.** Emulation is deterministic, the plan is a pure function of
+the cartridge, and the drill takes no randomness: two runs of each line produce identical
+`agent.ndjson`. So "regenerate it" is a real instruction and not a hope.
+
 ---
 
 ## 6. What the drill does **not** decide
