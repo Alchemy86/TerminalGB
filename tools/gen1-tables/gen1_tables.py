@@ -353,6 +353,228 @@ def starting_moves(rom, stats_at, dex):
     return [m for m in rom[r:r + 4] if m]
 
 
+# --- evolutions and level-up learnsets ---------------------------------------
+
+# `EvosMovesPointerTable` (pokered `data/pokemon/evos_moves.asm`): 190
+# little-endian pointers, one per **internal** index, each naming a record of
+#
+#     <evolutions, variable length, terminated by $00>
+#     <(level, move) pairs, terminated by $00>
+#
+# An evolution is one of three shapes (`constants/pokemon_data_constants.asm`):
+#
+#     db EVOLVE_LEVEL, level, species
+#     db EVOLVE_ITEM,  item, 1, species
+#     db EVOLVE_TRADE, 1, species
+#
+# The table is located by **property, then verified by content**: it is the only
+# run of 190 in-bank pointers whose BULBASAUR entry dereferences to
+# `01 10 09` — evolve at level 16 into internal index 9 — which is a fact about
+# this cartridge and not a remembered address. `species_names` has already
+# proved that internal 0x99 *is* BULBASAUR on the cartridge in hand.
+EVOLVE_LEVEL, EVOLVE_ITEM, EVOLVE_TRADE = 1, 2, 3
+BULBASAUR_INTERNAL = 0x99
+BULBASAUR_EVO = bytes([EVOLVE_LEVEL, 16, 0x09])
+NUM_INTERNAL = 190
+
+
+class EvosMoves:
+    """Every species' evolutions and level-up learnset, from the cartridge.
+
+    This is the whole of what the game can ever *ask* about learning a move:
+    the level-up table is fixed data, so the set of learn events is closed and
+    countable rather than open-ended.
+    """
+
+    def __init__(self, rom):
+        self.addr = None
+        for off in range(0, len(rom) - 2 * NUM_INTERNAL):
+            if not all(
+                0x4000 <= int.from_bytes(rom[off + 2 * i:off + 2 * i + 2],
+                                         "little") < 0x8000
+                for i in range(NUM_INTERNAL)
+            ):
+                continue
+            bank = off // 0x4000
+            p = int.from_bytes(
+                rom[off + 2 * (BULBASAUR_INTERNAL - 1):
+                    off + 2 * (BULBASAUR_INTERNAL - 1) + 2], "little")
+            at = bank * 0x4000 + (p - 0x4000)
+            if rom[at:at + 3] == BULBASAUR_EVO:
+                self.addr, self.bank = off, bank
+                break
+        if self.addr is None:
+            raise SystemExit(
+                "could not locate EvosMovesPointerTable — this tool reads "
+                "retail Red and Blue"
+            )
+        self.evolutions = {}
+        self.learnset = {}
+        for i in range(1, NUM_INTERNAL + 1):
+            p = int.from_bytes(
+                rom[self.addr + 2 * (i - 1):self.addr + 2 * (i - 1) + 2],
+                "little")
+            at = self.bank * 0x4000 + (p - 0x4000)
+            evos, at = self._evolutions(rom, at)
+            self.evolutions[i] = evos
+            self.learnset[i] = self._learnset(rom, at)
+
+    @staticmethod
+    def _evolutions(rom, at):
+        out = []
+        while rom[at] != 0:
+            kind = rom[at]
+            if kind == EVOLVE_LEVEL:
+                out.append({"kind": "level", "level": rom[at + 1],
+                            "into": rom[at + 2]})
+                at += 3
+            elif kind == EVOLVE_ITEM:
+                out.append({"kind": "item", "item": rom[at + 1],
+                            "level": rom[at + 2], "into": rom[at + 3]})
+                at += 4
+            elif kind == EVOLVE_TRADE:
+                out.append({"kind": "trade", "level": rom[at + 1],
+                            "into": rom[at + 2]})
+                at += 3
+            else:
+                raise SystemExit(
+                    f"EvosMoves: unknown evolution kind {kind} at 0x{at:06X}")
+        return out, at + 1
+
+    @staticmethod
+    def _learnset(rom, at):
+        out = []
+        while rom[at] != 0:
+            out.append((rom[at], rom[at + 1]))
+            at += 2
+            if len(out) > 32:
+                raise SystemExit("EvosMoves: a learnset with no terminator")
+        return out
+
+
+# --- growth rate, and what a level costs -------------------------------------
+
+# The growth-rate byte is offset 19 of the base-stats record and IS read from
+# the cartridge. The four curves it selects are **transcribed**, with their
+# citation, exactly as `battle-policy.md` records for the damage formula: the
+# cartridge stores them as `GrowthRateTable` coefficients that a macro packs,
+# and `plugins/gen1-link/src/romdata.rs::experience_for_level` already carries
+# the same four. Keeping one spelling in this repository matters more than
+# reading them twice.
+GROWTH_RATE_OFF = 19
+GROWTH_NAMES = {0: "medium fast", 3: "medium slow", 4: "fast", 5: "slow"}
+
+
+def growth_rate(rom, stats_at, dex):
+    return rom[stats_at + 28 * (dex - 1) + GROWTH_RATE_OFF]
+
+
+def experience_for_level(rate, level):
+    n = level
+    if rate == 4:
+        return 4 * n ** 3 // 5
+    if rate == 5:
+        return 5 * n ** 3 // 4
+    if rate == 3:
+        return max(0, (6 * n ** 3) // 5 - 15 * n * n + 100 * n - 140)
+    return n ** 3
+
+
+# --- TMs and HMs --------------------------------------------------------------
+
+# `TechnicalMachines` (pokered `data/moves/tmhm_moves.asm`): 50 TMs then 5 HMs,
+# one move number each. Located by its opening five — MEGA PUNCH, RAZOR WIND,
+# SWORDS DANCE, WHIRLWIND, MEGA KICK — which occur exactly once.
+TM_TABLE_HEAD = bytes([0x05, 0x0D, 0x0E, 0x12, 0x19])
+TM_COUNT, HM_COUNT = 50, 5
+# `constants/item_constants.asm`: HM_01 = $C4, TM_01 = $C9.
+HM_01_ITEM, TM_01_ITEM = 0xC4, 0xC9
+# Base-stats offset 20, seven bytes: bit (n-1) % 8 of byte (n-1) // 8 is set
+# when the species can learn TM/HM number n.
+TMHM_OFF = 20
+
+
+def technical_machines(rom):
+    hits = [o for o in find_all(rom, TM_TABLE_HEAD)
+            if all(1 <= rom[o + i] <= 165 for i in range(TM_COUNT + HM_COUNT))]
+    if len(hits) != 1:
+        raise SystemExit(
+            f"TechnicalMachines: {len(hits)} matches for its opening records, "
+            "expected 1")
+    at = hits[0]
+    return {i + 1: rom[at + i] for i in range(TM_COUNT + HM_COUNT)}, at
+
+
+def tm_item_id(n):
+    """The bag item id of TM/HM number `n` (1..50 are TMs, 51..55 are HMs)."""
+    return TM_01_ITEM + n - 1 if n <= TM_COUNT else HM_01_ITEM + n - TM_COUNT - 1
+
+
+def can_learn(rom, stats_at, dex, n):
+    b = rom[stats_at + 28 * (dex - 1) + TMHM_OFF + (n - 1) // 8]
+    return bool(b >> ((n - 1) % 8) & 1)
+
+
+# --- items lying on a map -----------------------------------------------------
+
+# `MapHeaderPointers` is at $01AE in bank 0 and is found by property — it is the
+# only offset in bank 0 whose 248 consecutive little-endian words all land in
+# $4000-$7FFF. `tools/pewter-chain/route_audit.py` established that and the
+# decoding of a map's object list below; this is the same walk, kept to the one
+# question "what items are lying on this map".
+MAP_HEADER_POINTERS = 0x01AE
+NUM_MAPS = 248
+
+
+def _map_header_banks(rom):
+    """`MapHeaderBanks`, disambiguated by making a known map decode sanely.
+
+    Several offsets hold 248 plausible bank bytes; only one of them makes
+    Viridian Forest (map `$33`) read as tileset 3 and 17x24 blocks.
+    """
+    for at in range(0x8000, 0x10000):
+        if not all(1 <= rom[at + i] < 0x40 for i in range(NUM_MAPS)):
+            continue
+        p = int.from_bytes(rom[MAP_HEADER_POINTERS + 2 * 0x33:
+                               MAP_HEADER_POINTERS + 2 * 0x33 + 2], "little")
+        h = rom[at + 0x33] * 0x4000 + (p - 0x4000)
+        if h + 3 < len(rom) and rom[h] == 3 and rom[h + 1] == 24 and rom[h + 2] == 17:
+            return at
+    raise SystemExit("could not identify MapHeaderBanks in this cartridge")
+
+
+def map_items(rom, m, banks=None):
+    """The item ids of every item ball on map `m`.
+
+    A map's object list is `count` then six bytes each; bit 7 of the text id
+    marks an item and one further byte is the item.
+    """
+    banks = banks if banks is not None else _map_header_banks(rom)
+    bank = rom[banks + m]
+    p = int.from_bytes(rom[MAP_HEADER_POINTERS + 2 * m:
+                           MAP_HEADER_POINTERS + 2 * m + 2], "little")
+    h = bank * 0x4000 + (p - 0x4000)
+    i = h + 9
+    conn = rom[i]
+    i += 1 + 11 * bin(conn).count("1")
+    o = bank * 0x4000 + (int.from_bytes(rom[i:i + 2], "little") - 0x4000)
+    o += 1                       # border block
+    o += 1 + 4 * rom[o]          # warps
+    o += 1 + 3 * rom[o]          # signs
+    n = rom[o]
+    o += 1
+    out = []
+    for _ in range(n):
+        txt = rom[o + 5]
+        o += 6
+        if txt & 0x40:
+            o += 2
+        elif txt & 0x80:
+            out.append(rom[o])
+            o += 1
+    return out
+
+
 # --- trainers ----------------------------------------------------------------
 
 # `TrainerNames`: `$50`-terminated class names, indexed from 1, opening
@@ -495,6 +717,32 @@ def item_prices(rom):
         return sum(((x >> 4) * 10 + (x & 15)) * 100 ** (2 - k)
                    for k, x in enumerate(b))
     return {i: bcd(rom[at + 3 * (i - 1):at + 3 * i]) for i in range(1, 100)}, at
+
+
+# `ItemNames`: `$50`-terminated names indexed from 1, opening MASTER BALL.
+ITEM_NAMES_HEAD = b"".join(
+    bytes([0x80 + ord(c) - ord('A')]) if c != ' ' else bytes([0x7F])
+    for c in "MASTER BALL"
+) + bytes([0x50])
+
+
+def item_names(rom):
+    for off in find_all(rom, ITEM_NAMES_HEAD):
+        out, i, ok = {}, off, True
+        for k in range(1, 100):
+            s, n = "", 0
+            while rom[i] != 0x50 and n < 16:
+                s += CHARMAP.get(rom[i], "")
+                i += 1
+                n += 1
+            if n >= 16 or not s:
+                ok = False
+                break
+            i += 1
+            out[k] = s
+        if ok and out.get(1) == "MASTER BALL" and out.get(4) == "POK BALL":
+            return out, off
+    raise SystemExit("could not locate ItemNames")
 
 
 def marts(rom):

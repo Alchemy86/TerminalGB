@@ -928,6 +928,15 @@ name = "gen1_catch_drill"
 path = "examples/gen1_catch_drill.rs"
 required-features = ["plugin-battle-control", "plugin-trainer", "plugin-agent"]
 
+# The LEARNING drill: what the game puts on screen when a Pokemon learns a move
+# or evolves, traced frame by frame, and whether the two modal interruptions can
+# be told apart. The same treatment catching.md gave the wild/trainer pair.
+# See docs/gen1/battling.md.
+[[example]]
+name = "gen1_learn_drill"
+path = "examples/gen1_learn_drill.rs"
+required-features = ["plugin-battle-control", "plugin-trainer"]
+
 # The LONG-RUN harness: the unattended-run stack end to end — milestones out of
 # a running machine, a durable log, a checkpoint another process resumes from,
 # the per-decision dataset, and the property the whole design rests on (a

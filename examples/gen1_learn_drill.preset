@@ -1,0 +1,124 @@
+# Battles for `examples/gen1_learn_drill.rs`.
+#
+# Each one exists to make the game ask a specific question, on the cheapest
+# route to it. The player's four moves are stated explicitly so the state at
+# the prompt is designed rather than inherited, and slot 1 is always the move
+# the drill will swing with — the driver presses A twice, which is FIGHT and
+# then the first move.
+#
+# CHANSEY at level 5 is the opponent throughout, for one reason: base
+# experience 255, the highest in the cartridge, against base attack 5 and base
+# defence 5, the lowest of each. One kill is 182 experience, it dies to two
+# HYPER BEAMs, and it cannot meaningfully hit back. The drill fights as many of
+# them as a level-up costs.
+#
+# **Level 5, not 10.** A level 10 CHANSEY is worth 364 and kills a level 6
+# BULBASAUR before the BULBASAUR gets through its 73 HP — measured, the first
+# run of this drill blacked out (`wIsInBattle` $FF).
+
+# ---------------------------------------------------------------------------
+# The move-learn prompt. BULBASAUR learns VINE WHIP at 13 and nothing else
+# between 8 and 19, so a level 12 holding four moves asks exactly once.
+#
+# **Two kills, not one, and that is measured rather than tuned.** A level 6
+# BULBASAUR fed one CHANSEY gains 182 experience and lands on level *8* — and
+# level 7's LEECH SEED is then never offered at all. Gen 1 announces one level
+# per battle and checks the learnset for the level it ended on, so crossing two
+# at once loses the move in between. Starting at 12 puts one boundary inside
+# the run and none beside it.
+# ---------------------------------------------------------------------------
+[learn-bulbasaur]
+description = A level 12 BULBASAUR with four moves, two kills from VINE WHIP
+
+player   = Bulbasaur
+level    = 12
+moves    = Hyper Beam, Growl, Tackle, Leer
+nickname = LEARNER
+
+wild     = Chansey
+level    = 5
+
+# ---------------------------------------------------------------------------
+# The evolution prompt, with no move-learn anywhere near it: BULBASAUR evolves
+# at 16 and IVYSAUR learns nothing at 16, so the only thing on screen is the
+# evolution.
+# ---------------------------------------------------------------------------
+[evolve-bulbasaur]
+description = A level 15 BULBASAUR, one kill from becoming an IVYSAUR
+
+player   = Bulbasaur
+level    = 15
+moves    = Hyper Beam, Growl, Tackle, Leer
+nickname = LEARNER
+
+wild     = Chansey
+level    = 5
+
+# ---------------------------------------------------------------------------
+# Both prompts in one level-up. ABRA evolves at 16 and KADABRA learns
+# CONFUSION at 16, so this is the case that says whether the evolved form's
+# move for the level it evolved on is offered at all — and, if it is, what
+# order the two modal interruptions arrive in.
+# ---------------------------------------------------------------------------
+[evolve-and-learn-abra]
+description = A level 15 ABRA holding four moves: evolution AND a new move at 16
+
+player   = Abra
+level    = 15
+moves    = Hyper Beam, Growl, Tackle, Leer
+nickname = LEARNER
+
+wild     = Chansey
+level    = 5
+
+# ---------------------------------------------------------------------------
+# An opponent and NOTHING ELSE. A preset with no `player =` line does not
+# touch the party, so it has nothing to restore afterwards — which is what
+# lets experience accumulate across several battles. The scenarios above set
+# the party up once; this one is what they are then fed.
+# ---------------------------------------------------------------------------
+[chansey]
+description = A wild level 5 CHANSEY: 182 experience and no threat
+
+wild     = Chansey
+level    = 5
+
+# ---------------------------------------------------------------------------
+# The claim `learn_table.py` rests on, put in front of the cartridge: a wild
+# Pokemon's four moves are a function of its species and its level and of
+# nothing else (`WriteMonMoves`). TENTACOOL is the sharpest case in the
+# cartridge — eight level-up entries, so at level 40 five of them have already
+# pushed the base move out.
+# ---------------------------------------------------------------------------
+[moveset-tentacool]
+description = A wild level 40 TENTACOOL, five learnset entries past full
+
+player   = Bulbasaur
+level    = 50
+moves    = Hyper Beam, Growl, Tackle, Leer
+nickname = LEARNER
+
+wild     = Tentacool
+level    = 40
+
+[moveset-nidorino]
+description = A wild level 40 NIDORINO
+
+player   = Bulbasaur
+level    = 50
+moves    = Hyper Beam, Growl, Tackle, Leer
+nickname = LEARNER
+
+wild     = Nidorino
+level    = 40
+
+[moveset-pidgeotto]
+description = A wild level 30 PIDGEOTTO
+
+player   = Bulbasaur
+level    = 50
+moves    = Hyper Beam, Growl, Tackle, Leer
+nickname = LEARNER
+
+wild     = Pidgeotto
+level    = 30
