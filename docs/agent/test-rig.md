@@ -78,20 +78,35 @@ failures failed, and — when two arms answered the same prompts — how often t
 left **the same** four moves, which is not the same question as both being
 right.
 
-### It says how far it has got, by default
+### It says how far it has got, by default — on STDOUT
 
-A long run prints a progress line to **stderr** every five seconds and appends
-the same tick to `<out>/progress.ndjson`:
+A long run prints a progress tick every five seconds and appends the same tick
+to `<out>/progress.ndjson`:
 
 ```
-progress 1200/2700 (44.4%) · CHARMANDER/random 300/300 · 6m12s elapsed · ~7m50s left
+progress[1]{done,total,pct,cell,cell_done,cell_total,elapsed,eta}:
+  1200,2700,44.4,CHARMANDER/random,300,300,6m12s,7m50s
 ```
+
+**It goes to stdout, not stderr**, which is a deliberate departure from the AXI
+rule that progress belongs on stderr — and it is the same correction `9d02819`
+made to the other two agent-facing front ends. An agent drives this through a
+shell and does not read stderr, so a rig that reports progress only there is
+silent to the thing it exists to serve. It is safe beside the report because it
+is TOON with a name of its own: nothing can mistake a `progress[1]{…}` block
+for a row of the result, and an agent that wants only the result can drop every
+block with that name.
+
+It is a one-row table rather than the object form because a tick is a *sample*
+and a stream of samples is a collection — every tick carries its own header, so
+any one of them parses on its own. Two lines a tick, every five seconds, is what
+being followable costs.
 
 On by default, because a run that prints nothing until it finishes cannot be
-told from a wedged one, and because this rig exists to be driven by things that
-are not people. `--quiet` silences the human line; the file is written either
-way. The estimate is a linear extrapolation and is labelled one: the cells are
-not equally expensive, so it moves as the run crosses a cell boundary.
+told from a wedged one. `--quiet` silences it; **the file is written either
+way**, so a `--quiet` run is still followable by anything that can read a file.
+The estimate is a linear extrapolation and is labelled one: the cells are not
+equally expensive, so it moves as the run crosses a cell boundary.
 
 ### The three things it is careful about
 
@@ -286,6 +301,55 @@ absolute rates differ, the distillation is subject-independent and the fights
 merely have different ceilings. If the gap moves, something subject-specific is
 happening in the player under test. **When the sample cannot separate the two,
 it says so** rather than picking the flattering reading.
+
+### 4a. The rig claims the throughput work, and it was measured rather than assumed
+
+`corpus` is the fair comparator — the same emulator doing the same work on the
+same entry states — and the bar is that the rig is **as fast or faster**. Three
+things this repository already paid for, checked against `ab` specifically. All
+figures are the same fixed job: **60 attempts of pewter link 04, from the same
+600-state entry pool, at the same seeds and the same phase spread 3001**, on a
+20-core box (8 P + 12 E) shared with other crews, load average stated because a
+wall clock on a shared box measures the box's afternoon.
+
+| | measured | ratio, and of what |
+|---|---|---|
+| **fan-out** | 41.87 s at `--workers 1`, 3.65 s at `--workers 16`, load 1.67/1.52 | **11.47x** — wall clock of the identical 60-attempt run, serial against 16-way |
+| **collector mode** | 42.07 s with `collecting()` + `set_render_pixels(false)` + `set_render_audio(false)`, 51.88 s with all three removed, `--workers 1`, load 3.92 | **1.23x** — wall clock of the same 60 attempts, drawing for nobody against not drawing |
+| **the battery** | 0 `.sav`/`.gbsave` files, 24 KB written in total | not a ratio: the machine is built with no save path, so there is nothing to fsync |
+
+The declaration order matters and is right: pixels and audio are turned off
+**before** `phase_start`, because a phase offset averages half its spread — 1,500
+frames against an attempt's ~3,500 — so a third of everything the program
+emulates happens before `ScenarioRun` exists.
+
+Two wastes were found that neither tool had been measured for:
+
+* **The entry pool was copied, once per subject and again per worker.** 600 save
+  states at 142 KB is 85 MB; sixteen workers is 1.4 GB of memcpy for data
+  nothing mutates, and on the three-subject, three-arm plan it is nine cells'
+  worth of it. It is one `Arc` and a per-subject list of indices now. Measured,
+  interleaved before/after at load 1.98 and 4.22: **wall 4.28 s -> 3.85 s and
+  4.27 s -> 3.85 s (1.11x), peak RSS 1,911,508 KB -> 160,560 KB (11.9x less).**
+  The same correction is applied to `corpus`, whose trajectory and final-state
+  hashes are byte-identical either side of it.
+* **The lead species was read serially for every state in the pool**, one whole
+  `Gameboy` each — including for plans where no subject filters by lead and the
+  answer is never consulted. It is skipped entirely in that case and fanned
+  across the workers when it is needed.
+
+**Parity, both sides in seconds.** Five interleaved rounds of the job above at
+16 workers, load rising 3.2 -> 17.4 as another crew fanned out: `ab`
+3.86 / 8.07 / 7.67 / 7.29 / 8.28 s against `corpus`
+7.72 / 8.34 / 8.23 / 9.00 / 9.37 s — `ab` faster in five rounds of five, the
+closest pair 8.07 against 8.34. Pinned to one P-core at `--workers 1` over 20
+attempts, which is contention-immune because it is CPU seconds: `ab`
+13.78 / 13.56 / 13.43 against `corpus` 13.73 / 13.48 / 13.39. So `ab` is **0.3 %
+behind at one worker** — it reads the lead's four move slots out of every
+finished state, which is the rig's own product — and **ahead at fan-out**,
+because it writes no per-attempt recording. `--workers` also used to be ignored
+whenever the value typed happened to equal `cores - 4`; comparing against the
+default cannot tell "not given" from "given the default", so there is a flag.
 
 ---
 

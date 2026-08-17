@@ -1910,6 +1910,11 @@ struct Args {
     to: usize,
     quiet: bool,
     workers: u32,
+    /// Whether `--workers` was actually typed. Comparing the value against
+    /// `default_workers()` cannot tell "not given" from "given the default",
+    /// so a plan's own `workers` used to survive an explicit `--workers 16` on
+    /// a twenty-core box. A flag says what was meant.
+    workers_given: bool,
     primitive: bool,
     paths: bool,
     start_dir: Option<PathBuf>,
@@ -1965,7 +1970,10 @@ fn parse(args: &[String]) -> Args {
             "--seeds" => a.seeds = next(i).parse().unwrap_or(1).max(1),
             "--from" => a.from = next(i).parse().unwrap_or(1),
             "--to" => a.to = next(i).parse().unwrap_or(12),
-            "--workers" => a.workers = next(i).parse().unwrap_or(1).max(1),
+            "--workers" => {
+                a.workers = next(i).parse().unwrap_or(1).max(1);
+                a.workers_given = true;
+            }
             "--quiet" => {
                 a.quiet = true;
                 i += 1;
@@ -2554,7 +2562,10 @@ fn cmd_corpus(a: &Args) {
     // A pool of entry states rather than one, when the caller has them. Every
     // attempt takes `seed % pool.len()`, so which state a seed used is
     // recoverable from the seed alone and the corpus stays reproducible.
-    let pool = entry_pool(a);
+    // Shared, never copied per worker: the pool is read-only and a link-04
+    // pool is 85 MB, so cloning it into sixteen workers was 1.4 GB of memcpy
+    // and peak RSS to match. Same correction as `run_arm`'s.
+    let pool = std::sync::Arc::new(entry_pool(a));
     let workers = a.workers.max(1);
     println!(
         "entry states: {}",
@@ -3321,7 +3332,7 @@ fn cmd_ab(a: &Args) {
     // answer to its prompt is. See `abrig::Expectation`: a state with no file
     // beside it is simply not scored on that outcome.
     let mut annotated = 0usize;
-    let states: Vec<(Vec<u8>, Option<abrig::Expectation>)> = files
+    let states: std::sync::Arc<Vec<(Vec<u8>, Option<abrig::Expectation>)>> = files
         .into_iter()
         .map(|p| {
             let b = std::fs::read(&p).expect("entry state");
@@ -3338,18 +3349,14 @@ fn cmd_ab(a: &Args) {
             }
             (b, e)
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     if annotated > 0 {
         println!(
             "prompts    {annotated} of {} entry state(s) carry an expected answer",
             states.len()
         );
     }
-    // Reading the lead out of every state costs one machine each; on a 700
-    // state pool it is under a second and it is the whole of "a different
-    // starter is a flag rather than a rewrite".
-    let leads: Vec<u8> = states.iter().map(|(b, _)| lead_species(&rom, b)).collect();
-
     let mut subjects = plan.subjects.clone();
     if subjects.is_empty() {
         subjects.push(abrig::Subject {
@@ -3365,6 +3372,36 @@ fn cmd_ab(a: &Args) {
         default_workers()
     } else {
         plan.workers
+    };
+
+    // **Read the lead only when a subject asks to be filtered by one, and read
+    // them across the workers when it does.** Each read is a whole machine —
+    // the cartridge is cloned into it and a save state loaded — and a plan with
+    // no `lead_species` anywhere never consults the answer, so on the ordinary
+    // single-subject plan this is the difference between 600 machines and none.
+    // When it *is* needed it is embarrassingly parallel and was serial.
+    let leads: Vec<u8> = if subjects.iter().any(|s| s.lead_species.is_some()) {
+        let out = std::sync::Mutex::new(vec![0u8; states.len()]);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|sc| {
+            for _ in 0..workers.min(states.len().max(1) as u32) {
+                let (out, next, states, rom) = (&out, &next, &states, rom.clone());
+                sc.spawn(move || {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    loop {
+                        let i = next.fetch_add(1, Relaxed);
+                        if i >= states.len() {
+                            break;
+                        }
+                        let v = lead_species(&rom, &states[i].0);
+                        out.lock().unwrap()[i] = v;
+                    }
+                });
+            }
+        });
+        out.into_inner().unwrap()
+    } else {
+        vec![0u8; states.len()]
     };
 
     // **Progress is on by default and silenced by a flag, never the reverse.**
@@ -3391,11 +3428,17 @@ fn cmd_ab(a: &Args) {
             use std::sync::atomic::Ordering::Relaxed;
             let mut f = std::fs::File::create(&path).ok();
             let emit = |live: &abrig::Live, f: &mut Option<std::fs::File>| {
-                let (human, json) = live.lines(began.elapsed().as_secs_f64());
-                // stderr, so stdout stays the report; the same tick also goes
-                // to the file, so something other than a person can follow it.
+                let (toon, json) = live.lines(began.elapsed().as_secs_f64());
+                // **stdout, because an agent drives this through a shell and
+                // does not read stderr** — the same correction `9d02819` made
+                // to the other two agent-facing front ends. It is safe to put
+                // it beside the report because it is TOON with a name of its
+                // own (`progress[1]{…}`), so nothing can mistake a tick for a
+                // row of the result. The same tick also goes to the file, so a
+                // run can be followed after the fact.
                 if !quiet {
-                    eprintln!("{human}");
+                    println!("{toon}");
+                    let _ = std::io::stdout().flush();
                 }
                 if let Some(f) = f.as_mut() {
                     let _ = writeln!(f, "{json}");
@@ -3416,17 +3459,18 @@ fn cmd_ab(a: &Args) {
     };
 
     for sub in &subjects {
-        let kept: Vec<&(Vec<u8>, Option<abrig::Expectation>)> = states
-            .iter()
-            .zip(&leads)
-            .filter(|(_, l)| sub.lead_species.map(|w| **l == w).unwrap_or(true))
-            .map(|(st, _)| st)
-            .collect();
-        let pool: Vec<Vec<u8>> = kept.iter().map(|(b, _)| b.clone()).collect();
-        let expect: Vec<Option<abrig::Expectation>> =
-            kept.iter().map(|(_, e)| e.clone()).collect();
-        pool_sizes.insert(sub.name.clone(), pool.len());
-        if pool.is_empty() {
+        // **A subject is a list of indices into the one shared pool, not a copy
+        // of it.** The pool used to be cloned once per subject and then again
+        // per worker: on the three-subject, three-arm, 700-state plan that is
+        // nine cells x sixteen workers x 33 MB of save states, ~4.8 GB of
+        // memcpy for data nobody mutates. `Arc` costs an atomic instead.
+        let idx: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(
+            (0..states.len())
+                .filter(|&i| sub.lead_species.map(|w| leads[i] == w).unwrap_or(true))
+                .collect(),
+        );
+        pool_sizes.insert(sub.name.clone(), idx.len());
+        if idx.is_empty() {
             eprintln!(
                 "subject {:?}: no entry state in the pool has that lead — skipped",
                 sub.name
@@ -3441,8 +3485,8 @@ fn cmd_ab(a: &Args) {
                 &rom,
                 &plan,
                 arm,
-                &pool,
-                &expect,
+                &states,
+                &idx,
                 &dir,
                 workers,
                 a.primitive,
@@ -3535,7 +3579,7 @@ fn build_plan(a: &Args, rom: &Cart) -> abrig::Plan {
     if a.idle_spread != IDLE_SPREAD {
         p.idle_spread = a.idle_spread;
     }
-    if a.workers != default_workers() {
+    if a.workers_given {
         p.workers = a.workers;
     }
     if let Some(s) = &a.split {
@@ -3588,8 +3632,8 @@ fn run_arm(
     rom: &Cart,
     plan: &abrig::Plan,
     arm: &abrig::ArmSpec,
-    pool: &[Vec<u8>],
-    expect: &[Option<abrig::Expectation>],
+    states: &std::sync::Arc<Vec<(Vec<u8>, Option<abrig::Expectation>)>>,
+    idx: &std::sync::Arc<Vec<usize>>,
     dir: &Path,
     workers: u32,
     primitive: bool,
@@ -3610,8 +3654,10 @@ fn run_arm(
             let dir = dir.join(format!("w{w}"));
             let (runs, seed0, spread) = (plan.runs, plan.seed0, plan.idle_spread);
             let player = arm.player.clone();
-            let pool = pool.to_vec();
-            let expect = expect.to_vec();
+            // Shared, not copied: see the note where `idx` is built. The only
+            // per-attempt clone left is the one entry state a worker is about
+            // to load into a machine, which it consumes.
+            let (states, idx) = (states.clone(), idx.clone());
             sc.spawn(move || {
                 use std::sync::atomic::Ordering::Relaxed;
                 loop {
@@ -3624,7 +3670,8 @@ fn run_arm(
                     // state, which driver seed, how far into the world the
                     // attempt starts — all a function of the seed alone, so
                     // two arms at seed N play the same fight.
-                    let entry = pool[(seed as usize) % pool.len()].clone();
+                    let e = idx[(seed as usize) % idx.len()];
+                    let entry = states[e].0.clone();
                     let idle = phase_for(seed, spread);
                     let mk: DriverFactory = match &player {
                         abrig::Player::Expert => Box::new(move |name: &str| {
@@ -3657,9 +3704,7 @@ fn run_arm(
                     // What the player left the party holding, and whether the
                     // pool says that is right. One machine, no emulated frames.
                     let moves = lead_moves(&rom, &o.state);
-                    let correct = expect[(seed as usize) % pool.len()]
-                        .as_ref()
-                        .map(|e| e.satisfied_by(&moves));
+                    let correct = states[e].1.as_ref().map(|x| x.satisfied_by(&moves));
                     tot[0].fetch_add(o.wall_ms as u64, Relaxed);
                     tot[1].fetch_add(o.emulate_ms as u64, Relaxed);
                     tot[2].fetch_add(o.setup_ms as u64, Relaxed);

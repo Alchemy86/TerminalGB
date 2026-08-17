@@ -837,7 +837,14 @@ impl Live {
         self.cell_done.fetch_add(1, Relaxed);
     }
 
-    /// One line of each kind. `elapsed` is seconds since the run began.
+    /// The tick, in both shapes: **TOON for stdout** and JSON for the file.
+    /// `elapsed` is seconds since the run began.
+    ///
+    /// The TOON block is a one-row table rather than the object form, because a
+    /// tick is a *sample* and a stream of samples is a collection: an agent
+    /// tailing stdout gets the same `progress[1]{…}` header every time and can
+    /// parse any one of them on its own. Two lines a tick is the price of the
+    /// run being followable at all — see `docs/agent/test-rig.md` §4a.
     ///
     /// The estimate is a plain linear extrapolation of attempts completed, and
     /// it is **labelled an estimate** because the cells are not equally
@@ -860,15 +867,17 @@ impl Live {
         } else {
             f64::NAN
         };
-        let human = format!(
-            "progress {done}/{} ({pct:.1}%) · {label} {cd}/{ct} · {} elapsed · ~{} left",
+        let eta_s = if eta.is_finite() {
+            hms(eta)
+        } else {
+            "?".to_string()
+        };
+        let cell = if label.is_empty() { "-" } else { &label };
+        let toon = format!(
+            "progress[1]{{done,total,pct,cell,cell_done,cell_total,elapsed,eta}}:\n\
+             \x20 {done},{},{pct:.1},{cell},{cd},{ct},{},{eta_s}",
             self.total,
             hms(elapsed),
-            if eta.is_finite() {
-                hms(eta)
-            } else {
-                "?".into()
-            }
         );
         let json = format!(
             "{{\"elapsed_s\":{elapsed:.1},\"done\":{done},\"total\":{},\
@@ -881,7 +890,7 @@ impl Live {
                 "null".into()
             }
         );
-        (human, json)
+        (toon, json)
     }
 }
 
