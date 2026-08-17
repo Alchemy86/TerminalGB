@@ -27,7 +27,7 @@ evolution taken.
 | of those, genuine **decisions** | **4** | **5** |
 | decisions that are a **decline** | **1** | **2** |
 | decisions that are a replacement | 3 | 3 |
-| events reached and played out | **7 of 7** | **7 of 7** |
+| events reached, played out, and the party verified | **7 of 7** | **7 of 7** |
 | corpus rows produced | **16** | **17** |
 | wall clock for the whole line | 6.3 s | 6.5 s |
 
@@ -118,6 +118,11 @@ being forgotten.
 
 The drill also cross-checks its own arithmetic: the plan says which slot the move to forget is in,
 and the cursor says which slot it was found at. A disagreement is reported.
+
+**Teeth, proven rather than claimed.** Editing one plan entry to name the wrong move to forget —
+EMBER where the rule chose LEER — turns the run red on the party read-back
+(`moves [SCRATCH, GROWL, EMBER, LEER] not [SCRATCH, GROWL, EMBER, RAGE]`) and the binary exits 1.
+The screens along the way look entirely normal.
 
 ---
 

@@ -1700,19 +1700,24 @@ mod drill {
         .map_err(|e| format!("{}: {e}", index.display()))?;
 
         println!();
+        // **Say what was checked, not just how many passed.** An evolving
+        // event has its level and its four moves verified and its form not, so
+        // a bare "7 of 7 verified" is a headline somebody could quote as more
+        // than it is.
         println!(
-            "   {done} of {asked} event(s) played out and verified against \
-             the cartridge{}",
+            "   {done} of {asked} event(s) played out; level and moves verified \
+             against the cartridge{}",
             if skipped > 0 {
-                format!("; {skipped} event(s) skipped by --level")
+                format!("; {skipped} skipped by --level")
             } else {
                 String::new()
             }
         );
         if unchecked > 0 {
             println!(
-                "   {unchecked} event(s) evolve, so the form is not checked - \
-                 the restore lands between the animation and the commit"
+                "   of those, {unchecked} evolve, so the FORM is not checked - \
+                 the plugin's restore lands between the evolution animation \
+                 and its commit"
             );
         }
         println!("   {} corpus row(s) -> {}", rows.len(), corpus.display());
