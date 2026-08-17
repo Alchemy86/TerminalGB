@@ -1359,7 +1359,8 @@ describes.
 
 | film | what it is |
 |---|---|
-| `pewter-chain-01-11-600agents.mp4` | **links 01 to 11 in one continuous cut**, 600 agents, 1280x720, 3 min 36 s at **12×, 60 fps**. The current one. Battles carry a halo, so the frozen crowd link 11 produces has its reason on screen. |
+| `pewter-chain-01-14-600agents.mp4` | **the whole journey: links 01 to 14 in one continuous cut**, ending in Pewter City. 600 agents, 1280x720, 3 min 21 s at **12×, 60 fps**, `--cover 0.90`. The current one. It carries a **stage timeline** with a playhead, so the long middle says what it is instead of reading as a stuck picture. |
+| `pewter-chain-01-11-600agents.mp4` | links 01 to 11, 3 min 36 s — superseded, and superseded by a film that is *shorter* while covering three more links (see `--cover` below). It stops at the forest's door, which is why a viewer asked where the bug catchers were. |
 | `pewter-chain-01-10-600agents.mp4` | the same cut over the ten links that certify at 3,000/3,000, 47.6 s — the shorter half of the length question below. |
 | `pewter-chain-01-03-600agents.mp4` | the three-link cut this all started from, 7.2 s, superseded. |
 | `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The columns, the bottlenecks and the ledges are the picture. |
@@ -1373,30 +1374,35 @@ prev=
 for l in 01-new-game 02-leave-the-house 03-oak-takes-you-to-the-lab \
          04-take-a-starter 05-the-rival-battle 06-cross-route-1 \
          07-collect-oaks-parcel 08-carry-it-back-to-pallet \
-         09-receive-the-pokedex 10-back-to-viridian 11-train-for-the-forest; do
+         09-receive-the-pokedex 10-back-to-viridian 11-train-for-the-forest \
+         12-heal-and-climb-route-2 13-cross-viridian-forest \
+         14-arrive-in-pewter; do
   cargo run --release --features scenario --example pewter_chain -- corpus \
       --rom <blue.gb> --scenario scenarios/pewter/$l.json --runs 600 --exits 600 \
-      --workers 6 --paths --out target/film11/${l%%-*} ${prev:+--start-dir $prev}
-  prev=target/film11/${l%%-*}/exits
+      --workers 8 --paths --out target/film14/${l%%-*} ${prev:+--start-dir $prev}
+  prev=target/film14/${l%%-*}/exits
 done
-python3 tools/pewter-chain/chain_tracks.py --out target/film11/tracks \
-    01-new-game:target/film11/01 … 11-train-for-the-forest:target/film11/11
+python3 tools/pewter-chain/chain_tracks.py --out target/film14/tracks \
+    01-new-game:target/film14/01 … 14-arrive-in-pewter:target/film14/14
 # --speed states the PACE and lets the runtime fall out of the material, which
-# is the right direction round. See below.
-python3 tools/pewter-chain/swarm_film.py target/film11/tracks \
-    --out target/film11/frames --speed 12 --fps 60 --cover 0.99 --width 1280 \
-    --title "THE PEWTER CHAIN 01-11" --method "…"
-ffmpeg -y -framerate 60 -i target/film11/frames/f%05d.png \
-    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p pewter-chain-01-11-600agents.mp4
+# is the right direction round. `--dry-run` first: it prints the stage table and
+# the --cover trade-off in seconds, and rendering is half an hour.
+python3 tools/pewter-chain/swarm_film.py target/film14/tracks \
+    --out target/film14/frames --speed 12 --fps 60 --cover 0.90 --width 1280 \
+    --title "THE PEWTER CHAIN 01-14" --method "…"
+ffmpeg -y -framerate 60 -i target/film14/frames/f%05d.png \
+    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p pewter-chain-01-14-600agents.mp4
 ```
 
 ### 11a. What it looks like
 
-Six stills from the eleven-link cut, in
-[`chain-stills/`](chain-stills/) — because everything else on this page is a
-number, and a reader could not see the swarm at all. They are frames of the
-film, downscaled to 900 px and quantised to 64 colours so the set is 752 KB
-rather than 5 MB; the videos stay out of git.
+Eight stills in [`chain-stills/`](chain-stills/) — because everything else on
+this page is a number, and a reader could not see the swarm at all. **1-6 are
+from the eleven-link cut and 7-8 from the fourteen-link one**, which is where
+the parts of the journey that did not exist until links 12-14 certified are:
+the forest and its bug catchers, and Pewter City. They are frames of the film,
+downscaled to 900 px and quantised to 64 colours so the set is 952 KB rather
+than 5 MB; the videos stay out of git.
 
 ![600 agents crossing Route 1 as a column, wild-battle halos in the grass](chain-stills/3-route-1-crossing.png)
 
@@ -1421,6 +1427,128 @@ game data.
 | [4 — pulled back over Route 1](chain-stills/4-route-1-pulled-back.png) | The camera at **67 tiles across**, the whole route in frame with 309 agents in wild battles. Nobody authored this shot — it fits the 5th-95th percentile of the swarm, so the zoom *is* how spread out the field is. |
 | [5 — the training grind](chain-stills/5-the-training-grind.png) | Link 11, and the reason it owns the runtime: **396 of 597 agents in wild battles at once**, a solid red mass in one patch of Route 1's grass, with a thin stream walking north to heal at the Pokémon Center inset. Without the halo this frame is a swarm frozen for no reason. |
 | [6 — the thinning tail](chain-stills/6-the-thinning-tail.png) | 41 emulated minutes in, **12 of 600 still running**. The honest half of the `--cover` finding below: the back of this cut is a draining crowd, because link 11's own length is long-tailed. |
+| [7 — the forest, and its bug catchers](chain-stills/7-the-forest-and-its-bug-catchers.png) | *Fourteen-link cut, 30.4 emulated minutes in.* **Viridian Forest is the map at the top left**, and the orange halos scattered across it are the bug catchers: `in a battle: 50 trainer`, against 118 red wild encounters everywhere else. Exactly one of the forest's three trainers is unavoidable (§3), so those 50 orange rings are 50 agents each having the one compulsory fight of the whole leg. 144 agents are still on link 11 while 124 are in here — and the camera is at **156 tiles across**, its widest possible, because that is what holding both takes. |
+| [8 — arriving in Pewter City](chain-stills/8-arriving-in-pewter.png) | *The last frame.* The **gold marker reading 540** sits on the Pewter City boundary — the tile every agent finishes on — with Pewter itself the strip along the top and the north end of Route 2 below it, and red halos where the stragglers are still fighting their way up. `540/600 arrived`, `60/600 agents live`, and `51 agent(s) off frame` because the camera is 28 tiles wide here and the rest of the swarm is still in the forest. Without the marker this frame has nobody in Pewter City in it, because an agent stops being drawn the moment it arrives. |
+
+### 11b. What each stage costs, and the only honest lever
+
+**All 600 agents ran all fourteen links** in the corpus this cut is made of —
+600/600 at every link, 600 distinct trajectories at every link, chained exit to
+entry so agent *s* is one playthrough. `swarm_film.py --dry-run` prints the
+table below, so it is measured on the same tracks the film is drawn from rather
+than transcribed:
+
+| lk | stage | median | agent-time | on screen | covered |
+|---:|---|---:|---:|---:|---:|
+| 1 | new-game | 5.0 s | 0.3% | 0.2% | 100.0% |
+| 2 | leave-the-house | 13.1 s | 0.7% | 0.5% | 94.9% |
+| 3 | oak-takes-you-to-the-lab | 32.1 s | 1.7% | 1.3% | 96.1% |
+| 4 | take-a-starter | 30.0 s | 1.6% | 1.3% | 100.0% |
+| 5 | the-rival-battle | 114.3 s | 6.0% | 4.7% | 99.2% |
+| 6 | cross-route-1 | 85.7 s | 4.4% | 3.9% | 97.0% |
+| 7 | collect-oaks-parcel | 24.3 s | 1.2% | 0.1% | 98.0% |
+| 8 | carry-it-back-to-pallet | 81.1 s | 4.1% | 4.0% | 98.4% |
+| 9 | receive-the-pokedex | 17.9 s | 0.9% | 0.0% | — |
+| 10 | back-to-viridian | 78.8 s | 4.0% | 3.6% | 99.7% |
+| **11** | **train-for-the-forest** | **1057.6 s** | **58.2%** | **64.7%** | 82.2% |
+| 12 | heal-and-climb-route-2 | 121.2 s | 6.3% | 0.0% | — |
+| 13 | cross-viridian-forest | 175.6 s | 9.1% | 15.6% | 66.4% |
+| 14 | arrive-in-pewter | 31.0 s | 1.5% | 0.0% | — |
+
+**Two share columns, because they answer different questions and merging them
+is how a share goes wrong.** *agent-time* is the stage's share of all the
+emulated time the swarm spends — a property of the chain, and the honest answer
+to "how much of this journey is the grind". *on screen* is the share of output
+frames on which that stage is what most of the *live* swarm is doing, which is
+the timeline's own partition and therefore what a viewer watches. They diverge
+in the back half because **an agent that finishes stops being drawn**, so the
+surviving population drifts towards the later links: link 13 is 9.1% of the
+journey and 15.6% of the film, and links 12 and 14 are real stages that are
+never the plurality of anybody — which is why they have no segment on the
+timeline and are still in the HUD's per-link bars every frame.
+
+**`--cover` cuts stragglers, never a stage — measured, not assumed.** The
+training stretch is **130 s of film at every cover value**, because it is the
+same stretch of emulated time either way; all `--cover` decides is how much
+thinning tail follows it. The trade-off, printed by `--dry-run`:
+
+| `--cover` | film | runtime at 12× | agents seen reaching Pewter | still going at the end |
+|---|---:|---:|---:|---:|
+| 0.7 | 34.6 emulated min | 2 m 52 s | 421/600 | 179 |
+| 0.8 | 37.4 min | 3 m 06 s | 481/600 | 119 |
+| **0.90** | **40.5 min** | **3 m 21 s** | **541/600** | **59** |
+| 0.95 | 43.0 min | 3 m 34 s | 571/600 | 29 |
+| 0.99 | 49.4 min | 4 m 06 s | 595/600 | 5 |
+| 1.0 | 54.2 min | 4 m 30 s | 600/600 | 0 |
+
+**0.90 is the choice**: a film that ends in Pewter City has to land the ending
+for the mass, 90% is where that happens, and at 3 m 21 s it is *shorter than the
+eleven-link cut it replaces* while carrying three more links. Below 0.9 the
+saving is seconds and the cost is agents who never arrive on screen.
+
+**And the pace is not a lever here.** Running link 11 faster than the walking
+would make the film lie about the single most interesting thing this chain has
+measured, so it is not done; §"Runtime and speed are not independent" is the
+arithmetic that leaves `--cover` as the only dial.
+
+**The timeline is what stops the long middle reading as a stuck picture.** A
+strip along the foot of the view, one pixel column per output frame, coloured
+by that frame's stage, labelled, with a playhead crossing it and a `now: link 11
+train-for-the-forest — 65% of this film` caption above. The segment widths *are*
+the "on screen" column, so the picture and the table cannot disagree.
+
+#### A fourteen-link cut cannot show the whole swarm, and that is geometry
+
+Coverage falls from **99.3%** on the eleven-link cut to **82.9%** here — 85.9%
+of it is the extra links and the last 3 points are the camera also following the
+agents that have arrived, which is the next section. **43.1% of frames are below
+90% covered, and none of it is camera tuning.** `report_impossible` measures the
+reason directly: the camera may not widen past the world it crops from (a wider
+crop is black bars, not more picture), the atlas window for fourteen links is
+**2496x3936**, so the tallest view available is **1755 px** — and the 5–95 swarm
+box **does not fit in it on 5,207 of 12,091 frames (43.1%), every one of them
+too tall**, against 5,211 frames below 90% covered. The two match to four
+frames: the shortfall is *entirely* geometric. On the eleven-link cut the same
+measurement is **0 frames**, which is why it scored 99.3% with identical camera
+rules.
+
+The cause is the chain continuing: while the slow half is still pacing Route 1's
+grass at atlas *y* 4112, the fast half is already in Viridian Forest at *y*
+2272, over two thousand pixels away. In the eleven-link cut those leaders simply
+*ended* and stopped being drawn. The HUD's off-frame line counts them every
+frame, which is the condition for this being honest rather than flattering.
+
+#### A film that ends in Pewter City showed nobody in Pewter City
+
+Two defects with one cause, both found by measuring rather than by watching, and
+both of them the price of the film outliving the eleven-link chain it was built
+for.
+
+**An agent stops being drawn the frame after its track ends, and link 14's goal
+fires the instant the player crosses the boundary.** So its entire stay in
+Pewter is one row of its track — and measured on this corpus **all 600 agents
+finish on the same tile**, `PEWTER_CITY (18, 35)`, so at most *one* is ever
+visible there. The ending was invisible by construction. An agent that completes
+the last link now leaves a **counted gold marker** on the tile it arrived at,
+and the HUD carries an `N/600 arrived` row. It is deliberately not a sprite (six
+hundred sprites on one tile is one sprite) and deliberately not folded into the
+"agents live" count — an arrived agent is done, not live, and merging the two
+would misreport both.
+
+**And the camera never went there.** With finished agents excluded from what it
+follows, the Pewter arrival tile is in frame on **0 of 12,091 frames**: the
+camera's northernmost view top is 998 px against the tile's 952, so it comes
+within 46 px and never arrives, because the slow half is always 2,400 px south
+in Route 1's grass and the 5–95 box always contains it. **"The majority" had
+silently come to mean "the surviving minority."** Counting arrived agents at
+their arrival tile puts Pewter in frame for the **last 1,033 frames — 17 s**,
+which is the arrival sequence.
+
+None of the six camera rules changes; only the population their 5–95 box is
+pointed at. It is a real trade and it is stated rather than hidden: coverage of
+the *live* agents falls **85.9% → 82.9%** and its 1st percentile **58.6% →
+32.8%**, all of it in those last seconds where 541 arrived agents outvote 59
+live stragglers. `--no-follow-arrivals` reproduces the older shot exactly.
 
 ### Runtime and speed are not independent, and one link owns the runtime
 
@@ -1458,33 +1586,42 @@ of them being picked quietly:
   rounding up, and the cut is minutes longer because the training grind really
   is that long.
 
-**Links 12-14 certified while this was being cut**, so a fourteen-link film to
-Pewter City is now possible and is not this one. Its length follows from the same
-identity and nothing else: the fourteen-link chain adds link 12's 19,050, link
-13's 13,794 and link 14's 1,152 median frames, so roughly **another 9 emulated
-minutes and about 45 s of film** on top of 01-11 — the shape of the problem is
-unchanged, because link 11 still owns the runtime.
+**Links 12-14 certified while the eleven-link cut was being made, and the
+fourteen-link film exists now** (§11b). The prediction made here at the time —
+"another 9 emulated minutes and about 45 s of film on top of 01-11" — was
+measured and is **wrong in the direction that matters**, and the reason is worth
+keeping because it is not about the material at all. The material really did
+grow: the median chain went 28.7 → **31.3** emulated minutes. But the film got
+**shorter**, 3 m 36 s → 3 m 21 s, because the eleven-link cut was made at
+`--cover 0.99` and the fourteen-link one at `--cover 0.90`. **Runtime is set by
+the cover as much as by the material**, and an estimate that carries the
+identity but not the cover is an estimate of a different film.
+
+The shape of the problem is otherwise unchanged, because link 11 still owns the
+runtime — 58.2% of the swarm's emulated time even with three more links after
+it.
 
 The two films' own figures, from the 600-attempt run they are made of — a
 smaller sample than the certification, so its p99 is shorter and the film's
 length is the film's rather than the chain's:
 
-| the cut | material at p99 | output at 12×, 60 fps |
+| the cut | material filmed | output at 12×, 60 fps |
 |---|---:|---:|
-| links 01-10 | 34,291 frames, 9.6 emulated min | **2,858 frames, 47.6 s** |
-| links 01-11 | 155,584 frames, 43.4 emulated min | **12,966 frames, 3 min 36 s** |
+| links 01-10, cover 0.99 | 34,291 frames, 9.6 emulated min | **2,858 frames, 47.6 s** |
+| links 01-11, cover 0.99 | 155,584 frames, 43.4 emulated min | **12,966 frames, 3 min 36 s** |
+| links 01-14, **cover 0.90** | 145,090 frames, 40.5 emulated min | **12,091 frames, 3 min 21 s** |
 
 **Neither is a pace decision and neither can be fixed by one.**
 The original swarm film ran 50 s because it filmed ten emulated minutes, not
 because it was paced differently — it used the same 12×. Measured side by side:
 
-| | original dot film | 01-03 cut | **01-11 cut** |
-|---|---:|---:|---:|
-| compression | 12.05× | 12.05× | **12.05×** |
-| stride, emulated frames per output frame | 24 | 12 | **12** |
-| frame rate | 30 fps | 60 fps | **60 fps** |
-| material filmed | 602 emulated s | 86.3 s | **2,605 s** |
-| output | 1,500 frames, 50 s | 432 frames, 7.2 s | **12,966 frames, 216 s** |
+| | original dot film | 01-03 cut | 01-11 cut | **01-14 cut** |
+|---|---:|---:|---:|---:|
+| compression | 12.05× | 12.05× | 12.05× | **12.05×** |
+| stride, emulated frames per output frame | 24 | 12 | 12 | **12** |
+| frame rate | 30 fps | 60 fps | 60 fps | **60 fps** |
+| material filmed | 602 emulated s | 86.3 s | 2,605 s | **2,429 s** |
+| output | 1,500 frames, 50 s | 432 frames, 7.2 s | 12,966 frames, 216 s | **12,091 frames, 201 s** |
 
 **`--speed 12` is how that is spelled now, not `--seconds`.** `step` is a whole
 number of emulated frames, so typing a runtime to hit a pace does not work:
@@ -1524,7 +1661,9 @@ p99 near 124,000, so agents do not cross a finish line together, they dribble.
 So the honest statement of the cost is not "63% of the film is grinding" but
 **the back half of it is a thinning crowd**, and that is a property of the
 training link and not of the film. The dial that moves it is `--cover`, not the
-pace: `--cover 0.6` would end the cut where 40% are still going.
+pace: `--cover 0.6` would end the cut where 40% are still going. §11b is that
+dial actually turned — 0.99 → 0.90 on the fourteen-link cut, which is what makes
+a longer journey a shorter film.
 
 Peter Whidden's *Training AI to Play Pokémon with Reinforcement Learning* is
 where the swarm view comes from and the credit is his. What differs here is a

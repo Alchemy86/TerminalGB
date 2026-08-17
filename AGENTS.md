@@ -8904,3 +8904,68 @@ cannot tell it was cut** — so `wrap_hud` is applied to the whole row list and 
 to whichever row last embarrassed us. Same rule as the status panel's `fit_bar`: shorten
 deliberately or wrap, never clip. And **crop the HUD out of a rendered frame and read it** before
 shipping a caption; no test in this repository can see a clipped string.
+
+### The fourteen-link cut broke two things the eleven-link one hid (`swarm_film.py`)
+
+The film to Pewter City is the same compositor over three more links, and extending it exposed
+two defects that were invisible while the chain stopped at the forest's door. Full record and
+every number: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §11b.
+
+- **"THE CAMERA FOLLOWS THE MAJORITY" HAD SILENTLY BECOME "IT FOLLOWS THE SURVIVING MINORITY."**
+  An agent that finishes stops being drawn, so as a long chain drains, the 5-95 box is fitted to
+  whoever is left — which is the slowest. Measured on the fourteen-link cut: the Pewter arrival
+  tile is in frame on **0 of 12,091 frames**, coming within **46 px** of the top edge and never
+  arriving, because the slow half is always 2,400 px south in Route 1's grass. Counting arrived
+  agents at their arrival tile puts Pewter in frame for the **last 1,033 frames (17 s)**. **None
+  of the six camera rules changes** — only the population their box is pointed at — and the trade
+  is stated rather than hidden: coverage of the *live* agents 85.9% → 82.9%, its 1st percentile
+  58.6% → 32.8%. `--no-follow-arrivals` reproduces the older shot exactly.
+- **A FILM THAT ENDS SOMEWHERE MUST DRAW SOMEBODY THERE, AND BY DEFAULT IT DRAWS NOBODY.** Link
+  14's goal fires the instant the player crosses into Pewter, so its whole stay is one row of the
+  track, and **all 600 agents finish on the same tile** — at most one is ever visible. An agent
+  that completes the last link now leaves a **counted marker** where it arrived, plus an
+  `N/600 arrived` HUD row. Not a sprite (600 sprites on one tile is one sprite) and **not folded
+  into "agents live"** — arrived is not live, and merging them misreports both.
+- **A COVERAGE FIGURE MUST SAY WHETHER THE SHOT WAS MISSED OR WAS NEVER AVAILABLE.**
+  `report_impossible` measures it: the camera may not widen past the world it crops from (a wider
+  crop is black bars), so the widest view is `world.width` by `world.width * OUT_H / VIEW_W`. The
+  fourteen-link atlas window is **2496x3936**, so the tallest view is **1755 px**, and the 5-95
+  swarm box **does not fit on 5,207 of 12,091 frames (43.1%), every one too tall** — against
+  5,211 frames below 90% covered, i.e. the shortfall is *entirely* geometric. The same
+  measurement on the eleven-link cut is **0 frames**, which is why it scored 99.3% with identical
+  rules. That is the correction to the older note above claiming the rules needed no change for a
+  bigger journey: true for eleven links, and it was true because the geometry still fitted.
+
+#### A STAGE'S SHARE OF A FILM HAS TWO RIGHT ANSWERS AND THEY DIVERGE BADLY
+
+`report_stages` prints both, because picking one is how a share becomes wrong. **agent-time** is
+the stage's share of all the emulated time the swarm spends — the chain's own shape. **on
+screen** is the share of output frames on which that stage is what most of the *live* swarm is
+doing — what a viewer watches, and the partition the on-screen timeline draws. Measured over
+fourteen links they disagree by a factor of nearly two in both directions: link 11 is 58.2% of
+the journey and 64.7% of the film, link 13 is 9.1% and **15.6%**, and links 12 and 14 are real
+stages that are **never the plurality of anybody** (0.0% on screen) because agents that finish
+stop being drawn and the surviving population drifts towards the later links. A stage with no
+timeline segment is still in the HUD's per-link bars every frame.
+
+**The timeline is what stops a long stage reading as a stuck picture** — one pixel column per
+output frame, coloured by that frame's stage, labelled, playhead crossing it, `now: link 11 …
+65% of this film` above. The segment widths *are* the "on screen" column, so the picture and the
+printed table cannot disagree.
+
+#### `--cover` CUTS STRAGGLERS, NEVER A STAGE — and a runtime estimate needs it
+
+Measured on the fourteen-link chain: **the training stretch is 130 s of film at every cover
+value**, because it is the same stretch of emulated time either way; all `--cover` decides is how
+much thinning tail follows. So it is the only honest lever on a film whose middle is one long
+stage — running link 11 faster than the walking would make the film lie about the most
+interesting thing the chain has measured. `report_cover` prints the trade at `--dry-run`, with
+the column that decides it: **how many agents are seen to finish the last link**. Chosen 0.90 —
+541/600 land the ending, 3 m 21 s.
+
+**AND A RUNTIME ESTIMATE THAT CARRIES THE IDENTITY BUT NOT THE COVER IS AN ESTIMATE OF A
+DIFFERENT FILM.** `docs/agent/pewter-chain.md` predicted "another 9 emulated minutes and about
+45 s of film" for the fourteen-link cut. The material did grow (median chain 28.7 → 31.3
+emulated min) and the film got **shorter** — 3 m 36 s → 3 m 21 s — because the cover went
+0.99 → 0.90. Quote `seconds_out x speed = the emulated time there is` *and* the cover, or the
+arithmetic is right about a film nobody made.

@@ -50,6 +50,7 @@ which is easy to lose in a rebuild. The sampling rate is **derived from the
 emulated time to cover and the length wanted**, not picked.
 """
 import argparse
+import bisect
 import collections
 import csv
 import json
@@ -519,6 +520,153 @@ def on_screen(px, py, x0, y0, cw, ch):
     return (x0 - h <= px <= x0 + cw + h) and (y0 - h <= py <= y0 + ch + h)
 
 
+def stage_track(positions, n_links):
+    """Which stage of the journey each output frame belongs to.
+
+    **The modal link among the live agents, per output frame.** That is what a
+    viewer is actually watching — the mass is what the camera follows and the
+    link bars already show — and it partitions the runtime exactly, so the
+    shares sum to 100% without anything having to be normalised. An
+    agent-weighted average would not: it would smear a stage's share across
+    the links its stragglers were still on, which is a different question from
+    "what is on screen".
+
+    Ties go to the earlier link, so a handover reads as ending rather than as
+    starting early. A frame with nobody live inherits the previous frame's
+    stage rather than falling to zero — the film has not left the journey, the
+    corpus has simply run out.
+    """
+    out, cur = [], 0
+    for here in positions:
+        per = collections.Counter(p[6] for p in here)
+        if per:
+            top = max(per.values())
+            cur = min(lk for lk, c in per.items() if c == top)
+        out.append(cur)
+    return out
+
+
+def stage_runs(stage_of):
+    """Contiguous runs of one stage, as (link, first frame, last frame)."""
+    runs = []
+    for i, lk in enumerate(stage_of):
+        if runs and runs[-1][0] == lk:
+            runs[-1][2] = i
+        else:
+            runs.append([lk, i, i])
+    return [tuple(r) for r in runs]
+
+
+def report_stages(stage_of, spans, names, cover, weighted):
+    """What fraction of the film each stage of the journey occupies.
+
+    **The long middle of this chain is one link and the film has to say so.**
+    Link 11 is the training grind, and summed per seed over the certified runs
+    it is 63% of the median chain — so at a fixed compression it is also most
+    of the film. A viewer who cannot see that is left wondering whether the
+    picture is stuck, which is the one reading the cut must not invite. So the
+    share is measured, printed here, and drawn on screen as a timeline with a
+    playhead moving through it.
+
+    Four columns, because they answer four different questions and conflating
+    any two of them is how a share becomes wrong.
+
+    * **emulated s** — how long that stage of the *game* takes an agent, median
+      over the agents that entered it. A property of the chain.
+    * **agent-time** — that stage's share of all the emulated time the swarm
+      spends. Also a property of the chain, and the honest answer to "how much
+      of this journey is the grind".
+    * **on screen** — the share of *output frames* on which that stage is what
+      most of the live swarm is doing, which is the timeline's own partition
+      and therefore what a viewer watches. It differs from agent-time, badly,
+      in the back half of a long chain: agents that finish stop being drawn, so
+      the surviving population drifts towards the later links and a short stage
+      can be the plurality for a long stretch. Both are printed rather than one
+      being picked, because each is right about a different question.
+    * **covered** — the camera's coverage while that stage is on screen. A
+      stage that spreads the swarm across the map is where a shot loses people,
+      and this is what says which one.
+    """
+    total = len(stage_of) or 1
+    frames = collections.Counter(stage_of)
+    # Median emulated duration per agent, per link, from the spans themselves.
+    dur = collections.defaultdict(list)
+    for v in spans.values():
+        for lk, _name, s0, s1, _g in v:
+            dur[lk].append(s1 - s0)
+    cov = collections.defaultdict(list)
+    for lk, c in zip(stage_of, cover or []):
+        cov[lk].append(c)
+    print("stage of the journey, share of the film's runtime:")
+    print(f"  {'lk':>2} {'stage':26s} {'emulated s':>11}  {'agent-time':>10} "
+          f"{'on screen':>17}  covered")
+    for lk in sorted(set(list(frames) + list(dur))):
+        if not lk:
+            continue
+        d = sorted(dur.get(lk, []))
+        med = d[len(d) // 2] / FPS_GB if d else 0.0
+        f = frames.get(lk, 0)
+        bar = "#" * int(round(24 * f / total))
+        c = cov.get(lk, [])
+        cs = f"{100*sum(c)/len(c):5.1f}%" if c else "     -"
+        print(f"  {lk:2d} {names.get(lk, '?')[:26]:26s} "
+              f"{med:8.1f} s  {100*weighted.get(lk, 0.0):9.1f}% "
+              f"{100*f/total:5.1f}% {bar:<24s}  {cs}")
+    top = frames.most_common(1)
+    if top and top[0][0]:
+        lk, f = top[0]
+        print(f"  the longest stage is link {lk} {names.get(lk, '?')}: "
+              f"{100*weighted.get(lk, 0.0):.1f}% of the swarm's emulated time "
+              f"and {100*f/total:.1f}% of the film's runtime")
+
+
+def report_cover(ends, spans, n_links, fps, speed):
+    """What each `--cover` would buy and what it would cost.
+
+    **`--cover` is the only honest lever on a film whose middle is one long
+    stage**, and it is a real trade rather than a free win, so it is measured
+    here instead of being argued about. The pace cannot be the lever: a cut
+    that ran the grind faster than the walking would make the film lie about
+    the single most interesting thing this chain has measured. Trimming the
+    tail cuts *stragglers*, not a stage — but only up to the point where it
+    starts cutting the ending, which on a chain that finishes in Pewter City
+    is the thing the cut exists to show.
+
+    So two columns that pull against each other: the runtime, and **how many
+    agents are seen to finish the last link** inside it. Pick the smallest
+    cover that still lands the ending for the mass.
+    """
+    if not ends:
+        return
+    ends = sorted(ends)
+    # When each agent finished the chain's last link, for the agents that did.
+    done = sorted(v[-1][3] for v in spans.values()
+                  if v and v[-1][0] == n_links and v[-1][4])
+    print(f"--cover trade-off ({len(done)} of {len(ends)} agents finish link "
+          f"{n_links} at all):")
+    for c in (0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0):
+        last = ends[min(len(ends) - 1, int(c * len(ends)))]
+        secs = last / fps / speed
+        arrived = sum(1 for e in done if e <= last)
+        still = sum(1 for e in ends if e > last)
+        print(f"  cover {c:<5} film {last/fps/60:5.1f} emulated min -> "
+              f"{secs//60:.0f}m{secs%60:04.1f}s at {speed:g}x; "
+              f"{arrived:3d}/{len(ends)} agents reach the end on screen, "
+              f"{still:3d} still going when it stops")
+
+
+def coverage_series(positions, cams, out_h, view_w):
+    """Per output frame, the fraction of live agents the camera is showing."""
+    out = []
+    for here, (cx, cy, cw) in zip(positions, cams):
+        ch = cw * out_h / view_w
+        x0, y0 = cx - cw / 2, cy - ch / 2
+        on = sum(1 for p in here
+                 if on_screen(p[1], p[2], x0, y0, cw, ch))
+        out.append(on / max(1, len(here)))
+    return out
+
+
 def report_camera(cams, fps):
     """How the camera moves, measured — the other half of "is this cut good".
 
@@ -560,6 +708,46 @@ def report_camera(cams, fps):
     print(f"  largest single-frame pan {max(abs(j[0]) for j in jumps)} px in x, "
           f"{max(abs(j[1]) for j in jumps)} px in y; width "
           f"{min(widths):.0f}-{max(widths):.0f} px")
+
+
+def report_impossible(positions, out_h, view_w, max_cw):
+    """How often the swarm cannot fit in ANY view, however the camera moves.
+
+    **A coverage figure has to say whether the shot was missed or was never
+    available**, and over a long journey it is often the second. The camera may
+    not widen past the world it is cropping from — a wider crop is black bars,
+    not more picture — so the widest view is `world.width` by
+    `world.width * OUT_H / VIEW_W`, and a 16:9 view of a world that is much
+    taller than it is wide can be a long way short of the swarm's own extent.
+
+    Measured on the fourteen-link chain: the atlas window is 2496x3936, so the
+    tallest view available is 1755 px, while the swarm spans Route 1's grass to
+    Viridian Forest — over two thousand pixels — for much of links 11 to 13.
+    No camera rule reaches that. Every frame counted here is one where losing
+    agents was the only option, and separating them out is what stops a
+    geometric limit being read as a tuning failure.
+    """
+    if not positions:
+        return
+    max_ch = max_cw * out_h / view_w
+    bad = wide = tall = 0
+    for here in positions:
+        if not here:
+            continue
+        xs = sorted(p[1] for p in here)
+        ys = sorted(p[2] for p in here)
+        n = len(xs)
+        ex = xs[min(n - 1, int(0.95 * n))] - xs[max(0, int(0.05 * n))]
+        ey = ys[min(n - 1, int(0.95 * n))] - ys[max(0, int(0.05 * n))]
+        if ex > max_cw or ey > max_ch:
+            bad += 1
+            wide += ex > max_cw
+            tall += ey > max_ch
+    n = len(positions)
+    print(f"  the widest view the world allows is {max_cw:.0f}x{max_ch:.0f} px; "
+          f"the 5-95 swarm box does not fit in it on {bad} frame(s) "
+          f"({100*bad/max(1,n):.1f}%) — {tall} too tall, {wide} too wide. "
+          f"On those, losing agents is geometric, not a camera fault.")
 
 
 def report_motion(positions, cams, lost, n_agents, out_h, view_w, tile=TILE):
@@ -694,6 +882,13 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="compute positions and camera, write any trace, and "
                          "stop before rendering")
+    ap.add_argument("--no-follow-arrivals", dest="follow_arrivals",
+                    action="store_false",
+                    help="leave agents that have finished the chain out of "
+                         "what the camera follows. Reproduces the shot the "
+                         "eleven-link cut had, where 'the majority' silently "
+                         "meant 'the surviving minority'; see the comment at "
+                         "the camera loop for what it costs either way")
     ap.add_argument("--cover", type=float, default=0.6,
                     help="fraction of agents whose whole run must fit in the "
                          "film; the rest are simply still going when it ends")
@@ -955,12 +1150,74 @@ def main():
         k = max(0, round(math.log(max(w, MIN_W) / MIN_W) / math.log(CAM_STEP)))
         return MIN_W * (CAM_STEP ** k)
 
+    # --- who has arrived, and where -----------------------------------------
+    # **A film that ends in Pewter City has to show somebody in Pewter City,
+    # and by default it shows nobody.** An agent stops being drawn the frame
+    # after its track ends, and link 14's goal fires the instant the player
+    # steps over the boundary — so its whole stay in Pewter is one row, and
+    # measured on this corpus **all 600 agents finish on the same tile**, which
+    # means at most one is ever visible there. The arrival, which is the point
+    # of the chain, was invisible.
+    #
+    # So an agent that *completed the last link* leaves a marker on the tile it
+    # finished on, carrying the count. It is not a sprite: six hundred sprites
+    # stacked on one tile is one sprite. And it is deliberately not folded into
+    # the "agents live" row — those agents are not live, they are done, and
+    # conflating the two would misreport both.
+    arrivals = collections.defaultdict(list)
+    for n, v in spans.items():
+        if n in corpus.end and v and v[-1][0] == n_links and v[-1][4]:
+            _fr, m, x, y, _f = corpus.paths[n][-1]
+            arrivals[(m, x, y)].append(corpus.end[n])
+    for k in arrivals:
+        arrivals[k].sort()
+    arrived_total = sum(len(v) for v in arrivals.values())
+    if arrivals:
+        print(f"{arrived_total} agent(s) finish link {n_links}, on "
+              f"{len(arrivals)} distinct tile(s); each leaves a counted marker "
+              f"where it arrived")
+
+    arr_pt = {}
+    for (m, ax, ay) in arrivals:
+        wp = atlas.place(m, ax, ay)
+        if wp is not None:
+            arr_pt[(m, ax, ay)] = (wp[0] - X0, wp[1] - Y0)
+
+    # **"The majority" has to include the agents that have finished, or on a
+    # long chain it silently comes to mean "the surviving minority".** None of
+    # the six rules below changes; what changes is the population whose 5-95
+    # box they are pointed at, and on a fourteen-link cut that is the whole
+    # difference between showing the ending and never showing it.
+    #
+    # Measured on this chain, `--cover 0.90`: with finished agents excluded the
+    # Pewter arrival tile is in frame on **0 of 12,091 frames** — the camera's
+    # northernmost view top is 998 px against the tile's 952, so it comes
+    # within 46 px and never arrives, because the slow half is always 2,400 px
+    # south in Route 1's grass and the 5-95 box always contains it. Including
+    # them puts Pewter in frame for the **last 1,033 frames (17 s)**, which is
+    # the arrival sequence.
+    #
+    # It is a real trade and it is stated rather than hidden: coverage of the
+    # *live* agents falls 85.9% -> 82.9% and its 1st percentile 58.6% -> 32.8%,
+    # all of it in those last seconds where 541 arrived agents outvote 59 live
+    # stragglers. That is the correct reading of "follow the majority" and the
+    # off-frame line counts the stragglers on every frame, but
+    # `--no-follow-arrivals` reproduces the older shot exactly.
     cams, prev = [], None
     box = None
-    for here in positions:
+    for _fi, here in enumerate(positions):
+        _g = max(1, _fi * step)
+        xs = [p[1] for p in here]
+        ys = [p[2] for p in here]
+        if a.follow_arrivals:
+            for k, fs in arrivals.items():
+                c = bisect.bisect_right(fs, _g)
+                if c and k in arr_pt:
+                    xs += [arr_pt[k][0]] * c
+                    ys += [arr_pt[k][1]] * c
         if here:
-            lx, hx_, mx = spread([p[1] for p in here])
-            ly, hy_, my = spread([p[2] for p in here])
+            lx, hx_, mx = spread(xs)
+            ly, hy_, my = spread(ys)
             tx, ty = mx, my
             box = (lx, hx_, ly, hy_)
             want = max(MIN_W, (hx_ - lx) * 1.25,
@@ -1041,9 +1298,82 @@ def main():
     # tile at a different number of world pixels.
     report_motion(positions, cams, lost, len(paths), OUT_H, VIEW_W,
                   tile=TILE * atlas.mul)
+    report_impossible(positions, OUT_H, VIEW_W, float(world.width))
     report_camera(cams, a.fps)
+    # Which stage of the journey each output frame belongs to, and what share
+    # of the runtime each takes. Only on a whole-chain film — a showcase of one
+    # link would draw a timeline with one segment and say nothing.
+    stage_of = stage_track(positions, n_links) if spans else []
+    link_names = {}
+    for v in spans.values():
+        for lk, name, *_ in v:
+            link_names.setdefault(lk, name)
+    # A stage's share of all the emulated time the swarm spends — the chain's
+    # own shape, independent of this cut's length or of `--cover`.
+    agent_time = collections.Counter()
+    for v in spans.values():
+        for lk, _name, s0, s1, _g in v:
+            agent_time[lk] += s1 - s0
+    tot_time = sum(agent_time.values()) or 1
+    link_share = {lk: c / tot_time for lk, c in agent_time.items()}
+    if stage_of:
+        report_stages(stage_of, spans, link_names,
+                      coverage_series(positions, cams, OUT_H, VIEW_W),
+                      link_share)
+        report_cover(list(corpus.end.values()), spans, n_links, FPS_GB,
+                     step * a.fps / FPS_GB)
     if a.dry_run:
         return
+
+    # --- the stage timeline, built once ------------------------------------
+    # **A film whose middle is one long stage has to say which stage it is.**
+    # Link 11 is the training grind and it owns most of the runtime; without a
+    # timeline the only reading available to a viewer is that the picture has
+    # stuck. The segment widths ARE the shares `report_stages` prints — one
+    # pixel column per output frame — so the picture and the table cannot
+    # disagree, and a playhead crossing a wide segment is what makes "this is
+    # long, and it is meant to be" legible without anybody being told.
+    TL_H, NOW_H, strip, runs = 0, 0, None, []
+    if stage_of:
+        TL_H = max(16, OUT_H // 30)
+        # The band the "now" line sits in, reserved so the off-frame warning
+        # is drawn ABOVE it rather than underneath it. Two captions sharing one
+        # strip of pixels is the clipping defect one layer out.
+        NOW_H = num_font.size + 8
+        runs = stage_runs(stage_of)
+        n_out = max(1, len(stage_of))
+
+        def tl_col(fi):
+            return int(fi * VIEW_W / n_out)
+
+        # A stage's share is its share of the WHOLE film, not of the run the
+        # label happens to sit in — a link the swarm returns to would otherwise
+        # be captioned with a fraction of itself, and the picture and the
+        # printed table would disagree.
+        stage_pct = {lk: 100.0 * c / n_out
+                     for lk, c in collections.Counter(stage_of).items()}
+        strip = Image.new("RGB", (VIEW_W, TL_H), (18, 22, 28))
+        sd = ImageDraw.Draw(strip)
+        widest = max(runs, key=lambda r: r[2] - r[1]) if runs else None
+        for lk, f0, f1 in runs:
+            c0, c1 = tl_col(f0), max(tl_col(f0) + 1, tl_col(f1 + 1))
+            sd.rectangle([c0, 0, c1 - 1, TL_H - 1],
+                         fill=(46, 66, 92) if lk % 2 else (32, 46, 66))
+            sd.line([c1 - 1, 0, c1 - 1, TL_H - 1], fill=(12, 15, 20))
+            share = stage_pct.get(lk, 0.0)
+            # Label only what fits. A number crammed into a two-pixel segment
+            # is unreadable, and a truncated one is worse than none — the rule
+            # the `--method` line and the title both earned.
+            if (lk, f0, f1) == widest:
+                txt = f"{lk} {link_names.get(lk, '')[3:]}  {share:.0f}%"
+            elif (f1 - f0 + 1) * 100.0 / n_out >= 4.0:
+                txt = f"{lk}"
+            else:
+                continue
+            tb = num_font.getbbox(txt)
+            if tb[2] - tb[0] <= c1 - c0 - 6:
+                sd.text((c0 + 4, (TL_H - num_font.size) // 2 - 1), txt,
+                        fill=(225, 235, 245), font=num_font)
 
     tinted = {}
     for i, (here, (cx, cy, cw)) in enumerate(zip(positions, cams)):
@@ -1133,6 +1463,30 @@ def main():
                        fill=(240, 244, 248), font=num_font,
                        stroke_width=1, stroke_fill=(0, 0, 0))
 
+        # --- the arrival markers -------------------------------------------
+        # Drawn over the sprites, because the tile they sit on is the one the
+        # last agents are still walking onto.
+        gbf = max(1, i * step)
+        arrived_now = 0
+        for (m, ax, ay), fs in arrivals.items():
+            c = bisect.bisect_right(fs, gbf)
+            arrived_now += c
+            wp = atlas.place(m, ax, ay)
+            if not c or wp is None:
+                continue
+            sx = int((wp[0] - X0 - x0) * scale)
+            sy = int((wp[1] - Y0 - y0) * scale)
+            if not (-40 <= sx <= VIEW_W + 40 and -40 <= sy <= OUT_H + 40):
+                continue
+            rr = max(6, int(atlas.tile_px[m] * scale * 0.55))
+            d.ellipse([sx - rr, sy - rr, sx + rr, sy + rr],
+                      fill=(250, 210, 90), outline=(30, 26, 12), width=2)
+            lab = str(c)
+            lb = font.getbbox(lab)
+            d.text((sx - (lb[2] - lb[0]) // 2, sy - rr - font.size - 4), lab,
+                   fill=(255, 235, 160), font=font,
+                   stroke_width=2, stroke_fill=(20, 18, 10))
+
         # **The camera follows the majority; it must not hide the minority.**
         # An agent the atlas does not place is invisible for a different
         # reason, and is counted on the same line rather than vanishing.
@@ -1146,13 +1500,12 @@ def main():
             if lost[i]:
                 warn += f"; {lost[i]} on a map the atlas does not place"
             bb = num_font.getbbox(warn)
-            d.rectangle([0, OUT_H - bb[3] - 10, VIEW_W, OUT_H],
+            wy = OUT_H - TL_H - NOW_H - bb[3] - 10
+            d.rectangle([0, wy, VIEW_W, OUT_H - TL_H - NOW_H],
                         fill=(40, 16, 16))
-            d.text((8, OUT_H - bb[3] - 6), warn, fill=(255, 190, 190),
-                   font=num_font)
+            d.text((8, wy + 4), warn, fill=(255, 190, 190), font=num_font)
 
         # --- the HUD, in the space the crop does not use ---------------------
-        gbf = max(1, i * step)
         hx = VIEW_W + 10
         d.rectangle([VIEW_W, 0, OUT_W, OUT_H], fill=(10, 12, 16))
         # **The title wraps too.** It was the one string in the panel drawn at
@@ -1166,6 +1519,15 @@ def main():
             ty += int(font.size * 1.25)
         rows = [
             f"{len(here)}/{len(paths)} agents live",
+        ]
+        # Not merged into the live count: an arrived agent is done, not live.
+        # Only once there is one — a permanent `0/600 arrived` costs a HUD row
+        # (two, once it wraps) for the whole first half of the film, and the
+        # row it costs is the tracked cohort's, which is how an individual is
+        # followed. What the marker means goes in the legend, not in this row.
+        if arrived_now:
+            rows.append(f"{arrived_now}/{len(paths)} arrived")
+        rows += [
             f"{gbf / FPS_GB / 60:.1f} emulated minutes",
             f"{step * a.fps / FPS_GB:.0f}x timelapse",
             f"{int(cw / TILE)} tiles across",
@@ -1252,6 +1614,12 @@ def main():
             d.text((hx + 10, y), f"halo = {kind} battle",
                    fill=(150, 165, 180), font=num_font)
             y += num_font.size + 2
+        if arrived_now:
+            d.ellipse([hx, y + 2, hx + 6, y + num_font.size - 1],
+                      fill=(250, 210, 90))
+            d.text((hx + 10, y), "gold = arrived here",
+                   fill=(150, 165, 180), font=num_font)
+            y += num_font.size + 2
         y += int(num_font.size * 0.6)
 
         # And where the tracked cohort actually is.
@@ -1269,6 +1637,29 @@ def main():
             d.text((hx + 10, y), f"{n:3d}  {label}",
                    fill=(215, 225, 235), font=num_font)
             y += num_font.size + 2
+
+        # --- the stage timeline, drawn last so nothing can overlap it -------
+        if strip is not None:
+            ty0 = OUT_H - TL_H
+            img.paste(strip, (0, ty0))
+            lk = stage_of[i]
+            cur = next((r for r in runs if r[1] <= i <= r[2]), None)
+            if cur:
+                c0, c1 = tl_col(cur[1]), max(tl_col(cur[1]) + 1,
+                                             tl_col(cur[2] + 1))
+                d.rectangle([c0, ty0, c1 - 1, OUT_H - 1],
+                            outline=(120, 190, 255), width=2)
+                txt = (f"now: link {lk} {link_names.get(lk, '')[3:]} — "
+                       f"{stage_pct.get(lk, 0.0):.0f}% of this film")
+                d.rectangle([0, ty0 - NOW_H, VIEW_W, ty0], fill=(12, 16, 22))
+                d.text((7, ty0 - NOW_H + 4), txt, fill=(190, 215, 240),
+                       font=num_font)
+            # The playhead. It is the whole reason the strip is here: a mark
+            # moving through a wide segment is what says "this is a long stage"
+            # rather than "the picture has frozen".
+            ph = tl_col(i)
+            d.rectangle([ph - 1, ty0, ph + 1, OUT_H - 1], fill=(255, 245, 190))
+
         img.save(os.path.join(a.out, f"f{i:05d}.png"))
     print(f"wrote {frames_out} frames to {a.out}")
     print("ffmpeg -y -framerate %d -i %s/f%%05d.png -c:v libopenh264 -b:v 6M out.mp4"
