@@ -252,6 +252,143 @@ def classify(mv, d):
     return out
 
 
+# --- the drill plan ----------------------------------------------------------
+#
+# THE PLAN IS THE ONLY PLACE THE CRITERION LIVES. `examples/gen1_learn_drill.rs`
+# triggers the level-ups and works the menus; it does not decide anything. That
+# split is deliberate and it is the same one `docs/agent/battle-policy.md`
+# records for the battle brain: **when one component decides something, no other
+# component may decide the same thing from its own arithmetic**, because two
+# implementations that agree today are two implementations that will disagree
+# the next time either is improved, and the gap is silent.
+#
+# So the rule above is applied here, once, and what crosses to the emulator is a
+# list of level-ups with the answer already in it.
+
+def why(mv, held, offered, loser, runner_up, types):
+    """One line saying why the rule chose what it chose, for the corpus."""
+    if loser is None:
+        return "every held move is protected; the rule declines"
+    v = value(mv, offered, types)
+    if loser == offered:
+        best = "the offered move is worth less than all four held"
+        if v is None:
+            best = ("the offered move deals no damage the table can price, "
+                    "and no held move is worse")
+        return best
+    lv = value(mv, loser, types)
+    if lv is None:
+        return (f"{mv.name(loser)} deals no damage the table can price and "
+                f"{mv.name(offered)} does")
+    ru = f", next worst {mv.name(runner_up)}" if runner_up else ""
+    return (f"{mv.name(loser)} is the worst priceable move held "
+            f"({lv:.1f} expected damage a turn against {v:.1f}){ru}")
+
+
+def drill_plan(rom, em, mv, names, dex_of, stats, stats_at, start,
+               evolve_teaches):
+    """Every level-up on one line that offers a move, with the answer.
+
+    Walks from level 1 taking every evolution — the measured rule is that
+    **nothing is ever lost by evolving** (`docs/gen1/discoveries.md`), so
+    refusing one would be drilling a line no player walks.
+
+    Each entry carries what the emulator needs to *reach* that level-up
+    directly rather than grinding to it: the species and level to arm, and the
+    four moves in slot order. `forget_slot` is 1-based because that is what the
+    game's own move list shows.
+    """
+    sp = start
+    held = [m for m in g.starting_moves(rom, stats_at, dex_of[start]) if m]
+    line, events = [names[sp]], []
+    for level in range(2, 101):
+        offers = [(sp, m) for lv, m in em.learnset[sp] if lv == level]
+        evo = next((e for e in em.evolutions[sp]
+                    if e["kind"] == "level" and e["level"] == level), None)
+        was, evolved = sp, False
+        if evo:
+            sp, evolved = evo["into"], True
+            line.append(names[sp])
+            if evolve_teaches:
+                offers += [(sp, m) for lv, m in em.learnset[sp] if lv == level]
+        for owner, move in offers:
+            e = {
+                "level": level,
+                "arm_level": level - 1,
+                # The species to put on the field. It is the form held at
+                # `level - 1`, which is the PRE-evolution one when the line
+                # evolves on this very level.
+                "arm_species": names[was],
+                "species": names[owner],
+                "evolves_here": evolved,
+                "held": [mv.name(m) for m in held],
+                "offered": mv.name(move),
+            }
+            if move in held:
+                # A real entry in the cartridge's table that can never produce
+                # a prompt: the Pokémon already knows the move. Counted, so the
+                # totals add up, and never drilled.
+                e.update(kind="already-held", answer="nothing",
+                         after=[mv.name(m) for m in held], flags=[],
+                         why="the move is already in a slot")
+                events.append(e)
+                continue
+            types = set(stats[dex_of[owner]]["types"]) if dex_of.get(owner) else set()
+            if len(held) < 4:
+                held.append(move)
+                e.update(kind="free", answer="learn",
+                         after=[mv.name(m) for m in held], flags=[],
+                         why=f"only {len(held) - 1} of the four slots were full")
+                events.append(e)
+                continue
+            loser, runner_up = decide(mv, held, move, types)
+            d = {"held": list(held), "offered": move, "loser": loser,
+                 "runner_up": runner_up, "types": types}
+            e["flags"] = sorted(classify(mv, d))
+            e["runner_up"] = mv.name(runner_up) if runner_up else None
+            e["why"] = why(mv, held, move, loser, runner_up, types)
+            if loser is None or loser == move:
+                e.update(kind="decision", answer="decline",
+                         after=[mv.name(m) for m in held])
+            else:
+                slot = held.index(loser)
+                e.update(kind="decision", answer="forget",
+                         forget=mv.name(loser), forget_slot=slot + 1)
+                held[slot] = move
+                e["after"] = [mv.name(m) for m in held]
+            events.append(e)
+    return line, events
+
+
+def emit_plan(rom, path, em, mv, names, dex_of, stats, stats_at, start,
+              evolve_teaches):
+    import json
+    line, events = drill_plan(rom, em, mv, names, dex_of, stats, stats_at,
+                              start, evolve_teaches)
+    dec = [e for e in events if e["kind"] == "decision"]
+    plan = {
+        "schema": "gen1-learn-plan/1",
+        "cartridge": os.path.basename(path),
+        "species": names[start],
+        "line": line,
+        "evolutions_taken": True,
+        "criterion": "tools/gen1-tables/learn_table.py, decide()",
+        "starts_with": [mv.name(m) for m in
+                        g.starting_moves(rom, stats_at, dex_of[start]) if m],
+        "counts": {
+            "learn_events": len(events),
+            "free": sum(1 for e in events if e["kind"] == "free"),
+            "already_held": sum(1 for e in events
+                                if e["kind"] == "already-held"),
+            "decisions": len(dec),
+            "declines": sum(1 for e in dec if e["answer"] == "decline"),
+            "replacements": sum(1 for e in dec if e["answer"] == "forget"),
+        },
+        "events": events,
+    }
+    print(json.dumps(plan, indent=2, sort_keys=False))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rom", required=True)
@@ -263,6 +400,11 @@ def main():
     ap.add_argument("--no-evolve-teaches", action="store_true",
                     help="model an evolution as NOT offering the new form's "
                          "move for the level it evolved on")
+    ap.add_argument("--drill-plan", metavar="SPECIES",
+                    help="emit, as JSON on stdout, every level-up on that "
+                         "species' line that offers a move, with the rule's "
+                         "answer already applied. This is what "
+                         "examples/gen1_learn_drill.rs consumes.")
     a = ap.parse_args()
 
     rom = g.read_rom(a.rom)
@@ -273,6 +415,21 @@ def main():
     em = g.EvosMoves(rom)
     real = [i for i in names if 1 <= dex_of.get(i, 0) <= 151]
     evolve_teaches = not a.no_evolve_teaches
+
+    def resolve(name):
+        want = name.lower().replace(" ", "")
+        i = next((k for k, v in names.items()
+                  if v.lower().replace(" ", "") == want), None)
+        if i is None:
+            raise SystemExit(f"no species named {name!r} in this cartridge")
+        return i
+
+    if a.drill_plan:
+        # Emitted alone and to stdout, so it can be redirected into a file
+        # without the rest of the report landing in it.
+        emit_plan(rom, a.rom, em, mv, names, dex_of, stats, stats_at,
+                  resolve(a.drill_plan), evolve_teaches)
+        return
 
     # -- 1. the closed table ------------------------------------------------
     #
