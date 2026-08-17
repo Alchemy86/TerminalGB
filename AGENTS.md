@@ -8491,6 +8491,16 @@ order given.
 - **`scenarios/tutorial/guidance/` is gitignored** by the existing `scenarios/*/guidance/` rule,
   so the walkthrough's own learned doors are not committed. The two `*.script.jsonl` route
   scripts *are* — a script is a specification, and it is what makes the run half runnable.
+- **It ends by handing the finished scenario to the test rig** (`docs/agent/test-rig.md`), which
+  is what turns one run into a measurement, and the rig's `See also` points back. **Measured
+  rather than asserted: the rig accepts an arbitrary scenario and both its default arms score
+  zero on this one** (`ab --scenario scenarios/tutorial/town-map.json --start-dir
+  target/cert2/09/exits --runs 4` → teacher 0.0 %, random 0.0 %). That is the honest answer, not
+  a fault: **the `expert` arm is the Pewter chain's own solver and has no route for a scenario
+  outside the chain**, so it is not a ceiling there, and a scripted route is a fixed list of
+  replies rather than an arm — it would score 100 % on the one start state it was written
+  against and nothing on any other. What the rig is saying is that the missing piece is a
+  *player*, i.e. a `command` arm. Do not read a zero teacher row as a broken rig.
 
 ### The agent-facing front ends are held to the AXI standard, and stderr is the trap
 

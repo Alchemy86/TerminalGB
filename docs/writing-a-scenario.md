@@ -8,8 +8,10 @@ and then shows the ways it goes wrong, with the output each one actually
 prints.
 
 Every command below is one to run, in the order given. Steps 0 to 5 need **no
-cartridge and cost nothing** — that is most of the authoring loop. Steps 6 to 8
-need a Game Boy ROM, and this repository ships none.
+cartridge and cost nothing** — that is most of the authoring loop. Everything
+from step 6 on needs a Game Boy ROM, and this repository ships none. It ends by
+handing the finished scenario to [the test rig](agent/test-rig.md), which is
+what turns one run into a measurement.
 
 The finished article is [`scenarios/tutorial/town-map.json`](../scenarios/tutorial/town-map.json)
 — read it afterwards, not now.
@@ -579,7 +581,55 @@ Three rules for a route, and they are not specific to Pallet Town:
 
 ---
 
-## 10. Where to go next
+## 10. One run is an anecdote — measure it
+
+A scenario that reaches its goal once has been *demonstrated*, not measured. The
+next step is [the test rig](agent/test-rig.md): the same scenario, from a pool of
+starting states, at the same seeds, with two or more players, and the paired gap
+between them. It takes the scenario you just wrote:
+
+```console
+$ cargo run --release --features scenario --example pewter_chain -- ab \
+    --rom <your-blue.gb> \
+    --scenario scenarios/tutorial/town-map.json \
+    --start-dir <a directory of .gbss entry states> \
+    --runs 4 --out target/tutorial/ab
+── all ─────────────────────────────────────────────
+3000 entry state(s) in the pool
+
+  arm          goal              battles  won    fled   lost   HP left  decisions
+  teacher        0.0% [0.0-49.0]       0    0.0%   0.0%   0.0%     0.0%      53.8
+  random         0.0% [0.0-49.0]       0    0.0%   0.0%   0.0%     0.0%      60.0
+  teacher      endings: out-of-calls 3, timeout 1
+  random       endings: out-of-calls 4
+```
+
+**Both arms scored zero, and that is the honest answer rather than a fault.**
+The rig's `expert` arm is the Pewter chain's own solver, which knows the routes
+for the chain's fourteen links and has none for a scenario you invented five
+minutes ago; `random` presses six buttons uniformly and was never going to walk
+into a house and talk to somebody. The scripted route from §7 is not an arm — it
+is a fixed list of replies, so it would score 100% on the one start state it was
+written against and nothing on any other.
+
+So the rig has told you exactly what you are missing: **a player**, meaning
+something that decides from what it is shown rather than from a list you wrote.
+That arrives as `command` — a subprocess speaking the agent's JSON protocol, the
+same `--driver command` seam §7 mentions — and it is the point at which a
+scenario stops being a demonstration and starts being a measurement.
+
+Two things from the rig's own pages worth taking now, while the scenario is
+fresh:
+
+- **A test is a committed `gbtestrig/1` file, not a shell command**, for the same
+  reason a scenario is a file: a number nobody can re-run is a number nobody can
+  check. See [§3 of the rig page](agent/test-rig.md#3-setting-a-test-up).
+- **[§7, what it cannot tell you](agent/test-rig.md#7-what-it-cannot-tell-you)**,
+  is the section to read before quoting anything it prints.
+
+---
+
+## 11. Where to go next
 
 - [`docs/scenarios.md`](scenarios.md) — the reference: every rule, the condition
   grammar, what a recording contains, and what has *not* been done.
@@ -593,3 +643,9 @@ Three rules for a route, and they are not specific to Pallet Town:
   what a driver is handed and what it may send back.
 - [`docs/claude-plays.md`](claude-plays.md) — putting a real model behind
   `--driver command`, and the budget and breaker that stop it running away.
+- [`docs/agent/test-rig.md`](agent/test-rig.md) and
+  [its first result](agent/test-rig-results.md) — turning a scenario into a
+  measurement, and what 2,700 attempts at the rival battle actually said.
+- [`docs/gen1/level-up-drill.md`](gen1/level-up-drill.md) — a worked example of
+  the other kind of question: not "did it get there" but "did it answer the
+  prompt correctly", scored against the party read back afterwards.

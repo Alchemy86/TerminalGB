@@ -584,6 +584,9 @@ by a catch-all arm over that byte.
 * [`docs/agent/pewter-chain.md`](pewter-chain.md) — the fourteen links, the
   certification protocol and where the entry states come from.
 * [`docs/scenarios.md`](../scenarios.md) — the scenario language, the referee
-  and the recording format.
+  and the recording format, and
+  [`docs/writing-a-scenario.md`](../writing-a-scenario.md) if you do not have a
+  scenario to point this at yet: it builds one end to end and finishes by
+  handing it here.
 * [`docs/agent-reference.md`](../agent-reference.md) — the snapshot a driver
   receives and the plan it returns.
