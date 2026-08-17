@@ -31,6 +31,8 @@
     }
   ],
   "evidence": [
-    "watch:got_pokedex!=0 — EVENT_GOT_POKEDEX, event index 37, wEventFlags $D74B bit 5. Set by OaksLabOakGivesPokedexScript together with EVENT_OAK_GOT_PARCEL. This is the flag ViridianCityCheckGotPokedexScript tests before it lets the player past the old man, so it is the real gate on the road north."
+    "watch:got_pokedex!=0 — EVENT_GOT_POKEDEX, event index 37, so wEventFlags $D74B bit 5, walked out of pokered's constants/event_constants.asm const list. OaksLabOakGivesPokedexScript (scripts/OaksLab.asm) ends `SetEvent EVENT_GOT_POKEDEX / SetEvent EVENT_OAK_GOT_PARCEL` — the two are set together, so the flag records the whole handover and not merely the parcel changing hands.",
+    "and it is the real gate on the road north, at one tile. ViridianCityCheckGotPokedexScript opens `CheckEvent EVENT_GOT_POKEDEX / ret nz`, so with the flag set it returns at once; without it, and only when wYCoord is 9 and wXCoord is 19, the old man's text plays and ViridianCityMovePlayerDownScript pushes the player back. So the block is that single tile rather than the whole road — a fact worth having before anyone routes around it.",
+    "failure party_hp=0 — the same judgement as link 06, and the same cartridge fact behind it: Pallet Town's approach carries grass and a blackout there is a real one."
   ]
 }

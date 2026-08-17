@@ -8153,6 +8153,22 @@ re-certified against it, exactly as a driver change forces.
   battle metric has the same trap. And hold a damage prediction until their HP actually moves —
   taking it on the next decision threw every check away and printed a healthy-looking
   "0 checked".
+- **THREE RULES THE FIGHTING HALF OF THE POLICY NEEDS, ALL FOUND ON LINK 10** and all
+  measured. (1) **A critical hit is the worst case, not the top of the roll range** — Gen 1
+  substitutes `2 * Level` for `Level`, so it is ~2x, at base-speed/2 out of 256, about one turn
+  in eleven; deciding "am I about to faint?" without it lost 10 of 600. (2) **Too hurt to pick a
+  fight** — under half health with no Pokémon Center on the leg, experience is not worth the
+  risk of collecting it; the old `fight()` had this and the first policy dropped it, which cost
+  the other 6 of 600. Gate it on the battle being *wild*: there is no running from a trainer and
+  a rule that leaves the policy with nothing to do is worse than no rule. (3) **A move's
+  accuracy is not the number in the move table** — `MoveHitTest` scales it by the attacker's
+  accuracy stage and the defender's evasion, so a Pidgey's SAND-ATTACK takes a 94% TACKLE to
+  47%, and a policy reading 94 keeps swinging instead of escaping. **That one only appeared at
+  3,000 attempts; 600 was clean twice.**
+- **`StatModifierRatios` IS READABLE — do not transcribe it.** `0F:76CB`, thirteen
+  (numerator, denominator) pairs, and its opening bytes `25,100,28,100,…` occur exactly once in
+  the cartridge, so the address is found rather than believed. Same treatment as `TypeEffects`:
+  read it, then re-check the first pair is 0.25 and the middle one exactly 1:1.
 - **AN ESCAPE THAT FAILED IS NOT THE SAME AS AN ESCAPE.** Checking "did the battle continue?"
   on the next *observation* counts every run as a failure, because a run attempt is always
   followed by the text reporting it: 5,288 fled battles reported 5,372 failed escapes. Check it

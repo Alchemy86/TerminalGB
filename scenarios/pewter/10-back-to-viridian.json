@@ -23,6 +23,8 @@
   "guidance": "guidance/10-back-to-viridian.json",
   "timeout_frames": 200000,
   "evidence": [
-    "map=0x01 — wCurMap $D35E. No event flag records the second climb."
+    "map=0x01 — wCurMap $D35E. VIRIDIAN_CITY is const index 1, which the cartridge's own map table states: `map_const VIRIDIAN_CITY, 20, 18 ; $01` in constants/map_constants.asm. No event flag records the walk, so the position is the most exact record there is.",
+    "failure party_hp=0 — the same judgement as link 06, and the same cartridge fact behind it: a blackout on Route 1 is a real one, because HandlePlayerBlackOut's `cp OAKS_LAB / ret z` needs wCurOpponent to be OPP_RIVAL1.",
+    "the leg does not train, and that is a change with a cost. It used to fight Route 1's wild Pokemon for experience and lost 10 of 600 attempts to a wiped party; three shared battle-policy rules (a critical hit in the faint test, a threat-relative fight threshold, and the accuracy stages MoveHitTest applies) took that to 1 in 3,000, and the last one is irreducible — once the lead is one hit from death with no Pokemon Center on the leg, Gen 1's run check may simply fail twice. The prevention is not to be there, so training is left to link 11, which exists for exactly that. The lead therefore arrives at link 11 a level or so lower. See docs/agent/pewter-chain.md 8.13."
   ]
 }

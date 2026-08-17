@@ -930,7 +930,7 @@ impl Gen1Observer {
                 power: t.power(id),
                 kind,
                 effect: t.effect(id),
-                accuracy: t.accuracy_percent(id),
+                accuracy: hit_chance(t, t.accuracy_percent(id), &ours, &theirs),
                 pp,
                 effect_pct: t.multiplier(kind, theirs.types.0, theirs.types.1),
                 stab: kind == ours.types.0 || kind == ours.types.1,
@@ -945,7 +945,7 @@ impl Gen1Observer {
         // What we expect to take. The opponent's move list is in its own battle
         // struct; a player would have to learn it by being hit, and the
         // module docs say so.
-        let (mut worst, mut expected) = (0u16, 0u16);
+        let (mut worst, mut expected, mut crit) = (0u16, 0u16, 0u16);
         for slot in 0..terminalgb_plugin_trainer::gen1::NUM_MOVES {
             let id = m.peek(tr::ENEMY_MON + b::MOVES + slot as u16).unwrap_or(0);
             if id == 0 {
@@ -956,7 +956,7 @@ impl Gen1Observer {
                 id,
                 power: t.power(id),
                 kind,
-                accuracy: t.accuracy_percent(id),
+                accuracy: hit_chance(t, t.accuracy_percent(id), &theirs, &ours),
                 pp: 1,
                 effect_pct: t.multiplier(kind, ours.types.0, ours.types.1),
                 stab: kind == theirs.types.0 || kind == theirs.types.1,
@@ -965,6 +965,13 @@ impl Gen1Observer {
             let (_, hi) = battle::damage(t, &their_move, &theirs, &ours);
             worst = worst.max(hi);
             expected = expected.max(hi * their_move.accuracy as u16 / 100);
+            // The same move as a critical hit: Gen 1 substitutes `2 * Level`
+            // for `Level` in the damage formula, so the attacker is priced at
+            // twice its level and nothing else changes.
+            let mut crit_side = theirs.clone();
+            crit_side.level = theirs.level.saturating_mul(2);
+            let (_, chi) = battle::damage(t, &their_move, &crit_side, &ours);
+            crit = crit.max(chi);
         }
         let items = read_bag(m);
         Some(battle::View {
@@ -976,6 +983,7 @@ impl Gen1Observer {
             party_alive: st.party.iter().filter(|p| p.hp > 0).count().max(1),
             incoming_max: worst,
             incoming_expected: expected,
+            incoming_crit: crit,
             // How many turns have gone on a stat move is the driver's count,
             // not a memory read — the cartridge does not keep one.
             stat_turns: 0,
@@ -984,12 +992,29 @@ impl Gen1Observer {
     }
 }
 
+/// A move's accuracy with the stages applied, as `MoveHitTest` applies them:
+/// multiply by the attacker's accuracy ratio, then by the inverse of the
+/// defender's evasion ratio. Both ratios come out of the cartridge's own
+/// `StatModifierRatios`.
+fn hit_chance(
+    t: &terminalgb_plugin_trainer::rom::BattleTables,
+    base: u8,
+    attacker: &crate::battle::Side,
+    defender: &crate::battle::Side,
+) -> u8 {
+    let (an, ad) = t.stage_ratio(attacker.accuracy_stage());
+    let (en, ed) = t.stage_ratio(defender.evasion_stage());
+    // The evasion ratio divides, so its numerator and denominator swap.
+    let pct = base as u32 * an * ed / ad.max(1) / en.max(1);
+    pct.min(100) as u8
+}
+
 /// One side of a battle out of its 28-byte struct.
 fn read_side(m: &mut Machine, base: u16, nick: u16, mods: u16) -> crate::battle::Side {
     use terminalgb_plugin_trainer::gen1::battle as b;
     let mut name = [0u8; 11];
     m.peek_into(nick, &mut name);
-    let mut stages = [crate::battle::NEUTRAL_STAGE; 4];
+    let mut stages = [crate::battle::NEUTRAL_STAGE; 6];
     for (i, s) in stages.iter_mut().enumerate() {
         // Uninitialised WRAM reads as anything; only 1..13 is a stage.
         let raw = m

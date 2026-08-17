@@ -331,10 +331,24 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
                 VIRIDIAN_MART,
                 vec![stage(&[(3, 6), (3, 7)], Finish::Step("down"))],
             );
+            // **Turn west on the row the mart door opens onto, not six rows
+            // down it.** `(29,26)` is one tile above a one-way ledge —
+            // measured, `(29,27)` walking down lands on `(29,29)` — so a `goto`
+            // that overshoots it by two is over the ledge and can never get
+            // back: from row 28 nothing reaches row 26, and the leg then spends
+            // its whole budget sliding along row 28. That was 17 of 600
+            // attempts, every one of them there, and it is the same shape as
+            // link 04's `(4,4)` and link 05's row 4 — **a waypoint whose
+            // overshoot is unrecoverable is a waypoint pointing at a trap.**
+            //
+            // Row 20 crosses the city cleanly (checked, x = 29 to 19), it is
+            // six rows above the ledge, and the rest of the chain finishes even
+            // from *below* the ledge — so the leg now survives the overshoot
+            // instead of being ended by it.
             r.insert(
                 VIRIDIAN_CITY,
                 vec![stage(
-                    &[(29, 26), (19, 26), (19, 30), (20, 30), (20, 35)],
+                    &[(19, 20), (19, 30), (20, 30), (20, 35)],
                     Finish::Step("down"),
                 )],
             );
@@ -474,10 +488,14 @@ fn may_fight_wild(scenario: &str) -> bool {
     // to fight against four to run from. Measured: fighting them spent the
     // whole 2,500-call budget without leaving the maze, and left the party
     // worn down for the bug catcher who cannot be run from.
-    matches!(
-        scenario,
-        "05-the-rival-battle" | "10-back-to-viridian" | "11-train-for-the-forest"
-    )
+    // **And not on the walk back to Viridian either.** That leg's job is to
+    // arrive; training is link 11's, which exists for exactly that. Fighting
+    // there put the lead in a fight it could not finish once in 1,500 — the
+    // escape fails, Gen 1 lets it fail again, and no policy can rescue a
+    // Pokémon that is already one hit from dead with no Pokémon Center on the
+    // leg. **The cost is real and belongs beside the benefit**: the lead
+    // arrives at link 11 a level or so lower, and link 11 has to make it up.
+    matches!(scenario, "05-the-rival-battle" | "11-train-for-the-forest")
 }
 
 /// Where each leg is trying to get to, so an off-route map can be recognised
@@ -1392,6 +1410,7 @@ mod tally {
         RUN_FORBIDDEN,
         RUN_FAINTING,
         RUN_TRAINED,
+        RUN_HURT,
         RUN_FAILED,
         HP_LEFT_PERMILLE,
         HP_SAMPLES,
@@ -1429,7 +1448,8 @@ mod tally {
              HP left when it ended: {hp:.1}% of max ({} sample(s)); faints {}; \
              items used {}\n  \
              ran because: {} the leg forbids a win, {} one hit from fainting, \
-             {} the lead is already trained; {} escapes failed\n  \
+             {} the lead is already trained, {} too hurt to pick a fight; \
+             {} escapes failed\n  \
              turns spent lowering a stat: {}\n  \
              damage predictions: {} checked, {:.1}% inside the roll range, \
              {} under, {} over (a critical hit lands over)",
@@ -1446,6 +1466,7 @@ mod tally {
             get(&RUN_FORBIDDEN),
             get(&RUN_FAINTING),
             get(&RUN_TRAINED),
+            get(&RUN_HURT),
             get(&RUN_FAILED),
             get(&STAT_TURNS),
             get(&DMG_CHECKED),
@@ -1544,10 +1565,14 @@ impl BattleTally {
         } else if why.contains("only a cost") {
             self.ran = true;
             tally::bump(&tally::RUN_TRAINED, 1);
+        } else if why.contains("too hurt") {
+            self.ran = true;
+            tally::bump(&tally::RUN_HURT, 1);
         }
         self.ran_last_turn = why.contains("must not win")
             || why.contains("not worth it")
-            || why.contains("only a cost");
+            || why.contains("only a cost")
+            || why.contains("too hurt");
         if why.contains("bag can outrun") {
             tally::bump(&tally::ITEMS, 1);
         }

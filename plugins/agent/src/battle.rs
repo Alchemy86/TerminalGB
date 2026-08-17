@@ -134,8 +134,10 @@ pub struct Side {
     pub defense: u16,
     pub speed: u16,
     pub special: u16,
-    /// Attack, Defense, Speed, Special stages, 1..13 with 7 neutral.
-    pub stages: [u8; 4],
+    /// Attack, Defense, Speed, Special, **accuracy and evasion** stages,
+    /// 1..13 with 7 neutral. The last two are why SAND-ATTACK is dangerous and
+    /// were the last thing the policy could not see.
+    pub stages: [u8; 6],
 }
 
 impl Side {
@@ -150,6 +152,14 @@ impl Side {
             Stat::Special => 3,
         }]
     }
+    /// The accuracy stage, index 4 of `wPlayerMonStatMods`.
+    pub fn accuracy_stage(&self) -> u8 {
+        self.stages[4]
+    }
+    /// The evasion stage, index 5.
+    pub fn evasion_stage(&self) -> u8 {
+        self.stages[5]
+    }
 }
 
 /// One of our four move slots.
@@ -163,7 +173,15 @@ pub struct Move {
     /// The move's own type, which is often not its user's.
     pub kind: u8,
     pub effect: u8,
-    /// Percent, from the cartridge's 0-255 byte.
+    /// Percent — the move's own accuracy byte **with the accuracy and evasion
+    /// stages already applied**, exactly as `MoveHitTest` applies them: the
+    /// attacker's accuracy ratio, then the inverse of the defender's evasion
+    /// ratio, both out of `StatModifierRatios`.
+    ///
+    /// **Not the ROM value.** A Pidgey's SAND-ATTACK takes a 94% TACKLE to 62%
+    /// and then 47%, and a policy reading 94 off the move table walks into a
+    /// fight it is no longer winning — measured, that is exactly how three of
+    /// 3,000 attempts at link 10 died.
     pub accuracy: u8,
     pub pp: u8,
     /// Type effectiveness against the Pokémon in front of us, 100 = neutral.
@@ -254,6 +272,18 @@ pub struct View {
     /// The worst single hit we expect to take, and the expected one.
     pub incoming_max: u16,
     pub incoming_expected: u16,
+    /// The worst hit **including a critical**, which is the number that decides
+    /// whether we can survive the turn.
+    ///
+    /// Gen 1's critical hit substitutes `2 * Level` for `Level` in the damage
+    /// formula (`CriticalHitTest` sets the flag, `CalculateDamage` doubles the
+    /// level), so it is close to twice an ordinary hit — and it happens on
+    /// base-speed/2 out of 256 turns, which for the Pokémon on Route 1 is
+    /// around one turn in eleven. **Deciding "am I about to faint?" from the
+    /// ordinary maximum loses that fight roughly once in sixty**, measured: 10
+    /// of 600 attempts at link 10 ended with the party wiped, every one of them
+    /// above the ordinary threshold when the killing turn came.
+    pub incoming_crit: u16,
     /// How many turns of this battle have already gone on a stat move.
     pub stat_turns: u8,
     /// `wCurrentMenuItem` — which row the cursor is on in whatever battle menu
@@ -359,7 +389,11 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
         }
     }
 
-    let doomed = v.incoming_max >= v.ours.hp;
+    // **A critical hit is the worst case, not the top of the roll range.** It
+    // is not rare — one turn in eleven for a Route 1 Pokémon — and it is the
+    // difference between a policy that survives and one that dies once in
+    // sixty. See [`View::incoming_crit`].
+    let doomed = v.incoming_crit.max(v.incoming_max) >= v.ours.hp;
     let ours_turns = best
         .map(|m| View::turns(v.theirs.hp, m.expected()))
         .unwrap_or(u32::MAX);
@@ -383,9 +417,14 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
                 why: "one more hit and we faint, and the bag can outrun it",
             };
         }
-        // A swing that might still win outright.
+        // A swing that might still win outright — **and that is likely to
+        // land**. Requiring only that a good roll *could* end it is what kept
+        // the policy swinging a 47%-accuracy TACKLE at a Pidgey on 1 HP while
+        // it was itself on 2, which is a coin flip taken in place of an escape
+        // that also removes the incoming hit. More likely than not is the
+        // threshold, and it is a statement rather than a tuned constant.
         if let Some(m) = best {
-            if m.max >= v.theirs.hp && v.faster() {
+            if m.max >= v.theirs.hp && v.faster() && m.accuracy >= 50 {
                 return Action::Fight {
                     slot: m.slot,
                     why: "faster, and a good roll ends it first",
@@ -410,6 +449,31 @@ pub fn decide(v: &View, intent: &Intent) -> Action {
     if wild && v.ours.level >= intent.train_to && v.can_run() {
         return Action::Run {
             why: "the lead is trained; this encounter is only a cost",
+        };
+    }
+    // **Too hurt to pick a fight.** Experience is only worth having if the
+    // Pokémon collecting it survives, and on a leg with no Pokémon Center on
+    // the way there is nothing to repair the damage with. Half is the same
+    // threshold the heal rule uses where a healer exists — `docs/agent/
+    // pewter-chain.md` §8.4 is about what happens when the two differ.
+    //
+    // Measured: without this the lead grinds itself down fight by fight until
+    // one starts too low to survive and the escape fails — 6 of 600 attempts at
+    // link 10, after the critical-hit rule had already removed the obvious
+    // half.
+    // **Too hurt is relative to what is hitting us, not a flat fraction.**
+    // Half of maximum is the floor — it protects the *next* encounter as much
+    // as this one — but a lead that cannot survive two worst-case hits is in
+    // trouble whatever fraction that is, and the worst case includes a
+    // critical. Measured: at 11 of 20 against a Rattata hitting for 7 on a
+    // crit, the flat rule says fight, the exchange leaves 6, the escape then
+    // fails twice and the lead is dead. Two of 3,000, and the only two left.
+    if wild
+        && v.can_run()
+        && (v.ours.hp * 2 <= v.ours.max_hp || v.ours.hp <= v.incoming_crit * 2)
+    {
+        return Action::Run {
+            why: "too hurt to pick a fight, and nothing here to heal with",
         };
     }
 
@@ -525,7 +589,7 @@ impl Side {
                 .and_then(|x| x.as_u64())
                 .unwrap_or(dflt)
         };
-        let mut stages = [NEUTRAL_STAGE; 4];
+        let mut stages = [NEUTRAL_STAGE; 6];
         for (i, s) in stages.iter_mut().enumerate() {
             *s = arr("stages", i, NEUTRAL_STAGE as u64) as u8;
         }
@@ -553,6 +617,7 @@ impl View {
         w.num_field("party_alive", self.party_alive as f64);
         w.num_field("incoming_max", self.incoming_max as f64);
         w.num_field("incoming_expected", self.incoming_expected as f64);
+        w.num_field("incoming_crit", self.incoming_crit as f64);
         w.num_field("menu_item", self.menu_item as f64);
         w.obj_field("ours");
         self.ours.write(w);
@@ -647,6 +712,7 @@ impl View {
             party_alive: v.u64_field("party_alive").unwrap_or(1) as usize,
             incoming_max: v.u64_field("incoming_max").unwrap_or(0) as u16,
             incoming_expected: v.u64_field("incoming_expected").unwrap_or(0) as u16,
+            incoming_crit: v.u64_field("incoming_crit").unwrap_or(0) as u16,
             // Not on the wire: the driver counts this, because the cartridge
             // does not. `View::parse` therefore never fills it and the caller
             // sets it from its own tally before deciding.
@@ -690,7 +756,7 @@ mod tests {
             defense: def,
             speed: spd,
             special: 10,
-            stages: [NEUTRAL_STAGE; 4],
+            stages: [NEUTRAL_STAGE; 6],
             ..Default::default()
         }
     }
@@ -722,6 +788,7 @@ mod tests {
             party_alive: 1,
             incoming_max: 5,
             incoming_expected: 4,
+            incoming_crit: 5,
             ..Default::default()
         }
     }
@@ -847,6 +914,58 @@ mod tests {
     }
 
     #[test]
+    fn a_swing_that_probably_misses_is_not_taken_over_an_escape() {
+        // 2 HP against a 1 HP opponent, faster, and one hit ends either of us
+        // — but SAND-ATTACK has taken the move to 47%. That is the shape that
+        // killed three of 3,000 attempts at link 10.
+        let mut v = view(false);
+        v.ours.hp = 2;
+        v.theirs.hp = 1;
+        v.ours.speed = 20;
+        v.theirs.speed = 10;
+        v.incoming_max = 6;
+        v.incoming_crit = 6;
+        v.moves[0].accuracy = 47;
+        assert_eq!(
+            decide(&v, &TRAIN),
+            Action::Run {
+                why: "one more hit and we faint, and this fight is not worth it"
+            }
+        );
+        // With the move still connecting, the swing is right.
+        v.moves[0].accuracy = 94;
+        assert_eq!(
+            decide(&v, &TRAIN),
+            Action::Fight {
+                slot: 0,
+                why: "faster, and a good roll ends it first"
+            }
+        );
+    }
+
+    #[test]
+    fn a_critical_hit_is_what_about_to_faint_means() {
+        // Comfortably above the ordinary maximum and inside a critical, which
+        // is the case that was quietly losing one attempt in sixty.
+        // Above half health, so the too-hurt rule is not what is being tested.
+        let mut v = view(false);
+        v.ours.hp = 12;
+        v.incoming_max = 5;
+        v.incoming_crit = 13;
+        assert_eq!(
+            decide(&v, &TRAIN),
+            Action::Run {
+                why: "one more hit and we faint, and this fight is not worth it"
+            }
+        );
+        // ... and with no critical in range it fights on. The crit has to
+        // drop below half our HP too, or the two-worst-hits rule takes over —
+        // which is a different rule with its own test.
+        v.incoming_crit = 5;
+        assert!(matches!(decide(&v, &TRAIN), Action::Fight { .. }));
+    }
+
+    #[test]
     fn a_potion_is_used_when_it_outruns_the_hit_coming() {
         let mut v = view(true);
         v.ours.hp = 4; // incoming_max 5 would faint us
@@ -857,6 +976,49 @@ mod tests {
                 id: 0x14,
                 why: "one more hit and we faint, and the bag can outrun it"
             }
+        );
+    }
+
+    #[test]
+    fn a_fight_two_worst_hits_would_lose_is_not_picked_at_any_fraction() {
+        // Comfortably over half, and still two critical hits from dead.
+        let mut v = view(false);
+        v.ours.hp = 12;
+        v.ours.max_hp = 20;
+        v.incoming_crit = 7;
+        assert_eq!(
+            decide(&v, &TRAIN),
+            Action::Run {
+                why: "too hurt to pick a fight, and nothing here to heal with"
+            }
+        );
+        // The same fraction against something that cannot hurt us is a fight.
+        v.incoming_crit = 2;
+        assert!(matches!(decide(&v, &TRAIN), Action::Fight { .. }));
+    }
+
+    #[test]
+    fn a_hurt_lead_does_not_pick_a_wild_fight() {
+        let mut v = view(false);
+        v.ours.hp = 9; // of 19, so under half
+        v.incoming_crit = 1;
+        assert_eq!(
+            decide(&v, &TRAIN),
+            Action::Run {
+                why: "too hurt to pick a fight, and nothing here to heal with"
+            }
+        );
+    }
+
+    #[test]
+    fn a_hurt_lead_still_fights_a_trainer_it_cannot_flee() {
+        let mut v = view(true);
+        v.ours.hp = 9;
+        v.incoming_crit = 1;
+        assert!(
+            matches!(decide(&v, &TRAIN), Action::Fight { .. }),
+            "there is no running from a trainer battle, so the rule must not \
+             leave the policy with nothing to do"
         );
     }
 

@@ -26,7 +26,8 @@ uses.
 | our moves and their PP | `wBattleMonMoves` `$D01C`, `wBattleMonPP` `$D02D` |
 | each move's power, type, accuracy, effect | the cartridge's own `Moves` table, `0E:4000` |
 | type effectiveness | the cartridge's own `TypeEffects`, `0F:6474` |
-| stat stages | `wPlayerMonStatMods` `$CD1A`, `wEnemyMonStatMods` `$CD2E` |
+| stat stages, **including accuracy and evasion** | `wPlayerMonStatMods` `$CD1A`, `wEnemyMonStatMods` `$CD2E` |
+| what a stat stage multiplies by | the cartridge's own `StatModifierRatios`, `0F:76CB` |
 | the bag | `wNumBagItems` `$D31D`, `wBagItems` `$D31E` |
 | which menu row the cursor is on | `wCurrentMenuItem` `$CC26` |
 
@@ -55,8 +56,11 @@ Each is written down with its citation, the same call
 - **how much a potion heals** — `ld b, 20 ; Potion heal amount` and its two
   siblings in `ItemUseMedicine`, `engine/items/item_effects.asm`.
 
-Also transcribed: `StatModifierRatios`' `db 66, 100` for one stage down, used
-only to answer "would spending a turn flip the race?".
+`StatModifierRatios` is **not** transcribed — it is read, from `0F:76CB`, an
+address found by searching the cartridge for its own opening bytes
+(`25,100,28,100,…`, which occur exactly once) and re-checked on every read: the
+first pair must be 0.25 and the middle one exactly 1:1, because a table read
+from the wrong place almost never has a neutral stage in its middle.
 
 ---
 
@@ -66,14 +70,62 @@ Each step is a fact about the state, not a preference.
 
 1. **A knock-out that cannot fail ends the fight.** If the worst roll of a move
    still takes them to zero and it cannot miss, nothing else can be better.
-2. **One hit from fainting** (their worst hit ≥ our HP): heal if the bag holds
-   something that outruns it; swing if we are faster and a good roll ends it
-   first; run if this is a wild battle; switch if the bench is not empty.
+2. **One hit from fainting** — and *one hit* means **including a critical**,
+   not the top of the ordinary roll range. heal if the bag holds something that
+   outruns it; swing if we are faster and a good roll ends it first; run if this
+   is a wild battle; switch if the bench is not empty.
 3. **A wild fight we are not being paid for** — the lead is already at
    `train_to`, so the encounter is only a cost. Run.
-4. **Losing the race**: if their expected damage takes us down before ours takes
+4. **Too hurt to pick a fight** — under half health on a leg with no Pokémon
+   Center on the way, experience is not worth the risk of collecting it. Run.
+5. **Losing the race**: if their expected damage takes us down before ours takes
    them, and a stat move would *flip* that, spend the turn on it.
-5. Otherwise the move with the highest expected damage, accuracy folded in.
+6. Otherwise the move with the highest expected damage, accuracy folded in.
+
+### Three rules that link 10 found, and it took 3,000 attempts to find the third
+
+Link 10 is the first leg where the policy *fights* wild Pokémon at scale:
+
+- **A critical hit is the worst case, not the top of the roll range.** Gen 1
+  substitutes `2 * Level` for `Level` in the damage formula for a crit
+  (`CriticalHitTest` sets the flag, `CalculateDamage` doubles the level), so it
+  is close to twice an ordinary hit — and at base-speed/2 out of 256 it happens
+  about one turn in eleven for a Route 1 Pokémon. Deciding "am I about to
+  faint?" without it lost 10 of 600 attempts, every one of them comfortably
+  above the ordinary threshold when the killing turn came. `View::incoming_crit`
+  prices the same move with the attacker at twice its level, and the faint test
+  uses it.
+- **Too hurt to pick a fight, and "too hurt" is relative to what is hitting
+  us.** The old `ChainDriver::fight` had a flat half-health rule and the first
+  version of the policy dropped it, which is a regression this page should name
+  rather than quietly fix: without it the lead grinds itself down fight by fight
+  until one starts too low to survive — the remaining 6 of 600. But a flat
+  fraction is not enough either: at 11 of 20 against a Rattata hitting for 7 on
+  a critical, half says fight, the exchange leaves 6, and the escape then fails
+  twice. **A lead that cannot survive two worst-case hits is in trouble whatever
+  fraction that is**, so the rule is `hp*2 <= max_hp || hp <= 2*incoming_crit`,
+  and half remains as the floor because it protects the *next* encounter as much
+  as this one. §8.4 of [the chain](pewter-chain.md) is about what happens when
+  the fight and heal thresholds differ. **It is gated on the battle being
+  wild**, because there is no running from a trainer and a rule that leaves the
+  policy with nothing to do is worse than no rule.
+
+- **A move's accuracy is not the number in the move table.** `MoveHitTest`
+  multiplies it by the attacker's accuracy ratio and by the inverse of the
+  defender's evasion ratio, both out of `StatModifierRatios` — so a Pidgey's
+  SAND-ATTACK takes a 94% TACKLE to 62% and then 47%. The policy was reading 94
+  off the ROM and, at 2 HP against a Pokémon on 1 HP, choosing to swing rather
+  than escape because *"a good roll ends it first"*. It was a coin flip taken in
+  place of an escape that also removes the incoming hit. Effective accuracy is
+  what the snapshot carries now, and the swing has to be **more likely than not**
+  to land.
+
+  **This one only appeared at 3,000 attempts** — a 600-attempt run was clean
+  twice over. That is the bar earning its keep rather than being a formality.
+
+Together: link 10 went 98.3% → 99.0% → 99.9% → **100.0%**, and its battle report
+from **no faints at all** and 62.6% of the lead's HP left, against 6 faints and
+56.9% before.
 
 ### Running is a decision
 

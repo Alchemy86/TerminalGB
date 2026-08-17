@@ -23,6 +23,8 @@
   "guidance": "guidance/08-carry-it-back-to-pallet.json",
   "timeout_frames": 120000,
   "evidence": [
-    "map=0x00 — wCurMap $D35E. No event flag records the walk back."
+    "map=0x00 — wCurMap $D35E. PALLET_TOWN is const index 0, which the cartridge's own map table states: `map_const PALLET_TOWN, 10, 9 ; $00` in constants/map_constants.asm. No event flag records the walk back, so the position is the most exact record there is.",
+    "failure party_hp=0 — the same judgement as link 06, and the same cartridge fact behind it: a blackout on Route 1 is a real one, because HandlePlayerBlackOut's `cp OAKS_LAB / ret z` needs wCurOpponent to be OPP_RIVAL1.",
+    "the return is a different route from the climb, and that is the ledges rather than a preference. Measured on the cartridge: walking down from Viridian City (29,27) lands on (29,29) — a two-tile jump over row 28 — and from row 28 nothing reaches row 26. Southward a ledge is a jump; northward it is a wall."
   ]
 }

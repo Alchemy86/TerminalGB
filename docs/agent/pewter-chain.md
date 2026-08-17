@@ -220,7 +220,7 @@ figure — the map-settle change measured below takes it to 90.8% — and link 0
 was re-run at 600 attempts for the showcase film, which is why it carries the
 larger denominator.
 
-**Links 01-07 are superseded by the certified table below**; the rest of this
+**Links 01-10 are superseded by the certified table below**; the rest of this
 one is what the chain did while it was being built. Nothing here is at the bar
 — see §7 — and two of the remaining rows are a long way from it. Multiplied
 out, the chain end to end at these rates was about **6%**, and that is the
@@ -244,11 +244,16 @@ The bar is 99.9% per link, and 3,000 clean attempts is what supports it (§7).
 | 05 | the-rival-battle | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 64 |
 | 06 | cross-route-1 | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 49 |
 | 07 | collect-oaks-parcel | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 12 |
+| 08 | carry-it-back-to-pallet | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 46 |
+| 09 | receive-the-pokedex | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 24 |
+| 10 | back-to-viridian | 3,000 | 3,000 | **100.0%**, 99.87-100% | 3,000 | 3,000 | 47 |
 
-Measured 2026-08-16 on the captain's Pokémon Blue, 12 workers, load average
-8-33 with other work on the box. Wall clock 264 s, 82 s, 189 s, 405 s, 564 s
-395 s and 201 s. Zero failures in 3,000 bounds each link's failure rate at about
-**0.10%** by the rule of three, which is the bar and not better than it.
+Measured on the captain's Pokémon Blue, 12 workers, load average 8-55 with
+other work on the box. Zero failures in 3,000 bounds each link's failure rate at
+about **0.10%** by the rule of three, which is the bar and not better than it —
+and **zero is the standard, not "at most three"**: two failures in 3,000 is
+99.93%, which sounds like it clears a 99.9% bar and does not, because two
+failures bound the rate at about 0.24% at 95% confidence.
 
 **All six were certified in one run against the shared battle policy.** That is
 the standing rule and not a courtesy: the policy is code every link runs, so a
@@ -581,8 +586,8 @@ attempts** are needed to support a 99.9% claim. Every rate on this page is
 written with its N and its interval for that reason, and `corpus` prints the
 bound itself so it cannot be quoted without one.
 
-**Links 01 to 07 have had them** — 3,000 attempts each, zero failures, 3,000
-distinct trajectories each, tabulated in §5. **Links 08 to 14 have not**, and
+**Links 01 to 10 have had them** — 3,000 attempts each, zero failures, 3,000
+distinct trajectories each, tabulated in §5. **Links 11 to 14 have not**, and
 several are visibly a long way from the bar; their failure modes are §8. The
 chain is finished when all fourteen are certified and not before, and the
 end-to-end figure stays what the weakest link makes it.
@@ -685,6 +690,70 @@ Fighting the forest's own wild Pokémon makes it worse, not better: Caterpie,
 Weedle and their cocoons give almost no experience and cost about fifteen
 decisions to beat against four to run from. Measured — fighting them spent the
 entire budget without leaving the maze.
+
+### 8.13 Link 10 took four goes, and the last cause only appeared at 3,000
+
+Link 10 is the first leg where the policy *fights* wild Pokémon at scale, and it
+is the reason the battle policy has the rules it has. Each round was measured,
+and each removed a real cause rather than a symptom:
+
+| | attempts | reached | what the failures were |
+|---|---|---|---|
+| as found | 600 | 98.3% | 10 party wipes on Route 1 |
+| + critical hits in the faint test | 600 | 99.0% | 6 wipes |
+| + too hurt to pick a fight | 600 | **100.0%** | — |
+| the same policy at 3,000 | 3,000 | 99.9% | 3 wipes |
+| + accuracy stages | 3,000 | 99.93% | 2 wipes |
+| + two-worst-hits threshold | 3,000 | 99.97% | 1 wipe |
+| + the leg stops training | 3,000 | **100.0%** | — |
+
+**Two things to take from that table.** The accuracy-stage bug was invisible at
+600 attempts twice over, and only a 3,000-attempt run found it — the bar earning
+its keep rather than being a formality. And 2,998 of 3,000 is 99.93%, which
+*sounds* like it clears a 99.9% bar and does not: two failures in 3,000 bounds
+the rate at about 0.24% at 95% confidence, and the standard on this page has
+always been **zero failures in 3,000**.
+
+**The last change is a scenario decision rather than a policy one, and it has a
+cost.** Once the lead is one hit from death with no Pokémon Center on the leg,
+no policy can rescue it: the escape can fail, Gen 1 lets it fail again, and that
+is the end. The prevention is not to be there — so link 10 stops training, the
+same as links 06 and 08, and training is left to link 11, which exists for
+exactly that. **The lead therefore arrives at link 11 a level or so lower and
+link 11 has to make it up**, which is a real trade and is written here rather
+than buried in a diff.
+
+### 8.12 A waypoint above a one-way ledge, and the rule that is now three-for-three
+
+Link 08 lost 17 of 600 attempts and every one of them was on Viridian City's row
+28, sliding between x=26 and x=32 with the leg's first waypoint at `(29,26)`
+unreachable above it.
+
+Measured on the cartridge, one step at a time: walking down from `(29,27)` lands
+on `(29,29)` — a two-tile jump over row 28 — and from row 28 nothing reaches row
+26. So `(29,26)` sits one tile above a **one-way** ledge, and a `goto` that
+overshoots it by two is over the ledge for good. The overshoot itself is
+ordinary: an NPC standing on the target tile, or a detour, and the walk carries
+on past it.
+
+The repair is not a bigger budget. Row 20 — the row the mart door opens onto —
+crosses the city cleanly from x=29 to x=19 (checked), sits six rows above the
+ledge, and **the rest of the chain finishes even from below the ledge**: from
+`(29,30)`, `(19,30) → (20,30) → (20,35)` all still work. So the leg turns west
+first and then goes south, and an overshoot costs nothing.
+
+**That is the third time this exact shape has appeared**, which is what makes it
+a rule rather than three anecdotes:
+
+| link | the waypoint | what was one tile away |
+|---|---|---|
+| 04 | `(4,4)` | the rival's sprite, and a detour south into a cartridge soft-lock |
+| 05 | approach `(8,4)` | the rival parks there after taking his ball |
+| 08 | `(29,26)` | a one-way ledge |
+
+**A waypoint whose overshoot is unrecoverable is a waypoint pointing at a trap.**
+Prefer the turning point with slack around it, and prefer a route whose later
+waypoints still work if an earlier one is missed.
 
 ### 8.11 Link 05 was failing itself on a state the cartridge repairs
 
@@ -1298,8 +1367,8 @@ not exist:
   pool of entry states and the chain keeps every winning seed's exit state, so
   "how far off nominal can a link start and still succeed" is one command away.
   It has not been run.
-- **Seven of the fourteen links have no 3,000-attempt run**, so their rates are
-  not certified against the bar. Links 01-07 are (§5); 08 onwards are the work.
+- **Four of the fourteen links have no 3,000-attempt run**, so their rates are
+  not certified against the bar. Links 01-10 are (§5); 11 onwards are the work.
 
 ## 14. Related pages
 

@@ -294,6 +294,15 @@ impl RomTables {
 const TYPE_EFFECTS: (usize, u16) = (0x0F, 0x6474);
 /// `Moves` — the same `0E:4000` [`MOVES`] points at, as a bank pair.
 const MOVES_BANK: (usize, u16) = (0x0E, 0x4000);
+/// `StatModifierRatios` — `0F:76CB`, thirteen (numerator, denominator) pairs
+/// for stages 1..13 (`data/battle/stat_modifiers.asm`). `MoveHitTest` walks it
+/// twice, once for the attacker's accuracy stage and once for the defender's
+/// evasion; `CalculateDamage`'s callers use the same table for the four battle
+/// stats. Located by its own bytes rather than transcribed — the sequence
+/// `25,100,28,100,…` occurs exactly once in the cartridge.
+const STAT_RATIOS: (usize, u16) = (0x0F, 0x76CB);
+/// Thirteen pairs.
+const STAT_RATIO_BYTES: usize = 26;
 /// `NUM_ATTACKS` is `$A5`, so the table is that many [`MOVE_LENGTH`] entries.
 const MOVES_BYTES: usize = super::gen1::NUM_ATTACKS as usize * MOVE_LENGTH;
 /// Gen 1 stops looking for more rows well before this; the cap only stops a
@@ -323,6 +332,7 @@ pub const FIRST_SPECIAL_TYPE: u8 = 0x14;
 pub struct BattleTables {
     moves: Vec<u8>,
     chart: Vec<(u8, u8, u8)>,
+    ratios: Vec<u8>,
 }
 
 impl BattleTables {
@@ -342,7 +352,28 @@ impl BattleTables {
             }
             chart.push((a, byte(cb, at + 1), byte(cb, at + 2)));
         }
-        BattleTables { moves, chart }
+        let (rb, ra) = STAT_RATIOS;
+        let ratios = (0..STAT_RATIO_BYTES)
+            .map(|i| byte(rb, ra.wrapping_add(i as u16)))
+            .collect();
+        BattleTables {
+            moves,
+            chart,
+            ratios,
+        }
+    }
+
+    /// The multiplier one stat stage applies, as `(numerator, denominator)`.
+    ///
+    /// `stage` is the cartridge's own 1..13 with 7 neutral. Out of range, or a
+    /// table that was not read, gives 1:1 — a wrong answer here would silently
+    /// scale every estimate, so it fails to *no effect* rather than to a guess.
+    pub fn stage_ratio(&self, stage: u8) -> (u32, u32) {
+        let i = (stage.clamp(1, 13) as usize - 1) * 2;
+        match (self.ratios.get(i), self.ratios.get(i + 1)) {
+            (Some(&n), Some(&d)) if d != 0 => (n as u32, d as u32),
+            _ => (1, 1),
+        }
     }
 
     /// Does the chart we read look like Gen 1's?
@@ -362,7 +393,13 @@ impl BattleTables {
             (0x17, 0x15, 20), // ELECTRIC WATER    super
             (0x15, 0x05, 20), // WATER    ROCK     super
         ];
-        self.chart.len() > HEAD.len() && self.chart[..6] == HEAD
+        // And the ratio table, whose own first pair is 0.25 and whose middle
+        // entry must be exactly 1:1 — a table read from the wrong address
+        // almost never has a neutral stage in the middle of it.
+        let ratios_ok = self.ratios.len() == STAT_RATIO_BYTES
+            && self.ratios[0..2] == [25, 100]
+            && self.ratios[12..14] == [1, 1];
+        self.chart.len() > HEAD.len() && self.chart[..6] == HEAD && ratios_ok
     }
 
     fn field(&self, id: u8, off: usize) -> u8 {
@@ -602,6 +639,13 @@ mod tests {
                     None => 0,
                 };
             }
+            if bank == 0x0F && (0x36CB..0x36CB + 26).contains(&off) {
+                const RATIOS: [u8; 26] = [
+                    25, 100, 28, 100, 33, 100, 40, 100, 50, 100, 66, 100, 1, 1, 15, 10,
+                    2, 1, 25, 10, 3, 1, 35, 10, 4, 1,
+                ];
+                return RATIOS[off - 0x36CB];
+            }
             if bank == 0x0F && off >= 0x2474 {
                 let k = off - 0x2474;
                 let (i, f) = (k / 3, k % 3);
@@ -632,6 +676,18 @@ mod tests {
             0,
             "a status move has no power, and that is a fact"
         );
+    }
+
+    #[test]
+    fn a_stat_stage_scales_by_the_cartridges_own_ratio() {
+        let t = fake_tables();
+        assert_eq!(t.stage_ratio(7), (1, 1), "stage 7 is neutral");
+        assert_eq!(t.stage_ratio(6), (66, 100), "one down");
+        assert_eq!(t.stage_ratio(1), (25, 100), "the floor");
+        assert_eq!(t.stage_ratio(13), (4, 1), "the ceiling");
+        assert_eq!(t.stage_ratio(0), (25, 100), "clamped, not wrapped");
+        // A table that was never read must not scale anything.
+        assert_eq!(super::BattleTables::default().stage_ratio(1), (1, 1));
     }
 
     #[test]
