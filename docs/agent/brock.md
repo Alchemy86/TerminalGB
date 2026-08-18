@@ -444,11 +444,18 @@ cargo build --release --features scenario,image --example pewter_chain
 ./target/release/examples/pewter_chain states --rom <blue.gb> \
     --start-dir <pool>/exits --peek 'badges@0xD356'
 
-# the pre-forest experiment (NOT a link — scenarios/experiments/ is never
-# read by chain_files)
+# the two pre-forest experiments (NOT links — scenarios/experiments/ is
+# never read by chain_files, so nothing there can join the chain by accident)
+for g in x-train-route-22 x-train-route-2-south; do
+  ./target/release/examples/pewter_chain corpus --rom <blue.gb> \
+      --scenario scenarios/experiments/$g.json \
+      --start-dir <a certified link-10 pool>/exits --runs 40 --workers 6
+done
+# …then compare against link 11 itself, run the same way. Pair on the seed:
+# the entry state and the phase offset are the same whichever grass is walked.
 ./target/release/examples/pewter_chain corpus --rom <blue.gb> \
-    --scenario scenarios/experiments/x-train-route-2-south.json \
-    --start-dir <link-10 pool>/exits --runs 40
+    --scenario scenarios/pewter/11-train-for-the-forest.json \
+    --start-dir <a certified link-10 pool>/exits --runs 40 --workers 6
 ```
 
 `states` is new, and so is its `--peek NAME@0xADDR`: **a flag a link is about to
