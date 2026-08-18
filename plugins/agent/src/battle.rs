@@ -185,7 +185,9 @@ pub struct Move {
     pub accuracy: u8,
     pub pp: u8,
     /// **DISABLE has taken this move away.** Read from `wPlayerDisabledMove`
-    /// ($D06D), whose low nibble is the disabled slot plus one.
+    /// ($D06D), whose **high** nibble is the disabled slot plus one — measured
+    /// on eight stuck states rather than read off a macro, and the low nibble
+    /// is the turns left. See `terminalgb_plugin_trainer::gen1::PLAYER_DISABLED_MOVE`.
     ///
     /// This is a *separate* thing from having no PP and it has to be, because
     /// the game answers them differently: a move with no PP is greyed out and
