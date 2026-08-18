@@ -326,6 +326,17 @@ produced [§6](#6-the-first-result--a-battle-comparison-not-the-move-learning-on
 `question` is required in spirit and printed at the top: a rig that does not
 make you write it produces tables nobody can interpret six months later.
 
+**A second plan runs the same three arms on a link where the ceiling and the
+floor are further apart than any battle:**
+[`cross-route-3.json`](../../scenarios/testrig/cross-route-3.json), 20 attempts
+a cell on [link 20](cerulean.md), a corridor whose three compulsory trainer
+battles cannot be walked round. **Teacher 60/60 on all three starter lines,
+`mash-a` 0/60, `random` 0/60** — gap +100.0 points [+56.2, +143.8] on every
+subject, McNemar p = 0.0000, and the subjects cannot be separated: one gap and
+three identical ceilings. The endings are the interesting half, and they differ:
+`mash-a` is **stuck** on all twenty and `random` runs **out of calls** on all
+twenty.
+
 Every field is also a flag, and a flag wins, so a committed plan can be re-run
 with one thing changed without editing it:
 
