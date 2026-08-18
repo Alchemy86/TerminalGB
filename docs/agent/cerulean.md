@@ -30,6 +30,28 @@ already been measured under a name.
 
 ---
 
+## 0. Certified
+
+The chain's standing gate, run in order from the certified link-18 exit pool,
+each link entering from the previous one's exits, `--idle-spread 3001`, every
+attempt a distinct trajectory:
+
+| link | reached the goal | 95 % CI | |
+|---|---:|---|---|
+| **18b-shop-in-pewter** | **3000/3000** | 100.0 [99.9-100.0] | the first item the chain has ever bought |
+| **19-east-to-route-3** | **3000/3000** | 100.0 [99.9-100.0] | re-certified; the shop moved where it starts |
+| **20-cross-route-3** | **2980/3000** | **99.3 [99.0-99.6]** | **accepted, not certified** — §7 |
+| **21-heal-at-mt-moon** | **2993/3000** | **99.8 [99.5-99.9]** | **accepted, not certified** — §7 |
+| **22-down-into-mt-moon** | **3000/3000** | 100.0 [99.9-100.0] | |
+
+**Three of the five clear the bar** — zero failures in 3,000 bounds the failure
+rate at about 0.10 % by the rule of three, which is the 99.9 % claim the rest of
+the chain carries. **Two do not, they are labelled that way permanently as link
+11 is, and the cause is one thing: poison.** Twenty of link 20's twenty failures
+and all seven of link 21's are deaths on the walk; **not one is a battle**.
+
+---
+
 ## 1. The road, read out of the cartridge
 
 Route 3 does **not** run east into Mt Moon. Its own header says otherwise: map
@@ -124,13 +146,14 @@ detour is **shorter** than the row-8 crossing and fights nobody. The same trade
 
 ### Measured
 
-**598 of 600** = **99.7 %** [98.8-99.9] over 600 attempts from the certified
-link-19 exit pool, 600 distinct trajectories, phase spread 3001. Zero faints in
-2,972 battles; 80.4 % of the lead's HP left at the end of one; 94.5 % of 4,956
+**2,980 of 3,000 = 99.3 % [99.0-99.6]**, 3,000 distinct trajectories, phase
+spread 3001, from the certified link-19 exit pool. **Zero faints** in 14,984
+battles; 79.6 % of the lead's HP left at the end of one; 94.8 % of 24,889
 non-knockout damage predictions inside Gen 1's 217-255 roll range. Median 201
 decisions, p99 300, against a ceiling of 1,200.
 
-**It does not clear the chain's 99.9 % bar, and §7 is why.**
+**It does not clear the chain's 99.9 % bar, and §7 is why — every one of the
+twenty failures is a death on the walk, and none of them is in a battle.**
 
 ---
 
@@ -138,6 +161,10 @@ decisions, p99 300, against a ceiling of 1,200.
 
 **Goal `watch:last_blackout_map=0x0F` AND `party_missing_hp=0` AND `map=0x44`**
 — the same three-part claim [link 16](brock.md) makes, on the same building.
+
+**2,993 of 3,000 = 99.8 % [99.5-99.9]**, and the seven failures are §7's cause
+carried across the map edge: five die on Route 4's spur and **two die at the
+counter itself**, on (3,3), poisoned with the nurse's dialogue already open.
 
 The value `0x0F` is measured rather than assumed: `wLastBlackoutMap` ($D719)
 reads `$02` (Pewter City) on every one of 598 link-20 exits and `$0F` (Route 4)
@@ -274,8 +301,15 @@ the wire, so nothing that ignores it changes.
 
 ### 5b. Measured
 
-`18b-shop-in-pewter` reaches its goal in about 90 decisions, and every exit
-state carries exactly five POKé BALLs and five POTIONs with ¥2,151 left.
+**3,000 of 3,000 = 100.0 % [99.9-100.0]**, 3,000 distinct trajectories. Every
+exit state carries exactly five POKé BALLs and five POTIONs with ¥2,151 left,
+and the link takes about 90 decisions.
+
+**Link 19 was re-certified from the new pool and cost nothing: 3,000 of 3,000.**
+Its route changed with the insertion — the Mart's door is east of the pocket
+that made the old crossing three waypoints, so leaving it is one straight line
+along row 18 — and the shop's own exit state opens inside the stock list, which
+is why link 19 carries an empty shopping list of its own (§5's last paragraph).
 
 ---
 
@@ -316,8 +350,9 @@ offset `0xC7E` by that record's own bytes, which occur exactly once.
 models it now, and **every cave and forest route drawn here needs it**: the
 table has four CAVERN entries and eight FOREST ones, and this chain crosses
 Viridian Forest. The corrected grid gives a completely different route — up the
-x=20 corridor, east along row 10, back west along row 7 — and it is **60 of 60**
-first time.
+x=20 corridor, east along row 10, back west along row 7 — and it is **3,000 of 3,000 = 100.0 %
+[99.9-100.0]** — 60 of 60 on the first sample and certified without a repair.
+Zero faints in 9,967 battles, 92.0 % of the lead's HP left at the end of one.
 
 **It turns north at x=31 rather than x=30 on purpose.** The LASS at (30,4) faces
 down, so her cone runs along column 30: a walker that climbs it is stopped

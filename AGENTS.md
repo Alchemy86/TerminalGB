@@ -10554,3 +10554,204 @@ polygon, the drawing primitives, the AXI helpers and **the camera**; `swarm_film
   the live population. `self.box` persists across a frame with no live agent, so rule 6 keeps
   measuring against the last real box rather than going blind. Get either wrong and the equality
   gate goes red immediately, which is the point of having it.
+## Past the badge, towards Misty — Route 3, Route 4 and Mt Moon (`scenarios/pewter/18b-22`)
+
+**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md).** Four new links east of
+Pewter, one shop, and two repairs to shared code that every earlier link now runs on. Certified at
+the chain's own gate — 3,000 attempts a link, in order, each entering from the previous one's exit
+pool, `--idle-spread 3001`, every attempt a distinct trajectory:
+
+| link | reached the goal | 95 % CI | note |
+|---|---:|---|---|
+| **18b-shop-in-pewter** | **3000/3000** | 100.0 [99.9-100.0] | the first item the chain has ever bought |
+| **19-east-to-route-3** | **3000/3000** | 100.0 [99.9-100.0] | re-certified; the shop moved where it starts |
+| **20-cross-route-3** | **2980/3000** | **99.3 [99.0-99.6]** | **accepted, not certified** — poison, below |
+| **21-heal-at-mt-moon** | **2993/3000** | **99.8 [99.5-99.9]** | **accepted, not certified** — the same cause |
+| **22-down-into-mt-moon** | **3000/3000** | 100.0 [99.9-100.0] | |
+
+**Three of the five clear the bar and two do not**, and the two are labelled that way permanently
+as link 11 is. Twenty of link 20's twenty failures and all seven of link 21's are deaths on the
+walk; **not one is a battle.**
+
+- **THE ROAD IS READ OUT OF THE CARTRIDGE AND ROUTE 3 DOES NOT GO EAST INTO MT MOON.** Map `$0E`'s
+  connection byte is `0b1010` and its two blocks name `$0F` **north** and `$02` west; Route 4 then
+  connects east to Cerulean. The entry coordinates are derived from the alignment bytes *before*
+  they are observed — Pewter east (yalign 248, xalign 0) → Route 3 **(0,10)**; Route 3 north
+  (yalign 17, xalign 206) → Route 4 **(9,17)** — and both agreed with the real exit pools, 600 and
+  598 states.
+- **Route 4's three doors are the Pokémon Center (11,5), the mountain's west mouth (18,5) and the
+  mouth it puts you back out of (24,5)**, and x=20-23 is solid on rows 6, 7 and 8, so the third is
+  not reachable on foot from the first two. **Mt Moon is not a shortcut round Route 4; it is the
+  only way east.**
+
+### A COLLISION LIST ALONE INVENTS A ROUTE THROUGH A CAVE — `TilePairCollisionsLand`
+
+**The single most reusable thing here, and it silently invalidates any cave or forest route drawn
+before it.** Gen 1 keeps a second table beside each tileset's collision list: three-byte records of
+`(tileset, tile, tile)` terminated by `$FF`, naming pairs that are **each walkable on their own**
+and that the game refuses to let you step *between*. `CheckForTilePairCollisions`
+(`home/overworld.asm`) is what reads it.
+
+- **Found at file offset `0xC7E` by its own first record**, `11 20 05` = `CAVERN, $20, $05`, whose
+  bytes occur exactly once in the cartridge. Four CAVERN entries, eight FOREST ones, then
+  `TilePairCollisionsWater` immediately after the `$FF`.
+- **Symptom when it is missing:** Mt Moon 1F's one-tile corridor at x=9 is tile `$05`, which *is* in
+  tileset 17's walkable list, and the floor beside it is `$20`. A grid built from the collision list
+  alone routes straight through it and **53 of 60 attempts ended stuck within four tiles of it**,
+  the solver pressing `left` eight times into a wall. With the table modelled the route is
+  completely different — up the x=20 corridor, east along row 10, back west along row 7 — and it is
+  **60 of 60 first time**.
+- `tools/pewter-chain/route_audit.py`'s `Map.step` refuses a blocked pair now
+  (`find_tile_pair_collisions`). **Viridian Forest is tileset 3 and has eight entries**, so link
+  13's route happens not to cross one rather than being immune.
+
+### MT MOON IS FOUR POCKETS AND A LADDER YOU CANNOT TAKE
+
+Read out of the maps' own warp tables, not a walkthrough. B1F is four regions that do not connect
+on foot, and each 1F ladder lands in a different one: 1F (5,5) → B1F (5,5); 1F (17,11) → B1F
+(25,9); 1F (25,15) → B1F (25,15). **The exit — B1F warp[7] at (27,3), back to Route 4 (24,5) — is
+in a fourth pocket that no 1F ladder reaches at all**, entered only from B2F through B1F's (23,3).
+So every crossing is 1F → B1F → B2F → back up to B1F. **The (25,15) ladder is a dead end for it**:
+from the B2F entry its pocket leads to, (15,27), there is no path to the exit ladder at (5,7).
+
+### THREE OF ROUTE 3'S EIGHT TRAINERS CANNOT BE AVOIDED AT ANY SIGHT RANGE
+
+Measured the way Viridian Forest's one was — block a single trainer's facing cone on the
+cartridge's own grid and ask whether the west edge still reaches the north edge. BUG CATCHER at
+(10,6) severs at range 1, YOUNGSTER at (14,4) at range 2, BUG CATCHER at (24,6) at range 3.
+Blocking all eight severs it at every range, so a fight was compulsory before any was named.
+
+- **A DEFEATED TRAINER PARKS ON THE TILE THE ROUTE NEEDED — the fourth instance of one rule.** The
+  first version crossed the shelf on row 4 and scored **0 of 60**, 56 of them standing on (19,4)
+  with 172 battles won, none lost and 80.3 % of the lead's HP still there. The LASS at (23,4) has
+  sight range **4**, which the cluster reads off directly: row 4 is walkable only from x=15 to
+  x=22, she sees x=19 to x=22, so a walker heading east is stopped at the westmost tile of her cone
+  and `TrainerWalkUpToPlayer` leaves her body on (20,4) — and row 5 is already sealed at x=19 by
+  another trainer's body. The route crosses on row 6 instead, and **every trainer it engages is
+  engaged from a tile he is already adjacent to**, so none of them can park on anything.
+  Link 04's `(4,4)`, link 05's row 4 and link 08's Viridian ledge were the first three; Mt Moon's
+  LASS at (30,4) was caught by the same rule before it could cost anything.
+- **The one fight on the route that can be lost is routed round, and the trade is measured.** With
+  the shelf fixed, 56 of 60 — and all four failures were faints on (33,8), a level 14 JIGGLYPUFF
+  with 115 base HP, SING and DISABLE, on a route with no Pokémon Center. Rows 11-12 run clear from
+  x=24 to x=37 and column 37 climbs through the same gap, so the detour is **shorter** than the
+  crossing it replaces and fights nobody: 119 of 120. The same trade link 17 makes with the gym's
+  junior trainer.
+
+### DISABLE — a gap in the shared battle policy, and it deadlocks rather than losing
+
+**A move a JIGGLYPUFF has disabled is still in the move list, still has PP, and selecting it costs
+no turn.** So a policy that re-picks it does not lose the fight, *it never finishes it*: 11 of 60
+attempts ran out of model calls standing on one tile with the cartridge answering "The move is
+disabled!" six hundred times in a row. `Move::usable()` is `pp > 0 && !disabled` now, and every
+rule in `battle::decide` reasons through it — the fallback "nothing damaging is left with PP → use
+whatever is left" was already there and had never been asked.
+
+- **`wPlayerDisabledMove` ($D06D) is `(slot + 1) << 4 | turns_left`**, zero when nothing is
+  disabled, and **the nibble order is measured rather than read off a macro**: eight stuck states
+  give `$38 $18 $17 $21 $37 $13 $34` beside `wPlayerDisabledMoveNumber` ($CCEE) naming EMBER,
+  TACKLE, TACKLE, GROWL, EMBER, TACKLE, EMBER — every high nibble is that move's own slot plus one.
+- **Do not read `$CCEE` instead.** The eighth state held WATER GUN with `$D06D` back at zero: the
+  move *number* goes stale when DISABLE expires, and only `$D06D` says whether anything is disabled
+  at all. A policy keyed on it alone refuses a usable move for the rest of the run.
+- Pinned by `battle::tests::a_disabled_move_is_never_chosen` (teeth proven) and
+  `disable_and_empty_pp_are_both_unusable`. **Shared driver code, so every certified link is
+  re-certified against it** — no opponent in links 01-19 carries DISABLE, so nothing before could
+  change, but the rule is that it is re-run rather than reasoned about.
+
+### The shop, and four things a Gen 1 counter teaches
+
+`18b-shop-in-pewter` is the door [`docs/gen1/catching.md`](docs/gen1/catching.md) §1 asked the
+chain crew for: five POKé BALLs and five POTIONs for ¥2,500 of the ¥4,651 the chain carries out of
+the gym. **Pewter rather than Viridian** — catching.md proposed Viridian's mart, which the chain
+already enters at link 07, but inserting a link there re-certifies everything from 07 onwards;
+Pewter's carries POKé BALLs too and costs three links. **`18b` is an insertion, not a
+renumbering**: link 19's certification is a published measurement tied to that name, and the chain
+reads `scenarios/pewter/*.json` in sorted order.
+
+- **THE BAG WAS NOT EMPTY, AND catching.md's TABLE STOPPED ONE LINK TOO EARLY.** From link 17
+  onwards `wNumBagItems` reads **1** and `$D31E` holds `$EA` — TM34, which the gym gives with the
+  badge and which link 17's own evidence already records. Not a ball, so the verdict was unchanged;
+  the *count* was not.
+- **The generic text handler buys the shop out.** `advance_text` is A up to twenty-four times and
+  every screen in a Gen 1 shop is a menu with something selected — the first trace bought nine POKé
+  BALLs by accident and was still going. The counter branch sits *before* the generic one.
+- **What has been bought is read out of the bag, never counted off the screen.** A confirmation box
+  is on screen across more than one decision and the money in its corner is redrawn mid-box, so
+  neither "the text changed" nor "the box was not there last time" is one purchase: measured, five
+  and five paid for and **nine and one** in the bag.
+- **Gen 1 puts the stock list's cursor back on the first line after a purchase**, so a driver that
+  counts its own `down` presses buys the first thing while believing it is buying the second —
+  **twenty-one POKé BALLs and one POTION**.
+- **And the cursor is read off the `▶` in the raw text, not off `screen.selected`.** `selected` cuts
+  an entry at the column where any other row starts a word, and a shop screen is four boxes side by
+  side, so "POKé BALL" comes back as "POKé" and no stock name ever matches: twenty-three POKé BALLs
+  and no POTIONs, the cursor never once believed to be anywhere. The same rule the move list's
+  `HORN ATTACK` records, in a wider screen.
+- **The clerk is talked to across the counter**: map `$38`'s (1,5) is tile `$1E`, one of the
+  tileset's counter tiles, so standing at (2,5) facing left puts a counter in front and Gen 1 looks
+  one tile further. Standing next to the clerk is impossible — (1,5) is the counter and (0,4)/(0,6)
+  are wall.
+
+### `game.bag` is in the snapshot, and the battle bag menu is worked
+
+**A player that cannot see its own bag cannot decide to use anything in it**, and until the chain
+bought something there was nothing to see — so the bag was only ever read inside a battle. It is in
+every snapshot now (`[{id, count}]`, additive to the wire). Buying at a counter, curing a poisoned
+lead in the overworld and "do we hold a ball" are all bag questions asked outside a battle.
+
+**And the moment the bag had potions in it the policy started choosing `Action::Item` and the
+solver had nowhere to put it**: it backed out of the bag, the policy picked ITEM again, and the two
+alternated — 485 of them in one battle, five attempts of 3,000 lost to it. Two menus, one decision
+(`item_step`), the bag row read from `s.bag`, and **both prompts that open the party list matched**:
+a switch asks "Choose a POKéMON" and an item asks "Use item on which POKéMON?" — with only the first
+matched the item's second menu fell through to the bag navigation and pressed `down` at a party list
+for the rest of the battle.
+
+### THE RESIDUAL IS POISON, AND THE CHAIN STILL HAS NO ANSWER TO IT
+
+Links 20 and 21 are the only two links past the gym that do not clear the 99.9 % bar, and **the
+failures are one cause**: Gen 1 poison costs 1 HP every four steps in the overworld and it faints.
+Route 3 has no Pokémon Center, both WEEDLE-carrying trainers on the route are forced by the
+geometry, and the deaths cluster in the last tiles before the exit.
+
+- **A heal detour back to Pewter cannot fix it, and the arithmetic says so before a run does.** The
+  trigger is half of maximum, ~26 of 53 HP; the walk back is ~75 steps of Route 3 plus ~35 of
+  Pewter, which is ~28 HP of poison. The detour kills the thing it is trying to save — and once
+  past x≈27 the *goal* is nearer than Pewter anyway.
+- **Potions in the bag do not fix it either, and that is measured rather than assumed.**
+  `battle::decide` reaches for a healing item only when it is `doomed` **in a battle**, and on
+  Route 3 a wild encounter is refused before that rule is reached while a trainer battle rarely
+  gets there. They removed every battle faint (4 → 0 in 3,000) and moved the rate by nothing that
+  600 or 3,000 attempts can separate.
+- **The two named repairs, in the order they would pay:** using an item in the *overworld* — six
+  menu screens, all screen-readable, and an ANTIDOTE cures poison outright rather than buying steps
+  — and reaching for one *before* running from a wild encounter, which is cheaper because the ITEM
+  menu is where the policy already points and Route 3's 20/256 grass rate meets something within a
+  few tiles almost every time.
+
+### MISTY NEEDS A SECOND POKÉMON FOR ONE STARTER, AND IT IS A TABLE FACT
+
+Not measured — no run has reached Cerulean — but it is read out of the cartridge rather than
+guessed, and it decides where the shop had to go, so it is written down now.
+`gen1_tables.py --plan misty`: STARYU 18 (WATER) and STARMIE 21 (PSYCHIC/WATER), beaten by GRASS,
+ELECTRIC and — against STARMIE — BUG. **BULBASAUR's line holds VINE WHIP from level 13, 4x on
+STARMIE and 2x on STARYU; SQUIRTLE's holds nothing (WATER is resisted by both); CHARMANDER's holds
+nothing ever, because EMBER is FIRE.** The same shape as Brock, one gym later.
+
+The catchable answers on the road ahead are **PARAS** (Mt Moon B1F 1/10 at level 10, B2F 2/10 at
+10-12 — BUG/GRASS, which answers both) and **ZUBAT** (LEECH LIFE, BUG, STARMIE only). PIKACHU is
+the classic answer and is in Viridian Forest, six links behind; BELLSPROUT is past Misty. So the
+catch belongs inside Mt Moon, which is why the balls are bought before Route 3.
+
+### The test rig on link 20, and what it says
+
+`scenarios/testrig/cross-route-3.json` — one subject per starter line, teacher against `mash-a` and
+`random`, 20 attempts a cell from the certified link-19 pool. **Teacher 60/60 on all three lines;
+`mash-a` 0/60 and `random` 0/60**, gap **+100.0 points [+56.2, +143.8]** on every subject
+(McNemar p = 0.0000), and the subjects cannot be separated — one gap and three identical ceilings.
+The endings are the interesting half: `mash-a` is **stuck** on all twenty, `random` runs **out of
+calls** on all twenty. A corridor of forced trainer battles is not a floor either of them reaches.
+
+**There is still no trained player in this repository**, so the split is `n/a` and these are a
+ceiling and a floor rather than a distillation result.
