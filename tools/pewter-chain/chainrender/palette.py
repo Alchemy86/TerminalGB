@@ -32,21 +32,55 @@ PANEL = (24, 27, 33)
 INK = (226, 230, 238)
 DIM = (140, 148, 162)
 
-# --- agent-frames, read INVERTED (blue = heavily trodden, warm = novel) ------
-# `swarm_film.py`'s heat. Deliberately its own ramp: it is agent-*frames* and
-# the opposite polarity to the traffic ramp below, and sharing swatches between
-# two units read in opposite directions would be the worst of both.
+# **The world stays grey and the agents carry the colour.** That is what makes
+# a crowd readable without labels: the eye separates agent from world instantly
+# and the colour carries the meaning. A Game Boy frame is four shades already,
+# so nothing has to be desaturated to get there.
+#
+# **The hue is the heat map, read at the agent's own feet** — how many
+# agent-frames the swarm has already spent on the tile it is standing on. Not
+# progress: novelty. Standing where thousands have already been is one end of
+# the scale, standing on rarely-trodden ground is the other, so **the frontier
+# lights up on its own** and an agent doing something genuinely new stands
+# apart from the crowd milling around Pallet Town.
+#
+# It is the same visitation count `corpus_report.py` draws its heat maps from —
+# one computation, one source of truth — and it is count-based exploration
+# novelty made visible: the colour *is* the signal an RL agent would be
+# rewarded on.
+#
+# **This is a declared exception to the categorical colour guard**, not a
+# silent one. That guard says no colour may appear that was not in the source
+# framebuffer, and it still applies **to the map layer**: the map art is
+# reproduced exactly. The agent overlay is deliberately outside it.
 HEAT_HUE = [
-    (72, 122, 255), (64, 176, 255), (60, 208, 200), (96, 220, 128),
-    (176, 224, 88), (232, 208, 72), (248, 160, 64), (252, 96, 72),
+    (70, 110, 210), (70, 130, 215), (70, 150, 220), (70, 175, 215),
+    (70, 195, 195), (80, 205, 160), (110, 210, 120), (150, 215, 90),
+    (195, 210, 70), (225, 195, 65), (240, 165, 60), (245, 130, 60),
+    (250, 100, 70), (255, 80, 110),
 ]
 
+# **`wIsInBattle` is not a boolean and a catch-all arm over it is a defect.**
+# The track carries `$D057` verbatim: 1 is a wild encounter, 2 is a trainer,
+# and **`$FF` means the player blacked out** — which is the end of the run, not
+# a fight (`plugins/agent`'s own reader had exactly this bug, and displayed a
+# whole stale battle panel in the overworld because of it). Anything that is
+# not 1 or 2 is therefore drawn as *not fighting* rather than swept into the
+# truthy branch. Measured over the corpus, only 0, 1 and 2 occur today; the
+# point is that the fourth value cannot quietly become a battle marker.
 BATTLE_KIND = {1: "wild", 2: "trainer"}
+# Two colours because the two are different events, and on this chain one of
+# them is a story beat: every trainer battle in links 01-11 is the rival in
+# Oak's lab, and the swarm turning red together in one room is the picture.
 BATTLE_HUE = {"wild": (255, 90, 90), "trainer": (255, 170, 60)}
 
 # --- distinct agents, sequential, cool to warm -------------------------------
-# Ten bands, because a swarm of 24 has 24 possible values and ten is as many as
-# an eye separates in a legend.
+# **Sequential, cool to warm, and it is DISTINCT AGENTS.** Deliberately its own
+# ramp rather than `HEAT_HUE` above: that one is agent-*frames* and is read
+# inverted (blue = heavily trodden, warm = novel, so an agent doing something
+# new lights up). Reusing the same swatches for the opposite polarity and a
+# different unit would be the worst of both. Ten bands, because a swarm of 24
+# has 24 possible values and ten is as many as an eye separates in a legend.
 TRAFFIC_RAMP = [
     (64, 96, 176), (62, 124, 188), (60, 152, 190), (64, 178, 176),
     (86, 196, 140), (132, 204, 100), (186, 204, 76), (226, 186, 68),

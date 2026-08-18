@@ -53,34 +53,30 @@ import argparse
 import bisect
 import collections
 import csv
-import json
 import math
 import os
 import sys
 
-# The Game Boy's own walk tile. Used only where nothing else can answer — the
-# camera's minimum width and the sprite's nominal size. **Every position on
-# screen comes from the atlas entry's own `tile_px`**, never from this.
-TILE = 16
-FPS_GB = 59.7275
+# The directory this file sits in has a hyphen in its name, so `chainrender` is
+# not importable by name from anywhere else — every tool here puts its own
+# directory on `sys.path` first. See `chainrender/__init__.py` for what moved
+# there and why.
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
 
-FACING = {0: "down", 4: "up", 8: "left", 12: "right"}
-# **Measured on the cartridge, from the tracks themselves.** `wWalkCounter`
-# ($CFC5, atlas `rom,live`) runs 7,6,5,4,3,2,1 with each value held two frames —
-# fourteen frames of animation — and `wXCoord`/`wYCoord` ($D362/$D361) update on
-# the frame it reaches 0. So **during a step the coordinate is still the tile
-# being left**, and the sprite is somewhere between it and the next one.
-#
-# That is the whole reason a film drawn from coordinates alone teleports, at
-# any compression and any frame rate: the coordinate does not move during the
-# walk, it snaps at the end of it. The offset from the coordinate towards the
-# facing direction is `(8 - counter) * 2` pixels, which is 2 px at counter 7 and
-# 14 px at counter 1 — a sixteen-pixel tile crossed in eight steps of two.
-STEP_PX = 2
-WALK_STEPS = 8
-# Fallback glide span. **The real one is MEASURED from the tracks at run time**
-# (`walk_span`) — see there for why a constant was the wrong shape.
-WALK_FRAMES = 14
+from chainrender import paint, palette, tracks  # noqa: E402
+from chainrender.atlas import Atlas  # noqa: E402
+from chainrender.camera import Camera  # noqa: E402
+from chainrender.paint import on_screen, tint, wrap_hud  # noqa: E402
+from chainrender.palette import (  # noqa: E402
+    BATTLE_HUE, BATTLE_KIND, BG, HEAT_HUE,
+)
+from chainrender.tracks import (  # noqa: E402
+    FACING, FPS_GB, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS, flag_at,
+    interpolate, link_at, load_links, track_files, walk_span,
+)
+
 
 # **How far above its own tile the player sprite is drawn, in tiles. MEASURED
 # AGAINST THE CARTRIDGE, not eyeballed.** A real game screen was captured at a
@@ -99,80 +95,6 @@ WALK_FRAMES = 14
 # is 16 px, an agent stands in the middle of it, and its sprite is lifted a
 # quarter of a tile. Reproduce with `tools/pewter-chain/measure_anchor.py`.
 SPRITE_LIFT = 4 / 16
-
-BG = (16, 18, 22)
-
-# **The world stays grey and the agents carry the colour.** That is what makes
-# a crowd readable without labels: the eye separates agent from world instantly
-# and the colour carries the meaning. A Game Boy frame is four shades already,
-# so nothing has to be desaturated to get there.
-#
-# **The hue is the heat map, read at the agent's own feet** — how many
-# agent-frames the swarm has already spent on the tile it is standing on. Not
-# progress: novelty. Standing where thousands have already been is one end of
-# the scale, standing on rarely-trodden ground is the other, so **the frontier
-# lights up on its own** and an agent doing something genuinely new stands
-# apart from the crowd milling around Pallet Town.
-#
-# It is the same visitation count `corpus_report.py` draws its heat maps from —
-# one computation, one source of truth — and it is count-based exploration
-# novelty made visible: the colour *is* the signal an RL agent would be
-# rewarded on.
-#
-# **This is a declared exception to the categorical colour guard**, not a
-# silent one. That guard says no colour may appear that was not in the source
-# framebuffer, and it still applies **to the map layer**: the map art is
-# reproduced exactly. The agent overlay is deliberately outside it.
-HEAT_HUE = [
-    (70, 110, 210), (70, 130, 215), (70, 150, 220), (70, 175, 215),
-    (70, 195, 195), (80, 205, 160), (110, 210, 120), (150, 215, 90),
-    (195, 210, 70), (225, 195, 65), (240, 165, 60), (245, 130, 60),
-    (250, 100, 70), (255, 80, 110),
-]
-
-
-def tint(sprite, rgb, Image):
-    """Recolour a four-shade sprite onto one hue, keeping its own shading and
-    its alpha. Nothing is invented: the luminance ramp is the sprite's."""
-    px = sprite.load()
-    out = Image.new("RGBA", sprite.size)
-    op = out.load()
-    for y in range(sprite.height):
-        for x in range(sprite.width):
-            r, g, b, al = px[x, y]
-            if al == 0:
-                op[x, y] = (0, 0, 0, 0)
-                continue
-            # 0 = the sprite's darkest ink, 1 = its lightest.
-            t = r / 255.0
-            op[x, y] = (
-                int(rgb[0] * (0.35 + 0.65 * t)),
-                int(rgb[1] * (0.35 + 0.65 * t)),
-                int(rgb[2] * (0.35 + 0.65 * t)),
-                al,
-            )
-    return out
-
-
-def track_files(d):
-    """`agent -> path`, for every track file in a directory.
-
-    `agent-NNN.csv` from a whole-chain film run, or `path-NNNNN.csv` from a
-    corpus of one link — the same format either way, and a showcase of one busy
-    stretch wants the second.
-    """
-    out = {}
-    for name in sorted(os.listdir(d)):
-        if name.endswith(".links.csv") or not name.endswith(".csv"):
-            continue
-        if name.startswith("agent-"):
-            n = int(name[6:-4])
-        elif name.startswith("path-"):
-            n = int(name[5:-4])
-        else:
-            continue
-        out[n] = os.path.join(d, name)
-    return out
 
 
 class Corpus:
@@ -249,145 +171,6 @@ class Corpus:
             self.end[n] = last
 
 
-def flag_at(pairs, frame):
-    """The battle flag in force at `frame`, from its change points.
-
-    Zero before the track starts, which is "not in a battle" and is what the
-    renderer wants for an agent that has not entered the film yet.
-    """
-    if not pairs or frame < pairs[0][0]:
-        return 0
-    lo, hi = 0, len(pairs) - 1
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if pairs[mid][0] <= frame:
-            lo = mid
-        else:
-            hi = mid - 1
-    return pairs[lo][1]
-
-
-# **`wIsInBattle` is not a boolean and a catch-all arm over it is a defect.**
-# The track carries `$D057` verbatim: 1 is a wild encounter, 2 is a trainer,
-# and **`$FF` means the player blacked out** — which is the end of the run, not
-# a fight (`plugins/agent`'s own reader had exactly this bug, and displayed a
-# whole stale battle panel in the overworld because of it). Anything that is
-# not 1 or 2 is therefore drawn as *not fighting* rather than swept into the
-# truthy branch. Measured over the corpus, only 0, 1 and 2 occur today; the
-# point is that the fourth value cannot quietly become a battle marker.
-BATTLE_KIND = {1: "wild", 2: "trainer"}
-# Two colours because the two are different events, and on this chain one of
-# them is a story beat: every trainer battle in links 01-11 is the rival in
-# Oak's lab, and the swarm turning red together in one room is the picture.
-BATTLE_HUE = {"wild": (255, 90, 90), "trainer": (255, 170, 60)}
-
-
-class Atlas:
-    """PixelGB's Kanto atlas: one image, and where every map sits in it.
-
-    The manifest is the whole of the layout. Nothing here searches, packs or
-    guesses — `rect` says where a map is drawn and `tile_px` says how big its
-    walk tile is, so `place()` is one multiply and one add.
-    """
-
-    def __init__(self, manifest_path, image_path=None,
-                 rendering="region-tint", scale=1):
-        with open(manifest_path) as f:
-            man = json.load(f)
-        d = os.path.dirname(os.path.abspath(manifest_path))
-        self.cartridge = man.get("cartridge", {})
-        self.placement = man.get("placement", {})
-        geom_scale = man.get("geometry", {}).get("scale", 1)
-
-        if image_path is None:
-            image_path, scale = self._pick_image(man, d, rendering, scale)
-        # "the 2x, 4x … images are nearest-neighbour enlargements of this same
-        # layout: multiply any rect by the scale" — geometry, atlas.json.
-        self.mul = scale / float(geom_scale)
-        self.image_path = image_path
-        self.scale = scale
-
-        self.origin, self.tile_px, self.kind, self.label = {}, {}, {}, {}
-        self.size, self.tiles = {}, {}
-        for m in man["maps"]:
-            r = m["rect"]
-            self.tiles[m["id"]] = (m["tiles"]["width"], m["tiles"]["height"])
-            self.origin[m["id"]] = (r["x"] * self.mul, r["y"] * self.mul)
-            self.size[m["id"]] = (r["width"] * self.mul, r["height"] * self.mul)
-            # Per-entry, as the manifest asks. This atlas happens to be uniform;
-            # honouring the field costs a dictionary and means a future atlas
-            # that draws interiors smaller cannot silently misplace them.
-            self.tile_px[m["id"]] = m["tile_px"] * self.mul
-            self.kind[m["id"]] = m["kind"]
-            self.label[m["id"]] = m["name"].replace("_", " ").title()
-
-    @staticmethod
-    def _pick_image(man, d, rendering, scale):
-        want = [im for im in man.get("images", [])
-                if im.get("rendering") == rendering and im.get("scale") == scale]
-        if not want:
-            sys.exit(f"atlas has no {rendering} image at {scale}x; it has "
-                     + ", ".join(f"{im['rendering']} {im['scale']}x"
-                                 for im in man.get("images", [])))
-        p = want[0]["path"]
-        # The manifest's paths are the atlas's own publication layout. A local
-        # copy may be flattened, so try the stated path, the flattened form and
-        # the bare name before giving up — and say which was tried.
-        cands = [os.path.join(d, p),
-                 os.path.join(d, p.replace("/", "_")),
-                 os.path.join(d, os.path.basename(p))]
-        cands += [os.path.join(d, f"{os.path.basename(d.rstrip('/'))}_{p.replace('/', '_')}")]
-        stem = p.replace("/", "_")
-        cands += [os.path.join(d, n) for n in sorted(os.listdir(d))
-                  if n.endswith(stem)]
-        for c in cands:
-            if os.path.exists(c):
-                return c, want[0]["scale"]
-        sys.exit("atlas image not found; tried:\n  " + "\n  ".join(cands))
-
-    def holds(self, map_id, x, y):
-        """Is this tile inside the map it claims to be on?
-
-        **A warp changes `wCurMap` one frame before it changes the
-        coordinates**, so on that frame a track says the destination map and
-        the *departure's* door tile. Measured on this chain: every one of the
-        600 agents carries exactly one row reading `OAKS_LAB (12,11)`, and
-        (12,11) is Pallet Town's own `warp_event 12,11, OAKS_LAB, 2` — Oak's
-        Lab is ten tiles wide. It is the same trap as the boot-time one
-        `chain_tracks.py::settle` handles, arriving mid-track instead of at the
-        head, and a hand-placed layout hid it because the stray point landed on
-        top of a neighbouring sheet. The atlas has real gaps, so it shows.
-        """
-        t = self.tiles.get(map_id)
-        return t is not None and 0 <= x < t[0] and 0 <= y < t[1]
-
-    def place(self, map_id, x, y):
-        """Pixel position of a **fractional** tile coordinate, or `None` when
-        the atlas does not place this map.
-
-        **The CENTRE of the tile, not its corner** — `rect` gives a tile's
-        top-left, and an agent standing on a tile is in the middle of it.
-        Returning the corner and then drawing a sprite centred on it puts every
-        agent half a tile up and to the left, which is what "the sprites sit
-        left of the path, straddling its edge" was. Measured against the
-        cartridge, not eyeballed: see `SPRITE_LIFT`.
-
-        `None` means unplaced and must never be drawn at the origin: the ids a
-        track carries include transients the cartridge writes before a map
-        header exists, and a battle has no map position at all.
-        """
-        o = self.origin.get(map_id)
-        if o is None:
-            return None
-        t = self.tile_px[map_id]
-        return (o[0] + (x + 0.5) * t, o[1] + (y + 0.5) * t,
-                self.kind[map_id] != "outdoor")
-
-    def open_image(self, Image):
-        Image.MAX_IMAGE_PIXELS = None      # a region atlas is legitimately huge
-        return Image.open(self.image_path).convert("RGB")
-
-
 def load_agent_labels(path):
     """agent -> label, from a CSV of `agent,label` rows.
 
@@ -449,138 +232,6 @@ def report_lines(labels, title, spans, ends, n_links, n_agents):
                 if where else "")
         print(f"  {lab:<12} {len(ns):>4}  finished {len(done):>4} "
               f"({100.0 * len(done) / max(1, len(ns)):.1f}%){tail}")
-
-
-def load_links(d):
-    """agent -> [(link, name, start, end, goal)], so the film can say which of
-    the fourteen an agent is on. Half the links happen on the same map, so a
-    position track alone cannot answer it."""
-    out = {}
-    for name in sorted(os.listdir(d)):
-        if not name.endswith(".links.csv"):
-            continue
-        n = int(name.split("-")[1].split(".")[0])
-        with open(os.path.join(d, name)) as f:
-            r = csv.reader(f)
-            next(r, None)
-            out[n] = [(int(a), b, int(c), int(e), g == "true")
-                      for a, b, c, e, g in (row for row in r if row)]
-    return out
-
-
-def link_at(spans, frame):
-    for link, name, start, end, goal in spans:
-        if start <= frame <= end:
-            return link, name, goal
-    return (spans[-1][0], spans[-1][1], spans[-1][4]) if spans else (0, "", False)
-
-
-def walk_span(paths, lo=8, hi=48, fallback=WALK_FRAMES):
-    """How long one step takes, **measured from the tracks in hand**.
-
-    The glide span used to be a hard-coded 14 frames, reasoned from
-    `wWalkCounter` running 7..1 with each value held two frames. Measured over
-    the whole certified chain, **no adjacent-tile arrival is ever that close
-    together**: the gaps are 17 (34%), 27-31 (40%) and 52-55 (9%), because a
-    track is sampled every 2-3 frames and the solver's own decision cadence
-    sits between some steps. So a 14-frame window guaranteed a freeze before
-    *every* step, of 3 frames at best and 17 at worst — and that is exactly the
-    reported "agents jump then pause". The animation constant was right about
-    the cartridge and wrong about the data.
-
-    Taking the mode rather than the mean because the distribution is
-    multi-modal, one mode per number of steps' worth of waiting; the first is
-    the step itself. Bounded, so a corpus of nothing but long waits cannot
-    produce a span that glides an agent across a minute of standing still.
-    """
-    gaps = collections.Counter()
-    for p in paths.values():
-        for a, b in zip(p, p[1:]):
-            if a[1] == b[1] and abs(a[2] - b[2]) + abs(a[3] - b[3]) == 1:
-                g = b[0] - a[0]
-                if lo <= g <= hi:
-                    gaps[g] += 1
-    return gaps.most_common(1)[0][0] if gaps else fallback
-
-
-def interpolate(path, frame, span=WALK_FRAMES):
-    """Where an agent is, between the tile it left and the tile it is going to.
-
-    **Renderer-side interpolation, not a memory read.** Positioning from
-    `wXCoord`/`wYCoord` alone teleports by construction — the coordinate does
-    not move during a walk, it snaps at the end of it — and reading the
-    sub-tile offset out of WRAM only helps at sampling rates fine enough to
-    catch it. Lerping between consecutive *recorded* tiles is independent of
-    the sampling rate entirely, works on tracks already on disk, and is the
-    same four lines Peter Whidden's own map visualiser uses
-    (`pwhiddy/pokerl-map-viz`, `visualizer_live.js`).
-
-    The progress fraction runs over the last `span` frames before the arrival
-    rather than over the whole gap, so an agent that stood still for a thousand
-    frames and then took one step does exactly that instead of drifting slowly
-    the whole time — **but `span` is the step time MEASURED from these tracks
-    (`walk_span`), never a constant**, and never longer than the gap. A span
-    shorter than the real cadence freezes the agent before every step, which is
-    what "jump then pause" was.
-
-    Note what this is *not*: it is not per-decision, and it is not sampled. `t`
-    is recomputed from the output frame's own emulated frame number every time
-    a frame is drawn, so at any compression the agent advances by exactly the
-    fraction of the step that elapsed.
-    """
-    lo, hi = 0, len(path) - 1
-    if frame <= path[0][0]:
-        return path[0][1], float(path[0][2]), float(path[0][3]), path[0][4]
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if path[mid][0] <= frame:
-            lo = mid
-        else:
-            hi = mid - 1
-    cur = path[lo]
-    if lo + 1 >= len(path):
-        return cur[1], float(cur[2]), float(cur[3]), cur[4]
-    nxt = path[lo + 1]
-    # Only between adjacent tiles on the same map. A warp is a jump, not a walk.
-    if nxt[1] != cur[1] or abs(nxt[2] - cur[2]) + abs(nxt[3] - cur[3]) != 1:
-        return cur[1], float(cur[2]), float(cur[3]), cur[4]
-    w = min(span, max(1, nxt[0] - cur[0]))
-    t = (frame - (nxt[0] - w)) / float(w)
-    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
-    return (
-        cur[1],
-        cur[2] + (nxt[2] - cur[2]) * t,
-        cur[3] + (nxt[3] - cur[3]) * t,
-        nxt[4] if t > 0 else cur[4],
-    )
-
-
-def wrap_hud(text, font, width):
-    """Break `text` onto as many lines as the HUD column can hold."""
-    out, line = [], ""
-    for word in text.split():
-        trial = f"{line} {word}".strip()
-        if line and font.getbbox(trial)[2] > width:
-            out.append(line)
-            line = word
-        else:
-            line = trial
-    if line:
-        out.append(line)
-    return out
-
-
-def on_screen(px, py, x0, y0, cw, ch):
-    """Is any of this agent's sprite in frame?
-
-    **Judged by the sprite, not by its centre.** A film's off-frame warning is
-    a claim about what a viewer can see, and an agent one tenth of a pixel past
-    the boundary is drawn, plainly, half in frame. Counting it as lost made a
-    knife-edge camera position report 362 of 592 agents missing from a picture
-    that showed nearly all of them — the number was wrong, not the shot.
-    """
-    h = TILE / 2.0
-    return (x0 - h <= px <= x0 + cw + h) and (y0 - h <= py <= y0 + ch + h)
 
 
 def stage_track(positions, n_links):
@@ -962,6 +613,13 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="compute positions and camera, write any trace, and "
                          "stop before rendering")
+    ap.add_argument("--no-split-aware", dest="split_aware",
+                    action="store_false",
+                    help="take the camera's box from the raw 5-95 percentiles "
+                         "of the frame, as it was before rule 7. Reproduces "
+                         "the pre-fix shot exactly, which is what makes the "
+                         "equality check possible; see chainrender/camera.py "
+                         "for what a bimodal swarm does to it")
     ap.add_argument("--no-follow-arrivals", dest="follow_arrivals",
                     action="store_false",
                     help="leave agents that have finished the chain out of "
@@ -1161,81 +819,14 @@ def main():
     # **and the HUD says how many did**, which is the condition for this being
     # honest rather than flattering.
     MIN_W = 26 * TILE
-
-    def spread(vals):
-        vals = sorted(vals)
-        n = len(vals)
-        lo = vals[max(0, int(0.05 * n))]
-        hi = vals[min(n - 1, int(0.95 * n))]
-        return lo, hi, (lo + hi) / 2
-
-    # **The map is the focus element: the world is steady and the camera
-    # drifts over it.** Reported as "it basically vibrates right now ... move
-    # slowly up/down with the mass, not vibrate up and down / side to side
-    # rapidly", and every one of the five causes below is a standard one.
-    #
-    # 1. THE TARGET IS SMOOTHED, and slowly. The old follow was an EMA at
-    #    k = 0.14, i.e. a time constant of about seven frames — a quarter of a
-    #    second at 30 fps, which is fast enough to reproduce most of the
-    #    per-frame jitter of the median it was chasing. `CAM_K` is a ~1.2 s
-    #    constant instead, so the camera lags the mass and glides.
-    # 2. A DEADZONE. Below it the camera does not move at all, so the pixel or
-    #    two the median wanders every frame produces no movement whatever.
-    # 3. THE ZOOM IS QUANTISED AND HELD. This is the one that is easy to miss
-    #    and was the loudest: `scale = VIEW_W / cw` was recomputed from a
-    #    continuously-varying width, so *every* frame resampled the pixel art
-    #    at a slightly different ratio and the whole picture shimmered — not
-    #    only the moving part. The width now snaps to a ladder and changes only
-    #    when it must (hysteresis), so a run of frames shares one exact scale.
-    # 4. THE PAN SPEED IS CAPPED, so nothing the mass does can make the camera
-    #    lurch.
-    # 5. AXIS BIAS. Route 1 is a vertical corridor; the shot wants Y tracked
-    #    and X nearly fixed. Chasing both axes is what turns a corridor walk
-    #    into side-to-side sway.
-    # 6. CATCH-UP, KEYED ON THE MASS BEING OUT OF FRAME — not on time, not on a
-    #    threshold on the centre error. Every constant in 1-5 is calibrated for
-    #    *jitter*, and when the swarm genuinely walks somewhere else they are
-    #    calibrated for the wrong thing: measured on this chain, the deadzone
-    #    plus a 1.6 px/frame cap plus a 0.22 X bias left the camera **78.7%**
-    #    covered and one frame with 362 of 592 agents off screen, for hundreds
-    #    of frames at a time, while the picture itself was perfectly steady.
-    #    A steady shot of the wrong place is not a good shot.
-    #
-    #    `outside` is how far the 5-95 box pokes past the current view, in
-    #    viewports. It is **exactly zero** whenever the swarm is already on
-    #    screen, so this is provably a no-op on every frame that was already
-    #    right, and rules 1-5 keep those frames bit-identical.
-    CAM_K = 0.028          # EMA per frame: tau ~= 36 frames ~= 1.2 s at 30 fps
-    CAM_DEAD = 0.16        # of the viewport, per axis, before anything moves
-    # **The pan cap is a fraction of WALKING PACE, not a pixel count.** It was
-    # 1.6 world px per output frame, which is a glide at 1x and a crawl at 9x —
-    # at 9x each output frame covers nine times the ground, so a cap tuned at
-    # 1x cannot keep up with the subject and the coverage fell to 92.5%. Tying
-    # it to how fast an agent actually walks on screen makes it scale with the
-    # compression for free, and at 1x it reproduces the tuned 1.6 exactly.
-    CAM_MAX_PAN = 0.85 * walk_px
-    CAM_X_TRACK = 0.22     # how much of the X drift to follow at all
-    CAM_STEP = 1.10        # zoom ladder ratio
-    CAM_GROW = 1.06        # widen only when the mass needs this much more
-    CAM_SHRINK = 0.74      # tighten only when it needs this much less
-    CAM_CATCHUP = 14.0     # how much faster it may glide when the mass is out
-    CAM_UNBIAS = 4.0       # how fast the X bias is released when it is out
-    # A margin (6) measures against, so the mass is kept *comfortably* inside
-    # rather than exactly on the edge. Without it the camera settles with a
-    # cluster balanced on the boundary — measured on this chain, seventy-one
-    # agents sat 0.15 px outside the left edge for hundreds of frames, which is
-    # a stable equilibrium and looks exactly like a botched shot.
-    CAM_INSET = 0.06
-
-    def quantise(w):
-        """Snap a wanted width onto a fixed geometric ladder.
-
-        Anchored on MIN_W rather than on the frame, so the same wanted width
-        always yields the same exact scale — which is the property that stops
-        the resample ratio moving under the picture.
-        """
-        k = max(0, round(math.log(max(w, MIN_W) / MIN_W) / math.log(CAM_STEP)))
-        return MIN_W * (CAM_STEP ** k)
+    # **Every rule the camera follows, and every constant it was tuned to, is
+    # in `chainrender.camera`** — read there for the six smoothing rules, for
+    # rule 7 (the box's own EMA, which is what stops a bimodal swarm lurching
+    # the shot), and for the numbers. It is shared so a film any other renderer
+    # makes can have a camera at all; before the package existed this was two
+    # hundred lines inside this function and nothing else could reach it.
+    cam = Camera(VIEW_W, OUT_H, MIN_W, world.width, world.height, walk_px,
+                 split_aware=a.split_aware)
 
     # --- who has arrived, and where -----------------------------------------
     # **A film that ends in Pewter City has to show somebody in Pewter City,
@@ -1316,8 +907,7 @@ def main():
     # stragglers. That is the correct reading of "follow the majority" and the
     # off-frame line counts the stragglers on every frame, but
     # `--no-follow-arrivals` reproduces the older shot exactly.
-    cams, prev = [], None
-    box = None
+    cams = []
     for _fi, here in enumerate(positions):
         _g = max(1, _fi * step)
         xs = [p[1] for p in here]
@@ -1328,76 +918,7 @@ def main():
                 if c and k in arr_pt:
                     xs += [arr_pt[k][0]] * c
                     ys += [arr_pt[k][1]] * c
-        if here:
-            lx, hx_, mx = spread(xs)
-            ly, hy_, my = spread(ys)
-            tx, ty = mx, my
-            box = (lx, hx_, ly, hy_)
-            want = max(MIN_W, (hx_ - lx) * 1.25,
-                       (hy_ - ly) * 1.25 * VIEW_W / OUT_H)
-        elif prev:
-            tx, ty, want = prev
-        else:
-            tx, ty, want = world.width / 2, world.height / 2, MIN_W
-        want = min(want, world.width * 1.0)
-
-        if prev is None:
-            prev = (float(tx), float(ty), quantise(want))
-            cams.append((round(prev[0]), round(prev[1]), prev[2]))
-            continue
-
-        px, py, pw = prev
-        # (3) hold the zoom unless the mass genuinely outgrew or fell well
-        # inside it, then snap to the ladder.
-        cw = pw
-        if want > pw * CAM_GROW or want < pw * CAM_SHRINK:
-            cw = quantise(want)
-        cw = min(cw, world.width * 1.0)
-        chh = cw * OUT_H / VIEW_W
-
-        # (6) how far the mass pokes past the frame it is being shown in.
-        # Measured against the view the camera has *now*, before it moves.
-        outside = 0.0
-        if box:
-            ix, iy = cw * (0.5 - CAM_INSET), chh * (0.5 - CAM_INSET)
-            outside = max(
-                0.0,
-                (px - ix - box[0]) / cw, (box[1] - px - ix) / cw,
-                (py - iy - box[2]) / chh, (box[3] - py - iy) / chh,
-            )
-
-        # (2) deadzone, per axis, in world pixels — but only while the mass is
-        # inside the frame. A deadzone that holds a camera still while the
-        # swarm is off screen is not suppressing jitter, it is refusing to look.
-        dx = tx - px
-        dy = ty - py
-        if outside <= 0.0:
-            if abs(dx) < cw * CAM_DEAD:
-                dx = 0.0
-            if abs(dy) < chh * CAM_DEAD:
-                dy = 0.0
-        # (5) axis bias: the corridor is vertical, so X barely moves — until
-        # (6) says the mass has left the frame sideways, which a corridor's
-        # never does.
-        dx *= min(1.0, CAM_X_TRACK + CAM_UNBIAS * outside)
-        # (1) smooth, then (4) cap — both opened up by (6). **The gain has to
-        # rise, not only the cap**: `CAM_K` is 2.8% of the error per frame, so
-        # a bigger cap alone changes nothing while the EMA is the binding
-        # constraint. `gain` is 1.0 whenever the mass is in frame, so this is
-        # still a no-op on every frame that was already right.
-        gain = 1.0 + CAM_CATCHUP * outside
-        cap = CAM_MAX_PAN * gain
-        vx = max(-cap, min(cap, dx * CAM_K * gain))
-        vy = max(-cap, min(cap, dy * CAM_K * gain))
-        # **The accumulator stays a float and only the OUTPUT is rounded.**
-        # Rounding the accumulator instead looks like the same thing and is a
-        # deadlock: a drift just outside the deadzone yields a step well under
-        # half a pixel, `round` throws it away, and the camera is stuck there
-        # for ever — visibly, since the mass keeps walking out of frame.
-        prev = (px + vx, py + vy, cw)
-        # (3, again) whole world pixels, so the crop lands on the same lattice
-        # every frame and a held camera is bit-identical frame to frame.
-        cams.append((round(prev[0]), round(prev[1]), cw))
+        cams.append(cam.step(xs, ys, live=bool(here)))
 
     if a.camera_trace:
         with open(a.camera_trace, "w") as fh:

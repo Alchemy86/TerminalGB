@@ -6,6 +6,8 @@ See chainrender/__init__.py for why this package exists.
 
 import os
 
+from .tracks import TILE
+
 
 def tint(sprite, rgb, Image):
     """Recolour a four-shade sprite onto one hue, keeping its own shading and

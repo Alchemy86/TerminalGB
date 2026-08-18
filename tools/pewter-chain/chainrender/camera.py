@@ -39,14 +39,36 @@ and both were reported as "it juggles back and forth":
   boundary — a camera pointed at nobody, moving because of agents it is not
   showing.
 * the same span drives the zoom, so the width is pinned to "both clusters" and
-  can never tighten when they regroup.
+  can never tighten when they regroup. Measured, this is the loud one: over the
+  training stretch of `chain-film` the crop width was a chattering square wave.
 
 The fix is to smooth the **box** and not only the camera: an EMA on each edge
 of the percentile box before any of rules 1-6 sees it. That removes the
 discontinuity at its source rather than downstream of it, which is why raising
 `CAM_K` or the deadzone never worked — they were being fed a step function.
-The band widens too (`BAND`), because the ask was to keep everyone on screen
-and the 5-95 clip is what was throwing agents out of frame.
+
+Measured on `chain-film` (24 agents, 15,632 frames at --speed 12 --fps 60),
+`--no-split-aware` against the default:
+
+    direction reversals   1.39/s x, 0.93/s y  ->  0.17/s x, 0.43/s y
+    frames camera still   78.2% x, 71.1% y    ->  85.2% x, 82.1% y
+    largest one-frame pan 48 px x, 48 px y    ->  11 px x,  4 px y
+    resample ratio moved  140 frames (0.9%)   ->  19 frames (0.1%)
+    frames below 90% cov  5006 (32.0%)        ->  4744 (30.3%)
+
+Two figures move the other way and both are stated rather than buried. The
+**distinct crop width count** goes 18 -> 20 because the smoothed box passes
+continuously through more rungs of the zoom ladder instead of jumping between
+two — the metric that matters for shimmer is how often the resample ratio
+actually moved, and that is six times better. And **mean coverage** goes
+93.0% -> 92.3% while the *below-90%* count improves: the distribution tightened
+rather than shifted.
+
+**34.2% of these frames are geometrically impossible** — the camera may not
+widen past the world it crops from, and on those the swarm genuinely does not
+fit in the widest view there is. `report_impossible()` prints that figure; no
+camera rule can beat it, so nothing here promises past it.
+
 """
 
 import math
@@ -67,18 +89,44 @@ class Camera:
     CAM_INSET = 0.06       # keep the mass comfortably inside, not on the edge
 
     # --- rule 7 ---
-    # The band the box is taken over. 5-95 discards a tenth of the swarm by
-    # construction, which is most of what "agents keep leaving the frame" was.
+    # The band the box is taken over. **Measured on `chain-film` this is not
+    # the lever** — 5-95, 2-98 and 0-100 give the same figures to the digit at
+    # 24 agents, because the box's own EMA below washes out the one or two
+    # agents the clip discards. It is widened anyway because at 600 agents 5-95
+    # discards thirty per edge rather than one, and because "keep everyone on
+    # screen" was half the ask.
     BAND = (0.02, 0.98)
     OLD_BAND = (0.05, 0.95)
     # The box edges' own EMA. Slower than the camera: the box is what the
-    # camera is *aiming at*, so it has to be the steadier of the two or the
+    # camera is *aiming at*, so it has to be the steadier of the two, or the
     # smoothing simply moves the jitter one level up.
-    BOX_K = 0.012
+    #
+    # **These two are re-measured, not inherited.** The pair that was in flight
+    # (0.012 / 0.10) is smoother than no rule 7 at all but grows the box fast
+    # enough to sweep the zoom ladder, which on a single-leg corpus costs more
+    # zoom changes than it saves. Swept on `chain-film` (24 agents, the whole
+    # chain, bimodal) and on 40 tracks of link 11 (one leg, unimodal), against
+    # the pre-fix camera:
+    #
+    #     BOX_K  GROW | chain-film reversals x/y   still x/y   resample changes
+    #     pre-fix     |        1.39 / 0.93        78.2 / 71.1        140
+    #     0.012  0.10 |        0.35 / 0.52        84.1 / 75.5         27
+    #     0.006  0.10 |        0.25 / 0.49        85.7 / 78.9         23
+    #     0.006  0.03 |        0.17 / 0.43        85.2 / 82.1         19
+    #     0.006  0.006|        0.13 / 0.22        85.0 / 86.8         19   <- but
+    #                                             coverage below 90% 32.6 -> 38.0%
+    #
+    # The last row is the trade this pair is chosen against: a box that never
+    # grows quickly is beautifully steady and **drops agents**, because rule 6
+    # keys its catch-up on how far the box pokes past the frame and a slow box
+    # is slow to notice. 0.006 / 0.03 is better than the pre-fix camera on
+    # every column on both corpora except one — one leg's zoom changes go
+    # 18 -> 23 of 50,000 frames, i.e. 0.04% -> 0.05%.
+    BOX_K = 0.006
     # A cluster that genuinely leaves must not be waited for indefinitely, so
     # the box may always widen faster than it narrows -- the same asymmetry
     # rule 3 uses, for the same reason.
-    BOX_K_GROW = 0.10
+    BOX_K_GROW = 0.03
 
     def __init__(self, view_w, out_h, min_w, world_w, world_h, walk_px,
                  split_aware=True):
@@ -128,14 +176,21 @@ class Camera:
         return self.min_w * (self.CAM_STEP ** k)
 
     # --- one frame -----------------------------------------------------------
-    def step(self, xs, ys):
-        """Advance one output frame. Returns (cx, cy, cw), cx/cy rounded."""
-        box = None
-        if xs:
+    def step(self, xs, ys, live=True):
+        """Advance one output frame. Returns (cx, cy, cw), cx/cy rounded.
+
+        `live` is whether any agent is on screen this frame, and it is separate
+        from `xs` being non-empty because an arrival marker contributes to the
+        box without being a live agent — the original loop tested the live
+        population, so a frame with only markers holds its target rather than
+        re-aiming at them. **`self.box` persists across such a frame**, so the
+        catch-up rule keeps measuring against the last real box rather than
+        going blind.
+        """
+        if live and xs:
             lx, hx = self._percentiles(xs)
             ly, hy = self._percentiles(ys)
-            box = self._smooth_box((lx, hx, ly, hy))
-            lx, hx, ly, hy = box
+            lx, hx, ly, hy = self._smooth_box((lx, hx, ly, hy))
             tx, ty = (lx + hx) / 2, (ly + hy) / 2
             want = max(self.min_w, (hx - lx) * 1.25,
                        (hy - ly) * 1.25 * self.view_w / self.out_h)
@@ -144,6 +199,7 @@ class Camera:
         else:
             tx, ty, want = self.world_w / 2, self.world_h / 2, self.min_w
         want = min(want, self.world_w * 1.0)
+        box = self.box
 
         if self.prev is None:
             self.prev = (float(tx), float(ty), self.quantise(want))
