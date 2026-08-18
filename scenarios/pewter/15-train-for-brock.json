@@ -1,0 +1,34 @@
+{
+  "schema": "gbscenario/1",
+  "name": "15-train-for-brock",
+  "objective": "Train the lead in the grass at the top of Route 2, just south of Pewter, until it is strong enough for Brock. THIS LINK IS A REPAIR, the second the chain has needed. Link 11 raised the lead to level 10 because Viridian Forest's bug catchers demanded it; nothing in the chain ever asked what Brock demands, and at level 10 he beats two of the three starters outright.",
+  "start_state": "states/14.gbss",
+  "goal": [
+    "watch:lead_level>=16"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "max_calls 4000",
+    "max_wall_seconds 2400"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/15-train-for-brock.json",
+  "timeout_frames": 1500000,
+  "watch": [
+    "lead_level"
+  ],
+  "evidence": [
+    "watch:lead_level>=16 - wPartyMon1Level, wPartyMons $D16B + party::LEVEL 33 = $D18C, pinned by terminalgb_plugin_trainer::gen1's own unit test and carried in the atlas at $D18C.",
+    "THE THRESHOLD IS NOT A MILESTONE THE GAME RECORDS, and neither was link 11's - Red and Blue have no flag for 'strong enough for Brock'. It is derived, and the derivation is a MOVE rather than a number. Brock's party is read from TrainerDataPointers 0E:5D3B class 34: GEODUDE Lv12 and ONIX Lv14, both ROCK/GROUND, and TypeEffects 0F:6474 makes WATER, GRASS, FIGHTING, GROUND and ICE 2x against each half, so 4x in total. Reading EvosMovesPointerTable 0E:B05C for the three starter lines: SQUIRTLE holds BUBBLE (WATER) from level 8, BULBASAUR holds VINE WHIP (GRASS) from level 13, and CHARMANDER's line never holds anything on that list - EMBER is FIRE, which the same chart makes 0.5x on ROCK. Measured at the level the chain used to deliver, 40 attempts per starter: SQUIRTLE 90.0%, CHARMANDER 20.0%, BULBASAUR 0.0%.",
+    "16 is where all three lines evolve, which is the only species-independent number in the neighbourhood, and it is the best the CHARMANDER line does: measured 35% at 14, 72.5% at 16 and 65% at 18, i.e. a plateau rather than a curve. docs/agent/brock.md section 10.",
+    "THE GRASS IS ROUTE 2's NORTHERN HALF, map $0D rows 2-7, 48 tiles, found by reading the tileset's own grass tile $52 out of the block map. Route 2 is two disjoint components of the walkable graph with Viridian Forest the only way between them - re-checked here, a breadth-first search from the southern grass to the northern one returns no path - so this ground is reachable only AFTER the forest and cannot help link 11. Measured: level 10 to 14 in 63,666 frames against a Route 1 attempt that could not reach level 12 in 600,000."
+  ]
+}

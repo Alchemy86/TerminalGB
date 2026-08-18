@@ -76,6 +76,17 @@ pub struct Progress {
     /// Total current HP across the party — zero with a non-empty party means
     /// the run has just blacked out.
     pub party_hp: u32,
+    /// How much HP the party is **short** of whole: the sum of every member's
+    /// maximum less its current.
+    ///
+    /// **Zero is "the party is healed", and that is a claim `party_hp` alone
+    /// cannot make.** A goal condition compares one number against a constant,
+    /// so "current equals maximum" is not expressible as `party_hp = <n>` —
+    /// the maximum is not a constant, it moves with the party and with every
+    /// level. Carrying the shortfall makes the whole question a single
+    /// comparison, `party_missing_hp=0`, which is what a link whose job is to
+    /// heal is actually judged on.
+    pub party_missing_hp: u32,
     /// Species owned, counted out of the Pokédex flags.
     pub owned: u16,
     /// Species seen.

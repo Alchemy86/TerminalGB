@@ -408,8 +408,13 @@ pub fn read_progress(m: &mut crate::plugin::Machine<'_>) -> Progress {
             m.peek(base + pm::HP).unwrap_or(0),
             m.peek(base + pm::HP + 1).unwrap_or(0),
         ]);
+        let max_hp = u16::from_be_bytes([
+            m.peek(base + pm::MAX_HP).unwrap_or(0),
+            m.peek(base + pm::MAX_HP + 1).unwrap_or(0),
+        ]);
         p.party.push((species, level));
         p.party_hp += hp as u32;
+        p.party_missing_hp += (max_hp.saturating_sub(hp)) as u32;
     }
     let mut dex = [0u8; DEX_BYTES];
     m.peek_into(W_POKEDEX_OWNED, &mut dex);

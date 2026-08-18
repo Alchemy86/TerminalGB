@@ -9812,3 +9812,138 @@ DIFFERENT FILM.** `docs/agent/pewter-chain.md` predicted "another 9 emulated min
 emulated min) and the film got **shorter** — 3 m 36 s → 3 m 21 s — because the cover went
 0.99 → 0.90. Quote `seconds_out x speed = the emulated time there is` *and* the cover, or the
 arithmetic is right about a film nobody made.
+
+## Past Pewter — the gym, the badge, and a precondition nobody had checked (`scenarios/pewter/15-19`)
+
+**Reader-facing page: [`docs/agent/brock.md`](docs/agent/brock.md).** Five links from arriving
+in Pewter to standing on Route 3 with the Boulder Badge, plus a repair link before them.
+Measured on the certified link-14 pool: **15 train 3000/3000, 16 heal 3000/3000, 17 gym
+2707/3000, 18 heal 3000/3000, 19 east 3000/3000.**
+
+- **BROCK IS THE FIRST LINK THE CHAIN HAS TO *WIN*, and that is what exposed everything below.**
+  Every battle link before it has a goal the cartridge sets whoever won —
+  `HandlePlayerBlackOut` special-cases the starter battle, so link 05's flag is set after a loss
+  as much as after a win, and the test rig measured the expert passing that link 300 of 300
+  while losing the fight up to 48 % of the time. A badge bit only sets if Brock is beaten, so
+  this is the first link whose pass rate measures battling rather than surviving.
+- **THE CHAIN'S PRECONDITION WAS BROCK-BLIND, AND THE CAUSE IS A MOVE, NOT A NUMBER.** Link 11
+  raises the lead to level 10 because Viridian Forest's bug catchers top out at 9. Nothing had
+  ever asked what Brock needs. Measured at level 10, 40 attempts per starter: **SQUIRTLE 90.0 %,
+  CHARMANDER 20.0 %, BULBASAUR 0.0 %**. Brock's GEODUDE Lv12 and ONIX Lv14 are both
+  **ROCK/GROUND**, so WATER/GRASS/FIGHTING/GROUND/ICE are 2x against each half and **4x** in
+  total; reading `EvosMovesPointerTable` for the three lines, SQUIRTLE holds BUBBLE from level
+  **8**, BULBASAUR holds VINE WHIP from **13**, and CHARMANDER's line holds **nothing on that
+  list ever** — EMBER is FIRE, which is 0.5x on ROCK. A Bulbasaur below 13 does **one damage a
+  turn** with 35 PP against 33 HP; it does not lose slowly, it cannot win.
+- **CHARMANDER CANNOT REACH THE 99.9 % BAR AND MORE LEVELS DO NOT FIX IT.** Measured 35 % at 14,
+  **72.5 % at 16**, 65 % at 18 — a plateau, not a curve. What would fix it is a second Pokémon
+  that answers ROCK/GROUND or items; both change the chain well before Pewter (the bag is empty
+  at every link, and `gen1_tables.py --plan brock` puts every catchable answer on Route 4, Mt
+  Moon or Route 24, all past the gym). Neither is taken; both are named. `BROCK_TRAIN_TO` is
+  **16**, which is where all three lines evolve — the only species-independent number in the
+  neighbourhood, and the best that line does.
+- **THE BADGE BIT WAS EARNED, NOT TRANSCRIBED.** Snapshot, play the gym, snapshot, diff **all
+  320 bytes** of `wEventFlags` plus the badge bytes: exactly five move, and every one is written
+  by a single block of `PewterGym.asm`'s `.gymVictory`. `wObtainedBadges` `$D356` bit 0
+  (`BIT_BOULDERBADGE`), `wBeatGymFlags` `$D72A` bit 0, `$D755` → `$C4`
+  (`EVENT_BEAT_PEWTER_GYM_TRAINER_0`, `EVENT_GOT_TM34`, **`EVENT_BEAT_BROCK`**), and `$D7EB`
+  `$81` → `$00` — two bits **cleared**, which are the Route 22 rival flags the same block
+  resets. A clearing in a flag diff is not always a loss; check the script before alarming.
+
+### `wLastBlackoutMap` proves the FIRST heal at a Center and nothing proves a repeat
+
+- **`$D719` holds the TOWN, not the Center's interior map** — `$01` (Viridian City) all the way
+  to Pewter on the certified pool, `$02` after Pewter's nurse. Measured both halves apart:
+  **entering the building leaves it at `$01`**, talking to the nurse flips it. That is a proof
+  of the interaction that "the party is at full HP" cannot give, because a party that was never
+  hurt is at full HP too.
+- **It flips at the START of the dialogue, before `HealParty` runs.** A run whose goal was the
+  flip alone stopped at the counter with the lead on 26/29. So the goal is the flip **and**
+  `party_missing_hp=0` **and** being in the building.
+- **`party_missing_hp` is new** (`Progress`, `src/longplay/progress.rs`): total maximum less
+  total current HP across the party. A goal compares one number against a constant, so "current
+  equals maximum" is otherwise inexpressible — the maximum moves with the party and with every
+  level. `party_missing_hp=0` is how a healing link is judged.
+- **A REPEAT HEAL AT THE SAME CENTER WRITES NOTHING THE CARTRIDGE KEEPS**, so link 18's goal is
+  the strongest claim available and not a proof: *whole, and standing inside the Pokémon
+  Center*. It forces anyone hurt through the nurse and cannot be satisfied by walking past the
+  door; it cannot tell a party that healed from one that arrived whole. Stated, not papered over.
+- **Both heal links therefore FINISH INSIDE the building** and links 17/19 begin by walking out.
+  That removed a real failure: an earlier link 18 with `map=0x02` fired at the **gym** door for
+  every attempt that came out whole — 23 of 60, in under ten decisions, never going near the
+  nurse. **A goal satisfiable at entry is a goal that measures nothing.**
+
+### Route 2's NORTHERN grass trains fast — and cannot help link 11
+
+- **Map `$0D`, rows 2-7, 48 grass tiles** (found by reading the tileset's own grass tile `$52`
+  out of the block map), nine steps from the map's north exit and fifteen more to Pewter's
+  Pokémon Center. **Level 10 → 14 in 63,666 frames**, 625 decisions, 35 battles, no faints —
+  against a Route 1 attempt that **could not reach level 12 in 600,000 frames, 30 of 30**.
+- **IT IS THE NORTHERN HALF, i.e. AFTER THE FOREST.** Route 2 is two disjoint components of the
+  walkable graph with Viridian Forest the only way between them; re-checked here, a BFS from the
+  southern grass to the northern returns **no path**. Nobody may read this as a fix for link 11,
+  whose whole job is training *before* the forest.
+- **NOTHING PRE-FOREST BEATS ROUTE 1, AND THE OBVIOUS CANDIDATE IS MEASURABLY WORSE.** Exp per
+  step: Route 2 2.87, Route 22 2.64, **Route 1 2.44**, Viridian Forest 1.24 (its rate is 8/256
+  against everyone else's 25). Steps to the Viridian nurse: **Route 1 25**, Route 2 south 56,
+  Route 22 79-82. Run head to head on link 11's own job, same pool, same seeds, same workers:
+  **Route 1 40/40 at a median 65,904 frames; Route 2 south 34/40 at 72,294.** The thirty-one
+  extra steps each way more than eat a 17.6 % richer table. Route 22 was **not run** — it is
+  further and less rich than a candidate that already lost, which is an argument from two
+  measured numbers and is labelled as one. `scenarios/experiments/` holds the experiment;
+  `chain_files` reads only `scenarios/pewter`, so nothing there can join the chain by accident.
+- **AND THE LEVER ON LINK 11 IS NOT THE LOCATION.** Per-map frames from one run's own position
+  track: **65.7 % of it is inside battles**, 16.8 % is the round trip to the nurse. A perfect
+  nurse saves at most a sixth, and Route 1 already has the closest one. The cost driver is
+  **~1,880 frames — 31 seconds of game time — per wild battle**, and the Route 2 link measures
+  the same 1,819: it is the game's own animations and text, identical on every map.
+
+### Two counters were reporting the wrong thing, and both fix published numbers
+
+- **A RUN THAT ENDS MID-BATTLE SCORED THE BATTLE AS A WIN.** `Drop for ChainDriver` scores the
+  last battle from the driver's last view, which is decisive in an ordinary win or loss because
+  the driver keeps deciding while the "…fainted!" text plays. A run the harness stops on
+  `party_hp=0` has no such view — the last decision was one hit before the end, so the lead is
+  standing in it and dead in the machine. Measured: a level 10 BULBASAUR fainted to the junior
+  trainer, final state `wIsInBattle = 2` and 0/30 HP, and the report said
+  `battles 1: won 1 (100.0%) … faints 0`. An indecisive view is **unresolved** now and named;
+  link 05's report is unchanged (29 won, 11 lost of 40, both sides).
+- **THE DAMAGE-PREDICTION COLUMN MEASURED THE WRONG MOVE.** It recorded the first *damaging
+  usable* move rather than the one chosen — the same move whenever the best one is in slot 1,
+  which is every link before the gym, because a starter's only attack is slot 1. A SQUIRTLE
+  holds TACKLE, TAIL WHIP, BUBBLE and the policy picks BUBBLE. The column read **29.9 % inside
+  the roll range with 474 of 700 "over"**; against the chosen move it reads **87.9 % with 68
+  over**, which is what a critical-hit rate explains. Link 05's control moved 85.8 → 87.8 %.
+  **So the 81-85 % damage agreement this project has published was measured against the wrong
+  move on any turn the policy did not pick slot 1.** Both fixes change only the measurement —
+  the gym link scored 39/120 before and after.
+
+### Two more route traps of the shape this chain keeps finding
+
+- **Pewter's south-west pocket.** Column 18 is solid on rows 18-20 and row 21 is solid from x=0
+  to x=18, so the left half of those rows has one way in and out, and a `goto` heading
+  north-east from the Pokémon Center walks into it: **23 of 23 failures of the Route 3 link were
+  stuck on row 20 between x=13 and x=17**, with no battle involved. East along row 26 first,
+  then straight up column 19, is 3000/3000.
+- **The gym's junior trainer IS avoidable and column 1 is what avoids him.** Rows 3 and 9 of map
+  `$36` are solid but for x=4 and x=5, so the straight climb up column 4 crosses his rightward
+  sight line at (4,6); column 1 runs from row 8 to row 4 entirely to his left. Both measured at
+  120 attempts from the level-10 pool: **fighting him 39/120 with 69 of 81 failures on his own
+  tile**, avoiding him 44/120 with every failure at Brock's. At level 10 the junior trainer
+  killed more of the chain than Brock did.
+
+### `pewter_chain states` — check a pool before you write a goal against it
+
+- **`states --start-dir D [--peek NAME@0xADDR]`** prints what a pool of entry states actually
+  holds — lead species, level, HP, moves, money, badges — and any raw address you name. No
+  frames are emulated; a save state carries the party. **A link's precondition is a claim about
+  its entry pool**, and until this existed the only way to check one was to run the link and
+  read the failures. It is also how the badge bit and the heal flag above were settled: *read a
+  byte out of real states before writing a goal against it.*
+
+### The gym arc films SEPARATELY from the journey to Pewter
+
+Captain's instruction, and it is arithmetic rather than taste: the fourteen-link cut is 190 MB
+and 3 m 21 s, and **58 % of its emulated time is link 11 alone**, so appending Brock makes a
+longer film in which the new material is a *smaller* fraction. Same tooling
+(`tools/pewter-chain/swarm_film.py`), separate output. **Do not re-stitch them for tidiness.**

@@ -135,6 +135,12 @@ const FOREST_SOUTH_GATE: u8 = 0x32;
 const VIRIDIAN_FOREST: u8 = 0x33;
 const FOREST_NORTH_GATE: u8 = 0x2F;
 const VIRIDIAN_POKECENTER: u8 = 0x29;
+const PEWTER_CITY: u8 = 0x02;
+const PEWTER_GYM: u8 = 0x36;
+const PEWTER_POKECENTER: u8 = 0x3A;
+/// Route 3, east of Pewter — where the chain goes next.
+#[allow(dead_code)]
+const ROUTE_3: u8 = 0x0E;
 
 /// Route 1 climbing north. Turning points of the shortest walkable path; the
 /// ledges make this different from the descent below.
@@ -207,6 +213,92 @@ const FOREST: &[(u8, u8)] = &[
     (1, 1),
 ];
 
+/// Pewter City, from where Route 2 lets you in, to the gym door at (16,17).
+///
+/// **Ten turning points for a walk of about thirty tiles**, and that is the
+/// map rather than a bad path: column 18 is solid on rows 18, 19 and 20 and
+/// row 21 is solid from x=0 to x=18, so the city's south-east quarter and its
+/// south-west quarter meet only along row 13. Every route across Pewter goes
+/// up and over.
+const PEWTER_TO_GYM: &[(u8, u8)] = &[
+    (16, 26),
+    (16, 22),
+    (19, 22),
+    (19, 13),
+    (11, 13),
+    (11, 16),
+    (10, 16),
+    (10, 18),
+    (16, 18),
+    (16, 17),
+];
+/// The gym door back to the Pokémon Center door, which is **not** the reverse
+/// of [`PEWTER_TO_GYM`] — it crosses row 13 the other way round.
+const GYM_TO_POKECENTER: &[(u8, u8)] = &[
+    (10, 18),
+    (10, 13),
+    (18, 13),
+    (18, 17),
+    (19, 17),
+    (19, 26),
+    (13, 26),
+    (13, 25),
+];
+/// Out of the Pokémon Center and east off the map onto Route 3.
+/// Out of the Pokémon Center and east off the map onto Route 3.
+///
+/// **Row 26 first, then straight up column 19.** The obvious diagonal is a
+/// trap: column 18 is solid on rows 18, 19 and 20 and row 21 is solid from
+/// x=0 to x=18, so the left half of rows 18-20 is a pocket with one way in and
+/// out, and a `goto` heading north-east from the Pokémon Center walks into it.
+/// Measured on the first 60-attempt run of this link: **23 of 23 failures were
+/// stuck on row 20 between x=13 and x=17**, inside that pocket, with no battle
+/// involved at all. The same shape as link 08's ledge — a waypoint whose
+/// overshoot cannot be recovered from.
+const PEWTER_TO_ROUTE_3: &[(u8, u8)] = &[(19, 26), (19, 18), (39, 18)];
+
+/// Pewter's Pokémon Center door down to the southern edge, where the map
+/// connection drops you onto the top of Route 2.
+const PEWTER_TO_ROUTE_2: &[(u8, u8)] = &[(18, 31), (18, 35)];
+/// The top of Route 2 into the grass block at x=0-7, y=2-7.
+///
+/// **Forty-eight tiles of grass a dozen steps from a Pokémon Center**, which
+/// is what makes this the place to train for Brock rather than Route 1. Both
+/// halves matter: Route 2's encounter table averages 29.4 experience against
+/// Route 1's 25.0 (`Wild`, read from `WildDataPointers`), and — far more
+/// importantly — the walk to a nurse and back is a dozen tiles here against
+/// the length of Route 1 plus Viridian City. A remedial link is dominated by
+/// its heal trips, not by its fights: link 11 aimed one level higher on
+/// Route 1 and spent its whole 600,000-frame budget without arriving,
+/// 30 attempts out of 30, ending in Viridian City every time.
+const ROUTE_2_TO_GRASS: &[(u8, u8)] = &[(8, 3), (2, 3)];
+/// Out of the grass and back north into Pewter.
+const ROUTE_2_TO_PEWTER: &[(u8, u8)] = &[(4, 2), (8, 2), (8, 0)];
+
+/// Up the gym to Brock, **round the junior trainer rather than through him**.
+///
+/// **The gym is two pinch points and everything follows from them.** Rows 3
+/// and 9 are solid except x=4 and x=5, so the middle band (rows 4-8) is
+/// entered and left through one two-tile gap at each end. The junior trainer
+/// stands at (3,6) facing **right** — his object's direction byte is `$D3` —
+/// so the straight climb up column 4 crosses his line at (4,6). Column 1 runs
+/// from row 8 to row 4 and every tile of it is to his **left**, which a
+/// rightward sight line cannot reach at any range.
+///
+/// **Measured both ways, 120 attempts each from the level-10 pool**: fighting
+/// him reached the goal 39 times with **69 of 81 failures on his own tile**;
+/// avoiding him reached it 44 times with every failure at Brock's. At that
+/// level the gym's junior trainer killed more of the chain than Brock did.
+const GYM_TO_BROCK: &[(u8, u8)] = &[(4, 8), (1, 8), (1, 4), (4, 4), (4, 2)];
+
+/// The straight climb, which fights him. Kept because it is the measured
+/// alternative rather than a hypothetical one, and swapping it in is one line.
+/// His party is DIGLETT Lv11 and SANDSHREW Lv11 and he is worth 273
+/// experience, so this is a real trade and not an obviously worse route — it
+/// simply loses at the level the chain arrives with.
+#[allow(dead_code)]
+const GYM_TO_BROCK_FIGHTING_THE_TRAINER: &[(u8, u8)] = &[(4, 11), (4, 2)];
+
 /// The Viridian Pokémon Center: heal, then leave.
 ///
 /// The nurse stands at (3,1) behind a counter, and (3,2) is solid. Gen 1's
@@ -223,6 +315,18 @@ const POKECENTER: &[Stage2] = &[
         finish: Finish::Step("down"),
     },
 ];
+
+/// Just the way out of a Pokémon Center, for a link that starts inside one.
+///
+/// **Both heal links finish inside the building**, because that is the
+/// strongest claim the cartridge supports: "the party is whole *and* you are
+/// standing in the Pokémon Center" forces anyone who is hurt through the
+/// nurse, and it cannot be satisfied by walking past the door. See
+/// `docs/agent/brock.md` for what it still cannot prove.
+const LEAVE_POKECENTER: &[Stage2] = &[Stage2 {
+    via: &[(3, 6), (3, 7)],
+    finish: Finish::Step("down"),
+}];
 
 /// A `const`-friendly [`Stage`]: the same thing with a borrowed waypoint list,
 /// because a `Vec` cannot be built in a `const`.
@@ -432,6 +536,109 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             );
             r.insert(VIRIDIAN_FOREST, vec![stage(FOREST, Finish::Step("up"))]);
         }
+        // ---- the gym arc ------------------------------------------------
+        //
+        // Every waypoint below is a turning point of a breadth-first path over
+        // the same walkability grid the rest of the chain was drawn on, with
+        // the map's own sprites treated as solid — which matters here, because
+        // the gym's junior trainer stands *in* the x=3 column and a grid that
+        // ignores him offers a route through his tile.
+        // ---- experiments, not links ----------------------------------------
+        //
+        // **`scenarios/experiments/` is deliberately not `scenarios/pewter/`**:
+        // `chain_files` reads only the latter, so nothing here is ever part of
+        // the chain or of a certification. They exist so that a claim about
+        // *where* to train is a measurement somebody else can re-run, rather
+        // than a table of distances and a plausible argument.
+        // `docs/agent/brock.md` has the numbers.
+        "x-train-route-2-south" => {
+            r.insert(
+                VIRIDIAN_CITY,
+                vec![stage(
+                    &[(20, 28), (19, 28), (19, 2), (18, 2), (18, 0)],
+                    Finish::Step("up"),
+                )],
+            );
+            r.insert(
+                ROUTE_2,
+                vec![stage(
+                    &[
+                        (8, 62),
+                        (7, 62),
+                        (7, 57),
+                        (5, 57),
+                        (5, 56),
+                        (4, 56),
+                        (4, 50),
+                    ],
+                    Finish::Grind((4, 48), (8, 51)),
+                )],
+            );
+        }
+        "16-heal-in-pewter" => {
+            // Pewter's Pokemon Center is the same building as Viridian's:
+            // nurse at (3,1) behind a counter, (3,2) solid, and the place to
+            // stand is (3,3) facing up. Checked against the cartridge rather
+            // than assumed — both maps use tileset 6 and their grids agree
+            // tile for tile in that corner.
+            // **From wherever link 15 stopped**, which is in the grass on
+            // Route 2 rather than in Pewter: a training link's exit state is
+            // taken the instant the level ticks over, and that is wherever the
+            // fight that earned it happened. The same shape link 12 has, for
+            // the same reason — link 11 leaves the player on Route 1.
+            r.insert(ROUTE_2, vec![stage(ROUTE_2_TO_PEWTER, Finish::Step("up"))]);
+            r.insert(
+                PEWTER_CITY,
+                vec![stage(&[(18, 26), (13, 26), (13, 25)], Finish::Arrive)],
+            );
+            r.insert(PEWTER_POKECENTER, Stage2::to_vec(POKECENTER));
+        }
+        // **A repair, and the second one this chain has needed.** Link 11
+        // exists because Viridian Forest's bug catchers beat a level 6 lead;
+        // this exists because Brock beats a level 10 one, and for two of the
+        // three starters it is not close. Measured, 40 attempts per starter
+        // from the certified pool: SQUIRTLE 90.0%, CHARMANDER 20.0%,
+        // BULBASAUR 0.0%. The cause is a move, not a number — see
+        // `docs/agent/brock.md`.
+        "15-train-for-brock" => {
+            r.insert(
+                PEWTER_CITY,
+                vec![stage(PEWTER_TO_ROUTE_2, Finish::Step("down"))],
+            );
+            r.insert(
+                ROUTE_2,
+                vec![stage(ROUTE_2_TO_GRASS, Finish::Grind((1, 3), (6, 6)))],
+            );
+        }
+        // **The one link in the chain that has to WIN a fight.** Every battle
+        // before this had a goal the cartridge sets whoever won — the rival
+        // battle's flag is set by `OaksLabRivalEndBattleScript` after a loss
+        // as much as after a win — so a passing rate measured surviving
+        // rather than battling. A badge bit only sets if Brock is beaten.
+        "17-fight-through-the-gym" => {
+            r.insert(PEWTER_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(PEWTER_CITY, vec![stage(PEWTER_TO_GYM, Finish::Arrive)]);
+            r.insert(PEWTER_GYM, vec![stage(GYM_TO_BROCK, Finish::Talk("up"))]);
+        }
+        "18-heal-after-the-gym" => {
+            r.insert(
+                PEWTER_GYM,
+                vec![stage(&[(4, 12), (4, 13)], Finish::Step("down"))],
+            );
+            r.insert(PEWTER_CITY, vec![stage(GYM_TO_POKECENTER, Finish::Arrive)]);
+            r.insert(PEWTER_POKECENTER, Stage2::to_vec(POKECENTER));
+        }
+        // East out of Pewter onto Route 3, by a map connection — the same
+        // shape as link 14's arrival and for the same reason: Pewter's
+        // connection byte is 0b0101, and reading each block's own destination
+        // gives south -> Route 2 and east -> Route 3.
+        "19-east-to-route-3" => {
+            r.insert(PEWTER_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(
+                PEWTER_CITY,
+                vec![stage(PEWTER_TO_ROUTE_3, Finish::Step("right"))],
+            );
+        }
         "14-arrive-in-pewter" => {
             r.insert(
                 FOREST_NORTH_GATE,
@@ -464,6 +671,60 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
 /// choice worth stating rather than a default.
 fn heal_route(scenario: &str) -> HashMap<u8, MapPlan> {
     let mut r: HashMap<u8, MapPlan> = HashMap::new();
+    // **The gym link needs one and every other link in Pewter does not.**
+    // Its two trainers are back to back with nothing between them, and the
+    // nurse is a five-minute walk away across the city — so a lead that beats
+    // the junior trainer and then walks straight into Brock arrives at the
+    // fight that matters already hurt. Measured in `docs/agent/brock.md`:
+    // fighting both without healing between costs a level of effective
+    // strength.
+    // Training on Route 2's grass, healing in Pewter — a dozen tiles each way.
+    // The Viridian nurse, from Route 2's southern grass: down the map, into
+    // the city, across it. Fifty-six steps against Route 1's twenty-five.
+    if scenario == "x-train-route-2-south" {
+        r.insert(
+            ROUTE_2,
+            vec![stage(
+                &[
+                    (4, 56),
+                    (5, 56),
+                    (5, 57),
+                    (7, 57),
+                    (7, 62),
+                    (8, 62),
+                    (8, 71),
+                ],
+                Finish::Step("down"),
+            )],
+        );
+        r.insert(
+            VIRIDIAN_CITY,
+            vec![stage(
+                &[(18, 2), (19, 2), (19, 26), (23, 26), (23, 25)],
+                Finish::Arrive,
+            )],
+        );
+        r.insert(VIRIDIAN_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
+    if scenario == "15-train-for-brock" {
+        r.insert(ROUTE_2, vec![stage(ROUTE_2_TO_PEWTER, Finish::Step("up"))]);
+        r.insert(
+            PEWTER_CITY,
+            vec![stage(
+                &[(18, 31), (13, 31), (13, 26), (13, 25)],
+                Finish::Arrive,
+            )],
+        );
+        r.insert(PEWTER_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
+    if scenario == "17-fight-through-the-gym" {
+        r.insert(
+            PEWTER_GYM,
+            vec![stage(&[(4, 12), (4, 13)], Finish::Step("down"))],
+        );
+        r.insert(PEWTER_CITY, vec![stage(GYM_TO_POKECENTER, Finish::Arrive)]);
+        r.insert(PEWTER_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
     if scenario == "11-train-for-the-forest" {
         r.insert(
             ROUTE_1,
@@ -502,8 +763,44 @@ fn may_fight_wild(scenario: &str) -> bool {
     // Pokémon that is already one hit from dead with no Pokémon Center on the
     // leg. **The cost is real and belongs beside the benefit**: the lead
     // arrives at link 11 a level or so lower, and link 11 has to make it up.
-    matches!(scenario, "05-the-rival-battle" | "11-train-for-the-forest")
+    matches!(
+        scenario,
+        "05-the-rival-battle"
+            | "11-train-for-the-forest"
+            | "15-train-for-brock"
+            | "x-train-route-2-south"
+    )
 }
+
+/// The level the solver trains its lead to before it stops picking fights.
+///
+/// **This must agree with the scenario's own goal**, and the hazard is the same
+/// one [`may_fight_wild`] carries: two places saying the same thing. It is a
+/// function rather than a constant because the two remedial links aim at
+/// different numbers, and those numbers came from different parts of the
+/// cartridge — link 11's from Viridian Forest's bug-catcher rosters, link 15b's
+/// from which level each starter's line first holds a move that answers
+/// ROCK/GROUND.
+///
+/// `$GB_TRAIN_TO` overrides it, for sweeping the threshold; a typo is ignored
+/// rather than silently changing the target.
+fn train_to(scenario: &str) -> u32 {
+    if let Some(v) = std::env::var("GB_TRAIN_TO")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        return v;
+    }
+    match scenario {
+        "11-train-for-the-forest" => 13,
+        "15-train-for-brock" => BROCK_TRAIN_TO,
+        "x-train-route-2-south" => 13,
+        _ => 13,
+    }
+}
+
+/// The level [`train_to`] aims at before the gym. See `docs/agent/brock.md`.
+const BROCK_TRAIN_TO: u32 = 16;
 
 /// Where each leg is trying to get to, so an off-route map can be recognised
 /// as off-route rather than merely unknown.
@@ -773,7 +1070,7 @@ impl ChainDriver {
             heal_route: heal_route(scenario),
             healing: false,
             refused_a_fight: false,
-            train_to: 13,
+            train_to: train_to(scenario),
             pending: None,
             busy: false,
             calls: 0,
@@ -1055,7 +1352,7 @@ impl ChainDriver {
         // mispress. B is the one button that can only ever back out of a menu.
         if s.said("CHOOSE A POK") {
             if let Action::Switch { to, why } = action {
-                return self.menu_to(view.menu_item, to as u8, why);
+                return self.menu_to(view.menu_item, to as u8, why, None);
             }
             return self.one("Back out of the party list.", "b");
         }
@@ -1081,7 +1378,12 @@ impl ChainDriver {
             // wCurrentMenuItem`. Measured before it was believed — the cursor
             // reads 1 with `▶` drawn on the first move.
             if let Action::Fight { slot, why } = action {
-                return self.menu_to(view.menu_item.saturating_sub(1), slot as u8, why);
+                return self.menu_to(
+                    view.menu_item.saturating_sub(1),
+                    slot as u8,
+                    why,
+                    Some(slot),
+                );
             }
             // Some other list we did not ask for.
             return self.one("Back out of this list.", "b");
@@ -1102,7 +1404,7 @@ impl ChainDriver {
             // policy's own cap on stat moves, so `MAX_STAT_TURNS` of two was
             // really about one.
             if !matches!(action, Action::Fight { .. }) {
-                self.tally.note(action.why());
+                self.tally.note(action.why(), None);
             }
             // **The heal threshold IS the fight threshold, and this is where
             // the two are made one thing rather than two numbers that agree
@@ -1147,7 +1449,7 @@ impl ChainDriver {
     ///
     /// `wCurrentMenuItem` is the live index, so this cannot drift: a swallowed
     /// press leaves the index where it was and the next decision repeats it.
-    fn menu_to(&mut self, at: u8, want: u8, why: &str) -> String {
+    fn menu_to(&mut self, at: u8, want: u8, why: &str, chose: Option<usize>) -> String {
         let say = format!("{why} (slot {})", want + 1);
         match at.cmp(&want) {
             std::cmp::Ordering::Less => self.one(&say, "down"),
@@ -1155,7 +1457,7 @@ impl ChainDriver {
             // Committed: this is the press that spends the turn, and the only
             // place a turn may be counted.
             std::cmp::Ordering::Equal => {
-                self.tally.note(why);
+                self.tally.note(why, chose);
                 self.one(&say, "a")
             }
         }
@@ -1456,6 +1758,7 @@ mod tally {
         DMG_KO_SHORT,
         TURNS,
         STAT_TURNS,
+        UNRESOLVED,
     );
 
     pub fn bump(c: &AtomicU64, by: u64) {
@@ -1479,7 +1782,8 @@ mod tally {
         };
         let checked = get(&DMG_CHECKED).max(1);
         Some(format!(
-            "battles {n}: won {} ({:.1}%), lost {} ({:.1}%), fled {} ({:.1}%); \
+            "battles {n}: won {} ({:.1}%), lost {} ({:.1}%), fled {} ({:.1}%), \
+             {} still running when the attempt ended; \
              {:.1} turns each\n  \
              HP left when it ended: {hp:.1}% of max ({} sample(s)); faints {}; \
              items used {}\n  \
@@ -1498,6 +1802,7 @@ mod tally {
             pct(get(&LOST)),
             get(&FLED),
             pct(get(&FLED)),
+            get(&UNRESOLVED),
             get(&TURNS) as f64 / n as f64,
             get(&HP_SAMPLES),
             get(&FAINTS),
@@ -1642,7 +1947,7 @@ impl BattleTally {
     /// construction, so a right/wrong column would be vacuous; what a reader
     /// needs is the mix, plus how often the escape failed, which costs a turn
     /// and is the real price of the decision.
-    fn note(&mut self, why: &str) {
+    fn note(&mut self, why: &str, chose: Option<usize>) {
         // A turn is an action chosen, not a decision spent — most decisions in
         // a battle go on reading the text a turn produced.
         self.turns += 1;
@@ -1681,8 +1986,20 @@ impl BattleTally {
             self.stat_turns = self.stat_turns.saturating_add(1);
             tally::bump(&tally::STAT_TURNS, 1);
         }
-        if let Some(v) = &self.last {
-            if let Some(m) = v.moves.iter().find(|m| m.damaging() && m.usable()) {
+        // **The move the policy actually chose, not the first damaging one in
+        // the list.** This used to be
+        // `v.moves.iter().find(|m| m.damaging() && m.usable())`, which is the
+        // same move whenever the best one is in slot 1 — true for every link
+        // before the gym, because a starter's only attack is slot 1. In
+        // Pewter it is not: a SQUIRTLE holds TACKLE, TAIL WHIP, BUBBLE and the
+        // policy picks BUBBLE, which is four times effective on ROCK/GROUND —
+        // so the range recorded was TACKLE's and the damage observed was
+        // BUBBLE's. Measured on the first 120-attempt gym run: **474 of 700
+        // predictions landed "over"**, against the 5-8 per cent a critical-hit
+        // rate explains, and the column read 29.9 per cent in range on a
+        // policy that was in fact fine.
+        if let (Some(v), Some(slot)) = (&self.last, chose) {
+            if let Some(m) = v.moves.iter().find(|m| m.slot == slot) {
                 if why.contains("knocks it out")
                     || why.contains("most damage")
                     || why.contains("ends it first")
@@ -1736,13 +2053,42 @@ impl BattleTally {
     }
 }
 
-/// **Score the last battle even when the run ends inside it.** A link whose
-/// goal fires on the turn a battle ends — which is exactly what link 05's does
-/// — would otherwise contribute nothing to the battle report, and the report
-/// would quietly describe a smaller sample than the run.
+/// **Score the last battle even when the run ends inside it — but only if the
+/// driver saw who won.**
+///
+/// A link whose goal fires on the turn a battle ends would otherwise contribute
+/// nothing to the battle report, and the report would quietly describe a
+/// smaller sample than the run. That is what this is for, and it worked
+/// because in an ordinary win or loss the driver keeps being asked for
+/// decisions while the "…fainted!" text plays, so the last view it holds is
+/// already decisive.
+///
+/// **A run cut short mid-battle has no such view, and scoring it anyway
+/// reports a loss as a win.** [`BattleTally::tick`] reads "we are still
+/// standing" as a win, and when the harness stops on `party_hp=0` the driver's
+/// last decision was taken one hit before the end — so the lead is standing in
+/// that view and dead in the machine. Measured on the first gym attempt this
+/// was written for: a level 10 BULBASAUR fainted to the gym's junior trainer,
+/// its final state reading `wIsInBattle = 2` and 0/30 HP, and the report said
+/// `battles 1: won 1 (100.0%) … faints 0`. Every number in it was wrong, on
+/// exactly the link whose battle numbers are the point.
+///
+/// So an indecisive view is counted as **unresolved** and named as such.
+/// Nothing else moves: link 05's rival battle ends in the overworld with the
+/// flag, so its decisions run past the knockout and its view is decisive.
 impl Drop for ChainDriver {
     fn drop(&mut self) {
-        self.tally.tick(false);
+        let decisive = self
+            .tally
+            .last
+            .as_ref()
+            .map(|v| v.ours.hp == 0 || v.theirs.hp == 0)
+            .unwrap_or(false);
+        if decisive {
+            self.tally.tick(false);
+        } else if self.tally.last.is_some() && !self.tally.inherited {
+            tally::bump(&tally::UNRESOLVED, 1);
+        }
     }
 }
 
@@ -1894,6 +2240,13 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
   verify --rom R --scenario S [--start FILE] [--runs N] [--primitive]
       Play the same seeds serially and in parallel and require identical
       final states. Determinism outranks everything else in flight.
+
+  states --rom R --start-dir D
+      What a pool of entry states actually holds — lead species, level, HP,
+      moves, money and badges — and the distribution across the pool.
+      **A link's precondition is a claim about its entry pool**, and this is
+      how that claim gets checked rather than assumed. No frames are
+      emulated: a save state carries the party.
 ";
 
 #[derive(Default)]
@@ -1931,6 +2284,11 @@ struct Args {
     split: Option<String>,
     /// A subprocess arm for `ab`: the program and its arguments, one string.
     student: Option<String>,
+    /// Extra raw addresses for `states`, as `NAME@0xADDR` or `0xADDR`.
+    /// **The verification tool for a new goal**: a flag or a byte a link is
+    /// about to be judged on gets read out of real states first, so the
+    /// goal is a measurement rather than a guess.
+    peek: Vec<String>,
 }
 
 fn parse(args: &[String]) -> Args {
@@ -1962,6 +2320,7 @@ fn parse(args: &[String]) -> Args {
             "--plan" => a.plan = Some(PathBuf::from(next(i))),
             "--lead" => a.leads.push(next(i)),
             "--split" => a.split = Some(next(i)),
+            "--peek" => a.peek.push(next(i)),
             "--student" => a.student = Some(next(i)),
             "--out" => a.out = Some(PathBuf::from(next(i))),
             "--seed" => a.seed = next(i).parse().unwrap_or(1),
@@ -2319,6 +2678,7 @@ fn main() {
         "verify" => cmd_verify(&a),
         "sprites" => cmd_sprites(&a),
         "routes" => cmd_routes(),
+        "states" => cmd_states(&a),
         "film" => cmd_film(&a),
         "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
@@ -3108,6 +3468,184 @@ fn cmd_film(a: &Args) {
         "{full} of {agents} agent(s) finished the chain; {:.1} s wall",
         t.elapsed().as_millis() as f64 / 1000.0
     );
+}
+
+/// What a pool of entry states actually holds.
+///
+/// **A link's precondition is a claim about the pool it starts from**, and
+/// until this existed the only way to check one was to run the link and read
+/// the failures. The Brock links needed it immediately: "link 11 trains the
+/// lead to level 10" is a floor, and what the gym cares about is the
+/// *distribution* — which is a different question and has a different answer
+/// per starter.
+///
+/// No frames are emulated. A save state carries the party, so this is one
+/// `load_state` and a handful of bus reads per file, exactly as
+/// [`lead_species`] already does.
+fn cmd_states(a: &Args) {
+    use terminalgb::longplay::watch::{Watch, Watches};
+    let rom = load_cart(&need_rom(a));
+    let dir = a.start_dir.clone().unwrap_or_else(|| {
+        eprintln!("--start-dir is required");
+        exit(2);
+    });
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| {
+            eprintln!("cannot read {}: {e}", dir.display());
+            exit(1);
+        })
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "gbss").unwrap_or(false))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        eprintln!("no .gbss files in {}", dir.display());
+        exit(1);
+    }
+    let names = [
+        "lead_species",
+        "lead_level",
+        "lead_hp",
+        "lead_max_hp",
+        "lead_move1",
+        "lead_move2",
+        "lead_move3",
+        "lead_move4",
+    ];
+    let mut list: Vec<Watch> = names.iter().filter_map(|n| Watch::named(n)).collect();
+    // Raw addresses, so a byte a new goal is about to rest on can be read out
+    // of real states *before* the goal is written. `NAME@0xD719` or `0xD719`.
+    let mut peeked: Vec<String> = Vec::new();
+    for spec in &a.peek {
+        let (nm, addr) = match spec.split_once('@') {
+            Some((n, addr)) => (n.to_string(), addr),
+            None => (spec.clone(), spec.as_str()),
+        };
+        let hex = addr
+            .trim_start_matches("0x")
+            .trim_start_matches("0X")
+            .trim_start_matches('$');
+        let Ok(a16) = u16::from_str_radix(hex, 16) else {
+            eprintln!("--peek {spec:?}: not an address");
+            exit(2);
+        };
+        let text = format!("{{\"name\":\"{nm}\",\"addr\":\"{a16:#06X}\",\"len\":1}}");
+        let j = match terminalgb_plugin_agent::json::parse(&text) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("--peek {spec:?}: {}", e.0);
+                exit(2);
+            }
+        };
+        match Watch::from_json(&j) {
+            Ok(watch) => {
+                peeked.push(nm);
+                list.push(watch);
+            }
+            Err(e) => {
+                eprintln!("--peek {spec:?}: {e}");
+                exit(2);
+            }
+        }
+    }
+    let w = Watches(list);
+    // Per (species, level): how many, and the worst and best HP fraction.
+    let mut byspecies: HashMap<(u8, u64), u32> = HashMap::new();
+    let mut unreadable = 0u32;
+    println!(
+        "{:>5}  {:<11} {:>3}  {:>7}  {:>6} {:>6}  moves",
+        "n", "lead", "lv", "hp", "money", "badges"
+    );
+    for (i, f) in files.iter().enumerate() {
+        let bytes = match std::fs::read(f) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("  {}: {e}", f.display());
+                unreadable += 1;
+                continue;
+            }
+        };
+        let mut gb = Gameboy::new(rom.0.as_ref().clone(), None);
+        if gb.load_state(&bytes).is_err() {
+            eprintln!("  {}: not a state for this cartridge", f.display());
+            unreadable += 1;
+            continue;
+        }
+        let sample = gb.with_machine(Cap::READ_MEMORY, |m| w.read(m));
+        let prog = gb.with_machine(Cap::READ_MEMORY, terminalgb::longplay::read_progress);
+        let sp = sample.get("lead_species").unwrap_or(0) as u8;
+        let lv = sample.get("lead_level").unwrap_or(0);
+        let hp = sample.get("lead_hp").unwrap_or(0);
+        let max = sample.get("lead_max_hp").unwrap_or(0);
+        let extra: Vec<String> = peeked
+            .iter()
+            .map(|n| format!("{n}={:#04X}", sample.get(n).unwrap_or(0)))
+            .collect();
+        let mv: Vec<String> = (1..=4)
+            .filter_map(|k| sample.get(&format!("lead_move{k}")))
+            .filter(|m| *m != 0)
+            .map(|m| move_name(&rom, m as u8))
+            .collect();
+        *byspecies.entry((sp, lv as u64)).or_default() += 1;
+        if i < 12 || files.len() <= 24 {
+            println!(
+                "{:>5}  {:<11} {:>3}  {:>3}/{:<3}  {:>6} {:>6}  {}",
+                i,
+                species_name(&rom, sp),
+                lv,
+                hp,
+                max,
+                prog.money,
+                prog.badges.count_ones(),
+                if extra.is_empty() {
+                    mv.join(", ")
+                } else {
+                    format!("{}  {}", extra.join(" "), mv.join(", "))
+                }
+            );
+        } else if i == 12 {
+            println!("      … {} more, summarised below", files.len() - 12);
+        }
+    }
+    println!("\n{} state(s), {unreadable} unreadable", files.len());
+    let mut keys: Vec<_> = byspecies.keys().copied().collect();
+    keys.sort();
+    let mut species_seen: Vec<u8> = keys.iter().map(|(s, _)| *s).collect();
+    species_seen.dedup();
+    for sp in species_seen {
+        let rows: Vec<_> = keys.iter().filter(|(s, _)| *s == sp).collect();
+        let total: u32 = rows.iter().map(|k| byspecies[k]).sum();
+        let lo = rows.first().map(|k| k.1).unwrap_or(0);
+        let hi = rows.last().map(|k| k.1).unwrap_or(0);
+        print!(
+            "  {:<11} {:>4} state(s), level {lo}-{hi}:",
+            species_name(&rom, sp),
+            total
+        );
+        for k in &rows {
+            print!(" L{}x{}", k.1, byspecies[k]);
+        }
+        println!();
+    }
+}
+
+/// A move's name from the cartridge, never a table written down here — the
+/// anti-drift rule `AGENTS.md` records for every Gen 1 constant.
+#[cfg(feature = "plugin-trainer")]
+fn move_name(rom: &Cart, index: u8) -> String {
+    let n = terminalgb_plugin_trainer::rom::RomTables::new(rom.0.as_ref().clone())
+        .move_name(index);
+    if n.is_empty() {
+        format!("#{index}")
+    } else {
+        n
+    }
+}
+
+#[cfg(not(feature = "plugin-trainer"))]
+fn move_name(_rom: &Cart, index: u8) -> String {
+    format!("#{index}")
 }
 
 /// Print every route the solver will walk, as JSON, for

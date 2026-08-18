@@ -1,0 +1,40 @@
+{
+  "schema": "gbscenario/1",
+  "name": "16-heal-in-pewter",
+  "objective": "Walk across Pewter City to its Pokemon Center and heal the party at the counter, before going anywhere near the gym.",
+  "start_state": "states/15.gbss",
+  "goal": [
+    "watch:last_blackout_map=0x02",
+    "party_missing_hp=0",
+    "map=0x3A"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle flee",
+    "require party>=1",
+    "max_calls 300",
+    "max_wall_seconds 900"
+  ],
+  "watch": [
+    {
+      "name": "last_blackout_map",
+      "addr": "0xD719",
+      "len": 1
+    }
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/16-heal-in-pewter.json",
+  "timeout_frames": 120000,
+  "evidence": [
+    "watch:last_blackout_map=0x02 - wLastBlackoutMap $D719, which the atlas records as 'where blacking out returns you - the last Pokemon Center you healed at'. It holds the TOWN, not the Center's interior map: measured $01 (Viridian City) on every state of the certified link-14 pool.",
+    "THE FLIP IS THE PROOF OF THE INTERACTION AND FULL HP IS NOT, because a party that was never hurt is at full HP too. Measured both halves separately: a run whose goal was merely reaching map $3A ended inside Pewter's Pokemon Center with $D719 still reading $01, so entering does not set it; a run that walked to (3,3) and talked to the nurse left it reading $02. The cartridge writes it in DisplayPokemonCenterDialogue's call to SetLastBlackoutMap.",
+    "party_missing_hp=0 AND map=0x3A are both needed beside it. $D719 is written at the START of the nurse's dialogue, before HealParty runs - measured, a run with the flip alone as its goal stopped at the counter with the lead on 26/29 - so the flip alone proves the conversation began and not that the party was healed. party_missing_hp is the sum over the party of wPartyMonNMaxHP less wPartyMonNHP; a goal compares one number against a constant and 'current equals maximum' is not expressible that way, because the maximum moves with the party and with every level.",
+    "map=0x3A rather than being back outside: finishing inside the building is what forces anyone who is hurt through the nurse. An earlier version of the link after the gym used map=0x02 and fired at the GYM door for every attempt that came out whole - 23 of 60, in under ten decisions, having never gone near the Pokemon Center."
+  ]
+}

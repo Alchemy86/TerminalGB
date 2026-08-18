@@ -1,0 +1,32 @@
+{
+  "schema": "gbscenario/1",
+  "name": "18-heal-after-the-gym",
+  "objective": "Out of the gym with the badge, back across Pewter City to the Pokemon Center, and heal what Brock cost before going on.",
+  "start_state": "states/17.gbss",
+  "goal": [
+    "party_missing_hp=0",
+    "map=0x3A"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle flee",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 300",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/18-heal-after-the-gym.json",
+  "timeout_frames": 120000,
+  "evidence": [
+    "party_missing_hp=0 AND map=0x3A - the party is whole and standing inside Pewter's Pokemon Center. See the 16-heal-in-pewter evidence for what party_missing_hp reads.",
+    "A REPEAT HEAL AT THE SAME POKEMON CENTER LEAVES NO CARTRIDGE-VISIBLE TRACE, and this goal is the strongest claim available rather than a proof. wLastBlackoutMap is already $02 from link 16, so the flip that proves the first Pewter heal cannot prove a second one. 'Whole, and inside the building' forces anyone who is hurt through the nurse and cannot be satisfied by walking past the door, but it does not distinguish a party that healed from one that arrived whole. That is a limit of the cartridge, not of the harness.",
+    "require badges>=1 - a run that reached this link without the badge is judged a forfeit rather than allowed to heal its way to a pass."
+  ]
+}

@@ -150,6 +150,7 @@ and that had quietly happened to more than half of this directory.
 | [example: agent snapshots](agent/examples/agent-snapshots.md) | what a driver is actually handed, captured from a real run |
 | [the Pewter chain](agent/pewter-chain.md) | fourteen scenarios from a cold cartridge to Pewter City, goals read out of the cartridge, the corpus they produced — and the link that scored 100% on the wrong task |
 | [the battle policy](agent/battle-policy.md) | fight, switch, item or run, decided from the cartridge's own type chart, move table, HP, PP and bag — one capability every link shares, with the battle report that goes beside a pass rate |
+| [past Pewter: the gym and the badge](agent/brock.md) | five links from arriving in Pewter to Route 3 with the Boulder Badge — the first link the chain has to *win*, the precondition nobody had checked, and where to train |
 | [the test rig](agent/test-rig.md) | one command, the same fight from the same start states at the same seeds, two or more players, and the paired gap between them — plus what a report can and cannot tell you |
 | [the test rig's first result](agent/test-rig-results.md) | the rival battle, three starters, 2,700 attempts: what the instrument measured the first time it was pointed at something |
 | [teacher against student on the move prompts](agent/move-learning-result.md) | the measurement the rig was built for: nine level-up prompts, a teacher, a student distilled from its corpus, a do-nothing floor, and the held-out control that says what the nine actually taught |

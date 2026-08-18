@@ -85,7 +85,13 @@ struct World {
     x: u8,
     y: u8,
     badges: u8,
-    party: Vec<(u8, u8, u16)>, // species, level, hp
+    /// species, level, current HP, maximum HP.
+    ///
+    /// **The maximum is written too**, because `Progress::party_missing_hp` is
+    /// what both Pewter heal links are judged on and a world that leaves the
+    /// maximum at zero reports "whole" for a party on its last legs. See
+    /// `docs/agent/brock.md` §7.
+    party: Vec<(u8, u8, u16, u16)>,
     owned: u16,
     items: u8,
     play_seconds: u32,
@@ -122,13 +128,15 @@ impl World {
                 m.poke(W_X_COORD, self.x);
                 m.poke(W_Y_COORD, self.y);
                 m.poke(tr::OBTAINED_BADGES, self.badges);
-                for (i, (species, level, hp)) in self.party.iter().enumerate() {
+                for (i, (species, level, hp, max_hp)) in self.party.iter().enumerate() {
                     let base = tr::PARTY_MONS + i as u16 * PARTY_MON_SIZE;
                     m.poke(base + pm::SPECIES, *species);
                     m.poke(base + pm::LEVEL, *level);
                     // Big-endian, like every multi-byte Gen 1 field.
                     m.poke(base + pm::HP, (hp >> 8) as u8);
                     m.poke(base + pm::HP + 1, (*hp & 0xFF) as u8);
+                    m.poke(base + pm::MAX_HP, (max_hp >> 8) as u8);
+                    m.poke(base + pm::MAX_HP + 1, (*max_hp & 0xFF) as u8);
                 }
                 // Pokédex owned flags, low species first.
                 for byte in 0..19u16 {
@@ -290,12 +298,54 @@ fn main() {
         );
     }
 
+    // [1b] `party_missing_hp` is read from the party, and it is what a heal is
+    // judged on. **A goal condition compares one number against a constant**,
+    // so "current equals maximum" is not expressible — the maximum moves with
+    // the party and with every level. Both Pewter heal links rest on this
+    // field; `docs/agent/brock.md` §7 has the rest.
+    {
+        let dir = scratch("missinghp");
+        let mut r = make_runner(&dir, walker(), base_cfg(&dir));
+        World {
+            party: vec![(1, 5, 12, 20), (4, 7, 22, 22)],
+            ..Default::default()
+        }
+        .apply(r.gameboy_mut());
+        let p = r.gameboy_mut().with_machine(
+            Capability::OBSERVE | Capability::READ_MEMORY,
+            terminalgb::longplay::read_progress,
+        );
+        c.ok(
+            "a hurt party reports exactly the HP it is short of",
+            p.party_missing_hp == 8 && p.party_hp == 34,
+            &format!(
+                "missing {} (want 8), current {} (want 34) — 12/20 and 22/22",
+                p.party_missing_hp, p.party_hp
+            ),
+        );
+        let mut r = make_runner(&scratch("missinghp2"), walker(), base_cfg(&dir));
+        World {
+            party: vec![(1, 5, 20, 20)],
+            ..Default::default()
+        }
+        .apply(r.gameboy_mut());
+        let whole = r.gameboy_mut().with_machine(
+            Capability::OBSERVE | Capability::READ_MEMORY,
+            terminalgb::longplay::read_progress,
+        );
+        c.ok(
+            "a whole party is missing nothing",
+            whole.party_missing_hp == 0,
+            &format!("missing {} (want 0)", whole.party_missing_hp),
+        );
+    }
+
     // [2] A run produces every artefact a person or a program would look for.
     let (board2, dir2) = {
         let dir = scratch("artefacts");
         let mut r = make_runner(&dir, walker(), base_cfg(&dir));
         World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             ..Default::default()
         }
         .apply(r.gameboy_mut());
@@ -407,7 +457,7 @@ fn main() {
         // A schedule of world changes: (frame, what to change).
         type Beat = (u64, fn(&mut World));
         let script: [Beat; 5] = [
-            (400, |w| w.party = vec![(1, 5, 20)]),
+            (400, |w| w.party = vec![(1, 5, 20, 20)]),
             (900, |w| w.map = 0x0C), // Route 1
             (1600, |w| w.party[0].1 = 8),
             (2400, |w| {
@@ -482,7 +532,7 @@ fn main() {
         cfg.max_frames = 3_000;
         let mut r = make_runner(&dir, walker(), cfg);
         let mut w = World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             ..Default::default()
         };
         w.apply(r.gameboy_mut());
@@ -536,7 +586,7 @@ fn main() {
         cfg.max_frames = 1_200;
         let mut r = make_runner(&dir, walker(), cfg);
         World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             ..Default::default()
         }
         .apply(r.gameboy_mut());
@@ -575,7 +625,7 @@ fn main() {
         cfg.checkpoint_every = 300;
         let mut r = make_runner(&dir, walker(), cfg.clone());
         let w = World {
-            party: vec![(4, 7, 22)],
+            party: vec![(4, 7, 22, 22)],
             map: 0x0C,
             badges: 1,
             play_seconds: 100,
@@ -659,7 +709,7 @@ fn main() {
         cfg.max_frames = 3_000;
         let mut r = make_runner(&dir, Box::new(DeadDriver), cfg);
         World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             ..Default::default()
         }
         .apply(r.gameboy_mut());
@@ -714,7 +764,7 @@ fn main() {
         .expect("attach");
         // The world at the start of every attempt: on map 0, one Pokémon.
         World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             ..Default::default()
         }
         .apply(&mut gb);
@@ -805,7 +855,7 @@ fn main() {
         gb.add_plugin(Box::new(AgentPlugin::new(walker(), Config::default())))
             .expect("attach");
         World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             map: 0x0C,
             ..Default::default()
         }
@@ -858,7 +908,7 @@ fn main() {
             gb.add_plugin(Box::new(AgentPlugin::new(walker(), Config::default())))
                 .expect("attach");
             World {
-                party: vec![(1, 5, 20)],
+                party: vec![(1, 5, 20, 20)],
                 ..Default::default()
             }
             .apply(&mut gb);
@@ -909,7 +959,7 @@ fn main() {
         }]);
         let mut r = make_runner(&dir, walker(), cfg);
         World {
-            party: vec![(1, 5, 20)],
+            party: vec![(1, 5, 20, 20)],
             ..Default::default()
         }
         .apply(r.gameboy_mut());

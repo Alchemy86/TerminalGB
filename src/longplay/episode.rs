@@ -76,6 +76,9 @@ pub enum Lhs {
     Badges,
     Party,
     PartyHp,
+    /// How far the party is from whole. `party_missing_hp=0` is the one way
+    /// to say "healed" in a grammar that compares against constants.
+    PartyMissingHp,
     Owned,
     Money,
     Items,
@@ -136,6 +139,7 @@ impl Cond {
             "badges" => Lhs::Badges,
             "party" => Lhs::Party,
             "party_hp" => Lhs::PartyHp,
+            "party_missing_hp" => Lhs::PartyMissingHp,
             "owned" => Lhs::Owned,
             "money" => Lhs::Money,
             "items" => Lhs::Items,
@@ -145,7 +149,8 @@ impl Cond {
                 _ => {
                     return Err(format!(
                         "{other:?} is not something to compare — try map, x, y, badges, \
-                         party, party_hp, owned, money, items, play_seconds, or \
+                         party, party_hp, party_missing_hp, owned, money, items, \
+                         play_seconds, or \
                          watch:<name>"
                     ))
                 }
@@ -193,6 +198,7 @@ impl Cond {
             Lhs::Badges => p.badges.count_ones() as i64,
             Lhs::Party => p.party.len() as i64,
             Lhs::PartyHp => p.party_hp as i64,
+            Lhs::PartyMissingHp => p.party_missing_hp as i64,
             Lhs::Owned => p.owned as i64,
             Lhs::Money => p.money as i64,
             Lhs::Items => p.items as i64,
@@ -777,6 +783,28 @@ mod tests {
             play_seconds: 600,
             ..Default::default()
         }
+    }
+
+    /// **"The party is whole" is a claim `party_hp` cannot make**, because a
+    /// goal compares one number against a constant and the maximum is not one
+    /// — it moves with the party and with every level. The shortfall is, so
+    /// `party_missing_hp=0` is the whole of it.
+    ///
+    /// This is what both Pewter heal links are judged on; see
+    /// `docs/agent/brock.md` §7 for why it is not, on its own, proof that a
+    /// nurse was talked to.
+    #[test]
+    fn a_healed_party_is_the_one_that_is_missing_no_hp() {
+        let w = Sample(vec![]);
+        let mut p = prog();
+        p.party_missing_hp = 0;
+        assert!(Cond::parse("party_missing_hp=0").unwrap().holds(&p, &w));
+        p.party_missing_hp = 17;
+        assert!(!Cond::parse("party_missing_hp=0").unwrap().holds(&p, &w));
+        assert!(Cond::parse("party_missing_hp>0").unwrap().holds(&p, &w));
+        // A party that is whole and one that was never hurt are the same
+        // reading, which is exactly the limitation the heal links record.
+        assert!(Cond::parse("party_missing_hp<=20").unwrap().holds(&p, &w));
     }
 
     #[test]
