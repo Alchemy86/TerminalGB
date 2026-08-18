@@ -53,6 +53,7 @@ from .palette import (  # noqa: F401
     legend_swatches, traffic_fraction,
 )
 from .tracks import (  # noqa: F401
-    FACING, FPS_GB, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS,
-    flag_at, interpolate, link_at, load_links, track_files, walk_span,
+    FACING, FPS_GB, GBTRK_MAGIC, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS,
+    decode_track, flag_at, interpolate, link_at, load_links, read_track,
+    track_files, track_last_frame, walk_span, write_track,
 )

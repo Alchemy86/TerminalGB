@@ -2326,9 +2326,7 @@ impl ChainDriver {
     /// four decisions a unit and cannot mistake one screen for the other,
     /// which walking the quantity up with `up` presses could.
     fn shop(&mut self, s: &Snap) -> Option<String> {
-        let Some(list) = self.shopping.as_mut() else {
-            return None;
-        };
+        let list = self.shopping.as_mut()?;
         // Not at the counter yet — the walk in is ordinary travel.
         if s.kind == "no-text" {
             return None;
@@ -3603,7 +3601,13 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
                     loudly if any two trajectories match.
       --exits N     keep the first N successful exits as <out>/exits/*.gbss,
                     which is the next link's entry pool
-      --paths       also write where the player was, per frame, per run
+      --paths       ALSO write the position track as CSV. It is written as
+                    `path-NNNNN.gbtrk` for every run whatever this says —
+                    recording is not opt-in any more, because a run whose
+                    position was never recorded can never be filmed and it is
+                    the certified runs a film most wants.
+      --no-tracks   record no position at all. For a throughput measurement,
+                    and for nothing else: it makes the run unfilmable.
       --screens N   ALSO RECORD THE PICTURE: a downscaled screen every N
                     emulated frames, as <out>/screen-NNNNN.gbscr. A position
                     track carries no pixels, so a mosaic of many runs needs
@@ -3668,6 +3672,26 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       a person; a program wanting the pool's composition PER INDEX — which
       starter agent `n` will carry, say — needs the rows, and `film` hands
       agent `ag` pool slot `ag % len` over the same sorted list.
+
+  pool pack|unpack|list --start-dir X [--out Y]
+      THE ENTRY POOL, STORED ONCE RATHER THAN N TIMES. A corpus's bytes are
+      not where anyone expects: measured on a real 720-attempt film pass,
+      126.08 MB of exit save states against 9.07 MB of position tracks. A
+      pool's states are the same machine a few thousand frames apart, so
+      93.2% of every state is byte-identical across the whole pool and
+      referencing one gives 39x with no compression at all — 21.01 MB of a
+      link's 120 exits becomes 0.54 MB. See docs/agent/track-format.md.
+      --start-dir accepts a .gbpool wherever it accepts a directory, so a
+      packed pool is usable in place; `unpack` is how the A/B rig, which
+      pairs a state with the .expect.json beside it, gets a directory back.
+
+  POSITION TRACKS ARE RECORDED FOR EVERY RUN, of every subcommand above —
+  `path-NNNNN.gbtrk` for an attempt, `agent-NN.gbtrk` for a `film` agent.
+  So a film of runs that were CERTIFIED is a selection over a certification
+  that already happened, not a second pass with `--paths` on:
+      tools/pewter-chain/chain_tracks.py --out DIR --select failed \\
+          01:cert/01 02:cert/02      # ...and --sort, --count, --seeds
+  docs/agent/track-format.md is the format, the measurements and the rules.
 ";
 
 #[derive(Default)]
@@ -3690,7 +3714,12 @@ struct Args {
     /// a twenty-core box. A flag says what was meant.
     workers_given: bool,
     primitive: bool,
+    /// `--paths`: **also** write the CSV form beside the binary one.
     paths: bool,
+    /// `--no-tracks`: record no position at all. Default is to record.
+    no_tracks: bool,
+    /// `pool`'s own verb — `pack`, `unpack` or `list`.
+    pool_action: Option<String>,
     /// A downscaled screen every N emulated frames; 0 records nothing.
     /// **The only way a picture leaves a headless run** — see
     /// `terminalgb::scenario::screens`.
@@ -3792,6 +3821,11 @@ fn parse(args: &[String]) -> Args {
                 i += 1;
                 continue;
             }
+            "--no-tracks" => {
+                a.no_tracks = true;
+                i += 1;
+                continue;
+            }
             "--paths" => {
                 a.paths = true;
                 i += 1;
@@ -3855,7 +3889,7 @@ struct Outcome {
     /// `terminalgb::scenario::run::BattleSummary`.
     battles: terminalgb::scenario::run::BattleSummary,
     recording: Recording,
-    path: Vec<terminalgb::scenario::run::PathPoint>,
+    path: terminalgb::scenario::track::Track,
     /// Every screen the run drew, when it was asked for them. **A position
     /// track carries no picture**, which is the whole reason this exists —
     /// see `terminalgb::scenario::screens`.
@@ -4138,7 +4172,15 @@ fn main() {
         println!("{USAGE}");
         exit(2);
     }
-    let a = parse(&args[1..]);
+    // `pool` takes a verb of its own before its flags, so its parse starts one
+    // argument later. Everything else is `subcommand --flags`.
+    let a = if args[0] == "pool" {
+        let mut a = parse(&args[2.min(args.len())..]);
+        a.pool_action = args.get(1).cloned();
+        a
+    } else {
+        parse(&args[1..])
+    };
     match args[0].as_str() {
         "ab" => cmd_ab(&a),
         "abfilm" => cmd_abfilm(&a),
@@ -4149,6 +4191,7 @@ fn main() {
         "sprites" => cmd_sprites(&a),
         "routes" => cmd_routes(),
         "states" => cmd_states(&a),
+        "pool" => cmd_pool(&a),
         "film" => cmd_film(&a),
         "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
@@ -4170,6 +4213,11 @@ fn default_workers() -> u32 {
 /// if given, else the single `--start`, else nothing (a cold cartridge).
 fn entry_pool(a: &Args) -> Vec<Option<Vec<u8>>> {
     if let Some(d) = &a.start_dir {
+        // A packed pool is the same pool, in the same order, 33x smaller —
+        // see `terminalgb::scenario::pool` and `pewter_chain pool`.
+        if d.is_file() {
+            return read_pool_file(d).into_iter().map(Some).collect();
+        }
         let mut v: Vec<PathBuf> = std::fs::read_dir(d)
             .unwrap_or_else(|e| {
                 eprintln!("cannot read {}: {e}", d.display());
@@ -4197,28 +4245,182 @@ fn entry_pool(a: &Args) -> Vec<Option<Vec<u8>>> {
     })]
 }
 
-/// Where the player was, one row per **change**.
+/// The members of a `.gbpool`, in file order.
+fn read_pool_file(p: &Path) -> Vec<Vec<u8>> {
+    let b = std::fs::read(p).unwrap_or_else(|e| {
+        eprintln!("error: cannot read {}: {e}", p.display());
+        exit(1);
+    });
+    let pool = terminalgb::scenario::pool::Pool::decode(&b).unwrap_or_else(|e| {
+        eprintln!("error: {}: {e}", p.display());
+        eprintln!("help: a directory of .gbss files works here too");
+        exit(1);
+    });
+    if pool.is_empty() {
+        eprintln!("error: {} holds no states", p.display());
+        exit(1);
+    }
+    pool.members().iter().map(|m| m.bytes.clone()).collect()
+}
+
+/// `pool pack|unpack|list` — the exit pool, stored once rather than N times.
 ///
-/// A row is written whenever any of map, position, facing, the walk counter or
-/// the battle flag moves, so a standing character costs one row and a walking
-/// one costs a row per frame — which is exactly the resolution a film needs and
-/// no more. `frame` is the emulated frame the row begins at.
-fn write_path(path: &Path, pts: &[terminalgb::scenario::run::PathPoint]) {
-    let mut out = String::from("frame,map,x,y,facing,walking,battle\n");
-    let mut last: Option<terminalgb::scenario::run::PathPoint> = None;
-    for p in pts {
-        let same = last.map(|l| {
-            (l.map, l.x, l.y, l.facing, l.walking, l.in_battle)
-                == (p.map, p.x, p.y, p.facing, p.walking, p.in_battle)
-        });
-        if same == Some(true) {
-            continue;
+/// **This is where a corpus's bytes actually are.** Measured on a real
+/// 720-attempt film pass: 126.08 MB of exit save states against 9.07 MB of
+/// position tracks and 10.27 MB of recordings, i.e. 88 % of the directory. A
+/// pool's states are the same machine a few thousand frames apart, so 93.2 %
+/// of every state's bytes are identical across all 720 of them and referencing
+/// one gives **33.4x with no compression at all**. See
+/// `terminalgb::scenario::pool`.
+fn cmd_pool(a: &Args) {
+    use terminalgb::scenario::pool::{Member, Pool};
+    let what = a.pool_action.as_deref().unwrap_or("");
+    let src = a.start_dir.clone().unwrap_or_else(|| {
+        println!("error: pool {what} needs a source");
+        println!("help: pewter_chain pool pack --start-dir DIR [--out FILE]");
+        println!("help: pewter_chain pool unpack --start-dir FILE --out DIR");
+        println!("help: pewter_chain pool list --start-dir FILE");
+        exit(2);
+    });
+    match what {
+        "pack" => {
+            let mut files: Vec<PathBuf> = std::fs::read_dir(&src)
+                .unwrap_or_else(|e| {
+                    println!("error: cannot read {}: {e}", src.display());
+                    exit(1);
+                })
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|x| x == "gbss").unwrap_or(false))
+                .collect();
+            files.sort();
+            if files.is_empty() {
+                println!("error: no .gbss files in {}", src.display());
+                exit(1);
+            }
+            let members: Vec<Member> = files
+                .iter()
+                .map(|p| Member {
+                    name: p.file_stem().unwrap().to_string_lossy().to_string(),
+                    bytes: std::fs::read(p).expect("state"),
+                })
+                .collect();
+            let raw: usize = members.iter().map(|m| m.bytes.len()).sum();
+            let out = a
+                .out
+                .clone()
+                .unwrap_or_else(|| src.with_extension("gbpool"));
+            let bytes = Pool::new(members).encode();
+            // **Round-tripped before the file is offered as a replacement.** A
+            // pool that packed wrong and was then deleted from is a corpus
+            // nobody can re-enter.
+            let back = Pool::decode(&bytes).unwrap_or_else(|e| {
+                println!("error: the pool this build just wrote does not read back: {e}");
+                exit(1);
+            });
+            for (m, f) in back.members().iter().zip(files.iter()) {
+                if m.bytes != std::fs::read(f).unwrap() {
+                    println!(
+                        "error: {} did not round-trip — nothing written",
+                        f.display()
+                    );
+                    exit(1);
+                }
+            }
+            std::fs::write(&out, &bytes).expect("write the pool");
+            println!("pool:");
+            println!("  states: {}", back.len());
+            println!("  from: {}", src.display());
+            println!("  file: {}", out.display());
+            println!("  before: {:.2} MB", raw as f64 / 1e6);
+            println!("  after: {:.2} MB", bytes.len() as f64 / 1e6);
+            println!("  ratio: {:.1}x", raw as f64 / bytes.len() as f64);
+            println!();
+            println!("help[2]:");
+            println!("  Use it directly: --start-dir {}", out.display());
+            println!("  Put the directory back: pewter_chain pool unpack --start-dir {} --out {}",
+                     out.display(), src.display());
         }
+        "unpack" => {
+            let dst = a.out.clone().unwrap_or_else(|| {
+                println!("error: pool unpack needs --out DIR");
+                exit(2);
+            });
+            let b = std::fs::read(&src).unwrap_or_else(|e| {
+                println!("error: cannot read {}: {e}", src.display());
+                exit(1);
+            });
+            let pool = Pool::decode(&b).unwrap_or_else(|e| {
+                println!("error: {}: {e}", src.display());
+                exit(1);
+            });
+            std::fs::create_dir_all(&dst).expect("output directory");
+            for m in pool.members() {
+                std::fs::write(dst.join(format!("{}.gbss", m.name)), &m.bytes)
+                    .expect("state");
+            }
+            println!("pool:");
+            println!("  states: {}", pool.len());
+            println!("  into: {}", dst.display());
+        }
+        "list" => {
+            let b = std::fs::read(&src).unwrap_or_else(|e| {
+                println!("error: cannot read {}: {e}", src.display());
+                exit(1);
+            });
+            let pool = Pool::decode(&b).unwrap_or_else(|e| {
+                println!("error: {}: {e}", src.display());
+                exit(1);
+            });
+            let raw: usize = pool.members().iter().map(|m| m.bytes.len()).sum();
+            println!("pool:");
+            println!("  file: {}", src.display());
+            println!("  states: {}", pool.len());
+            println!("  packed: {:.2} MB", b.len() as f64 / 1e6);
+            println!("  unpacked: {:.2} MB", raw as f64 / 1e6);
+            println!("  ratio: {:.1}x", raw as f64 / b.len().max(1) as f64);
+            println!();
+            println!("states[{}]{{slot,name,bytes}}:", pool.len());
+            for (i, m) in pool.members().iter().enumerate() {
+                println!("  {i},{},{}", m.name, m.bytes.len());
+            }
+        }
+        other => {
+            println!("error: unknown pool action {other:?}");
+            println!("help: pewter_chain pool pack|unpack|list --start-dir X");
+            exit(2);
+        }
+    }
+}
+
+/// Where the player was, as `GBTK` bytes.
+///
+/// **Written for every run, not for the ones somebody remembered to ask
+/// about.** A certification pass used to record nothing, so the runs that were
+/// actually certified could never be filmed and the interesting material — the
+/// failures, the blackouts, the tail — was thrown away at the moment it
+/// happened. The reason was cost, and cost is a format problem: measured over
+/// three real corpora this is **35-43x smaller than the CSV it replaces**
+/// (`docs/agent/track-format.md`). See `terminalgb::scenario::track` for the
+/// format and for what it deliberately does not carry.
+fn write_track(path: &Path, t: &terminalgb::scenario::track::Track) {
+    let _ = std::fs::write(path, t.encode());
+}
+
+/// The same track as CSV, for `--paths`.
+///
+/// Kept because a CSV is what a spreadsheet, an `awk` one-liner and anything
+/// written before the binary format existed can read. **It is six columns
+/// now**, not seven: the walk counter is no longer part of a position track —
+/// see `terminalgb::scenario::track`. Every reader in this repository accepts
+/// both widths, so a track written last year still renders.
+fn write_path_csv(path: &Path, t: &terminalgb::scenario::track::Track) {
+    let mut out = String::from("frame,map,x,y,facing,battle\n");
+    for p in t.points() {
         out.push_str(&format!(
-            "{},{},{},{},{},{},{}\n",
-            p.frame, p.map, p.x, p.y, p.facing, p.walking, p.in_battle
+            "{},{},{},{},{},{}\n",
+            p.frame, p.map, p.x, p.y, p.facing, p.in_battle
         ));
-        last = Some(*p);
     }
     let _ = std::fs::write(path, out);
 }
@@ -4318,7 +4520,7 @@ fn cmd_solve(a: &Args) {
         &out,
         a.quiet,
         a.primitive,
-        a.paths,
+        !a.no_tracks,
         phase_for(a.seed, a.idle_spread),
         screens_cfg(a),
     );
@@ -4329,8 +4531,11 @@ fn cmd_solve(a: &Args) {
     if let Some(b) = tally::report() {
         println!("{b}");
     }
-    if a.paths {
-        write_path(&out.join(format!("path-{:05}.csv", a.seed)), &o.path);
+    if !a.no_tracks {
+        write_track(&out.join(format!("path-{:05}.gbtrk", a.seed)), &o.path);
+        if a.paths {
+            write_path_csv(&out.join(format!("path-{:05}.csv", a.seed)), &o.path);
+        }
     }
     if let Some(t) = &o.screens {
         let f = out.join(format!("screen-{:05}.gbscr", a.seed));
@@ -4406,7 +4611,7 @@ fn cmd_chain(a: &Args) {
                 &dir,
                 true,
                 a.primitive,
-                a.paths,
+                !a.no_tracks,
                 phase_for(seed, a.idle_spread),
                 None,
             );
@@ -4533,6 +4738,7 @@ fn cmd_corpus(a: &Args) {
             let seed0 = a.seed0;
             let primitive = a.primitive;
             let paths = a.paths;
+            let tracks = !a.no_tracks;
             let (screens_all, screens_last) = (screens_all, screens_last);
             sc.spawn(move || {
                 use std::sync::atomic::Ordering::Relaxed;
@@ -4560,7 +4766,7 @@ fn cmd_corpus(a: &Args) {
                         None
                     };
                     let o = play(
-                        &rom, &sp, entry, seed, &dir, true, primitive, paths, idle,
+                        &rom, &sp, entry, seed, &dir, true, primitive, tracks, idle,
                         screens,
                     );
                     // The next link's entry pool. Only successful exits: a
@@ -4575,8 +4781,14 @@ fn cmd_corpus(a: &Args) {
                     }
                     let file = format!("run-{seed:05}.json");
                     let _ = o.recording.save(&out.join(&file));
-                    if paths {
-                        write_path(&out.join(format!("path-{seed:05}.csv")), &o.path);
+                    if tracks {
+                        write_track(&out.join(format!("path-{seed:05}.gbtrk")), &o.path);
+                        if paths {
+                            write_path_csv(
+                                &out.join(format!("path-{seed:05}.csv")),
+                                &o.path,
+                            );
+                        }
                     }
                     if let Some(t) = &o.screens {
                         let _ = std::fs::write(
@@ -4589,7 +4801,7 @@ fn cmd_corpus(a: &Args) {
                         "{{\"seed\":{seed},\"file\":\"{file}\",\"goal\":{},\
                          \"ending\":\"{}\",\"frames\":{},\"decisions\":{},\
                          \"wall_ms\":{},\"map\":{},\"x\":{},\"y\":{},\
-                         \"idle\":{idle},\"entry\":{},\
+                         \"idle\":{idle},\"entry\":{},\"pool\":{},\
                          \"trajectory\":\"{traj:016x}\",\
                          \"final_state\":\"{:016x}\"}}",
                         o.goal,
@@ -4601,6 +4813,14 @@ fn cmd_corpus(a: &Args) {
                         o.x,
                         o.y,
                         (seed as usize) % pool.len(),
+                        // **How big the pool WAS.** A stitcher maps a recorded
+                        // slot back to the seed that produced it by reading the
+                        // exit directory's names, and that map is only the one
+                        // this run used if the directory still has the same
+                        // number of files in it. Without this field a pool that
+                        // has since lost a state silently re-points every slot
+                        // above the gap — see `chain_tracks.provenance`.
+                        pool.len(),
                         o.recording.final_state
                     );
                     tot_frames.fetch_add(o.frames_total, Relaxed);
@@ -5059,7 +5279,7 @@ fn cmd_film(a: &Args) {
                 let seed = 1 + ag as u64;
                 let dir = out.join(format!("w{ag}"));
                 let mut carried: Option<Vec<u8>> = pool[ag as usize % pool.len()].clone();
-                let mut track: Vec<terminalgb::scenario::run::PathPoint> = Vec::new();
+                let mut track = terminalgb::scenario::track::Track::new();
                 let mut base = 0u32;
                 let mut reached = 0usize;
                 // Where each link began and ended in the joined stream, which
@@ -5082,12 +5302,17 @@ fn cmd_film(a: &Args) {
                         phase_for(seed, spread),
                         None,
                     );
-                    for mut p in o.path {
+                    for p in o.path.points() {
+                        let mut p = *p;
                         p.frame += base;
                         track.push(p);
                     }
                     let start = base;
-                    base = track.last().map(|p| p.frame).unwrap_or(base);
+                    // **The last FRAME, not the last record.** A link that ends
+                    // standing still has its final record long before its final
+                    // frame, and a span that stopped at the record would hand
+                    // the next link a base inside this one.
+                    base += o.path.last_frame();
                     spans.push(format!(
                         "{},{},{},{},{}",
                         link,
@@ -5102,7 +5327,7 @@ fn cmd_film(a: &Args) {
                     reached = n + 1;
                     carried = Some(o.state);
                 }
-                write_path(&out.join(format!("agent-{ag:02}.csv")), &track);
+                write_track(&out.join(format!("agent-{ag:02}.gbtrk")), &track);
                 let _ = std::fs::write(
                     out.join(format!("agent-{ag:02}.links.csv")),
                     format!("link,name,start,end,goal\n{}\n", spans.join("\n")),

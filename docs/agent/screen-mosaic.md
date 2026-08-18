@@ -26,9 +26,9 @@ This is the whole reason there is a capture mode at all, and it is worth being
 blunt about because every other film in this repository *is* derived from what
 is already on disk.
 
-`pewter_chain corpus --paths` writes `path-NNNNN.csv`, whose columns are
-`frame,map,x,y,facing,walking,battle`. There is **no picture in it**. A position
-track is enough to draw a dot on a map — that is what `swarm_film.py` does — and
+Every `pewter_chain corpus` run writes `path-NNNNN.gbtrk`, a record per change
+of `map,x,y,facing,battle` ([the track format](track-format.md)). There is **no
+picture in it**. A position track is enough to draw a dot on a map — that is what `swarm_film.py` does — and
 it is enough for a heat map, a route audit and every measurement on
 [the Pewter chain page](pewter-chain.md). It is not enough for a screen, and no
 amount of reprocessing turns it into one.

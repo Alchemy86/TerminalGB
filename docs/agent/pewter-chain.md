@@ -1524,8 +1524,11 @@ describes.
 
 ```sh
 # one 600-attempt corpus per link, each entering from the previous link's exit
-# pool, with per-frame position tracks. `--exits 600` is what makes agent `s`
-# of every link the same playthrough — see chain_tracks.py's own header.
+# pool. Position tracks are written for every attempt, so this is a plain
+# certification and the film below is a selection over it — see
+# [the track format](track-format.md). `--exits 600` is what lets agent `s` of
+# every link be traced back to one playthrough; chain_tracks.py's own header
+# has the rule, which it now computes from the pools rather than assuming.
 prev=
 for l in 01-new-game 02-leave-the-house 03-oak-takes-you-to-the-lab \
          04-take-a-starter 05-the-rival-battle 06-cross-route-1 \
@@ -1535,11 +1538,13 @@ for l in 01-new-game 02-leave-the-house 03-oak-takes-you-to-the-lab \
          14-arrive-in-pewter; do
   cargo run --release --features scenario --example pewter_chain -- corpus \
       --rom <blue.gb> --scenario scenarios/pewter/$l.json --runs 600 --exits 600 \
-      --workers 8 --paths --out target/film14/${l%%-*} ${prev:+--start-dir $prev}
+      --workers 8 --out target/film14/${l%%-*} ${prev:+--start-dir $prev}
   prev=target/film14/${l%%-*}/exits
 done
 python3 tools/pewter-chain/chain_tracks.py --out target/film14/tracks \
     01-new-game:target/film14/01 … 14-arrive-in-pewter:target/film14/14
+# ...or a sample of it: --select goal|failed, --sort fastest|slowest,
+# --count N, --seeds 3,7,11-14. See docs/agent/track-format.md §4.
 # --speed states the PACE and lets the runtime fall out of the material, which
 # is the right direction round. `--dry-run` first: it prints the stage table and
 # the --cover trade-off in seconds, and rendering is half an hour.
@@ -2243,10 +2248,12 @@ done
 cargo run --release --features scenario --example pewter_chain -- \
     chain --rom <blue.gb> --seeds 6 --out target/pewter-chain
 
-# a corpus for one link, fanned out, with per-frame position tracks
+# a corpus for one link, fanned out. Every attempt records where the player
+# was, as `path-NNNNN.gbtrk` — see docs/agent/track-format.md — so a film of
+# these runs is a selection afterwards rather than a second pass.
 cargo run --release --features scenario --example pewter_chain -- \
     corpus --rom <blue.gb> --scenario scenarios/pewter/06-cross-route-1.json \
-    --start-dir target/pewter-chain/entry/05 --runs 400 --workers 8 --paths
+    --start-dir target/pewter-chain/entry/05 --runs 400 --workers 8
 
 # determinism, serially against in parallel
 cargo run --release --features scenario --example pewter_chain -- \

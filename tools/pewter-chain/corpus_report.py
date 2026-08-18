@@ -24,11 +24,13 @@ and over a plain grid when it is not. They answer the question a table cannot:
 """
 import argparse
 import collections
-import csv
 import json
 import os
 import random
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import chainrender as cr  # noqa: E402
 
 TILE = 16  # a Gen 1 coordinate unit is 16x16 pixels
 
@@ -44,17 +46,14 @@ def load_index(d):
 
 
 def load_paths(d):
-    """seed -> [(frame, map, x, y, facing, walking, battle)]"""
-    out = {}
-    for name in sorted(os.listdir(d)):
-        if not (name.startswith("path-") and name.endswith(".csv")):
-            continue
-        seed = int(name[5:-4])
-        with open(os.path.join(d, name)) as f:
-            r = csv.reader(f)
-            next(r, None)
-            out[seed] = [tuple(int(v) for v in row) for row in r if row]
-    return out
+    """seed -> [(frame, map, x, y, facing, battle)]
+
+    Reads whichever form the corpus holds — `path-NNNNN.gbtrk`, which every run
+    writes now, or the `.csv` `--paths` writes. `chainrender.tracks` is the one
+    reader; see `terminalgb::scenario::track` for why the walk counter is not
+    in a track any more.
+    """
+    return {n: cr.read_track(p) for n, p in cr.track_files(d).items()}
 
 
 def tiles_of(path):

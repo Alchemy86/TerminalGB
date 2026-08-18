@@ -67,10 +67,12 @@
 //! anything is a claim nobody here has earned.
 
 pub mod knowledge;
+pub mod pool;
 pub mod record;
 pub mod rules;
 pub mod run;
 pub mod screens;
+pub mod track;
 
 use std::path::{Path, PathBuf};
 

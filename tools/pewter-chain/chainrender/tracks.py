@@ -36,22 +36,162 @@ FACING = {0: "down", 4: "up", 8: "left", 12: "right"}
 def track_files(d):
     """`agent -> path`, for every track file in a directory.
 
-    `agent-NNN.csv` from a whole-chain film run, or `path-NNNNN.csv` from a
-    corpus of one link — the same format either way, and a showcase of one busy
-    stretch wants the second.
+    `agent-NNN` from a whole-chain film run, or `path-NNNNN` from a corpus of
+    one link — the same track either way, and a showcase of one busy stretch
+    wants the second. Either may be `.gbtrk` (what every run writes now) or
+    `.csv` (what `--paths` writes, and what corpora collected before the binary
+    format existed). **A `.gbtrk` wins where both are present**: they carry the
+    same points and the binary one is the source.
     """
     out = {}
     for name in sorted(os.listdir(d)):
-        if name.endswith(".links.csv") or not name.endswith(".csv"):
+        if name.endswith(".links.csv"):
             continue
-        if name.startswith("agent-"):
-            n = int(name[6:-4])
-        elif name.startswith("path-"):
-            n = int(name[5:-4])
+        if name.endswith(".gbtrk"):
+            stem, rank = name[:-6], 0
+        elif name.endswith(".csv"):
+            stem, rank = name[:-4], 1
         else:
             continue
-        out[n] = os.path.join(d, name)
+        if stem.startswith("agent-"):
+            n = int(stem[6:])
+        elif stem.startswith("path-"):
+            n = int(stem[5:])
+        else:
+            continue
+        if n not in out or rank < out[n][0]:
+            out[n] = (rank, os.path.join(d, name))
+    return {n: p for n, (_, p) in out.items()}
+
+
+GBTRK_MAGIC = b"GBTK"
+
+
+def read_track(path):
+    """Every recorded point of one track, as `(frame, map, x, y, facing, battle)`.
+
+    **The one reader**, so a tool never has to know which of the two forms it
+    was handed. See `terminalgb::scenario::track` for the binary format and for
+    the measurement that produced it — 35-43x smaller than the CSV, against
+    4.4x for `gzip -9` on the same files, because most of what the CSV held was
+    the walk counter ticking and nothing has ever read it.
+
+    A legacy seven-column CSV (`frame,map,x,y,facing,walking,battle`) is
+    accepted and its walk counter dropped on the way in, so a corpus collected
+    before this still renders.
+    """
+    with open(path, "rb") as f:
+        head = f.read(4)
+        if head == GBTRK_MAGIC:
+            return decode_track(head + f.read())
+    with open(path) as f:
+        r = csv.reader(f)
+        next(r, None)
+        out = []
+        for row in r:
+            if not row:
+                continue
+            v = [int(x) for x in row]
+            if len(v) == 7:            # legacy: drop the walk counter
+                v = v[:5] + v[6:]
+            v = tuple(v)
+            # With the counter gone a legacy CSV holds runs of rows that changed
+            # nothing. Collapsing them here is what makes one reader mean one
+            # shape, whichever form the track was stored in.
+            if out and out[-1][1:] == v[1:]:
+                continue
+            out.append(v)
+        return out
+
+
+def decode_track(b):
+    """`GBTK` bytes -> `[(frame, map, x, y, facing, battle)]`.
+
+    Refuses rather than returning an empty list: a track that silently decodes
+    to nothing is a film of an empty world, which reads as a broken renderer
+    rather than as a broken file.
+    """
+    if len(b) < 14 or b[:4] != GBTRK_MAGIC:
+        raise ValueError("not a GBTK track")
+    if b[4] != 1:
+        raise ValueError(f"track version {b[4]} — this reader understands 1")
+    if b[5] != 0:
+        raise ValueError(f"track flags {b[5]:#04x} are not understood")
+    count = int.from_bytes(b[6:10], "little")
+    at = 14
+    cur = [0, 0, 0, 0, 0]      # map, x, y, facing, battle
+    frame = 0
+    out = []
+    for i in range(count):
+        mask = b[at]
+        at += 1
+        n = 0
+        shift = 0
+        while True:
+            byte = b[at]
+            at += 1
+            n |= (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                break
+        frame += n
+        for bit in range(5):
+            if mask & (1 << bit):
+                cur[bit] = b[at]
+                at += 1
+        out.append((frame, cur[0], cur[1], cur[2], cur[3], cur[4]))
     return out
+
+
+def track_last_frame(path):
+    """The last emulated frame the run reached, which is not the last record.
+
+    A run that ends standing still has its final record long before its final
+    frame. The binary form carries it; a CSV cannot, so the last record's frame
+    is the best a legacy track can answer.
+    """
+    with open(path, "rb") as f:
+        head = f.read(14)
+        if len(head) >= 14 and head[:4] == GBTRK_MAGIC:
+            return int.from_bytes(head[10:14], "little")
+    pts = read_track(path)
+    return pts[-1][0] if pts else 0
+
+
+def write_track(path, points, last_frame=None):
+    """`[(frame, map, x, y, facing, battle)]` -> a `GBTK` file."""
+    body = bytearray()
+    prev = None
+    pf = 0
+    n = 0
+    last = last_frame or 0
+    for p in points:
+        fr, cur = p[0], tuple(p[1:6])
+        last = max(last, fr)
+        if cur == prev:
+            continue
+        if prev is None:
+            mask, fields = 0x1F, list(cur)
+        else:
+            mask, fields = 0, []
+            for i, (a, c) in enumerate(zip(prev, cur)):
+                if a != c:
+                    mask |= 1 << i
+                    fields.append(c)
+        body.append(mask)
+        d = fr - pf
+        while True:
+            x = d & 0x7F
+            d >>= 7
+            body.append(x | (0x80 if d else 0))
+            if not d:
+                break
+        body += bytes(fields)
+        prev, pf, n = cur, fr, n + 1
+    with open(path, "wb") as f:
+        f.write(GBTRK_MAGIC + bytes([1, 0])
+                + n.to_bytes(4, "little") + last.to_bytes(4, "little") + body)
+
 
 def flag_at(pairs, frame):
     """The battle flag in force at `frame`, from its change points.
@@ -82,8 +222,11 @@ def load_links(d):
         with open(os.path.join(d, name)) as f:
             r = csv.reader(f)
             next(r, None)
-            out[n] = [(int(a), b, int(c), int(e), g == "true")
-                      for a, b, c, e, g in (row for row in r if row)]
+            # Six columns since the stitcher started recording which seed each
+            # link really was (`chain_tracks.provenance`); five before it.
+            out[n] = [(int(row[0]), row[1], int(row[2]), int(row[3]),
+                       row[4] == "true")
+                      for row in r if row]
     return out
 
 def link_at(spans, frame):

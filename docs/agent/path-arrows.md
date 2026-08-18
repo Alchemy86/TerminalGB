@@ -16,10 +16,10 @@ is a property of the crop and not of `--tile-px`. The stretch stills in §6 are
 what this picture looks like close up.*
 
 It **emulates nothing**. The position tracks are already on disk — one
-`frame,map,x,y,facing,walking,battle` row per change, written by
-`pewter_chain film` and `pewter_chain corpus --paths`, stitched per agent by
-[`chain_tracks.py`](../../tools/pewter-chain/chain_tracks.py). Rendering the
-whole 24-agent chain takes about a second and a half.
+`frame,map,x,y,facing,battle` record per change, written by **every**
+`pewter_chain` run (see [the track format](track-format.md)) and stitched per
+agent by [`chain_tracks.py`](../../tools/pewter-chain/chain_tracks.py).
+Rendering the whole 24-agent chain takes about a second and a half.
 
 ---
 

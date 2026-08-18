@@ -62,7 +62,6 @@ one-way corridor. The count is printed.
 import argparse
 import array
 import collections
-import csv
 import os
 import subprocess
 import sys
@@ -139,38 +138,32 @@ class Steps:
             prev = None
             last = None
             lastmap = None
-            with open(p) as f:
-                r = csv.reader(f)
-                next(r, None)
-                for row in r:
-                    if not row:
-                        continue
-                    fr, m, x, y, facing, _walk, _battle = (int(v) for v in row)
-                    self.rows += 1
-                    if not holds(m, x, y):
-                        # The one frame a warp has changed `wCurMap` and not the
-                        # coordinates, plus the boot rows before a map header
-                        # exists. `swarm_film.Atlas.holds` documents both.
-                        self.offmap += 1
-                        continue
-                    last = fr
-                    lastmap = m
-                    self.visited.add(m)
-                    if prev is not None and (prev[1], prev[2], prev[3]) != (m, x, y):
-                        if prev[1] == m:
-                            delta = (x - prev[2], y - prev[3])
-                            d_ix = DELTA.get(delta)
-                        else:
-                            d_ix = None
-                        if d_ix is None:
-                            self.warps += 1
-                        else:
-                            self.facing_steps += 1
-                            if FACING_DIR.get(facing) == d_ix:
-                                self.facing_agrees += 1
-                            self._add(cur, prev[1], prev[2], prev[3], d_ix, n,
-                                      fr)
-                    prev = (fr, m, x, y)
+            for fr, m, x, y, facing, _battle in cr.read_track(p):
+                self.rows += 1
+                if not holds(m, x, y):
+                    # The one frame a warp has changed `wCurMap` and not the
+                    # coordinates, plus the boot rows before a map header
+                    # exists. `swarm_film.Atlas.holds` documents both.
+                    self.offmap += 1
+                    continue
+                last = fr
+                lastmap = m
+                self.visited.add(m)
+                if prev is not None and (prev[1], prev[2], prev[3]) != (m, x, y):
+                    if prev[1] == m:
+                        delta = (x - prev[2], y - prev[3])
+                        d_ix = DELTA.get(delta)
+                    else:
+                        d_ix = None
+                    if d_ix is None:
+                        self.warps += 1
+                    else:
+                        self.facing_steps += 1
+                        if FACING_DIR.get(facing) == d_ix:
+                            self.facing_agrees += 1
+                        self._add(cur, prev[1], prev[2], prev[3], d_ix, n,
+                                  fr)
+                prev = (fr, m, x, y)
             if last is None:
                 # Every row named a map the atlas cannot vouch for.
                 self.dropped.append(n)
@@ -233,13 +226,13 @@ def _track_files(d):
     """
     if not os.path.isdir(d):
         die(f"no such tracks directory: {d}",
-            f"{SELF} summary <dir>   # a dir of agent-NNN.csv or path-NNNNN.csv",
+            f"{SELF} summary <dir>   # a dir of agent-NNN or path-NNNNN tracks",
             code=2)
     out = cr.track_files(d)
     if not out:
-        die(f"no agent-NNN.csv or path-NNNNN.csv in {d}",
-            "a film run writes agent-NNN.csv; "
-            "`pewter_chain corpus --paths` writes path-NNNNN.csv")
+        die(f"no agent-NNN or path-NNNNN tracks in {d}",
+            "a film run writes agent-NNN.gbtrk; every `pewter_chain corpus` "
+            "run writes path-NNNNN.gbtrk (and .csv with --paths)")
     return out
 
 

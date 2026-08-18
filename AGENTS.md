@@ -7895,6 +7895,98 @@ aggregation, savestate and battery).
 - **Nothing is committed**: the video and the captured map sheets are game art and live in
   `target/swarm/`. The two commands in `docs/swarm-view.md` regenerate them in about a minute.
 
+## EVERY RUN RECORDS ITS POSITION NOW — `GBTK` tracks, and where a corpus's bytes really are
+
+**Full page: [`docs/agent/track-format.md`](docs/agent/track-format.md).** Format
+`src/scenario/track.rs`; exit-pool archive `src/scenario/pool.rs`; selection and stitching
+`tools/pewter-chain/chain_tracks.py`; one Python reader `chainrender/tracks.py`.
+
+- **THE DEFECT WAS THE SPLIT, NOT THE COST: a certification pass recorded nothing, so the runs
+  that were actually certified could never be filmed.** A picture of a certified attempt meant
+  re-running the whole thing, and the failures, the blackouts and the tail were thrown away at
+  the moment they happened. Recording is on by default now; `--no-tracks` is for a throughput
+  measurement and for nothing else, and `--paths` still writes the CSV **beside** the binary.
+- **MEASURE WHERE THE BYTES ARE BEFORE OPTIMISING THE FILE YOU ASSUMED.** A real 720-attempt
+  film pass is 143 MB: **126.08 MB of exit save states**, 10.27 MB of recordings and **9.07 MB
+  of tracks**. Position recording was 6 % of a corpus directory even in its old form, so the
+  cost argument against leaving it on was aimed at the wrong file all along. Say the numbers.
+- **The four measured numbers, same 720 files:** CSV **9.07 MB**; CSV + `gzip -9` per file
+  **2.06 MB (4.4x)**; `GBTK` **0.23 MB (39.1x)**; `GBTK` + gzip 0.18 MB. **Compression is the
+  cheap win and the format beats it by nine times** — and only 1.3x of redundancy is left
+  afterwards, which is what says the format removed the thing gzip was compressing.
+- **83 % OF EVERY ROW A TRACK EVER HELD WAS THE WALK COUNTER TICKING, AND NOTHING HAS EVER READ
+  IT.** `wWalkCounter` ($CFC5) runs 7..1 across a step; both Python readers unpacked it into
+  `_walk` and dropped it, because the renderer reconstructs the glide by interpolating between
+  consecutive recorded tiles (`chainrender.tracks.interpolate`), which is independent of the
+  sampling rate. It is out of the track. **A track's CSV form is SIX columns now**
+  (`frame,map,x,y,facing,battle`); every reader here accepts both widths and drops the counter
+  from a legacy file, so an old corpus still renders.
+- **A record is a mask byte, a varint frame delta and only the bytes that changed — 3.18 bytes
+  measured.** `Track::push` deduplicates **on the way in**, so a run standing still for a
+  hundred thousand frames holds one point rather than a hundred thousand; that is what keeps a
+  sixteen-worker fan-out's memory flat now that recording is not optional.
+- **`Track::last_frame` is not the last record's frame** and the header carries it for that
+  reason: a run that ends standing still has its final record long before its final frame, and
+  an agent that vanishes early reads as an agent that stopped. A CSV cannot say it at all.
+- **Measured on a nine-link, 200-attempt-per-link certification of the real chain (1,800
+  runs): 0.28 MB of tracks against 315.21 MB of exit save states.**
+- **And it is free in time as well.** Link 06, 25 attempts, pinned to one P-core, interleaved
+  five rounds each at load average 43: **1.97 s recording against 1.94 s with `--no-tracks`**,
+  against a run-to-run spread of 1.94-2.04 s over those ten runs.
+
+### THE EXIT POOL IS 88 % OF A CORPUS, AND IT IS 39x COMPRESSIBLE WITH NO COMPRESSOR
+
+- **A pool's states are the same machine a few thousand frames apart: 93.2 % of every state's
+  175,114 bytes are byte-identical across all 720 of them.** `gzip -9` per file finds only
+  5.4x, because a 32 KiB window cannot see across a 175 KB file to the one beside it.
+  Referencing one member and storing the differing runs is **21.01 MB → 0.54 MB (39.0x)** on a
+  real 120-state pool, and **126.08 MB → 3.31 MB** across a whole film pass.
+- `pewter_chain pool pack|unpack|list`, format `GBPL` (`src/scenario/pool.rs`). **`--start-dir`
+  accepts a `.gbpool` wherever it accepts a directory.** `pack` decodes what it just wrote and
+  compares it against every source file before offering the archive as a replacement — a pool
+  that packed wrong and was then deleted from is a corpus nobody can re-enter.
+- **Not made the default output**, deliberately: the A/B rig and `states` pair a `.gbss` with
+  the `.expect.json` beside it and want a directory. `pool unpack` is how they get one.
+- **A test fixture's SHAPE has to be measured too.** A first version of the pool test scattered
+  4,000 *isolated* differing bytes and reported 4.2x, because that is 4,000 run headers where a
+  real pool has ~300 contiguous runs of ~7 bytes. Match the shape, or the test measures a
+  different problem and reports a ratio the real thing never has.
+
+### SAMPLING — and the honesty property was REPAIRED, not merely preserved
+
+- `chain_tracks.py --select goal|failed|all --sort fastest|slowest|seed --count N --seeds
+  3,7,11-14`, over one link or fourteen. **A film of the failures is a one-liner**, which it
+  could not be at all before. Outcome is the last link attempted; speed is total emulated
+  frames, never wall clock.
+- **"AGENT `s` IS SEED `s` AT EVERY LINK" IS ONLY TRUE OF A CHAIN THAT NEVER FAILED.**
+  `--exits N` keeps the first N *successful* exits and names each after its own seed, so a link
+  that failed once leaves a pool with gaps (`00000, 00001, 00003, …`) and the next link's
+  attempt 2 entered from seed **3**. `chain_tracks.provenance` reads the names and walks an
+  agent's ancestry backwards exactly, so a gapped pool stitches correctly instead of silently
+  wrongly.
+- **It is cross-checked against what the corpus recorded about itself, twice**: the slot each
+  attempt took (`"entry"`) against the arithmetic, and **how big the pool was** (`"pool"`, a
+  field added for this) against how big the directory is now — because a pool that has since
+  lost a state maps every slot above the gap to a different seed. An attempt whose ancestry
+  cannot be proved is **refused**, and a named `--seeds` is refused by name. **Teeth: deleting
+  one state from link 08's pool of a nine-link certification takes the stitch from 200 agents
+  to 0.** Without the `pool` field the same deletion refused only *one* — the `% len` check
+  alone cannot see a size change while every seed is below the new length.
+- `agent-NNN.links.csv` has a sixth column naming the seed each link really was.
+
+### The demonstration, and the material it needed
+
+- One certification (nine links × 200, all 200/200, ~2.5 min on sixteen workers), then three
+  films with **no further emulation**: the twenty fastest certified playthroughs, the twenty
+  slowest, and every failure of a tenth link.
+- **The current chain has no failures to film**, which is a good problem: links 01-09 are
+  200/200. The failure film uses `scenarios/tutorial/town-map.json` — the scenario
+  `docs/writing-a-scenario.md` builds and the expert has no route for — **0 of 60**, so its
+  attempts are sixty real ten-link playthroughs that failed at the last one.
+- **`ls` is proxied here and prints a size where `ls -l` normally prints one**, so
+  `ls -l | awk '{print $5}'` reads the wrong column and reports 0.00 MB for a 5 MB file. Use
+  `du -b` or `stat`.
+
 ## The screen mosaic — a corpus's own SCREENS, and the capture pass they need
 
 **Full page: [`docs/agent/screen-mosaic.md`](docs/agent/screen-mosaic.md).** Sixty agents' Game

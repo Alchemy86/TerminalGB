@@ -37,6 +37,7 @@ use super::knowledge::{Guidance, Knowledge};
 use super::record::{fnv1a, Decision, Ending, Recording, ReplayReport};
 use super::rules::{standing_notes, Allowances, Observed, Referee, Verdict};
 use super::screens::ScreenTrack;
+use super::track::{Track, TrackPoint};
 use super::{Scenario, Source};
 use crate::gameboy::Gameboy;
 use crate::longplay::progress::Progress;
@@ -146,15 +147,24 @@ pub struct RunResult {
     /// chosen, which nothing outside the driver can. The two are complementary
     /// and the numbers below are the ones that are comparable.
     pub battles: BattleSummary,
-    /// Where the player was on **every emulated frame**, when the run was
-    /// asked to track it.
+    /// Where the player was, sampled on **every emulated frame** and kept
+    /// whenever it changed.
+    ///
+    /// **On by default**, because a run whose position was not recorded can
+    /// never be filmed afterwards and the interesting material — the failures,
+    /// the blackouts, the tail — is exactly what a certification pass used to
+    /// throw away. [`ScenarioRun::tracking`] turns it off for a throughput
+    /// measurement and for nothing else.
     ///
     /// Sampled per frame rather than per decision on purpose: a decision is
     /// tens of frames apart and a film built from one point per decision is a
     /// slideshow of teleports, while a heat map built from one is a scatter of
-    /// waypoints rather than a picture of where the time went. Five bus reads
-    /// a frame, and only when [`ScenarioRun::tracking`] asked for it.
-    pub path: Vec<PathPoint>,
+    /// waypoints rather than a picture of where the time went. Four bus reads a
+    /// frame and a comparison; the point is dropped unless something moved, so
+    /// a run that stands still for a hundred thousand frames costs one record.
+    /// See [`crate::scenario::track`] for the storage format and its measured
+    /// cost.
+    pub path: Track,
     /// Every screen this run drew, downscaled and packed, when the run was
     /// asked to record them.
     ///
@@ -232,20 +242,14 @@ impl BattleSummary {
     }
 }
 
-/// One frame of where the player was.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PathPoint {
-    pub frame: u32,
-    pub map: u8,
-    pub x: u8,
-    pub y: u8,
-    /// 0 down, 4 up, 8 left, 12 right — the game's own encoding.
-    pub facing: u8,
-    /// Non-zero while a step animation is in progress, which is what tells a
-    /// film that the character is walking rather than standing still.
-    pub walking: u8,
-    pub in_battle: u8,
-}
+/// One recorded change of where the player was.
+///
+/// The old name for [`TrackPoint`], kept because it is what the front ends
+/// spell. **It no longer carries the walk counter**: `wWalkCounter` ticks
+/// across a step, so it was 83 % of every row a track ever held, nothing has
+/// ever read it, and the renderer reconstructs the glide by interpolating
+/// between consecutive recorded tiles. See [`crate::scenario::track`].
+pub type PathPoint = TrackPoint;
 
 impl RunResult {
     pub fn reached_goal(&self) -> bool {
@@ -406,7 +410,10 @@ impl ScenarioRun {
             capture_failures: true,
             pace_while_thinking: false,
             guidance_file,
-            track: false,
+            // **On by default.** A run that did not record its position can
+            // never be filmed, and the split between a certification pass and
+            // a film pass is exactly what made the certified runs unfilmable.
+            track: true,
             video: None,
             collecting: false,
             screens: None,
@@ -419,7 +426,10 @@ impl ScenarioRun {
         self
     }
 
-    /// Record the player's position on every frame. See [`RunResult::path`].
+    /// Whether to record where the player was. **On by default** — see
+    /// [`RunResult::path`] for why, and [`crate::scenario::track`] for what it
+    /// costs. Pass `false` only when nothing will ever want a picture of this
+    /// run, which in practice means a throughput benchmark.
     pub fn tracking(mut self, on: bool) -> Self {
         self.track = on;
         self
@@ -558,7 +568,7 @@ impl ScenarioRun {
         let mut prev: Option<Progress> = None;
         let mut next_frame = Instant::now() + FRAME_TIME;
         let mut guided = 0u64;
-        let mut path: Vec<PathPoint> = Vec::new();
+        let mut path = Track::new();
         // Where the run has been lately, one entry per *change* of tile. See
         // `looping`.
         let mut visits: VecDeque<(u8, u8, u8)> = VecDeque::new();
@@ -802,13 +812,12 @@ impl ScenarioRun {
     fn point(&mut self, frame: u32) -> PathPoint {
         self.gb
             .with_machine(Capability::OBSERVE | Capability::READ_MEMORY, |m| {
-                PathPoint {
+                TrackPoint {
                     frame,
                     map: m.peek(0xD35E).unwrap_or(0),
                     y: m.peek(0xD361).unwrap_or(0),
                     x: m.peek(0xD362).unwrap_or(0),
                     facing: m.peek(0xC109).unwrap_or(0),
-                    walking: m.peek(0xCFC5).unwrap_or(0),
                     in_battle: m.peek(0xD057).unwrap_or(0),
                 }
             })
@@ -887,7 +896,7 @@ impl ScenarioRun {
             capture: None,
             final_state_bytes: Vec::new(),
             battles: BattleSummary::default(),
-            path: Vec::new(),
+            path: Track::new(),
             screens: None,
         }
     }

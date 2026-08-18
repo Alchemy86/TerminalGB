@@ -52,7 +52,6 @@ emulated time to cover and the length wanted**, not picked.
 import argparse
 import bisect
 import collections
-import csv
 import math
 import os
 import sys
@@ -74,7 +73,8 @@ from chainrender.palette import (  # noqa: E402
 )
 from chainrender.tracks import (  # noqa: E402
     FACING, FPS_GB, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS, flag_at,
-    interpolate, link_at, load_links, track_files, walk_span,
+    interpolate, link_at, load_links, read_track, track_files,
+    track_last_frame, walk_span,
 )
 
 
@@ -101,14 +101,15 @@ class Corpus:
     """Every track, reduced as it is read rather than after.
 
     **A raw row list cannot hold an eleven-link chain, and the number says so
-    rather than the fear.** A row is written whenever the position, the facing,
-    the walk counter or the battle flag moves, so a *walking* agent costs a row
-    every couple of frames — and link 11 paces Route 1's grass for tens of
-    emulated minutes. Measured over the corpus: **65,463 raw rows per agent for
-    that link alone, which is 39.3M rows across 600 agents** and about 5 GB of
-    Python tuples, on a box whose free memory is measured in single-figure
-    gigabytes because several crews share it. The three-link film got away with
-    holding everything because three links is 5,156 frames.
+    rather than the fear.** A row is written whenever the position, the facing
+    or the battle flag moves — and link 11 paces Route 1's grass for tens of
+    emulated minutes. Measured over the corpus back when a track also carried
+    the walk counter: **65,463 raw rows per agent for that link alone, which is
+    39.3M rows across 600 agents** and about 5 GB of Python tuples, on a box
+    whose free memory is measured in single-figure gigabytes because several
+    crews share it. Dropping the counter from the track removed 83 % of those
+    rows at source (`terminalgb::scenario::track`); this reduction is what
+    holds the rest.
 
     Nothing downstream wants those rows, which is what makes this a reduction
     and not a sampling. Three things are: the tile-change list the renderer
@@ -134,33 +135,26 @@ class Corpus:
         for n, p in track_files(d).items():
             path, fights, last, rows = [], [], None, 0
             prev = None
-            with open(p) as f:
-                r = csv.reader(f)
-                next(r, None)
-                for row in r:
-                    if not row:
-                        continue
-                    fr, m, x, y, facing, _walk, battle = (int(v) for v in row)
-                    rows += 1
-                    self.visited.add(m)
-                    if prev is not None and holds(prev[1], prev[2], prev[3]):
-                        self.visits[(prev[1], prev[2], prev[3])] += max(
-                            1, fr - prev[0])
-                    prev = (fr, m, x, y)
-                    last = fr
-                    if not fights or fights[-1][1] != battle:
-                        fights.append((fr, battle))
-                    # A row whose coordinate is not on the map it names is the
-                    # one-frame warp straddle. Dropping it rather than drawing
-                    # it is what makes the agent hold its last real tile until
-                    # the destination arrives, which is what a warp is: a jump,
-                    # and `interpolate` already refuses to lerp across one.
-                    if not holds(m, x, y):
-                        self.straddles += 1
-                        continue
-                    if not path or (path[-1][1], path[-1][2],
-                                    path[-1][3]) != (m, x, y):
-                        path.append((fr, m, x, y, facing))
+            for fr, m, x, y, facing, battle in read_track(p):
+                rows += 1
+                self.visited.add(m)
+                if prev is not None and holds(prev[1], prev[2], prev[3]):
+                    self.visits[(prev[1], prev[2], prev[3])] += max(1, fr - prev[0])
+                prev = (fr, m, x, y)
+                last = fr
+                if not fights or fights[-1][1] != battle:
+                    fights.append((fr, battle))
+                # A row whose coordinate is not on the map it names is the
+                # one-frame warp straddle. Dropping it rather than drawing
+                # it is what makes the agent hold its last real tile until
+                # the destination arrives, which is what a warp is: a jump,
+                # and `interpolate` already refuses to lerp across one.
+                if not holds(m, x, y):
+                    self.straddles += 1
+                    continue
+                if not path or (path[-1][1], path[-1][2],
+                                path[-1][3]) != (m, x, y):
+                    path.append((fr, m, x, y, facing))
             if not rows or not path:
                 # Every row named a map the atlas cannot vouch for. Dropping
                 # the agent is right, and saying so is the point of the count.
@@ -168,7 +162,12 @@ class Corpus:
                 continue
             self.paths[n] = path
             self.fights[n] = fights
-            self.end[n] = last
+            # **The last FRAME the run reached, not the last record.** A run
+            # that ends standing still has its final record long before its
+            # final frame, and an agent that vanishes early reads as an agent
+            # that stopped. Only the binary form can answer it; a CSV's best
+            # answer is its last row, which is what this used to be.
+            self.end[n] = max(last, track_last_frame(p))
 
 
 def load_agent_labels(path):
@@ -646,7 +645,7 @@ def main():
     corpus = Corpus(a.tracks, atlas.holds)
     paths, fights, straddles = corpus.paths, corpus.fights, corpus.straddles
     if not paths:
-        sys.exit(f"no agent-*.csv in {a.tracks}")
+        sys.exit(f"no agent-NNN or path-NNNNN tracks in {a.tracks}")
     span = walk_span(paths)
     spans = load_links(a.tracks)
     n_links = max((lk for v in spans.values() for lk, *_ in v), default=0)
