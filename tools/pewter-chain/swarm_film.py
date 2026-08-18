@@ -895,6 +895,23 @@ def report_motion(positions, cams, lost, n_agents, out_h, view_w, tile=TILE):
               f"p5 {100*cov[max(0, int(0.05*len(cov)))]:.1f}%  "
               f"median {100*cov[len(cov)//2]:.1f}%; "
               f"{bad} frame(s) ({100*bad/len(cov):.1f}%) below 90% covered")
+        # And the same argument one step further: a percentile still cannot
+        # tell one long excursion from a scatter of single frames, and only
+        # the first is visible to a viewer. The run length is what a person
+        # actually sees, so it is what a coverage claim should be argued on.
+        run = worst_run = at = worst_at = 0
+        for i, f in enumerate(frac):
+            if 1 - f < 0.9:
+                if not run:
+                    at = i
+                run += 1
+                if run > worst_run:
+                    worst_run, worst_at = run, at
+            else:
+                run = 0
+        if worst_run:
+            print(f"  longest unbroken stretch below 90%: {worst_run} frame(s) "
+                  f"from frame {worst_at}")
 
 
 def main():

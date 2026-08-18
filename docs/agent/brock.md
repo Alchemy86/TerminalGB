@@ -531,19 +531,33 @@ does not begin at link 1 needs somewhere to begin, so `--from` above 1 requires
 uses) and refuses without one rather than filming agents on the Nintendo logo.
 
 ```sh
-# the gym arc, one continuous track per agent, straight out of the emulator
+# the gym arc, one continuous track per agent, straight out of the emulator.
+# 600 agents over 16 workers is 17 min of wall clock on a quiet 20-core box.
 ./target/release/examples/pewter_chain film --rom <blue.gb> \
-    --runs 120 --workers 14 --from 15 --to 19 \
+    --runs 600 --workers 16 --from 15 --to 19 \
     --start-dir <a certified link-14 exit pool>/exits \
     --out target/gymfilm/tracks
 
+# which starter each agent carries, per index, over the same sorted pool
+# `film` hands agent `ag` slot `ag % len` from — see §14c for why this is a
+# file rather than a rule.
+./target/release/examples/pewter_chain states --rom <blue.gb> --all \
+    --start-dir <a certified link-14 exit pool>/exits > pool.txt
+#   ...then `n,<the evolved form of column 2>` into lines.csv, with a leading
+#   `# by starter line` as its heading.
+
 # --dry-run first: it prints the stage table and the --cover trade-off in
-# seconds, and rendering is not quick.
+# seconds, and rendering is 20 minutes.
 python3 tools/pewter-chain/swarm_film.py target/gymfilm/tracks \
-    --out target/gymfilm/frames --speed 26 --fps 60 --cover 0.90 --width 1280 \
-    --title "PAST PEWTER 15-19"
+    --out target/gymfilm/frames --speed 26 --fps 60 --cover 0.95 --width 1280 \
+    --title "PAST PEWTER 15-19" --agent-labels lines.csv \
+    --method "600 agents, 200 per starter line"
 ffmpeg -y -framerate 60 -i target/gymfilm/frames/f%05d.png \
-    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p past-pewter-15-19.mp4
+    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p pewter-gym-15-19-600agents.mp4
+# and a lighter copy for watching away from the machine
+ffmpeg -y -framerate 60 -i target/gymfilm/frames/f%05d.png \
+    -c:v libopenh264 -b:v 1400k -pix_fmt yuv420p \
+    pewter-gym-15-19-600agents-mobile.mp4
 
 # and the journey to Pewter, unchanged and still reproducible
 ./target/release/examples/pewter_chain film --rom <blue.gb> \
@@ -556,32 +570,137 @@ per-link bars and its stage timeline work from a `film` run alone —
 runs. **The spans carry the link's number in the whole chain**, not its
 position in the slice, so a span file lines up against a report.
 
-**The arc's own shape**, from `swarm_film.py --dry-run` on a `film` run:
-
-| link | emulated time | share of the swarm's | share of the film |
-|---|---:|---:|---:|
-| **15-train-for-brock** | **2608.0 s** | **88.5%** | **91.3%** |
-| 16-heal-in-pewter | 80.8 s | 2.4% | 1.6% |
-| 17-fight-through-the-gym | 205.8 s | 6.7% | 5.2% |
-| 18-heal-after-the-gym | 43.3 s | 1.4% | 1.1% |
-| 19-east-to-route-3 | 28.1 s | 1.0% | 0.8% |
+**The arc's own shape**, from `swarm_film.py --dry-run` on a two-agent `film`
+run: the training link is **88.5%** of the swarm's emulated time and the whole
+arc is **47.6 emulated minutes**. That was a prediction made before the cut
+existed; §14a is the same table measured on the 600 agents the film is actually
+drawn from, and it held — 89.3% and 53.5 minutes filmed of a 59.2-minute
+longest run.
 
 **The same shape link 11 has in the main chain, and it is why the two cuts do
-not belong together** — and why the pace has to be higher here than there. The
-arc is **47.6 emulated minutes**, so `seconds_out x speed = the emulated time
-there is` puts 8x at **5 m 55 s**, longer than the whole fourteen-link cut. The
-smoothness ceiling is `stride <= walk_span`, and `walk_span` measures **31**
-emulated frames on these tracks, so at 60 fps anything up to **~31x** stays
-smooth: **24-30x gives a 1½-2 minute film** and is the right pace for material
-that is seven-eighths grinding. (Measured on a two-agent dry run; the per-agent
-emulated time is what sets this and it barely moves with the swarm size, but
-the *longest* run does, so re-read `--dry-run` before committing to a pace.)
+not belong together** — and why the pace has to be higher here than there.
+`seconds_out x speed = the emulated time there is` puts 8x at **5 m 55 s**,
+longer than the whole fourteen-link cut. The smoothness ceiling is
+`stride <= walk_span`, and `walk_span` measures **31** emulated frames on these
+tracks, so at 60 fps anything up to **~31x** stays smooth: **24-30x gives a
+1½-2 minute film** and is the right pace for material that is seven-eighths
+grinding. (The per-agent emulated time is what sets this and it barely moves
+with the swarm size, but the *longest* run does, so re-read `--dry-run` before
+committing to a pace — on two agents it was 52.0 emulated minutes filmed and on
+six hundred it is 53.5.)
 
 **Fedora's ffmpeg has no `libx264`** (patent-clean build); `libopenh264` is the
 substitute and `-crf` is not accepted there.
 
-The film is **not committed** — it is game art, and a 190 MB artefact does not
-belong in git whatever is in it. The 01-14 cut's stills are in
-[`chain-stills/`](chain-stills/) under the rule
+The film is **not committed** — it is game art, and a 115 MB artefact does not
+belong in git whatever is in it. The stills are, in
+[`chain-stills/`](chain-stills/), under the rule
 [`docs/link-trade/`](../link-trade/) established: our interface, doing
 something, with the game incidental.
+
+### 14a. The cut, rendered
+
+**`/home/aaron/pokemon-run/pewter-gym-15-19-600agents.mp4`** — 600 agents,
+links 15 to 19 in one continuous cut, 1280x720, **26x at 60 fps, 2 m 03 s**,
+7,379 frames, `--cover 0.95`. Beside it
+`pewter-gym-15-19-600agents-mobile.mp4`, the same frames at `-b:v 1400k`:
+**115 MB and 38 MB**.
+
+The tracks are one `film` run — 600 agents, 16 workers, **1041 s of wall clock**
+on a quiet box — entering from `target/film11/14/exits`, the certified
+fourteen-link corpus's own link-14 exit pool, 600 states, 200 of each starter.
+**532 of the 600 finished the arc**, which is 88.7% against the gym's certified
+88.6% (§9) — a figure the film reproduced as a side effect of being made.
+
+**What the run measures about itself**, all from `swarm_film.py`'s own report on
+the tracks the film is drawn from:
+
+| | |
+|---|---|
+| emulated time filmed | 191,840 frames = **53.5 minutes** (the longest single run is 212,116) |
+| pace | every 26th emulated frame; **glide span 31**, measured from these tracks, so 26 is inside the `stride <= walk_span` ceiling |
+| agent motion, 3,724,299 samples | median 0.00 px, p90 **13.42**, p99 15.03; ≥12 px 11.43%, <4 px 81.31% |
+| quantisation | **0.8%** of 737,503 moving samples land on the tile grid — 100% without the interpolation |
+| camera coverage | mean **93.3%** of live agents on screen, median 94.5%, p5 90.2%, 4.7% of frames below 90% |
+| the longest unbroken stretch below 90% | **142 frames (2.4 s), and it is the last 142** — the arrival shot, where the camera has followed the finishers to Route 3 and the last stragglers are still in the grass |
+| camera steadiness | 14 distinct crop widths over 7,379 frames, resample ratio moved on 2.2%; still on 79.4% of frames in x and 76.2% in y; 0.89 and 1.19 direction reversals per second; largest single-frame pan 59 and 111 px |
+| geometry | the 5-95 swarm box fits the widest view the world allows on **every** frame, so nothing lost is geometric |
+
+**The `worst frame` line is a transient and the run length is what says so.**
+It reports frame 1,496 with 599 of 599 off screen — which reads as a disaster
+and is one output frame of a zoom snapping back while a first handful of agents
+head north to heal. `report_camera` prints the longest unbroken stretch below
+par now for exactly this: a mean and a worst frame cannot tell a blink from a
+minute, and only the second is something a viewer sees.
+
+**`--cover 0.95`, not the chain's 0.90, and the trade is measured rather than
+preferred.** `report_cover` prints the whole ladder at `--dry-run`; the two
+rows that decide it are 0.90 → **1 m 59.7 s** with 472 of 532 arrivals on
+screen, and 0.95 → **2 m 03.0 s** with 502. Three seconds for thirty more
+arrivals. The cost is the thinning tail, and it is small here: the share of the
+film with fewer than a hundred agents live goes **3% → 6%**, against the
+fourteen-link cut where the same step is much worse and 0.90 is right.
+
+**The stage shares on the rendered cut** — the same table as above, re-measured
+on 600 agents rather than two:
+
+| link | emulated | share of the swarm's time | share of the film |
+|---|---:|---:|---:|
+| **15-train-for-brock** | **2561.0 s** | **89.3%** | **85.1%** |
+| 16-heal-in-pewter | 49.0 s | 1.9% | 0.0% |
+| 17-fight-through-the-gym | 149.1 s | 6.9% | **14.9%** |
+| 18-heal-after-the-gym | 31.1 s | 1.1% | 0.0% |
+| 19-east-to-route-3 | 22.6 s | 0.8% | 0.0% |
+
+Three of the five are **never what most of the live swarm is doing**, and that
+is not a rendering fault: an agent that finishes stops being drawn, so the
+surviving population drifts towards the later links and the three short ones
+are always a minority of it. They are in the per-link bars on every frame
+regardless. The gym takes 14.9% of the runtime against 6.9% of the emulated
+time for the same reason, in the other direction.
+
+**The stage timeline is the thing that makes this watchable.** At 85% of the
+runtime on one link, without a labelled strip and a playhead crossing it the
+only reading available to a viewer is that the picture has stuck.
+
+### 14b. What it looks like
+
+| | what it shows |
+|---|---|
+| [9 — the Route 2 grind](chain-stills/9-the-route-2-grind.png) | 26.1 emulated minutes in and **474 of 599 agents in wild battles at once**, a solid red mass in the 48 grass tiles of Route 2's northern half (§4). This is 85% of the film, and the frame is the argument for the timeline: nothing moves, and the reason is that everything is fighting. |
+| [10 — the gym, and the line that cannot win it](chain-stills/10-the-gym-and-the-line-that-cannot-win.png) | 36.4 minutes in, the camera holding both the grass and **Pewter Gym as an interior panel**, bottom left, with the orange trainer halo on Brock's own tile. `in a battle: 71 trainer 310 wild`. The by-starter block is the picture: **CHARMELEON 137 going, 2 through, 61 stopped** — against IVYSAUR and WARTORTLE, who between them have lost one agent, and that one on the training link. |
+| [11 — the badge, and the three lines](chain-stills/11-the-badge-and-the-three-lines.png) | *The last frame.* The gold marker reading **502** sits on the Route 3 boundary, with Pewter's gym and mart in frame; `30/600 agents live`. And the arc's own result, on screen: **CHARMELEON 134 through and 66 stopped, IVYSAUR 170/1, WARTORTLE 198/1** — §10's certification, reproduced by the film that was made to show it. |
+
+### 14c. The swarm splits along something the tracks cannot see
+
+**Which starter an agent carries is a property of the entry pool it was handed,
+not of its track**, so the film cannot know it and must not guess.
+`swarm_film.py --agent-labels FILE` takes a CSV of `agent,label` rows — an
+optional leading `# title` names the set — and draws a live count per label:
+**going, got there, stopped**, with the stopped share as a bar behind the row.
+The three counts are one partition of that label's agents, computed by
+bisecting the same per-agent end frames the arrival markers use, so the block
+and the markers can never disagree about who got there.
+
+`pewter_chain states --all` is the other half: it prints the pool per index
+over the same sorted list `film` hands agent `ag` slot `ag % len`, which is
+what makes the two line up. On this pool the mapping is **`n % 3`** — 0
+CHARMANDER, 1 SQUIRTLE, 2 BULBASAUR — because link 04's ball is `6 + seed % 3`
+and 600 divides by three; checked against all 600 rows, **zero violations, 200
+of each**. **Do not hard-code that rule anywhere.** It is a property of a pool
+whose size happens to be a multiple of three, and it is the whole reason the
+mapping is a file rather than an inference.
+
+What the film then reports, on its own tracks, beside §10's thousand-attempt
+certification:
+
+| line | in the film | certified (§10) |
+|---|---:|---:|
+| SQUIRTLE → WARTORTLE | **199/200 (99.5%)** — and its one loss is on link 15, not the gym | 1000/1000 |
+| BULBASAUR → IVYSAUR | **199/200 (99.5%)** | 989/1000 |
+| CHARMANDER → CHARMELEON | **134/200 (67.0%)** | 670/1000 |
+
+**66 of the film's 68 losses are Charmeleon at the gym.** The Charmeleon figure
+lands on the certified 67.0% to the decimal on a fifth of the sample, which is
+coincidence at that precision — but the shape is not, and it is the shape the
+film was asked to show.

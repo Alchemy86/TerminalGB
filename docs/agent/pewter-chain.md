@@ -1512,6 +1512,7 @@ describes.
 | `screen-mosaic-05-rival-battle.mp4` | **not a map at all** — sixty agents' own screens tiled into one frame, playing at once. A different compositor and a different capture pass: see [the screen mosaic](screen-mosaic.md). |
 | `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The columns, the bottlenecks and the ledges are the picture. |
 | `pewter-chain-swarm-24agents.mp4` | the whole fourteen-link chain at 52×, 60 s, clearly labelled a timelapse. |
+| `pewter-gym-15-19-600agents.mp4` | **the gym arc, links 15 to 19, a separate cut on purpose** — 600 agents, 2 min 03 s at **26×, 60 fps**, `--cover 0.95`, plus a `-mobile` copy. It is not sewn onto the fourteen-link film and must not be: the arithmetic, the figures, its three stills and the starter-line divergence it makes visible are all in [`brock.md`](brock.md) §14. |
 
 ```sh
 # one 600-attempt corpus per link, each entering from the previous link's exit

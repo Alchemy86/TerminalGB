@@ -10141,3 +10141,56 @@ longer film in which the new material is a *smaller* fraction. Same tooling
   `stride <= walk_span`, and `walk_span` measures **31** emulated frames on these tracks, so at
   60 fps anything to **~31x** stays smooth: **24-30x gives a 1½-2 minute film**, which is the
   right pace for material that is seven-eighths grinding.
+
+### The gym-arc cut, rendered — and the swarm splits three ways inside it
+
+**`/home/aaron/pokemon-run/pewter-gym-15-19-600agents.mp4`** (plus a `-mobile`
+copy at `-b:v 1400k`; **115 MB and 38 MB**, neither committed): 600 agents over links
+15-19 from the certified link-14 exit pool, **26x at 60 fps, `--cover 0.95`, 2 m 03 s**,
+7,379 frames. Recipe, every figure and three stills: `docs/agent/brock.md` §14; the stills
+are `docs/agent/chain-stills/9`-`11`. The `film` run is 16 workers and **1041 s of wall
+clock**; the render is ~20 min and the encode ~1.
+
+- **THE FILM REPRODUCED THE ARC'S OWN CERTIFICATION AS A SIDE EFFECT OF BEING MADE.**
+  532 of 600 finished (88.7 % against the gym's certified 88.6 %), and split by starter
+  line **CHARMELEON 134/200 (67.0 %), IVYSAUR 199/200, WARTORTLE 199/200** against §10's
+  670/1000, 989/1000 and 1000/1000. **66 of the 68 losses are Charmeleon at the gym**; the
+  other two are one Ivysaur at the gym and one Wartortle on the training link — so
+  Wartortle has still never lost the gym.
+- **A FILM CANNOT KNOW WHAT AN AGENT IS CARRYING AND MUST NOT GUESS.** Which starter an
+  agent has is a property of the *entry pool*, not of the tracks. `swarm_film.py
+  --agent-labels FILE` takes a CSV of `agent,label` rows (an optional leading `# title`
+  names the set), draws a live count per label in the HUD — **going / got there /
+  stopped**, with the stopped share as a bar behind the row — and prints a
+  finished/stopped table to the report. The three counts are one partition, bisected from
+  the same per-agent end frames the arrival markers use, so the block and the markers
+  cannot disagree about who got there.
+- **`pewter_chain states --all` is the other half**: it prints the pool per index over the
+  same sorted list `film` hands agent `ag` slot `ag % len` from. Without it `states`
+  summarises anything over 24 rows, which is right for a person and useless to a program.
+- **On the certified link-14 pool of 600 the mapping is `n % 3`** — 0 CHARMANDER, 1
+  SQUIRTLE, 2 BULBASAUR — because link 04's ball is `6 + seed % 3` and 600 divides by
+  three. Checked against all 600 rows, **zero violations, 200 of each**. **Do not
+  hard-code that rule anywhere**: a different `--exits` count breaks it, which is exactly
+  why the mapping is a file rather than an inference.
+- **`--cover 0.95` here, against the chain's 0.90, and it is measured not preferred.**
+  0.90 gives 1 m 59.7 s with 472 of 532 arrivals on screen; 0.95 gives 2 m 03.0 s with
+  502. Three seconds for thirty more arrivals, and the thinning tail (the share of the
+  film with under a hundred agents live) goes **3 % → 6 %** — small on a two-minute cut,
+  which is not true of the fourteen-link one where 0.90 is right.
+- **A WORST FRAME IS NOT A STRETCH, AND `report_camera` NOW PRINTS THE RUN LENGTH.** This
+  cut reports `worst frame 1496 with 599 of 599 off`, which reads as a disaster and is one
+  output frame of a zoom snapping back. The longest unbroken stretch below 90 % coverage is
+  **142 frames (2.4 s) and it is the last 142** — the arrival shot, where the camera has
+  followed the finishers to Route 3 while the stragglers are still in the grass, i.e. the
+  documented `--follow-arrivals` trade. **Judge a camera excursion by the run length**; the
+  percentiles added one round earlier still cannot tell a blink from a minute.
+- **The per-link bars draw only the links the cut contains.** `--from`/`--to` made a film a
+  slice, and a five-link slice drew a bar for every link in the chain — fourteen
+  permanently empty rows. The heading still carries the chain's own count, so link 15 is
+  still link 15.
+- **Three of the five links are never the plurality of the live swarm** (`on screen` 0.0 %
+  for 16, 18 and 19) and that is not a fault: an agent that finishes stops being drawn, so
+  the surviving population drifts towards the later links. They are in the per-link bars on
+  every frame regardless. The gym is the mirror image — 14.9 % of the runtime against 6.9 %
+  of the emulated time.
