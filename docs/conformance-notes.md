@@ -119,8 +119,25 @@ move.
 
 * **`late_sp*`, 24 rows.** These are sprite-fetch timing against a transfer that
   ends mid-scanline; they belong with the PPU work, not here.
-* **The rest are the prohibited region `$FEA0-$FEFF`**, which is a different
-  behaviour and got its own pass — below.
+* **The prohibited region `$FEA0-$FEFF`**, which is a different behaviour and
+  got its own pass — the next entry below. After it, 137 rows are red and
+  **every remaining `busypush`/`busypop` failure is a `cgb04c` row**; the DMG
+  half of both families is green.
+* **About 19 of those are one unexplained Color behaviour, and the obvious
+  explanation is ruled out.** `oamdma_srcXXXX_busypushC001` and its `E001`,
+  `F001` and `FE01` siblings prime `$D000` and `$BFFF`, push `$55AA` at
+  `SP = $C001` during a transfer — so the writes are to `$C000` and `$BFFF` —
+  and then read `$BFFF` and **`$D000`** back. A DMG expects `$D000` untouched,
+  which we produce. A `cgb04c` expects `$D000` to hold the `$55` that was
+  written to `$C000`. It is **not** work-RAM aliasing: `lbegin` opens with
+  `ld a,02 / ldff(70),a`, so `$D000` is bank 2 and `$C000` is bank 0. Forcing
+  our `$D000` window onto bank 0 does move 19 rows, which is how the aliasing
+  reading was tested — and Pan Docs
+  ([SVBK](https://gbdev.io/pandocs/CGB_Registers.html)) is explicit that "bank
+  0 is always available at C000–CFFF" and that writing 0 selects bank 1, so that
+  is a wrong change and was not made. **Left open and unexplained rather than
+  fitted**: whatever a Color console does with a work-RAM write while a
+  cartridge-bus transfer runs, it is not the address decode we have.
 
 **Carries into the tool.** Seven checks, one per clause above, each expressible
 as "start a transfer from page P, touch address A on M-cycle N, report what the

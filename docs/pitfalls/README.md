@@ -57,6 +57,7 @@ Search this page for the error text you have. Strings are quoted verbatim.
 | a comparison that scores 100 % against a buffer nobody has written yet | [an exact match against a blank screen](tests.md#an-exact-match-against-a-blank-screen-is-not-evidence) |
 | one screenshot row wrong by thousands of pixels while its neighbours are exact | [a reference claimed by the wrong ROM](tests.md#a-reference-screenshot-claimed-by-the-wrong-rom) |
 | `reference is neither a DMG nor a compatibility palette`, or a suite's readme naming a colour its own pictures do not use | [documentation disagreeing with the files](tests.md#a-suites-own-documentation-disagreeing-with-the-files-it-ships) |
+| a foreign emulator disagreeing with you about the state a boot ROM hands over | [a reference emulator's boot ROM is not the console's](tests.md#a-reference-emulators-boot-rom-is-not-the-consoles-boot-rom) |
 
 ### The host, the terminal and the clock
 
@@ -93,6 +94,7 @@ Search this page for the error text you have. Strings are quoted verbatim.
 | a game that traps the player with no way out | [the cartridge has no exit](not-our-bug.md#the-room-really-has-no-door-checking-the-games-code-first) |
 | a suite score that cannot be improved however correct you get | [the denominator is wrong](not-our-bug.md#most-of-a-suites-remaining-rows-can-be-unwinnable) |
 | references that disagree with each other for the same ROM | [more than one reference means more than one machine](not-our-bug.md#more-than-one-reference-image-means-more-than-one-machine) |
+| closing rows in one suite makes another suite's distance jump | [two suites disagreeing name two machines](not-our-bug.md#two-suites-disagreeing-about-one-address-is-a-statement-about-two-machines) |
 | a red row somebody keeps trying to fix | [a row that must stay red](not-our-bug.md#an-honest-suite-has-deliberate-reds) |
 
 ---

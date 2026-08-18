@@ -209,9 +209,23 @@ const DMG_BOOT_SYSTEM_COUNTER: u16 = 0xABCC;
 /// The same value for a Color console, measured by Mooneye
 /// `misc/boot_div-cgbABCDE`. That ROM has a **DMG** cartridge header, so what it
 /// actually measures is the compatibility path; a CGB cartridge takes a
-/// different route through the boot ROM and no suite ROM pins where it ends up.
-/// The same value is used for both, which is right for `ColorAsClassic` and a
-/// documented approximation for `Color`.
+/// different route through the boot ROM. The same value is used for both, which
+/// is right for `ColorAsClassic` and a documented approximation for `Color`.
+///
+/// **A suite ROM does pin the CGB-mode value, and we fail it.** BullyGB's
+/// header is `$80`, and its very first check reads `DIV` a fixed distance after
+/// hand-off and requires `$1F` on a Color console; we read `$27`, so it prints
+/// `Invalid initial DIV` and stops — which is the whole of why `csp/bully` is a
+/// black screen here. Its author reports it passing on three real CGB units.
+/// Sweeping this constant, `$1DC0`-ish satisfies it *with our PPU convention*,
+/// and that is exactly why it was not changed: BullyGB waits for `LY >= $90`
+/// before reading `DIV`, so what it really pins is the **phase between the
+/// system counter and the PPU** at hand-off, and we have no independent
+/// measurement of where a CGB boot ROM leaves the PPU for a CGB cartridge
+/// (`misc/boot_hwio-C` skips `$FF40`/`$FF41`/`$FF44`). Fitting one unknown to
+/// absorb another would move every CGB-flagged cartridge's `DIV`, and therefore
+/// its APU phase and its RNG, on no better evidence than one row.
+/// **SameBoy cannot settle it** — see `tools/sameboy-oracle/README.md`.
 const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
 
 /// The first DMG revision, from `acceptance/boot_div-dmg0`. Its boot ROM is a

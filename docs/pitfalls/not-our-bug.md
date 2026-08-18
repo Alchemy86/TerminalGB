@@ -163,6 +163,45 @@ entry records the verification (the suite's own README, read from the pinned che
 
 ---
 
+## Two suites disagreeing about one address is a statement about two machines
+
+**Symptom.** Closing rows in one suite makes another suite's distance jump.
+
+**What it looks like.** A regression, or a rule you got backwards.
+
+**Root cause.** The worked example is the block Nintendo calls prohibited,
+`$FEA0-$FEFF`. Pan Docs, ["FEA0–FEFF range"](https://gbdev.io/pandocs/Memory_Map.html), gives
+it **three** answers: `$00` on DMG/MGB/SGB/SGB2, "a unique RAM area, masked with a
+revision-specific value" on CGB revisions `0-D`, and the high nibble of the low address byte
+twice (`$FEAx` → `$AA`) on CGB revision E, AGB, AGS and GBP. Gambatte's Color reference console
+is **CPU CGB C**, so its rows pop back whatever they wrote there. `cgb-acid-hell`'s
+hardware-photographed reference does not.
+
+**Resolution.** Measure both, and pick with the numbers on the table rather than by picking the
+suite you were working on:
+
+| | Gambatte | `cgb-acid-hell` |
+|---|---:|---:|
+| the block reads `$FF` (what we had) | 3083 | 2 px |
+| the revision E / AGB nibble rule | **3109** | **2 px** |
+| revisions `0-D`, RAM with no mask | **3135** | **176 px** |
+
+We take the revision E rule. Three reasons, all of them checkable: the emulator already targets
+CGB-E elsewhere, two pixels from a hardware photograph is worth more than 26 rows measuring
+another stepping, and **"RAM with no mask" is a guess where the nibble rule is documented** —
+Pan Docs gives no mask for any revision in `0-D`.
+
+**Side effects and blast radius.** The general form is uncomfortable and worth stating: *a
+suite's score is a statement about the machine its references came from.* When two suites give
+one address two answers, at most one of them is describing the console you model, and the
+honest write-up names which machine each of them is rather than quietly optimising the total.
+
+**How we found it.** Implementing the RAM behaviour, running every suite, and reading the one
+row that moved the wrong way. `make test-external` scoring twelve other suites is what made
+that a five-minute check instead of a silent regression.
+
+---
+
 ## More than one reference image means more than one machine
 
 **Symptom.** A ROM fails against one reference set and passes against another, or a row is

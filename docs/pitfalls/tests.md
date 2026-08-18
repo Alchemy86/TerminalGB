@@ -413,3 +413,50 @@ expectation**, because the artefact is what every other runner is scored against
 **How we found it.** `mbc3-tester@cgb` reported "reference is neither a DMG nor a
 compatibility palette" — a message that exists precisely so an unrecognised colour is reported
 as a runner limitation rather than as 23,040 wrong pixels.
+
+---
+
+## A reference emulator's boot ROM is not the console's boot ROM
+
+**Symptom.** You want to know what a real console leaves in `DIV` (or `LY`, or anywhere else)
+when it hands the cartridge control, you have an oracle that runs a foreign emulator, and its
+answer disagrees with a hardware-verified suite you already pass.
+
+**What it looks like.** A boot-state bug in your emulator, or a bug in the suite.
+
+**Root cause.** SameBoy — the oracle this repository ships in
+[`tools/sameboy-oracle/`](../../tools/sameboy-oracle/README.md) — ships **its own
+reimplemented boot ROMs**, not Nintendo's. They are functionally faithful and are not
+cycle-identical, so anything measured *across* the boot is that emulator's number, not
+hardware's.
+
+**Measured, 2026-08-18.** A ten-instruction probe cartridge that stores `DIV`, `LY`, `STAT` and
+`LCDC` at `$0100` and then spins:
+
+| | our DMG | SameBoy `dmg` | our CGB | SameBoy `cgbE`, DMG cartridge | SameBoy `cgbE`, CGB cartridge |
+|---|---|---|---|---|---|
+| `DIV` | `$AB` | `$BD` | `$26` | `$C0` | `$AC` |
+| `LY` | `$00` | `$90` | `$00` | `$93` | `$92` |
+
+Our DMG value is the one Mooneye's `acceptance/boot_div-dmgABCmgb` pins — six `DIV` reads at
+chosen offsets, verified by Gekkio on real DMG and MGB units — and we pass that ROM. SameBoy is
+18 `DIV` ticks away from it. The decisive confirmation: **SameBoy fails BullyGB's
+`Invalid initial DIV` check on every one of its nine consoles**, including the ones BullyGB's
+author verified pass on his own hardware.
+
+**Resolution.** Use the oracle for what it is good at — a ROM's *own* verdict on a machine you
+do not own — and never for the boot hand-off. For that, the authorities are Mooneye's
+`boot_div`/`boot_hwio`/`boot_regs` family and a real boot ROM, which this project deliberately
+neither ships nor downloads (`src/boot.rs`).
+
+**Side effects and blast radius.** None to the emulator; the cost is entirely in time. The
+`peek` mode added to the oracle while chasing this is worth keeping anyway — it is how you ask
+a foreign implementation what it leaves at an address, which is the one question a pass/fail
+oracle cannot answer.
+
+**How we found it.** BullyGB draws a black screen here, and its single failing check turns out
+to be the initial `DIV`. `CGB_BOOT_SYSTEM_COUNTER`'s own doc comment already says what is wrong
+— the value is measured by `misc/boot_div-cgbABCDE`, whose cartridge has a **DMG** header, so
+it pins the compatibility path and *"a CGB cartridge takes a different route through the boot
+ROM and no suite ROM pins where it ends up"*. BullyGB, whose header is `$80`, is that ROM. The
+detour was trying to settle the CGB-mode value with the oracle.

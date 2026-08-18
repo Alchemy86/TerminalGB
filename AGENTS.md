@@ -740,6 +740,37 @@ emulator points a stranger straight at our page. Nothing else in the ecosystem d
   audio verdict** — a band-limited resample really can turn a high square wave into a flat line,
   it just was not what happened here.
 
+## BullyGB's black screen is ONE failing check, and it is the CGB-mode boot counter
+
+**`csp/bully` draws nothing here and it is not a rendering fault.** Traced: the ROM runs its
+first test, fails, prints a message and parks on `jr -2` at `$01DC` with the LCD on and the
+palette black. The failing test is the first entry in its own table at `$0ED7` — `$02C7`, four
+instructions long — and it is **`Invalid initial DIV`**: on a device id ≥ 4 (a CGB or an AGB)
+it requires `DIV` to read **`$1F`** a fixed distance after hand-off, and we read `$27`.
+
+- **`CGB_BOOT_SYSTEM_COUNTER`'s own doc comment already predicted this.** `$2678` is measured
+  by Mooneye `misc/boot_div-cgbABCDE`, whose cartridge header is **DMG** (`$0143 = $00`), so it
+  pins the *compatibility* path through the CGB boot ROM. BullyGB's header is `$80`, so it
+  takes the CGB path — **it is the suite ROM the comment said did not exist.**
+- **IT WAS NOT CHANGED, AND THE REASON IS NOT TIMIDITY.** BullyGB waits for `LY >= $90` before
+  reading `DIV`, so what it pins is the **phase between the system counter and the PPU** at
+  hand-off, not the counter alone — and no ROM measures where a CGB boot ROM leaves the PPU for
+  a CGB cartridge (`misc/boot_hwio-C` skips `$FF40`, `$FF41` and `$FF44` in its own mask).
+  Sweeping the counter, anything around `$1DC0` satisfies bully *given our PPU convention*, but
+  fitting one unknown to absorb another would move every CGB-flagged cartridge's `DIV`, and so
+  its APU phase and its RNG, on the evidence of a single row. One row is not worth that.
+- **AND SAMEBOY CANNOT SETTLE IT.** It ships reimplemented boot ROMs: its DMG hands over
+  `DIV = $BD` where Mooneye's hardware-verified `boot_div-dmgABCmgb` (which we pass) pins
+  `$AB`, and it fails bully's check on **all nine** of its consoles including the ones bully's
+  author verified on hardware. See `docs/pitfalls/tests.md` and
+  `tools/sameboy-oracle/README.md`. The oracle grew a `peek` mode chasing this, which is worth
+  keeping: it is how you ask a foreign implementation what it left at an address.
+- **What would settle it** is a real boot ROM (which this project deliberately neither ships
+  nor downloads — `src/boot.rs`), or deriving the CGB path's duration from
+  [ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms) `src/cgb.asm` the way
+  `sgb_boot_system_counter` was derived, **together with** an independent fix on the PPU's
+  hand-off position. Two crews' work, not one.
+
 ## OAM DMA has a bus, and the CPU has to share it (`src/mmu/mod.rs::dma_conflict`)
 
 **Full record with the seven rows that pin each clause, the cost table and what is still red:
@@ -797,8 +828,19 @@ harness's verdict *text*, every audio hash, and Mealybug's per-row pixel counts.
   proven four ways: removing the read conflict reddens 2, letting a conflicting write land
   reddens 2, collapsing the Color console's work-RAM bus reddens 4, dropping the wired-AND
   reddens 1.
-- **137 of the 811 rows are still red**, and the largest named cause is `late_sp*` (24 rows) —
-  sprite-fetch timing against a transfer ending mid-scanline, which belongs with the PPU work.
+- **137 of the 811 rows are still red, and the DMG half of `busypush`/`busypop` is entirely
+  green — every remaining one of those is a `cgb04c` row.** The largest named cause is
+  `late_sp*` (24 rows), sprite-fetch timing against a transfer ending mid-scanline, which
+  belongs with the PPU work.
+- **ABOUT 19 ROWS ARE ONE UNEXPLAINED COLOR BEHAVIOUR, AND THE OBVIOUS EXPLANATION IS RULED
+  OUT — do not re-run that experiment.** `oamdma_srcXXXX_busypushC001` (and `E001`, `F001`,
+  `FE01`) prime `$D000` and `$BFFF`, push `$55AA` at `SP = $C001` during a transfer — so the
+  writes go to `$C000` and `$BFFF` — then read `$BFFF` and **`$D000`** back. A DMG expects
+  `$D000` untouched, which we produce; a `cgb04c` expects it to hold the `$55` written to
+  `$C000`. **It is not work-RAM aliasing**: `lbegin` opens `ld a,02 / ldff(70),a`, so `$D000`
+  is bank 2 and `$C000` is bank 0. Forcing our `$D000` window onto bank 0 *does* move 19 rows,
+  which is how that reading was tested and killed — Pan Docs' SVBK entry says bank 0 is always
+  at `$C000-$CFFF` and that writing 0 selects bank 1, so it is a wrong change and was not made.
 
 ### `$FEA0-$FEFF` IS NOT A HOLE, AND THE TWO SUITES THAT REACH IT NAME DIFFERENT CONSOLES
 

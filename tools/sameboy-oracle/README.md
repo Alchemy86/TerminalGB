@@ -12,6 +12,7 @@ B=target/sameboy-oracle/SameBoy/build/bin/tester
 
 $O $B cgbE samesuite target/test-suites/samesuite/apu/channel_4/channel_4_freq_change.gb
 $O $B dmg  blargg    tests/oam_bug/oam_bug.gb 4000
+$O $B cgbC peek      some.gb 400 C000 C001 9821
 ```
 
 It prints the **ROM's own** verdict, exactly as our two harnesses read it — the
@@ -43,6 +44,23 @@ here by reading prose instead:
    for character what `testharness/baseline.txt` records for
    `blargg/oam_bug@cgb`. Agreeing with an independent implementation *in the
    detail* is a much stronger claim than "we fail too".
+
+## `peek` — what does a real implementation leave *here*?
+
+`peek <rom> <frames> <addr>...` runs the ROM and prints those bytes in hex. It is not a
+verdict and does not pretend to be one; it exists because the two verdict modes can only ask a
+question the ROM already asks itself, and sometimes the question is "what is in memory".
+
+## It is NOT an oracle for the boot hand-off
+
+**SameBoy ships its own reimplemented boot ROMs**, so anything measured *across* the boot is
+its number and not hardware's. Measured 2026-08-18 with a ten-instruction probe cartridge:
+SameBoy's DMG hands the cartridge `DIV = $BD` where Mooneye's hardware-verified
+`acceptance/boot_div-dmgABCmgb` — which this emulator passes — pins `$AB`. It also **fails
+BullyGB's `Invalid initial DIV` check on all nine of its consoles**, including the ones
+BullyGB's author verified on his own hardware. Use `boot_div`/`boot_hwio`/`boot_regs` for that
+question, not this. Written up in
+[`docs/pitfalls/tests.md`](../../docs/pitfalls/tests.md#a-reference-emulators-boot-rom-is-not-the-consoles-boot-rom).
 
 ## House rules
 
