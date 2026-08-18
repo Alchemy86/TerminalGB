@@ -10573,6 +10573,16 @@ pool, `--idle-spread 3001`, every attempt a distinct trajectory:
 as link 11 is. Twenty of link 20's twenty failures and all seven of link 21's are deaths on the
 walk; **not one is a battle.**
 
+- **A REBASE ONTO AN EMULATION CHANGE COSTS A RE-CERTIFICATION, AND WHETHER IT COSTS A *DIFFERENT
+  ANSWER* IS ONE COMPARISON.** This set was certified, `main` landed two MMU accuracy fixes (OAM
+  DMA's bus conflict and the prohibited block `$FEA0-$FEFF`), and it was certified again on the
+  rebased emulator — a corpus is a function of the entry state, the scenario, the seed **and the
+  binary**. **All 3,000 trajectories of links 20, 21 and 22 came back byte-identical, and so did
+  the entry pools 18b and 19 produced.** So both fixes are transparent to this cartridge: Blue's
+  OAM DMA runs from HRAM and never reads the bus the fix blocks, and nothing on this chain touches
+  the prohibited block. Play the same seeds and compare the trajectory hashes — it is far cheaper
+  than arguing about whether a fix can matter.
+
 - **`18b` IS AN INSERTION AND THE CLI NUMBERS LINKS FROM THEIR OWN FILE NAMES NOW, NOT FROM THEIR
   POSITION.** Link 19's certification is a published measurement tied to that name, so the shop went
   in as `18b-shop-in-pewter` — which sorts between `18-` and `19-` — rather than renumbering four

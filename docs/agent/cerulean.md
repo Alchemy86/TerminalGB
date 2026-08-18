@@ -59,6 +59,22 @@ the chain carries. **Two do not, they are labelled that way permanently as link
 11 is, and the cause is one thing: poison.** Twenty of link 20's twenty failures
 and all seven of link 21's are deaths on the walk; **not one is a battle**.
 
+### The rebase onto two MMU accuracy fixes changed nothing, and that is measured
+
+The whole set was certified once, then `main` landed
+`fix(mmu): OAM DMA has a bus` and the prohibited-block fix beside it, and it was certified again on the rebased emulator — because a
+corpus is a function of the entry state, the scenario, the seed **and the
+binary**, and an emulation change invalidates a rate the way a driver change
+does.
+
+**All 3,000 trajectories of links 20, 21 and 22 are byte-identical across the
+two, and so are the entry pools 18b and 19 produced.** So the two fixes are
+transparent to this cartridge on this chain — Blue's OAM DMA runs from HRAM and
+never reads the bus the fix now blocks, and nothing here touches `$FEA0-$FEFF`.
+That is a measurement rather than an argument, and it is the cheap way to find
+out whether a rebase costs a re-certification: play the same seeds and compare
+the trajectory hashes.
+
 ---
 
 ## 1. The road, read out of the cartridge
