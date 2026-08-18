@@ -4905,13 +4905,16 @@ floor's are declines it got by inaction.**
   and the two CANNOT be separated at nine prompts** (difference +25.0, se 25.0,
   p = 0.317). Say so. And the task forbids the flattering reading anyway: of the
   840 decisions, the number whose right answer differs by species is **zero**.
-- **THE HELD-OUT CONTROL IS THE FINDING: 0 of 9, both directions, worse than
-  doing nothing** — it replaces where it should decline, which the inert floor
-  accidentally gets right. The reason is measured, not a shortcoming of the fit:
-  across the two lines the corpora share **one held move name of eleven** and
-  **none of the nine offered moves**, so an unseen student has never seen a move
-  it is being asked about. **Nine prompts distil the teacher's answers and teach
-  nothing about the question**; the fix is more of the 840, not a better fit.
+- **THE HELD-OUT CONTROL AT NINE PROMPTS WAS 0 of 9 BOTH DIRECTIONS — AND IT WAS
+  MEASURING THE CORPUS, NOT THE METHOD.** The reason was in its own overlap
+  figures: across the two lines the corpora share **one held move name of eleven
+  and none of the nine offered moves**, so the unseen student had never seen a
+  move it was asked about. **Scaled to 140 species lines it transfers: 73 of 97
+  held-out prompts, 42 of 60 replacements, against a floor of 0 of 60.** The
+  policy is the same three counters; only the corpus grew. **The general lesson:
+  a negative held-out result at a tiny sample means "the corpus is too small to
+  say", not "the method does not work" — and the way to tell them apart is to
+  measure the overlap between train and test before drawing the conclusion.**
 - **The student may not read the drill's `label` block** — it is ground truth,
   not something a player sees. `policy.py` raises rather than quietly scoring a
   cheat.
@@ -4934,6 +4937,37 @@ floor's are declines it got by inaction.**
   values and the prompt looked unanswered when it had in fact been answered
   correctly six decisions earlier. `advance_text` is safe to give any arm: it
   refuses to answer a question.
+- **THE SCALE-OUT IS `tools/learn-student/drill_all.py`: 140 lines, 46.4 s of
+  wall clock on 14 workers (616 worker-seconds), 370 verified prompts.** Numbers
+  to quote: 151 species, 140 lines with a decision, 10 whose walk offers none,
+  **1 that cannot be planned — MEW**, because `BaseStats` holds 150 records
+  (`assert_table_length NUM_POKEMON - 1 ; discount Mew`) and MEW's live in
+  another bank. 432 decisions planned, 370 drilled, **236 of the published 581
+  distinct (held, offered) pairs**, 268 of the 840, 98 species, 1,360 corpus
+  rows. The 581/840 are over every *catchable* starting state; `--drill-plan`
+  walks one line per species from level 1, which is why it is a subset.
+- **58 DECISIONS WERE LOST AND EVERY CAUSE IS THE DRILL, NOT THE RIG.** 14 lines
+  where **the level-up never happened** — the drill wins its battle by pressing
+  A and A takes **move slot 1**, so a line whose slot 1 is SPLASH/HARDEN/SING
+  cannot kill the level-2 MAGIKARP and one whose slot 1 is TELEPORT *flees*;
+  9 where the move to forget was not in the list; 5 where the NO at the delete
+  box did not take; 1 where the lead fainted. Choosing a damaging slot would fix
+  about half of the first group; the rest hold no damaging move at all.
+- **THE DRILL STAGES THE CARTRIDGE PER PROCESS NOW** (`out/stage-<pid>/`). It
+  used to be a fixed `target/gen1-learn-drill/`, and the drill *deletes* the
+  `.sav` there on the way in so every line starts from a new game — so two
+  drills sharing it each delete the other's save file. Harmless only because the
+  drill never reads one. **`--prompts` into a shared directory is still not
+  parallel-safe** (the numbering reads the directory), so `drill_all.py` gives
+  each process its own and merges.
+- **A TEACHER THAT REPLAYS BY SCREEN MUST KEY ON THE EXACT TEXT, AND ON THE
+  PARTY'S LEVEL.** The `Delete an older move…?` box shows the offered move and
+  the party's HP and **not what is held**, so digit-stripping the key made two
+  prompts on one line that offer the same move collide: 18 ambiguous keys of 619
+  against 4 of 895 exact, and the teacher scored 88 of 97 instead of 97 of 97.
+  The remaining four are **character-for-character identical screens with
+  different right answers** — the ceiling on any screen-only player, teacher
+  included, and a fact about the cartridge rather than the tool.
 - **MATCH A PROMPT PHRASE AS IT LOOKS WHILE IT IS STILL BEING TYPED.** Gen 1
   prints a box a character at a time, so waiting for `which move should be
   forgotten?` and being handed `Which move` is not a near miss — it fell through

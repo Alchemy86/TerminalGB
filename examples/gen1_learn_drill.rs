@@ -60,8 +60,17 @@ fn find_rom() -> Option<PathBuf> {
     None
 }
 
-fn stage(rom: &Path) -> Result<PathBuf, String> {
-    let dir = PathBuf::from("target/gen1-learn-drill");
+/// Stage the cartridge somewhere this process alone owns.
+///
+/// **Per process, not per program.** The MBC writes its `.sav` beside whatever
+/// path it is handed, and the drill deletes that file on the way in so every
+/// line starts from a new game — so two drills staging to one fixed directory
+/// share a save file and each one's first act is to delete the other's. It is
+/// harmless today only because the drill never reads a save; a fixed path is
+/// still a shared mutable file between processes, and 140 species lines is
+/// exactly the run somebody parallelises.
+fn stage(rom: &Path, out: &Path) -> Result<PathBuf, String> {
+    let dir = out.join(format!("stage-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let dest = dir.join(rom.file_name().ok_or("the ROM path has no filename")?);
     std::fs::copy(rom, &dest).map_err(|e| format!("cannot stage the ROM: {e}"))?;
@@ -553,7 +562,7 @@ fn levels_to(
 }
 
 fn cmd_trace(rom: &Path) -> Result<(), String> {
-    let staged = stage(rom)?;
+    let staged = stage(rom, Path::new("target/gen1-learn-drill"))?;
     let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
     let ps = presets()?;
 
@@ -585,7 +594,7 @@ fn cmd_trace(rom: &Path) -> Result<(), String> {
 }
 
 fn cmd_cancel(rom: &Path) -> Result<(), String> {
-    let staged = stage(rom)?;
+    let staged = stage(rom, Path::new("target/gen1-learn-drill"))?;
     let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
     let ps = presets()?;
     println!("== cancelling an evolution: is it offered again? ==");
@@ -617,7 +626,7 @@ fn cmd_cancel(rom: &Path) -> Result<(), String> {
 /// a function of its species and its level" — which is the claim that makes the
 /// decision table finite. This is that claim, measured.
 fn cmd_moveset(rom: &Path) -> Result<(), String> {
-    let staged = stage(rom)?;
+    let staged = stage(rom, Path::new("target/gen1-learn-drill"))?;
     let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
     let ps = presets()?;
     println!("== what a wild Pokemon at a level actually holds ==");
@@ -1638,7 +1647,7 @@ mod drill {
         pool_dir: Option<&Path>,
     ) -> Result<(), String> {
         let plan = load_plan(plan_path)?;
-        let staged = stage(rom)?;
+        let staged = stage(rom, out)?;
         let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
         let tables = RomTables::locate(bytes.clone()).map_err(|e| format!("{e}"))?;
         let dir = out.join(plan.species.to_lowercase());

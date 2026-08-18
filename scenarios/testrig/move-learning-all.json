@@ -1,0 +1,22 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "move-learning-all",
+  "question": "The whole drillable table: every prompt the drill verified, with the student fitted to all of them. Teacher against student on every prompt, with the declines counted on their own.",
+  "split": "seen",
+  "scenario": "scenarios/learn/answer-a-move-prompt.json",
+  "entry_pool": "target/learn-all/pool-all",
+  "runs": "pool",
+  "seed0": 0,
+  "idle_spread": 0,
+  "subjects": [],
+  "arms": [
+    { "name": "teacher", "player": "command", "program": "python3",
+      "args": ["tools/learn-student/policy.py", "teacher",
+               "--corpus", "target/learn-all/corpus-all.ndjson"] },
+    { "name": "student", "player": "command", "program": "python3",
+      "args": ["tools/learn-student/policy.py", "student",
+               "--model", "target/learn-student/all.json"] },
+    { "name": "mash-a", "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh", "args": [] }
+  ]
+}

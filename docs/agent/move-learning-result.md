@@ -149,6 +149,123 @@ prompts rather than a better fit to these nine.
 
 ---
 
+## 4a. AT SCALE — 370 prompts, 98 species, and the held-out split that works
+
+**The nine-prompt control above said the distillation does not transfer. It was
+right about the nine and wrong as a verdict on the method, and scaling settled
+which.** The measured cause was coverage — two lines share one held move name of
+eleven and none of the nine offered moves — so the test is whether a corpus that
+covers the move table transfers. It does.
+
+### The drill, at scale
+
+`tools/learn-student/drill_all.py` emits a plan per species, drills every one in
+parallel, and merges the pools. **140 lines, 46.4 s of wall clock on 14 workers
+(616 worker-seconds)** — the fan-out the rig's own throughput work bought,
+pointed at the drill.
+
+| | |
+| --- | ---: |
+| species in the cartridge | 151 |
+| lines with at least one decision | **140** |
+| lines whose walk offers no decision at all | 10 |
+| lines that could not be planned | **1** — MEW |
+| decisions the plans asked for | **432** (153 declines) |
+| decisions drilled and verified against the cartridge | **370** (127 declines) |
+| distinct (four held, offered) pairs covered | **236 of the 581** |
+| distinct (species, held, offered) decisions covered | **268 of the 840** |
+| distinct species asking | **98** |
+| corpus rows | **1,360** across 127 files |
+
+**MEW cannot be planned and the reason is the cartridge**: `BaseStats` holds 150
+records — its own line is `assert_table_length NUM_POKEMON - 1 ; discount Mew` —
+and MEW's live at `MewBaseStats` in another bank, which the planner does not
+read. A one-species gap, named rather than swallowed.
+
+**The 581 and the 840 are over every reachable *starting state*** — a Pokémon
+can be caught at any level, so `learn_table.py` walks 17,100 trajectories.
+`--drill-plan` walks one line per species from level 1, which is a subset: hence
+236 of 581 rather than all of them. Covering the rest needs the planner to emit
+mid-line starting states, which is a plan-generator change and not a drill one.
+
+### The 24 lines that failed, and why
+
+58 of the 432 decisions were lost. Four causes, every one a **drill**
+limitation rather than anything about the rig or the criterion:
+
+| lines | cause |
+| ---: | --- |
+| 14 | **the level-up never happened.** The drill wins its battle by pressing A, and A on the battle menu takes **move slot 1** — so on a line whose slot 1 is SPLASH, HARDEN, SING or a status move it cannot kill the level-2 MAGIKARP, and where slot 1 is TELEPORT it *flees*. Two sub-cases: a damaging move exists further down the list (KADABRA holds TELEPORT then CONFUSION) and choosing the slot would fix it; or none of the four can damage anything (MAGIKARP with only SPLASH, METAPOD with only HARDEN), which no opponent choice fixes. |
+| 9 | **the move to forget was not in the list** when the cursor walk looked for it. |
+| 5 | **the NO at the delete box did not take**, and the move list opened on what should have been a decline. |
+| 1 | **the lead fainted** and no battle started thereafter (`charmeleon`). |
+
+### The result
+
+Both runs use every arm from the same states at the same seeds; `mash-a` is the
+press-A floor.
+
+**Held out — 97 prompts from 31 species lines the student never saw**
+(`scenarios/testrig/move-learning-heldout.json`, split `unseen`, the student
+fitted to the other 96 lines' 1,028 corpus rows):
+
+| arm | correct | replace | decline |
+| --- | ---: | ---: | ---: |
+| teacher | **97 of 97** (100.0 % [96.2-100.0]) | 60/60 | 37/37 |
+| **student** | **73 of 97** (**75.3 %** [65.8-82.8]) | **42/60** | 31/37 |
+| mash-a | 37 of 97 (38.1 % [29.1-48.1]) | **0/60** | 37/37 |
+
+Paired gap teacher − student **+24.7 points [+14.8, +34.6]** over 97 pairs
+(24 discordant, all one way, McNemar p = 0.0000); teacher − floor **+61.9
+[+46.2, +77.5]**.
+
+**Fitted to all of it — 370 prompts** (`move-learning-all.json`, split `seen`):
+
+| arm | correct | replace | decline |
+| --- | ---: | ---: | ---: |
+| teacher | 366 of 370 (98.9 % [97.3-99.6]) | 241/243 | 125/127 |
+| student | 308 of 370 (83.2 % [79.1-86.7]) | 193/243 | 115/127 |
+| mash-a | 127 of 370 (34.3 % [29.7-39.3]) | **0/243** | **127/127** |
+
+Gap teacher − student **+15.7 points [+11.6, +19.7]** over 370 pairs, p =
+0.0000. Agreement teacher-student 312 of 370 (84.3 %).
+
+**Wall clock:** the whole pipeline is about two minutes — 46.4 s to drill 140
+lines, 15.0 s for the 291 held-out attempts, 57.6 s for the 1,110 attempts of
+the full pool, at ~1,650 % CPU.
+
+### What changed between 0 of 9 and 42 of 60
+
+**Nine prompts: the held-out student scored 0 of 9 and got the declines wrong
+too. 370 prompts: it answers 42 of 60 replacements on lines it has never seen.**
+The policy is the same three counters; only the corpus grew. So the nine-prompt
+control was measuring **coverage**, exactly as its own overlap figures said, and
+the honest reading of a negative held-out result at a tiny sample is *"the
+corpus is too small to say"* rather than *"the method does not work"*.
+
+**And the floor is what stops that being read as more than it is.** `mash-a`
+scores 38.1 % held out and **0 of 60 replacements** — every one of its correct
+answers is a decline it got by inaction. The student's 42 of 60 replacements is
+the number that is doing the work.
+
+### The four the teacher cannot get, and why that is a fact about the screen
+
+On the full pool the teacher scores 366 of 370, not 370. It replays a recorded
+answer looked up by what is on the screen, and **four screens in the corpus are
+character-for-character identical with different right answers**: the
+`Delete an older move to make room for X?` box shows the offered move and the
+party's HP and *not what is held*, so two prompts on one line offering the same
+move to the same Pokémon at the same HP are indistinguishable from inside the
+game. The lookup already prefers the exact text and the party's level over the
+digit-stripped form — that alone took 18 ambiguous keys of 619 down to 4 of 895
+and the teacher from 88 of 97 to 97 of 97 on the held-out pool — and the
+remaining four are not resolvable from what a player is shown.
+
+**That is worth more than the four marks.** It is the ceiling on any screen-only
+player, teacher included, and it is measured rather than argued.
+
+---
+
 ## 5. Reproducing it
 
 Point `$ROM` at your own cartridge; none is distributed here, and neither the
@@ -184,19 +301,46 @@ The controls are `scenarios/testrig/move-learning-unseen-{CHARMANDER,BULBASAUR}.
 each wanting a model trained on the other line
 (`--corpus target/learn-drill/<other>/agent.ndjson`).
 
+**And at scale** — 140 species lines, the held-out split, about two minutes:
+
+```sh
+# every line, in parallel, into one pool
+python3 tools/learn-student/drill_all.py --rom "$ROM" --out target/learn-all
+
+# the held-out split is every fourth line by name, so it needs no seed file;
+# see docs/agent/move-learning-result.md §4a for the four commands that build
+# target/learn-all/{corpus-all,corpus-train}.ndjson and pool-{all,test}
+python3 tools/learn-student/policy.py train \
+    --corpus target/learn-all/corpus-train.ndjson --out target/learn-student/train.json
+
+cargo run --release --features scenario --example pewter_chain -- \
+    ab --rom "$ROM" --plan scenarios/testrig/move-learning-heldout.json
+```
+
 ---
 
 ## 6. What this cannot tell you
 
-* **Nine prompts.** Every interval on this page is wider than the effect it
-  brackets. Nothing here separates the two lines, and nothing here is a rate
-  for "move learning" — it is a rate for these nine questions.
+* **The nine-prompt tables are nine prompts.** Every interval on them is wider
+  than the effect it brackets, nothing on them separates the two lines, and
+  nothing on them is a rate for "move learning". [§4a](#4a-at-scale--370-prompts-98-species-and-the-held-out-split-that-works)
+  is where the sample is large enough to say anything, and even there the pool
+  is **236 of the 581 distinct pairs** — the rate is for the decisions a line
+  walked from level 1 meets, not for the whole table.
 * **The split is `seen`** for the headline table. It says the distillation
   carries the teacher's answers on the data it was fitted to. §4 is the only
   generalisation claim on the page and it is negative.
 * **No model has been through this.** The student is a counting policy, not a
   network; the rig's `command` arm is the seam a trained one arrives through
-  and it is exercised here by a real subprocess, three arms of it.
+  and it is exercised here by a real subprocess, three arms of it. What the
+  scale-out establishes is that the *corpus* is large enough to transfer, which
+  is the precondition a network would need and the nine did not meet.
+* **58 of the 432 planned decisions were never drilled**, so the pool is what
+  the drill could reach rather than what the plans asked for. The four causes
+  are in [§4a](#the-24-lines-that-failed-and-why) and all four are drill
+  robustness, but a rate over a pool that dropped its hardest instantiations is
+  a rate with a selection effect in it, and nobody has measured which way it
+  leans.
 * **The teacher is a replay.** It cannot be wrong on these nine, because these
   nine are what it replays. Its 9 of 9 is a statement about the pool and the
   harness, not about the criterion — the criterion's own justification is in

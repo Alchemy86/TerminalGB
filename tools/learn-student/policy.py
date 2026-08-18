@@ -188,17 +188,40 @@ def load_corpus(paths):
     return rows
 
 
+def keys(obs):
+    """The screen, most specific first, for looking a recorded answer up.
+
+    **The exact text before the digit-stripped one, and the level before
+    neither.** The `Delete an older move…?` box shows only the offered move and
+    the party's HP; two prompts on one line that offer the same move at
+    different levels therefore look identical once the digits are gone.
+    Measured on the 1,360-row corpus: 18 of 619 digit-stripped keys are
+    ambiguous against 4 of 895 exact ones, and every one of those 18 is a
+    prompt the teacher would answer with whichever plan it indexed last.
+
+    The level is legitimate: it is on the screen — the party panel prints
+    `Lv24` — even though it is not in the box's own words.
+    """
+    text = " ".join(obs.get("screen", {}).get("text", "").split())
+    party = (obs.get("game", {}).get("party") or [{}])[0]
+    lv = party.get("level")
+    return [f"{lv}|{text}", text, f"{lv}|{norm(text)}", norm(text)]
+
+
 def teacher_table(rows):
     table = {}
     for obs, reply in rows:
-        table[norm(obs["screen"]["text"])] = reply["plan"]
+        for k in keys(obs):
+            # First writer wins on the vaguer keys, so a specific key is never
+            # shadowed by a later row that only matches loosely.
+            table.setdefault(k, reply["plan"])
     return table
 
 
 def teacher_act(table, obs):
     screen = obs.get("screen", {})
     text = screen.get("text", "")
-    plan = table.get(norm(text))
+    plan = next((table[k] for k in keys(obs) if k in table), None)
     if plan is None:
         k = kind(screen)
         if k is None:
