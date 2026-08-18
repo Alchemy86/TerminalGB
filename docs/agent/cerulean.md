@@ -7,7 +7,8 @@ measured over thousands of attempts rather than argued for.
 
 > Read [`pewter-chain.md`](pewter-chain.md) first and [`brock.md`](brock.md)
 > second. This page assumes both: the chain's certification gate, the battle
-> policy, and the fact that the party is **one Pokémon with an empty bag**.
+> policy, and the fact that the party is **one Pokémon** — and that the bag was
+> empty until §5, which is the first thing the chain has ever bought.
 
 ```text
    Pewter PC ─18b─▶ the Mart ─19─▶ Route 3 ─20─▶ Route 4 ─21─▶ the nurse ─22─▶ Mt Moon B1F
