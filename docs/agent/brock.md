@@ -522,6 +522,12 @@ Same tooling ([`docs/swarm-view.md`](../swarm-view.md),
 `tools/pewter-chain/swarm_film.py`), separate output. **Do not re-stitch them
 for tidiness.**
 
+> **The shop went in at `18b` after this was written, so `--from 15 --to 19`
+> now covers six files rather than five.** `link_number` reads the digits a
+> file's own name carries — `18b` answers 18 — so the range still means what it
+> says and `19-east-to-route-3` is still in it; what changed is that the arc now
+> contains a trip to the mart. See [`cerulean.md`](cerulean.md) §5.
+
 **`film` takes `--from`/`--to` now**, and that is what makes either cut
 producible on purpose. It used to play every link there was, which was right
 while the chain ended at Pewter and stopped being right the moment it did not:
