@@ -140,6 +140,35 @@ Not an instantaneous `memcpy` ([`src/mmu/oamdma.rs:94`](https://github.com/Alche
 `active()` ([`src/mmu/oamdma.rs:80`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/oamdma.rs#L80)) true for the CPU access sharing
 the M-cycle with the last byte — the single cycle `acceptance/oam_dma_timing` measures.
 
+### …and it shares its bus with the CPU
+
+The transfer controller has **no bus of its own**. It drives the source address onto whichever
+bus that address lives on and reads the byte back off it, so a CPU access on the same bus in
+the same M-cycle is looking at the same wires
+([`src/mmu/mod.rs:1013`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L1013)):
+
+- a **read** gets the transfer's byte, not the memory it addressed;
+- a **write** never reaches its own address, and is what the transfer copies into OAM instead;
+- HRAM, the I/O block, OAM and `IE` are internal to the chip and on neither bus — which is
+  exactly why every OAM DMA routine ever written is copied to HRAM before it is run.
+
+**A DMG has two buses and a Color console has three.** A DMG's work RAM hangs off the same
+external bus as the cartridge; a CGB gives it a bus of its own, so a transfer out of work RAM
+leaves the cartridge alone there and does not on a DMG. Three consequences of the extra bus,
+each pinned by a Gambatte row rather than reasoned out:
+
+| conflict | what the transfer stores | pinned by |
+|---|---|---|
+| cartridge bus, either console | the CPU's byte — nothing else is driving during a write | `oamdma_src0000_busypushC001` |
+| a **DMG**'s work-RAM source | the CPU's byte **and** the source byte, wired together (`$65 & $55 = $45`) — a DMG's work RAM is inside the SoC and keeps driving | `oamdma_srcC000_busypushC001` |
+| a **Color** console's work-RAM bus | the source byte: the CPU is locked out entirely | the same ROM on `cgb04c` |
+| a **Color** console's video bus | `$00`, on a read as much as on a write | `oamdma_src8000_busypop9FFF` |
+
+Worth **+401 Gambatte rows in each picture mode** (2682 → 3083 `standard`, 3059 → 3460
+`identical`) with no regression anywhere, at +1.1 % of the emulator's own per-frame figure on a
+real game and a byte-identical WRAM hash. Full record and the still-red list:
+[`docs/conformance-notes.md`](../conformance-notes.md), 2026-08-18.
+
 ### The lesson worth keeping: an unmodelled peripheral hid a whole dimension of CPU accuracy
 
 **Fourteen Mooneye *instruction-timing* tests measure which M-cycle a memory access lands on
@@ -188,4 +217,5 @@ PPU rendering is untouched by this — it stays batched — so frame cost does n
 | A game seeds its RNG from `DIV` and gets the same value every launch | the system counter starting at zero instead of the boot ROM's leftover — see [boot.md](boot.md) |
 | Music tempo drifts, or a raster split runs at double rate | a timer built as "a divider and a counter" rather than one tapped counter; or a STAT interrupt fired per source rather than on the line's 0→1 edge ([ppu.md](ppu.md)) |
 | Everything an instruction-timing suite reports is wrong, and the CPU looks broken | OAM DMA is instantaneous |
+| A game reads a table while its sprite DMA runs and gets bytes unrelated to the address it asked for | the DMA modelled as a copy rather than as something that occupies a bus — see above |
 | A run of `EI` instructions never enables interrupts | `EI`'s delay implemented as a restartable counter |

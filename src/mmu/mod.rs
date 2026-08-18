@@ -300,6 +300,51 @@ const SGB_BOOT_SYSTEM_COUNTER_ALL_ONES: u16 = 0xD174;
 /// 70184 — a jagged profile with no clean optimum, which is the signature of a
 /// constant absorbing an error somewhere else rather than a value being found.
 /// See `docs/measured/scoreboard.md`, "The c-sp aggregation".
+/// The buses a Game Boy memory access can land on.
+///
+/// `None` is not a bus — it is "this address is internal to the chip" (OAM,
+/// the I/O block, HRAM and `IE`), which is why an OAM DMA routine is copied to
+/// HRAM before it is run. See [`MemoryManagementUnit::dma_conflict`].
+///
+/// **A DMG has two buses and a Color console has three.** On a DMG the work
+/// RAM hangs off the same external bus as the cartridge, so a DMA out of WRAM
+/// blocks the cartridge and vice versa; on a CGB the work RAM has a bus of its
+/// own and the two do not interfere. Gambatte's `oamdma_srcC000_busypop7FFF`
+/// is the one-row proof: with a DMA running out of `$C000` it expects the DMG
+/// to pop the DMA's byte and the Color console to pop the real ROM byte.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum DmaBus {
+    None,
+    /// Cartridge ROM and cartridge RAM — plus work RAM on a DMG.
+    External,
+    /// Video RAM.
+    Video,
+    /// Work RAM and its echo, on a Color console only.
+    Wram,
+}
+
+/// What a transfer latches into OAM when a CPU **write** shares its bus.
+///
+/// Four answers, and they are read off Gambatte's `oamdma_*_busypush*` rows
+/// rather than argued from first principles — see
+/// [`MemoryManagementUnit::dma_conflict`].
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum DmaWrite {
+    /// The CPU's own byte. The cartridge bus is in write mode, so nothing else
+    /// is driving it and the transfer copies what the CPU put there.
+    Cpu,
+    /// The CPU's byte **and** the source byte, wired together. A DMG's work RAM
+    /// is inside the SoC and keeps driving through a write cycle, so a transfer
+    /// reading work RAM sees both — `oamdma_srcC000_busypushC001` expects
+    /// `$65 & $55 = $45` where the cartridge cases expect a plain `$55`.
+    And,
+    /// The source byte: the CPU is locked out and the transfer is undisturbed.
+    /// A Color console's own work-RAM bus behaves this way.
+    Source,
+    /// Zero — a Color console's video bus.
+    Zero,
+}
+
 fn boot_ppu_dot(console: crate::mode::Model) -> Option<u32> {
     match console {
         crate::mode::Model::Dmg0 => Some(DMG0_BOOT_PPU_DOT),
@@ -369,6 +414,20 @@ pub struct MemoryManagementUnit<'a> {
     pub timer: Timer,
     /// OAM DMA ($FF46) — a timed 160 M-cycle transfer, see [`oamdma`].
     oam_dma: OamDma,
+    /// Which bus OAM DMA is driving **this M-cycle**, or [`DmaBus::None`] when
+    /// no transfer is moving a byte. See [`MemoryManagementUnit::dma_conflict`].
+    dma_bus: DmaBus,
+    /// The byte OAM DMA put on that bus this M-cycle, and the OAM index it went
+    /// to. Only meaningful while `dma_bus` is not `None`.
+    dma_byte: u8,
+    dma_index: u8,
+    /// What a conflicting CPU write latches into OAM this M-cycle.
+    dma_write: DmaWrite,
+    /// True on Color silicon, where the work RAM has a bus of its own rather
+    /// than hanging off the cartridge bus. Cached from `gbmode` because
+    /// [`Self::cpu_bus_of`] is on the memory-access path. Derived state, so it
+    /// is not serialised.
+    wram_own_bus: bool,
     pub keypad: Keypad,
     /// The Super Game Boy's ICD2, listening on `$FF00`. `None` on every other
     /// console — see [`crate::sgb`] for what it does and what it deliberately
@@ -504,6 +563,11 @@ impl<'a> MemoryManagementUnit<'a> {
             serial,
             timer: Timer::default(),
             oam_dma: OamDma::new(),
+            dma_bus: DmaBus::None,
+            dma_byte: 0xFF,
+            dma_index: 0,
+            dma_write: DmaWrite::Cpu,
+            wram_own_bus: false,
             keypad: Keypad::default(),
             sgb: None,
             input_queue: InputQueue::default(),
@@ -778,6 +842,10 @@ impl<'a> MemoryManagementUnit<'a> {
             GbMode::Color | GbMode::ColorAsClassic => crate::mode::Model::Cgb,
         };
         self.gpu.gbmode = mode;
+        // Color silicon gives the work RAM its own bus — see [`DmaBus`]. A CGB
+        // running a DMG cartridge is still Color silicon, so this follows the
+        // console and not the cartridge.
+        self.wram_own_bus = !mode.is_dmg();
         // The ICD2 exists only on an SGB, so a machine that is not one pays
         // nothing: `Option::is_some` on the `$FF00` path and no state to
         // serialise.
@@ -895,13 +963,99 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     fn oam_dma_tick(&mut self) {
         if self.oam_dma.idle() {
+            self.dma_bus = DmaBus::None;
             return;
         }
         if let Some((page, i)) = self.oam_dma.step() {
             let b = self.oam_dma_source(page, i);
+            // Publish what the transfer put on its source bus this M-cycle, so
+            // a CPU access that shares the bus can see it — see
+            // [`Self::dma_conflict`].
+            self.dma_bus = self.dma_bus_of_page(page);
+            self.dma_write = self.dma_write_rule(self.dma_bus, page);
+            self.dma_byte = b;
+            self.dma_index = i;
             // Straight to the PPU: `wb` would refuse it, since OAM belongs to
             // the DMA while it runs.
             self.gpu.wb(0xFE00 + i as u16, b);
+        } else {
+            self.dma_bus = DmaBus::None;
+        }
+    }
+
+    /// True when a CPU access to `address` lands on the bus OAM DMA is driving
+    /// in this very M-cycle.
+    ///
+    /// **The rule, and it is one rule and not two.** The DMA controller does
+    /// not have a bus of its own: it drives the source address onto whichever
+    /// bus that address lives on, and reads the byte back off it. A CPU access
+    /// on the same bus in the same M-cycle therefore does not get its own
+    /// memory — the two are looking at the same wires, so the value is
+    /// whatever is on them. A read gets the DMA's byte; a write puts the CPU's
+    /// data on the wires, and the DMA copies *that* into OAM instead of what
+    /// the source held. The CPU's own write still lands wherever it was
+    /// addressed.
+    ///
+    /// This is the largest single named cause in the whole c-sp aggregation —
+    /// `TGB-DMA-001`, 562 Gambatte `oamdma/` rows — and Gambatte's own sources
+    /// are what pin it. `oamdma_src0000_busypush0001` pushes `$55AA` with
+    /// `SP = $0001` while a DMA runs out of ROM, so the high byte is written to
+    /// `$0000`, which is ROM and keeps nothing; the ROM then reads `$FE9D` and
+    /// expects **`$55`**, the byte the CPU wrote, rather than the `$65` the
+    /// source holds there. `oamdma_src0000_busypop7FFF` is the mirror image: it
+    /// pops from `$7FFF`, whose ROM byte is `$55`, and expects `$65` — the byte
+    /// the DMA was reading.
+    ///
+    /// HRAM, I/O, OAM and `IE` are internal to the chip and are on neither bus,
+    /// which is why an OAM DMA routine is always copied to HRAM before it is
+    /// run (Pan Docs, "OAM DMA Transfer").
+    #[inline]
+    fn dma_conflict(&self, address: u16) -> bool {
+        self.dma_bus != DmaBus::None
+            && self.bus_tick_enabled
+            && self.cpu_bus_of(address) == self.dma_bus
+    }
+
+    /// Which bus an OAM DMA reading from `page` drives.
+    ///
+    /// Pages `$E0-$FF` are the part the two consoles disagree about. A DMG
+    /// folds them onto echo RAM and reads work RAM through them; a Color
+    /// console puts the address on the cartridge bus, where nothing answers, so
+    /// the transfer copies `$FF` — which is exactly what Gambatte's
+    /// `oamdma_srcE000_*` rows expect of each machine.
+    #[inline]
+    fn dma_bus_of_page(&self, page: u8) -> DmaBus {
+        match page {
+            0x80..=0x9F => DmaBus::Video,
+            0xC0..=0xDF if self.wram_own_bus => DmaBus::Wram,
+            _ => DmaBus::External,
+        }
+    }
+
+    /// What a conflicting CPU write puts in OAM — see [`DmaWrite`].
+    #[inline]
+    fn dma_write_rule(&self, bus: DmaBus, page: u8) -> DmaWrite {
+        match bus {
+            // Only a Color console has this bus, and on it the CPU simply does
+            // not get the cycle.
+            DmaBus::Wram => DmaWrite::Source,
+            DmaBus::Video if self.wram_own_bus => DmaWrite::Zero,
+            // A DMG's work RAM is on the same bus as the cartridge *and* inside
+            // the SoC, which is the one case where both ends drive.
+            DmaBus::External if !self.wram_own_bus && page >= 0xC0 => DmaWrite::And,
+            _ => DmaWrite::Cpu,
+        }
+    }
+
+    /// Which bus a CPU access to `address` drives.
+    #[inline]
+    fn cpu_bus_of(&self, address: u16) -> DmaBus {
+        match address {
+            0x0000..=0x7FFF | 0xA000..=0xBFFF => DmaBus::External,
+            0x8000..=0x9FFF => DmaBus::Video,
+            0xC000..=0xFDFF if self.wram_own_bus => DmaBus::Wram,
+            0xC000..=0xFDFF => DmaBus::External,
+            _ => DmaBus::None,
         }
     }
 
@@ -911,6 +1065,13 @@ impl<'a> MemoryManagementUnit<'a> {
     fn oam_dma_source(&self, page: u8, index: u8) -> u8 {
         let mut address = ((page as u16) << 8) | index as u16;
         if address >= 0xE000 {
+            // A Color console does not fold these onto echo RAM: it puts the
+            // address on the cartridge bus, where nothing answers. Gambatte's
+            // `oamdma_srcE000_*`/`srcFF00_*` rows expect `$FF` in OAM there and
+            // the echoed work RAM on a DMG.
+            if self.wram_own_bus {
+                return 0xFF;
+            }
             address -= 0x2000;
         }
         match address {
@@ -1358,6 +1519,20 @@ impl<'a> MemoryManagementUnit<'a> {
             };
             self.oam_bug(kind, self.bus_ticked);
         }
+        // A read that shares OAM DMA's bus reads the wires, not the memory —
+        // see [`Self::dma_conflict`]. Ahead of the dispatch because it is one
+        // predictable branch and it overrides every arm it can reach.
+        if self.dma_conflict(address) {
+            // A Color console's video bus loses the byte: the transfer stores
+            // zero for this index whether the CPU read or wrote, while the CPU
+            // still sees what was on the bus (`oamdma_src8000_busypop9FFF`
+            // expects `$00` in OAM on `cgb04c` and the real tile byte on a
+            // DMG).
+            if self.dma_write == DmaWrite::Zero {
+                self.gpu.wb(0xFE00 + u16::from(self.dma_index), 0x00);
+            }
+            return self.dma_byte;
+        }
         match address {
             0x0000..=0x7FFF => self.read_rom(address),
             // The PPU holds the VRAM bus through mode 3 — see
@@ -1567,6 +1742,24 @@ impl<'a> MemoryManagementUnit<'a> {
         // write, so `idu_share` is deliberately not consulted here.
         if is_oam_page(address) {
             self.oam_bug(OamBug::Write, self.bus_ticked);
+        }
+        // A write that shares OAM DMA's bus puts the CPU's data on the wires,
+        // and the transfer copies *that* into OAM rather than the byte its
+        // source holds — see [`Self::dma_conflict`]. **The write itself never
+        // reaches its own address**: the DMA owns the bus, so the memory the
+        // CPU addressed never sees the cycle. `oamdma_src0000_busypushC001`
+        // pins both halves at once — it pushes `$55AA` at `SP = $C001` during a
+        // DMA and then pops the same two addresses back, and expects the values
+        // that were there *before* the push.
+        if self.dma_conflict(address) {
+            let latched = match self.dma_write {
+                DmaWrite::Cpu => value,
+                DmaWrite::And => self.dma_byte & value,
+                DmaWrite::Source => self.dma_byte,
+                DmaWrite::Zero => 0x00,
+            };
+            self.gpu.wb(0xFE00 + u16::from(self.dma_index), latched);
+            return;
         }
         if let Some(staged) = commit.stage {
             if self.gpu_defer > 0 {
@@ -2555,5 +2748,168 @@ mod boot_state_tests {
         ] {
             assert_eq!(boot_ppu_dot(m), None, "{m:?}");
         }
+    }
+}
+
+/// OAM DMA's bus conflict — `TGB-DMA-001`, and the largest single named cause
+/// in the c-sp aggregation.
+///
+/// Every expectation here is Gambatte's, named at the assertion: those ROMs
+/// were verified on a DMG-CPU-08 and a CPU CGB C, and the whole point of the
+/// model is that it is one physical rule rather than a table of cases. See
+/// [`MemoryManagementUnit::dma_conflict`] and `docs/measured/timing.md`.
+#[cfg(test)]
+mod dma_conflict_tests {
+    use super::*;
+
+    fn machine(model: crate::mode::Model) -> MemoryManagementUnit<'static> {
+        // A ROM whose low page is distinguishable from anything we put in RAM.
+        let mut rom = vec![0u8; 0x8000];
+        for (i, b) in rom.iter_mut().enumerate().take(0x100) {
+            *b = 0x10 + (i as u8);
+        }
+        rom[0x0147] = 0x00;
+        let mut mem = MemoryManagementUnit::new_with_model(rom, None, model).unwrap();
+        // Everything below models a CPU instruction running, which is what the
+        // per-access bus tick and every access-blocking rule are gated on.
+        mem.bus_tick_enabled = true;
+        mem
+    }
+
+    /// Fill work RAM's first page with a pattern the ROM cannot produce, and
+    /// start a transfer out of it. Returns the machine parked one M-cycle
+    /// before the first byte moves, so the next access is the conflict.
+    fn dma_from(model: crate::mode::Model, page: u8) -> MemoryManagementUnit<'static> {
+        let mut mem = machine(model);
+        for i in 0..0xA0u8 {
+            mem.wram[i as usize] = 0xA0 + i;
+        }
+        mem.wb(0xFF46, page);
+        // M = 0 was the write itself; M = 1 is idle.
+        mem.internal_tick();
+        mem
+    }
+
+    /// `oamdma_src0000_busypop7FFF`: the ROM byte at `$7FFF` is `$55` and the
+    /// test expects the byte the transfer was reading instead.
+    #[test]
+    fn a_read_on_the_transfers_bus_reads_the_wires() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
+        // The first byte of the transfer is work RAM's `$A0`; a DMG's work RAM
+        // is on the cartridge bus, so a ROM read in the same M-cycle sees it.
+        assert_eq!(mem.rb(0x0000), 0xA0);
+        assert_eq!(mem.rb(0x0000), 0xA1, "and the next M-cycle's byte after it");
+    }
+
+    /// HRAM is internal to the chip and is on neither bus — which is why every
+    /// OAM DMA routine ever written is copied there before it is run.
+    #[test]
+    fn hram_and_the_io_block_are_never_conflicted() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
+        mem.zram[0] = 0x5A;
+        assert_eq!(mem.rb(0xFF80), 0x5A);
+        assert_eq!(mem.rb(0xFF80), 0x5A);
+    }
+
+    /// A Color console gives its work RAM a bus of its own, so a transfer out
+    /// of work RAM leaves the cartridge alone — `oamdma_srcC000_busypop7FFF`
+    /// expects the DMG to pop the transfer's byte and the CGB to pop the real
+    /// ROM byte.
+    #[test]
+    fn a_color_console_keeps_work_ram_off_the_cartridge_bus() {
+        let mut dmg = dma_from(crate::mode::Model::Dmg, 0xC0);
+        let mut cgb = dma_from(crate::mode::Model::Cgb, 0xC0);
+        assert_eq!(dmg.rb(0x0010), 0xA0, "DMG: one bus, so the read conflicts");
+        assert_eq!(cgb.rb(0x0010), 0x20, "CGB: the ROM answers for itself");
+        // ...and the CGB's own work-RAM bus still conflicts with itself.
+        assert_eq!(cgb.rb(0xC000), 0xA1);
+    }
+
+    /// `oamdma_src0000_busypushC001` pushes during a transfer and then pops the
+    /// same two addresses back, expecting what was there *before* the push: the
+    /// transfer owns the bus, so the addressed memory never sees the cycle.
+    #[test]
+    fn a_conflicting_write_never_reaches_its_own_address() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0x00);
+        mem.wram[0x100] = 0x12;
+        // $C100 is on the cartridge bus on a DMG, and the transfer is reading
+        // ROM, so this write is lost.
+        mem.wb(0xC100, 0x99);
+        assert_eq!(mem.wram[0x100], 0x12);
+    }
+
+    /// The same write is not lost entirely — it is what the transfer copies.
+    /// With a cartridge source the bus is in write mode and nothing else is
+    /// driving, so OAM gets the CPU's byte verbatim.
+    #[test]
+    fn a_conflicting_write_is_what_the_transfer_copies() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0x00);
+        mem.wb(0xC100, 0x99);
+        assert_eq!(mem.gpu.rb(0xFE00), 0x99);
+    }
+
+    /// ...except out of a DMG's work RAM, which is inside the SoC and keeps
+    /// driving through the write cycle, so both ends reach OAM.
+    /// `oamdma_srcC000_busypushC001` expects `$65 & $55 = $45` exactly where the
+    /// cartridge cases expect a plain `$55`.
+    #[test]
+    fn a_dmg_work_ram_source_wires_the_two_together() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
+        mem.wb(0x0000, 0x55);
+        assert_eq!(mem.gpu.rb(0xFE00), 0xA0 & 0x55);
+    }
+
+    /// A Color console's work-RAM bus locks the CPU out instead: the write is
+    /// dropped and the transfer copies what work RAM held
+    /// (`oamdma_srcC000_busypushC001` on `cgb04c`).
+    #[test]
+    fn a_color_work_ram_source_is_undisturbed_by_a_write() {
+        let mut mem = dma_from(crate::mode::Model::Cgb, 0xC0);
+        mem.wram[0x100] = 0x12;
+        mem.wb(0xC100, 0x99);
+        assert_eq!(mem.gpu.rb(0xFE00), 0xA0, "the transfer copied work RAM");
+        assert_eq!(mem.wram[0x100], 0x12, "and the write is still lost");
+    }
+
+    /// A Color console's video bus loses the byte altogether, whether the CPU
+    /// read or wrote (`oamdma_src8000_busypop9FFF` expects `$00` in OAM on
+    /// `cgb04c` and the real tile byte on a DMG).
+    #[test]
+    fn a_color_video_bus_conflict_stores_zero() {
+        let mut mem = dma_from(crate::mode::Model::Cgb, 0x80);
+        mem.gpu.wb(0x8000, 0x77);
+        let _ = mem.rb(0x9000);
+        assert_eq!(mem.gpu.rb(0xFE00), 0x00);
+    }
+
+    /// A Color console does not fold source pages `$E0-$FF` onto echo RAM: it
+    /// puts them on the cartridge bus, where nothing answers
+    /// (`oamdma_srcE000_*` on `cgb04c`).
+    #[test]
+    fn color_source_pages_above_df_read_open_bus() {
+        let mut dmg = dma_from(crate::mode::Model::Dmg, 0xE0);
+        let mut cgb = dma_from(crate::mode::Model::Cgb, 0xE0);
+        dmg.internal_tick();
+        cgb.internal_tick();
+        assert_eq!(dmg.gpu.rb(0xFE00), 0xA0, "DMG: echo of work RAM");
+        assert_eq!(cgb.gpu.rb(0xFE00), 0xFF, "CGB: nothing drives the bus");
+    }
+
+    /// Nothing above conflicts once the transfer is over.
+    #[test]
+    fn the_bus_comes_back_when_the_transfer_ends() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
+        for _ in 0..0xA0 {
+            mem.internal_tick();
+        }
+        assert_eq!(mem.rb(0x0010), 0x20);
+    }
+
+    /// A debug peek must be able to read memory during a transfer: it is not a
+    /// CPU access and does not own a bus cycle.
+    #[test]
+    fn a_debug_peek_is_not_a_bus_cycle() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
+        assert_eq!(mem.debug_peek(0x0010), 0x20);
     }
 }

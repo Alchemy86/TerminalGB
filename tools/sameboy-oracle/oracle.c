@@ -14,6 +14,14 @@
  *              $DE $B0 $61 signature, plus the report text from $A004,
  *              which `testharness/testroms.rs` reads
  *
+ * plus one thing that is not a verdict at all:
+ *
+ *   peek       the bytes at the addresses named on the command line, after
+ *              `frames` frames. A boot ROM is part of the silicon and this
+ *              emulator does not run one, so "what does a real CGB leave in
+ *              DIV for a CGB cartridge?" is a question only an implementation
+ *              that runs the real boot ROM can answer.
+ *
  * Nothing here is a hash of anybody's framebuffer, and nothing here is an
  * expectation of ours — the point is to ask a foreign implementation the same
  * question the ROM asks, so a disagreement names a real defect in one of us.
@@ -60,7 +68,7 @@ int main(int argc, char **argv)
 {
     if (argc < 5) {
         fprintf(stderr,
-                "usage: %s <bootrom-dir> <model> samesuite|blargg <rom> [frames]\n"
+                "usage: %s <bootrom-dir> <model> samesuite|blargg|peek <rom> [frames] [addr...]\n"
                 "  model: dmg mgb sgb cgb0 cgbB cgbC cgbD cgbE agb\n",
                 argv[0]);
         return 2;
@@ -126,6 +134,21 @@ int main(int argc, char **argv)
             printf("\"\n");
             rc = status == 0 ? 0 : 1;
         }
+    }
+    /* `peek`: run for `frames` and print the bytes at the addresses that
+     * follow, in hex. Not a verdict — it is how you ask a foreign
+     * implementation what a *real boot ROM* leaves behind, which is the one
+     * question this repository cannot answer from its own source. See the
+     * README beside this file. */
+    else if (!strcmp(what, "peek")) {
+        for (int f = 0; f < frames; f++) GB_run_frame(&gb);
+        printf("%s (%s)", rom, model);
+        for (int i = 6; i < argc; i++) {
+            unsigned a = (unsigned)strtoul(argv[i], NULL, 16);
+            printf(" %04x=%02x", a, GB_safe_read_memory(&gb, (uint16_t)a));
+        }
+        printf("\n");
+        rc = 0;
     }
     else {
         fprintf(stderr, "unknown verdict kind '%s'\n", what);

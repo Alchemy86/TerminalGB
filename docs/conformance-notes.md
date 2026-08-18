@@ -23,6 +23,116 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-18 — OAM DMA has a bus, and the CPU has to share it (`TGB-DMA-001`)
+
+The largest single named cause in the whole c-sp aggregation, and it had never
+been modelled: while an OAM DMA runs, a CPU access on the same bus does not
+reach the memory it addressed. `docs/pitfalls/codes.md` records it as
+`TGB-DMA-001` with 562 failing Gambatte rows against it; the count was right.
+
+**Measured, `make test-external` before and after, both picture modes:**
+Gambatte **2682 → 3083 of 5225** on `standard` and **3059 → 3460** on
+`identical` — **+401 rows in each mode, zero regressions**, and every one of
+them inside `oamdma/`. Nothing else moved: Mooneye 95/103 and 103/103, `misc`
+8/8, SameSuite 73/76, Mealybug 3/79 and 26/79 per row, `cpp` 4/4, the twelve
+other c-sp suites, the in-repo harness 46/47 with identical verdict text,
+`audiocapture` including every hash, `savestate`, `battery`, `ppuengines`,
+`chiptune`, `agent` and 865 library tests.
+
+- **Symptom.** A game that reads or writes anything outside high RAM while its
+  OAM DMA runs sees the wrong bytes, and the sprite table it just built holds
+  the wrong bytes too. It is invisible in most software — the reason every DMA
+  routine ever written is copied to HRAM first is precisely that this is real —
+  and it is 562 rows of a public suite.
+- **Caught by.** Gambatte's `oamdma/` group, 811 rows, and nothing else in any
+  suite this repository scores. Now also `mmu::dma_conflict_tests`, eleven
+  cases at unit speed, teeth proven four ways (removing the read conflict
+  reddens 2, letting a conflicting write land reddens 2, collapsing the Color
+  console's work-RAM bus onto the cartridge bus reddens 4, dropping the
+  wired-AND reddens 1).
+- **Hardware behaviour.** The DMA controller has no bus of its own: it drives
+  the source address onto whichever bus that address lives on and reads the
+  byte back off it (Pan Docs, ["OAM DMA Transfer"](https://gbdev.io/pandocs/OAM_DMA_Transfer.html),
+  and Gekkio, *Game Boy: Complete Technical Reference* §"OAM DMA"). A CPU access
+  on the same bus in the same M-cycle is therefore looking at the same wires.
+  **A DMG has two buses and a Color console has three** — its work RAM is not on
+  the cartridge bus — which is the whole of why the two consoles' expectations
+  differ across the group.
+
+### The rule, and the four rows that pin each half of it
+
+Every clause below was read off a Gambatte source, not argued from first
+principles. Their sources are the specification; the file name carries the
+expectation per console.
+
+1. **A read gets the transfer's byte.** `oamdma_src0000_busypop7FFF` pops from
+   `$7FFF`, whose ROM byte is `$55`, during a DMA out of ROM, and expects `$65`
+   — the byte the transfer was reading.
+2. **A write never reaches its own address.** `oamdma_src0000_busypushC001`
+   pushes `$55AA` at `SP = $C001` during a DMA and then pops the same two
+   addresses back, expecting the values that were there *before* the push.
+3. **…but it is what the transfer copies.** The same ROM reads `$FE9D` and
+   expects `$55`, the byte the CPU wrote to `$0000` — an address that keeps
+   nothing.
+4. **Except out of a DMG's work RAM, where the two are wired together.**
+   `oamdma_srcC000_busypushC001` expects `$65 & $55 = $45` exactly where the
+   cartridge-source cases expect a plain `$55`. A DMG's work RAM is inside the
+   SoC and keeps driving through a write cycle; the cartridge is outside it and
+   does not.
+5. **A Color console's work-RAM bus locks the CPU out instead.** The same ROM on
+   `cgb04c` expects the untouched work-RAM byte in OAM *and* the write still
+   lost.
+6. **A Color console's video bus loses the byte altogether**, on a read as much
+   as on a write: `oamdma_src8000_busypop9FFF` expects `$00` in OAM on `cgb04c`
+   and the real tile byte on a DMG.
+7. **A Color console does not fold source pages `$E0-$FF` onto echo RAM.** It
+   puts them on the cartridge bus, where nothing answers, so the transfer copies
+   `$FF` (`oamdma_srcE000_*`); a DMG reads the echoed work RAM.
+
+### Cost, measured
+
+Pinned to one P-core, interleaved against the parent commit, four rounds each,
+load average 1.4:
+
+| workload | before | after |
+|---|---:|---:|
+| `cpu_instrs`, 15,000 frames | 0.1960 ms/frame | **0.1953** |
+| Pokémon Blue boot, 8,000 frames | 0.0891 ms/frame | **0.0901** |
+
+The pure-CPU figure is inside code-layout noise in our favour; the real game's
+is **+1.1 %** of the emulator's own figure, which is 0.006 % of a 16.743 ms
+frame. Both runs produce a **byte-identical WRAM hash** — a cartridge that does
+not read across a running DMA cannot tell.
+
+### Not serialised, deliberately
+
+`dma_bus`, `dma_byte`, `dma_index` and `dma_write` are published by
+`oam_dma_tick` and consumed by the access that shares the M-cycle with it, and
+`MemoryManagementUnit::bus_tick` runs before every CPU access — so they are
+never live across a frame boundary and are republished before anything can read
+them. Same argument as `idu_share`, and `savestate::FORMAT_VERSION` did not
+move.
+
+### What is still red, and why
+
+163 of the 811 `oamdma/` rows. The two named causes:
+
+* **The prohibited region `$FEA0-$FEFF`.** We read `$FF` there on every console.
+  `oamdma_*_busypushFEA1` and `busypushFF01` say a DMG reads `$00` and a
+  `cgb04c` reads back what was written — i.e. it is real RAM on a Color console.
+  That is a separate behaviour from OAM DMA and is left as a finding rather than
+  guessed at.
+* **`late_sp*`, 24 rows.** These are sprite-fetch timing against a transfer that
+  ends mid-scanline; they belong with the PPU work, not here.
+
+**Carries into the tool.** Seven checks, one per clause above, each expressible
+as "start a transfer from page P, touch address A on M-cycle N, report what the
+CPU saw and what landed in OAM". A conformance tool can generate the whole
+matrix; the interesting part is that the *answer* depends on the console, which
+is exactly the kind of thing a bare pass/fail runner cannot explain.
+
+---
+
 ## 2026-08-16 — an outside paper's Gen 1 claims, measured; and the one our own engine had backwards
 
 The captain's order was to challenge the figures in Appendix G of *The PokéAgent

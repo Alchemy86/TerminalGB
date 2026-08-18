@@ -728,11 +728,9 @@ emulator points a stranger straight at our page. Nothing else in the ecosystem d
   `TGB-PPU-007` (the STAT write glitch, covered only by ROMs the modern Mooneye suite dropped,
   so it is quietly rotting out of the ecosystem); `TGB-SER-001` (the serial interrupt's phase
   against `DIV` — one suite measures it at all).
-- **`TGB-DMA-001` is the single largest named cause in the whole aggregation** — 562 failing
-  rows: while OAM DMA runs the CPU sees the DMA's bus rather than the memory it addressed. Our
-  OAM blocking and 160-cycle timing are right (every Mooneye `oam_dma_*` passes); the bus
-  conflict is not modelled at all. Gambatte covers it exhaustively, so this is a *fix* item,
-  not a cartridge item.
+- ~~**`TGB-DMA-001` is the single largest named cause in the whole aggregation**~~ — **fixed,
+  2026-08-18; see "OAM DMA has a bus" below.** It was 562 failing rows and is 163 now. Leaving
+  the sentence as a live gap would send the next crew at work already done.
 - **`TGB-APU-001` was verified not to be a runner artefact before it was written down.** 71
   Gambatte rows where we emit a flat 0.0 for the whole judged frame and hardware does not.
   Re-running the audio player at the Game Boy's own 2 MiHz rate (`Sound::set_player` honours
@@ -741,6 +739,70 @@ emulator points a stranger straight at our page. Nothing else in the ecosystem d
   37 other rows in the same group. **Do the equivalent check before blaming an emulator for an
   audio verdict** — a band-limited resample really can turn a high square wave into a flat line,
   it just was not what happened here.
+
+## OAM DMA has a bus, and the CPU has to share it (`src/mmu/mod.rs::dma_conflict`)
+
+**Full record with the seven rows that pin each clause, the cost table and what is still red:
+[`docs/conformance-notes.md`](docs/conformance-notes.md) (2026-08-18); registry row
+[`TGB-DMA-001`](docs/pitfalls/codes.md).** Measured with `make test-external` /
+`make test-external-accurate` before and after: Gambatte **2682 → 3083 of 5225** on `standard`
+and **3059 → 3460** on `identical` — **+401 rows in each mode, zero regressions, every one of
+them inside `oamdma/`.** Everything else byte-identical in both modes, including the in-repo
+harness's verdict *text*, every audio hash, and Mealybug's per-row pixel counts.
+
+- **THE DMA CONTROLLER HAS NO BUS OF ITS OWN.** It drives the source address onto whichever bus
+  that address lives on and reads the byte back off it, so a CPU access on the same bus in the
+  same M-cycle is looking at the same wires. That is one physical rule, not a table of cases,
+  and everything below falls out of it. HRAM, the I/O block, OAM and `IE` are internal to the
+  chip and on neither bus — which is *why* every OAM DMA routine ever written is copied to HRAM
+  before it is run.
+- **A DMG HAS TWO BUSES AND A COLOR CONSOLE HAS THREE.** A DMG's work RAM hangs off the same
+  external bus as the cartridge; a CGB gives it a bus of its own. `oamdma_srcC000_busypop7FFF`
+  is the one-row proof — with a transfer running out of `$C000` it expects the DMG to pop the
+  transfer's byte and the Color console to pop the real ROM byte. `wram_own_bus` follows the
+  *console*, not the cartridge, because the extra bus is silicon: a CGB running a DMG game has
+  it too.
+- **A conflicting write never reaches its own address, and IS what the transfer copies.** Both
+  halves are pinned by one ROM: `oamdma_src0000_busypushC001` pushes `$55AA` at `SP = $C001`
+  during a transfer, then pops the same two addresses back and expects what was there *before*
+  the push — and reads `$FE9D` expecting the `$55` the CPU wrote to `$0000`, an address that
+  keeps nothing.
+- **EXCEPT OUT OF A DMG'S WORK RAM, WHERE THE TWO ARE WIRED TOGETHER.**
+  `oamdma_srcC000_busypushC001` expects `$65 & $55 = $45` exactly where every cartridge-source
+  case expects a plain `$55`. A DMG's work RAM is inside the SoC and keeps driving through a
+  write cycle; the cartridge is outside it and does not. A Color console's own work-RAM bus
+  instead locks the CPU out — write dropped, transfer undisturbed — and its **video** bus loses
+  the byte altogether, storing `$00`, on a read as much as on a write
+  (`oamdma_src8000_busypop9FFF`).
+- **A Color console does not fold source pages `$E0-$FF` onto echo RAM.** It puts them on the
+  cartridge bus, where nothing answers, so the transfer copies `$FF`; a DMG reads the echoed
+  work RAM. `oamdma_srcE000_*` scores both.
+- **EVERY CLAUSE ABOVE WAS READ OFF A GAMBATTE SOURCE, NOT ARGUED FROM FIRST PRINCIPLES.** Its
+  `test/hwtests/oamdma/*.asm` are the specification and the file name carries the expectation
+  per console; the ROMs were verified on a DMG-CPU-08 and a CPU CGB C. Two attempts at a
+  "clean" unified rule (wired-AND everywhere; the CPU's byte everywhere) each cost rows that
+  the split rule wins. **Fetch the sources before touching this** — they are not in the c-sp
+  bundle, which ships ROMs only.
+- **Not serialised, deliberately.** `dma_bus`/`dma_byte`/`dma_index`/`dma_write` are published
+  by `oam_dma_tick` and consumed by the access that shares the M-cycle with it, and `bus_tick`
+  runs *before* every CPU access — so they are republished before anything can read them and
+  are never live across a frame boundary. Same argument as `idu_share`;
+  `savestate::FORMAT_VERSION` did not move.
+- **Cost, pinned to one P-core and interleaved against the parent commit, four rounds each at
+  load average 1.4:** `cpu_instrs` 0.1960 → **0.1953** ms/frame (inside code-layout noise, in
+  our favour) and Pokémon Blue's boot 0.0891 → **0.0901** (+1.1 % of the emulator's own figure,
+  0.006 % of a 16.743 ms frame). **The WRAM hash is byte-identical on both** — a cartridge that
+  does not read across a running transfer cannot tell.
+- **Gated by `mmu::dma_conflict_tests`** — eleven cases, no ROM, in a plain `cargo test`. Teeth
+  proven four ways: removing the read conflict reddens 2, letting a conflicting write land
+  reddens 2, collapsing the Color console's work-RAM bus reddens 4, dropping the wired-AND
+  reddens 1.
+- **163 of the 811 rows are still red and the two causes are named.** `late_sp*` (24 rows) is
+  sprite-fetch timing against a transfer ending mid-scanline and belongs with the PPU work; the
+  rest are the **prohibited region `$FEA0-$FEFF`**, which we read as `$FF` on every console
+  where `oamdma_*_busypushFEA1`/`busypushFF01` say a DMG reads `$00` and a `cgb04c` reads back
+  what was written. That is a different behaviour and is left as a finding rather than guessed
+  at.
 
 ## Gating the EXTERNAL suites — Mooneye / SameSuite / Mealybug (`make test-external`)
 

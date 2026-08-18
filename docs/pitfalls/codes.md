@@ -174,9 +174,12 @@ when mode 3 began.
 
 ### `TGB-DMA-001` — while OAM DMA runs, the CPU sees the DMA's bus
 
-**Behaviour.** OAM DMA drives the address bus for 160 M-cycles. A CPU read outside HRAM during
-that window does not reach the memory it addressed — it sees whatever the DMA is transferring —
-and OAM reads return `$FF` while writes are dropped.
+**Behaviour.** OAM DMA has no bus of its own: it drives the source address onto whichever bus
+that address lives on and reads the byte back off it, for 160 M-cycles. A CPU access on the
+same bus in the same M-cycle is looking at the same wires — a read gets the transfer's byte, a
+write never reaches its own address and is what the transfer copies into OAM instead. **A DMG
+has two buses and a Color console has three**, its work RAM being off the cartridge bus, so the
+two consoles disagree across most of the group. OAM itself reads `$FF` while writes are dropped.
 
 **What a wrong emulator does.** Games copy their OAM routine into HRAM precisely because of
 this, so an emulator that gets it wrong mostly survives — until a game reads a table during a
@@ -184,10 +187,10 @@ DMA, at which point it gets a byte that has nothing to do with the address.
 
 | | |
 |---|---|
-| Already covered? | **exhaustively** — Gambatte `oamdma/` is 811 rows, the largest single group in the suite, and 562 fail here. `oamdma_src<XXXX>_busypushA001` walks every source region |
+| Already covered? | **exhaustively** — Gambatte `oamdma/` is 811 rows, the largest single group in the suite. 562 failed here when this row was written; 163 do now |
 | From inside a cartridge? | **yes** — start a DMA from a known source and read a byte whose real value differs |
-| Our state | OAM blocking and the 160-cycle timing are modelled (`src/mmu/oamdma.rs`, Mooneye `oam_dma_*` all pass); the **bus conflict is not**, and that is the single largest named cause in the whole aggregation |
-| Read next | [measured/timing.md](../measured/timing.md) |
+| Our state | **modelled** since 2026-08-18 (`MemoryManagementUnit::dma_conflict`), worth +401 Gambatte rows in each picture mode with no regression. What is left is the prohibited region `$FEA0-$FEFF`, which is a different behaviour, and `TGB-DMA-002` |
+| Read next | [`docs/conformance-notes.md`](../conformance-notes.md), 2026-08-18 |
 
 ### `TGB-DMA-002` — an object's position written late relative to a DMA
 
