@@ -1107,6 +1107,9 @@ pub fn map_name(id: u8) -> &'static str {
         0x0D => "Route 2",
         0x0E => "Route 3",
         0x0F => "Route 4",
+        // Route 22, west of Viridian — where `scenarios/experiments/` measures
+        // pre-forest training. `map_const ROUTE_22, 20, 9 ; $21`.
+        0x21 => "Route 22",
         0x25 => "Red's house 1F",
         0x26 => "Red's house 2F (bedroom)",
         0x27 => "Blue's house",
@@ -1171,6 +1174,7 @@ mod tests {
             (0x02, "Pewter City"),
             (0x0C, "Route 1"),
             (0x0D, "Route 2"),
+            (0x21, "Route 22"),
             (0x25, "Red's house 1F"),
             (0x26, "Red's house 2F (bedroom)"),
             (0x28, "Oak's Lab"),
