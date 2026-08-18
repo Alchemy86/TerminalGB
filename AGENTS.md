@@ -9985,7 +9985,13 @@ longer film in which the new material is a *smaller* fraction. Same tooling
   film is stitched from separate corpus runs. **The spans carry the link's number in the whole
   chain, not its position in the slice** — a span file saying "link 1" for `15-train-for-brock`
   is one nobody can line up against a report.
-- **The gym arc's own shape, from those spans** (one agent, 144,810 emulated frames): the
-  training link is **85 % of it** — 123,426 frames against the gym's 12,294 and the two heals'
-  4,824 and 2,586. The same shape link 11 has in the main chain, and the reason the two cuts do
-  not belong together.
+- **The gym arc's own shape, from `swarm_film.py --dry-run` on a `film` run:** the training
+  link is **88.5 % of the swarm's emulated time and 91.3 % of the film's runtime** (2608.0 s
+  against the gym's 205.8, the two heals' 80.8 and 43.3, and the walk east's 28.1). The same
+  shape link 11 has in the main chain, and the reason the two cuts do not belong together.
+- **AND IT IS WHY THE GYM ARC NEEDS A HIGHER PACE THAN THE MAIN CHAIN, NOT A LOWER ONE.** The
+  arc is **47.6 emulated minutes**, so `seconds_out x speed = the emulated time there is` puts
+  8x at **5 m 55 s** — longer than the whole fourteen-link cut. The ceiling is
+  `stride <= walk_span`, and `walk_span` measures **31** emulated frames on these tracks, so at
+  60 fps anything to **~31x** stays smooth: **24-30x gives a 1½-2 minute film**, which is the
+  right pace for material that is seven-eighths grinding.

@@ -494,7 +494,7 @@ uses) and refuses without one rather than filming agents on the Nintendo logo.
 # --dry-run first: it prints the stage table and the --cover trade-off in
 # seconds, and rendering is not quick.
 python3 tools/pewter-chain/swarm_film.py target/gymfilm/tracks \
-    --out target/gymfilm/frames --speed 8 --fps 60 --cover 0.90 --width 1280 \
+    --out target/gymfilm/frames --speed 26 --fps 60 --cover 0.90 --width 1280 \
     --title "PAST PEWTER 15-19"
 ffmpeg -y -framerate 60 -i target/gymfilm/frames/f%05d.png \
     -c:v libopenh264 -b:v 8M -pix_fmt yuv420p past-pewter-15-19.mp4
@@ -510,10 +510,26 @@ per-link bars and its stage timeline work from a `film` run alone —
 runs. **The spans carry the link's number in the whole chain**, not its
 position in the slice, so a span file lines up against a report.
 
-**The arc's own shape, from those spans** (one agent, 144,810 emulated frames):
-the training link is **85% of it** — 123,426 frames against the gym's 12,294
-and the two heals' 4,824 and 2,586. The same shape link 11 has in the main
-chain, and the reason the two cuts do not belong together.
+**The arc's own shape**, from `swarm_film.py --dry-run` on a `film` run:
+
+| link | emulated time | share of the swarm's | share of the film |
+|---|---:|---:|---:|
+| **15-train-for-brock** | **2608.0 s** | **88.5%** | **91.3%** |
+| 16-heal-in-pewter | 80.8 s | 2.4% | 1.6% |
+| 17-fight-through-the-gym | 205.8 s | 6.7% | 5.2% |
+| 18-heal-after-the-gym | 43.3 s | 1.4% | 1.1% |
+| 19-east-to-route-3 | 28.1 s | 1.0% | 0.8% |
+
+**The same shape link 11 has in the main chain, and it is why the two cuts do
+not belong together** — and why the pace has to be higher here than there. The
+arc is **47.6 emulated minutes**, so `seconds_out x speed = the emulated time
+there is` puts 8x at **5 m 55 s**, longer than the whole fourteen-link cut. The
+smoothness ceiling is `stride <= walk_span`, and `walk_span` measures **31**
+emulated frames on these tracks, so at 60 fps anything up to **~31x** stays
+smooth: **24-30x gives a 1½-2 minute film** and is the right pace for material
+that is seven-eighths grinding. (Measured on a two-agent dry run; the per-agent
+emulated time is what sets this and it barely moves with the swarm size, but
+the *longest* run does, so re-read `--dry-run` before committing to a pace.)
 
 **Fedora's ffmpeg has no `libx264`** (patent-clean build); `libopenh264` is the
 substitute and `-crf` is not accepted there.
