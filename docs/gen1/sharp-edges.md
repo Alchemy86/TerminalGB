@@ -105,6 +105,18 @@ key.** Press through it before walking, or the next hundred steps move nothing.
 **Pace movement by coordinate, not by alternating directions.** A press that only turns the
 character costs a step and moves nothing, so blind alternation drifts.
 
+**A TILESET'S COLLISION LIST IS NOT THE WHOLE OF ITS WALKABILITY.** Gen 1 keeps a second table
+beside it — `TilePairCollisionsLand`, three-byte records of `(tileset, tile, tile)` terminated by
+`$FF` — naming pairs of tiles that are **each walkable on their own** and that the game refuses to
+let you step *between*; `CheckForTilePairCollisions` in `home/overworld.asm` reads it. There are
+four CAVERN entries and eight FOREST ones, so **every cave and forest route needs it**. Measured:
+Mt Moon 1F's one-tile corridor at x=9 is tile `$05`, which is in tileset 17's walkable list, and
+the floor beside it is `$20` — and `CAVERN, $20, $05` is the table's very first record. A grid
+built from the collision list alone routes straight through it, and the solver pressed `left`
+eight times into a wall on 53 of 60 attempts. The table is at file offset `0xC7E` in this
+cartridge, found by that first record's own bytes, which occur exactly once.
+[`docs/agent/cerulean.md`](../agent/cerulean.md) §6.
+
 **Oak stops a new game at the north exit of Pallet Town.** `PalletTownDefaultScript` opens
 `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`, so setting that one bit — byte 0, bit 0 of
 `wEventFlags` — skips the entire introduction, the starter choice and the rival battle.
