@@ -2829,7 +2829,7 @@ mod dma_conflict_tests {
         // A ROM whose low page is distinguishable from anything we put in RAM.
         let mut rom = vec![0u8; 0x8000];
         for (i, b) in rom.iter_mut().enumerate().take(0x100) {
-            *b = 0x10 + (i as u8);
+            *b = (0x10 + i) as u8;
         }
         rom[0x0147] = 0x00;
         let mut mem = MemoryManagementUnit::new_with_model(rom, None, model).unwrap();
@@ -2844,8 +2844,8 @@ mod dma_conflict_tests {
     /// before the first byte moves, so the next access is the conflict.
     fn dma_from(model: crate::mode::Model, page: u8) -> MemoryManagementUnit<'static> {
         let mut mem = machine(model);
-        for i in 0..0xA0u8 {
-            mem.wram[i as usize] = 0xA0 + i;
+        for i in 0..0xA0usize {
+            mem.wram[i] = (0xA0 + i) as u8;
         }
         mem.wb(0xFF46, page);
         // M = 0 was the write itself; M = 1 is idle.
