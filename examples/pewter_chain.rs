@@ -2332,7 +2332,7 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       Play the same seeds serially and in parallel and require identical
       final states. Determinism outranks everything else in flight.
 
-  states --rom R --start-dir D [--peek NAME@0xADDR ...]
+  states --rom R --start-dir D [--peek NAME@0xADDR ...] [--all]
       What a pool of entry states actually holds — lead species, level, HP,
       moves, money and badges — and the distribution across the pool.
       **A link's precondition is a claim about its entry pool**, and this is
@@ -2342,6 +2342,10 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       be judged on gets read out of real states BEFORE the goal is written.
       That is how the Boulder Badge bit and the heal flag were settled —
       see docs/agent/brock.md.
+      --all prints every row instead of the first twelve. The summary is for
+      a person; a program wanting the pool's composition PER INDEX — which
+      starter agent `n` will carry, say — needs the rows, and `film` hands
+      agent `ag` pool slot `ag % len` over the same sorted list.
 ";
 
 #[derive(Default)]
@@ -2395,6 +2399,12 @@ struct Args {
     /// about to be judged on gets read out of real states first, so the
     /// goal is a measurement rather than a guess.
     peek: Vec<String>,
+    /// `states --all`: print every row rather than the first twelve. A pool
+    /// of six hundred is summarised by default because a screenful is what a
+    /// person reads — but a *program* that wants the pool's composition per
+    /// index (which starter each agent will carry, say) needs all of it, and
+    /// piping the summary is not that.
+    all: bool,
 }
 
 fn parse(args: &[String]) -> Args {
@@ -2433,6 +2443,11 @@ fn parse(args: &[String]) -> Args {
             "--lead" => a.leads.push(next(i)),
             "--split" => a.split = Some(next(i)),
             "--peek" => a.peek.push(next(i)),
+            "--all" => {
+                a.all = true;
+                i += 1;
+                continue;
+            }
             "--student" => a.student = Some(next(i)),
             "--out" => a.out = Some(PathBuf::from(next(i))),
             "--seed" => a.seed = next(i).parse().unwrap_or(1),
@@ -3897,7 +3912,7 @@ fn cmd_states(a: &Args) {
             .map(|m| move_name(&rom, m as u8))
             .collect();
         *byspecies.entry((sp, lv as u64)).or_default() += 1;
-        if i < 12 || files.len() <= 24 {
+        if a.all || i < 12 || files.len() <= 24 {
             println!(
                 "{:>5}  {:<11} {:>3}  {:>3}/{:<3}  {:>6} {:>6}  {}",
                 i,

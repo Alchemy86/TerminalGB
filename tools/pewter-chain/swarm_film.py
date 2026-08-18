@@ -388,6 +388,63 @@ class Atlas:
         return Image.open(self.image_path).convert("RGB")
 
 
+def load_agent_labels(path):
+    """agent -> label, from a CSV of `agent,label` rows.
+
+    **A film cannot know what an agent is carrying, and it must not guess.**
+    Which starter an agent has is a property of the *entry pool* it was given,
+    not of the tracks, and the pool is somebody else's file — so the mapping
+    is supplied rather than inferred. `pewter_chain states --all` prints it per
+    index over the same sorted list `film` hands agent `ag` slot `ag % len`,
+    which is what makes the two line up.
+
+    An optional leading `# ...` line is the block's heading, because a label
+    set with no name on screen is a set nobody can read.
+    """
+    title, out = "by label", {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("#"):
+                if title == "by label":
+                    title = line.lstrip("#").strip() or title
+                continue
+            n, _, lab = line.partition(",")
+            if not lab:
+                continue
+            out[int(n)] = lab.strip()
+    return title, out
+
+
+def report_lines(labels, title, spans, ends, n_links, n_agents):
+    """What each label's agents did with the arc — finished, or stopped, and
+    on which link. This is the divergence the film is asked to show, printed
+    so the picture and the table cannot disagree."""
+    if not labels:
+        return
+    by = collections.defaultdict(list)
+    for n, lab in labels.items():
+        if n in ends:
+            by[lab].append(n)
+    if not by:
+        return
+    print(f"{title}: {len(by)} label(s) over {len(labels)} of {n_agents} agent(s)")
+    for lab in sorted(by):
+        ns = by[lab]
+        done = [n for n in ns
+                if spans.get(n) and spans[n][-1][0] == n_links and spans[n][-1][4]]
+        out = [n for n in ns if n not in set(done)]
+        where = collections.Counter(
+            spans[n][-1][0] for n in out if spans.get(n))
+        tail = ("  stopped on link " +
+                ", ".join(f"{lk} x{c}" for lk, c in sorted(where.items()))
+                if where else "")
+        print(f"  {lab:<12} {len(ns):>4}  finished {len(done):>4} "
+              f"({100.0 * len(done) / max(1, len(ns)):.1f}%){tail}")
+
+
 def load_links(d):
     """agent -> [(link, name, start, end, goal)], so the film can say which of
     the fourteen an agent is on. Half the links happen on the same map, so a
@@ -889,6 +946,13 @@ def main():
                          "eleven-link cut had, where 'the majority' silently "
                          "meant 'the surviving minority'; see the comment at "
                          "the camera loop for what it costs either way")
+    ap.add_argument("--agent-labels", default=None,
+                    help="CSV of `agent,label` rows (an optional leading "
+                         "`# title` names the set). Adds a live count per "
+                         "label to the HUD and a finished/stopped table to "
+                         "the report — which is how a film shows a swarm "
+                         "splitting along something the tracks cannot see, "
+                         "such as which starter each agent carries")
     ap.add_argument("--cover", type=float, default=0.6,
                     help="fraction of agents whose whole run must fit in the "
                          "film; the rest are simply still going when it ends")
@@ -1164,6 +1228,17 @@ def main():
     # stacked on one tile is one sprite. And it is deliberately not folded into
     # the "agents live" row — those agents are not live, they are done, and
     # conflating the two would misreport both.
+    # **Which starter an agent carries is not in its track**, so it is
+    # supplied. `labels` is agent -> label; `finished` is who completed the
+    # last link, which is the same test the arrival markers use, so the two
+    # can never disagree about who got there.
+    lab_title, labels = ("by label", {})
+    if a.agent_labels:
+        lab_title, labels = load_agent_labels(a.agent_labels)
+        labels = {n: l for n, l in labels.items() if n in paths}
+    lab_names = sorted(set(labels.values()))
+    lab_total = collections.Counter(labels.values())
+
     arrivals = collections.defaultdict(list)
     for n, v in spans.items():
         if n in corpus.end and v and v[-1][0] == n_links and v[-1][4]:
@@ -1176,6 +1251,22 @@ def main():
         print(f"{arrived_total} agent(s) finish link {n_links}, on "
               f"{len(arrivals)} distinct tile(s); each leaves a counted marker "
               f"where it arrived")
+
+    # Per label: when each agent's run ended, split by whether it finished the
+    # arc. Bisecting these at the current frame is what the HUD block counts,
+    # so "still going", "got there" and "stopped" are one partition and never
+    # three independent tallies that can drift apart.
+    lab_done_ends, lab_out_ends = (collections.defaultdict(list),
+                                   collections.defaultdict(list))
+    for n, lab in labels.items():
+        if n not in corpus.end:
+            continue
+        v = spans.get(n) or []
+        ok = bool(v) and v[-1][0] == n_links and v[-1][4]
+        (lab_done_ends if ok else lab_out_ends)[lab].append(corpus.end[n])
+    for d in (lab_done_ends, lab_out_ends):
+        for k in d:
+            d[k].sort()
 
     arr_pt = {}
     for (m, ax, ay) in arrivals:
@@ -1322,6 +1413,7 @@ def main():
                       link_share)
         report_cover(list(corpus.end.values()), spans, n_links, FPS_GB,
                      step * a.fps / FPS_GB)
+    report_lines(labels, lab_title, spans, corpus.end, n_links, len(paths))
     if a.dry_run:
         return
 
@@ -1568,7 +1660,13 @@ def main():
             per = collections.Counter(p[6] for p in here)
             top = max(per.values()) if per else 1
             bw = OUT_W - hx - 12
-            for lk in range(1, n_links + 1):
+            # **Only the links this cut contains.** `--from`/`--to` made a
+            # film a slice of the chain, and a slice drew a bar for every link
+            # in the whole chain — fourteen permanently empty rows on a
+            # five-link cut, which is the same "says nothing" this block is
+            # already gated on one level out. The heading still carries the
+            # chain's own count, so link 15 is still link 15.
+            for lk in sorted(link_names):
                 c = per.get(lk, 0)
                 d.rectangle([hx, y, hx + int(bw * c / top), y + num_font.size],
                             fill=(60, 120, 190) if c else (34, 40, 48))
@@ -1588,6 +1686,45 @@ def main():
                 d.text((hx + 2, y), f"{atlas.label.get(mp, hex(mp))[:16]}  {c}",
                        fill=(235, 240, 245), font=num_font)
                 y += num_font.size + 3
+
+        # **The swarm splits along something the tracks cannot see.** All 600
+        # agents run one arc, and which of the three starter lines an agent
+        # carries decides the gym: measured over a thousand attempts each,
+        # Wartortle 1000/1000, Ivysaur 989/1000, Charmeleon 670/1000, with
+        # every failure on Brock's own tile. Without this block that is a
+        # third of one line quietly vanishing in a crowd; with it the bars
+        # part on the frames the gym is being fought, which is the most
+        # interesting thing the arc has to show.
+        #
+        # Three counts and they are one partition: still going, got there,
+        # stopped. The red bar is the stopped share, so the divergence is
+        # readable at a glance rather than by comparing three numbers.
+        if lab_names:
+            y += 8
+            d.text((hx, y), lab_title, fill=(200, 215, 230), font=num_font)
+            y += int(num_font.size * 1.7)
+            live_by = collections.Counter(
+                labels[p[0]] for p in here if p[0] in labels)
+            bw = OUT_W - hx - 12
+            # The label column is as wide as the longest label, never a
+            # constant: a label clipped mid-word is the same defect as a
+            # clipped measurement, and nothing here knows what the labels are.
+            lw = max(len(l) for l in lab_names)
+            for lab in lab_names:
+                tot = max(1, lab_total[lab])
+                done = bisect.bisect_right(lab_done_ends.get(lab, []), gbf)
+                out = bisect.bisect_right(lab_out_ends.get(lab, []), gbf)
+                live = live_by.get(lab, 0)
+                d.rectangle([hx, y, hx + int(bw * out / tot), y + num_font.size],
+                            fill=(120, 44, 44) if out else (34, 40, 48))
+                txt = f"{lab:<{lw}} {live:>3}▸ {done:>3}✓ {out:>3}✗"
+                d.text((hx + 2, y), txt, fill=(228, 234, 240), font=num_font)
+                y += num_font.size + 3
+            for t in wrap_hud("▸ going  ✓ got there  ✗ stopped",
+                              num_font, OUT_W - hx - 12):
+                d.text((hx, y), t, fill=(150, 165, 180), font=num_font)
+                y += num_font.size + 2
+            y += int(num_font.size * 0.6)
 
         # The colour scale itself, so the film explains its own encoding.
         y += 8
