@@ -302,7 +302,12 @@ line.
 
 ## 9. What the gym measures, at the level the chain now delivers
 
-Threshold 16, 120 attempts through the whole arc from the certified link-14 pool:
+Threshold 16, **120 attempts** through the whole arc from the certified link-14
+pool. **The chain's standing gate is 3,000 attempts per link and that has not
+been run for these five** — zero failures in 120 bounds a failure rate only at
+about 2.5% by the rule of three, nine times short of the 99.9% claim links 01-06
+carry. Do not quote these as certified.
+
 
 | link | reached the goal |
 |---|---|
@@ -384,7 +389,7 @@ measurement, and the gym link scored 39/120 before and after.
 in and out. A `goto` heading north-east from the Pokémon Center walks into it:
 **23 of 23 failures of link 19 were stuck on row 20 between x=13 and x=17**, with
 no battle involved at all. Going east along row 26 first and then straight up
-column 19 is 60/60.
+column 19 is 120/120.
 
 **Pewter is two halves joined at row 13.** For the same reason, every route
 across the city goes up and over — the gym is ten waypoints from the Pokémon

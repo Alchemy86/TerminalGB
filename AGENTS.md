@@ -8823,6 +8823,10 @@ findings used to be scattered across `docs/gen1/sharp-edges.md`, `docs/agent/pew
 
 ## The Pewter chain — fourteen scenarios from a cold cartridge (`scenarios/pewter/`)
 
+**The chain runs to link 19 now** — the gym, the badge and the training repair in front of it
+are a section of their own further down, ["Past Pewter"](#past-pewter--the-gym-the-badge-and-a-precondition-nobody-had-checked-scenariospewter15-19).
+Everything in this section still holds for links 01-14.
+
 **Reader-facing page: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md).** Fourteen
 links from the Nintendo logo to standing in Pewter City, an expert solver
 (`examples/pewter_chain.rs`) that gets through all of them, and the corpus that comes out.
@@ -9817,8 +9821,10 @@ arithmetic is right about a film nobody made.
 
 **Reader-facing page: [`docs/agent/brock.md`](docs/agent/brock.md).** Five links from arriving
 in Pewter to standing on Route 3 with the Boulder Badge, plus a repair link before them.
-Measured on the certified link-14 pool: **15 train 3000/3000, 16 heal 3000/3000, 17 gym
-2707/3000, 18 heal 3000/3000, 19 east 3000/3000.**
+Measured on the certified link-14 pool, **120 attempts per link**: 15 train **120/120**,
+16 heal **120/120**, 17 gym **108/120**, 18 heal **120/120**, 19 east **120/120**. The
+3,000-attempt certification the chain's other links carry is **not yet run for these**; do not
+quote a 99.9 % claim for any of them.
 
 - **BROCK IS THE FIRST LINK THE CHAIN HAS TO *WIN*, and that is what exposed everything below.**
   Every battle link before it has a goal the cartridge sets whoever won —
@@ -9924,7 +9930,7 @@ Measured on the certified link-14 pool: **15 train 3000/3000, 16 heal 3000/3000,
   to x=18, so the left half of those rows has one way in and out, and a `goto` heading
   north-east from the Pokémon Center walks into it: **23 of 23 failures of the Route 3 link were
   stuck on row 20 between x=13 and x=17**, with no battle involved. East along row 26 first,
-  then straight up column 19, is 3000/3000.
+  then straight up column 19, is 120/120.
 - **The gym's junior trainer IS avoidable and column 1 is what avoids him.** Rows 3 and 9 of map
   `$36` are solid but for x=4 and x=5, so the straight climb up column 4 crosses his rightward
   sight line at (4,6); column 1 runs from row 8 to row 4 entirely to his left. Both measured at

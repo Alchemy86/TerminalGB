@@ -6,6 +6,10 @@ cartridge's own memory. A scripted expert solves them; what comes out is a
 corpus of runs — successes and failures — a chain of save states any link can
 be started from instantly, and the list of places a solver reliably struggles.
 
+> **The chain continues past Pewter** — the gym, the badge, and the
+> precondition none of these fourteen links had checked — in
+> [`brock.md`](brock.md). Read this page first; that one assumes it.
+
 > **Comparing two players on one of these links** — the same entry states, the
 > same seeds, the rates, the intervals and the paired gap — is
 > [the test rig](test-rig.md), and its entry pool is this chain's own
