@@ -14,6 +14,14 @@ states; the score is what four moves each left in the party.
 **No battle number appears anywhere on this page**, and the battle columns the
 rig prints are all zero for every arm — none of these attempts fights anything.
 
+**You can watch one row of it happen.** The held-out comparison in
+[§4a](#4a-at-scale--432-prompts-105-species-and-the-held-out-split-that-works)
+is recorded — the rig running end to end, and one prompt played out by both
+players side by side, teacher forgetting GROWL while the student throws away
+ICE BEAM: [the test rig, §0](test-rig.md#0-watch-it-run).
+
+![teacher and student at the same menu on the same frame, cursors on different moves](rig-stills/teacher-vs-student-diverge.png)
+
 ---
 
 ## 1. The result

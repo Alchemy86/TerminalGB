@@ -15,6 +15,158 @@ up, how to read what comes back, and — the section people skip and shouldn't �
 
 ---
 
+## 0. Watch it run
+
+Everything else on this page is prose about a measurement. **These are the
+measurement happening.** Two recordings, because the rig has two halves worth
+seeing: the **instrument** — one command, a progress line, a table — and the
+**thing it measures**, which is a decision taken inside a running Game Boy.
+
+The **stills are in git**, in [`rig-stills/`](rig-stills/); the mp4s are not,
+for the reason [the chain films](pewter-chain.md#11a-what-it-looks-like) are
+not — a seven-megabyte artefact does not belong in a repository when the
+command that makes it is three lines away. Both are written to
+`~/pokemon-run/testrig/`.
+
+### 0.1 The instrument — `test-rig-running.mp4`
+
+`ab`, from the command line to the table, in real time. 23 s.
+
+![the rig's banner, its setup, and the first two progress ticks](rig-stills/rig-setup-and-progress.png)
+
+*The first ten seconds: the command, the plan's own question, **`SPLIT: UNSEEN`
+printed with its meaning** before a single figure appears, the scenario and the
+entry pool it will use, and the progress line. `all/teacher` has just finished
+its 114 attempts.*
+
+![the progress line ticking while the second and third arms run](rig-stills/rig-progress-ticking.png)
+
+*Ticks are every five seconds and go to **stdout**, as TOON with a name of
+their own (`progress[1]{…}`), so a tick can never be mistaken for a row of the
+result — and the same tick goes to `progress.ndjson`, so a run can be followed
+after the fact. `eta` is derived from the arm's own rate.*
+
+![the full report: rates, intervals, the paired gap, and where the wall clock went](rig-stills/rig-results-table.png)
+
+*The whole report on one screen. Rates with Wilson intervals; the prompt
+outcome split into `replace` and `decline` because a player that does nothing
+scores every decline; agreement, which is not the same question as both being
+right; the paired McNemar gap; **what this cannot tell you**; and where the
+wall clock went.*
+
+```sh
+ROM=~/roms/'Pokemon - Blue Version (USA, Europe) (SGB Enhanced).gb'
+
+REC_FPS=3 REC_FONT=10 REC_TAIL=10 tools/testrig/record-terminal.sh \
+    target/rigfilm/heldout 150 60 -- \
+    ./target/release/examples/pewter_chain ab --rom "$ROM" \
+        --plan scenarios/testrig/move-learning-heldout.json
+
+ffmpeg -y -framerate 2.530 -i target/rigfilm/heldout/frames/%05d.png \
+    -vf scale=1800:-2 -c:v libopenh264 -b:v 2500k -pix_fmt yuv420p -r 30 \
+    ~/pokemon-run/testrig/test-rig-running.mp4
+```
+
+[`tools/testrig/record-terminal.sh`](../../tools/testrig/record-terminal.sh)
+is the repository's own screenshot recipe turned into a loop — there is no
+`asciinema` on this box, so it drives a real WezTerm window on **XWayland**,
+grabs it by window id and reports the frame rate it actually achieved, which
+is what the `-framerate` above is. **Read `timing.txt` and use that number**:
+`import` is most of the period and its cost moves with the window's size, so a
+hard-coded rate plays the recording faster or slower than it happened.
+
+### 0.2 The thing it measures — `teacher-vs-student.mp4`
+
+**One row of that table, from inside the game.** The same held-out prompt, the
+same save state, the same seed, played by both arms with the panes side by
+side. 36 s, and the whole story is in one frame of it:
+
+![teacher and student at the same menu on the same frame, cursors on different moves](rig-stills/teacher-vs-student-diverge.png)
+
+*Frame 1110 of both runs. LAPRAS at level 46 is offered HYDRO PUMP and already
+knows four moves, so the cartridge asks which to forget. **The teacher's cursor
+is on GROWL and the student's is on ICE BEAM.** Nothing separates the two
+machines but the player.*
+
+| | |
+| --- | --- |
+| ![the student's screen reading LEARNER forgot ICE BEAM](rig-stills/teacher-vs-student-forgot.png) | The student commits first: **`LEARNER forgot ICE BEAM!`** — it has thrown away the strongest move on the list to keep a growl. The teacher is still working the menu. |
+| ![the teacher forgetting GROWL while the student has already learned HYDRO PUMP](rig-stills/teacher-vs-student-answered.png) | The teacher's answer, and the student's, on one frame: `LEARNER forgot GROWL!` beside `LEARNER learned HYDRO PUMP!`. Both reached the goal; one of them is [the pool's answer](../gen1/learning-moves.md) and one is a row of the 27 the gap is made of. |
+
+```sh
+./target/release/examples/pewter_chain abfilm --rom "$ROM" \
+    --plan scenarios/testrig/move-learning-film.json \
+    --seed 51 --runs 1100 --out target/rigfilm/lapras
+
+tools/testrig/caption-film.sh target/rigfilm/lapras/frames \
+    ~/pokemon-run/testrig/teacher-vs-student.mp4 2 \
+    'held-out prompt 00051 - LAPRAS Lv46 is offered HYDRO PUMP and already knows four moves' \
+    'the pool: forget GROWL - "GROWL deals no damage the table can price and HYDRO PUMP does"' \
+    'teacher forgets GROWL and is right. student forgets ICE BEAM and is wrong. Same save state, same seed.'
+```
+
+[`scenarios/testrig/move-learning-film.json`](../../scenarios/testrig/move-learning-film.json)
+is the held-out plan with **two arms instead of three**: a side-by-side is for
+watching a decision, and the `mash-a` floor is not making one — it presses A
+until its call budget runs out. Everything else about it is the held-out plan,
+so the pane you are watching *is* a row of §0.1's table.
+[`caption-film.sh`](../../tools/testrig/caption-film.sh) puts the band on:
+`abfilm` captions each arm but cannot know which prompt the entry state holds,
+because that lives in the pool's own `00051.expect.json` beside the save state.
+Seed 51 was picked out of `attempts.ndjson` — 27 of the 114 seeds are
+discordant and every one of them falls the same way.
+
+### 0.3 What was filmed, and what the numbers on it are
+
+**The plan is [`move-learning-heldout.json`](../../scenarios/testrig/move-learning-heldout.json),
+split `unseen`, 114 prompts × 3 arms = 342 attempts, one per entry state.**
+Nothing on either recording is staged; the run on camera is the run whose
+report is in `target/testrig/move-learning-heldout/report.txt`.
+
+Neither the entry pool nor the student is committed — both are the game's own
+text and frames — so both recordings begin with the drill
+([move-learning result §5](move-learning-result.md#5-reproducing-it)):
+
+```sh
+python3 tools/learn-student/drill_all.py    --rom "$ROM" --out target/learn-all
+python3 tools/learn-student/split_heldout.py             --out target/learn-all
+python3 tools/learn-student/policy.py train \
+    --corpus target/learn-all/corpus-train.ndjson --out target/learn-student/train.json
+```
+
+* **The figures reproduce [§4a of the move-learning result](move-learning-result.md#4a-at-scale--432-prompts-105-species-and-the-held-out-split-that-works)
+  exactly** — teacher 112 of 114, student 85, floor 42, paired gap **+23.7
+  points [+14.8, +32.6]** over 114 pairs — from a pool and a model rebuilt from
+  scratch on the day, **five runs — twice off camera, once on it, and twice
+  more after this branch was rebased onto a `main` that had changed
+  `examples/pewter_chain.rs` and `src/scenario/` underneath it** — identical
+  every time. **Including `mash-a`'s 42**, which that page warns is the one arm
+  whose figure is not bit-stable; it simply did not move here.
+* **The pool was rebuilt, not reused.** `drill_all.py` drilled **140 lines, 0
+  failed, 432 prompts** in 29.8 s of wall clock on this box (855 worker-seconds
+  in the published run; 450 here, on a quieter box) — the same counts the drill
+  page records.
+* **Do not read a wall clock off a recorded run.** The same command measured
+  19 s unrecorded at load average 2.7 and **13 s on camera** at load average
+  0.9; the capture loop is about half a core and the box moved under it. The
+  recording is honest about what the rig printed, and what it printed is a
+  figure for a box being screenshotted three times a second.
+* **The nine-prompt plan is too fast to film, and that is worth saying rather
+  than filming a longer one and calling it that plan.**
+  [`move-learning.json`](../../scenarios/testrig/move-learning.json) — the
+  plan the top of this page and §5a point at — is 27 attempts and **1.8 s**, so
+  it finishes before the first five-second progress tick. It is the plan to
+  *run*; the held-out plan is the one with something to watch.
+* **A `command` arm's frame count is wall-clock sensitive and its answer is
+  not.** The side-by-side run gives the teacher 2,148 frames and 6 decisions on
+  seed 51; the batched run of the same seed gives 4,908 frames. The emulator
+  never blocks on a driver, so a subprocess that replies faster leaves fewer
+  emulated frames behind — exactly what `WHERE THE WALL CLOCK WENT` says at the
+  foot of the report. The four moves each player left are identical either way,
+  which is what is being measured.
+
+---
+
 ## 1. Why this exists
 
 Every measurement this project has published came from code written once for

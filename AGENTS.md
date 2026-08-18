@@ -5215,6 +5215,67 @@ the rig on 300 attempts each: **14.0 %, 5.7 %, 48.3 %** — two agree closely an
   (160×144×4 per frame, ~4.6 MB per thousand frames per arm). Nothing here is
   committed; the plan file and the report are.
 
+### FILMING THE RIG — the recorder, and why a recorded number is not the tool's number
+
+**`docs/agent/test-rig.md` §0 is the media; `tools/testrig/{record-terminal.sh,caption-film.sh}`
+are what made it.** Two artefacts, `~/pokemon-run/testrig/{test-rig-running,teacher-vs-student}.mp4`,
+with the stills committed to `docs/agent/rig-stills/` and the mp4s deliberately not — the
+`docs/agent/chain-stills/` rule.
+
+- **THERE IS NO `asciinema` AND NO `agg` ON THIS BOX.** `record-terminal.sh` is this
+  repository's own screenshot recipe turned into a loop: WezTerm on **XWayland** (the only
+  display `import` can capture here), grabbed by window id, `--cwd` and every path absolute
+  because a spawned terminal starts in `$HOME`. It reaches ~2.5-3.3 fps; `import` is most of
+  the period and its cost moves with the window's size, so it **measures its own rate into
+  `timing.txt` and the `-framerate` handed to ffmpeg must come from that file** — a
+  hard-coded one plays the recording faster or slower than it happened. `ffmpeg` here has no
+  `libx264`: `-c:v libopenh264 -b:v 2500k`, and `-crf` is not accepted.
+- **DO NOT QUOTE A WALL CLOCK OFF A RECORDED RUN.** The identical `ab` command measured 19 s
+  unrecorded at load average 2.7 and **13 s on camera** at load 0.9 — the capture loop is
+  about half a core *and* the box moved underneath. The report is honest about what it
+  printed; what it printed belongs to a box being screenshotted three times a second.
+- **THE NINE-PROMPT PLAN IS TOO FAST TO FILM, AND SAYING SO BEATS FILMING A BIGGER ONE AND
+  CALLING IT THAT PLAN.** `move-learning.json` is 27 attempts and **1.8 s**, i.e. it finishes
+  before the first five-second progress tick, so a recording of it is six frames of nothing.
+  The held-out plan (342 attempts, 13-19 s, 3 ticks) is what was filmed. Terminal geometry
+  that works: **150 cols × 60 rows at font 10** — 150 because the report's longest line is 149
+  characters and anything narrower wraps the GAP lines, 60 because `report.txt` is 48 lines
+  and the whole of it then survives on the final screen.
+- **A `command` ARM'S FRAME COUNT IS WALL-CLOCK SENSITIVE AND ITS ANSWER IS NOT.** Seed 51
+  through `abfilm` gives the teacher 2,148 frames / 6 decisions; the same seed inside the
+  batched `ab` run gives 4,908. The emulator never blocks on a driver, so a subprocess that
+  replies faster leaves fewer emulated frames behind — exactly what `WHERE THE WALL CLOCK
+  WENT` says. The four moves each player left are identical either way. **Never pin a frame
+  count from a subprocess arm.**
+- **`abfilm` CANNOT KNOW WHICH PROMPT THE ENTRY STATE HOLDS** — that lives in the pool's own
+  `<NNNNN>.expect.json` beside the save state — so the caption band is added afterwards by
+  `caption-film.sh`, which renders it **once** and overlays it rather than drawing per frame
+  (a thousand `magick` invocations otherwise), and upscales the panes with **nearest
+  neighbour**, because any other filter invents shades the framebuffer does not contain.
+  The font path here contains `[wght]`, which `magick` reads as a frame specifier, so
+  `-font Helvetica` (ghostscript) is what is available.
+- **`scenarios/testrig/move-learning-film.json` is the held-out plan with TWO arms**, because
+  a side-by-side is for watching a decision and `mash-a` is not making one. Everything else
+  about it is identical, so a pane really is a row of the held-out table. Pick the seed out of
+  `attempts.ndjson`: 27 of the 114 held-out seeds are discordant and all fall the same way;
+  **seed 51 (LAPRAS Lv46, offered HYDRO PUMP)** is the legible one — the teacher forgets GROWL
+  and the student throws away ICE BEAM, and the two cursors sit on different rows of the same
+  menu on the same frame.
+- **A PLAN'S `question` STRING IS PROSE AND NOTHING GATES IT.** `move-learning-heldout.json`
+  said *"31 lines the student never saw, fitted to the other 96"* while `split_heldout.py`
+  reports **35 and 105** — stale, printed in the banner, and therefore the first thing a
+  recording puts on screen. Fixed here; check a plan's prose against the split before filming
+  or quoting it.
+- **The whole pipeline rebuilds from nothing in about 40 s and reproduced the published
+  figures exactly.** `drill_all.py` 140 lines / 0 failed / 432 prompts in 29.8 s (450
+  worker-seconds on a quiet box), `split_heldout.py` 35 held out / 105 fitted / 1,085 train
+  rows, and then teacher **112 of 114**, student **85**, floor **42**, gap **+23.7 [+14.8,
+  +32.6]** — five times: twice off camera, once on it, and twice more after rebasing onto a
+  `main` that had changed `examples/pewter_chain.rs` and `src/scenario/` underneath it.
+  Identical every time **including `mash-a`'s 42**, which
+  `docs/agent/move-learning-result.md` warns is the one arm that is not bit-stable. It did not
+  move here; that is a fact about this box, not a retraction of the warning.
+
 ## Catching — the gate, the discriminator, and the ball (`plugins/agent/src/catch.rs`)
 
 **Full page with every measurement and the commands: [`docs/gen1/catching.md`](docs/gen1/catching.md).**

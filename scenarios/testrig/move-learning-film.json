@@ -1,0 +1,20 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "move-learning-film",
+  "question": "One held-out move-learning prompt, teacher and student, from the same save state at the same seed — what a row of the held-out table looks like from inside the game. Two arms, because a side-by-side is for watching a decision and the floor is not making one.",
+  "split": "unseen",
+  "scenario": "scenarios/learn/answer-a-move-prompt.json",
+  "entry_pool": "target/learn-all/pool-test",
+  "runs": "pool",
+  "seed0": 0,
+  "idle_spread": 0,
+  "subjects": [],
+  "arms": [
+    { "name": "teacher", "player": "command", "program": "python3",
+      "args": ["tools/learn-student/policy.py", "teacher",
+               "--corpus", "target/learn-all/corpus-all.ndjson"] },
+    { "name": "student", "player": "command", "program": "python3",
+      "args": ["tools/learn-student/policy.py", "student",
+               "--model", "target/learn-student/train.json"] }
+  ]
+}

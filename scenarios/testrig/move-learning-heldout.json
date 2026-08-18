@@ -1,7 +1,7 @@
 {
   "schema": "gbtestrig/1",
   "name": "move-learning-heldout",
-  "question": "The whole drillable table: 31 lines the student never saw, fitted to the other 96. Teacher against student on every prompt, with the declines counted on their own.",
+  "question": "The whole drillable table: 35 species lines the student never saw, fitted to the other 105. Teacher against student on every prompt, with the declines counted on their own.",
   "split": "unseen",
   "scenario": "scenarios/learn/answer-a-move-prompt.json",
   "entry_pool": "target/learn-all/pool-test",
