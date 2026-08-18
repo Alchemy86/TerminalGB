@@ -1,0 +1,42 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "cross-route-3",
+  "question": "Route 3, one subject per starter line. Three of its eight trainers cannot be walked round at any sight range, so the corridor has to be fought through rather than navigated round - how much of the expert's rate does a player that cannot see the machine get, and is the shortfall the same on every line?",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/20-cross-route-3.json",
+  "entry_pool": "target/cert/19-east-to-route-3/exits",
+  "runs": 20,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [
+    {
+      "name": "CHARMELEON",
+      "lead_species": 178
+    },
+    {
+      "name": "IVYSAUR",
+      "lead_species": 9
+    },
+    {
+      "name": "WARTORTLE",
+      "lead_species": 179
+    }
+  ],
+  "arms": [
+    {
+      "name": "teacher",
+      "player": "expert"
+    },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    },
+    {
+      "name": "random",
+      "player": "random",
+      "seed_base": 2654435769
+    }
+  ]
+}

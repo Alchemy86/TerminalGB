@@ -138,11 +138,20 @@ const VIRIDIAN_POKECENTER: u8 = 0x29;
 const PEWTER_CITY: u8 = 0x02;
 const PEWTER_GYM: u8 = 0x36;
 const PEWTER_POKECENTER: u8 = 0x3A;
+/// The Pewter Mart — the first shop the chain has ever needed. Its clerk
+/// stands at (0,5) facing right, behind the counter tile `$1E` at (1,5), so
+/// the place to stand is (2,5) facing **left**: Gen 1 looks one tile further
+/// when the tile in front of you is one of the tileset's counter tiles.
+const PEWTER_MART: u8 = 0x38;
 /// Route 3, east of Pewter — the road to Mt Moon and Cerulean.
 const ROUTE_3: u8 = 0x0E;
 /// Route 4, north of Route 3: the Mt Moon Pokémon Center, the mountain's two
 /// mouths, and — past the mountain — the road east into Cerulean.
 const ROUTE_4: u8 = 0x0F;
+/// Mt Moon's first floor. Forty by thirty-six, seven trainers, and three
+/// ladders down to B1F — all of which come out in a different pocket of a
+/// floor that is itself in pieces. See `docs/agent/cerulean.md`.
+const MT_MOON_1F: u8 = 0x3B;
 /// The Mt Moon Pokémon Center, on Route 4 beside the mountain's west mouth.
 /// The same building as Viridian's and Pewter's — nurse at (3,1), counter,
 /// doors at (3,7)/(4,7) — which is why [`POKECENTER`] serves all three.
@@ -253,18 +262,86 @@ const GYM_TO_POKECENTER: &[(u8, u8)] = &[
     (13, 26),
     (13, 25),
 ];
-/// Out of the Pokémon Center and east off the map onto Route 3.
-/// Out of the Pokémon Center and east off the map onto Route 3.
+
+/// The Mt Moon Pokémon Center's door east to the mountain's west mouth.
 ///
-/// **Row 26 first, then straight up column 19.** The obvious diagonal is a
-/// trap: column 18 is solid on rows 18, 19 and 20 and row 21 is solid from
-/// x=0 to x=18, so the left half of rows 18-20 is a pocket with one way in and
-/// out, and a `goto` heading north-east from the Pokémon Center walks into it.
-/// Measured on the first 60-attempt run of this link: **23 of 23 failures were
-/// stuck on row 20 between x=13 and x=17**, inside that pocket, with no battle
-/// involved at all. The same shape as link 08's ledge — a waypoint whose
-/// overshoot cannot be recovered from.
-const PEWTER_TO_ROUTE_3: &[(u8, u8)] = &[(19, 26), (19, 18), (39, 18)];
+/// Two tiles apart on row 6 and then one step up into the door at (18,5). The
+/// third door on that row, (24,5), is the one the mountain puts you *back* out
+/// of and cannot be reached from here — x=20-23 is solid on rows 6, 7 and 8.
+const ROUTE_4_TO_MT_MOON: &[(u8, u8)] = &[(18, 6), (18, 5)];
+
+/// Mt Moon 1F, from the Route 4 entrance at (14,35) to the ladder at (17,11).
+///
+/// **Three ladders go down and they are not interchangeable.** B1F is four
+/// pockets that do not connect to each other, and each 1F ladder lands in a
+/// different one: (5,5) → B1F (5,5), (17,11) → B1F (25,9), (25,15) → B1F
+/// (25,15). Only the pocket B1F's own exit sits in — (23,3) beside (27,3), the
+/// warp back to Route 4 — is reached from B2F, so every route through the
+/// mountain is 1F → B1F → B2F → B1F again. This ladder is the shortest of the
+/// three: forty steps against fifty-three, and its B1F pocket's own way down
+/// is ten steps from where it lands.
+///
+/// **AND A COLLISION LIST ALONE INVENTS A ROUTE THROUGH IT.** The first version
+/// of this list went west along row 22 and up the one-tile corridor at x=9,
+/// which every tile of is `$05` and in tileset 17's own walkable list — and the
+/// solver pressed `left` eight times into a wall, 53 of 60 attempts stuck
+/// within four tiles of it. Gen 1 has a *second* table beside the collision
+/// list: `TilePairCollisionsLand`, three-byte records of (tileset, tile, tile)
+/// naming pairs that are each walkable and that the game refuses to let you
+/// step **between**. Its very first record is `CAVERN, $20, $05`, and the floor
+/// beside that corridor is `$20`. `route_audit.py` models it now, and every
+/// cave and forest route drawn here needs it — Viridian Forest has six entries
+/// of its own.
+///
+/// The route the corrected grid gives climbs the x=20 corridor instead, crosses
+/// row 10 east, and comes back west along row 7. **It turns up at x=31 rather
+/// than x=30 on purpose**: the LASS at (30,4) faces down, so her cone runs
+/// along column 30 — a walker that climbs it is stopped inside it and she then
+/// parks on the tile above, sealing the climb. Turning one tile east means she
+/// is engaged from row 7 or row 10 and parks on column 30, which neither leg
+/// uses.
+const MT_MOON_1F_TO_B1F: &[(u8, u8)] = &[
+    (14, 22),
+    (20, 22),
+    (20, 10),
+    (31, 10),
+    (31, 7),
+    (17, 7),
+    (17, 11),
+];
+
+/// Pewter's Pokémon Center door to the Mart door at (23,17).
+///
+/// The first four turning points are [`PEWTER_TO_GYM`]'s, for the same reason:
+/// column 18 is solid on rows 18-20 and row 21 is solid from x=0 to x=18, so
+/// everything in Pewter goes up and over. The Mart's door is *east* of that
+/// pocket, which is why the last leg is row 18 and not a diagonal.
+const PEWTER_TO_MART: &[(u8, u8)] =
+    &[(16, 26), (16, 22), (19, 22), (19, 18), (23, 18), (23, 17)];
+/// Inside the Mart, from the door to the tile the clerk can be talked to from.
+const MART_TO_CLERK: &[Stage2] = &[Stage2 {
+    via: &[(3, 5), (2, 5)],
+    finish: Finish::Talk("left"),
+}];
+/// Just the way out of the Mart, for the link that starts inside one.
+const LEAVE_MART: &[Stage2] = &[Stage2 {
+    via: &[(3, 6), (3, 7)],
+    finish: Finish::Step("down"),
+}];
+/// Out of the Mart and straight east off the map onto Route 3.
+///
+/// Row 18 runs clear from the Mart's door to the city's east edge — sixteen
+/// steps and no turn — which is why the shop link changes where link 19 starts
+/// rather than costing it anything. It **replaces** a three-waypoint list from
+/// the Pokémon Center door, and the reason that one had three is worth keeping
+/// even though the walk is gone: column 18 is solid on rows 18, 19 and 20 and
+/// row 21 is solid from x=0 to x=18, so the left half of rows 18-20 is a
+/// pocket with one way in and out, and a `goto` heading north-east from the
+/// Pokémon Center walks into it. Measured on that link's first 60-attempt run:
+/// 23 of 23 failures stuck on row 20 between x=13 and x=17, with no battle
+/// involved at all. **The Mart's door is east of the pocket**, which is why
+/// this leg can be one straight line where that one could not.
+const MART_TO_ROUTE_3: &[(u8, u8)] = &[(23, 18), (39, 18)];
 
 /// Route 4's southern spur, from where Route 3 lets you in at (9,17) up to the
 /// Mt Moon Pokémon Center's door at (11,5).
@@ -276,14 +353,8 @@ const PEWTER_TO_ROUTE_3: &[(u8, u8)] = &[(19, 26), (19, 18), (39, 18)];
 /// mouth and (24,5) the mouth it puts you back out of — and x=20-23 is solid
 /// on rows 6, 7 and 8, so the third is not reachable on foot from the first
 /// two. **Mt Moon is not a shortcut round Route 4; it is the only way east.**
-const ROUTE_4_TO_POKECENTER: &[(u8, u8)] = &[
-    (10, 16),
-    (10, 12),
-    (12, 12),
-    (12, 6),
-    (11, 6),
-    (11, 5),
-];
+const ROUTE_4_TO_POKECENTER: &[(u8, u8)] =
+    &[(10, 16), (10, 12), (12, 12), (12, 6), (11, 6), (11, 5)];
 
 /// Route 3, from where Pewter drops you in to the northern edge that crosses
 /// onto Route 4. **Sixteen turning points for eighty-five steps, and the map
@@ -771,12 +842,27 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         // shape as link 14's arrival and for the same reason: Pewter's
         // connection byte is 0b0101, and reading each block's own destination
         // gives south -> Route 2 and east -> Route 3.
+        // **This link starts in the Mart now, not the Pokémon Center**, because
+        // the shop link goes in between. Row 18 runs clear from the Mart's own
+        // door to the city's east edge, so the crossing is one leg rather than
+        // the three the Pokémon Center needed.
         "19-east-to-route-3" => {
+            r.insert(PEWTER_MART, Stage2::to_vec(LEAVE_MART));
             r.insert(PEWTER_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
             r.insert(
                 PEWTER_CITY,
-                vec![stage(PEWTER_TO_ROUTE_3, Finish::Step("right"))],
+                vec![stage(MART_TO_ROUTE_3, Finish::Step("right"))],
             );
+        }
+        // **The first shop in the chain, and the first item it has ever
+        // held.** Two things need it and neither is optional: the bag is empty
+        // at every link of the chain as it stands, so `catch::decide` can only
+        // ever answer `Unavailable`; and Route 3 poisons the lead often enough
+        // to kill it twice in 600 crossings with nothing to cure it.
+        "18b-shop-in-pewter" => {
+            r.insert(PEWTER_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(PEWTER_CITY, vec![stage(PEWTER_TO_MART, Finish::Arrive)]);
+            r.insert(PEWTER_MART, Stage2::to_vec(MART_TO_CLERK));
         }
         // ---- past Pewter, towards Cerulean ------------------------------
         //
@@ -786,20 +872,24 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         // of them standing on the only tiles the geometry offers. Nothing can
         // be routed round, so the link's rate is the battle policy's rate.
         "20-cross-route-3" => {
-            r.insert(
-                ROUTE_3,
-                vec![stage(ROUTE_3_CROSSING, Finish::Step("up"))],
-            );
+            r.insert(ROUTE_3, vec![stage(ROUTE_3_CROSSING, Finish::Step("up"))]);
         }
         // **The first heal since the gym, and the last one before the
         // mountain.** Route 4's own Pokémon Center is nine tiles from the
         // mouth of Mt Moon, which is what makes it the place to be whole.
         "21-heal-at-mt-moon" => {
-            r.insert(
-                ROUTE_4,
-                vec![stage(ROUTE_4_TO_POKECENTER, Finish::Arrive)],
-            );
+            r.insert(ROUTE_4, vec![stage(ROUTE_4_TO_POKECENTER, Finish::Arrive)]);
             r.insert(MT_MOON_POKECENTER, Stage2::to_vec(POKECENTER));
+        }
+        // **Into the mountain, and down.** The goal is B1F rather than the
+        // mouth of the cave, because arriving on 1F is not a milestone the
+        // cartridge or the geography treats as one: the floor is a maze whose
+        // three ladders lead to three unconnected pockets, and which one you
+        // take decides the whole rest of the crossing.
+        "22-down-into-mt-moon" => {
+            r.insert(MT_MOON_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(ROUTE_4, vec![stage(ROUTE_4_TO_MT_MOON, Finish::Arrive)]);
+            r.insert(MT_MOON_1F, vec![stage(MT_MOON_1F_TO_B1F, Finish::Arrive)]);
         }
         "14-arrive-in-pewter" => {
             r.insert(
@@ -937,6 +1027,50 @@ fn heal_route(scenario: &str) -> HashMap<u8, MapPlan> {
     r
 }
 
+/// The item ids this chain names, from `constants/item_constants.asm`'s own
+/// `const` list. Both are in the atlas as values rather than addresses, so
+/// they are written out here beside the shopping list that uses them.
+/// Pewter's stock, in the order the counter lists it, as the substrings its
+/// cursor highlights. `gen1_tables.py --marts` reads the ids out of the
+/// cartridge at file offset `0x02442`: POKE_BALL, POTION, ESCAPE_ROPE,
+/// ANTIDOTE, BURN_HEAL, AWAKENING, PARLYZ_HEAL.
+const PEWTER_STOCK: &[&str] = &[
+    "BALL", "POTION", "ESCAPE", "ANTIDOTE", "BURN", "AWAKEN", "PARLYZ",
+];
+
+mod item {
+    /// `POKE_BALL`, the fifth `const` in the list and ¥200 in `ItemPrices`.
+    pub const POKE_BALL: u8 = 0x04;
+    /// `POTION`, ¥300.
+    pub const POTION: u8 = 0x14;
+}
+
+/// What each leg buys, if it buys anything.
+///
+/// **The quantities are what the two things that need a bag ask for**, and
+/// both are measured elsewhere: five POKé BALLs because `catch::decide`
+/// answers `Unavailable` with none and a Poké Ball is the best chance per ¥ at
+/// every catch rate and every HP (`docs/gen1/catching.md` §5), and five POTIONs
+/// because Route 3 poisons the lead and kills it about twice in six hundred
+/// crossings with nothing to drink. ¥1,000 + ¥1,500 against the ¥4,651 the
+/// chain carries out of the gym.
+fn shopping_list(scenario: &str) -> Option<ShopList> {
+    let want: &'static [(usize, u8, u32)] = match scenario {
+        // Row 0 is POKE_BALL and row 1 is POTION in Pewter's own stock order.
+        "18b-shop-in-pewter" => &[(0, item::POKE_BALL, 5), (1, item::POTION, 5)],
+        // Nothing to buy, and that is a job rather than an omission: this link
+        // starts on the frame the shop link's goal fired, which is inside the
+        // stock list. See [`ChainDriver::shop`].
+        "19-east-to-route-3" => &[],
+        _ => return None,
+    };
+    Some(ShopList {
+        want,
+        stock: PEWTER_STOCK,
+        line: 0,
+    })
+}
+
 /// Should this leg's solver fight wild Pokémon, or run from them?
 ///
 /// **A `battle flee` rule forfeits a run that won a battle**, so this must
@@ -1038,6 +1172,8 @@ struct Snap {
     selected: String,
     waiting: bool,
     cursor_row: i64,
+    /// `(item id, count)` of everything in the bag, in the game's own order.
+    bag: Vec<(u8, u8)>,
     /// `(x, y, to_map)` of every door the observer can see on this map.
     exits: Vec<(u8, u8, u8)>,
     last: Vec<String>,
@@ -1083,6 +1219,14 @@ impl Snap {
                 s.battle = Some(b.str_field("kind").unwrap_or("trainer").to_string());
                 s.arena = terminalgb_plugin_agent::battle::View::parse(b);
             }
+            if let Some(b) = g.get("bag").and_then(|b| b.as_array()) {
+                for it in b {
+                    s.bag.push((
+                        it.u64_field("id").unwrap_or(0) as u8,
+                        it.u64_field("count").unwrap_or(0) as u8,
+                    ));
+                }
+            }
             if let Some(e) = g.get("exits").and_then(|e| e.as_array()) {
                 for x in e {
                     s.exits.push((
@@ -1118,6 +1262,15 @@ impl Snap {
 
     fn said(&self, needle: &str) -> bool {
         self.text.to_ascii_uppercase().contains(needle)
+    }
+
+    /// How many of item `id` the bag holds.
+    fn holds(&self, id: u8) -> u32 {
+        self.bag
+            .iter()
+            .filter(|(i, _)| *i == id)
+            .map(|(_, c)| *c as u32)
+            .sum()
     }
 
     fn stuck_last(&self) -> bool {
@@ -1198,6 +1351,12 @@ pub struct ChainDriver {
     barren: u32,
     /// Consecutive battle turns, so a fight that will not end is escaped.
     battle_turns: u32,
+    /// How far through the bag the current `Action::Item` has got: 0 while the
+    /// item is still being chosen, 1 once A has been pressed on it and the
+    /// party list is what is on screen. **Two menus, one decision** — and
+    /// without it the driver backs out of the bag, the policy picks ITEM
+    /// again, and the two alternate: measured, 485 of them in one battle.
+    item_step: u8,
     /// The action the shared policy chose for the turn now being worked
     /// through the menus. Held so the walk from the main menu to the move list
     /// cannot change its mind halfway and leave the cursor somewhere odd.
@@ -1237,9 +1396,39 @@ pub struct ChainDriver {
     /// fights. Nothing before Viridian Forest earns any experience, and a
     /// level 5 starter does not beat a bug catcher.
     train_to: u32,
+    /// What the shop link is still trying to buy, and how much of the current
+    /// line has been paid for. `None` on every other link, which is what keeps
+    /// the counter out of the way of every screen that is not a shop counter.
+    shopping: Option<ShopList>,
     pending: Option<String>,
     busy: bool,
     calls: u32,
+}
+
+/// A shopping list, worked one line at a time down the mart's own stock order.
+///
+/// **The cursor is never read.** The item list opens with the cursor on the
+/// first line and Gen 1 leaves it where it was between purchases, so the
+/// position is a *count of `down` presses* the driver made and nothing else —
+/// which cannot go out of phase with a swallowed press the way reading a
+/// glyph could, because a swallowed `down` simply leaves the cursor where the
+/// driver already thinks it is and the next decision presses it again.
+#[derive(Debug, Clone)]
+struct ShopList {
+    /// `(stock row, item id, how many)`, in the mart's own order so the rows
+    /// only ever move downwards. Pewter's stock is POKE_BALL, POTION,
+    /// ESCAPE_ROPE, ANTIDOTE, BURN_HEAL, AWAKENING, PARLYZ_HEAL — read out of
+    /// the cartridge with `gen1_tables.py --marts`, not typed in from a guide.
+    want: &'static [(usize, u8, u32)],
+    /// The stock list's own order, as substrings of what the cursor highlights.
+    /// **The cursor is read, not counted.** Gen 1 puts it back on the first
+    /// line after a purchase, so a driver that remembers how many `down`
+    /// presses it has made keeps buying the first thing on the list while
+    /// believing it is buying the second — measured, twenty-one POKé BALLs and
+    /// one POTION where five and five were asked for.
+    stock: &'static [&'static str],
+    /// Which line of `want` is being paid for.
+    line: usize,
 }
 
 impl ChainDriver {
@@ -1262,6 +1451,7 @@ impl ChainDriver {
             at_map: None,
             barren: 0,
             battle_turns: 0,
+            item_step: 0,
             plan_this_turn: None,
             tally: BattleTally::default(),
             primitive: false,
@@ -1275,6 +1465,7 @@ impl ChainDriver {
             healing: false,
             refused_a_fight: false,
             train_to: train_to(scenario),
+            shopping: shopping_list(scenario),
             pending: None,
             busy: false,
             calls: 0,
@@ -1351,6 +1542,17 @@ impl ChainDriver {
             return self.fight(s);
         }
         self.battle_turns = 0;
+        // 2b. The mart counter. **It has to come before the generic text
+        //     handling**, because that handling answers a menu with
+        //     `advance_text`, which is A up to twenty-four times — and at a
+        //     shop counter that buys the first item on the list over and over
+        //     until the money runs out. Measured, by accident, on the first
+        //     trace: nine POKé BALLs and still going.
+        if self.shopping.is_some() && s.map == PEWTER_MART {
+            if let Some(plan) = self.shop(s) {
+                return plan;
+            }
+        }
         // 3. A menu or a conversation. `advance_text` refuses to press A on the
         //    naming keyboard and says so, which is why that case is first.
         if s.kind == "naming-keyboard" {
@@ -1433,6 +1635,125 @@ impl ChainDriver {
             }
         }
         self.travel(s)
+    }
+
+    /// The Pewter Mart's counter, as a state machine over the screen text.
+    ///
+    /// **One button per decision, never `advance_text`.** Every screen in a
+    /// Gen 1 shop is a menu with something selected, and A on a menu chooses
+    /// rather than advances; the generic handler's twenty-four presses buy
+    /// whatever the cursor happens to be on until the money is gone.
+    ///
+    /// The screens, decoded off a real counter rather than from a guide:
+    ///
+    /// | says | is | answer |
+    /// |---|---|---|
+    /// | `May I help you?` | BUY / SELL / QUIT, cursor on BUY | A |
+    /// | `Take your time.` | the stock list, and the quantity box over it | A, or `down` to the next line, or B when finished |
+    /// | `That will be ¥N. OK?` | YES / NO, cursor on YES | A, and count the purchase |
+    /// | anything else | "Here you are!", "Thank you!" | A |
+    ///
+    /// The stock list and the quantity box carry the same "Take your time."
+    /// caption, which is why A is the answer to both: A on the list opens the
+    /// box at ×01 and A on the box confirms it. Buying one at a time costs
+    /// four decisions a unit and cannot mistake one screen for the other,
+    /// which walking the quantity up with `up` presses could.
+    fn shop(&mut self, s: &Snap) -> Option<String> {
+        let Some(list) = self.shopping.as_mut() else {
+            return None;
+        };
+        // Not at the counter yet — the walk in is ordinary travel.
+        if s.kind == "no-text" {
+            return None;
+        }
+        // **What has been bought is read out of the bag, never counted off the
+        // screen.** Two attempts at counting confirmations both got it wrong
+        // in the same direction and for the same reason: a confirmation box is
+        // on screen across more than one decision and the money in its corner
+        // is redrawn mid-box, so neither "a new text" nor "the box was not
+        // there last time" is one purchase. Measured, the second of them paid
+        // for five POKé BALLs and five POTIONs and left the counter holding
+        // **nine and one**. The bag is the thing the goal is judged on, so it
+        // is the thing the driver reads.
+        while list
+            .want
+            .get(list.line)
+            .is_some_and(|&(_, id, want)| s.holds(id) >= want)
+        {
+            list.line += 1;
+        }
+        // **Finished — or here to close a counter somebody else left open.**
+        // The shop link's goal fires the moment the last thing lands in the
+        // bag, which is a frame with the stock list still on screen, so the
+        // state it hands the next link opens inside the menu. That link
+        // therefore carries an empty shopping list, and an empty list is
+        // "press B at every screen a counter can show" — B is CANCEL on the
+        // stock list, NO on a confirmation and QUIT on the BUY/SELL menu, so
+        // one button unwinds the whole thing whatever it is looking at.
+        if list.line >= list.want.len() {
+            if s.kind == "no-text" {
+                return None;
+            }
+            return Some(Plan::new("Nothing else, thank you.").press("b", 1).finish());
+        }
+        if s.said("THAT WILL BE") {
+            return Some(Plan::new("Yes.").press("a", 1).finish());
+        }
+        // The BUY / SELL / QUIT menu, on the way in and again after every
+        // trip through the stock list. **B rather than A once the list is
+        // done**: A there is BUY, which reopens the list the driver has just
+        // closed, and the two then alternate for ever — measured, 400
+        // decisions of it.
+        if s.said("MAY I HELP YOU") || s.said("ANYTHING") {
+            return Some(Plan::new("Buy.").press("a", 1).finish());
+        }
+        if s.said("TAKE YOUR TIME") {
+            let Some(&(row, id, want)) = list.want.get(list.line) else {
+                return Some(Plan::new("That is the lot.").press("b", 1).finish());
+            };
+            // Where the cursor is, read off the line the ▶ is on.
+            //
+            // **Not `screen.selected`**, which cuts an entry at the column
+            // where any other row of the screen starts a word — and a shop
+            // screen is four boxes side by side, so "POKé BALL" comes back as
+            // "POKé" and no stock name ever matches. Measured: twenty-three
+            // POKé BALLs and no POTIONs, the cursor never once believed to be
+            // anywhere. Taking the text after the ▶ has no such rule.
+            //
+            // No ▶ at all means the quantity box is up over the list, where A
+            // is what confirms ×01 — so an unreadable cursor is answered by
+            // buying rather than by moving, which is the safe way round.
+            let head = s
+                .text
+                .find('▶')
+                .map(|i| s.text[i..].chars().take(16).collect::<String>())
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            let at = list.stock.iter().position(|n| head.contains(n));
+            match at {
+                Some(a) if a < row => {
+                    return Some(
+                        Plan::new("Down to the next thing on the list.")
+                            .press("down", 1)
+                            .finish(),
+                    )
+                }
+                Some(a) if a > row => {
+                    return Some(Plan::new("Back up the list.").press("up", 1).finish())
+                }
+                _ => {}
+            }
+            return Some(
+                Plan::new(&format!("Take one — {} of {want} so far.", s.holds(id)))
+                    .press("a", 1)
+                    .finish(),
+            );
+        }
+        Some(
+            Plan::new("Read what the counter is saying.")
+                .press("a", 1)
+                .finish(),
+        )
     }
 
     /// The title screen, NEW GAME, Oak's speech and the two name menus.
@@ -1528,6 +1849,7 @@ impl ChainDriver {
         if s.waiting || s.kind == "dialogue" || s.kind == "text" {
             // Between turns. The next menu gets a fresh decision.
             self.plan_this_turn = None;
+            self.item_step = 0;
             if self.primitive {
                 return self.one("Let the battle text finish.", "a");
             }
@@ -1554,9 +1876,20 @@ impl ChainDriver {
 
         // The party list, reached either on purpose (a switch) or by a
         // mispress. B is the one button that can only ever back out of a menu.
-        if s.said("CHOOSE A POK") {
+        // **Two different prompts open the party list**, and only one of them
+        // was matched: a switch asks "Choose a POKéMON", an item asks "Use item
+        // on which POKéMON?" — and with only the first matched the item's
+        // second menu fell through to the bag navigation, which pressed `down`
+        // at a party list for the rest of the battle.
+        if s.said("CHOOSE A POK") || s.said("USE ITEM ON WHICH") {
             if let Action::Switch { to, why } = action {
                 return self.menu_to(view.menu_item, to as u8, why, None);
+            }
+            // **An item is used ON somebody**, so the party list is the second
+            // half of `Action::Item` rather than a mispress. The lead is the
+            // one that is hurt and the chain carries no bench, so it is row 0.
+            if let Action::Item { why, .. } = action {
+                return self.menu_to(view.menu_item, 0, why, None);
             }
             return self.one("Back out of the party list.", "b");
         }
@@ -1588,6 +1921,19 @@ impl ChainDriver {
                     why,
                     Some(slot),
                 );
+            }
+            // **The bag, which reaches here looking exactly like a move
+            // list.** `Action::Item` is what tells the two apart: the policy
+            // asked for an item, so the list in front of us is the one that
+            // holds it. Its cursor is 0-based, unlike the move list's, and the
+            // row is the item's own position in the bag — which the snapshot
+            // now carries, so it is read rather than assumed.
+            if let Action::Item { id, why } = action {
+                let want = s.bag.iter().position(|(i, _)| *i == id).unwrap_or(0) as u8;
+                if view.menu_item == want {
+                    self.item_step = 1;
+                }
+                return self.menu_to(view.menu_item, want, why, None);
             }
             // Some other list we did not ask for.
             return self.one("Back out of this list.", "b");

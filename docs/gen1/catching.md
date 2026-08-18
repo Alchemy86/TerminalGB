@@ -42,9 +42,31 @@ Against the chain's own carried-forward states (`pewter_chain chain --from 1
 | 07, 08 | 1 | ¥3175 | OAK's PARCEL ×1 |
 | 09, 10 | 1 | ¥3175 | *(empty)* |
 
-**The bag is empty at every one of them.** So the capability opens at **no link
-of the chain as it stands today**, and `Verdict::Unavailable` is the honest
-answer for the whole of links 01–14, not `No`.
+**The bag is empty at every one of them.** So the capability opened at **no
+link of the chain as that table was measured**, and `Verdict::Unavailable` is
+the honest answer for the whole of links 01–14, not `No`.
+
+> ### It opens now, and the table above stopped one link too early
+>
+> Two things have changed since it was measured, and both are worth reading
+> beside it.
+>
+> **The bag is not empty after the gym.** Link 17 hands over `EVENT_GOT_TM34`
+> along with the badge — it is one of the three bits in the `$D755` change that
+> link's own evidence records — so from link 17 onwards `wNumBagItems` reads
+> **1** and `$D31E` holds item `$EA`, TM34. Measured on all 600 link-18 exits.
+> It is not a ball, so the verdict is unchanged; the *count* is.
+>
+> **And the door §1 asked the chain crew for is built.**
+> [`scenarios/pewter/18b-shop-in-pewter.json`](../../scenarios/pewter/18b-shop-in-pewter.json)
+> walks from Pewter's Pokémon Center to its Mart and buys **five POKé BALLs and
+> five POTIONs** for ¥2,500 of the ¥4,651 the chain carries out of the gym. It
+> is a purchase in a map the chain already stands beside, with money it already
+> has, exactly as this section proposed — and it is in Pewter rather than
+> Viridian so that only links 19 and after are re-certified rather than the
+> whole chain. From link 18b onwards `catch::decide` can answer something other
+> than `Unavailable` for the first time. See
+> [`docs/agent/cerulean.md`](../agent/cerulean.md) §4.
 
 ### The two doors, both read out of the cartridge
 
@@ -87,8 +109,9 @@ python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --marts
 ```
 
 So the cheapest way to open the capability is a purchase inside a map the chain
-already stands in, with money it already has. That is a scenario the chain does
-not have; adding it belongs with the crew that owns `examples/pewter_chain.rs`.
+already stands in, with money it already has. **That scenario exists now** —
+`18b-shop-in-pewter`, in Pewter's mart rather than Viridian's, so that the
+re-certification it forces is three links rather than thirteen.
 
 ### 1a. A finding for the chain crew: link 09 exits inside a cutscene
 

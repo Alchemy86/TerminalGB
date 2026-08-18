@@ -921,10 +921,7 @@ mod tests {
         // Teeth: with the flag clear the same view picks the damage, so the
         // test is measuring the flag and not the move order.
         v.moves[0].disabled = false;
-        assert!(matches!(
-            decide(&v, &TRAIN),
-            Action::Fight { slot: 0, .. }
-        ));
+        assert!(matches!(decide(&v, &TRAIN), Action::Fight { slot: 0, .. }));
     }
 
     /// A disabled move is a *different* thing from one with no PP, and both

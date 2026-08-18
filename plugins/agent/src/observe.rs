@@ -714,6 +714,15 @@ pub struct GameState {
     pub badges: u8,
     pub money: u32,
     pub party: Vec<PartyMon>,
+    /// What the bag holds, item id and count, in the game's own order.
+    ///
+    /// **A player that cannot see its own bag cannot decide to use anything in
+    /// it**, and until the chain bought something there was nothing in it to
+    /// see — so this was only ever read inside a battle. It is read every
+    /// decision now: buying at a counter, curing a poisoned lead in the
+    /// overworld and answering "do we hold a ball" are all bag questions and
+    /// none of them happens in a battle.
+    pub bag: Vec<crate::battle::Item>,
     pub battle: BattleKind,
     pub opponent: Option<PartyMon>,
     /// Everything the shared battle policy decides from, when a battle is up.
@@ -820,6 +829,7 @@ impl Gen1Observer {
             facing: Facing::from_byte(m.peek(W_PLAYER_FACING).unwrap_or(0xFF)),
         };
         st.map_name = map_name(st.position.map);
+        st.bag = read_bag(m);
         st.badges = m.peek(tr::OBTAINED_BADGES).unwrap_or(0);
         st.money = terminalgb_plugin_trainer::text::bcd3([
             m.peek(tr::PLAYER_MONEY).unwrap_or(0),

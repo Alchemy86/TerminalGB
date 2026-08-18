@@ -10,15 +10,23 @@ measured over thousands of attempts rather than argued for.
 > policy, and the fact that the party is **one Pokémon with an empty bag**.
 
 ```text
-   Pewter City ── 19 ──▶ Route 3 ── 20 ──▶ Route 4 ── 21 ──▶ the nurse
-                                                 │
-                                                 └── 22+ ──▶ Mt Moon ──▶ Cerulean
+   Pewter PC ─18b─▶ the Mart ─19─▶ Route 3 ─20─▶ Route 4 ─21─▶ the nurse ─22─▶ Mt Moon B1F
+                                                                                    │
+                                                                                    └─ 23+ ─▶ B2F ─▶ Route 4 east ─▶ Cerulean
 ```
 
-- **Scenarios**: [`scenarios/pewter/20-cross-route-3.json`](../../scenarios/pewter/20-cross-route-3.json),
-  [`21-heal-at-mt-moon.json`](../../scenarios/pewter/21-heal-at-mt-moon.json).
-- **Solver**: [`examples/pewter_chain.rs`](../../examples/pewter_chain.rs), `ROUTE_3_CROSSING`
-  and `ROUTE_4_TO_POKECENTER`.
+- **Scenarios**: [`scenarios/pewter/18b-shop-in-pewter.json`](../../scenarios/pewter/18b-shop-in-pewter.json),
+  [`20-cross-route-3.json`](../../scenarios/pewter/20-cross-route-3.json),
+  [`21-heal-at-mt-moon.json`](../../scenarios/pewter/21-heal-at-mt-moon.json),
+  [`22-down-into-mt-moon.json`](../../scenarios/pewter/22-down-into-mt-moon.json).
+- **Solver**: [`examples/pewter_chain.rs`](../../examples/pewter_chain.rs) —
+  `PEWTER_TO_MART`, `ChainDriver::shop`, `ROUTE_3_CROSSING`, `ROUTE_4_TO_POKECENTER`.
+
+**`18b` is an insertion, not a renumbering**, and the reason is that link 19's
+certification is a published measurement tied to that name. The chain reads
+`scenarios/pewter/*.json` in sorted order and `18b` sorts between `18-` and
+`19-`, so the shop goes in where it is needed without moving anything that has
+already been measured under a name.
 
 ---
 
@@ -122,7 +130,7 @@ link-19 exit pool, 600 distinct trajectories, phase spread 3001. Zero faints in
 non-knockout damage predictions inside Gen 1's 217-255 roll range. Median 201
 decisions, p99 300, against a ceiling of 1,200.
 
-**It does not clear the chain's 99.9 % bar, and §5 is why.**
+**It does not clear the chain's 99.9 % bar, and §7 is why.**
 
 ---
 
@@ -192,7 +200,135 @@ reasoned about.
 
 ---
 
-## 5. The residual is POISON, and the chain has no answer to it yet
+## 5. The shop, and the bag the chain has never had
+
+**Goal: `map=0x38` AND the bag holds five POKé BALLs AND five POTIONs.**
+
+Two things wanted a bag and neither could have one:
+[`catch::decide`](../gen1/catching.md) can only answer `Unavailable` without a
+ball, and a poisoned lead on Route 3 has nothing to drink. The shop is one
+purchase in a map the chain already walks past, with money it already carries:
+¥2,500 of ¥4,651, at prices read out of `ItemPrices` (file offset `0x4608`)
+rather than typed in.
+
+**Pewter rather than Viridian, and that is the whole of why it is link 18b.**
+`docs/gen1/catching.md` §1 proposed Viridian's mart, which the chain already
+enters at link 07 — but inserting a link there re-certifies everything from 07
+onwards. Pewter's mart carries POKé BALLs too (its stock is POKE_BALL, POTION,
+ESCAPE_ROPE, ANTIDOTE, BURN_HEAL, AWAKENING, PARLYZ_HEAL, read with
+`gen1_tables.py --marts`), and inserting there re-certifies three links.
+
+**The bag was not empty when this started, and catching.md's table stopped one
+link too early.** On all 600 link-18 exits `wNumBagItems` reads **1** and
+`$D31E` holds `$EA` — TM34, which the gym gives with the badge and which link
+17's own evidence already records as one of the three bits in its `$D755`
+change. So the two purchases land in bag slots 2 and 3, and the goal names the
+item **ids** as well as the counts rather than trusting a slot.
+
+### Four things the counter taught, three of them the hard way
+
+**The clerk is talked to across the counter.** Map `$38`'s tile (1,5) is `$1E`,
+one of the tileset's counter tiles, so standing at (2,5) facing *left* puts a
+counter in front of the player and Gen 1 looks one tile further for the sprite.
+Standing next to the clerk himself is impossible: (1,5) is the counter and
+(0,4)/(0,6) are wall.
+
+**The generic text handler buys the shop out.** `advance_text` is A up to
+twenty-four times, and every screen in a Gen 1 shop is a menu with something
+selected — so the first trace of this link, written before there was a shop
+handler at all, bought nine POKé BALLs by accident and was still going. The
+counter is answered one button per decision, and the branch that does it sits
+*before* the generic one.
+
+**What has been bought is read out of the bag, never counted off the screen.**
+Two attempts at counting confirmations both failed in the same direction: a
+confirmation box is on screen across more than one decision and the money in
+its corner is redrawn mid-box, so neither "the text changed" nor "the box was
+not there last time" is one purchase. The second of them paid for five and five
+and left the counter holding **nine and one**. The bag is what the goal is
+judged on, so it is what the driver reads — which is why the bag is now in the
+snapshot at all (§5a).
+
+**Gen 1 puts the list cursor back on the first line after a purchase.** A
+driver that remembers how many `down` presses it has made therefore keeps
+buying the first thing on the list while believing it is buying the second —
+measured, **twenty-one POKé BALLs and one POTION** where five and five were
+asked for. The cursor is read every decision instead.
+
+**And it is read off the `▶`, not off `screen.selected`.** `selected` cuts an
+entry at the column where any other row of the screen starts a word, and a shop
+screen is four boxes side by side — so "POKé BALL" comes back as "POKé" and no
+stock name ever matches. Measured: twenty-three POKé BALLs and no POTIONs, the
+cursor never once believed to be anywhere. The same rule
+[`pewter-chain.md`](pewter-chain.md) records for `HORN ATTACK` in a move list,
+met again in a wider screen.
+
+### 5a. The bag is in the snapshot now
+
+`game.bag` — `[{id, count}]`, every decision, not only inside a battle. **A
+player that cannot see its own bag cannot decide to use anything in it**, and
+until the chain bought something there was nothing in it to see. Buying at a
+counter, curing a poisoned lead in the overworld and answering "do we hold a
+ball" are all bag questions and none of them happens in a battle. Additive to
+the wire, so nothing that ignores it changes.
+
+### 5b. Measured
+
+`18b-shop-in-pewter` reaches its goal in about 90 decisions, and every exit
+state carries exactly five POKé BALLs and five POTIONs with ¥2,151 left.
+
+---
+
+## 6. Link 22 — into the mountain, and down
+
+**Goal: `map=0x3C`** — B1F, not the cave mouth. Arriving on 1F is not a
+milestone the geography treats as one: **which of the floor's three ladders is
+taken decides the whole rest of the crossing.** B1F is four pockets that do not
+connect to each other on foot, and each 1F ladder lands in a different one —
+(5,5) → B1F (5,5), (17,11) → B1F (25,9), (25,15) → B1F (25,15). The exit from
+the mountain, B1F's warp[7] at (27,3), is in a **fourth** pocket that no 1F
+ladder reaches at all and that is entered only from B2F. So every crossing of
+Mt Moon is 1F → B1F → B2F → back up to B1F, and the ladder at (25,15) is a dead
+end for it: from the B2F entry its pocket leads to, (15,27), there is no path to
+the exit ladder at (5,7) at all.
+
+### A collision list alone invents a route through a cave
+
+The first route went west along row 22 and up the one-tile corridor at x=9 —
+every tile of which is `$05`, and `$05` is in tileset 17's own walkable list.
+**53 of 60 attempts ended stuck within four tiles of it**, the solver pressing
+`left` eight times into a wall.
+
+Gen 1 keeps a *second* table beside each tileset's collision list.
+`TilePairCollisionsLand` is three-byte records of (tileset, tile, tile),
+terminated by `$FF`, naming pairs that are each walkable on their own and that
+the game refuses to let you step **between** — `CheckForTilePairCollisions` in
+`home/overworld.asm` is what reads it. Its very first record is
+
+```
+11 20 05     CAVERN, $20, $05
+```
+
+and the floor beside that corridor is `$20`. Found in this cartridge at file
+offset `0xC7E` by that record's own bytes, which occur exactly once.
+
+[`tools/pewter-chain/route_audit.py`](../../tools/pewter-chain/route_audit.py)
+models it now, and **every cave and forest route drawn here needs it**: the
+table has four CAVERN entries and eight FOREST ones, and this chain crosses
+Viridian Forest. The corrected grid gives a completely different route — up the
+x=20 corridor, east along row 10, back west along row 7 — and it is **60 of 60**
+first time.
+
+**It turns north at x=31 rather than x=30 on purpose.** The LASS at (30,4) faces
+down, so her cone runs along column 30: a walker that climbs it is stopped
+inside it and `TrainerWalkUpToPlayer` then parks her body on the tile above,
+sealing the climb. One tile east and she is engaged from row 7 or row 10 instead
+and parks on a column neither leg uses. The fourth instance of the rule §2
+records, met before it could cost anything.
+
+---
+
+## 7. The residual is POISON, and the chain has no answer to it yet
 
 Both of link 20's 600-attempt failures are the same thing, and neither is a
 battle: **the lead is poisoned and dies walking**, at (55,10) and (59,2) — ten
@@ -210,15 +346,25 @@ detour kills the thing it is trying to save. And once past x≈27 the *goal* is
 nearer than Pewter anyway — the Mt Moon Pokémon Center is twenty steps beyond
 the map edge.
 
-So the cure is an item, and the chain has never bought one. That is the same
-door [`docs/gen1/catching.md`](../gen1/catching.md) §1 is waiting on — a purchase
-in a mart the chain already walks past, with money it already has (¥4,476-5,326
-at link 19, a POTION at ¥300 and a POKé BALL at ¥200) — which is why the shop is
-the next link rather than a heal detour.
+So the cure is an item, and the chain had never bought one. **§5 is that door,
+and it is open now** — but opening it is not the same as walking through it, and
+the honest statement is that the potions are in the bag and **have never been
+used**: `battle::decide` reaches for a healing item only when it is `doomed`
+*in a battle*, and on Route 3 a wild encounter is refused before that rule is
+reached while a trainer battle rarely gets there. Measured on 240 crossings with
+a full bag: `items used 0`.
+
+**Two named repairs remain, and neither is guesswork about where to look.**
+Using an item in the *overworld* is the one that fits the failure — six menu
+screens, all screen-readable, and an ANTIDOTE cures poison outright rather than
+buying steps. Reaching for one *before* running from a wild encounter is the
+cheaper half: on Route 3's 20/256 grass rate a poisoned lead meets something
+within a few tiles almost every time, and the battle ITEM menu is where the
+policy already points.
 
 ---
 
-## 6. Misty needs a second Pokémon for one starter, and the cartridge says so
+## 8. Misty needs a second Pokémon for one starter, and the cartridge says so
 
 Not measured yet — no run has reached Cerulean — but it is a table fact rather
 than a guess, and it decides where the shop link has to go, so it is written
@@ -247,7 +393,7 @@ shop goes in before Route 3 rather than after it.
 
 ---
 
-## 7. Reproducing it
+## 9. Reproducing it
 
 ```sh
 cargo build --release --features scenario --example pewter_chain
@@ -267,7 +413,7 @@ python3 tools/pewter-chain/route_audit.py --rom <blue.gb>
 python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --plan misty
 ```
 
-## 8. See also
+## 10. See also
 
 * [`pewter-chain.md`](pewter-chain.md) — the chain, the gate, and the repair loop.
 * [`brock.md`](brock.md) — the gym arc, and the starter that cannot pass it.

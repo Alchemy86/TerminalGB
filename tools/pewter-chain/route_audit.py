@@ -140,6 +140,38 @@ def find_ledge_tiles(rom: bytes):
     return out
 
 
+def find_tile_pair_collisions(rom: bytes):
+    """`TilePairCollisionsLand` — pairs of tiles you may not walk *between*.
+
+    **A collision list alone over-reports a cave.** Gen 1 has a second table
+    beside it: three-byte records of (tileset, tile, tile), terminated by `$FF`,
+    naming pairs that are each walkable on their own and that the game refuses
+    to let you step between. `HandleLedges`' neighbour, `CheckForTilePairCollisions`
+    in `home/overworld.asm`, is what reads it.
+
+    Measured on Mt Moon 1F: the one-tile corridor at x=9 (tile `$05`) is in
+    tileset 17's walkable list, and the floor beside it at x=10 is `$20`, and
+    `CAVERN, $20, $05` is the table's very first record — so a grid built from
+    the collision list alone offers a route straight through it, and the solver
+    pressed left eight times against a wall. **Both Mt Moon and Viridian Forest
+    have entries here**, so any route drawn over a cave or a forest needs this.
+
+    Found by its own first record rather than by address: `11 20 05` — CAVERN,
+    `$20`, `$05` — occurs exactly once in the cartridge.
+    """
+    at = rom.find(bytes([0x11, 0x20, 0x05]))
+    if at < 0 or rom.find(bytes([0x11, 0x20, 0x05]), at + 1) >= 0:
+        raise SystemExit("cannot find TilePairCollisionsLand by its first record")
+    pairs = set()
+    i = at
+    while rom[i] != 0xFF:
+        ts, a, b = rom[i], rom[i + 1], rom[i + 2]
+        pairs.add((ts, a, b))
+        pairs.add((ts, b, a))
+        i += 3
+    return pairs
+
+
 def flat(bank: int, addr: int) -> int:
     return bank * 0x4000 + (addr - 0x4000)
 
@@ -178,8 +210,9 @@ def check_pointers(rom: bytes) -> None:
 
 
 class Map:
-    def __init__(self, rom: bytes, banks: int, m: int, ledges=frozenset()):
+    def __init__(self, rom: bytes, banks: int, m: int, ledges=frozenset(), pairs=frozenset()):
         self.ledges = ledges
+        self.pairs = pairs
         bank = rom[banks + m]
         h = flat(bank, rom[MAP_HEADER_POINTERS + 2 * m] | (rom[MAP_HEADER_POINTERS + 2 * m + 1] << 8))
         self.id = m
@@ -251,6 +284,10 @@ class Map:
         """
         n = (p[0] + d[0], p[1] + d[1])
         if self.walkable(n):
+            # Two tiles that are each walkable and that the game still refuses
+            # to let you step between. See `find_tile_pair_collisions`.
+            if (self.tileset, self.tile[p[1]][p[0]], self.tile[n[1]][n[0]]) in self.pairs:
+                return None
             return n
         if not self.inside(n):
             return None
@@ -380,6 +417,7 @@ def audit(rom: bytes, routes) -> int:
     check_pointers(rom)
     banks = find_map_header_banks(rom)
     ledges = find_ledge_tiles(rom)
+    pairs = find_tile_pair_collisions(rom)
     cache: dict[int, Map] = {}
     hard = 0
     fragile = 0
@@ -389,7 +427,9 @@ def audit(rom: bytes, routes) -> int:
         if not via:
             continue
         stages += 1
-        m = cache.setdefault(st["map"], Map(rom, banks, st["map"], ledges))
+        m = cache.setdefault(
+            st["map"], Map(rom, banks, st["map"], ledges, pairs)
+        )
         where = f'{st["scenario"]} seed {st["seed"]} {st["kind"]} map ${m.id:02X} stage {st["stage"]}'
 
         for p in via:

@@ -768,6 +768,17 @@ impl AgentPlugin {
             w.end_arr();
             w.num_field("badges", game.badges.count_ones() as f64);
             w.num_field("money", game.money as f64);
+            // **The bag, every decision and not only in a battle.** Buying at
+            // a counter, curing a poisoned lead in the overworld and "do we
+            // hold a ball" are all bag questions asked outside one.
+            w.arr_field("bag");
+            for it in &game.bag {
+                w.begin_obj();
+                w.num_field("id", it.id as f64);
+                w.num_field("count", it.count as f64);
+                w.end_obj();
+            }
+            w.end_arr();
             w.arr_field("party");
             for m in &game.party {
                 w.begin_obj();
