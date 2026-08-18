@@ -418,6 +418,13 @@ def load_agent_labels(path):
     return title, out
 
 
+def finished_arc(span, n_links):
+    """Did this agent complete the last link of the cut? One predicate, because
+    the arrival markers, the HUD's per-label counts and the printed table all
+    ask it and three copies would eventually answer differently."""
+    return bool(span) and span[-1][0] == n_links and span[-1][4]
+
+
 def report_lines(labels, title, spans, ends, n_links, n_agents):
     """What each label's agents did with the arc — finished, or stopped, and
     on which link. This is the divergence the film is asked to show, printed
@@ -433,9 +440,8 @@ def report_lines(labels, title, spans, ends, n_links, n_agents):
     print(f"{title}: {len(by)} label(s) over {len(labels)} of {n_agents} agent(s)")
     for lab in sorted(by):
         ns = by[lab]
-        done = [n for n in ns
-                if spans.get(n) and spans[n][-1][0] == n_links and spans[n][-1][4]]
-        out = [n for n in ns if n not in set(done)]
+        done = {n for n in ns if finished_arc(spans.get(n), n_links)}
+        out = [n for n in ns if n not in done]
         where = collections.Counter(
             spans[n][-1][0] for n in out if spans.get(n))
         tail = ("  stopped on link " +
@@ -1258,7 +1264,7 @@ def main():
 
     arrivals = collections.defaultdict(list)
     for n, v in spans.items():
-        if n in corpus.end and v and v[-1][0] == n_links and v[-1][4]:
+        if n in corpus.end and finished_arc(v, n_links):
             _fr, m, x, y, _f = corpus.paths[n][-1]
             arrivals[(m, x, y)].append(corpus.end[n])
     for k in arrivals:
@@ -1278,8 +1284,7 @@ def main():
     for n, lab in labels.items():
         if n not in corpus.end:
             continue
-        v = spans.get(n) or []
-        ok = bool(v) and v[-1][0] == n_links and v[-1][4]
+        ok = finished_arc(spans.get(n), n_links)
         (lab_done_ends if ok else lab_out_ends)[lab].append(corpus.end[n])
     for d in (lab_done_ends, lab_out_ends):
         for k in d:
