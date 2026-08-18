@@ -63,111 +63,37 @@ import argparse
 import array
 import collections
 import csv
-import importlib.util
-import json as _json
 import os
 import subprocess
 import sys
 
+# The directory this file sits in has a hyphen in its name, so it is not a
+# package and `chainrender` cannot be reached by name from anywhere else. Every
+# tool here adds its own directory to `sys.path` and imports it. That replaces
+# the `importlib` hack this file used to load `swarm_film.py` for its `Atlas`.
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import chainrender as cr  # noqa: E402
+from chainrender import axi  # noqa: E402
+from chainrender.arrows import (  # noqa: E402
+    DELTA, DIRS, FACING_DIR, OPPOSITE, VEC, arrow_points,
+)
+from chainrender.axi import die, flush_json, helps, note, obj, table  # noqa: E402
+from chainrender.paint import load_font  # noqa: E402
+from chainrender.palette import (  # noqa: E402
+    BG, DIM, ENCODINGS, INK, PANEL, TRAFFIC_RAMP, arrow_rgb, arrow_scale,
+    band_of, legend_swatches,
+)
 
 
-def _swarm_film():
-    """`swarm_film.py` as a module, for `Atlas` and nothing else.
-
-    The directory has a hyphen in it, so it is not a package and cannot be
-    imported by name. Importing the file directly runs only its constants and
-    its `def`s — `main()` is behind the usual guard — and **its own rendering
-    path is not touched**: this tool is a sibling, not a fork of it.
-    """
-    p = os.path.join(HERE, "swarm_film.py")
-    spec = importlib.util.spec_from_file_location("swarm_film", p)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-# --- AXI: TOON on stdout, errors on stdout, help lines -----------------------
-# An agent drives this through a shell and does not read stderr, so an error
-# sent there is an error it cannot act on. Exit codes: 0 success, 1 the work
-# failed, 2 the command line was wrong.
-_JSON = False
-_BLOCKS = []
 SELF = "python3 tools/pewter-chain/path_arrows.py"
+axi.SELF = SELF
 
-
-def _cell(v):
-    if v is None:
-        return "-"
-    if isinstance(v, float):
-        return f"{v:.4g}"
-    return str(v)
-
-
-def table(name, rows, fields):
-    if _JSON:
-        _BLOCKS.append((name, [{f: r.get(f) for f in fields} for r in rows]))
-        return
-    print(f"{name}[{len(rows)}]{{{','.join(fields)}}}:")
-    for r in rows:
-        print("  " + ",".join(_cell(r.get(f)) for f in fields))
-
-
-def obj(name, pairs):
-    if _JSON:
-        _BLOCKS.append((name, dict(pairs)))
-        return
-    print(f"{name}:")
-    for k, v in pairs:
-        print(f"  {k}: {v}")
-
-
-def note(text):
-    if _JSON:
-        _BLOCKS.append(("note", text))
-        return
-    print(text)
-
-
-def helps(lines):
-    if _JSON or not lines:
-        return
-    print(f"help[{len(lines)}]:")
-    for line in lines:
-        print(f"  {line}")
-
-
-def flush_json():
-    if not _JSON:
-        return
-    out = {}
-    for name, payload in _BLOCKS:
-        if name in out and isinstance(out[name], list):
-            out[name].extend(payload)
-        else:
-            out[name] = payload
-    print(_json.dumps(out, indent=2))
-
-
-def die(message, *suggestions, code=1):
-    if _JSON:
-        print(_json.dumps({"error": message, "help": list(suggestions)}, indent=2))
-    else:
-        print(f"error: {message}")
-        for s in suggestions:
-            print(f"help: {s}")
-    sys.exit(code)
-
-
-# --- the data ----------------------------------------------------------------
-# `PathPoint::facing` — 0 down, 4 up, 8 left, 12 right, the game's own encoding
-# (`src/scenario/run.rs`). Indexed 0..3 here so it fits an `array('B')`.
-DIRS = ["down", "up", "left", "right"]
-DELTA = {(0, 1): 0, (0, -1): 1, (-1, 0): 2, (1, 0): 3}
-FACING_DIR = {0: 0, 4: 1, 8: 2, 12: 3}
-OPPOSITE = {0: 1, 1: 0, 2: 3, 3: 2}
-# Unit vector per direction, in screen axes (y grows down).
-VEC = {0: (0, 1), 1: (0, -1), 2: (-1, 0), 3: (1, 0)}
+# Direction bookkeeping (`DIRS`/`DELTA`/`FACING_DIR`/`OPPOSITE`/`VEC`) and the
+# arrow polygon live in `chainrender.arrows`; the colour ramps and the two
+# encodings live in `chainrender.palette`.
 
 
 class Steps:
@@ -300,25 +226,16 @@ class Steps:
 
 
 def _track_files(d):
-    """`agent -> path`, for every track file in a directory.
+    """`chainrender.tracks.track_files`, with this tool's own AXI errors.
 
-    `agent-NNN.csv` from a film run or `path-NNNNN.csv` from one link's corpus;
-    the format is identical. Mirrors `swarm_film.track_files`, which is a
-    private helper there — a copy of five lines is cheaper than making its
-    rendering path load this one.
+    The shared helper is a plain lookup; naming a missing directory or an empty
+    one is a command-line mistake and belongs where the command line is.
     """
-    out = {}
     if not os.path.isdir(d):
         die(f"no such tracks directory: {d}",
             f"{SELF} summary <dir>   # a dir of agent-NNN.csv or path-NNNNN.csv",
             code=2)
-    for name in sorted(os.listdir(d)):
-        if name.endswith(".links.csv") or not name.endswith(".csv"):
-            continue
-        if name.startswith("agent-"):
-            out[int(name[6:-4])] = os.path.join(d, name)
-        elif name.startswith("path-"):
-            out[int(name[5:-4])] = os.path.join(d, name)
+    out = cr.track_files(d)
     if not out:
         die(f"no agent-NNN.csv or path-NNNNN.csv in {d}",
             "a film run writes agent-NNN.csv; "
@@ -326,71 +243,9 @@ def _track_files(d):
     return out
 
 
-# --- colour ------------------------------------------------------------------
-# **Sequential, cool to warm, and it is DISTINCT AGENTS.** Deliberately its own
-# ramp rather than `swarm_film.HEAT_HUE`: that one is agent-*frames* and is read
-# inverted (blue = heavily trodden, warm = novel, so an agent doing something
-# new lights up). Reusing the same swatches for the opposite polarity and a
-# different unit would be the worst of both. Ten bands, because a swarm of 24
-# has 24 possible values and ten is as many as an eye separates in a legend.
-TRAFFIC_RAMP = [
-    (64, 96, 176), (62, 124, 188), (60, 152, 190), (64, 178, 176),
-    (86, 196, 140), (132, 204, 100), (186, 204, 76), (226, 186, 68),
-    (243, 142, 62), (248, 88, 84),
-]
-BG = (16, 18, 22)
-PANEL = (24, 27, 33)
-INK = (226, 230, 238)
-DIM = (140, 148, 162)
-
-
-def band_of(k, n_agents):
-    """Which ramp band a distinct-agent count falls in. Linear, because the
-    quantity is bounded by the swarm size and is not heavy-tailed — unlike
-    dwell, which is, and which is why the heat maps log-scale."""
-    if n_agents <= 1:
-        return len(TRAFFIC_RAMP) - 1
-    t = (k - 1) / (n_agents - 1)
-    return max(0, min(len(TRAFFIC_RAMP) - 1, int(round(t * (len(TRAFFIC_RAMP) - 1)))))
-
-
-def arrow_points(cx, cy, d_ix, length, width, double):
-    """Polygon for one arrow, centred on (cx, cy) and pointing `d_ix`.
-
-    Built along +y and rotated, so the four directions are the same shape
-    rather than four hand-drawn ones.
-    """
-    half = length / 2.0
-    hw = width / 2.0
-    head = min(half, width * 0.85)
-    shaft = hw * 0.42
-    pts = [(-shaft, -half + (head if double else 0.0)),
-           (-hw, -half + (head if double else 0.0)),
-           (0.0, -half),
-           (hw, -half + (head if double else 0.0)),
-           (shaft, -half + (head if double else 0.0)),
-           (shaft, half - head),
-           (hw, half - head),
-           (0.0, half),
-           (-hw, half - head),
-           (-shaft, half - head)]
-    if not double:
-        # A flat tail rather than a second head.
-        pts = [(-shaft, -half), (shaft, -half)] + pts[5:]
-    ux, uy = VEC[d_ix]
-    # Explicit per-direction rotation: clearer than a matrix nobody can read.
-    out = []
-    for px, py in pts:
-        if (ux, uy) == (0, 1):        # down
-            rx, ry = px, py
-        elif (ux, uy) == (0, -1):     # up
-            rx, ry = -px, -py
-        elif (ux, uy) == (1, 0):      # right
-            rx, ry = py, -px
-        else:                          # left
-            rx, ry = -py, px
-        out.append((cx + rx, cy + ry))
-    return out
+# The colour ramps, the two encodings and the arrow polygon are in
+# `chainrender.palette` / `chainrender.arrows`, so an encoding fixed here
+# reaches every renderer rather than this one picture.
 
 
 # --- the world ---------------------------------------------------------------
@@ -481,19 +336,8 @@ class World:
         return ((p[0] - self.x0) * self.factor, (p[1] - self.y0) * self.factor)
 
 
-def load_font(px):
-    from PIL import ImageFont
-    for f in ("/usr/share/fonts/adwaita-mono-fonts/AdwaitaMono-Bold.ttf",
-              "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf"):
-        if os.path.exists(f):
-            try:
-                return ImageFont.truetype(f, px)
-            except Exception:
-                pass
-    return ImageFont.load_default()
-
-
-def draw_arrow(dr, world, steps, ix, k, n_agents, paced_at, alpha_floor=0.55):
+def draw_arrow(dr, world, steps, ix, k, n_agents, paced_at,
+               encoding="direction"):
     """One tile's arrow onto `dr`. Returns False when the tile is unplaced."""
     m, x, y = steps.tiles[ix]
     if m not in world.maps:
@@ -504,15 +348,15 @@ def draw_arrow(dr, world, steps, ix, k, n_agents, paced_at, alpha_floor=0.55):
     counts = steps.dir_counts[ix]
     top, _share, other = steps.dominant(counts)
     double = other >= paced_at * counts[top] and other > 0
-    band = band_of(k, n_agents)
-    col = TRAFFIC_RAMP[band]
-    # **Size carries the same number as the hue.** A one-agent detour is a small
-    # dim arrow and a whole-swarm corridor is a big bright one, so the contrast
-    # survives grey printing and a colour-blind reader.
+    col = arrow_rgb(encoding, top, k, n_agents, paced=double)
+    # **Whatever the hue carries, the other quantity is still readable a second
+    # way** — this repository's rule for its panels, applied here. Under
+    # `traffic`, hue and size both carry the agent count and the direction is
+    # in the arrow's own shape. Under `direction`, hue carries the direction
+    # and the agent count moves to size *and* brightness.
     # A one-agent corpus IS the whole swarm, so it sits at the top of the ramp
-    # in both channels rather than reading as a lone detour.
-    t = 1.0 if n_agents <= 1 else (k - 1) / (n_agents - 1)
-    scale = 0.46 + 0.54 * t
+    # in every channel rather than reading as a lone detour.
+    scale = arrow_scale(encoding, k, n_agents)
     tp = world.tile_px
     length = tp * 0.94 * scale
     width = max(2.0, tp * 0.52 * scale)
@@ -522,7 +366,8 @@ def draw_arrow(dr, world, steps, ix, k, n_agents, paced_at, alpha_floor=0.55):
     return True
 
 
-def panel_width(font, small, title, subtitle, lines, tile_px):
+def panel_width(font, small, title, subtitle, lines, tile_px,
+                encoding="direction"):
     """Wide enough for the longest line there is.
 
     **A clipped caption is worse than a short one**, because a reader cannot
@@ -536,13 +381,18 @@ def panel_width(font, small, title, subtitle, lines, tile_px):
     w = probe.textlength(title, font=font)
     for t in list(subtitle) + [t for t, _c in lines]:
         w = max(w, probe.textlength(t, font=small))
-    # The ramp is drawn at a fixed swatch size, so it has a floor of its own.
-    w = max(w, len(TRAFFIC_RAMP) * max(10, int(tile_px * 0.9)))
+    # The key is drawn at a fixed swatch size, so it has a floor of its own.
+    if encoding == "traffic":
+        w = max(w, len(TRAFFIC_RAMP) * max(10, int(tile_px * 0.9)))
+    else:
+        w = max(w, tile_px * 9.0)
     return int(w + tile_px * 2.6)
 
 
 def legend(img, dr, x, y, w, steps, n_agents, tile_px, title, subtitle, lines,
-           font, small):
+           font, small, encoding="direction"):
+    """The panel. **What it says is derived from the encoding that was used**,
+    so a key and a picture cannot disagree about what a colour means."""
     dr.rectangle([x, 0, x + w, img.height], fill=PANEL)
     pad = int(tile_px * 1.2)
     cx = x + pad
@@ -554,36 +404,98 @@ def legend(img, dr, x, y, w, steps, n_agents, tile_px, title, subtitle, lines,
         yy += int(small.size * 1.35)
     yy += int(small.size * 0.9)
 
-    dr.text((cx, yy), "COLOUR + SIZE = agents that", font=small, fill=INK)
-    yy += int(small.size * 1.3)
-    dr.text((cx, yy), "stepped off this tile", font=small, fill=INK)
-    yy += int(small.size * 1.7)
-    sw = max(10, int((w - 2 * pad) / len(TRAFFIC_RAMP)))
-    for i, col in enumerate(TRAFFIC_RAMP):
-        dr.rectangle([cx + i * sw, yy, cx + (i + 1) * sw - 2, yy + sw],
-                     fill=col)
-    yy += sw + int(small.size * 0.4)
-    dr.text((cx, yy), "1", font=small, fill=DIM)
-    lab = f"{n_agents}"
-    dr.text((cx + len(TRAFFIC_RAMP) * sw - small.size * len(lab) * 0.62, yy),
-            lab, font=small, fill=DIM)
-    yy += int(small.size * 2.0)
-
-    # The two arrow shapes, drawn with the same code that draws the map.
-    ax = cx + tile_px
-    for shape, text in (("one", "one-way"), ("two", "walked both ways")):
-        pts = arrow_points(ax, yy + tile_px * 0.5, 3, tile_px * 1.6,
-                           tile_px * 0.8, shape == "two")
-        dr.polygon(pts, fill=TRAFFIC_RAMP[-3], outline=(10, 12, 16))
-        dr.text((ax + tile_px * 1.6, yy + tile_px * 0.12), text,
+    if encoding == "traffic":
+        dr.text((cx, yy), "COLOUR + SIZE = agents that", font=small, fill=INK)
+        yy += int(small.size * 1.3)
+        dr.text((cx, yy), "stepped off this tile", font=small, fill=INK)
+        yy += int(small.size * 1.7)
+        sw = max(10, int((w - 2 * pad) / len(TRAFFIC_RAMP)))
+        for i, col in enumerate(TRAFFIC_RAMP):
+            dr.rectangle([cx + i * sw, yy, cx + (i + 1) * sw - 2, yy + sw],
+                         fill=col)
+        yy += sw + int(small.size * 0.4)
+        dr.text((cx, yy), "1", font=small, fill=DIM)
+        lab = f"{n_agents}"
+        dr.text((cx + len(TRAFFIC_RAMP) * sw - small.size * len(lab) * 0.62, yy),
+                lab, font=small, fill=DIM)
+        yy += int(small.size * 2.0)
+    else:
+        # **The direction key is drawn as arrows, not as swatches**, because
+        # the thing being keyed is a direction and a square cannot point.
+        dr.text((cx, yy), "COLOUR = which way they walked", font=small,
+                fill=INK)
+        yy += int(small.size * 1.7)
+        for d_ix, label in ((1, "up"), (0, "down"),
+                            (2, "left"), (3, "right")):
+            pts = arrow_points(cx + tile_px * 0.9, yy + tile_px * 0.5, d_ix,
+                               tile_px * 1.5, tile_px * 0.8, False)
+            dr.polygon(pts, fill=arrow_rgb("direction", d_ix, n_agents,
+                                           n_agents),
+                       outline=(10, 12, 16))
+            dr.text((cx + tile_px * 2.0, yy + tile_px * 0.12), label,
+                    font=small, fill=INK)
+            yy += int(tile_px * 1.55)
+        pts = arrow_points(cx + tile_px * 0.9, yy + tile_px * 0.5, 1,
+                           tile_px * 1.5, tile_px * 0.8, True)
+        dr.polygon(pts, fill=arrow_rgb("direction", 1, n_agents, n_agents,
+                                       paced=True),
+                   outline=(10, 12, 16))
+        dr.text((cx + tile_px * 2.0, yy + tile_px * 0.12), "both ways",
                 font=small, fill=INK)
-        yy += int(tile_px * 1.7)
-    yy += int(small.size * 1.0)
+        yy += int(tile_px * 1.9)
+        dr.text((cx, yy), "SIZE + BRIGHTNESS = agents", font=small, fill=INK)
+        yy += int(small.size * 1.3)
+        dr.text((cx, yy), "that stepped off this tile", font=small, fill=INK)
+        yy += int(small.size * 1.6)
+        # The same arrow at both ends of the traffic range, so a reader can see
+        # what "one agent" and "the whole swarm" actually look like on the map.
+        for k, label in ((1, "1"), (n_agents, f"{n_agents}")):
+            s = arrow_scale("direction", k, n_agents)
+            pts = arrow_points(cx + tile_px * 0.9, yy + tile_px * 0.5, 3,
+                               tile_px * 1.5 * s, tile_px * 0.8 * s, False)
+            dr.polygon(pts, fill=arrow_rgb("direction", 3, k, n_agents),
+                       outline=(10, 12, 16))
+            dr.text((cx + tile_px * 2.0, yy + tile_px * 0.12), label,
+                    font=small, fill=DIM)
+            yy += int(tile_px * 1.55)
+        yy += int(small.size * 0.6)
+
+    if encoding == "traffic":
+        # The two arrow shapes, drawn with the same code that draws the map.
+        ax = cx + tile_px
+        for shape, text in (("one", "one-way"), ("two", "walked both ways")):
+            pts = arrow_points(ax, yy + tile_px * 0.5, 3, tile_px * 1.6,
+                               tile_px * 0.8, shape == "two")
+            dr.polygon(pts, fill=TRAFFIC_RAMP[-3], outline=(10, 12, 16))
+            dr.text((ax + tile_px * 1.6, yy + tile_px * 0.12), text,
+                    font=small, fill=INK)
+            yy += int(tile_px * 1.7)
+        yy += int(small.size * 1.0)
 
     for line, colour in lines:
         dr.text((cx, yy), line, font=small, fill=colour)
         yy += int(small.size * 1.35)
     return yy
+
+
+def legibility(steps, world, drawn_ix, width):
+    """How big the smallest arrow is once the picture is fitted to a screen.
+
+    **Raising `--tile-px` does not help this and it is worth knowing why.** The
+    crop and the arrows scale together, so an arrow's share of the picture is
+    fixed: at whole-chain zoom `chain-film` measures 5.8 display pixels for a
+    whole-swarm arrow fitted to 900 px wide, and the same 5.8 at any
+    `--tile-px`. The only lever is **how much map is in the frame**, which is
+    `--maps`. Reported rather than argued so a reader can check it.
+    """
+    tp = world.tile_px
+    fit = 900.0 / max(1, width)
+    biggest = tp * 0.94 * fit
+    smallest = biggest * (0.46 if getattr(world, "encoding", "") == "traffic"
+                          else 0.64)
+    # Which map holds the most drawn tiles — the stretch worth zooming into.
+    per = collections.Counter(steps.tiles[ix][0] for ix in drawn_ix)
+    return biggest, smallest, per
 
 
 def endings(steps, atlas):
@@ -600,12 +512,11 @@ def endings(steps, atlas):
 
 def build(a, want_video):
     from PIL import Image, ImageDraw
-    sf = _swarm_film()
     if not os.path.exists(a.atlas):
         die(f"no atlas manifest at {a.atlas}",
             f"{SELF} {'video' if want_video else 'still'} <dir> --atlas <atlas.json>",
             code=2)
-    atlas = sf.Atlas(a.atlas, a.atlas_image, a.rendering, a.atlas_scale)
+    atlas = cr.Atlas(a.atlas, a.atlas_image, a.rendering, a.atlas_scale)
     steps = Steps(a.tracks, atlas.holds)
     if not steps.n_steps:
         die(f"no walked steps in {a.tracks}",
@@ -615,7 +526,8 @@ def build(a, want_video):
         maps = {int(t, 0) for t in a.maps.split(",")}
     world = World(atlas, steps, a.tile_px, a.margin, Image, a.dim, maps,
                   a.mask)
-    return sf, atlas, steps, world, Image, ImageDraw
+    world.encoding = a.colour
+    return atlas, steps, world, Image, ImageDraw
 
 
 def hud_lines(steps, world, atlas, drawn, extra=()):
@@ -629,8 +541,7 @@ def hud_lines(steps, world, atlas, drawn, extra=()):
 # --- commands ----------------------------------------------------------------
 def cmd_summary(a):
     from PIL import Image  # noqa: F401  (fails early and clearly if absent)
-    sf = _swarm_film()
-    atlas = sf.Atlas(a.atlas, a.atlas_image, a.rendering, a.atlas_scale)
+    atlas = cr.Atlas(a.atlas, a.atlas_image, a.rendering, a.atlas_scale)
     steps = Steps(a.tracks, atlas.holds)
     n = steps.n_agents
     if not steps.n_steps:
@@ -728,22 +639,23 @@ def render_still(a, steps, world, atlas, Image, ImageDraw, upto=None):
                   DIM))
     lines.append((f"map art: PixelGB, {a.rendering};", DIM))
     lines.append(("maps nobody entered are dimmed", DIM))
-    panel_w = panel_width(font, small, a.title, sub, lines, tp)
+    panel_w = panel_width(font, small, a.title, sub, lines, tp, a.colour)
 
     img = Image.new("RGB", (world.image.width + panel_w, world.image.height), BG)
     img.paste(world.image, (0, 0))
     dr = ImageDraw.Draw(img)
     drawn = 0
     for ix, k in sorted(counts.items(), key=lambda kv: kv[1]):
-        if draw_arrow(dr, world, steps, ix, k, steps.n_agents, a.paced):
+        if draw_arrow(dr, world, steps, ix, k, steps.n_agents, a.paced,
+                      a.colour):
             drawn += 1
     legend(img, dr, world.image.width, 0, panel_w, steps, steps.n_agents, tp,
-           a.title, sub, lines, font, small)
+           a.title, sub, lines, font, small, a.colour)
     return img, len(drawn_ix), n_steps
 
 
 def cmd_still(a):
-    sf, atlas, steps, world, Image, ImageDraw = build(a, False)
+    atlas, steps, world, Image, ImageDraw = build(a, False)
     img, drawn, drawn_steps = render_still(a, steps, world, atlas, Image,
                                            ImageDraw)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)) or ".", exist_ok=True)
@@ -764,18 +676,34 @@ def cmd_still(a):
     table("endings", [{"map": f"0x{m:02X}", "name": lab, "agents": c}
                       for m, c, lab in endings(steps, atlas)],
           ["map", "name", "agents"])
-    helps([
-        f"{SELF} video {a.tracks} --out {os.path.splitext(a.out)[0]} --mp4",
+    drawn_ix = [ix for ix in range(len(steps.tiles))
+                if steps.tiles[ix][0] in world.maps]
+    big, small, per = legibility(steps, world, drawn_ix, img.width)
+    obj("arrow size once this is fitted to a 900px-wide screen", [
+        ("whole-swarm arrow", f"{big:.1f} display px"),
+        ("one-agent arrow", f"{small:.1f} display px"),
+        ("note", "--tile-px does not move these; --maps does"),
+    ])
+    tips = [f"{SELF} video {a.tracks} --out {os.path.splitext(a.out)[0]} --mp4"]
+    if big < 9.0 and not a.maps:
+        # **A picture whose arrows fit in six display pixels is a picture of
+        # the route, not of the arrows.** Name the busiest stretch rather than
+        # leaving a reader to work out which `--maps` to ask for.
+        busiest = ",".join(f"0x{m:02X}" for m, _ in per.most_common(2))
+        tips.append(f"{SELF} still {a.tracks} --maps {busiest} --tile-px 22 "
+                    f"--out <png>   # the busiest stretch, arrows legible")
+    tips += [
         f"{SELF} still {a.tracks} --maps 0x0C,0x01 --out <png>   # one stretch",
         f"{SELF} summary {a.tracks}",
-    ])
+    ]
+    helps(tips)
     return 0
 
 
 def cmd_video(a):
-    sf, atlas, steps, world, Image, ImageDraw = build(a, True)
+    atlas, steps, world, Image, ImageDraw = build(a, True)
     last = max(steps.end.values())
-    fps_gb = sf.FPS_GB
+    fps_gb = cr.FPS_GB
     if a.speed:
         stride = max(1, int(round(a.speed * fps_gb / a.fps)))
         frames_out = -(-last // stride)
@@ -792,14 +720,15 @@ def cmd_video(a):
     # are already known.
     widest_sub = [f"{steps.n_agents} agents from "
                   f"{os.path.basename(a.tracks.rstrip('/'))}",
-                  f"{last/sf.FPS_GB/60:6.1f} emulated minutes",
+                  f"{last/cr.FPS_GB/60:6.1f} emulated minutes",
                   f"{len(steps.tiles)} tiles lit, {steps.n_steps} steps",
                   f"{steps.n_agents} of {steps.n_agents} still running"]
     widest_lines = hud_lines(steps, world, atlas, 0, extra=[("", INK)])
     widest_lines += [("", INK), ("9999x timelapse", DIM),
                      (f"map art: PixelGB, {a.rendering};", DIM),
                      ("maps nobody entered are dimmed", DIM)]
-    panel_w = panel_width(font, small, a.title, widest_sub, widest_lines, tp)
+    panel_w = panel_width(font, small, a.title, widest_sub, widest_lines, tp,
+                          a.colour)
     W = world.image.width + panel_w
     H = world.image.height
     # h264 wants even dimensions.
@@ -865,8 +794,10 @@ def cmd_video(a):
             for jx in _near(steps, world, ix, tp):
                 kk = drawn_k.get(jx)
                 if kk:
-                    draw_arrow(dr, world, steps, jx, kk, steps.n_agents, a.paced)
-            draw_arrow(dr, world, steps, ix, k, steps.n_agents, a.paced)
+                    draw_arrow(dr, world, steps, jx, kk, steps.n_agents,
+                               a.paced, a.colour)
+            draw_arrow(dr, world, steps, ix, k, steps.n_agents, a.paced,
+                       a.colour)
 
         live = sum(1 for e in live_end if e >= gbf)
         panel = Image.new("RGB", (panel_w, H), PANEL)
@@ -882,7 +813,7 @@ def cmd_video(a):
         lines.append((f"map art: PixelGB, {a.rendering};", DIM))
         lines.append(("maps nobody entered are dimmed", DIM))
         legend(panel, pd, 0, 0, panel_w, steps, steps.n_agents, tp,
-               a.title, sub, lines, font, small)
+               a.title, sub, lines, font, small, a.colour)
         canvas.paste(panel, (world.image.width, 0))
         canvas.save(os.path.join(a.out, f"f{i:05d}.png"))
         written += 1
@@ -937,7 +868,8 @@ def cmd_home(a):
     obj("this tool", [
         ("reads", "agent-NNN.csv / path-NNNNN.csv position tracks already on disk"),
         ("emulates", "nothing"),
-        ("colour and size", "how many DISTINCT agents stepped off the tile"),
+        ("colour", "which way they walked (--colour traffic: the agent count)"),
+        ("size and brightness", "how many DISTINCT agents stepped off the tile"),
         ("arrow", "the direction of travel, from the tile delta"),
         ("double-headed", "the tile was walked both ways"),
     ])
@@ -978,7 +910,11 @@ HELP = {
         [f"{SELF} still /home/aaron/pokemon-run/chain-film "
          f"--out /home/aaron/pokemon-run/pewter-path-arrows.png",
          f"{SELF} still <dir> --maps 0x0C --tile-px 20 --out <png>"],
-        ["--tile-px N    output pixels per walk tile (default 12)",
+        ["--colour E     direction (default): hue is the way they walked, "
+         "size and brightness the agent count. traffic: the original ramp",
+         "--tile-px N    output pixels per walk tile (default 16). It does "
+         "NOT change how big an arrow looks once the picture is fitted to a "
+         "screen — only --maps does",
          "--maps LIST    only these map ids, e.g. 0x0C,0x01",
          "--dim F        darken the map layer, 1.0 leaves the art exact",
          "--rendering    four-shade (default) or region-tint"],
@@ -987,7 +923,8 @@ HELP = {
         "PNG frames in which the arrows appear as the swarm reaches the tiles.",
         [f"{SELF} video /home/aaron/pokemon-run/chain-film "
          f"--out /home/aaron/pokemon-run/pewter-path-arrows --mp4 --speed 900"],
-        ["--speed X      film at X times real time; the runtime falls out of it",
+        ["--colour E     direction (default) or traffic; see `help still`",
+         "--speed X      film at X times real time; the runtime falls out of it",
          "--seconds S    how long the film should be instead",
          "--fps N        output frame rate (default 30)",
          "--mp4          encode with ffmpeg as well as writing the frames"],
@@ -1023,6 +960,11 @@ def main():
     ap.add_argument("--mask", type=float, default=0.30,
                     help="how bright a map nobody in this corpus entered is drawn; 1.0 leaves the whole crop exact")
     ap.add_argument("--paced", type=float, default=0.40)
+    ap.add_argument("--colour", "--color", dest="colour", default="direction",
+                    choices=ENCODINGS,
+                    help="direction: hue is the way they walked, traffic moves "
+                         "to size and brightness (default). traffic: the "
+                         "original ramp, hue and size both the agent count")
     ap.add_argument("--title", default="THE SWARM'S PATHS")
     ap.add_argument("--out", default=None)
     ap.add_argument("--fps", type=int, default=30)
