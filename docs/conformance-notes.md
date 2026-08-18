@@ -23,6 +23,29 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-18 — where the whole aggregation stood, before and after the day
+
+Written down because every later claim is judged against it, and because the
+day began by initialising the `retrio/gb-test-roms` submodule — without which
+`testharness/testroms.rs` proves nothing and `cargo test` is green for the wrong
+reason. **With it initialised the in-repo harness runs and is 46/47, exactly
+what `testharness/baseline.txt` says**, so the honest baseline did not move: the
+harness was not lying about its *score*, it simply was not running.
+
+Summed over every checked-in baseline, `SKIP` rows in neither column, both
+picture modes measured separately because a blended number is wrong:
+
+| | `standard` | `identical` |
+|---|---:|---:|
+| start of day | 3200 / 6210 | 3719 / 6210 |
+| end of day | **3627 / 6210** | **4146 / 6210** |
+
+**+427 rows in each mode, all of them Gambatte's `oamdma/` group, with zero
+regressions in any other suite or either mode.** The two entries below are what
+did it.
+
+---
+
 ## 2026-08-18 — OAM DMA has a bus, and the CPU has to share it (`TGB-DMA-001`)
 
 The largest single named cause in the whole c-sp aggregation, and it had never
@@ -200,6 +223,14 @@ revision `0-D`.
 
 **No `savestate::FORMAT_VERSION` bump**, because nothing is stored: on the
 console we model the block is not memory.
+
+**Cost of this one is nothing measurable** — it is one more arm in `rb`'s
+dispatch over a range no hot loop touches. Both of the day's memory changes
+together, interleaved against the commit before them on one pinned P-core, five
+rounds each at load average 14: Pokémon Blue's boot **0.1383 → 0.1399 ms/frame
+(+1.2 %)**, with the frame hash *and* the WRAM hash byte-identical. That agrees
+with the +1.1 % measured for the bus conflict alone on a quiet box, so the
+figure is not a contention artefact.
 
 **Carries into the tool.** Three checks — the block's value per console, that it
 is `$FF` whenever OAM is, and that a write to it keeps nothing — plus the

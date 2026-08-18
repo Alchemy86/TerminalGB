@@ -823,7 +823,9 @@ harness's verdict *text*, every audio hash, and Mealybug's per-row pixel counts.
   load average 1.4:** `cpu_instrs` 0.1960 → **0.1953** ms/frame (inside code-layout noise, in
   our favour) and Pokémon Blue's boot 0.0891 → **0.0901** (+1.1 % of the emulator's own figure,
   0.006 % of a 16.743 ms frame). **The WRAM hash is byte-identical on both** — a cartridge that
-  does not read across a running transfer cannot tell.
+  does not read across a running transfer cannot tell. Re-measured with the `$FEA0-$FEFF` work
+  on top, five rounds at load average 14: **0.1383 → 0.1399 (+1.2 %)**, frame *and* WRAM hash
+  identical — so the figure survives contention and the second change costs nothing.
 - **Gated by `mmu::dma_conflict_tests`** — eleven cases, no ROM, in a plain `cargo test`. Teeth
   proven four ways: removing the read conflict reddens 2, letting a conflicting write land
   reddens 2, collapsing the Color console's work-RAM bus reddens 4, dropping the wired-AND
