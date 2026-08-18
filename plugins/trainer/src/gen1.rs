@@ -119,6 +119,26 @@ pub mod addr {
     /// exactly this address at `03:5777` and `03:5797` on this cartridge — see
     /// [`super::capture`].
     pub const ENEMY_ACTUAL_CATCH_RATE: u16 = 0xD007;
+    /// `wPlayerDisabledMove` — which of our moves DISABLE has taken away.
+    ///
+    /// **The HIGH nibble is the move slot plus one and the low nibble is the
+    /// turns left**; the whole byte is zero when nothing is disabled. Measured
+    /// rather than read off `DisableEffect`, on eight stuck states from link
+    /// 20: `$38` `$18` `$17` `$21` `$37` `$13` `$34` beside
+    /// `wPlayerDisabledMoveNumber` ($CCEE) naming EMBER, TACKLE, TACKLE,
+    /// GROWL, EMBER, TACKLE and EMBER — every high nibble is that move's own
+    /// slot plus one, and the low nibble moves while the slot does not.
+    ///
+    /// **Do not read `$CCEE` instead.** The eighth state had it holding WATER
+    /// GUN with this byte back at zero: the move *number* goes stale when
+    /// DISABLE expires, and only this byte says whether anything is disabled.
+    ///
+    /// **A policy that does not read this deadlocks.** Measured on Route 3: a
+    /// LASS's level 14 JIGGLYPUFF disabled an IVYSAUR's only move with PP left
+    /// and the solver re-selected it 600 times in a row, the cartridge
+    /// answering "The move is disabled!" every time — 11 of 60 attempts, all
+    /// of them out of model calls on the same tile.
+    pub const PLAYER_DISABLED_MOVE: u16 = 0xD06D;
     /// `wEnemyMonStatMods` — in-battle stat stages, `7` is neutral
     /// (attack, defense, speed, special, accuracy, evasion).
     pub const ENEMY_STAT_MODS: u16 = 0xCD2E;

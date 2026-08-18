@@ -8,7 +8,9 @@ be started from instantly, and the list of places a solver reliably struggles.
 
 > **The chain continues past Pewter** — the gym, the badge, and the
 > precondition none of these fourteen links had checked — in
-> [`brock.md`](brock.md). Read this page first; that one assumes it.
+> [`brock.md`](brock.md), and past the badge towards Misty — Route 3, Route 4
+> and the mouth of Mt Moon — in [`cerulean.md`](cerulean.md). Read this page
+> first; both of those assume it.
 
 > **Comparing two players on one of these links** — the same entry states, the
 > same seeds, the rates, the intervals and the paired gap — is

@@ -138,9 +138,15 @@ const VIRIDIAN_POKECENTER: u8 = 0x29;
 const PEWTER_CITY: u8 = 0x02;
 const PEWTER_GYM: u8 = 0x36;
 const PEWTER_POKECENTER: u8 = 0x3A;
-/// Route 3, east of Pewter — where the chain goes next.
-#[allow(dead_code)]
+/// Route 3, east of Pewter — the road to Mt Moon and Cerulean.
 const ROUTE_3: u8 = 0x0E;
+/// Route 4, north of Route 3: the Mt Moon Pokémon Center, the mountain's two
+/// mouths, and — past the mountain — the road east into Cerulean.
+const ROUTE_4: u8 = 0x0F;
+/// The Mt Moon Pokémon Center, on Route 4 beside the mountain's west mouth.
+/// The same building as Viridian's and Pewter's — nurse at (3,1), counter,
+/// doors at (3,7)/(4,7) — which is why [`POKECENTER`] serves all three.
+const MT_MOON_POKECENTER: u8 = 0x44;
 /// Route 22, west of Viridian — a pre-forest training candidate, measured in
 /// `scenarios/experiments/` and not part of the chain.
 const ROUTE_22: u8 = 0x21;
@@ -259,6 +265,105 @@ const GYM_TO_POKECENTER: &[(u8, u8)] = &[
 /// involved at all. The same shape as link 08's ledge — a waypoint whose
 /// overshoot cannot be recovered from.
 const PEWTER_TO_ROUTE_3: &[(u8, u8)] = &[(19, 26), (19, 18), (39, 18)];
+
+/// Route 4's southern spur, from where Route 3 lets you in at (9,17) up to the
+/// Mt Moon Pokémon Center's door at (11,5).
+///
+/// **The jog east at row 12 is the map, not a bad path**: row 11 begins at
+/// x=12, so a straight climb up column 10 is walled, and the corridor from the
+/// bottom of the map to the three doors on row 5 is one tile wide in places.
+/// The three doors are (11,5) the Pokémon Center, (18,5) the mountain's west
+/// mouth and (24,5) the mouth it puts you back out of — and x=20-23 is solid
+/// on rows 6, 7 and 8, so the third is not reachable on foot from the first
+/// two. **Mt Moon is not a shortcut round Route 4; it is the only way east.**
+const ROUTE_4_TO_POKECENTER: &[(u8, u8)] = &[
+    (10, 16),
+    (10, 12),
+    (12, 12),
+    (12, 6),
+    (11, 6),
+    (11, 5),
+];
+
+/// Route 3, from where Pewter drops you in to the northern edge that crosses
+/// onto Route 4. **Sixteen turning points for eighty-five steps, and the map
+/// is why**: rows 8-13 are chopped into three pockets by the solid columns at
+/// x=17 and x=23, row 7 is a wall with gaps only at x=11, 27, 37, 49 and 59,
+/// and row 5's own wall at x=28-33 means the upper shelf cannot carry you
+/// past x=27 either. So the crossing zigzags — up at 11, along the shelf,
+/// down at 27, along the floor, up at 37, along the shelf, down at 49 — and
+/// every one of those columns is a gap the cartridge left, not a choice.
+///
+/// **Three of Route 3's eight trainers cannot be avoided at any sight range**,
+/// which is measured rather than assumed: blocking one trainer's cone and
+/// asking whether the walk graph still connects the west edge to the north
+/// edge severs it for the BUG CATCHER at (10,6), the YOUNGSTER at (14,4) and
+/// the BUG CATCHER at (24,6) — the first guards the only ascent out of the
+/// west pocket, the second the only crossing of the shelf, the third the only
+/// descent back onto the floor. See `docs/agent/cerulean.md`.
+///
+/// **AND IT CROSSES THE SHELF ALONG ROW 6, NOT ROW 4, BECAUSE THE LASS AT
+/// (23,4) PARKS ON ROW 4 ONCE SHE IS BEATEN.** Measured, and it was the whole
+/// of the first version's failure: 56 of 60 attempts ended standing at (19,4)
+/// with nothing left to fight and nothing hurt — 172 battles won, none lost,
+/// 80.3 % of the lead's HP still there. Her sight range is **4**, which the
+/// cluster reads off directly: row 4 is walkable only from x=15 to x=22, she
+/// sees x=19 to x=22, so a walker heading east is stopped at the westmost tile
+/// of her cone and `TrainerWalkUpToPlayer` then leaves her body on (20,4). Row
+/// 4 is sealed, and row 5 is already sealed at x=19 by the BUG CATCHER's own
+/// body, so from (19,4) there is no tile east at all.
+///
+/// The shelf's lower storey is the way through: (18,5) drops to row 6, whose
+/// x=18-22 corridor passes *under* the BUG CATCHER at (19,5) — whose cone is
+/// the single tile (19,6), because row 7 is a wall beneath him — and climbs
+/// back to row 5 at (20,6)/(20,5), east of his body. **Every trainer this
+/// route engages is engaged from a tile he is already adjacent to**, so none
+/// of them can park on anything, and the LASS is never walked into at all.
+///
+/// The general rule this is the fourth instance of: *a waypoint a defeated
+/// trainer can stand on is a waypoint that stops existing.* Link 05's row 4 was
+/// the same shape, and so was the tile the rival parks on in Oak's laboratory.
+///
+/// **AND THE FLOOR IS CROSSED ALONG ROW 11, NOT ROW 8, BECAUSE THE LASS AT
+/// (33,10) IS THE ONE FIGHT ON THIS ROUTE THAT CAN BE LOST.** She faces up, so
+/// her cone is (33,9) and (33,8) — row 7 is a wall above it — and row 8 is the
+/// obvious way east. Measured on 60 attempts with the route through it: **four
+/// faints, every one of them on her tile**, against zero anywhere else on the
+/// route; her JIGGLYPUFF is level 14 with a base HP of 115, so it takes three
+/// or four turns to remove while SING and DISABLE take turns away, and Route 3
+/// has no Pokémon Center to arrive at it whole from. Rows 11 and 12 run clear
+/// from x=24 to x=37, her body blocks row 10 rather than row 11, and column 37
+/// climbs from row 11 to row 5 through the same gap — so the detour is
+/// *shorter* than the row-8 crossing and fights nobody.
+///
+/// The same trade link 17 makes with the gym's junior trainer, measured the
+/// same way: the experience is real and losing the link is worse.
+///
+/// **The descent is the gap at x=27 and NOT the ledge at x=25.** Both are
+/// inside the same trainer's cone once his range reaches three, so the fight
+/// is the same either way — but a ledge is one-way, and this chain has lost
+/// three links to a waypoint whose overshoot could not be recovered from
+/// (link 04's (4,4), link 05's row 4, link 08's Viridian ledge). A gap can be
+/// walked back through; a ledge cannot.
+const ROUTE_3_CROSSING: &[(u8, u8)] = &[
+    (5, 9),
+    (11, 8),
+    (11, 5),
+    (18, 5),
+    (18, 6),
+    (20, 6),
+    (20, 5),
+    (27, 5),
+    (27, 11),
+    (37, 11),
+    (37, 5),
+    (49, 5),
+    (49, 10),
+    (57, 10),
+    (57, 8),
+    (59, 8),
+    (59, 0),
+];
 
 /// Pewter's Pokémon Center door down to the southern edge, where the map
 /// connection drops you onto the top of Route 2.
@@ -672,6 +777,29 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
                 PEWTER_CITY,
                 vec![stage(PEWTER_TO_ROUTE_3, Finish::Step("right"))],
             );
+        }
+        // ---- past Pewter, towards Cerulean ------------------------------
+        //
+        // **The first link the chain has had to FIGHT its way across.** Every
+        // battle leg before this was one fight (the rival, Brock) or a patch
+        // of grass; Route 3 is eight trainers strung along a corridor, three
+        // of them standing on the only tiles the geometry offers. Nothing can
+        // be routed round, so the link's rate is the battle policy's rate.
+        "20-cross-route-3" => {
+            r.insert(
+                ROUTE_3,
+                vec![stage(ROUTE_3_CROSSING, Finish::Step("up"))],
+            );
+        }
+        // **The first heal since the gym, and the last one before the
+        // mountain.** Route 4's own Pokémon Center is nine tiles from the
+        // mouth of Mt Moon, which is what makes it the place to be whole.
+        "21-heal-at-mt-moon" => {
+            r.insert(
+                ROUTE_4,
+                vec![stage(ROUTE_4_TO_POKECENTER, Finish::Arrive)],
+            );
+            r.insert(MT_MOON_POKECENTER, Stage2::to_vec(POKECENTER));
         }
         "14-arrive-in-pewter" => {
             r.insert(

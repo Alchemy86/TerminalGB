@@ -913,6 +913,24 @@ impl Gen1Observer {
         if ours.level == 0 || theirs.level == 0 || ours.max_hp == 0 {
             return None;
         }
+        // **Which move DISABLE has taken away.** `wPlayerDisabledMove` is
+        // `(slot + 1) << 4 | turns_left`, and zero when nothing is disabled.
+        //
+        // The nibble order is measured, not read off a macro: eight stuck
+        // states from link 20 give `$D06D` = `$38`/`$18`/`$17`/`$21`/`$37`/
+        // `$13`/`$34` beside `wPlayerDisabledMoveNumber` ($CCEE) reading
+        // EMBER/TACKLE/TACKLE/GROWL/EMBER/TACKLE/EMBER — every high nibble is
+        // that move's own slot plus one, and the low nibble varies while the
+        // slot does not. The eighth is the reason `$CCEE` is not read instead:
+        // it still held WATER GUN with `$D06D` back at zero, so the move
+        // number goes **stale** when DISABLE expires and only `$D06D` says
+        // whether anything is disabled at all.
+        let disabled_slot = m
+            .peek(tr::PLAYER_DISABLED_MOVE)
+            .filter(|b| *b != 0)
+            .map(|b| (b >> 4) as usize)
+            .filter(|n| *n >= 1)
+            .map(|n| n - 1);
         let mut moves = Vec::new();
         for slot in 0..terminalgb_plugin_trainer::gen1::NUM_MOVES {
             let id = m.peek(tr::BATTLE_MON + b::MOVES + slot as u16).unwrap_or(0);
@@ -932,6 +950,7 @@ impl Gen1Observer {
                 effect: t.effect(id),
                 accuracy: hit_chance(t, t.accuracy_percent(id), &ours, &theirs),
                 pp,
+                disabled: disabled_slot == Some(slot),
                 effect_pct: t.multiplier(kind, theirs.types.0, theirs.types.1),
                 stab: kind == ours.types.0 || kind == ours.types.1,
                 min: 0,

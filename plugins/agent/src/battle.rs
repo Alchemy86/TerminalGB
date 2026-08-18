@@ -184,6 +184,16 @@ pub struct Move {
     /// 3,000 attempts at link 10 died.
     pub accuracy: u8,
     pub pp: u8,
+    /// **DISABLE has taken this move away.** Read from `wPlayerDisabledMove`
+    /// ($D06D), whose low nibble is the disabled slot plus one.
+    ///
+    /// This is a *separate* thing from having no PP and it has to be, because
+    /// the game answers them differently: a move with no PP is greyed out and
+    /// selecting it is refused before the turn starts, while a disabled move is
+    /// selected happily and then answered with "The move is disabled!" and no
+    /// turn passes at all. A policy that re-picks it does not lose the fight —
+    /// it never finishes it. See [`Move::usable`].
+    pub disabled: bool,
     /// Type effectiveness against the Pokémon in front of us, 100 = neutral.
     pub effect_pct: u32,
     pub stab: bool,
@@ -193,8 +203,19 @@ pub struct Move {
 }
 
 impl Move {
+    /// May the turn actually be spent on this move?
+    ///
+    /// **PP and DISABLE both make a move unusable, and only one of them is
+    /// visible in the move list.** Selecting a disabled move costs no turn and
+    /// changes nothing, so a policy that keeps choosing it spins for ever
+    /// rather than losing — which is exactly what it did: 11 of 60 attempts at
+    /// link 20 ran out of model calls standing on one tile, every one of them
+    /// re-selecting a TACKLE a JIGGLYPUFF had disabled. The other three moves
+    /// were a GROWL, a LEECH SEED and a VINE WHIP with no PP, so the fallback
+    /// at the end of [`decide`] had something legal to reach for the whole
+    /// time and was never asked.
     pub fn usable(&self) -> bool {
-        self.pp > 0
+        self.pp > 0 && !self.disabled
     }
     pub fn damaging(&self) -> bool {
         self.power > 0 && self.effect_pct > 0
@@ -709,6 +730,7 @@ impl View {
             w.num_field("effect", m.effect as f64);
             w.num_field("accuracy", m.accuracy as f64);
             w.num_field("pp", m.pp as f64);
+            w.bool_field("disabled", m.disabled);
             w.num_field("effect_pct", m.effect_pct as f64);
             w.bool_field("stab", m.stab);
             w.num_field("min", m.min as f64);
@@ -753,6 +775,10 @@ impl View {
                             effect: n("effect") as u8,
                             accuracy: n("accuracy") as u8,
                             pp: n("pp") as u8,
+                            disabled: m
+                                .get("disabled")
+                                .and_then(|b| b.as_bool())
+                                .unwrap_or(false),
                             effect_pct: n("effect_pct") as u32,
                             stab: m
                                 .get("stab")
@@ -865,6 +891,53 @@ mod tests {
             incoming_crit: 5,
             ..Default::default()
         }
+    }
+
+    /// **A disabled move is not offered, and the policy finds something else.**
+    ///
+    /// The shape that broke link 20: the only damaging move with PP left is
+    /// the one DISABLE took away, so the policy must fall through to a move
+    /// that does nothing rather than re-selecting a move the cartridge will
+    /// refuse. Selecting a disabled move costs no turn, so the failure is a
+    /// deadlock rather than a loss and no HP figure ever shows it.
+    #[test]
+    fn a_disabled_move_is_never_chosen() {
+        let mut v = view(true);
+        // Slot 0 is the damage, slot 1 is a GROWL. Make the damage clearly
+        // worth having — otherwise rule 3 reaches for the stat move anyway and
+        // the test passes for a reason that has nothing to do with DISABLE.
+        v.moves[0].min = 8;
+        v.moves[0].max = 10;
+        // Disable the damage.
+        v.moves[0].disabled = true;
+        match decide(&v, &TRAIN) {
+            Action::Fight { slot, .. } => assert_eq!(
+                slot, 1,
+                "picked a disabled move; the cartridge answers \"The move is \
+                 disabled!\" and no turn passes"
+            ),
+            other => panic!("a trainer battle cannot be run from: {other:?}"),
+        }
+        // Teeth: with the flag clear the same view picks the damage, so the
+        // test is measuring the flag and not the move order.
+        v.moves[0].disabled = false;
+        assert!(matches!(
+            decide(&v, &TRAIN),
+            Action::Fight { slot: 0, .. }
+        ));
+    }
+
+    /// A disabled move is a *different* thing from one with no PP, and both
+    /// have to reach [`Move::usable`] or the policy is right by accident.
+    #[test]
+    fn disable_and_empty_pp_are_both_unusable() {
+        let mut m = mv(0, 1, 40, 0, 3, 4);
+        assert!(m.usable());
+        m.disabled = true;
+        assert!(!m.usable());
+        m.disabled = false;
+        m.pp = 0;
+        assert!(!m.usable());
     }
 
     const TRAIN: Intent = Intent {
