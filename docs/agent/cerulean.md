@@ -54,7 +54,16 @@ attempt a distinct trajectory:
 | **25-east-to-cerulean** | **3000/3000** | 100.0 [99.9-100.0] | **Cerulean City** |
 
 **Every link past the gym is certified**, and the two that were "accepted, not
-certified" are not any more. Zero failures in 3,000 bounds the failure rate at
+certified" are not any more. **The whole chain runs cold cartridge to Cerulean
+City in one command and 1 m 44 s**, three seeds, every link solved:
+
+```sh
+./target/release/examples/pewter_chain chain --rom <blue.gb> --seeds 3 --to 25
+...
+=== link 25: 25-east-to-cerulean
+seed 1: GOAL — 2538 frames, 11 decisions, ended on map 0x03 (Cerulean City) at (0, 18)
+```
+ Zero failures in 3,000 bounds the failure rate at
 about 0.10 % by the rule of three, which is the 99.9 % claim the rest of the
 chain carries.
 

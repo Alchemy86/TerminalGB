@@ -10958,3 +10958,5 @@ Re-certifying the whole chain on `b5ee848` gives **15-train-for-brock 2997/3000*
 - **The whole chain was then replayed with the binary as committed** — 26 links × 100 seeds =
   **2,600 trajectories, every one identical** — which is what says the certification belongs to the
   shipped source and not to whatever was built while it ran.
+- **And it runs cold cartridge to Cerulean City in one command**: `pewter_chain chain --seeds 3
+  --to 25`, **1 m 44 s**, every link solved on all three seeds, ending on map `0x03` at (0,18).
