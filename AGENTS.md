@@ -9960,3 +9960,21 @@ Captain's instruction, and it is arithmetic rather than taste: the fourteen-link
 and 3 m 21 s, and **58 % of its emulated time is link 11 alone**, so appending Brock makes a
 longer film in which the new material is a *smaller* fraction. Same tooling
 (`tools/pewter-chain/swarm_film.py`), separate output. **Do not re-stitch them for tidiness.**
+
+- **`pewter_chain film` takes `--from`/`--to` now, and that is what makes either cut producible
+  on purpose.** It used to play every link there was, which was right while the chain ended at
+  Pewter and stopped being right the moment it did not — one command that always plays
+  everything can produce neither film, and the published 01-14 cut would have become
+  irreproducible the day links 15-19 landed. **A slice that does not begin at link 1 needs
+  somewhere to begin**, so `--from` above 1 requires `--start-dir` (agent *ag* takes pool slot
+  `ag % len`, the same rule `corpus` uses) and refuses without one rather than filming agents on
+  the Nintendo logo.
+- **`film` writes the `agent-NN.links.csv` span file too**, so `swarm_film.py`'s per-link bars
+  and its stage timeline work from a `film` run alone; `chain_tracks.py` is only needed when a
+  film is stitched from separate corpus runs. **The spans carry the link's number in the whole
+  chain, not its position in the slice** — a span file saying "link 1" for `15-train-for-brock`
+  is one nobody can line up against a report.
+- **The gym arc's own shape, from those spans** (one agent, 144,810 emulated frames): the
+  training link is **85 % of it** — 123,426 frames against the gym's 12,294 and the two heals'
+  4,824 and 2,586. The same shape link 11 has in the main chain, and the reason the two cuts do
+  not belong together.

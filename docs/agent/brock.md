@@ -460,21 +460,44 @@ Same tooling ([`docs/swarm-view.md`](../swarm-view.md),
 `tools/pewter-chain/swarm_film.py`), separate output. **Do not re-stitch them
 for tidiness.**
 
+**`film` takes `--from`/`--to` now**, and that is what makes either cut
+producible on purpose. It used to play every link there was, which was right
+while the chain ended at Pewter and stopped being right the moment it did not:
+one command that always plays everything can produce neither film. A slice that
+does not begin at link 1 needs somewhere to begin, so `--from` above 1 requires
+`--start-dir` (a pool; agent *ag* takes slot `ag % len`, the same rule `corpus`
+uses) and refuses without one rather than filming agents on the Nintendo logo.
+
 ```sh
-# one corpus per link with per-frame position tracks, each entering from the
-# previous link's exit pool. `--exits N` with the same N is what makes agent
-# `s` of every link the same playthrough — chain_tracks.py's header explains it.
-prev=<a certified link-14 exit pool>
-for l in 15-train-for-brock 16-heal-in-pewter 17-fight-through-the-gym          18-heal-after-the-gym 19-east-to-route-3; do
-  ./target/release/examples/pewter_chain corpus --rom <blue.gb>       --scenario scenarios/pewter/$l.json --runs 120 --exits 120 --workers 8       --paths --out target/gymfilm/${l%%-*} --start-dir $prev
-  prev=target/gymfilm/${l%%-*}/exits
-done
-python3 tools/pewter-chain/chain_tracks.py --out target/gymfilm/tracks     --agents 120 15:target/gymfilm/15 16:target/gymfilm/16     17:target/gymfilm/17 18:target/gymfilm/18 19:target/gymfilm/19
+# the gym arc, one continuous track per agent, straight out of the emulator
+./target/release/examples/pewter_chain film --rom <blue.gb> \
+    --runs 120 --workers 14 --from 15 --to 19 \
+    --start-dir <a certified link-14 exit pool>/exits \
+    --out target/gymfilm/tracks
+
 # --dry-run first: it prints the stage table and the --cover trade-off in
 # seconds, and rendering is not quick.
-python3 tools/pewter-chain/swarm_film.py target/gymfilm/tracks     --out target/gymfilm/frames --speed 8 --fps 60 --cover 0.90 --width 1280     --title "PAST PEWTER 15-19"
-ffmpeg -y -framerate 60 -i target/gymfilm/frames/f%05d.png     -c:v libopenh264 -b:v 8M -pix_fmt yuv420p past-pewter-15-19.mp4
+python3 tools/pewter-chain/swarm_film.py target/gymfilm/tracks \
+    --out target/gymfilm/frames --speed 8 --fps 60 --cover 0.90 --width 1280 \
+    --title "PAST PEWTER 15-19"
+ffmpeg -y -framerate 60 -i target/gymfilm/frames/f%05d.png \
+    -c:v libopenh264 -b:v 8M -pix_fmt yuv420p past-pewter-15-19.mp4
+
+# and the journey to Pewter, unchanged and still reproducible
+./target/release/examples/pewter_chain film --rom <blue.gb> \
+    --runs 600 --workers 8 --to 14 --out target/film14/tracks
 ```
+
+`film` writes the `agent-NN.links.csv` span file too, so `swarm_film.py`'s
+per-link bars and its stage timeline work from a `film` run alone —
+`chain_tracks.py` is only needed when a film is stitched from separate corpus
+runs. **The spans carry the link's number in the whole chain**, not its
+position in the slice, so a span file lines up against a report.
+
+**The arc's own shape, from those spans** (one agent, 144,810 emulated frames):
+the training link is **85% of it** — 123,426 frames against the gym's 12,294
+and the two heals' 4,824 and 2,586. The same shape link 11 has in the main
+chain, and the reason the two cuts do not belong together.
 
 **Fedora's ffmpeg has no `libx264`** (patent-clean build); `libopenh264` is the
 substitute and `-crf` is not accepted there.

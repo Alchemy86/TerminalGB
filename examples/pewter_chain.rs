@@ -2206,10 +2206,14 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
                     which is the next link's entry pool
       --paths       also write where the player was, per frame, per run
 
-  film --rom R --agents N [--out DIR] [--workers N]
+  film --rom R --agents N [--out DIR] [--workers N] [--from N] [--to N]
       Play the WHOLE chain once per agent, each agent carrying its own exit
       state forward, and write one continuous per-frame position track each.
       An agent that fails a link stops there, which is the honest picture.
+      --from/--to select a slice of the chain. The gym arc films as its own
+      cut rather than being sewn onto the journey to Pewter — see
+      docs/agent/brock.md — so a command that always plays every link
+      cannot produce either film on purpose.
 
   sprites --rom R --start FILE --out DIR
       Read the player's own overworld sprite out of OAM and VRAM, four
@@ -3389,6 +3393,14 @@ fn write_rgba(path: &Path, w: usize, h: usize, rgba: &[u8]) {
 /// its *own* exit state from link to link rather than a shared one, so the
 /// agents diverge for the same reason a swarm does and the divergence is the
 /// picture.
+/// A scenario path's link name, for a one-line report.
+fn link_name(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 fn cmd_film(a: &Args) {
     let rom = load_cart(&need_rom(a));
     let out = a
@@ -3396,12 +3408,57 @@ fn cmd_film(a: &Args) {
         .clone()
         .unwrap_or_else(|| PathBuf::from("target/pewter-chain/film"));
     std::fs::create_dir_all(&out).expect("output directory");
-    let files = chain_files();
+    // **`--from`/`--to`, because the chain outgrew one film.** This used to
+    // take every link there was, which was right while the chain ended at
+    // Pewter and is not now: the gym arc is its own cut, deliberately, and a
+    // command that always plays everything cannot produce either of them on
+    // purpose. It also means the published 01-14 film stays reproducible after
+    // links 15-19 landed — see `docs/agent/brock.md` §14 for why they are not
+    // sewn together.
+    let all = chain_files();
+    // Carry the link's number in the whole chain, not its position in the
+    // slice: a span file saying "link 1" for `15-train-for-brock` is a span
+    // file nobody can line up against a report.
+    let files: Vec<(usize, String)> = all
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (i + 1, f.clone()))
+        .filter(|(link, _)| *link >= a.from && *link <= a.to)
+        .collect();
+    if files.is_empty() {
+        eprintln!("--from {} --to {} selects no link", a.from, a.to);
+        exit(2);
+    }
     let agents = a.runs.max(1);
     let workers = a.workers.max(1);
+    // **A slice that does not start at link 1 needs somewhere to start.**
+    // Link 1 boots the cartridge cold; every link after it begins from the
+    // previous one's exit state, so `--from 15` without a pool would silently
+    // film fifteen agents standing on the Nintendo logo. `--start-dir` gives
+    // each agent `ag % pool.len()`, the same rule `corpus` uses, so which
+    // state an agent began from is recoverable from its number.
+    let pool: Vec<Option<Vec<u8>>> = if a.from > 1 {
+        if a.start_dir.is_none() && a.start.is_none() {
+            eprintln!(
+                "--from {} starts part way through the chain, so it needs \
+                 --start-dir (a pool of entry states) or --start (one)",
+                a.from
+            );
+            exit(2);
+        }
+        entry_pool(a)
+    } else {
+        vec![None]
+    };
+    let pool = std::sync::Arc::new(pool);
     println!(
-        "{agents} agent(s) over {} link(s), {workers} worker(s)",
-        files.len()
+        "{agents} agent(s) over {} of {} link(s) ({}..{}), {workers} worker(s), \
+         {} entry state(s)",
+        files.len(),
+        all.len(),
+        files.first().map(|(_, f)| link_name(f)).unwrap_or_default(),
+        files.last().map(|(_, f)| link_name(f)).unwrap_or_default(),
+        pool.len(),
     );
 
     let t = std::time::Instant::now();
@@ -3412,6 +3469,7 @@ fn cmd_film(a: &Args) {
         for _ in 0..workers {
             let (next, done) = (next.clone(), done.clone());
             let (rom, out, files) = (rom.clone(), out.clone(), files.clone());
+            let pool = pool.clone();
             let primitive = a.primitive;
             let spread = a.idle_spread;
             sc.spawn(move || loop {
@@ -3421,11 +3479,17 @@ fn cmd_film(a: &Args) {
                 }
                 let seed = 1 + ag as u64;
                 let dir = out.join(format!("w{ag}"));
-                let mut carried: Option<Vec<u8>> = None;
+                let mut carried: Option<Vec<u8>> = pool[ag as usize % pool.len()].clone();
                 let mut track: Vec<terminalgb::scenario::run::PathPoint> = Vec::new();
                 let mut base = 0u32;
                 let mut reached = 0usize;
-                for (n, f) in files.iter().enumerate() {
+                // Where each link began and ended in the joined stream, which
+                // is what `swarm_film.py` draws its per-link bars and its
+                // stage timeline from. `chain_tracks.py` writes the same file
+                // when a film is stitched from separate corpus runs; writing
+                // it here means `film` is a complete source on its own.
+                let mut spans: Vec<String> = Vec::new();
+                for (n, (link, f)) in files.iter().enumerate() {
                     let sp = PathBuf::from(f);
                     let o = play(
                         &rom,
@@ -3442,7 +3506,16 @@ fn cmd_film(a: &Args) {
                         p.frame += base;
                         track.push(p);
                     }
+                    let start = base;
                     base = track.last().map(|p| p.frame).unwrap_or(base);
+                    spans.push(format!(
+                        "{},{},{},{},{}",
+                        link,
+                        link_name(f),
+                        start,
+                        base,
+                        o.goal
+                    ));
                     if !o.goal {
                         break;
                     }
@@ -3450,6 +3523,10 @@ fn cmd_film(a: &Args) {
                     carried = Some(o.state);
                 }
                 write_path(&out.join(format!("agent-{ag:02}.csv")), &track);
+                let _ = std::fs::write(
+                    out.join(format!("agent-{ag:02}.links.csv")),
+                    format!("link,name,start,end,goal\n{}\n", spans.join("\n")),
+                );
                 let _ = std::fs::remove_dir_all(&dir);
                 done.lock().unwrap().push((ag, reached, base as u64));
             });
