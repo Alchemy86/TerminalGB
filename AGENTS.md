@@ -9841,6 +9841,13 @@ quote a 99.9 % claim for any of them.
   **8**, BULBASAUR holds VINE WHIP from **13**, and CHARMANDER's line holds **nothing on that
   list ever** — EMBER is FIRE, which is 0.5x on ROCK. A Bulbasaur below 13 does **one damage a
   turn** with 35 PP against 33 HP; it does not lose slowly, it cannot win.
+- **Brock's stats were read back out of `wEnemyMon` in the running game, not merely computed.**
+  The table gives the level and the species; the stats come from a formula and a DV pair, so
+  they were checked at `$CFE5..$CFFD` on real mid-fight states: GEODUDE Lv12 33/26/30/11/14,
+  ONIX Lv14 36/20/52/26/15, and `wEnemyMonDVs` reading **`$98` `$88`** — the fixed trainer DVs,
+  out of the machine rather than out of a memory. **Geodude curls to Defence 120**, four times
+  its base, which is why a Normal move is worthless against it and the policy takes the Fire
+  one — special, against a Special of 14 — despite it being 0.5x.
 - **CHARMANDER CANNOT REACH THE 99.9 % BAR AND MORE LEVELS DO NOT FIX IT.** Measured 35 % at 14,
   **72.5 % at 16**, 65 % at 18 — a plateau, not a curve. What would fix it is a second Pokémon
   that answers ROCK/GROUND or items; both change the chain well before Pewter (the bag is empty

@@ -45,12 +45,24 @@ Brock at all at the level the chain delivers, and the reason is not a number.
 
 ## 3. The reason is a MOVE, and it is a fact about the cartridge
 
-Brock's party, read from `TrainerDataPointers` (`0E:5D3B`, class 34):
+Brock's party, read from `TrainerDataPointers` (`0E:5D3B`, class 34) — and then
+**read back out of `wEnemyMon` in the running game**, which is the check that
+matters, because the level and the species come from the table while the stats
+come from a formula and a DV pair:
 
 | | level | HP | ATK | DEF | SPD | SPC | moves |
 |---|---:|---:|---:|---:|---:|---:|---|
 | GEODUDE | 12 | 33 | 26 | 30 | 11 | 14 | TACKLE, DEFENSE CURL |
 | ONIX | 14 | 36 | 20 | 52 | 26 | 15 | TACKLE, SCREECH |
+
+Every one of those numbers is what `$CFE5..$CFFD` holds mid-fight, on states
+captured from real attempts, and `wEnemyMonDVs` reads **`$98` `$88`** — the
+fixed trainer DVs, out of the machine rather than out of a memory. (Attack and
+Defence read differently on a state taken later in a battle, because the
+policy's GROWL and Geodude's own DEFENSE CURL have moved them. **Geodude curls
+to Defence 120**, four times its base, which is why a Normal move is worthless
+against it and the policy's Fire one — special, against Geodude's Special of 14
+— is picked despite being 0.5x.)
 
 Both are **ROCK/GROUND**, and the type chart (`TypeEffects`, `0F:6474`) makes
 WATER, GRASS, FIGHTING, GROUND and ICE each **2x against both halves**, i.e.
