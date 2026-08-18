@@ -25,7 +25,7 @@
   "evidence": [
     "map=0x0E - wCurMap $D35E. ROUTE_3 is const index 14, and map $0E's header (MapHeaderPointers $01AE, bank from MapHeaderBanks $C23D) decodes as tileset 0 with the wild table WildDataPointers gives for Route 3: SPEAROW, PIDGEY and JIGGLYPUFF at levels 3-8.",
     "Route 3 is reached by a map CONNECTION and not a warp, which is why the goal is the map and no warp is named. Pewter's connection byte is 0b0101 and its two blocks name maps $0D and $0E in the cartridge's own north/south/west/east order, so bit 2 is south to Route 2 and bit 0 is east to Route 3 - the same reading link 14's evidence derives from Pallet Town and Viridian City.",
-    "THE ROUTE ACROSS PEWTER IS NOT THE OBVIOUS ONE, and the obvious one is a trap. Column 18 is solid on rows 18, 19 and 20 and row 21 is solid from x=0 to x=18, so the left half of those three rows is a pocket with one way in and out; a goto heading north-east from the Pokemon Center walks into it. Measured on the first 60-attempt run: 23 of 23 failures were stuck on row 20 between x=13 and x=17, with no battle involved at all. East along row 26 first, then straight up column 19, is 120/120."
+    "THE ROUTE ACROSS PEWTER IS NOT THE OBVIOUS ONE, and the obvious one is a trap. Column 18 is solid on rows 18, 19 and 20 and row 21 is solid from x=0 to x=18, so the left half of those three rows is a pocket with one way in and out; a goto heading north-east from the Pokemon Center walks into it. Measured on the first 60-attempt run: 23 of 23 failures were stuck on row 20 between x=13 and x=17, with no battle involved at all. East along row 26 first, then straight up column 19, is 3000/3000 at the chain's own gate."
   ],
   "guidance": "guidance/19-east-to-route-3.json"
 }

@@ -329,55 +329,101 @@ chain takes the avoiding route; the fighting one is kept as
 `GYM_TO_BROCK_AVOIDING_THE_TRAINER`'s counterpart, so swapping them back is one
 line.
 
-## 9. What the gym measures, at the level the chain now delivers
+## 9. Certified: 3,000 attempts a link, in order
 
-Threshold 16, **120 attempts** through the whole arc from the certified link-14
-pool. **The chain's standing gate is 3,000 attempts per link and that has not
-been run for these five** — zero failures in 120 bounds a failure rate only at
-about 2.5% by the rule of three, nine times short of the 99.9% claim links 01-06
-carry. Do not quote these as certified.
+The chain's standing gate, run in order from the certified link-14 pool, each
+link entering from the previous one's exit pool:
 
+| link | reached the goal | 95% CI | distinct trajectories |
+|---|---:|---|---:|
+| **15-train-for-brock** | **3000/3000** | 100.0 [99.9-100.0] | 3000 / 3000 |
+| **16-heal-in-pewter** | **3000/3000** | 100.0 [99.9-100.0] | 3000 / 3000 |
+| **17-fight-through-the-gym** | **2659/3000** | **88.6 [87.4-89.7]** | 3000 / 3000 |
+| **18-heal-after-the-gym** | **3000/3000** | 100.0 [99.9-100.0] | 3000 / 3000 |
+| **19-east-to-route-3** | **3000/3000** | 100.0 [99.9-100.0] | 3000 / 3000 |
 
-| link | reached the goal |
-|---|---|
-| 15-train-for-brock | **120/120** |
-| 16-heal-in-pewter | **120/120** |
-| **17-fight-through-the-gym** | **108/120 (90.0%)** |
-| 18-heal-after-the-gym | **120/120** |
-| 19-east-to-route-3 | **120/120** |
+**Four of the five clear the bar** — zero failures in 3,000 bounds the failure
+rate at about 0.10% by the rule of three, which is the 99.9% claim links 01-06
+carry. **The gym does not, and §10 is why.**
+
+Every attempt is a distinct trajectory, so none of this is one attempt counted
+three thousand times: the entry state, the driver seed and the idle-frame phase
+all move (`--idle-spread 3001`). Wall clock is not comparable between the links
+— another crew held ten to sixteen of the twenty cores for most of the run, load
+average 15 to 43 — but frames, verdicts and trajectories are contention-free.
+
+**The battle numbers, which for this arc are the point:**
+
+| | battles | won | fled | HP left at the end | faints | items |
+|---|---:|---:|---:|---:|---:|---:|
+| 15-train-for-brock | 216,850 | 203,054 (93.6%) | 11,829 (5.5%) | 77.3% | **0** | 0 |
+| 16-heal-in-pewter | 1,720 | 0 | 1,720 (100%) | 84.4% | 0 | 0 |
+| **17-fight-through-the-gym** | **3,000** | **2,659 (88.6%)** | 0 | **92.6%** | **0** | **0** |
+
+Three things in that table are worth reading twice. **Zero faints across
+216,850 training battles** — every one of link 15's 11,829 runs was the policy
+declining a fight it judged unsafe, not an escape from one it was losing (7
+escapes failed in the whole run). **The gym is won at 92.6% HP or lost
+outright** — there is no middle; a Wartortle or an Ivysaur two-shots both of
+Brock's Pokémon and a Charmeleon does not. And **not one item was used in
+220,000 battles**, because the bag is empty at every link of this chain, which
+is §10's constraint stated as a measurement.
+
+**The damage model, checked against what actually landed:** link 15 reports
+**98.2% of 103,669 non-knockout predictions inside Gen 1's 217-255 roll range**,
+13 under and 1,825 over — and "over" is what a critical hit looks like. The gym
+reports 86.2% of 11,354, its higher over-rate being Onix's base speed of 70
+against a wild Pidgey's 56. Both are measured against **the move the policy
+chose**, which they would not have been before §11.
 
 ## 10. Charmander cannot reach the bar, and more levels do not fix it
 
-The gym link's 90% is not spread evenly. Per starter, from the same pools the
-arc above ran on — 20 attempts each at levels 14 and 18, **40 each at 16**:
+**Every one of link 17's 341 failures ended on Brock's own tile** — map `$36`
+(4,2), 336 by fainting and 5 out of decisions — from 341 *distinct* entry
+states, so nothing is clustered on one bad start. And they are one line. Reading
+the species out of each failing entry state:
 
-| line | level 10 | level 14 | **level 16** (all three lines have evolved) | level 18 |
+| line | certified | 95% CI |
+|---|---:|---|
+| SQUIRTLE → WARTORTLE | **1000/1000** | 100.0 [99.6-100.0] |
+| BULBASAUR → IVYSAUR | **989/1000** | 98.9 [98.0-99.4] |
+| CHARMANDER → CHARMELEON | **670/1000** | **67.0 [64.0-69.8]** |
+
+330 of the 341 failures are Charmeleon, 11 are Ivysaur, and **none is
+Wartortle**. The pool is exactly a thousand of each, because link 16's exits are
+link 15's are link 14's, and link 14's pool was 40/40/40.
+
+**More levels do not fix it.** Per starter at three thresholds — 20 attempts
+each at 14 and 18, 40 at 16, alongside the certified thousand:
+
+| line | level 10 | level 14 | level 16 | level 18 |
 |---|---:|---:|---:|---:|
-| SQUIRTLE → WARTORTLE | 90% | 100% | **100%** (40/40) [91.2-100] | 100% |
-| BULBASAUR → IVYSAUR | 0% | 100% | **97.5%** (39/40) [87.1-99.6] | — |
-| CHARMANDER → CHARMELEON | 20% | 35% | **72.5%** (29/40) [57.2-83.9] | 65% |
+| SQUIRTLE → WARTORTLE | 90% | 100% | **100%** | 100% |
+| BULBASAUR → IVYSAUR | 0% | 100% | **98.9%** | — |
+| CHARMANDER → CHARMELEON | 20% | 35% | **67.0%** | 65% |
 
-**The Charmander line plateaus and does not converge.** Level 18 measured worse
-than 16 — the intervals overlap heavily at n=20, so read that as flat rather
-than as a decline, which is the point either way: the extra levels are not
-buying wins.
+**The Charmander line plateaus and does not converge.** Level 18 measured no
+better than 16 — the intervals overlap heavily at n=20, so read that as flat
+rather than as a decline, which is the point either way: the extra levels are
+not buying wins.
 
-That is what the type chart predicts. Squirtle and Bulbasaur are landing a 4x
-move; Charmeleon's best against Geodude is EMBER at **0.5x**, which only beats
-SCRATCH at 1x because Geodude's Special is 14 to its Defence of 30. It wins on
-the opponent being weak, not on being strong against it.
+That is what the type chart predicts. Wartortle and Ivysaur land a 4x move;
+Charmeleon's best against Geodude is EMBER at **0.5x**, which only beats
+SCRATCH at 1x because Geodude's Special is 14 against its Defence of 30 — and
+Geodude curls that Defence to 120, which settles it. Charmeleon wins on the
+opponent being weak, not on being strong against it.
 
 **So link 17 cannot be certified at the chain's 99.9% bar for the Charmander
 line, and no level reachable by grinding changes that.** What would: a second
 Pokémon that answers ROCK/GROUND, or items. Both change the chain well before
-Pewter — the bag is empty at every link so far, and nothing catchable before
-Pewter answers ROCK/GROUND (`gen1_tables.py --plan brock` puts the nearest
-candidates on Route 4, Mt Moon and Route 24, all past the gym). Neither is taken
-here; both are named.
+Pewter — the bag is empty at every link so far (0 items used in 220,000
+battles, §9), and nothing catchable before Pewter answers ROCK/GROUND
+(`gen1_tables.py --plan brock` puts the nearest candidates on Route 4, Mt Moon
+and Route 24, all past the gym). Neither is taken here; both are named.
 
 Level 16 is the committed threshold (`BROCK_TRAIN_TO`). It is where all three
-lines evolve, which is the only species-independent number in the neighbourhood,
-and it is the best the Charmander line does.
+lines evolve, which is the only species-independent number in the
+neighbourhood, and it is the best the Charmander line does.
 
 ## 11. Two counters that were reporting the wrong thing
 
@@ -418,7 +464,7 @@ measurement, and the gym link scored 39/120 before and after.
 in and out. A `goto` heading north-east from the Pokémon Center walks into it:
 **23 of 23 failures of link 19 were stuck on row 20 between x=13 and x=17**, with
 no battle involved at all. Going east along row 26 first and then straight up
-column 19 is 120/120.
+column 19 is 3000/3000.
 
 **Pewter is two halves joined at row 13.** For the same reason, every route
 across the city goes up and over — the gym is ten waypoints from the Pokémon

@@ -9821,10 +9821,11 @@ arithmetic is right about a film nobody made.
 
 **Reader-facing page: [`docs/agent/brock.md`](docs/agent/brock.md).** Five links from arriving
 in Pewter to standing on Route 3 with the Boulder Badge, plus a repair link before them.
-Measured on the certified link-14 pool, **120 attempts per link**: 15 train **120/120**,
-16 heal **120/120**, 17 gym **108/120**, 18 heal **120/120**, 19 east **120/120**. The
-3,000-attempt certification the chain's other links carry is **not yet run for these**; do not
-quote a 99.9 % claim for any of them.
+**Certified at the chain's own gate — 3,000 attempts a link, in order, each entering from the
+previous link's exit pool, 3,000 distinct trajectories every time:** 15 train **3000/3000**,
+16 heal **3000/3000**, 17 gym **2659/3000 (88.6 %, [87.4-89.7])**, 18 heal **3000/3000**,
+19 east **3000/3000**. **Four of the five clear the 99.9 % bar; the gym does not, and that is a
+finding rather than a defect** — see the Charmander entry below.
 
 - **BROCK IS THE FIRST LINK THE CHAIN HAS TO *WIN*, and that is what exposed everything below.**
   Every battle link before it has a goal the cartridge sets whoever won —
@@ -9848,13 +9849,27 @@ quote a 99.9 % claim for any of them.
   out of the machine rather than out of a memory. **Geodude curls to Defence 120**, four times
   its base, which is why a Normal move is worthless against it and the policy takes the Fire
   one — special, against a Special of 14 — despite it being 0.5x.
-- **CHARMANDER CANNOT REACH THE 99.9 % BAR AND MORE LEVELS DO NOT FIX IT.** Measured 35 % at 14,
-  **72.5 % at 16**, 65 % at 18 — a plateau, not a curve. What would fix it is a second Pokémon
+- **CHARMANDER CANNOT REACH THE 99.9 % BAR AND MORE LEVELS DO NOT FIX IT.** Certified over a
+  thousand attempts per line: **WARTORTLE 1000/1000 [99.6-100], IVYSAUR 989/1000 [98.0-99.4],
+  CHARMELEON 670/1000 [64.0-69.8]** — 330 of link 17's 341 failures are Charmeleon, 11 are
+  Ivysaur, **none is Wartortle**, and **every one of the 341 ended on Brock's own tile** from 341
+  *distinct* entry states. Across thresholds it is 35 % at 14, **67 % at 16**, 65 % at 18 — a
+  plateau, not a curve. What would fix it is a second Pokémon
   that answers ROCK/GROUND or items; both change the chain well before Pewter (the bag is empty
   at every link, and `gen1_tables.py --plan brock` puts every catchable answer on Route 4, Mt
   Moon or Route 24, all past the gym). Neither is taken; both are named. `BROCK_TRAIN_TO` is
   **16**, which is where all three lines evolve — the only species-independent number in the
   neighbourhood, and the best that line does.
+- **THE BATTLE NUMBERS ARE THE POINT ON THIS ARC, AND THREE OF THEM ARE WORTH READING TWICE.**
+  **Zero faints across link 15's 216,850 training battles** — all 11,829 of its runs were the
+  policy declining a fight it judged unsafe, not escaping one it was losing (7 escapes failed in
+  the whole run). **The gym is won at 92.6 % HP or lost outright**: there is no middle, because a
+  Wartortle or an Ivysaur two-shots both of Brock's Pokémon and a Charmeleon does not. And **not
+  one item was used in 220,000 battles**, which is the empty bag stated as a measurement rather
+  than as a premise. The damage model checks out at **98.2 % of 103,669 non-knockout predictions
+  inside the 217-255 roll range** on link 15 (86.2 % of 11,354 in the gym, its higher over-rate
+  being Onix's base speed of 70 against a wild Pidgey's 56) — measured against **the move the
+  policy chose**, which it would not have been before the fix below.
 - **THE BADGE BIT WAS EARNED, NOT TRANSCRIBED.** Snapshot, play the gym, snapshot, diff **all
   320 bytes** of `wEventFlags` plus the badge bytes: exactly five move, and every one is written
   by a single block of `PewterGym.asm`'s `.gymVictory`. `wObtainedBadges` `$D356` bit 0
@@ -9948,7 +9963,7 @@ quote a 99.9 % claim for any of them.
   to x=18, so the left half of those rows has one way in and out, and a `goto` heading
   north-east from the Pokémon Center walks into it: **23 of 23 failures of the Route 3 link were
   stuck on row 20 between x=13 and x=17**, with no battle involved. East along row 26 first,
-  then straight up column 19, is 120/120.
+  then straight up column 19, is 3000/3000.
 - **The gym's junior trainer IS avoidable and column 1 is what avoids him.** Rows 3 and 9 of map
   `$36` are solid but for x=4 and x=5, so the straight climb up column 4 crosses his rightward
   sight line at (4,6); column 1 runs from row 8 to row 4 entirely to his left. Both measured at
