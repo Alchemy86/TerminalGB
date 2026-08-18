@@ -1016,6 +1016,45 @@ impl<'a> MemoryManagementUnit<'a> {
             && self.cpu_bus_of(address) == self.dma_bus
     }
 
+    /// `$FEA0-$FEFF`, which Nintendo calls prohibited and which is not a hole.
+    ///
+    /// Pan Docs, ["FEA0–FEFF range"](https://gbdev.io/pandocs/Memory_Map.html):
+    /// it returns `$FF` while OAM is blocked, and otherwise the answer depends
+    /// on the console.
+    ///
+    /// * **DMG, MGB, SGB, SGB2** — reads return `$00`, and a read while OAM is
+    ///   blocked triggers the OAM-corruption bug (which `is_oam_page` already
+    ///   routes here: `$FE00-$FEFF` is one bus).
+    /// * **CGB revision E, AGB, AGS, GBP** — a read returns the high nibble of
+    ///   the low address byte twice, so `$FEAx` is `$AA` and `$FEBx` is `$BB`.
+    /// * **CGB revisions 0-D** — a real, unique RAM area, "masked with a
+    ///   revision-specific value". Deliberately **not** implemented: we do not
+    ///   know the mask for any revision, and the two suites that reach this
+    ///   block name different machines.
+    ///
+    /// **The two suites disagree, and the disagreement is the finding.**
+    /// Gambatte's Color reference console is CPU CGB C, so its
+    /// `oamdma_*_busypushFEA1` and `busypushFF01` rows pop back exactly what
+    /// they wrote here. `cgb-acid-hell`'s hardware-photographed reference does
+    /// not: implementing the block as plain RAM was measured at **+26 more
+    /// Gambatte rows and cgb-acid-hell 2 → 176 wrong pixels**, so its reference
+    /// device is a revision E or an AGB. This emulator already targets CGB-E
+    /// elsewhere (`sound::CgbRevision`), a two-pixel distance to a hardware
+    /// photograph is worth more than 26 rows of a suite measuring another
+    /// stepping, and "RAM with no mask" would be a guess where the nibble rule
+    /// is documented. If a revision knob with an `0-D`/`E` boundary is ever
+    /// added — neither `mode::PpuRevision` nor `sound::CgbRevision` has it —
+    /// this is where it goes and those are the numbers.
+    #[inline]
+    fn read_unusable(&self, address: u16) -> u8 {
+        if self.gbmode.is_dmg() {
+            0x00
+        } else {
+            let low = (address & 0xFF) as u8;
+            (low & 0xF0) | (low >> 4)
+        }
+    }
+
     /// Which bus an OAM DMA reading from `page` drives.
     ///
     /// Pages `$E0-$FF` are the part the two consoles disagree about. A DMG
@@ -1622,8 +1661,18 @@ impl<'a> MemoryManagementUnit<'a> {
             }),
             0xFF80..=0xFFFE => self.zram[address as usize & 0x007F],
             0xFFFF => self.inte,
-            // Prohibited region FEA0-FEFF and any unmapped I/O read back 0xFF.
-            // Hardware's OAM-block-dependent value here is not modelled (mmu.md).
+            // `$FEA0-$FEFF` is on OAM's bus, so it is `$FF` whenever OAM is,
+            // and console-dependent otherwise — see [`Self::read_unusable`].
+            0xFEA0..=0xFEFF => {
+                if self.oam_dma.active()
+                    || (self.bus_tick_enabled && !self.gpu.cpu_can_read_oam())
+                {
+                    0xFF
+                } else {
+                    self.read_unusable(address)
+                }
+            }
+            // Any unmapped I/O reads back 0xFF.
             _ => 0xFF,
         }
     }
@@ -2893,6 +2942,49 @@ mod dma_conflict_tests {
         cgb.internal_tick();
         assert_eq!(dmg.gpu.rb(0xFE00), 0xA0, "DMG: echo of work RAM");
         assert_eq!(cgb.gpu.rb(0xFE00), 0xFF, "CGB: nothing drives the bus");
+    }
+
+    /// The prohibited block `$FEA0-$FEFF` is not a hole: Pan Docs gives it a
+    /// different answer per console, and `$FF` is only right while OAM is
+    /// blocked. Gambatte's `oamdma_*_busypushFF01` pops `$FEFF` back and
+    /// expects `$00` on a DMG.
+    #[test]
+    fn the_prohibited_block_answers_per_console() {
+        let mut dmg = machine(crate::mode::Model::Dmg);
+        let mut cgb = machine(crate::mode::Model::Cgb);
+        let mut agb = machine(crate::mode::Model::Agb);
+        for m in [&mut dmg, &mut cgb, &mut agb] {
+            // Out of every PPU mode that would blank it.
+            m.bus_tick_enabled = false;
+        }
+        assert_eq!(dmg.rb(0xFEA5), 0x00);
+        assert_eq!(dmg.rb(0xFEFF), 0x00);
+        assert_eq!(cgb.rb(0xFEA5), 0xAA, "the low byte's high nibble, twice");
+        assert_eq!(cgb.rb(0xFEB0), 0xBB);
+        assert_eq!(agb.rb(0xFEFF), 0xFF);
+    }
+
+    /// ...and it is `$FF` while a transfer owns OAM, on every console, because
+    /// it is on OAM's bus.
+    #[test]
+    fn the_prohibited_block_is_blocked_with_oam() {
+        let mut mem = dma_from(crate::mode::Model::Dmg, 0xC0);
+        assert_eq!(mem.rb(0xFEA5), 0xFF);
+    }
+
+    /// Writes there keep nothing. On the Color revisions `0-D` they would —
+    /// Pan Docs calls it "a unique RAM area, masked with a revision-specific
+    /// value" — but no revision's mask is documented, and implementing it
+    /// unmasked was measured at 26 more Gambatte rows against `cgb-acid-hell`
+    /// going from 2 wrong pixels to 176. See [`read_unusable`].
+    ///
+    /// [`read_unusable`]: MemoryManagementUnit::read_unusable
+    #[test]
+    fn a_write_to_the_prohibited_block_keeps_nothing() {
+        let mut mem = machine(crate::mode::Model::Cgb);
+        mem.bus_tick_enabled = false;
+        mem.wb(0xFEA5, 0x5A);
+        assert_eq!(mem.rb(0xFEA5), 0xAA);
     }
 
     /// Nothing above conflicts once the transfer is over.

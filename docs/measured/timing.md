@@ -169,6 +169,19 @@ Worth **+401 Gambatte rows in each picture mode** (2682 → 3083 `standard`, 305
 real game and a byte-identical WRAM hash. Full record and the still-red list:
 [`docs/conformance-notes.md`](../conformance-notes.md), 2026-08-18.
 
+### And `$FEA0-$FEFF` is not a hole
+
+The block Nintendo calls prohibited sits on OAM's bus, so it reads `$FF` whenever OAM does —
+and *only* then. Otherwise the answer is per console (Pan Docs,
+["FEA0–FEFF range"](https://gbdev.io/pandocs/Memory_Map.html)): `$00` on DMG, MGB, SGB and
+SGB2, and on CGB revision E, AGB, AGS and GBP the high nibble of the low address byte twice, so
+`$FEAx` reads `$AA`. Revisions 0-D make it a real RAM area "masked with a revision-specific
+value", which is deliberately not modelled — no revision's mask is documented, and the two
+suites that reach the block name different machines. Implemented as unmasked RAM it is 26
+further Gambatte rows against `cgb-acid-hell` going from **2 to 176** wrong pixels, which is
+what says that suite's hardware-photographed reference is a revision E or an AGB. Worth +26
+rows in each mode as it stands.
+
 ### The lesson worth keeping: an unmodelled peripheral hid a whole dimension of CPU accuracy
 
 **Fourteen Mooneye *instruction-timing* tests measure which M-cycle a memory access lands on

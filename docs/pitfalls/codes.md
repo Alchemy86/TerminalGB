@@ -187,9 +187,9 @@ DMA, at which point it gets a byte that has nothing to do with the address.
 
 | | |
 |---|---|
-| Already covered? | **exhaustively** — Gambatte `oamdma/` is 811 rows, the largest single group in the suite. 562 failed here when this row was written; 163 do now |
+| Already covered? | **exhaustively** — Gambatte `oamdma/` is 811 rows, the largest single group in the suite. 562 failed here when this row was written; 137 do now |
 | From inside a cartridge? | **yes** — start a DMA from a known source and read a byte whose real value differs |
-| Our state | **modelled** since 2026-08-18 (`MemoryManagementUnit::dma_conflict`), worth +401 Gambatte rows in each picture mode with no regression. What is left is the prohibited region `$FEA0-$FEFF`, which is a different behaviour, and `TGB-DMA-002` |
+| Our state | **modelled** since 2026-08-18 (`MemoryManagementUnit::dma_conflict`), worth +427 Gambatte rows in each picture mode with no regression once the prohibited block `$FEA0-$FEFF` was given its per-console answer too. What is left is `TGB-DMA-002` |
 | Read next | [`docs/conformance-notes.md`](../conformance-notes.md), 2026-08-18 |
 
 ### `TGB-DMA-002` — an object's position written late relative to a DMA

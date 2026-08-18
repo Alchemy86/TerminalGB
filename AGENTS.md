@@ -797,12 +797,33 @@ harness's verdict *text*, every audio hash, and Mealybug's per-row pixel counts.
   proven four ways: removing the read conflict reddens 2, letting a conflicting write land
   reddens 2, collapsing the Color console's work-RAM bus reddens 4, dropping the wired-AND
   reddens 1.
-- **163 of the 811 rows are still red and the two causes are named.** `late_sp*` (24 rows) is
-  sprite-fetch timing against a transfer ending mid-scanline and belongs with the PPU work; the
-  rest are the **prohibited region `$FEA0-$FEFF`**, which we read as `$FF` on every console
-  where `oamdma_*_busypushFEA1`/`busypushFF01` say a DMG reads `$00` and a `cgb04c` reads back
-  what was written. That is a different behaviour and is left as a finding rather than guessed
-  at.
+- **137 of the 811 rows are still red**, and the largest named cause is `late_sp*` (24 rows) —
+  sprite-fetch timing against a transfer ending mid-scanline, which belongs with the PPU work.
+
+### `$FEA0-$FEFF` IS NOT A HOLE, AND THE TWO SUITES THAT REACH IT NAME DIFFERENT CONSOLES
+
+Found while triaging what the bus conflict left behind; worth **+26 more rows in each mode**
+(Gambatte 3083 → 3109 `standard`, 3460 → 3486 `identical`), zero regressions, nothing else
+moved, no `savestate::FORMAT_VERSION` bump. Full record: `docs/conformance-notes.md`
+(2026-08-18).
+
+- **`$FF` is only right while OAM is blocked.** Pan Docs, "FEA0–FEFF range": otherwise the
+  answer is per console — `$00` on DMG/MGB/SGB/SGB2, "a unique RAM area masked with a
+  revision-specific value" on CGB revisions **0-D**, and on **CGB revision E, AGB, AGS and
+  GBP** the high nibble of the low address byte twice (`$FEAx` → `$AA`).
+- **ONE CONSOLE CANNOT SATISFY BOTH SUITES, AND THE NUMBERS SAY WHICH TO PICK.** Gambatte's
+  Color reference is CPU CGB C — a `0-D` machine — so its `oamdma_*_busypushFEA1` and
+  `busypushFF01` rows pop back exactly what they wrote there. `cgb-acid-hell`'s
+  hardware-photographed reference disagrees: **implemented as plain RAM it is +26 further
+  Gambatte rows and cgb-acid-hell 2 → 176 wrong pixels.** So that device is a revision E or an
+  AGB. Same shape as SameSuite's contradictory `-cgb0`/`-cgbB` pair.
+- **We take the revision E rule**, for three reasons written at
+  `MemoryManagementUnit::read_unusable`: this emulator already targets CGB-E elsewhere; two
+  pixels from a hardware photograph is worth more than 26 rows measuring another stepping; and
+  "RAM with no mask" is a guess where the nibble rule is documented — Pan Docs gives no mask
+  for any revision `0-D`. **If a revision knob with an `0-D`/`E` boundary is ever added,
+  neither `mode::PpuRevision` (C vs D) nor `sound::CgbRevision` (0/B vs C+) has it**, and that
+  function is where it goes.
 
 ## Gating the EXTERNAL suites — Mooneye / SameSuite / Mealybug (`make test-external`)
 

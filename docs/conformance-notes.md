@@ -117,19 +117,78 @@ move.
 
 163 of the 811 `oamdma/` rows. The two named causes:
 
-* **The prohibited region `$FEA0-$FEFF`.** We read `$FF` there on every console.
-  `oamdma_*_busypushFEA1` and `busypushFF01` say a DMG reads `$00` and a
-  `cgb04c` reads back what was written — i.e. it is real RAM on a Color console.
-  That is a separate behaviour from OAM DMA and is left as a finding rather than
-  guessed at.
 * **`late_sp*`, 24 rows.** These are sprite-fetch timing against a transfer that
   ends mid-scanline; they belong with the PPU work, not here.
+* **The rest are the prohibited region `$FEA0-$FEFF`**, which is a different
+  behaviour and got its own pass — below.
 
 **Carries into the tool.** Seven checks, one per clause above, each expressible
 as "start a transfer from page P, touch address A on M-cycle N, report what the
 CPU saw and what landed in OAM". A conformance tool can generate the whole
 matrix; the interesting part is that the *answer* depends on the console, which
 is exactly the kind of thing a bare pass/fail runner cannot explain.
+
+---
+
+## 2026-08-18 — `$FEA0-$FEFF` is not a hole, and the two suites that reach it name different consoles
+
+Found while triaging what OAM DMA's bus conflict left behind. We read `$FF`
+across the block Nintendo calls prohibited, on every console and in every PPU
+mode. **`$FF` is only right while OAM is blocked.**
+
+**Measured:** Gambatte **3083 → 3109 of 5225** on `standard` and **3460 → 3486**
+on `identical` — **+26 rows in each mode, zero regressions**, all inside
+`oamdma/`. Every other suite byte-identical in both modes, and the in-repo
+harness, `audiocapture`, `savestate`, `battery` and `ppuengines` unmoved.
+
+- **Symptom.** A program that reads the block gets `$FF` where a DMG gives `$00`
+  and a Color console gives a fixed pattern. It also gets `$FF` from a *stale*
+  block — after the PPU has released OAM, which is when the difference is
+  observable at all.
+- **Caught by.** Gambatte's `oamdma_*_busypushFEA1` and `busypushFF01`, which
+  push into the block during a transfer and pop it back afterwards. Now also
+  `mmu::dma_conflict_tests::the_prohibited_block_answers_per_console` and
+  `..._is_blocked_with_oam`, teeth proven both ways.
+- **Hardware behaviour.** Pan Docs,
+  ["FEA0–FEFF range"](https://gbdev.io/pandocs/Memory_Map.html): the block
+  "returns `$FF` when OAM is blocked, and otherwise the behavior depends on the
+  hardware revision" — `$00` on DMG/MGB/SGB/SGB2 (and a read during OAM block
+  triggers the OAM-corruption bug, which we already route through
+  `is_oam_page`); "a unique RAM area, masked with a revision-specific value" on
+  CGB revisions 0-D; and on **CGB revision E, AGB, AGS and GBP** the high nibble
+  of the low address byte twice, so `$FEAx` reads `$AA`.
+
+### The finding: one console cannot satisfy both suites, and the numbers say which
+
+Gambatte's Color reference is **CPU CGB C**, a revision `0-D` machine, so its
+rows pop back exactly what they wrote into the block — it is RAM there.
+`cgb-acid-hell`'s reference is a photograph of a real device and it disagrees.
+Implemented as plain RAM, measured:
+
+| | Gambatte | `cgb-acid-hell` |
+|---|---:|---:|
+| block reads `$FF` (before) | 3083 | 2 px |
+| revision E / AGB nibble rule | **3109** | **2 px** |
+| revisions 0-D, RAM with no mask | **3135** | **176 px** |
+
+So `cgb-acid-hell`'s device is a revision E or an AGB, and this is the same
+shape as SameSuite's contradictory `-cgb0`/`-cgbB` pair: *a suite that ships a
+reference for one program is naming a machine.* We take the **revision E**
+rule, for three reasons stated at
+[`MemoryManagementUnit::read_unusable`](../src/mmu/mod.rs): this emulator
+already targets CGB-E elsewhere; two pixels from a hardware photograph is worth
+more than 26 rows measuring another stepping; and "RAM with no mask" is a guess
+where the nibble rule is documented — Pan Docs does not give the mask for any
+revision `0-D`.
+
+**No `savestate::FORMAT_VERSION` bump**, because nothing is stored: on the
+console we model the block is not memory.
+
+**Carries into the tool.** Three checks — the block's value per console, that it
+is `$FF` whenever OAM is, and that a write to it keeps nothing — plus the
+meta-lesson, which is the interesting one: *two suites disagreeing about one
+address is a statement about two machines, and the honest answer names which
+machine each of them is.*
 
 ---
 
