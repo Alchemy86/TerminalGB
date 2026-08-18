@@ -141,6 +141,9 @@ const PEWTER_POKECENTER: u8 = 0x3A;
 /// Route 3, east of Pewter — where the chain goes next.
 #[allow(dead_code)]
 const ROUTE_3: u8 = 0x0E;
+/// Route 22, west of Viridian — a pre-forest training candidate, measured in
+/// `scenarios/experiments/` and not part of the chain.
+const ROUTE_22: u8 = 0x21;
 
 /// Route 1 climbing north. Turning points of the shortest walkable path; the
 /// ledges make this different from the descent below.
@@ -575,6 +578,37 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
                 )],
             );
         }
+        // Route 22, west of Viridian. The other pre-forest candidate, and the
+        // one the geometry alone could not settle: its grass is 8 % richer
+        // than Route 1's and 43 steps from the nurse against Route 1's 25 and
+        // Route 2 south's 56. `docs/agent/brock.md` §4.
+        "x-train-route-22" => {
+            r.insert(
+                VIRIDIAN_CITY,
+                vec![stage(
+                    // Both entries converge at (16,18): the city's south
+                    // edge, where link 10 leaves the player, and the Pokémon
+                    // Center door, where the heal loop returns them.
+                    &[
+                        (19, 28),
+                        (19, 18),
+                        (16, 18),
+                        (16, 17),
+                        (7, 17),
+                        (7, 16),
+                        (0, 16),
+                    ],
+                    Finish::Step("left"),
+                )],
+            );
+            r.insert(
+                ROUTE_22,
+                vec![stage(
+                    &[(39, 9), (37, 9), (37, 12), (33, 12), (33, 11)],
+                    Finish::Grind((30, 8), (33, 11)),
+                )],
+            );
+        }
         "16-heal-in-pewter" => {
             // Pewter's Pokemon Center is the same building as Viridian's:
             // nurse at (3,1) behind a counter, (3,2) solid, and the place to
@@ -681,6 +715,39 @@ fn heal_route(scenario: &str) -> HashMap<u8, MapPlan> {
     // Training on Route 2's grass, healing in Pewter — a dozen tiles each way.
     // The Viridian nurse, from Route 2's southern grass: down the map, into
     // the city, across it. Fifty-six steps against Route 1's twenty-five.
+    // The Viridian nurse from Route 22's grass: east off the map, then across
+    // the city. Forty-three steps against Route 1's twenty-five.
+    if scenario == "x-train-route-22" {
+        r.insert(
+            ROUTE_22,
+            vec![stage(
+                &[(33, 12), (37, 12), (37, 9), (39, 9)],
+                Finish::Step("right"),
+            )],
+        );
+        r.insert(
+            VIRIDIAN_CITY,
+            vec![stage(
+                &[
+                    (0, 17),
+                    (4, 17),
+                    (4, 20),
+                    (8, 20),
+                    (8, 21),
+                    (9, 21),
+                    (9, 22),
+                    (10, 22),
+                    (10, 23),
+                    (14, 23),
+                    (14, 26),
+                    (23, 26),
+                    (23, 25),
+                ],
+                Finish::Arrive,
+            )],
+        );
+        r.insert(VIRIDIAN_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
     if scenario == "x-train-route-2-south" {
         r.insert(
             ROUTE_2,
@@ -769,6 +836,7 @@ fn may_fight_wild(scenario: &str) -> bool {
             | "11-train-for-the-forest"
             | "15-train-for-brock"
             | "x-train-route-2-south"
+            | "x-train-route-22"
     )
 }
 
@@ -794,7 +862,7 @@ fn train_to(scenario: &str) -> u32 {
     match scenario {
         "11-train-for-the-forest" => 13,
         "15-train-for-brock" => BROCK_TRAIN_TO,
-        "x-train-route-2-south" => 13,
+        "x-train-route-2-south" | "x-train-route-22" => 13,
         _ => 13,
     }
 }

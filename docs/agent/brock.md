@@ -117,46 +117,55 @@ Brock preparation needs and it **cannot help link 11**, whose whole job is
 training *before* the forest. Nobody should read this finding as a fix for
 link 11.
 
-### Is anything pre-forest better than Route 1? Measured: no
+### Is anything pre-forest better than Route 1? Measured: yes, by about 8%
 
 Link 11 is the single largest consumer of the chain's emulated time, so this is
-worth an answer rather than an assumption. Every pre-forest map with grass, from
-`WildDataPointers` and the walkability grid:
-
-The first four columns are computed from `WildDataPointers` and `BaseStats`;
-the last is a breadth-first path length over the walkability grid. Both are
+worth an answer rather than an assumption. Every pre-forest map with grass. The
+first four columns are computed from `WildDataPointers` and `BaseStats`; the
+last is a breadth-first path length over the walkability grid. Both are
 cartridge reads, not measurements of a run.
 
 | grass | map | mean exp/encounter | rate | exp per step | steps to the Viridian nurse |
 |---|---|---:|---:|---:|---:|
 | **Route 1**, rows 6-9 | `$0C` | 25.0 | 25/256 | 2.44 | **25** |
 | Route 2 **south**, rows 48-51 | `$0D` | 29.4 | 25/256 | 2.87 | 56 |
-| Route 22, rows 8-11 | `$21` | 27.0 | 25/256 | 2.64 | 79 – 82 |
+| **Route 22**, rows 8-11 | `$21` | 27.0 | 25/256 | 2.64 | **43** |
 | Viridian Forest | `$33` | 39.7 | **8**/256 | **1.24** | — |
 
-Route 2's southern half looks the best of them on paper: the same encounter
-table as the northern half, 17.6% richer per encounter than Route 1. **It is
-measurably worse.** Same job (level 5-6 → 10), same entry pool, same seeds, same
-worker count:
+Both candidates were run on link 11's own job — level 5-6 to 10, from the
+certified link-10 pool, same seeds, same worker count, and **paired on the
+seed**, because each attempt is the same entry state and the same phase offset
+whichever grass it walks:
 
-| | reached the goal | median frames | mean frames | median decisions |
+| | reached the goal | median frames | mean paired difference | faster on |
 |---|---:|---:|---:|---:|
-| **Route 1** (link 11, as shipped) | **40/40** | **65,904** | 71,633 | 656 |
-| Route 2 south (`scenarios/experiments/`) | 34/40 | 72,294 | 85,225 | 669 |
+| **Route 1** (link 11, as shipped) | **40/40** | 65,904 | — | — |
+| **Route 22** | **40/40** | **60,474** | **−7,709** (se 1,723, t = −4.47) | **29 of 40 seeds** |
+| Route 2 south | 34/40 | 72,294 | +13,999 (se 4,041, t = +3.46) | 6 of 34 seeds |
 
-The thirty-one extra steps to the nurse, each way, more than eat the richer
-table. **Route 1 is already the best pre-forest ground**, and it wins on the one
-term that is not the encounter table: it is by far the closest to a Pokémon
-Center.
+**Route 22 is about 8% faster than Route 1, and Route 2 south is about 11%
+slower.** Link 11 is 58% of the chain's emulated time, so 8% off it is roughly
+**4.7% off the whole run** — modest, real, and on the record. *Link 11 is not
+changed here; the captain's instruction was to measure and say.*
 
-Route 22 was **not run**. It is further from the nurse than Route 2 south (79-82
-steps against 56) and less rich (27.0 against 29.4), so it loses on both terms
-to a candidate that already lost. That is an argument from two measured numbers,
-not a measurement, and it is labelled as such.
+The 8.3% median gain tracks Route 22's 8% richer encounter table almost
+exactly, which is the consistency check: the walk is a small enough share that
+the table dominates. Route 2 south has the **richest** table of the three and
+still loses, because its grass is 24 steps from its own exit before the city
+crossing even starts — 56 steps to the nurse against Route 22's 43.
 
-Viridian Forest is the interesting one and it loses on the term nobody looks at:
-its encounter *rate* is 8/256 against Route 1's 25, so despite being 59% richer
-per encounter it is **half as good per step**.
+Viridian Forest is the interesting one and it loses on the term nobody looks
+at: its encounter *rate* is 8/256 against Route 1's 25, so despite being 59%
+richer per encounter it is **half as good per step**.
+
+> **A correction worth keeping.** An earlier draft of this page did *not* run
+> Route 22. It argued that Route 22 "loses on both terms to a candidate that
+> already lost", from a nurse distance of 79-82 steps — and that number was
+> **wrong**: the breadth-first search behind it started from a tile that is not
+> walkable, and the real distance is 43. The conclusion inverted the moment the
+> number was fixed. **An argument from two measured numbers is still an
+> argument, and it is only as good as the weaker number.** Route 22 is measured
+> now.
 
 ### And the lever on link 11 is not the location
 

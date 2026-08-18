@@ -9896,15 +9896,26 @@ quote a 99.9 % claim for any of them.
   walkable graph with Viridian Forest the only way between them; re-checked here, a BFS from the
   southern grass to the northern returns **no path**. Nobody may read this as a fix for link 11,
   whose whole job is training *before* the forest.
-- **NOTHING PRE-FOREST BEATS ROUTE 1, AND THE OBVIOUS CANDIDATE IS MEASURABLY WORSE.** Exp per
-  step: Route 2 2.87, Route 22 2.64, **Route 1 2.44**, Viridian Forest 1.24 (its rate is 8/256
-  against everyone else's 25). Steps to the Viridian nurse: **Route 1 25**, Route 2 south 56,
-  Route 22 79-82. Run head to head on link 11's own job, same pool, same seeds, same workers:
-  **Route 1 40/40 at a median 65,904 frames; Route 2 south 34/40 at 72,294.** The thirty-one
-  extra steps each way more than eat a 17.6 % richer table. Route 22 was **not run** — it is
-  further and less rich than a candidate that already lost, which is an argument from two
-  measured numbers and is labelled as one. `scenarios/experiments/` holds the experiment;
-  `chain_files` reads only `scenarios/pewter`, so nothing there can join the chain by accident.
+- **ROUTE 22 IS ABOUT 8 % FASTER THAN ROUTE 1 FOR LINK 11's JOB, AND ROUTE 2 SOUTH IS ABOUT
+  11 % SLOWER.** Both run on that job — level 5-6 to 10, the certified link-10 pool, same seeds,
+  same workers, **paired on the seed**: Route 1 **40/40** at a median 65,904 frames; **Route 22
+  40/40 at 60,474**, mean paired difference **−7,709 (se 1,723, t = −4.47)**, faster on **29 of
+  40 seeds**; Route 2 south 34/40 at 72,294, **+13,999 (t = +3.46)**, faster on 6 of 34. Link 11
+  is 58 % of the chain's emulated time, so 8 % off it is ~4.7 % off the whole run — modest, real,
+  and **link 11 was NOT changed**: the instruction was to measure and say.
+- **The exp-per-step table alone does not predict the winner, which is why they were run.** Exp
+  per step: Route 2 2.87, Route 22 2.64, **Route 1 2.44**, Viridian Forest 1.24 (its *rate* is
+  8/256 against everyone else's 25, so despite being 59 % richer per encounter it is half as
+  good per step). Steps to the Viridian nurse: Route 1 **25**, Route 22 **43**, Route 2 south
+  **56**. Route 2 south has the richest table of the three and still loses, because its grass is
+  24 steps from its own exit before the city crossing starts.
+- **AND AN ARGUMENT FROM TWO MEASURED NUMBERS IS STILL AN ARGUMENT.** An earlier draft did not
+  run Route 22: it reasoned that Route 22 "loses on both terms to a candidate that already lost",
+  from a nurse distance of **79-82 steps**. That number was wrong — the breadth-first search
+  behind it started from a tile that is not walkable, and the real distance is **43** — and the
+  conclusion inverted the moment it was fixed. Run the experiment.
+- `scenarios/experiments/` holds both; `chain_files` reads only `scenarios/pewter`, so nothing
+  there can join the chain by accident.
 - **AND THE LEVER ON LINK 11 IS NOT THE LOCATION.** Per-map frames from one run's own position
   track: **65.7 % of it is inside battles**, 16.8 % is the round trip to the nurse. A perfect
   nurse saves at most a sixth, and Route 1 already has the closest one. The cost driver is
