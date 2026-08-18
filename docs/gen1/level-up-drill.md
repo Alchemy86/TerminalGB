@@ -262,9 +262,12 @@ Consequences worth knowing:
   [nothing is ever lost by evolving](discoveries.md#cancelling-an-evolution-costs-one-level-and-nothing-else)
   and a line that refuses them is a line no player walks. The `cancel` subcommand still measures
   what a refusal does.
-- **A trained student.** This produces what a student trains from. Whether one learns it is the
-  A/B rig's question — a separate piece of work, landing as `docs/agent/test-rig.md` — and **no
-  model has been through this corpus.**
+- **A trained student that is a model.** This produces what a student trains from, and
+  `--prompts <dir>` now also writes the [A/B rig](../agent/test-rig.md)'s entry pool: one save
+  state per verified decision, taken with the question on the screen, and a `gbtestprompt/1`
+  file beside it. A teacher and a counting student have been run against each other on it —
+  [the result](../agent/move-learning-result.md) — and the held-out control there is worth
+  reading before anyone plans a bigger corpus. **No model has been through this corpus.**
 
 ---
 
@@ -289,6 +292,10 @@ cargo run --release --features $FEATS --example gen1_learn_drill -- drill \
 python3 tools/agent-docs/log_to_dataset.py \
     target/learn-drill/charmander/agent.ndjson > charmander.dataset.jsonl
 ```
+
+`--prompts <dir>` additionally writes the A/B rig's entry pool — see
+[the corpus contract](../agent/test-rig.md#the-corpus-contract). Numbering continues from what
+is already in the directory, so drilling both lines into one pool is the ordinary use.
 
 `--level N` runs one level-up on its own, which is how to iterate on a single prompt.
 `GB_LEARN_DRILL_DUMP=1` prints the decoded screen, the cursor, what it points at and the live

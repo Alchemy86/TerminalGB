@@ -482,7 +482,7 @@ multiset happened to match. Pinned by
 producer's business and the distillation's; what arrives here is a player, as a
 `command` arm.
 
-### What the level-up drill still owes, precisely
+### The drill supplies it now — `--prompts`
 
 [`docs/gen1/level-up-drill.md`](../gen1/level-up-drill.md) already triggers every
 level-up, answers every prompt and verifies the resulting party against the
@@ -492,31 +492,58 @@ agent format (`agent.ndjson`, one record per button, observation verbatim in
 `species,level,arm_species,offered,kind,answer,reached,verified,rows`). Nothing
 about either needs to change.
 
-**The one thing missing is a pool this rig can start from.** A corpus records
-what happened; a rig needs to *re-run* the same prompt with a different player,
-which means a save state taken at the moment the prompt is on screen. So, per
-verified event:
+**The one thing that was missing was a pool this rig can start from.** A corpus
+records what happened; a rig needs to *re-run* the same prompt with a different
+player, which means a save state taken at the moment the prompt is on screen.
+`gen1_learn_drill drill --prompts <dir>` writes it, per **verified decision**:
 
-* `gb.save_state()` written as `<pool>/NNNNN.gbss` **at the prompt**, before the
-  answer is given;
+* `gb.save_state()` as `<pool>/NNNNN.gbss` on the first frame the
+  `Delete an older move…?` box is answerable — before the cursor exists the
+  question is still typing itself out and a press there would only advance
+  text; after the first press the answer has been given;
 * `<pool>/NNNNN.expect.json` as above, whose `correct_moves` is the party the
-  drill already verifies — `held`, `offered` and `level` are columns
-  `events.csv` already has.
+  drill already verifies.
 
-That is two `fs::write` calls at a point the drill is already standing on, and
-it is the whole join between the two pieces of work. Everything else on this
-page then works unchanged: the rig files each state under a subject by reading
-its lead species, runs the teacher and the student from it, and compares the
-four moves each left.
+**Only a verified decision earns a place.** A prompt the drill could not itself
+answer correctly is a prompt whose "right answer" is a claim rather than a
+measurement. Numbering continues from what is already in the directory, because
+both lines are drilled into one pool and that pair is the point.
+
+Everything else on this page then works unchanged: the rig files each state
+under a subject by reading its lead species, runs the teacher and the student
+from it, and compares the four moves each left. The result is
+[**teacher against student on the move prompts**](move-learning-result.md).
+
+Two small things the rig grew for it, both general:
+
+* **A subject may name several lead species** (`"lead_species": [178, 180]`),
+  because a subject is usually an evolutionary *line* and a line is several
+  forms. The Charmander line meets its prompts as a CHARMELEON and a CHARIZARD;
+  filing those under two subjects of two prompts each answers a question nobody
+  asked. One number still parses and is the same thing with one member.
+* **`"runs": "pool"`** — one attempt per entry state the subject holds. An entry
+  is taken as `seed % pool.len()`, so a fixed count that does not divide the
+  pool runs some prompts twice and others not at all, and the interval beside
+  the rate is computed over an *n* that is not the number of questions asked.
+  Meaningless for a battle pool, where the entries are interchangeable starting
+  worlds and the run count is the sample size.
 
 ### What the report says, and why there are two numbers
 
 ```
-  arm          prompts answered correctly
-  teacher         3 of 6     50.0% [18.8-81.2]
-  screen          3 of 6     50.0% [18.8-81.2]
-  AGREEMENT teacher vs screen: 6 of 6 prompts left the same four moves (100.0%)
+  arm          prompts answered correctly              of which
+  teacher         4 of 4    100.0% [51.0-100.0]   replace  3/3  decline  1/1
+  student         3 of 4     75.0% [30.1-95.4]    replace  2/3  decline  1/1
+  mash-a          1 of 4     25.0% [4.6-69.9]     replace  0/3  decline  1/1
+  AGREEMENT teacher vs student: 3 of 4 prompts left the same four moves (75.0%)
 ```
+
+**A decline gets its own column, and it earned that on the first run.** A
+decline's right answer is the move set the prompt arrived with, so a player that
+answers nothing at all is scored correct on every one of them: pooled,
+`mash-a` above reads as a quarter of the task; split, it reads as *zero of three
+replacements and one of one decline by inaction*, which is the truth. Pinned by
+`declines_are_counted_on_their_own`.
 
 **Agreeing with the teacher and being right are different questions, and the rig
 reports both.** Two players can each be wrong *and wrong in the same way* —
@@ -548,9 +575,9 @@ how many prompts each species even asks.
 > **Read this as what it is.** It measures the rival battle, because that is
 > what the instrument was first pointed at while the move-learning prompts were
 > still being built. It is **not** the move-learning result and must not be
-> quoted as one; that measurement waits on a prompt pool
-> ([§5a](#5a-measuring-move-learning--the-unit-is-a-prompt)). It is still
-> useful: it is what proved the rig, and it produced two findings.
+> quoted as one — that one is
+> [here](move-learning-result.md). It is still useful: it is what proved the
+> rig, and it produced two findings.
 
 **Plan:** [`scenarios/testrig/starter-rival-battle.json`](../../scenarios/testrig/starter-rival-battle.json).
 Pokémon Blue, link 05 (the rival battle in Oak's lab), three subjects, three

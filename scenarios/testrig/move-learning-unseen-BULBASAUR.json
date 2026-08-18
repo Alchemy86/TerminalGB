@@ -1,0 +1,21 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "move-learning-unseen-BULBASAUR",
+  "question": "The control the seen split cannot give: a student trained ONLY on the other evolutionary line, answering this one's prompts. Did it learn to answer a move prompt, or did it learn these moves?",
+  "split": "unseen",
+  "scenario": "scenarios/learn/answer-a-move-prompt.json",
+  "entry_pool": "target/learn-prompts",
+  "runs": "pool",
+  "seed0": 0,
+  "idle_spread": 0,
+  "subjects": [ { "name": "BULBASAUR", "lead_species": [9,154] } ],
+  "arms": [
+    { "name": "teacher", "player": "command", "program": "python3",
+      "args": ["tools/learn-student/policy.py", "teacher",
+               "--corpus", "target/learn-drill/charmander/agent.ndjson",
+               "--corpus", "target/learn-drill/bulbasaur/agent.ndjson"] },
+    { "name": "student", "player": "command", "program": "python3",
+      "args": ["tools/learn-student/policy.py", "student",
+               "--model", "target/learn-student/charmander-only.json"] }
+  ]
+}

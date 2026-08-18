@@ -4769,6 +4769,31 @@ held, what was offered, what each player did, and whether they agree.
   `<pool>/NNNNN.expect.json` naming `correct_moves`. The state→action training
   corpus never touches the rig. That division is deliberate — a rig that also
   knew about corpus formats would need changing every time one did.
+  **`gen1_learn_drill drill --prompts <dir>` writes it**, on the first frame the
+  `Delete an older move…?` box is *answerable* — before the cursor exists the
+  question is still typing itself out, and after the first press the answer has
+  been given, so that is the only moment a foreign player can be handed the same
+  question. Only a **verified** decision earns a place: a prompt the drill could
+  not itself answer correctly has a "right answer" that is a claim rather than a
+  measurement. Numbering continues from what is already in the directory,
+  because both lines go into one pool and a run that restarted at 00000 would
+  silently overwrite the other species.
+- **A SUBJECT IS USUALLY A LINE, SO `lead_species` TAKES A LIST**
+  (`[178, 180]`). The Charmander line meets its prompts as a CHARMELEON and a
+  CHARIZARD; filing those under two subjects of two prompts each answers a
+  question nobody asked. One number still parses.
+- **`"runs": "pool"` — one attempt per entry state the subject holds.** An entry
+  is `seed % pool.len()`, so a fixed count that does not divide the pool runs
+  some prompts twice and others not at all, and the interval beside the rate is
+  over an *n* that is not the number of questions asked. Meaningless for a
+  *battle* pool, where entries are interchangeable worlds and the run count is
+  the sample size.
+- **A DECLINE IS SCORED BY A PLAYER THAT DOES NOTHING, so it gets its own
+  column.** A decline's correct move set is the one the prompt arrived with.
+  Measured on the first run: the `mash-a` floor scored **3 of 9 — every one of
+  them a decline — and 0 of 6 replacements**, while never reaching the goal on
+  any attempt. Pooled it reads as a third of the task. `Cell::prompts_split`,
+  `declines_are_counted_on_their_own`.
 - **What a player chose is read off the party it left behind**
   (`wPartyMon1Moves`, via the `lead_move1..4` named watches), so nothing is
   inferred from a recording and every player is scored identically. One machine
@@ -4797,11 +4822,19 @@ held, what was offered, what each player did, and whether they agree.
 
 ### IT SAYS HOW FAR IT HAS GOT, BY DEFAULT — and where the wall clock went
 
-- **Progress to stderr every 5 s, plus the same tick in `<out>/progress.ndjson`.**
+- **Progress to STDOUT every 5 s, plus the same tick in `<out>/progress.ndjson`.**
   On by default with `--quiet` to silence it, never a flag to enable it: a run
   that prints nothing until it finishes cannot be told from a wedged one, and an
-  hour went on checking process tables for exactly that reason. stdout stays the
-  report; the file is written whether or not the human line is.
+  hour went on checking process tables for exactly that reason. It was on
+  *stderr*, which is the AXI default and is **wrong for this tool** — an agent
+  drives it through a shell and does not read stderr, the same correction
+  `9d02819` made to `examples/scenario.rs` and `gen1_tables.py`. It is safe
+  beside the report because it is TOON with a name of its own
+  (`progress[1]{done,total,pct,cell,…}`), so nothing can mistake a tick for a
+  row of the result and an agent that wants only the result drops every block
+  with that name. A one-row *table* rather than the object form, because a tick
+  is a sample and a stream of samples is a collection: every tick carries its
+  own header and parses alone. The file is written whether or not the line is.
 - **`WHERE THE WALL CLOCK WENT` splits an arm's attempts into emulating, setup
   and the rest**, because a rig like this is worth having only if it is fast and
   somebody has to know which part to attack. `setup` is the per-attempt tax an
@@ -4814,6 +4847,100 @@ held, what was offered, what each player did, and whether they agree.
   spawn-and-decide happens while the machine keeps running and is charged to
   `emulating`. **A slow player shows up as more FRAMES per attempt**, which is
   why the frame count sits in the table beside the shares.
+
+### THE RIG ALREADY CLAIMED THE THROUGHPUT WORK — and two wastes beside it did not
+
+Checked against `pewter_chain ab` specifically, because a rig whose value is the
+speed of the loop must not leave this repository's throughput work on the floor.
+`corpus` is the fair comparator: the same emulator doing the same work on the
+same entry states. Every figure below is one fixed job — **60 attempts of pewter
+link 04, from the same 600-state pool, at the same seeds and phase spread
+3001** — on a 20-core box shared with other crews, with the load average stated,
+because a wall clock on a shared box measures the box's afternoon.
+
+- **Fan-out: present.** 41.87 s at `--workers 1` against 3.65 s at `--workers
+  16`, load 1.67/1.52 — **11.47x**, of the wall clock of the identical run.
+- **Collector mode: present, and declared before the phase offset.** 42.07 s
+  with `collecting()` + `set_render_pixels(false)` + `set_render_audio(false)`
+  against 51.88 s with all three removed, one worker, load 3.92 — **1.23x**. The
+  order matters: a phase offset averages half its spread, so about a third of
+  everything the program emulates happens before `ScenarioRun` exists.
+- **The battery: never touched.** `Gameboy::new(rom, None)`, so 0 `.sav` files
+  and 24 KB of output for the whole run.
+- **THE ENTRY POOL WAS CLONED ONCE PER SUBJECT AND AGAIN PER WORKER.** 600 save
+  states at 142 KB is 85 MB, sixteen workers is 1.4 GB of memcpy for data
+  nothing mutates, and a three-subject three-arm plan does it nine times. One
+  `Arc` and a per-subject list of indices instead. Interleaved before/after at
+  load 1.98 and 4.22: **wall 4.28 -> 3.85 s and 4.27 -> 3.85 s (1.11x), peak RSS
+  1,911,508 -> 160,560 KB (11.9x)**. The same correction is on `corpus`, whose
+  trajectory and final-state hashes are byte-identical either side of it.
+- **The lead species was read serially for every state in the pool**, one whole
+  `Gameboy` each, including for plans where no subject filters by lead and the
+  answer is never consulted. Skipped in that case, fanned across the workers
+  when needed.
+- **`--workers` was ignored whenever the value typed equalled `cores - 4`.**
+  Comparing a value against the default cannot tell "not given" from "given the
+  default", so a plan's own `workers` survived an explicit override. There is a
+  `workers_given` flag now. **General: never infer "was this argument given"
+  from its value.**
+- **Parity, both sides in seconds.** Five interleaved rounds at 16 workers, load
+  rising 3.2 -> 17.4 as another crew fanned out: `ab` 3.86 / 8.07 / 7.67 / 7.29
+  / 8.28 s against `corpus` 7.72 / 8.34 / 8.23 / 9.00 / 9.37 — `ab` faster in
+  five of five. Pinned to one P-core at one worker over 20 attempts, which is
+  contention-immune because it is CPU seconds: `ab` 13.78 / 13.56 / 13.43
+  against `corpus` 13.73 / 13.48 / 13.39. So **`ab` is 0.3 % behind at one
+  worker** — it reads the lead's four move slots out of every finished state,
+  which is the rig's own product — **and ahead at fan-out**, because it writes
+  no per-attempt recording.
+
+### THE FIRST MOVE-LEARNING RESULT, AND WHAT THE HELD-OUT CONTROL SAID
+
+**Full page: [`docs/agent/move-learning-result.md`](docs/agent/move-learning-result.md).**
+Nine prompts (Charmander 4, Bulbasaur 5, three of them declines), a teacher that
+replays the drill's own answers, a student fitted from the drill's corpus, and a
+press-A floor. **Teacher 9/9, student 8/9, floor 3/9 — and all three of the
+floor's are declines it got by inaction.**
+
+- **The gap teacher − student is +25.0 points on one line and +0.0 on the other,
+  and the two CANNOT be separated at nine prompts** (difference +25.0, se 25.0,
+  p = 0.317). Say so. And the task forbids the flattering reading anyway: of the
+  840 decisions, the number whose right answer differs by species is **zero**.
+- **THE HELD-OUT CONTROL IS THE FINDING: 0 of 9, both directions, worse than
+  doing nothing** — it replaces where it should decline, which the inert floor
+  accidentally gets right. The reason is measured, not a shortcoming of the fit:
+  across the two lines the corpora share **one held move name of eleven** and
+  **none of the nine offered moves**, so an unseen student has never seen a move
+  it is being asked about. **Nine prompts distil the teacher's answers and teach
+  nothing about the question**; the fix is more of the 840, not a better fit.
+- **The student may not read the drill's `label` block** — it is ground truth,
+  not something a player sees. `policy.py` raises rather than quietly scoring a
+  cheat.
+- **The teacher is a REPLAY, not a second implementation of the criterion.** The
+  criterion lives in `tools/gen1-tables/learn_table.py` and only there; two
+  implementations of one rule disagree the moment either is improved. So the
+  teacher's 9/9 is a statement about the pool and the harness, not about the
+  criterion.
+- **The prompt's goal condition is `watch:in_battle=0`, and it was earned rather
+  than chosen.** A move-learn prompt sets no event flag. What the cartridge does
+  record is that the prompt happens *inside* the battle sequence: measured on
+  all nine pool states, `wIsInBattle` ($D057) reads `$01` on the frame the
+  question is answerable and `$00` once it has been answered and the game has
+  left the battle. It is 1 at the start of every attempt, so it cannot fire
+  before the player acts.
+- **THE ANSWER DOES NOT LAND UNTIL THE TEXT AFTER IT HAS BEEN READ.** The game
+  prints `LEARNER forgot LEER!` and `LEARNER learned RAGE!` and only *then*
+  writes the party. An adapter that waits on those boxes leaves the move set
+  exactly as it found it — measured: every arm scored the pool's own `held`
+  values and the prompt looked unanswered when it had in fact been answered
+  correctly six decisions earlier. `advance_text` is safe to give any arm: it
+  refuses to answer a question.
+- **MATCH A PROMPT PHRASE AS IT LOOKS WHILE IT IS STILL BEING TYPED.** Gen 1
+  prints a box a character at a time, so waiting for `which move should be
+  forgotten?` and being handed `Which move` is not a near miss — it fell through
+  to "this is not the question", pressed A to read on, and forgot whichever move
+  the cursor was sitting on. Match `which move`, `make room`, `abandon learn`.
+  And **a menu with something highlighted is a question whatever its words**, so
+  never `advance_text` on one: A on a list is a choice.
 
 ### THE PASS RATE IS BLIND TO THE FIGHT UNDER IT — found on a BATTLE run, which is not the deliverable
 

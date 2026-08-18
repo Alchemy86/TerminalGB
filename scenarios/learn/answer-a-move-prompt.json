@@ -1,0 +1,30 @@
+{
+  "schema": "gbscenario/1",
+  "name": "answer-a-move-prompt",
+  "objective": "Your Pokemon has levelled up, already knows four moves, and the game is asking whether to delete an older one to make room for the new one. Answer it. YES opens the move list — walk the cursor to the move that should be forgotten and press A. NO then asks whether to abandon learning the new move; answer YES to that to decline it. Choose the answer that leaves the Pokemon with the best four moves it could hold. A move that deals no damage cannot be priced against one that does; never give up the last damaging move; and a move whose power byte is 0 or 1 is not necessarily weak — GUILLOTINE, SEISMIC TOSS and their siblings carry their damage in their effect. The cursor starts on the first move in the list, so count the presses down to the one you want, and read the cursor back rather than trusting the count.",
+  "goal": [
+    "watch:in_battle=0"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "max_calls 20",
+    "max_wall_seconds 300"
+  ],
+  "knowledge": [],
+  "timeout_frames": 9000,
+  "watch": [
+    "in_battle",
+    "lead_species",
+    "lead_level",
+    "lead_move1",
+    "lead_move2",
+    "lead_move3",
+    "lead_move4"
+  ],
+  "evidence": [
+    "watch:in_battle=0 — wIsInBattle $D057 (atlas, rom+live+inv). A move-learn prompt sets no event flag: pokered's LearnMove and its two yes/no boxes leave nothing behind that a later reader can find, which is why nine of the fourteen Pewter links use wCurMap and this one uses the battle flag. What the cartridge does record is that the prompt happens INSIDE the battle sequence: measured on all nine states of the prompt pool, wIsInBattle reads $01 on the frame the question is answerable and $00 once the answer has been given and the game has left the battle — so 'the battle is over' is the cartridge's own 'the question has been dealt with'. It is 1 at the start of every attempt, so it cannot fire before the player acts.",
+    "THE GOAL IS NOT THE MEASUREMENT. Answering the prompt at all reaches the goal; answering it CORRECTLY is scored separately by the test rig, which reads wPartyMon1Moves ($D173, watches lead_move1..4) out of the state the attempt leaves behind and compares it in slot order against the gbtestprompt/1 answer beside the entry state. See docs/agent/test-rig.md section 5a."
+  ]
+}

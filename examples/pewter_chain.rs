@@ -3361,7 +3361,7 @@ fn cmd_ab(a: &Args) {
     if subjects.is_empty() {
         subjects.push(abrig::Subject {
             name: "all".into(),
-            lead_species: None,
+            lead_species: Vec::new(),
         });
     }
 
@@ -3380,7 +3380,7 @@ fn cmd_ab(a: &Args) {
     // no `lead_species` anywhere never consults the answer, so on the ordinary
     // single-subject plan this is the difference between 600 machines and none.
     // When it *is* needed it is embarrassingly parallel and was serial.
-    let leads: Vec<u8> = if subjects.iter().any(|s| s.lead_species.is_some()) {
+    let leads: Vec<u8> = if subjects.iter().any(|s| !s.lead_species.is_empty()) {
         let out = std::sync::Mutex::new(vec![0u8; states.len()]);
         let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|sc| {
@@ -3407,16 +3407,17 @@ fn cmd_ab(a: &Args) {
     // **Progress is on by default and silenced by a flag, never the reverse.**
     // Attempts that could actually run: a subject whose pool is empty is
     // skipped below, so it is not in the denominator.
-    let live_total = subjects
-        .iter()
-        .filter(|s| {
-            leads
-                .iter()
-                .any(|l| s.lead_species.map(|w| *l == w).unwrap_or(true))
-        })
-        .count() as u32
-        * plan.arms.len() as u32
-        * plan.runs;
+    // Per subject, because `"runs": "pool"` gives each one as many attempts as
+    // it has entry states and the subjects need not hold the same number.
+    let runs_for = |sub: &abrig::Subject| -> u32 {
+        if plan.runs_is_pool {
+            leads.iter().filter(|l| sub.takes(**l)).count() as u32
+        } else {
+            plan.runs
+        }
+    };
+    let live_total: u32 =
+        subjects.iter().map(&runs_for).sum::<u32>() * plan.arms.len() as u32;
     let live = std::sync::Arc::new(abrig::Live::new(live_total));
     let began = std::time::Instant::now();
     let ticker = {
@@ -3465,9 +3466,7 @@ fn cmd_ab(a: &Args) {
         // nine cells x sixteen workers x 33 MB of save states, ~4.8 GB of
         // memcpy for data nobody mutates. `Arc` costs an atomic instead.
         let idx: std::sync::Arc<Vec<usize>> = std::sync::Arc::new(
-            (0..states.len())
-                .filter(|&i| sub.lead_species.map(|w| leads[i] == w).unwrap_or(true))
-                .collect(),
+            (0..states.len()).filter(|&i| sub.takes(leads[i])).collect(),
         );
         pool_sizes.insert(sub.name.clone(), idx.len());
         if idx.is_empty() {
@@ -3480,7 +3479,8 @@ fn cmd_ab(a: &Args) {
         for arm in &plan.arms {
             let dir = out.join(format!("{}-{}", sub.name, arm.name));
             std::fs::create_dir_all(&dir).ok();
-            live.begin(&format!("{}/{}", sub.name, arm.name), plan.runs);
+            let runs = runs_for(sub);
+            live.begin(&format!("{}/{}", sub.name, arm.name), runs);
             let cell = run_arm(
                 &rom,
                 &plan,
@@ -3489,6 +3489,7 @@ fn cmd_ab(a: &Args) {
                 &idx,
                 &dir,
                 workers,
+                runs,
                 a.primitive,
                 &live,
             );
@@ -3541,6 +3542,7 @@ fn build_plan(a: &Args, rom: &Cart) -> abrig::Plan {
         }
         None => abrig::Plan {
             name: "adhoc".into(),
+            runs_is_pool: false,
             question: String::new(),
             split: abrig::Split::NotApplicable,
             scenario: PathBuf::new(),
@@ -3601,7 +3603,7 @@ fn build_plan(a: &Args, rom: &Cart) -> abrig::Plan {
                 });
                 abrig::Subject {
                     name: species_name(rom, idx),
-                    lead_species: Some(idx),
+                    lead_species: vec![idx],
                 }
             })
             .collect();
@@ -3636,6 +3638,7 @@ fn run_arm(
     idx: &std::sync::Arc<Vec<usize>>,
     dir: &Path,
     workers: u32,
+    runs: u32,
     primitive: bool,
     live: &abrig::Live,
 ) -> abrig::Cell {
@@ -3652,7 +3655,7 @@ fn run_arm(
             let (next, rows, tot) = (next.clone(), rows.clone(), tot.clone());
             let (rom, sp) = (rom.clone(), plan.scenario.clone());
             let dir = dir.join(format!("w{w}"));
-            let (runs, seed0, spread) = (plan.runs, plan.seed0, plan.idle_spread);
+            let (seed0, spread) = (plan.seed0, plan.idle_spread);
             let player = arm.player.clone();
             // Shared, not copied: see the note where `idx` is built. The only
             // per-attempt clone left is the one entry state a worker is about
@@ -3704,7 +3707,9 @@ fn run_arm(
                     // What the player left the party holding, and whether the
                     // pool says that is right. One machine, no emulated frames.
                     let moves = lead_moves(&rom, &o.state);
-                    let correct = states[e].1.as_ref().map(|x| x.satisfied_by(&moves));
+                    let expect = states[e].1.as_ref();
+                    let correct = expect.map(|x| x.satisfied_by(&moves));
+                    let decline = expect.map(|x| x.decline).unwrap_or(false);
                     tot[0].fetch_add(o.wall_ms as u64, Relaxed);
                     tot[1].fetch_add(o.emulate_ms as u64, Relaxed);
                     tot[2].fetch_add(o.setup_ms as u64, Relaxed);
@@ -3725,6 +3730,7 @@ fn run_arm(
                         hp_samples: b.hp_samples,
                         moves,
                         correct,
+                        decline,
                     });
                 }
             });
@@ -3745,7 +3751,8 @@ fn run_arm(
             out.push_str(&format!(
                 "{{\"seed\":{},\"goal\":{},\"ending\":{:?},\"frames\":{},\
                  \"decisions\":{},\"battles\":{},\"won\":{},\"lost\":{},\
-                 \"fled\":{},\"moves\":[{},{},{},{}],\"correct\":{}}}\n",
+                 \"fled\":{},\"moves\":[{},{},{},{}],\"correct\":{},\
+                 \"decline\":{}}}\n",
                 a.seed,
                 a.goal,
                 a.ending,
@@ -3762,7 +3769,8 @@ fn run_arm(
                 match a.correct {
                     Some(v) => v.to_string(),
                     None => "null".into(),
-                }
+                },
+                a.decline
             ));
         }
         let _ = std::fs::write(dir.join("attempts.ndjson"), out);
@@ -3796,7 +3804,11 @@ fn banner(p: &abrig::Plan, out: &Path) -> String {
          output   {}\n",
         p.scenario.display(),
         p.pool.display(),
-        p.runs,
+        if p.runs_is_pool {
+            "one per entry state".to_string()
+        } else {
+            p.runs.to_string()
+        },
         p.seed0,
         p.idle_spread,
         out.display()
@@ -3875,18 +3887,29 @@ fn render(
             .filter_map(|arm| get(&sub.name, &arm.name))
             .any(|c| c.prompts().1 > 0)
         {
-            s.push_str("\n  arm          prompts answered correctly\n");
+            // **Declines on their own column.** A decline's correct answer is
+            // the move set the prompt arrived with, so a player that answers
+            // nothing scores every one of them — which is what the `mash-a`
+            // floor did, and pooling the two hid it.
+            s.push_str(
+                "\n  arm          prompts answered correctly              of which\n",
+            );
             for arm in &plan.arms {
                 let Some(c) = get(&sub.name, &arm.name) else {
                     continue;
                 };
                 let (k, n) = c.prompts();
+                let ((rk, rn), (dk, dn)) = c.prompts_split();
                 s.push_str(&format!(
-                    "  {:<12} {:>4} of {:<4} {}\n",
+                    "  {:<12} {:>4} of {:<4} {}   replace {:>2}/{:<2} decline {:>2}/{:<2}\n",
                     arm.name,
                     k,
                     n,
-                    abrig::pct_ci(k, n)
+                    abrig::pct_ci(k, n),
+                    rk,
+                    rn,
+                    dk,
+                    dn
                 ));
             }
             for arm in plan.arms.iter().skip(1) {
@@ -4155,9 +4178,7 @@ fn report_json(
         out.push_str(&format!(
             "    {{\"name\": {:?}, \"lead_species\": {}, \"pool\": {pool}, \"arms\": [\n",
             sub.name,
-            sub.lead_species
-                .map(|x| x.to_string())
-                .unwrap_or_else(|| "null".into())
+            sub.lead_json()
         ));
         let mut first_arm = true;
         for arm in &plan.arms {

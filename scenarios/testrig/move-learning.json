@@ -1,0 +1,42 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "move-learning",
+  "question": "A level-up move prompt has one right answer and the cartridge asks it 840 distinct times across the game. On the nine the drill played out — four on the Charmander line, five on the Bulbasaur line, three of them declines — how many does a student distilled from the teacher's own corpus get right, is it behind the teacher, and is the gap the same on both lines?",
+  "split": "seen",
+  "scenario": "scenarios/learn/answer-a-move-prompt.json",
+  "entry_pool": "target/learn-prompts",
+  "runs": "pool",
+  "seed0": 0,
+  "idle_spread": 0,
+  "subjects": [
+    { "name": "CHARMANDER", "lead_species": [178, 180] },
+    { "name": "BULBASAUR", "lead_species": [9, 154] }
+  ],
+  "arms": [
+    {
+      "name": "teacher",
+      "player": "command",
+      "program": "python3",
+      "args": [
+        "tools/learn-student/policy.py", "teacher",
+        "--corpus", "target/learn-drill/charmander/agent.ndjson",
+        "--corpus", "target/learn-drill/bulbasaur/agent.ndjson"
+      ]
+    },
+    {
+      "name": "student",
+      "player": "command",
+      "program": "python3",
+      "args": [
+        "tools/learn-student/policy.py", "student",
+        "--model", "target/learn-student/both.json"
+      ]
+    },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    }
+  ]
+}

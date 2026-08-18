@@ -144,9 +144,39 @@ pub struct ArmSpec {
 #[derive(Clone, Debug)]
 pub struct Subject {
     pub name: String,
-    /// Keep only entry states whose lead is this **internal index number**.
-    /// `None` keeps every state in the pool.
-    pub lead_species: Option<u8>,
+    /// Keep only entry states whose lead is one of these **internal index
+    /// numbers**. Empty keeps every state in the pool.
+    ///
+    /// A *set* rather than one number because an evolutionary line is several
+    /// forms and a subject is usually a line: the move-learning prompts a
+    /// CHARMANDER meets are met by a CHARMELEON and a CHARIZARD, and filing
+    /// those under three subjects of two prompts each answers a question
+    /// nobody asked. One number still parses — `"lead_species": 176` — and is
+    /// the same thing with one member.
+    pub lead_species: Vec<u8>,
+}
+
+impl Subject {
+    /// Does this subject take an entry whose lead is `sp`?
+    pub fn takes(&self, sp: u8) -> bool {
+        self.lead_species.is_empty() || self.lead_species.contains(&sp)
+    }
+
+    /// How the plan wrote it, for the report's provenance block.
+    pub fn lead_json(&self) -> String {
+        match self.lead_species.len() {
+            0 => "null".into(),
+            1 => self.lead_species[0].to_string(),
+            _ => format!(
+                "[{}]",
+                self.lead_species
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
+    }
 }
 
 /// A test, as a file somebody else can re-run.
@@ -163,6 +193,17 @@ pub struct Plan {
     pub subjects: Vec<Subject>,
     pub arms: Vec<ArmSpec>,
     pub runs: u32,
+    /// `"runs": "pool"` — one attempt per entry state the subject holds,
+    /// instead of a fixed count.
+    ///
+    /// **A prompt pool wants every prompt answered exactly once.** An entry is
+    /// taken as `seed % pool.len()`, so a fixed count that does not divide the
+    /// pool runs some prompts twice and others not at all — on a four-prompt
+    /// subject at `runs: 5` the first prompt is counted twice and the interval
+    /// beside it is computed over an n that is not the number of questions
+    /// asked. It is meaningless for a *battle* pool, where the entries are
+    /// interchangeable starting worlds and the run count is the sample size.
+    pub runs_is_pool: bool,
     pub seed0: u64,
     pub idle_spread: u32,
     pub workers: u32,
@@ -194,10 +235,18 @@ impl Plan {
                     .get("name")
                     .and_then(|x| x.as_str())
                     .ok_or("every subject needs a \"name\"")?;
-                let lead = it.get("lead_species").and_then(|x| x.as_u64());
+                let lead = match it.get("lead_species") {
+                    Some(json::Json::Arr(a)) => a
+                        .iter()
+                        .filter_map(|x| x.as_u64())
+                        .map(|x| x as u8)
+                        .collect(),
+                    Some(x) => x.as_u64().map(|n| vec![n as u8]).unwrap_or_default(),
+                    None => Vec::new(),
+                };
                 subjects.push(Subject {
                     name: name.to_string(),
-                    lead_species: lead.map(|x| x as u8),
+                    lead_species: lead,
                 });
             }
         }
@@ -254,6 +303,7 @@ impl Plan {
             subjects,
             arms,
             runs: n("runs", 200) as u32,
+            runs_is_pool: matches!(v.get("runs").and_then(|x| x.as_str()), Some("pool")),
             seed0: n("seed0", 0),
             idle_spread: n("idle_spread", 3001) as u32,
             workers: n("workers", 0) as u32,
@@ -282,6 +332,8 @@ pub struct Attempt {
     /// Whether [`Attempt::moves`] matches the entry's stated expectation.
     /// `None` when the entry carried none.
     pub correct: Option<bool>,
+    /// Whether that expectation was a **decline**. See [`Expectation::decline`].
+    pub decline: bool,
 }
 
 /// Which of an attempt's outcomes a rate or a gap is about.
@@ -459,6 +511,23 @@ impl Cell {
     /// Prompts this cell answered, and how many were right.
     pub fn prompts(&self) -> (u32, u32) {
         self.tally(Outcome::PromptCorrect)
+    }
+
+    /// The same, split by whether the right answer was to decline.
+    ///
+    /// Returns `((right, n) for replacements, (right, n) for declines)`.
+    pub fn prompts_split(&self) -> ((u32, u32), (u32, u32)) {
+        let mut r = (0, 0);
+        let mut d = (0, 0);
+        for a in &self.attempts {
+            let Some(ok) = a.correct else { continue };
+            let slot = if a.decline { &mut d } else { &mut r };
+            slot.1 += 1;
+            if ok {
+                slot.0 += 1;
+            }
+        }
+        (r, d)
     }
 
     /// On how many prompts did this cell and `other` leave the party holding
@@ -742,6 +811,15 @@ pub struct Expectation {
     pub offered: u8,
     pub correct_moves: [u8; 4],
     pub why: String,
+    /// `"decline"` when the right answer is to refuse the offered move.
+    ///
+    /// **A decline is a different question and is reported on its own row.**
+    /// It is the only answer whose correct move set is the one the prompt
+    /// arrived with, so a player that does nothing at all scores it — which
+    /// makes it the half of the task a summary can flatter. Pooled with the
+    /// replacements it is invisible; the three declines in the level-up pool
+    /// were the captain's own named requirement for exactly that reason.
+    pub decline: bool,
 }
 
 impl Expectation {
@@ -786,6 +864,7 @@ impl Expectation {
                 .and_then(|x| x.as_str())
                 .unwrap_or_default()
                 .to_string(),
+            decline: v.get("answer").and_then(|x| x.as_str()) == Some("decline"),
         })
     }
 
@@ -1054,6 +1133,73 @@ mod tests {
     /// slot order.** Gen 1 replaces a forgotten move in place, so which slot the
     /// new move went into is part of the answer — teeth: the "wrong slot" case
     /// below holds exactly the right multiset and must still be wrong.
+    /// A subject is usually a **line**, and a line is several forms.
+    #[test]
+    fn a_subject_may_name_several_lead_species() {
+        let p = Plan::parse(
+            r#"{"schema":"gbtestrig/1","name":"n","split":"seen","scenario":"s",
+               "entry_pool":"p","runs":"pool",
+               "subjects":[{"name":"CHARMANDER","lead_species":[178,180]},
+                           {"name":"ALL"}],
+               "arms":[{"name":"a","player":"expert"}]}"#,
+        )
+        .expect("plan");
+        assert!(p.runs_is_pool, "\"runs\": \"pool\" must be understood");
+        assert!(p.subjects[0].takes(178) && p.subjects[0].takes(180));
+        assert!(!p.subjects[0].takes(9), "a line does not take another line");
+        assert!(
+            p.subjects[1].takes(9) && p.subjects[1].takes(180),
+            "a subject that names none takes every state"
+        );
+    }
+
+    /// A decline's right answer is the move set the prompt arrived with, so a
+    /// player that answers nothing scores every one of them. Pooled with the
+    /// replacements that is invisible.
+    #[test]
+    fn declines_are_counted_on_their_own() {
+        let held = [10, 45, 52, 43];
+        let replaced = [10, 45, 52, 99];
+        let mk = |seed, moves: [u8; 4], correct, decline| Attempt {
+            seed,
+            goal: true,
+            ending: "goal".into(),
+            frames: 1,
+            decisions: 1,
+            battles: 0,
+            won: 0,
+            fled: 0,
+            lost: 0,
+            frames_in_battle: 0,
+            hp_permille: 0,
+            hp_samples: 0,
+            moves,
+            correct: Some(correct),
+            decline,
+        };
+        // A do-nothing player: right on both declines, wrong on both
+        // replacements.
+        let c = Cell {
+            attempts: vec![
+                mk(0, held, false, false),
+                mk(1, held, false, false),
+                mk(2, held, true, true),
+                mk(3, held, true, true),
+            ],
+            timing: Timing::default(),
+        };
+        assert_eq!(c.prompts(), (2, 4), "pooled, it looks like half the task");
+        let ((rk, rn), (dk, dn)) = c.prompts_split();
+        assert_eq!((rk, rn), (0, 2), "it answered no replacement correctly");
+        assert_eq!((dk, dn), (2, 2), "and every decline by doing nothing");
+        // And a real answer moves only the replacement column.
+        let c2 = Cell {
+            attempts: vec![mk(0, replaced, true, false), mk(2, held, true, true)],
+            timing: Timing::default(),
+        };
+        assert_eq!(c2.prompts_split(), ((1, 1), (1, 1)));
+    }
+
     #[test]
     fn a_prompt_is_answered_in_slot_order_not_as_a_set() {
         let e = Expectation::parse(
@@ -1219,7 +1365,7 @@ mod tests {
             "arms":[{"name":"student","player":"command","program":"python3",
                      "args":["-m","agentgb.adapter","--policy","x.npz"]}]}"#;
         let p = Plan::parse(text).expect("parses");
-        assert_eq!(p.subjects[0].lead_species, Some(176));
+        assert_eq!(p.subjects[0].lead_species, vec![176]);
         match &p.arms[0].player {
             Player::Command { program, args } => {
                 assert_eq!(program, "python3");

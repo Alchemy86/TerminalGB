@@ -1197,6 +1197,14 @@ mod drill {
         pub note: String,
         pub rows: Vec<Row>,
         pub saw: Vec<&'static str>,
+        /// A save state taken **at the prompt, before the answer is given**.
+        ///
+        /// This is the whole join to the A/B test rig: the corpus records what
+        /// happened, and a rig needs to *re-run* the same prompt with a
+        /// different player, which means a machine standing where the question
+        /// was asked. See `docs/agent/test-rig.md` §5a. `None` for an event
+        /// that is not a decision, or one whose prompt was never reached.
+        pub prompt_state: Option<Vec<u8>>,
     }
 
     /// Arm, level up, answer, read the party back.
@@ -1217,6 +1225,7 @@ mod drill {
             note: String::new(),
             rows: Vec::new(),
             saw: Vec::new(),
+            prompt_state: None,
         };
         if let Err(err) = a.arm(&preset_name(e)) {
             o.note = format!("could not arm: {err}");
@@ -1308,6 +1317,16 @@ mod drill {
                             a.tap(KeypadKey::A);
                         }
                         Some(sel) => {
+                            // **The first frame the box is answerable is the
+                            // prompt.** Before the cursor exists the question
+                            // is still typing itself out and a player dropped
+                            // in there would press A into the text; after the
+                            // first press the answer has been given. This is
+                            // the only moment a foreign player can be handed
+                            // the same question.
+                            if o.prompt_state.is_none() && e.kind == "decision" {
+                                o.prompt_state = Some(a.gb.save_state());
+                            }
                             let on_it = sel.trim().eq_ignore_ascii_case(want);
                             let say = if !on_it {
                                 format!("The cursor is on {sel}; move it to {want}.")
@@ -1575,11 +1594,48 @@ mod drill {
 
     // -- the run -----------------------------------------------------------
 
+    /// A `gbtestprompt/1` file, the right answer to one prompt.
+    ///
+    /// Only `correct_moves` is load-bearing to the rig; the rest is provenance,
+    /// carried so a row of its report can be read without opening these notes.
+    fn expectation(e: &Event, tables: &RomTables, want: &[u8]) -> String {
+        let mv = |n: &str| tables.resolve_move(n).unwrap_or(0);
+        let mut w = json::Writer::new();
+        w.begin_obj();
+        w.str_field("schema", "gbtestprompt/1");
+        w.num_field(
+            "species",
+            tables
+                .resolve_species(&e.arm_species)
+                .map(|s| s.index)
+                .unwrap_or(0) as f64,
+        );
+        w.str_field("species_name", &e.arm_species);
+        w.num_field("level", e.level as f64);
+        w.arr_field("held");
+        for n in &e.held {
+            w.num_item(mv(n) as f64);
+        }
+        w.end_arr();
+        w.num_field("offered", mv(&e.offered) as f64);
+        w.str_field("offered_name", &e.offered);
+        w.arr_field("correct_moves");
+        for m in want {
+            w.num_item(*m as f64);
+        }
+        w.end_arr();
+        w.str_field("answer", &e.answer);
+        w.str_field("why", &e.why);
+        w.end_obj();
+        w.finish()
+    }
+
     pub fn run(
         rom: &Path,
         plan_path: &Path,
         out: &Path,
         only: Option<u8>,
+        pool_dir: Option<&Path>,
     ) -> Result<(), String> {
         let plan = load_plan(plan_path)?;
         let staged = stage(rom)?;
@@ -1606,6 +1662,30 @@ mod drill {
         let mut clock = 0u32;
         let mut lines: Vec<String> = Vec::new();
         let mut skipped = 0usize;
+        // The A/B rig's entry pool: a save state at each prompt and the right
+        // answer beside it. **Only a verified decision earns a place.** A
+        // prompt the drill could not itself answer correctly is a prompt whose
+        // "right answer" is a claim rather than a measurement, and an entry
+        // pool of those would score every player against a guess.
+        if let Some(d) = pool_dir {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        // **Number on from what is already there.** Both lines are drilled into
+        // one pool — that pair is the whole point of the rig's two subjects —
+        // and a run that restarted at 00000 would silently overwrite the other
+        // species. `NNNNN` is the contract's own naming; the rig files each
+        // state under a subject by reading its lead, not by its name.
+        let mut pooled = pool_dir
+            .and_then(|d| std::fs::read_dir(d).ok())
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path().extension().map(|x| x == "gbss").unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        let first_index = pooled;
 
         for e in &plan.events {
             if only.is_some() && only != Some(e.level) {
@@ -1663,7 +1743,33 @@ mod drill {
             if o.verified {
                 done += 1;
             }
+            if let (Some(d), Some(state)) = (pool_dir, o.prompt_state.as_ref()) {
+                if o.verified {
+                    let want: Vec<u8> = e
+                        .after
+                        .iter()
+                        .map(|n| tables.resolve_move(n).unwrap_or(0))
+                        .collect();
+                    let stem = format!("{:05}", pooled);
+                    std::fs::write(d.join(format!("{stem}.gbss")), state)
+                        .map_err(|err| format!("{}: {err}", d.display()))?;
+                    std::fs::write(
+                        d.join(format!("{stem}.expect.json")),
+                        expectation(e, &tables, &want),
+                    )
+                    .map_err(|err| format!("{}: {err}", d.display()))?;
+                    pooled += 1;
+                }
+            }
             rows.extend(o.rows);
+        }
+        if let Some(d) = pool_dir {
+            println!();
+            println!(
+                "   {} prompt(s) written to {} as a gbtestprompt/1 pool ({pooled} in it now)",
+                pooled - first_index,
+                d.display()
+            );
         }
 
         // -- write the corpus ---------------------------------------------
@@ -1735,6 +1841,7 @@ fn main() {
     let mut plan: Option<PathBuf> = None;
     let mut out = PathBuf::from("target/learn-drill");
     let mut only: Option<u8> = None;
+    let mut prompts: Option<PathBuf> = None;
     let mut cmd = String::new();
     let mut i = 0;
     while i < args.len() {
@@ -1756,6 +1863,14 @@ fn main() {
             "--level" => {
                 i += 1;
                 only = args.get(i).and_then(|s| s.parse().ok());
+            }
+            // The A/B rig's entry pool: one save state per verified decision,
+            // taken with the question on the screen, and the right answer in a
+            // `gbtestprompt/1` file beside it. See `docs/agent/test-rig.md`
+            // §5a — this is the whole join between the drill and the rig.
+            "--prompts" => {
+                i += 1;
+                prompts = args.get(i).map(PathBuf::from);
             }
             other if cmd.is_empty() => cmd = other.to_string(),
             other => {
@@ -1780,13 +1895,14 @@ fn main() {
         "cancel" => cmd_cancel(&rom),
         "moveset" => cmd_moveset(&rom),
         "drill" => match plan {
-            Some(p) => drill::run(&rom, &p, &out, only),
+            Some(p) => drill::run(&rom, &p, &out, only, prompts.as_deref()),
             None => Err("drill needs --plan <plan.json>; produce one with \
                          `learn_table.py --drill-plan <species>`"
                 .into()),
         },
         _ => Err("usage: gen1_learn_drill <trace|cancel|moveset|drill> \
-                  --rom <blue.gb> [--plan p.json] [--out DIR] [--level N]"
+                  --rom <blue.gb> [--plan p.json] [--out DIR] [--level N] \
+                  [--prompts DIR]"
             .into()),
     };
     if let Err(e) = r {
