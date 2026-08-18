@@ -79,8 +79,11 @@ What each starter's line holds, from `EvosMovesPointerTable` (`0E:B05C`):
 
 So Squirtle arrives with the answer, Bulbasaur is three levels short of it, and
 Charmander's line never gets one. Below level 13 a Bulbasaur's best move against
-Geodude is TACKLE at 0.5x, which does **one or two damage** against 33 HP with
-35 PP to spend — it does not lose slowly, it cannot win at all.
+Geodude is TACKLE at 0.5x. Put through `CalculateDamage` with the stats §3
+verified against the running game, that is **one or two damage** against 33 HP
+with 35 PP to spend — so it does not lose slowly, it cannot win at all. The
+0/40 above is the measurement; this paragraph is the arithmetic that explains
+it.
 
 **The precondition was Brock-blind, and the fix is not one number.** That is the
 finding this work exists to report.
@@ -120,6 +123,10 @@ Link 11 is the single largest consumer of the chain's emulated time, so this is
 worth an answer rather than an assumption. Every pre-forest map with grass, from
 `WildDataPointers` and the walkability grid:
 
+The first four columns are computed from `WildDataPointers` and `BaseStats`;
+the last is a breadth-first path length over the walkability grid. Both are
+cartridge reads, not measurements of a run.
+
 | grass | map | mean exp/encounter | rate | exp per step | steps to the Viridian nurse |
 |---|---|---:|---:|---:|---:|
 | **Route 1**, rows 6-9 | `$0C` | 25.0 | 25/256 | 2.44 | **25** |
@@ -153,8 +160,9 @@ per encounter it is **half as good per step**.
 
 ### And the lever on link 11 is not the location
 
-Where a link-11 run's frames actually go, one attempt, per-map from its own
-position track:
+Where a link-11 run's frames actually go — **one attempt**, per-map from its
+own position track. One run is enough to answer "is it walking or fighting?",
+which is a factor-of-four question; it is not a precise split:
 
 | | frames | share | of which inside a battle |
 |---|---:|---:|---:|
@@ -167,8 +175,8 @@ position track:
 to the nurse.** So a perfectly placed Pokémon Center could save at most about
 17%, and Route 1 already has the closest one. The cost driver is **frames per
 battle**: 19 battles in 35,721 frames is **1,880 frames — thirty-one seconds of
-game time — per wild encounter**, and the Route 2 training link measures the
-same 1,819. That number is the same on every map, because it is the game's own
+game time — per wild encounter**, and a single Route 2 training run measures
+the same 1,819 (63,666 frames over 35 battles). That number is the same on every map, because it is the game's own
 animations and text rather than anything the route controls.
 
 If link 11 is to be shortened, it is that constant or the number of battles, not
@@ -438,11 +446,41 @@ cargo build --release --features scenario,image --example pewter_chain
 be judged on gets read out of real entry states before the goal is written**,
 which is how §6 and §7 were settled.
 
-## 14. The film is its own cut
+## 14. The film is its own cut, and it must stay that way
 
-**The gym arc films separately from the journey that got here, and it must stay
-that way.** The fourteen-link cut is 190 MB and 3m21s and 58% of its emulated
-time is link 11 alone, so sewing Brock onto the end makes a longer film in which
-the new material is a *smaller* fraction. Same tooling
-([`docs/swarm-view.md`](../swarm-view.md), `tools/pewter-chain/swarm_film.py`),
-separate output. Do not re-stitch them for tidiness.
+**The gym arc films separately from the journey that got here.** The
+fourteen-link cut is 190 MB and 3 m 21 s, and **58% of its emulated time is
+link 11 alone** — so sewing Brock onto the end makes a *longer* film in which
+the new material is a *smaller* fraction. The identity
+`seconds_out x speed = the emulated time there is` is the whole argument: the
+gym arc is a few emulated minutes against the chain's thirty-one, so at any
+shared pace it is a rounding error of the combined runtime.
+
+Same tooling ([`docs/swarm-view.md`](../swarm-view.md),
+`tools/pewter-chain/swarm_film.py`), separate output. **Do not re-stitch them
+for tidiness.**
+
+```sh
+# one corpus per link with per-frame position tracks, each entering from the
+# previous link's exit pool. `--exits N` with the same N is what makes agent
+# `s` of every link the same playthrough — chain_tracks.py's header explains it.
+prev=<a certified link-14 exit pool>
+for l in 15-train-for-brock 16-heal-in-pewter 17-fight-through-the-gym          18-heal-after-the-gym 19-east-to-route-3; do
+  ./target/release/examples/pewter_chain corpus --rom <blue.gb>       --scenario scenarios/pewter/$l.json --runs 120 --exits 120 --workers 8       --paths --out target/gymfilm/${l%%-*} --start-dir $prev
+  prev=target/gymfilm/${l%%-*}/exits
+done
+python3 tools/pewter-chain/chain_tracks.py --out target/gymfilm/tracks     --agents 120 15:target/gymfilm/15 16:target/gymfilm/16     17:target/gymfilm/17 18:target/gymfilm/18 19:target/gymfilm/19
+# --dry-run first: it prints the stage table and the --cover trade-off in
+# seconds, and rendering is not quick.
+python3 tools/pewter-chain/swarm_film.py target/gymfilm/tracks     --out target/gymfilm/frames --speed 8 --fps 60 --cover 0.90 --width 1280     --title "PAST PEWTER 15-19"
+ffmpeg -y -framerate 60 -i target/gymfilm/frames/f%05d.png     -c:v libopenh264 -b:v 8M -pix_fmt yuv420p past-pewter-15-19.mp4
+```
+
+**Fedora's ffmpeg has no `libx264`** (patent-clean build); `libopenh264` is the
+substitute and `-crf` is not accepted there.
+
+The film is **not committed** — it is game art, and a 190 MB artefact does not
+belong in git whatever is in it. The 01-14 cut's stills are in
+[`chain-stills/`](chain-stills/) under the rule
+[`docs/link-trade/`](../link-trade/) established: our interface, doing
+something, with the game incidental.
