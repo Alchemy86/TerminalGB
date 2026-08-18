@@ -9,7 +9,11 @@ Where [`swarm_film.py`](../../tools/pewter-chain/swarm_film.py) answers *where
 is everybody right now*, this answers *where did anybody ever go, which way, and
 how much of the swarm went there*.
 
-![The whole chain: every tile 24 agents walked from Red's bedroom towards Pewter City](chain-stills/path-arrows-1-the-whole-chain.png)
+![The whole chain: every tile 24 agents walked from Red's bedroom towards Pewter City, hue by direction](chain-stills/path-arrows-1-the-whole-chain.png)
+
+*At whole-chain zoom an arrow is about five display pixels — see §3 for why that
+is a property of the crop and not of `--tile-px`. The stretch stills in §6 are
+what this picture looks like close up.*
 
 It **emulates nothing**. The position tracks are already on disk — one
 `frame,map,x,y,facing,walking,battle` row per change, written by
@@ -93,14 +97,28 @@ corridor. **161 of 978 tiles (16.5 %)** on `chain-film`, 135 of 788 (17.1 %) on
 
 ---
 
-## 3. What the colour means, and why it is not step count
+## 3. What the colour means — direction, with the traffic in size and brightness
 
-**Hue and size both encode how many DISTINCT AGENTS stepped off the tile.**
-One arrow, two channels, one number — the redundancy this repository's panels
-already require, so the picture survives being printed small or in grey.
+**Hue is the DIRECTION of travel**: cyan up, orange down, pink left, green
+right, and lilac for a tile the swarm walked both ways. That is the encoding
+[Peter Whidden's video](https://www.youtube.com/watch?v=DcYLT37ImBY) uses, and
+what it buys is that a corridor comes out as one solid colour and reads as a
+route at a glance, where a sequential ramp over the same tiles is a wash of
+near-neighbours.
 
-That is the question the picture exists to answer, and step count is
-measurably the wrong unit for it. On `chain-film`:
+**The agent count is not lost — it moves to SIZE and BRIGHTNESS.** One arrow,
+the direction in its hue and its shape, the traffic in how big and how vivid it
+is; the redundancy this repository's panels already require, so the picture
+survives being printed small or in grey. The four hues are separated in
+**lightness** as well as in hue (relative luminance 0.55 / 0.75 / 0.50 / 0.72)
+for the same reason, and so that a red-green colour-blind reader can still tell
+left from right.
+
+### Why the ramp it replaces was there, and why it is still available
+
+`--colour traffic` is the original: **hue and size both encode how many
+DISTINCT AGENTS stepped off the tile**, and the argument for measuring that
+rather than step count is unchanged. On `chain-film`:
 
 | | tile | steps | agents |
 |---|---|---:|---:|
@@ -117,10 +135,44 @@ colour its agents. Distinct agents is bounded by the swarm size, so the ramp
 spends its whole range on "how much of the swarm came this way", and a
 one-agent detour cannot out-shout a corridor.
 
-The ramp is deliberately **its own**, not `swarm_film.HEAT_HUE`. That one is
-agent-*frames* and is read **inverted** — blue is heavily trodden and warm is
-novel, so an agent doing something new lights up. Reusing the same swatches for
-the opposite polarity and a different unit would be the worst of both.
+That ramp is deliberately **its own**, not `swarm_film`'s `HEAT_HUE`. That one
+is agent-*frames* and is read **inverted** — blue is heavily trodden and warm
+is novel, so an agent doing something new lights up. Reusing the same swatches
+for the opposite polarity and a different unit would be the worst of both.
+
+**What made the ramp hard to read was the distribution, not the ramp.**
+Measured on `chain-film`, of its 978 walked tiles **232 carry exactly one agent
+and 78% sit in the bottom four of the ramp's ten bands** — so most of the
+picture was dark blue-green over bright pixel art, and the report was that it
+was "grey and near impossible to see". Direction hue fixes that at source,
+because every tile gets one of four vivid colours whatever its traffic. The
+brightness floor is 0.58 and the size floor 0.64 of a full-swarm arrow, both
+chosen so those 232 single-agent tiles stay legible rather than disappearing.
+
+`--colour traffic` reproduces every picture published before this change **byte
+for byte** — the whole-chain still is md5
+`75146a5f60b19beea973902c56b300cf`, checked on every render.
+
+### The other half of "hard to see" is ZOOM, and it is not fixable by a palette
+
+The crop and the arrows scale together, so **an arrow's share of the picture is
+fixed and `--tile-px` cannot move it**. Measured on `chain-film`: a whole-swarm
+arrow is **5.4 display pixels** once the whole-chain still is fitted to a
+900-pixel-wide screen — and 5.4 at `--tile-px 16` and at `--tile-px 26` alike.
+The only lever is how much map is in the frame.
+
+`still` therefore reports both figures on every render, and below a legibility
+floor it names the `--maps` command for the busiest stretch rather than leaving
+a reader to work it out:
+
+```
+arrow size once this is fitted to a 900px-wide screen:
+  whole-swarm arrow: 5.4 display px
+  one-agent arrow: 3.5 display px
+  note: --tile-px does not move these; --maps does
+help[4]:
+  ... still chain-film --maps 0x33,0x0C --tile-px 22 --out <png>   # the busiest stretch
+```
 
 Two presentation choices are stated on the picture itself rather than left to
 be discovered: **maps nobody in the corpus entered are dimmed** (`--mask 1.0`
@@ -192,12 +244,13 @@ thing this project measures rather than implies. Both the legend and
 
 ### Pallet Town and Route 1
 
-![Pallet Town in red at 24 agents, Route 1 in green and yellow at 17, one-agent detours in blue](chain-stills/path-arrows-2-pallet-and-route-1.png)
+![Pallet Town and Route 1, cyan northbound, orange southbound, lilac where the swarm paced](chain-stills/path-arrows-2-pallet-and-route-1.png)
 
-309 tiles, 11,190 steps. Pallet Town and Oak's Lab are red because every one of
-the 24 agents walked them; Route 1 is green-to-yellow because seven had already
-stopped by then; the small dark-blue arrows are the 232 tiles exactly one agent
-ever stepped off — the detours.
+309 tiles, 11,190 steps. The route north is a cyan column and the return leg an
+orange one — a structure the old ramp could not show at all, because both were
+the same shade of "24 agents walked here". The small dim arrows are the 232
+tiles exactly one agent ever stepped off; they keep their hue and lose only
+intensity, which is what the 0.58 brightness floor is for.
 
 **Route 1's ledges show up as a one-way structure, and the numbers agree with
 the finding [`docs/swarm-view.md`](../swarm-view.md) reached independently**:
@@ -208,18 +261,30 @@ route down are not the same route.
 
 ### Viridian City
 
-![Viridian City, with the training band as horizontal double-headed arrows](chain-stills/path-arrows-3-viridian-city.png)
+![Viridian City, with the training band as lilac double-headed arrows](chain-stills/path-arrows-3-viridian-city.png)
 
 180 tiles and 129,375 steps — 86 % of every step in the corpus, on one map.
-The horizontal double-headed arrows across the lower half are the training
-band, and they are the argument for the double head in one picture: a
-single-headed arrow there would claim a flow through grass the swarm was
-pacing back and forth for ten emulated hours.
+The **lilac double-headed arrows** across the lower half are the training band,
+and they are the argument for the double head in one picture: a single-headed
+arrow there would claim a flow through grass the swarm was pacing back and
+forth for ten emulated hours. Lilac belongs to no single direction because by
+construction those tiles have none, so the grind reads as a distinct region
+rather than as more corridor.
 
 It is also the clearest illustration of the limitation above. Those tiles are
-mid-ramp green, the same as the corridor through the city, because the same
-number of agents walked both. **Nothing in this picture says one of them cost a
+the same brightness as the corridor through the city, because the same number
+of agents walked both. **Nothing in this picture says one of them cost a
 thousand times more time than the other.**
+
+### The two encodings, on the same map
+
+![Viridian City drawn with the traffic ramp above and with direction hue below](chain-stills/path-arrows-4-traffic-vs-direction.png)
+
+The same 180 tiles and the same 129,375 steps. Above, hue and size both carry
+the agent count and every tile is a near-neighbour of its own neighbours;
+below, the column into the Pokemon Center is one solid cyan, the eastward bands
+are green, the westward ones pink, and the grind is lilac. Nothing about the
+measurement changed — only which channel carries which half of it.
 
 ---
 
@@ -258,10 +323,18 @@ cut renders in about 34 seconds.
 
 ## 8. Things worth knowing if you change it
 
-- **`swarm_film.py`'s rendering path is not touched.** This is a sibling that
-  imports its `Atlas` and nothing else, by path (the directory has a hyphen in
-  it, so it is not a package). Importing the file runs only its constants and
-  its `def`s.
+- **The shared parts live in
+  [`chainrender/`](../../tools/pewter-chain/chainrender/)** — the atlas, the
+  track reader, the palettes, the arrow polygon, the AXI helpers and (for the
+  films) the camera. `swarm_film.py`'s rendering path is not touched; this is a
+  sibling, not a fork. The directory has a hyphen in its name, so it is not
+  importable by name: every tool puts its own directory on `sys.path` and
+  imports `chainrender`. That replaced an `importlib` hack this file used to
+  load `swarm_film.py` for its `Atlas` alone.
+- **Both encodings are gated by an equality check.** `--colour traffic` must
+  reproduce the whole-chain still at md5 `75146a5f60b19beea973902c56b300cf`,
+  551,205 bytes. It is a one-second render, so there is no excuse for skipping
+  it after touching this file.
 - **The left/right rotation was wrong when first written and looked plausible.**
   A picture of a swarm pacing east and west is symmetric, so the eye cannot
   catch an inverted horizontal arrow. It was found by rendering one arrow per

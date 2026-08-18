@@ -40,6 +40,17 @@ import os
 import struct
 import sys
 
+# `chainrender` is not importable by name — this directory has a hyphen in it —
+# so every tool here puts its own directory on `sys.path` first. Only the font
+# loader is shared: **this picture's palette is deliberately its own** (its
+# background is (10,12,16) against the films' (16,18,22)), and unifying two
+# palettes that were chosen separately would change a published picture to no
+# end.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from chainrender.paint import load_font  # noqa: E402
+
 MAGIC = b"GBSCR1\0\0"
 HEADER = 24
 # Our own four DMG shades, darkest first — the ranks `screens.rs` quantises to.
@@ -257,16 +268,6 @@ def grid_for(n, area_w, area_h, tile_w, tile_h, gap):
     return best[1], best[2]
 
 
-def load_font(px):
-    from PIL import ImageFont
-    for f in ("/usr/share/fonts/adwaita-mono-fonts/AdwaitaMono-Bold.ttf",
-              "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf"):
-        if os.path.exists(f):
-            try:
-                return ImageFont.truetype(f, px)
-            except Exception:
-                pass
-    return ImageFont.load_default()
 
 
 def home(root):

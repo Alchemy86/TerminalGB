@@ -2144,6 +2144,67 @@ Viridian and back three times, and the long cut is *better* covered than the
 short one (1.2% of frames below par against 4.9%) because the mass is spread
 over open ground rather than split between two panels.
 
+### Rule 7: smooth the BOX, because a bimodal swarm has no midpoint
+
+Reported as *"it juggles back and forth"* on the training video, and it was one
+line. The camera's target was the **midpoint of the 5th and 95th percentiles**
+of agent positions. A training leg is bimodal by construction — agents split
+between the Pokemon Center and the grass, and the healed ones walk back — so
+that midpoint sits in the **empty gap between the two clusters**, and it lurches
+every time the population balance crosses a percentile boundary. It is a camera
+pointed at nobody, moving because of agents it is not showing. The same span
+drives the zoom, so the width was pinned to "both clusters" and could never
+tighten when they regrouped.
+
+![The camera over 15,632 frames, before in red and after in green: the crop width is a chattering square wave before and flat after](chain-stills/camera-before-after.png)
+
+The fix is an EMA on **each edge of the box**, applied before any of the six
+rules above sees it. That removes the discontinuity at its source rather than
+downstream of it, which is why raising the camera's own gain or its deadzone
+never helped: they were being fed a step function, and smoothing after a
+discontinuity only delays it.
+
+Measured on `chain-film` (24 agents, 15,632 frames at `--speed 12 --fps 60`),
+`--no-split-aware` against the default:
+
+| | before | after |
+|---|---:|---:|
+| direction reversals, x | 1.39/s | **0.17/s** |
+| direction reversals, y | 0.93/s | **0.43/s** |
+| frames camera still, x | 78.2% | **85.2%** |
+| frames camera still, y | 71.1% | **82.1%** |
+| largest one-frame pan | 48 / 48 px | **11 / 4 px** |
+| zoom resample ratio moved | 140 frames (0.9%) | **19 frames (0.1%)** |
+| frames below 90% covered | 5006 (32.0%) | **4744 (30.3%)** |
+| distinct crop widths | 18 | 20 |
+| mean coverage of live agents | 93.0% | 92.3% |
+
+**The last two move the other way and are stated rather than buried.** The
+distinct-width count rises because the smoothed box passes continuously through
+more rungs of the zoom ladder instead of jumping between two — the metric that
+matters for shimmer is how often the resample ratio *actually moved*, and that
+is six times better. Mean coverage falls 0.7 points while the below-90% count
+improves by 1.7, i.e. the distribution tightened rather than shifted.
+
+**`--no-split-aware` reproduces the pre-fix camera trace byte for byte**, which
+is what makes that whole table checkable rather than asserted, and what let the
+two constants be swept rather than chosen. They were: the pair that was in
+flight (a 0.012 edge EMA growing at 0.10) is smoother than no rule 7 at all but
+grows the box fast enough to sweep the zoom ladder, which on a *single-leg*
+corpus costs more zoom changes than it saves. Swept against 40 tracks of link 11
+as well as the whole chain, 0.006 growing at 0.03 beats the pre-fix camera on
+every column on both corpora bar one — one leg's zoom changes going 18 to 23 of
+50,000 frames. The far end of the sweep is recorded in the source too, because
+**a box that never grows quickly is beautifully steady and drops agents**: rule
+6 keys its catch-up on how far the box pokes past the frame, and a slow box is
+slow to notice.
+
+**34.2% of these frames are geometrically impossible and no camera rule can
+beat that.** The camera may not widen past the world it crops from, and on those
+frames the swarm genuinely does not fit in the widest view there is.
+`report_impossible()` prints the figure on every run; nothing here promises past
+it.
+
 ### A raw row list cannot hold an eleven-link chain
 
 Measured rather than feared. A track row is written whenever the position, the
