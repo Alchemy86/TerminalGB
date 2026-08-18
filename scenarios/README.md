@@ -39,6 +39,19 @@ one JSON reply per line, the same shape a model returns, and it goes through the
 identical parse-clamp-execute path a live model's reply does — so a route that
 works scripted works with a model behind it, and costs nothing to iterate on.
 
+`pewter/` — **the chain**, nineteen links from a cold cartridge to Route 3 with
+the Boulder Badge. `chain_files` reads this directory and nothing else, so a
+file dropped here joins the chain. Links 01-14 are
+[`docs/agent/pewter-chain.md`](../docs/agent/pewter-chain.md); 15-19 are
+[`docs/agent/brock.md`](../docs/agent/brock.md).
+
+`experiments/` — scenarios that are **not links** and must never become them.
+They exist so that a claim about *where* to do something is a measurement
+somebody else can re-run rather than a table of distances and a plausible
+argument: `x-train-route-22` and `x-train-route-2-south` do link 11's own job
+on other grass, and the answer was not the one the geometry suggested. Kept out
+of `pewter/` deliberately, because `chain_files` reads only that directory.
+
 Recordings are not in here either — they go to the run's output directory
 (`target/scenario/<name>/` by default). A recording carries the identity of the
 cartridge and the start state it came from, so it is safe to hand to somebody
