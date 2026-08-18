@@ -860,12 +860,20 @@ fn train_to(scenario: &str) -> u32 {
         return v;
     }
     match scenario {
-        "11-train-for-the-forest" => 13,
         "15-train-for-brock" => BROCK_TRAIN_TO,
-        "x-train-route-2-south" | "x-train-route-22" => 13,
-        _ => 13,
+        // Link 11's number, and the two pre-forest experiments do link 11's
+        // own job so they share it. Every other link trains nothing, and for
+        // those this is simply the ceiling above which the policy stops
+        // picking fights — which never binds, because they never pick any.
+        _ => FOREST_TRAIN_TO,
     }
 }
+
+/// The level the solver stops picking fights at before Viridian Forest.
+///
+/// Above link 11's own goal of 10 on purpose: the goal is the precondition the
+/// forest imposes, this is where the policy loses interest in a wild Pokémon.
+const FOREST_TRAIN_TO: u32 = 13;
 
 /// The level [`train_to`] aims at before the gym. See `docs/agent/brock.md`.
 const BROCK_TRAIN_TO: u32 = 16;
