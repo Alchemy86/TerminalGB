@@ -297,6 +297,13 @@ step ever invents one.
 The caption is drawn *after* the zoom, so it stays the same size and in the same
 place while the map moves underneath it.
 
+## See also
+
+* [the screen mosaic](agent/screen-mosaic.md) — the same population drawn as
+  their own **screens** rather than as positions on a map. A position track
+  carries no pixels, so it needs its own capture pass; it answers "are they all
+  in the same menu?" where this answers "are they all in the same place?".
+
 ## Honest limits
 
 * **Two maps, not a world.** By design for a proof of concept; see PixelGB

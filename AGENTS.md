@@ -7707,6 +7707,69 @@ aggregation, savestate and battery).
 - **Nothing is committed**: the video and the captured map sheets are game art and live in
   `target/swarm/`. The two commands in `docs/swarm-view.md` regenerate them in about a minute.
 
+## The screen mosaic — a corpus's own SCREENS, and the capture pass they need
+
+**Full page: [`docs/agent/screen-mosaic.md`](docs/agent/screen-mosaic.md).** Sixty agents' Game
+Boy screens tiled into one frame, playing at once — what the swarm *sees* where
+`swarm_film.py` draws where it *is*. `tools/pewter-chain/screen_mosaic.py` tiles;
+`pewter_chain corpus --screens N` captures; `src/scenario/screens.rs` is the format.
+
+- **A `path-NNNNN.csv` CARRIES NO PIXELS, so this is the one film in this repository that
+  cannot be derived from a corpus already on disk.** Every other picture here is reprocessed
+  from `frame,map,x,y,facing,walking,battle`; a screen is not in there and no reprocessing
+  invents one. Hence a capture pass, and hence the size work below — the two are one decision.
+- **DESIGN FOR SIZE BEFORE RECORDING, and print the estimate rather than measuring afterwards.**
+  Full-rate RGBA is **3.3 GB per emulated minute per agent**. Three decisions, each a property
+  of the machine rather than a compression trick, take four orders of magnitude off it:
+  **two bits per pixel** because that is the DMG's own depth (quantised by *luminance rank*,
+  the `tools/conformance/image.py` rule, because our shades are `000000/606060/c0c0c0/ffffff`
+  and nobody else's are); **downscale ×2** because a mosaic tile is 160 px before any gap; and
+  **sample every 12 frames** because a mosaic is a timelapse. 1,440 B a sample, ~7.0 KiB per
+  emulated second per agent. `ScreenTrack::push` samples at **pixel centres** — the
+  `video::fit_maps` / `screen::halfblocks` rule, pinned by a mirror-symmetry test edge sampling
+  fails.
+- **The estimate is a CEILING taken from the scenario's own `timeout_frames`, and it is about
+  17x the outturn.** Link 05 prints "at most 824 MiB" for 60 agents and lands **49 MB**, because
+  an attempt runs ~7,500 of the 120,000 frames it is allowed. That is the right way round — an
+  estimate that is sometimes low is one that sometimes fills a disk — but do not quote it as a
+  prediction. `--screens-budget` (2048 MiB) **refuses the run before a frame is emulated** and
+  names the three flags that lower it.
+- **THE COST IS THE PICTURE, NOT THE CAPTURE, and it does not move with the sample rate.**
+  One attempt of link 05: 0.98 s with no capture, **1.22-1.25 s** at `--screens 12`, `60` and
+  `1200` alike. A collecting run has the PPU's pixel path off (`ScenarioRun::collecting`);
+  asking for screens turns it back on for the whole run, exactly as `filming` does.
+- **A CAPTURE RUN'S SAVE-STATE DIGEST IS NOT A NON-CAPTURE RUN'S — expect it, it is not a
+  regression.** A save state holds the framebuffer. Measured, seed 11 of link 05 with and
+  without `--screens`: 7,398 frames, 71 decisions, same ending, different `final_state`, and
+  **every one of the 66,993 differing bytes inside a 92,159-byte window** against a framebuffer
+  of 160×144×4 = 92,160, with `pewter_chain states` reading back identical map, position, money,
+  badges, party, level, HP and moves. Same phenomenon `collecting()` already causes from the
+  other direction. Compare decisions, frames, endings and the state's *contents*, never the
+  digest. A capture is still bit-reproducible against itself (checked both ways).
+- **A FINISHED AGENT MUST NOT LOOK LIKE A STUCK ONE**, which is the whole value of the picture.
+  Three marks at once, because a colour alone is not a reading (`src/screen/panel.rs`): the tile
+  is blended 55 % towards the panel, the border is green for the goal and red for anything else,
+  and **the ending is written on it as a whole short word** from `Ending::tag`. The first version
+  truncated to nine characters and printed `OUT-OF-CA`, which a reader cannot tell was cut —
+  the `fit_bar` rule, met again.
+- **THE GRID MAXIMISES THE *WHOLE* ZOOM, and the fraction is only the tie-break.** A tile is
+  drawn nearest-neighbour at an integer multiple; a fractional resample invents shades the
+  Game Boy never drew, and a four-shade picture is where that is most visible. Guarded
+  categorically, the `screen::halfblocks` rule: a live tile's interior contains **exactly four
+  colours** and they are `000000/606060/c0c0c0/ffffff`. 1920x1080 is the default because it is
+  the smallest frame that draws 60 tiles at a whole ×2.
+- **EVERY CERTIFIED LINK PASSES, so the red border is not exercised by a chain film** — measured
+  60/60 on links 05, 12, 13 and 14. The failing example ships against
+  `scenarios/tutorial/town-map.json`, which the expert genuinely has no route for (0 of 20,
+  19 `out-of-calls` + 1 `timeout`). **Do not manufacture a failure to demonstrate a style**; find
+  a scenario that really fails.
+- **Thin horizontal detail aliases** — the vertical halve drops alternate source rows and Gen 1
+  draws one-pixel floor stripes, so some interiors band. `--screens-scale 1` if a fine pattern is
+  the subject. Say it in the "what the picture cannot tell you" list rather than letting somebody
+  report it as a render bug.
+- `collect.sh` takes `SCREENS=12 SCREEN_RUNS=60` as environment, opt-in and bounded; `film` does
+  not capture (it goes through `play_filmed`), `corpus` and `solve` do.
+
 ## The status page (`docs/status.md`, `docs/status/index.html`) — scores are generated, not typed
 
 - **`docs/status.md` is the front door** — suite standings, abilities, honest gaps, roadmap —

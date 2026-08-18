@@ -2262,6 +2262,7 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
 
   solve --rom R --scenario S [--start FILE] [--seed N] [--out DIR] [--quiet]
       Play one link with the expert solver and write its recording.
+      --screens N   also record the picture — see `corpus --screens` below.
 
   chain --rom R [--seeds N] [--out DIR] [--from N] [--to N]
       Play the whole chain, carrying each link's finish forward as the next
@@ -2281,6 +2282,16 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       --exits N     keep the first N successful exits as <out>/exits/*.gbss,
                     which is the next link's entry pool
       --paths       also write where the player was, per frame, per run
+      --screens N   ALSO RECORD THE PICTURE: a downscaled screen every N
+                    emulated frames, as <out>/screen-NNNNN.gbscr. A position
+                    track carries no pixels, so a mosaic of many runs needs
+                    this and cannot be derived from a corpus afterwards.
+                    The cost is PRINTED BEFORE ANY RUN STARTS and the run is
+                    refused above --screens-budget rather than filling a disk.
+      --screens-scale K   downscale factor (default 2 = 80x72). A mosaic tile
+                    is small; 2 is already at or above what gets drawn.
+      --screens-runs M    only the first M seeds record (default: all of them)
+      --screens-budget MB the estimate this run may not exceed (default 2048)
 
   film --rom R --agents N [--out DIR] [--workers N] [--from N] [--to N]
       Play the WHOLE chain once per agent, each agent carrying its own exit
@@ -2354,6 +2365,17 @@ struct Args {
     workers_given: bool,
     primitive: bool,
     paths: bool,
+    /// A downscaled screen every N emulated frames; 0 records nothing.
+    /// **The only way a picture leaves a headless run** — see
+    /// `terminalgb::scenario::screens`.
+    screens: u32,
+    /// The downscale factor screens are captured at.
+    screens_scale: u32,
+    /// How many seeds record their screens; 0 means all of them. **The bound**,
+    /// because six hundred agents recording a long link is gigabytes.
+    screens_runs: u32,
+    /// The estimated capture size, in MiB, this run may not exceed.
+    screens_budget: u64,
     start_dir: Option<PathBuf>,
     /// Frames of phase to spread attempts over; 0 disables the axis.
     idle_spread: u32,
@@ -2384,6 +2406,8 @@ fn parse(args: &[String]) -> Args {
         to: 99,
         workers: default_workers(),
         idle_spread: IDLE_SPREAD,
+        screens_scale: 2,
+        screens_budget: 2048,
         ..Default::default()
     };
     let mut i = 0;
@@ -2401,6 +2425,10 @@ fn parse(args: &[String]) -> Args {
             "--start-dir" => a.start_dir = Some(PathBuf::from(next(i))),
             "--idle-spread" => a.idle_spread = next(i).parse().unwrap_or(IDLE_SPREAD),
             "--exits" => a.exits = next(i).parse().unwrap_or(0),
+            "--screens" => a.screens = next(i).parse().unwrap_or(0),
+            "--screens-scale" => a.screens_scale = next(i).parse().unwrap_or(2).max(1),
+            "--screens-runs" => a.screens_runs = next(i).parse().unwrap_or(0),
+            "--screens-budget" => a.screens_budget = next(i).parse().unwrap_or(2048),
             "--plan" => a.plan = Some(PathBuf::from(next(i))),
             "--lead" => a.leads.push(next(i)),
             "--split" => a.split = Some(next(i)),
@@ -2491,6 +2519,10 @@ struct Outcome {
     battles: terminalgb::scenario::run::BattleSummary,
     recording: Recording,
     path: Vec<terminalgb::scenario::run::PathPoint>,
+    /// Every screen the run drew, when it was asked for them. **A position
+    /// track carries no picture**, which is the whole reason this exists —
+    /// see `terminalgb::scenario::screens`.
+    screens: Option<terminalgb::scenario::screens::ScreenTrack>,
 }
 
 /// Everything an attempt *did*, in one number.
@@ -2605,6 +2637,7 @@ fn play(
     primitive: bool,
     track: bool,
     idle: u32,
+    screens: Option<(u32, u32)>,
 ) -> Outcome {
     play_with(
         rom,
@@ -2616,6 +2649,7 @@ fn play(
         idle,
         &|name| Box::new(ChainDriver::new(name, seed).primitive(primitive)),
         None,
+        screens,
     )
 }
 
@@ -2638,6 +2672,10 @@ fn play_with(
     idle: u32,
     driver: &dyn Fn(&str) -> Box<dyn Driver>,
     frames_dir: Option<&Path>,
+    // `(every, scale)` — a downscaled screen every N emulated frames. See
+    // `terminalgb::scenario::screens`; `None` records nothing, which is what
+    // every command but `corpus` and `solve` passes.
+    screens: Option<(u32, u32)>,
 ) -> Outcome {
     let s = Scenario::load(scenario_path).unwrap_or_else(|e| {
         eprintln!("{}: {e}", scenario_path.display());
@@ -2679,7 +2717,7 @@ fn play_with(
     // whatever was last in the buffer — which is not a failure a rate would
     // ever explain. So the skip is conditional on nobody wanting the picture,
     // and the arm that wants it pays for it.
-    gb.set_render_pixels(frames_dir.is_some());
+    gb.set_render_pixels(frames_dir.is_some() || screens.is_some());
     gb.set_render_audio(false);
     // **Phase the world before the agent is attached, never after.** Burning
     // the frames here means the plugin does not exist yet and so cannot act
@@ -2708,12 +2746,16 @@ fn play_with(
                 exit(1);
             })
             .tracking(track)
+            .screens(
+                screens.map(|(e, _)| e).unwrap_or(0),
+                screens.map(|(_, k)| k).unwrap_or(1),
+            )
             // Nothing in this program looks at the picture or listens to the
             // sound: the solver reads `wTileMap` and a handful of WRAM bytes,
             // and a film is stitched from the position tracks. Both skips are
             // guest-invisible — see `ScenarioRun::collecting`.
             .collecting();
-    if frames_dir.is_some() {
+    if frames_dir.is_some() || screens.is_some() {
         // `collecting()` turns the picture off; an arm that reads it turns it
         // back on. Guest-invisible either way, and byte-identical at a frame
         // boundary — `Gameboy::set_render_pixels`.
@@ -2743,6 +2785,7 @@ fn play_with(
         battles: r.battles,
         recording: r.recording,
         path: r.path,
+        screens: r.screens,
     }
 }
 
@@ -2837,6 +2880,70 @@ fn write_path(path: &Path, pts: &[terminalgb::scenario::run::PathPoint]) {
     let _ = std::fs::write(path, out);
 }
 
+/// `(every, scale)` for a run that was asked to record its screens.
+fn screens_cfg(a: &Args) -> Option<(u32, u32)> {
+    (a.screens > 0).then_some((a.screens, a.screens_scale))
+}
+
+/// What a capture will cost, printed **before** a frame is emulated, and
+/// refused above the budget.
+///
+/// A position track is a few hundred kilobytes and nobody has ever had to
+/// think about it. A picture is not: at full rate and full depth one agent is
+/// 3.3 GB per emulated minute, and the failure mode of finding that out
+/// afterwards is a full disk with somebody else's certification run on it. So
+/// the arithmetic happens first, on the scenario's own `timeout_frames` — the
+/// most frames an attempt is *allowed*, which is the honest worst case — and
+/// the run stops rather than starting something it cannot finish.
+fn screens_budget_check(a: &Args, s: &Scenario, runs: u32) -> u32 {
+    use terminalgb::scenario::screens as scr;
+    let Some((every, scale)) = screens_cfg(a) else {
+        return 0;
+    };
+    let recorded = if a.screens_runs == 0 {
+        runs
+    } else {
+        a.screens_runs.min(runs)
+    };
+    let (w, h) = scr::dims(scale);
+    let per_run = scr::estimate(every, scale, s.timeout_frames);
+    let worst = per_run * recorded as u64;
+    println!(
+        "screens: {w}x{h} at 2 bpp, one every {every} frames — \
+         {} per sample, {}/emulated second, {} worst case per attempt \
+         ({} frames, the scenario's own timeout)",
+        scr::human(scr::bytes_per_sample(scale) as u64),
+        scr::human((scr::bytes_per_sample(scale) as f64 * 59.7275 / every as f64) as u64),
+        scr::human(per_run),
+        s.timeout_frames,
+    );
+    println!(
+        "screens: {recorded} of {runs} attempt(s) record — at most {} on disk",
+        scr::human(worst)
+    );
+    let budget = a.screens_budget * 1024 * 1024;
+    if worst > budget {
+        println!(
+            "error: the capture could reach {}, above the {} budget",
+            scr::human(worst),
+            scr::human(budget)
+        );
+        println!(
+            "help: lower it with --screens-runs N (fewer attempts record), \
+             --screens {} (a coarser sample) or --screens-scale {} (a smaller \
+             picture)",
+            every * 2,
+            scale * 2
+        );
+        println!(
+            "help: or raise the ceiling with --screens-budget {}",
+            a.screens_budget * 2
+        );
+        exit(2);
+    }
+    recorded
+}
+
 fn need_rom(a: &Args) -> PathBuf {
     a.rom.clone().unwrap_or_else(|| {
         eprintln!("--rom is required");
@@ -2870,6 +2977,7 @@ fn cmd_solve(a: &Args) {
         a.primitive,
         a.paths,
         phase_for(a.seed, a.idle_spread),
+        screens_cfg(a),
     );
     report(&o, a.seed);
     if let Some(b) = tally::report() {
@@ -2877,6 +2985,16 @@ fn cmd_solve(a: &Args) {
     }
     if a.paths {
         write_path(&out.join(format!("path-{:05}.csv", a.seed)), &o.path);
+    }
+    if let Some(t) = &o.screens {
+        let f = out.join(format!("screen-{:05}.gbscr", a.seed));
+        let _ = std::fs::write(&f, t.encode());
+        println!(
+            "screens: {} sample(s), {} -> {}",
+            t.frames(),
+            terminalgb::scenario::screens::human(t.len() as u64),
+            f.display()
+        );
     }
     let _ = o.recording.save(&out.join(format!("run-{}.json", a.seed)));
     let _ = std::fs::write(out.join("final.gbss"), &o.state);
@@ -2944,6 +3062,7 @@ fn cmd_chain(a: &Args) {
                 a.primitive,
                 a.paths,
                 phase_for(seed, a.idle_spread),
+                None,
             );
             report(&o, seed);
             let _ = o.recording.save(&dir.join(format!("run-{seed}.json")));
@@ -3011,6 +3130,18 @@ fn cmd_corpus(a: &Args) {
     // and peak RSS to match. Same correction as `run_arm`'s.
     let pool = std::sync::Arc::new(entry_pool(a));
     let workers = a.workers.max(1);
+    // **Before anything is emulated.** A refusal here costs nothing; a refusal
+    // after four hours of fan-out costs the run and possibly the disk.
+    let screens_all = screens_cfg(a);
+    let screens_last = if screens_all.is_some() {
+        let sc = Scenario::load(&sp).unwrap_or_else(|e| {
+            println!("error: {}: {e}", sp.display());
+            exit(1);
+        });
+        a.seed0 + screens_budget_check(a, &sc, a.runs) as u64
+    } else {
+        0
+    };
     println!(
         "entry states: {}",
         if pool.len() > 1 {
@@ -3056,6 +3187,7 @@ fn cmd_corpus(a: &Args) {
             let seed0 = a.seed0;
             let primitive = a.primitive;
             let paths = a.paths;
+            let (screens_all, screens_last) = (screens_all, screens_last);
             sc.spawn(move || {
                 use std::sync::atomic::Ordering::Relaxed;
                 let dir = out.join(format!("w{w}"));
@@ -3072,8 +3204,19 @@ fn cmd_corpus(a: &Args) {
                     // held-out entry state, which driver seed, and how far
                     // into the world the attempt starts.
                     let idle = phase_for(seed, spread);
-                    let o =
-                        play(&rom, &sp, entry, seed, &dir, true, primitive, paths, idle);
+                    // The bound is on **which seeds** record, so the ones that
+                    // do are the low seeds — the same seeds `--exits` keeps and
+                    // the same ones a chain stitches, so a mosaic and a film
+                    // are of the same agents.
+                    let screens = if seed < screens_last {
+                        screens_all
+                    } else {
+                        None
+                    };
+                    let o = play(
+                        &rom, &sp, entry, seed, &dir, true, primitive, paths, idle,
+                        screens,
+                    );
                     // The next link's entry pool. Only successful exits: a
                     // pool seeded from failures would certify the following
                     // link against worlds no real run ever reaches, which is
@@ -3088,6 +3231,12 @@ fn cmd_corpus(a: &Args) {
                     let _ = o.recording.save(&out.join(&file));
                     if paths {
                         write_path(&out.join(format!("path-{seed:05}.csv")), &o.path);
+                    }
+                    if let Some(t) = &o.screens {
+                        let _ = std::fs::write(
+                            out.join(format!("screen-{seed:05}.gbscr")),
+                            t.encode(),
+                        );
                     }
                     let traj = trajectory_hash(&o);
                     let row = format!(
@@ -3275,6 +3424,7 @@ fn cmd_verify(a: &Args) {
                 a.primitive,
                 false,
                 phase_for(seed, a.idle_spread),
+                None,
             );
             (seed, o.recording.final_state, o.frames)
         })
@@ -3303,6 +3453,7 @@ fn cmd_verify(a: &Args) {
                     primitive,
                     false,
                     phase_for(seed, spread),
+                    None,
                 );
                 par.lock()
                     .unwrap()
@@ -3581,6 +3732,7 @@ fn cmd_film(a: &Args) {
                         primitive,
                         true,
                         phase_for(seed, spread),
+                        None,
                     );
                     for mut p in o.path {
                         p.frame += base;
@@ -4397,6 +4549,7 @@ fn run_arm(
                         idle,
                         mk.as_ref(),
                         frames.as_deref(),
+                        None,
                     );
                     let b = o.battles;
                     // What the player left the party holding, and whether the
@@ -5152,6 +5305,7 @@ fn play_filmed(
         battles: r.battles,
         recording: r.recording,
         path: r.path,
+        screens: None,
     }
 }
 

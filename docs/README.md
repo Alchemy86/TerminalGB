@@ -154,6 +154,7 @@ and that had quietly happened to more than half of this directory.
 | [the test rig](agent/test-rig.md) | one command, the same fight from the same start states at the same seeds, two or more players, and the paired gap between them — plus what a report can and cannot tell you |
 | [the test rig's first result](agent/test-rig-results.md) | the rival battle, three starters, 2,700 attempts: what the instrument measured the first time it was pointed at something |
 | [teacher against student on the move prompts](agent/move-learning-result.md) | the measurement the rig was built for: nine level-up prompts, a teacher, a student distilled from its corpus, a do-nothing floor, and the held-out control that says what the nine actually taught |
+| [the screen mosaic](agent/screen-mosaic.md) | sixty agents' Game Boy screens tiled into one frame — what the swarm *sees* rather than where it is, the capture mode it needs, and what a downscaled tile cannot tell you |
 | [the swarm view](swarm-view.md) | twenty-four emulators from one save state drawn as dots on a map — the null-model baseline a trained agent has to beat, and an object lesson in what the rest of this tooling adds up to |
 | [shiny hunting](shiny-hunt.md) | N emulators hunting one DV pattern in parallel, and the decorrelation problem that makes it hard |
 

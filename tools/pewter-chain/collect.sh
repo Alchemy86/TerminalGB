@@ -12,6 +12,16 @@ ROM=${1:?rom}
 ENTRY=${2:?entry dir}
 OUT=${3:?out dir}
 W=${4:-8}
+# **Screens are opt-in and bounded, because they are the one output whose size
+# has to be thought about.** `$SCREENS=12` records a downscaled 80x72 frame
+# every 12 emulated frames as `<out>/<link>/screen-NNNNN.gbscr`, which is what
+# `tools/pewter-chain/screen_mosaic.py` tiles; `$SCREEN_RUNS` bounds how many
+# attempts of each link record one. A position track is a few hundred KB and
+# nobody has had to think about it; link 11 alone is ~7.5 MiB an agent. The
+# capture prints its own estimate and refuses above `--screens-budget`.
+# See docs/agent/screen-mosaic.md.
+SCREENS=${SCREENS:-0}
+SCREEN_RUNS=${SCREEN_RUNS:-60}
 BIN=./target/release/examples/pewter_chain
 S=scenarios/pewter
 
@@ -21,6 +31,9 @@ run() {  # link-number scenario runs
   prev=$(printf '%02d' $((10#$n - 1)))
   local args=(corpus --rom "$ROM" --scenario "$S/$sc.json" --runs "$runs"
               --workers "$W" --paths --out "$OUT/$sc")
+  if [ "$SCREENS" != "0" ]; then
+    args+=(--screens "$SCREENS" --screens-runs "$SCREEN_RUNS")
+  fi
   if [ "$n" != "01" ] && [ -d "$ENTRY/$prev" ]; then
     args+=(--start-dir "$ENTRY/$prev")
   fi

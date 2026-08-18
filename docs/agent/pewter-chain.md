@@ -1509,6 +1509,7 @@ describes.
 | `pewter-chain-01-11-600agents.mp4` | links 01 to 11, 3 min 36 s — superseded, and superseded by a film that is *shorter* while covering three more links (see `--cover` below). It stops at the forest's door, which is why a viewer asked where the bug catchers were. |
 | `pewter-chain-01-10-600agents.mp4` | the same cut over the ten links that certify at 3,000/3,000, 47.6 s — the shorter half of the length question below. |
 | `pewter-chain-01-03-600agents.mp4` | the three-link cut this all started from, 7.2 s, superseded. |
+| `screen-mosaic-05-rival-battle.mp4` | **not a map at all** — sixty agents' own screens tiled into one frame, playing at once. A different compositor and a different capture pass: see [the screen mosaic](screen-mosaic.md). |
 | `route1-showcase-600agents.mp4` | 600 agents crossing Route 1, **2× real time**, 83 s. The columns, the bottlenecks and the ledges are the picture. |
 | `pewter-chain-swarm-24agents.mp4` | the whole fourteen-link chain at 52×, 60 s, clearly labelled a timelapse. |
 

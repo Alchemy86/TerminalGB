@@ -70,6 +70,7 @@ pub mod knowledge;
 pub mod record;
 pub mod rules;
 pub mod run;
+pub mod screens;
 
 use std::path::{Path, PathBuf};
 

@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 use super::knowledge::{Guidance, Knowledge};
 use super::record::{fnv1a, Decision, Ending, Recording, ReplayReport};
 use super::rules::{standing_notes, Allowances, Observed, Referee, Verdict};
+use super::screens::ScreenTrack;
 use super::{Scenario, Source};
 use crate::gameboy::Gameboy;
 use crate::longplay::progress::Progress;
@@ -154,6 +155,14 @@ pub struct RunResult {
     /// waypoints rather than a picture of where the time went. Five bus reads
     /// a frame, and only when [`ScenarioRun::tracking`] asked for it.
     pub path: Vec<PathPoint>,
+    /// Every screen this run drew, downscaled and packed, when the run was
+    /// asked to record them.
+    ///
+    /// **A position track carries no picture**, which is why a mosaic of many
+    /// runs cannot be built out of a corpus that has already been collected —
+    /// see [`crate::scenario::screens`] for the format and for the arithmetic
+    /// that keeps it affordable.
+    pub screens: Option<ScreenTrack>,
 }
 
 /// What happened in the battles of one run, as the host saw them.
@@ -340,6 +349,8 @@ pub struct ScenarioRun {
     video: Option<crate::video::VideoOut>,
     /// Nobody is watching — see [`ScenarioRun::collecting`].
     collecting: bool,
+    /// A downscaled screen every N frames — see [`ScenarioRun::screens`].
+    screens: Option<ScreenTrack>,
 }
 
 impl ScenarioRun {
@@ -398,6 +409,7 @@ impl ScenarioRun {
             track: false,
             video: None,
             collecting: false,
+            screens: None,
         })
     }
 
@@ -410,6 +422,28 @@ impl ScenarioRun {
     /// Record the player's position on every frame. See [`RunResult::path`].
     pub fn tracking(mut self, on: bool) -> Self {
         self.track = on;
+        self
+    }
+
+    /// Record a **downscaled** screen every `every` emulated frames.
+    ///
+    /// This is the only way a picture leaves a headless run: a position track
+    /// says where the player was and carries no pixels, so a mosaic of dozens
+    /// of runs needs a capture pass and cannot be derived from a corpus
+    /// afterwards. `scale` is the downscale factor — 2 gives 80x72, which is
+    /// already at or above the size a mosaic tile is drawn at.
+    ///
+    /// **It is not free and the cost is the pixels, not the packing.** A
+    /// [`ScenarioRun::collecting`] run has the PPU's pixel path switched off
+    /// (worth about half a frame on this box); asking for screens switches it
+    /// back on for the whole run, exactly as [`ScenarioRun::filming`] does.
+    /// Everything a cartridge can see is unchanged either way — the
+    /// framebuffer is emulator output and is reachable from no address.
+    ///
+    /// `every` of 0 records nothing. See [`crate::scenario::screens::estimate`]
+    /// for what it will cost before a byte is written.
+    pub fn screens(mut self, every: u32, scale: u32) -> Self {
+        self.screens = (every > 0).then(|| ScreenTrack::new(every, scale));
         self
     }
 
@@ -477,7 +511,8 @@ impl ScenarioRun {
         // commute: a filmed run keeps its pixels whichever order they arrive
         // in. See [`ScenarioRun::collecting`].
         if self.collecting {
-            self.gb.set_render_pixels(self.video.is_some());
+            self.gb
+                .set_render_pixels(self.video.is_some() || self.screens.is_some());
             self.gb.set_render_audio(false);
         }
         let t = Instant::now();
@@ -562,6 +597,11 @@ impl ScenarioRun {
             if let Some(v) = &mut self.video {
                 let img = self.gb.image();
                 v.frame(img, 160, 144, Instant::now());
+            }
+            if let Some(sc) = self.screens.as_mut() {
+                if frames % sc.every() as u64 == 0 {
+                    sc.push(self.gb.image());
+                }
             }
             if self.pace_while_thinking && self.thinking() {
                 let now = Instant::now();
@@ -751,6 +791,7 @@ impl ScenarioRun {
             final_state_bytes,
             battles: battles.summary(),
             path,
+            screens: self.screens.take(),
         }
     }
 
@@ -847,6 +888,7 @@ impl ScenarioRun {
             final_state_bytes: Vec::new(),
             battles: BattleSummary::default(),
             path: Vec::new(),
+            screens: None,
         }
     }
 
