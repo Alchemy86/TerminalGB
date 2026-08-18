@@ -2245,12 +2245,16 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       Play the same seeds serially and in parallel and require identical
       final states. Determinism outranks everything else in flight.
 
-  states --rom R --start-dir D
+  states --rom R --start-dir D [--peek NAME@0xADDR ...]
       What a pool of entry states actually holds — lead species, level, HP,
       moves, money and badges — and the distribution across the pool.
       **A link's precondition is a claim about its entry pool**, and this is
       how that claim gets checked rather than assumed. No frames are
       emulated: a save state carries the party.
+      --peek reads any raw address beside them, so a flag a link is about to
+      be judged on gets read out of real states BEFORE the goal is written.
+      That is how the Boulder Badge bit and the heal flag were settled —
+      see docs/agent/brock.md.
 ";
 
 #[derive(Default)]
