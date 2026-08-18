@@ -45,9 +45,12 @@ from . import arrows, atlas, axi, camera, paint, palette, tracks  # noqa: F401
 
 from .atlas import Atlas  # noqa: F401
 from .camera import Camera  # noqa: F401
+from .arrows import DIRS, arrow_points  # noqa: F401
+from .paint import load_font, on_screen, tint, wrap_hud  # noqa: F401
 from .palette import (  # noqa: F401
-    BATTLE_HUE, BATTLE_KIND, BG, DIM, DIRECTION_HUE, HEAT_HUE, INK, PANEL,
-    TRAFFIC_RAMP, arrow_rgb, band_of, legend_swatches, traffic_fraction,
+    BATTLE_HUE, BATTLE_KIND, BG, DIM, DIRECTION_HUE, ENCODINGS, HEAT_HUE, INK,
+    PACED_HUE, PANEL, TRAFFIC_RAMP, arrow_rgb, arrow_scale, band_of,
+    legend_swatches, traffic_fraction,
 )
 from .tracks import (  # noqa: F401
     FACING, FPS_GB, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS,
