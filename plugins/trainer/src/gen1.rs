@@ -147,6 +147,19 @@ pub mod addr {
     /// `wCurrentMenuItem` — the live cursor index of whatever menu is open,
     /// zero-based. In a battle's move list that is the move slot.
     pub const CURRENT_MENU_ITEM: u16 = 0xCC26;
+    /// `wListScrollOffset` — how far a scrolling list has been scrolled, in
+    /// entries. **The bag list needs both**: the item the cursor is on is
+    /// `wListScrollOffset + wCurrentMenuItem`, because `wCurrentMenuItem` is
+    /// the row within the four visible ones and stops at 3. Measured on a bag
+    /// of four items — the cursor on the fourth reads scroll 1, item 2.
+    pub const LIST_SCROLL_OFFSET: u16 = 0xCC36;
+    /// `wPlayerMonNumber` — which party slot is currently out.
+    ///
+    /// **The only exact answer to "who is in front".** A party list offers
+    /// every slot including the one already fighting, and Gen 1 answers a
+    /// switch to that one with `ZUBAT is already out!` and no turn spent —
+    /// which a policy that keeps asking turns into a loop.
+    pub const PLAYER_MON_NUMBER: u16 = 0xCC2F;
     /// `wNumBagItems` — how many distinct items the bag holds.
     pub const NUM_BAG_ITEMS: u16 = 0xD31D;
     /// `wBagItems` — id/quantity pairs, terminated by `$FF`.

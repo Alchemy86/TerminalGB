@@ -1,0 +1,32 @@
+{
+  "schema": "gbscenario/1",
+  "name": "23-down-to-mt-moon-b2f",
+  "objective": "Across the first pocket of Mt Moon B1F, from the ladder the last link came down to the ladder that goes further down - throwing a Poke Ball on the way at anything worth keeping. B1F is four pockets that do not connect on foot and only one of them has a way on; this is that walk, and it is also the first place on the road where the balls link 18b bought can be spent.",
+  "start_state": "states/22.gbss",
+  "goal": [
+    "map=0x3D"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 900",
+    "max_wall_seconds 1800"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/23-down-to-mt-moon-b2f.json",
+  "timeout_frames": 400000,
+  "evidence": [
+    "map=0x3D - wCurMap $D35E. MT_MOON_B2F is const index 61, and B1F's own object data names it: map $3C's warp[4] at (21,17) leads to map $3D warp[1], which map $3D's own table puts at (21,17).",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, WHICH IS WHY party_hp=0 IS NOT ON THE FAILURE LIST. That is how the cartridge works and how a person plays it: HandlePlayerBlackOut heals the party and SpecialWarpIn puts the player on wLastBlackoutMap at the tile in front of that Pokemon Center's door, and the player walks back. Measured on Mt Moon B2F - both party members reach 0 HP at decision 217 and the next observation is Route 4 (11,6) at full health, one tile below the Mt Moon Pokemon Center's door at (11,5). So the goal stays the destination, the walk back is in the solver's recover_route table, and the call budget carries it. What a blackout costs is time, which is exactly what it costs a person.",
+    "THE ENTRY POINT IS (5,5) AND IT IS DERIVED BEFORE IT IS OBSERVED. Map $3B's warp[2] at (5,5) carries destination map 60 ($3C) and destination warp 0, and map $3C's warp[0] is at (5,5) - so the ladder the previous link takes lands here. Measured on the link-22 exit pool as well.",
+    "THIS POCKET HAS NO TRAINERS AND NO LEDGES. B1F's objects are all in the other three pockets; a breadth-first path from (5,5) to (21,17) over the cartridge's own walkability grid, with TilePairCollisionsLand modelled, is 29 steps and enters nobody's line. So the only thing that can go wrong here is a wild encounter, which the leg is allowed to decide about.",
+    "AND IT IS THE ONLY LADDER OUT OF THIS POCKET. The pocket is 84 tiles - x=4-7 rows 4-17, joined along rows 16-17 out to x=21 - and holds exactly two warps: (5,5) back up to 1F and (21,17) down to B2F.",
+    "THE CATCH IS OPPORTUNISTIC AND THE GOAL DOES NOT DEPEND ON IT, WHICH IS A MEASURED CHOICE. A leg whose goal was party>=2 was built and run first: it paces this pocket until something is caught and scores 56 of 60, the four failures being attempts that spend their whole call budget without ever throwing at a full-health lead - catch::decide refuses a throw that costs a turn the lead would not survive, and there is no nurse inside the mountain to undo the attrition. Making the catch a side effect of a walk that was already 60 of 60 costs nothing and gains a bench whenever one is offered. What a bench is FOR is measured on the next link: it is Gen 1's only answer to confusion."
+  ]
+}

@@ -10565,13 +10565,16 @@ pool, `--idle-spread 3001`, every attempt a distinct trajectory:
 |---|---:|---|---|
 | **18b-shop-in-pewter** | **3000/3000** | 100.0 [99.9-100.0] | the first item the chain has ever bought |
 | **19-east-to-route-3** | **3000/3000** | 100.0 [99.9-100.0] | re-certified; the shop moved where it starts |
-| **20-cross-route-3** | **2980/3000** | **99.3 [99.0-99.6]** | **accepted, not certified** — poison, below |
-| **21-heal-at-mt-moon** | **2993/3000** | **99.8 [99.5-99.9]** | **accepted, not certified** — the same cause |
-| **22-down-into-mt-moon** | **3000/3000** | 100.0 [99.9-100.0] | |
+| **20-cross-route-3** | ~~2980/3000~~ **3000/3000** | 100.0 [99.9-100.0] | **CERTIFIED** — see the blackout section below |
+| **21-heal-at-mt-moon** | ~~2993/3000~~ **3000/3000** | 100.0 [99.9-100.0] | **CERTIFIED** — the same |
+| **22-down-into-mt-moon** | **3000/3000** | 100.0 [99.9-100.0] | re-routed onto the (5,5) ladder |
 
-**Three of the five clear the bar and two do not**, and the two are labelled that way permanently
-as link 11 is. Twenty of link 20's twenty failures and all seven of link 21's are deaths on the
-walk; **not one is a battle.**
+**Every one of the five clears the bar now.** The two that did not were losing twenty and seven
+attempts to the same thing — the lead poisoned in a fight it could not avoid and dying on the walk
+afterwards, **not one of them in a battle** — and what closed them was **not** treating a blackout
+as a failure at all. See *"A BLACKOUT IS A LEGAL DETOUR"* below; the strike-through figures are
+what this section measured before that, kept because the *cause* it names is still the right
+diagnosis.
 
 - **A REBASE ONTO AN EMULATION CHANGE COSTS A RE-CERTIFICATION, AND WHETHER IT COSTS A *DIFFERENT
   ANSWER* IS ONE COMPARISON.** This set was certified, `main` landed two MMU accuracy fixes (OAM
@@ -10782,3 +10785,176 @@ and paired on the seed: `cross-route-3` (20, one subject per starter line, 20 at
   fail these links narrowly.
 - **There is still no trained player in this repository**, so every split is `n/a` and these are a
   ceiling and a floor rather than a distillation result.
+
+## A BLACKOUT IS A LEGAL DETOUR, NOT A LOSS — and that is what certified links 20 and 21
+
+**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md) §0-§2.** The section
+above records links 20 and 21 as "accepted, not certified" for poison. **Every link from 18b to 25
+is certified 3000/3000 now**, and what closed the two was not the antidote — it was the captain's
+correction that *the party fainting and waking at a Pokémon Center is how the game works*.
+
+- **THE MODEL, AND IT IS A CLAIM ABOUT THE GAME RATHER THAN ABOUT THE SOLVER.** The party faints,
+  you wake at the last Pokémon Center whole, and you walk back. Scoring that as a failed run was
+  this chain asserting something the cartridge does not. So `party_hp=0` is **off the failure list
+  of every leg from 20 to 25**, the goal is still the destination, and the walk back is
+  `recover_route(scenario)` — a third route table beside the leg's own and the walk to the nurse.
+  **What a blackout costs is time**, which is exactly what it costs a person; the call budgets
+  carry it (link 20 1,200 → 2,000, link 25 600 → 2,000).
+- **IT IS WORTH 213 ATTEMPTS IN 3,000 ON ONE LINK.** Link 24 (Mt Moon B2F) blacks out on **7.1 %**
+  of its attempts and reaches the goal on **all 3,000**; link 22 blacks out 18 times and likewise.
+  Under the old model every one of those was a failed run.
+- **WHERE YOU WAKE IS MEASURED, NOT ASSUMED.** Traced with the failure condition removed: both
+  party members reach 0 HP on B2F at decision 217 and the next observation is **Route 4 (11,6)** at
+  full health — one tile below the Mt Moon Pokémon Center's door at (11,5). `HandlePlayerBlackOut`
+  heals the party and `SpecialWarpIn` puts the player on `wLastBlackoutMap` at that Centre's own
+  doorstep. Past Pewter the last heal is either Pewter's or Mt Moon's, so there are exactly **two**
+  places to wake up.
+- **THE SWITCH BACK IS BY MAP, SO THE TABLES ARE KEPT DISJOINT WHERE THE GEOGRAPHY ALLOWS IT.**
+  `ChainDriver::recovered` is "a map the leg routes over and the walk back does not", one line.
+  **Route 4 is the one place that cannot work** — its western and eastern mouths are the same map
+  and not connected (x=19-23 solid on row 5, x=20-23 on rows 6-8) — so a blackout east of the
+  mountain costs the whole crossing again and link 25 names an `x` as well.
+  **Link 22 needs no table at all**: it wakes on Route 4, which is already on its own route.
+- **`recovering` HAS TO BE LATCHED, NOT RECOMPUTED.** `party_hp == 0` is true for the handful of
+  decisions the blackout text takes; by the time the player is standing on the doorstep the party
+  is already whole.
+
+## Poison, and the bag the driver had never opened (`ChainDriver::use_item`)
+
+**Still worth doing where it is cheap — 196 cures and 664 drinks in link 20's 3,000 certified
+attempts — but §2 above is the cure, not this.**
+
+- **REPRODUCED FIRST, AND `GB_AGENT_LOG` IS WIRED INTO `play_with` SO ANYONE CAN.** Seed 21 of the
+  certified link-19 pool, deterministically: poisoned at decision 82 at 47 of 51 HP, walks **168
+  more decisions** with five POTIONs in the bag, dies at (59,3) — two tiles from the map edge the
+  goal is on the other side of. The party's `status` field was already observed and serialised;
+  `Snap` simply never parsed it. **`corpus` runs sixteen workers into one path, so the log is for
+  `solve`.**
+- **THE CURE IS AN ANTIDOTE AND THE CHAIN NOW BUYS FIVE.** ¥100 each in `ItemPrices` (file offset
+  `0x4608`, three-byte BCD, ids 1-based) against a POTION's ¥300, and it *cures* poison where a
+  potion buys twenty HP of the same problem. Row 3 of Pewter's own stock, bag slot 4, so `18b`'s
+  goal names `watch:antidote_id=0x0B` as well as the count.
+- **THE BAG IS FIVE SCREENS AND EVERY ONE WAS DECODED OFF A REAL CARTRIDGE** with the MCP server:
+  overworld → START; the start menu (`selected` walks to ITEM); the bag list; `USE`/`TOSS`; `Use
+  item on which POKéMON?`; then **B** out of all of them, because A on the message box does not
+  leave it. Fifteen decisions end to end.
+- **THE BAG LINE IS `wListScrollOffset + wCurrentMenuItem` AND BOTH HALVES ARE NEEDED.** Four items
+  make the list scroll and the cursor on the fourth reads scroll 1, item 2; and the list does
+  **not** reopen at the top (measured: it came back at scroll 1, item 2), so the direction to press
+  is computed from where the cursor is against where the item sits in the bag, never counted. Both
+  bytes are new on the wire (`screen.menu_index`, `screen.menu_scroll`) and both are in the atlas.
+- **A DRINK'S RULE IS "SPEND ONE ONLY WHEN ALL OF IT LANDS" (`max_hp - hp >= 20`), NOT A FRACTION —
+  AND TWO FRACTIONS WERE MEASURED FIRST.** At a third the Mt Moon B2F lead arrived at 30 of 55 and
+  died at 22 with five POTIONs untouched; at a half it arrived at the **same** 30 of 55, because 30
+  is 54.5 % and a boundary is exactly where a worn-down lead lives. `refused_a_fight` sits beside
+  it, and the whole rule is gated on the leg having no nurse so the bag and the walk never compete.
+- **NEITHER TRIGGER CAN FIRE BEFORE THE MART LINK, AND THAT BOUNDS THE BLAST RADIUS.** The bag holds
+  nothing but the gym's TM34 until `18b`, so on every link the chain had already certified `holds`
+  answers zero and `want_item` returns `None` before it looks at anything else. Link 19 is the one
+  link that carries potions and cannot use them: it is a walk across a town with no battles and a
+  lead link 18 has just healed.
+- Measured red → green on the same six hundred seeds: link 20 **590/600 → 600/600**, with the bag
+  opened **9 times to cure and once to drink in 96 crossings**.
+
+## Mt Moon: one ladder of three, a fossil in the doorway, and the chain reaches Cerulean
+
+**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md) §3-§5.** Three new links —
+`23-down-to-mt-moon-b2f`, `24-cross-mt-moon-b2f`, `25-east-to-cerulean`.
+
+- **THE CHAIN WAS TAKING A DEAD-END LADDER AND ITS OWN GOAL COULD NOT SEE IT.** B1F is four pockets
+  that do not connect on foot and each 1F ladder lands in a different one; only **(5,5)**'s pocket
+  holds a way on — (21,17) → B2F's 452-tile pocket, which holds the (5,7) ladder to B1F (23,3), the
+  exit pocket. The other two land in B2F pockets of 69 and 94 tiles **whose only warp is the one
+  back**. Link 22 took (17,11), satisfied `map=0x3C` perfectly, and left the next link a whole
+  extra crossing of 1F from the exit. Read off the warp tables of all four maps.
+- **A WARP TILE IS NOT AN OBSTACLE A WALKABILITY GRID KNOWS ABOUT.** The corrected route's first
+  version ran along row 15 from x=21 to x=31, which passes **(25,15)** — the third ladder — and
+  **sixty of sixty attempts** arrived on B1F in the wrong pocket, goal satisfied, next link stuck
+  against a wall from its first decision. Block every warp but the target in the search that draws
+  a waypoint list.
+- **TAKING A FOSSIL IS COMPULSORY AND IT IS GEOMETRY.** Rows 2-4 of B2F hold the corridor to the
+  (5,7) ladder and the only opening into them is (12,5)/(13,5), whose two tiles below — (12,6) and
+  (13,6) — are the two fossil objects. A Gen 1 sprite is solid, so with both standing there is **no
+  path at all**, and with either gone there is a 109-step one. Measured by blocking every object
+  tile and asking. It is also why the cartridge takes the other fossil away when you pick one up.
+  The route stands at (12,7), faces up and presses A — `Finish::Talk`, the verb the chain already
+  uses on Oak and the nurse.
+- **Two fights are forced on B2F and both are engaged from a tile the trainer is already beside**:
+  the super nerd at (12,8) from (13,8), and the rocket at (11,16) **along row 18** at range two, so
+  his body lands on (11,17) and off the row. Climbing column 11 instead meets him at range eight
+  and parks him at (11,23), in the middle of the corridor.
+- **Route 4 east needs two ledge jumps and a ledge-free search finds no path at all.** (44,6) →
+  (46,6) and (79,8) → (79,10), both in the direction of travel, both waypointed on the tile before
+  *and* the tile after so a `goto` can neither overshoot onto one nor be asked to climb one.
+- **There is no heal between the Mt Moon Pokémon Center and Cerulean**: Route 4's eastern mouth at
+  (24,5) cannot be walked to from (18,5) or (11,5), because x=19-23 is solid on row 5 and x=20-23
+  on rows 6, 7 and 8. The antidotes and potions link 18b buys carry the whole mountain.
+
+## The chain throws a Poké Ball — and Gen 1's only answer to confusion is a bench
+
+**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md) §6.**
+`plugins/agent/src/catch.rs` had been built, measured against the cartridge and **never once wired
+into a run**. It is now, on link 23.
+
+- **THE MEASUREMENT THAT DECIDED IT.** Link 24's residual is a level-13 ZUBAT's SUPERSONIC: the
+  screen reads `is confused!` and then `It hurt itself in its confusion!`, and the self-hit costs
+  about a fifth of the lead's bar a turn. **Nothing in Pewter's stock cures confusion** and the
+  cartridge's only answer is to switch out. Split by starter line over sixty attempts with one
+  Pokémon: CHARMELEON 19/19, WARTORTLE 20/21, **IVYSAUR 16/20** — the same starter-dependent wall
+  `docs/agent/brock.md` measured, one gym later.
+- **Three facts had to reach the driver**: `wEnemyMonActualCatchRate` `$D007`, `wBattleType`
+  `$D05A`, and each party member's **internal** species index. All three are additive on the wire.
+- **A THROW IS EXPRESSED AS `Action::Item { id: ball }`**, because that is what it is — choose ITEM,
+  choose the ball — so the battle menus needed no new case. The one difference from a POTION is
+  that a ball is thrown *at* the opponent, so the party list never appears.
+- **ZUBAT IS THE ANSWER TO ITS OWN PROBLEM AND IS THE CHEAPEST CATCH IN THE GAME**: five of B1F's
+  ten encounter slots at levels 7-11, base catch rate **255**. PARAS is on the list at one slot in
+  ten because `--plan misty` names it as the one catchable thing on this road that answers **both**
+  of Misty's.
+- **IT RIDES A WALK RATHER THAN BEING A LINK OF ITS OWN, AND THAT IS MEASURED.** A leg whose *goal*
+  was `party>=2` was built first and scored **56 of 60**: the four failures spend their whole budget
+  without ever throwing, because `catch::decide` refuses a throw that costs a turn the lead would
+  not survive and there is no nurse inside the mountain. Hung off link 23 — already 60 of 60 — the
+  same catch costs nothing: **60/60 with 117 balls thrown and 26 benches landing**, and the leg that
+  follows goes 55/60 → 57/60. So **43 % of attempts leave B1F with a second Pokémon at no cost**,
+  and the bench is worth about two attempts in sixty on the crossing — real, and not enough alone.
+- **THREE MENUS EXIST ONLY ONCE THERE IS A BENCH, AND EACH COST A RUN BEFORE IT WAS FOUND.**
+  (1) **`Will BLUE change POKéMON?`** — Gen 1's free switch when a *trainer's* Pokémon faints; read
+  as the move list, fifteen of sixty attempts spent 900 decisions in one battle with no HP moving.
+  B is NO. (2) **`Bring out which POKéMON?`** — the forced replacement after a faint, and a **third**
+  wording for the party list beside `Choose a POKéMON.` and `Use item on which POKéMON?`; B cannot
+  leave it. (3) **An item is used on whoever is OUT, not on row 0** — with a fainted lead in slot 0
+  the driver offered it a POTION and the cartridge answered `It won't have any effect.` for ever.
+  *A screen that cannot appear until a capability exists is a screen nobody has tested.*
+- **A catch is counted where the PARTY grows, never where a ball leaves the bag** — and on a leg
+  whose goal is the catch it is never counted at all, because the run ends on the sampling tick the
+  party grows. The report prints the count only when it is non-zero rather than as a nought-per-cent
+  success rate.
+
+### A measured negative: fighting Mt Moon's wild battles buys nothing
+
+`GB_FIGHT_WILD` is an experiment knob beside `train_to`'s own `GB_TRAIN_TO` — a comma-separated
+list of legs that may fight wild battles — so "would training here help?" can be asked without
+inventing a scenario to ask it in. Asked with `GB_TRAIN_TO=24` over sixty attempts a link:
+**flee 59/60, 60/60, 55/60 (174/180) against fight 58/60, 60/60, 57/60 (175/180)**, and 84
+overworld drinks against 54. One attempt apart in a hundred and eighty — not separable, and not
+what closed these links. Recorded so nobody runs it again.
+
+## THE PUBLISHED FIGURES FOR LINKS 15 AND 17 DO NOT REPRODUCE ON THIS BASE
+
+Re-certifying the whole chain on `b5ee848` gives **15-train-for-brock 2997/3000** and
+**17-fight-through-the-gym 2701/3000 (90.0 %)** where `docs/agent/brock.md` publishes 3000/3000 and
+**2659/3000 (88.6 %)**. Both moved and in opposite directions.
+
+- **THIS BRANCH IS PROVABLY NOT THE CAUSE, AND THE CHECK IS THE CHEAP ONE THIS FILE ALREADY
+  RECOMMENDS.** A binary built at `HEAD` in a separate tree (`git archive HEAD | tar -x -C /tmp`,
+  own `target/`, so the running certification's binary is never touched) and replayed from the
+  same entry pools reproduces **150/150** of link 15's trajectories and **300/300** of link 17's,
+  hash for hash — and HEAD's own binary scores the same **270/300** on link 17.
+- **So the two figures belong to a different pool or a different base than the one they were
+  published against**, and they are recorded rather than quietly overwritten. Everything else on
+  the chain re-certifies exactly as published: links 01-10, 12, 13, 14, 16, 18, 18b and 19 all
+  3000/3000, link 11 **2999/3000**.
+- **The whole chain was then replayed with the binary as committed** — 26 links × 100 seeds =
+  **2,600 trajectories, every one identical** — which is what says the certification belongs to the
+  shipped source and not to whatever was built while it ran.

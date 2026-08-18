@@ -1,0 +1,31 @@
+{
+  "schema": "gbscenario/1",
+  "name": "25-east-to-cerulean",
+  "objective": "East along Route 4 from the mountain's eastern mouth to Cerulean City - the first town past Pewter, and the far side of Mt Moon.",
+  "start_state": "states/24.gbss",
+  "goal": [
+    "map=0x03"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 2000",
+    "max_wall_seconds 2400"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/25-east-to-cerulean.json",
+  "timeout_frames": 800000,
+  "evidence": [
+    "map=0x03 - wCurMap $D35E. CERULEAN_CITY is const index 3, and Route 4's own header says so: map $0F's connection byte is 0b0101, and its two blocks name map $0E south and map $03 east. The east connection carries yalign 8 and xalign 0, so leaving Route 4 at (89,y) arrives in Cerulean at (0,y+8); Cerulean's own west connection says the same in reverse, yalign 248 (= -8) and xalign 89.",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, WHICH IS WHY party_hp=0 IS NOT ON THE FAILURE LIST. That is how the cartridge works and how a person plays it: HandlePlayerBlackOut heals the party and SpecialWarpIn puts the player on wLastBlackoutMap at the tile in front of that Pokemon Center's door, and the player walks back. Measured on Mt Moon B2F - both party members reach 0 HP at decision 217 and the next observation is Route 4 (11,6) at full health, one tile below the Mt Moon Pokemon Center's door at (11,5). So the goal stays the destination, the walk back is in the solver's recover_route table, and the call budget carries it. What a blackout costs is time, which is exactly what it costs a person.",
+    "THE MOUNTAIN'S EASTERN MOUTH IS NOT REACHABLE FROM ITS WESTERN ONE. Route 4's three doors are all on row 5: (11,5) the Pokemon Center, (18,5) the mouth the chain went in by, and (24,5) the mouth it comes back out of. x=19-23 is solid on row 5 and x=20-23 is solid on rows 6, 7 and 8, so the eastern mouth has no walk to the other two - which is why there is no heal between here and Cerulean, and why the antidotes and potions link 18b buys have to carry the whole crossing.",
+    "TWO LEDGE JUMPS AND NEITHER IS OPTIONAL. A breadth-first search over the cartridge's walkability grid with ledge steps forbidden finds no path from (24,5) to the eastern edge at all; with them it is 73 steps, jumping (44,6) to (46,6) and (79,8) to (79,10). Both are in the direction of travel and both are waypointed on the tile before and the tile after, so a goto can neither overshoot onto one nor be asked to climb back up it - LedgeTiles (06:66CF) has no entry for facing up.",
+    "NO FIGHT IS FORCED. Route 4's only trainer is at (63,3) facing right, two rows above the route, and the severance sweep over the grid finds a path with every cone blocked."
+  ]
+}

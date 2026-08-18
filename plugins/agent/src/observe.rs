@@ -679,6 +679,11 @@ impl Screen {
 /// One party member, trimmed to what a decision needs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PartyMon {
+    /// The **internal** species index — `wPartyMon1Species`' own numbering,
+    /// not the Pokédex number. `catch::decide` compares against this to answer
+    /// "do we already hold one?", and the two numberings differ for almost
+    /// every species.
+    pub species: u8,
     pub name: String,
     pub nickname: String,
     pub level: u8,
@@ -734,6 +739,25 @@ pub struct GameState {
     /// when no map header is loaded — which means the player is not in
     /// control. See [`W_CUR_MAP_HEIGHT`].
     pub map_size: Option<(u8, u8)>,
+    /// Where the cursor is in whatever menu is open, as the cartridge keeps
+    /// it: `wCurrentMenuItem` and `wListScrollOffset`.
+    ///
+    /// **A list longer than its window needs both.** `wCurrentMenuItem` is the
+    /// row within the four visible entries of a bag list and stops at 3; the
+    /// entry the cursor is on is the sum. Measured on a bag of four items, the
+    /// cursor on the fourth: scroll 1, item 2. Read every decision because a
+    /// menu can be open outside a battle — the bag, the start menu, a shop —
+    /// and the battle `View` carried the item alone.
+    pub menu_index: u8,
+    pub menu_scroll: u8,
+    /// `wEnemyMonActualCatchRate` and `wBattleType`, the two facts
+    /// [`crate::catch::decide`] needs that a battle [`crate::battle::View`]
+    /// does not carry. Meaningless outside a battle and sent only inside one.
+    pub catch_rate: u8,
+    pub battle_type: u8,
+    /// `wPlayerMonNumber` — which party slot is out. Meaningless outside a
+    /// battle; sent only inside one.
+    pub active_slot: u8,
 }
 
 /// Reads Gen 1 state through a capability-checked [`Machine`].
@@ -844,6 +868,7 @@ impl Gen1Observer {
             m.peek_into(tr::PARTY_MON_NICKS + i * 11, &mut nick);
             use terminalgb_plugin_trainer::gen1::party as p;
             st.party.push(PartyMon {
+                species: m.peek(base + p::SPECIES).unwrap_or(0),
                 name: String::new(),
                 nickname: terminalgb_plugin_trainer::text::decode(&nick),
                 level: m.peek(base + p::LEVEL).unwrap_or(0),
@@ -885,12 +910,19 @@ impl Gen1Observer {
             });
         }
 
+        st.menu_index = m.peek(tr::CURRENT_MENU_ITEM).unwrap_or(0);
+        st.menu_scroll = m.peek(tr::LIST_SCROLL_OFFSET).unwrap_or(0);
+
         st.battle = BattleKind::from_flag(m.peek(tr::IS_IN_BATTLE).unwrap_or(0));
         if st.battle != BattleKind::None {
             use terminalgb_plugin_trainer::gen1::battle as b;
             let mut nick = [0u8; 11];
             m.peek_into(tr::ENEMY_MON_NICK, &mut nick);
+            st.active_slot = m.peek(tr::PLAYER_MON_NUMBER).unwrap_or(0);
+            st.catch_rate = m.peek(tr::ENEMY_ACTUAL_CATCH_RATE).unwrap_or(0);
+            st.battle_type = m.peek(tr::BATTLE_TYPE).unwrap_or(0);
             st.opponent = Some(PartyMon {
+                species: m.peek(tr::ENEMY_MON).unwrap_or(0),
                 name: String::new(),
                 nickname: terminalgb_plugin_trainer::text::decode(&nick),
                 level: m.peek(tr::ENEMY_MON + b::LEVEL).unwrap_or(0),

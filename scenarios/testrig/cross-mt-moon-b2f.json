@@ -1,0 +1,29 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "24-cross-mt-moon-b2f",
+  "question": "Across Mt Moon B2F to the mountain's exit pocket, which means taking one of the two fossils: the pair of them stand in the only doorway to the corridor the exit ladder is on. Two forced fights, and a level-13 ZUBAT whose SUPERSONIC is the hardest thing on this road.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/24-cross-mt-moon-b2f.json",
+  "entry_pool": "target/cert2/23-down-to-mt-moon-b2f/exits",
+  "runs": 12,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [],
+  "arms": [
+    {
+      "name": "teacher",
+      "player": "expert"
+    },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    },
+    {
+      "name": "random",
+      "player": "random",
+      "seed_base": 2654435769
+    }
+  ]
+}

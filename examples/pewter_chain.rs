@@ -156,6 +156,12 @@ const MT_MOON_1F: u8 = 0x3B;
 /// The same building as Viridian's and Pewter's — nurse at (3,1), counter,
 /// doors at (3,7)/(4,7) — which is why [`POKECENTER`] serves all three.
 const MT_MOON_POKECENTER: u8 = 0x44;
+/// `MT_MOON_B1F`, const index 60.
+const MT_MOON_B1F: u8 = 0x3C;
+/// `MT_MOON_B2F`, const index 61.
+const MT_MOON_B2F: u8 = 0x3D;
+/// `CERULEAN_CITY`, const index 3.
+const CERULEAN_CITY: u8 = 0x03;
 /// Route 22, west of Viridian — a pre-forest training candidate, measured in
 /// `scenarios/experiments/` and not part of the chain.
 const ROUTE_22: u8 = 0x21;
@@ -300,14 +306,135 @@ const ROUTE_4_TO_MT_MOON: &[(u8, u8)] = &[(18, 6), (18, 5)];
 /// parks on the tile above, sealing the climb. Turning one tile east means she
 /// is engaged from row 7 or row 10 and parks on column 30, which neither leg
 /// uses.
+/// Across Mt Moon 1F to the **(5,5)** ladder, which is the only one of the
+/// three that leads anywhere.
+///
+/// **The other two are dead ends for a crossing, and this is read off the warp
+/// tables rather than reasoned about.** B1F is four pockets that do not
+/// connect on foot, and each 1F ladder lands in a different one:
+///
+/// | 1F ladder | lands on B1F at | that pocket also holds | which reaches |
+/// |---|---|---|---|
+/// | (5,5) | (5,5) | (21,17) → B2F (21,17) | B2F's big pocket, and its (5,7) ladder to B1F (23,3) — **the exit** |
+/// | (17,11) | (25,9) | (17,11) → B2F (25,9) | a B2F pocket whose only warp is the one back |
+/// | (25,15) | (25,15) | (13,27) → B2F (15,27) | likewise |
+///
+/// So from the (17,11) ladder — which is the one this route used to take — the
+/// way out of the mountain is back up to 1F, across it to (5,5), and down
+/// again: a whole extra crossing of the floor. Measured by walking the warp
+/// graph, and the previous route was chosen against exactly this question
+/// without the pockets being enumerated.
 const MT_MOON_1F_TO_B1F: &[(u8, u8)] = &[
     (14, 22),
-    (20, 22),
-    (20, 10),
-    (31, 10),
-    (31, 7),
-    (17, 7),
-    (17, 11),
+    (21, 22),
+    (21, 15),
+    // **Row 15 carries the (25,15) ladder, and stepping on a warp is taking
+    // it.** The first version of this route ran straight along row 15 from
+    // x=21 to x=31 and every one of sixty attempts arrived on B1F at (25,15)
+    // — in the wrong pocket, with the link's own `map=0x3C` goal perfectly
+    // satisfied and the next link stuck against a wall. A warp tile is not an
+    // obstacle a walkability grid knows about; it has to be blocked
+    // explicitly, and it is blocked in the search that drew this list.
+    (24, 15),
+    (24, 14),
+    (31, 14),
+    (31, 3),
+    (14, 3),
+    // **Down column 14 into the one fight this floor cannot avoid.** The
+    // YOUNGSTER at (12,16) faces right and row 16 is the only way west into
+    // the room the ladder is in — rows 13-15 wall off x=12,13 and x=18 walls
+    // off rows 16-18, so every route from the east must cross his line.
+    // Measured the way Route 3's three were: block one trainer's cone, ask
+    // whether the entrance still connects to the ladder, and he is the only
+    // one that severs it.
+    (14, 16),
+    // **And row 17 rather than row 16, because his body lands on row 16.**
+    // Seen at (14,16) at range two, `TrainerWalkUpToPlayer` puts him on
+    // (13,16) — the next tile of the row-16 run west. Row 17 is clear and one
+    // step down. The fifth instance of the rule links 04, 05, 08 and 20 each
+    // paid for.
+    (14, 17),
+    (6, 17),
+    // Column 6, not column 5: the trainer at (5,6) faces **down** the whole of
+    // column 5, and the ladder at (5,5) is the tile above him — outside his
+    // line. So climbing one column east and stepping left onto the ladder
+    // reaches it without a fight at all.
+    (6, 5),
+    (5, 5),
+];
+
+/// B1F's first pocket, from the (5,5) ladder to the (21,17) ladder down to
+/// B2F. No trainers and no ledges: 29 steps.
+/// **From wherever the catching leg left the player**, not from the ladder:
+/// (7,16) is reachable by a straight `goto` from every tile of the pocket, and
+/// the column-5 tiles a path from (5,5) crosses hold no warp.
+const MT_MOON_B1F_TO_B2F: &[(u8, u8)] = &[(7, 16), (21, 16), (21, 17)];
+
+/// B2F, from the ladder down to the fossil that is in the way.
+///
+/// **The two fossils are the gateway, not a side room, and that is what makes
+/// taking one compulsory.** Rows 2-4 of B2F hold the corridor to the (5,7)
+/// ladder — the only ladder that reaches B1F's exit pocket — and the only way
+/// into them from the rest of the floor is (12,5)/(13,5), whose two tiles
+/// below are (12,6) and (13,6): the two object sprites. A sprite is solid
+/// (`IsSpriteInFrontOfPlayer`), so with both standing there is **no path at
+/// all**; with either one gone there is. Measured by blocking every object
+/// tile and asking, and it is also why Gen 1 takes the other fossil away when
+/// you pick one up — a fossil left behind would wall the mountain.
+const MT_MOON_B2F_TO_FOSSIL: &[(u8, u8)] = &[
+    (23, 17),
+    (23, 14),
+    (27, 14),
+    (27, 16),
+    (33, 16),
+    (33, 14),
+    (36, 14),
+    (36, 22),
+    (32, 22),
+    (32, 31),
+    // **Column 8 rather than column 11.** The rocket at (11,16) faces down the
+    // whole of column 11, so climbing it is being seen at range eight and
+    // having his body parked at (11,23), in the corridor. Coming up column 8
+    // and east along row 18 meets him at (11,18) at range two instead, where
+    // his body lands on (11,17) — off the row the route is on.
+    (8, 31),
+    (8, 18),
+    (13, 18),
+    // Up column 13, which crosses the super nerd at (12,8)'s line at (13,8) —
+    // he is already adjacent there, so he does not move and his body never
+    // touches the climb.
+    (13, 7),
+    (12, 7),
+];
+
+/// B2F once the fossil is out of the way: up through the gap it was blocking,
+/// west along the rows 2-4 corridor, and down to the (5,7) ladder.
+const MT_MOON_B2F_TO_EXIT: &[(u8, u8)] =
+    &[(12, 6), (12, 4), (3, 4), (3, 6), (5, 6), (5, 7)];
+
+/// B1F's fourth pocket — sixteen tiles, entered only from B2F, and the way out
+/// of the mountain. `warp[7]` at (27,3) leads to map `$FF`, which is Route 4.
+const MT_MOON_B1F_TO_ROUTE_4: &[(u8, u8)] = &[(27, 3)];
+
+/// Route 4 from the mountain's eastern mouth to Cerulean City.
+///
+/// **Two ledge jumps, and neither is optional**: a breadth-first search with
+/// ledge steps forbidden finds no path at all. (44,6) → (46,6) and (79,8) →
+/// (79,10) are both in the direction of travel and both are waypointed on the
+/// tile before and the tile after, so a `goto` can neither overshoot onto one
+/// nor be asked to climb back up it. The lone trainer, at (63,3) facing right,
+/// is two rows above the route and is never engaged.
+const ROUTE_4_TO_CERULEAN: &[(u8, u8)] = &[
+    (24, 6),
+    (44, 6),
+    (46, 6),
+    (49, 6),
+    (49, 10),
+    (61, 10),
+    (61, 8),
+    (79, 8),
+    (79, 10),
+    (89, 10),
 ];
 
 /// Pewter's Pokémon Center door to the Mart door at (23,17).
@@ -342,6 +469,20 @@ const LEAVE_MART: &[Stage2] = &[Stage2 {
 /// involved at all. **The Mart's door is east of the pocket**, which is why
 /// this leg can be one straight line where that one could not.
 const MART_TO_ROUTE_3: &[(u8, u8)] = &[(23, 18), (39, 18)];
+
+/// From the Pewter Pokémon Center's door out to Route 3 — the walk back after
+/// a blackout on Route 3 or on Route 4's spur, both of which last healed here.
+/// Thirty-five steps, breadth-first over the cartridge's own grid.
+const PEWTER_CENTRE_TO_ROUTE_3: &[(u8, u8)] = &[
+    (13, 26),
+    (20, 26),
+    (20, 23),
+    (21, 23),
+    (21, 22),
+    (32, 22),
+    (32, 18),
+    (39, 18),
+];
 
 /// Route 4's southern spur, from where Route 3 lets you in at (9,17) up to the
 /// Mt Moon Pokémon Center's door at (11,5).
@@ -891,6 +1032,41 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             r.insert(ROUTE_4, vec![stage(ROUTE_4_TO_MT_MOON, Finish::Arrive)]);
             r.insert(MT_MOON_1F, vec![stage(MT_MOON_1F_TO_B1F, Finish::Arrive)]);
         }
+        // **Down again, through the floor the mountain is actually crossed
+        // on.** B1F's first pocket is 84 tiles with no trainer in it, so this
+        // is a walk; what it is worth is the ladder at its far end, which is
+        // the only one that reaches B2F's big pocket.
+        "23-down-to-mt-moon-b2f" => {
+            r.insert(MT_MOON_B1F, vec![stage(MT_MOON_B1F_TO_B2F, Finish::Arrive)]);
+        }
+        // **The fossil, and the way out.** Two forced fights, one object that
+        // has to be picked up because it is standing in the doorway, and then
+        // the sixteen-tile pocket on the other side that is the only way out
+        // of the mountain.
+        "24-cross-mt-moon-b2f" => {
+            r.insert(
+                MT_MOON_B2F,
+                vec![
+                    stage(MT_MOON_B2F_TO_FOSSIL, Finish::Talk("up")),
+                    stage(MT_MOON_B2F_TO_EXIT, Finish::Arrive),
+                ],
+            );
+            r.insert(
+                MT_MOON_B1F,
+                vec![stage(MT_MOON_B1F_TO_ROUTE_4, Finish::Arrive)],
+            );
+        }
+        // Out of the mountain and east along Route 4 to Cerulean City.
+        "25-east-to-cerulean" => {
+            r.insert(
+                ROUTE_4,
+                vec![stage(ROUTE_4_TO_CERULEAN, Finish::Step("right"))],
+            );
+            // A few tiles in, so the walker has somewhere to be while the
+            // goal is sampled rather than treating the arrival tile as
+            // off-route and looking for a door.
+            r.insert(CERULEAN_CITY, vec![stage(&[(4, 18)], Finish::Arrive)]);
+        }
         "14-arrive-in-pewter" => {
             r.insert(
                 FOREST_NORTH_GATE,
@@ -907,6 +1083,94 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         _ => {}
     }
     r
+}
+
+/// The way back after a BLACKOUT — the walk from the Pokémon Center the
+/// cartridge puts you in to the ground the leg is actually about.
+///
+/// **A blackout is a legal detour, not a loss.** That is how the cartridge
+/// works and how a person plays it: the party faints, you wake at the last
+/// Pokémon Center whole, and you walk back. Treating it as a failure is a
+/// claim about the *game* that the game does not make — and it was costing
+/// this chain two links their certification for something a player would not
+/// even call a mistake. So `party_hp=0` is off the failure list of every leg
+/// past the gym, the goal is still the destination, and this table is how the
+/// solver gets there from wherever it woke up.
+///
+/// **Where you wake is measured, not assumed.** `SpecialWarpIn` puts the
+/// player on `wLastBlackoutMap` at the tile in front of that Centre's door —
+/// traced on Mt Moon B2F: both party members reach 0 HP at decision 217 and
+/// the next observation is Route 4 **(11,6)** at full health, one tile below
+/// the Mt Moon Pokémon Center's door at (11,5). Past Pewter the last heal is
+/// either Pewter (links 20 and 21) or Mt Moon (everything inside the
+/// mountain), so there are exactly two places to wake up.
+///
+/// **The switch back is by map, and that is why the tables are disjoint where
+/// they can be**: `ChainDriver::recovered` says the walk is over when the
+/// player stands on a map the leg routes over and the walk back does not.
+/// Route 4 is the one map where that cannot work — its two mouths are the same
+/// map and different places, x=19-23 being solid on row 5 — so link 25 carries
+/// an `x` as well.
+fn recover_route(scenario: &str) -> HashMap<u8, MapPlan> {
+    let mut r: HashMap<u8, MapPlan> = HashMap::new();
+    // From Pewter's Pokémon Center out to Route 3. The last heal before the
+    // mountain is Pewter's, so this is where links 20 and 21 wake up.
+    let from_pewter = |r: &mut HashMap<u8, MapPlan>| {
+        r.insert(PEWTER_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+        r.insert(
+            PEWTER_CITY,
+            vec![stage(PEWTER_CENTRE_TO_ROUTE_3, Finish::Step("right"))],
+        );
+    };
+    // From Route 4's western half back into the mountain and down to B1F's
+    // first pocket. Inside the mountain the last heal is Mt Moon's, so this is
+    // where links 23, 24 and 25 wake up.
+    let into_the_mountain = |r: &mut HashMap<u8, MapPlan>| {
+        r.insert(ROUTE_4, vec![stage(ROUTE_4_TO_MT_MOON, Finish::Arrive)]);
+        r.insert(MT_MOON_1F, vec![stage(MT_MOON_1F_TO_B1F, Finish::Arrive)]);
+    };
+    match scenario {
+        "20-cross-route-3" => from_pewter(&mut r),
+        "21-heal-at-mt-moon" => {
+            from_pewter(&mut r);
+            r.insert(ROUTE_3, vec![stage(ROUTE_3_CROSSING, Finish::Step("up"))]);
+        }
+        // **Link 22 needs none**: it wakes on Route 4, which is already on its
+        // own route, and `ROUTE_4_TO_MT_MOON` is reachable from the Centre's
+        // doorstep. The table being empty is the honest way to say so.
+        "23-down-to-mt-moon-b2f" => into_the_mountain(&mut r),
+        "24-cross-mt-moon-b2f" => {
+            into_the_mountain(&mut r);
+            r.insert(MT_MOON_B1F, vec![stage(MT_MOON_B1F_TO_B2F, Finish::Arrive)]);
+        }
+        // **The whole mountain again, because Route 4's eastern mouth cannot
+        // be walked to from its western one.** x=19-23 is solid on row 5 and
+        // x=20-23 on rows 6, 7 and 8, so a blackout east of the mountain
+        // really does cost the crossing a second time. That is the cartridge's
+        // price, not the solver's.
+        "25-east-to-cerulean" => {
+            into_the_mountain(&mut r);
+            r.insert(MT_MOON_B1F, vec![stage(MT_MOON_B1F_TO_B2F, Finish::Arrive)]);
+            r.insert(
+                MT_MOON_B2F,
+                vec![
+                    stage(MT_MOON_B2F_TO_FOSSIL, Finish::Talk("up")),
+                    stage(MT_MOON_B2F_TO_EXIT, Finish::Arrive),
+                ],
+            );
+        }
+        _ => {}
+    }
+    r
+}
+
+/// Where a leg counts as back on its own ground when the walk back re-enters a
+/// map it already routes over. Only Route 4 needs it — see [`recover_route`].
+fn recover_east_of(scenario: &str) -> Option<(u8, u8)> {
+    match scenario {
+        "25-east-to-cerulean" => Some((ROUTE_4, 20)),
+        _ => None,
+    }
 }
 
 /// The detour a leg takes when the party is too hurt to go on.
@@ -1043,21 +1307,88 @@ mod item {
     pub const POKE_BALL: u8 = 0x04;
     /// `POTION`, ¥300.
     pub const POTION: u8 = 0x14;
+    /// `ANTIDOTE`, ¥100 — and the *cure* for the thing that kills this chain
+    /// on Route 3, where a POTION only buys twenty HP of the same problem.
+    /// Both prices are read out of `ItemPrices` at file offset `0x4608`
+    /// (3-byte BCD per item, item ids 1-based), not typed in from a guide.
+    pub const ANTIDOTE: u8 = 0x0B;
+    /// What a POTION restores. **Not read out of a table** — Gen 1 keeps the
+    /// medicine amounts in `ItemUseMedicine`'s own code rather than in a list
+    /// the way it keeps prices — so this is the documented twenty, and the
+    /// rule it serves ("spend one only when all of it lands") is insensitive
+    /// to a few HP either way.
+    pub const POTION_HEAL: u32 = 20;
+}
+
+/// What each leg is prepared to spend a Poké Ball on.
+///
+/// **The first time this chain has ever thrown one**, and it is a
+/// *measurement* that put it here rather than an ambition. Link 25's crossing
+/// of Mt Moon B2F loses attempts to a level-13 ZUBAT's SUPERSONIC: Gen 1
+/// confusion makes the lead hit itself for about a fifth of its bar a turn,
+/// there is no item in Pewter's stock that cures it, and the cartridge's only
+/// answer is to **switch out** — which needs a bench the chain has never had.
+/// Measured by starter line over sixty attempts of that leg with one Pokémon:
+/// CHARMELEON 19/19, WARTORTLE 20/21, **IVYSAUR 16/20**.
+///
+/// ZUBAT is the answer to its own problem and is the cheapest catch in the
+/// game: `gen1_tables.py --where zubat` puts it in five of B1F's ten
+/// encounter slots at levels 7-11, and its base catch rate is **255** — the
+/// maximum — so one Poké Ball at full health is already better than even.
+/// PARAS is worth a ball too, at one slot in ten, because it is the one thing
+/// on this road that answers *both* of Misty's Pokémon (`--plan misty`).
+///
+/// Species indices are **internal**, not Pokédex numbers: `gen1_tables.py`
+/// reads both out of the cartridge and they differ for almost every species.
+fn catch_wants(scenario: &str) -> &'static [terminalgb_plugin_agent::catch::Want] {
+    use terminalgb_plugin_agent::catch::Want;
+    const ZUBAT: u8 = 107;
+    const PARAS: u8 = 109;
+    const MT_MOON: &[Want] = &[
+        Want {
+            species: PARAS,
+            cap: 1,
+            why: "BUG/GRASS answers both of Misty's, and it is one slot in ten",
+        },
+        Want {
+            species: ZUBAT,
+            cap: 1,
+            why: "a bench to switch to when the lead is confused, at catch rate 255",
+        },
+    ];
+    match scenario {
+        // **The catch rides the walk it is already making.** A leg whose
+        // *goal* was `party>=2` was built and measured first and scored 56 of
+        // 60: the four failures spend their whole budget without ever
+        // throwing, because `catch::decide` refuses a throw that costs a turn
+        // the lead would not survive and there is no nurse inside the
+        // mountain. Hung off a walk that was already 60 of 60, the same catch
+        // costs nothing and risks nothing.
+        "23-down-to-mt-moon-b2f" => MT_MOON,
+        _ => &[],
+    }
 }
 
 /// What each leg buys, if it buys anything.
 ///
-/// **The quantities are what the two things that need a bag ask for**, and
-/// both are measured elsewhere: five POKé BALLs because `catch::decide`
+/// **The quantities are what the three things that need a bag ask for**, and
+/// every one is measured elsewhere: five POKé BALLs because `catch::decide`
 /// answers `Unavailable` with none and a Poké Ball is the best chance per ¥ at
-/// every catch rate and every HP (`docs/gen1/catching.md` §5), and five POTIONs
-/// because Route 3 poisons the lead and kills it about twice in six hundred
-/// crossings with nothing to drink. ¥1,000 + ¥1,500 against the ¥4,651 the
-/// chain carries out of the gym.
+/// every catch rate and every HP (`docs/gen1/catching.md` §5); five ANTIDOTEs
+/// because poison — not a battle — is what kills this chain on Route 3 and
+/// Route 4, and an antidote *cures* it where a potion buys twenty HP of the
+/// same problem; and five POTIONs for the lead that is simply worn down.
+/// ¥1,000 + ¥1,500 + ¥500 against the ¥4,651 the chain carries out of the gym.
 fn shopping_list(scenario: &str) -> Option<ShopList> {
     let want: &'static [(usize, u8, u32)] = match scenario {
-        // Row 0 is POKE_BALL and row 1 is POTION in Pewter's own stock order.
-        "18b-shop-in-pewter" => &[(0, item::POKE_BALL, 5), (1, item::POTION, 5)],
+        // Rows 0, 1 and 3 are POKE_BALL, POTION and ANTIDOTE in Pewter's own
+        // stock order — read with `gen1_tables.py --marts`, never counted off
+        // a guide.
+        "18b-shop-in-pewter" => &[
+            (0, item::POKE_BALL, 5),
+            (1, item::POTION, 5),
+            (3, item::ANTIDOTE, 5),
+        ],
         // Nothing to buy, and that is a job rather than an omission: this link
         // starts on the frame the shop link's goal fired, which is inside the
         // stock list. See [`ChainDriver::shop`].
@@ -1078,6 +1409,12 @@ fn shopping_list(scenario: &str) -> Option<ShopList> {
 /// where the party has to grow: nothing before Viridian Forest earns any
 /// experience at all, and a level 5 starter does not beat a bug catcher.
 fn may_fight_wild(scenario: &str) -> bool {
+    // The experiment knob, beside `train_to`'s own `GB_TRAIN_TO`: a
+    // comma-separated list of legs that may fight wild battles, for asking
+    // "would training here help?" without inventing a scenario to ask it in.
+    if let Ok(v) = std::env::var("GB_FIGHT_WILD") {
+        return v.split(',').any(|n| n.trim() == scenario);
+    }
     // **Not in the forest**, and that is a measured choice rather than a
     // squeamish one. Route 1 and Route 2 are Pidgey and Rattata, which are
     // worth beating; Viridian Forest is Caterpie, Weedle and their cocoons,
@@ -1143,7 +1480,15 @@ const BROCK_TRAIN_TO: u32 = 16;
 /// Where each leg is trying to get to, so an off-route map can be recognised
 /// as off-route rather than merely unknown.
 fn on_route(scenario: &str) -> Vec<u8> {
-    route_for(scenario, 0).keys().copied().collect()
+    // **The walk back's maps count as on the route.** `off_route` picks the
+    // door that leads somewhere the leg knows about, and after a blackout
+    // every map between the Pokémon Center and the leg's own ground is
+    // somewhere it knows about.
+    let mut v: Vec<u8> = route_for(scenario, 0).keys().copied().collect();
+    v.extend(recover_route(scenario).keys().copied());
+    v.sort_unstable();
+    v.dedup();
+    v
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,16 +1507,41 @@ struct Snap {
     lead_level: u32,
     lead_hp: u32,
     lead_max_hp: u32,
+    /// The lead's status condition as the game labels it — `PSN`, `BRN`,
+    /// `SLP`, `FRZ`, `PAR` — and empty when it is healthy.
+    ///
+    /// **The one fact a walking party can be dying of and nothing was
+    /// reading.** Poison costs 1 HP every four steps in the overworld and it
+    /// faints; measured on Route 3, a lead poisoned at decision 82 walked 168
+    /// more with five Potions in the bag and died two tiles from the exit.
+    lead_status: String,
     battle: Option<String>,
     /// The battle facts the shared policy decides from. `None` outside a
     /// battle, and also inside one whose structs the engine has not filled yet.
     arena: Option<terminalgb_plugin_agent::battle::View>,
+    /// `wEnemyMonActualCatchRate` and `wBattleType`, the two facts
+    /// `catch::decide` needs that a battle `View` does not carry.
+    catch_rate: u8,
+    battle_type: u8,
+    /// `wPlayerMonNumber` — which party slot is out.
+    active_slot: usize,
+    /// Every party member's **internal** species index, which is how
+    /// `catch::decide` answers "do we already hold one?".
+    party_species: Vec<u8>,
+    /// Every party member's current HP, in the game's own order — which is
+    /// what says who can be sent out when the one in front faints.
+    party_hps: Vec<u32>,
     kind: String,
     trust: String,
     text: String,
     selected: String,
     waiting: bool,
     cursor_row: i64,
+    /// `wCurrentMenuItem` and `wListScrollOffset`. The entry a list cursor is
+    /// on is the **sum**: `wCurrentMenuItem` is the row within the four
+    /// visible entries of a bag and stops at 3.
+    menu_index: usize,
+    menu_scroll: usize,
     /// `(item id, count)` of everything in the bag, in the game's own order.
     bag: Vec<(u8, u8)>,
     /// `(x, y, to_map)` of every door the observer can see on this map.
@@ -1214,10 +1584,22 @@ impl Snap {
                 s.lead_level = lead.u64_field("level").unwrap_or(0) as u32;
                 s.lead_hp = lead.u64_field("hp").unwrap_or(0) as u32;
                 s.lead_max_hp = lead.u64_field("max_hp").unwrap_or(1) as u32;
+                s.lead_status =
+                    lead.str_field("status").unwrap_or("").to_ascii_uppercase();
             }
             if let Some(b) = g.get("battle") {
                 s.battle = Some(b.str_field("kind").unwrap_or("trainer").to_string());
                 s.arena = terminalgb_plugin_agent::battle::View::parse(b);
+                s.catch_rate = b.u64_field("catch_rate").unwrap_or(0) as u8;
+                s.battle_type = b.u64_field("battle_type").unwrap_or(0) as u8;
+                s.active_slot = b.u64_field("active_slot").unwrap_or(0) as usize;
+            }
+            if let Some(a) = g.get("party").and_then(|p| p.as_array()) {
+                for m in a {
+                    s.party_species
+                        .push(m.u64_field("species").unwrap_or(0) as u8);
+                    s.party_hps.push(m.u64_field("hp").unwrap_or(0) as u32);
+                }
             }
             if let Some(b) = g.get("bag").and_then(|b| b.as_array()) {
                 for it in b {
@@ -1251,6 +1633,8 @@ impl Snap {
                 .and_then(|r| r.as_u64())
                 .map(|r| r as i64)
                 .unwrap_or(-1);
+            s.menu_index = sc.u64_field("menu_index").unwrap_or(0) as usize;
+            s.menu_scroll = sc.u64_field("menu_scroll").unwrap_or(0) as usize;
         }
         if let Some(a) = v.get("last_actions").and_then(|a| a.as_array()) {
             for o in a {
@@ -1388,6 +1772,14 @@ pub struct ChainDriver {
     /// that is what is happening right now.
     heal_route: HashMap<u8, MapPlan>,
     healing: bool,
+    /// The walk back from the Pokémon Center the cartridge puts you in after a
+    /// blackout, and whether that is what is happening right now. See
+    /// [`recover_route`] — **a blackout is a legal detour, not a loss.**
+    recover_route: HashMap<u8, MapPlan>,
+    recovering: bool,
+    /// The one place a leg's walk back re-enters a map it already routes over,
+    /// so the map alone cannot say when it is over. See [`recover_east_of`].
+    recover_east_of: Option<(u8, u8)>,
     /// Set when the battle policy declined a fight because the lead is too
     /// hurt, and cleared when the walk to the nurse begins. **The one place
     /// the solver learns the fight threshold rather than guessing at it.**
@@ -1400,10 +1792,55 @@ pub struct ChainDriver {
     /// line has been paid for. `None` on every other link, which is what keeps
     /// the counter out of the way of every screen that is not a shop counter.
     shopping: Option<ShopList>,
+    /// What this leg is prepared to spend a Poké Ball on. Empty on every leg
+    /// but the one that catches, and an empty list means `catch::decide` is
+    /// never even asked.
+    wants: &'static [terminalgb_plugin_agent::catch::Want],
+    /// How many the party held at the last decision, so a catch can be counted
+    /// where it lands rather than where a ball leaves the bag.
+    party_seen: usize,
+    /// What the driver is part-way through taking out of the bag in the
+    /// overworld, and how many attempts at one have been abandoned.
+    item_use: Option<ItemUse>,
+    item_failures: u32,
     pending: Option<String>,
     busy: bool,
     calls: u32,
 }
+
+/// A cure or a drink, held across the eight or so decisions the bag costs.
+///
+/// **Every Gen 1 item is used through the same five screens** — the start
+/// menu, the bag list, USE/TOSS, the party list, the message — so this is one
+/// state machine over the text rather than one per item, and what the item
+/// *is* only decides which line of the bag to stop on.
+#[derive(Debug, Clone)]
+struct ItemUse {
+    /// Item id, which is how the bag says the thing has been spent.
+    id: u8,
+    /// How many the bag held when this started. **The completion signal is
+    /// the count going down, not a message on screen**: the message is a
+    /// sentence about the item that varies by item and by outcome, and the
+    /// count is the fact the goal itself is read from.
+    had: u32,
+    /// Decisions spent so far, so a menu that will not answer is abandoned
+    /// rather than looped on.
+    tries: u32,
+    /// Said in the plan, so a trace names why the bag was opened at all.
+    why: &'static str,
+}
+
+/// How many decisions one trip through the bag may cost before it is given up
+/// on. Measured on a real counter: START, three cursor moves, A, A, A and four
+/// B presses is ten, so thirty is three times the honest cost and still a
+/// rounding error against a leg's 1,200-call ceiling.
+const ITEM_USE_BUDGET: u32 = 30;
+
+/// How many trips through the bag may be abandoned before the driver stops
+/// opening it on this leg. **Not one**: a single failure is as likely to be a
+/// swallowed press as a real refusal, and a leg that gives up on its own cure
+/// after one is a leg that dies of poison holding an antidote.
+const ITEM_USE_FAILURES: u32 = 3;
 
 /// A shopping list, worked one line at a time down the mart's own stock order.
 ///
@@ -1463,9 +1900,16 @@ impl ChainDriver {
             fight_wild: may_fight_wild(scenario),
             heal_route: heal_route(scenario),
             healing: false,
+            recover_route: recover_route(scenario),
+            recovering: false,
+            recover_east_of: recover_east_of(scenario),
             refused_a_fight: false,
             train_to: train_to(scenario),
             shopping: shopping_list(scenario),
+            wants: catch_wants(scenario),
+            party_seen: 0,
+            item_use: None,
+            item_failures: 0,
             pending: None,
             busy: false,
             calls: 0,
@@ -1553,6 +1997,24 @@ impl ChainDriver {
                 return plan;
             }
         }
+        // **A catch is counted where the party grows, never where a ball is
+        // thrown.** `AddPartyMon` is what writes `wPartyCount`, and a failed
+        // throw writes nothing — so this is the same rule the shop's
+        // "read the bag, never count the screen" is.
+        if s.in_game && s.party > self.party_seen {
+            if self.party_seen > 0 {
+                tally::CAUGHT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            self.party_seen = s.party;
+        }
+        // 2c. The bag, for the same reason and one screen further on: every
+        //     screen between START and "was cured of poison!" is a menu, and
+        //     `advance_text` would press A through all of them — which on the
+        //     start menu is the Pokédex and in the bag is whatever the cursor
+        //     happens to be on.
+        if let Some(plan) = self.use_item(s) {
+            return plan;
+        }
         // 3. A menu or a conversation. `advance_text` refuses to press A on the
         //    naming keyboard and says so, which is why that case is first.
         if s.kind == "naming-keyboard" {
@@ -1618,6 +2080,41 @@ impl ChainDriver {
         //    set by the policy itself, in `fight`, when it declines because
         //    the lead is too hurt; the flat half stays only as a floor for the
         //    case where the lead is hurt and nothing has attacked it yet.
+        //    **A BLACKOUT IS A LEGAL DETOUR, NOT A LOSS.** The party faints,
+        //    the cartridge puts the player in the last Pokémon Center whole,
+        //    and a person walks back and carries on — so the leg's goal is
+        //    still the destination and this is the walk. `party_hp == 0` is
+        //    the only signal there is; it is true for the handful of decisions
+        //    the blackout text takes, and by the time the player is standing
+        //    in the Centre the party is already healed, so the flag has to be
+        //    latched rather than recomputed.
+        if !self.recover_route.is_empty() {
+            if s.party > 0 && s.party_hp == 0 && !self.recovering {
+                self.recovering = true;
+                self.healing = false;
+                self.stage.clear();
+                self.idx = 0;
+                self.at_map = None;
+            } else if self.recovering && s.party_hp > 0 && self.recovered(s) {
+                self.recovering = false;
+                self.stage.clear();
+                self.idx = 0;
+                self.at_map = None;
+            }
+        }
+        //    **And before the walk, the bag.** A nurse is four map
+        //    transitions away and an antidote is eight decisions; on a leg
+        //    with no nurse at all — Route 3, Route 4's spur — the bag is the
+        //    only answer there is. Started only from the plain overworld, so
+        //    it can never interrupt a cutscene or a conversation.
+        if s.kind == "no-text" && self.item_failures < ITEM_USE_FAILURES {
+            if let Some(u) = self.want_item(s) {
+                self.item_use = Some(u);
+                if let Some(plan) = self.use_item(s) {
+                    return plan;
+                }
+            }
+        }
         if !self.heal_route.is_empty() && s.lead_max_hp > 0 {
             let hurt = self.refused_a_fight || s.lead_hp * 2 <= s.lead_max_hp;
             let full = s.lead_hp >= s.lead_max_hp;
@@ -1635,6 +2132,176 @@ impl ChainDriver {
             }
         }
         self.travel(s)
+    }
+
+    /// Take something out of the bag and use it, in the overworld.
+    ///
+    /// **The failure this exists for**: Gen 1 poison costs 1 HP every four
+    /// steps *outside* a battle and it faints, and nothing in this driver had
+    /// ever looked at a status byte. Measured on Route 3, seed 21 of the
+    /// certified link-19 pool: the lead is poisoned at decision 82 at 47 of 51
+    /// HP, walks 168 more decisions with five POTIONs in the bag, and dies at
+    /// (59,3) — two tiles from the map edge the goal is on the other side of.
+    /// `battle::decide` reaches for a healing item only when it is *doomed in
+    /// a battle*, and a wild encounter on Route 3 is refused before that rule
+    /// is reached, so the bag had never once been opened outside a fight.
+    ///
+    /// The five screens, decoded off a real cartridge with the MCP server
+    /// rather than from a guide (`wCurrentMenuItem` / `wListScrollOffset` read
+    /// beside each one):
+    ///
+    /// | screen | says | answer |
+    /// |---|---|---|
+    /// | the overworld | nothing | START |
+    /// | the start menu | `POKéDEX POKéMON ITEM <name> SAVE OPTION EXIT` | walk the cursor to ITEM, A |
+    /// | the bag | the item names and their counts | walk to the line, A |
+    /// | the sub-menu | `USE  TOSS` | A on USE |
+    /// | the party list | `Use item on which POKéMON?` | A — the chain carries one Pokémon and the cursor opens on it |
+    ///
+    /// and then B out of all of them, because A on the message box does not
+    /// leave it (measured — B does).
+    ///
+    /// **The bag line is read as `wListScrollOffset + wCurrentMenuItem`, and
+    /// both halves are needed.** Four items make the list scroll: the cursor
+    /// on the fourth reads scroll 1, item 2. And the list does *not* reopen at
+    /// the top — measured, it came back at scroll 1, item 2 — so the direction
+    /// to press has to be computed from where the cursor is against where the
+    /// item sits in the bag, never counted.
+    fn use_item(&mut self, s: &Snap) -> Option<String> {
+        let (id, had, why, tries) = {
+            let u = self.item_use.as_mut()?;
+            u.tries += 1;
+            (u.id, u.had, u.why, u.tries)
+        };
+        let spent = s.holds(id) < had;
+        if spent || tries > ITEM_USE_BUDGET {
+            // The overworld is where a trip through the bag ends, whichever
+            // way it went — so back out of whatever is still on screen first.
+            if s.kind == "no-text" {
+                use std::sync::atomic::Ordering::Relaxed;
+                if spent {
+                    let c = if id == item::ANTIDOTE {
+                        &tally::CURED
+                    } else {
+                        &tally::DRANK
+                    };
+                    c.fetch_add(1, Relaxed);
+                } else {
+                    self.item_failures += 1;
+                    tally::BAG_GAVE_UP.fetch_add(1, Relaxed);
+                }
+                self.item_use = None;
+                return None;
+            }
+            return Some(Plan::new("Put the bag away.").press("b", 1).finish());
+        }
+        if s.kind == "no-text" {
+            return Some(Plan::new(why).press("start", 1).finish());
+        }
+        // The party list. **An item is used ON somebody**, and the chain
+        // carries one Pokémon, so the cursor is already on it.
+        if s.said("USE ITEM ON WHICH") {
+            return Some(Plan::new("On the lead.").press("a", 1).finish());
+        }
+        // USE / TOSS, drawn over the bag list — so the list's own names are
+        // still on screen and only `TOSS` tells the two screens apart.
+        if s.said("TOSS") {
+            if s.selected.to_ascii_uppercase().contains("USE") {
+                return Some(Plan::new("Use it.").press("a", 1).finish());
+            }
+            return Some(Plan::new("Up to USE.").press("up", 1).finish());
+        }
+        // The start menu. **Which entries sit above ITEM is the test, not the
+        // player's name**: POKéDEX and POKéMON both read `POK` whatever the
+        // player is called, and everything below ITEM does not — which is what
+        // keeps this free of a table of the six preset names.
+        if s.said("SAVE") && s.said("OPTION") {
+            let sel = s.selected.to_ascii_uppercase();
+            if sel.contains("ITEM") {
+                return Some(Plan::new("Open the bag.").press("a", 1).finish());
+            }
+            let d = if sel.contains("POK") { "down" } else { "up" };
+            return Some(Plan::new("Towards ITEM.").press(d, 1).finish());
+        }
+        if s.kind == "menu" {
+            let at = s.menu_scroll + s.menu_index;
+            let want = s.bag.iter().position(|(i, _)| *i == id).unwrap_or(0);
+            let (say, key) = match at.cmp(&want) {
+                std::cmp::Ordering::Less => ("Down the bag.", "down"),
+                std::cmp::Ordering::Greater => ("Back up the bag.", "up"),
+                std::cmp::Ordering::Equal => (why, "a"),
+            };
+            return Some(Plan::new(say).press(key, 1).finish());
+        }
+        // The message the item printed. B, not A: A on "was cured of poison!"
+        // leaves the box exactly where it is — measured.
+        Some(Plan::new("Read it and close it.").press("b", 1).finish())
+    }
+
+    /// Is there something in the bag worth stopping to use?
+    ///
+    /// **Neither of these can fire before the mart link, and that is what
+    /// bounds the blast radius of the whole change.** The bag holds nothing
+    /// but the gym's TM34 until `18b-shop-in-pewter`, so on every link the
+    /// chain has already certified `holds` answers zero and this returns
+    /// `None` before it looks at anything else.
+    fn want_item(&mut self, s: &Snap) -> Option<ItemUse> {
+        if s.party == 0 || s.lead_max_hp == 0 || s.lead_hp == 0 {
+            return None;
+        }
+        // **Poison is the one condition that keeps costing after the battle is
+        // over**, and an ANTIDOTE cures it outright rather than buying steps
+        // against it — ¥100 in `ItemPrices` (file offset `0x4608`) against a
+        // POTION's ¥300 for twenty HP, which on Route 3 is eighty more steps
+        // of the same problem.
+        if s.lead_status == "PSN" && s.holds(item::ANTIDOTE) > 0 {
+            return Some(ItemUse {
+                id: item::ANTIDOTE,
+                had: s.holds(item::ANTIDOTE),
+                tries: 0,
+                why: "Poisoned — take the antidote.",
+            });
+        }
+        // A drink is not a cure; it is what a leg with no nurse on it has
+        // instead of the walk.
+        //
+        // **The rule is "spend a potion only when all of it lands", and that
+        // is a statement rather than a threshold.** Two thresholds were tried
+        // first and both measured as the dead band this chain has now opened
+        // three times — a fraction of maximum health is a number the lead can
+        // sit just above while walking into the fight that kills it. At a
+        // third, the Mt Moon B2F lead arrived at 30 of 55 and died at 22 with
+        // five POTIONs untouched; at a half it arrived at the *same* 30 of 55,
+        // because 30 is 54.5 % and the boundary is where a worn-down lead
+        // lives. Missing at least one potion's worth has no such boundary: it
+        // tops the lead up between fights, and the only thing it can waste is
+        // the part of a potion that would have overflowed, which is zero by
+        // construction.
+        //
+        // `refused_a_fight` is kept beside it because the shared policy's own
+        // "too hurt" is threat-relative — it weighs the lead against what is
+        // in front of it — and nothing out here can recompute that.
+        //
+        // Only where there is no nurse, so the two answers never compete for
+        // the same decision. On a leg with a heal route the walk is free and
+        // the bag is not.
+        if self.heal_route.is_empty()
+            && (self.refused_a_fight
+                || s.lead_max_hp.saturating_sub(s.lead_hp) >= item::POTION_HEAL)
+            && s.holds(item::POTION) > 0
+        {
+            // **Cleared here, or one refusal drinks the whole bag.** The nurse
+            // walk clears it when the walk begins; with no nurse this is the
+            // walk, so this is where it is spent.
+            self.refused_a_fight = false;
+            return Some(ItemUse {
+                id: item::POTION,
+                had: s.holds(item::POTION),
+                tries: 0,
+                why: "Hurt with no nurse in reach — drink a potion.",
+            });
+        }
+        None
     }
 
     /// The Pewter Mart's counter, as a state machine over the screen text.
@@ -1869,9 +2536,32 @@ impl ChainDriver {
         let mut view = view.clone();
         view.stat_turns = self.tally.stat_turns;
         let view = &view;
+        // **The catch is asked first, and only on a leg that wants
+        // something.** A ball is a *turn*, exactly like a move or an item, so
+        // it belongs in the same once-per-turn decision the battle policy's
+        // answer is cached in — and it is expressed as `Action::Item` because
+        // that is what it is: choose ITEM, choose the ball, press A. The menus
+        // below then need no new case at all. The one difference from a POTION
+        // is that a ball is thrown *at* the opponent rather than used on
+        // somebody, so the party list the item path handles never appears.
+        let wants = self.wild_wants(s);
         let action = self
             .plan_this_turn
-            .get_or_insert_with(|| terminalgb_plugin_agent::battle::decide(view, &intent))
+            .get_or_insert_with(|| {
+                if let Some(ball) = wants {
+                    // **Counted here and nowhere else.** This closure runs
+                    // once per turn — `plan_this_turn` caches the answer
+                    // through the several decisions the menus take — whereas
+                    // the verdict above is asked on every decision. Counting
+                    // it there reported 571 throws for 56 catches.
+                    tally::THROWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return terminalgb_plugin_agent::battle::Action::Item {
+                        id: ball.0,
+                        why: ball.1,
+                    };
+                }
+                terminalgb_plugin_agent::battle::decide(view, &intent)
+            })
             .clone();
 
         // The party list, reached either on purpose (a switch) or by a
@@ -1881,15 +2571,82 @@ impl ChainDriver {
         // on which POKéMON?" — and with only the first matched the item's
         // second menu fell through to the bag navigation, which pressed `down`
         // at a party list for the rest of the battle.
-        if s.said("CHOOSE A POK") || s.said("USE ITEM ON WHICH") {
-            if let Action::Switch { to, why } = action {
-                return self.menu_to(view.menu_item, to as u8, why, None);
+        // **"Will BLUE change POKéMON?" — a screen that only exists once the
+        // chain has a bench, and it cost the first run with one.** Gen 1
+        // offers a free switch whenever a *trainer's* Pokémon faints; with one
+        // Pokémon it never appears, so nothing here had ever seen it. The
+        // driver read it as the move list, pressed keys at YES/NO for ever,
+        // and fifteen of sixty attempts spent their whole call budget in one
+        // battle without a single HP moving. B is NO, and NO is the answer:
+        // the switch the policy actually wants is `Action::Switch`, which it
+        // asks for through the PKMN menu on its own turn.
+        if s.said("CHANGE POK") {
+            return self.one("Keep the one that is out.", "b");
+        }
+        // **`SWITCH / STATS / CANCEL` — the submenu A on a party member opens,
+        // and the fourth screen the chain had never seen with one Pokémon.**
+        // It is drawn *over* the party list, so `Choose a POKéMON.` is still
+        // on screen and only `STATS` tells the two apart. Unhandled, the
+        // driver pressed A on the bench, read the submenu as the list it had
+        // just left, pressed B back out of it, and alternated for the rest of
+        // the run.
+        if s.said("STATS") && s.said("SWITCH") {
+            if s.selected.to_ascii_uppercase().contains("SWITCH") {
+                return self.one("Send it out.", "a");
             }
-            // **An item is used ON somebody**, so the party list is the second
-            // half of `Action::Item` rather than a mispress. The lead is the
-            // one that is hurt and the chain carries no bench, so it is row 0.
+            return self.one("Up to SWITCH.", "up");
+        }
+        // **"Bring out which POKéMON?" — the forced replacement after a
+        // faint, and a THIRD wording for the party list.** Gen 1 has three:
+        // `Choose a POKéMON.` for a voluntary switch, `Use item on which
+        // POKéMON?` for an item, and this one, which only exists once there is
+        // a bench to bring out. Unmatched, it fell through to the bag
+        // navigation with whatever the policy had last decided, and the cursor
+        // walked up and down a two-entry list for the rest of the run —
+        // measured, five of sixty attempts, 900 decisions each, not one HP
+        // moving. It is not a menu B can leave: somebody has to be chosen, and
+        // the answer is the first party slot with any HP left.
+        if s.said("BRING OUT WHICH")
+            || s.arena.as_ref().is_some_and(|v| v.ours.hp == 0)
+                && (s.said("CHOOSE A POK") || s.said("USE ITEM ON WHICH"))
+        {
+            let to = s.party_hps.iter().position(|h| *h > 0).unwrap_or(0) as u8;
+            return self.menu_to(
+                view.menu_item,
+                to,
+                "the one in front is out — send the next one",
+                None,
+            );
+        }
+        if s.said("CHOOSE A POK") || s.said("USE ITEM ON WHICH") {
+            // **A switch goes to somebody who is not already out.**
+            // `battle::decide` names slot 1 because that is the bench in a
+            // party of two, and once the bench *is* what is fighting, Gen 1
+            // answers with `ZUBAT is already out!`, spends no turn, and the
+            // policy asks again: measured, 1,800 decisions of it. Whoever is
+            // in front is `wPlayerMonNumber`, so the answer is the first slot
+            // with HP that is not that one — and if there is nobody, the
+            // switch is not available and B backs out.
+            if let Action::Switch { why, .. } = action {
+                if let Some(to) = s
+                    .party_hps
+                    .iter()
+                    .enumerate()
+                    .position(|(i, h)| *h > 0 && i != s.active_slot)
+                {
+                    return self.menu_to(view.menu_item, to as u8, why, None);
+                }
+                return self.one("Nobody else can come out.", "b");
+            }
+            // **An item is used ON somebody, and that somebody is whoever is
+            // out** — the first party slot with any HP left. Row 0 was right
+            // for the whole of this chain's life and stopped being right the
+            // day it grew a bench: with a fainted lead in slot 0 the driver
+            // offered it a POTION, the cartridge answered "It won't have any
+            // effect.", and the two alternated for the rest of the run.
             if let Action::Item { why, .. } = action {
-                return self.menu_to(view.menu_item, 0, why, None);
+                let to = s.party_hps.iter().position(|h| *h > 0).unwrap_or(0) as u8;
+                return self.menu_to(view.menu_item, to, why, None);
             }
             return self.one("Back out of the party list.", "b");
         }
@@ -1995,6 +2752,40 @@ impl ChainDriver {
         self.one(&format!("towards {want}"), key)
     }
 
+    /// Ask the catch policy whether this turn should be a Poké Ball.
+    ///
+    /// **Returns `None` the moment the leg wants nothing**, so every leg but
+    /// the catching one pays one slice comparison and never builds a
+    /// situation. The verdict is the shared
+    /// [`terminalgb_plugin_agent::catch`] policy's — the same one
+    /// `docs/gen1/catching.md` measured against the cartridge at 251 throws —
+    /// and the driver only turns `Throw` into keypresses.
+    fn wild_wants(&mut self, s: &Snap) -> Option<(u8, &'static str)> {
+        use terminalgb_plugin_agent::catch;
+        if self.wants.is_empty() {
+            return None;
+        }
+        let view = s.arena.as_ref()?;
+        let kind = match s.battle.as_deref() {
+            Some("wild") => terminalgb_plugin_agent::battlekind::ScreenVerdict::Wild,
+            Some(_) => terminalgb_plugin_agent::battlekind::ScreenVerdict::Trainer,
+            None => terminalgb_plugin_agent::battlekind::ScreenVerdict::Unknown,
+        };
+        let sit = catch::Situation::from_view(
+            view,
+            kind,
+            Some(terminalgb_plugin_trainer::gen1::BattleType::from_flag(
+                s.battle_type,
+            )),
+            s.catch_rate,
+            &s.party_species,
+        );
+        match catch::decide(&sit, self.wants) {
+            catch::Verdict::Throw(t) => Some((t.item, t.why)),
+            _ => None,
+        }
+    }
+
     /// Step a menu cursor one row towards `want`, or press A when it is there.
     ///
     /// `wCurrentMenuItem` is the live index, so this cannot drift: a swallowed
@@ -2011,6 +2802,38 @@ impl ChainDriver {
                 self.one(&say, "a")
             }
         }
+    }
+
+    /// Which of the three route tables is in force.
+    ///
+    /// **The walk back outranks the walk to the nurse**, because after a
+    /// blackout the party is already whole and the only thing left to do is
+    /// get back.
+    fn table(&self) -> &HashMap<u8, MapPlan> {
+        if self.recovering {
+            &self.recover_route
+        } else if self.healing {
+            &self.heal_route
+        } else {
+            &self.route
+        }
+    }
+
+    /// Is the walk back over?
+    ///
+    /// **A map the leg routes over and the walk back does not** — which is
+    /// what keeps the two tables from arguing about the same decision, and is
+    /// why [`recover_route`] keeps them disjoint wherever the geography lets
+    /// it. Route 4 is the one place it cannot: its western and eastern mouths
+    /// are the same map and not connected to each other, so link 25 names an
+    /// `x` as well.
+    fn recovered(&self, s: &Snap) -> bool {
+        if let Some((map, x)) = self.recover_east_of {
+            if s.map == map && s.x >= x {
+                return true;
+            }
+        }
+        self.route.contains_key(&s.map) && !self.recover_route.contains_key(&s.map)
     }
 
     /// Follow the route on the current map.
@@ -2030,11 +2853,7 @@ impl ChainDriver {
             // and the solver healed, walked out, and went straight back in,
             // for 469 decisions.
             if let Some(prev) = self.at_map {
-                let table = if self.healing {
-                    &self.heal_route
-                } else {
-                    &self.route
-                };
+                let table = self.table();
                 let last_leg = table
                     .get(&prev)
                     .and_then(|st| {
@@ -2061,11 +2880,7 @@ impl ChainDriver {
             // could not get back, 74 times in 300.
             return Plan::new("Let the new map settle.").wait(24).finish();
         }
-        let table = if self.healing {
-            &self.heal_route
-        } else {
-            &self.route
-        };
+        let table = self.table();
         let Some(stages) = table.get(&s.map).cloned() else {
             return self.off_route(s);
         };
@@ -2309,6 +3124,14 @@ mod tally {
         TURNS,
         STAT_TURNS,
         UNRESOLVED,
+        // The bag, outside a battle. `ITEMS` above counts what
+        // `battle::decide` reached for; these count what the *walk* did,
+        // which is a different question and until now had the answer "never".
+        CURED,
+        DRANK,
+        BAG_GAVE_UP,
+        THROWN,
+        CAUGHT,
     );
 
     pub fn bump(c: &AtomicU64, by: u64) {
@@ -2316,6 +3139,31 @@ mod tally {
     }
     pub fn get(c: &AtomicU64) -> u64 {
         c.load(Relaxed)
+    }
+
+    /// The bag, outside a battle — printed even when nothing fought, because
+    /// a leg whose whole failure mode is a walk has no battles to report it
+    /// against.
+    pub fn bag_report() -> Option<String> {
+        let (c, d, g) = (get(&CURED), get(&DRANK), get(&BAG_GAVE_UP));
+        let (t, k) = (get(&THROWN), get(&CAUGHT));
+        if c + d + g + t == 0 {
+            return None;
+        }
+        // **A catch is only ever *seen* here on a leg that keeps playing
+        // afterwards.** On the catching leg itself the goal is `party>=2`, so
+        // the run ends on the sampling tick the party grows and the driver is
+        // never asked again — which is why the count is printed only when it
+        // is non-zero rather than as a nought-per-cent success rate.
+        let balls = match (t, k) {
+            (0, _) => String::new(),
+            (t, 0) => format!("; {t} ball(s) thrown"),
+            (t, k) => format!("; {t} ball(s) thrown, {k} catch(es) seen land"),
+        };
+        Some(format!(
+            "the bag, in the overworld: {c} cure(s), {d} drink(s), \
+             {g} trip(s) through it abandoned{balls}"
+        ))
     }
 
     /// One line, printed beside the pass rate.
@@ -3223,6 +4071,12 @@ fn play_with(
         // The snapshot carries `frame_png` when this is set, which is the
         // whole of what a screen-only player needs from this side.
         frame_capture: frames_dir.map(|d| d.to_path_buf()),
+        // **The diagnostic that reads what the driver was actually handed.**
+        // Every request and reply, as NDJSON, which is the only place the
+        // party's `status` field — and so a poisoned lead — is visible from
+        // outside. Off unless asked for; and `corpus` runs sixteen workers
+        // into one path, so it is `solve` this is for.
+        log: std::env::var("GB_AGENT_LOG").ok().map(PathBuf::from),
         ..Config::default()
     };
     gb.add_plugin(Box::new(AgentPlugin::new(driver(&s.name), cfg)))
@@ -3469,6 +4323,9 @@ fn cmd_solve(a: &Args) {
         screens_cfg(a),
     );
     report(&o, a.seed);
+    if let Some(b) = tally::bag_report() {
+        println!("  {b}");
+    }
     if let Some(b) = tally::report() {
         println!("{b}");
     }
@@ -3815,6 +4672,9 @@ fn cmd_corpus(a: &Args) {
     }
     // How the battles inside those episodes went. A link can pass while the
     // battle policy is quietly awful; see `docs/agent/battle-policy.md`.
+    if let Some(b) = tally::bag_report() {
+        println!("  {b}");
+    }
     if let Some(b) = tally::report() {
         println!("{b}");
     }

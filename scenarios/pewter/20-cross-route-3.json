@@ -6,25 +6,24 @@
   "goal": [
     "map=0x0F"
   ],
-  "failure": [
-    "party_hp=0"
-  ],
+  "failure": [],
   "rules": [
     "no_memory_writes",
     "battle decide",
     "require party>=1",
     "require badges>=1",
-    "max_calls 1200",
-    "max_wall_seconds 1800"
+    "max_calls 2000",
+    "max_wall_seconds 2400"
   ],
   "knowledge": [
     "atlas",
     "guidance"
   ],
   "guidance": "guidance/20-cross-route-3.json",
-  "timeout_frames": 400000,
+  "timeout_frames": 700000,
   "evidence": [
     "map=0x0F - wCurMap $D35E. ROUTE_4 is const index 15, and Route 3's own header says so: map $0E's connection byte is 0b1010 and its two blocks name maps $0F north and $02 west, in the cartridge's north/south/west/east order. The same header gives the coordinate map - the north connection's alignment bytes are yalign 17 and xalign 206 (= -50), and Route 4's south connection back is yalign 0, xalign 50, which is the same statement read from the other end - so leaving Route 3 at (59,0) arrives on Route 4 at (9,17).",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, WHICH IS WHY party_hp=0 IS NOT ON THE FAILURE LIST. That is how the cartridge works and how a person plays it: HandlePlayerBlackOut heals the party and SpecialWarpIn puts the player on wLastBlackoutMap at the tile in front of that Pokemon Center's door, and the player walks back. Measured on Mt Moon B2F - both party members reach 0 HP at decision 217 and the next observation is Route 4 (11,6) at full health, one tile below the Mt Moon Pokemon Center's door at (11,5). So the goal stays the destination, the walk back is in the solver's recover_route table, and the call budget carries it. What a blackout costs is time, which is exactly what it costs a person.",
     "ROUTE 3 IS ENTERED AT (0,10) AND THAT IS DERIVED, NOT OBSERVED FROM A RUN. Pewter's east connection carries yalign 248 (= -8) and xalign 0, so a player stepping east off Pewter's (39,18) arrives at Route 3 x=0, y=18-8=10. Route 3's own west connection says the same in reverse: yalign 8, xalign 39.",
     "THREE OF THE EIGHT TRAINERS CANNOT BE AVOIDED AT ANY SIGHT RANGE, measured on the cartridge's walkability grid the way Viridian Forest's one was: block a single trainer's facing cone, ask whether the west edge still connects to the north edge, and the answer is no for the BUG CATCHER at (10,6) facing right (opponent 202 roster 4: CATERPIE 10, WEEDLE 10, CATERPIE 10), the YOUNGSTER at (14,4) facing down (opponent 201 roster 1: RATTATA 11, EKANS 11) from range 2, and the BUG CATCHER at (24,6) facing right (opponent 202 roster 6: CATERPIE 11, METAPOD 11) from range 3. Blocking all eight cones severs the map at every range, so at least one fight was compulsory before any of them was named individually.",
     "The geometry behind that: rows 8-13 are cut into three pockets by the solid columns x=17 and x=23, row 7 is a wall whose only gaps are x=11, 27, 37, 49 and 59, and row 5 is walled at x=28-33 so the upper shelf cannot carry the player past x=27 either. The ascent at x=11 is the only way out of the west pocket and (10,6) faces straight along it; the crossing of the shelf at (14,5)/(14,6) is the only way east past the YOUNGSTER's body; the descent at x=25-27 is the only way back onto the floor and (24,6) faces along all three of its tiles.",

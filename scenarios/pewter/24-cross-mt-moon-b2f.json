@@ -1,0 +1,32 @@
+{
+  "schema": "gbscenario/1",
+  "name": "24-cross-mt-moon-b2f",
+  "objective": "Across Mt Moon B2F and out of the mountain's eastern mouth - which means taking one of the two fossils, because the pair of them stand in the only doorway to the corridor the exit ladder is on.",
+  "start_state": "states/23.gbss",
+  "goal": [
+    "map=0x0F",
+    "x>=20"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 1800",
+    "max_wall_seconds 2400"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/24-cross-mt-moon-b2f.json",
+  "timeout_frames": 700000,
+  "evidence": [
+    "map=0x0F AND x>=20 - wCurMap $D35E and wXCoord $D362. Being back on B1F is not enough and neither is being on Route 4: three of B2F's four warps lead back to B1F pockets that are not the exit, and Route 4's western mouth at (18,5) is the one the chain went IN by. The exit pocket is B1F x=20-27 rows 2-3, entered only through map $3D's warp[3] at (5,7) which leads to map $3C warp[6] at (23,3); its own warp[7] at (27,3) leads to map $FF - Route 4 - at (24,5). x=19-23 is solid on Route 4's row 5 and x=20-23 on rows 6, 7 and 8, so x>=20 is the eastern mouth and nothing else on that map is.",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, WHICH IS WHY party_hp=0 IS NOT ON THE FAILURE LIST. That is how the cartridge works and how a person plays it: HandlePlayerBlackOut heals the party and SpecialWarpIn puts the player on wLastBlackoutMap at the tile in front of that Pokemon Center's door, and the player walks back. Measured on Mt Moon B2F - both party members reach 0 HP at decision 217 and the next observation is Route 4 (11,6) at full health, one tile below the Mt Moon Pokemon Center's door at (11,5). So the goal stays the destination, the walk back is in the solver's recover_route table, and the call budget carries it. What a blackout costs is time, which is exactly what it costs a person.",
+    "TAKING A FOSSIL IS COMPULSORY, AND THAT IS GEOMETRY RATHER THAN A SIDE QUEST. Rows 2-4 of B2F hold the corridor that leads to the (5,7) ladder, and the only opening between them and the rest of the floor is (12,5)/(13,5) - row 5 is solid from x=4 to x=11 and from x=14 to x=19. The two tiles below that opening, (12,6) and (13,6), are the two fossil objects. A Gen 1 sprite is solid (IsSpriteInFrontOfPlayer), so with both standing there is no path from the ladder at (21,17) to the ladder at (5,7) at all; with either one gone there is a 109-step one. Measured by blocking every object tile on the floor and asking. It is also the reason the cartridge takes the other fossil away when you pick one up: a fossil left behind would wall the mountain.",
+    "TWO FIGHTS ARE FORCED AND BOTH ARE ENGAGED FROM A TILE THE TRAINER IS ALREADY BESIDE. The super nerd at (12,8) faces right, and column 13 is the only climb from row 18 to row 7, so (13,8) is unavoidable - but he is already adjacent to it and TrainerWalkUpToPlayer leaves him where he is. The rocket at (11,16) faces down column 11, and rows 16, 17 and 18 between x=7 and x=17 are the only link between the x=7-11 corridor and the x=12-17 climb, so his line cannot be avoided either; the route meets him along row 18, at range two, where his body lands on (11,17) and off the row.",
+    "AND IT CLIMBS COLUMN 8 RATHER THAN COLUMN 11 TO GET THERE. Column 11 from row 31 enters his cone at (11,24), eight tiles down, and parks his body at (11,23) - in the middle of the corridor the route is on. Column 8 is clear the whole way and joins row 18 west of him."
+  ]
+}

@@ -8,28 +8,31 @@
     "party_missing_hp=0",
     "map=0x44"
   ],
-  "failure": [
-    "party_hp=0"
-  ],
+  "failure": [],
   "rules": [
     "no_memory_writes",
     "battle flee",
     "require party>=1",
     "require badges>=1",
-    "max_calls 300",
-    "max_wall_seconds 900"
+    "max_calls 1600",
+    "max_wall_seconds 2400"
   ],
   "knowledge": [
     "atlas",
     "guidance"
   ],
   "guidance": "guidance/21-heal-at-mt-moon.json",
-  "timeout_frames": 150000,
+  "timeout_frames": 700000,
   "watch": [
-    { "name": "last_blackout_map", "addr": "0xD719", "len": 1 }
+    {
+      "name": "last_blackout_map",
+      "addr": "0xD719",
+      "len": 1
+    }
   ],
   "evidence": [
     "map=0x44 - wCurMap $D35E. MT_MOON_POKECENTER is const index 68, and Route 4's own object data names it: map $0F's warp[0] at (11,5) leads to map $44 warp[0], and map $44 decodes as tileset 6, 14x8 blocks with warps at (3,7) and (4,7) back to $FF - the same building as Viridian's $29 and Pewter's $3A, tile for tile, which is why one waypoint list serves all three.",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, WHICH IS WHY party_hp=0 IS NOT ON THE FAILURE LIST. That is how the cartridge works and how a person plays it: HandlePlayerBlackOut heals the party and SpecialWarpIn puts the player on wLastBlackoutMap at the tile in front of that Pokemon Center's door, and the player walks back. Measured on Mt Moon B2F - both party members reach 0 HP at decision 217 and the next observation is Route 4 (11,6) at full health, one tile below the Mt Moon Pokemon Center's door at (11,5). So the goal stays the destination, the walk back is in the solver's recover_route table, and the call budget carries it. What a blackout costs is time, which is exactly what it costs a person.",
     "watch:last_blackout_map=0x0F - wLastBlackoutMap $D719, and THE VALUE IS MEASURED RATHER THAN ASSUMED, the same way link 16's $02 was. On the certified link-20 exit pool it reads $02 (Pewter City, where the chain last healed) on every one of 598 states; on this link's own exits it reads $0F on every one of 120. So the byte holds the map the Centre was entered from - Route 4 - and not the Centre's own $44, exactly as Pewter's holds the town and not $3A. The cartridge writes it in DisplayPokemonCenterDialogue's call to SetLastBlackoutMap.",
     "party_missing_hp=0 AND map=0x44 are both needed beside the flip, for the reasons link 16 measured on the same building: $D719 is written at the START of the nurse's dialogue, before HealParty runs, so the flip alone proves the conversation began rather than that the party is whole; and finishing INSIDE the building is what forces anyone hurt through the nurse instead of being satisfied by walking past the door.",
     "THE ENTRY POINT IS (9,17) ON ROUTE 4 AND IS DERIVED BEFORE IT IS OBSERVED. Route 3's north connection carries yalign 17 and xalign 206 (= -50), so leaving Route 3 at (59,0) arrives at Route 4 (9,17); measured on all 598 link-20 exits, x=0x09 y=0x11. Route 4's own south connection says the same in reverse, yalign 0 and xalign 50.",

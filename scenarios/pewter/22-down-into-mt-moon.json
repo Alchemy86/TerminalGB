@@ -1,33 +1,34 @@
 {
   "schema": "gbscenario/1",
   "name": "22-down-into-mt-moon",
-  "objective": "Out of the Mt Moon Pokemon Center, into the mountain's west mouth, across the first floor and down the ladder to B1F. The goal is B1F rather than the cave mouth because arriving on 1F is not a milestone: which of its three ladders is taken decides the whole rest of the crossing.",
+  "objective": "Out of the Mt Moon Pokemon Center, into the mountain's west mouth, across the first floor and down the (5,5) ladder to B1F. The goal is B1F rather than the cave mouth because arriving on 1F is not a milestone: which of its three ladders is taken decides the whole rest of the crossing, and only one of the three leads anywhere.",
   "start_state": "states/21.gbss",
   "goal": [
     "map=0x3C"
   ],
-  "failure": [
-    "party_hp=0"
-  ],
+  "failure": [],
   "rules": [
     "no_memory_writes",
     "battle decide",
     "require party>=1",
     "require badges>=1",
-    "max_calls 900",
-    "max_wall_seconds 1800"
+    "max_calls 1400",
+    "max_wall_seconds 2400"
   ],
   "knowledge": [
     "atlas",
     "guidance"
   ],
   "guidance": "guidance/22-down-into-mt-moon.json",
-  "timeout_frames": 400000,
+  "timeout_frames": 600000,
   "evidence": [
-    "map=0x3C - wCurMap $D35E. MT_MOON_B1F is const index 60, and the warp graph read out of the maps' own object data names it: Route 4's warp[1] at (18,5) leads to map $3B warp[0] at (14,35), and map $3B's warp[3] at (17,11) leads to map $3C warp[2] at (25,9).",
-    "THE THREE LADDERS DOWN ARE NOT INTERCHANGEABLE, which is why the route names one. Map $3B's warps [2],[3],[4] at (5,5), (17,11) and (25,15) land on map $3C at (5,5), (25,9) and (25,15), and those three tiles are in three pockets of B1F that do not connect to each other on foot: x=4-7 rows 4-17 plus row 16-17 out to x=21; x=14-25 rows 8-11; and x=24-27 rows 14-27 plus row 26-27 back to x=10. The exit from the mountain, warp[7] at (27,3), is in a FOURTH pocket - x=20-27 rows 2-3 - which no 1F ladder reaches at all and which is entered only from B2F, through B1F's warp[6] at (23,3). So every crossing of Mt Moon is 1F to B1F to B2F and back up to B1F.",
-    "This ladder is the shortest of the three by breadth-first path over the cartridge's own walkability grid: 40 steps from the entrance against 53 for (5,5) and 41 for (25,15), and its B1F pocket's own way down to B2F - warp[1] at (17,11) - is 10 steps from where it lands, against 28 and 24 for the other two.",
+    "map=0x3C - wCurMap $D35E. MT_MOON_B1F is const index 60, and the warp graph read out of the maps' own object data names it: Route 4's warp[1] at (18,5) leads to map $3B warp[0] at (14,35), and map $3B's warp[2] at (5,5) leads to map $3C warp[0] at (5,5).",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, WHICH IS WHY party_hp=0 IS NOT ON THE FAILURE LIST. That is how the cartridge works and how a person plays it: HandlePlayerBlackOut heals the party and SpecialWarpIn puts the player on wLastBlackoutMap at the tile in front of that Pokemon Center's door, and the player walks back. Measured on Mt Moon B2F - both party members reach 0 HP at decision 217 and the next observation is Route 4 (11,6) at full health, one tile below the Mt Moon Pokemon Center's door at (11,5). So the goal stays the destination, the walk back is in the solver's recover_route table, and the call budget carries it. What a blackout costs is time, which is exactly what it costs a person.",
+    "ONLY ONE OF THE THREE LADDERS LEADS ANYWHERE, AND THE ROUTE USED TO TAKE ONE OF THE OTHER TWO. Map $3B's warps [2],[3],[4] at (5,5), (17,11) and (25,15) land on B1F at (5,5), (25,9) and (25,15), and those are three pockets of B1F that do not connect to each other on foot. Each pocket also holds one ladder DOWN to B2F, and that is what separates them: (5,5)'s pocket holds (21,17), which lands in B2F's big 452-tile pocket - the one that also holds B2F's (5,7) ladder up to B1F (23,3), which is the fourth B1F pocket and the only one with a way out of the mountain (warp[7] at (27,3), to map $FF = Route 4). The other two pockets' ladders land in B2F pockets of 69 and 94 tiles whose ONLY warp is the one back, so from either of them the way out is back up to 1F, across it to (5,5), and down again. Measured by walking the warp graph across all four maps; the previous version of this route took (17,11) and left the chain a whole extra crossing of 1F from the exit.",
     "THE WALKABILITY GRID NEEDED A SECOND TABLE BEFORE THIS ROUTE COULD BE DRAWN AT ALL. Gen 1 keeps TilePairCollisionsLand beside each tileset's collision list: three-byte records of (tileset, tile, tile), terminated by $FF, naming pairs that are each walkable on their own and that the game refuses to let you step between - CheckForTilePairCollisions in home/overworld.asm reads it. Its first record is CAVERN, $20, $05, found in this cartridge at file offset 0xC7E by that record's own bytes, which occur exactly once. Mt Moon 1F's one-tile corridor at x=9 is $05 and the floor beside it is $20, so a grid built from the collision list alone offers a route straight through it: measured, 53 of 60 attempts stuck within four tiles of it, the solver pressing left into a wall. Viridian Forest's tileset has six entries of its own, so any cave or forest route drawn here needs this table.",
-    "The route turns north at x=31 rather than x=30 because the LASS at (30,4) faces down and her cone runs along column 30: a walker that climbs it is stopped inside it, and TrainerWalkUpToPlayer then parks her body on the tile above, sealing the climb. One tile east and she is engaged from row 7 or row 10 instead and parks on a column neither leg uses - the same rule link 20's row-4 crossing is the fourth instance of."
+    "EXACTLY ONE FIGHT ON THIS FLOOR IS FORCED AND IT IS THE YOUNGSTER AT (12,16). Measured the way Route 3's three were, on the cartridge's own walkability grid: block one trainer's facing cone and ask whether the entrance at (14,35) still connects to the (5,5) ladder. Rows 13-15 wall off x=12 and x=13 and x=18 walls off rows 16-18, so the only way west into the room the ladder is in is row 16 between x=13 and x=17 - which is exactly his line, since he faces right. Blocking any single other cone leaves a path; blocking his does not.",
+    "THE ROUTE DROPS TO ROW 17 THE MOMENT THAT FIGHT IS OVER, because his body lands on row 16. Seen at (14,16) at range two, TrainerWalkUpToPlayer puts him on (13,16) - the next tile of the row-16 run west. Row 17 runs clear from x=1 to x=17 and is one step down. That is the fifth instance of the rule links 04, 05, 08 and 20 each paid for: a waypoint a defeated trainer can stand on is a waypoint that stops existing.",
+    "AND THE LADDER IS REACHED WITHOUT FIGHTING THE TRAINER STANDING UNDER IT. The trainer at (5,6) faces down, so his line is column 5 below him; the ladder at (5,5) is the tile ABOVE him and outside it. Climbing column 6 to (6,5) and stepping left onto (5,5) never enters column 5 at all.",
+    "A WARP TILE IS NOT AN OBSTACLE A WALKABILITY GRID KNOWS ABOUT, AND ROW 15 CARRIES ONE. The first version of this route ran along row 15 from x=21 to x=31, which passes (25,15) - the third ladder - and stepping on a warp is taking it: sixty of sixty attempts arrived on B1F at (25,15), in the wrong pocket, with this link's own map=0x3C goal perfectly satisfied and the next link stuck against a wall from its first decision. The route steps up to row 14 at x=24 to pass it, and the search that draws these lists now blocks every warp on the map except the one it is aiming at."
   ]
 }

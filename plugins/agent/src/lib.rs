@@ -783,6 +783,10 @@ impl AgentPlugin {
             for m in &game.party {
                 w.begin_obj();
                 w.str_field("name", &m.nickname);
+                // The **internal** species index, which is what
+                // `catch::decide` compares a wild Pokémon against to answer
+                // "do we already hold one?".
+                w.num_field("species", m.species as f64);
                 w.num_field("level", m.level as f64);
                 w.num_field("hp", m.hp as f64);
                 w.num_field("max_hp", m.max_hp as f64);
@@ -801,9 +805,20 @@ impl AgentPlugin {
                         _ => "trainer",
                     },
                 );
+                // The two facts a catch decision needs and a battle `View`
+                // does not carry: the rate the ball routine actually reads
+                // (not the species' base rate) and which kind of wild battle
+                // this is, since the old man's tutorial keeps nothing.
+                // Which party slot is out — the only exact answer to "who is
+                // in front", and what stops a switch being asked for the
+                // Pokémon that is already fighting.
+                w.num_field("active_slot", game.active_slot as f64);
+                w.num_field("catch_rate", game.catch_rate as f64);
+                w.num_field("battle_type", game.battle_type as f64);
                 if let Some(o) = &game.opponent {
                     w.obj_field("opponent");
                     w.str_field("name", &o.nickname);
+                    w.num_field("species", o.species as f64);
                     w.num_field("level", o.level as f64);
                     w.num_field("hp", o.hp as f64);
                     w.num_field("max_hp", o.max_hp as f64);
@@ -858,6 +873,15 @@ impl AgentPlugin {
         if let Some(c) = screen.cursor_col {
             w.num_field("menu_cursor_col", c as f64);
         }
+        // **The cursor as the cartridge keeps it, beside the row it is drawn
+        // on.** A row is a screen fact and cannot be compared with a position
+        // in the bag; `wCurrentMenuItem` can, and `wListScrollOffset` is the
+        // other half of it once a list is longer than its window. Both are
+        // read every decision — the battle `View` carried the item alone, and
+        // the bag, the start menu and a shop counter are all menus outside a
+        // battle. Additive to the wire.
+        w.num_field("menu_index", game.menu_index as f64);
+        w.num_field("menu_scroll", game.menu_scroll as f64);
         w.end_obj();
 
         // What the last plan actually achieved. This is what makes an agent

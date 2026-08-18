@@ -1,0 +1,29 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "23-down-to-mt-moon-b2f",
+  "question": "Across Mt Moon B1F's first pocket to the ladder down, throwing a Poke Ball on the way at anything worth keeping. No trainer stands in this pocket, so what it tests is whether a player can find one ladder among four unconnected pockets.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/23-down-to-mt-moon-b2f.json",
+  "entry_pool": "target/cert2/22-down-into-mt-moon/exits",
+  "runs": 12,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [],
+  "arms": [
+    {
+      "name": "teacher",
+      "player": "expert"
+    },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    },
+    {
+      "name": "random",
+      "player": "random",
+      "seed_base": 2654435769
+    }
+  ]
+}
