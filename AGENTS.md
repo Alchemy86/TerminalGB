@@ -10259,18 +10259,36 @@ clock**; the render is ~20 min and the encode ~1.
 ## The path-arrow map — one arrow per walked tile (`tools/pewter-chain/path_arrows.py`)
 
 **Reader-facing page: [`docs/agent/path-arrows.md`](docs/agent/path-arrows.md).** A *movement
-map* over PixelGB's atlas: every tile the swarm ever walked, as a directional arrow, coloured by
-how much of the swarm came that way. A **sibling** of `swarm_film.py`, not a fork — it imports
-that file's `Atlas` by path (the directory has a hyphen, so it is not a package) and touches its
-rendering path not at all. It **emulates nothing**: the `frame,map,x,y,facing,walking,battle`
-tracks are already on disk. Still + video for the whole 24-agent chain in about 35 seconds.
+map* over PixelGB's atlas: every tile the swarm ever walked, as a directional arrow, **hue by
+direction and traffic in size and brightness**. A **sibling** of `swarm_film.py`, not a fork —
+both import `chainrender` (see below) and neither touches the other's rendering path. It
+**emulates nothing**: the `frame,map,x,y,facing,walking,battle` tracks are already on disk.
+Still + video for the whole 24-agent chain in about 35 seconds.
 
 - **`facing` AND THE TILE DELTA ARE TWO INDEPENDENT READINGS OF THE SAME STEP, AND THEY AGREE ON
   EVERY ONE.** 149,741 steps in `chain-film` and 82,640 in `chain-film-big`, **232,381 steps,
   zero disagreements, 100.0000% both**. The delta is what is *used*, because a `facing` row is
   also written when the player turns on the spot and only the delta tells turning from walking.
   `summary` re-measures it on whatever tracks it is given and the legend carries the figure.
-- **THE COLOUR IS DISTINCT AGENTS, AND STEP COUNT IS MEASURABLY THE WRONG UNIT.** Busiest tile by
+- **HUE IS THE DIRECTION AND THE TRAFFIC IS IN SIZE AND BRIGHTNESS (`--colour direction`, the
+  default).** Reported as "grey and near impossible to see", and the cause was measured: of
+  `chain-film`'s 978 walked tiles **232 carry exactly one agent and 78% sit in the bottom four of
+  the traffic ramp's ten bands**, so most of the picture was dark blue-green over bright pixel
+  art. Direction hue fixes that at source — every tile gets one of four vivid colours whatever
+  its traffic — and it is Whidden's own encoding (`DcYLT37ImBY`), where a corridor reads as one
+  solid colour at a glance. Cyan up, orange down, pink left, green right, **lilac for a tile
+  walked both ways**, and the four are separated in **lightness** (0.55/0.75/0.50/0.72) as well
+  as hue so the picture survives grey printing and a red-green colour-blind reader. Floors:
+  brightness 0.58, size 0.64 — chosen so those 232 single-agent tiles stay legible.
+  **`--colour traffic` is the original and reproduces every published picture byte for byte**
+  (whole-chain still md5 `75146a5f60b19beea973902c56b300cf`, 551,205 bytes; check it after any
+  edit, it is a one-second render).
+- **THE OTHER HALF OF "HARD TO SEE" IS ZOOM AND `--tile-px` CANNOT MOVE IT.** The crop and the
+  arrows scale together, so an arrow's share of the picture is fixed: measured, a whole-swarm
+  arrow is **5.4 display px** once the whole-chain still is fitted to 900 px wide, at
+  `--tile-px 16` **and** at 26. Only `--maps` moves it. `still` reports both figures on every
+  render and, below a legibility floor, names the `--maps` command for the busiest stretch.
+- **THE COLOUR *UNIT* IS STILL DISTINCT AGENTS, AND STEP COUNT IS MEASURABLY THE WRONG ONE.** Busiest tile by
   steps is `VIRIDIAN_CITY (22,28)` at **20,529 steps and 16 of 24 agents**; busiest by agents is
   `OAKS_LAB (5,5)` at **325 steps and 24 of 24**. Eight agents paced one grass band for ten
   emulated hours, so a step ramp draws the grind as the whole map and the route as nothing —
@@ -10326,3 +10344,86 @@ neighbours the repaint rectangle can clip). Read off its own panel: **977 of 978
 107.5 emulated minutes and 94,978 steps; the remaining 37% of every step the swarm takes adds one
 tile.** That is "it is not a dwell map" stated as motion. **Fedora's ffmpeg has no `libx264`** —
 `libopenh264 -b:v 4M`, and `-crf` is not accepted.
+
+## `chainrender` — the shared renderer package, and the camera that now reaches every film
+
+**Reader-facing page: [`docs/agent/chainrender.md`](docs/agent/chainrender.md).**
+`tools/pewter-chain/chainrender/` holds the atlas, the track reader, the palettes, the arrow
+polygon, the drawing primitives, the AXI helpers and **the camera**; `swarm_film.py`,
+`path_arrows.py` and (for its font) `screen_mosaic.py` import it.
+
+- **THE COST OF FOUR RENDERERS WAS NEVER TIDINESS — IT WAS THAT A FIX LANDED ON ONE VIDEO.** The
+  camera smoothing lived inside `swarm_film.main()`, two hundred lines nothing else could reach,
+  so `examples/swarm_view.rs`, `path_arrows.py` and AgentGB's `chain.py` all judder by
+  construction. Rule 7 below would have had exactly the same reach.
+- **THE DIRECTORY HAS A HYPHEN, SO `chainrender` IS NOT IMPORTABLE BY NAME.** Every tool does
+  `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))` then `import chainrender`.
+  That is what replaced `path_arrows.py`'s `importlib` hack, which loaded `swarm_film.py` as a
+  module to reach one class.
+- **EXTRACT BY AST, NEVER BY LINE NUMBER.** The proxied `grep`/`sed` renumber lines and an
+  earlier attempt cut two docstrings in half. `ast.get_source_segment` plus a walk back over the
+  preceding comment block is what works — **and re-extracting each name from the pre-move source
+  and from the package and comparing is what proves the move was verbatim.** That check earned
+  its place in minutes: a salvaged `palette.py` had `HEAT_HUE` with **eight** entries where the
+  live one has **fourteen**, and a film indexes it directly, so the first render after wiring it
+  died with `IndexError`. Three more comment blocks had been silently dropped the same way.
+  **A file that looks right is not a file that is right.**
+- **TWO EQUALITY GATES, BOTH CHEAP, BOTH MANDATORY AFTER TOUCHING EITHER TOOL.**
+  `swarm_film.py --no-split-aware --dry-run --camera-trace` must reproduce the pre-fix trace
+  **byte for byte** (15,632 frames on `chain-film`, md5 `4291439921254f04bff653a4948fe000`), and
+  `path_arrows.py still --colour traffic` must reproduce md5
+  `75146a5f60b19beea973902c56b300cf`. `--dry-run` renders nothing, so the pair costs three
+  seconds.
+- **`examples/swarm_view.rs` STAYS WHERE IT IS, and that is not laziness.** It has map origins
+  measured from seams on the running cartridge at single-step granularity,
+  `--verify-determinism`, and the categorical no-new-colours guard — none of which the Python
+  side has. It is the thing to consolidate *onto*, not away from.
+- **`screen_mosaic.py` shares only `load_font`.** Its palette is its own on purpose (background
+  `(10,12,16)` against the films' `(16,18,22)`); unifying two palettes chosen separately would
+  change a published picture to no end.
+
+### Rule 7: the camera's BOX is what judders, not the camera
+
+- **A PERCENTILE HAS NO MIDPOINT WHEN THE SWARM IS BIMODAL, AND A TRAINING LEG IS BIMODAL BY
+  CONSTRUCTION.** `spread()` returned the midpoint of the 5th and 95th percentiles as the camera
+  centre; agents split between the Pokemon Center and the grass, so that midpoint sits in the
+  **empty gap between the two clusters** and lurches whenever the population balance crosses a
+  percentile boundary — a camera pointed at nobody, moving because of agents it is not showing.
+  The same span drives the zoom, so the width was pinned to "both clusters" and could never
+  tighten. Reported as *"it juggles back and forth"*.
+- **THE FIX IS AN EMA ON EACH EDGE OF THE BOX, BEFORE RULES 1-6 SEE IT.** That removes the
+  discontinuity at source. **Raising `CAM_K` or the deadzone never helped and could not** — they
+  were being fed a step function, and smoothing downstream of a discontinuity only delays it.
+  Measured on `chain-film`, 15,632 frames, `--no-split-aware` against the default: direction
+  reversals **1.39/s → 0.17/s** in x and **0.93/s → 0.43/s** in y; frames still **78.2% → 85.2%**
+  x and **71.1% → 82.1%** y; largest one-frame pan **48/48 px → 11/4 px**; resample ratio moved
+  **140 frames (0.9%) → 19 (0.1%)**; frames below 90% covered **32.0% → 30.3%**.
+- **TWO FIGURES MOVE THE OTHER WAY AND BOTH ARE STATED.** Distinct crop widths 18 → 20, because
+  the smoothed box passes continuously through more rungs of the zoom ladder instead of jumping
+  between two — **the shimmer metric is how often the ratio MOVED**, and that is six times
+  better. Mean coverage 93.0% → 92.3% while the below-90% count improves: the distribution
+  tightened rather than shifted.
+- **`BOX_K = 0.006` / `BOX_K_GROW = 0.03` ARE MEASURED, NOT INHERITED.** The pair that was in
+  flight (0.012 / 0.10) is smoother than no rule 7 at all but grows the box fast enough to sweep
+  the zoom ladder, which on a *single-leg* corpus costs more zoom changes than it saves. Swept
+  against 40 tracks of link 11 as well as the whole chain. **The far end of the sweep is the
+  lesson: a box that never grows quickly is beautifully steady and DROPS agents** (0.006/0.006
+  gives reversals 0.13/0.22 and coverage below 90% 32.6% → **38.0%**), because rule 6 keys its
+  catch-up on how far the box pokes past the frame and a slow box is slow to notice.
+- **THE BAND IS NOT THE LEVER AT THIS SWARM SIZE.** 5-95, 2-98 and 0-100 give the same figures to
+  the digit on `chain-film`, because the box's own EMA washes out the one agent the clip
+  discards. It is widened to 2-98 for the 600-agent case, where 5-95 discards thirty per edge —
+  but do not credit the band with the improvement.
+- **34.2% OF THESE FRAMES ARE GEOMETRICALLY IMPOSSIBLE.** The camera may not widen past the world
+  it crops from and the swarm does not fit in the widest view there is. `report_impossible()`
+  prints it; quote it, do not promise past it.
+- **A CAMERA IS JUDGED BY MEASURING ITS TRACK, NEVER BY WATCHING AND ASSERTING.**
+  `--camera-trace <csv> --dry-run` writes the per-frame camera without rendering, so old and new
+  are compared on the real code path in seconds. Plot the three columns (centre x, centre y,
+  crop width) before and after: the crop-width panel is where the complaint lives, and it is a
+  chattering square wave before and flat after — `docs/agent/chain-stills/camera-before-after.png`.
+- **`Camera.step(xs, ys, live)` takes `live` separately from `xs` being non-empty**, because an
+  arrival marker contributes to the box without being a live agent and the original loop tested
+  the live population. `self.box` persists across a frame with no live agent, so rule 6 keeps
+  measuring against the last real box rather than going blind. Get either wrong and the equality
+  gate goes red immediately, which is the point of having it.
