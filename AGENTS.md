@@ -10573,6 +10573,15 @@ pool, `--idle-spread 3001`, every attempt a distinct trajectory:
 as link 11 is. Twenty of link 20's twenty failures and all seven of link 21's are deaths on the
 walk; **not one is a battle.**
 
+- **`18b` IS AN INSERTION AND THE CLI NUMBERS LINKS FROM THEIR OWN FILE NAMES NOW, NOT FROM THEIR
+  POSITION.** Link 19's certification is a published measurement tied to that name, so the shop went
+  in as `18b-shop-in-pewter` — which sorts between `18-` and `19-` — rather than renumbering four
+  files. `chain` and `film` used to take `link = index + 1`, which an insertion silently shifts:
+  `--from 15 --to 19`, the command `docs/agent/brock.md` §14 publishes for the gym-arc film, would
+  have covered five *different* links and quietly dropped `19-east-to-route-3`. `link_number`
+  reads the digits the file itself carries, so `18b` answers **18** — inside every range link 18 is
+  inside, and its carried state is written as `states/18` after link 18's own, which is what the
+  next link wants to start from.
 - **THE ROAD IS READ OUT OF THE CARTRIDGE AND ROUTE 3 DOES NOT GO EAST INTO MT MOON.** Map `$0E`'s
   connection byte is `0b1010` and its two blocks name `$0F` **north** and `$02` west; Route 4 then
   connects east to Cerulean. The entry coordinates are derived from the alignment bytes *before*

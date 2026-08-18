@@ -28,6 +28,15 @@ certification is a published measurement tied to that name. The chain reads
 `19-`, so the shop goes in where it is needed without moving anything that has
 already been measured under a name.
 
+**And `chain`/`film` number links from their own file names now, not from their
+position in that list.** They used to take `link = index + 1`, which an
+insertion silently shifts: `--from 15 --to 19` — the command
+[`brock.md`](brock.md) §14 publishes for the gym-arc film — would have covered
+five *different* links and quietly dropped `19-east-to-route-3`. `link_number`
+reads the digits the file carries, so `18b` answers **18**: inside every range
+link 18 is inside, and its carried state is written as `states/18` after link
+18's own, which is what the next link wants to start from.
+
 ---
 
 ## 0. Certified

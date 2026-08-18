@@ -3529,8 +3529,8 @@ fn cmd_chain(a: &Args) {
         None
     };
 
-    for (n, f) in files.iter().enumerate() {
-        let link = n + 1;
+    for f in files.iter() {
+        let link = link_number(f);
         if link < a.from || link > a.to {
             continue;
         }
@@ -4141,8 +4141,7 @@ fn cmd_film(a: &Args) {
     // file nobody can line up against a report.
     let files: Vec<(usize, String)> = all
         .iter()
-        .enumerate()
-        .map(|(i, f)| (i + 1, f.clone()))
+        .map(|f| (link_number(f), f.clone()))
         .filter(|(link, _)| *link >= a.from && *link <= a.to)
         .collect();
     if files.is_empty() {
@@ -4511,6 +4510,29 @@ fn cmd_routes() {
     }
     out.push_str("\n]\n");
     println!("{out}");
+}
+
+/// The link number a scenario file's own name carries, which is **not** its
+/// position in the sorted list.
+///
+/// **`18b-shop-in-pewter` is link 18's second half, not link 19.** Numbering by
+/// position silently renumbers everything after an insertion, and the published
+/// commands say `--from 15 --to 19` for the gym arc — which with `18b` inserted
+/// would have covered five different links and quietly dropped
+/// `19-east-to-route-3`. Reading the digits the file itself carries makes an
+/// insertion cost nothing: `18b` answers 18, so it is inside every range link
+/// 18 is inside, and the state it carries forward is written as `states/18`
+/// after link 18's own — which is what the next link wants to start from.
+fn link_number(path: &str) -> usize {
+    Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0)
 }
 
 fn chain_files() -> Vec<String> {
