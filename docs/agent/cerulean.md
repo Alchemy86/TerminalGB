@@ -399,7 +399,39 @@ policy already points.
 
 ---
 
-## 8. Misty needs a second Pokémon for one starter, and the cartridge says so
+## 8. The test rig, on all four new links
+
+Every new link was handed to [the rig](test-rig.md) beside the expert, from its
+own certified entry pool, paired on the seed, `--idle-spread 3001`:
+
+| plan | link | teacher | `mash-a` | `random` | gap [goal] |
+|---|---|---:|---:|---:|---|
+| [`cross-route-3`](../../scenarios/testrig/cross-route-3.json) | 20, per starter line | **60/60** | 0/60 | 0/60 | **+100.0 [+56.2, +143.8]**, p = 0.0000 |
+| [`shop-in-pewter`](../../scenarios/testrig/shop-in-pewter.json) | 18b | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]**, p = 0.0005 |
+| [`heal-at-mt-moon`](../../scenarios/testrig/heal-at-mt-moon.json) | 21 | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]**, p = 0.0005 |
+| [`down-into-mt-moon`](../../scenarios/testrig/down-into-mt-moon.json) | 22 | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]**, p = 0.0005 |
+
+**A rate of zero four times over says less than how it was reached, and the
+endings differ.** On link 20 `mash-a` is **stuck** on all twenty attempts and
+`random` runs **out of calls** on all twenty; on the shop both run out of calls
+having bought nothing at all — the goal names the item **ids** as well as the
+counts, so pressing A at a counter until the money is gone does not satisfy it;
+on link 21 `mash-a` is stuck on all twelve and `random` produces the only
+`violated` verdict in the set, by **winning** a battle on a leg whose rule is
+`battle flee`. On link 20 the three starter lines cannot be separated: one gap
+and three identical ceilings.
+
+The other number worth reading is the decision count. On link 21 the teacher
+takes **12** decisions and the floors spend **300**; on link 22, **94** against
+**900**. A floor arm does not fail these links narrowly.
+
+**There is still no trained player in this repository**, so every split is `n/a`
+and these are a ceiling and a floor rather than a distillation result. The
+`command` arm is the whole integration surface a trained one arrives through.
+
+---
+
+## 9. Misty needs a second Pokémon for one starter, and the cartridge says so
 
 Not measured yet — no run has reached Cerulean — but it is a table fact rather
 than a guess, and it decides where the shop link has to go, so it is written
@@ -428,7 +460,7 @@ shop goes in before Route 3 rather than after it.
 
 ---
 
-## 9. Reproducing it
+## 10. Reproducing it
 
 ```sh
 cargo build --release --features scenario --example pewter_chain
@@ -448,7 +480,7 @@ python3 tools/pewter-chain/route_audit.py --rom <blue.gb>
 python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --plan misty
 ```
 
-## 10. See also
+## 11. See also
 
 * [`pewter-chain.md`](pewter-chain.md) — the chain, the gate, and the repair loop.
 * [`brock.md`](brock.md) — the gym arc, and the starter that cannot pass it.

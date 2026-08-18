@@ -10744,14 +10744,22 @@ The catchable answers on the road ahead are **PARAS** (Mt Moon B1F 1/10 at level
 the classic answer and is in Viridian Forest, six links behind; BELLSPROUT is past Misty. So the
 catch belongs inside Mt Moon, which is why the balls are bought before Route 3.
 
-### The test rig on link 20, and what it says
+### The test rig, on all four new links
 
-`scenarios/testrig/cross-route-3.json` — one subject per starter line, teacher against `mash-a` and
-`random`, 20 attempts a cell from the certified link-19 pool. **Teacher 60/60 on all three lines;
-`mash-a` 0/60 and `random` 0/60**, gap **+100.0 points [+56.2, +143.8]** on every subject
-(McNemar p = 0.0000), and the subjects cannot be separated — one gap and three identical ceilings.
-The endings are the interesting half: `mash-a` is **stuck** on all twenty, `random` runs **out of
-calls** on all twenty. A corridor of forced trainer battles is not a floor either of them reaches.
+One plan per link, teacher against `mash-a` and `random`, from each link's own certified entry pool
+and paired on the seed: `cross-route-3` (20, one subject per starter line, 20 attempts a cell),
+`shop-in-pewter`, `heal-at-mt-moon` and `down-into-mt-moon` (12 attempts each). **Teacher 60/60 and
+12/12/12; every floor arm 0.** Gap **+100.0 points** on every subject — [+56.2, +143.8] at n=20 and
+[+43.4, +156.6] at n=12 — and on link 20 the three starter lines cannot be separated.
 
-**There is still no trained player in this repository**, so the split is `n/a` and these are a
-ceiling and a floor rather than a distillation result.
+- **A RATE OF ZERO FOUR TIMES OVER SAYS LESS THAN HOW IT WAS REACHED, AND THE ENDINGS DIFFER.** On
+  link 20 `mash-a` is **stuck** on all twenty and `random` runs **out of calls** on all twenty; on
+  the shop both run out of calls having bought nothing, because the goal names the item **ids** as
+  well as the counts and pressing A at a counter until the money is gone does not satisfy it; on
+  link 21 `random` produces the set's only `violated` verdict, by **winning** a battle on a leg
+  whose rule is `battle flee`.
+- **And the decision count is the other number worth reading**: on link 21 the teacher takes **12**
+  decisions where the floors spend **300**, on link 22 **94** against **900**. A floor arm does not
+  fail these links narrowly.
+- **There is still no trained player in this repository**, so every split is `n/a` and these are a
+  ceiling and a floor rather than a distillation result.

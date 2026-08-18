@@ -1,0 +1,17 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "shop-in-pewter",
+  "question": "Can a player that cannot see the machine buy anything at a Gen 1 counter? Every screen in a shop is a menu with something selected, so A is a choice rather than an advance - and the goal names the item ids and the counts, so buying the wrong thing does not count.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/18b-shop-in-pewter.json",
+  "entry_pool": "target/pool19/18-heal-after-the-gym/exits",
+  "runs": 12,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [],
+  "arms": [
+    { "name": "teacher", "player": "expert" },
+    { "name": "mash-a", "player": "command", "program": "tools/agent-docs/hello_adapter.sh", "args": [] },
+    { "name": "random", "player": "random", "seed_base": 2654435769 }
+  ]
+}

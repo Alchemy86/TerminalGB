@@ -1,0 +1,17 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "heal-at-mt-moon",
+  "question": "Up Route 4's one-tile-wide spur to the nurse. A short walk, one door and one conversation - the cheapest link past the gym, and the question is whether that is enough for a floor arm to reach.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/21-heal-at-mt-moon.json",
+  "entry_pool": "target/cert/20-cross-route-3/exits",
+  "runs": 12,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [],
+  "arms": [
+    { "name": "teacher", "player": "expert" },
+    { "name": "mash-a", "player": "command", "program": "tools/agent-docs/hello_adapter.sh", "args": [] },
+    { "name": "random", "player": "random", "seed_base": 2654435769 }
+  ]
+}

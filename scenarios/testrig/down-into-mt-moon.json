@@ -1,0 +1,17 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "down-into-mt-moon",
+  "question": "Across Mt Moon's first floor to the ladder. A maze with one forced trainer in it, and the floor a collision list alone cannot walk.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/22-down-into-mt-moon.json",
+  "entry_pool": "target/cert/21-heal-at-mt-moon/exits",
+  "runs": 12,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [],
+  "arms": [
+    { "name": "teacher", "player": "expert" },
+    { "name": "mash-a", "player": "command", "program": "tools/agent-docs/hello_adapter.sh", "args": [] },
+    { "name": "random", "player": "random", "seed_base": 2654435769 }
+  ]
+}
