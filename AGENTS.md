@@ -10255,3 +10255,74 @@ clock**; the render is ~20 min and the encode ~1.
   the surviving population drifts towards the later links. They are in the per-link bars on
   every frame regardless. The gym is the mirror image — 14.9 % of the runtime against 6.9 %
   of the emulated time.
+
+## The path-arrow map — one arrow per walked tile (`tools/pewter-chain/path_arrows.py`)
+
+**Reader-facing page: [`docs/agent/path-arrows.md`](docs/agent/path-arrows.md).** A *movement
+map* over PixelGB's atlas: every tile the swarm ever walked, as a directional arrow, coloured by
+how much of the swarm came that way. A **sibling** of `swarm_film.py`, not a fork — it imports
+that file's `Atlas` by path (the directory has a hyphen, so it is not a package) and touches its
+rendering path not at all. It **emulates nothing**: the `frame,map,x,y,facing,walking,battle`
+tracks are already on disk. Still + video for the whole 24-agent chain in about 35 seconds.
+
+- **`facing` AND THE TILE DELTA ARE TWO INDEPENDENT READINGS OF THE SAME STEP, AND THEY AGREE ON
+  EVERY ONE.** 149,741 steps in `chain-film` and 82,640 in `chain-film-big`, **232,381 steps,
+  zero disagreements, 100.0000% both**. The delta is what is *used*, because a `facing` row is
+  also written when the player turns on the spot and only the delta tells turning from walking.
+  `summary` re-measures it on whatever tracks it is given and the legend carries the figure.
+- **THE COLOUR IS DISTINCT AGENTS, AND STEP COUNT IS MEASURABLY THE WRONG UNIT.** Busiest tile by
+  steps is `VIRIDIAN_CITY (22,28)` at **20,529 steps and 16 of 24 agents**; busiest by agents is
+  `OAKS_LAB (5,5)` at **325 steps and 24 of 24**. Eight agents paced one grass band for ten
+  emulated hours, so a step ramp draws the grind as the whole map and the route as nothing —
+  that is a *dwell* map, which `corpus_report.py` already draws weighted by frames. Distinct
+  agents is bounded by the swarm size, so the ramp spends its range on the question being asked.
+  Hue **and** size carry it (the panels' redundancy rule), so it survives grey printing.
+  Deliberately **not** `swarm_film.HEAT_HUE`: that is agent-*frames* and is read **inverted**
+  (blue = trodden, warm = novel), and reusing the swatches for the opposite polarity and a
+  different unit would be the worst of both.
+- **A PACED TILE GETS A DOUBLE-HEADED ARROW.** Where the two commonest directions are opposite
+  and the weaker is ≥ `--paced 0.40` of the stronger, no flow exists. 161 of 978 tiles (16.5%)
+  on `chain-film`. Without it the training band reads as a one-way corridor.
+- **THE CROP IS EVERY MAP THE TRACKS WERE *ON*, NOT EVERY MAP THEY WALKED *ACROSS*.** Pewter
+  City is the worked example: link 14's goal fires the instant the player crosses the boundary,
+  so the nine finishers have **one row** there and never step *off* a Pewter tile. It has no
+  arrows and it still has to be in a picture of a journey to Pewter City.
+- **THE PICTURE IS SURVIVORSHIP-FILTERED AND SAYS SO IN EVERY RENDER.** `chain-film` is 24
+  agents: **9 stop in Pewter City, 8 in Viridian City still grinding, 7 in Oak's Lab inside the
+  first ~15,000 frames**. Per map that is 24 agents on Pallet/Oak's Lab/Red's house, 17 on Route
+  1 and Viridian, 14 in the Pokémon Center, **9 on Route 2 and in Viridian Forest**. So the
+  forest arrows are the nine finishers, never "the swarm". Both the legend and `summary`'s
+  `endings` table state it.
+- **It reproduces the one-way-ledge finding `docs/swarm-view.md` reached from different data:**
+  147 of Route 1's 213 walked tiles carry a vertical step, and of those **22 are northbound only
+  and 40 southbound only** (1,909 up against 1,314 down). Two instruments agreeing about the
+  shape of a route is the check.
+
+### Three bugs, each a class worth remembering
+
+- **A LEFT/RIGHT ARROW ROTATION CAN BE INVERTED AND LOOK PERFECTLY PLAUSIBLE.** A swarm pacing
+  east and west is symmetric, so the eye cannot catch it and the first render was accepted.
+  Found by drawing one arrow per direction and asserting the tip sits at `centre + unit × half`,
+  then confirmed end to end against a **hand-written six-tile eastward track**. *Verify a
+  glyph's orientation against a synthetic track, never against real data.*
+- **EVENTS APPENDED PER AGENT ARE NOT SORTED BY FRAME, AND A REPLAY BY FRAME STALLS ON THE FIRST
+  LONG AGENT.** A single flat `array` filled agent by agent gave a video whose accumulation
+  stopped at **279 of 978 tiles**: the cursor was inside one grinder's half-million frames and
+  never reached the fifteen agents behind it. Fixed with a per-agent cursor (a k-way merge), not
+  a sort — a whole corpus is millions of steps and a sort permutation is hundreds of megabytes.
+  It looked plausible throughout, because the early frames were right.
+- **DO NOT SHADOW THE OUTPUT-FRAME LOOP VARIABLE.** The merge above first used `i` for its
+  cursor inside `for i in range(frames_out)`, so `canvas.save(f"f{i:05d}.png")` took an agent's
+  cursor as the frame number: 467 iterations, **355 files, indices up to 16617, `ffmpeg` silently
+  encoding a fraction**. The printed frame count was still 467, so only listing the directory
+  showed it.
+
+### The video is an accumulation, and its shape is the finding
+
+`--speed`/`--seconds`/`--fps` follow `swarm_film.py`'s conventions. Published cut: **467 frames,
+15.6 s at 30 fps, a 900x timelapse** over 835,679 emulated frames, 1856x2424, 1.3 MB, ~34 s to
+render (incremental — only tiles whose agent count crossed a band are repainted, plus the
+neighbours the repaint rectangle can clip). Read off its own panel: **977 of 978 tiles are lit by
+107.5 emulated minutes and 94,978 steps; the remaining 37% of every step the swarm takes adds one
+tile.** That is "it is not a dwell map" stated as motion. **Fedora's ffmpeg has no `libx264`** —
+`libopenh264 -b:v 4M`, and `-crf` is not accepted.

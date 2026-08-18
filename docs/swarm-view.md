@@ -303,6 +303,12 @@ place while the map moves underneath it.
   their own **screens** rather than as positions on a map. A position track
   carries no pixels, so it needs its own capture pass; it answers "are they all
   in the same menu?" where this answers "are they all in the same place?".
+* [the swarm's paths](agent/path-arrows.md) — the same kind of position track
+  as a *movement map*: one arrow per walked tile, coloured by how much of the
+  swarm came that way. It reproduces the one-way-ledge finding above from the
+  Pewter chain's own tracks — **22 of Route 1's tiles are northbound only and
+  40 are southbound only** — so two instruments, built from different data for
+  different reasons, agree about the shape of the route.
 
 ## Honest limits
 

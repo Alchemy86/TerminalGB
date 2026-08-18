@@ -1493,6 +1493,12 @@ heat-06-cross-route-1-map28.png    Oak's Lab
 
 ## 11. The films
 
+A third picture comes out of the same tracks and is not a film at all:
+[the swarm's paths](path-arrows.md) draws every tile anybody walked as a
+directional arrow, coloured by how many agents came that way. It answers *where
+did anybody ever go* where a film answers *where is everybody now*, and it costs
+no emulator run.
+
 Two kinds, because they cannot be one: an overview has to compress tens of
 emulated minutes to be watchable, and a showcase has to *not* compress if the
 walk cycle is to be visible. All of them come out of the same compositor
@@ -2240,6 +2246,9 @@ not exist:
 - [long runs and episodes](../longplay.md) — the episode primitive underneath.
 - [the swarm view](../swarm-view.md) — the null model a trained agent has to
   beat, and where the film work continues.
+- [the swarm's paths](path-arrows.md) — the same tracks as a *movement map*:
+  one arrow per walked tile, coloured by how much of the swarm came that way,
+  with the survivorship the picture carries stated in it.
 - [Gen 1 mechanics](../gen1/README.md) — the memory map, battle control and the
   citation standard these goals follow.
 - [discoveries](../gen1/discoveries.md) — the faults and corrected beliefs this

@@ -243,5 +243,8 @@ Read this before drawing a conclusion off a still.
   corpus come from
 * [the swarm view](../swarm-view.md) — the same population drawn as positions on
   one world instead of as screens
+* [the swarm's paths](path-arrows.md) — the same population as the *union* of
+  its paths: one arrow per walked tile, from a corpus already on disk and with
+  no capture pass at all
 * [the test rig](test-rig.md) — when the question is a number rather than a
   picture
