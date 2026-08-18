@@ -687,6 +687,7 @@ mod drill {
     use terminalgb_plugin_battle_control::{preset::PresetFile, BattlePlugin};
     use terminalgb_plugin_gen1_link::romdata::{experience_for_level, RomTables};
     use terminalgb_plugin_trainer::gen1::addr as tr;
+    use terminalgb_plugin_trainer::rom::BattleTables;
 
     /// `wPartyMon1Exp` `$D179`, three bytes big-endian. Not in
     /// `plugins/trainer`'s `party` module because nothing there needed it; the
@@ -715,7 +716,18 @@ mod drill {
         pub level: u8,
         pub arm_level: u8,
         pub arm_species: String,
+        /// The **internal index** of `arm_species`, and the only unambiguous
+        /// way to name it. Two species decode to the same printable name once
+        /// the gender glyphs are dropped (`NIDORAN`), so a preset built from
+        /// the name arms whichever the cartridge lists first — measured, the
+        /// female's plan armed a male and learned its moves instead.
+        /// `0` for a plan written before the field existed, which falls back
+        /// to the name.
+        pub arm_index: u8,
         pub species: String,
+        /// The internal index of `species`, on the same footing as
+        /// [`Event::arm_index`].
+        pub species_index: u8,
         pub evolves_here: bool,
         pub held: Vec<String>,
         pub offered: String,
@@ -762,7 +774,9 @@ mod drill {
                 level: e.u64_field("level").unwrap_or(0) as u8,
                 arm_level: e.u64_field("arm_level").unwrap_or(0) as u8,
                 arm_species: e.str_field("arm_species").unwrap_or_default().into(),
+                arm_index: e.u64_field("arm_index").unwrap_or(0) as u8,
                 species: e.str_field("species").unwrap_or_default().into(),
+                species_index: e.u64_field("species_index").unwrap_or(0) as u8,
                 evolves_here: e
                     .get("evolves_here")
                     .and_then(|v| v.as_bool())
@@ -809,7 +823,37 @@ mod drill {
     /// nothing but SPLASH, and cannot cross a boundary at any level in the
     /// game — so the arithmetic is the same for every event instead of being
     /// tuned per event.
-    fn preset_for(e: &Event) -> String {
+    ///
+    /// **`can_fight` decides which of two shapes it gets, and the second one
+    /// exists because five events hold no move that can hurt anything.**
+    /// JIGGLYPUFF at 9 knows only SING, KAKUNA and METAPOD at 12 only HARDEN,
+    /// MAGIKARP at 15 only SPLASH and ABRA at 16 only TELEPORT — measured over
+    /// all 140 lines, and no choice of *move* recovers any of them. So the
+    /// opponent ends the battle instead: the same level 2 MAGIKARP, holding
+    /// SELFDESTRUCT, which knocks itself out and awards its 5 experience
+    /// exactly as a kill would.
+    ///
+    /// **It is a trainer battle, and that is the whole of why ABRA works.**
+    /// TELEPORT ends a *wild* battle — the ABRA escapes and earns nothing —
+    /// and `TryRunningFromBattle` refuses a trainer battle outright, so on a
+    /// trainer's MAGIKARP the TELEPORT fails and the turn passes. SPLASH and
+    /// HARDEN do nothing either way; SING costs a few turns of sleep and no
+    /// more. Gen 1 has no trainer experience bonus (that arrives in Gen 2), so
+    /// the 5 experience and the "cannot cross a boundary" property are
+    /// unchanged.
+    fn preset_for(e: &Event, can_fight: bool) -> String {
+        let opposition = if can_fight {
+            "wild     = Magikarp\n\
+             level    = 2\n"
+                .to_string()
+        } else {
+            "trainer  = Youngster\n\
+             roster   = 1\n\
+             enemy    = Magikarp\n\
+             level    = 2\n\
+             moves    = Selfdestruct\n"
+                .to_string()
+        };
         format!(
             "[{}]\n\
              description = {} at level {} learning {}\n\
@@ -818,16 +862,53 @@ mod drill {
              moves    = {}\n\
              nickname = LEARNER\n\
              \n\
-             wild     = Magikarp\n\
-             level    = 2\n",
+             {}",
             preset_name(e),
             e.arm_species,
             e.arm_level,
             e.offered,
-            e.arm_species,
+            arm_species(e),
             e.arm_level,
             e.held.join(", "),
+            opposition,
         )
+    }
+
+    /// How a preset should name this event's Pokémon.
+    ///
+    /// The internal index when the plan carries one, because a printable name
+    /// is not unique — see [`Event::arm_index`]. The name is the fallback for
+    /// a plan written before the field existed.
+    fn arm_species(e: &Event) -> String {
+        if e.arm_index == 0 {
+            e.arm_species.clone()
+        } else {
+            e.arm_index.to_string()
+        }
+    }
+
+    /// Can this event's Pokémon knock anything out with what it holds?
+    ///
+    /// A move's power byte, read out of the cartridge. **Zero means a status
+    /// move and nothing else** — the seven placeholder-power moves
+    /// (`GUILLOTINE`, `SEISMIC TOSS`, `DRAGON RAGE`, ...) carry a power of 1,
+    /// which is the same distinction `learn_table.py`'s rule 0 makes and the
+    /// reason it is a power test rather than a damage estimate.
+    ///
+    /// `GB_LEARN_DRILL_NO_EXPLODER=1` answers "yes" for everything, which puts
+    /// the plain wild MAGIKARP back in front of the five that cannot fight —
+    /// the A/B that shows the exploding trainer is doing the work rather than
+    /// being decoration.
+    fn can_fight(e: &Event, tables: &RomTables, moves: &BattleTables) -> bool {
+        if std::env::var_os("GB_LEARN_DRILL_NO_EXPLODER").is_some() {
+            return true;
+        }
+        e.held.iter().any(|m| {
+            tables
+                .resolve_move(m)
+                .map(|id| moves.power(id) > 0)
+                .unwrap_or(false)
+        })
     }
 
     // -- the machine -------------------------------------------------------
@@ -900,6 +981,21 @@ mod drill {
                 })
         }
 
+        /// Everything the battle policy decides from, read through the
+        /// observer this arena already carries.
+        ///
+        /// Destructured rather than `self.obs.read(...)` because
+        /// [`Gameboy::with_machine`] borrows `self.gb` mutably and the
+        /// observer is a field of the same struct; splitting the borrow is
+        /// what lets the table cache live for the whole run instead of being
+        /// rebuilt 1.6 KiB at a time on every look.
+        fn state(&mut self) -> terminalgb_plugin_agent::observe::GameState {
+            let Arena { gb, obs, .. } = self;
+            gb.with_machine(Capability::OBSERVE | Capability::READ_MEMORY, |m| {
+                obs.read(m)
+            })
+        }
+
         /// Run frames until the tilemap has been unchanged for [`STABLE`] of
         /// them, or [`SETTLE_CAP`] frames have passed. Nothing is held down.
         fn settle(&mut self) -> Screen {
@@ -944,12 +1040,140 @@ mod drill {
             }
         }
 
+        /// Is the lead on zero HP? `wPartyMon1HP` is big-endian, like every
+        /// multi-byte field in a Gen 1 party struct.
+        fn lead_fainted(&mut self) -> bool {
+            let at = tr::PARTY_MONS + terminalgb_plugin_trainer::gen1::party::HP;
+            self.gb.peek(tr::PARTY_COUNT) > 0
+                && self.gb.peek(at) == 0
+                && self.gb.peek(at + 1) == 0
+        }
+
         fn arm(&mut self, name: &str) -> Result<(), String> {
             self.gb
                 .plugin_mut::<BattlePlugin>()
                 .ok_or("the plugin vanished")?
                 .arm(name)
                 .map_err(|e| e.to_string())
+        }
+
+        /// One press of a battle menu, when a battle menu is what is on screen.
+        ///
+        /// **This exists because pressing A took move slot 1.** A on the main
+        /// battle menu is FIGHT and A on the move list is *the first move*, so
+        /// a line whose slot 1 is SPLASH, HARDEN or SING could not kill the
+        /// level 2 MAGIKARP that supplies the experience — and a line whose
+        /// slot 1 is TELEPORT ran away from it. Fourteen species lines lost
+        /// every one of their decisions to that, measured
+        /// (`docs/agent/move-learning-result.md`).
+        ///
+        /// **The choice is not made here.** It is
+        /// [`terminalgb_plugin_agent::battle::decide`], the one battle policy
+        /// this repository has, reading the move table and the type chart out
+        /// of the cartridge and both sides out of the two battle structs. What
+        /// is here is the *menu*: turning that slot into a keypress without
+        /// going out of phase, which is the same split
+        /// `examples/pewter_chain.rs::fight` makes.
+        ///
+        /// Returns `None` when this is not a battle menu, and the caller falls
+        /// back to pressing A — which is right for every text box, every
+        /// animation and the main menu's own FIGHT.
+        fn battle_key(&mut self, screen: &Screen, held: &[String]) -> Option<KeypadKey> {
+            use terminalgb_plugin_agent::battle::{self, Action};
+            if self.gb.peek(tr::IS_IN_BATTLE) == 0 {
+                return None;
+            }
+            // The party list, reached only by a mispress. B is the one button
+            // that can only ever back out of a menu — the same answer
+            // `pewter_chain::fight` gives it.
+            if oneline(screen).contains("CHOOSE A POK") {
+                return Some(KeypadKey::B);
+            }
+            let sel = screen.selected()?;
+            let sel = sel.trim().to_string();
+            // The main menu is FIGHT / PKMN over ITEM / RUN. A on FIGHT is
+            // already what this drill wants, so it falls through to the
+            // caller; anywhere else on that menu is a mispress and walks back,
+            // because A on RUN ends the battle and A on PKMN opens a list.
+            if sel.eq_ignore_ascii_case("FIGHT") {
+                return None;
+            }
+            if sel.eq_ignore_ascii_case("PKMN") {
+                return Some(KeypadKey::Left);
+            }
+            if sel.eq_ignore_ascii_case("ITEM") || sel.eq_ignore_ascii_case("RUN") {
+                return Some(KeypadKey::Up);
+            }
+            // The move list, identified by the cursor sitting on one of the
+            // four moves this event's plan says the Pokémon holds — allowing
+            // for the truncation [`menu_row_is`] describes.
+            if !held.iter().any(|h| menu_row_is(h, &sel)) {
+                return None;
+            }
+            let mut view = self.state().arena?;
+            // **A move that knocks its own user out is not a move this rig may
+            // make.** `decide` is right to weigh SELFDESTRUCT for a player with
+            // a bench — it ends the battle, which is usually the point — and it
+            // is exactly wrong here: the level-up is checked for a Pokémon that
+            // survived, so an exploding VOLTORB blacks the party out and every
+            // event after it. Measured: eight events across the seven
+            // self-destructing lines fainted. `EXPLODE_EFFECT` is 7
+            // (`constants/move_effect_constants.asm`), confirmed against this
+            // cartridge — SELFDESTRUCT and EXPLOSION are the only two moves
+            // carrying it.
+            const EXPLODE_EFFECT: u8 = 7;
+            view.moves.retain(|m| m.effect != EXPLODE_EFFECT);
+            if view.moves.is_empty() {
+                return None;
+            }
+            // **The drill is not a player: it must never run, and it must
+            // never spend the turn on a status move.** Running is not a
+            // level-up, and neither is GROWL — the policy is right to weigh
+            // both for somebody playing the game and neither is available to a
+            // rig whose whole purpose is to cross one experience boundary. So
+            // the policy is asked for the fight it would pick, and anything
+            // else falls back to the most damage on offer.
+            let intent = battle::Intent {
+                may_fight_wild: true,
+                // Above every reachable level, so `why::TRAINED` can never fire.
+                train_to: u8::MAX,
+            };
+            let slot = match battle::decide(&view, &intent) {
+                // `Move::slot` is the cartridge's slot and `view.moves` has had
+                // the self-destructing moves taken out of it, so the two are no
+                // longer the same index — look the move up by its own slot.
+                Action::Fight { slot, .. }
+                    if view
+                        .moves
+                        .iter()
+                        .any(|m| m.slot == slot && m.damaging() && m.usable()) =>
+                {
+                    slot
+                }
+                _ => view
+                    .moves
+                    .iter()
+                    .filter(|m| m.usable() && m.damaging())
+                    .max_by_key(|m| m.expected())
+                    .or_else(|| view.moves.iter().find(|m| m.usable()))
+                    .map_or(0, |m| m.slot),
+            };
+            // **The battle move list's cursor is 1-based**, and that is the
+            // cartridge saying so: `MoveSelectionMenu` (`engine/battle/core.asm`)
+            // opens `ld a, [wPlayerMoveListIndex] / inc a / ld [hli], a ;
+            // wCurrentMenuItem`. Measured here too, on RHYDON at level 64: the
+            // cursor on the first move reads **1**, where the main menu on
+            // FIGHT reads 0 and the *forget* list on its first move also reads
+            // **0** — the two move lists disagree, and only this one is the one
+            // `MoveSelectionMenu` builds. Getting it wrong is silent: the index
+            // already equals the target and A fires on the wrong move
+            // (`docs/gen1/discoveries.md`).
+            let at = (self.gb.peek(tr::CURRENT_MENU_ITEM) as usize).saturating_sub(1);
+            Some(match at.cmp(&slot) {
+                std::cmp::Ordering::Less => KeypadKey::Down,
+                std::cmp::Ordering::Greater => KeypadKey::Up,
+                std::cmp::Ordering::Equal => KeypadKey::A,
+            })
         }
 
         fn await_battle(&mut self, limit: u32) -> Result<(), String> {
@@ -1009,6 +1233,27 @@ mod drill {
     /// rows and padded with spaces is searchable.
     fn oneline(s: &Screen) -> String {
         s.text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Is the menu row reading `sel` the item called `name`?
+    ///
+    /// **A move list truncates, and this is where that is absorbed.**
+    /// [`Screen::selected`] ends an item at a blank run followed by a column
+    /// where another row of the same menu also starts a word — which is
+    /// exactly right for `FIGHT`/`PKMN` over `ITEM`/`RUN`, and exactly wrong
+    /// for a list of aligned two-word move names: with `HORN ATTACK` over
+    /// `TAIL WHIP`, `WHIP` begins in the column `ATTACK` does, so the first row
+    /// reads back as `HORN`. So a row matches its name outright, or matches
+    /// the name's first word — and nothing else, which is the only truncation
+    /// that rule can produce.
+    fn menu_row_is(name: &str, sel: &str) -> bool {
+        let (name, sel) = (name.trim(), sel.trim());
+        name.eq_ignore_ascii_case(sel)
+            || (!sel.is_empty()
+                && name
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|w| w.eq_ignore_ascii_case(sel)))
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1247,7 +1492,7 @@ mod drill {
         for _ in 0..PATCH_CLEAR {
             a.gb.frame();
         }
-        let growth = match tables.resolve_species(&e.arm_species) {
+        let growth = match tables.resolve_species(&arm_species(e)) {
             Ok(s) => s.growth_rate,
             Err(err) => {
                 o.note = format!("{}: {err}", e.arm_species);
@@ -1266,10 +1511,14 @@ mod drill {
             .iter()
             .map(|n| tables.resolve_move(n).unwrap_or(0))
             .collect();
-        let want_species = tables
-            .resolve_species(&e.species)
-            .map(|s| s.index)
-            .unwrap_or(0);
+        let want_species = if e.species_index != 0 {
+            e.species_index
+        } else {
+            tables
+                .resolve_species(&e.species)
+                .map(|s| s.index)
+                .unwrap_or(0)
+        };
         a.target = Some(Target {
             level: e.level,
             species: want_species,
@@ -1291,11 +1540,14 @@ mod drill {
             if dump {
                 let m = read_mon(&mut a.gb);
                 println!(
-                    "        f{frame:<5} {p:?} party sp{} lv{} moves {:?} | cursor {:?} selected {:?}",
+                    "        f{frame:<5} {p:?} party sp{} lv{} moves {:?} | battle {:02X} \
+                     cursor {:?} menu_item {} selected {:?}",
                     m.species,
                     m.level,
                     m.moves,
+                    a.gb.peek(tr::IS_IN_BATTLE),
                     screen.cursor_row,
+                    a.gb.peek(tr::CURRENT_MENU_ITEM),
                     screen.selected()
                 );
                 for line in screen.compact_text().lines() {
@@ -1382,18 +1634,55 @@ mod drill {
                     // **Walk the cursor by reading it back, never by counting
                     // presses.** A press `HandleMenuInput` swallows is silent,
                     // and on this list a silent miss forgets a different move —
-                    // which the cartridge accepts without complaint. So: look
-                    // at what the cursor is on, and press Down only while it is
-                    // not the move the rule chose.
-                    let mut steps = 0;
+                    // which the cartridge accepts without complaint.
+                    //
+                    // **What is read back is `wCurrentMenuItem`, not the text
+                    // the cursor is on, and that is a correction.**
+                    // `Screen::selected` ends an item at a blank run followed
+                    // by a column where another row of the same menu starts a
+                    // word — which is exactly right for `FIGHT`/`PKMN` over
+                    // `ITEM`/`RUN` and exactly wrong for a list of aligned
+                    // two-word move names: with `HORN ATTACK` over `TAIL WHIP`,
+                    // `WHIP` begins where `ATTACK` does, so the first row reads
+                    // back as `HORN`. Measured on RHYDON at level 64; six lines
+                    // failed with *"never found TAIL WHIP in the move list"* for
+                    // no other reason. The index cannot be truncated, and it is
+                    // the same reading `examples/pewter_chain.rs::fight` takes.
+                    //
+                    // **This list's cursor is 0-based, and the BATTLE move
+                    // list's is 1-based.** That is a correction to the note
+                    // this repository already carries: the 1-based index
+                    // belongs to `MoveSelectionMenu`, which opens
+                    // `ld a, [wPlayerMoveListIndex] / inc a / ld [hli], a`, and
+                    // the forget list is not that menu. Measured on RHYDON at
+                    // level 64 with the cursor on the first move of each:
+                    // battle list **1**, forget list **0**, main menu **0**.
+                    // Subtracting one here walked to slot 2 and forgot FURY
+                    // ATTACK where the rule chose TAIL WHIP — silently, because
+                    // the cartridge accepts whatever the cursor is on.
+                    let Some(want_row) =
+                        e.forget_slot.map(|s| s.saturating_sub(1)).or_else(|| {
+                            e.held.iter().position(|m| {
+                                m.trim().eq_ignore_ascii_case(target.trim())
+                            })
+                        })
+                    else {
+                        o.note = format!(
+                            "the plan says to forget {target}, which is not one \
+                             of the four moves it says are held"
+                        );
+                        return o;
+                    };
                     let mut landed = false;
+                    let mut walked = 0;
                     for _ in 0..8 {
                         let sc = a.settle();
                         if classify(&sc) != Prompt::Which {
                             break;
                         }
+                        let at = a.gb.peek(tr::CURRENT_MENU_ITEM) as usize;
                         let sel = sc.selected().unwrap_or_default();
-                        let on_it = sel.trim().eq_ignore_ascii_case(target.trim());
+                        let on_it = at == want_row;
                         let say = if on_it {
                             format!("{target} is the weakest of the four - {}", e.why)
                         } else {
@@ -1412,33 +1701,36 @@ mod drill {
                         });
                         decision += 1;
                         if on_it {
+                            // The screen is the cross-check on the index, and
+                            // it tolerates exactly the truncation described
+                            // above and nothing else: the row must be the move
+                            // the plan named, or its first word.
+                            if !menu_row_is(&target, &sel) {
+                                o.note = format!(
+                                    "the plan says {target} is slot {}; the \
+                                     screen has {sel} there",
+                                    want_row + 1
+                                );
+                                return o;
+                            }
                             a.tap(KeypadKey::A);
                             landed = true;
                             break;
                         }
-                        a.tap(KeypadKey::Down);
-                        steps += 1;
+                        a.tap(if at < want_row {
+                            KeypadKey::Down
+                        } else {
+                            KeypadKey::Up
+                        });
+                        walked += 1;
                     }
                     if !landed {
                         o.note = format!(
-                            "never found {target} in the move list after \
-                             {steps} step(s)"
+                            "never reached slot {} in the move list after \
+                             {walked} step(s)",
+                            want_row + 1
                         );
                         return o;
-                    }
-                    // Cross-check the plan's slot arithmetic against the
-                    // screen: the list is in the order the preset wrote the
-                    // moves, so the cursor should have travelled exactly
-                    // `forget_slot - 1` rows. A disagreement means one of the
-                    // two is wrong and it is worth knowing which.
-                    if let Some(slot) = e.forget_slot {
-                        if steps + 1 != slot {
-                            o.note = format!(
-                                "the plan says slot {slot}; the cursor found \
-                                 {target} at slot {}",
-                                steps + 1
-                            );
-                        }
                     }
                     o.answered = true;
                     done_with_prompt = true;
@@ -1496,7 +1788,11 @@ mod drill {
                     }
                 }
                 Prompt::None => {
-                    a.tap(KeypadKey::A);
+                    // A battle menu gets the policy's move; everything else —
+                    // text boxes, animations, the main menu's own FIGHT — gets
+                    // the A it always got.
+                    let key = a.battle_key(&screen, &e.held).unwrap_or(KeypadKey::A);
+                    a.tap(key);
                     if a.gb.peek(tr::IS_IN_BATTLE) == 0
                         && done_with_prompt
                         && !busy(&screen)
@@ -1510,7 +1806,17 @@ mod drill {
                     }
                 }
             }
-            if a.gb.peek(tr::IS_IN_BATTLE) == 0xFF {
+            // **`wIsInBattle == $FF` IS NOT A BLACKOUT ON ITS OWN.** The
+            // repository already records that `$FF` means blacked out rather
+            // than fighting — and measured here, the cartridge also passes
+            // through it on the way *out* of a battle it won: CHARMELEON at
+            // level 8 kills the MAGIKARP, grows to level 9, and the byte reads
+            // `$FF` for an instant while the stat screen is up. The drill read
+            // that as a faint and threw away an event it had just completed,
+            // then every event after it. The party is the evidence: a blackout
+            // is a lead on zero HP, which is also what
+            // `longplay::Progress::wiped` uses and for the same reason.
+            if a.gb.peek(tr::IS_IN_BATTLE) == 0xFF && a.lead_fainted() {
                 o.note = "the lead fainted — the opponent is too strong".into();
                 return o;
             }
@@ -1614,10 +1920,14 @@ mod drill {
         w.str_field("schema", "gbtestprompt/1");
         w.num_field(
             "species",
-            tables
-                .resolve_species(&e.arm_species)
-                .map(|s| s.index)
-                .unwrap_or(0) as f64,
+            if e.arm_index != 0 {
+                e.arm_index
+            } else {
+                tables
+                    .resolve_species(&e.arm_species)
+                    .map(|s| s.index)
+                    .unwrap_or(0)
+            } as f64,
         );
         w.str_field("species_name", &e.arm_species);
         w.num_field("level", e.level as f64);
@@ -1650,6 +1960,20 @@ mod drill {
         let staged = stage(rom, out)?;
         let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
         let tables = RomTables::locate(bytes.clone()).map_err(|e| format!("{e}"))?;
+        // The move table, read out of the staged cartridge by bank and address
+        // rather than transcribed, and confirmed against the type chart's own
+        // opening rows before anything is believed of it.
+        let moves = BattleTables::read(|bank, a| {
+            *bytes
+                .get(bank * 0x4000 + (a as usize & 0x3FFF))
+                .unwrap_or(&0xFF)
+        });
+        if !moves.verified() {
+            return Err("the move table and type chart did not read back as \
+                        this cartridge's — refusing to choose a battle move \
+                        from them"
+                .into());
+        }
         let dir = out.join(plan.species.to_lowercase());
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
@@ -1662,7 +1986,11 @@ mod drill {
         println!("   corpus {}", dir.display());
         println!();
 
-        let presets: String = plan.events.iter().map(preset_for).collect();
+        let presets: String = plan
+            .events
+            .iter()
+            .map(|e| preset_for(e, can_fight(e, &tables, &moves)))
+            .collect();
         let mut a = Arena::boot(&staged, &bytes, &presets)?;
         let mut rows: Vec<Row> = Vec::new();
         let mut done = 0usize;
@@ -1703,6 +2031,23 @@ mod drill {
             }
             let o = play(&mut a, &tables, e, rows.len() as u32 + 1, clock);
             clock += o.frames.max(1);
+            // **One bad event must not cost the rest of the line.** A drill
+            // that gives up mid-sequence leaves the machine wherever it stood
+            // — a stat screen, a text box, a battle nobody finished — and
+            // `arm` only ever lands when the *overworld loop* polls
+            // `wCurOpponent`, so every event after it reported "no battle
+            // started" and the whole line went with it. Measured on
+            // CHARMELEON: one lost event, then six unreachable ones. A fresh
+            // machine costs about a second and is the one recovery that cannot
+            // itself get stuck, and every event arms its own party from the
+            // preset anyway, so nothing is carried between them.
+            //
+            // A *verified* event can leave the machine wedged too, and the
+            // same test catches both: `wIsInBattle` back at 0 is the overworld
+            // loop running, which is the one condition `arm` needs.
+            if !o.verified || a.gb.peek(tr::IS_IN_BATTLE) != 0 {
+                a = Arena::boot(&staged, &bytes, &presets)?;
+            }
             let verdict = if o.verified && o.species_unverified {
                 "ok (form unchecked)"
             } else if o.verified {

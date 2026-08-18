@@ -4909,8 +4909,8 @@ floor's are declines it got by inaction.**
   MEASURING THE CORPUS, NOT THE METHOD.** The reason was in its own overlap
   figures: across the two lines the corpora share **one held move name of eleven
   and none of the nine offered moves**, so the unseen student had never seen a
-  move it was asked about. **Scaled to 140 species lines it transfers: 73 of 97
-  held-out prompts, 42 of 60 replacements, against a floor of 0 of 60.** The
+  move it was asked about. **Scaled to 140 species lines it transfers: 85 of 114
+  held-out prompts, 50 of 72 replacements, against a floor of 0 of 72.** The
   policy is the same three counters; only the corpus grew. **The general lesson:
   a negative held-out result at a tiny sample means "the corpus is too small to
   say", not "the method does not work" — and the way to tell them apart is to
@@ -4937,22 +4937,90 @@ floor's are declines it got by inaction.**
   values and the prompt looked unanswered when it had in fact been answered
   correctly six decisions earlier. `advance_text` is safe to give any arm: it
   refuses to answer a question.
-- **THE SCALE-OUT IS `tools/learn-student/drill_all.py`: 140 lines, 46.4 s of
-  wall clock on 14 workers (616 worker-seconds), 370 verified prompts.** Numbers
-  to quote: 151 species, 140 lines with a decision, 10 whose walk offers none,
-  **1 that cannot be planned — MEW**, because `BaseStats` holds 150 records
-  (`assert_table_length NUM_POKEMON - 1 ; discount Mew`) and MEW's live in
-  another bank. 432 decisions planned, 370 drilled, **236 of the published 581
-  distinct (held, offered) pairs**, 268 of the 840, 98 species, 1,360 corpus
-  rows. The 581/840 are over every *catchable* starting state; `--drill-plan`
-  walks one line per species from level 1, which is why it is a subset.
-- **58 DECISIONS WERE LOST AND EVERY CAUSE IS THE DRILL, NOT THE RIG.** 14 lines
-  where **the level-up never happened** — the drill wins its battle by pressing
-  A and A takes **move slot 1**, so a line whose slot 1 is SPLASH/HARDEN/SING
-  cannot kill the level-2 MAGIKARP and one whose slot 1 is TELEPORT *flees*;
-  9 where the move to forget was not in the list; 5 where the NO at the delete
-  box did not take; 1 where the lead fainted. Choosing a damaging slot would fix
-  about half of the first group; the rest hold no damaging move at all.
+- **THE SCALE-OUT IS `tools/learn-student/drill_all.py`: 140 lines, 64.3 s of
+  wall clock on 14 workers (855 worker-seconds), 432 verified prompts — every
+  planned decision, no line failing.** Numbers to quote: 151 species, 140 lines
+  with a decision, 10 whose walk offers none, **1 that cannot be planned — MEW**,
+  because `BaseStats` holds 150 records (`assert_table_length NUM_POKEMON - 1 ;
+  discount Mew`) and MEW's live in another bank. 432 decisions planned, **432
+  drilled**, **277 of the published 581 distinct (held, offered) pairs**, 311 of
+  the 840, 105 species, 1,469 corpus rows. The 581/840 are over every
+  *catchable* starting state; `--drill-plan` walks one line per species from
+  level 1, which is why it is a subset. **MEW stays excluded on purpose** — four
+  level-up learns in its whole life, no move unique to it, unobtainable in
+  normal play, so a special case for one species buys nothing.
+- **58 DECISIONS USED TO BE LOST AND EVERY CAUSE WAS THE DRILL, NOT THE RIG —
+  all four are closed, and the whole fix is free.** Interleaved A/B on the same
+  box at the same load, two rounds: before 24 lines failed / 370 drilled /
+  64.0 s / 854 worker-s, after **0 / 432 / 64.3 s / 855 worker-s**; on the five
+  lines both binaries complete identically the CPU cost is the same to the
+  second. The four:
+  - **the level-up never happened** (14 lines) — A on the move list takes **slot
+    1**, so a line whose slot 1 is SPLASH/HARDEN/SING cannot kill the level 2
+    MAGIKARP and one whose slot 1 is TELEPORT *flees*. Fixed by asking
+    `terminalgb_plugin_agent::battle::decide` for the slot — **the one battle
+    policy, not a second one** — with two drill-only constraints on top: it may
+    never run (running is not a level-up) and it may never use SELFDESTRUCT or
+    EXPLOSION (effect byte 7), because `decide` is right to weigh an explosion
+    for a player with a bench and it blacks out a rig whose level-up is checked
+    on a survivor. Eight events on the seven self-destructing lines fainted
+    before that clause existed.
+  - **the move to forget was not in the list** (9) — not a menu bug:
+    `Screen::selected` returns `HORN` for `HORN ATTACK` whenever another row of
+    the same list starts a word in the same column, which on four aligned move
+    names is constant. **Identify a menu row by its index, never by its text.**
+  - **the NO at the delete box did not take** (5) — the same truncation, plus an
+    off-by-one: the **forget** list's `wCurrentMenuItem` is **0-based** where the
+    **battle** move list's is 1-based. Measured on RHYDON at level 64 with the
+    cursor on the first move of each: battle list 1, forget list 0, main menu 0.
+  - **the lead fainted** (1, `charmeleon`) — it had not. `wIsInBattle` reads
+    `$FF` for an instant on the way out of a battle it *won*. A blackout is a
+    lead on **zero HP**; require both.
+- **FIVE EVENTS HOLD NO MOVE THAT CAN HURT ANYTHING, AND THEY GET AN OPPONENT
+  THAT KNOCKS ITSELF OUT.** Measured over all 140 lines, exactly five and all of
+  them `free` events: JIGGLYPUFF at 9 (SING), KAKUNA and METAPOD at 12 (HARDEN),
+  MAGIKARP at 15 (SPLASH), ABRA at 16 (TELEPORT). No choice of *move* recovers
+  any. The preset gives those five a **trainer's** level 2 MAGIKARP holding
+  SELFDESTRUCT — a trainer battle rather than a wild one is the whole of why
+  ABRA works, because `TryRunningFromBattle` refuses one and the TELEPORT fails.
+  Gen 1 has no trainer experience bonus, so the 5 experience and the "cannot
+  cross a boundary at any level" property are unchanged.
+  `GB_LEARN_DRILL_NO_EXPLODER=1` puts the wild MAGIKARP back and reddens all
+  five.
+- **ONE BAD EVENT MUST NOT COST THE REST OF THE LINE.** A drill that gives up
+  mid-sequence leaves the machine wherever it stood, and `arm` only lands when
+  the *overworld loop* polls `wCurOpponent` — so on CHARMELEON one lost event
+  was followed by six unreachable ones. The runner rebuilds the machine whenever
+  an event did not verify **or left `wIsInBattle` non-zero**; every event arms
+  its own party from the preset, so nothing is carried between them anyway.
+- **A SPECIES CANNOT BE IDENTIFIED BY ITS PRINTED NAME.** NIDORAN♂ and NIDORAN♀
+  normalise to the same string in every decoder here, so `resolve_species`
+  returns whichever comes first — measured, the female's plan armed a male and
+  learned HORN ATTACK where the plan said SCRATCH. `learn_table.py` emits
+  `arm_index`/`species_index` and the presets arm by index. The same collision
+  also gave both lines one filename in `drill_all.py`, so one plan overwrote the
+  other and two workers drilled the survivor into one directory: **140 lines
+  planned, 139 files on disk, and a total that looked complete.**
+- **MORE COVERAGE DID NOT MOVE THE HELD-OUT RATE, AND THAT IS THE FINDING.**
+  370 decisions → 432, 236 distinct pairs → 277, 98 species → 105, and the
+  held-out student went **75.3 % [65.8-82.8] on 97 prompts → 74.6 %
+  [65.9-81.7] on 114**, replacements 42/60 → 50/72. Overlapping intervals, gap
+  unchanged within a point. At nine prompts the binding constraint was coverage
+  (measured, via the train/test overlap); at a thousand corpus rows it is the
+  **policy**, which is three counters. A network is the next variable to move,
+  not a bigger corpus. The seen split is 80.3 % on 432 against 83.2 % on 370 —
+  different pools, different models, overlapping intervals, so evidence of
+  nothing on its own; what it retires is the old *"the pool dropped its hardest
+  instantiations"* caveat, and splitting the 432 by whether the old drill could
+  reach them says the newly-reachable ones are if anything **easier** (student
+  23/27 against 324/405).
+- **THE PRESS-A FLOOR IS THE ONE ARM WHOSE FIGURE IS NOT BIT-STABLE.** Two runs
+  of the identical `move-learning-all` command gave 152 and 153 of 432; teacher
+  and student reproduce exactly. `mash-a` ends every attempt by exhausting its
+  call budget and **the emulator never blocks on a driver**, so how many frames
+  have gone by when the budget runs out depends on how fast the subprocess was.
+  It moves the floor by a prompt and never the arms being measured — but quote
+  it from the run whose other rows you are quoting.
 - **THE DRILL STAGES THE CARTRIDGE PER PROCESS NOW** (`out/stage-<pid>/`). It
   used to be a fixed `target/gen1-learn-drill/`, and the drill *deletes* the
   `.sav` there on the way in so every line starts from a new game — so two
@@ -4965,7 +5033,7 @@ floor's are declines it got by inaction.**
   the party's HP and **not what is held**, so digit-stripping the key made two
   prompts on one line that offer the same move collide: 18 ambiguous keys of 619
   against 4 of 895 exact, and the teacher scored 88 of 97 instead of 97 of 97.
-  The remaining four are **character-for-character identical screens with
+  The remaining six (of 432) are **character-for-character identical screens with
   different right answers** — the ceiling on any screen-only player, teacher
   included, and a fact about the cartridge rather than the tool.
 - **MATCH A PROMPT PHRASE AS IT LOOKS WHILE IT IS STILL BEING TYPED.** Gen 1

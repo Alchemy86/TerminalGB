@@ -319,7 +319,16 @@ def drill_plan(rom, em, mv, names, dex_of, stats, stats_at, start,
                 # `level - 1`, which is the PRE-evolution one when the line
                 # evolves on this very level.
                 "arm_species": names[was],
+                # **The internal index, because a NAME is not unique.** The two
+                # NIDORAN differ only by a gender glyph, and every decoder that
+                # drops non-alphanumerics — ours and the emulator's alike — maps
+                # both to `NIDORAN`, so `resolve_species` returns whichever
+                # comes first. Measured: the drill armed a NIDORAN male for the
+                # female's plan and learned HORN ATTACK where the plan said
+                # SCRATCH. The index is what the party actually stores.
+                "arm_index": was,
                 "species": names[owner],
+                "species_index": owner,
                 "evolves_here": evolved,
                 "held": [mv.name(m) for m in held],
                 "offered": mv.name(move),

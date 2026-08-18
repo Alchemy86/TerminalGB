@@ -57,6 +57,8 @@ correct its body and say so in it — that is what the "our own belief" rows bel
 | [a screen does not survive a switch](#a-screen-does-not-survive-a-switch) | our battle engine had a Gen 3 rule in it | **our own belief** | [`wPlayerBattleStatus3`][wPlayerBattleStatus3] |
 | [a cartridge can tell there is no sound chip](#a-cartridge-can-tell-there-is-no-sound-chip) | the nurse's healing sequence never finishes | emulator | — |
 | [the learnset table is indexed by internal number, not by dex number](#the-learnset-table-is-indexed-by-internal-number-not-by-dex-number) | reading the first 151 slots loses all three starters | cartridge mechanic | — |
+| [two species share one printable name](#two-species-share-one-printable-name) | NIDORAN, and a lookup by name cannot tell them apart | cartridge mechanic | [`wPartyMon1Species`][wPartyMon1Species] |
+| [a menu row can be truncated by the row below it](#a-menu-row-can-be-truncated-by-the-row-below-it) | `HORN ATTACK` reads back as `HORN` | **our own belief** | [`wCurrentMenuItem`][wCurrentMenuItem] |
 | [a link that scored 100 per cent on the wrong task](#a-link-that-scored-100-per-cent-on-the-wrong-task) | a goal authored from a plausible idea | **our own belief** | — |
 | [the silent dead band](#the-silent-dead-band) | two components deciding the same thing | **our own belief** | — |
 
@@ -397,6 +399,16 @@ policy's choice is thrown away with nothing anywhere to say so.
 
 **How it was found.** By measuring it before believing it, rather than by a failure. The driver
 reads `menu_item - 1` for the move list and `menu_item` for everything else.
+
+**And "the move list" means the BATTLE one only — the forget list is 0-based.** That is a
+correction to the first version of this entry, which read as though *any* list of four moves
+carried the quirk. Measured on RHYDON at level 64 with `▶` on the first move of each, one
+`wCurrentMenuItem` read per screen: the battle move list **1**, the `Which move should be
+forgotten?` list **0**, the main FIGHT/PKMN/ITEM/RUN menu **0**. Only the first is the menu
+`MoveSelectionMenu` builds; the forget list is somebody else's `HandleMenuInput`. Subtracting one
+there walked the [level-up drill](level-up-drill.md) to the slot *below* the move its rule had
+chosen and forgot that instead — silently, because the cartridge accepts whatever the cursor is
+on, which is this entry's own point arriving a second time.
 
 **What is actually happening.** `MoveSelectionMenu` (`engine/battle/core.asm`) opens with:
 
@@ -903,6 +915,15 @@ what let it through.
 > enumerated.** This has bitten three times: this one, a film compositor's `if battle:` (truthy
 > for wild, trainer *and* blacked-out alike), and the same reader's `_ => Trainer`.
 
+**And `$FF` is not a reliable blackout signal either, which is the fourth time round.** The
+[level-up drill](level-up-drill.md) treated it as one and threw away events it had just
+*completed*: measured on CHARMELEON at level 8, the lead kills the MAGIKARP, grows to level 9,
+and the byte reads `$FF` for an instant while the level-up stat screen is up — a battle nobody
+lost. It is on the way *out* of a battle in either direction, which is what `.allPokemonFainted`
+being an end-of-battle path should have implied. **The party is the evidence a blackout leaves: a
+lead on zero HP**, which is what `longplay::Progress::wiped` already uses and for the same
+reason. The drill now requires both, and one line's seven events stopped being one.
+
 ---
 
 ### Two map names in our own table were wrong
@@ -1000,6 +1021,72 @@ own: **a rule written down in one harness does not reach the next one.**
 ---
 
 ## Reading the cartridge's own tables
+
+### Two species share one printable name
+
+**Kind: a cartridge fact, and the trap it sets for every name lookup.**
+
+**What it is.** NIDORAN♂ and NIDORAN♀ are two species with two internal indices, two base-stat
+records and **two different learnsets** — and their names differ only by a gender glyph. Every
+decoder in this repository normalises a species name by dropping what is not alphanumeric, so
+both become `NIDORAN`, and a lookup by name returns whichever the cartridge lists first.
+
+**How it showed up.** It did not show up at all until a *second* bug was fixed. The scale-out
+script filed each plan under a sanitised stem, so `nidoran.plan.json` was written twice and one
+of the two lines was silently never drilled — 140 lines planned, 139 files on disk, and a total
+that looked complete. Giving them distinct filenames exposed the real one underneath: the
+female's plan armed a **male**, which then learned HORN ATTACK at level 8 where the plan said
+SCRATCH, and the drill reported a moveset mismatch it could not explain.
+
+**How it was found.** By reading the species byte the game had actually generated
+(`wPartyMon1Species` = 3, the male) beside the plan that had asked for 15. The screen said
+`NIDORAN` in both runs and could not have told anybody apart.
+
+**What is actually happening.** `RomTables::resolve_species` matches on a normalised name and
+returns the first internal index whose name normalises the same way. There is nothing wrong with
+that rule; there is something wrong with using a *name* to identify a species at all. The party
+stores an internal index, and so does every table in the cartridge.
+
+**The memory.** [`wPartyMon1Species` `$D16B`][wPartyMon1Species].
+
+**Evidence, and the rule.** `learn_table.py` emits `arm_index` and `species_index` beside the
+names, and the drill's presets name the Pokémon by index; the names stay for the report to be
+readable. Both NIDORAN lines drill to 6 of 6 events, with the male learning HORN ATTACK at 8 and
+the female SCRATCH. **Anything that identifies a Pokémon, a move or a map by its printed name
+should carry the index beside it** — the name is for the reader.
+
+---
+
+### A menu row can be truncated by the row below it
+
+**Kind: a correction of our own belief, about a reader of ours.**
+
+**What it is.** `Screen::selected` — the agent's "what is the cursor on?" — reads back `HORN`
+when the cursor is on `HORN ATTACK`, if some other row of the same list begins a word in the
+column `ATTACK` begins in. On a Gen 1 battle move list, which is four left-aligned move names,
+that happens constantly: `HORN ATTACK` over `TAIL WHIP`, `POISON STING` over `STRING SHOT`,
+`QUICK ATTACK` over `FOCUS ENERGY`.
+
+**How it showed up.** Six species lines of the [level-up drill](level-up-drill.md) failed with
+*"never found TAIL WHIP in the move list after 8 step(s)"* — a cursor walk that pressed Down
+eight times looking for a move that was on the screen the whole time, one row up from where it
+started.
+
+**How it was found.** By dumping the decoded screen beside the value: the box plainly read
+`▶HORN ATTACK / STOMP / TAIL WHIP / FURY ATTACK` and `selected()` returned `"HORN"`.
+
+**What is actually happening**, and it is not a bug in the rule. `selected` ends an item at a run
+of blanks that is followed by a column where *another row of the same menu* also starts a word.
+That is exactly what makes `FIGHT` end before `PKMN` on the two-column battle menu, and exactly
+what keeps `NEW GAME` whole on the title screen — both cases it was written for and both
+measured. A list of aligned two-word names is the case where the same rule cuts.
+
+**Evidence, and the rule for a caller.** **Identify a menu row by its index, not by its text.**
+`wCurrentMenuItem` is the row the cartridge itself is on and cannot be truncated; the text is a
+cross-check that must tolerate the one truncation the rule can produce — the item's name, or its
+first word, and nothing else. With the walk driven by the index the six lines drill to completion.
+
+---
 
 ### The learnset table is indexed by internal number, not by dex number
 

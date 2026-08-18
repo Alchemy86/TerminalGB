@@ -77,7 +77,8 @@ Grinding to level 65 is not a test of anything. Each event is reached in one bat
    function the preset itself used to give the Pokémon its experience, so there is no second
    formula to drift.
 3. **Kill one level 2 MAGIKARP.** Worth 5 experience, knows nothing but SPLASH, and cannot hurt
-   anything the plan ever arms.
+   anything the plan ever arms. **Which move does the killing is
+   [`terminalgb_plugin_agent::battle::decide`]'s answer, not slot 1** — see §3a.
 
 **The opponent is a MAGIKARP and not the CHANSEY the trace scenarios use, and that is arithmetic
 rather than taste.** CHANSEY is worth 182, which at low level crosses two level boundaries at
@@ -86,6 +87,28 @@ once and loses the move belonging to the one it skipped — the
 experience written directly, 5 points cannot cross a boundary at any level in the game, so the
 same arithmetic works for an event at level 9 and an event at level 65 instead of being tuned per
 event.
+
+### 2a. Five events cannot fight, and their opponent knocks itself out
+
+**Measured over all 140 drillable lines, exactly five events hold no move that can damage
+anything**: JIGGLYPUFF at 9 with only SING, KAKUNA and METAPOD at 12 with only HARDEN, MAGIKARP
+at 15 with only SPLASH, ABRA at 16 with only TELEPORT. Every one is a `free` slot-filling event,
+so no *decision* is at stake — but a line that cannot play out its first event used to lose every
+event after it, so they had to be got through.
+
+**No choice of move recovers any of them, so the opponent ends the battle instead.** Those five
+presets arm a **trainer's** level 2 MAGIKARP holding SELFDESTRUCT, which faints itself and awards
+the same 5 experience a kill would.
+
+**A trainer battle rather than a wild one is the whole of why ABRA works.** TELEPORT ends a wild
+battle — the ABRA escapes and earns nothing — and `TryRunningFromBattle` refuses a trainer battle
+outright, so the TELEPORT fails and the turn passes. SPLASH and HARDEN do nothing either way;
+SING costs a few turns of sleep and no more. **Gen 1 has no trainer experience bonus** (that
+arrives in Gen 2), so the 5 points and the "cannot cross a boundary at any level" property above
+are both unchanged.
+
+**Teeth.** `GB_LEARN_DRILL_NO_EXPLODER=1` answers "this one can fight" for everything, which puts
+the plain wild MAGIKARP back in front of the five: all five go red and their lines with them.
 
 **Declared assistance.** Writing the experience is `Gameboy::debug_write`, which
 `Gameboy::host_writes()` counts; the drill prints the count at the end (3,017 for a full line,
@@ -106,7 +129,35 @@ phrase in them was read off a traced screen rather than recalled:
 | `Abandon learning X?` | walk the cursor to **YES** (decline) or **NO**, press A |
 
 **"Walk the cursor" means read it back, not count presses**, and that distinction cost a run. See
-§4.
+§4. **What is read back is the cursor's *index*, not the text it is sitting on** — see §4 again,
+because reading the text cost six lines.
+
+### 3a. The move is the battle policy's, and the menu is the drill's
+
+**The drill used to win its battle by pressing A, and A on the move list takes slot 1.** So a
+line whose slot 1 is SPLASH, HARDEN or SING could not kill the MAGIKARP that supplies the
+experience, and one whose slot 1 is TELEPORT ran away from it — 14 species lines lost every one
+of their decisions to that.
+
+**The choice is [`terminalgb_plugin_agent::battle::decide`], the one battle policy this
+repository has**, the same implementation every Pewter chain link fights through: it reads the
+move table and the type chart out of the cartridge and both sides out of the two battle structs.
+What the drill adds is the *menu* — turning a slot into a keypress without going out of phase,
+which is the same split `examples/pewter_chain.rs::fight` makes.
+
+Two drill-only constraints ride on top, and both are stated where they are applied:
+
+* **It may never run.** Running is not a level-up. `decide`'s escape and stat-move branches are
+  right for somebody playing the game and unavailable to a rig whose whole purpose is to cross
+  one experience boundary, so anything that is not `Fight` falls back to the most damage on offer.
+* **It may never use SELFDESTRUCT or EXPLOSION.** `decide` is right to weigh an explosion for a
+  player with a bench — it ends the battle, which is usually the point — and it is exactly wrong
+  here, because the level-up is checked on a Pokémon that *survived*. Measured: eight events
+  across the seven self-destructing lines blacked the party out, and each one took the rest of
+  its line with it. `EXPLODE_EFFECT` is 7 (`constants/move_effect_constants.asm`), confirmed
+  against this cartridge — those two moves are the only ones carrying it.
+
+[`terminalgb_plugin_agent::battle::decide`]: ../../plugins/agent/src/battle.rs
 
 ### The verdict is the cartridge's
 
@@ -126,7 +177,7 @@ The screens along the way look entirely normal.
 
 ---
 
-## 4. Four things this cost, and what each one teaches
+## 4. Seven things this cost, and what each one teaches
 
 **A tap shorter than `MENU_GAP` is swallowed, and on a move list that forgets the wrong move.**
 Gen 1's `HandleMenuInput` delays several frames after accepting a press. Three 12-frame taps moved
@@ -145,6 +196,35 @@ been made. Found frame by frame with `GB_LEARN_DRILL_DUMP=1`.
 > The general form is worth keeping: **a phrase that identifies a screen must be a phrase that is
 > still on it when the screen is asking you something.** The opening words of a Gen 1 sentence are
 > usually gone by then.
+
+**A menu row can be truncated by the row below it, and the cursor walk searched for a move that
+was on the screen the whole time.** `Screen::selected` ends an item at a blank run followed by a
+column where another row of the same list starts a word — right for `FIGHT` over `ITEM`, and on
+four left-aligned move names it cuts `HORN ATTACK` down to `HORN`, because `TAIL WHIP`'s `WHIP`
+begins where `ATTACK` does. Six lines failed with *"never found TAIL WHIP in the move list after
+8 step(s)"*. **Identify a menu row by its index, not by its text**; the text is a cross-check that
+must tolerate exactly that truncation and nothing else. The
+[discovery](discoveries.md#a-menu-row-can-be-truncated-by-the-row-below-it).
+
+**And the two move lists disagree about where their index starts.** The battle move list's
+`wCurrentMenuItem` is 1-based — `MoveSelectionMenu` opens `ld a, [wPlayerMoveListIndex] / inc a`
+— and the `Which move should be forgotten?` list's is **0**. Measured on RHYDON at level 64 with
+`▶` on the first move of each. Subtracting one on the forget list walked to the slot *below* the
+move the rule chose and forgot that instead, silently, which is this section's first lesson
+arriving a second time.
+
+**`wIsInBattle == $FF` is not a blackout on its own.** The cartridge passes through it on the way
+*out* of a battle it won: CHARMELEON at level 8 kills the MAGIKARP, grows to level 9, and the
+byte reads `$FF` for an instant while the stat screen is up. The drill read that as a faint and
+threw away an event it had just completed. **A blackout is a lead on zero HP** — the same
+evidence `longplay::Progress::wiped` uses — and requiring both is the fix.
+
+**One bad event must not cost the rest of the line.** A drill that gives up mid-sequence leaves
+the machine wherever it stood — a stat screen, a text box, a battle nobody finished — and `arm`
+only ever lands when the **overworld loop** polls `wCurOpponent`. So on CHARMELEON one lost event
+was followed by six reporting *"no battle started"*. The runner rebuilds the machine whenever an
+event did not verify **or left `wIsInBattle` non-zero**; every event arms its own party from the
+preset, so nothing was ever carried between them.
 
 **`BattlePlugin` restores the party the moment `wIsInBattle` reads 0**, which is *after* the
 prompts, so a snapshot taken on "there is a party" captures the restored one and writes the
@@ -262,6 +342,15 @@ Consequences worth knowing:
   [nothing is ever lost by evolving](discoveries.md#cancelling-an-evolution-costs-one-level-and-nothing-else)
   and a line that refuses them is a line no player walks. The `cancel` subcommand still measures
   what a refusal does.
+- **MEW.** It cannot be planned — `BaseStats` holds 150 records
+  (`assert_table_length NUM_POKEMON - 1 ; discount Mew`) and MEW's live at `MewBaseStats` in
+  another bank the planner does not read. **A deliberate exclusion rather than a to-do**: four
+  level-up learns in its whole life, no move among them unique to it, and unobtainable in normal
+  play, so a special case for one species buys nothing the other 150 do not already carry.
+- **Starting states other than level 1.** `--drill-plan` walks one line per species from level 1,
+  which reaches 277 of the 581 distinct (four held, offered) pairs the cartridge can ask. The
+  rest need the *planner* to emit mid-line starting states — a Pokémon can be caught at any level
+  — which is a plan-generator change and not a drill one.
 - **A trained student that is a model.** This produces what a student trains from, and
   `--prompts <dir>` now also writes the [A/B rig](../agent/test-rig.md)'s entry pool: one save
   state per verified decision, taken with the question on the screen, and a `gbtestprompt/1`

@@ -62,6 +62,7 @@ def plans(rom_path, out):
     pdir = out / "plans"
     pdir.mkdir(parents=True, exist_ok=True)
     written, skipped, failed = [], [], []
+    pending = {}
     for i in real:
         buf = io.StringIO()
         try:
@@ -79,9 +80,20 @@ def plans(rom_path, out):
             skipped.append(names[i])
             continue
         stem = "".join(c for c in names[i].lower() if c.isalnum())
-        (pdir / f"{stem}.plan.json").write_text(buf.getvalue())
-        written.append((names[i], stem, len(d["events"]), len(decisions),
-                        sum(1 for e in decisions if e["answer"] == "decline")))
+        # **A stem must be unique, and NIDORAN is why.** The two of them differ
+        # only by a gender glyph, which `isalnum` drops — so both lines wrote
+        # `nidoran.plan.json`, one silently overwrote the other, and two workers
+        # then drilled the same plan into the same output directory at the same
+        # time. Measured: 140 lines planned, 139 distinct files, one line never
+        # drilled at all. Colliding stems take the internal index, both of them,
+        # so neither is "the plain one" by accident of iteration order.
+        pending.setdefault(stem, []).append((i, buf.getvalue(), d, decisions))
+    for stem, group in pending.items():
+        for i, text, d, decisions in group:
+            name = stem if len(group) == 1 else f"{stem}-{i}"
+            (pdir / f"{name}.plan.json").write_text(text)
+            written.append((names[i], name, len(d["events"]), len(decisions),
+                            sum(1 for e in decisions if e["answer"] == "decline")))
     return written, skipped, failed, real
 
 
