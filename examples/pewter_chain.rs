@@ -1185,7 +1185,11 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         // ledge inside it. 7.55 experience per step against Route 5's 8.10
         // and Route 24's 10.85 — and both of those are behind a one-way ledge
         // descent or five bridge trainers respectively.
-        "27-train-for-misty" => {
+        // `x-train-for-misty-30` is the same ground with a higher target, for
+        // asking whether ANY reachable level answers Misty for the Charmander
+        // line. It lives in `scenarios/experiments/`, which `chain_files`
+        // never reads, so it cannot join the chain by accident.
+        "27-train-for-misty" | "x-train-for-misty-30" => {
             r.insert(CERULEAN_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
             r.insert(
                 CERULEAN_CITY,
@@ -1335,7 +1339,7 @@ fn recover_route(scenario: &str) -> HashMap<u8, MapPlan> {
         // one, the Gym for the other. That is deliberate: the walk back and
         // the walk out cross the same city and there is nothing in the city
         // to tell them apart.
-        "27-train-for-misty" => {
+        "27-train-for-misty" | "x-train-for-misty-30" => {
             r.insert(
                 CERULEAN_CITY,
                 vec![stage(CERULEAN_TO_ROUTE_4, Finish::Step("left"))],
@@ -1465,7 +1469,7 @@ fn heal_route(scenario: &str) -> HashMap<u8, MapPlan> {
     // across the city. Forty-seven steps, against link 15's twenty-seven —
     // the price of a grass patch that is a map away from its nurse, and the
     // reason Route 5's richer table does not pay for its one-way ledges.
-    if scenario == "27-train-for-misty" {
+    if scenario == "27-train-for-misty" || scenario == "x-train-for-misty-30" {
         r.insert(
             ROUTE_4,
             vec![stage(ROUTE_4_GRASS_TO_CERULEAN, Finish::Step("right"))],
@@ -1651,6 +1655,7 @@ fn may_fight_wild(scenario: &str) -> bool {
             | "11-train-for-the-forest"
             | "15-train-for-brock"
             | "27-train-for-misty"
+            | "x-train-for-misty-30"
             | "x-train-route-2-south"
             | "x-train-route-22"
     )
@@ -1678,6 +1683,7 @@ fn train_to(scenario: &str) -> u32 {
     match scenario {
         "15-train-for-brock" => BROCK_TRAIN_TO,
         "27-train-for-misty" => MISTY_TRAIN_TO,
+        "x-train-for-misty-30" => 30,
         // Link 11's number, and the two pre-forest experiments do link 11's
         // own job so they share it. Every other link trains nothing, and for
         // those this is simply the ceiling above which the policy stops

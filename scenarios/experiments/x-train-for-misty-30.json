@@ -1,0 +1,29 @@
+{
+  "schema": "gbscenario/1",
+  "name": "x-train-for-misty-30",
+  "objective": "NOT A LINK. Route 4's grass again, to level 30 instead of 24, for asking whether any level a player can reach by grinding answers Misty for the Charmander line.",
+  "start_state": "states/26.gbss",
+  "goal": [
+    "watch:lead_level>=30"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 12000",
+    "max_wall_seconds 14400"
+  ],
+  "knowledge": [
+    "atlas"
+  ],
+  "timeout_frames": 4000000,
+  "watch": [
+    "lead_level"
+  ],
+  "evidence": [
+    "watch:lead_level>=30 - wPartyMon1Level $D18C, the same address link 27's goal reads. This scenario exists only to sweep the threshold; scenarios/experiments/ is never read by chain_files, so nothing here can join the chain.",
+    "30 is where the CHARMANDER line's damage model stops improving against Misty: CHARMELEON at 30 still needs nine turns to kill STARMIE and still dies in three, because WATER GUN is 2x on FIRE and its own best move is a 40-power SCRATCH at 1x. brock.md measured the mirror of this at Brock and found a plateau rather than a curve; this is the same sweep on the other gym."
+  ]
+}
