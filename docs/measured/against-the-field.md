@@ -130,12 +130,17 @@ bookkeeping **once per instruction** — `MemoryManagementUnit::do_cycle` runs 3
 and advances the timer, the PPU, the APU, OAM DMA, the serial port and the cartridge clock every
 time — where PyBoy does it **once per horizon**, which is typically many instructions.
 
-The road from here is therefore named, and it is a project rather than a pass: **make the timer
-and the PPU lazy the way the APU already is.** `Sound::catch_up` is exactly the pattern —
-nothing is synthesised until something reads a register, and it does not cost accuracy
-(`dmg_sound` is 12/12 with it). A lazily-caught-up timer and PPU would keep every M-cycle
-answerable while removing the eager work, which is the only remaining item on this page big
-enough to matter.
+**The PPU half of that was taken and is worth +17.5 %** ([`docs/throughput.md`](../throughput.md)
+§16): the batched renderer is advanced lazily now, bounded by a horizon, with every gate green
+and 5,320 Gambatte rows unmoved.
+
+**The timer half was sized and refused.** Deferring it measures **8.5 % slower**, because
+`Timer::do_mcycle` is a handful of field operations while the closed-form batch carries three
+guards — the batch wins over a *loop* of 38 M-cycles and loses to a direct step over eight. A
+peripheral that genuinely has to count is not overhead.
+
+So what is left of PyBoy's lead is the per-access tick itself, and the interpreter. That is a
+different execution model, not another pass.
 
 ## 5. What this changes about the goal
 

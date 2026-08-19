@@ -12059,8 +12059,31 @@ in both picture modes**, every other gate green. The largest single win since th
 - **THE OAM-CORRUPTION HOOK NEEDS IT TOO**, and for a reason worth remembering: `Gpu::oam_bug`
   predicts which OAM row a bus cycle hits **from the PPU's own free-running dot counter**, so the
   counter has to be current. Both hooks (`read_at`'s and `idu_tick`'s) flush.
+- **THE TIMER IS NOT THE OTHER HALF OF THIS IDEA — MEASURED, AND IT IS 8.5 % THE WRONG WAY.**
+  `--breakdown` prices `no timer` at 13.0 % and the obvious next move is to defer it the same
+  way. **Sized before building**: deferring `Timer::do_mcycle_now` by a fixed eight accesses —
+  wrong, but the cheapest possible version and so an upper bound — measures **0.0436 → 0.0473
+  ms/frame, 8.5 % SLOWER**. `do_mcycle` is a handful of field operations; `batch_mcycles` is
+  closed-form arithmetic behind three guards, and it wins over a *loop* of 38 M-cycles (which is
+  what a halted CPU hands it) and loses to a direct step over eight. **The PPU pays a whole chunk
+  of bookkeeping per call whatever the dot count; the timer pays per M-cycle because per M-cycle
+  is what it does.** Do not repeat this.
 - **ANYTHING ELSE THAT READS THE PPU MUST FLUSH FIRST**, and the list is the whole contract:
   VRAM, OAM, `$FF40-$FF4F`, `$FF68-$FF6B`, a VRAM DMA (gated on one being active), an OAM DMA, a
   render-mode switch, a speed switch, and `Gameboy::end_frame` for the framebuffer and plugins.
   **Add a new PPU observer and you must add its flush** — the gates will tell you, but they take
   ten minutes and the row groups above are the map of what each mistake looks like.
+
+### Where the standard frame is after all of it, and it is FLAT
+
+`eu-stack` by source line on a **quiet** box: `bus_tick`'s entry 9.4 %, `Cpu::operation`'s
+`match op` 6.8 %, `MemoryManagementUnit::fetch`'s ROM read 6.3 %, `Timer::do_mcycle` 6.1 %, and
+**nothing else above 3 %**. What is left at the top is the per-access hook, the opcode dispatch
+and the fetch — the three things an interpreter *is*. **The next real step is a different
+execution model (block compilation or threaded code), not another pass**, and the honest note
+beside it is that we are already 9.5x the reference cycle-accurate implementation.
+
+Session totals, cold-boot collector, interleaved on one P-core, **quiet box**:
+**0.0592 -> 0.0454 ms/frame, 283x -> 369x (+30.4 %)**, and **414x** with no APU installed.
+Aggregate on the same box: **four workers 1,066x, twenty workers 3,735x** — the per-instance
+figure rises only 28 % from one to twenty, which is the silicon-limited shape §9 describes.

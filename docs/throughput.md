@@ -1252,6 +1252,39 @@ one P-core, thread CPU clock, **quiet box (load 1.3)**:
 gate green throughout. With no APU installed at all — PyBoy's configuration — the same build is
 **0.0405 ms/frame, 414×**.
 
-**What is left, in order of what it is worth.** The timer is the other half of §16's idea and is
-priced at 13.0 % by `--breakdown`. The per-access tick is 13.6 % and is accuracy we keep. After
-those the profile has nothing above 6 % and the next thing would be the interpreter itself.
+### 16.6 The timer is NOT the other half — measured, and it is 8.5 % the wrong way
+
+§15 named "make the timer lazy the way the APU already is" as the next item, on the strength of
+`--breakdown` pricing `no timer` at 13.0 %. **It was sized before it was built, and the sizing
+killed it**: deferring `Timer::do_mcycle_now` by a fixed eight accesses — wrong, but the
+cheapest possible version and therefore an upper bound — measures **0.0436 → 0.0473 ms/frame,
+8.5 % SLOWER**.
+
+The reason is worth keeping. `do_mcycle` is a handful of field operations; `Timer::batch_mcycles`
+is closed-form arithmetic behind three guards (a reload in flight, an overflow inside the span, a
+counter off the 4 T grid). The batch wins over the *loop* when a halted CPU hands it 38 M-cycles
+at a time, which is what §12 measured — and loses to a direct step when the span is eight. **So
+`no timer`'s 13.0 % is a peripheral that genuinely has to count, not overhead waiting to be
+removed.**
+
+The PPU was the opposite case and that is why the same idea went 17.5 % one way there and 8.5 %
+the other way here: the PPU pays a whole chunk of *bookkeeping* per call regardless of the dot
+count, and the timer pays per M-cycle because per M-cycle is what it does.
+
+### 16.7 Where the frame is now, and it is flat
+
+`eu-stack`, leaf frame, by source line, on a **quiet** box after §15 and §16:
+
+| line | share |
+|---|---:|
+| `bus_tick`'s own entry | 9.4 % |
+| `Cpu::operation`'s `match op` | 6.8 % |
+| `MemoryManagementUnit::fetch`'s ROM read | 6.3 % |
+| `Timer::do_mcycle` | 6.1 % |
+| everything else | nothing above 3 % |
+
+**There is no item left worth a pass.** What is above 6 % is the per-access hook, the opcode
+dispatch and the fetch itself — the three things an interpreter *is*. The next real step is a
+different execution model (block compilation, or threaded code), and the honest note beside it is
+that we are already 9.5× the reference cycle-accurate implementation and 2.1× off one that gave
+up cycle accuracy to get there.
