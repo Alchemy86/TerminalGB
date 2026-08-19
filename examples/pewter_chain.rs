@@ -2899,7 +2899,9 @@ impl ChainDriver {
             let (say, key) = match row.cmp(&want_row) {
                 std::cmp::Ordering::Less => ("Down the party.", "down"),
                 std::cmp::Ordering::Greater => ("Back up the party.", "up"),
-                std::cmp::Ordering::Equal if self.promote_swapping => ("Put it in front.", "a"),
+                std::cmp::Ordering::Equal if self.promote_swapping => {
+                    ("Put it in front.", "a")
+                }
                 std::cmp::Ordering::Equal => ("This is the one.", "a"),
             };
             return Some(Plan::new(say).press(key, 1).finish());
@@ -3243,13 +3245,14 @@ impl ChainDriver {
                     .as_ref()
                     .and_then(|a| worst_held(&a.moves))
                     .unwrap_or(1);
-                if s.menu_index == want {
-                    Some(self.one("This is the move the criterion prices lowest.", "a"))
-                } else if s.menu_index < want {
-                    Some(self.one("Walk the cursor down to it.", "down"))
-                } else {
-                    Some(self.one("Walk the cursor up to it.", "up"))
-                }
+                let (say, key) = match s.menu_index.cmp(&want) {
+                    std::cmp::Ordering::Equal => {
+                        ("This is the move the criterion prices lowest.", "a")
+                    }
+                    std::cmp::Ordering::Less => ("Walk the cursor down to it.", "down"),
+                    std::cmp::Ordering::Greater => ("Walk the cursor up to it.", "up"),
+                };
+                Some(self.one(say, key))
             }
             Learn::None => None,
         }
@@ -3280,9 +3283,9 @@ impl ChainDriver {
         // throwing, and `catch::decide` says so itself by answering `Weaken`.
         // Without this the hunt declines the encounter it has been walking a
         // hundred and twenty-eight steps for. See [`hunting`].
-        let hunted = self
-            .hunting
-            .is_some_and(|sp| view.theirs.species == sp && s.battle.as_deref() == Some("wild"));
+        let hunted = self.hunting.is_some_and(|sp| {
+            view.theirs.species == sp && s.battle.as_deref() == Some("wild")
+        });
         let intent = terminalgb_plugin_agent::battle::Intent {
             may_fight_wild: self.fight_wild || hunted,
             train_to: if hunted { 100 } else { self.train_to as u8 },
@@ -3928,7 +3931,9 @@ mod tally {
         let swap = match (p, pg) {
             (0, 0) => String::new(),
             (p, 0) => format!("; {p} promoted to the front"),
-            (p, pg) => format!("; {p} promoted to the front, {pg} gave up on the party menu"),
+            (p, pg) => {
+                format!("; {p} promoted to the front, {pg} gave up on the party menu")
+            }
         };
         Some(format!(
             "the bag, in the overworld: {c} cure(s), {d} drink(s), \
