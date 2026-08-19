@@ -50,12 +50,13 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from chainrender.paint import load_font  # noqa: E402
+# **The capture reader and the tiling live in the package**, because the
+# swarm film cuts to these screens and needs both — see
+# chainrender/mosaic.py and screen-mosaic.md section 7.
+from chainrender.mosaic import (  # noqa: F401,E402
+    HEADER, MAGIC, SHADES, Track, grid_for,
+)
 
-MAGIC = b"GBSCR1\0\0"
-HEADER = 24
-# Our own four DMG shades, darkest first — the ranks `screens.rs` quantises to.
-SHADES = [(0x00, 0x00, 0x00), (0x60, 0x60, 0x60), (0xC0, 0xC0, 0xC0),
-          (0xFF, 0xFF, 0xFF)]
 FPS_DMG = 59.7275
 
 INK = (232, 236, 242)
@@ -84,66 +85,6 @@ ENDING_WORD = {
 # the capture
 # ---------------------------------------------------------------------------
 
-class Track:
-    """One agent's screens, decoded on demand."""
-
-    def __init__(self, path):
-        self.path = path
-        with open(path, "rb") as f:
-            head = f.read(HEADER)
-            if len(head) < HEADER or head[:8] != MAGIC:
-                raise ValueError(f"{path}: not a gbscr/1 capture")
-            (self.w, self.h, self.every, self.scale,
-             self.frames) = struct.unpack("<HHHHI", head[8:20])
-            self.data = f.read()
-        self.stride = (self.w + 3) // 4
-        self.plane = self.h * self.stride
-        want = self.frames * self.plane
-        if len(self.data) < want:
-            # A capture whose file is short is a capture that was interrupted.
-            # Say so and use what is there rather than decoding past the end.
-            self.frames = len(self.data) // self.plane
-
-    def bytes_on_disk(self):
-        return HEADER + len(self.data)
-
-    def last_frame(self):
-        """The emulated frame the final sample was taken on."""
-        return self.frames * self.every
-
-    def at(self, emulated):
-        """Sample index for an emulated frame, clamped to what was captured.
-
-        Sample `i` is emulated frame `(i + 1) * every`, because a sample is
-        taken *after* the frame it names. Returns `(index, live)` — `live` is
-        false once the run has ended, which is what makes a finished tile
-        distinguishable from a stuck one.
-        """
-        if self.frames == 0:
-            return 0, False
-        i = int(emulated) // self.every - 1
-        if i < 0:
-            return 0, True
-        if i >= self.frames:
-            return self.frames - 1, False
-        return i, True
-
-    def rgb(self, i):
-        """One sample as a flat RGB bytes object, `w * h * 3`."""
-        base = i * self.plane
-        out = bytearray(self.w * self.h * 3)
-        o = 0
-        for y in range(self.h):
-            row = self.data[base + y * self.stride:
-                            base + (y + 1) * self.stride]
-            for x in range(self.w):
-                v = (row[x >> 2] >> (6 - 2 * (x & 3))) & 3
-                r, g, b = SHADES[v]
-                out[o] = r
-                out[o + 1] = g
-                out[o + 2] = b
-                o += 3
-        return bytes(out)
 
 
 def link_name(d):
@@ -235,37 +176,6 @@ def die(msg, *helps):
     sys.exit(2)
 
 
-def grid_for(n, area_w, area_h, tile_w, tile_h, gap):
-    """Columns and rows that leave the tiles biggest at a WHOLE zoom.
-
-    Tried exhaustively rather than derived: `n` is at most a few hundred and
-    the aspect ratio of a Game Boy screen (10:9) is not a video's, so the
-    closed form for one is wrong for the other.
-
-    **The integer zoom is the thing being maximised, and the fraction is only
-    the tie-break.** A tile is drawn nearest-neighbour at a whole multiple, for
-    the same reason every other picture in this repository is: a fractional
-    resample invents shades the Game Boy never drew, and a four-shade picture
-    is exactly where that is most visible. A grid that scores 2.9 fractionally
-    and 2 as a whole number is no better than one that scores 2.1.
-    """
-    best = None
-    for cols in range(1, n + 1):
-        rows = math.ceil(n / cols)
-        w = (area_w - gap * (cols + 1)) / cols
-        h = (area_h - gap * (rows + 1)) / rows
-        if w <= 4 or h <= 4:
-            continue
-        scale = min(w / tile_w, h / tile_h)
-        key = (int(scale), scale)
-        if best is None or key > best[0]:
-            best = (key, cols, rows)
-    if best is None:
-        die(f"{n} tiles do not fit in {area_w}x{area_h}",
-            f"Lower --tiles, or raise --width/--height (a {tile_w}x{tile_h} "
-            f"tile needs about {tile_w * n // max(1, int(math.sqrt(n)))} px "
-            f"across)")
-    return best[1], best[2]
 
 
 

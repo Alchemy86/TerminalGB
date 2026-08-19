@@ -142,6 +142,47 @@ jerks" had no number attached to it: the existing columns count how OFTEN the
 zoom moved and say nothing about how far it went in one frame, and a cut reads
 as a jerk however rarely it happens.
 
+## The zoom target could latch on a rung wider than the world
+
+**Found from a camera report and it was not the camera's framing.** Reported on
+the gym cut: *"Everyone was in the gym for ages and yet we were still zoomed
+out over a large area — we should have been right up in clear view on the
+gym."*
+
+The obvious reading is that the box is a symmetric percentile band, so it
+cannot tighten onto a dense cluster with a tail. That was implemented (a
+highest-density interval instead of a band), swept, and **rejected** — the
+measurement and the numbers are in `camera.py` above `BAND`, and the short
+version is that a swarm spread over Mt Moon's three floors has no single mass
+to tighten onto, so it costs 99.8 % coverage for 83.2 %.
+
+The real fault was rule 9's own: `zoom_to` was set to a **rung wider than the
+world**, `cw` is clamped to the world, so the arrival test never fired — and
+because a glide in flight suppresses the "should I start a zoom?" branch, the
+camera latched at the world width for the rest of the film. The clamp is on the
+target now, and completion is "we arrived **or** we cannot move further".
+
+| gym cut, 600 agents | before | after |
+|---|---:|---:|
+| median crop width | 1696 px (the whole world) | **512 px** (the tightest rung) |
+| frames at world width | 2938 of 2938 | **204 of 2938** |
+| coverage, mean | 99.2 % | 98.7 % |
+
+**Mt Moon is byte-identical either way** — the camera trace over its 8,290
+frames has the same md5 before and after — because the latch only bites when a
+swarm *concentrates after having been spread*, which is the gym's shape and not
+Mt Moon's. That is why the fault survived a film that measured its camera on
+every other axis: nothing was measuring the crop width against the world.
+
+## Screen captures, and tiling them
+
+`chainrender/mosaic.py` holds the `gbscr/1` reader and the tiling, moved
+verbatim from `screen_mosaic.py` (checked by re-extracting each name from both
+files and comparing — this package's own rule) plus one new function,
+`best_grid`. The swarm film needs both the moment it can **cut to the battle
+screens**, and a second copy of either would eventually disagree about what a
+capture holds. See [`screen-mosaic.md`](screen-mosaic.md) §7.
+
 ## What is deliberately NOT here
 
 **`examples/swarm_view.rs` stays where it is.** It is Rust, and it holds three

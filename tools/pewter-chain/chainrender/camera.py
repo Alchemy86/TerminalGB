@@ -97,6 +97,34 @@ class Camera:
     # screen" was half the ask.
     BAND = (0.02, 0.98)
     OLD_BAND = (0.05, 0.95)
+
+    # **Rule 10 was tried here and REJECTED — do not re-derive it.**
+    #
+    # Reported on the gym cut: *"Everyone was in the gym for ages and yet we
+    # were still zoomed out over a large area."* The obvious reading is that
+    # these bands are SYMMETRIC percentiles, so they answer "where are the
+    # middle 96 % of the sorted positions" and cannot tighten onto a dense
+    # cluster with a tail. The obvious fix is to frame the shortest interval
+    # holding a share of the agents — the highest-density interval — instead.
+    #
+    # It was implemented and swept, and **the fault was not the framing at
+    # all**: the raw box on that cut collapses to a single point (every agent
+    # is on Brock's tile) and the camera stayed wide anyway, because
+    # `zoom_to` had latched on a rung wider than the world. See the clamp in
+    # `step`. With that fixed the gym's median crop width is 512 px — the
+    # tightest rung there is — with these bands unchanged.
+    #
+    # The density interval then costs more than it buys, measured both ways:
+    #
+    #     share   gym: frames at world width   Mt Moon: coverage   <90 % covered
+    #     1.00 (this band)      204 of 2938           99.8 %           0.0 %
+    #     0.95                  ...                   97.9 %           2.5 %
+    #     0.90                  147 of 2938           83.2 %          20.3 %
+    #
+    # A swarm spread across Mt Moon's three floors has no single mass to
+    # tighten onto, so cropping to nine agents in ten throws away a whole
+    # floor — a 1,424-frame stretch below 90 % covered. **A knob that trades
+    # one cut against another is not modelling anything.**
     # The box edges' own EMA. Slower than the camera: the box is what the
     # camera is *aiming at*, so it has to be the steadier of the two, or the
     # smoothing simply moves the jitter one level up.
@@ -332,7 +360,18 @@ class Camera:
             target = self.quantise(want)
             out = target > pw
             if self.held >= (self.ZOOM_DWELL_OUT if out else self.ZOOM_DWELL_IN):
-                nxt = self.next_rung(self.quantise(pw), target)
+                # **Clamp the TARGET to the world, not only the width.** A
+                # rung wider than the world is unreachable, so a `zoom_to` set
+                # to one never completes — and because a glide in flight
+                # suppresses the "should I start a zoom?" branch, the camera
+                # latches at the world width FOR THE REST OF THE FILM. That is
+                # what "everyone was in the gym for ages and yet we were still
+                # zoomed out" was: not the framing, a stuck target. Measured on
+                # a synthetic concentrate: `zoom_to` pinned at 2048 against a
+                # 1696-px world for 2,000 frames while the box collapsed to a
+                # point underneath it.
+                nxt = min(self.next_rung(self.quantise(pw), target),
+                          self.world_w * 1.0)
                 if abs(nxt - pw) > 1e-6:
                     self.zoom_to = nxt
         cw = pw
@@ -341,8 +380,10 @@ class Camera:
                 cw = min(self.zoom_to, pw * self.ZOOM_RATE)
             else:
                 cw = max(self.zoom_to, pw / self.ZOOM_RATE)
-            if abs(cw - self.zoom_to) < 1e-6:
-                cw, self.zoom_to, self.held = self.zoom_to, None, 0
+            # Completion is "we arrived" OR "we cannot move any further",
+            # because the clamp above can put the target beyond the world.
+            if abs(cw - self.zoom_to) < 1e-6 or abs(cw - pw) < 1e-9:
+                cw, self.zoom_to, self.held = min(cw, self.world_w * 1.0), None, 0
         cw = min(cw, self.world_w * 1.0)
         return self._pan(px, py, tx, ty, box, cw)
 

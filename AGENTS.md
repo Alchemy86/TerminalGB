@@ -11194,6 +11194,58 @@ panning out and across nicely"*.
   `path_arrows.py still --colour traffic` still reproduces
   `75146a5f60b19beea973902c56b300cf`.
 
+### The camera's zoom target could LATCH, and a gym film cut to the battle screens
+
+Two reports on the gym cut, and they are one root cause plus one missing shot.
+
+- **"EVERYONE WAS IN THE GYM FOR AGES AND YET WE WERE STILL ZOOMED OUT" — AND IT
+  WAS NOT THE FRAMING.** The obvious reading is that the camera's box is a
+  symmetric percentile band, which cannot tighten onto a dense cluster with a
+  tail. That was implemented as a highest-density interval, swept, and
+  **rejected**: a swarm spread over Mt Moon's three floors has no single mass to
+  tighten onto, so it costs coverage 99.8 % → 83.2 % and a 1,424-frame stretch
+  below 90 % covered, to buy the gym almost nothing. **A knob that trades one
+  cut against another is not modelling anything.** The measurement is kept in
+  `chainrender/camera.py` above `BAND` so nobody re-derives it.
+- **The real fault was rule 9's own: `zoom_to` could be set to a rung WIDER THAN
+  THE WORLD.** `cw` is clamped to the world, so the arrival test never fired —
+  and because a glide in flight suppresses the "should I start a zoom?" branch,
+  **the camera latched at the world width for the rest of the film**. Gym cut,
+  600 agents: median crop width **1696 px (the whole world) → 512 px (the
+  tightest rung)**, frames at world width 2938 of 2938 → 204. **Mt Moon's camera
+  trace is byte-identical either way** — the latch only bites when a swarm
+  *concentrates after having been spread*.
+- **A film that measures its camera on every other axis can still miss this**:
+  nothing was measuring the crop width **against the world**. The zoom-step
+  figure rule 9 added would not have caught it either, because a latched zoom
+  never steps.
+- **A POSITION FILM CANNOT SHOW A BATTLE, SO A GYM CUT SHOWS THE SCREENS.**
+  *"As a gym battle we SHOULD have been treated to a full screen of Brock
+  battles before switching back to the map as they all leave."* Both renderers
+  existed and now share `chainrender`, so this is a **sequencing** decision:
+  `swarm_film.py --screens <corpus-dir>` cuts to the mosaic while the share of
+  live agents in a battle is above `--battle-cut`, with hysteresis and a minimum
+  dwell, and cuts back as they leave. Full record:
+  [`docs/agent/screen-mosaic.md`](docs/agent/screen-mosaic.md) §7.
+- **ONE CORPUS PASS MUST PRODUCE BOTH THE TRACKS AND THE CAPTURES.** `corpus
+  --paths --screens N` writes them together for the same seeds; a film whose map
+  came from one run and whose mosaic came from another is two populations.
+- **`--battle-tiles` IS A CEILING, NOT A COUNT**, and the two obvious objectives
+  are both wrong — measured on a 1024x720 picture area with an 80x72 capture:
+  maximising the count gives 48 tiles at 1x covering a third of the picture;
+  maximising the covered area gives **12** at 3x, because coverage always
+  prefers fewer bigger tiles. `mosaic.best_grid` maximises the count **subject
+  to a legible whole zoom** — 24 at 2x — which is what a mosaic is for.
+- **The capture budget's estimate is a worst case from the scenario's own
+  timeout and is ~17x the outturn** — link 17 estimated 3.02 GiB and wrote
+  143 MB. Raise `--screens-budget` rather than coarsening the capture, and check
+  the outturn afterwards.
+- **Say why the map went away.** A cut with no reason on screen reads as a
+  glitch; the bottom bar carries the share in a battle while the battle view is
+  up. And the tiles are the agents in a battle **right now**, re-chosen per
+  frame — a fixed list would show somebody walking under a caption saying six
+  hundred are fighting.
+
 ### Making a film with it — the tooling half, and three things that cost time
 
 **What an agent achieved in a film is AgentGB's record, not this one**

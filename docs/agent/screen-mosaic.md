@@ -237,6 +237,75 @@ Read this before drawing a conclusion off a still.
   fast way to *find* the question, and `index.ndjson` plus the per-attempt
   recording is where it gets answered.
 
+## 7. The mosaic as a SHOT inside the swarm film
+
+**A position film cannot show a battle, and a gym cut is mostly battle.** Every
+agent walks to Brock's tile and fights there, so six hundred sprites stack into
+one sprite and the picture goes still for most of the runtime. Reported on the
+gym cut: *"as a gym battle we SHOULD have been treated to a full screen of
+Brock battles before switching back to the map as they all leave."*
+
+Both renderers already existed and they now share
+[`chainrender`](chainrender.md), so this is a **sequencing** decision rather
+than new machinery: `swarm_film.py --screens <corpus-dir>` cuts to the battle
+screens while the swarm is overwhelmingly in a battle, and cuts back to the map
+as they leave.
+
+![24 Brock battles at once, at a whole 2x zoom](chain-stills/13-the-battle-screens.png)
+
+```bash
+# the SAME run must produce both, or the map and the mosaic are two different
+# populations. One corpus pass writes the tracks and the captures together.
+target/release/examples/pewter_chain corpus --rom <blue.gb> \
+    --scenario scenarios/pewter/17-fight-through-the-gym.json \
+    --start-dir target/cert2/16-heal-in-pewter/exits \
+    --runs 600 --workers 16 --paths \
+    --screens 8 --screens-scale 2 --screens-runs 72 --screens-budget 4096 \
+    --out ~/pokemon-run/brock-screens
+
+python3 tools/pewter-chain/chain_tracks.py --out ~/pokemon-run/brock-screen-tracks \
+    --agents 600 17-fight-through-the-gym:~/pokemon-run/brock-screens
+
+python3 tools/pewter-chain/swarm_film.py ~/pokemon-run/brock-screen-tracks \
+    --out <frames> --speed 4 --fps 60 --cover 0.90 --width 1280 \
+    --screens ~/pokemon-run/brock-screens
+```
+
+**When it cuts is a rule with hysteresis, and the film prints it.** The share of
+live agents in a battle enters at `--battle-cut` (0.60) and leaves at the lower
+`--battle-back` (0.45), with a `--battle-hold` (30 output frames) minimum dwell
+so a one-frame dip cannot cut the film in half — the same shape as the camera's
+own rule 3. On the gym cut that gives three runs and the reason for each:
+
+```
+72 screen capture(s); the battle view holds 1731 of 3315 output frames (52%) in 3 run(s)
+  frames 921-1862 (15.7 s), cut in at 523 of 600 live agents in a battle
+  frames 2218-2819 (10.0 s), cut in at 198 of 300 live agents in a battle
+  frames 3128-3314 (3.1 s), cut in at 56 of 93 live agents in a battle
+```
+
+Four things that are load-bearing:
+
+* **The tiles are the agents that are in a battle RIGHT NOW**, chosen per frame
+  from those that have a capture — never a fixed list, or the picture would
+  show somebody walking while the caption says six hundred are fighting.
+* **`--battle-tiles` is a ceiling, not a count.** What is drawn is the most
+  tiles that fit at a *legible* whole zoom (`mosaic.best_grid`) — 24 at 2x on a
+  1024x720 picture area. Two obvious objectives are both wrong and were both
+  measured: maximising the count gives 48 tiles at 1x covering a third of the
+  picture, and maximising the covered area gives **12** at 3x, because coverage
+  always prefers fewer bigger tiles. A dozen battles is not a screen full of
+  battles.
+* **A cut with no reason on screen reads as a glitch**, so the bottom bar says
+  which view is up and why: *"THE BATTLE SCREENS — 600 of 600 live agents are
+  in a battle; the map returns as they leave"*. The HUD keeps running
+  underneath, including the arrival count, which accumulates on a battle frame
+  even though its marker belongs to the map and the map is not on screen.
+* **The whole zoom is checked, not assumed.** A tile's interior contains
+  exactly four colours — `000000/606060/c0c0c0/ffffff`, our DMG shades to the
+  byte — because a fractional resample would invent shades the Game Boy never
+  drew. Same categorical guard as everywhere else here.
+
 ## See also
 
 * [the Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — where the links, the entry pools and the

@@ -64,7 +64,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from chainrender import paint, palette, tracks  # noqa: E402
+from chainrender import mosaic, paint, palette, tracks  # noqa: E402
 from chainrender.atlas import Atlas  # noqa: E402
 from chainrender.camera import Camera  # noqa: E402
 from chainrender.paint import on_screen, tint, wrap_hud  # noqa: E402
@@ -231,6 +231,53 @@ def report_lines(labels, title, spans, ends, n_links, n_agents):
                 if where else "")
         print(f"  {lab:<12} {len(ns):>4}  finished {len(done):>4} "
               f"({100.0 * len(done) / max(1, len(ns)):.1f}%){tail}")
+
+
+def battle_cut(positions, share_in, share_out, hold):
+    """Which output frames show the BATTLE SCREENS instead of the map.
+
+    **"As a gym battle we SHOULD have been treated to a full screen of Brock
+    battles before switching back to the map as they all leave."** A position
+    film cannot show a battle: every agent walks to the same tile and fights
+    there, so six hundred sprites stack into one sprite and the picture goes
+    still for most of a gym cut. The screens are the picture of that, and this
+    repository already renders them — `screen_mosaic.py`. The missing piece was
+    never machinery, it was **when to cut**.
+
+    The rule is the share of live agents in a battle, with hysteresis so it
+    cannot flutter at the boundary (`share_in` to enter, the lower `share_out`
+    to leave) and a minimum dwell so a one-frame dip does not cut the film in
+    half. Both are the same shape as the camera's own rule 3.
+
+    Returns a list of bools, one per output frame.
+    """
+    share = []
+    for here in positions:
+        live = len(here)
+        share.append(sum(1 for p in here if p[5]) / live if live else 0.0)
+    out, on, since = [], False, 0
+    for v in share:
+        want = v >= share_in if not on else v >= share_out
+        if want != on and since >= hold:
+            on, since = want, 0
+        else:
+            since += 1
+        out.append(on)
+    return out
+
+
+def cut_runs(cuts):
+    """Contiguous runs of the battle view, as (first, last) output frames."""
+    runs, start = [], None
+    for i, v in enumerate(cuts):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    if start is not None:
+        runs.append((start, len(cuts) - 1))
+    return runs
 
 
 def stage_track(positions, n_links):
@@ -642,6 +689,27 @@ def main():
                          "the report — which is how a film shows a swarm "
                          "splitting along something the tracks cannot see, "
                          "such as which starter each agent carries")
+    ap.add_argument("--screens", default=None,
+                    help="a corpus directory holding screen-NNNNN.gbscr. With "
+                         "it, the film CUTS TO THE BATTLE SCREENS while the "
+                         "swarm is overwhelmingly in a battle and cuts back to "
+                         "the map as they leave — the thing a position film "
+                         "cannot show, because every agent fights on the same "
+                         "tile. Capture with `corpus --screens N`")
+    ap.add_argument("--battle-cut", type=float, default=0.60,
+                    help="the share of live agents in a battle that cuts to "
+                         "the screens")
+    ap.add_argument("--battle-back", type=float, default=0.45,
+                    help="and the lower share that cuts back to the map; the "
+                         "gap is hysteresis, so the view cannot flutter")
+    ap.add_argument("--battle-hold", type=int, default=30,
+                    help="output frames a view must be held before it may "
+                         "change, so a one-frame dip cannot cut the film")
+    ap.add_argument("--battle-tiles", type=int, default=48,
+                    help="the CEILING on how many battles the mosaic shows at "
+                         "once. What it actually draws is the most that fit at "
+                         "a legible whole zoom — see mosaic.best_grid, which "
+                         "picks 24 at 2x on a 1024x720 picture area")
     ap.add_argument("--no-integer-zoom", dest="integer_zoom",
                     action="store_false",
                     help="take the camera's zoom off the geometric ladder "
@@ -974,6 +1042,34 @@ def main():
         report_cover(list(corpus.end.values()), spans, n_links, FPS_GB,
                      step * a.fps / FPS_GB)
     report_lines(labels, lab_title, spans, corpus.end, n_links, len(paths))
+    # --- the battle view -----------------------------------------------------
+    # **A position film cannot show a battle, and a gym cut is mostly battle.**
+    # The captures are the picture of it; `battle_cut` decides when, and the
+    # decision is PRINTED, because a cut nobody can see the reason for is a cut
+    # that reads as a glitch.
+    caps, cuts = {}, [False] * frames_out
+    if a.screens:
+        for f in sorted(os.listdir(a.screens)):
+            if f.startswith("screen-") and f.endswith(".gbscr"):
+                try:
+                    caps[int(f[7:-6])] = mosaic.Track(os.path.join(a.screens, f))
+                except Exception:
+                    pass
+        if not caps:
+            sys.exit(f"no screen-NNNNN.gbscr in {a.screens} — capture with "
+                     f"`pewter_chain corpus --screens N`")
+        cuts = battle_cut(positions, a.battle_cut, a.battle_back, a.battle_hold)
+        runs = cut_runs(cuts)
+        n_cut = sum(cuts)
+        print(f"{len(caps)} screen capture(s); the battle view holds "
+              f"{n_cut} of {frames_out} output frames ({100*n_cut/max(1,frames_out):.0f}%) "
+              f"in {len(runs)} run(s)")
+        for f0, f1 in runs[:6]:
+            live = len(positions[f0]) or 1
+            inb = sum(1 for p in positions[f0] if p[5])
+            print(f"  frames {f0}-{f1} ({(f1-f0+1)/a.fps:.1f} s), cut in at "
+                  f"{inb} of {live} live agents in a battle")
+
     if a.dry_run:
         return
 
@@ -1078,7 +1174,37 @@ def main():
         # black, which is what the clamp above is there to avoid anyway.
         crop = world.crop((x0, y0, x0 + cw_i, y0 + ch_i))
         img = Image.new("RGB", (OUT_W, OUT_H), (10, 12, 16))
-        if on_rung and sc >= 1:
+        if cuts[i]:
+            # **THE BATTLE VIEW.** The tiles are the agents that are actually
+            # in a battle right now and have a capture — never a fixed list,
+            # or the picture would show somebody walking while the caption
+            # says six hundred are fighting. Drawn at a WHOLE zoom by
+            # `grid_for`, for the reason every other picture here is:
+            # a fractional resample invents shades the Game Boy never drew.
+            fighting = [n for (n, *_r) in here if _r[4] and n in caps]
+            if not fighting:
+                fighting = sorted(caps)[: a.battle_tiles]
+            fighting = fighting[: a.battle_tiles]
+            gbf_i = max(1, i * step)
+            tw = th = 0
+            for n in fighting[:1]:
+                tw, th = caps[n].w, caps[n].h
+            if tw:
+                GAP = 6
+                ntile, cols, rows, z = mosaic.best_grid(
+                    len(fighting), VIEW_W, OUT_H, tw, th, GAP)
+                fighting = fighting[:ntile]
+                gw, gh = cols * (tw * z + GAP) + GAP, rows * (th * z + GAP) + GAP
+                x_off, y_off = (VIEW_W - gw) // 2, (OUT_H - gh) // 2
+                for k, n in enumerate(fighting):
+                    idx, _live = caps[n].at(gbf_i)
+                    tile = Image.frombytes("RGB", (tw, th),
+                                           bytes(caps[n].rgb(idx)))
+                    if z > 1:
+                        tile = tile.resize((tw * z, th * z), Image.NEAREST)
+                    img.paste(tile, (x_off + GAP + (k % cols) * (tw * z + GAP),
+                                     y_off + GAP + (k // cols) * (th * z + GAP)))
+        elif on_rung and sc >= 1:
             sc = int(sc)
             big = crop.resize((cw_i * sc, ch_i * sc), Image.NEAREST)
             ox, oy = (cw_i * sc - VIEW_W) // 2, (ch_i * sc - OUT_H) // 2
@@ -1102,7 +1228,7 @@ def main():
         # Alpha, so the map underneath still reads — the halo says "something
         # is happening here", the map says where. Drawn in one overlay pass
         # before any sprite, so a halo can never land on top of a neighbour.
-        fighting = [p for p in here if p[5]]
+        fighting = [] if cuts[i] else [p for p in here if p[5]]
         if fighting:
             halo = Image.new("RGBA", (OUT_W, OUT_H), (0, 0, 0, 0))
             hd = ImageDraw.Draw(halo)
@@ -1119,7 +1245,8 @@ def main():
             img = Image.alpha_composite(img.convert("RGBA"), halo).convert("RGB")
 
         d = ImageDraw.Draw(img)
-        for (n, px, py, indoors, facing, battle, lk, lname, band, _m) in here:
+        for (n, px, py, indoors, facing, battle, lk, lname, band, _m) in (
+                [] if cuts[i] else here):
             # The sprite is drawn at the size of the walk tile it stands on, so
             # an atlas that ever draws a map at a different tile_px puts its
             # agents at the right size without a second decision.
@@ -1162,7 +1289,10 @@ def main():
             c = bisect.bisect_right(fs, gbf)
             arrived_now += c
             wp = atlas.place(m, ax, ay)
-            if not c or wp is None:
+            # The count still accumulates on a battle-view frame — the HUD row
+            # must keep running — but the marker belongs to the map, and the
+            # map is not on screen.
+            if not c or wp is None or cuts[i]:
                 continue
             sx = int((wp[0] - X0 - x0) * scale) - ox
             sy = int((wp[1] - Y0 - y0) * scale) - oy
@@ -1386,6 +1516,14 @@ def main():
                             outline=(120, 190, 255), width=2)
                 txt = (f"now: link {lk} {link_names.get(lk, '')[3:]} — "
                        f"{stage_pct.get(lk, 0.0):.0f}% of this film")
+                # **Say why the map went away.** A cut with no reason on
+                # screen reads as a glitch; this is the one line that makes
+                # the battle view legible as a deliberate shot.
+                if cuts[i]:
+                    _l = len(here) or 1
+                    _b = sum(1 for p in here if p[5])
+                    txt = (f"THE BATTLE SCREENS — {_b} of {_l} live agents are "
+                           f"in a battle; the map returns as they leave")
                 d.rectangle([0, ty0 - NOW_H, VIEW_W, ty0], fill=(12, 16, 22))
                 d.text((7, ty0 - NOW_H + 4), txt, fill=(190, 215, 240),
                        font=num_font)
