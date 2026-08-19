@@ -11575,3 +11575,220 @@ Two reports on the gym cut, and they are one root cause plus one missing shot.
   with empty logs, twice, with no OOM in the journal. Long encodes and long
   renders are run in the foreground (or through the harness's own background
   task, which does survive) and checked by their artefacts, not by a log.
+## A BENCH — catching, promoting and training a second Pokémon (`scenarios/pewter/23b`, `26b`)
+
+**Reader-facing pages: [`docs/gen1/catch-and-train.md`](docs/gen1/catch-and-train.md)
+(the cartridge half — which species beats which gym and why) and
+[`docs/agent/catch-and-train.md`](docs/agent/catch-and-train.md) (the rates, and
+AgentGB's by the standing rule).** Chooser
+[`tools/gen1-tables/duel.py`](tools/gen1-tables/duel.py); solver
+`catch_wants` / `hunting` / `lead_with` / `ChainDriver::reorder_party` /
+`ChainDriver::weakening_move` in `examples/pewter_chain.rs`.
+
+**CERTIFIED: the gym is 2996 of 3000 with a bench, and the three starter lines
+converge** — BULBASAUR 1090/1091, SQUIRTLE 1112/1114, **CHARMANDER 794/795
+against 0 of 775 before**. With a PARASECT in front the gym is fought by a
+PARASECT whichever starter is on the bench, so **the Cascade Badge stops being
+a fact about the starter**; the Boulder Badge still is, which is why the
+Charmander column's denominator is 795 against the others' ~1,100.
+
+Until this the chain carried **one Pokémon** and the Charmander line could not
+take the Cascade Badge with it (0 of 775, and no reachable level fixes it). The
+capability is three things with the **species as a parameter**, because a
+viable catch is good for every run rather than a rescue for one starter: hunt
+one species, put it in front, train what is in front.
+
+- **A BENCH THAT BEATS A WATER GYM HAS TO *RESIST* WATER, AND THAT MEANS
+  GRASS — the defensive half is the one everybody skips.** `TypeEffects` gives
+  WATER × GRASS = 0.5 and WATER × ELECTRIC = 1.0, so a grass bench takes half
+  what an electric one takes from Misty's STARMIE. Measured through
+  `CalculateDamage` at level 24: PARASECT 4 turns to kill / **13 to die**;
+  PIKACHU 4 / **3 — it loses**. It is the same reason IVYSAUR is the starter
+  that wins.
+- **A TYPE IS NOT A MOVE.** PARAS is BUG/GRASS and **never learns a damaging
+  GRASS move at all** — its learnset is STUN SPORE 13, LEECH LIFE 20, SPORE 27,
+  SLASH 34, GROWTH 41. `gen1_tables.py --plan` answers by type and will hand you
+  a species that cannot act on it; `duel.py` is the answer to that.
+- **PIKACHU IS A GOOD EARLY CATCH AND LOSES THIS GYM AT EVERY REACHABLE
+  LEVEL** — 14, 18, 21, 24, 27 and 30, checked. It is in Viridian Forest before
+  Brock so it levels the whole road, it arrives holding THUNDERSHOCK, and none
+  of that matters: base Special 50 needs four turns and base HP 35 / Defence 30
+  against a STAB WATER GUN survives two or three. **Do not re-litigate it from
+  the type chart's attacking half.**
+- **`duel.py` IS CALIBRATED, NOT TRUSTED.** It must put IVYSAUR and WARTORTLE
+  above the line at 24 and CHARMELEON below it at every level — the three
+  outcomes three certified 3,000-attempt runs already measured. A ranking
+  instrument that reproduces three known answers is worth using on the unknown
+  ones; one that does not is a model.
+- **A NARROW MARGIN IS NOT A PREDICTION, and the Brock run is what earns that
+  caveat.** The Misty calibration works because its margins are wide (3 turns
+  against 9, and 12 against 3). Point the same command at Brock and it calls a
+  level 16 CHARMELEON a **win at 6 turns against 9** where the chain measures
+  that line at 67 % — his GEODUDE uses DEFENSE CURL, which is a stat stage the
+  tool does not model, and six turns is long enough for one critical hit to
+  decide it. Read a two- or three-turn gap as "go and measure it".
+- **A POKÉMON CAUGHT AT A LEVEL AND ONE TRAINED TO IT ARE DIFFERENT ON PAPER,
+  AND CONFLATING THEM FLATTERS THE HIGHER LEVELS.** `WriteMonMoves` pushes the
+  oldest move out; the level-up prompt *asks*, and this project's criterion
+  protects the last damaging move. `duel.py --caught-at N` is the second model.
+  **It corrected one of this page's own claims**: a level 24 WEEPINBELL
+  generated at 24 holds WRAP and loses, one caught at 12 and trained keeps VINE
+  WHIP and **beats Misty at 21, 24 and 27** — so BELLSPROUT is out on
+  **geography alone** (Nugget Bridge), not on its evolution. Every Misty verdict
+  is the same under both models, PIKACHU's included.
+- **THE ANSWER WAS A LEVEL, NOT A SPECIES: PARAS evolves into PARASECT at
+  exactly 24**, which is what `MISTY_TRAIN_TO` already aimed at for the
+  Squirtle line's BITE. At 21 it loses. The bench and the starter wanting the
+  same threshold is luck, and it is why one training leg serves both.
+
+### A HUNT MUST NOT KNOCK OUT WHAT IT IS TRYING TO CATCH
+
+**The single most expensive thing to have missed, and it would have failed for
+exactly the line the work exists to rescue.** `battle::decide` picks the move
+that ends the fight soonest, which is right for every fight this chain has ever
+had and exactly wrong for the one it is trying not to win. A level 20
+CHARMELEON's EMBER is FIRE against BUG/GRASS — **2× twice over** — and against a
+level 11 PARAS' 30 HP it does **112**. Reproduced end to end from a real
+CHARMELEON entry state: the hunt burned all 1,500 of its decisions without a
+catch; with `weakening_move` it is **3 of 3, one ball and two chipping turns
+each**.
+
+- The rule: among usable damaging moves take the one that hurts most while its
+  **best** roll still leaves the target standing; if every move can knock it
+  out, take the gentlest. `max` rather than `expected` because a knockout is not
+  a tail risk to trade off — it is the encounter gone, and on Mt Moon B2F that
+  is another 128 steps.
+- **Nothing measured it before because the chain had only ever hunted with a
+  WARTORTLE**, whose WATER GUN is *halved* by the same typing. The general
+  lesson: a capability tested on one entry state is tested on one game.
+
+### Promoting is a capability of its own, and its goal fires inside the menu
+
+- **Gen 1 gives experience to what was sent out and sends out the first party
+  member with any HP**, so a caught Pokémon on the bench cannot be trained at
+  all. `ChainDriver::reorder_party` drives the cartridge's own `SwitchPartyMon`
+  (START → POKéMON → A → `SWITCH`), so the leg still reports `clean`.
+- **Two of the party menu's screens cannot be told apart from the screen.**
+  `STATS / SWITCH / CANCEL` is drawn *over* the party list it came from, so only
+  the word `SWITCH` says which one this is — the `USE / TOSS` trap again. And
+  `SwitchPartyMon` prints **nothing at all** on its second pass, so which of the
+  two identical lists is on screen is a driver flag (`promote_swapping`),
+  cleared whenever the start menu comes back.
+- **A PROMOTION'S GOAL FIRES WITH THE MENU STILL OPEN, AND THE NEXT LEG HAS TO
+  CLOSE IT.** The byte a promotion is judged on is written by `SwitchPartyMon`
+  from inside the party menu. Left to the generic text handler that is a loop —
+  A on a party list chooses, A in the overworld reopens the start menu — and a
+  real run spent **all 4,000 of its decisions alternating between the two
+  without taking a step**. `lead_with` therefore names the species on the leg
+  *after* the promotion as well, which makes `reorder_party` see the swap
+  already done and back out; the same thing `shopping_list` does for
+  `19-east-to-route-3`.
+- **WHERE the promotion happens is measured, not tidy.** Promoting inside the
+  mountain hands Mt Moon B2F's two forced trainer battles — and Route 4's
+  crossing after them — to a level 10-12 PARAS whose only move is a 40-power
+  SCRATCH. It waits until Cerulean, after the last fight the starter has to win.
+- **Link 27's exit state is a level-24 PARAS mid-evolution.** The goal fires the
+  instant the level ticks over, which is inside the battle and before the
+  evolution animation; the form becomes PARASECT during link 28. Verified by
+  reading the species out of each link's exit state. A leg that pressed **B**
+  through that animation would cancel it.
+
+### Link 23 stopped catching, so 23b's goal could be exact
+
+- **A goal satisfiable at entry measures nothing** — `misty.md` §2's own lesson
+  about link 28. Link 23 used to catch a ZUBAT or a PARAS opportunistically, so
+  a hunt leg after it could start with a party of two and `party>=2` would fire
+  on arrival. `catch_wants("23-down-to-mt-moon-b2f")` is now empty and the hunt
+  is the only thing in the mountain that throws a ball, which makes
+  `watch:slot2_species=109` exact. The ZUBAT bought a bench for the SUPERSONIC
+  confusion problem and a hunted PARAS is that bench *and* the thing that beats
+  Misty, so nothing was lost — and every ball spent on a ZUBAT is one the hunt
+  does not have.
+- **`wPartySpecies` is `$D164`, seven bytes, INTERNAL indices**, so slot two is
+  `$D165`. PARAS is **109** and its Pokédex number is 46.
+- **The pacing box is `x` 20-28, `y` 12-14 on Mt Moon B2F and it is
+  trainer-free.** Blocking all five trainers' cones out to eight tiles and
+  searching from the B1F ladder's landing at (21,17) reaches 299 tiles; rows 12,
+  13 and 14 all run clear from x=20 to x=28. PARAS is 2 of 10 slots there
+  against 1 of 10 on either floor above, at a 10/256 rate — **about one step in
+  128**.
+
+### Route 24's grass cannot be reached without Nugget Bridge — the geography, corrected
+
+**And BELLSPROUT would otherwise be the better bench**, which is what makes
+this geography load-bearing rather than a footnote: trained from 12 it keeps
+VINE WHIP and beats Misty from level 21, three levels earlier than PARASECT.
+
+`CLAUDE.md` already recorded Route 24's grass as "on the far side of Nugget
+Bridge". The cones say otherwise and the conclusion still holds: the grass is a
+2×14 band at `x` 4-5, `y` 18-31 that **no trainer's cone touches**, but rows
+32-35 — the whole corridor up from Cerulean — are walkable only at `x` 10-11 and
+13-14, and at row 31 `x` 6-9 is solid. So the only way in is north up the bridge
+and back down. A search from all four southern entry tiles avoiding every
+trainer body and cone reaches **73 tiles and not one square of grass, at every
+sight range from 3 to 8**.
+
+### Tooling that came out of it
+
+- **`tools/gen1-tables/duel.py`** — every catchable candidate against a
+  trainer's own party through `CalculateDamage`, worst roll, at named levels.
+  AXI-shaped: TOON on stdout, errors on stdout with a suggestion, exit 0/1/2.
+- **`tools/pewter-chain/build_pool.sh`** — builds each link's entry pool from
+  the last one's exits and **freezes it read-only the moment it is finished**,
+  because a pool rewritten under a certification is three hours nobody gets
+  back. `$SPEC` overrides runs and exits per link: the expensive link in an arc
+  is rarely the one whose rate is being quoted.
+- **`tools/pewter-chain/replay_check.sh`** — replays a link's own seeds with the
+  binary in hand and requires the trajectory hashes to match. **A corpus is a
+  function of the entry state, the scenario, the seed AND the binary**, and this
+  is what says a change did not reach a link it was not aimed at.
+- **`tools/pewter-chain/split_by_line.py`** — a link's rate split by the starter
+  line, read from **party slot two**, because once a bench leads the starter is
+  no longer at the front. Wilson intervals, never the normal approximation.
+
+### Certifying an arc: the mechanics that cost time here
+
+- **NEVER REBUILD THE BINARY WHILE A CERTIFICATION IS READING SCENARIOS OR
+  BUILDING POOLS.** `build_pool.sh` invokes the binary fresh per link, so a
+  rebuild mid-run silently splits an arc across two binaries. It happened twice
+  here; both times `replay_check.sh` proved links 01-22 reproduced hash for hash
+  and the pool was still usable, which is the *only* reason it was not a redo.
+  Pin the sha256 and stop touching the source.
+- **A SCENARIO FILE IS READ AT RUN TIME AND IS PART OF WHAT IS CERTIFIED** — its
+  goal, its rules and its objective string all reach the run. Edit them before
+  the run reaches that link, or not at all.
+- **The pool thins where the chain does.** From 800 states at link 19 the split
+  is WARTORTLE 294, IVYSAUR 292, **CHARMELEON 214** — the Charmander line is
+  under-represented from Pewter onwards because Brock's gym has already cost it
+  a third of its runs. A per-line table has to say the denominator.
+- **Only the pieces a claim rests on need the full 3,000.** The gym is cheap per
+  attempt and is the headline, so it gets 3,000; link 27 is ~150 s an attempt
+  and is not, so it gets fewer and the report says which. `$SPEC` on
+  `build_pool.sh` is that decision made explicit rather than in a comment.
+
+### The certification found two defects that nothing smaller would have
+
+Both were invisible at the scale everything else was tested at — three seeds,
+a hand-driven chain — and both were diagnosed by *reproducing one failing
+seed* with `GB_AGENT_LOG` rather than by reading code.
+
+- **THE PARTY MENU DOES NOT SCROLL, AND `wListScrollOffset` IS A TRAP ON IT.**
+  A party is at most six long and Gen 1 draws all of it — but it does not
+  *reset* that byte either, so the party menu inherits whatever the last
+  scrolling list left. **33 of 1,000 promotions failed, every one on a run
+  whose bag had scrolled on the way to an ANTIDOTE**, and the cursor then
+  oscillated between rows 0 and 1 answering "back up the party" to both,
+  because `scroll + index` was never the row. `use_item` must keep adding the
+  two; a bag genuinely scrolls. **The rule: ask whether the list you are
+  reading actually scrolls before you add the offset.**
+- **A WARP TILE IS NOT AN OBSTACLE A WALKABILITY GRID KNOWS ABOUT — the third
+  time in this chain, and the hunt is what exposed it.** (21,17) is the ladder
+  Mt Moon B2F is entered by. While link 23 handed link 24 a player standing
+  *on* it the walk east along row 17 could not re-enter it; a hunt hands over
+  from anywhere in its pacing box, and `Action::GoTo` is greedy on the larger
+  remaining delta — so from (20,12) it walks down column 20 to row 17 and steps
+  straight back up the ladder. **31 of 1,000 attempts ended oscillating on B1F
+  at (19..21,16), in a pocket from which the leg's own (27,3) is not reachable
+  on foot at all.** A `(23,14)` waypoint first makes the crossing impossible.
+  **The general shape: changing where a leg HANDS OVER changes every greedy
+  path the next leg takes, and a warp tile in between is a silent trapdoor.**
