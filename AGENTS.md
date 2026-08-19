@@ -11136,6 +11136,17 @@ what closed these links. Recorded so nobody runs it again.
 
 ## The Cascade Badge — Cerulean, and the move-learn prompt nothing had answered (`scenarios/pewter/26-30`)
 
+> **WHERE THIS IS WRITTEN UP, AND WHERE IT SHOULD BE.** The cartridge half is
+> [`docs/gen1/cerulean-gym.md`](docs/gen1/cerulean-gym.md) and stays here.
+> **The results half — the certified rates, the per-line split, the level
+> sweep, the rig — belongs in [AgentGB](https://github.com/Alchemy86/AgentGB)
+> under `docs/where-things-live.md`'s rule**, beside `pewter-chain.md`,
+> `brock.md` and `cerulean.md` which moved there on 2026-08-19. It is at
+> `docs/agent/misty.md` here only because the worktree that measured it cannot
+> write to that repository, and its first paragraph says so. **Moving it is one
+> commit there and a stub here**, with the stub added to `EXEMPT` in
+> `docs/tools/docs_index.py`.
+
 **Reader-facing page: [`docs/agent/misty.md`](docs/agent/misty.md).** Five links from arriving in
 Cerulean to standing in its Pokémon Center with the second badge, cut to the Brock arc's shape:
 26 heal, 27 train, 28 heal, 29 gym, 30 heal. **The whole chain now runs cold cartridge to the

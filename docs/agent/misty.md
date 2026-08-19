@@ -1,14 +1,27 @@
-# Cerulean, and the Cascade Badge
+# Cerulean, and the Cascade Badge — what our solver did
+
+> **THIS PAGE BELONGS IN [AgentGB](https://github.com/Alchemy86/AgentGB), NOT
+> HERE, AND IT IS ONLY HERE BECAUSE IT WAS MEASURED IN A WORKTREE THAT CANNOT
+> WRITE TO THAT REPOSITORY.** Everything below is a rate our solver achieved or
+> a route it took — [`../where-things-live.md`](../where-things-live.md)'s test
+> puts that in AgentGB, beside `pewter-chain.md`, `brock.md` and
+> `cerulean.md`, which moved there on 2026-08-19. **Moving it is one commit
+> there and a stub here**, and the stub belongs in `EXEMPT` in
+> [`docs/tools/docs_index.py`](../tools/docs_index.py) with its reason, exactly
+> as the others are.
+>
+> **The cartridge half has already been split out and stays here**:
+> [`docs/gen1/cerulean-gym.md`](../gen1/cerulean-gym.md) holds Misty's party and
+> movesets, the gym's map and its three trainers, the trainer that sees through
+> a wall, the badge bits, the nurse restoring PP, and the grass tables — all of
+> which would be true with no agent in the world.
 
 Five links from arriving in Cerulean City to standing in its Pokémon Center with
-the second badge. Everything here comes out of the cartridge — Misty's party and
-her movesets, the gym's layout, the badge bits, where the grass is — and
-everything is measured against it rather than argued from it.
-
-Read [`pewter-chain.md`](pewter-chain.md) for the chain and its certification
-gate, [`brock.md`](brock.md) for the first gym, and
-[`cerulean.md`](cerulean.md) for the road that gets here. This page assumes all
-three.
+the second badge, cut to the shape the Brock arc has. Read
+[AgentGB's `pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md)
+for the chain and its certification gate, and
+[`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md)
+for the first gym; this page assumes both.
 
 ```text
    Cerulean ─26─▶ the nurse ─27─▶ Route 4's grass ─28─▶ the nurse ─29─▶ MISTY ─30─▶ the nurse
@@ -71,7 +84,7 @@ entry states that arrive in Cerulean **poisoned, at 2-8 HP, with an empty bag** 
 Route 3 and Mt Moon spend every antidote and potion link 18b bought, so there is
 nothing to drink and nothing to cure with. The 21-step walk to the counter kills
 them one tile short of the door; they wake at *Mt Moon's* Pokémon Center,
-because this link runs before the anchor has moved (§5); and the crossing they
+because this link runs before the anchor has moved (§4); and the crossing they
 are sent back across kills them again. **The named fix is a shop in Cerulean** —
 mart 2 in the cartridge's own list sells POKE_BALL, POTION, REPEL, ANTIDOTE,
 BURN_HEAL, AWAKENING and PARLYZ_HEAL, and the chain walks past its door with
@@ -91,29 +104,10 @@ three seeds, thirty links, **4 m 57 s**.
 
 ---
 
-## 1. Misty, read out of the cartridge
-
-`TrainerDataPointers` (`0E:5D3B`, class 35 — `TrainerNames`' own 35th record is
-`MISTY`), then the stats and the movesets built the way `WriteMonMoves` builds
-them, from the base-stats moves plus the learnset up to the level:
-
-| | level | HP | ATK | DEF | SPD | SPC | moves |
-|---|---:|---:|---:|---:|---:|---:|---|
-| STARYU | 18 | 41 | 24 | 27 | 38 | 33 | TACKLE, WATER GUN |
-| STARMIE | 21 | 59 | 40 | 44 | 56 | 50 | TACKLE, WATER GUN, HARDEN |
-
-**Her whole offence is one 40-power special WATER move.** That single fact
-decides the arc, because WATER is a type two of the three starter lines have an
-opinion about — and they have opposite ones.
-
-STARYU is WATER; STARMIE is PSYCHIC/WATER, so it takes 2× from BUG as well.
-Neither carries a PSYCHIC move: STARMIE learns nothing at all by level, so its
-four are its base-stats four.
-
-## 2. The starter decides it again, and the line that cannot pass is the other one
+## 1. The starter decides it again, and the line that cannot pass is the other one
 
 Brock's gym is ROCK/GROUND and Charmander's line has no answer to it
-([`brock.md`](brock.md) §10 measured 670 of 1000). Misty is WATER, so the
+([`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) §10 measured 670 of 1000). Misty is WATER, so the
 prediction going in was that the ranking would invert. It does — and the line
 that fails is **still Charmander's**, for the opposite reason.
 
@@ -139,7 +133,7 @@ it is why `MISTY_TRAIN_TO` is 24.
 
 ### Measured, at the level the chain arrives with
 
-Twenty attempts per line through [the rig](test-rig.md), paired on the seed,
+Twenty attempts per line through [the rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md), paired on the seed,
 from the certified link-26 exit pool — that is the gym fought at **level 20**,
 i.e. with link 27 skipped:
 
@@ -149,7 +143,7 @@ i.e. with link 27 skipped:
 | **WARTORTLE** | **45.0%** | 25.8-65.8 | 284 decisions, and the eleven failures are Misty |
 | **CHARMELEON** | **0.0%** | 0.0-16.1 | wins both trainer battles on the way in — 36 of them across 20 attempts — and loses to Misty every time |
 
-That is [`brock.md`](brock.md) §2's table with the lines rearranged, which is
+That is [`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) §2's table with the lines rearranged, which is
 exactly what a WATER gym should do to it. It is also the argument for link 27:
 Wartortle at 20 is a coin flip and at 24 it is not.
 
@@ -167,7 +161,7 @@ and 29 unchanged:
 | 30 | **8.3%** | 12 | 1.5-35.4 | SCRATCH, GROWL, EMBER, RAGE |
 
 **A plateau rather than a curve**, which is the same shape
-[`brock.md`](brock.md) §10 measured for the same line at the other gym — and ten
+[`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) §10 measured for the same line at the other gym — and ten
 levels there bought 32 points where ten levels here buy eight. The reason is the
 same both times and it is not a number: WATER GUN is 2× on FIRE, so a level 30
 Charmeleon with 88 HP still loses three of them a turn while its own best answer
@@ -182,10 +176,10 @@ saying rather than presenting the criterion as having improved something.
 **The pool itself carries a finding.** Its 3,000 states are IVYSAUR 1112,
 WARTORTLE 1119 and **CHARMELEON 769** — the Charmander line is under-represented
 arriving in Cerulean because Brock's gym has already cost it a third of its runs
-([`brock.md`](brock.md) §10). A line that cannot pass one gym is thinned before
+([`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) §10). A line that cannot pass one gym is thinned before
 it reaches the next.
 
-## 3. What that costs: the move-learn prompt, which nothing in this chain had ever seen
+## 2. What that costs: the move-learn prompt, which nothing in this chain had ever seen
 
 **The chain has never levelled a Pokémon into a full move list before, and the
 first run of link 27 stalled on it.** WARTORTLE reached level 24, the cartridge
@@ -245,7 +239,7 @@ BUBBLE, WATER GUN and leaves holding **TACKLE, BITE, BUBBLE, WATER GUN**.
 
 **A heal link's goal fires the instant the party is whole and the player is
 inside the building — so a party that arrives already whole never reaches the
-counter.** [`brock.md`](brock.md) §7 states that limit honestly and calls it a
+counter.** [`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) §7 states that limit honestly and calls it a
 limit of the cartridge, which it is; what nobody had seen is that it has a
 *consequence*, because **HP is not the only thing `HealParty` restores**.
 
@@ -273,7 +267,7 @@ whatever PP the Route 2 grind left it. Nothing here measures how much of
 call, not this one's. **The general lesson is the one to carry: a goal that
 fires on arrival cannot force an interaction, and "whole" means more than HP.**
 
-## 4. Where the training happens, and why not somewhere richer
+## 3. Where the training happens, and why not somewhere richer
 
 Route 4's own grass, east of the mountain: **sixty walkable tiles at x=64-73,
 y=10-15**, found by reading the tileset's grass tile (`$52`) out of the block
@@ -302,14 +296,14 @@ back out of, and the walk to a nurse is the length of the map. **Route 24's is
 on the far side of Nugget Bridge** — five trainers in a column at x=10-11 plus a
 ROCKET at the top, every one of them unavoidable on a two-tile bridge.
 
-## 5. The heal comes first, and that is geometry rather than tidiness
+## 4. The heal comes first, and that is geometry rather than tidiness
 
 `wLastBlackoutMap` (`$D719`) reads **`0x0F`** on the state link 25 hands over —
 measured, not assumed. That is Route 4, i.e. the Mt Moon Pokémon Center, whose
 door is at (11,5); and Route 4's three doors are all on row 5 with x=19-23 solid
 on that row and x=20-23 solid on rows 6, 7 and 8, so **the mountain's eastern
 mouth cannot be walked to from its western one**
-([`cerulean.md`](cerulean.md) §3). A blackout while training east of the
+([`cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) §3). A blackout while training east of the
 mountain would therefore cost the whole crossing again.
 
 One conversation moves the anchor: after link 26 the same byte reads **`0x03`**,
@@ -317,94 +311,7 @@ Cerulean City, and every blackout in this arc costs the walk across one city.
 That is why link 26 is first and link 27 second, where Brock's arc trains first
 and heals second.
 
-## 6. The gym, from the cartridge
-
-Map `$41`, 10×14 tiles, two warps out at (4,13) and (5,13). Three objects, and
-the pools are water:
-
-| at | facing | what |
-|---|---|---|
-| (4,2) | down | opponent 235 = 200 + class 35 = **MISTY** |
-| (2,3) | right | opponent 206 = 200 + class 6 = **JR.TRAINER♀**, roster 1: GOLDEEN Lv19 |
-| (8,7) | left | opponent 215 = 200 + class 15 = **SWIMMER**, roster 1: HORSEA Lv16, SHELLDER Lv16 |
-
-```
-   0 ##########
-   1 ....##....
-   2 .###M.###.     MISTY, facing down
-   3 .#J.....#.     the junior trainer, facing right
-   4 .######.#.
-   5 .#......#.
-   6 .#.##.###.
-   7 .#.##.##S.     the swimmer, facing LEFT — into a wall
-   8 .#....###.
-   9 .###..###.
-  10 .###..#G#.     the gym guide
-  11 .###..#.#.
-  12 ..........
-  13 ....WW....     the way in
-```
-
-**Both trainers have to be fought, and only one of the two reasons is
-geometry.** Misty's free neighbours are (4,3) and (5,2); (5,2) is reachable only
-from (5,3) because row 1 is walled at x=4 and x=5; so every route to her crosses
-row 3, which is the junior trainer's own line, and (1,3) is a wall so there is no
-tile on that row to her left to enter from. A breadth-first search with row 3
-blocked from x=3 to x=7 finds no path at all.
-
-### A GEN 1 TRAINER SEES THROUGH A WALL, and this is where that was measured
-
-The swimmer faces **left**, and (7,7) and (6,7) are both solid. A sight line that
-terrain could block would never reach the route — the only walkable ground beside
-him is column 9, to his right. He engages anyway, at **(5,7)**, three tiles away
-with two walls in between: traced on the first attempt at this link, `Splash! …
-I'm first up! Let's do it!`.
-
-That is worth knowing beyond this gym, because this repository's severance
-sweeps — the ones that establish which trainers on Route 3, in Viridian Forest
-and on Mt Moon are unavoidable — block a cone's *tiles* and ask whether the map
-still connects. Blocking is the right model for "may the player stand here"; it
-is **not** a model of occlusion, and nothing in those sweeps assumed it was. The
-correction is to any future reading that a wall between a trainer and the route
-buys anything.
-
-### The junior trainer parks on the tile the walk needed — the fifth time
-
-`TrainerWalkUpToPlayer` brings a beaten trainer to the tile beside the player.
-She engages from the west while the player is at (5,3), so her body lands on
-**(4,3)**, which was the route's last waypoint. Measured: 24 decisions
-oscillating between (5,2) and (5,3) with the goal never reached. Misty is talked
-to from **(5,2)** facing left instead — her other neighbour, and on nobody's
-line. Links 04, 05, 08 and 20 each paid for the same rule.
-
-## 7. The badge bits, verified the way this repository earns a flag
-
-Snapshot before, play the gym, snapshot after, diff **every one of the 320 bytes**
-of `wEventFlags` (`$D747`) plus the badge bytes. **Exactly three move, and
-nothing is cleared:**
-
-| address | before | after | what |
-|---|---:|---:|---|
-| `$D356` `wObtainedBadges` | `$01` | `$03` | **bit 1 — the Cascade Badge** |
-| `$D72A` `wBeatGymFlags` | `$01` | `$03` | bit 1 |
-| `$D75E` | `$00` | `$CC` | bits 2, 3, 6, 7 |
-
-`$D75E`'s four bits decode against `constants/event_constants.asm`'s own `const`
-list as `EVENT_BEAT_CERULEAN_GYM_TRAINER_0` (2),
-`EVENT_BEAT_CERULEAN_GYM_TRAINER_1` (3), `EVENT_GOT_TM11` (6) and
-**`EVENT_BEAT_MISTY`** (7). The same counting of that list puts
-`EVENT_BEAT_PEWTER_GYM_TRAINER_0`, `EVENT_GOT_TM34` and `EVENT_BEAT_BROCK` on
-`$D755` bits 2, 6 and 7, `EVENT_FOLLOWED_OAK_INTO_LAB` on `$D747` bit 0 and
-`EVENT_GOT_POKEDEX` on `$D74B` bit 5 — three flags other links in this chain
-derived independently, and agreeing with them is what says the counting is right.
-
-Pewter's gym also **cleared** two bits of `$D7EB` (it rearms the Route 22 rival
-encounter). Cerulean's clears nothing.
-
-The goal is `badges>=2`, which counts the bits of `wObtainedBadges`. At this
-point in the chain no third badge is reachable, so the count is the badge.
-
-## 8. The links
+## 5. The links
 
 | link | goal | what it is judged on |
 |---|---|---|
@@ -424,9 +331,9 @@ Neither heal link can prove a *repeat* heal, and both say so: `$D719` is already
 strongest claim the cartridge supports. It forces anyone who is hurt through the
 nurse and cannot be satisfied at a door.
 
-## 8b. The test rig, on all five links
+## 6. The test rig, on all five links
 
-Every new link handed to [the rig](test-rig.md) beside the expert, from its own
+Every new link handed to [the rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md) beside the expert, from its own
 certified entry pool, paired on the seed, `--idle-spread 3001`:
 
 | plan | link | teacher | `mash-a` | `random` | gap [goal] |
@@ -464,7 +371,7 @@ zero on the line that does not.
 **There is still no trained player in this repository**, so every split is
 `n/a` and these are a ceiling and a floor rather than a distillation result.
 
-## 9. Running it
+## 7. Running it
 
 ```sh
 cargo build --release --features scenario,image --example pewter_chain
@@ -491,11 +398,11 @@ cargo build --release --features scenario,image --example pewter_chain
 python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --plan misty
 ```
 
-## 10. See also
+## 8. See also
 
-* [`cerulean.md`](cerulean.md) — the road here, and the blackout model this arc rests on.
-* [`brock.md`](brock.md) — the first gym, and the starter that cannot pass it.
-* [`pewter-chain.md`](pewter-chain.md) — the chain, the gate, and the repair loop.
+* [`cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) — the road here, and the blackout model this arc rests on.
+* [`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) — the first gym, and the starter that cannot pass it.
+* [`pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — the chain, the gate, and the repair loop.
 * [`battle-policy.md`](battle-policy.md) — the policy that fights all three of this gym's battles.
 * [`../gen1/learning-moves.md`](../gen1/learning-moves.md) — the criterion §3 implements.
-* [`test-rig.md`](test-rig.md) — the rig §11 runs.
+* [`test-rig.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md) — the rig §11 runs.
