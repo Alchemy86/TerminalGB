@@ -11250,23 +11250,35 @@ right. **Pewter's gym also *cleared* two bits of `$D7EB`; Cerulean's clears noth
 
 ### Certified, and the one line that cannot pass
 
-The chain's standing gate, in order, each link entering from the previous one's
-exits, `--idle-spread 3001`, every attempt a distinct trajectory:
+The chain's standing gate, in order, from a **frozen** link-25 exit pool, one
+binary throughout, `--idle-spread 3001`:
 
-| link | reached the goal | entry states |
-|---|---:|---:|
-| 26-heal-in-cerulean | **3000/3000** | 450 |
-| 27-train-for-misty | **3000/3000** (seeds 0-2999, no gaps) | 450 |
-| 28-heal-before-misty | **3000/3000** | 3000 |
-| **29-fight-through-cerulean-gym** | **2222/3000 = 74.1 %** | 3000 |
-| 30-heal-after-misty | see `docs/agent/misty.md` | 2222 |
+| link | reached the goal | 95 % CI |
+|---|---:|---|
+| 26-heal-in-cerulean | **2998/3000** | 99.9 [99.8-100.0] |
+| 27-train-for-misty | **3000/3000** | 100.0 [99.9-100.0] |
+| 28-heal-before-misty | **3000/3000** | 100.0 [99.9-100.0] |
+| **29-fight-through-cerulean-gym** | **2211/3000** | **73.7 [72.1-75.2]** |
+| 30-heal-after-misty | **3000/3000** | 100.0 [99.9-100.0] |
 
-**Split by the line the entry state carries: IVYSAUR 1109/1112 (99.7 %),
-WARTORTLE 1113/1119 (99.5 %), CHARMELEON 0/769 (0.0 %).** Every one of the 778
-failures is a loss to Misty and 769 of them are one line, so **link 29 is
+**Split by the line the entry state carries: IVYSAUR 1107/1110 (99.7 %),
+WARTORTLE 1104/1115 (99.0 %), CHARMELEON 0/775 (0.0 %).** Every one of the 789
+failures is a loss to Misty and 775 of them are one line, so **link 29 is
 accepted rather than certified** — labelled that way permanently, as link 11 is.
-Neither surviving line clears 99.9 % either (three and six losses in about
-eleven hundred each) and what is left there is the fight's own variance.
+Neither surviving line clears 99.9 % either and what is left there is the
+fight's own variance. **Link 27 fought 153,485 wild battles and lost none.**
+**Replayed and identical**: sixty seeds of link 26 and sixty of link 29
+reproduce 60/60 hash for hash, trajectory and final state both.
+
+**Link 26's two failures are the arc's one open repair and they name it.** Both
+are entry states that arrive in Cerulean **poisoned, at 2-8 HP, with an empty
+bag** — Route 3 and Mt Moon spend every antidote and potion link 18b bought — so
+the 21-step walk to the counter kills them one tile short of the door, they wake
+at **Mt Moon's** Centre because this link runs before the anchor moves, and the
+crossing they are sent back across kills them again. The fix is **a shop in
+Cerulean**: mart 2 in the cartridge's own list sells ANTIDOTE and POTION, and
+the chain walks past its door with about ¥5,800. Same repair `cerulean.md` §1
+predicted for the same cause one arc earlier; not taken here.
 
 **And no reachable level fixes the Charmander line**, measured rather than
 modelled — a Charmeleon-only pool trained on Route 4's grass through

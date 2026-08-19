@@ -27,35 +27,56 @@ three.
 
 ## 0. Certified
 
-The chain's standing gate, run in order from the certified link-25 exit pool,
+The chain's standing gate, run in order from a **frozen** link-25 exit pool,
 each link entering from the previous one's exits, `--idle-spread 3001`, every
-attempt a distinct trajectory, one binary throughout:
+attempt a distinct trajectory, **one binary throughout**:
 
-| link | reached the goal | 95 % CI | entry states | |
-|---|---:|---|---:|---|
-| **26-heal-in-cerulean** | **3000/3000** | 100.0 [99.9-100.0] | 450 | |
-| **27-train-for-misty** | **3000/3000** | 100.0 [99.9-100.0] | 450 | seeds 0-2999, no gaps in the exit pool |
-| **28-heal-before-misty** | **3000/3000** | 100.0 [99.9-100.0] | 3000 | |
-| **29-fight-through-cerulean-gym** | **2222/3000** | **74.1 [72.5-75.6]** | 3000 | **accepted, not certified** — §2 |
-| **30-heal-after-misty** | see below | | 2222 | |
+| link | reached the goal | 95 % CI | entry states |
+|---|---:|---|---:|
+| **26-heal-in-cerulean** | **2998/3000** | 99.9 [99.8-100.0] | 500 |
+| **27-train-for-misty** | **3000/3000** | 100.0 [99.9-100.0] | 2998 |
+| **28-heal-before-misty** | **3000/3000** | 100.0 [99.9-100.0] | 3000 |
+| **29-fight-through-cerulean-gym** | **2211/3000** | **73.7 [72.1-75.2]** | 3000 |
+| **30-heal-after-misty** | **3000/3000** | 100.0 [99.9-100.0] | 2211 |
 
-**Four of the five clear the bar** — zero failures in 3,000 bounds the failure
+**Three of the five clear the bar** — zero failures in 3,000 bounds the failure
 rate at about 0.10 % by the rule of three, which is the 99.9 % claim the rest of
-the chain carries. **The gym does not, and the reason is one starter line.**
+the chain carries — and the two that do not are named below rather than rounded
+up. **Link 27 fought 153,485 wild battles across its 3,000 attempts and lost
+none of them**; every one of its 3,599 runs was the policy declining a fight it
+judged unsafe.
 
-Split by the line the entry state carries:
+**Replayed and identical.** Sixty seeds of link 26 and sixty of link 29, played
+again from the same pools with the same binary, reproduce **60/60 and 60/60
+hash for hash** — trajectory and final state both.
+
+### The gym, split by the line the entry state carries
 
 | line | beat Misty at level 24 | 95 % CI | failures |
 |---|---:|---|---:|
-| **IVYSAUR** | **1109/1112 = 99.7 %** | 99.2-99.9 | 3 |
-| **WARTORTLE** | **1113/1119 = 99.5 %** | 98.8-99.8 | 6 |
-| **CHARMELEON** | **0/769 = 0.0 %** | 0.0-0.5 | **769** |
+| **IVYSAUR** | **1107/1110 = 99.7 %** | 99.2-99.9 | 3 |
+| **WARTORTLE** | **1104/1115 = 99.0 %** | 98.2-99.4 | 11 |
+| **CHARMELEON** | **0/775 = 0.0 %** | 0.0-0.5 | **775** |
 
-**Every one of the 778 failures is a loss to Misty**, and 769 of them are one
-line. Neither surviving line quite clears 99.9 % either — three and six losses
-in about eleven hundred each — so link 29 is **accepted rather than certified**,
-labelled that way permanently as link 11 is, and what is left is the fight's own
-variance rather than anything the route can move.
+**Every one of the 789 failures is a loss to Misty and 775 of them are one
+line.** Neither surviving line quite clears 99.9 % either — three and eleven
+losses in about eleven hundred each — so link 29 is **accepted rather than
+certified**, labelled that way permanently as link 11 is, and what is left there
+is the fight's own variance rather than anything the route can move.
+
+### And link 26's two
+
+Both are **timeouts on Route 4 after about 1,070 decisions**, and both come from
+entry states that arrive in Cerulean **poisoned, at 2-8 HP, with an empty bag** —
+Route 3 and Mt Moon spend every antidote and potion link 18b bought, so there is
+nothing to drink and nothing to cure with. The 21-step walk to the counter kills
+them one tile short of the door; they wake at *Mt Moon's* Pokémon Center,
+because this link runs before the anchor has moved (§5); and the crossing they
+are sent back across kills them again. **The named fix is a shop in Cerulean** —
+mart 2 in the cartridge's own list sells POKE_BALL, POTION, REPEL, ANTIDOTE,
+BURN_HEAL, AWAKENING and PARLYZ_HEAL, and the chain walks past its door with
+about ¥5,800 — which is the same repair `cerulean.md` §1 predicted for the same
+cause one arc earlier. It is not taken here.
 
 **The whole chain runs cold cartridge to the Cascade Badge in one command**:
 
