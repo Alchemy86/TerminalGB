@@ -1,0 +1,29 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "27-train-for-misty",
+  "question": "Train the lead in Route 4's grass, east of Mt Moon, to the level at which the Squirtle line first holds a move that beats Misty's STARMIE.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/27-train-for-misty.json",
+  "entry_pool": "target/cert/26-heal-in-cerulean/exits",
+  "runs": 12,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [],
+  "arms": [
+    {
+      "name": "teacher",
+      "player": "expert"
+    },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    },
+    {
+      "name": "random",
+      "player": "random",
+      "seed_base": 2654435769
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schema": "gbscenario/1",
+  "name": "28-heal-before-misty",
+  "objective": "Out of Route 4's grass and back across Cerulean to the nurse, whole, before the gym.",
+  "start_state": "states/27.gbss",
+  "goal": [
+    "party_missing_hp=0",
+    "map=0x40"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle flee",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 600",
+    "max_wall_seconds 1200"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/28-heal-before-misty.json",
+  "timeout_frames": 300000,
+  "evidence": [
+    "party_missing_hp=0 AND map=0x40 is the strongest claim the cartridge supports for a REPEAT heal at a Center it has already recorded. wLastBlackoutMap $D719 already reads 0x03 after link 26, so it cannot move again here and cannot prove anything - the same limit link 18 states after Brock's gym. Finishing inside the building is what forces anyone who is hurt through the nurse and stops the goal firing at a door.",
+    "party_missing_hp is the sum over the party of wPartyMonNMaxHP less wPartyMonNHP. A goal condition compares one number against a constant and 'current equals maximum' is not expressible that way, because the maximum moves with the party and with every level.",
+    "IT STARTS IN THE GRASS AND NOT IN A TOWN, because a training link's exit state is taken the instant the level ticks over - which is wherever the fight that earned it happened. The same shape link 16 has after link 15, and for the same reason.",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE: the cartridge heals the party on the way, so a run that blacks out satisfies party_missing_hp=0 the moment it wakes and only has to be standing in the building."
+  ]
+}

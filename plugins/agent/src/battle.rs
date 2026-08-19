@@ -63,7 +63,13 @@ pub const MAX_STAT_TURNS: u8 = 2;
 /// read this from** — the effect byte is an index into a jump table of code —
 /// so the ids are written here and cited, the same call `rom::sprite_bank`
 /// makes for the picture banks.
-mod effect {
+///
+/// **Public because the solver's move-learn criterion asks the same question.**
+/// Which of four held moves to give up when the game offers a fifth turns on
+/// "is this a status move anything can spend a turn on?", and there must be one
+/// answer to that in the codebase rather than two — see
+/// `examples/pewter_chain.rs::worst_held`.
+pub mod effect {
     pub const ATTACK_DOWN1: u8 = 18;
     pub const DEFENSE_DOWN1: u8 = 19;
     pub const SPEED_DOWN1: u8 = 20;

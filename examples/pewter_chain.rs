@@ -173,6 +173,14 @@ const MT_MOON_B1F: u8 = 0x3C;
 const MT_MOON_B2F: u8 = 0x3D;
 /// `CERULEAN_CITY`, const index 3.
 const CERULEAN_CITY: u8 = 0x03;
+/// Cerulean's Pokémon Center, `warp[2]` at (19,17). The same building again —
+/// nurse at (3,1), doors at (3,7)/(4,7) — so [`POKECENTER`] serves it too.
+const CERULEAN_POKECENTER: u8 = 0x40;
+/// Cerulean Gym, `warp[3]` at (30,19). Ten by fourteen, three objects: MISTY
+/// (opponent 235 = 200 + class 35) at (4,2) facing down, a JR.TRAINER♀
+/// (opponent 206, GOLDEEN Lv19) at (2,3) facing right, and a SWIMMER
+/// (opponent 215, HORSEA Lv16 + SHELLDER Lv16) at (8,7) facing left.
+const CERULEAN_GYM: u8 = 0x41;
 /// Route 22, west of Viridian — a pre-forest training candidate, measured in
 /// `scenarios/experiments/` and not part of the chain.
 const ROUTE_22: u8 = 0x21;
@@ -447,6 +455,77 @@ const ROUTE_4_TO_CERULEAN: &[(u8, u8)] = &[
     (79, 10),
     (89, 10),
 ];
+
+/// Cerulean City, from the western edge the mountain road drops you on to the
+/// Pokémon Center's door at (19,17).
+///
+/// **Row 19, not row 18, and the difference is a person standing on it.** The
+/// city's object list puts a walking NPC (`movement $FE`) at (15,18), and a
+/// sprite is solid; row 19 runs clear from x=0 to x=22 with nothing on it at
+/// all. Twenty-one steps, breadth-first over the cartridge's own grid.
+const CERULEAN_TO_POKECENTER: &[(u8, u8)] = &[(4, 19), (19, 19), (19, 18), (19, 17)];
+
+/// The Pokémon Center's doorstep back out to Route 4 — the walk the training
+/// link makes, and the walk back after a blackout on either side of it.
+///
+/// The city's western edge is where Route 4 hands over: Route 4's east
+/// connection carries yalign 8, so leaving at (89,11) arrives at Cerulean
+/// (0,19) and the reverse is the same row.
+const CERULEAN_TO_ROUTE_4: &[(u8, u8)] = &[(19, 19), (1, 19), (0, 19)];
+
+/// The Pokémon Center's doorstep to the Gym's door at (30,19).
+///
+/// Fourteen steps. Row 18 east to x=22, down to row 20, then east along it —
+/// rows 19 and 20 are both walled between x=23 and x=29, and (30,19) is the
+/// gap the door sits in.
+const CERULEAN_TO_GYM: &[(u8, u8)] = &[(22, 18), (22, 20), (30, 20), (30, 19)];
+
+/// The Gym's doorstep back to the Pokémon Center's door — the walk after the
+/// badge, and the reverse of [`CERULEAN_TO_GYM`] because the geometry here is
+/// symmetric where Pewter's was not.
+const CERULEAN_GYM_TO_POKECENTER: &[(u8, u8)] =
+    &[(30, 20), (22, 20), (22, 18), (19, 18), (19, 17)];
+
+/// Route 4 east of the mountain, from Cerulean's edge into the grass.
+///
+/// **The grass is a closed room with one door.** Sixty tiles at x=64-73,
+/// y=10-15, walled at row 9 and row 16 and at x=62 and x=75 — the single way
+/// in is row 14, through x=75-77, and column 77 is the only tile that joins
+/// rows 12 and 14 without a ledge (row 13 is solid at x=75, 76, 78 and 79).
+/// That is why this list turns twice for what looks like a straight walk: the
+/// ledge at x=76 works going *west* and can never be climbed back.
+const ROUTE_4_TO_GRASS: &[(u8, u8)] = &[(79, 11), (79, 12), (77, 12), (77, 14), (73, 14)];
+
+/// The same, eastward: out of the grass and along Route 4 to Cerulean.
+const ROUTE_4_GRASS_TO_CERULEAN: &[(u8, u8)] =
+    &[(73, 14), (77, 14), (77, 12), (79, 12), (79, 11), (89, 11)];
+
+/// Inside Cerulean Gym, from the door to the tile Misty is talked to from.
+///
+/// **Row 3 cannot be avoided and neither can the trainer standing on it.**
+/// (4,2) and (5,2) are the only tiles beside Misty, and (5,2) is reachable
+/// only from (5,3) — row 1 is walled at x=4 and x=5 — so every route to her
+/// crosses row 3, which is the JR.TRAINER♀'s own line: she stands at (2,3)
+/// facing right, and (1,3) is a wall, so there is no tile on that row to her
+/// left to enter from. A breadth-first search with row 3 blocked from x=3 to
+/// x=7 finds no path at all. GOLDEEN Lv19 is therefore part of this link.
+///
+/// **A GEN 1 TRAINER SEES THROUGH A WALL, AND THIS IS WHERE THAT WAS
+/// MEASURED.** The SWIMMER at (8,7) faces left and (7,7) and (6,7) are both
+/// solid, so a sight line that terrain could block would never reach the route
+/// — and he engages anyway, at (5,7), three tiles away with two walls in
+/// between. Traced on the first attempt: `Splash! … I'm first up! Let's do
+/// it!`. So this leg fights all three, and a severance sweep that treats a
+/// cone as stopping at a wall is measuring something the cartridge does not do.
+///
+/// **The last tile is (5,2) and not (4,3), because the junior trainer parks on
+/// (4,3).** `TrainerWalkUpToPlayer` brings a beaten trainer to the tile beside
+/// the player, and she engages from the west at (5,3) — so her body lands on
+/// the one tile the walk still needed. Measured: 24 decisions oscillating
+/// between (5,2) and (5,3) with the goal never reached. (5,2) is Misty's other
+/// neighbour and she is talked to facing left. This is the **fifth** time this
+/// chain has paid for the same rule — links 04, 05, 08 and 20 are the others.
+const GYM_TO_MISTY: &[(u8, u8)] = &[(5, 12), (5, 5), (7, 5), (7, 3), (5, 3), (5, 2)];
 
 /// Pewter's Pokémon Center door to the Mart door at (23,17).
 ///
@@ -1078,6 +1157,81 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             // off-route and looking for a door.
             r.insert(CERULEAN_CITY, vec![stage(&[(4, 18)], Finish::Arrive)]);
         }
+        // ---- Cerulean, and the Cascade Badge ----------------------------
+        //
+        // **The heal comes first, and it is not politeness.** Blacking out
+        // puts the player at the last Pokémon Center they *healed* at, and
+        // until the nurse in Cerulean has been spoken to that is Mt Moon's —
+        // which is on Route 4's western half, and x=19-23 is solid on row 5,
+        // so a blackout while training east of the mountain would cost the
+        // whole crossing again. One conversation moves the anchor to this
+        // side of it.
+        "26-heal-in-cerulean" => {
+            r.insert(
+                CERULEAN_CITY,
+                vec![stage(CERULEAN_TO_POKECENTER, Finish::Arrive)],
+            );
+            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
+        }
+        // **The third remedial link, and the third time the chain has arrived
+        // at a gym short of what beats it.** Link 11 exists because Viridian
+        // Forest's bug catchers beat a level 6 lead and link 15 because Brock
+        // beats a level 10 one; this exists because Misty's STARMIE is level
+        // 21 and the chain reaches Cerulean below it. See
+        // `docs/agent/misty.md` for the per-line arithmetic.
+        //
+        // Route 4's own grass is the ground: sixty tiles at x=64-73, y=10-15,
+        // on the road the chain already walks, no trainer in the room and no
+        // ledge inside it. 7.55 experience per step against Route 5's 8.10
+        // and Route 24's 10.85 — and both of those are behind a one-way ledge
+        // descent or five bridge trainers respectively.
+        "27-train-for-misty" => {
+            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(
+                CERULEAN_CITY,
+                vec![stage(CERULEAN_TO_ROUTE_4, Finish::Step("left"))],
+            );
+            r.insert(
+                ROUTE_4,
+                vec![stage(ROUTE_4_TO_GRASS, Finish::Grind((64, 10), (73, 15)))],
+            );
+        }
+        // Back out of the grass and across to the nurse, whole, before the
+        // gym — the same shape link 16 has, and for the same reason: a
+        // training link's exit state is taken the instant the level ticks
+        // over, which is wherever the fight that earned it happened.
+        "28-heal-before-misty" => {
+            r.insert(
+                ROUTE_4,
+                vec![stage(ROUTE_4_GRASS_TO_CERULEAN, Finish::Step("right"))],
+            );
+            r.insert(
+                CERULEAN_CITY,
+                vec![stage(CERULEAN_TO_POKECENTER, Finish::Arrive)],
+            );
+            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
+        }
+        // **The second link the chain has to WIN**, and the first where the
+        // opposition is a type the starters mostly cannot answer.
+        "29-fight-through-cerulean-gym" => {
+            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(CERULEAN_CITY, vec![stage(CERULEAN_TO_GYM, Finish::Arrive)]);
+            r.insert(
+                CERULEAN_GYM,
+                vec![stage(GYM_TO_MISTY, Finish::Talk("left"))],
+            );
+        }
+        "30-heal-after-misty" => {
+            r.insert(
+                CERULEAN_GYM,
+                vec![stage(&[(4, 12), (4, 13)], Finish::Step("down"))],
+            );
+            r.insert(
+                CERULEAN_CITY,
+                vec![stage(CERULEAN_GYM_TO_POKECENTER, Finish::Arrive)],
+            );
+            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
+        }
         "14-arrive-in-pewter" => {
             r.insert(
                 FOREST_NORTH_GATE,
@@ -1169,6 +1323,27 @@ fn recover_route(scenario: &str) -> HashMap<u8, MapPlan> {
                     stage(MT_MOON_B2F_TO_EXIT, Finish::Arrive),
                 ],
             );
+        }
+        // **Once the nurse in Cerulean has been spoken to there is one place
+        // to wake up and it is on this side of the mountain** — (19,18), the
+        // tile in front of that Centre's own door. So the walk back is short
+        // for the first time in this chain: west across the city for the
+        // training link, and east across it for the gym.
+        //
+        // Both tables name CERULEAN_CITY, which the leg's own route names
+        // too, so `recovered` fires on the map *after* it — Route 4 for the
+        // one, the Gym for the other. That is deliberate: the walk back and
+        // the walk out cross the same city and there is nothing in the city
+        // to tell them apart.
+        "27-train-for-misty" => {
+            r.insert(
+                CERULEAN_CITY,
+                vec![stage(CERULEAN_TO_ROUTE_4, Finish::Step("left"))],
+            );
+        }
+        "28-heal-before-misty" => {}
+        "29-fight-through-cerulean-gym" => {
+            r.insert(CERULEAN_CITY, vec![stage(CERULEAN_TO_GYM, Finish::Arrive)]);
         }
         _ => {}
     }
@@ -1284,6 +1459,36 @@ fn heal_route(scenario: &str) -> HashMap<u8, MapPlan> {
         );
         r.insert(PEWTER_CITY, vec![stage(GYM_TO_POKECENTER, Finish::Arrive)]);
         r.insert(PEWTER_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
+    // Training on Route 4's grass, healing in Cerulean: out of the grass room
+    // by its one door, east along the route the chain already walks, and
+    // across the city. Forty-seven steps, against link 15's twenty-seven —
+    // the price of a grass patch that is a map away from its nurse, and the
+    // reason Route 5's richer table does not pay for its one-way ledges.
+    if scenario == "27-train-for-misty" {
+        r.insert(
+            ROUTE_4,
+            vec![stage(ROUTE_4_GRASS_TO_CERULEAN, Finish::Step("right"))],
+        );
+        r.insert(
+            CERULEAN_CITY,
+            vec![stage(CERULEAN_TO_POKECENTER, Finish::Arrive)],
+        );
+        r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
+    }
+    // **The gym link needs one for the same reason Pewter's did**: its
+    // trainers stand back to back, and a lead that beats the first and walks
+    // straight into Misty arrives at the fight that matters already hurt.
+    if scenario == "29-fight-through-cerulean-gym" {
+        r.insert(
+            CERULEAN_GYM,
+            vec![stage(&[(4, 12), (4, 13)], Finish::Step("down"))],
+        );
+        r.insert(
+            CERULEAN_CITY,
+            vec![stage(CERULEAN_GYM_TO_POKECENTER, Finish::Arrive)],
+        );
+        r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
     }
     if scenario == "11-train-for-the-forest" {
         r.insert(
@@ -1445,6 +1650,7 @@ fn may_fight_wild(scenario: &str) -> bool {
         "05-the-rival-battle"
             | "11-train-for-the-forest"
             | "15-train-for-brock"
+            | "27-train-for-misty"
             | "x-train-route-2-south"
             | "x-train-route-22"
     )
@@ -1471,6 +1677,7 @@ fn train_to(scenario: &str) -> u32 {
     }
     match scenario {
         "15-train-for-brock" => BROCK_TRAIN_TO,
+        "27-train-for-misty" => MISTY_TRAIN_TO,
         // Link 11's number, and the two pre-forest experiments do link 11's
         // own job so they share it. Every other link trains nothing, and for
         // those this is simply the ceiling above which the policy stops
@@ -1487,6 +1694,9 @@ const FOREST_TRAIN_TO: u32 = 13;
 
 /// The level [`train_to`] aims at before the gym. See `docs/agent/brock.md`.
 const BROCK_TRAIN_TO: u32 = 16;
+
+/// The level [`train_to`] aims at before Misty. See `docs/agent/misty.md`.
+const MISTY_TRAIN_TO: u32 = 24;
 
 /// Where each leg is trying to get to, so an off-route map can be recognised
 /// as off-route rather than merely unknown.
@@ -1879,6 +2089,106 @@ struct ShopList {
     line: usize,
 }
 
+/// The three screens a level-up move prompt puts in the way.
+///
+/// **Every phrase here was read off a traced screen** — `GB_AGENT_LOG` on a
+/// link-27 run that stalled — and not recalled. Two of them are shortened for
+/// a reason that cost this repository a whole link once already
+/// (`examples/gen1_learn_drill.rs` records it): the YES/NO box **scrolls the
+/// question that raised it off the screen**. Gen 1 holds two lines of text and
+/// `Delete an older move to make room for BITE?` is three, so by the frame the
+/// box is answerable the only words left are `move to make room / for BITE?`.
+/// Matching the opening words makes the box invisible, and A on that box means
+/// YES — so the answer is given by accident rather than chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Learn {
+    /// `Delete an older move to make room for X?` — a YES/NO box.
+    Delete,
+    /// `Which move should be forgotten?` — the four-move list.
+    Which,
+    /// `Abandon learning X?` — a YES/NO box.
+    Abandon,
+    /// Anything else.
+    None,
+}
+
+/// Which prompt, if any, the screen is showing.
+///
+/// **Order matters**: the move list is drawn *under* the question that opened
+/// it, so `Delete an older` is still on the screen when the list appears.
+fn learn_prompt(text: &str) -> Learn {
+    let one: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.contains("Which move should") {
+        Learn::Which
+    } else if one.contains("Abandon learning") {
+        Learn::Abandon
+    } else if one.contains("Delete an older")
+        || one.contains("learn more than")
+        || one.contains("move to make room")
+    {
+        Learn::Delete
+    } else {
+        Learn::None
+    }
+}
+
+/// Which of the four held moves is worth least, as a slot.
+///
+/// **The criterion is `tools/gen1-tables/learn_table.py`'s, clause for clause,
+/// and it is written here in the driver's own terms rather than reimplemented
+/// from taste** — see `docs/gen1/learning-moves.md`, which states it and
+/// enumerates the 840 decisions Gen 1 can ever ask. In order:
+///
+/// 0. never a move whose power byte is a placeholder (`OHKO`, `SUPER FANG`,
+///    the fixed-damage effects) — seven moves the table cannot price at all;
+/// 1. never the last damaging move;
+/// 2. a status move goes before any damaging one;
+/// 3. among damaging moves, the lowest `power x accuracy x STAB`;
+/// 4. status moves are **not** ranked against each other by the criterion — so
+///    the tie-break here is the driver's own and it is the policy's: a status
+///    move [`battle::effect::lowers`] can spend a turn on is worth more than one
+///    it cannot. Losing GROWL costs `battle::decide`'s stat-lowering rule;
+///    losing LEECH SEED costs nothing, because nothing in this solver can ever
+///    choose it.
+fn worst_held(moves: &[terminalgb_plugin_agent::battle::Move]) -> Option<usize> {
+    use terminalgb_plugin_agent::battle::effect;
+    /// `OHKO`, `SUPER FANG` and the fixed-damage effects — `learn_table.py`'s
+    /// `UNPRICED_EFFECTS`. A power byte of 0 or 1 there is a placeholder and
+    /// the move is worth far more than the number says.
+    const UNPRICED: [u8; 3] = [38, 40, 41];
+    let priced: Vec<&terminalgb_plugin_agent::battle::Move> = moves
+        .iter()
+        .filter(|m| !UNPRICED.contains(&m.effect))
+        .collect();
+    let damaging = priced.iter().filter(|m| m.power > 0).count();
+    // Rule 2 then rule 4: any status move before any attack.
+    let status: Vec<_> = priced.iter().filter(|m| m.power == 0).collect();
+    if !status.is_empty() {
+        return status
+            .iter()
+            .min_by_key(|m| {
+                (
+                    effect::lowers(m.effect).is_some(),
+                    m.accuracy,
+                    std::cmp::Reverse(m.slot),
+                )
+            })
+            .map(|m| m.slot);
+    }
+    // Rule 1: the last damaging move is never given up.
+    if damaging <= 1 {
+        return None;
+    }
+    priced
+        .iter()
+        .filter(|m| m.power > 0)
+        .min_by_key(|m| {
+            let stab = if m.stab { 3 } else { 2 };
+            (m.power as u32) * (m.accuracy as u32) * stab
+        })
+        .map(|m| m.slot)
+}
+
 impl ChainDriver {
     pub fn new(scenario: &str, seed: u64) -> ChainDriver {
         ChainDriver {
@@ -1991,6 +2301,18 @@ impl ChainDriver {
         //    menu ones.
         if !s.in_game || !s.loaded {
             return self.intro(s);
+        }
+        // 1b. **A LEVEL-UP MOVE PROMPT IS NOT A BATTLE MENU**, and it owns the
+        //     screen from inside a battle. It must be answered before
+        //     [`ChainDriver::fight`] sees the screen, because `fight` reads a
+        //     YES/NO box as battle text, presses A into it, and the two boxes
+        //     hand each other back and forth for ever. Measured on the first
+        //     link-27 run: the lead reached level 24, was offered BITE — the
+        //     move the whole threshold exists for — and spent all 600 of its
+        //     remaining decisions alternating between `move to make room for
+        //     BITE?` and `Abandon learning BITE?` at (70,14).
+        if let Some(plan) = self.learn_move(s) {
+            return plan;
         }
         // 2. A battle owns the screen until it is over.
         if s.battle.is_some() {
@@ -2518,6 +2840,75 @@ impl ChainDriver {
     /// ROM, both sides' HP and stats out of the two battle structs, the bag out
     /// of `wBagItems`. What is here is the *menus*: turning that decision into
     /// keypresses without going out of phase.
+    /// Answer a level-up move prompt: take the move, and give up the one the
+    /// criterion prices lowest.
+    ///
+    /// **Taking it is the point rather than a default.** Link 27's threshold is
+    /// level 24 *because* that is where WARTORTLE is offered BITE — 60 power
+    /// against the 40 of its best other attack, and the move that flips the
+    /// race against Misty's STARMIE. A solver that grinds to the level and then
+    /// declines the move has walked the whole leg for nothing.
+    ///
+    /// **A press while the question is still typing itself out advances the
+    /// text; it does not answer.** So the cursor is what says the box is
+    /// answerable, and until there is one the only thing to do is read on.
+    ///
+    /// `wCurrentMenuItem` is what the cursor is read from, never the glyph:
+    /// [`Screen::selected`] ends an item at a blank run followed by a column
+    /// where another row starts a word, which is exactly wrong for a list of
+    /// aligned two-word move names — `TAIL WHIP` under `WATER GUN` reads back
+    /// as `TAIL`. **And this list's cursor is 0-based where the battle move
+    /// list's is 1-based**, which `examples/gen1_learn_drill.rs` measured on
+    /// RHYDON at level 64.
+    fn learn_move(&mut self, s: &Snap) -> Option<String> {
+        let prompt = learn_prompt(&s.text);
+        if prompt == Learn::None {
+            return None;
+        }
+        let menu = s.kind == "menu" || s.kind == "yes-no";
+        match prompt {
+            Learn::Delete => {
+                if !menu {
+                    return Some(self.one("Read the rest of the question.", "a"));
+                }
+                // YES is the first row of the box and NO the second.
+                if s.menu_index == 0 {
+                    Some(self.one("Yes — make room for the new move.", "a"))
+                } else {
+                    Some(self.one("The cursor is on NO; move it to YES.", "up"))
+                }
+            }
+            // Reached only when the YES did not take. Answering NO puts the
+            // delete question back rather than losing the move, which is the
+            // one recovery this screen offers.
+            Learn::Abandon => {
+                if !menu {
+                    return Some(self.one("Read the rest of the question.", "a"));
+                }
+                if s.menu_index == 1 {
+                    Some(self.one("No — do not abandon the new move.", "a"))
+                } else {
+                    Some(self.one("The cursor is on YES; move it to NO.", "down"))
+                }
+            }
+            Learn::Which => {
+                let want = s
+                    .arena
+                    .as_ref()
+                    .and_then(|a| worst_held(&a.moves))
+                    .unwrap_or(1);
+                if s.menu_index == want {
+                    Some(self.one("This is the move the criterion prices lowest.", "a"))
+                } else if s.menu_index < want {
+                    Some(self.one("Walk the cursor down to it.", "down"))
+                } else {
+                    Some(self.one("Walk the cursor up to it.", "up"))
+                }
+            }
+            Learn::None => None,
+        }
+    }
+
     fn fight(&mut self, s: &Snap) -> String {
         use terminalgb_plugin_agent::battle::Action;
         self.battle_turns += 1;

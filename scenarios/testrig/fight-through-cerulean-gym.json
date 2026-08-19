@@ -1,0 +1,48 @@
+{
+  "schema": "gbtestrig/1",
+  "name": "29-fight-through-cerulean-gym",
+  "question": "Into Cerulean Gym, past a SWIMMER who sees through a wall and a JR.TRAINER who cannot be avoided, and beat Misty for the Cascade Badge. One subject per starter line, because Brock was decided by the starter and Misty is a WATER gym - so the line that cannot pass should be the other one.",
+  "split": "n/a",
+  "scenario": "scenarios/pewter/29-fight-through-cerulean-gym.json",
+  "entry_pool": "target/cert/28-heal-before-misty/exits",
+  "runs": 20,
+  "seed0": 0,
+  "idle_spread": 3001,
+  "subjects": [
+    {
+      "name": "WARTORTLE",
+      "lead_species": [
+        179
+      ]
+    },
+    {
+      "name": "IVYSAUR",
+      "lead_species": [
+        9
+      ]
+    },
+    {
+      "name": "CHARMELEON",
+      "lead_species": [
+        178
+      ]
+    }
+  ],
+  "arms": [
+    {
+      "name": "teacher",
+      "player": "expert"
+    },
+    {
+      "name": "mash-a",
+      "player": "command",
+      "program": "tools/agent-docs/hello_adapter.sh",
+      "args": []
+    },
+    {
+      "name": "random",
+      "player": "random",
+      "seed_base": 2654435769
+    }
+  ]
+}

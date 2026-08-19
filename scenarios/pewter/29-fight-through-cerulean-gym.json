@@ -1,0 +1,34 @@
+{
+  "schema": "gbscenario/1",
+  "name": "29-fight-through-cerulean-gym",
+  "objective": "Into Cerulean Gym, past its junior trainer, and beat Misty for the Cascade Badge.",
+  "start_state": "states/28.gbss",
+  "goal": [
+    "badges>=2"
+  ],
+  "failure": [
+    "party_hp=0"
+  ],
+  "rules": [
+    "no_memory_writes",
+    "battle fight",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 600",
+    "max_wall_seconds 1200"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/29-fight-through-cerulean-gym.json",
+  "timeout_frames": 300000,
+  "evidence": [
+    "badges>=2 counts the bits of wObtainedBadges $D356. The chain arrives here with exactly one - bit 0, BIT_BOULDERBADGE, which link 17 verified byte by byte - and no other badge is reachable at this point, so the second bit is BIT_CASCADEBADGE and the count is the badge.",
+    "VERIFIED BY DIFFING EVERY BYTE OF wEventFlags ($D747, 320 bytes) plus the badge bytes across the gym, not by transcription. EXACTLY THREE BYTES MOVE and nothing is cleared: $D356 wObtainedBadges 0x01 -> 0x03, i.e. bit 1, BIT_CASCADEBADGE; $D72A wBeatGymFlags 0x01 -> 0x03; and $D75E 0x00 -> 0xCC, whose four bits decode against constants/event_constants.asm's own const list as EVENT_BEAT_CERULEAN_GYM_TRAINER_0 (bit 2), EVENT_BEAT_CERULEAN_GYM_TRAINER_1 (bit 3), EVENT_GOT_TM11 (bit 6) and EVENT_BEAT_MISTY (bit 7). The same counting of that list puts EVENT_BEAT_PEWTER_GYM_TRAINER_0, EVENT_GOT_TM34 and EVENT_BEAT_BROCK on $D755 bits 2, 6 and 7, EVENT_FOLLOWED_OAK_INTO_LAB on $D747 bit 0 and EVENT_GOT_POKEDEX on $D74B bit 5 - three flags other links in this chain derived independently, which is what says the counting is right. Pewter's gym also CLEARED two bits of $D7EB (it rearms the Route 22 rival); Cerulean's clears nothing.",
+    "NEITHER OF THE GYM'S TRAINERS CAN BE AVOIDED, AND ONE OF THE TWO REASONS IS A MEASUREMENT NOBODY HERE HAD MADE. Map 0x41's object data declares opponent 235 = 200 + class 35 (MISTY) at (4,2) facing down, opponent 206 = 200 + class 6 (JR.TRAINER female, roster 1: GOLDEEN Lv19) at (2,3) facing right, and opponent 215 = 200 + class 15 (SWIMMER, roster 1: HORSEA Lv16 and SHELLDER Lv16) at (8,7) facing left. The junior trainer is geometry: Misty's only free neighbours are (4,3) and (5,2), (5,2) is reachable only from (5,3) because row 1 is walled at x=4 and x=5, so every route to her crosses row 3 - her own line - and (1,3) is a wall so there is no tile on that row to her left to enter from. A breadth-first search over the cartridge's walkability grid with row 3 blocked from x=3 to x=7 finds no path at all. The SWIMMER is not geometry: he faces left and (7,7) and (6,7) are both SOLID, so a sight line terrain could block would never reach the route - and he engages anyway, at (5,7), three tiles away through two walls. A GEN 1 TRAINER SEES THROUGH A WALL. Traced on the first attempt at this link: 'Splash! ... I'm first up! Let's do it!'.",
+    "THE SWIMMER FACES A WALL. (7,7) and (6,7) are both solid and column 9 - the only walkable ground beside him - is to his right, so he cannot see the route unless Gen 1 lets a trainer see through a wall. Row 7 has to be crossed either way, at x=5 or x=2, so the route does not depend on the answer; whether he engages is reported in the battle tally rather than assumed.",
+    "MISTY IS THE MIRROR OF BROCK AND THE STARTER THAT CANNOT PASS IS THE OTHER ONE. Her two Pokemon are WATER and their only threat is a 40-power special WATER GUN. The BULBASAUR line answers it with VINE WHIP (GRASS, 2x on both) from level 13; the SQUIRTLE line resists WATER and gets there when WARTORTLE learns BITE (60 power) at level 24; the CHARMANDER line is 2x WEAK to WATER GUN and holds nothing better than a 40-power SCRATCH at any level. Measured per line in docs/agent/misty.md.",
+    "THE JUNIOR TRAINER PARKS ON THE TILE THE WALK NEEDED, for the fifth time in this chain - links 04, 05, 08 and 20 are the others. She engages from the west while the player is at (5,3), and TrainerWalkUpToPlayer leaves her body on (4,3), which was the route's last waypoint. Measured: 24 decisions oscillating between (5,2) and (5,3) with the goal never reached. Misty is talked to from (5,2) facing left instead, which is her other neighbour and is not on anybody's line."
+  ]
+}

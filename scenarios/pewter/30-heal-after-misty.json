@@ -1,0 +1,30 @@
+{
+  "schema": "gbscenario/1",
+  "name": "30-heal-after-misty",
+  "objective": "Out of Cerulean Gym and back to the nurse with the Cascade Badge.",
+  "start_state": "states/29.gbss",
+  "goal": [
+    "party_missing_hp=0",
+    "map=0x40"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle flee",
+    "require party>=1",
+    "require badges>=2",
+    "max_calls 400",
+    "max_wall_seconds 900"
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/30-heal-after-misty.json",
+  "timeout_frames": 200000,
+  "evidence": [
+    "party_missing_hp=0 AND map=0x40 is the strongest claim the cartridge supports for a repeat heal, and require badges>=2 is what makes this link about the badge rather than about a walk: wLastBlackoutMap $D719 already reads 0x03 and cannot move again here, so the flip that proved link 26 is not available. The same limit link 18 states after Brock's gym.",
+    "IT FINISHES INSIDE THE BUILDING. An earlier version of the link after Brock's gym used the town's own map id and fired at the GYM door for every attempt that came out whole - 23 of 60, in under ten decisions, having never gone near the Pokemon Center.",
+    "THE WALK IS THE REVERSE OF THE WAY IN, which Pewter's was not: Cerulean's Pokemon Center and its gym are both reached off row 20 and row 18 with x=23-29 walled between them, so there is one corridor and it runs both ways. Fourteen steps, breadth-first over the cartridge's own grid."
+  ]
+}
