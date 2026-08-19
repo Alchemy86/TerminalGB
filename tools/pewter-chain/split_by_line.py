@@ -33,18 +33,40 @@ import os
 import re
 import sys
 
-# `wPartySpecies` holds INTERNAL indices. These three are read out of the
-# cartridge by `gen1_tables.py --species <name>`; they are not Pokedex numbers.
-LINES = {0xB0: "CHARMANDER", 0x99: "BULBASAUR", 0xB1: "SQUIRTLE",
-         0xB2: "CHARMELEON", 0x9A: "IVYSAUR", 0xB3: "WARTORTLE",
-         0x8E: "VENUSAUR", 0xB4: "BLASTOISE", 0xB5: "CHARIZARD"}
-# Which family each form belongs to, so a pool of evolved starters still splits
-# into three rows rather than six.
-FAMILY = {"CHARMANDER": "CHARMANDER", "CHARMELEON": "CHARMANDER",
-          "CHARIZARD": "CHARMANDER", "BULBASAUR": "BULBASAUR",
-          "IVYSAUR": "BULBASAUR", "VENUSAUR": "BULBASAUR",
-          "SQUIRTLE": "SQUIRTLE", "WARTORTLE": "SQUIRTLE",
-          "BLASTOISE": "SQUIRTLE"}
+# **THE LINES ARE READ OUT OF THE CARTRIDGE, NEVER WRITTEN DOWN HERE.** An
+# internal species index is not a Pokedex number and the two differ throughout
+# Gen 1 — the first version of this file had IVYSAUR at 0x9A, which is VENUSAUR,
+# and silently dropped 1,091 of 3,000 attempts into an "unknown line" bucket
+# while reporting a confident total. `gen1_tables.py` reads `MonsterNames` and
+# `EvosMovesPointerTable` off the ROM in hand, so the three families fall out of
+# walking each starter's own evolutions.
+STARTERS = ("BULBASAUR", "CHARMANDER", "SQUIRTLE")
+
+
+def families(rom_path):
+    """{internal index: family head name}, derived from the cartridge."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, os.path.join(here, "..", "gen1-tables"))
+    import gen1_tables as g
+    rom = g.read_rom(rom_path)
+    names, _ = g.species_names(rom)
+    ev = g.EvosMoves(rom)
+    by_name = {v.upper(): k for k, v in names.items()}
+    out = {}
+    for head in STARTERS:
+        i = by_name.get(head)
+        if i is None:
+            continue
+        seen = set()
+        stack = [i]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            out[cur] = head
+            stack.extend(e["into"] for e in ev.evolutions.get(cur, []))
+    return out
 
 
 def wilson(k, n, z=1.96):
@@ -65,6 +87,8 @@ def main():
     ap.add_argument("pool", help="`states --all --peek starter@0xD165` saved to a file")
     ap.add_argument("--peek", default="starter",
                     help="the --peek name to read the line from (default 'starter')")
+    ap.add_argument("--rom", help="the cartridge (or $POKE_ROM) — the species "
+                                  "indices are read from it, never typed in")
     a = ap.parse_args()
 
     idx = os.path.join(a.corpus, "index.ndjson")
@@ -87,12 +111,24 @@ def main():
               f"--peek {a.peek}@0xD165 > {a.pool}")
         return 2
 
+    rom = a.rom or os.environ.get("POKE_ROM")
+    if not rom:
+        print("error: no cartridge given, and the species indices come from it")
+        print("help: split_by_line.py <corpus> <pool> --rom <your Red or Blue>.gb")
+        print("help: or: export POKE_ROM=<your Red or Blue>.gb")
+        return 2
+    try:
+        fam_of = families(rom)
+    except SystemExit as e:
+        print(f"error: could not read the cartridge: {e}")
+        return 2
+
     rows, unknown = {}, 0
     total_k = total_n = 0
     for line in open(idx, encoding="utf-8"):
         r = json.loads(line)
         sp = by_slot.get(r.get("entry"))
-        fam = FAMILY.get(LINES.get(sp, ""), None)
+        fam = fam_of.get(sp)
         if fam is None:
             unknown += 1
             continue
@@ -109,8 +145,12 @@ def main():
     lo, hi = wilson(total_k, total_n)
     print(f"total:\n  passed: {total_k}\n  attempts: {total_n}\n"
           f"  rate: {100*total_k/total_n:.1f}\n  ci: {lo:.1f}-{hi:.1f}")
+    # **A silent unknown bucket is how a wrong species table hides**, so this
+    # is loud: an attempt whose line could not be read is in NEITHER column and
+    # the count is printed whenever it is not zero.
     if unknown:
-        print(f"  entries whose line could not be read: {unknown}")
+        print(f"  attempts whose line could not be read: {unknown}"
+              f"  <- these are in neither column")
     return 0
 
 
