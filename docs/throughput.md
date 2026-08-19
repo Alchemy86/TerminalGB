@@ -1056,3 +1056,121 @@ done
 GB_PPU=accurate ./target/release/examples/csp_suite --quiet --suite gambatte \
     --dir target/test-suites/csp --baseline testharness/csp_gambatte_accurate_baseline.txt
 ```
+
+---
+
+## 15. Round four: the per-access path, and the first look at the field
+
+§12 found the frame flat and said so. This round takes the flat items anyway — five of them,
+worth **+16.7 %** together — and then does something the page had never done: **builds two other
+emulators and times them here**, because "as fast as possible" needs a ceiling somebody else has
+demonstrated rather than one we assumed.
+
+Method as §11: pinned to a P-core, thread CPU clock, interleaved against a binary built from the
+parent commit, Pokémon Blue from an overworld save state, load average 19. **Every frame hash and
+every WRAM hash byte-identical on every measurement** — these are equivalences, not declarations.
+
+**0.1364 → 0.1136 ms/frame, 123× → 148× real time.**
+
+### 15.1 The profile said something the sample counts did not
+
+`eu-stack`, leaf frame only, 700 samples, attributed by **source line** through `addr2line` with
+the PIE bias subtracted:
+
+| line | share | what |
+|---|---:|---|
+| `Gameboy::frame` (the inlined interpreter) | 33.6 % | dispatch and execute |
+| `MemoryManagementUnit::bus_tick` | 13.1 % | the per-access hook |
+| `Sound::do_cycle` | 12.9 % | called 11,051 times a frame |
+| `MemoryManagementUnit::rb` | 11.0 % | address dispatch |
+| `MBC3::readrom` | 10.1 % | every opcode fetch, through `Box<dyn>` |
+| `Gpu::do_cycle` | 9.1 % | the mode machine |
+| `Gpu::stat_signal`'s early-out, *one line* | 4.5 % | four bool loads |
+
+**Two of those overstate their marginal cost and one understates it, which is why every row
+below was measured rather than reasoned about.** `Sound::do_cycle` at 12.9 % of samples turned
+out to be worth 4.3 %, and `MBC3::readrom` at 10.1 % to be worth 3.1 % — sampling attributes a
+call's return path to the callee. The `stat_signal` line was worth roughly what it looked like.
+
+### 15.2 The APU clock is batched — exactly, not to the end of the instruction
+
+`Sound::do_cycle` runs once per CPU memory access and **does nothing but add to a counter on
+99.7 % of them**: the APU acts once every `output_period` (24,344 T), and `Sound::run` fires 31
+times a frame against those 11,051 calls.
+
+`MemoryManagementUnit::flush_apu` accumulates instead, and the budget is
+[`Sound::cycles_to_output`](../src/sound.rs) — so the flush lands on the same cycle `do_output`
+would have and **no sample moves**. §13 sized the cheaper approximation ("move the call to the
+end of the instruction") at 1.5 % and left it; this is exact, removes the call rather than
+moving it, and is worth **+4.3 %**. Everything that observes the APU flushes first: `catch_up`
+before an `NRxx` or wave-RAM access, `div_write` on a `$FF04` write, the instruction's own
+remainder, and a speed switch.
+
+### 15.3 The opcode fetch does not go through the trait object
+
+Every opcode and immediate came through `Box<dyn MemoryBankController>`. §13 tried devirtualising
+it — a closed `enum Cartridge` — and measured **4 % slower**, because the branch predictor sees
+one answer all session and inlining a mapper grows the hottest function.
+
+The answer is not to devirtualise the call but to **not make it**. Each mapper publishes its two
+16 KiB windows as byte offsets (`MemoryBankController::rom_window_bases`, re-read after every
+write into `$0000-$7FFF`, which is the only thing that can move them) into an `Arc<[u8]>` it
+**shares** with the MMU — one allocation, two owners, no copy, so a swarm agent's 3.3 MiB does
+not move. `MemoryManagementUnit::fetch` is the fetch-only path: the OAM-bug hook cannot apply to
+a program counter, and the boot overlay and a DMA conflict are both still tested. **An index
+outside the ROM falls through to the mapper**, so MBC5 keeps answering `0` where the others
+answer `$FF`. Worth **+3.1 %** as a cache and **+4.6 %** once `fetch` skips the dispatch as well.
+
+### 15.4 Three one-line items
+
+* `Gpu::stat_signal`'s early-out was four bool loads; it is one packed `any_inte`, re-derived
+  where the four are written.
+* `OamDma::idle()` was two loads from the far end of a 150 KiB struct on **every memory access**
+  to answer "no". The MMU caches the answer beside the rest of its per-access state — the
+  function's own doc comment predicted this.
+* `MemoryManagementUnit::do_cycle`'s unconditional `intf |= x.interrupt; x.interrupt = 0` pairs
+  are gated on the event having happened, which is the argument `bus_tick` already applies to
+  the timer, extended to the keypad, the serial port, the PPU and the serial shift clock.
+
+### 15.5 Two negative results, both from the same wrong intuition
+
+Both were "remove work from the common path", both measured **worse**, and both are the same
+lesson: **once a check is one packed test, replacing it with a branch is a loss.**
+
+| change | result |
+|---|---|
+| skip `refresh_stat_line` on PPU chunks that moved neither the mode nor the line | 0.1138 → 0.1147, **0.8 % slower** |
+| gate `Serial::take_pending` and `check_and_reset_gpu_updated` on the event, instead of storing unconditionally | 0.1138 → 0.1168, **2.7 % slower** |
+
+The second is the more interesting: those two stores really do dirty a cache line once per
+instruction for events that happen ~137 and ~1 times a frame, which is exactly the shape §12's
+`bus_tick` note treats as waste. It is not waste when the line is hot anyway and the branch is
+not free.
+
+### 15.6 And then: what does anybody else actually do?
+
+Full page, with the method and the licences: [`docs/measured/against-the-field.md`](measured/against-the-field.md).
+Short version, all on this box, one core, one ROM, 7,168 frames from reset, thread CPU clock,
+every side optimised:
+
+| | ms/frame | × real time | cycle-accurate? |
+|---|---:|---:|---|
+| SameBoy (`-O3 -ffast-math` + LTO), render off | 0.5925 | 28× | yes |
+| **TerminalGB**, pixels off | **0.0692** | **242×** | yes |
+| PyBoy 2.7.0 (Cython), render off, sound off | 0.0298 | 562× | no |
+
+**The "1,000-10,000× for a fast interpreter" figure is not what a cycle-accurate emulator does
+on this hardware — the reference implementation reaches 28× and we are 8.6× past it.** PyBoy's
+real 2.3× lead is bought by not being cycle-accurate, and its technique is in its own source
+comment: every peripheral publishes a `_cycles_to_interrupt` horizon and is advanced only when
+one is reached. That is our idle batch, applied always rather than only while the CPU is halted.
+
+Costing the parts on both sides says where the gap is and it is not where it looked: **our
+renderer is within 16 % of PyBoy's and our silent APU is an order of magnitude cheaper. The
+whole difference is the core**, and specifically that we do peripheral bookkeeping once per
+*instruction* where PyBoy does it once per *horizon*. Dropping the per-access tick — the accuracy
+we keep on purpose — is only **+13.6 %** of that.
+
+**So the next structural item is named: make the timer and the PPU lazy the way the APU already
+is.** `Sound::catch_up` is the proof the pattern costs no accuracy. It is a project, not a pass,
+and it is the only remaining item on this page big enough to matter.

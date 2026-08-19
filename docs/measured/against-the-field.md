@@ -42,9 +42,25 @@ Reproduce it: [`tools/perf/sameboy-bench.c`](../../tools/perf/sameboy-bench.c),
 | **TerminalGB**, pixels off, no APU | **0.0672** | **249×** | yes |
 | TerminalGB, pixels off, APU installed and silent | 0.0706 | 237× | yes |
 | TerminalGB, pixels on | 0.1106 | 151× | yes |
-| **PyBoy 2.7.0** (LGPL-3.0, Cython), rendering and sound off | **0.0297** | **563×** | **no** |
+| **PyBoy 2.7.0** (LGPL-3.0, Cython), rendering and sound off | **0.0298** | **562×** | **no** |
 
-**We are 8.8× faster than SameBoy and 2.3× slower than PyBoy.**
+**We are 8.6× faster than SameBoy and 2.3× slower than PyBoy.** The PyBoy row is the mean of
+four runs interleaved with ours on the same core in the same minute (562, 559, 563, 562 against
+our 242, 242, 242, 237) — a single-shot reading of either drifts by 30 % as the box's other
+occupant comes and goes.
+
+### And where PyBoy's 2.3× is, which is the useful half
+
+Costed by turning each part on and off on both sides in the same session:
+
+| component | PyBoy | us |
+|---|---:|---:|
+| **core only** (no rendering, no sound) | **0.0198–0.0298** | **0.0672** |
+| the renderer, on top | +0.0374 | +0.0434 |
+| the APU, on top | +0.0255 (producing samples) | +0.0034 silent, +0.0400 producing |
+
+**Our renderer is within 16 % of PyBoy's and our APU is an order of magnitude cheaper when
+silent, which is the configuration a collector runs in. The entire gap is the core.**
 
 ## 3. The claim that did *not* hold
 
@@ -105,9 +121,21 @@ need sub-instruction resolution, and it is lossless.
 ### And what we did not
 
 Dropping the per-access tick entirely — the thing PyBoy does not pay — is priced by
-`core_bench --breakdown` at **+21 %** of a collector's frame. It would take us from 249× to
-about 300×, and it would cost `mem_timing`. It is available under the captain's two-budget rule
-as a *performance-mode* liberty, and it is written down here rather than taken quietly.
+`core_bench --breakdown` at **+13.6 %** of a collector's frame. It would take us from 242× to
+about 275×, and it would cost `mem_timing`. It is available under the two-budget rule as a
+*performance-mode* liberty, and it is written down here rather than taken quietly.
+
+**It is also nowhere near the 2.3×, and that is the finding.** The rest is that we do peripheral
+bookkeeping **once per instruction** — `MemoryManagementUnit::do_cycle` runs 3,698 times a frame
+and advances the timer, the PPU, the APU, OAM DMA, the serial port and the cartridge clock every
+time — where PyBoy does it **once per horizon**, which is typically many instructions.
+
+The road from here is therefore named, and it is a project rather than a pass: **make the timer
+and the PPU lazy the way the APU already is.** `Sound::catch_up` is exactly the pattern —
+nothing is synthesised until something reads a register, and it does not cost accuracy
+(`dmg_sound` is 12/12 with it). A lazily-caught-up timer and PPU would keep every M-cycle
+answerable while removing the eager work, which is the only remaining item on this page big
+enough to matter.
 
 ## 5. What this changes about the goal
 

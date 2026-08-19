@@ -11945,3 +11945,80 @@ number, because aggregate and single-core are different pieces of engineering.**
 - **`core_bench` reports thread CPU time and prints the wall figure beside it**, and it is still
   56 % faster on a quiet box than at load 16 (0.0581 vs 0.0909 ms/frame) because contention
   reaches it through frequency scaling. **Pin it, and state the load average.**
+
+
+## WE ARE 8.6x FASTER THAN SAMEBOY AND 2.3x SLOWER THAN PYBOY — MEASURED HERE (`docs/measured/against-the-field.md`)
+
+**Both were BUILT AND TIMED ON THIS BOX rather than quoted.** One core, one cartridge, 7,168
+frames from reset, thread CPU clock, every side optimised, interleaved in one session:
+
+| | ms/frame | x real time | cycle-accurate? |
+|---|---:|---:|---|
+| SameBoy (`CONF=release` = `-O3 -ffast-math -DNDEBUG` + LTO), render off | 0.5925 | 28x | yes |
+| **TerminalGB**, pixels off | **0.0692** | **242x** | yes |
+| PyBoy 2.7.0 (Cython), render off, sound off | 0.0298 | 562x | no |
+
+- **THE "1,000-10,000x FOR A FAST INTERPRETER" FIGURE IS NOT WHAT A CYCLE-ACCURATE EMULATOR DOES
+  ON THIS HARDWARE.** The reference implementation — the same SameBoy `tools/sameboy-oracle`
+  already pins, compiled with `-ffast-math` and LTO — reaches **28x**. Do not plan against that
+  figure, and do not let "1000x single core is roughly where we should already be" back into a
+  brief. Arithmetic worth keeping: 1000x is ~**one host clock per Game Boy T-cycle** at 5 GHz;
+  10,000x is a tenth of one, which is not an interpreter.
+- **TIME THE CORE, NOT THE HARNESS.** SameBoy's shipped `Tester` handles buttons, watches for
+  stuck games, takes a screenshot **and sets `disable_rendering`** — timing it answers a
+  different question. `tools/perf/sameboy-bench.c` is 40 lines against its public API and runs
+  the same loop `core_bench` does. Comparing our pixels-on run against its tester was wrong by
+  a factor of two before that was caught.
+- **PYBOY'S 2.3x IS REAL AND IT IS BOUGHT BY NOT BEING CYCLE-ACCURATE** — this repo's own
+  scoreboard records PyBoy scoring **0** on Mealybug's 24 published rows where the per-dot engine
+  here scores 26. Its technique is in its own source comment (`pyboy/core/mb.py::tick`, LGPL-3.0,
+  **read and cited, never copied**): `cycles_target = min(timer._cycles_to_interrupt,
+  lcd._cycles_to_interrupt, lcd._cycles_to_frame, sound._cycles_to_interrupt,
+  serial._cycles_to_interrupt)`, run the CPU that far, then catch every peripheral up in one
+  step. **That is our idle batch, applied always rather than only while halted.**
+- **COST THE PARTS BEFORE BLAMING ONE.** Turning each half on and off on both sides: **our
+  renderer is within 16 % of PyBoy's** (+0.0434 against +0.0374 ms/frame) and **our silent APU is
+  an order of magnitude cheaper** (+0.0034 against +0.0255). The entire gap is the core, and
+  specifically that `MemoryManagementUnit::do_cycle` does peripheral bookkeeping **3,698 times a
+  frame — once per instruction** — where PyBoy does it once per horizon. Dropping the per-access
+  tick, which is the accuracy we keep on purpose, is only **+13.6 %** of it.
+- **SO THE NEXT STRUCTURAL ITEM IS NAMED: make the timer and the PPU lazy the way the APU already
+  is.** `Sound::catch_up` is the proof the pattern costs nothing in accuracy — `dmg_sound` is
+  12/12 with it. A project, not a pass, and the only remaining item big enough to matter.
+- **A SINGLE-SHOT READING OF EITHER SIDE DRIFTS BY 30 % HERE.** Interleave, and state the load
+  average. An early PyBoy reading of 849x and a later one of 562x are the same command.
+- `tools/perf/{sameboy-bench.c,pyboy-bench.py}` make both reproducible. PyBoy is LGPL-3.0-only
+  and SameBoy is Expat; both are **read for technique and cited**, and neither has a line of code
+  in this repository.
+
+## Round four on the per-access path — +16.7 %, and two negatives from one wrong intuition
+
+**Full record: [`docs/throughput.md`](docs/throughput.md) §15.** 0.1364 -> 0.1136 ms/frame,
+123x -> 148x, **every frame hash and every WRAM hash byte-identical on every measurement**, all
+four external gates and every in-repo harness green.
+
+- **THE APU CLOCK IS BATCHED AND THE BATCH IS EXACT.** `Sound::do_cycle` ran once per memory
+  access — 11,051 times a frame — and did nothing but add to a counter on **99.7 %** of them
+  (`Sound::run` fires 31 times). `MemoryManagementUnit::flush_apu` accumulates and flushes on
+  `Sound::cycles_to_output`, so the flush lands on the same cycle `do_output` would have and **no
+  sample moves**. §13 sized the *approximation* (flush at the end of the instruction) at 1.5 %
+  and stopped; the exact version is **+4.3 %** and removes the call rather than moving it.
+  Everything that observes the APU flushes first — miss one and `catch_up` syncs to a stale time.
+- **THE OPCODE FETCH DOES NOT GO THROUGH THE TRAIT OBJECT, AND THE TRICK IS NOT TO
+  DEVIRTUALISE.** §13 measured a closed `enum Cartridge` at 4 % *slower*. Instead each mapper
+  publishes its two 16 KiB windows as byte offsets into an `Arc<[u8]>` it **shares** with the MMU
+  — one allocation, two owners, **no copy**, so a swarm agent's 3.3 MiB does not move — and
+  `MemoryManagementUnit::fetch` is the fetch-only path. **An index outside the ROM falls through
+  to the mapper**, so MBC5 keeps answering `0` where the others answer `$FF`. +3.1 % as a cache,
+  +4.6 % once the dispatch is skipped too.
+- **SAMPLING OVERSTATES A CALLEE AND THE ONLY CURE IS TO MEASURE.** `Sound::do_cycle` was 12.9 %
+  of leaf samples and worth 4.3 %; `MBC3::readrom` was 10.1 % and worth 3.1 %. Attribute by
+  **source line** (`addr2line` with the PIE bias subtracted — `eu-stack` prints absolute
+  addresses and the binary is PIE), then still A/B every change.
+- **TWO NEGATIVES, SAME WRONG INTUITION — do not repeat them.** Skipping `refresh_stat_line` on
+  PPU chunks that moved neither mode nor line: **0.8 % slower**. Gating
+  `Serial::take_pending` and `check_and_reset_gpu_updated` on the event instead of storing
+  unconditionally: **2.7 % slower**. Both really do dirty a cache line once per instruction for
+  an event that happens ~137 and ~1 times a frame — the shape §12 treats as waste — and it is
+  **not** waste when the line is hot anyway and the branch is not free. Once a check is one
+  packed test, replacing it with a branch loses.
