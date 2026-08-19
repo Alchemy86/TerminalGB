@@ -142,6 +142,23 @@ leg being quoted; that is stated rather than hidden, and it is what `$SPEC` on
 legs under the chain's 99.9 % bar are §4's, each diagnosed to the byte or the
 tile.
 
+### And it runs cold cartridge to the Cascade Badge in one command
+
+```sh
+./target/release/examples/pewter_chain chain --rom <blue.gb> --seeds 3 --to 30
+...
+=== link 23: 23b-hunt-a-paras
+seed 1: GOAL — 5988 frames, 62 decisions, ended on map 0x3D at (26, 13)
+=== link 26: 26b-lead-with-the-paras
+seed 1: GOAL — 738 frames, 14 decisions, ended on map 0x40 at (3, 3)
+=== link 29: 29-fight-through-cerulean-gym
+seed 1: GOAL — 32472 frames, 257 decisions, ended on map 0x41 at (5, 2)
+```
+
+**33 links, three seeds, every link solved on every seed, 109 s a seed**, and
+all three end holding a level 25 PARASECT with both badges (`wObtainedBadges`
+`$D356` = `$03`) and the starter on the bench.
+
 ### The answer, split by the starter line the entry state carries
 
 Read from **party slot two**, because once the bench leads the starter is no
