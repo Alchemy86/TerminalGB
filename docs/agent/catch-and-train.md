@@ -96,7 +96,81 @@ line's BITE. At 21 it loses; at 24 it wins by nine turns.
 
 ## 4. Findings
 
-<!-- FINDINGS -->
+### A hunt must not knock out what it is trying to catch
+
+**The most expensive thing to have missed, and it would have failed for exactly
+the line the work exists to rescue.**
+`terminalgb_plugin_agent::battle::decide` picks the move that ends the fight
+soonest. That is right for every fight this chain has ever had and exactly
+wrong for the one it is trying not to win.
+
+A level 20 CHARMELEON's EMBER is FIRE against BUG/GRASS, so it is 2× twice
+over, and through `CalculateDamage` against a level 11 PARAS' 30 HP it does
+**112**. Reproduced end to end from a real CHARMELEON entry state:
+
+| | caught a PARAS | decisions spent |
+|---|---:|---:|
+| before `weakening_move` | **0 of 1** | 1,500 — the whole budget |
+| after | **3 of 3** | 30, 58, 95 |
+
+One ball and two chipping turns each. The rule is: among the moves that are
+usable and do damage, take the one that hurts most while its **best** roll
+still leaves the target standing; if every move can knock it out, take the
+gentlest and accept the risk. `max` rather than `expected`, because a knockout
+is not a tail risk to be traded off — it is the encounter gone, and on B2F that
+is another 128 steps.
+
+**Nothing measured it before because the chain had only ever hunted with a
+WARTORTLE**, whose WATER GUN is *halved* by the same typing. The general
+lesson: a capability tested from one entry state is tested on one game.
+
+### A promotion's goal fires with the menu still open
+
+The byte a promotion is judged on is written by `SwitchPartyMon` from inside
+the party menu, so link 26b's exit state has that menu up and link 27 starts on
+that frame. Left to the generic text handler it is a loop — A on a party list
+chooses, A in the overworld reopens the start menu — and the first real run
+**spent all 4,000 of its decisions alternating between the two without taking a
+step.** `lead_with` therefore names the species on the leg *after* the
+promotion as well, which makes `reorder_party` see the swap already done and
+back out. It is the same thing `shopping_list` does for `19-east-to-route-3`,
+whose own start state is inside the shop counter link 18b left open.
+
+### Link 27's exit state is a level-24 PARAS mid-evolution
+
+The goal fires the instant the level ticks over, which is inside the battle and
+before the evolution animation — so link 27 hands over a **PARAS** at level 24
+and the form becomes PARASECT during link 28. Read out of each link's own exit
+state rather than assumed. A leg that pressed **B** through that animation
+would cancel it; every leg here presses A.
+
+### Link 23 stopped catching, so the hunt's goal could be exact
+
+**A goal satisfiable at entry measures nothing** — [`misty.md`](misty.md)'s own
+lesson about link 28. Link 23 used to catch a ZUBAT or a PARAS opportunistically,
+so a hunt after it could begin with a party of two and `party>=2` would fire on
+arrival. `catch_wants` for link 23 is empty now, the hunt is the only thing in
+the mountain that throws a ball, and `watch:slot2_species=109` is exact.
+
+Nothing was lost by it. The ZUBAT existed to give the SUPERSONIC-confusion
+switch a bench; a hunted PARAS **is** that bench and is also the thing that
+beats Misty — and every ball spent on a ZUBAT is one the hunt does not have.
+
+### What is not measured, and why
+
+**PIKACHU's verdict is `duel.py`'s, not a chain measurement.** Pikachu lives in
+Viridian Forest, thirteen links before the gym and before the chain has any
+Poké Balls at all, so measuring it through the chain means a ball-buying link in
+Viridian and re-certifying every link from 12 to 30 — a bigger project than this
+one, and one whose answer the cartridge's own damage formula already gives with
+three certified calibration points. Said plainly rather than implied.
+
+**No emulator run pits a Pikachu against Misty either.** `gen1_battle` can arm
+the fight from a preset, but it has no battle policy behind it — a fixed
+"always use move slot 1" policy would flatter a Pikachu, whose one good move is
+in slot 1, and punish a PARASECT, whose best move against STARYU and against
+STARMIE are different. A measurement that is unfair between candidates is worse
+than none.
 
 ## See also
 

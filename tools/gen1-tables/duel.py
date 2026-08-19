@@ -34,6 +34,14 @@ the ranking it produces is the one the emulator then reproduces. It is
 calibrated rather than trusted: run it against Misty and it must put IVYSAUR
 and WARTORTLE above the line at level 24 and CHARMELEON below it at every
 level, which is what three certified 3,000-attempt runs measured.
+
+**A NARROW MARGIN IS NOT A PREDICTION.** That calibration works because Misty's
+margins are wide — 3 turns against 9, and 12 against 3 — and a wide margin
+survives everything left out. Against Brock the same command calls a level 16
+CHARMELEON a win at 6 turns against 9, where the chain measures that line at
+67 %: his GEODUDE uses DEFENSE CURL, which is a stat stage, and six turns is
+long enough for one critical hit to decide it. Read a two- or three-turn gap as
+"too close to call".
 """
 import argparse
 import math
@@ -42,6 +50,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen1_tables as g  # noqa: E402
+import learn_table as lt  # noqa: E402
 
 SELF = "python3 tools/gen1-tables/duel.py"
 
@@ -71,39 +80,78 @@ def stat(base, dv, level, hp=False):
 
 
 class Mon:
-    """One side of the duel, built the way the cartridge builds one."""
+    """One side of the duel, built the way the cartridge builds one.
 
-    def __init__(self, rom, tables, internal, level, dvs=DEFAULT_DVS, moves=None):
+    `internal` is the species as it is **caught** or generated. It is evolved
+    forward through every level evolution at or below `level`, because a level
+    threshold and a form are the same question in Gen 1.
+
+    The moveset has two honest answers and this takes whichever is asked for.
+
+    * **Caught at this level** (`caught_at=None`, the default) —
+      `WriteMonMoves`: the last four the species has learned by then, oldest
+      pushed out. This is what a wild one you meet at that level holds.
+    * **Caught at `caught_at` and trained up** — the level-up prompt asks
+      instead of pushing, and `learn_table.decide` is the criterion this
+      project answers it with. It protects the last damaging move, so a
+      BELLSPROUT trained from 13 still holds VINE WHIP at 24 where one caught
+      at 24 does not.
+
+    **The two are different Pokemon on paper and conflating them flatters the
+    higher levels.** A PIKACHU caught at 27 has already pushed THUNDERSHOCK out
+    in favour of SWIFT; one trained from 5 keeps it.
+    """
+
+    def __init__(self, rom, tables, internal, level, dvs=DEFAULT_DVS, moves=None,
+                 caught_at=None):
         names, dex_of, stats, stats_at, mv, ev, _chart = tables
-        # Evolve as far as this level allows: `EvolveTradeMon`'s level entries
-        # are the reason a threshold and a form are the same question.
-        while True:
-            up = [e for e in ev.evolutions[internal]
-                  if e["kind"] == "level" and e["level"] <= level]
-            if not up:
-                break
-            internal = up[0]["into"]
-        self.internal, self.level, self.name = internal, level, names[internal]
-        b = stats[dex_of[internal]]
-        a, d, s, c = dvs
-        hp_dv = ((a & 1) << 3) | ((d & 1) << 2) | ((s & 1) << 1) | (c & 1)
+        start = internal
+        form = internal
+        for lv in range(1, level + 1):
+            for e in ev.evolutions[form]:
+                if e["kind"] == "level" and e["level"] <= lv:
+                    form = e["into"]
+        self.internal, self.level, self.name = form, level, names[form]
+        b = stats[dex_of[form]]
+        a, d, s_, c = dvs
+        hp_dv = ((a & 1) << 3) | ((d & 1) << 2) | ((s_ & 1) << 1) | (c & 1)
         self.max_hp = stat(b["hp"], hp_dv, level, hp=True)
         self.atk = stat(b["atk"], a, level)
         self.dfn = stat(b["def"], d, level)
-        self.spd = stat(b["spd"], s, level)
+        self.spd = stat(b["spd"], s_, level)
         self.spc = stat(b["spc"], c, level)
         self.types = b["types"]
         if moves is not None:
             self.moves = list(moves)
-            return
-        # `WriteMonMoves`: the last four the species has learned by this level.
-        held = list(g.starting_moves(rom, stats_at, dex_of[internal]))
-        for lvl, m in ev.learnset[internal]:
-            if lvl <= level and m not in held:
-                held.append(m)
-                if len(held) > 4:
-                    held.pop(0)
-        self.moves = held[-4:]
+        elif caught_at is None:
+            self.moves = lt.moveset_at(rom, ev, stats_at, dex_of, form, level)
+        else:
+            self.moves = Mon._trained(rom, tables, start, caught_at, level)
+
+    @staticmethod
+    def _trained(rom, tables, start, caught_at, level):
+        """The moves a Pokemon caught at `caught_at` holds once trained."""
+        _, dex_of, stats, stats_at, mv, ev, _ = tables
+        form = start
+        for lv in range(1, caught_at + 1):
+            for e in ev.evolutions[form]:
+                if e["kind"] == "level" and e["level"] <= lv:
+                    form = e["into"]
+        held = list(lt.moveset_at(rom, ev, stats_at, dex_of, form, caught_at))
+        for lv in range(caught_at + 1, level + 1):
+            for e in ev.evolutions[form]:
+                if e["kind"] == "level" and e["level"] == lv:
+                    form = e["into"]
+            for lvl, m in ev.learnset[form]:
+                if lvl != lv or m in held:
+                    continue
+                if len(held) < 4:
+                    held.append(m)
+                    continue
+                loser, _ = lt.decide(mv, held, m, stats[dex_of[form]]["types"])
+                if loser is not None and loser != m:
+                    held[held.index(loser)] = m
+        return held
 
 
 def damage(tables, att, dfd, move):
@@ -163,6 +211,10 @@ output:
                          "14,18,21,24,27,30)")
     ap.add_argument("--max-level", metavar="N", type=int, default=22,
                     help="level ceiling for the automatic candidate list")
+    ap.add_argument("--caught-at", metavar="N", type=int,
+                    help="treat each candidate as CAUGHT at level N and trained "
+                         "up, applying the level-up prompt's own criterion, "
+                         "instead of generated at each swept level")
     ap.add_argument("--dvs", metavar="A,D,S,C", default="8,8,8,8",
                     help="the candidate's DVs (default 8,8,8,8 — mid-range)")
     ap.add_argument("--json", action="store_true", help="emit JSON")
@@ -235,7 +287,8 @@ output:
     rows = []
     for internal in want:
         for level in levels:
-            m = Mon(rom, tables, internal, level, dvs)
+            caught = a.caught_at if a.caught_at and a.caught_at < level else None
+            m = Mon(rom, tables, internal, level, dvs, caught_at=caught)
             worst_kill, worst_die, move = 0, 10**6, ""
             for f in foes:
                 d, best_move = best(tables, m, f)
@@ -261,12 +314,22 @@ output:
     g.table("duels", rows,
             ["catch", "level", "form", "best_move", "turns_to_kill",
              "turns_to_die", "verdict"])
+    if a.caught_at:
+        g.note(f"movesets are those of a Pokemon CAUGHT at level {a.caught_at} and "
+               "trained up, through the level-up prompt's own criterion — which "
+               "is a different Pokemon from one generated at the swept level.")
+    else:
+        g.note("movesets are WriteMonMoves' — the last four the species has "
+               "learned by the swept level, which is what a wild one you meet "
+               "there holds. Use --caught-at N for one caught low and trained.")
     g.note("turns are against the WORST of Gen 1's 217..255 damage rolls, and "
            "against whichever of the trainer's Pokemon is hardest to kill and "
            "quickest to kill you. No critical hits, no status, no stat stages.")
     g.helps([
         f"{SELF} --against {a.against} --candidates <species,species>",
         f"{SELF} --against {a.against} --levels 20,24,28",
+        f"{SELF} --against {a.against} --caught-at 12   "
+        "(caught low and trained, not generated at each level)",
         "python3 tools/gen1-tables/gen1_tables.py --where <species>  "
         "(which maps one is catchable on)",
     ])

@@ -75,6 +75,25 @@ It models damage and nothing else — no critical hits, no status, no stat
 stages, no PP, no 1-in-256 miss. `crates/terminalgb-gen1-battle` is the engine;
 this is a chooser.
 
+**A NARROW MARGIN IS NOT A PREDICTION.** The Misty calibration works because
+its margins are wide — IVYSAUR 3 turns against 9, CHARMELEON 12 against 3 — and
+a wide margin survives everything the tool leaves out. Point the same command
+at Brock and it calls a level 16 CHARMELEON a win at **6 turns against 9**,
+where the chain measures that line at 67 %: Brock's GEODUDE uses DEFENSE CURL,
+which is a stat stage, and six turns is long enough for one critical hit to
+decide it. Read a two- or three-turn gap as "too close to call" and go and
+measure it.
+
+**And a moveset has two honest answers, so the tool takes whichever is asked
+for.** By default it uses `WriteMonMoves` — the last four the species has
+learned by the swept level, oldest pushed out — which is what a wild one you
+meet *at* that level holds. `--caught-at N` instead starts from what one caught
+at N holds and walks it up through the level-up prompt, answered with
+[`learn_table.py`](../../tools/gen1-tables/learn_table.py)'s criterion. **The
+two are different Pokémon on paper and conflating them flatters the higher
+levels.** The verdicts above are unchanged either way; §7's BELLSPROUT is not,
+and that is the one place it matters.
+
 ## 3. PIKACHU, evaluated properly — and it loses
 
 Pikachu is the obvious early catch and the case for it is a good one: it is in
@@ -110,8 +129,15 @@ The level 27 and 30 rows carry a third fact worth knowing on its own:
 learned by that level**, so a Pikachu caught at 27 has already pushed
 THUNDERSHOCK out of its own move list in favour of SWIFT. A Pikachu *trained*
 from level 5 keeps it, because the level-up prompt's criterion drops GROWL
-first — but the two are different Pokémon on paper and a sweep that conflates
-them flatters the higher levels.
+first.
+
+**So the sweep was run again the fair way, and the verdict does not move.**
+`duel.py --against misty --caught-at 5 --candidates pikachu --levels 21,24,27`
+keeps THUNDERSHOCK throughout and gives 4 turns to kill against 3 to die at 21
+and again at 24, and 3 against 4 at 27 — a one-turn margin, at a level three
+above the one the chain trains to and reached only by roughly half as much
+grinding again. **Pikachu's problem is not its move list, it is that ELECTRIC
+does not resist WATER**, and no moveset model changes that.
 
 **So the honest answer to "is Pikachu a good early catch?" is: yes for the road
 and no for this gym.** It is the best thing in Viridian Forest, it fights well
@@ -212,8 +238,14 @@ already does for the shop counter link 18b's goal leaves open.
 
 * **BELLSPROUT** (Route 24 `0x23` and Route 25 `0x24`, levels 12-14, 3 of 10
   slots, base catch rate 255) arrives holding **VINE WHIP** — a real GRASS
-  attack — and is the one candidate that looks better than PARAS on paper at
-  the level it is caught. It is out on **geography and on its own evolution**.
+  attack — and it is **out on geography alone**. That correction is worth
+  stating because the first version of this page got it wrong: the table in §2
+  puts a level 24 WEEPINBELL's best move at WRAP, which is true of one
+  *generated* at 24 and false of one *caught at 12 and trained*. The prompt's
+  criterion protects the last damaging move, so a trained one keeps VINE WHIP
+  and then **wins at 21, 24 and 27** (`--caught-at 12`: 3 turns to kill against
+  7, 9 and 11 to die). It is the better bench of the two on every measure
+  except the one that decides it.
   Route 24's grass is a 2×14 band at `x` 4-5, `y` 18-31 and no trainer's sight
   cone touches it — but you cannot get to it. Rows 32-35, which are the whole
   of the corridor up from Cerulean, are walkable only at `x` 10-11 and 13-14;
@@ -223,9 +255,7 @@ already does for the shop counter link 18b's goal leaves open.
   avoids every trainer body and every sight cone reaches **73 tiles and not one
   square of grass, at every sight range from 3 to 8**. Nugget Bridge's seven
   trainers are unavoidable, which is what `CLAUDE.md` already recorded from the
-  other direction. And BELLSPROUT evolves into WEEPINBELL at 21, whose
-  own learnset replaces VINE WHIP's slot: at 24 its best move is WRAP, and it
-  loses.
+  other direction.
 * **VOLTORB** and **MAGNEMITE** are ELECTRIC, so they carry Pikachu's defensive
   problem, and both are on maps far past Cerulean.
 * **ZUBAT → GOLBAT** wins narrowly at 24 (5 turns to kill, 6 to die) and is
