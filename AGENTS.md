@@ -11828,3 +11828,120 @@ seed* with `GB_AGENT_LOG` rather than by reading code.
   on foot at all.** A `(23,14)` waypoint first makes the crossing impossible.
   **The general shape: changing where a leg HANDS OVER changes every greedy
   path the next leg takes, and a warp tile in between is a silent trapdoor.**
+
+## THE ADDRESS BUS IS SHARED TOO — a work-RAM access under an OAM DMA (`MemoryManagementUnit::wram_bus_address`)
+
+**Full page with the whole measured table: [`docs/measured/oam-dma-work-ram.md`](docs/measured/oam-dma-work-ram.md);
+conformance record in `docs/conformance-notes.md`.** Gambatte **3109 → 3173 on `standard` and
+3486 → 3550 on `identical`, +64 rows in each mode, every one FAIL → PASS, nothing else in
+either gate moved.**
+
+- **THE "~19 UNEXPLAINED COLOR ROWS" IN `docs/conformance-notes.md` ARE EXPLAINED AND CLOSED.**
+  That note recorded the obvious reading — that `$C000` and `$D000` alias — as tested and
+  rejected on the authority of Pan Docs' SVBK entry. **Both halves were right**: Pan Docs is
+  correct, bank 0 really is always at `$C000-$CFFF`, and forcing our window would have been a
+  wrong change. What was missing is a *third* possibility nobody had tested.
+- **THE RULE, and it is symmetric:** while an OAM DMA transfers **from the external bus**, a
+  CPU access to `$C000-$DFFF` (and its echo) has **address bit 12 replaced by bit 12 of the
+  address the transfer is driving**. Bits 0-11 stay the CPU's and `SVBK` still selects the
+  upper half's bank. So a write to `$C000` lands at `$D000` when the source page has bit 12
+  set, *and* a write to `$D000` lands at `$C000` when it does not. **Reads follow the identical
+  rule.** External-bus only — a video-bus source (`$80-$9F`) does not redirect at all, and a
+  work-RAM source conflicts on its own bus and the access never reaches here.
+- **It is the address half of a principle this repo already had.** `docs/conformance-notes.md`
+  2026-08-18 established *"the DMA controller has no bus of its own"* and applied it to the
+  **data** lines. The address lines are shared too, which is also why "a conflicting write
+  never reaches its own address" — part of that address is coming from somewhere else.
+- **SETTLED WITH A PROBE CARTRIDGE THROUGH TWO IMPLEMENTATIONS, NOT WITH A WIKI.** The captain's
+  instruction was *"pan docs could be wrong… MEASURE IT"*. A hand-assembled cartridge does the
+  sequence and stores the answers; [`examples/peek_probe.rs`](examples/peek_probe.rs) reads them
+  out of **our** machine and `tools/sameboy-oracle`'s `peek` reads them out of **SameBoy**,
+  argument for argument, on purpose. Eleven source pages × both halves of work RAM × every
+  `SVBK` bank. We now agree with SameBoy **8 of 8** where we previously differed on 5.
+- **`peek_probe` IS THE REUSABLE HALF.** Any "what does a real implementation leave here?"
+  question is now two commands. It is a normal `[[example]]`, needs no feature, and takes the
+  oracle's argument order so the two answers can be laid side by side untranslated.
+- **THE TRAP THAT MAKES A PROBE LOOK BROKEN: 30 frames is inside SameBoy's boot ROM.** It runs
+  real boot code, so a short `peek` returns *the same bytes for every cartridge* — which reads
+  exactly like a cartridge that is not running. **Use 400.** (Ours needs no such margin: we do
+  not run a boot ROM unless the user supplies one.)
+- **A ROM-SOURCED OAM DMA CORRUPTS THE CPU'S OWN OPCODE FETCHES**, which is why every OAM DMA
+  routine ever written lives in HRAM — and why a probe must **stay in HRAM until the transfer
+  is over**, not `jp` back to ROM. Getting that wrong looks like an undefined-opcode fault in
+  the middle of your own code.
+- `dma_a12` is published by `oam_dma_tick` and consumed before anything can read it, so it is
+  **not serialised** — the same argument `dma_bus`/`dma_byte`/`idu_share` already make. No
+  `savestate::FORMAT_VERSION` bump.
+- **Still red and NOT this:** `busypushFEA1`/`busypushFF01` are the prohibited block's
+  per-revision value (the two suites there name different consoles — see the `$FEA0-$FEFF`
+  entry), and `late_sp*` is sprite-fetch timing against a transfer ending mid-scanline, which
+  belongs with the PPU work.
+
+## The per-dot engine can idle-batch now, and mode 2 is one job (`src/gpu/fifo.rs`)
+
+**Full record: [`docs/throughput.md`](docs/throughput.md) §14.** `identical` **0.535 → 0.332
+ms/frame** on an overworld save state (and 0.5755 before the round started), frame and WRAM
+hashes byte-identical, **no row of any suite lost in either mode**.
+
+- **`Gpu::idle_dots` returned 0 for anything but `RenderMode::Fast`, so under `identical` a
+  halted CPU stepped one M-cycle at a time and the idle batch — worth −58 % of a frame on the
+  batched renderer — was simply unavailable.** Pokémon Blue halts for four fifths of its frame.
+  `Gpu::accurate_idle_dots` is the horizon; it bounds a mode-3 span by `WIDTH - lx`, because
+  `lx` advances at most one per dot so the mode-0 strobe cannot land before then.
+- **ONLY THE DRAWING WINDOW IS BATCHED, AND THE OTHER THREE WERE MEASURED, NOT ASSUMED.**
+  Mode 0, VBlank and the OAM window all look batchable on paper — the STAT line's terms are
+  constant across each. Scored: mode 0 + VBlank **costs 10 Gambatte `dma/gdma_cycles_*` /
+  `dma/hdma_start_ly0` rows and blocks 22 more gains**; the OAM window moves **8 of dmg-acid2's
+  23,040 pixels** and `cgb-acid2` 158 → 166 px. And the full horizon was **slower** than the
+  narrow one on a real cartridge (0.442 vs 0.332), so there was no trade to weigh. **Do not
+  re-widen it without re-running both gates.**
+- **The OAM-window one has a mechanism worth knowing: `mode` still reads 0 at dot 0** — the
+  first dot is what enters mode 2 — so a batch started there runs across the 0→2 transition,
+  which is where the mode-0 term of the STAT line drops. The mode-0/VBlank one is **not**
+  explained and is left unfitted.
+- **The same "ask `mode`, not the dot counter" trap in reverse cost a whole afternoon.** The
+  drawing clause originally tested `self.mode == 3`, which misses the dot mode 3 *begins* — and
+  a CPU halted exactly there was handed the rest of the line and slept through the HBlank
+  interrupt. `acceptance/ppu/hblank_ly_scx_timing-GS` is the row that says so.
+- **`Gpu::oam_scan_span` does the whole run of mode-2 dots at once**, which an ablation priced
+  at **56 % of the entire per-dot engine**. It is exact because nothing changes under it
+  mid-call: `do_cycle_accurate` is reached with one M-cycle's dots from `bus_tick` or a
+  horizon-bounded span from the idle batch, so `LCDC.2` (read live per entry),
+  `WY`, `LYC` and OAM all hold still. Costs no row anywhere.
+- **`RenderMode::IDENTICAL_COST` moved because `identical` got faster** — the first time it has
+  moved for that reason rather than because `standard` did. Re-measure with
+  `cargo test --release --test ppuengines`, which fails the build if the constant disagrees.
+
+### MEASURED NEGATIVE: the APU's channel loops are not the APU's cost — do not repeat this
+
+`--breakdown` prices the whole APU at **+16.7 %** of a collector's frame and
+`SquareChannel::run_span`'s per-expiry `while` loop is the obvious target. A closed form for it
+was written and proved exhaustively equivalent over 36,864 starting states *including the blip
+deltas sample for sample* — and measured **0.3 %**. **Print the counter first:** the square
+loops run **141 iterations a frame** on an overworld state and 87 on a cold boot (wave 193 and
+97), because real music uses periods of a thousand T-cycles, not four. The ceiling on the whole
+idea is 0.4 %. Reverted. `Sound::do_cycle` is called **11,051 times a frame and does nothing
+99.7 % of them** (`Sound::run` fires 31), and §13 already sized moving that call at 1.5 % — so
+the largest named APU target is still `Sound::run`'s channel synthesis, which is guest-visible.
+
+## Headless throughput, written down at last — and WHICH 1000x (`docs/measured/throughput-baseline.md`)
+
+Nobody had ever recorded it, which is why the captain had to ask. **Quote the target with the
+number, because aggregate and single-core are different pieces of engineering.**
+
+- **Aggregate, 20 workers, collector configuration: 74,155 emulated frames/s = 1242x real
+  time** — measured while another crew held sixteen of the twenty cores. A quiet box is
+  **~3,900x** (`docs/throughput.md` §6). **The 1000x aggregate goal is met.**
+- **Single core, collector configuration, pinned to a P-core: 288x on a quiet box, 184x at load
+  16.** 1000x is 3.5x away and **is not available by shaving**: `--breakdown` prices the
+  per-access bus tick at +21 %, the whole APU at +16.7 % and the whole timer at +14 %, so
+  deleting all three outright — which would not be an emulator — is ~1.9x, about **550x**. It
+  needs block compilation or a threaded-code interpreter, i.e. a project.
+- **`examples/headless` IS NOT A THROUGHPUT BENCHMARK and reads about a third of the real
+  figure.** It renders every pixel, hashes the whole framebuffer, round-trips a save state and
+  runs 60 more frames; timing the process also buys start-up and the ROM read. Measured: 90x
+  pinned to a P-core, 65x on an E-core, 64-80x unpinned. **That reconciles the 29.6-41.2x
+  reading that prompted all this** — it was that instrument, on an E-core, on a busy box.
+- **`core_bench` reports thread CPU time and prints the wall figure beside it**, and it is still
+  56 % faster on a quiet box than at load 16 (0.0581 vs 0.0909 ms/frame) because contention
+  reaches it through frequency scaling. **Pin it, and state the load average.**

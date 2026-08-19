@@ -437,6 +437,11 @@ pub struct MemoryManagementUnit<'a> {
     dma_index: u8,
     /// What a conflicting CPU write latches into OAM this M-cycle.
     dma_write: DmaWrite,
+    /// Bit 12 of the address an OAM DMA is currently driving, published
+    /// alongside [`Self::dma_bus`] and consumed by
+    /// [`Self::wram_bus_address`]. Not serialised, for the same reason
+    /// `dma_bus` is not: it is republished before anything can read it.
+    dma_a12: bool,
     /// True on Color silicon, where the work RAM has a bus of its own rather
     /// than hanging off the cartridge bus. Cached from `gbmode` because
     /// [`Self::cpu_bus_of`] is on the memory-access path. Derived state, so it
@@ -581,6 +586,7 @@ impl<'a> MemoryManagementUnit<'a> {
             dma_byte: 0xFF,
             dma_index: 0,
             dma_write: DmaWrite::Cpu,
+            dma_a12: false,
             wram_own_bus: false,
             keypad: Keypad::default(),
             sgb: None,
@@ -989,6 +995,9 @@ impl<'a> MemoryManagementUnit<'a> {
             self.dma_write = self.dma_write_rule(self.dma_bus, page);
             self.dma_byte = b;
             self.dma_index = i;
+            // Bit 12 of the address the transfer is driving — see
+            // [`Self::wram_bus_address`].
+            self.dma_a12 = page & 0x10 != 0;
             // Straight to the PPU: `wb` would refuse it, since OAM belongs to
             // the DMA while it runs.
             self.gpu.wb(0xFE00 + i as u16, b);
@@ -1097,6 +1106,51 @@ impl<'a> MemoryManagementUnit<'a> {
             // the SoC, which is the one case where both ends drive.
             DmaBus::External if !self.wram_own_bus && page >= 0xC0 => DmaWrite::And,
             _ => DmaWrite::Cpu,
+        }
+    }
+
+    /// The work-RAM address a CPU access actually reaches while an OAM DMA is
+    /// running — which is **not always the one the CPU asked for**.
+    ///
+    /// The address bus is shared; only the data buses are separate. So while a
+    /// transfer drives an address, work RAM latches **that** address's bit 12
+    /// rather than the CPU's, and a write to `$C000` lands at `$D000` (in
+    /// whatever `SVBK` bank is selected) whenever the transfer's source address
+    /// has bit 12 set — and, symmetrically, a write to `$D000` lands at `$C000`
+    /// when it does not. Bits 0-11 stay the CPU's.
+    ///
+    /// **Measured, not inferred, and it is the correction of a note that used
+    /// to stand here.** `docs/conformance-notes.md` recorded ~19 Gambatte
+    /// `cgb04c` rows as "one unexplained Color behaviour", having tested and
+    /// rejected the obvious reading — that `$C000` and `$D000` alias — because
+    /// Pan Docs ([SVBK](https://gbdev.io/pandocs/CGB_Registers.html)) says bank
+    /// 0 is always at `$C000-$CFFF`. **Pan Docs is right and so was that
+    /// refusal**: this is not aliasing, and the banked window is where it has
+    /// always been. What moves is which address the write uses.
+    ///
+    /// The rule was read off a probe cartridge run through
+    /// [`tools/sameboy-oracle`](../../tools/sameboy-oracle/README.md) and this
+    /// emulator side by side (`docs/measured/oam-dma-work-ram.md`): eleven
+    /// source pages, both halves of work RAM as the write target, and every
+    /// `SVBK` bank read back. It is **external-bus transfers only** — a
+    /// video-bus source (`$80-$9F`) does not redirect, and a work-RAM source
+    /// conflicts on its own bus and the access is resolved before reaching here.
+    ///
+    /// **Reads follow the same rule and the same symmetry**, which the same
+    /// probe measures: with the transfer sourced from `$7F00`, a read of
+    /// `$C000` returns what `$D000` holds, and a read of `$D000` during a
+    /// `$0000`-sourced transfer returns what `$C000` holds.
+    #[inline]
+    fn wram_bus_address(&self, address: u16) -> u16 {
+        if self.wram_own_bus
+            && self.bus_tick_enabled
+            && self.dma_bus == DmaBus::External
+            && matches!(address, 0xC000..=0xFDFF)
+        {
+            let a12 = if self.dma_a12 { 0x1000 } else { 0 };
+            (address & !0x1000) | a12
+        } else {
+            address
         }
     }
 
@@ -1602,10 +1656,12 @@ impl<'a> MemoryManagementUnit<'a> {
             0xA000..=0xBFFF => self.mbc.readram(address),
             // Echo RAM (E000-FDFF) mirrors WRAM: the same arms serve both ranges
             // because & 0x0FFF folds the echo address onto the C000-page bank.
-            0xC000..=0xCFFF | 0xE000..=0xEFFF => self.wram[address as usize & 0x0FFF],
-            0xD000..=0xDFFF | 0xF000..=0xFDFF => {
-                self.wram[(self.wrambank * 0x1000) | address as usize & 0x0FFF]
-            }
+            // A running transfer can move this read's bit 12 — see
+            // [`Self::wram_bus_address`].
+            0xC000..=0xFDFF => match self.wram_bus_address(address) {
+                a @ (0xC000..=0xCFFF | 0xE000..=0xEFFF) => self.wram[a as usize & 0x0FFF],
+                a => self.wram[(self.wrambank * 0x1000) | (a as usize & 0x0FFF)],
+            },
             // OAM belongs to the DMA while a transfer runs: the CPU reads
             // $FF and its writes are dropped (Pan Docs, "OAM DMA Transfer").
             // It belongs to the PPU through modes 2 and 3 for the same reason
@@ -1846,12 +1902,14 @@ impl<'a> MemoryManagementUnit<'a> {
                 }
             }
             0xA000..=0xBFFF => self.mbc.writeram(address, value),
-            0xC000..=0xCFFF | 0xE000..=0xEFFF => {
-                self.wram[address as usize & 0x0FFF] = value
-            }
-            0xD000..=0xDFFF | 0xF000..=0xFDFF => {
-                self.wram[(self.wrambank * 0x1000) | (address as usize & 0x0FFF)] = value
-            }
+            // A running transfer can move this write's bit 12 — see
+            // [`Self::wram_bus_address`].
+            0xC000..=0xFDFF => match self.wram_bus_address(address) {
+                a @ (0xC000..=0xCFFF | 0xE000..=0xEFFF) => {
+                    self.wram[a as usize & 0x0FFF] = value
+                }
+                a => self.wram[(self.wrambank * 0x1000) | (a as usize & 0x0FFF)] = value,
+            },
             0xFE00..=0xFE9F => {
                 if !self.oam_dma.active()
                     && (!self.bus_tick_enabled || self.gpu.cpu_can_write_oam())

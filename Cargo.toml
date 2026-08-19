@@ -486,6 +486,14 @@ required-features = ["tui"]
 name = "headless"
 path = "examples/headless.rs"
 
+# Run a cartridge and print bytes, argument for argument with
+# `tools/sameboy-oracle`'s `peek` mode — so the same question can be put to two
+# implementations and the answers laid side by side. See
+# `docs/conformance-notes.md`, the OAM-DMA work-RAM entry.
+[[example]]
+name = "peek_probe"
+path = "examples/peek_probe.rs"
+
 # Pure-emulation throughput, in both units: this project's ms/frame and the
 # reinforcement-learning community's aggregate steps-per-second across a
 # fan-out. Public embedding API only, so it builds with no features and

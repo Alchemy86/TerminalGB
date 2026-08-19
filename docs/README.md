@@ -61,9 +61,11 @@ and that had quietly happened to more than half of this directory.
 | [the PPU](measured/ppu.md) | two picture engines, and what the difference is actually worth |
 | [the APU](measured/apu.md) | ten calibrated constants, each measured against a named ROM |
 | [boot state](measured/boot.md) | the Game Boy is nine machines, not four, and no two hand over the same state |
+| [OAM DMA and work RAM](measured/oam-dma-work-ram.md) | the address bus is shared: what a work-RAM access does under a transfer, settled with a probe cartridge and a second implementation |
 | [cartridges](measured/cartridges.md) | mappers, the clock, and the class of bug that eats somebody's save |
 | [the link port](measured/serial.md) | the half no ROM-driven suite can reach |
 | [the Super Game Boy](measured/sgb.md) | a joypad port that is also a command channel |
+| [headless throughput](measured/throughput-baseline.md) | how fast the core runs with nothing attached, the method that reproduces it, and which of the two 1000× targets each number belongs to |
 | [the host boundary](measured/host.md) | defects that leave the framebuffer perfect — the pacing clock, the build, the audio device, the terminal |
 | [symptoms](measured/symptoms.md) | "my emulator does X" → what it actually is |
 | [Mealybug Tearoom](mealybug.md) | what the mid-scanline suite measures, where we stand, and what the rest would cost |

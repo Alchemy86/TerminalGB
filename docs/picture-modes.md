@@ -110,14 +110,23 @@ thing that shows a pipeline change getting closer. Both are in the baselines.
 
 ## 4. The cost figure, and how it stays honest
 
-`RenderMode::IDENTICAL_COST` is **8.8**, and it is measured rather than chosen. **It has moved
-three times, and every time because `standard` got faster — never because `identical` got
-slower.** First 2.1 → 6.3, when the PSP work rewrote the whole-scanline renderer to fetch once per
-tile instead of once per pixel; then 6.3 → 6.8, when the shipping profile stopped optimising for
-size; then 6.8 → 8.8, when `Gpu::blit_dmg_tile` started drawing a whole monochrome tile with word
-arithmetic ([`docs/throughput.md`](throughput.md) §12). A branchy whole-scanline loop is exactly
-the shape an optimiser — or a human — can do something with, while the per-dot engine's pixels
-come out of the fetcher and none of those three changes touches it.
+`RenderMode::IDENTICAL_COST` is **7.6**, and it is measured rather than chosen. **It has moved
+four times, and the fourth is the first time it moved because `identical` got FASTER.** First
+2.1 → 6.3, when the PSP work rewrote the whole-scanline renderer to fetch once per tile instead
+of once per pixel; then 6.3 → 6.8, when the shipping profile stopped optimising for size; then
+6.8 → 8.8, when `Gpu::blit_dmg_tile` started drawing a whole monochrome tile with word
+arithmetic. All three were `standard` — a branchy whole-scanline loop is exactly the shape an
+optimiser, or a human, can do something with, while the per-dot engine's pixels come out of the
+fetcher.
+
+8.8 → 7.6 is the other direction: the per-dot engine gained the idle batch it had never been
+able to use and stopped walking mode 2 a dot at a time
+([`docs/throughput.md`](throughput.md) §14). Measured in one session, same harness, HEAD against
+the change: **8.44× → 7.25/7.31/7.32×** on dmg-acid2 (accurate 0.6759 → 0.5653 ms/frame), and
+on a real cartridge — Pokémon Blue from an overworld save state, where the CPU actually halts —
+**0.5755 → 0.332 ms/frame**. The constant is the published 8.8 scaled by the ratio HEAD and the
+change measured against each other in that session, because both ends are depressed by the same
+contention.
 
 [`testharness/ppuengines.rs`](../testharness/ppuengines.rs) times both engines over the same 400
 frames of dmg-acid2 on every `cargo test --release` and **fails the build if the constant disagrees

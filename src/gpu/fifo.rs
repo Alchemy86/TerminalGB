@@ -375,6 +375,13 @@ impl Gpu {
                 self.refresh_stat_line();
                 continue;
             }
+            // Mode 2 has nothing a dot can distinguish — take the whole run.
+            if self.modeclock < OAM_DOTS {
+                let step = left.min(OAM_DOTS - self.modeclock);
+                self.oam_scan_span(step);
+                left -= step;
+                continue;
+            }
             self.accurate_dot();
             left -= 1;
         }
@@ -393,24 +400,10 @@ impl Gpu {
     /// documentation without a mental offset.
     fn accurate_dot(&mut self) {
         if self.modeclock < OAM_DOTS {
-            // The line the PPU restarts on after `LCDC` bit 7 goes 0→1 has no
-            // OAM scan at all: `STAT` reads mode 0 and the mode-2 source does
-            // not strobe (`acceptance/ppu/lcdon_timing-GS`).
-            if self.skip_first_oam {
-                self.check_wy_trigger();
-            } else {
-                if self.mode != 2 {
-                    self.start_oam_scan();
-                    self.change_mode(2);
-                }
-                self.oam_scan_dot();
-            }
-            if self.modeclock + 1 == OAM_DOTS {
-                // Mode 3 begins on the *next* dot; set the pipeline up now so
-                // its first fetch happens on that dot rather than a dot late.
-                self.start_mode3();
-            }
-        } else if self.mode == 3 && self.pipe.lx as usize >= WIDTH {
+            self.oam_scan_span(1);
+            return;
+        }
+        if self.mode == 3 && self.pipe.lx as usize >= WIDTH {
             // Mode 3 is over. **The transition is applied at the TOP of the
             // first mode-0 dot, not at the bottom of the last mode-3 one** —
             // the same edge convention mode 2 → 3 already uses above, and the
@@ -439,6 +432,60 @@ impl Gpu {
         self.refresh_stat_line();
     }
 
+    /// The whole run of **mode-2 dots** the caller's budget reaches, at once.
+    ///
+    /// Mode 2 is 80 dots of one job — walk the 40 OAM entries, two dots each —
+    /// and, unlike mode 3, nothing it does is visible dot by dot: the scan list
+    /// is only read when `start_mode3` sorts it, the STAT line's mode-2 term is
+    /// asserted for the whole window (see [`Gpu::oam_strobe`](super::Gpu::oam_strobe)),
+    /// and the `LY`/`LYC` term cannot move inside a line. So the only thing a
+    /// per-dot walk of mode 2 bought was 79 evaluations of a signal that could
+    /// not have changed — **56 % of the whole per-dot engine's cost, measured**.
+    ///
+    /// It is exact rather than approximate because the caller cannot change
+    /// anything mid-span: `do_cycle_accurate` is reached from
+    /// [`MemoryManagementUnit::bus_tick`](crate::mmu::MemoryManagementUnit) with
+    /// one M-cycle's worth of dots, or from the idle batch, which is bounded by
+    /// [`Gpu::idle_dots`](super::Gpu::idle_dots) — and that bound stops at the
+    /// end of mode 2. So `LCDC.2` (which decides sprite height and is read live,
+    /// per entry, because `m3_lcdc_obj_size_change` moves it), `WY`, `LYC` and
+    /// OAM itself all hold still for the length of one call.
+    ///
+    /// `dots` must not carry the span past `OAM_DOTS`; `do_cycle_accurate`
+    /// clamps it.
+    fn oam_scan_span(&mut self, dots: u32) {
+        let from = self.modeclock;
+        let to = from + dots;
+        debug_assert!(to <= OAM_DOTS);
+
+        // The line the PPU restarts on after `LCDC` bit 7 goes 0→1 has no OAM
+        // scan at all: `STAT` reads mode 0 and the mode-2 source does not
+        // strobe (`acceptance/ppu/lcdon_timing-GS`). `check_wy_trigger` latches
+        // once and is idempotent, so once for the span is once per dot.
+        if self.skip_first_oam {
+            self.check_wy_trigger();
+        } else {
+            if self.mode != 2 {
+                self.start_oam_scan();
+                self.change_mode(2);
+            }
+            // Dots 0..79 -> entries 0..39, one per two dots: the even ones.
+            let mut dot = from + (from & 1);
+            while dot < to {
+                self.oam_scan_entry((dot / 2) as usize);
+                dot += 2;
+            }
+        }
+
+        self.modeclock = to;
+        if to == OAM_DOTS {
+            // Mode 3 begins on the next dot; set the pipeline up now so its
+            // first fetch happens on that dot rather than a dot late.
+            self.start_mode3();
+        }
+        self.refresh_stat_line();
+    }
+
     /// Cross into the next scanline: `LY` moves, the coincidence flag
     /// re-latches, and line 144 starts VBlank.
     fn next_line(&mut self) {
@@ -457,15 +504,10 @@ impl Gpu {
         self.pipe.fetched = 0;
     }
 
-    /// One dot of the OAM scan. Hardware checks one sprite every two dots, so
-    /// forty of them fill the 80-dot mode; `LCDC.2` is read live, which is what
+    /// One OAM entry. Hardware checks one sprite every two dots, so forty of
+    /// them fill the 80-dot mode; `LCDC.2` is read live, which is what
     /// `m3_lcdc_obj_size_change` changes underneath it.
-    fn oam_scan_dot(&mut self) {
-        // Dots 0..79 -> entries 0..39, one per two dots.
-        if self.modeclock % 2 != 0 {
-            return;
-        }
-        let index = (self.modeclock / 2) as usize;
+    fn oam_scan_entry(&mut self, index: usize) {
         if index >= 40 || self.pipe.nscan >= 10 {
             return;
         }

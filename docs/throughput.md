@@ -939,3 +939,120 @@ cargo test --lib the_word_blit_draws_what_the_pixel_loop_draws
 **Pin it.** `taskset -c <a P-core>` on every single-worker figure, and interleave; without both, the
 run-to-run spread on this box is larger than everything §12 measures.
 
+
+---
+
+## 14. Round four: the per-dot engine, and the one number nobody had written down
+
+Rounds one to three were all `standard`. This one is `identical` — and it starts by noticing
+that the *ratio* between the two engines had never been measured on a real cartridge.
+`RenderMode::IDENTICAL_COST` is calibrated on dmg-acid2, which is a still picture; on Pokémon
+Blue from an overworld save state the per-dot engine was **3.24×** the batched one
+(0.1777 → 0.5757 ms/frame).
+
+### 14.1 Where the time was
+
+`eu-stack`, 400 samples of the worker thread, leaf frame, `identical`, collector configuration:
+
+| symbol | share |
+|---|---:|
+| `Gpu::do_cycle` (which inlines the dot loop) | 41 % |
+| `bg_fetch_dot` | 16.5 % |
+| `Gpu::refresh_stat_line` | 8.25 % |
+| everything else (CPU, MMU, APU, mapper) | 34 % |
+
+Two ablations sized the candidates. Skipping mode 2's dots outright — wrong, but a
+measurement — took 0.5755 → **0.2524**: the **80 OAM-scan dots of every scanline were 56 % of
+the whole engine's cost**. Making `refresh_stat_line` a no-op inside the dot loop was worth a
+further 8.4 %.
+
+### 14.2 Mode 2 is 80 dots of one job
+
+[`Gpu::oam_scan_span`](../src/gpu/fifo.rs) does the whole run of mode-2 dots the caller's budget
+reaches, at once. It is exact rather than approximate because nothing can change under it
+mid-call: `do_cycle_accurate` is reached from `bus_tick` with one M-cycle's worth of dots, or
+from the idle batch, which is bounded by `Gpu::idle_dots` — so `LCDC.2` (read live, per entry,
+because `m3_lcdc_obj_size_change` moves it), `WY`, `LYC` and OAM all hold still. The scan list
+is not read until `start_mode3` sorts it, and the STAT line's mode-2 term is asserted for the
+whole window, so 79 of the 80 `refresh_stat_line` calls could not have changed anything.
+
+**It costs no row of any suite in either picture mode.**
+
+### 14.3 The per-dot engine had never been able to idle-batch at all
+
+`Gpu::idle_dots` opened with `if self.render_mode != RenderMode::Fast { return 0 }`, so under
+`identical` a halted CPU stepped **one M-cycle at a time** — losing the idle batch that
+`--breakdown` prices at **−58 % of a frame** on the batched renderer. Pokémon Blue halts for
+about four fifths of its frame.
+
+The per-dot engine knows where its own edges are, so it can answer. What it may batch is a dot
+count after which nothing a halted CPU can observe has changed, and a halted CPU observes
+exactly one thing: an interrupt.
+
+**Only the drawing window is taken, and the reason the others are not is measured.**
+`accurate_idle_dots` bounds a mode-3 span by `WIDTH - lx`, because `lx` advances by at most one
+per dot, so the mode-0 strobe cannot land before then. Worth **0.535 → 0.332 ms/frame**.
+
+The three windows that are *not* batched all looked defensible on paper — the STAT line's terms
+are constant across mode 0, across VBlank and across the OAM window — and each was implemented
+and scored against the suites rather than argued about:
+
+| batched window | Gambatte `identical` | other |
+|---|---|---|
+| mode 3 (**taken**) | +64 rows, −0 | — |
+| mode 0 and VBlank | −10 rows (`dma/gdma_cycles_*`, `dma/hdma_start_ly0`), and **blocks 22 more** | — |
+| the OAM window | — | dmg-acid2 **8 of 23,040 pixels**, `cgb-acid2` 158 → 166 px |
+
+The OAM one has a mechanism: `mode` still reads 0 at dot 0, so a batch started there runs
+across the mode 0→2 transition, which is where the mode-0 term of the STAT line drops.
+The mode-0/VBlank one does not, and is left unexplained rather than fitted.
+
+**And the full horizon was also *slower* than the narrow one** on a real cartridge — 0.442
+against 0.332 ms/frame — so there was not even a trade to weigh. `identical` spends rows on
+nothing.
+
+### 14.4 The two-budget rule this round is the first to use
+
+The captain's framing, and it is what made the table above a decision rather than an argument:
+**`identical` is where every last row is chased, and the performance path may take liberties so
+long as nothing a game can see changes.** Both halves are load-bearing here. Under one budget
+the mode-0 batch would have been a judgement call about ten rows against fifteen per cent; under
+two it is simply not `identical`'s to take.
+
+### 14.5 A negative result: the APU's channel loops are not the APU's cost
+
+`--breakdown` prices the whole APU at **+16.7 %** of a collector's frame, and
+`SquareChannel::run_span`'s per-expiry loop is the obvious target — it is a `while` over a
+period that can be as short as 4 T-cycles, i.e. 17,556 iterations a frame in the worst case.
+A closed form for it (the duty position telescopes; the amplitude only changes at the two
+pattern edges per eight steps) was written, proved exhaustively equivalent over 36,864 starting
+states including the emitted blip deltas sample for sample, and **measured at 0.3 %.**
+
+The reason is one counter, and it should have been printed first: **the square loops run 141
+iterations a frame on an overworld state and 87 on a cold boot**, the wave channel 193 and 97,
+because real music uses periods of a thousand T-cycles and not four. The ceiling on the whole
+idea is 0.4 %. Reverted.
+
+`Sound::do_cycle` is called **11,051 times a frame** and does nothing 99.7 % of them —
+`Sound::run` fires 31 times — which is where the APU's cost actually is, and §13 already sized
+moving that call at 1.5 %. **The largest named APU target remains `Sound::run`'s channel
+synthesis**, which is guest-visible and stays.
+
+### 14.6 Reproducing §14
+
+```sh
+# the profile
+GB_PPU=accurate ./target/release/examples/core_bench --rom blue.gb --state s.gbss \
+    --frames 400000 --audio --no-audio-out &
+for i in $(seq 1 400); do eu-stack -p $! -n 2; done   # attribute per THREAD, not per sample
+
+# the ratio, on a real cartridge rather than on a still picture
+for m in standard accurate; do
+  GB_PPU=$m taskset -c 4 ./target/release/examples/core_bench --rom blue.gb \
+      --state s.gbss --frames 5000 --warmup 800 --audio --no-audio-out --repeat 2 --json
+done
+
+# the rows, which is the half that decides it
+GB_PPU=accurate ./target/release/examples/csp_suite --quiet --suite gambatte \
+    --dir target/test-suites/csp --baseline testharness/csp_gambatte_accurate_baseline.txt
+```

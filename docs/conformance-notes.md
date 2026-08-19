@@ -146,21 +146,15 @@ move.
   got its own pass — the next entry below. After it, 137 rows are red and
   **every remaining `busypush`/`busypop` failure is a `cgb04c` row**; the DMG
   half of both families is green.
-* **About 19 of those are one unexplained Color behaviour, and the obvious
-  explanation is ruled out.** `oamdma_srcXXXX_busypushC001` and its `E001`,
-  `F001` and `FE01` siblings prime `$D000` and `$BFFF`, push `$55AA` at
-  `SP = $C001` during a transfer — so the writes are to `$C000` and `$BFFF` —
-  and then read `$BFFF` and **`$D000`** back. A DMG expects `$D000` untouched,
-  which we produce. A `cgb04c` expects `$D000` to hold the `$55` that was
-  written to `$C000`. It is **not** work-RAM aliasing: `lbegin` opens with
-  `ld a,02 / ldff(70),a`, so `$D000` is bank 2 and `$C000` is bank 0. Forcing
-  our `$D000` window onto bank 0 does move 19 rows, which is how the aliasing
-  reading was tested — and Pan Docs
-  ([SVBK](https://gbdev.io/pandocs/CGB_Registers.html)) is explicit that "bank
-  0 is always available at C000–CFFF" and that writing 0 selects bank 1, so that
-  is a wrong change and was not made. **Left open and unexplained rather than
-  fitted**: whatever a Color console does with a work-RAM write while a
-  cartridge-bus transfer runs, it is not the address decode we have.
+* ~~**About 19 of those are one unexplained Color behaviour**~~ — **explained and fixed,
+  2026-08-19; see the entry at the top of this file and
+  [`docs/measured/oam-dma-work-ram.md`](measured/oam-dma-work-ram.md).** The reading this note
+  recorded as tested-and-rejected — that `$C000` and `$D000` alias — really is wrong, and Pan
+  Docs really is right that bank 0 is always at `$C000-$CFFF`. What was missing is a third
+  possibility: while a transfer drives the **external** bus, a CPU access to `$C000-$DFFF`
+  takes address **bit 12** from the address the transfer is driving. Nothing aliases; the
+  access simply is not at the address the CPU asked for. Worth +32 rows on `standard` and +64
+  on `identical`. **Do not restate this as an open gap.**
 
 **Carries into the tool.** Seven checks, one per clause above, each expressible
 as "start a transfer from page P, touch address A on M-cycle N, report what the

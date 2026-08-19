@@ -76,14 +76,20 @@ impl RenderMode {
     /// figure is that median scaled onto the old one: 6.8 x (8.5 / 6.4).
     ///
     /// **A ratio is two numbers and either can move, so re-run the harness
-    /// rather than carrying this one forward.** A run taken while this machine
+    /// rather than carrying this one forward.** It has moved four times and
+    /// three of those were `standard` getting faster; **8.8 → 7.6 is the first
+    /// time `identical` did** (docs/throughput.md §14 — the idle batch it had
+    /// never been able to use, and mode 2 stopping being walked a dot at a
+    /// time). Measured HEAD against the change in one session: 8.44x → 7.25,
+    /// 7.31, 7.32 on dmg-acid2, and 0.5755 → 0.332 ms/frame on a real
+    /// cartridge, where the CPU actually halts. A run taken while this machine
     /// was busy gave 7.75, and one while it was very busy gave 5.56 — which is
     /// why the figure is approximate, is shown with a `~`, and is checked
     /// against a deliberately wide band. See docs/portability.md §3.7.
     ///
     /// Quoted wherever the choice is offered — a player trading speed for
     /// exactness has to be told the price at the moment they trade.
-    pub const IDENTICAL_COST: f32 = 8.8;
+    pub const IDENTICAL_COST: f32 = 7.6;
 
     /// Every mode, in the order the TUI's `P` key cycles them: the default
     /// first, so a player who taps `P` twice is back where they started.
@@ -916,8 +922,11 @@ impl Gpu {
     /// has an event on every dot by construction, or the LCD switched off,
     /// where nothing here advances at all).
     pub(crate) fn idle_dots(&self) -> u32 {
-        if self.render_mode != RenderMode::Fast || !self.lcd_on {
+        if !self.lcd_on {
             return 0;
+        }
+        if self.render_mode == RenderMode::Accurate {
+            return self.accurate_idle_dots();
         }
         let m = self.modeclock;
         let mut next = if m <= OAM_DOTS {
@@ -936,6 +945,50 @@ impl Gpu {
             }
         }
         next.saturating_sub(m)
+    }
+
+    /// [`Gpu::idle_dots`] for the per-dot engine.
+    ///
+    /// This used to return 0, so under `identical` a halted CPU stepped one
+    /// M-cycle at a time and the idle batch — worth −58 % of a frame on the
+    /// batched renderer — was simply unavailable. It is available: the per-dot
+    /// engine knows where its own edges are.
+    ///
+    /// The answer has to be a dot count after which **nothing a halted CPU can
+    /// observe has changed**, and all such a CPU observes is an interrupt. Only
+    /// one window is taken, and the reason the others are not is measured
+    /// rather than cautious:
+    ///
+    /// * **While drawing** — mode 3, and the dot mode 3 begins, where `mode`
+    ///   still reads 2 because `accurate_dot` changes it as its first act. `lx`
+    ///   advances by at most one per dot (the head-of-line `SCX` discard and an
+    ///   object fetch both hold it still), so `WIDTH - lx` is a lower bound on
+    ///   the mode-0 strobe and the edge can only land on the last dot of the
+    ///   span or later. Worth **0.535 → 0.332 ms/frame** on an overworld save
+    ///   state, and it costs no row of any suite in either picture mode.
+    /// * **Mode 0, the OAM window and VBlank are NOT batched, and it is not for
+    ///   want of trying.** Every one of them is defensible on paper — the STAT
+    ///   line's terms are constant across all three — and each was implemented
+    ///   and scored. Batching mode 0 and VBlank costs **10 Gambatte
+    ///   `dma/gdma_cycles_*` and `dma/hdma_start_ly0` rows and blocks 22 more
+    ///   that would otherwise be won**, and batching the OAM window moves 8 of
+    ///   dmg-acid2's 23,040 pixels (and `cgb-acid2` with it, 158 → 166 px)
+    ///   because a batch started at dot 0 runs across the mode 0→2 transition.
+    ///   The full horizon was *also slower* than this one on a real cartridge
+    ///   (0.442 against 0.332), so there is not even a trade to weigh.
+    ///   `identical` spends rows on nothing.
+    ///
+    /// The caller rounds this up to a whole M-cycle, which can overshoot by up
+    /// to three dots — harmless, because a CPU only looks at `IE & IF` on an
+    /// M-cycle boundary, so an edge inside the M-cycle it wakes on is seen at
+    /// the same instant either way.
+    fn accurate_idle_dots(&self) -> u32 {
+        let m = self.modeclock;
+        if m >= OAM_DOTS && self.line < VBLANK_LINE && self.mode != 0 {
+            let togo = (WIDTH as u32).saturating_sub(self.pipe.lx as u32);
+            return togo.max(1);
+        }
+        1
     }
 
     /// Latch the window's frame-long "Y condition" if this scanline's `LY`
