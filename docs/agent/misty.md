@@ -71,6 +71,28 @@ The Squirtle line's number is not a level, it is a **move**:
 power against the 40 of its best other attack. That is where the race flips, and
 it is why `MISTY_TRAIN_TO` is 24.
 
+### Measured, at the level the chain arrives with
+
+Twenty attempts per line through [the rig](test-rig.md), paired on the seed,
+from the certified link-26 exit pool — that is the gym fought at **level 20**,
+i.e. with link 27 skipped:
+
+| line | beat the gym at level 20 | 95% CI | what happened |
+|---|---:|---|---|
+| **IVYSAUR** | **100.0%** | 83.9-100.0 | 151 decisions, 75.4% HP left |
+| **WARTORTLE** | **45.0%** | 25.8-65.8 | 284 decisions, and the eleven failures are Misty |
+| **CHARMELEON** | **0.0%** | 0.0-16.1 | wins both trainer battles on the way in — 36 of them across 20 attempts — and loses to Misty every time |
+
+That is [`brock.md`](brock.md) §2's table with the lines rearranged, which is
+exactly what a WATER gym should do to it. It is also the argument for link 27:
+Wartortle at 20 is a coin flip and at 24 it is not.
+
+**The pool itself carries a finding.** Its 3,000 states are IVYSAUR 1112,
+WARTORTLE 1119 and **CHARMELEON 769** — the Charmander line is under-represented
+arriving in Cerulean because Brock's gym has already cost it a third of its runs
+([`brock.md`](brock.md) §10). A line that cannot pass one gym is thinned before
+it reaches the next.
+
 ## 3. What that costs: the move-learn prompt, which nothing in this chain had ever seen
 
 **The chain has never levelled a Pokémon into a full move list before, and the
