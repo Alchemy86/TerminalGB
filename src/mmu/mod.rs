@@ -1634,10 +1634,8 @@ impl<'a> MemoryManagementUnit<'a> {
         let dma = !crate::profile::oam_dma_skipped();
         #[cfg(not(feature = "profile"))]
         let dma = true;
-        if dma {
-            if self.oam_dma_busy {
-                self.oam_dma_cycles(timerticks);
-            }
+        if dma && self.oam_dma_busy {
+            self.oam_dma_cycles(timerticks);
         }
         if self.timer.interrupt != 0 {
             self.intf |= self.timer.interrupt;
