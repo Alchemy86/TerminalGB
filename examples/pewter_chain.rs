@@ -3303,7 +3303,24 @@ impl ChainDriver {
         // below then need no new case at all. The one difference from a POTION
         // is that a ball is thrown *at* the opponent rather than used on
         // somebody, so the party list the item path handles never appears.
-        let wants = self.wild_wants(s);
+        let verdict = self.wild_wants(s);
+        let ball = match &verdict {
+            Some(terminalgb_plugin_agent::catch::Verdict::Throw(t)) => {
+                Some((t.item, t.why))
+            }
+            _ => None,
+        };
+        // **The one move rule a hunt needs, and it only ever fires on a hunt.**
+        // `catch::decide` says `Weaken` when the target is too healthy to spend
+        // a ball on; the battle policy would then pick the move that ends the
+        // fight soonest, which on a hunt destroys the encounter it has been
+        // pacing for. See [`ChainDriver::weakening_move`].
+        let weaken = hunted
+            && matches!(
+                verdict,
+                Some(terminalgb_plugin_agent::catch::Verdict::Weaken { .. })
+            );
+        let wants = ball;
         let action = self
             .plan_this_turn
             .get_or_insert_with(|| {
@@ -3318,6 +3335,15 @@ impl ChainDriver {
                         id: ball.0,
                         why: ball.1,
                     };
+                }
+                if weaken {
+                    if let Some(slot) = ChainDriver::weakening_move(view) {
+                        tally::WEAKENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        return terminalgb_plugin_agent::battle::Action::Fight {
+                            slot,
+                            why: "chip it down without knocking it out — we want to catch it",
+                        };
+                    }
                 }
                 terminalgb_plugin_agent::battle::decide(view, &intent)
             })
@@ -3519,7 +3545,10 @@ impl ChainDriver {
     /// [`terminalgb_plugin_agent::catch`] policy's — the same one
     /// `docs/gen1/catching.md` measured against the cartridge at 251 throws —
     /// and the driver only turns `Throw` into keypresses.
-    fn wild_wants(&mut self, s: &Snap) -> Option<(u8, &'static str)> {
+    fn wild_wants(
+        &mut self,
+        s: &Snap,
+    ) -> Option<terminalgb_plugin_agent::catch::Verdict> {
         use terminalgb_plugin_agent::catch;
         if self.wants.is_empty() {
             return None;
@@ -3539,10 +3568,47 @@ impl ChainDriver {
             s.catch_rate,
             &s.party_species,
         );
-        match catch::decide(&sit, self.wants) {
-            catch::Verdict::Throw(t) => Some((t.item, t.why)),
-            _ => None,
-        }
+        Some(catch::decide(&sit, self.wants))
+    }
+
+    /// Which move to chip a **hunted** Pokémon down with, when a ball is not
+    /// yet worth throwing.
+    ///
+    /// # Why a hunt needs its own move rule, and a catch does not
+    ///
+    /// [`terminalgb_plugin_agent::battle::decide`] picks the move that ends
+    /// the fight soonest, which is right for every fight the chain has ever
+    /// had and exactly wrong for the one it is trying not to win. **Measured
+    /// on the cartridge's own numbers: a level 20 CHARMELEON's EMBER is FIRE
+    /// against BUG/GRASS, so it is 2x twice over, and against a level 11
+    /// PARAS' 30 HP it does 112** — the Charmander line would knock out every
+    /// PARAS it ever met, and the one line this whole capability exists to
+    /// rescue could never catch anything. Nothing measured it before this
+    /// because the chain had only ever hunted with a WARTORTLE, whose WATER
+    /// GUN is *halved* by the same typing.
+    ///
+    /// The rule: among the moves that are usable and do damage, take the one
+    /// that hurts most while its **best** roll still leaves the target
+    /// standing. `max` rather than `expected` because a knockout is not a
+    /// tail risk to be traded off — it is the encounter gone, and on B2F that
+    /// is another 128 steps.
+    ///
+    /// If every damaging move can knock it out, take the gentlest and accept
+    /// the risk: a status move would be safer still, but Gen 1's escape check
+    /// is the opponent's to make and standing there doing nothing invites it
+    /// to run. Returns the move's own slot.
+    fn weakening_move(view: &terminalgb_plugin_agent::battle::View) -> Option<usize> {
+        let usable: Vec<_> = view
+            .moves
+            .iter()
+            .filter(|m| m.usable() && m.damaging())
+            .collect();
+        usable
+            .iter()
+            .filter(|m| u32::from(m.max) < u32::from(view.theirs.hp))
+            .max_by_key(|m| m.max)
+            .or_else(|| usable.iter().min_by_key(|m| m.max))
+            .map(|m| m.slot)
     }
 
     /// Step a menu cursor one row towards `want`, or press A when it is there.
@@ -3895,6 +3961,8 @@ mod tally {
         // passenger and starts being the one that trains.
         PROMOTED,
         PROMOTE_GAVE_UP,
+        // Turns a hunt spent deliberately not winning.
+        WEAKENED,
     );
 
     pub fn bump(c: &AtomicU64, by: u64) {
@@ -3909,7 +3977,7 @@ mod tally {
     /// against.
     pub fn bag_report() -> Option<String> {
         let (c, d, g) = (get(&CURED), get(&DRANK), get(&BAG_GAVE_UP));
-        let (t, k) = (get(&THROWN), get(&CAUGHT));
+        let (t, k, w) = (get(&THROWN), get(&CAUGHT), get(&WEAKENED));
         if c + d + g + t + get(&PROMOTED) + get(&PROMOTE_GAVE_UP) == 0 {
             return None;
         }
@@ -3922,6 +3990,14 @@ mod tally {
             (0, _) => String::new(),
             (t, 0) => format!("; {t} ball(s) thrown"),
             (t, k) => format!("; {t} ball(s) thrown, {k} catch(es) seen land"),
+        };
+        // **A hunt's own turns, counted apart from every other kind.** These
+        // are turns spent deliberately not winning, which no other leg has
+        // ever taken, and they are what says the weakening rule fired at all.
+        let chip = if w == 0 {
+            String::new()
+        } else {
+            format!("; {w} turn(s) chipping something down to catch it")
         };
         // **The promotion is reported separately from the catch**, because
         // the two fail for different reasons and a leg that caught something
@@ -3937,7 +4013,7 @@ mod tally {
         };
         Some(format!(
             "the bag, in the overworld: {c} cure(s), {d} drink(s), \
-             {g} trip(s) through it abandoned{balls}{swap}"
+             {g} trip(s) through it abandoned{balls}{chip}{swap}"
         ))
     }
 
