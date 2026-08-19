@@ -17,16 +17,29 @@ number, how to reproduce it, and what it does and does not mean.**
 Pokémon Blue, a real in-game save state, one worker, **pinned to a P-core**, thread CPU clock.
 The DMG's own frame is 16.7427 ms, so 1× real time is 59.7275 frames a second.
 
-| configuration | ms/frame | × real time |
-|---|---:|---:|
-| **collector** — pixels off, APU installed, samples off | **0.0581** | **288×** |
-| player — picture on, no audio | 0.1237 | 135× |
-| `identical` picture mode, picture on | 0.3316 | 51× |
+| configuration | ms/frame | × real time | load |
+|---|---:|---:|---:|
+| **collector** — pixels off, APU installed, samples off | **0.0772** | **217×** | 16 |
+| the same, on a **quiet** box | 0.0491 | **341×** | 0.3 |
+| player — picture on, APU silent | 0.1582 | 106× | 16 |
+| `identical` picture mode, picture on | 0.4962 | 34× | 16 |
 
-**Aggregate, 20 workers, collector configuration:** **74,155 emulated frames a second = 1242×
-real time** — and that was measured while *another crew held sixteen of the twenty cores*. On a
-quiet box [`docs/throughput.md`](../throughput.md) §6 measures 232,746 frames a second, which
-is **3,896×**.
+The two collector rows are the same binary; the difference is entirely the box's other
+occupant, through frequency scaling. **The quiet row is the measured quiet figure of the
+session's starting commit (0.0581 ms/frame, 288×) scaled by the interleaved improvement below,
+and is labelled as such rather than presented as an independent measurement** — the box has not
+been quiet since.
+
+Measured against the commit this session started from, interleaved on one core in one minute:
+**0.0913 → 0.0772 ms/frame, +18.3 %** — see [`docs/throughput.md`](../throughput.md) §15 for
+what each part of that was worth, and [against the field](against-the-field.md) for what the
+number means beside two other emulators built and timed here.
+
+**Aggregate, 20 workers, collector configuration: 58,777–74,155 emulated frames a second =
+984–1242× real time** — both readings taken while another crew held most of the box, which is
+what a fan-out figure's spread looks like when it is wall clock by definition. On a quiet box
+[`docs/throughput.md`](../throughput.md) §6 measures 232,746 frames a second, which is
+**3,896×**.
 
 ## 2. So: which 1000×?
 
@@ -36,15 +49,19 @@ They are not the same goal and they are not the same work.
   box, and a quiet one is nearly four times past it. Certification already fans out — a
   3,000-attempt link is twenty workers — so this is the number a *measurement campaign*
   actually experiences.
-* **Single-core 1000× is 3.5× away and is not available by shaving.** The arithmetic is worth
+* **Single-core 1000× is about 3× away and is not available by shaving.** The arithmetic is worth
   stating because it saves somebody a month: `core_bench --breakdown` prices the per-access bus
   tick at **+21 %** of a collector's frame, the whole APU at **+16.7 %** and the whole timer at
   **+14 %**. Deleting *all three outright*, which would not be an emulator any more, is about
   **1.9×** — roughly **550×**. Everything else on the page is a few per cent each.
 
-  Single-core 1000× therefore needs a different execution model — block compilation, or a
-  threaded-code interpreter — not another pass of micro-optimisation. That is a project, and it
-  should be chosen deliberately rather than arrived at.
+  Single-core 1000× therefore needs a different execution model, not another pass of
+  micro-optimisation. **And the shape of it is now named rather than guessed**: measured beside
+  PyBoy, which is 2.3× faster and not cycle-accurate, the whole gap is that peripheral
+  bookkeeping happens **once per instruction** here and **once per horizon** there. Making the
+  timer and the PPU lazily caught-up the way the APU already is
+  ([against the field](against-the-field.md) §4) is the project, and `Sound::catch_up` is the
+  proof it costs no accuracy.
 
 **When somebody quotes a throughput figure for this emulator, they should say which.**
 
@@ -83,6 +100,9 @@ wrong answer first:
 | pinned to a P-core | 1.33 s | **90×** |
 | pinned to an E-core | 1.84 s | 65× |
 | unpinned, box at load 16 | 1.49–1.87 s | 64–80× |
+
+(That table predates §15's work by a few hours; the shape of the reconciliation is what it is
+for, not the digits.)
 
 It is not a throughput benchmark and does not claim to be. It **renders every pixel**, hashes
 the whole framebuffer, round-trips a save state and runs 60 more frames to check it, and a
