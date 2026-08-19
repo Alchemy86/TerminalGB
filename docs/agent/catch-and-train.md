@@ -107,6 +107,14 @@ line's BITE. At 21 it loses; at 24 it wins by nine turns.
 
 ## 2. Certified
 
+Run in the chain's own order, each link entering from the previous one's
+**frozen, read-only** exit pool, `--idle-spread 3001`, every attempt a distinct
+trajectory, **one binary throughout** (`sha256 6bedd631…`, logged by the run
+itself). Links 01-22 are unchanged by this work and were rebuilt at 1,000
+attempts each as the pool for it; they reproduce every published rate, and
+seven of them replay hash for hash against the final binary — 09, 14, 17, 20,
+22, 23 and 23b, 60 or 30 attempts apiece, **0 different**.
+
 <!-- CERT TABLE -->
 
 ## 3. What it costs
