@@ -1316,3 +1316,93 @@ dispatch and the fetch itself — the three things an interpreter *is*. The next
 different execution model (block compilation, or threaded code), and the honest note beside it is
 that we are already 9.5× the reference cycle-accurate implementation and 2.1× off one that gave
 up cycle accuracy to get there.
+
+---
+
+## 17. A technique list, worked and measured — five already done, three refused, one deprioritised
+
+A list of standard techniques for making a cycle-accurate Game Boy emulator faster without
+losing accuracy, taken item by item **against this emulator's own profile** rather than in the
+order the list gives them. That distinction turned out to matter: the item ranked "likely the
+single biggest remaining win" is worth about one per cent here, for a reason a count settles in
+a minute.
+
+| # | technique | verdict |
+|---|---|---|
+| 1 | batch component stepping by predictive synchronisation | **done** — §16, +17.5 %; the APU too (§15.2, +4.3 %) |
+| 2 | flat function-pointer dispatch instead of a `match` | **already done by the compiler** |
+| 3 | a tick buffer / delay queue for bus alignment | **already done** |
+| 4 | direct memory pointer mapping (a page table) | **≈1 %, not the biggest win — counted** |
+| 5 | lazy PPU evaluation and scanline batching | **done**, both halves |
+| 6 | pre-decoded tile caches | **sized and deprioritised** — nothing for a collector |
+| 7 | zero-allocation cycle loops | **already satisfied** |
+| 8 | flag-register packing | **measured neutral** |
+| 9 | LTO, then PGO | LTO fat since round two; **PGO measured 4.3 % slower** (§13) |
+
+### 17.1 The two that were already done, and the evidence
+
+**#2.** A `match` on a dense `u8` was assumed to be a jump table; it is, and here is the proof
+rather than the assumption — `objdump` over `Gameboy::frame` finds four of rustc's tables:
+
+```text
+lea    0x1185e(%rip),%rdi
+movslq (%rdi,%rsi,4),%rsi
+add    %rdi,%rsi
+jmp    *%rsi
+```
+
+A function-pointer table would replace a relative offset with a full pointer load and gain
+nothing. **#7.** `Cpu::debug`, the one allocation on the instruction path, is commented out at
+its call site; a stack sample of 500 frames finds no allocator frame at all.
+
+### 17.2 #4: the page table is not the biggest win, because 72 % of reads already skip the match
+
+The list's reasoning is right — `read_at` really does dispatch through a range chain, and that
+would be the hottest path in the emulator. It is not the hottest path *here*, because
+[`MemoryManagementUnit::fetch`](../src/mmu/mod.rs) (§15.3) already takes opcode and immediate
+reads straight to a ROM window. Counted over a frame of Pokémon Blue's overworld:
+
+| | calls per frame |
+|---|---:|
+| `fetch` — bypasses the dispatch entirely | **4,764** |
+| `read_at` — through the match | 1,843 |
+| …of which ROM (one compare, then the same window path) | 914 |
+| …work RAM | 591 |
+| …high RAM | 319 |
+| …everything else | 19 |
+
+So a page table would reach about **910 accesses of a frame's ~6,600 reads**, and only the
+dispatch part of them. Hoisting work RAM and high RAM ahead of the match measures **+0.7 %** —
+and that version is *wrong*, because it skips
+[`MemoryManagementUnit::wram_bus_address`](../src/mmu/mod.rs), the OAM-DMA address redirect. The
+hashes only matched because this cartridge does not exercise it. **Not taken:** under one per
+cent, for a correctness hazard on the emulator's most-used function.
+
+### 17.3 #8: flag packing is neutral, and the compiler is why
+
+`Registers::flag` is a read-modify-write of `F` plus its `& 0xF0`, and an ALU instruction calls
+it four times. Replacing all 46 four-flag groups in `src/cpu/data.rs` with one branchless
+`set_flags(z, n, h, c)` — one store instead of four — measures **0.0624 → 0.0626 ms/frame**,
+inside the noise, with every hash identical. LLVM had already coalesced them. Reverted: 46
+mechanical rewrites of the most correctness-critical file in the CPU, for nothing.
+
+### 17.4 #6: a tile cache buys a *player* something and a collector nothing
+
+`Gpu::blit_dmg_tile` decodes a monochrome tile through a 256-entry spread table (§12.3). Caching
+decoded tiles and invalidating on a VRAM write would replace that with a copy — but the whole
+renderer is **0.0434 ms/frame** of a player's 0.1106, and a collector does not run it at all
+(`set_render_pixels(false)`, §4). At an optimistic third of the renderer it is ~9 % of a
+*player's* frame and **0 % of a certification run's**. Left for whoever wants the frontend
+faster; it is not throughput.
+
+### 17.5 What the four negatives in this round have in common
+
+Deferring the timer (8.5 % slower), skipping `refresh_stat_line` on quiet PPU chunks (0.8 %),
+gating two per-instruction stores (2.7 %), and packing the flags (neutral) — plus this round's
+hoist at 0.7 % for a correctness hazard.
+
+**Every one of them was "remove work from the common path", and every one lost or drew.** After
+§15 and §16 the profile has no item above 9.4 % and the top three are the per-access hook, the
+opcode dispatch and the fetch. That is what a tight interpreter looks like from the inside, and
+it is the honest signal that the next real step is a different execution model rather than
+another pass.
