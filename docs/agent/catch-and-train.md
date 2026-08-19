@@ -115,13 +115,124 @@ attempts each as the pool for it; they reproduce every published rate, and
 seven of them replay hash for hash against the final binary — 09, 14, 17, 20,
 22, 23 and 23b, 60 or 30 attempts apiece, **0 different**.
 
-<!-- CERT TABLE -->
+| link | reached the goal | 95 % CI | frames (mean) |
+|---|---:|---|---:|
+| 23-down-to-mt-moon-b2f | **1000/1000** | 99.6-100.0 | 1,985 |
+| **23b-hunt-a-paras** | **982/1000 = 98.2 %** | 97.2-98.9 | 15,316 |
+| 24-cross-mt-moon-b2f | **988/1000 = 98.8 %** | 97.9-99.3 | 29,883 |
+| 25-east-to-cerulean | **1000/1000** | 99.6-100.0 | 2,537 |
+| 26-heal-in-cerulean | **1000/1000** | 99.6-100.0 | 1,558 |
+| **26b-lead-with-the-paras** | **1000/1000** | 99.6-100.0 | 754 |
+| 27-train-for-misty | **500/500** | 99.2-100.0 | 754,313 |
+| 28-heal-before-misty | **500/500** | 99.2-100.0 | 3,923 |
+| **29-fight-through-cerulean-gym** | **2996/3000 = 99.9 %** | 99.7-99.9 | 27,445 |
+| 30-heal-after-misty | **500/500** | 99.2-100.0 | 5,037 |
+
+**Seven of the ten are 100 %, and the gym is 2996 of 3000.** Link 27 gets 500
+attempts rather than 3,000 because it is ~750,000 frames each and it is not the
+leg being quoted; that is stated rather than hidden, and it is what `$SPEC` on
+[`build_pool.sh`](../../tools/pewter-chain/build_pool.sh) exists for. The two
+legs under the chain's 99.9 % bar are §4's, each diagnosed to the byte or the
+tile.
+
+### The answer, split by the starter line the entry state carries
+
+Read from **party slot two**, because once the bench leads the starter is no
+longer at the front, with the internal indices taken off the cartridge
+([`split_by_line.py`](../../tools/pewter-chain/split_by_line.py)).
+
+| line | without a bench ([`misty.md`](misty.md)) | **with a bench** | 95 % CI |
+|---|---:|---:|---|
+| BULBASAUR → IVYSAUR | 1107/1110 = 99.7 % | **1090/1091 = 99.9 %** | 99.5-100.0 |
+| SQUIRTLE → WARTORTLE | 1104/1115 = 99.0 % | **1112/1114 = 99.8 %** | 99.3-100.0 |
+| **CHARMANDER → CHARMELEON** | **0/775 = 0.0 %** | **794/795 = 99.9 %** | 99.3-100.0 |
+| **all three** | 2211/3000 = 73.7 % | **2996/3000 = 99.9 %** | 99.7-99.9 |
+
+**The three lines converge, and that is the result.** With a PARASECT in front
+the gym is fought by a PARASECT whichever starter is on the bench, so the
+Cascade Badge stops being a fact about the starter. The Boulder Badge still is
+— Brock's gym costs the Charmander line a third of its runs before it ever gets
+here, which is why that column's denominator is 795 against the others' ~1,100.
+
+**The four failures are not a line.** Two ran out of model calls (both
+Squirtle-line) and two lost the fight (one Bulbasaur, one Charmander). At
+99.9 % this is the fight's own variance, which is what `misty.md` says about
+the three and eleven it had.
+
+**Chain-level, the honest product**: 0.982 (a bench is caught) × 0.988 (the
+mountain is crossed) × 0.999 (the badge) ≈ **96.9 %** of runs that reach Mt Moon
+B2F leave Cerulean with the second badge, against 73.7 % before — and for the
+Charmander line, against nothing at all.
 
 ## 3. What it costs
 
 <!-- COST -->
 
 ## 4. Findings
+
+### The hunt's 1.8 % is five balls spent, not a PARAS that never appeared
+
+**Every one of the 18 failures ran to the 1,500-call cap**, at 162k-173k frames
+where a success takes a median of **9,282 frames and 88 decisions** (p90 24,936
+and 221; the longest success 78,744 and 681). A tail that long against a median
+that short is a different distribution, so it was reproduced rather than
+assumed — four failing seeds (57, 78, 110, 339), and every one reports
+
+```
+the bag, in the overworld: ... 5 ball(s) thrown; 2 turn(s) chipping something
+   down to catch it
+battles 92: won 12 (13.0%), lost 0 (0.0%), fled 80 (87.0%)
+```
+
+**And it is one PARAS, not five.** Exactly two chipping turns each: the leg
+finds its PARAS, chips it twice to bring the odds over `catch::decide`'s
+one-third floor, and then throws every ball it has at that same target at about
+even money. Five coin flips is 3 %; 1.8 % is measured. Afterwards
+`catch::decide` answers `Unavailable` — the capability does not exist any more
+— so the walk carries on correctly and pointlessly until the budget runs out.
+
+Two repairs, **neither taken here** for the same reason `misty.md` leaves link
+26's own two alone: each re-opens the certification of every link after it.
+
+1. **Buy more balls.** `18b-shop-in-pewter` buys five at ¥200 out of the ¥4,651
+   the chain carries out of Brock's gym; ten would put five consecutive
+   failures near one run in a thousand. It costs ¥1,000 and a re-certification
+   of links 18b to 30.
+2. **Spend turns instead of balls.** `catch::decide` throws as soon as the
+   chance passes a third, which is the right trade when balls are plentiful and
+   turns are not; on a hunt it is the other way round — five balls and thousands
+   of spare decisions. Chipping to the floor `weakening_move` already computes
+   takes a Poké Ball at catch rate 190 from about even money to about 85 %,
+   i.e. five consecutive failures from roughly 1 in 33 to 1 in 13,000.
+
+### Link 24's 1.2 % is a warp tile the walkability grid does not know about
+
+The `(23,14)` waypoint took link 24 from 969 to **988 of 1000**; the twelve left
+are eight distinct entry states, four failing on both their seeds, every one
+oscillating on B1F at `(19..21,16)`. Reproduced:
+
+```
+d   1 (61, 21, 15)  Let the battle text finish.     <- B2F, mid-battle
+d   9 (60, 21, 17)  Let the new map settle.         <- B1F, down the ladder
+d  11 (60, 21, 16)  Walls in the way — go round.    <- and there it stays
+```
+
+**The hunt's own approach corridor is column 21, rows 15 and 16**, because the
+ladder lands at (21,17) and that column is the only way north out of it. A wild
+encounter on that corridor that ends in the catch leaves the leg's exit state
+*mid-battle* a tile or two above the ladder; the battle resolves, the step
+completes, and the player is back on B1F — in a pocket from which the leg's own
+(27,3) is not reachable on foot at all.
+
+**The named fix, not taken here**: approach east along row 17 to (23,17) and
+north up column 23, and pace `(23,12)-(28,14)` instead of `(20,12)-(28,14)`.
+That leaves column 21 unvisited above row 17. It changes 23b, so it re-opens
+every link after it.
+
+**A pool with gaps is not indexed by its file names**, and that cost a wrong
+diagnosis first time: `--exits N` keeps the first N *successful* exits and names
+each after its own seed, so entry index 661 is file `00670.gbss`. Looking one up
+by name reproduces a different, passing run.
 
 ### A hunt must not knock out what it is trying to catch
 
@@ -150,6 +261,29 @@ is another 128 steps.
 **Nothing measured it before because the chain had only ever hunted with a
 WARTORTLE**, whose WATER GUN is *halved* by the same typing. The general
 lesson: a capability tested from one entry state is tested on one game.
+
+### Two defects the certification found that nothing smaller would have
+
+Both were invisible at the scale everything else was tested at — three seeds
+and a hand-driven chain — and both were diagnosed by **reproducing one failing
+seed** with `GB_AGENT_LOG` rather than by reading code.
+
+**THE PARTY MENU DOES NOT SCROLL, AND `wListScrollOffset` IS A TRAP ON IT.** A
+party is at most six long and Gen 1 draws all of it — but it does not *reset*
+that byte either, so the party menu inherits whatever the last scrolling list
+left. **33 of 1,000 promotions failed, every one on a run whose bag had
+scrolled on the way to an ANTIDOTE**, and the cursor then oscillated between
+rows 0 and 1 answering "back up the party" to both, because `scroll + index` was
+never the row. `use_item` must keep adding the two; a bag genuinely scrolls.
+**967/1000 → 1000/1000.**
+
+**CHANGING WHERE A LEG HANDS OVER CHANGES EVERY GREEDY PATH THE NEXT LEG
+TAKES.** Link 23 used to hand link 24 a player standing *on* the B2F ladder, so
+its walk east along row 17 could not re-enter it. A hunt hands over from
+anywhere in its pacing box, and `Action::GoTo` is greedy on the larger remaining
+delta — so from (20,12) it walked down column 20 to row 17 and stepped straight
+back up. **969/1000 → 988/1000** with one waypoint. The residual is the same
+tile and is above.
 
 ### A promotion's goal fires with the menu still open
 
