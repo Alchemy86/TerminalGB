@@ -409,6 +409,18 @@ const MT_MOON_B1F_TO_B2F: &[(u8, u8)] = &[(7, 16), (21, 16), (21, 17)];
 const MT_MOON_B2F_TO_HUNT: &[(u8, u8)] = &[(21, 14)];
 
 const MT_MOON_B2F_TO_FOSSIL: &[(u8, u8)] = &[
+    // **(23,14) FIRST, AND IT IS THE HUNT THAT MADE IT NECESSARY.** A WARP
+    // TILE IS NOT AN OBSTACLE A WALKABILITY GRID KNOWS ABOUT, and (21,17) is
+    // the ladder this floor is entered by. While link 23 handed this leg a
+    // player standing *on* it, the walk east along row 17 could not re-enter
+    // it; a hunt hands over from anywhere in its pacing box, and `Action::GoTo`
+    // is greedy on the larger remaining delta — so from (20,12) it walks down
+    // column 20 to row 17 and steps straight back up the ladder. Measured: 31
+    // of 1,000 attempts ended oscillating on B1F at (19..21,16), in a pocket
+    // from which the leg's own (27,3) is not reachable on foot at all.
+    // Getting to column 23 first makes the crossing impossible from anywhere
+    // in the box, and costs a player entering at (21,17) two steps.
+    (23, 14),
     (23, 17),
     (23, 14),
     (27, 14),
@@ -2994,7 +3006,17 @@ impl ChainDriver {
             // Pass one picks the caught one; pass two picks the slot to put it
             // in, which is the front.
             let want_row = if self.promote_swapping { 0 } else { at };
-            let row = s.menu_scroll + s.menu_index;
+            // **`wCurrentMenuItem` ALONE, and `wListScrollOffset` is a trap
+            // here.** A party is at most six long and Gen 1 draws all of it,
+            // so the party menu never scrolls — but `wListScrollOffset` is not
+            // *reset* by it either, and it keeps whatever the last scrolling
+            // list left. Measured: 33 of 1,000 promotions failed, every one on
+            // a run whose bag had scrolled on the way to an ANTIDOTE, and the
+            // cursor then oscillated between rows 0 and 1 answering "back up
+            // the party" to both because `scroll + index` was never the row.
+            // [`ChainDriver::use_item`] must keep adding the two — a bag
+            // genuinely scrolls.
+            let row = s.menu_index;
             let (say, key) = match row.cmp(&want_row) {
                 std::cmp::Ordering::Less => ("Down the party.", "down"),
                 std::cmp::Ordering::Greater => ("Back up the party.", "up"),
