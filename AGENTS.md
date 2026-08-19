@@ -11318,6 +11318,17 @@ one to carry: a goal that fires on arrival cannot force an interaction, and
 - **A background job launched from a tool call dies with the call unless it is `setsid`.** Two
   pool builds were lost mid-link to this before `setsid nohup … & disown` stuck. `run_in_background`
   did not save it either.
+- **AN ENTRY POOL CAN CHANGE UNDER A CERTIFICATION, AND THE ONLY THING THAT CATCHES IT IS
+  REPLAYING THE RUN.** Link 26's certification recorded `pool: 450` in its own `index.ndjson`;
+  the directory on disk holds **500 states written 31 minutes into that run**, by a leftover
+  `mkpool.sh` that re-ran link 25 and rewrote every exit. So entry state #1 is a different
+  machine and the run cannot be replayed — 0 of 120 seeds reproduce, and 54 of them differ in
+  frames or decisions. **The code was not at fault and the check is what said so**: HEAD and the
+  certification's own commit agree with each other 120/120, and the same binary run twice
+  reproduces 120/120. `index.ndjson` records `pool`, and comparing it against
+  `find <dir> -name '*.gbss' | wc -l` is a one-line audit worth doing before publishing any
+  corpus. **Freeze the pool** (`cp -r` to a directory nothing writes, `chmod -w`) before a long
+  certification, and check `ls --time-style` mtimes afterwards.
 - **`pkill -f` AND `pgrep -f` MATCH YOUR OWN SHELL, AND HERE THAT KILLED A CERTIFICATION IN
   FLIGHT — TWICE IN ONE SESSION.** This file already carries the warning and it was still walked
   into: `pkill -f "fast.sh"` and then `for p in $(pgrep -f "/tmp/…/cert.sh")` each matched the
