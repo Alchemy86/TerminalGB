@@ -34,8 +34,22 @@ a quiet box: **0.0592 → 0.0454 ms/frame, 283× → 369×, +30.4 %** — see
 [against the field](against-the-field.md) for what the number means beside two other emulators
 built and timed here.
 
-**Aggregate, 20 workers, collector configuration: 55,917–74,155 emulated frames a second =
-936–1242× real time** — both readings taken while another crew held most of the box, which is
+**Aggregate, 20 workers, collector configuration: 223,073 emulated frames a second = 3,735×
+real time** on a quiet box, and the whole curve is worth having because of where it crosses:
+
+| workers | frames/s | × real time | per instance |
+|---:|---:|---:|---:|
+| 1 | 16,590 | 278× | 0.0602 ms |
+| **4** | **63,687** | **1,066×** | 0.0624 ms |
+| 8 | 126,633 | 2,120× | 0.0627 ms |
+| 12 | 153,455 | 2,569× | 0.0679 ms |
+| 16 | 197,543 | 3,307× | 0.0727 ms |
+| 20 | 223,073 | 3,735× | 0.0770 ms |
+
+**Four cores are already past 1000×.** The per-instance figure rises only 28 % from one worker
+to twenty, which is what "silicon-limited, not contention-limited" looks like — see
+[`docs/throughput.md`](../throughput.md) §9 for the arithmetic that ties the shape to this box's
+8 P-cores and 12 E-cores. On a contended box the same command reads — both readings taken while another crew held most of the box, which is
 what a fan-out figure's spread looks like when it is wall clock by definition. On a quiet box
 [`docs/throughput.md`](../throughput.md) §6 measures 232,746 frames a second, which is
 **3,896×**.
@@ -44,8 +58,7 @@ what a fan-out figure's spread looks like when it is wall clock by definition. O
 
 They are not the same goal and they are not the same work.
 
-* **Aggregate 1000× is already met.** It was met before this page was written, on a contended
-  box, and a quiet one is nearly four times past it. Certification already fans out — a
+* **Aggregate 1000× is already met, and met on four cores.** Twenty give 3,735×. Certification already fans out — a
   3,000-attempt link is twenty workers — so this is the number a *measurement campaign*
   actually experiences.
 * **Single-core 1000× is about 3× away and is not available by shaving.** The arithmetic is worth
