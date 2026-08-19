@@ -1395,7 +1395,35 @@ renderer is **0.0434 ms/frame** of a player's 0.1106, and a collector does not r
 *player's* frame and **0 % of a certification run's**. Left for whoever wants the frontend
 faster; it is not throughput.
 
-### 17.5 What the four negatives in this round have in common
+### 17.5 The compiler flags, re-run — and a correction to §13's sign
+
+`[profile.release]` already carries `opt-level = 3`, `lto = "fat"`,
+`codegen-units = 1`, `panic = "abort"` and `strip`. The two that are not in it were both re-run
+here because they are free.
+
+**`-C target-cpu=native` is 3.3 % SLOWER**, measured interleaved on one core: 0.0608 → 0.0628
+ms/frame, three rounds, same frame hash. §13 recorded it as "buys nothing measurable"; after
+this session's work it is actively worse, and the conclusion — **do not add a
+`.cargo/config.toml`** — is unchanged and now better evidenced. That is a good outcome in its
+own right: a flag file would have silently made released artefacts non-portable.
+
+**PGO, and §13 got the sign wrong.** `-Cprofile-use` still refuses fat LTO on the pinned rustc
+1.83 (`module flag identifiers must be unique … !"CG Profile"`), so `tools/perf/pgo.sh` produces
+a **thin**-LTO binary. Scored against both comparators in one session, three interleaved rounds:
+
+| build | ms/frame |
+|---|---:|
+| fat LTO — what ships | **0.0616** |
+| thin LTO | 0.0694 |
+| thin + PGO | 0.0666 |
+
+**PGO is +4.2 % over its fair comparator** — it does help — **and thin+PGO is still 8.1 % worse
+than fat LTO alone.** §13 recorded PGO as 4.3 % *slower* than thin; on this code and this
+workload it is faster than thin. The *decision* is the same either way and is now precise
+instead of directional: **PGO is not adoptable, because the LTO it costs is worth more than the
+profile it buys.**
+
+### 17.6 What the negatives in this round have in common
 
 Deferring the timer (8.5 % slower), skipping `refresh_stat_line` on quiet PPU chunks (0.8 %),
 gating two per-instruction stores (2.7 %), and packing the flags (neutral) — plus this round's

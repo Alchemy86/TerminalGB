@@ -12106,3 +12106,53 @@ is the interpreter itself. Sizing from the captain's GBA table, a JIT is about 6
 interpreter — and worth stating: a JIT for a *cycle-accurate* emulator is materially harder,
 because you cannot reorder memory accesses whose sub-instruction timing is observable, which the
 `wram MOVED` row above proves is not hypothetical.
+
+
+## THE TECHNIQUE LISTS, WORKED — and the two top-ranked items were already neutralised
+
+**Full record: [`docs/throughput.md`](docs/throughput.md) §17.** Three lists of standard
+techniques for a cycle-accurate Game Boy emulator, taken item by item **against this emulator's
+own profile**. The headline is that the two items ranked highest across the lists are both
+already dealt with, and a *count* settles each in a minute where an argument would not.
+
+- **"`Box<dyn MemoryBankController>` is a vtable dispatch on EVERY cartridge read" — COUNTED:
+  `readrom` 0.0 calls a frame, `readram` 0.0, `writeram` 0.0, `writerom` 29.1.** The
+  `Arc<[u8]>` ROM window (§15.3) took the read path off the trait object entirely; an `Mbc`
+  enum would optimise twenty-nine calls a frame, and §13 already measured that enum at **4 %
+  slower**. **Do not do this.**
+- **"A page-table memory map is likely the single biggest remaining win" — COUNTED: 4,764 of a
+  frame's 6,607 reads are fetches that already bypass the dispatch** (`MemoryManagementUnit::
+  fetch`), and 914 more are ROM taking one compare. A page table reaches ~910 accesses, i.e.
+  about 1 %. Hoisting work RAM and high RAM ahead of the match measures **+0.7 % and is
+  WRONG** — it skips `wram_bus_address`, the OAM-DMA address redirect, and the hashes only
+  matched because this cartridge does not exercise it.
+- **VERIFIED RATHER THAN ASSUMED, so nobody re-checks:** the opcode `match` **is** a jump table
+  (four of rustc's, `objdump` over `Gameboy::frame`, `movslq (%rdi,%rsi,4); add; jmp *%rsi`);
+  there is **no allocation in the cycle loop** (`Cpu::debug`'s call site is commented out, and
+  500 stack samples find no allocator frame); the tick buffer already exists (`bus_ticked`,
+  `apu_pending`, `gpu_owed`, `gpu_defer`); scanline batching is `renderscan`; and `wram`/`zram`/
+  `vram`/`voam` are already fixed-size arrays.
+- **FLAG PACKING IS NEUTRAL.** All 46 four-flag groups in `src/cpu/data.rs` converted to one
+  branchless `set_flags(z, n, h, c)` — one store instead of four — measures 0.0624 → 0.0626
+  ms/frame with every hash identical. **LLVM had already coalesced the read-modify-writes.**
+  Reverted rather than landed: 46 mechanical rewrites of the most correctness-critical file in
+  the CPU, for nothing.
+- **MAKING THE BANK INDICES PROVABLY IN BOUNDS IS NEUTRAL TOO.** `(self.wrambank & 7) * 0x1000`
+  lets LLVM drop the check; measured neutral to 0.4 % slower, because there are only 591
+  work-RAM reads a frame and the branch predicts perfectly.
+- **`-C target-cpu=native` IS 3.3 % SLOWER** (0.0608 → 0.0628, three interleaved rounds). §13 had
+  it at "buys nothing"; it is worse now. **Still no `.cargo/config.toml`** — and that is a good
+  outcome, since a flag file would silently make released artefacts non-portable.
+- **PGO IS NOT ADOPTABLE, AND §13'S SIGN WAS WRONG.** `-Cprofile-use` still refuses fat LTO on
+  rustc 1.83, so `tools/perf/pgo.sh` yields a *thin* binary. Measured in one session: fat
+  **0.0616**, thin 0.0694, thin+PGO 0.0666. **PGO is +4.2 % over its fair comparator and still
+  8.1 % worse than fat LTO alone.** §13 recorded PGO as 4.3 % slower than thin; it is faster.
+  The decision is unchanged and now precise: the LTO it costs is worth more than the profile it
+  buys.
+- **AGREED AND NOT ATTEMPTED:** computed goto (Rust has no labels-as-values, and the match is
+  already a table) and mmap + SIGSEGV for bank switching — a signal handler in a library's hot
+  path, and **incompatible with the wasm target, which this project ships**.
+- **DEPRIORITISED WITH NUMBERS, not skipped:** a pre-decoded tile cache and SIMD tile decoding
+  help only a *player*. The whole renderer is 0.0434 ms of a player's 0.1106 ms frame and **a
+  collector does not run it at all**, so an optimistic third of the renderer is ~9 % of a
+  player's frame and **0 % of a certification run's**.
