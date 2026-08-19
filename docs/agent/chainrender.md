@@ -53,7 +53,7 @@ That is also what replaced `path_arrows.py`'s `importlib` hack, which loaded
 | module | holds |
 |---|---|
 | `atlas.py` | `Atlas` — PixelGB's manifest, and where a map lands in it |
-| `tracks.py` | the position-track reader, `TILE`/`FPS_GB`/`STEP_PX`, `walk_span`, `interpolate` |
+| `tracks.py` | the position-track reader, `TILE`/`FPS_GB`/`STEP_PX`, `walk_span`, `interpolate`, `walk_phase` |
 | `camera.py` | `Camera` — the seven rules, and every constant they were tuned to |
 | `palette.py` | every colour any renderer uses, and the two arrow encodings |
 | `arrows.py` | direction bookkeeping and the arrow polygon |
@@ -103,7 +103,31 @@ python3 <repo>/tools/pewter-chain/path_arrows.py still chain-film \
 ```
 
 `--dry-run` renders nothing, so the camera check is two seconds and the arrow
-check is one.
+check is one. **Both still reproduce after `walk_phase` split `_segment` out of
+`interpolate`** — the camera trace is derived from interpolated positions, so
+that gate is a real check on the refactor and not only on the camera.
+
+## `walk_phase` — the walk cycle, from the same segment as the position
+
+`interpolate` and `walk_phase` are two questions about one thing: **where in
+its step is this agent?** They share `_segment`, deliberately, so the legs and
+the feet cannot disagree about it. `interpolate` turns the answer into a
+fractional tile position; `walk_phase` returns the raw fraction, or `None` when
+no step is under way — standing still, or a jump `interpolate` refuses to glide.
+
+**It is a reconstruction, and the format asks for one.**
+`terminalgb::scenario::track` measured that 83 % of all track rows changed
+nothing but `wWalkCounter`, dropped it, and said in as many words that "the step
+is expanded back at draw time". This is that expansion. `swarm_film.py` uses it
+to pick a pose out of the walk cycle `pewter_chain sprites` captures: the
+cartridge draws the standing pose for the first half of a step and a stepping
+pose for the second, alternating which one between steps — all three of those
+facts measured, and written up in
+[the render comparison](swarm-render-comparison.md#72--the-walk-cycle).
+
+A sprite directory with no `player-<dir>-w<n>.png` files in it renders exactly
+as it did before the cycle existed, which is what keeps an already-published
+film reproducible — checked, 700 frames, identical md5.
 
 ## Rules 8 and 9 — the zoom
 

@@ -7872,6 +7872,30 @@ position, the camera pulling back. Assembled from what already existed — the s
 (in-repo 46/47, Mooneye 103/103 + 8/8, SameSuite 76, Mealybug 79, cpp 4/4, the whole c-sp
 aggregation, savestate and battery).
 
+- **AGENTS DO NOT TELEPORT ANY MORE — `--inter` and `--fps` (`swarm_view.rs`).** `wXCoord`/
+  `wYCoord` do not move *during* a step, they snap at the end of it, so one drawn frame per
+  recorded position is a whole-tile jump by construction — and if the **stride** (`--sample /
+  --inter` emulated frames per drawn frame) is longer than the ~16-frame walk step, the jump is
+  all a viewer ever sees. `--inter 2 --fps 60` is the default and is *exactly* the pace one frame
+  per sample at 30 fps used to give (`seconds_out x speed = the emulated time there is`;
+  interpolation adds no emulated time). Measured on the documented hero recipe: p90 displacement
+  per drawn frame **16.00 → 8.00 px**, p99 32 → 16, moving samples on the tile grid **100 % →
+  62.7 %**, same 50 s at 12x. **`--inter 1` reproduces the old renderer byte for byte** (375
+  frames, identical md5 against a build of the pre-change source) — check that after touching it.
+  Full record: `docs/agent/swarm-render-comparison.md` §7.
+- **QUOTE THE ON-GRID SHARE, NOT THE DISPLACEMENT.** A walking agent covers 16 px per step
+  whatever the timelapse, so displacement per drawn frame rises with the pace by construction and
+  saturates exactly where a pace decision gets made. *What fraction of moving samples land on a
+  whole tile* is scale-free; `report_motion` prints both and both renderers now print the same
+  pair, for the same reason `swarm_film.py` already did.
+- **A STRAIGHT MULTI-TILE INTERVAL IS GLIDED; A BENT ONE IS NOT — and that differs from
+  `chainrender` because the DATA differs.** `swarm_view`'s samples are fixed-rate, so at
+  `--sample 24` an agent walks two tiles in one interval about one in five (3,401 of ~16,700); a
+  run along one axis really did pass through the tiles between, while a move that changed *both*
+  axes is an L and a straight glide across it draws a diagonal nobody walked. `chainrender`
+  refuses both, correctly, because its tracks are event-recorded and a two-tile gap there means a
+  teleport. Counted on the report line (47 bent, 53 warps in that run); lower `--sample` until
+  the bent count is small — at 12 it is 12.
 - **`hunt::Schedule::step` is `pub` now and `Schedule::draw` was added**, both purely additive.
   A second walker that invented its own randomness would be measuring a different rig; the whole
   claim that these instances diverge for the *same* reason the hunter's do rests on both walkers
@@ -10679,6 +10703,51 @@ polygon, the drawing primitives, the AXI helpers and **the camera**; `swarm_film
   the live population. `self.box` persists across a frame with no live agent, so rule 6 keeps
   measuring against the last real box rather than going blind. Get either wrong and the equality
   gate goes red immediately, which is the point of having it.
+### THE AGENTS WALK NOW — the walk cycle, and the phase that drives it
+
+Closing the second of the two gaps `docs/agent/swarm-render-comparison.md` names. Full record
+there, §7.2; the capture is `cmd_sprites` / `capture_walk_cycle` in `examples/pewter_chain.rs`,
+the phase is `chainrender.tracks.walk_phase`, the consumer is `swarm_film.py`.
+
+- **THE SEQUENCE IS MEASURED, NOT ASSUMED, and it is two rules.** Logging `wWalkCounter` against
+  the pose drawn over eight consecutive steps: the **standing** pose covers counters 7,6,5,4 —
+  the first half of a step — and a **stepping** pose covers 3,2,1; and **which** stepping pose
+  alternates from one step to the next. Two more measurements fall out and both are load-bearing:
+  the second stepping pose is the exact horizontal mirror of the first (0 differing pixels), and
+  the right-facing standing frame is the exact mirror of the left-facing one (0 px) — which is
+  what lets a side walled in on every sidestep have its cycle *derived* and still be **checked**
+  rather than guessed.
+- **THE `walking` FIELD A BRIEF WILL TELL YOU TO USE IS NOT IN A TRACK ANY MORE.**
+  `terminalgb::scenario::track` measured that 83 % of all rows changed nothing but the walk
+  counter, dropped it, and said the step is "expanded back at draw time". `walk_phase` is that
+  expansion, and it shares `_segment` with `interpolate` **so the legs and the feet cannot
+  disagree about which step the agent is in**. Which pose leads is the parity of the destination
+  tile (it changes by one every step); which leads *first* is a function of how many steps the
+  player has taken since the game began, is not in any track, and cannot be seen — the two poses
+  are mirrors.
+- **A SPRITE DIRECTORY WITH NO `-w` FILES RENDERS EXACTLY AS IT DID** — checked, 700 frames,
+  identical md5 against a build of the pre-change source. Same property as `--inter 1` on
+  `swarm_view`. Both camera and arrow equality gates in `docs/agent/chainrender.md` still
+  reproduce, and the camera one is a real check on the `_segment` refactor because a camera trace
+  is derived from interpolated positions.
+- **CAPTURING A WALK CYCLE MEANS ACTUALLY WALKING, AND ROUTE 1 IS GRASS.** The first version
+  captured left and right *from inside a wild battle* — the tell was `left facing 4`, the facing
+  byte never having moved. Reload the start state before every direction, and break out of the
+  sample loop the moment `wIsInBattle` is non-zero: a battle owns OAM, so nothing after that
+  frame is the overworld player.
+- **A direction can simply be a wall from where a state was saved.** The obvious state to hand
+  this — the shiny hunter's `route1.gbss` — is hemmed in east and west, so the capture sidesteps
+  along the other axis and retries up to `SPRITE_SIDESTEPS` times, and says how many it took.
+- **THE PICTURES ARE NOT COMMITTED AND MUST NOT BE.** A sprite sheet of Red's poses is exactly
+  the "pixel arrays, tile sheets" the licence-boundary rule forbids. What *is* committed is a
+  film frame — our compositor's own output, tinted, over the atlas, with map context — which is
+  the `docs/link-trade/` and `docs/agent/chain-stills/` precedent. `docs/agent/smoothness-stills/`
+  holds two; the mp4s are in `~/pokemon-run/smoothness/`.
+- **A STILL CANNOT PROVE ANIMATION.** The claim is the number — 700-frame films rendered with
+  identical captions so only the sprites differ: **125 of 233 sampled frames differ, median 42
+  differing pixels, max 277**, which is the scale of a few agents changing pose on the frames
+  where agents are mid-step. The pictures are supporting.
+
 ## Past the badge, towards Misty — Route 3, Route 4 and Mt Moon (`scenarios/pewter/18b-22`)
 
 **Reader-facing page: [`docs/agent/cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md).** Four new links east of

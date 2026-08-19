@@ -74,7 +74,7 @@ from chainrender.palette import (  # noqa: E402
 from chainrender.tracks import (  # noqa: E402
     FACING, FPS_GB, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS, flag_at,
     interpolate, link_at, load_links, read_track, track_files,
-    track_last_frame, walk_span,
+    track_last_frame, walk_phase, walk_span,
 )
 
 
@@ -830,13 +830,41 @@ def main():
                     pass
         return ImageFont.load_default()
 
-    sprites = {}
-    for f in os.listdir(a.sprites):
+    # **The walk cycle, when it has been captured, and the standing pose alone
+    # when it has not.** `player-<dir>-f<n>.png` is the held pose `cmd_sprites`
+    # has always written; `player-<dir>-w<n>.png` are the poses it now also
+    # reads off the cartridge while the player is actually stepping, in cycle
+    # order — index 0 the standing pose, then one per leg. A sprite directory
+    # from before that change has no `-w` files and renders exactly as it did,
+    # which is what keeps an already-published film reproducible.
+    sprites, walkcycle = {}, {}
+    for f in sorted(os.listdir(a.sprites)):
         for k in FACING.values():
-            if f.startswith(f"player-{k}-"):
+            if f.startswith(f"player-{k}-f"):
                 sprites[k] = Image.open(os.path.join(a.sprites, f)).convert("RGBA")
+            elif f.startswith(f"player-{k}-w"):
+                # Keyed on the number, not on the file name: `w10` sorts before
+                # `w2` and there is no reason to leave that trap lying about.
+                n = f[len(f"player-{k}-w"):].split(".")[0]
+                walkcycle.setdefault(k, []).append(
+                    (int(n) if n.isdigit() else 0,
+                     Image.open(os.path.join(a.sprites, f)).convert("RGBA")))
+    if not sprites:
+        # Older captures wrote only `-f`; older still, only the bare prefix.
+        for f in sorted(os.listdir(a.sprites)):
+            for k in FACING.values():
+                if f.startswith(f"player-{k}-"):
+                    sprites[k] = Image.open(
+                        os.path.join(a.sprites, f)).convert("RGBA")
     if not sprites:
         sys.exit(f"no player-*.png in {a.sprites}")
+    walkcycle = {k: [im for _n, im in sorted(v)] for k, v in walkcycle.items()}
+    if walkcycle:
+        print(f"walk cycle   {', '.join(f'{k}:{len(v)}' for k, v in sorted(walkcycle.items()))}"
+              " poses per facing")
+    else:
+        print("walk cycle   none captured - agents will glide without a stride."
+              " Re-run `pewter_chain sprites` to add one.")
 
     os.makedirs(a.out, exist_ok=True)
     OUT_W, OUT_H = a.width, int(a.width * 9 / 16)
@@ -886,8 +914,24 @@ def main():
                 gone += 1
                 continue
             lk, lname, _ = link_at(spans.get(n, []), gbf)
+            # Which pose of the walk cycle, from the same step `interpolate`
+            # placed the agent inside. **Measured on the cartridge** (see
+            # `cmd_sprites::capture_walk_cycle`): the standing pose covers the
+            # first half of a step and a stepping pose the second, and which of
+            # the two stepping poses alternates from one step to the next.
+            #
+            # The alternation is taken from the parity of the destination tile,
+            # which changes by exactly one every step — so it alternates the
+            # way the cartridge does. *Which* of the two leads is a function of
+            # how many steps the player has taken since the game began, which a
+            # position track does not carry and which nobody can see: the two
+            # poses are exact mirrors of each other.
+            pose = 0
+            ph = walk_phase(paths[n], gbf, span)
+            if ph is not None and ph >= 0.5:
+                pose = 1 + ((round(x) + round(y)) & 1)
             here.append((n, wp[0] - X0, wp[1] - Y0, wp[2], facing, battle, lk,
-                         lname, heat_band(m, round(x), round(y)), m))
+                         lname, heat_band(m, round(x), round(y)), m, pose))
         positions.append(here)
         lost.append(gone)
 
@@ -1232,7 +1276,7 @@ def main():
         if fighting:
             halo = Image.new("RGBA", (OUT_W, OUT_H), (0, 0, 0, 0))
             hd = ImageDraw.Draw(halo)
-            for (_n, px, py, _i, _f, battle, _lk, _ln, _b, _m) in fighting:
+            for (_n, px, py, _i, _f, battle, _lk, _ln, _b, _m, _p) in fighting:
                 sw = max(8, int(atlas.tile_px[_m] * scale))
                 sx = int((px - x0) * scale) - ox
                 sy = int((py - y0) * scale) - oy
@@ -1245,8 +1289,8 @@ def main():
             img = Image.alpha_composite(img.convert("RGBA"), halo).convert("RGB")
 
         d = ImageDraw.Draw(img)
-        for (n, px, py, indoors, facing, battle, lk, lname, band, _m) in (
-                [] if cuts[i] else here):
+        for (n, px, py, indoors, facing, battle, lk, lname, band, _m,
+             pose) in ([] if cuts[i] else here):
             # The sprite is drawn at the size of the walk tile it stands on, so
             # an atlas that ever draws a map at a different tile_px puts its
             # agents at the right size without a second decision.
@@ -1255,10 +1299,17 @@ def main():
             sy = int((py - y0) * scale) - oy
             if not (-sw <= sx <= VIEW_W + sw and -sw <= sy <= OUT_H + sw):
                 continue
-            key = (FACING.get(facing, "down"), band, sw)
+            face = FACING.get(facing, "down")
+            cyc = walkcycle.get(face)
+            # A cycle with fewer poses than the parity asks for (the side-on
+            # facings have two, not three) wraps rather than reaching past its
+            # end — the two legs are one picture there.
+            frame_i = 0 if not cyc else pose % len(cyc)
+            key = (face, band, sw, frame_i)
             sp = tinted.get(key)
             if sp is None:
-                base_sp = sprites.get(key[0], next(iter(sprites.values())))
+                base_sp = (cyc[frame_i] if cyc
+                           else sprites.get(face, next(iter(sprites.values()))))
                 sp = tint(base_sp, HEAT_HUE[key[1]], Image)
                 sp = sp.resize((sw, sw), Image.NEAREST)
                 tinted[key] = sp
@@ -1491,7 +1542,7 @@ def main():
         y += 8
         d.text((hx, y), "tracked", fill=(200, 215, 230), font=num_font)
         y += int(num_font.size * 1.7)
-        for (n, _, _, _, _, _, lk, lname, band, _m) in sorted(
+        for (n, _, _, _, _, _, lk, lname, band, _m, _p) in sorted(
                 here, key=lambda p: p[0]):
             if n not in cohort or y > OUT_H - num_font.size * 2:
                 continue

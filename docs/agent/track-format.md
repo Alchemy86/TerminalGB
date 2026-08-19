@@ -106,6 +106,15 @@ reconstructs the glide by interpolating between consecutive recorded tiles
 and works on tracks already on disk. Dropping it and expanding the step back at
 draw time is exactly what *"store transitions, not frames"* means here.
 
+**That expansion now drives the sprites' walk cycle as well as their
+positions.** `chainrender.tracks.walk_phase` answers "how far through a step is
+this agent", from the *same* segment `interpolate` places it on, so a renderer
+that wants both cannot end up with the feet and the legs disagreeing. The
+counter stays out of the format: what a film needs is the phase, and the phase
+is derivable. See
+[the render comparison](swarm-render-comparison.md#72--the-walk-cycle) for the
+sequence the cartridge actually draws.
+
 Two consequences to know:
 
 - **The CSV `--paths` writes is six columns now** — `frame,map,x,y,facing,battle`

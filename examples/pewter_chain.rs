@@ -123,6 +123,17 @@ fn stage(via: &[(u8, u8)], finish: Finish) -> Stage {
 /// by a script) does not advance, so an accident cannot skip a leg.
 type MapPlan = Vec<Stage>;
 
+/// `wWalkCounter` — 7,6,5,4,3,2,1 across a step, each value held two frames,
+/// and zero when the player is standing still. The one byte that says the
+/// engine is mid-step, which is what the walk-cycle capture waits for.
+const WALK_COUNTER: u16 = 0xCFC5;
+
+/// How many times the sprite capture will sidestep looking for open ground
+/// before giving up on a direction. Six is enough to clear Route 1's fences
+/// from the hunter's own start state; a direction that is still blocked after
+/// six is reported rather than silently missing.
+const SPRITE_SIDESTEPS: usize = 6;
+
 const REDS_HOUSE_2F: u8 = 0x26;
 const REDS_HOUSE_1F: u8 = 0x25;
 const PALLET_TOWN: u8 = 0x00;
@@ -5095,12 +5106,24 @@ fn cmd_sprites(a: &Args) {
     // Face each way in turn and grab what the machine draws. A press in a
     // direction you are not facing only turns you, which is exactly what is
     // wanted here.
-    for (name, key) in [
-        ("down", terminalgb_plugin_api::KeypadKey::Down),
-        ("up", terminalgb_plugin_api::KeypadKey::Up),
-        ("left", terminalgb_plugin_api::KeypadKey::Left),
-        ("right", terminalgb_plugin_api::KeypadKey::Right),
+    //
+    // **The start state is reloaded before every direction**, and that is not
+    // tidiness: capturing the walk cycle means actually walking, and a walk on
+    // Route 1 rolls a wild encounter within a few dozen steps. Without the
+    // reload the third and fourth directions were captured from inside a
+    // battle — observed, and it shows up as `left facing 4`, the facing byte
+    // never having moved.
+    use terminalgb_plugin_api::KeypadKey as K;
+    let (ud, lr) = ((K::Up, K::Down), (K::Left, K::Right));
+    let mut stand: std::collections::BTreeMap<&str, Vec<u8>> = Default::default();
+    let mut cycles: std::collections::BTreeMap<&str, Vec<Vec<u8>>> = Default::default();
+    for (name, key, perp) in [
+        ("down", K::Down, lr),
+        ("up", K::Up, lr),
+        ("left", K::Left, ud),
+        ("right", K::Right, ud),
     ] {
+        gb.load_state(&bytes).expect("reload the start state");
         // Two taps: a press in a direction you are not facing only turns
         // you, and the second one is what makes the turn stick when the tile
         // ahead is walkable and the first press stepped instead.
@@ -5116,7 +5139,187 @@ fn cmd_sprites(a: &Args) {
         let path = out.join(format!("player-{name}-f{facing}.png"));
         write_rgba(&path, 16, 16, &px);
         println!("{} facing {facing} -> {}", name, path.display());
+
+        // ...and then the **walk cycle**, which is the difference between a
+        // sprite that glides and one that walks. See `capture_walk_cycle`.
+        //
+        // A direction may simply be a wall from where the state was saved —
+        // the shiny hunter's `route1.gbss`, the obvious state to hand this, is
+        // hemmed in east and west. So sidestep along the other axis and try
+        // again rather than reporting a cartridge that draws nothing.
+        let mut frames = capture_walk_cycle(&mut gb, key);
+        let mut tries = 0;
+        while frames.is_empty() && tries < SPRITE_SIDESTEPS {
+            let side = if tries % 2 == 0 { perp.0 } else { perp.1 };
+            for _ in 0..=(tries / 2) {
+                gb.queue_press(side, 24, 0);
+            }
+            for _ in 0..90 {
+                gb.frame();
+            }
+            for _ in 0..2 {
+                gb.queue_press(key, 16, 8);
+            }
+            for _ in 0..60 {
+                gb.frame();
+            }
+            frames = capture_walk_cycle(&mut gb, key);
+            tries += 1;
+        }
+        if tries > 0 && !frames.is_empty() {
+            println!("  {name}: sidestepped {tries} time(s) to find open ground");
+        }
+        if frames.is_empty() {
+            println!(
+                "  {name}: no step taken in {SPRITE_SIDESTEPS} tries, so no walk cycle"
+            );
+        }
+        for (i, f) in frames.iter().enumerate() {
+            let path = out.join(format!("player-{name}-w{i}.png"));
+            write_rgba(&path, 16, 16, f);
+            println!("  {name} walk frame {i} -> {}", path.display());
+        }
+        stand.insert(name, px);
+        cycles.insert(name, frames);
     }
+
+    // **Left and right are one picture and a mirror bit** — the cartridge
+    // stores three facings and flips one, which is why `player_sprite` honours
+    // OAM's X-flip. So a side that was walled in on every sidestep can be
+    // derived from the other side rather than left missing...
+    //
+    // ...but only after **checking** it: the two standing frames have to be
+    // exact mirrors of each other, 0 differing pixels, or the derivation is a
+    // guess and is refused. Measured on Route 1's own start state, they are.
+    for (from, to) in [("left", "right"), ("right", "left")] {
+        if !cycles.get(to).is_none_or(|c| c.is_empty()) {
+            continue;
+        }
+        let (Some(a), Some(b)) = (stand.get(from), stand.get(to)) else {
+            continue;
+        };
+        if mirror16(a) != *b {
+            println!(
+                "  {to}: no cycle, and it is not the mirror of {from} - not derived"
+            );
+            continue;
+        }
+        let Some(src) = cycles.get(from) else {
+            continue;
+        };
+        if src.is_empty() {
+            continue;
+        }
+        println!(
+            "  {to}: no step of its own; derived from {from} by mirroring \
+(their standing frames match exactly, so this is checked rather than assumed)"
+        );
+        for (i, f) in src.iter().enumerate() {
+            let path = out.join(format!("player-{to}-w{i}.png"));
+            write_rgba(&path, 16, 16, &mirror16(f));
+            println!("  {to} walk frame {i} -> {}", path.display());
+        }
+    }
+}
+
+/// A 16x16 RGBA cut-out flipped left-to-right.
+fn mirror16(px: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; px.len()];
+    for y in 0..16 {
+        for x in 0..16 {
+            let s = (y * 16 + x) * 4;
+            let d = (y * 16 + (15 - x)) * 4;
+            out[d..d + 4].copy_from_slice(&px[s..s + 4]);
+        }
+    }
+    out
+}
+
+/// The distinct pictures the cartridge draws **while the player is stepping**,
+/// in the order it first draws them.
+///
+/// **Ours were four standing poses, and his walk.** Peter Whidden's swarm cuts
+/// a four-frame cycle per direction out of a sprite sheet
+/// (`[1,4,6,8]` on the sheet, `PWhiddy/PokemonRedExperiments`,
+/// `visualization/BetterMapVis_script_version.py`); `cmd_sprites` captured one
+/// held pose per facing, so an interpolated agent *slid* instead of walking.
+/// This closes that, and closes it the way everything else here reads the
+/// cartridge: **not drawn, not vendored, not guessed** — hold the direction,
+/// let the engine animate, and keep whatever distinct 16x16 cut-outs come out
+/// of OAM and VRAM.
+///
+/// **The sequence, measured rather than assumed** (eight consecutive steps
+/// walking south on Route 1, logging `wWalkCounter` against the pose drawn):
+///
+/// ```text
+/// counter  7 7 7 6 6 5 5 4 4 | 3 3 2 2 1 1
+/// pose     0 0 0 0 0 0 0 0 0 | 1 1 1 1 1 1     <- one step
+/// pose     0 0 0 0 0 0 0 0 0 | 2 2 2 2 2 2     <- the next
+/// ```
+///
+/// So the standing pose covers the **first half** of a step and a stepping pose
+/// the second, and **which** stepping pose alternates from one step to the
+/// next. That is the whole rule a renderer needs, and it is why the frames are
+/// written in cycle order: index 0 is the standing pose, 1 and 2 the two legs.
+/// Measured too: pose 2 is the exact horizontal mirror of pose 1 (0 differing
+/// pixels), which is why the side-on facings have only two poses — mirroring a
+/// side view would turn the player round.
+///
+/// Dedupe on the pixels rather than on the tile ids: a mirrored pose is a
+/// different picture drawn from the same tiles, and it is the picture that is
+/// wanted.
+fn capture_walk_cycle(
+    gb: &mut Gameboy,
+    key: terminalgb_plugin_api::KeypadKey,
+) -> Vec<Vec<u8>> {
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    // Long enough for several steps in a row, so both alternating poses appear
+    // even when the first step is interrupted by a turn — and short enough
+    // that a walk through grass is unlikely to have rolled an encounter before
+    // the poses are in hand. The battle test below is what makes that safe
+    // rather than lucky.
+    for _ in 0..8 {
+        gb.queue_press(key, 24, 0);
+    }
+    for _ in 0..240 {
+        gb.frame();
+        let (walking, battling, px) =
+            gb.with_machine(Cap::OBSERVE | Cap::READ_MEMORY, |m| {
+                let w = m.peek(WALK_COUNTER).unwrap_or(0);
+                let b = m.peek(0xD057).unwrap_or(0);
+                (
+                    w,
+                    b,
+                    if w != 0 && b == 0 {
+                        Some(player_sprite(m))
+                    } else {
+                        None
+                    },
+                )
+            });
+        // A battle owns OAM, so nothing after this frame is the overworld
+        // player. Stop rather than collecting a Pokémon's tiles as a pose.
+        if battling != 0 {
+            break;
+        }
+        if walking == 0 {
+            continue;
+        }
+        let Some(px) = px else { continue };
+        // An empty cut-out means the sprite was not in OAM this frame (a
+        // screen transition, a battle wipe); it is not a pose.
+        if px.chunks(4).all(|p| p[3] == 0) {
+            continue;
+        }
+        if !seen.iter().any(|f| *f == px) {
+            seen.push(px);
+        }
+    }
+    gb.clear_input();
+    for _ in 0..30 {
+        gb.frame();
+    }
+    seen
 }
 
 /// OAM slots 0-3, laid out as a 16x16 RGBA cut-out with colour 0 transparent.

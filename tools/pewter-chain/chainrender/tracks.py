@@ -287,9 +287,29 @@ def interpolate(path, frame, span=WALK_FRAMES):
     a frame is drawn, so at any compression the agent advances by exactly the
     fraction of the step that elapsed.
     """
-    lo, hi = 0, len(path) - 1
+    cur, nxt, t = _segment(path, frame, span)
+    if nxt is None:
+        return cur[1], float(cur[2]), float(cur[3]), cur[4]
+    return (
+        cur[1],
+        cur[2] + (nxt[2] - cur[2]) * t,
+        cur[3] + (nxt[3] - cur[3]) * t,
+        nxt[4] if t > 0 else cur[4],
+    )
+
+
+def _segment(path, frame, span):
+    """The two records `frame` falls between, and the progress through the step.
+
+    **One implementation of "where is this agent in its step", so the position
+    and the walk cycle cannot disagree about it.** `nxt` is `None` — and `t` is
+    zero — whenever there is nothing to glide to: past the end of the track, or
+    across a warp, or across a gap of more than one tile, which on an
+    event-recorded track means a teleport rather than a walk.
+    """
     if frame <= path[0][0]:
-        return path[0][1], float(path[0][2]), float(path[0][3]), path[0][4]
+        return path[0], None, 0.0
+    lo, hi = 0, len(path) - 1
     while lo < hi:
         mid = (lo + hi + 1) // 2
         if path[mid][0] <= frame:
@@ -298,17 +318,31 @@ def interpolate(path, frame, span=WALK_FRAMES):
             hi = mid - 1
     cur = path[lo]
     if lo + 1 >= len(path):
-        return cur[1], float(cur[2]), float(cur[3]), cur[4]
+        return cur, None, 0.0
     nxt = path[lo + 1]
     # Only between adjacent tiles on the same map. A warp is a jump, not a walk.
     if nxt[1] != cur[1] or abs(nxt[2] - cur[2]) + abs(nxt[3] - cur[3]) != 1:
-        return cur[1], float(cur[2]), float(cur[3]), cur[4]
+        return cur, None, 0.0
     w = min(span, max(1, nxt[0] - cur[0]))
     t = (frame - (nxt[0] - w)) / float(w)
     t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
-    return (
-        cur[1],
-        cur[2] + (nxt[2] - cur[2]) * t,
-        cur[3] + (nxt[3] - cur[3]) * t,
-        nxt[4] if t > 0 else cur[4],
-    )
+    return cur, nxt, t
+
+
+def walk_phase(path, frame, span=WALK_FRAMES):
+    """How far through a step an agent is, or `None` if it is standing still.
+
+    **This is what drives the walk cycle**, and it is derived rather than read:
+    the walk counter is deliberately *not* in a position track — measured over
+    three real corpora, 83 % of all rows changed nothing but that counter, so
+    `terminalgb::scenario::track` drops it and says "the step is expanded back
+    at draw time". This is that expansion, and it is the same segment
+    `interpolate` positions the agent from, so the legs and the feet cannot
+    disagree.
+
+    Returns `t` in `[0, 1)` — 0 at the tile being left, approaching 1 at the
+    tile being entered. `None` means no step is under way: standing still, or a
+    jump `interpolate` refuses to glide.
+    """
+    _cur, nxt, t = _segment(path, frame, span)
+    return None if nxt is None else t

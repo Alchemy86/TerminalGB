@@ -85,6 +85,18 @@ const WALK_COUNTER: u16 = 0xCFC5;
 
 /// A Gen 1 walk tile is 16x16 pixels; a block is 32x32.
 const TILE_PX: i64 = 16;
+/// How many emulated frames one step takes, which is the **smoothness ceiling**
+/// a drawn frame's stride has to stay under.
+///
+/// Read off the cartridge rather than chosen: `wWalkCounter` runs 7,6,5,4,3,2,1
+/// with each value held two frames and the coordinate snapping to the new tile
+/// on the frame it reaches 0 — sixteen pixels crossed in eight moves of two.
+/// `chainrender.tracks` documents the same arithmetic and its `walk_span`
+/// measures 17-31 on real corpora, the excess being the solver's own decision
+/// cadence between steps. Sixteen is therefore the *tightest* honest ceiling:
+/// a stride above it draws fewer than one frame per step, and no amount of
+/// interpolation can smooth a step that is never drawn in progress.
+const STEP_FRAMES: f64 = 16.0;
 /// The player's walk tile's top-left **screen** cell is (8, 8) in 8x8 GB tiles,
 /// i.e. screen pixel (64, 64). Measured by the World Trade Centre crew against
 /// the running engine (`screen::calibrate` scores row 8 at 360/360 cells and
@@ -137,6 +149,8 @@ struct Args {
     instances: usize,
     frames: u64,
     sample: u32,
+    inter: u32,
+    fps: u32,
     seed: u64,
     out: Option<PathBuf>,
     maps: Option<PathBuf>,
@@ -160,6 +174,16 @@ The swarm view: N emulators from one save state, all drawn on one map.
                             about ten minutes of game time)
   --sample <n>              record a position every n emulated frames
                             (default 12, so five video frames per game second)
+  --inter <n>               video frames drawn per recorded position, lerping
+                            between them (default 2; 1 is the old, teleporting
+                            behaviour). It buys smoothness, not speed: the pace
+                            is --sample x --fps / --inter, so raising --inter
+                            and --fps together leaves the film exactly as fast
+                            and only its motion changes.
+  --fps <n>                 the frame rate the printed ffmpeg recipe uses, and
+                            the one the timelapse figure is computed against
+                            (default 60, which is what Whidden's own offline
+                            renderer encodes at)
   --seed <n>                root seed; every instance's is derived from it
   --out <dir>               write the composited PNG sequence here
   --maps <dir>              backgrounds produced by --capture-maps
@@ -184,6 +208,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         instances: hunt::default_instances(),
         frames: 36_000,
         sample: 12,
+        inter: 2,
+        fps: 60,
         seed: 0x5EED_C0FF_EE15_600D,
         out: None,
         maps: None,
@@ -218,6 +244,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--sample" => {
                 a.sample = next("--sample")?.parse().map_err(|_| "bad --sample")?
             }
+            "--inter" => a.inter = next("--inter")?.parse().map_err(|_| "bad --inter")?,
+            "--fps" => a.fps = next("--fps")?.parse().map_err(|_| "bad --fps")?,
             "--seed" => a.seed = next("--seed")?.parse().map_err(|_| "bad --seed")?,
             "--out" => a.out = Some(next("--out")?.into()),
             "--maps" => a.maps = Some(next("--maps")?.into()),
@@ -244,6 +272,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
     if a.sample == 0 {
         return Err("--sample must be at least 1".into());
     }
+    if a.inter == 0 {
+        return Err("--inter must be at least 1".into());
+    }
+    if a.fps == 0 {
+        return Err("--fps must be at least 1".into());
+    }
+    a.inter = a.inter.min(8);
     a.scale = a.scale.clamp(1, 8);
     a.instances = a.instances.max(1);
     Ok(a)
@@ -1053,12 +1088,85 @@ impl Composer {
         self.background[i..i + 4].copy_from_slice(&c);
     }
 
-    /// World pixel of the centre of a walk tile.
-    fn world_of(&self, s: &Sample) -> Option<(i64, i64)> {
-        let &(ox, oy) = self.layout.origin.get(&s.map)?;
+    /// World pixel of a tile position — **fractional**, because an interpolated
+    /// agent is between two of them for most of every step.
+    fn world_at(&self, map: u8, x: f64, y: f64) -> Option<(i64, i64)> {
+        let &(ox, oy) = self.layout.origin.get(&map)?;
+        let half = (TILE_PX / 2) as f64;
         Some((
-            ox + i64::from(s.x) * TILE_PX + TILE_PX / 2,
-            oy + i64::from(s.y) * TILE_PX + TILE_PX / 2,
+            ox + (x * TILE_PX as f64 + half).round() as i64,
+            oy + (y * TILE_PX as f64 + half).round() as i64,
+        ))
+    }
+
+    /// Where one agent is on output frame `(k, t)`, and what it is doing.
+    ///
+    /// **The same four lines `chainrender.tracks.interpolate` uses**, and for
+    /// the same reason: `wXCoord`/`wYCoord` do not move *during* a step, they
+    /// snap at the end of it, so an agent drawn straight from them teleports by
+    /// construction. Lerping between consecutive recorded positions is
+    /// independent of the sampling rate, works on samples already in hand, and
+    /// is what Peter Whidden's own renderer does (`inter_steps` in
+    /// `PWhiddy/PokemonRedExperiments`, `visualization/BetterMapVis_script_version.py`).
+    ///
+    /// The one difference from `chainrender`'s version, and it is a difference
+    /// in the *data* rather than in the model: these samples are taken at a
+    /// **fixed rate**, so the gap between two of them is always `--sample`
+    /// frames and *is* the window to glide over. `chainrender` reads
+    /// event-recorded tracks, where a gap can be a thousand frames of standing
+    /// still, so it has to measure a step's real length (`walk_span`) and glide
+    /// only over the tail of the gap.
+    ///
+    /// **Only between adjacent tiles on the same map.** A warp is a jump, not a
+    /// walk, and so is a blackout — which returns the player to a Pokémon
+    /// Center that may well be on the map they were already on.
+    fn at(&self, samples: &[Sample], k: usize, t: f64) -> Option<(u8, f64, f64, bool)> {
+        self.at_reported(samples, k, t, &mut Held::default())
+    }
+
+    /// [`Composer::at`], saying **why** it refused to interpolate when it did.
+    /// A refusal is a jump a viewer sees, so it is counted rather than assumed
+    /// rare — see [`report_motion`].
+    fn at_reported(
+        &self,
+        samples: &[Sample],
+        k: usize,
+        t: f64,
+        held: &mut Held,
+    ) -> Option<(u8, f64, f64, bool)> {
+        let cur = samples.get(k)?;
+        let rest = (cur.map, f64::from(cur.x), f64::from(cur.y), cur.battling);
+        if t <= 0.0 {
+            return Some(rest);
+        }
+        let Some(nxt) = samples.get(k + 1) else {
+            return Some(rest);
+        };
+        let d = (i32::from(nxt.x) - i32::from(cur.x)).abs()
+            + (i32::from(nxt.y) - i32::from(cur.y)).abs();
+        if nxt.map != cur.map {
+            held.warp += 1;
+            return Some(rest);
+        }
+        if d == 0 {
+            return Some(rest);
+        }
+        // A run along one axis is a walk through every tile between the two,
+        // so gliding it draws a path that was really taken. A move that
+        // changed both axes is an L, and a straight glide across it is a
+        // diagonal nobody walked — refused, and counted.
+        if d > 1 {
+            if nxt.x != cur.x && nxt.y != cur.y {
+                held.bent += 1;
+                return Some(rest);
+            }
+            held.long += 1;
+        }
+        Some((
+            cur.map,
+            f64::from(cur.x) + (f64::from(nxt.x) - f64::from(cur.x)) * t,
+            f64::from(cur.y) + (f64::from(nxt.y) - f64::from(cur.y)) * t,
+            cur.battling,
         ))
     }
 
@@ -1067,17 +1175,19 @@ impl Composer {
     /// The header is drawn separately and last, because it must survive the
     /// zoom: a caption that scrolls off the top of a close-up is a caption
     /// nobody can read at the moment the picture is most interesting.
-    fn body(&self, traces: &[Trace], k: usize) -> (Vec<u8>, Tally) {
+    fn body(&self, traces: &[Trace], k: usize, frac: f64) -> (Vec<u8>, Tally) {
         let mut buf = self.background.clone();
         let mut tally = Tally::default();
         for (i, t) in traces.iter().enumerate() {
-            let Some(s) = t.samples.get(k) else { continue };
+            let Some((map, x, y, battling)) = self.at(&t.samples, k, frac) else {
+                continue;
+            };
             tally.live += 1;
-            if s.battling {
+            if battling {
                 tally.battling += 1;
             }
-            *tally.here.entry(s.map).or_default() += 1;
-            let Some((wx, wy)) = self.world_of(s) else {
+            *tally.here.entry(map).or_default() += 1;
+            let Some((wx, wy)) = self.world_at(map, x, y) else {
                 tally.elsewhere += 1;
                 continue;
             };
@@ -1086,7 +1196,7 @@ impl Composer {
                 wx - self.ox,
                 wy - self.oy,
                 agent_colour(i),
-                s.battling,
+                battling,
             );
         }
         (buf, tally)
@@ -1123,14 +1233,17 @@ impl Composer {
         }
     }
 
-    fn header(&self, buf: &mut [u8], k: usize, total: usize, sample: u32, t: &Tally) {
+    /// `stride` is emulated frames per **output** frame — `--sample / --inter`,
+    /// not `--sample`. Interpolation multiplies the frame count, so a clock
+    /// derived from the sample rate would run `--inter` times fast.
+    fn header(&self, buf: &mut [u8], k: usize, total: usize, stride: f64, t: &Tally) {
         let (live, battling, elsewhere, here) =
             (t.live, t.battling, t.elsewhere, &t.here);
         use terminalgb::video::card::{fit_scale, text_width};
         let mut c = Canvas::new(buf, self.w as u32, self.h as u32);
         c.fill(0, 0, self.w as u32, HEADER_H as u32, BG);
         c.fill(0, HEADER_H as i64 - 1, self.w as u32, 1, MAP_EDGE);
-        let secs = (k as f64 * f64::from(sample)) / 59.7275;
+        let secs = (k as f64 * stride) / 59.7275;
         // The card font has letters, digits, `-`, `.`, `:` and `/` and draws
         // anything else as a blank — so no `+` in a caption, ever.
         let top = format!(
@@ -1163,6 +1276,118 @@ impl Composer {
             0
         };
         c.fill(1, HEADER_H as i64 - 4, done as u32, 2, DIM_INK);
+    }
+}
+
+/// Why the renderer declined to glide between two samples, counted.
+///
+/// **A refusal is a jump a viewer sees**, so both reasons are reported rather
+/// than assumed rare. `warp` is a map change and is not a walk at all — a door,
+/// a route boundary or a blackout returning the player to a Pokémon Center.
+/// `bent` is a move of more than one tile that changed **both** axes: at a
+/// fixed sampling rate that means the interval was long enough for two or more
+/// steps, so the agent really did walk it — but it walked an L, and a straight
+/// glide would draw a diagonal it never took. A multi-tile run along **one**
+/// axis is glided, because every tile between the two really was stood on.
+///
+/// Lower `--sample` until `bent` is small; raising `--inter` does not help it,
+/// because the gap it measures is between two *recorded* positions.
+#[derive(Default, Clone, Copy)]
+struct Held {
+    warp: u64,
+    bent: u64,
+    long: u64,
+}
+
+/// What the finished film's motion actually measures, printed on every run.
+///
+/// **A smoothness claim has to be a number.** Two of them, and the second is
+/// the one that survives a fast cut:
+///
+/// * **displacement per drawn frame**, in world pixels — how far an agent moves
+///   between two frames a viewer sees. A walking agent covers 16 px per step by
+///   construction, so this rises with the timelapse factor and cannot be read
+///   as a quality figure on its own.
+/// * **the share of moving samples that land exactly on the tile grid** — which
+///   is scale-free. With no interpolation *every* moving sample is on the grid,
+///   because an agent is only ever drawn at a whole tile; with interpolation
+///   the only ones left are the frames where a step happens to complete.
+///   Warps are excluded: a warp really is a whole-tile jump, and counting one
+///   credits the renderer for the cartridge's own teleport.
+///
+/// The same pair `tools/pewter-chain/swarm_film.py`'s `report_motion` prints,
+/// for the same reason — see `AGENTS.md`, "`report_motion`'s `>=12 px` line
+/// CANNOT judge a fast cut".
+fn report_motion(comp: &Composer, traces: &[Trace], frames_out: usize, inter: usize) {
+    let mut steps: Vec<f64> = Vec::new();
+    let (mut moving, mut on_grid) = (0u64, 0u64);
+    let mut held = Held::default();
+    for t in traces {
+        let mut prev: Option<(u8, i64, i64)> = None;
+        for f in 0..frames_out {
+            let k = f / inter;
+            let frac = (f % inter) as f64 / inter as f64;
+            // Only the first sub-frame of each interval is counted towards the
+            // refusals, or every one of them would count the same interval.
+            let mut this = Held::default();
+            let sink = if f % inter == 1 { &mut held } else { &mut this };
+            let Some((map, x, y, _)) = comp.at_reported(&t.samples, k, frac, sink) else {
+                prev = None;
+                continue;
+            };
+            let Some((wx, wy)) = comp.world_at(map, x, y) else {
+                prev = None;
+                continue;
+            };
+            if let Some((pm, px, py)) = prev {
+                if pm == map {
+                    let d = (((wx - px).pow(2) + (wy - py).pow(2)) as f64).sqrt();
+                    steps.push(d);
+                    if d > 0.0 {
+                        moving += 1;
+                        let whole = |v: f64| (v - v.round()).abs() < 1e-6;
+                        if whole(x) && whole(y) {
+                            on_grid += 1;
+                        }
+                    }
+                }
+            }
+            prev = Some((map, wx, wy));
+        }
+    }
+    if steps.is_empty() {
+        return;
+    }
+    steps.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pct = |q: f64| steps[((steps.len() - 1) as f64 * q) as usize];
+    println!();
+    println!("motion      {} agent-frames measured", steps.len());
+    println!(
+        "            displacement per drawn frame: median {:.2} px, p90 {:.2}, p99 {:.2}, max {:.2}",
+        pct(0.5),
+        pct(0.9),
+        pct(0.99),
+        steps[steps.len() - 1]
+    );
+    if moving == 0 {
+        println!("            nothing moved, so there is nothing to quantise");
+        return;
+    }
+    println!(
+        "            moving samples on the tile grid: {:.1}% ({on_grid} of {moving}) - lower is smoother",
+        100.0 * on_grid as f64 / moving as f64
+    );
+    if inter > 1 {
+        println!(
+            "            not glided: {} warps (a jump, correctly), {} bent multi-tile intervals",
+            held.warp, held.bent
+        );
+        if held.long > 0 {
+            println!(
+                "            {} straight multi-tile intervals glided through the tiles between",
+                held.long
+            );
+        }
     }
 }
 
@@ -1450,36 +1675,72 @@ fn run(args: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let comp = Composer::new(layout, &sheets);
     let total = traces.iter().map(|t| t.samples.len()).max().unwrap_or(0);
+    // **Interpolation is what stops an agent teleporting, and it costs output
+    // frames.** One frame per recorded position is a stride of `--sample`
+    // emulated frames, which at the documented `--sample 24` is longer than a
+    // DMG walk step (measured at 17-31 emulated frames over the certified
+    // chain, `chainrender.tracks.walk_span`) — so the agent finishes a whole
+    // step between two drawn frames and there is nothing left to be smooth.
+    // Drawing `--inter` frames per position divides the stride by the same
+    // factor and puts it back under that ceiling.
+    let inter = a.inter.max(1) as usize;
+    let frames_out = if total == 0 {
+        0
+    } else {
+        (total - 1) * inter + 1
+    };
+    let stride = f64::from(a.sample) / inter as f64;
     println!();
     println!(
-        "drawing     {total} frames at {}x{}{}",
+        "drawing     {frames_out} frames at {}x{}{}",
         comp.w * a.scale as usize,
         comp.h * a.scale as usize,
         if a.zoom { ", zooming out" } else { "" }
     );
+    println!(
+        "            {total} recorded positions x {inter} interpolated, \
+stride {stride:.1} emulated frames per drawn frame"
+    );
+    // The ceiling, stated rather than assumed. Over it there is nothing
+    // interpolation can do: the agent finishes a whole step between two drawn
+    // frames, so every frame a viewer sees has it on a whole tile.
+    if stride > STEP_FRAMES {
+        println!(
+            "            OVER the {STEP_FRAMES:.0}-frame walk step - agents will still \
+jump a tile at a time. Raise --inter to {}, or lower --sample.",
+            (f64::from(a.sample) / STEP_FRAMES).ceil() as u32
+        );
+    }
 
     // The zoom, if asked for: hold the tightest integer scale that still shows
     // the swarm, then step down one scale at a time over the first third of the
     // run until the whole canvas is in frame.
     let max_scale = 4usize;
-    let zoom_until = total / 3;
+    let zoom_until = frames_out / 3;
     let mut checked = false;
-    for k in 0..total {
-        let (mut frame, tally) = comp.body(&traces, k);
+    for f in 0..frames_out {
+        let k = f / inter;
+        let frac = (f % inter) as f64 / inter as f64;
+        let (mut frame, tally) = comp.body(&traces, k, frac);
         if a.zoom {
-            let s = if k >= zoom_until || zoom_until == 0 {
+            let s = if f >= zoom_until || zoom_until == 0 {
                 1
             } else {
-                let t = k as f64 / zoom_until as f64;
+                let t = f as f64 / zoom_until as f64;
                 (max_scale as f64 - t * (max_scale as f64 - 1.0)).round() as usize
             }
             .clamp(1, max_scale);
             if s > 1 {
                 // Centre on the swarm so the close-up is of the agents rather
-                // than of an arbitrary corner.
+                // than of an arbitrary corner. Interpolated, like everything
+                // else drawn on this frame — a camera stepping a whole tile
+                // while the agents glide is its own kind of judder.
                 let (mut sx, mut sy, mut n) = (0i64, 0i64, 0i64);
                 for t in &traces {
-                    if let Some(p) = t.samples.get(k).and_then(|p| comp.world_of(p)) {
+                    if let Some(p) = comp
+                        .at(&t.samples, k, frac)
+                        .and_then(|(m, x, y, _)| comp.world_at(m, x, y))
+                    {
                         sx += p.0 - comp.ox;
                         sy += p.1 - comp.oy;
                         n += 1;
@@ -1500,13 +1761,13 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         // The caption goes on last, so it is the same size and in the same
         // place whatever the zoom is doing underneath it.
-        comp.header(&mut frame, k, total, a.sample, &tally);
+        comp.header(&mut frame, f, frames_out, stride, &tally);
         let (fw, fh) = (comp.w, comp.h);
         let scaled = magnify(&frame, fw, fh, a.scale as usize);
-        if a.scale > 1 && k == 0 {
+        if a.scale > 1 && f == 0 {
             assert_no_new_colours(&frame, &scaled)?;
         }
-        let path = out.join(format!("frame_{k:06}.png"));
+        let path = out.join(format!("frame_{f:06}.png"));
         image::save_buffer(
             &path,
             &scaled,
@@ -1515,33 +1776,42 @@ fn run(args: &[String]) -> Result<(), String> {
             image::ColorType::Rgba8,
         )
         .map_err(|e| format!("{}: {e}", path.display()))?;
-        if !a.quiet && k % 50 == 0 {
-            eprint!("\rframe {k}/{total}   ");
+        if !a.quiet && f % 50 == 0 {
+            eprint!("\rframe {f}/{frames_out}   ");
         }
     }
     if !a.quiet {
         eprintln!();
     }
 
-    // 59.7275 / sample is the true rate the samples were taken at, so playing
-    // them back at that rate would be real time. 30 fps is what a video wants;
-    // say out loud what that does to the clock rather than leaving the viewer
-    // to guess how fast the swarm is really moving.
-    let real_fps = 59.7275 / f64::from(a.sample);
-    const PLAY_FPS: f64 = 30.0;
+    report_motion(&comp, &traces, frames_out, inter);
+
+    // `59.7275 / stride` is the true rate the drawn frames stand for, so playing
+    // them back at that rate would be real time. Say out loud what the chosen
+    // frame rate does to the clock rather than leaving the viewer to guess how
+    // fast the swarm is really moving.
+    //
+    // **`--inter` buys smoothness, never speed.** `seconds_out x speed = the
+    // emulated time there is` — interpolation adds no emulated time, so drawing
+    // `--inter` times as many frames and playing them `--inter` times as fast
+    // is the same film, smoother. The default pair (`--inter 2 --fps 60`) is
+    // exactly the pace one frame per sample at 30 fps used to give; 60 is also
+    // what Whidden's own offline renderer encodes at.
+    let real_fps = 59.7275 / stride;
+    let play_fps = f64::from(a.fps);
     println!();
-    println!("wrote {total} frames to {}", out.display());
+    println!("wrote {frames_out} frames to {}", out.display());
     println!("turn them into a video with:");
     println!(
-        "  ffmpeg -y -framerate {PLAY_FPS} -i {}/frame_%06d.png \\\n\
+        "  ffmpeg -y -framerate {play_fps:.0} -i {}/frame_%06d.png \\\n\
          \x20   -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' -c:v libx264 -pix_fmt yuv420p \\\n\
          \x20   -crf 18 swarm.mp4",
         out.display()
     );
     println!(
         "  {:.0}s of video, {:.0}x game speed ({:.1} emulated minutes per agent)",
-        total as f64 / PLAY_FPS,
-        PLAY_FPS / real_fps,
+        frames_out as f64 / play_fps,
+        play_fps / real_fps,
         a.frames as f64 / 59.7275 / 60.0
     );
     // Fedora (and anything else that ships a patent-clean ffmpeg) has no

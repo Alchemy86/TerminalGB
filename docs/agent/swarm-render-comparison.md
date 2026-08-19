@@ -55,9 +55,9 @@ be behind him, so this is **not** a candidate for "why his reads smoother."
 
 | Property | His (cited, primary unless marked) | Ours (cited) | Verdict |
 |---|---|---|---|
-| **Position interpolation, offline renderer** | `inter_steps=4` (8 in a test render), linear, between coordinate samples — `raw…/BetterMapVis_script_version.py`: `"fract in np.arange(0,1,1/inter_steps)"` | `chainrender.tracks.interpolate` — linear, span from `walk_span()` (measured per corpus, ~17-31 emulated frames) — [`tools/pewter-chain/chainrender/tracks.py:265`](../../tools/pewter-chain/chainrender/tracks.py) | **parity for `swarm_film.py`**. **We are worse for `examples/swarm_view.rs`** — see §3.1, it has none |
+| **Position interpolation, offline renderer** | `inter_steps=4` (8 in a test render), linear, between coordinate samples — `raw…/BetterMapVis_script_version.py`: `"fract in np.arange(0,1,1/inter_steps)"` | `chainrender.tracks.interpolate` — linear, span from `walk_span()` (measured per corpus, ~17-31 emulated frames) — [`tools/pewter-chain/chainrender/tracks.py:265`](../../tools/pewter-chain/chainrender/tracks.py); and `--inter` in [`examples/swarm_view.rs`](../../examples/swarm_view.rs) | **CLOSED — parity both ways.** `swarm_view.rs` gained the same lerp; see §7.1 |
 | **Position interpolation, live viewer** | linear + *adaptive* duration: `animationDuration = max(1000, batchTimingAvg * 0.95)`, EMA `alpha=0.3` on the batch timing itself — `raw…/visualizer_live.js` | fixed sample stride, fixed output pace (`--speed`/`--fps`); no adaptation to data arrival rate (n/a offline — every frame is ground truth, not a sparse network update) | **not comparable** — his problem (sparse live telemetry) is not ours (full emulated ground truth). Not a gap. |
-| **Sprite art** | 16×16 tiles cut from a spritesheet at `sy=34+17*y, sx=9+17*x`; **4-frame walk-cycle** per direction (`[1,4,6,8]` on the sheet) | `pewter_chain sprites` reads the real OAM/VRAM sprite, 4 **static** facings (down/up/left/right), captured **once** from a standing pose — [`examples/pewter_chain.rs:5076`](../../examples/pewter_chain.rs) `cmd_sprites` | **we are worse** — see §3.2 |
+| **Sprite art** | 16×16 tiles cut from a spritesheet at `sy=34+17*y, sx=9+17*x`; **4-frame walk-cycle** per direction (`[1,4,6,8]` on the sheet) | `pewter_chain sprites` reads the real OAM/VRAM sprite — the standing facing **and now the walk cycle**, captured while the player is actually stepping — [`examples/pewter_chain.rs`](../../examples/pewter_chain.rs) `cmd_sprites` / `capture_walk_cycle` | **CLOSED.** Three poses per vertical facing, two per side-on one, and the cartridge's own sequence measured rather than assumed; see §7.2 |
 | **Camera, offline renderer** | **none.** Fixed `global_offset` plus a hand-authored per-map offset dict; no zoom, no pan, no smoothing — `raw…/BetterMapVis_script_version.py`: `"global_offset = np.array([1056-16*12, 331])"` | seven tuned rules (EMA target, deadzone, quantised zoom ladder, pan cap, axis bias, catch-up, box-smoothing) — [`tools/pewter-chain/chainrender/camera.py:1`](../../tools/pewter-chain/chainrender/camera.py) | **structural, not a bug** — see §3.3 |
 | **Camera, live viewer** | user-driven wheel zoom (`scaleFactor = 1 - deltaY*0.0015`) blending two background textures with `smoothstep(2, 4.5, val)` for LOD | quantised-ladder zoom with hysteresis, hard snaps between rungs (`AGENTS.md`, "THE ZOOM WAS THE LOUDEST CAUSE") | **his LOD-blend idea is applicable to us** — see §3.4. Not proof his *video* used it (that's the live viewer, not the offline renderer). |
 | **Video codec/pixel format, offline renderer** | `codec='prores_ks', encoded_format='yuva444p'` (ProRes 4444 **with alpha**) — a mezzanine/compositing format, not a delivery one | current defaults are already `-c:v libx264 -pix_fmt yuv420p` (or `libopenh264` fallback) — [`examples/swarm_view.rs:1537`](../../examples/swarm_view.rs), [`tools/pewter-chain/path_arrows.py:824`](../../tools/pewter-chain/path_arrows.py), [`tools/pewter-chain/swarm_film.py:1344`](../../tools/pewter-chain/swarm_film.py), [`tools/pewter-chain/screen_mosaic.py:543`](../../tools/pewter-chain/screen_mosaic.py) | **codec is not currently a gap in our tooling** — see §3.5 for what the "VP9 4:4:4" report probably was |
@@ -71,7 +71,8 @@ be behind him, so this is **not** a candidate for "why his reads smoother."
 ### Cheap (hours, no new capture pipeline, no new dependency)
 
 **3.1 — `examples/swarm_view.rs` has zero position interpolation and draws a
-flat dot, not a sprite.** [Highest-value cheap fix if this is the video being
+flat dot, not a sprite.** *(**Closed** — the interpolation half. See §7.1 for
+what landed and what it measured; the dot is still a dot, deliberately.)* [Highest-value cheap fix if this is the video being
 judged.] It samples position every `--sample N` frames (`docs/swarm-view.md`
 example: every 24 frames) and stamps `agent_colour(i)` straight onto the
 canvas with `Compositor::marker` — [`examples/swarm_view.rs:1084-1098`]
@@ -88,7 +89,10 @@ of the newer renderer (AGENTS.md already records this consolidation as
 port `chainrender.tracks.interpolate`'s approach into it. No new capture, no
 new dependency — this is the single cheapest, highest-leverage fix available.
 
-**3.2 — Our agents don't animate while walking; his do.** Whidden's sprite
+**3.2 — Our agents don't animate while walking; his do.** *(**Closed.** See
+§7.2 — and note that the fix is not the one this section predicted: the
+`walking` field it expected to drive the cycle from is not in a track any more,
+and the phase is reconstructed instead.)* Whidden's sprite
 sheet carries four walk-cycle frames per direction
 (`sx = 9 + 17*x` for `x in [1,4,6,8]`, `raw…/BetterMapVis_script_version.py`
 — **primary**). Ours captures **one static standing frame per facing**,
@@ -289,6 +293,133 @@ axis.
   viewer is working from sparse websocket telemetry and has to guess timing
   (its adaptive EMA duration exists to paper over that). This is a structural
   advantage for us that §2's table already notes as "not comparable."
+
+## 7. What has since been closed, and what it measured
+
+Both of §3's cheap items are done. Neither changed a byte of emulation; both
+are **strictly opt-in on their input**, so an already-published film reproduces
+exactly.
+
+### 7.1 — Interpolation in `examples/swarm_view.rs`
+
+`--inter <n>` draws *n* video frames per recorded position, lerping between
+them: the same model as `chainrender.tracks.interpolate` and as Whidden's own
+`inter_steps`. `--fps <n>` (default 60, his figure) says what the printed
+`ffmpeg` recipe encodes at, so **`--inter` buys smoothness and never speed** —
+`seconds_out x speed = the emulated time there is`, and interpolation adds no
+emulated time.
+
+**Measured on the hero recipe from [`docs/swarm-view.md`](../swarm-view.md)**
+(24 agents, 36,000 frames, `--sample 24 --zoom`, Pokémon Blue, the shiny
+hunter's `route1.gbss`) — the tool prints all of this itself now:
+
+| | `--inter 1 --fps 30` (before) | `--inter 2 --fps 60` (after) |
+|---|---:|---:|
+| drawn frames | 1,500 | 2,999 |
+| film length / pace | 50 s at 12x | **50 s at 12x** — unchanged |
+| stride, emulated frames per drawn frame | 24.0 (**over** the 16-frame walk step) | 12.0 |
+| displacement per drawn frame, p90 | 16.00 px | **8.00 px** |
+| p99 | 32.00 px | **16.00 px** |
+| moving samples landing on the tile grid | 100.0 % | **62.7 %** |
+
+One agent's drawn positions over the same fourteen frames, read off the
+rendered PNGs rather than out of the renderer: **16, 23, 16, 16, 16, 0, 31, 16,
+16, 16, 16, 32 px** before, against **7, 8, 8, 0, 23, 8, 8, 8, 8, 8, 8, 0, 0,
+15 px** after.
+
+![Interpolation, before and after](smoothness-stills/interpolation-trail.png)
+
+*One second of film, every drawn position of every agent superimposed. Left:
+separate dots, one per tile. Right: continuous trails.*
+
+Three things worth keeping:
+
+* **`--inter 1` reproduces the old renderer byte for byte** — checked against a
+  build of the pre-change source, 375 frames, identical md5. So is
+  `swarm_film.py` with a sprite directory that has no walk cycle in it (700
+  frames, identical md5), and both camera/arrow equality gates in
+  [`chainrender.md`](chainrender.md) still hold.
+* **The ceiling is `stride <= one walk step`, and the tool says when it is over
+  it.** A DMG step crosses 16 px in ~16 emulated frames (`wWalkCounter` 7..1,
+  two frames each, 2 px a frame); above that an agent finishes a whole step
+  between two drawn frames and *no* amount of interpolation can smooth
+  something that is never drawn in progress. The documented recipe was at 24,
+  i.e. over it.
+* **A straight multi-tile interval is glided; a bent one is not.** These
+  samples are fixed-rate, so at `--sample 24` an agent walks two tiles in one
+  interval about one interval in five (3,401 of ~16,700). A run along one axis
+  really did pass through the tiles between and is glided; a move that changed
+  *both* axes is an L, and a straight glide across it would draw a diagonal
+  nobody walked — refused, and counted on the report line (**47** of those,
+  against **53** warps, in that same run). `chainrender`'s version refuses both,
+  correctly, because its tracks are event-recorded and a gap of two tiles there
+  means a teleport.
+
+### 7.2 — The walk cycle
+
+`pewter_chain sprites` now also holds the direction down and keeps every
+distinct 16x16 cut-out the cartridge draws *while the player is stepping*,
+writing them as `player-<dir>-w<n>.png` in cycle order beside the standing
+`player-<dir>-f<n>.png` it always wrote.
+
+**The sequence was measured, not assumed** — eight consecutive steps walking
+south, logging `wWalkCounter` against the pose drawn:
+
+```text
+counter  7 7 7 6 6 5 5 4 4 | 3 3 2 2 1 1
+pose     0 0 0 0 0 0 0 0 0 | 1 1 1 1 1 1     <- one step
+pose     0 0 0 0 0 0 0 0 0 | 2 2 2 2 2 2     <- the next
+```
+
+So the standing pose covers the **first half** of a step and a stepping pose
+the second, and **which** stepping pose alternates from one step to the next.
+Two more measurements fall out: pose 2 is the exact horizontal mirror of pose 1
+(0 differing pixels), and the right-facing standing frame is the exact mirror of
+the left-facing one (0 differing pixels) — which is what lets a side that is
+walled in on every sidestep have its cycle *derived* from the other side and
+still be checked rather than guessed.
+
+**§3.2 predicted the wrong mechanism, and this is the correction.** It expected
+the renderer to be driven from a `walking` field already in the track data.
+That field is not there: `terminalgb::scenario::track` measured that **83 % of
+all track rows changed nothing but the walk counter** and dropped it, saying in
+as many words that "the step is expanded back at draw time". So the phase is
+reconstructed — `chainrender.tracks.walk_phase`, over the *same* segment
+`interpolate` positions the agent from, so the legs and the feet cannot
+disagree. Which of the two stepping poses leads is taken from the parity of the
+destination tile, which changes by exactly one every step; *which* leads first
+is a function of how many steps the player has taken since the game began,
+which no position track carries and which nobody can see, the two poses being
+mirrors.
+
+**Measured on a 700-frame film** (8 agents, the Pewter gym approach, 2x, 60 fps,
+identical captions so only the sprites differ): **125 of 233 sampled frames
+differ, median 42 differing pixels, max 277** — the scale of a few agents
+changing pose, on the frames where agents are mid-step.
+
+![The walk cycle, before and after](smoothness-stills/walk-cycle-strip.png)
+
+*Six consecutive frames of the same film. Top: the same pose every frame.
+Bottom: the legs move.*
+
+**A still cannot prove animation**, which is why the numbers above are the
+claim and the pictures are supporting. The two side-by-side clips are
+`~/pokemon-run/smoothness/swarm-interp-ab.mp4` and `swarm-walkcycle-ab.mp4` —
+not committed, for the same reason no film in this repository is.
+
+### 7.3 — What was deliberately *not* done
+
+* **His camera was not copied**, because §2 found he has none: a fixed
+  `global_offset` and a hand-authored per-map dict. Our seven (now nine) tuned
+  rules are solving a problem he sidesteps, and §3.8 still stands.
+* **The codec was not touched** — §3.4 is still the answer, and his ProRes 4444
+  with alpha is a mezzanine format rather than a delivery one.
+* **`swarm_view.rs` still draws a dot rather than a sprite.** It is a
+  twenty-four-agent proof of concept whose whole diagnostic value is that a pile
+  of agents on one tile reads as *brighter*; a sprite does not stack that way,
+  and the sprite renderer is `swarm_film.py`. A dot has no legs to swing, so
+  §7.2 does not apply to it.
+* **The map layout is still another crew's**, per the original instruction.
 
 ## Sources
 

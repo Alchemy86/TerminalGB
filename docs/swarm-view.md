@@ -92,12 +92,12 @@ cd target/swarm
 ../release/examples/swarm_view --rom blue.gb --state route1.gbss \
     --capture-maps maps --capture-frames 200000
 
-# 2. run the swarm and composite (23s)
+# 2. run the swarm and composite (28s)
 ../release/examples/swarm_view --rom blue.gb --state route1.gbss --maps maps \
     --instances 24 --frames 36000 --sample 24 --zoom --out frames
 
 # 3. the command it prints
-ffmpeg -y -framerate 30 -i frames/frame_%06d.png \
+ffmpeg -y -framerate 60 -i frames/frame_%06d.png \
     -vf 'scale=trunc(iw/2)*2:trunc(ih/2)*2' -c:v libx264 -pix_fmt yuv420p \
     -crf 18 swarm.mp4
 ```
@@ -125,10 +125,60 @@ real save.
 |---|---|
 | wall time | **23.8 s** |
 | emulated | 864,000 frames = **608x real time** |
-| video | 1,500 frames, 352x926, **50 s at 30 fps = 12x game speed** |
+| video | 2,999 frames, 352x926, **50 s at 60 fps = 12x game speed** |
 | encounters fled | 203 |
 | samples spent in battle | 19.05 % |
 | blackouts | 0 |
+
+## Agents glide; they do not teleport
+
+`--inter <n>` draws *n* video frames per recorded position and lerps between
+them, and `--fps <n>` says what the printed `ffmpeg` recipe encodes at. The
+defaults are **2** and **60**, and the pair is chosen so the *pace* is exactly
+what one frame per position at 30 fps used to give — `seconds_out x speed = the
+emulated time there is`, and interpolation adds no emulated time. `--inter 1`
+is the old, teleporting behaviour and reproduces it byte for byte.
+
+**Why it is needed at all, and how to tell:** a Gen 1 walk step crosses sixteen
+pixels in about sixteen emulated frames (`wWalkCounter` runs 7..1 with each
+value held two frames, two pixels a frame), and `wXCoord`/`wYCoord` do not move
+*during* a step — they snap at the end of it. So an agent drawn straight from
+them jumps a whole tile, and if the **stride** (emulated frames per drawn frame,
+i.e. `--sample / --inter`) is longer than the step, the jump is all a viewer
+ever sees. The tool prints the stride, says out loud when it is over that
+ceiling, and reports what the finished film's motion actually measures:
+
+```
+            1500 recorded positions x 2 interpolated, stride 12.0 emulated frames per drawn frame
+motion      71689 agent-frames measured
+            displacement per drawn frame: median 0.00 px, p90 8.00, p99 16.00, max 178.89
+            moving samples on the tile grid: 62.7% (16625 of 26519) - lower is smoother
+            not glided: 53 warps (a jump, correctly), 47 bent multi-tile intervals
+            3354 straight multi-tile intervals glided through the tiles between
+```
+
+Against `--inter 1` on the identical run: p90 **16.00** px, p99 **32.00**, and
+**100.0 %** of moving samples on the tile grid — because with one frame per
+position an agent is only ever drawn on a whole tile. That last figure is the
+one to quote, because it is scale-free: displacement per frame rises with the
+timelapse factor by construction and cannot be read as a quality number on its
+own.
+
+Two honest limits, both counted on that report line. A **warp** is a jump and is
+drawn as one — a door, a route boundary, or a blackout returning the player to a
+Pokémon Center. And because these samples are taken at a fixed rate rather than
+on every tile change, an interval can contain more than one step: a run along
+one axis is glided (the agent really did pass through the tiles between), but a
+move that changed *both* axes is an L, and a straight glide across it would draw
+a diagonal nobody walked, so it is refused. Lower `--sample` until that count is
+small — at `--sample 12` it is 12 in the whole run, against 47 at 24.
+
+Full before/after, with the numbers and a picture:
+[`docs/agent/swarm-render-comparison.md`](agent/swarm-render-comparison.md) §7.1.
+**The agents here are dots, deliberately** — a pile of them on one tile reads as
+brighter, which is the whole diagnostic, and sprites do not stack that way. The
+sprite renderer, and the walk cycle that goes with it, is
+[`swarm_film.py`](agent/chainrender.md).
 
 ## Proof they diverged
 

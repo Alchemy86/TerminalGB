@@ -55,5 +55,5 @@ from .palette import (  # noqa: F401
 from .tracks import (  # noqa: F401
     FACING, FPS_GB, GBTRK_MAGIC, STEP_PX, TILE, WALK_FRAMES, WALK_STEPS,
     decode_track, flag_at, interpolate, link_at, load_links, read_track,
-    track_files, track_last_frame, walk_span, write_track,
+    track_files, track_last_frame, walk_phase, walk_span, write_track,
 )
