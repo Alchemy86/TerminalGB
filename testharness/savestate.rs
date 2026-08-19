@@ -91,8 +91,11 @@ fn round_trip(label: &str, path: &str, warmup: u32, compare: u32) -> bool {
         reference.frame();
         restored.frame();
 
-        let rf = reference.image();
-        let sf = restored.image();
+        // `save_state` is `&mut` (it brings the lazily-advanced PPU current),
+        // so take the framebuffers as owned bytes rather than holding two
+        // borrows across the comparison below.
+        let rf = reference.image().to_vec();
+        let sf = restored.image().to_vec();
         assert!(
             rf == sf,
             "{label}: framebuffer diverged at frame {i} after load"
@@ -105,7 +108,7 @@ fn round_trip(label: &str, path: &str, warmup: u32, compare: u32) -> bool {
             "{label}: full machine state diverged at frame {i} after load"
         );
 
-        let h = fnv1a64(rf);
+        let h = fnv1a64(&rf);
         if h != prev_frame {
             frames_changed += 1;
             prev_frame = h;

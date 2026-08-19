@@ -258,8 +258,8 @@ static STATE_BUF: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 #[no_mangle]
 pub extern "C" fn save_state() -> ImageBuffer {
     if let Some(gb) = GAMEBOY.get() {
-        if let Ok(locked_gb) = gb.lock() {
-            if let Some(gameboy) = locked_gb.as_ref() {
+        if let Ok(mut locked_gb) = gb.lock() {
+            if let Some(gameboy) = locked_gb.as_mut() {
                 let bytes = gameboy.save_state();
                 let buf = STATE_BUF.get_or_init(|| Mutex::new(Vec::new()));
                 if let Ok(mut b) = buf.lock() {

@@ -927,6 +927,35 @@ impl Gpu {
     /// Returns 0 when there is no horizon to compute (the per-dot engine, which
     /// has an event on every dot by construction, or the LCD switched off,
     /// where nothing here advances at all).
+    /// How many dots [`Gpu::do_cycle`] may be **deferred** by — the distance to
+    /// the next dot at which this PPU does anything a CPU can observe.
+    ///
+    /// The batched engine pays a whole chunk of bookkeeping per *call* — the
+    /// line test, the three-way mode test, the STAT line — however few dots the
+    /// call carries, and it is called once per instruction. Letting the MMU
+    /// accumulate and apply them in one go is worth a great deal (about a
+    /// third of a headless frame, [`docs/throughput.md`](../docs/throughput.md)
+    /// §16), and it is exact as long as nothing crosses a boundary unseen.
+    ///
+    /// This is that bound, and it is the same one [`Gpu::idle_dots`] hands the
+    /// halted CPU: mode 2 ends at `OAM_DOTS + 1`, mode 3 at
+    /// `OAM_DOTS + DRAW_DOTS + 1`, the line at `LINE_DOTS`, and a Color
+    /// console's VBlank strobe rises `VBLANK_STROBE_LEAD` dots before that. The
+    /// caller flushes on the instruction whose dots *reach* it, so the crossing
+    /// — and any interrupt, `updated` or `hblanking` it carries — lands on
+    /// exactly the instruction it would have landed on.
+    ///
+    /// **Zero for the per-dot engine and with the LCD off**, which the caller
+    /// reads as "never defer": the per-dot engine is stepped per bus access by
+    /// design, and with the LCD off `do_cycle` returns at its first line
+    /// anyway, so there is nothing to save.
+    pub(crate) fn defer_dots(&self) -> u32 {
+        if self.render_mode != RenderMode::Fast || !self.lcd_on {
+            return 0;
+        }
+        self.idle_dots()
+    }
+
     pub(crate) fn idle_dots(&self) -> u32 {
         if !self.lcd_on {
             return 0;

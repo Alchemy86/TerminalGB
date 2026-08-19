@@ -94,7 +94,10 @@ pub trait HuntMachine: Send {
     /// the latch.
     fn load_state(&mut self, bytes: &[u8]) -> Result<(), String>;
     /// The machine's full state right now.
-    fn save_state(&self) -> Vec<u8>;
+    /// Serialise the machine. `&mut self` because the host may be advancing
+    /// peripherals lazily and a state is an observation — see
+    /// `Gameboy::save_state`.
+    fn save_state(&mut self) -> Vec<u8>;
     /// Run one emulated frame.
     fn frame(&mut self);
     /// Hold or release a button.
@@ -822,7 +825,7 @@ impl<M: HuntMachine> Instance<M> {
 
     /// The machine's full state right now — the thing that makes a hit
     /// actionable rather than a boast.
-    pub fn state(&self) -> Vec<u8> {
+    pub fn state(&mut self) -> Vec<u8> {
         self.gb.save_state()
     }
 
@@ -1390,7 +1393,7 @@ mod tests {
             self.latched = None;
             Ok(())
         }
-        fn save_state(&self) -> Vec<u8> {
+        fn save_state(&mut self) -> Vec<u8> {
             self.entropy.to_le_bytes().to_vec()
         }
         fn frame(&mut self) {

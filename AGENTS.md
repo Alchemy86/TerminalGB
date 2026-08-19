@@ -12022,3 +12022,45 @@ four external gates and every in-repo harness green.
   an event that happens ~137 and ~1 times a frame — the shape §12 treats as waste — and it is
   **not** waste when the line is hot anyway and the branch is not free. Once a check is one
   packed test, replacing it with a branch loses.
+
+
+## THE PPU IS ADVANCED LAZILY NOW (`MemoryManagementUnit::flush_gpu`, `Gpu::defer_dots`)
+
+**Full record: [`docs/throughput.md`](docs/throughput.md) §16.** **0.1134 -> 0.0965 ms/frame,
+147x -> 173x (+17.5 %)**, frame and WRAM hashes byte-identical, **all 5,320 Gambatte rows match
+in both picture modes**, every other gate green. The largest single win since the idle batch.
+
+- **THE BATCHED RENDERER PAID A WHOLE CHUNK OF BOOKKEEPING PER CALL** — the line test, the
+  three-way mode test, `refresh_stat_line` — however few dots that call carried, and
+  `MMU::do_cycle` called it **once per instruction**. Twelve dots and eighty dots cost the same.
+  A crude sizing hack (defer by a fixed eight instructions, which is wrong) measured **+47 %**,
+  which is what made it worth building properly.
+- **THE BOUND IS `Gpu::defer_dots` AND IT IS EXACT.** The distance to the next dot at which the
+  PPU does anything a CPU can see — a mode edge, an `LY` increment, the Color VBlank strobe lead
+  — i.e. the same horizon `Gpu::idle_dots` already hands the halted CPU. `MMU::do_cycle` flushes
+  on the instruction whose **own dots reach** it, so a mode change, a STAT or VBlank interrupt,
+  `updated` and the HBlank latch land on exactly the instruction they landed on before.
+  **Zero for the per-dot engine** (stepped per bus access by design) and with the LCD off.
+- **FOUR DEFECTS, EACH NAMED BY THE ROWS THAT MOVED — this is what the suites are for.**
+  1. **210 rows** (`miscmstatirq`, `halt`, `lycEnable`, `m0enable`): `bus_tick` hands the PPU dots
+     **directly** while `ppu_ticks_with_the_bus` is set (interrupt dispatch), so anything still
+     owed must go in first or the two arrive out of order.
+  2. **181 rows, same groups**: `flush_gpu` folded `gpu.interrupt` into `intf`. **A flush can now
+     happen part-way through an instruction** — a `$FF41` read causes one — so folding there
+     hands the CPU a STAT interrupt *earlier* than the batched engine ever did. **The fold stays
+     at the end of `MMU::do_cycle`.**
+  3. **38 rows, all `halt/late_m0int_halt_m0stat_*`**: `idle_mcycles` measured its horizon from
+     the PPU's **lagging** position, so a halted CPU idled `gpu_owed` dots too long and woke
+     late. It subtracts the owed dots.
+  4. **`testharness/savestate.rs`**: "state diverged one instruction after loading". **A SAVE
+     STATE IS AN OBSERVATION** — `Gameboy::save_state` is **`&mut self`** now and flushes, which
+     is also why this needed **no `savestate::FORMAT_VERSION` bump** and every existing state
+     still loads. The `HuntMachine::save_state` trait method moved with it.
+- **THE OAM-CORRUPTION HOOK NEEDS IT TOO**, and for a reason worth remembering: `Gpu::oam_bug`
+  predicts which OAM row a bus cycle hits **from the PPU's own free-running dot counter**, so the
+  counter has to be current. Both hooks (`read_at`'s and `idu_tick`'s) flush.
+- **ANYTHING ELSE THAT READS THE PPU MUST FLUSH FIRST**, and the list is the whole contract:
+  VRAM, OAM, `$FF40-$FF4F`, `$FF68-$FF6B`, a VRAM DMA (gated on one being active), an OAM DMA, a
+  render-mode switch, a speed switch, and `Gameboy::end_frame` for the framebuffer and plugins.
+  **Add a new PPU observer and you must add its flush** — the gates will tell you, but they take
+  ten minutes and the row groups above are the map of what each mistake looks like.

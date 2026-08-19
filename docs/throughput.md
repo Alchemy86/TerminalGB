@@ -1174,3 +1174,63 @@ we keep on purpose — is only **+13.6 %** of that.
 **So the next structural item is named: make the timer and the PPU lazy the way the APU already
 is.** `Sound::catch_up` is the proof the pattern costs no accuracy. It is a project, not a pass,
 and it is the only remaining item on this page big enough to matter.
+
+---
+
+## 16. Round five: the PPU is advanced lazily — +17.5 %, and the technique came from somebody else
+
+§15 measured PyBoy at 2.3× this emulator and read its source for *why*. The answer was in its own
+comment: every peripheral publishes a horizon and is advanced only when one is reached. This is
+that idea applied where we do not need sub-instruction resolution, and it is the largest single
+win on this page since the idle batch itself.
+
+**0.1134 → 0.0965 ms/frame, 147× → 173×**, interleaved on one P-core against the parent commit,
+**frame hash and WRAM hash byte-identical**, and **all 5,320 Gambatte rows match in both picture
+modes**.
+
+### 16.1 The batched renderer paid a whole chunk per call
+
+`Gpu::do_cycle` was called once per instruction with that instruction's dots. Whatever the
+count, the call pays a full pass: the line-boundary test, the three-way mode test, and
+`refresh_stat_line`. Twelve dots and eighty dots cost the same.
+
+`MemoryManagementUnit::flush_gpu` accumulates the dots instead and applies them together. A
+crude sizing hack — defer by a fixed eight instructions, which is wrong — measured **+47 %**,
+which is what made it worth doing properly.
+
+### 16.2 The bound, and why it is exact
+
+[`Gpu::defer_dots`](../src/gpu/mod.rs) is the distance to the next dot at which the PPU does
+anything a CPU can observe — a mode edge, an `LY` increment, a Color console's VBlank strobe
+lead. It is the same horizon `Gpu::idle_dots` already hands the halted CPU.
+
+`MemoryManagementUnit::do_cycle` flushes on the instruction whose **own dots reach** that
+horizon, not on the one after, so a mode change, a STAT or VBlank interrupt, `updated` and the
+HBlank latch all land on exactly the instruction they landed on before. Everything that reads
+the PPU out of turn flushes first: VRAM, OAM, the `$FF4x` and `$FF6x` registers, a VRAM DMA, an
+OAM DMA, the OAM-corruption hook, a render-mode switch and a save state.
+
+It returns **zero for the per-dot engine**, which is stepped per bus access by design, and with
+the LCD off, where `do_cycle` returns at its first line anyway.
+
+### 16.3 Four things the gates caught, in the order they caught them
+
+This is the value of a suite whose expectations are somebody else's. Each of these was a real
+defect that a plausible-looking implementation had, and each was named by the rows that moved.
+
+| what the rows said | the defect |
+|---|---|
+| 210 rows across `miscmstatirq`, `halt`, `lycEnable`, `m0enable` | `bus_tick` hands the PPU dots **directly** during interrupt dispatch, so anything still owed has to go in first or the two arrive out of order |
+| the same groups, still 181 | `flush_gpu` folded `gpu.interrupt` into `intf`. A flush can now happen **part-way through an instruction** — a `$FF41` read causes one — so folding there handed the CPU a STAT interrupt earlier than the batched engine ever did. The fold stays at the end of the instruction. |
+| 38 rows, all `halt/late_m0int_halt_m0stat_*` | `idle_mcycles` measured its horizon from the PPU's **lagging** position, so a halted CPU idled `gpu_owed` dots too long and woke late. It subtracts the owed dots now. |
+| `savestate`: "state diverged one instruction after loading" | **a save state is an observation.** `Gameboy::save_state` is `&mut self` and brings the PPU current, which is also why this needed no `savestate::FORMAT_VERSION` bump and every existing state still loads. |
+
+The OAM-corruption hook needed the same treatment for the same reason — it predicts which OAM
+row a bus cycle hits from the PPU's own free-running dot counter, so the counter has to be
+current.
+
+### 16.4 What it does not do
+
+**Nothing for `identical`**, by construction: the per-dot engine is the accuracy engine and is
+stepped per bus access. And nothing for a machine with the LCD off. The gain is the batched
+renderer's, which is the default and the one a collector runs.

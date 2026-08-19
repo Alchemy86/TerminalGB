@@ -690,6 +690,12 @@ impl Gameboy {
     /// The housekeeping [`Gameboy::frame`] does *after* the frame's cycles.
     /// See [`Gameboy::begin_frame`].
     pub fn end_frame(&mut self) {
+        // The PPU is advanced lazily between the dots at which it can be
+        // observed (`MemoryManagementUnit::flush_gpu`), so bring it current
+        // before anything outside the frame loop looks at it — a save state, a
+        // plugin's `on_frame`, or the framebuffer itself.
+        self.cpu.memory.flush_for_observer();
+
         // Battery-backed cartridge RAM is written out here, once the game has
         // left it alone for a moment — NOT in `Drop`, which the frontends
         // cannot guarantee runs (winit's event loop calls `process::exit`, the
@@ -798,7 +804,19 @@ impl Gameboy {
     /// Serialise the complete machine state to bytes. The caller decides where
     /// the bytes live (a file, local storage, a download). See
     /// [`crate::savestate`] for the format.
-    pub fn save_state(&self) -> Vec<u8> {
+    ///
+    /// **`&mut self`, and the reason is the PPU.** It is advanced lazily
+    /// between the dots at which it can be observed
+    /// ([`MemoryManagementUnit::flush_gpu`](crate::mmu::MemoryManagementUnit)),
+    /// so a state taken part-way through a frame would otherwise record a PPU
+    /// that is behind by dots the format does not carry — and a machine
+    /// restored from it would run on while the original had them still owed.
+    /// `testharness/savestate.rs` catches exactly that: it steps one
+    /// instruction at a time and compares. **A save state is an observation**,
+    /// so it brings the machine current first, which is also why this needed no
+    /// `savestate::FORMAT_VERSION` bump and every existing state still loads.
+    pub fn save_state(&mut self) -> Vec<u8> {
+        self.cpu.memory.flush_for_observer();
         self.cpu.save_state()
     }
 
@@ -917,6 +935,9 @@ impl Gameboy {
 
     /// Switch rendering engine live. See [`crate::gpu::Gpu::set_render_mode`].
     pub fn set_render_mode(&mut self, mode: crate::gpu::RenderMode) {
+        // The per-dot engine is stepped per bus access and never deferred, so
+        // hand the batched one what it is owed before the switch.
+        self.cpu.memory.flush_for_observer();
         self.cpu.memory.gpu.set_render_mode(mode)
     }
 
@@ -1111,7 +1132,7 @@ impl terminalgb_plugin_gen1_shinyhunt::hunt::HuntMachine for Gameboy {
         Gameboy::load_state(self, bytes).map_err(|e| e.to_string())
     }
 
-    fn save_state(&self) -> Vec<u8> {
+    fn save_state(&mut self) -> Vec<u8> {
         Gameboy::save_state(self)
     }
 

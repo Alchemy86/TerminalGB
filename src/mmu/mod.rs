@@ -448,6 +448,11 @@ pub struct MemoryManagementUnit<'a> {
     apu_budget: u32,
     /// `!oam_dma.idle()`, cached — see [`Self::bus_tick`].
     oam_dma_busy: bool,
+    /// Dots the PPU has been promised but not yet given, and the distance to
+    /// the next dot at which it could do something observable — see
+    /// [`Self::flush_gpu`].
+    gpu_owed: u32,
+    gpu_horizon: u32,
     /// The cartridge ROM, shared with the mapper rather than copied, and the
     /// byte offsets of the two windows the CPU sees — see [`Self::read_rom`].
     rom_share: std::sync::Arc<[u8]>,
@@ -601,6 +606,8 @@ impl<'a> MemoryManagementUnit<'a> {
             apu_pending: 0,
             apu_budget: 0,
             oam_dma_busy: false,
+            gpu_owed: 0,
+            gpu_horizon: 0,
             rom_share: std::sync::Arc::from(&[][..]),
             rom_lo: 0,
             rom_hi: 0,
@@ -1000,6 +1007,10 @@ impl<'a> MemoryManagementUnit<'a> {
             if self.ppu_ticks_with_the_bus
                 || self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
             {
+                // This hands the PPU dots directly, so anything the batched
+                // engine is still owed has to go in first or the two arrive out
+                // of order — 210 Gambatte rows say so.
+                self.flush_gpu();
                 let step = match self.gbspeed {
                     GbSpeed::Single => 4,
                     GbSpeed::Double => 2,
@@ -1038,6 +1049,8 @@ impl<'a> MemoryManagementUnit<'a> {
     /// M-cycles whether the CPU is busy with memory accesses or idling.
     #[inline]
     fn oam_dma_tick(&mut self) {
+        // The transfer writes OAM, which the PPU reads while it draws.
+        self.flush_gpu();
         if self.oam_dma.idle() {
             self.dma_bus = DmaBus::None;
             self.oam_dma_busy = false;
@@ -1099,6 +1112,31 @@ impl<'a> MemoryManagementUnit<'a> {
         } else {
             self.apu_budget = u32::MAX;
         }
+    }
+
+    /// Give the PPU the dots it is owed, and take a new horizon.
+    ///
+    /// The batched renderer pays a whole chunk of bookkeeping per *call* — the
+    /// line test, the three-way mode test, `refresh_stat_line` — however few
+    /// dots that call carries, and `Self::do_cycle` called it once per
+    /// instruction. Accumulating instead and applying them together is about a
+    /// third of a headless frame.
+    ///
+    /// **It is exact, not an approximation.** The bound is
+    /// [`Gpu::defer_dots`] — the distance to the next dot at which the PPU
+    /// does anything a CPU can see — and `Self::do_cycle` flushes on the
+    /// instruction whose own dots *reach* it, so a mode change, an `LY`
+    /// increment, a STAT or VBlank interrupt, `updated` and the HBlank latch
+    /// all land on exactly the instruction they landed on before. Everything
+    /// that reads the PPU out of turn flushes first: VRAM, OAM, the `$FF4x`
+    /// and `$FF6x` registers, a VRAM DMA, and the frontend's own accessors.
+    #[inline]
+    fn flush_gpu(&mut self) {
+        let owed = std::mem::take(&mut self.gpu_owed);
+        if owed > 0 {
+            self.gpu.do_cycle(owed);
+        }
+        self.gpu_horizon = self.gpu.defer_dots();
     }
 
     /// True when a CPU access to `address` lands on the bus OAM DMA is driving
@@ -1340,6 +1378,7 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     pub(crate) fn idu_tick(&mut self, value: u16) {
         if is_oam_page(value) {
+            self.flush_gpu();
             self.oam_bug(OamBug::Write, self.bus_ticked + 4);
         }
     }
@@ -1392,6 +1431,12 @@ impl<'a> MemoryManagementUnit<'a> {
     /// length-prefixed, self-describing block so a reader that lacks a `Sound`
     /// instance (wasm, or the headless core) can skip it — that is what lets a
     /// native state with audio load cleanly elsewhere.
+    /// The PPU must be current: [`Self::flush_gpu`] defers it between
+    /// observations and a save state is an observation.
+    pub(crate) fn flush_for_observer(&mut self) {
+        self.flush_gpu();
+    }
+
     pub(crate) fn save_state(&self, w: &mut crate::savestate::Writer) {
         w.bytes(&self.wram);
         w.bytes(&self.zram);
@@ -1486,6 +1531,8 @@ impl<'a> MemoryManagementUnit<'a> {
         self.timer.load_state(r)?;
         self.oam_dma.load_state(r)?;
         self.oam_dma_busy = !self.oam_dma.idle();
+        self.gpu_owed = 0;
+        self.gpu_horizon = 0;
         self.keypad.load_state(r)?;
         // SGB block. Only parsed when this machine is a Super Game Boy; the
         // length prefix means a DMG build skips it whole.
@@ -1577,7 +1624,13 @@ impl<'a> MemoryManagementUnit<'a> {
             crate::profile::count_idle_reason(2);
             return 1;
         }
-        let dots = self.gpu.idle_dots();
+        // **Measured against the PPU's true position, not its lagging one.**
+        // `flush_gpu` leaves it up to `gpu_owed` dots behind, and this horizon
+        // is a distance from where it *is*, so the owed dots have already been
+        // spent against it. Without the subtraction a halted CPU idles that
+        // much too long and wakes late — Gambatte's
+        // `halt/late_m0int_halt_m0stat_*` group counts it, 38 rows.
+        let dots = self.gpu.idle_dots().saturating_sub(self.gpu_owed);
         if dots == 0 {
             #[cfg(feature = "profile")]
             crate::profile::count_idle_reason(3);
@@ -1655,9 +1708,17 @@ impl<'a> MemoryManagementUnit<'a> {
 
         // Like the timer, the accurate PPU already advanced during this
         // instruction's memory accesses; apply only the remainder.
-        self.gpu
-            .do_cycle(gputicks.saturating_sub(self.gpu_bus_ticked));
+        self.gpu_owed += gputicks.saturating_sub(self.gpu_bus_ticked);
         self.gpu_bus_ticked = 0;
+        if self.gpu_owed >= self.gpu_horizon {
+            self.flush_gpu();
+        }
+        // **The fold stays here, at the end of the instruction, and does not
+        // move into `flush_gpu`.** A flush can now happen part-way through an
+        // instruction — a `$FF41` read will cause one — and folding there would
+        // hand the CPU a STAT interrupt earlier than the batched engine ever
+        // did. Gambatte's `miscmstatirq`, `lycEnable`, `m0enable` and `halt`
+        // groups count exactly that: 181 rows.
         if self.gpu.interrupt != 0 {
             self.intf |= self.gpu.interrupt;
             self.gpu.interrupt = 0;
@@ -1766,6 +1827,9 @@ impl<'a> MemoryManagementUnit<'a> {
         // guards the flag as well as the corruption: a debug peek of OAM must
         // neither corrupt it nor eat a pending `share_idu`.
         if is_oam_page(address) && self.bus_tick_enabled {
+            // The corruption is predicted from the PPU's own dot counter, so
+            // it must be current — see [`Self::flush_gpu`].
+            self.flush_gpu();
             // A read and an IDU increment sharing one M-cycle corrupt OAM
             // differently from a plain read — see `share_idu`.
             let kind = if std::mem::take(&mut self.idu_share) {
@@ -1796,6 +1860,7 @@ impl<'a> MemoryManagementUnit<'a> {
             // the CPU's own accesses: a debug peek routes through here with the
             // tick suppressed and must see the real byte.
             0x8000..=0x9FFF => {
+                self.flush_gpu();
                 if self.bus_tick_enabled && !self.gpu.cpu_can_read_vram() {
                     0xFF
                 } else {
@@ -1816,6 +1881,7 @@ impl<'a> MemoryManagementUnit<'a> {
             // It belongs to the PPU through modes 2 and 3 for the same reason
             // VRAM does — see [`Gpu::cpu_can_reach_oam`].
             0xFE00..=0xFE9F => {
+                self.flush_gpu();
                 if self.oam_dma.active()
                     || (self.bus_tick_enabled && !self.gpu.cpu_can_read_oam())
                 {
@@ -1866,9 +1932,15 @@ impl<'a> MemoryManagementUnit<'a> {
             // nothing mapped, so it reads `$FF` — which is what
             // `acceptance/boot_hwio-dmgABCmgb` expects and has always seen.
             0xFF50 => 0xFE | u8::from(!self.boot_active),
-            0xFF40..=0xFF4F => self.gpu.rb(address),
+            0xFF40..=0xFF4F => {
+                self.flush_gpu();
+                self.gpu.rb(address)
+            }
             0xFF51..=0xFF55 => self.hdma_read(address),
-            0xFF68..=0xFF6B => self.gpu.rb(address),
+            0xFF68..=0xFF6B => {
+                self.flush_gpu();
+                self.gpu.rb(address)
+            }
             0xFF70 => self.wrambank as u8,
             0xFF72..=0xFF73 => self.undocumented_cgb_regs[address as usize - 0xFF72],
             0xFF75 => self.undocumented_cgb_regs[2] | 0b10001111,
@@ -2053,6 +2125,7 @@ impl<'a> MemoryManagementUnit<'a> {
             }
             // Dropped outright through mode 3 — see [`Gpu::cpu_can_reach_vram`].
             0x8000..=0x9FFF => {
+                self.flush_gpu();
                 if !self.bus_tick_enabled || self.gpu.cpu_can_write_vram() {
                     self.gpu.wb(address, value)
                 }
@@ -2067,6 +2140,7 @@ impl<'a> MemoryManagementUnit<'a> {
                 a => self.wram[(self.wrambank * 0x1000) | (a as usize & 0x0FFF)] = value,
             },
             0xFE00..=0xFE9F => {
+                self.flush_gpu();
                 if !self.oam_dma.active()
                     && (!self.bus_tick_enabled || self.gpu.cpu_can_write_oam())
                 {
@@ -2125,9 +2199,15 @@ impl<'a> MemoryManagementUnit<'a> {
             // KEY1 bit 0 is a request, not a trigger: `STOP` performs the
             // switch. Writing 0 back withdraws it (only bit 0 is writable).
             0xFF4D => self.speed_switch_req = value & 0x1 == 0x1,
-            0xFF40..=0xFF4F => self.gpu.wb(address, value),
+            0xFF40..=0xFF4F => {
+                self.flush_gpu();
+                self.gpu.wb(address, value)
+            }
             0xFF51..=0xFF55 => self.hdma_write(address, value),
-            0xFF68..=0xFF6B => self.gpu.wb(address, value),
+            0xFF68..=0xFF6B => {
+                self.flush_gpu();
+                self.gpu.wb(address, value)
+            }
             0xFF0F => self.intf = value,
             0xFF70 => {
                 self.wrambank = match value & 0x7 {
@@ -2186,6 +2266,7 @@ impl<'a> MemoryManagementUnit<'a> {
             // otherwise every sound plays an octave high in CGB fast mode.
             // Flush first: the cycles owed were handed over at the old speed.
             self.flush_apu();
+            self.flush_gpu();
             if let Some(ref mut sound) = self.sound {
                 sound.set_double_speed(self.gbspeed == GbSpeed::Double);
             }
@@ -2251,6 +2332,10 @@ impl<'a> MemoryManagementUnit<'a> {
     }
 
     fn perform_vramdma(&mut self) -> u32 {
+        // Reads `may_hdma`, which is the HBlank-entry latch, and writes VRAM.
+        if self.hdma_status != DMAType::NoDma {
+            self.flush_gpu();
+        }
         match self.hdma_status {
             DMAType::NoDma => 0,
             DMAType::Gdma => self.perform_gdma(),

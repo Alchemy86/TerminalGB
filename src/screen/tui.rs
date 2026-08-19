@@ -3937,7 +3937,7 @@ impl App {
     /// the core just hands us bytes).
     fn save_slot(&mut self) {
         let slot = self.slot;
-        let result = self.session.as_ref().map(|s| {
+        let result = self.session.as_mut().map(|s| {
             let path = state_path(&s.gb.rom_title(), slot);
             let bytes = s.gb.save_state();
             (bytes.len(), std::fs::write(&path, &bytes))
