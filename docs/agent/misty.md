@@ -25,6 +25,51 @@ three.
 
 ---
 
+## 0. Certified
+
+The chain's standing gate, run in order from the certified link-25 exit pool,
+each link entering from the previous one's exits, `--idle-spread 3001`, every
+attempt a distinct trajectory, one binary throughout:
+
+| link | reached the goal | 95 % CI | entry states | |
+|---|---:|---|---:|---|
+| **26-heal-in-cerulean** | **3000/3000** | 100.0 [99.9-100.0] | 450 | |
+| **27-train-for-misty** | **3000/3000** | 100.0 [99.9-100.0] | 450 | seeds 0-2999, no gaps in the exit pool |
+| **28-heal-before-misty** | **3000/3000** | 100.0 [99.9-100.0] | 3000 | |
+| **29-fight-through-cerulean-gym** | **2222/3000** | **74.1 [72.5-75.6]** | 3000 | **accepted, not certified** — §2 |
+| **30-heal-after-misty** | see below | | 2222 | |
+
+**Four of the five clear the bar** — zero failures in 3,000 bounds the failure
+rate at about 0.10 % by the rule of three, which is the 99.9 % claim the rest of
+the chain carries. **The gym does not, and the reason is one starter line.**
+
+Split by the line the entry state carries:
+
+| line | beat Misty at level 24 | 95 % CI | failures |
+|---|---:|---|---:|
+| **IVYSAUR** | **1109/1112 = 99.7 %** | 99.2-99.9 | 3 |
+| **WARTORTLE** | **1113/1119 = 99.5 %** | 98.8-99.8 | 6 |
+| **CHARMELEON** | **0/769 = 0.0 %** | 0.0-0.5 | **769** |
+
+**Every one of the 778 failures is a loss to Misty**, and 769 of them are one
+line. Neither surviving line quite clears 99.9 % either — three and six losses
+in about eleven hundred each — so link 29 is **accepted rather than certified**,
+labelled that way permanently as link 11 is, and what is left is the fight's own
+variance rather than anything the route can move.
+
+**The whole chain runs cold cartridge to the Cascade Badge in one command**:
+
+```sh
+./target/release/examples/pewter_chain chain --rom <blue.gb> --seeds 3 --to 30
+...
+=== link 29: 29-fight-through-cerulean-gym
+seed 1: GOAL — 18162 frames, 167 decisions, ended on map 0x41 at (5, 2)
+```
+
+three seeds, thirty links, **4 m 57 s**.
+
+---
+
 ## 1. Misty, read out of the cartridge
 
 `TrainerDataPointers` (`0E:5D3B`, class 35 — `TrainerNames`' own 35th record is
@@ -174,6 +219,38 @@ one answer to "is this a status move anything can use" in the codebase, not two.
 
 Measured on a real run: WARTORTLE arrives at level 24 holding TACKLE, TAIL WHIP,
 BUBBLE, WATER GUN and leaves holding **TACKLE, BITE, BUBBLE, WATER GUN**.
+
+### The heal link had a hole, and HP was hiding it
+
+**A heal link's goal fires the instant the party is whole and the player is
+inside the building — so a party that arrives already whole never reaches the
+counter.** [`brock.md`](brock.md) §7 states that limit honestly and calls it a
+limit of the cartridge, which it is; what nobody had seen is that it has a
+*consequence*, because **HP is not the only thing `HealParty` restores**.
+
+Measured on the first certified link-28 pool: **41 of 219 IVYSAUR states arrived
+at the gym with VINE WHIP — its only move that answers WATER, and 10 PP — partly
+or wholly spent on Route 4's grass.** Nineteen per cent of link-27 exits happen
+to be at full HP, and every one of those walked past the nurse.
+
+| VINE WHIP PP on arriving at the gym | beat Misty |
+|---|---:|
+| **10, full** | **887/890 = 99.7 %** [99.0-99.9] |
+| short | 170/205 = 82.9 % [77.2-87.5] |
+| 0 | 17/35 = 48.6 % |
+
+So Ivysaur's first certified figure of **96.5 %** was a defect in link 28, not a
+weakness of the line — and the fix is one line: **link 29 talks to the nurse on
+its way out**, which link 28 cannot do because its own goal ends the run at the
+door. The previously failing seed 121 went from `party_hp=0` at 203 decisions to
+the goal at 136, and the line's certified rate went **96.5 % → 99.7 %**.
+
+**The same hole is in Brock's arc**, links 16 and 17, with the same shape: a
+Wartortle or an Ivysaur that arrives in Pewter whole enters that gym with
+whatever PP the Route 2 grind left it. Nothing here measures how much of
+`brock.md` §9's 88.6 % that is worth; re-certifying nine links is that arc's
+call, not this one's. **The general lesson is the one to carry: a goal that
+fires on arrival cannot force an interaction, and "whole" means more than HP.**
 
 ## 4. Where the training happens, and why not somewhere richer
 
