@@ -8,7 +8,10 @@ use std::path;
 /// and the optional 8 KiB of cartridge RAM is always visible, with no enable
 /// register. Pan Docs: <https://gbdev.io/pandocs/nombc.html>
 pub struct MBC0 {
-    rom: Vec<u8>,
+    /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
+    /// so the CPU's opcode fetch need not go through this trait object — one
+    /// allocation, two owners, no copy.
+    rom: std::sync::Arc<[u8]>,
     ram: Vec<u8>,
     battery: Battery,
 }
@@ -26,7 +29,7 @@ impl MBC0 {
             _ => Battery::none(),
         };
         let mut res = MBC0 {
-            rom: data,
+            rom: data.into(),
             ram: vec![0u8; rambanks * 0x2000],
             battery,
         };
@@ -57,6 +60,12 @@ impl MemoryBankController for MBC0 {
         // A homebrew or truncated ROM can be shorter than the 32 KiB window;
         // unmapped cartridge space reads as open bus, it does not panic.
         *self.rom.get(a as usize).unwrap_or(&0xFF)
+    }
+    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+        Some(self.rom.clone())
+    }
+    fn rom_window_bases(&self) -> (usize, usize) {
+        (0, 0x4000)
     }
     fn readrom_bank(&self, bank: usize, a: u16) -> u8 {
         super::banked_rom_byte(&self.rom, bank, a)

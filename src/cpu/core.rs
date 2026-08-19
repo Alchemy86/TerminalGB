@@ -212,7 +212,7 @@ impl Cpu<'_> {
         // println!("{} {}", op, format!("{:?}", self.registers));
     }
     pub fn get_byte(&mut self) -> u8 {
-        let pc = self.memory.rb(self.registers.pc);
+        let pc = self.memory.fetch(self.registers.pc);
         self.registers.pc = self.registers.pc.wrapping_add(1);
         pc
     }

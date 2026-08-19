@@ -5,7 +5,10 @@ use crate::mbc::{ram_banks, rom_banks, MemoryBankController};
 pub type StrResult<T> = Result<T, &'static str>;
 
 pub struct MBC1 {
-    rom: Vec<u8>,
+    /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
+    /// so the CPU's opcode fetch need not go through this trait object — one
+    /// allocation, two owners, no copy.
+    rom: std::sync::Arc<[u8]>,
     ram: Vec<u8>,
     ram_on: bool,
     banking_mode: u8,
@@ -94,7 +97,7 @@ impl MBC1 {
         };
 
         let mut res = MBC1 {
-            rom: data,
+            rom: data.into(),
             ram: vec![0u8; ramsize],
             ram_on: false,
             banking_mode: 0,
@@ -170,6 +173,17 @@ impl MemoryBankController for MBC1 {
         };
         let idx = (bank * 0x4000) | ((a as usize) & 0x3FFF);
         *self.rom.get(idx).unwrap_or(&0xFF)
+    }
+    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+        Some(self.rom.clone())
+    }
+    fn rom_window_bases(&self) -> (usize, usize) {
+        let lo = if self.banking_mode == 0 {
+            0
+        } else {
+            self.rombank & self.bank2_mask()
+        };
+        (lo * 0x4000, self.rombank * 0x4000)
     }
     fn readrom_bank(&self, bank: usize, a: u16) -> u8 {
         super::banked_rom_byte(&self.rom, bank, a)

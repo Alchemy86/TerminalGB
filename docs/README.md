@@ -65,6 +65,7 @@ and that had quietly happened to more than half of this directory.
 | [cartridges](measured/cartridges.md) | mappers, the clock, and the class of bug that eats somebody's save |
 | [the link port](measured/serial.md) | the half no ROM-driven suite can reach |
 | [the Super Game Boy](measured/sgb.md) | a joypad port that is also a command channel |
+| [against the field](measured/against-the-field.md) | other emulators built and timed here on the same core, ROM and clock — one claim held, one did not, and where the difference comes from |
 | [headless throughput](measured/throughput-baseline.md) | how fast the core runs with nothing attached, the method that reproduces it, and which of the two 1000× targets each number belongs to |
 | [the host boundary](measured/host.md) | defects that leave the framebuffer perfect — the pacing clock, the build, the audio device, the terminal |
 | [symptoms](measured/symptoms.md) | "my emulator does X" → what it actually is |

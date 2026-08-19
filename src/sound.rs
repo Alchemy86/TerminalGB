@@ -1800,6 +1800,39 @@ impl Sound {
     /// which is wired to the unmodified 4.194304 MHz clock — advances half as
     /// far. `cpu_frac` carries the odd tick so an odd `cycles` never loses
     /// time (the APU must stay exactly `cycles/2` behind, or pitch drifts).
+    /// How many **CPU** cycles this APU can be handed before [`Sound::do_cycle`]
+    /// would do anything but add to a counter.
+    ///
+    /// `do_cycle` advances `time` and `grid_phase` and then, once every
+    /// `output_period` (24344 T, about three times an emulated frame), runs the
+    /// channels and hands a block to the player. It is called **once per CPU
+    /// memory access** — 11,051 times a frame on Pokémon Blue's overworld — and
+    /// 99.7 % of those calls only add to the counter.
+    ///
+    /// This lets the caller batch those: accumulate the cycles, and flush only
+    /// when the accumulation reaches this budget or when something is about to
+    /// *observe* the APU. That is exact rather than approximate — the flush
+    /// lands on the same cycle `do_output` would have — which is why the answer
+    /// is a budget rather than "flush at the end of the instruction". See
+    /// [`MemoryManagementUnit::flush_apu`](crate::mmu::MemoryManagementUnit).
+    ///
+    /// `u32::MAX` when there is no player, because then `do_cycle` returns at
+    /// its first line and the clock is not running at all.
+    pub fn cycles_to_output(&self) -> u32 {
+        if self.player.is_none() {
+            return u32::MAX;
+        }
+        let need = self.output_period.saturating_sub(self.time).max(1);
+        if self.double_speed {
+            // `do_cycle` halves what it is handed, carrying the odd cycle in
+            // `cpu_frac`: it advances by `(cpu_frac + cycles) >> 1`, so it takes
+            // `2 * need - cpu_frac` CPU cycles to cover `need` APU ones.
+            (need * 2).saturating_sub(self.cpu_frac).max(1)
+        } else {
+            need
+        }
+    }
+
     pub fn do_cycle(&mut self, cycles: u32) {
         if self.player.is_none() {
             return;

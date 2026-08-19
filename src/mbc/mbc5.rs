@@ -5,7 +5,10 @@ pub type StrResult<T> = Result<T, &'static str>;
 use std::path;
 
 pub struct MBC5 {
-    rom: Vec<u8>,
+    /// Shared with [`MemoryManagementUnit`](crate::mmu::MemoryManagementUnit)
+    /// so the CPU's opcode fetch need not go through this trait object — one
+    /// allocation, two owners, no copy.
+    rom: std::sync::Arc<[u8]>,
     ram: Vec<u8>,
     rombank: usize,
     rambank: usize,
@@ -32,7 +35,7 @@ impl MBC5 {
         let rombanks = rom_banks(data[0x148], data.len());
 
         let mut res = MBC5 {
-            rom: data,
+            rom: data.into(),
             ram: vec![0u8; ramsize],
             rombank: 1,
             rambank: 0,
@@ -71,6 +74,12 @@ impl MemoryBankController for MBC5 {
             (self.rombank * 0x4000) | ((a as usize) & 0x3FFF)
         };
         *self.rom.get(idx).unwrap_or(&0)
+    }
+    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+        Some(self.rom.clone())
+    }
+    fn rom_window_bases(&self) -> (usize, usize) {
+        (0, self.rombank * 0x4000)
     }
     fn readrom_bank(&self, bank: usize, a: u16) -> u8 {
         super::banked_rom_byte(&self.rom, bank, a)

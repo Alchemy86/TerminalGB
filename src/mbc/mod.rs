@@ -69,6 +69,28 @@ pub trait MemoryBankController: Send {
     /// of the cartridge are open bus (`0xFF`), as in `readrom`.
     fn readrom_bank(&self, bank: usize, a: u16) -> u8;
 
+    /// The cartridge ROM, shared rather than copied.
+    ///
+    /// The CPU fetches every opcode through `$0000-$7FFF`, so that read was an
+    /// indirect call through this trait object several thousand times a frame —
+    /// 10 % of a headless collector's samples. The MMU keeps its own handle to
+    /// the same allocation and the offsets below, so a fetch is two loads and
+    /// an index. See
+    /// [`MemoryManagementUnit::read_rom`](crate::mmu::MemoryManagementUnit).
+    ///
+    /// `None` from a mapper that cannot express its window as a byte offset
+    /// into one slice, which simply keeps the old path.
+    fn rom_share(&self) -> Option<std::sync::Arc<[u8]>> {
+        None
+    }
+
+    /// Byte offsets into [`Self::rom_share`] of the two 16 KiB windows the CPU
+    /// currently sees at `$0000` and `$4000`. Re-read after every write into
+    /// `$0000-$7FFF`, which is the only thing that can move them.
+    fn rom_window_bases(&self) -> (usize, usize) {
+        (0, 0)
+    }
+
     /// Read from an explicitly numbered 8 KiB cartridge-RAM bank, ignoring the
     /// mapped bank and the RAM-enable gate, and **without touching any
     /// register**. The read-only sibling of [`Self::readram`], for the same

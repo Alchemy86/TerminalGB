@@ -442,6 +442,17 @@ pub struct MemoryManagementUnit<'a> {
     /// [`Self::wram_bus_address`]. Not serialised, for the same reason
     /// `dma_bus` is not: it is republished before anything can read it.
     dma_a12: bool,
+    /// CPU cycles the APU has been handed but not yet told about, and the
+    /// budget at which they must be — see [`Self::flush_apu`].
+    apu_pending: u32,
+    apu_budget: u32,
+    /// `!oam_dma.idle()`, cached — see [`Self::bus_tick`].
+    oam_dma_busy: bool,
+    /// The cartridge ROM, shared with the mapper rather than copied, and the
+    /// byte offsets of the two windows the CPU sees — see [`Self::read_rom`].
+    rom_share: std::sync::Arc<[u8]>,
+    rom_lo: usize,
+    rom_hi: usize,
     /// True on Color silicon, where the work RAM has a bus of its own rather
     /// than hanging off the cartridge bus. Cached from `gbmode` because
     /// [`Self::cpu_bus_of`] is on the memory-access path. Derived state, so it
@@ -587,6 +598,12 @@ impl<'a> MemoryManagementUnit<'a> {
             dma_index: 0,
             dma_write: DmaWrite::Cpu,
             dma_a12: false,
+            apu_pending: 0,
+            apu_budget: 0,
+            oam_dma_busy: false,
+            rom_share: std::sync::Arc::from(&[][..]),
+            rom_lo: 0,
+            rom_hi: 0,
             wram_own_bus: false,
             keypad: Keypad::default(),
             sgb: None,
@@ -616,6 +633,7 @@ impl<'a> MemoryManagementUnit<'a> {
             cart_rtc,
         };
         fill_random(&mut res.wram, 42);
+        res.refresh_rom_windows();
         Ok(res)
     }
 
@@ -709,7 +727,38 @@ impl<'a> MemoryManagementUnit<'a> {
     /// register and still reaches the cartridge, which is what the boot ROM's
     /// own logo check depends on.
     #[inline]
+    /// Re-take the mapper's ROM handle and window offsets. Called at
+    /// construction, after every write into `$0000-$7FFF` (the only thing that
+    /// can move a window) and after `load_state`.
+    fn refresh_rom_windows(&mut self) {
+        if let Some(rom) = self.mbc.rom_share() {
+            self.rom_share = rom;
+        }
+        let (lo, hi) = self.mbc.rom_window_bases();
+        self.rom_lo = lo;
+        self.rom_hi = hi;
+    }
+
     fn read_rom(&self, address: u16) -> u8 {
+        // The fetch path. Every opcode and every immediate comes through here,
+        // and it used to be an indirect call through `Box<dyn
+        // MemoryBankController>` — 10 % of a headless collector's samples. The
+        // mapper still decides which bank is mapped; it just publishes the
+        // answer as a byte offset (`MemoryBankController::rom_window_bases`,
+        // re-read after every write into `$0000-$7FFF`) into an allocation the
+        // MMU shares with it. **An index outside the ROM falls through to the
+        // mapper**, so each one keeps its own open-bus value — MBC5 answers `0`
+        // where the others answer `$FF`, and that difference is preserved.
+        if !self.boot_active {
+            let base = if address < 0x4000 {
+                self.rom_lo
+            } else {
+                self.rom_hi
+            };
+            if let Some(b) = self.rom_share.get(base | (address as usize & 0x3FFF)) {
+                return *b;
+            }
+        }
         if self.boot_active {
             if let Some(b) = self.boot.as_ref().and_then(|r| r.byte(address)) {
                 return b;
@@ -916,14 +965,21 @@ impl<'a> MemoryManagementUnit<'a> {
             #[cfg(not(feature = "profile"))]
             let (apu, dma) = (true, true);
             if apu {
-                if let Some(ref mut sound) = self.sound {
-                    sound.do_cycle(4);
+                // Accumulate, and only call the APU when it could do something
+                // other than add to a counter — see [`Self::flush_apu`].
+                self.apu_pending += 4;
+                if self.apu_pending >= self.apu_budget {
+                    self.flush_apu();
                 }
             }
             // `oam_dma_tick` returns immediately when nothing is running, but
             // *reaching* it is a call and a load from the far end of a 150 KiB
             // struct. Asking here keeps the common M-cycle straight-line.
-            if dma && !self.oam_dma.idle() {
+            // `OamDma::idle()` loads two fields from the far end of a 150 KiB
+            // struct, on every memory access, to answer "no" essentially
+            // always — 2.4 % of a collector's samples. The answer is cached
+            // beside the other per-access state instead.
+            if dma && self.oam_dma_busy {
                 self.oam_dma_tick();
             }
             // The accurate PPU is a per-dot machine, so it has to advance
@@ -984,6 +1040,7 @@ impl<'a> MemoryManagementUnit<'a> {
     fn oam_dma_tick(&mut self) {
         if self.oam_dma.idle() {
             self.dma_bus = DmaBus::None;
+            self.oam_dma_busy = false;
             return;
         }
         if let Some((page, i)) = self.oam_dma.step() {
@@ -1003,6 +1060,44 @@ impl<'a> MemoryManagementUnit<'a> {
             self.gpu.wb(0xFE00 + i as u16, b);
         } else {
             self.dma_bus = DmaBus::None;
+        }
+    }
+
+    /// Hand the APU the cycles it has been owed, and take a new budget.
+    ///
+    /// `Sound::do_cycle` is called once per CPU memory access — 11,051 times a
+    /// frame on Pokémon Blue's overworld — and **99.7 % of those calls do
+    /// nothing but add to a counter**: the APU only acts once every
+    /// `output_period` (24344 T, about three times a frame), and `Sound::run`
+    /// fires 31 times a frame against those 11,051 calls. The call itself was
+    /// 12.9 % of a collector's leaf samples.
+    ///
+    /// So `bus_tick` accumulates instead, and this is the only thing that
+    /// actually advances the APU clock. **It is exact, not an approximation**,
+    /// because the budget is `Sound::cycles_to_output` — the flush lands on the
+    /// same cycle `do_output` would have, so no sample moves and no register
+    /// read-back changes. The alternative that was tried first and rejected —
+    /// flushing at the end of the instruction — is cheaper still and is *not*
+    /// exact: it slides the sample stream by up to one instruction.
+    ///
+    /// Everything that observes the APU flushes first: `catch_up` before an
+    /// `NRxx`/wave-RAM read or write, `div_write` on a `$FF04` write, and the
+    /// instruction's own remainder in `Self::do_cycle`. Miss one and
+    /// `catch_up` synchronises to a stale `time`.
+    ///
+    /// The budget is zeroed rather than recomputed whenever the machine
+    /// changes underneath it (a player attached, a speed switch), so the next
+    /// access flushes and takes a fresh one.
+    #[inline]
+    fn flush_apu(&mut self) {
+        let pending = std::mem::take(&mut self.apu_pending);
+        if let Some(ref mut sound) = self.sound {
+            if pending > 0 {
+                sound.do_cycle(pending);
+            }
+            self.apu_budget = sound.cycles_to_output();
+        } else {
+            self.apu_budget = u32::MAX;
         }
     }
 
@@ -1390,6 +1485,7 @@ impl<'a> MemoryManagementUnit<'a> {
         self.serial.load_state(r)?;
         self.timer.load_state(r)?;
         self.oam_dma.load_state(r)?;
+        self.oam_dma_busy = !self.oam_dma.idle();
         self.keypad.load_state(r)?;
         // SGB block. Only parsed when this machine is a Super Game Boy; the
         // length prefix means a DMG build skips it whole.
@@ -1419,6 +1515,8 @@ impl<'a> MemoryManagementUnit<'a> {
         let mbc = r.blob()?;
         let mut mr = crate::savestate::Reader::new(&mbc);
         self.mbc.load_state(&mut mr)?;
+        // The mapper may have restored a different bank.
+        self.refresh_rom_windows();
         // A save-state load replaces cartridge RAM wholesale without the game
         // ever writing it, so the battery file has to be rewritten too — else
         // the next launch resurrects the pre-load save.
@@ -1537,22 +1635,35 @@ impl<'a> MemoryManagementUnit<'a> {
         #[cfg(not(feature = "profile"))]
         let dma = true;
         if dma {
-            self.oam_dma_cycles(timerticks);
+            if self.oam_dma_busy {
+                self.oam_dma_cycles(timerticks);
+            }
         }
-        self.intf |= self.timer.interrupt;
-        self.timer.interrupt = 0;
-        self.serial_shift();
+        if self.timer.interrupt != 0 {
+            self.intf |= self.timer.interrupt;
+            self.timer.interrupt = 0;
+        }
+        // Gated for the same reason `bus_tick` gates it: draining
+        // unconditionally dirties a cache line once per instruction for an
+        // event that happens ~137 times a frame.
+        if self.timer.serial_edge_pending() {
+            self.serial_shift();
+        }
 
-        self.intf |= self.keypad.interrupt;
-        self.keypad.interrupt = 0;
+        if self.keypad.interrupt != 0 {
+            self.intf |= self.keypad.interrupt;
+            self.keypad.interrupt = 0;
+        }
 
         // Like the timer, the accurate PPU already advanced during this
         // instruction's memory accesses; apply only the remainder.
         self.gpu
             .do_cycle(gputicks.saturating_sub(self.gpu_bus_ticked));
         self.gpu_bus_ticked = 0;
-        self.intf |= self.gpu.interrupt;
-        self.gpu.interrupt = 0;
+        if self.gpu.interrupt != 0 {
+            self.intf |= self.gpu.interrupt;
+            self.gpu.interrupt = 0;
+        }
 
         // Like the timer, the APU already advanced `bus_ticked` T-cycles
         // during this instruction's accesses (bus_tick); apply only the
@@ -1562,13 +1673,18 @@ impl<'a> MemoryManagementUnit<'a> {
         #[cfg(not(feature = "profile"))]
         let apu = true;
         if apu {
-            if let Some(ref mut sound) = self.sound {
-                sound.do_cycle(timerticks);
+            // The remainder of the instruction, plus whatever `bus_tick`
+            // accumulated — see [`Self::flush_apu`].
+            self.apu_pending += timerticks;
+            if self.apu_pending >= self.apu_budget {
+                self.flush_apu();
             }
         }
 
-        self.intf |= self.serial.interrupt;
-        self.serial.interrupt = 0;
+        if self.serial.interrupt != 0 {
+            self.intf |= self.serial.interrupt;
+            self.serial.interrupt = 0;
+        }
 
         // The cartridge's own crystal. `gputicks` is real time — it is already
         // divided by the CGB speed multiplier — which is what the clock on the
@@ -1613,6 +1729,41 @@ impl<'a> MemoryManagementUnit<'a> {
     // memory map: https://gbdev.io/pandocs/Memory_Map.html
     pub fn rb(&mut self, address: u16) -> u8 {
         self.bus_tick();
+        self.read_at(address)
+    }
+
+    /// The **opcode and immediate fetch**, which is the same read as
+    /// [`Self::rb`] with the arms a program counter cannot reach left out.
+    ///
+    /// `PC` spends essentially the whole of a game in ROM, and that read was
+    /// the single hottest line in a headless profile — the M-cycle hook, then
+    /// the OAM-corruption test, then the DMA-conflict test, then a match over
+    /// the whole address space, to reach the first arm. Here the common case is
+    /// the bus tick and two loads.
+    ///
+    /// **Everything it skips, it skips because it cannot apply**, and anything
+    /// it is not sure of falls through to the general path: the OAM bug fires
+    /// only for `$FE00-$FEFF`, the boot overlay and a DMA conflict are both
+    /// tested, and an index outside the ROM goes to the mapper so each one
+    /// keeps its own open-bus value.
+    #[inline]
+    pub fn fetch(&mut self, address: u16) -> u8 {
+        self.bus_tick();
+        if address < 0x8000 && !self.boot_active && !self.dma_conflict(address) {
+            let base = if address < 0x4000 {
+                self.rom_lo
+            } else {
+                self.rom_hi
+            };
+            if let Some(b) = self.rom_share.get(base | (address as usize & 0x3FFF)) {
+                return *b;
+            }
+        }
+        self.read_at(address)
+    }
+
+    /// [`Self::rb`] without the M-cycle — the dispatch itself.
+    fn read_at(&mut self, address: u16) -> u8 {
         // `bus_tick_enabled` is the "a CPU instruction is running" test, and it
         // guards the flag as well as the corruption: a debug peek of OAM must
         // neither corrupt it nor eat a pending `share_idu`.
@@ -1685,6 +1836,7 @@ impl<'a> MemoryManagementUnit<'a> {
                 // Catch the APU up to "now" first: NR52 status, length and
                 // sweep state are otherwise evaluated lazily in ~45 ms blocks
                 // and read stale (see Sound::catch_up).
+                self.flush_apu();
                 self.sound.as_mut().map_or(0xFF, |s| {
                     s.catch_up();
                     s.rb(address)
@@ -1725,10 +1877,13 @@ impl<'a> MemoryManagementUnit<'a> {
             // CGB PCM12/PCM34: the live 4-bit digital output of each
             // channel, low nibble first (CH1/CH3 low, CH2/CH4 high). Sample
             // accurate, so the APU has to be caught up to this very cycle.
-            0xFF76..=0xFF77 => self.sound.as_mut().map_or(0x00, |s| {
-                s.catch_up();
-                s.rb(address)
-            }),
+            0xFF76..=0xFF77 => {
+                self.flush_apu();
+                self.sound.as_mut().map_or(0x00, |s| {
+                    s.catch_up();
+                    s.rb(address)
+                })
+            }
             0xFF80..=0xFFFE => self.zram[address as usize & 0x007F],
             0xFFFF => self.inte,
             // `$FEA0-$FEFF` is on OAM's bus, so it is `$FF` whenever OAM is,
@@ -1894,7 +2049,10 @@ impl<'a> MemoryManagementUnit<'a> {
         }
         let value = commit.dispatch.unwrap_or(value);
         match address {
-            0x0000..=0x7FFF => self.mbc.writerom(address, value),
+            0x0000..=0x7FFF => {
+                self.mbc.writerom(address, value);
+                self.refresh_rom_windows();
+            }
             // Dropped outright through mode 3 — see [`Gpu::cpu_can_reach_vram`].
             0x8000..=0x9FFF => {
                 if !self.bus_tick_enabled || self.gpu.cpu_can_write_vram() {
@@ -1934,6 +2092,7 @@ impl<'a> MemoryManagementUnit<'a> {
                 // must be caught up to this cycle first, exactly as for a
                 // direct NRxx access.
                 if address == 0xFF04 {
+                    self.flush_apu();
                     if let Some(ref mut sound) = self.sound {
                         sound.catch_up();
                         sound.div_write();
@@ -1944,12 +2103,16 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF10..=0xFF3F => {
                 // Catch-up before the write so the frame-sequencer position
                 // the write interacts with is current (see Sound::catch_up).
+                self.flush_apu();
                 if let Some(ref mut sound) = self.sound {
                     sound.catch_up();
                     sound.wb(address, value);
                 }
             }
-            0xFF46 => self.oam_dma.request(value),
+            0xFF46 => {
+                self.oam_dma.request(value);
+                self.oam_dma_busy = !self.oam_dma.idle();
+            }
             // Writing bit 0 unmaps the boot ROM, for good: there is no way back
             // short of a reset, which is why the boot ROM's last instruction is
             // this write and the byte after it is the cartridge's `$0100`.
@@ -2023,9 +2186,12 @@ impl<'a> MemoryManagementUnit<'a> {
             // The APU is wired to the unmodified 4.194304 MHz clock, so it
             // must halve the CPU T-cycles it is handed at double speed —
             // otherwise every sound plays an octave high in CGB fast mode.
+            // Flush first: the cycles owed were handed over at the old speed.
+            self.flush_apu();
             if let Some(ref mut sound) = self.sound {
                 sound.set_double_speed(self.gbspeed == GbSpeed::Double);
             }
+            self.apu_budget = 0;
         }
         self.speed_switch_req = false;
     }
@@ -2142,6 +2308,7 @@ impl<'a> MemoryManagementUnit<'a> {
         let fresh = self.sound.is_none();
         if fresh {
             self.sound = Some(crate::sound::Sound::new());
+            self.apu_budget = 0;
         }
         let sound = self.sound.as_mut().unwrap();
         // DMG carts get DMG APU semantics (length counters survive power-off

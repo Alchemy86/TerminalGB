@@ -269,6 +269,10 @@ pub struct Gpu {
     sprite_size: u32,
     sprite_on: bool,
     lcdc0: bool,
+    /// `lyc_inte | m0_inte | m1_inte | m2_inte`, kept beside them so
+    /// [`Gpu::stat_signal`]'s early-out is one load. Derived, never
+    /// serialised — [`Gpu::refresh_any_inte`] is called wherever the four move.
+    any_inte: bool,
     lyc_inte: bool,
     m0_inte: bool,
     m1_inte: bool,
@@ -369,6 +373,7 @@ impl Gpu {
             sprite_size: 8,
             sprite_on: false,
             lcdc0: false,
+            any_inte: false,
             lyc_inte: false,
             m2_inte: false,
             m1_inte: false,
@@ -722,6 +727,7 @@ impl Gpu {
         self.m0_inte = r.bool()?;
         self.m1_inte = r.bool()?;
         self.m2_inte = r.bool()?;
+        self.refresh_any_inte();
         self.scy = r.u8()?;
         self.scx = r.u8()?;
         self.winy = r.u8()?;
@@ -1036,7 +1042,10 @@ impl Gpu {
         // With no source selected the line is low whatever the PPU is doing,
         // and this is asked once per instruction: on an in-order MIPS the four
         // loads and the OR are cheaper than reaching `lyc_signal`/`oam_strobe`.
-        if !(self.lyc_inte || self.m0_inte || self.m1_inte || self.m2_inte) {
+        // One packed test rather than four loads: this line is 4.5 % of a
+        // collector's samples on its own, because it runs on every
+        // `refresh_stat_line` and the answer is almost always "no source".
+        if !self.any_inte {
             return false;
         }
         (self.lyc_inte && self.lyc_signal())
@@ -1196,6 +1205,13 @@ impl Gpu {
     /// comparison clock is stopped, so the flag holds its last value and a
     /// write to `LYC` cannot change it (`acceptance/ppu/stat_lyc_onoff`
     /// rounds 1-3 read `STAT` back to prove exactly that).
+    /// Re-derive [`Gpu::any_inte`]. Call it wherever one of the four STAT
+    /// select bits moves — there is exactly one such place plus `load_state`.
+    #[inline]
+    fn refresh_any_inte(&mut self) {
+        self.any_inte = self.lyc_inte || self.m0_inte || self.m1_inte || self.m2_inte;
+    }
+
     fn refresh_lyc_match(&mut self) {
         self.lyc_match = self.line == self.lyc;
         self.refresh_stat_line();
@@ -1478,6 +1494,7 @@ impl Gpu {
                 self.m2_inte = v & 0x20 == 0x20;
                 self.m1_inte = v & 0x10 == 0x10;
                 self.m0_inte = v & 0x08 == 0x08;
+                self.refresh_any_inte();
                 // Enabling a source whose condition is *already* true raises
                 // the line here and now (`acceptance/ppu/stat_lyc_onoff`
                 // toggles STAT.6 while LY == LYC and counts the fires);
