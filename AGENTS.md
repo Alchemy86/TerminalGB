@@ -11248,6 +11248,59 @@ and nothing is cleared** — `$D356` `wObtainedBadges` `$01 → $03` (bit 1, `BI
 flags other links derived independently, and agreeing with them is what says the counting is
 right. **Pewter's gym also *cleared* two bits of `$D7EB`; Cerulean's clears nothing.**
 
+### Certified, and the one line that cannot pass
+
+The chain's standing gate, in order, each link entering from the previous one's
+exits, `--idle-spread 3001`, every attempt a distinct trajectory:
+
+| link | reached the goal | entry states |
+|---|---:|---:|
+| 26-heal-in-cerulean | **3000/3000** | 450 |
+| 27-train-for-misty | **3000/3000** (seeds 0-2999, no gaps) | 450 |
+| 28-heal-before-misty | **3000/3000** | 3000 |
+| **29-fight-through-cerulean-gym** | **2222/3000 = 74.1 %** | 3000 |
+| 30-heal-after-misty | see `docs/agent/misty.md` | 2222 |
+
+**Split by the line the entry state carries: IVYSAUR 1109/1112 (99.7 %),
+WARTORTLE 1113/1119 (99.5 %), CHARMELEON 0/769 (0.0 %).** Every one of the 778
+failures is a loss to Misty and 769 of them are one line, so **link 29 is
+accepted rather than certified** — labelled that way permanently, as link 11 is.
+Neither surviving line clears 99.9 % either (three and six losses in about
+eleven hundred each) and what is left there is the fight's own variance.
+
+**And no reachable level fixes the Charmander line**, measured rather than
+modelled — a Charmeleon-only pool trained on Route 4's grass through
+`scenarios/experiments/x-train-for-misty-30.json`: **0.0 % at level 20 (n=20),
+0.0 % at 24 (n=12), 8.3 % at 30 (n=12)**. A plateau, not a curve, and the same
+shape `brock.md` §10 measured for the same line at the other gym.
+
+### A HEAL LINK'S GOAL FIRES ON ARRIVAL, SO A PARTY THAT IS ALREADY WHOLE NEVER REACHES THE NURSE — AND HP IS NOT THE ONLY THING SHE RESTORES
+
+`brock.md` §7 states the limit honestly ("it cannot distinguish a party that
+healed from one that arrived whole") and calls it a limit of the cartridge,
+which it is. **What nobody had seen is that it has a consequence**, because
+`HealParty` refills PP as well as HP.
+
+Measured on the first certified link-28 pool: **41 of 219 IVYSAUR states reached
+the gym with VINE WHIP — its only move that answers WATER, and 10 PP — partly or
+wholly spent on Route 4's grass**, because nineteen per cent of link-27 exits
+happen to be at full HP and walked straight past the counter. **With a full VINE
+WHIP the line beats Misty 887 of 890 times; short of it 170 of 205; empty 17 of
+35.** So Ivysaur's first certified 96.5 % was a defect in link 28 rather than a
+weakness of the line.
+
+**The fix is one line and it belongs in the leg AFTER the heal**: link 29 walks
+to the counter on its way out (`Stage2::to_vec(POKECENTER)` where it used to be
+`LEAVE_POKECENTER`), because link 28 cannot — its own goal ends the run at the
+door. 96.5 % → **99.7 %**.
+
+**THE SAME HOLE IS IN BROCK'S ARC**, links 16 and 17, with the same shape: a
+lead that arrives in Pewter whole enters that gym with whatever PP the Route 2
+grind left it. Nothing here measures how much of `brock.md` §9's 88.6 % that is
+worth — re-certifying nine links is that arc's call. **The general rule is the
+one to carry: a goal that fires on arrival cannot force an interaction, and
+"whole" means more than HP.**
+
 ### Three tooling traps that cost a run each
 
 - **`--exits N` WRITES AN EXIT FOR A SEED BELOW N THAT SUCCEEDED, so a pool is `N × pass_rate`
@@ -11265,6 +11318,14 @@ right. **Pewter's gym also *cleared* two bits of `$D7EB`; Cerulean's clears noth
 - **A background job launched from a tool call dies with the call unless it is `setsid`.** Two
   pool builds were lost mid-link to this before `setsid nohup … & disown` stuck. `run_in_background`
   did not save it either.
+- **`pkill -f` AND `pgrep -f` MATCH YOUR OWN SHELL, AND HERE THAT KILLED A CERTIFICATION IN
+  FLIGHT — TWICE IN ONE SESSION.** This file already carries the warning and it was still walked
+  into: `pkill -f "fast.sh"` and then `for p in $(pgrep -f "/tmp/…/cert.sh")` each matched the
+  `zsh -c` running them, so the whole process group went — including a 3,000-attempt link-27 run
+  at 2,856 attempts and an unrelated corpus beside it. **List with `ps -eo pid,args | awk '/pat/
+  && !/awk/'` and kill the PIDs it prints.** The run was recoverable only because `--exits` writes
+  progressively: 2,856 exits were on disk, and a `--seed0 2856 --runs 144` tail plus a `cp -n`
+  completed the pool with no gaps.
 
 ## THE PUBLISHED FIGURES FOR LINKS 15 AND 17 DO NOT REPRODUCE ON THIS BASE
 
