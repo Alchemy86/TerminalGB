@@ -61,6 +61,25 @@ the mountain would hand Mt Moon B2F's two forced trainer battles — and Route
 SCRATCH. It waits until Cerulean, after the last fight the starter has to win
 and immediately before the leg that trains.
 
+### Adding a bench for the next gym is five edits
+
+Nothing below names a species, and the recipe is the test of whether the
+capability is general or PARAS-shaped:
+
+1. `duel.py --against <leader>` says **what** to catch and **at what level** —
+   and `gen1_tables.py --where <species>` and `--encounters <map>` say where and
+   in how many slots.
+2. One `Want` in `catch_wants`, one entry in `hunting`, one in `lead_with`.
+3. A hunt scenario whose goal is `watch:slot2_species=<internal index>`, and a
+   promotion scenario whose goal is `watch:lead_species=<the same>`.
+4. A `Finish::Grind` box in `route_for` on trainer-free ground, found the way §5
+   of [the cartridge page](../gen1/catch-and-train.md) finds this one.
+5. `train_to` for the level `duel.py` named, and the *next* leg's `lead_with`
+   entry so it closes the party menu the promotion's goal leaves open.
+
+`ChainDriver::reorder_party` and `ChainDriver::weakening_move` know nothing
+about any species at all.
+
 ## 1. Choosing the species is a cartridge read, and the obvious answer is wrong
 
 The full derivation is [`../gen1/catch-and-train.md`](../gen1/catch-and-train.md).
