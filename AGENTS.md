@@ -12087,3 +12087,22 @@ Session totals, cold-boot collector, interleaved on one P-core, **quiet box**:
 **0.0592 -> 0.0454 ms/frame, 283x -> 369x (+30.4 %)**, and **414x** with no APU installed.
 Aggregate on the same box: **four workers 1,066x, twenty workers 3,735x** — the per-instance
 figure rises only 28 % from one to twenty, which is the silicon-limited shape §9 describes.
+
+### `--breakdown` PROVES ITS "guest-visible" COLUMN NOW — and that closed the last structural question
+
+The note column was a **claim** about hardware, taken from `profile::Switches`' doc comments. It
+sits beside two **measurements** now: the WRAM hash and the frame hash each row ended on, against
+the baseline's. `same` means that row's work was invisible **to this workload**, whatever the
+note says — which is the question a performance mode actually turns on.
+
+**And the answer for the one liberty worth 17.7 % is NO.** On Pokémon Blue from an overworld
+state, `no bus tick` reads **`wram MOVED`**: the cartridge's own memory ends up different, so
+dropping the per-access tick is not a liberty no game can see. **The accuracy that costs
+`mem_timing` is accuracy this cartridge is using.** `no timer` is the same. The two rows that
+*are* free here — `no apu` and `no oam dma` — are worth 2.2 % and 1.1 %, which is not a mode.
+
+**So the two-budget rule has no big lever left on the standard path**, and the remaining headroom
+is the interpreter itself. Sizing from the captain's GBA table, a JIT is about 6x over a good
+interpreter — and worth stating: a JIT for a *cycle-accurate* emulator is materially harder,
+because you cannot reorder memory accesses whose sub-instruction timing is observable, which the
+`wram MOVED` row above proves is not hypothetical.

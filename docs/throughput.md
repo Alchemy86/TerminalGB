@@ -1271,7 +1271,35 @@ The PPU was the opposite case and that is why the same idea went 17.5 % one way 
 the other way here: the PPU pays a whole chunk of *bookkeeping* per call regardless of the dot
 count, and the timer pays per M-cycle because per M-cycle is what it does.
 
-### 16.7 Where the frame is now, and it is flat
+### 16.7 `--breakdown` proves its own "guest-visible" column now
+
+That column was a **claim** — a sentence in `profile::Switches`' doc comment about what hardware
+does. It now sits beside two that are a **measurement**: the WRAM hash and the frame hash the row
+ended on, against the baseline's. `same` means the row's work was invisible **to this workload**,
+whatever the note says about hardware, and that is the question a performance mode actually
+turns on.
+
+Run on Pokémon Blue from an overworld save state, 12,000 frames:
+
+| row | delta | wram | frame | note |
+|---|---:|---|---|---|
+| no pixels | +0.0 % | same | same | guest-INVISIBLE |
+| **no bus tick** | **+17.7 %** | **MOVED** | same | guest-visible |
+| **no timer** | **+13.3 %** | **MOVED** | same | guest-visible |
+| no idle batch | −35.4 % | same | same | guest-invisible |
+| no timer batch | −8.9 % | same | same | guest-invisible |
+| no apu | +2.2 % | same | same | guest-visible |
+| no oam dma | +1.1 % | same | same | guest-visible |
+
+**That settles the one structural liberty left.** Dropping the per-access tick is the largest
+single item on the page at 17.7 %, and the two-budget rule would allow a *performance mode* to
+take a liberty no game can see. **It is not one:** Pokémon Blue's own work RAM ends up different.
+The accuracy that costs `mem_timing` is accuracy this cartridge is using.
+
+The two rows that *are* free for this workload — `no apu` and `no oam dma` — are 2.2 % and 1.1 %,
+which is not a mode.
+
+### 16.8 Where the frame is now, and it is flat
 
 `eu-stack`, leaf frame, by source line, on a **quiet** box after §15 and §16:
 

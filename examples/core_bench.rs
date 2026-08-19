@@ -383,14 +383,16 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
     ];
 
     println!(
-        "{:<14} {:>10} {:>8} {:>12} {:>10}   {}",
-        "row", "ms/frame", "delta", "instr/frame", "scanlines", "note"
+        "{:<14} {:>10} {:>8} {:>12} {:>9} {:>9}   {}",
+        "row", "ms/frame", "delta", "instr/frame", "wram", "frame", "note"
     );
     let mut base_ms = 0.0f64;
     let mut base_counters = profile::Counters::default();
+    let mut base_hashes = (0u64, 0u64);
     for (name, sw, note) in rows {
         let mut best = f64::INFINITY;
         let mut counters = profile::Counters::default();
+        let mut hashes = (0u64, 0u64);
         for _ in 0..a.repeat.max(1) {
             let mut gb = Gameboy::new(rom.to_vec(), None);
             // Same machine `one_worker` builds: a collector's has a sound chip
@@ -418,6 +420,16 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
             if s < best {
                 best = s;
                 counters = c;
+                // What the cartridge could see. The `note` column *claims*
+                // guest-visible or not; these two say whether it was, for this
+                // workload, which is a different and more useful question — a
+                // row marked guest-visible whose WRAM hash never moves is a
+                // liberty a *performance* mode could take for this game.
+                let mut wram = Vec::with_capacity(0x2000);
+                for addr in 0xC000u32..0xE000 {
+                    wram.push(gb.peek(addr as u16));
+                }
+                hashes = (fnv1a(&wram), fnv1a(gb.image()));
             }
         }
         profile::set_switches(base);
@@ -425,16 +437,25 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
         if name == "baseline" {
             base_ms = ms;
             base_counters = counters;
+            base_hashes = hashes;
         }
         let delta = if name == "baseline" {
             "  —".to_string()
         } else {
             format!("{:+.1}%", (base_ms / ms - 1.0) * 100.0)
         };
+        let mark = |same: bool| {
+            if same || name == "baseline" {
+                "same"
+            } else {
+                "MOVED"
+            }
+        };
         println!(
-            "{name:<14} {ms:>10.4} {delta:>8} {:>12} {:>10}   {note}",
+            "{name:<14} {ms:>10.4} {delta:>8} {:>12} {:>9} {:>9}   {note}",
             counters.instructions / a.frames.max(1),
-            counters.scanlines / a.frames.max(1),
+            mark(hashes.0 == base_hashes.0),
+            mark(hashes.1 == base_hashes.1),
         );
     }
     println!();
@@ -453,6 +474,11 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
         base_counters.idle_reason[5],
     );
     println!("A row whose instr/frame differs from the baseline's is NOT an A/B.");
+    println!(
+        "`wram`/`frame` are what the cartridge and the screen ended up holding: \
+         `same` means this row's work was invisible TO THIS WORKLOAD, whatever \
+         the note says about hardware."
+    );
 }
 
 #[cfg(not(feature = "profile"))]
