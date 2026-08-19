@@ -1217,8 +1217,20 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         }
         // **The second link the chain has to WIN**, and the first where the
         // opposition is a type the starters mostly cannot answer.
+        // **This leg TALKS TO THE NURSE on its way out, and that is a
+        // repair.** A heal link's goal is `party_missing_hp=0` and being
+        // inside the building, and it fires the instant the player steps in —
+        // so a party that arrives already whole never reaches the counter.
+        // **HP is not the only thing a nurse restores**: `HealParty` refills
+        // PP too, and measured on the certified link-28 pool, 41 of 219
+        // IVYSAUR states arrive at this gym with VINE WHIP — its only move
+        // that answers WATER — partly or wholly spent on Route 4's grass.
+        // With a full 10 PP the line beats Misty 887 of 890 times; short of
+        // it, 170 of 205; empty, 17 of 35. The counter is ten decisions away
+        // and it cannot be reached from link 28, because that link's own goal
+        // ends the run at the door.
         "29-fight-through-cerulean-gym" => {
-            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(LEAVE_POKECENTER));
+            r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
             r.insert(CERULEAN_CITY, vec![stage(CERULEAN_TO_GYM, Finish::Arrive)]);
             r.insert(
                 CERULEAN_GYM,
