@@ -400,6 +400,14 @@ const MT_MOON_B1F_TO_B2F: &[(u8, u8)] = &[(7, 16), (21, 16), (21, 17)];
 /// all**; with either one gone there is. Measured by blocking every object
 /// tile and asking, and it is also why Gen 1 takes the other fossil away when
 /// you pick one up — a fossil left behind would wall the mountain.
+/// Up out of the ladder's landing and on to the hunting box.
+///
+/// Three tiles, straight up column 21 from (21,17) to (21,14). Rows 15 and 16
+/// carry it (`x` 20-27 and 20-29 respectively) and row 14 is the bottom of the
+/// box itself, so nothing here can wander into the cone of the trainer at
+/// (11,16), which faces **down** and covers column 11.
+const MT_MOON_B2F_TO_HUNT: &[(u8, u8)] = &[(21, 14)];
+
 const MT_MOON_B2F_TO_FOSSIL: &[(u8, u8)] = &[
     (23, 17),
     (23, 14),
@@ -1129,6 +1137,22 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
         "23-down-to-mt-moon-b2f" => {
             r.insert(MT_MOON_B1F, vec![stage(MT_MOON_B1F_TO_B2F, Finish::Arrive)]);
         }
+        // **The hunt.** The ladder from B1F lands at (21,17); column 21 runs
+        // clear from there up to y=14, and rows 12, 13 and 14 all run clear
+        // from x=20 to x=28 — a 9x3 box that no trainer's sight cone touches,
+        // out of the 299 tiles a cone-avoiding search reaches from the
+        // landing. PARAS is two of B2F's ten encounter slots against one of
+        // ten on either floor above, so this is the best ground the mountain
+        // has, and link 23 already ends standing on it.
+        "23b-hunt-a-paras" => {
+            r.insert(
+                MT_MOON_B2F,
+                vec![stage(
+                    MT_MOON_B2F_TO_HUNT,
+                    Finish::Grind((20, 12), (28, 14)),
+                )],
+            );
+        }
         // **The fossil, and the way out.** Two forced fights, one object that
         // has to be picked up because it is standing in the doorway, and then
         // the sixteen-tile pocket on the other side that is the only way out
@@ -1173,6 +1197,11 @@ fn route_for(scenario: &str, seed: u64) -> HashMap<u8, MapPlan> {
             );
             r.insert(CERULEAN_POKECENTER, Stage2::to_vec(POKECENTER));
         }
+        // **The swap, and nothing else.** The player is standing inside the
+        // Pokémon Center where link 26's goal fired, and the party menu opens
+        // from where you stand — so this leg has no route at all, which is
+        // exactly why it is separable from the walk that follows it.
+        "26b-lead-with-the-paras" => {}
         // **The third remedial link, and the third time the chain has arrived
         // at a gym short of what beats it.** Link 11 exists because Viridian
         // Forest's bug catchers beat a level 6 lead and link 15 because Brock
@@ -1320,7 +1349,10 @@ fn recover_route(scenario: &str) -> HashMap<u8, MapPlan> {
         // own route, and `ROUTE_4_TO_MT_MOON` is reachable from the Centre's
         // doorstep. The table being empty is the honest way to say so.
         "23-down-to-mt-moon-b2f" => into_the_mountain(&mut r),
-        "24-cross-mt-moon-b2f" => {
+        // The hunt wakes where link 24 does and needs the same walk back —
+        // down to B1F, along its first pocket and back down the one ladder
+        // that reaches the big B2F pocket.
+        "23b-hunt-a-paras" | "24-cross-mt-moon-b2f" => {
             into_the_mountain(&mut r);
             r.insert(MT_MOON_B1F, vec![stage(MT_MOON_B1F_TO_B2F, Finish::Arrive)]);
         }
@@ -1593,52 +1625,141 @@ mod item {
     pub const POTION_HEAL: u32 = 20;
 }
 
+/// PARAS' **internal** species index — `wPartySpecies`' own numbering, which
+/// is not its Pokédex number (46). `gen1_tables.py` reads both out of the
+/// cartridge and they differ for almost every species; mixing them is the
+/// classic Gen 1 mistake.
+const PARAS: u8 = 109;
+
 /// What each leg is prepared to spend a Poké Ball on.
 ///
-/// **The first time this chain has ever thrown one**, and it is a
-/// *measurement* that put it here rather than an ambition. Link 25's crossing
-/// of Mt Moon B2F loses attempts to a level-13 ZUBAT's SUPERSONIC: Gen 1
-/// confusion makes the lead hit itself for about a fifth of its bar a turn,
-/// there is no item in Pewter's stock that cures it, and the cartridge's only
-/// answer is to **switch out** — which needs a bench the chain has never had.
-/// Measured by starter line over sixty attempts of that leg with one Pokémon:
-/// CHARMELEON 19/19, WARTORTLE 20/21, **IVYSAUR 16/20**.
+/// # The species is a parameter, and choosing it is a cartridge read
 ///
-/// ZUBAT is the answer to its own problem and is the cheapest catch in the
-/// game: `gen1_tables.py --where zubat` puts it in five of B1F's ten
-/// encounter slots at levels 7-11, and its base catch rate is **255** — the
-/// maximum — so one Poké Ball at full health is already better than even.
-/// PARAS is worth a ball too, at one slot in ten, because it is the one thing
-/// on this road that answers *both* of Misty's Pokémon (`--plan misty`).
+/// This is one half of a **catch-and-train capability** — hunt a named
+/// species, put it in front ([`lead_with`]), train it ([`train_to`]) — and
+/// nothing in any of the three knows what PARAS is. Which species a leg wants
+/// is the only thing that changes, and it is chosen by reading the cartridge's
+/// own tables rather than from memory of the games: `gen1_tables.py
+/// --catch-for water` lists what is catchable that answers a WATER gym, and
+/// `--encounters` says on which floor and in how many slots.
+///
+/// # Why PARAS, when it is not the obvious answer
+///
+/// **The catch that beats a WATER gym has to RESIST water, and that means
+/// GRASS.** Put every candidate through Gen 1's own `CalculateDamage` against
+/// Misty's real party at the level the chain trains to
+/// (`docs/gen1/catch-and-train.md` §2 has the table and the command):
+///
+/// | catch | at 24 | vs STARYU | vs STARMIE |
+/// |---|---|---|---|
+/// | PARAS | **PARASECT** | 3 turns to kill, 16 to die | 4 to kill, **13 to die** |
+/// | ZUBAT | GOLBAT | 3 / 9 | 5 / 6 |
+/// | PIKACHU | PIKACHU | 2 / 5 | **4 / 3 — it loses** |
+///
+/// PARAS **evolves into PARASECT at exactly level 24**, which is the level the
+/// chain already trains to for the Squirtle line's BITE; and BUG/GRASS takes
+/// **half** damage from a STAB WATER GUN where ELECTRIC takes all of it. That
+/// second half is the whole difference: PIKACHU hits Misty for 2x and dies in
+/// three turns anyway, which is why an electric answer is a worse answer than
+/// a grass one however good the type chart looks going forwards.
 ///
 /// Species indices are **internal**, not Pokédex numbers: `gen1_tables.py`
 /// reads both out of the cartridge and they differ for almost every species.
 fn catch_wants(scenario: &str) -> &'static [terminalgb_plugin_agent::catch::Want] {
     use terminalgb_plugin_agent::catch::Want;
-    const ZUBAT: u8 = 107;
-    const PARAS: u8 = 109;
-    const MT_MOON: &[Want] = &[
-        Want {
-            species: PARAS,
-            cap: 1,
-            why: "BUG/GRASS answers both of Misty's, and it is one slot in ten",
-        },
-        Want {
-            species: ZUBAT,
-            cap: 1,
-            why: "a bench to switch to when the lead is confused, at catch rate 255",
-        },
-    ];
+    const PARAS_ONLY: &[Want] = &[Want {
+        species: PARAS,
+        cap: 1,
+        why: "BUG/GRASS resists a water gun and answers both of Misty's — \
+              see docs/gen1/catch-and-train.md",
+    }];
     match scenario {
-        // **The catch rides the walk it is already making.** A leg whose
-        // *goal* was `party>=2` was built and measured first and scored 56 of
-        // 60: the four failures spend their whole budget without ever
-        // throwing, because `catch::decide` refuses a throw that costs a turn
-        // the lead would not survive and there is no nurse inside the
-        // mountain. Hung off a walk that was already 60 of 60, the same catch
-        // costs nothing and risks nothing.
-        "23-down-to-mt-moon-b2f" => MT_MOON,
+        // **The hunt is the only thing in the mountain that throws a ball
+        // now, and that is a change from the leg that used to.** Link 23 used
+        // to catch a ZUBAT or a PARAS opportunistically, for a bench to switch
+        // to when a SUPERSONIC confused the lead. A hunted PARAS is that bench
+        // *and* the thing that beats Misty, so the ZUBAT bought nothing the
+        // PARAS does not — and every ball spent on one is a ball this leg does
+        // not have. Removing it also makes this leg's goal exact: the party is
+        // one on arrival, so `slot2_species` can only become a PARAS.
+        "23b-hunt-a-paras" => PARAS_ONLY,
         _ => &[],
+    }
+}
+
+/// The species a leg is **hunting**, as against catching if one wanders past.
+///
+/// # Why a hunt is a different thing from a catch, and needs one extra rule
+///
+/// [`terminalgb_plugin_agent::catch::decide`] answers `Weaken` below
+/// [`terminalgb_plugin_agent::catch::WEAKEN_BELOW`] — a third — because a ball
+/// thrown at a full-health target is worth less than one more turn of
+/// chipping. That is right, and on an *opportunistic* leg it costs nothing:
+/// the encounter is declined, the walk carries on, and another one comes
+/// along.
+///
+/// **A hunt cannot afford that, and the arithmetic says by how much.** PARAS
+/// is two slots in ten of a floor whose encounter rate is 10/256, so it is
+/// about one step in 128 — and a leg that answers `Weaken` and then runs away
+/// has thrown away the encounter it has been pacing for. So the one extra rule
+/// is: **fight the thing you are hunting, run from everything else.** Measured
+/// against the cartridge's own routine
+/// ([`terminalgb_plugin_trainer::capture`]): a full-health PARAS at catch rate
+/// 190 is a 25 % Poké Ball, which is under the third; at half health it is
+/// 50 %, which is over it.
+///
+/// Returns the **internal** species index, the same numbering
+/// [`terminalgb_plugin_agent::catch::Want`] uses.
+fn hunting(scenario: &str) -> Option<u8> {
+    match scenario {
+        "23b-hunt-a-paras" => Some(PARAS),
+        _ => None,
+    }
+}
+
+/// The species a leg must leave in **party slot one**.
+///
+/// # Why promoting is a capability of its own, and not part of the catch
+///
+/// Gen 1 sends out the first party member that has any HP, and experience goes
+/// to whatever was sent out. So a caught Pokémon on the bench cannot be
+/// trained at all: it has to lead first. The party menu's `SWITCH` is the
+/// cartridge's own way to say so, and [`ChainDriver::reorder_party`] is a
+/// driver stage over exactly that — no memory is written, so a leg that
+/// promotes still reports `clean`.
+///
+/// **It is deliberately a separate leg from the hunt.** The hunt's length is a
+/// geometric variable and the promotion is a dozen decisions and
+/// deterministic; folded together, a promotion bug reads as a hunt that never
+/// found anything, and one budget has to cover both.
+///
+/// **And WHERE it happens is a measured constraint, not a tidiness choice.**
+/// Promoting inside the mountain would hand Mt Moon B2F's two forced trainer
+/// battles — and Route 4's crossing after them — to a level 10-12 PARAS whose
+/// only move is a 40-power SCRATCH. The promotion therefore waits until
+/// Cerulean, after the last fight the starter has to win and immediately
+/// before the leg that trains.
+///
+/// **A leg that promotes nothing is not a failure here.** A hunt that came
+/// away empty leaves nothing to put in front; `reorder_party` says so and
+/// stands down, and the leg's own goal is what reports it.
+fn lead_with(scenario: &str) -> Option<u8> {
+    match scenario {
+        "26b-lead-with-the-paras" => Some(PARAS),
+        // **The leg that follows names it too, and that is a job rather than
+        // a duplication.** A promotion leg's goal is the party order, which
+        // the cartridge writes *inside* the party menu — so its exit state has
+        // the menu open, and the next leg starts on that frame. Left to the
+        // generic text handler that is a loop: A on a party list chooses, A in
+        // the overworld reopens the start menu, and a real run spent all 4,000
+        // of its decisions alternating between the two without taking a step.
+        // Naming the species here makes [`ChainDriver::reorder_party`] see the
+        // swap already done and back out to the overworld, which is exactly
+        // what `shopping_list` does for `19-east-to-route-3` and for the same
+        // reason. It is belt and braces as well: a leg whose promotion did not
+        // land still gets one.
+        "27-train-for-misty" => Some(PARAS),
+        _ => None,
     }
 }
 
@@ -2076,6 +2197,24 @@ pub struct ChainDriver {
     /// but the one that catches, and an empty list means `catch::decide` is
     /// never even asked.
     wants: &'static [terminalgb_plugin_agent::catch::Want],
+    /// The species this leg is **hunting**, if it is hunting rather than
+    /// catching opportunistically. See [`hunting`].
+    hunting: Option<u8>,
+    /// The species this leg must leave in party slot one, and how many
+    /// decisions the party menu has already cost. See [`lead_with`].
+    promote: Option<u8>,
+    promote_tries: u32,
+    /// Which half of the swap the party menu is in: `false` while the caught
+    /// one is still being picked, `true` once `SWITCH` has been chosen and the
+    /// cursor is looking for the slot to swap it with.
+    ///
+    /// **It is a flag rather than something read off the screen because Gen 1
+    /// draws the same list both times.** `SwitchPartyMon` prints nothing new
+    /// — the second pass is the same twenty rows with the same cursor — so
+    /// there is no text that distinguishes them. It is reset every time the
+    /// start menu comes back into view, so a swallowed press costs one trip
+    /// through the menu rather than wedging the leg.
+    promote_swapping: bool,
     /// How many the party held at the last decision, so a catch can be counted
     /// where it lands rather than where a ball leaves the bag.
     party_seen: usize,
@@ -2109,6 +2248,17 @@ struct ItemUse {
     /// Said in the plan, so a trace names why the bag was opened at all.
     why: &'static str,
 }
+
+/// How many decisions one trip through the party menu may cost before the
+/// promotion is given up on.
+///
+/// The honest cost is about a dozen: START, one cursor move to POKéMON, A, up
+/// to five moves down the list, A, one move to SWITCH, A, up to five moves
+/// back up, A, and a B to close it. Forty is three times that, and it is spent
+/// against a leg whose only job is the swap — so a promotion that has not
+/// landed by then is a bug to be reported by a failed goal, not something to
+/// keep pressing at.
+const PROMOTE_BUDGET: u32 = 40;
 
 /// How many decisions one trip through the bag may cost before it is given up
 /// on. Measured on a real counter: START, three cursor moves, A, A, A and four
@@ -2287,6 +2437,10 @@ impl ChainDriver {
             train_to: train_to(scenario),
             shopping: shopping_list(scenario),
             wants: catch_wants(scenario),
+            hunting: hunting(scenario),
+            promote: lead_with(scenario),
+            promote_tries: 0,
+            promote_swapping: false,
             party_seen: 0,
             item_use: None,
             item_failures: 0,
@@ -2405,6 +2559,14 @@ impl ChainDriver {
         //     start menu is the Pokédex and in the bag is whatever the cursor
         //     happens to be on.
         if let Some(plan) = self.use_item(s) {
+            return plan;
+        }
+        // 2d. The party menu, for the same reason again and for the leg whose
+        //     whole job it is. A caught Pokémon on the bench earns nothing —
+        //     Gen 1 sends out the first party member with HP — so a leg that
+        //     means to train one has to put it in front first. See
+        //     [`ChainDriver::reorder_party`].
+        if let Some(plan) = self.reorder_party(s) {
             return plan;
         }
         // 3. A menu or a conversation. `advance_text` refuses to press A on the
@@ -2627,6 +2789,123 @@ impl ChainDriver {
         }
         // The message the item printed. B, not A: A on "was cured of poison!"
         // leaves the box exactly where it is — measured.
+        Some(Plan::new("Read it and close it.").press("b", 1).finish())
+    }
+
+    /// Leave [`lead_with`]'s species in party slot one, through the party
+    /// menu's own `SWITCH`.
+    ///
+    /// # Why this is a driver stage and not a memory write
+    ///
+    /// Gen 1 sends out the first party member that has any HP, and experience
+    /// goes to whatever was sent out — so a caught Pokémon on the bench can
+    /// never be trained. The cartridge's own answer is `SwitchPartyMon`
+    /// (`engine/menus/party_menu.asm`), reached from START → POKéMON → A →
+    /// `SWITCH`, and driving that leaves the leg `clean`: nothing is written,
+    /// the game does the swap, and every byte it touches it would have touched
+    /// for a player.
+    ///
+    /// # The five screens, and the one that cannot be told apart from another
+    ///
+    /// | says | is | answer |
+    /// |---|---|---|
+    /// | nothing (`no-text`) | the overworld | START |
+    /// | `SAVE` and `OPTION` | the start menu | towards POKéMON, then A |
+    /// | `SWITCH` | STATS / SWITCH / CANCEL, drawn **over** the party list | towards SWITCH, then A |
+    /// | a menu | the party list | towards the wanted slot, then A |
+    ///
+    /// `SWITCH` has to be tested before the list, for the same reason
+    /// [`ChainDriver::use_item`] tests `TOSS` before the bag: the submenu is
+    /// drawn on top of the list it came from, so the list's own rows are still
+    /// on screen and only the submenu's own word says which screen this is.
+    ///
+    /// **The two passes over the party list are identical on screen** —
+    /// `SwitchPartyMon` prints nothing and redraws the same rows — so which
+    /// one this is comes from [`ChainDriver::promote_swapping`], set when
+    /// `SWITCH` is chosen and cleared whenever the start menu comes back.
+    ///
+    /// # The completion signal is the party, never the screen
+    ///
+    /// The same rule the shop and the bag already follow: `s.party_species[0]`
+    /// is what `AddPartyMon` and `SwitchPartyMon` actually write, and it is
+    /// what the leg's own goal is read from. A message on screen is a sentence
+    /// about the swap; the order is the swap.
+    fn reorder_party(&mut self, s: &Snap) -> Option<String> {
+        let want = self.promote?;
+        // **Not held is not a failure here, and it must not become a loop.**
+        // A hunt that came away empty leaves nothing to promote; the leg's
+        // goal says so, and opening the menu forty times to discover it again
+        // would spend the budget that a retry of the hunt would want.
+        let Some(at) = s.party_species.iter().position(|&x| x == want) else {
+            self.promote = None;
+            return None;
+        };
+        let done = at == 0;
+        if done || self.promote_tries > PROMOTE_BUDGET {
+            // Whichever way it went, the walk resumes in the overworld — so
+            // back out of whatever is still on screen first.
+            if s.kind == "no-text" {
+                use std::sync::atomic::Ordering::Relaxed;
+                if done {
+                    tally::PROMOTED.fetch_add(1, Relaxed);
+                } else {
+                    tally::PROMOTE_GAVE_UP.fetch_add(1, Relaxed);
+                }
+                self.promote = None;
+                return None;
+            }
+            return Some(Plan::new("Put the menu away.").press("b", 1).finish());
+        }
+        self.promote_tries += 1;
+        if s.kind == "no-text" {
+            self.promote_swapping = false;
+            return Some(
+                Plan::new("Lead with the one we caught, so it is the one that trains.")
+                    .press("start", 1)
+                    .finish(),
+            );
+        }
+        // The start menu. **Which entries sit above POKéMON is the test**, the
+        // same way [`ChainDriver::use_item`] finds ITEM: POKéDEX is the only
+        // row above it, and every row below reads neither `DEX` nor `MON`.
+        // The player's own name is one of those rows, which is why this asks
+        // for `MON` rather than for anything a name could collide with — the
+        // introduction picks from the cartridge's own preset list, and none of
+        // those six is `MON` or `DEX`.
+        if s.said("SAVE") && s.said("OPTION") {
+            self.promote_swapping = false;
+            let sel = s.selected.to_ascii_uppercase();
+            if sel.contains("MON") && !sel.contains("DEX") {
+                return Some(Plan::new("Open the party.").press("a", 1).finish());
+            }
+            let d = if sel.contains("DEX") { "down" } else { "up" };
+            return Some(Plan::new("Towards POKéMON.").press(d, 1).finish());
+        }
+        // STATS / SWITCH / CANCEL, over the list it came from.
+        if s.said("SWITCH") {
+            let sel = s.selected.to_ascii_uppercase();
+            if sel.contains("SWITCH") {
+                self.promote_swapping = true;
+                return Some(Plan::new("Switch it.").press("a", 1).finish());
+            }
+            let d = if sel.contains("STATS") { "down" } else { "up" };
+            return Some(Plan::new("Towards SWITCH.").press(d, 1).finish());
+        }
+        if s.kind == "menu" {
+            // Pass one picks the caught one; pass two picks the slot to put it
+            // in, which is the front.
+            let want_row = if self.promote_swapping { 0 } else { at };
+            let row = s.menu_scroll + s.menu_index;
+            let (say, key) = match row.cmp(&want_row) {
+                std::cmp::Ordering::Less => ("Down the party.", "down"),
+                std::cmp::Ordering::Greater => ("Back up the party.", "up"),
+                std::cmp::Ordering::Equal if self.promote_swapping => ("Put it in front.", "a"),
+                std::cmp::Ordering::Equal => ("This is the one.", "a"),
+            };
+            return Some(Plan::new(say).press(key, 1).finish());
+        }
+        // A message the swap printed, or a box still typing. B, not A: A on a
+        // menu chooses, and everything here is one keypress from a menu.
         Some(Plan::new("Read it and close it.").press("b", 1).finish())
     }
 
@@ -2994,9 +3273,19 @@ impl ChainDriver {
             // nothing to decide from, so let it.
             return Plan::new("Let the battle settle.").wait(16).finish();
         };
+        // **A hunt fights the thing it is hunting, and runs from everything
+        // else.** The leg's own `fight_wild` is `false` — a mountain has no
+        // nurse in it and a Zubat is worth nothing — but the one encounter the
+        // leg exists for has to be chipped down before a ball is worth
+        // throwing, and `catch::decide` says so itself by answering `Weaken`.
+        // Without this the hunt declines the encounter it has been walking a
+        // hundred and twenty-eight steps for. See [`hunting`].
+        let hunted = self
+            .hunting
+            .is_some_and(|sp| view.theirs.species == sp && s.battle.as_deref() == Some("wild"));
         let intent = terminalgb_plugin_agent::battle::Intent {
-            may_fight_wild: self.fight_wild,
-            train_to: self.train_to as u8,
+            may_fight_wild: self.fight_wild || hunted,
+            train_to: if hunted { 100 } else { self.train_to as u8 },
         };
         // How many turns have already gone on a stat move is the driver's
         // count; the cartridge keeps none, so the view carries ours.
@@ -3599,6 +3888,10 @@ mod tally {
         BAG_GAVE_UP,
         THROWN,
         CAUGHT,
+        // The party menu, which is where a caught Pokémon stops being a
+        // passenger and starts being the one that trains.
+        PROMOTED,
+        PROMOTE_GAVE_UP,
     );
 
     pub fn bump(c: &AtomicU64, by: u64) {
@@ -3614,7 +3907,7 @@ mod tally {
     pub fn bag_report() -> Option<String> {
         let (c, d, g) = (get(&CURED), get(&DRANK), get(&BAG_GAVE_UP));
         let (t, k) = (get(&THROWN), get(&CAUGHT));
-        if c + d + g + t == 0 {
+        if c + d + g + t + get(&PROMOTED) + get(&PROMOTE_GAVE_UP) == 0 {
             return None;
         }
         // **A catch is only ever *seen* here on a leg that keeps playing
@@ -3627,9 +3920,19 @@ mod tally {
             (t, 0) => format!("; {t} ball(s) thrown"),
             (t, k) => format!("; {t} ball(s) thrown, {k} catch(es) seen land"),
         };
+        // **The promotion is reported separately from the catch**, because
+        // the two fail for different reasons and a leg that caught something
+        // and could not lead with it is a party-menu bug, not a hunt that came
+        // away empty.
+        let (p, pg) = (get(&PROMOTED), get(&PROMOTE_GAVE_UP));
+        let swap = match (p, pg) {
+            (0, 0) => String::new(),
+            (p, 0) => format!("; {p} promoted to the front"),
+            (p, pg) => format!("; {p} promoted to the front, {pg} gave up on the party menu"),
+        };
         Some(format!(
             "the bag, in the overworld: {c} cure(s), {d} drink(s), \
-             {g} trip(s) through it abandoned{balls}"
+             {g} trip(s) through it abandoned{balls}{swap}"
         ))
     }
 

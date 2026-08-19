@@ -12,15 +12,15 @@
     "battle decide",
     "require party>=1",
     "require badges>=1",
-    "max_calls 4000",
-    "max_wall_seconds 5400"
+    "max_calls 16000",
+    "max_wall_seconds 14400"
   ],
   "knowledge": [
     "atlas",
     "guidance"
   ],
   "guidance": "guidance/27-train-for-misty.json",
-  "timeout_frames": 1500000,
+  "timeout_frames": 4000000,
   "watch": [
     "lead_level"
   ],

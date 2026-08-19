@@ -1,0 +1,39 @@
+{
+  "schema": "gbscenario/1",
+  "name": "23b-hunt-a-paras",
+  "objective": "Stand in Mt Moon B2F's safe pocket until a PARAS appears, weaken it and catch it - the bench the Charmander line needs to take the Cascade Badge, and a better bench than a ZUBAT for every line.",
+  "start_state": "states/23.gbss",
+  "goal": [
+    "watch:slot2_species=109"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle decide",
+    "require party>=1",
+    "require badges>=1",
+    "max_calls 1500",
+    "max_wall_seconds 2400"
+  ],
+  "watch": [
+    {
+      "name": "slot2_species",
+      "addr": "0xD165",
+      "len": 1
+    }
+  ],
+  "knowledge": [
+    "atlas",
+    "guidance"
+  ],
+  "guidance": "guidance/23b-hunt-a-paras.json",
+  "timeout_frames": 900000,
+  "evidence": [
+    "watch:slot2_species=109 - wPartySpecies $D164 is seven bytes, one INTERNAL species index per slot and a $FF terminator (AtlasGB pokemon-rb, wPartySpecies, len 7); slot two is therefore $D165. 109 is PARAS' internal index, which gen1_tables.py reads out of MonsterNames on the cartridge in hand and which is NOT its Pokedex number 46 - mixing the two is the classic Gen 1 mistake.",
+    "THE GOAL NAMES THE SPECIES AND THE SLOT, NOT `party>=2`, AND THAT IS THE WHOLE POINT. A goal satisfiable at entry is a goal that measures nothing (docs/agent/misty.md's own lesson about link 28). Link 23 no longer catches anything at all, so the party is exactly one on arrival here and the only thing that can join it is what this leg throws a ball at - which is a PARAS and nothing else.",
+    "PARAS IS ON THIS FLOOR AND NOWHERE BETTER ON THE CHAIN'S ROUTE. gen1_tables.py --encounters reads WildDataPointers: Mt Moon 1F (0x3B) has PARAS in 1 of 10 slots at level 8, B1F (0x3C) 1 of 10 at level 10, and B2F (0x3D) 2 OF 10 at levels 10-12. All three floors carry a grass rate of 10/256, so B2F is twice the density and the higher level, and link 23 already ends standing on it.",
+    "THE PACING BOX IS x=20-28 y=12-14 AND IT IS TRAINER-FREE. B2F declares five trainers - (12,8) facing right, (11,16) and (15,22) facing down, (29,11) facing up, (29,17) facing left. Blocking every one of their sight cones out to eight tiles and running a breadth-first search from the ladder's landing at (21,17) over the cartridge's own walkability grid leaves 299 reachable tiles; rows 12, 13 and 14 all run clear from x=20 to x=28, so that 9x3 rectangle is a full box no cone touches. Column 21 from y=17 up to y=14 is the walk on to it.",
+    "A HUNT IS NOT A CATCH AND NEEDS ONE EXTRA RULE. catch::decide answers Weaken below a third of full health because a ball thrown at a full-health target is worth less than one more turn of chipping - right on a leg that catches whatever wanders past, and wrong here, where the encounter being declined IS the one the leg has been pacing for. PARAS is 2 slots in 10 of a floor whose rate is 10/256, i.e. about one step in 128. So this leg fights the thing it is hunting and runs from everything else.",
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, the same model links 20 to 25 carry: the party faints, the cartridge puts the player in the Mt Moon Pokemon Center whole, and the walk back down is recover_route's job."
+  ]
+}

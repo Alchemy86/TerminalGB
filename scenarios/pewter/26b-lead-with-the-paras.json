@@ -1,0 +1,31 @@
+{
+  "schema": "gbscenario/1",
+  "name": "26b-lead-with-the-paras",
+  "objective": "Put the caught PARAS in party slot one through the party menu's own SWITCH, so that it is the one that trains - Gen 1 sends out the first party member with HP, and experience goes to whatever was sent out.",
+  "start_state": "states/26.gbss",
+  "goal": [
+    "watch:lead_species=109"
+  ],
+  "failure": [],
+  "rules": [
+    "no_memory_writes",
+    "battle flee",
+    "require party>=2",
+    "require badges>=1",
+    "max_calls 200",
+    "max_wall_seconds 600"
+  ],
+  "watch": [
+    "lead_species"
+  ],
+  "knowledge": [
+    "atlas"
+  ],
+  "timeout_frames": 120000,
+  "evidence": [
+    "watch:lead_species=109 - the built-in lead_species watch reads wPartyMon1's own species byte at wPartyMons $D16B, which is the INTERNAL index; 109 is PARAS. It is the byte SwitchPartyMon writes, so the goal is the swap itself and not a message about it.",
+    "NO MEMORY IS WRITTEN AND THE RULE SAYS SO. The swap is driven through the cartridge's own party menu - START, POKeMON, A on the caught one, SWITCH, A on the front - which is engine/menus/party_menu.asm's SwitchPartyMon. Every byte it touches it would have touched for a player, so the leg reports clean.",
+    "IT IS A LEG OF ITS OWN, AND WHERE IT SITS IS A MEASURED CONSTRAINT. Promoting inside the mountain would hand Mt Moon B2F's two forced trainer battles - and Route 4's crossing after them - to a level 10-12 PARAS whose only move is a 40-power SCRATCH. The promotion therefore waits until Cerulean, after the last fight the starter has to win and immediately before the leg that trains.",
+    "THE PARTY MENU IS FIVE SCREENS AND TWO OF THEM CANNOT BE TOLD APART. STATS/SWITCH/CANCEL is drawn over the party list it came from, so the list's own rows are still on screen and only the word SWITCH says which screen this is - the same trap ChainDriver::use_item records for USE/TOSS over the bag. And SwitchPartyMon prints nothing at all on its second pass, so which of the two identical lists is on screen is the driver's own flag rather than anything readable."
+  ]
+}
