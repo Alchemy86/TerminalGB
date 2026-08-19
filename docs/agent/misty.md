@@ -87,6 +87,32 @@ That is [`brock.md`](brock.md) §2's table with the lines rearranged, which is
 exactly what a WATER gym should do to it. It is also the argument for link 27:
 Wartortle at 20 is a coin flip and at 24 it is not.
 
+### And no reachable level fixes the Charmander line
+
+Sweeping the threshold on a Charmeleon-only pool — 60 of the certified link-26
+pool's own Charmeleon states, trained on Route 4's grass through
+`scenarios/experiments/x-train-for-misty-30.json` and then put through links 28
+and 29 unchanged:
+
+| level | beat Misty | n | 95% CI | what it holds |
+|---:|---:|---:|---|---|
+| 20 | **0.0%** | 20 | 0.0-16.1 | SCRATCH, GROWL, EMBER, LEER |
+| **24** — the committed threshold | **0.0%** | 12 | 0.0-24.2 | SCRATCH, GROWL, EMBER, RAGE |
+| 30 | **8.3%** | 12 | 1.5-35.4 | SCRATCH, GROWL, EMBER, RAGE |
+
+**A plateau rather than a curve**, which is the same shape
+[`brock.md`](brock.md) §10 measured for the same line at the other gym — and ten
+levels there bought 32 points where ten levels here buy eight. The reason is the
+same both times and it is not a number: WATER GUN is 2× on FIRE, so a level 30
+Charmeleon with 88 HP still loses three of them a turn while its own best answer
+is a 40-power SCRATCH at 1×.
+
+**The level 24 and level 30 rows also hold RAGE**, which the move-learn handler
+took at level 24 over LEER. That is the criterion applied faithfully — clause 2
+puts a status move ahead of any attack — and it is a lateral move at best: RAGE
+is 20 power against SCRATCH's 40, and `battle::decide` never chooses it. Worth
+saying rather than presenting the criterion as having improved something.
+
 **The pool itself carries a finding.** Its 3,000 states are IVYSAUR 1112,
 WARTORTLE 1119 and **CHARMELEON 769** — the Charmander line is under-represented
 arriving in Cerulean because Brock's gym has already cost it a third of its runs
