@@ -90,7 +90,14 @@ The short of it, from `duel.py --against misty --levels 24`:
 | **PARAS** | **PARASECT** | 4 | 13 | **WIN** |
 | PIKACHU | PIKACHU | 4 | 3 | lose |
 | BELLSPROUT | WEEPINBELL | 15 | 9 | lose |
-| ZUBAT | GOLBAT | 5 | 6 | edge |
+| ZUBAT | GOLBAT | 5 | 6 | wins, by one turn |
+
+The BELLSPROUT row is the caught-at-24 moveset; one caught at 12 and *trained*
+keeps VINE WHIP and beats Misty from 21 — it is out on **geography**, because
+Route 24's grass is unreachable without Nugget Bridge's seven trainers. A
+narrow margin like ZUBAT's is not a prediction either: the tool models damage
+and nothing else. Both caveats are §2 and §7 of
+[the cartridge page](../gen1/catch-and-train.md).
 
 **PIKACHU was evaluated properly and it loses.** It is the best thing in
 Viridian Forest, it is caught before Brock so it levels through the whole road
