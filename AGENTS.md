@@ -11787,6 +11787,13 @@ Measured at 240 attempts a leg:
   walks to the nurse more. *The arithmetic prices the experience; it does not
   price being weak.* Budget for that whenever a trainee starts far below the
   ground it is training on.
+- **What the two new legs cost, over 300 attempts each: the hunt is 1.72 Poké
+  Balls and 2.06 chipping turns, and the promotion is 14 decisions.** 1.72 balls
+  per catch is the ~50 %-a-throw estimate arrived at from the other side, and it
+  is why five is not enough for the tail. **`build_pool.sh` keeps only the last
+  four lines of a corpus run, which is the battle report and not the bag report**
+  — the hunt's own numbers have to be captured separately or they are lost from
+  the certification log.
 - **THE FIRST CONTROL WAS INVALID AND THE REASON IS WORTH KNOWING**: it ran
   link 27 from **26**'s exits, where the party already holds the bench — and
   `lead_with` names the species on link 27 as well as 26b, so that arm promoted

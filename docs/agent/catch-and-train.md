@@ -213,6 +213,30 @@ In wall-clock terms that is about **650,000 extra emulated frames**, roughly
 three emulated hours, added to a leg that was already the longest in the arc.
 It is the whole price of the capability — every other leg is within noise.
 
+### What the two new legs themselves cost
+
+Over 300 attempts each, with the whole run's output kept (`build_pool.sh` keeps
+only the last four lines, which is the battle report and not the bag report, so
+the hunt's own numbers have to be captured separately):
+
+| | per attempt |
+|---|---|
+| **the hunt** | **1.72 Poké Balls and 2.06 chipping turns** (517 and 619 over 300), 15,316 frames mean, median 9,282 |
+| **the promotion** | **14 decisions, 754 frames**, 300/300, 9.9 s of wall clock for all 300 |
+
+**1.72 balls per catch is the ~50 %-a-throw estimate from the other side**, and
+it is why five is not enough for the tail: the first ball works about three
+times in five, and the leg is only out of the game when all five miss.
+
+**The promotion is free.** It is fifteen decisions and deterministic, which is
+the argument for it being a leg of its own rather than folded into the hunt —
+its length is not a variable and the hunt's is.
+
+*(`tally::PROMOTED` reads zero on 26b, and that is correct rather than a bug:
+the goal fires on the swap, so the run ends before the driver backs out of the
+menu and reaches the line that counts it. It is the same reason a catch is only
+ever seen to land on a leg that keeps playing afterwards.)*
+
 ### One thing the invalid first control did prove
 
 The first attempt ran link 27 from **26**'s exits rather than 23's, meaning the
