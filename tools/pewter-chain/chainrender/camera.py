@@ -128,18 +128,96 @@ class Camera:
     # rule 3 uses, for the same reason.
     BOX_K_GROW = 0.03
 
+    # **Rule 8: every rung of the ladder is an INTEGER pixel scale, and that is
+    # a compression finding as much as a sharpness one.**
+    #
+    # The geometric ladder above snaps the width so the resample ratio holds
+    # still — but it never asked what that ratio IS, and measured over the Mt
+    # Moon cut **not one frame of 7,100 sat at an integer scale**: the two
+    # widths the film spends most of its time at are 0.4025x and 2.4615x.
+    #
+    # The source is pixel art. Gen 1 draws grass, cave floor and water as a
+    # ONE-PIXEL dither checkerboard, so a fractional nearest resample turns
+    # that checkerboard into moiré: an irregular, frame-to-frame-unstable
+    # high-frequency pattern over the whole picture. It looks soft and
+    # shimmery — which is what "often a tab blurry" is — and it is also the
+    # single most expensive thing anybody can hand a video codec, because
+    # every transform block is full of noise that never repeats. Both halves
+    # of "the files are huge and it looks blurry" are this.
+    #
+    # At an integer scale nearest is exact: an upscale by `s` makes every
+    # source pixel an aligned `s x s` block, a downscale by `k` samples one
+    # pixel in `k` on a regular grid. The dither stays a dither, the codec's
+    # blocks line up with the content, and nothing shimmers.
+    #
+    # The cost is a coarser ladder — the rungs are 1/4, 1/3, 1/2, 1, 2, 3, 4
+    # rather than 10% apart — so it is rounded UP (a wider view, a smaller
+    # scale) and never down: showing more world costs nothing, and losing
+    # agents off the edge is the one thing this camera must not do.
+    INT_UP = (1, 2, 3, 4, 6, 8)      # upscale by s: crop is view_w / s
+    INT_DOWN = (2, 3, 4, 6, 8, 12)   # downscale by k: crop is view_w * k
+
+    # **Rule 9: the zoom TRAVELS. It never cuts.**
+    #
+    # Reported in the captain's own words: *"the videos are supposed to follow
+    # the majority and be smooth but it suddenly jerks OUT when more
+    # entertaining say mt moon, instead of either panning out and across
+    # nicely"*. Rule 7 fixed the shape rule 3 could not handle — a swarm split
+    # between two clusters on ONE map — and a MAP TRANSITION is a third shape
+    # that neither covers.
+    #
+    # What happens at one: the atlas places Mt Moon 1F 1,400 px from Route 4,
+    # so the instant the first agents warp in, the box spans both and `want`
+    # multiplies. Rule 3 then assigns `cw = quantise(want)` in a single frame,
+    # which on an integer ladder can be **three rungs at once** — an 8x jump
+    # between one output frame and the next. That is a cut, and a cut is what
+    # a viewer calls a jerk.
+    #
+    # So the zoom moves at most ONE rung per change and then has to hold. The
+    # centre was already rate-limited (rule 4's pan cap, opened up by rule 6);
+    # this is the same treatment for the other axis of the shot, and the two
+    # together are what "pans out and across" means. Widening is allowed to
+    # step faster than narrowing, the same asymmetry rules 3 and 7 already
+    # use and for the same reason: rule 6 keys its catch-up on how far the
+    # mass pokes outside, so a camera slow to widen is slow to notice it has
+    # lost people.
+    ZOOM_DWELL_OUT = 6     # output frames a widening rung must be held
+    ZOOM_DWELL_IN = 24     # and a narrowing one, which is never urgent
+
+    # **And it GLIDES between rungs rather than stepping onto them**, because
+    # one rung of an integer ladder is still a 1.33x-2x jump and a 2x jump in
+    # one frame is a cut. So the width travels geometrically towards the rung
+    # it is heading for and settles exactly on it:
+    #
+    #   **the picture is pixel-exact whenever the camera is at rest, and only
+    #   the handful of frames of an actual zoom are fractionally scaled.**
+    #
+    # That is the whole trade, stated: rule 8 wants integer scale for
+    # crispness and compression, a viewer wants a continuous zoom, and a
+    # moving picture is where the moire is least visible and a still one is
+    # where it is most. Measured on the Mt Moon cut, five zoom changes in
+    # 7,100 frames, so under 2% of frames are ever off a rung.
+    ZOOM_RATE = 1.035      # per output frame; 2x takes ~20 frames
+
     def __init__(self, view_w, out_h, min_w, world_w, world_h, walk_px,
-                 split_aware=True):
+                 split_aware=True, integer_zoom=True):
         self.view_w, self.out_h = view_w, out_h
         self.min_w = min_w
         self.world_w, self.world_h = world_w, world_h
         self.split_aware = split_aware
+        self.integer_zoom = integer_zoom
+        # The rungs, as crop widths, smallest first. Built once so `quantise`
+        # is a lookup and the set is inspectable.
+        self.rungs = sorted({float(view_w) / s for s in self.INT_UP}
+                            | {float(view_w) * k for k in self.INT_DOWN})
         # **The pan cap is a fraction of WALKING PACE, not a pixel count.** At
         # 9x each output frame covers nine times the ground, so a cap tuned at
         # 1x cannot keep up with its own subject.
         self.cam_max_pan = 0.85 * walk_px
         self.prev = None      # (x, y, width) floats
         self.box = None       # (lo_x, hi_x, lo_y, hi_y), smoothed
+        self.held = 0         # output frames since the zoom last moved a rung
+        self.zoom_to = None   # the rung the width is travelling towards
         self.band = self.BAND if split_aware else self.OLD_BAND
 
     # --- the box -------------------------------------------------------------
@@ -171,9 +249,37 @@ class Camera:
         always yields the same exact scale -- the property that stops the
         resample ratio moving under the picture.
         """
+        if self.integer_zoom:
+            # Round UP to the next integer-scale rung, so the view only ever
+            # gets wider than asked for — see rule 8 above.
+            for cw in self.rungs:
+                if cw >= w - 1e-6:
+                    return cw
+            return self.rungs[-1]
         k = max(0, round(math.log(max(w, self.min_w) / self.min_w)
                          / math.log(self.CAM_STEP)))
         return self.min_w * (self.CAM_STEP ** k)
+
+    def next_rung(self, now, target):
+        """One step along the ladder from `now` towards `target`.
+
+        With no ladder (integer zoom off) the rungs are 10% apart and a single
+        step is imperceptible, so the geometric case steps by one `CAM_STEP`
+        rather than jumping — the rule is about how FAR the zoom may move in
+        one frame, not about which ladder it is on.
+        """
+        if target == now:
+            return now
+        if self.integer_zoom:
+            rungs = self.rungs
+            if target > now:
+                nxt = [r for r in rungs if r > now * 1.0001]
+                return min(nxt) if nxt else now
+            nxt = [r for r in rungs if r < now * 0.9999]
+            return max(nxt) if nxt else now
+        step = self.CAM_STEP if target > now else 1.0 / self.CAM_STEP
+        moved = now * step
+        return min(moved, target) if target > now else max(moved, target)
 
     # --- one frame -----------------------------------------------------------
     def step(self, xs, ys, live=True):
@@ -207,11 +313,41 @@ class Camera:
 
         px, py, pw = self.prev
         # (3) hold the zoom unless the mass genuinely outgrew or fell well
-        # inside it, then snap to the ladder.
+        # inside it, then snap to the ladder -- (9) ONE RUNG AT A TIME, and
+        # only after the last one has been held.
+        # **Rules 8 and 9 are one switch**, so `--no-integer-zoom` reproduces
+        # the pre-rule-8 camera exactly and the equality gate keeps its
+        # meaning. Nothing is lost by pairing them: without the integer ladder
+        # the rungs are 10% apart, and rate-limiting a 10% step is
+        # rate-limiting something already imperceptible.
+        if not self.integer_zoom:
+            cw = pw
+            if want > pw * self.CAM_GROW or want < pw * self.CAM_SHRINK:
+                cw = self.quantise(want)
+            return self._pan(px, py, tx, ty, box,
+                             min(cw, self.world_w * 1.0))
+        self.held += 1
+        if self.zoom_to is None and (want > pw * self.CAM_GROW
+                                     or want < pw * self.CAM_SHRINK):
+            target = self.quantise(want)
+            out = target > pw
+            if self.held >= (self.ZOOM_DWELL_OUT if out else self.ZOOM_DWELL_IN):
+                nxt = self.next_rung(self.quantise(pw), target)
+                if abs(nxt - pw) > 1e-6:
+                    self.zoom_to = nxt
         cw = pw
-        if want > pw * self.CAM_GROW or want < pw * self.CAM_SHRINK:
-            cw = self.quantise(want)
+        if self.zoom_to is not None:
+            if self.zoom_to > pw:
+                cw = min(self.zoom_to, pw * self.ZOOM_RATE)
+            else:
+                cw = max(self.zoom_to, pw / self.ZOOM_RATE)
+            if abs(cw - self.zoom_to) < 1e-6:
+                cw, self.zoom_to, self.held = self.zoom_to, None, 0
         cw = min(cw, self.world_w * 1.0)
+        return self._pan(px, py, tx, ty, box, cw)
+
+    def _pan(self, px, py, tx, ty, box, cw):
+        """Rules 1, 2, 4, 5 and 6 — where the camera moves, given a width."""
         chh = cw * self.out_h / self.view_w
 
         # (6) how far the mass pokes past the frame it is being shown in,

@@ -65,6 +65,7 @@ what makes the per-link population on screen mean something. The
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -255,6 +256,24 @@ def provenance(parts, seed):
     return seeds
 
 
+def link_number(name, pos):
+    """The link's number in the WHOLE CHAIN, read off its own name.
+
+    **A span file saying "link 1" for `20-cross-route-3` is one nobody can line
+    up against a report.** The chain numbers its links from their scenario file
+    names (`pewter_chain`'s own `link_number` does the same), so a slice filmed
+    on its own must keep those numbers rather than renumbering from 1 — the HUD
+    draws a bar per link and captions the set "link of N", and a six-link cut
+    of links 20-25 that calls itself links 1-6 is describing a different
+    measurement from the one on screen.
+
+    Falls back to the position when the name carries no leading digits, so a
+    caller naming its links freely still gets a film.
+    """
+    m = re.match(r"(\d+)", name)
+    return int(m.group(1)) if m else pos
+
+
 def stitch(parts, seed):
     """One agent's whole chain, or `None` if it cannot be stitched honestly.
 
@@ -265,7 +284,9 @@ def stitch(parts, seed):
         return None
     rows, spans, base, reached = [], [], 0, 0
     goal = False
-    for n, ((name, d, rowsx, _names), s) in enumerate(zip(parts, seeds), start=1):
+    for pos, ((name, d, rowsx, _names), s) in enumerate(zip(parts, seeds),
+                                                        start=1):
+        n = link_number(name, pos)
         path, last_frame = read_track(d, s)
         if not path:
             break
@@ -275,7 +296,7 @@ def stitch(parts, seed):
         end = base + max(last_frame, path[-1][0])
         goal = bool(rowsx.get(s, {}).get("goal", False))
         spans.append((n, name, base, end, goal))
-        reached = n
+        reached = pos
         # The next link starts where this one finished, so its frame
         # numbers continue rather than restart.
         base = end + 1
@@ -391,7 +412,8 @@ def main():
         print(f"  frames: {min(fr)} shortest, {max(fr)} longest, "
               f"{sum(fr) // len(fr)} mean")
     for i, (name, _, _, _) in enumerate(parts):
-        print(f"  link {i + 1} {name}: {reached[i]} agent(s) entered it")
+        print(f"  link {link_number(name, i + 1)} {name}: "
+              f"{reached[i]} agent(s) entered it")
     if not pool:
         print("  nothing selected — try --select all")
 

@@ -418,6 +418,15 @@ def report_camera(cams, fps):
     print(f"  still {100*still_x:.1f}% of frames in x, {100*still_y:.1f}% in y; "
           f"direction reversals {reversals([j[0] for j in jumps])/secs:.2f}/s in "
           f"x, {reversals([j[1] for j in jumps])/secs:.2f}/s in y")
+    # **The zoom step is the number the "it jerks OUT" report is about**, and
+    # nothing here measured it before rule 9 — the columns above count HOW
+    # OFTEN the zoom moved and say nothing about how far it went in one frame.
+    # A cut reads as a jerk however rarely it happens.
+    steps = [max(a[2], b[2]) / min(a[2], b[2])
+             for a, b in zip(cams, cams[1:]) if a[2] != b[2]]
+    if steps:
+        print(f"  largest single-frame zoom step {max(steps):.2f}x "
+              f"(rule 9 holds this to one rung; a cut is what reads as a jerk)")
     print(f"  largest single-frame pan {max(abs(j[0]) for j in jumps)} px in x, "
           f"{max(abs(j[1]) for j in jumps)} px in y; width "
           f"{min(widths):.0f}-{max(widths):.0f} px")
@@ -633,6 +642,15 @@ def main():
                          "the report — which is how a film shows a swarm "
                          "splitting along something the tracks cannot see, "
                          "such as which starter each agent carries")
+    ap.add_argument("--no-integer-zoom", dest="integer_zoom",
+                    action="store_false",
+                    help="take the camera's zoom off the geometric ladder "
+                         "again, so the view is resampled at whatever "
+                         "fractional scale the swarm's spread asks for. "
+                         "Reproduces every film published before rule 8 — and "
+                         "the camera-trace equality check — at the cost of the "
+                         "moire the ladder exists to remove; see rule 8 in "
+                         "chainrender/camera.py for the measurement")
     ap.add_argument("--cover", type=float, default=0.6,
                     help="fraction of agents whose whole run must fit in the "
                          "film; the rest are simply still going when it ends")
@@ -825,7 +843,7 @@ def main():
     # makes can have a camera at all; before the package existed this was two
     # hundred lines inside this function and nothing else could reach it.
     cam = Camera(VIEW_W, OUT_H, MIN_W, world.width, world.height, walk_px,
-                 split_aware=a.split_aware)
+                 split_aware=a.split_aware, integer_zoom=a.integer_zoom)
 
     # --- who has arrived, and where -----------------------------------------
     # **A film that ends in Pewter City has to show somebody in Pewter City,
@@ -1011,26 +1029,64 @@ def main():
 
     tinted = {}
     for i, (here, (cx, cy, cw)) in enumerate(zip(positions, cams)):
-        ch = cw * OUT_H / VIEW_W
+        # **The view is taken at an EXACT integer pixel scale** (rule 8 in
+        # `chainrender/camera.py`, which is where the argument lives). The
+        # camera's rung is `VIEW_W / s` for an integer upscale `s` or
+        # `VIEW_W * k` for an integer downscale `k`, so `scale` below is
+        # exactly `s` or exactly `1/k` and nearest-neighbour is then a lossless
+        # operation: every source pixel becomes an aligned `s x s` block, or
+        # one pixel in `k` is taken on a regular grid.
+        #
+        # An upscale rung does not divide the viewport evenly (1024/3 is not a
+        # whole number of source pixels), so the crop is rounded UP and the
+        # magnified image is centre-cropped back to the viewport. `off` is that
+        # trim, and every screen coordinate below carries it — get that wrong
+        # and the sprites walk off their own tiles.
+        # **Integer only when the camera is AT REST on a rung** (rule 9's
+        # glide). Mid-zoom the width is between rungs, and those few frames
+        # take the ordinary fractional path — a moving picture is where moire
+        # is least visible, and a cut is what a viewer actually complains
+        # about.
+        scale = VIEW_W / cw
+        s_up, s_dn = round(scale), round(1.0 / scale) if scale else 0
+        on_rung = a.integer_zoom and (
+            (s_up >= 1 and abs(scale - s_up) < 1e-6)
+            or (s_dn >= 1 and abs(1.0 / scale - s_dn) < 1e-6))
+        if on_rung and scale >= 1:
+            sc = int(s_up)
+            cw_i, ch_i = -(-VIEW_W // sc), -(-OUT_H // sc)
+        elif on_rung:
+            k = int(s_dn)
+            cw_i, ch_i, sc = VIEW_W * k, OUT_H * k, 1.0 / k
+        else:
+            cw_i, ch_i = int(round(cw)), int(round(cw * OUT_H / VIEW_W))
+            sc = scale
         # **Clamp the crop to the world.** Reported as an interior panel
         # running off the left edge with the agents inside it cut in half:
         # the camera centres on the mass, the mass is inside a panel in the
         # gutter, and an unclamped crop then hangs past the world's edge and
         # takes the panel's outer half with it. Clamping pulls the view back
         # inside, which shows the whole panel and costs nothing anywhere else.
-        x0 = int(round(cx - cw / 2))
-        y0 = int(round(cy - ch / 2))
-        if cw < world.width:
-            x0 = max(0, min(x0, world.width - int(round(cw))))
-        if ch < world.height:
-            y0 = max(0, min(y0, world.height - int(round(ch))))
+        x0 = int(round(cx - cw_i / 2))
+        y0 = int(round(cy - ch_i / 2))
+        if cw_i < world.width:
+            x0 = max(0, min(x0, world.width - cw_i))
+        if ch_i < world.height:
+            y0 = max(0, min(y0, world.height - ch_i))
         # `crop` takes only the region, rather than pasting a whole region
         # atlas behind a small window. Out-of-range is legal and pads with
         # black, which is what the clamp above is there to avoid anyway.
-        crop = world.crop((x0, y0, x0 + int(round(cw)), y0 + int(round(ch))))
-        scale = VIEW_W / cw
+        crop = world.crop((x0, y0, x0 + cw_i, y0 + ch_i))
         img = Image.new("RGB", (OUT_W, OUT_H), (10, 12, 16))
-        img.paste(crop.resize((VIEW_W, OUT_H), Image.NEAREST), (0, 0))
+        if on_rung and sc >= 1:
+            sc = int(sc)
+            big = crop.resize((cw_i * sc, ch_i * sc), Image.NEAREST)
+            ox, oy = (cw_i * sc - VIEW_W) // 2, (ch_i * sc - OUT_H) // 2
+            img.paste(big.crop((ox, oy, ox + VIEW_W, oy + OUT_H)), (0, 0))
+        else:
+            ox = oy = 0
+            img.paste(crop.resize((VIEW_W, OUT_H), Image.NEAREST), (0, 0))
+        scale = sc
 
         # **A fighting agent is not walking anywhere, and a film that only
         # draws positions shows it standing still with no explanation.** Links
@@ -1052,8 +1108,8 @@ def main():
             hd = ImageDraw.Draw(halo)
             for (_n, px, py, _i, _f, battle, _lk, _ln, _b, _m) in fighting:
                 sw = max(8, int(atlas.tile_px[_m] * scale))
-                sx = int((px - x0) * scale)
-                sy = int((py - y0) * scale)
+                sx = int((px - x0) * scale) - ox
+                sy = int((py - y0) * scale) - oy
                 r = sw
                 hue = BATTLE_HUE[battle]
                 for k, alpha in ((1.0, 70), (0.62, 130)):
@@ -1068,8 +1124,8 @@ def main():
             # an atlas that ever draws a map at a different tile_px puts its
             # agents at the right size without a second decision.
             sw = max(8, int(atlas.tile_px[_m] * scale))
-            sx = int((px - x0) * scale)
-            sy = int((py - y0) * scale)
+            sx = int((px - x0) * scale) - ox
+            sy = int((py - y0) * scale) - oy
             if not (-sw <= sx <= VIEW_W + sw and -sw <= sy <= OUT_H + sw):
                 continue
             key = (FACING.get(facing, "down"), band, sw)
@@ -1108,8 +1164,8 @@ def main():
             wp = atlas.place(m, ax, ay)
             if not c or wp is None:
                 continue
-            sx = int((wp[0] - X0 - x0) * scale)
-            sy = int((wp[1] - Y0 - y0) * scale)
+            sx = int((wp[0] - X0 - x0) * scale) - ox
+            sy = int((wp[1] - Y0 - y0) * scale) - oy
             if not (-40 <= sx <= VIEW_W + 40 and -40 <= sy <= OUT_H + 40):
                 continue
             rr = max(6, int(atlas.tile_px[m] * scale * 0.55))
@@ -1125,7 +1181,7 @@ def main():
         # An agent the atlas does not place is invisible for a different
         # reason, and is counted on the same line rather than vanishing.
         offscreen = [p for p in here
-                     if not on_screen(p[1], p[2], x0, y0, cw, ch)]
+                     if not on_screen(p[1], p[2], x0, y0, cw_i, ch_i)]
         if offscreen or lost[i]:
             warn = f"{len(offscreen)} agent(s) off frame"
             if offscreen and spans:

@@ -11085,3 +11085,145 @@ Re-certifying the whole chain on `b5ee848` gives **15-train-for-brock 2997/3000*
   shipped source and not to whatever was built while it ran.
 - **And it runs cold cartridge to Cerulean City in one command**: `pewter_chain chain --seeds 3
   --to 25`, **1 m 44 s**, every link solved on all three seeds, ending on map `0x03` at (0,18).
+
+## Film encoding and the camera's zoom — two causes, and a compatibility trap
+
+**Reader-facing page: [`docs/agent/film-encoding.md`](docs/agent/film-encoding.md);
+the tool is `tools/pewter-chain/encode_film.py`** (`encode`, `bakeoff`,
+`measure`, `recipes`, AXI-shaped). Reported as: the films are large and often a
+tab blurry, and *"it genuinely feels like these can be WAYYYY smaller file wise
+while maintaining high length and quality."* There were **two independent
+causes** and neither was the one the file names suggest.
+
+- **NOT ONE FRAME OF A PUBLISHED FILM SAT AT AN INTEGER PIXEL SCALE.** The
+  camera snapped its crop width to a geometric ladder so the resample ratio
+  would hold still and never asked what that ratio *was*: measured over the Mt
+  Moon cut, 22 distinct scales, the three commonest being 0.3326x, 0.4025x and
+  2.4615x. Gen 1 draws grass, cave floor and water as a **one-pixel dither
+  checkerboard**, so a fractional nearest resample is moiré — irregular,
+  frame-to-frame unstable, and the single most expensive thing anybody can hand
+  a codec. **Camera rule 8** makes every rung `view_w / s` or `view_w * k` for
+  an integer `s`/`k`, rounded UP so no agent is lost to it. Measured on the same
+  tracks and the same encoder: **56.45 MB → 35.38 MB**, and on a
+  quality-targeted encode **125.70 → 43.07**; the source PNGs are 10 % smaller
+  too, and camera coverage went *up*.
+- **`-b:v 6M` IS A BITRATE TARGET, NOT A QUALITY TARGET**, and `libopenh264` is
+  the weakest encoder on this box: on the hardest 240 frames it reaches PSNR
+  24.7 where VP9 at constant quality reaches 32.5. **Measured with a
+  CATEGORICAL metric, not only PSNR** — the share of pixels that come back
+  byte-identical and the count of colours the decode invented, the same rule
+  `screen::halfblocks` and the terminal captures already use. The lossless
+  recipe scores 100 % / 0, which calibrates the metric and proves the render is
+  exact up to the encoder.
+- **4:4:4 IS NOT SHIPPABLE, AND THAT COST A SHIPPED FILM.** `yuv444p` VP9 is
+  **VP9 Profile 1** and 4:4:4 AV1 is AV1 Professional; most players and
+  essentially all hardware decoders do not implement either, and a decoder that
+  does not implement it reads the planes as 4:2:0 anyway — the captain's player
+  showed perfect layout and text with the atlas's greys rendered **green, pink
+  and orange**. Two dead ends, both measured, neither to be repeated: it is
+  **not** the missing colour tags (grey is `U = V = 128` in every matrix, so a
+  wrong matrix leaves greys grey — and BT.709 tags were added and it was still
+  corrupt), and **checking it with ffmpeg proved nothing, nor did Chrome**,
+  because both implement Profile 1. **A compatibility fault is only visible in
+  a decoder that lacks the feature.**
+- **So: compatibility beats chroma fidelity, and sharpness comes from
+  INTEGER-SCALE RENDERING rather than exotic chroma.** The deliverable is
+  **H.264 High + CABAC, `yuv420p`, `+faststart`**, colour-tagged — 5.6 % smaller
+  than the Baseline the old recipe produced at marginally better quality, and
+  measured on the same frames 4:2:0 with modern rate control is visually
+  indistinguishable from 4:4:4 at 9x zoom while 4:2:0 with the old recipe is
+  mush. **The defect was never the chroma; it was the rate control.** Every
+  4:4:4 and lossless recipe is marked MASTER ONLY and `encode` refuses one
+  without `--master`.
+- **COLOUR IS DECLARED, NEVER GUESSED — and only two of the four tags survive.**
+  The conversion and the tag are stated together (full-range RGB → limited-range
+  BT.709, tagged BT.709 limited) so a tag-reading player and a BT.709-assuming
+  player agree. **No encoder in this ffmpeg build writes `color_primaries` or
+  `color_transfer` into an mp4** — measured on `libvpx-vp9`, `libsvtav1` and
+  `libopenh264` alike, with and without `-movflags write_colr` — so the gate
+  requires the **matrix** and the **range**, which are the two that corrupt a
+  picture when guessed.
+- **`encode` VERIFIES AND FAILS RATHER THAN HANDING OVER A BROKEN FILM**: the
+  tags must be present, and a decode under a *forced* BT.709 interpretation must
+  match the source. Neither catches a profile fault, so **the last check is a
+  human opening the file in a different program and looking at it** — here,
+  Chrome over `python3 -m http.server` via `chrome-devtools-axi`, reading pixels
+  off a canvas.
+- **`-vf scale` at identical dimensions is a colour conversion and resamples
+  nothing** — that is the only reason it is allowed in the recipe. **Nothing in
+  an encode may ever change the picture's size**; the frames are already at the
+  output resolution. A **mobile** copy therefore drops every second FRAME
+  (decimation, every remaining pixel exactly where it was) and lowers the
+  bitrate; it never scales.
+- **A `bakeoff` slice is not a film.** The hardest 240 frames of a cut and the
+  whole 7,100-frame film rank recipes differently, because most of a swarm film
+  is nearly static and a constant-quality encoder spends almost nothing there.
+  Quote the whole-film number, or say which slice.
+
+### Camera rule 9 — the zoom travels, and it never cuts
+
+Reported as *"the videos are supposed to follow the majority and be smooth but
+it suddenly jerks OUT when more entertaining say mt moon, instead of either
+panning out and across nicely"*.
+
+- **A MAP TRANSITION IS A THIRD SHAPE, AND NEITHER RULE 3 NOR RULE 7 COVERS
+  IT.** Rule 7's box EMA fixed a swarm split between two clusters on ONE map.
+  The atlas places Mt Moon 1F 1,400 px from Route 4, so the instant the first
+  agents warp in the box multiplies and rule 3 assigned `quantise(want)` in a
+  single frame — on an integer ladder that is up to **three rungs, an 8x jump
+  between one output frame and the next**. That is a cut, and a cut is what a
+  viewer calls a jerk.
+- **One rung per change, held before the next, and a geometric GLIDE between
+  rungs.** Widening may step faster than narrowing (rule 6 keys its catch-up on
+  how far the mass pokes outside, so a camera slow to widen is slow to notice it
+  has lost people). Measured on the 600-agent Mt Moon cut: largest single-frame
+  zoom step **8x → 2.00x → 1.03x**, largest pan 10 → 5 px, coverage 99.5 →
+  99.8 %, 0 frames below 90 % covered.
+- **The trade is stated rather than hidden: the picture is pixel-exact whenever
+  the camera is at REST on a rung, and only the frames of an actual zoom are
+  off one** — 78 of 8,290, i.e. 0.9 %. A moving picture is where moiré is least
+  visible and a still one is where it is most.
+- **`report_camera` prints the zoom step now.** It did not before, which is why
+  "it jerks" had no number attached: the existing columns count how OFTEN the
+  zoom moved and say nothing about how far it went in one frame.
+- **The equality gate grew a flag and the page says so.** The documented
+  reproduction is `--no-split-aware --no-integer-zoom`; verified byte-identical
+  against a build of the pre-change source at two invocations
+  (`74dd586a82d9af555beb6634865a052e` at the defaults,
+  `81fd46e732ba1933df1dba422a04aaf1` at `--speed 12 --fps 60 --cover 0.99`), and
+  `path_arrows.py still --colour traffic` still reproduces
+  `75146a5f60b19beea973902c56b300cf`.
+
+### Making a film with it — the tooling half, and three things that cost time
+
+**What an agent achieved in a film is AgentGB's record, not this one**
+(`docs/where-things-live.md`). What belongs here is the tool, and
+[`docs/agent/film-encoding.md`](docs/agent/film-encoding.md) §8 is it.
+
+- **THE PACE IS DERIVED, NEVER PICKED, AND THE CEILING IS MEASURED FROM THE
+  TRACKS.** `seconds_out x speed = the emulated time there is`, bounded by
+  `stride <= walk_span` — and `walk_span` is measured per corpus and printed
+  (29 emulated frames on both of the Mt Moon and gym cuts, so ~29x at 60 fps).
+  A short link wants a *slower* pace, not a faster one: a 3.3-minute link at 4x
+  is 49 s, and 4x also measured best on camera coverage against 3x and 6x.
+- **A CLIP OF ONE RUN NEEDS NO FILM TOOLING**: `solve --screens 1
+  --screens-scale 1` writes a `gbscr/1` capture at one sample per emulated
+  frame and `screen_mosaic.py`'s `Track` decodes it. **Find the moment with a
+  contact sheet** — every 60th frame of a 6,000-frame run tiles into one image
+  and the whole sequence is legible at a glance — rather than scrubbing.
+- **DO NOT DRAW A CARD THAT PRETENDS TO BE A GAME SCREEN.** A Gen 1 run never
+  opens its party menu, so a film of one cannot show a party; a state the run
+  left behind can be *read* (`states --peek`) and shown as what it is. And
+  assert every caption fits before drawing it — the `fit_bar` rule — because a
+  truncated caption cannot be told from a complete one.
+- **`pewter_chain film` reads `--runs`, and its own usage text said
+  `--agents N`.** Fixed. A flag documented in the tool and absent from the
+  parser exits with `unknown option` and reads as a broken build.
+- **`chain_tracks.py` numbers links from their NAME now, not their position.** A
+  span file saying "link 1" for `20-cross-route-3` is one nobody can line up
+  against a report, and the HUD captions the set "link of N".
+- **BACKGROUND JOBS LAUNCHED WITH `nohup ... &` DO NOT RELIABLY SURVIVE HERE.**
+  Two whole-film bake-offs and a five-recipe encode script were reaped mid-run
+  with empty logs, twice, with no OOM in the journal. Long encodes and long
+  renders are run in the foreground (or through the harness's own background
+  task, which does survive) and checked by their artefacts, not by a log.

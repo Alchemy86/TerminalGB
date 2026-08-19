@@ -154,6 +154,7 @@ and that had quietly happened to more than half of this directory.
 | [the swarm's paths](agent/path-arrows.md) | every tile the swarm ever walked, drawn as a directional arrow over the atlas — what the colour encodes, and the survivorship the picture cannot help carrying |
 | [position tracks, and sampling which runs get filmed](agent/track-format.md) | every run records where it was now, so a film is a selection over a certification that already happened — the compact format, where a corpus's bytes really are, and the selectors that make "film me the failures" a one-liner |
 | [`chainrender`](agent/chainrender.md) | the parts every Python renderer here shares — the atlas, the tracks, the palettes and the camera — why they were four copies, and the two equality gates that keep the consolidation honest |
+| [encoding a film](agent/film-encoding.md) | why the films were huge and often soft — the two independent causes measured, the recipe that came out of it, and the 4:4:4 compatibility trap that cost a shipped film |
 | [the swarm view](swarm-view.md) | twenty-four emulators from one save state drawn as dots on a map — the null-model baseline a trained agent has to beat, and an object lesson in what the rest of this tooling adds up to |
 | [shiny hunting](shiny-hunt.md) | N emulators hunting one DV pattern in parallel, and the decorrelation problem that makes it hard |
 

@@ -81,11 +81,20 @@ both proofs are cheap enough that there is no excuse for skipping them.
 ```bash
 cd /home/aaron/pokemon-run
 
-# the camera: --no-split-aware must reproduce the pre-fix trace byte for byte
+# the camera: --no-split-aware --no-integer-zoom must reproduce the pre-fix
+# trace byte for byte. **--no-integer-zoom is part of the gate now**: rules 8
+# and 9 changed which rung the camera picks and how fast it travels between
+# rungs, so the flag that reproduces the old shot has to be in the command or
+# the gate is asserting the new one against the old one's md5.
 python3 <repo>/tools/pewter-chain/swarm_film.py chain-film \
     --atlas atlas/atlas.json --out /tmp/x --dry-run \
-    --camera-trace /tmp/cam.csv --speed 12 --fps 60 --no-split-aware
+    --camera-trace /tmp/cam.csv --speed 12 --fps 60 \
+    --no-split-aware --no-integer-zoom
 # 15,632 frames, md5 4291439921254f04bff653a4948fe000
+# verified again after rules 8 and 9, at two invocations: the default
+# --seconds 70 --fps 30 gives 2,100 frames / 74dd586a82d9af555beb6634865a052e
+# and --speed 12 --fps 60 --cover 0.99 gives 69,640 / 81fd46e732ba1933df1dba422a04aaf1,
+# identical to a build of the pre-change source in both cases.
 
 # the arrows: --colour traffic must reproduce the published still
 python3 <repo>/tools/pewter-chain/path_arrows.py still chain-film \
@@ -95,6 +104,43 @@ python3 <repo>/tools/pewter-chain/path_arrows.py still chain-film \
 
 `--dry-run` renders nothing, so the camera check is two seconds and the arrow
 check is one.
+
+## Rules 8 and 9 — the zoom
+
+Two rules landed in `chainrender/camera.py` after the package existed, and both
+are in it precisely so that every renderer gets them rather than only the one
+whose author happened to be looking.
+
+* **Rule 8: every rung is an integer pixel scale.** Measured over the Mt Moon
+  cut, not one frame of 7,100 sat at one — and a fractional nearest resample of
+  Gen 1's one-pixel dither is moiré, which is both the softness in the picture
+  and two thirds of the bitrate.
+  [`film-encoding.md`](film-encoding.md) §1 is the measurement.
+* **Rule 9: the zoom travels, and it never cuts.** Reported as *"it suddenly
+  jerks OUT when more entertaining say mt moon, instead of either panning out
+  and across nicely"*. Rule 7 fixed a swarm split between two clusters on ONE
+  map; a **map transition** is a third shape neither rule covers — the atlas
+  places Mt Moon 1F 1,400 px from Route 4, so the box multiplies the instant
+  the first agents warp in and rule 3 assigned the new width in a single frame.
+  The zoom now moves at most one rung per change, has to hold before the next,
+  and **glides geometrically between rungs** so that the picture is pixel-exact
+  whenever the camera is at rest and only the handful of frames of an actual
+  zoom are off a rung.
+
+Measured on the 600-agent Mt Moon cut, 8,290 frames:
+
+| | before rule 9 | one rung at a time | rung + glide |
+|---|---:|---:|---:|
+| largest single-frame zoom step | up to 8x | 2.00x | **1.03x** |
+| largest single-frame pan, x | 10 px | 5 px | **5 px** |
+| frames off an integer rung | n/a | 0 | 78 (0.9 %) |
+| camera coverage, mean | 99.5 % | 99.8 % | **99.8 %** |
+| frames below 90 % covered | 0 | 0 | **0** |
+
+`report_camera` prints the zoom step now. It did not before, which is why "it
+jerks" had no number attached to it: the existing columns count how OFTEN the
+zoom moved and say nothing about how far it went in one frame, and a cut reads
+as a jerk however rarely it happens.
 
 ## What is deliberately NOT here
 

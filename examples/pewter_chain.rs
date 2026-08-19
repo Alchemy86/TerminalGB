@@ -3619,7 +3619,7 @@ pewter_chain — twelve scenarios from a cold cartridge to Pewter City
       --screens-runs M    only the first M seeds record (default: all of them)
       --screens-budget MB the estimate this run may not exceed (default 2048)
 
-  film --rom R --agents N [--out DIR] [--workers N] [--from N] [--to N]
+  film --rom R --runs N [--out DIR] [--workers N] [--from N] [--to N]
       Play the WHOLE chain once per agent, each agent carrying its own exit
       state forward, and write one continuous per-frame position track each.
       An agent that fails a link stops there, which is the honest picture.
