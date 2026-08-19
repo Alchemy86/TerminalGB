@@ -11134,6 +11134,138 @@ inventing a scenario to ask it in. Asked with `GB_TRAIN_TO=24` over sixty attemp
 overworld drinks against 54. One attempt apart in a hundred and eighty — not separable, and not
 what closed these links. Recorded so nobody runs it again.
 
+## The Cascade Badge — Cerulean, and the move-learn prompt nothing had answered (`scenarios/pewter/26-30`)
+
+**Reader-facing page: [`docs/agent/misty.md`](docs/agent/misty.md).** Five links from arriving in
+Cerulean to standing in its Pokémon Center with the second badge, cut to the Brock arc's shape:
+26 heal, 27 train, 28 heal, 29 gym, 30 heal. **The whole chain now runs cold cartridge to the
+Cascade Badge in one command** — `pewter_chain chain --rom <blue.gb> --seeds 3 --to 30`, 4 m 57 s,
+every link solved on every seed.
+
+- **MISTY IS ONE 40-POWER SPECIAL WATER MOVE, AND THAT DECIDES THE WHOLE ARC.** STARYU Lv18 and
+  STARMIE Lv21 (`TrainerDataPointers` `0E:5D3B` class 35), movesets built the way `WriteMonMoves`
+  builds them: TACKLE + WATER GUN, and TACKLE + WATER GUN + HARDEN. **STARMIE learns nothing at
+  all by level**, so it has no psychic move and its four are its base-stats four.
+- **THE BROCK FINDING INVERTS AND THE LINE THAT FAILS IS STILL CHARMANDER'S.** Through
+  `CalculateDamage` at the lowest of Gen 1's 217..255 rolls: **IVYSAUR** wins from level 18 (VINE
+  WHIP, GRASS, 2× on both); **WARTORTLE** wins from level 24 and it resists WATER; **CHARMELEON
+  never** — it is **2× weak to WATER GUN** (38 of 56 HP at L20, 30 of 79 at L30, so it dies in two
+  or three turns at any level) while needing nine or ten to answer. Sweeping to L30 does not close
+  it, exactly as sweeping Brock's to 18 did not.
+- **`MISTY_TRAIN_TO` IS 24 BECAUSE OF A MOVE, NOT A NUMBER.** `EvosMovesPointerTable` `0E:B05C`
+  gives WARTORTLE **BITE at level 24** — 60 power against the 40 of its best other attack — and
+  that is where the race against STARMIE flips.
+
+### The move-learn prompt: the chain had never levelled into a full move list
+
+**The first link-27 run reached level 24, was offered BITE, and spent every one of its remaining
+600 decisions alternating between `move to make room for BITE?` and `Abandon learning BITE?` at
+(70,14).** `ChainDriver::fight` reads a YES/NO box as battle text and presses A into it, and the
+two boxes hand each other back and forth for ever. `ChainDriver::learn_move` answers the prompt
+**before `fight` sees the screen** — the prompt arrives with `mode: battle`, so it has to be
+hooked ahead of the battle branch — and it **takes** the move, because link 27's threshold exists
+*because of* BITE and a solver that grinds to the level and then declines it has walked the leg
+for nothing.
+
+- **Every rule in that handler had already been paid for once in
+  `examples/gen1_learn_drill.rs`, and re-reading that file first is what made this an hour rather
+  than a day.** Match `move to make room`, not `Delete an older`: the box scrolls its own question
+  off the two lines Gen 1 holds, so matching the opening words makes the box invisible — and A on
+  it means YES, so the answer gets *given* rather than chosen. A press while the question is still
+  typing advances the text and does not answer, so the cursor is what says the box is answerable.
+  Read `wCurrentMenuItem`, never the glyph (`Screen::selected` truncates aligned two-word move
+  names: `TAIL WHIP` under `WATER GUN` reads back as `TAIL`). **The forget list's cursor is
+  0-based where the battle move list's is 1-based.**
+- **`Abandon learning …` is answered NO**, which puts the delete question back — the one recovery
+  that screen offers, and what makes a swallowed press cost a decision instead of the move.
+- **`worst_held` IS `learn_table.py`'s CRITERION, CLAUSE FOR CLAUSE**, and its one open question
+  is settled with the *policy's* own answer rather than a new one: the criterion deliberately does
+  not rank status moves against each other, so the tie-break is `battle::effect::lowers` — a
+  status move `battle::decide` can spend a turn on outranks one it cannot. Losing GROWL costs the
+  stat-lowering rule; losing LEECH SEED costs nothing, because nothing in this solver can choose
+  it. **`plugins/agent/src/battle.rs`'s `mod effect` was made `pub` for exactly that**: there must
+  be one answer in the codebase to "is this a status move anything can use".
+- Measured: WARTORTLE arrives at 24 holding TACKLE, TAIL WHIP, BUBBLE, WATER GUN and leaves
+  holding **TACKLE, BITE, BUBBLE, WATER GUN**.
+
+### A GEN 1 TRAINER SEES THROUGH A WALL
+
+Cerulean Gym's SWIMMER stands at (8,7) facing **left**, and (7,7) and (6,7) are both solid — the
+only walkable ground beside him is column 9, to his right. **He engages anyway, at (5,7), three
+tiles away with two walls in between**: traced on the first attempt, `Splash! … I'm first up!
+Let's do it!`. So Gen 1's trainer sight check compares coordinates and does not test the tiles in
+between.
+
+**What that does and does not correct.** This repository's severance sweeps — the ones that
+establish which trainers on Route 3, in Viridian Forest and on Mt Moon are unavoidable — block a
+cone's *tiles* and ask whether the map still connects; that is the right model for "may the player
+stand here" and none of them assumed occlusion. The correction is to any future reading that a
+wall between a trainer and the route buys anything.
+
+### And the junior trainer parks on the tile the walk needed — the FIFTH time
+
+Misty's only free neighbours are (4,3) and (5,2); (5,2) is reachable only from (5,3) because row 1
+is walled at x=4 and x=5; so every route crosses row 3, which is the JR.TRAINER♀'s own line, and
+(1,3) is a wall so there is no tile on that row to her left to enter from — a BFS with row 3
+blocked from x=3 to x=7 finds no path at all. She engages from the west at (5,3) and
+`TrainerWalkUpToPlayer` leaves her body on **(4,3)**, which was the route's last waypoint:
+measured, 24 decisions oscillating between (5,2) and (5,3). **Misty is talked to from (5,2) facing
+left** — links 04, 05, 08 and 20 are the other four.
+
+### The heal is first in the arc, and that is geometry
+
+`wLastBlackoutMap` (`$D719`) reads **`0x0F`** on link 25's exit state — measured with
+`states --peek`, not assumed. That is Route 4, i.e. the **Mt Moon** Pokémon Center, whose door
+cannot be walked to from the mountain's eastern mouth (x=19-23 solid on row 5, x=20-23 on rows
+6-8), so a blackout while training east of the mountain would cost the whole crossing again. One
+conversation moves it to `0x03`. **So this arc heals first and trains second where Brock's arc
+does the reverse.**
+
+### Route 4's grass, and the two richer patches that are not worth it
+
+Sixty walkable tiles at **x=64-73, y=10-15** on map `$0F` (the tileset's own grass tile `$52`,
+read out of the block map): a closed room with **one door** — walled at row 9 and row 16 and at
+x=62 and x=75, entered along row 14 through x=75-77 — no trainer in it, no ledge inside it, and on
+the road the chain already walks. Column 77 is the only tile joining rows 12 and 14 without a
+ledge, which is why `ROUTE_4_TO_GRASS` turns twice for what looks like a straight walk.
+
+Experience per step, from `WildDataPointers` and `BaseStats`' base-experience byte: **Route 4
+7.55**, Route 5 8.10, **Route 24 10.85**, Route 25 6.33, Route 3 4.22, Mt Moon B2F 3.86. Route 4
+is 7 % and 30 % behind the two best — and **Route 5's grass is behind a one-way ledge descent**
+(patches at rows 4-5, 8-9, 12-13 with `LedgeTiles` entries at rows 3, 7, 11, 15, so each can be
+dropped into and never climbed out of) while **Route 24's is on the far side of Nugget Bridge**
+(five trainers in a column at x=10-11 plus a ROCKET, unavoidable on a two-tile bridge).
+
+### The badge bits, and nothing else moves
+
+Diffing all 320 bytes of `wEventFlags` plus the badge bytes across the gym: **exactly three move
+and nothing is cleared** — `$D356` `wObtainedBadges` `$01 → $03` (bit 1, `BIT_CASCADEBADGE`),
+`$D72A` `wBeatGymFlags` `$01 → $03`, and `$D75E` `$00 → $CC`, whose bits decode against
+`constants/event_constants.asm`'s own `const` list as `EVENT_BEAT_CERULEAN_GYM_TRAINER_0` (2),
+`_1` (3), `EVENT_GOT_TM11` (6) and **`EVENT_BEAT_MISTY`** (7). The same counting puts
+`EVENT_BEAT_PEWTER_GYM_TRAINER_0`/`EVENT_GOT_TM34`/`EVENT_BEAT_BROCK` on `$D755` bits 2/6/7,
+`EVENT_FOLLOWED_OAK_INTO_LAB` on `$D747` bit 0 and `EVENT_GOT_POKEDEX` on `$D74B` bit 5 — three
+flags other links derived independently, and agreeing with them is what says the counting is
+right. **Pewter's gym also *cleared* two bits of `$D7EB`; Cerulean's clears nothing.**
+
+### Three tooling traps that cost a run each
+
+- **`--exits N` WRITES AN EXIT FOR A SEED BELOW N THAT SUCCEEDED, so a pool is `N × pass_rate`
+  and not `N`.** `cmd_corpus`'s test is `o.goal && seed < seed0 + exits`, which is deliberate —
+  the low seeds are the ones a film and a stitch can line up — but the usage string's "keep the
+  first N successful exits" reads as backfilling and does not. Measured: link 17 at 88.6 % asked
+  for 600 and produced **537**. Ask for more runs than exits, and expect a chain's pool to shrink
+  at every link that is not 100 %.
+- **A SHELL GLOB PUTS `18b-shop-in-pewter.json` BEFORE `18-heal-after-the-gym.json` AND
+  `chain_files()` DOES NOT.** Locale collation ignores the hyphen, so `bash`'s `*.json` gives
+  `…18b…` then `…18-…`; Rust's `Vec::sort` is byte-order and gives the reverse, which is the
+  order the chain means. A shell loop building the pools therefore fed link 18b link **17's**
+  exits — the player standing in Pewter Gym rather than in the Pokémon Center — and the run died
+  with no output at all. `LC_ALL=C ls -d scenarios/pewter/*.json | LC_ALL=C sort` is the fix.
+- **A background job launched from a tool call dies with the call unless it is `setsid`.** Two
+  pool builds were lost mid-link to this before `setsid nohup … & disown` stuck. `run_in_background`
+  did not save it either.
+
 ## THE PUBLISHED FIGURES FOR LINKS 15 AND 17 DO NOT REPRODUCE ON THIS BASE
 
 Re-certifying the whole chain on `b5ee848` gives **15-train-for-brock 2997/3000** and
