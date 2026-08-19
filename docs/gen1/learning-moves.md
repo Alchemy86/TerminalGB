@@ -107,7 +107,7 @@ Raising each species from level 1, the first four-move prompt lands at:
 | PIKACHU | level 26 | 
 | PIDGEY | level 31 |
 
-The [Pewter chain](../agent/pewter-chain.md) carries one Pokémon and its
+The [Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) carries one Pokémon and its
 training leg's goal is `lead_level>=10`. **So the prompt never arises before
 Pewter at all** — the first one a run of ours can meet is twenty-odd levels in,
 and that is a very different training problem from one that occurs constantly.

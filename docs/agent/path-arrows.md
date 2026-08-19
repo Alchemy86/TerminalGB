@@ -363,7 +363,7 @@ cut renders in about 34 seconds.
 
 ## 9. Related pages
 
-- [the Pewter chain](pewter-chain.md) — the fourteen scenarios these tracks come
+- [the Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — the fourteen scenarios these tracks come
   from, the certification that produced them, and §11 on the films.
 - [the swarm view](../swarm-view.md) — the same tracks drawn as *agents moving*
   rather than as paths, and the one-way-ledge finding this reproduces.
@@ -371,6 +371,6 @@ cut renders in about 34 seconds.
   Game Boy *screens*. A position track carries no pixels, so that one needs a
   capture pass where this one needs nothing; it answers "what are they all
   looking at?" where this answers "where did they all go?".
-- [heat maps](pewter-chain.md#10-heat-maps) — dwell weighted by frames, which is
+- [heat maps](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md#10-heat-maps) — dwell weighted by frames, which is
   the question this picture deliberately does not answer.
-- [the test rig](test-rig.md) — what turns a corpus into a measurement.
+- [the test rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md) — what turns a corpus into a measurement.

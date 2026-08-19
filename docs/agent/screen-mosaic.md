@@ -3,7 +3,7 @@
 > `tools/pewter-chain/screen_mosaic.py`, fed by `pewter_chain corpus --screens`.
 > Video: `/home/aaron/pokemon-run/screen-mosaic-05-rival-battle.mp4`.
 
-[The swarm view](../swarm-view.md) and [the chain film](pewter-chain.md#11-the-films)
+[The swarm view](../swarm-view.md) and [the chain film](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md#11-the-films)
 draw where every agent **is**, on one world. This draws what every agent
 **sees**, side by side: sixty Game Boys in a rack, all playing the same link
 from the same pool of entry states, at the same seeds, at the same moment of
@@ -30,7 +30,7 @@ Every `pewter_chain corpus` run writes `path-NNNNN.gbtrk`, a record per change
 of `map,x,y,facing,battle` ([the track format](track-format.md)). There is **no
 picture in it**. A position track is enough to draw a dot on a map — that is what `swarm_film.py` does — and
 it is enough for a heat map, a route audit and every measurement on
-[the Pewter chain page](pewter-chain.md). It is not enough for a screen, and no
+[the Pewter chain page](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md). It is not enough for a screen, and no
 amount of reprocessing turns it into one.
 
 So a mosaic needs a capture pass, and a capture pass has to be designed for size
@@ -239,12 +239,12 @@ Read this before drawing a conclusion off a still.
 
 ## See also
 
-* [the Pewter chain](pewter-chain.md) — where the links, the entry pools and the
+* [the Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — where the links, the entry pools and the
   corpus come from
 * [the swarm view](../swarm-view.md) — the same population drawn as positions on
   one world instead of as screens
 * [the swarm's paths](path-arrows.md) — the same population as the *union* of
   its paths: one arrow per walked tile, from a corpus already on disk and with
   no capture pass at all
-* [the test rig](test-rig.md) — when the question is a number rather than a
+* [the test rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md) — when the question is a number rather than a
   picture

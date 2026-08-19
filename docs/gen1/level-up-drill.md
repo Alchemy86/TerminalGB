@@ -352,10 +352,10 @@ Consequences worth knowing:
   rest need the *planner* to emit mid-line starting states — a Pokémon can be caught at any level
   — which is a plan-generator change and not a drill one.
 - **A trained student that is a model.** This produces what a student trains from, and
-  `--prompts <dir>` now also writes the [A/B rig](../agent/test-rig.md)'s entry pool: one save
+  `--prompts <dir>` now also writes the [A/B rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md)'s entry pool: one save
   state per verified decision, taken with the question on the screen, and a `gbtestprompt/1`
   file beside it. A teacher and a counting student have been run against each other on it —
-  [the result](../agent/move-learning-result.md) — and the held-out control there is worth
+  [the result](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/move-learning-result.md) — and the held-out control there is worth
   reading before anyone plans a bigger corpus. **No model has been through this corpus.**
 
 ---
@@ -383,7 +383,7 @@ python3 tools/agent-docs/log_to_dataset.py \
 ```
 
 `--prompts <dir>` additionally writes the A/B rig's entry pool — see
-[the corpus contract](../agent/test-rig.md#the-corpus-contract). Numbering continues from what
+[the corpus contract](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md#the-corpus-contract). Numbering continues from what
 is already in the directory, so drilling both lines into one pool is the ordinary use.
 
 `--level N` runs one level-up on its own, which is how to iterate on a single prompt.

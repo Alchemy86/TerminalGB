@@ -247,7 +247,7 @@ choice; scoring the Oak's Lab loss as one is contradicting the game.
 55 decisions with the party back at 19/19, money untouched at ₽3000 (a blackout halves it), and
 `wOaksLabCurScript` at `SCRIPT_OAKSLAB_RIVAL_STARTS_EXIT` — the same state a win leaves.
 
-![600 agents fighting the rival in Oak's Lab at once](../agent/chain-stills/2-the-rival-battle.png)
+![600 agents fighting the rival in Oak's Lab at once](https://raw.githubusercontent.com/Alchemy86/AgentGB/main/docs/agent/chain-stills/2-the-rival-battle.png)
 
 *Every trainer battle in the first eleven links of the chain is this one fight, which is why all
 600 agents are in it together. Roughly a quarter of them are about to lose it, and it makes no
@@ -668,7 +668,7 @@ That last block is the failure reproduced from the cartridge in three lines, wit
 run: the walker never reaches the waypoint from below, and where it stops is the x=26..32 slide
 the 600-attempt corpus reported.
 
-> **Correction while measuring this.** [`docs/agent/pewter-chain.md`](../agent/pewter-chain.md)
+> **Correction while measuring this.** [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md)
 > §8.12 and the comment in [`examples/pewter_chain.rs`](../../examples/pewter_chain.rs) both said
 > *"walking down from `(29,27)` lands on `(29,29)`"*. Row 27 is the ledge and is not standable;
 > the jump is **`(29,26)` → `(29,28)`**, which is what the same section says three paragraphs further down (*"stepping down
@@ -698,7 +698,7 @@ glossing**: it cannot know whether an overshoot is *reachable* (that needs the m
 NPC in the way is what pushed the walker over the ledge in the first place), and it has no model
 of the driver's stuck-sidestep, so it over-reports.
 
-![the swarm crossing Route 1](../agent/chain-stills/4-route-1-pulled-back.png)
+![the swarm crossing Route 1](https://raw.githubusercontent.com/Alchemy86/AgentGB/main/docs/agent/chain-stills/4-route-1-pulled-back.png)
 
 *Route 1 is the same shape at scale: 42 one-way ledge drops, so the climb is not the descent
 reversed and the chain carries two waypoint lists for one map. A decorrelated random walk over
@@ -794,10 +794,10 @@ Route 1 and Viridian City carry no item balls either (map object data), and ther
 Viridian City, so training cannot be moved next to the nurse. Between them those three facts say
 the residual is a property of the game at that point in it, not of the policy — which is why the
 link is
-[recorded as accepted rather than certified](../agent/pewter-chain.md#7b-link-11--accepted-at-one-failure-and-why-that-is-not-a-pass)
+[recorded as accepted rather than certified](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md#7b-link-11--accepted-at-one-failure-and-why-that-is-not-a-pass)
 rather than tuned until it looked green.
 
-![the training grind](../agent/chain-stills/5-the-training-grind.png)
+![the training grind](https://raw.githubusercontent.com/Alchemy86/AgentGB/main/docs/agent/chain-stills/5-the-training-grind.png)
 
 *396 of 597 agents in a wild battle at once, in one patch of Route 1's grass, with a thin stream
 walking north to heal. There is nothing else for them to do: the nurse is the only healing in the
@@ -1268,7 +1268,7 @@ and Viridian Forest's identity by header — are a dozen lines each on top of it
   trying to do when it bit you. This page is the reasoning; that one is the warning.
 - [the memory map](memory-map.md) and [the memory atlas](atlas/README.md) — where these addresses
   live and how each was graded. AtlasGB links back into this page by slug.
-- [the Pewter chain](../agent/pewter-chain.md) — the campaign most of these came out of, with the
+- [the Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — the campaign most of these came out of, with the
   per-link measurements and the certification bar.
 - [the battle policy](../agent/battle-policy.md) — the battle findings in the order a policy needs
   them, with the report that goes beside a pass rate.

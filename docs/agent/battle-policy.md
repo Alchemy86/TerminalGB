@@ -1,6 +1,6 @@
 # The battle policy — one capability, not a per-link workaround
 
-Up to link 05 a battle was something the [Pewter chain](pewter-chain.md)
+Up to link 05 a battle was something the [Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md)
 *survived*: the driver pressed FIGHT, then A on whatever move happened to sit in
 the first slot. This is the thing that replaces it — fight, switch, use an item
 or run, chosen from the cartridge's own state, by one implementation every link
@@ -10,7 +10,7 @@ uses.
 > *driver-side*, so only this policy can produce them. For a comparison
 > between two players — the same fight, the same start states, the same seeds,
 > host-side battle outcomes and a paired gap — see
-> [the test rig](test-rig.md).
+> [the test rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md).
 
 - **The policy**: [`plugins/agent/src/battle.rs`](../../plugins/agent/src/battle.rs)
   — pure, unit-tested, no machine and no emulator.
@@ -113,7 +113,7 @@ Link 10 is the first leg where the policy *fights* wild Pokémon at scale:
   twice. **A lead that cannot survive two worst-case hits is in trouble whatever
   fraction that is**, so the rule is `hp*2 <= max_hp || hp <= 2*incoming_crit`,
   and half remains as the floor because it protects the *next* encounter as much
-  as this one. §8.4 of [the chain](pewter-chain.md) is about what happens when
+  as this one. §8.4 of [the chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) is about what happens when
   the fight and heal thresholds differ. **It is gated on the battle being
   wild**, because there is no running from a trainer and a rule that leaves the
   policy with nothing to do is worse than no rule.
@@ -217,7 +217,7 @@ walk to the nurse — and the policy, weighing a level 3 Rattata's critical hit,
 declined 94 of 100 encounters.** It paced the grass for 2,500 decisions and
 gained nothing.
 
-That is [§8.4's dead band](pewter-chain.md) exactly, re-opened by the policy
+That is [§8.4's dead band](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) exactly, re-opened by the policy
 getting cleverer, and the fix is the one that closes it for good rather than for
 now: **the heal decision no longer computes a threshold at all.** The policy's
 own refusal is the trigger — when `decide` returns
@@ -274,7 +274,7 @@ reached by trainer battles too — link 05 spends 2,450 turns on stat moves in i
 05, 11 and 13, and link 11 is signed off. The full record, with both candidate
 arithmetics, the 3,000-attempt measurements and the trap that the obvious
 correction trades one factor-of-two bias for another, is
-[`pewter-chain.md` §7c](pewter-chain.md).
+[`pewter-chain.md` §7c](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md).
 
 **So read the numbers in §3 knowing that**: the stat-move rule fires more often
 than an honest expectation would justify, and the 2,450 turns below are that
@@ -375,7 +375,7 @@ harness first.*
 `Action::Run` carries a sentence saying why, and callers read it back. That
 started as `why.contains("too hurt")`, which is tolerable for a report and stops
 being tolerable the moment a reason drives behaviour — which it now does, in
-[link 11](pewter-chain.md). The four are `battle::why::{FORBIDDEN, FAINTING,
+[link 11](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md). The four are `battle::why::{FORBIDDEN, FAINTING,
 TRAINED, TOO_HURT}`; the policy names them, callers match the name, and the
 compiler guarantees the two texts are one string rather than two that agree
 today.
@@ -435,7 +435,7 @@ doubt. Full working:
 
 ## 6. Related pages
 
-- [the Pewter chain](pewter-chain.md) — the links this is used by, and the
+- [the Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — the links this is used by, and the
   certification gate.
 - [Gen 1 battle control](../gen1/battle-control.md) — starting a battle from
   outside, which is a different job.

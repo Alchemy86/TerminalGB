@@ -2,6 +2,39 @@
 
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
+## Standing rule: this is the emulator, AgentGB is the agent
+
+**TerminalGB is the terminal tool that carries the harness. AgentGB is the home
+of the teacher-and-student story.** The captain has given this correction twice,
+and on 2026-08-19 the pages that had been written into this repository were
+moved out: `docs/agent/pewter-chain.md`, `brock.md`, `cerulean.md`,
+`test-rig.md`, `test-rig-results.md`, `move-learning-result.md`, and the results
+half of `docs/gen1/catching.md`. Pointer stubs stand at every old path so this
+repository's own source comments still resolve.
+
+**Before writing any page that could land in either repository, read
+[`docs/where-things-live.md`](docs/where-things-live.md).** The one-line test:
+*a fact about the Game Boy, or about our tooling, is ours; a fact about what the
+agent did is AgentGB's.* A page that is genuinely both gets **split, never
+duplicated** — `docs/gen1/catching.md` is the worked example. The rule is not
+"write less about the agent"; it is "document the **tool** here and the
+**result** there". The stubs are pointers: do not grow content back into them.
+
+**Two gates decide how a cross-repo link is written, and both fired on the first
+attempt at this move.** A link into AgentGB must use the **`/tree/main/`** URL
+form — `codemap_links.py --check` rejects every `github.com/<owner>/<repo>/blob/…`
+link that is not ours, so `/blob/` is 51 CI failures — and a *new* pointer stub
+must be added to `EXEMPT` in `docs/tools/docs_index.py` with its reason, because
+`docs_index.py --check` requires every page under `docs/` to be indexed or
+exempt and a stub is neither content nor an oversight. An **image** is the one
+exception and keeps a `raw.githubusercontent.com` URL: it is the only form that
+renders.
+
+Everything below this line that quotes an agent result — a link's pass rate, a
+certification, a battle outcome — is **agent memory about work whose
+reader-facing page now lives in AgentGB**. It is kept because it is how this
+repository's tooling came to be, but the published record is over there.
+
 ## Standing convention: every emulation fix feeds the conformance tool
 
 **When you fix an emulation bug, capture it as a conformance-tool test case *at the moment of
@@ -4832,8 +4865,8 @@ right page for *why* — it is task-shaped and explains mechanisms. The atlas is
 
 ## The TEST RIG — one command, two players, the same fight (`pewter_chain ab`)
 
-**Reader-facing page: [`docs/agent/test-rig.md`](docs/agent/test-rig.md); the
-measured first result: [`docs/agent/test-rig-results.md`](docs/agent/test-rig-results.md).**
+**Reader-facing page: [`docs/agent/test-rig.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md); the
+measured first result: [`docs/agent/test-rig-results.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig-results.md).**
 Reusable half `examples/support/abrig.rs` (pure, unit-tested, no cartridge);
 front end `cmd_ab`/`cmd_abfilm` in `examples/pewter_chain.rs`; host-side battle
 observation `scenario::run::{Battles, BattleSummary}`.
@@ -5022,7 +5055,7 @@ because a wall clock on a shared box measures the box's afternoon.
 
 ### THE FIRST MOVE-LEARNING RESULT, AND WHAT THE HELD-OUT CONTROL SAID
 
-**Full page: [`docs/agent/move-learning-result.md`](docs/agent/move-learning-result.md).**
+**Full page: [`docs/agent/move-learning-result.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/move-learning-result.md).**
 Nine prompts (Charmander 4, Bulbasaur 5, three of them declines), a teacher that
 replays the drill's own answers, a student fitted from the drill's corpus, and a
 press-A floor. **Teacher 9/9, student 8/9, floor 3/9 — and all three of the
@@ -5344,10 +5377,10 @@ the rig on 300 attempts each: **14.0 %, 5.7 %, 48.3 %** — two agree closely an
 
 ### FILMING THE RIG — the recorder, and why a recorded number is not the tool's number
 
-**`docs/agent/test-rig.md` §0 is the media; `tools/testrig/{record-terminal.sh,caption-film.sh}`
-are what made it.** Two artefacts, `~/pokemon-run/testrig/{test-rig-running,teacher-vs-student}.mp4`,
-with the stills committed to `docs/agent/rig-stills/` and the mp4s deliberately not — the
-`docs/agent/chain-stills/` rule.
+**The media is AgentGB's `docs/agent/test-rig.md` §0 (it moved on 2026-08-19, and the stills with
+it); `tools/testrig/{record-terminal.sh,caption-film.sh}` here are what made it.** Two artefacts,
+`~/pokemon-run/testrig/{test-rig-running,teacher-vs-student}.mp4`, with the stills committed to
+AgentGB's `docs/agent/rig-stills/` and the mp4s deliberately not.
 
 - **THERE IS NO `asciinema` AND NO `agg` ON THIS BOX.** `record-terminal.sh` is this
   repository's own screenshot recipe turned into a loop: WezTerm on **XWayland** (the only
@@ -9238,7 +9271,7 @@ findings used to be scattered across `docs/gen1/sharp-edges.md`, `docs/agent/pew
 are a section of their own further down, ["Past Pewter"](#past-pewter--the-gym-the-badge-and-a-precondition-nobody-had-checked-scenariospewter15-19).
 Everything in this section still holds for links 01-14.
 
-**Reader-facing page: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md).** Fourteen
+**Reader-facing page: [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md).** Fourteen
 links from the Nintendo logo to standing in Pewter City, an expert solver
 (`examples/pewter_chain.rs`) that gets through all of them, and the corpus that comes out.
 **Nothing is trained**; the solver is scripted and says so everywhere it is described.
@@ -9382,7 +9415,7 @@ at `(5,5)`. It is the cartridge's own `PrepareOAMData` overflowing a 40-entry bu
 **is** `wTileMap`, and the collision check then reads the stamped `$A0` as a wall in every
 direction. Full mechanism with the pokered citations:
 [`docs/gen1/sharp-edges.md`](docs/gen1/sharp-edges.md); the route repair and the numbers:
-[`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §8.10.
+[`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) §8.10.
 
 - **The recipe for telling the two kinds of hang apart, because it took hours the first time.**
   Sample `Gameboy::debug_pc` over many frames — but know that Gen 1 spends most of every frame
@@ -9445,7 +9478,7 @@ re-certified against it, exactly as a driver change forces.
   readers (`theirs_turns`, `useful_stat_move`) ask expectation questions, and
   `SelectEnemyMove`'s `.chooseRandomMove` picks a wild Pokémon's move uniformly, so an honest
   figure is about **half** what it reports. Measured, unlanded, and written up with its numbers
-  in [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §7c — including the trap that
+  in [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) §7c — including the trap that
   the obvious correction trades one factor-of-two bias for another (flooring the roll mean, the
   accuracy and the move mean in turn reads **1** where the truth is **2.14**; accumulate at
   200x and divide once, rounded). Left alone because link 11 is signed off and correcting it
@@ -9618,7 +9651,7 @@ honest; a wrongly named one is not.**
 
 ### The swarm film — five things that were not obvious (`tools/pewter-chain/swarm_film.py`)
 
-Full description: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §11. Inspired by
+Full description: [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) §11. Inspired by
 Peter Whidden's swarm view; the credit is his and stays.
 
 1. **A film drawn from `wXCoord`/`wYCoord` TELEPORTS BY CONSTRUCTION.** Measured from the tracks:
@@ -10167,7 +10200,7 @@ shipping a caption; no test in this repository can see a clipped string.
 
 The film to Pewter City is the same compositor over three more links, and extending it exposed
 two defects that were invisible while the chain stopped at the forest's door. Full record and
-every number: [`docs/agent/pewter-chain.md`](docs/agent/pewter-chain.md) §11b.
+every number: [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) §11b.
 
 - **"THE CAMERA FOLLOWS THE MAJORITY" HAD SILENTLY BECOME "IT FOLLOWS THE SURVIVING MINORITY."**
   An agent that finishes stops being drawn, so as a long chain drains, the 5-95 box is fitted to
@@ -10230,7 +10263,7 @@ arithmetic is right about a film nobody made.
 
 ## Past Pewter — the gym, the badge, and a precondition nobody had checked (`scenarios/pewter/15-19`)
 
-**Reader-facing page: [`docs/agent/brock.md`](docs/agent/brock.md).** Five links from arriving
+**Reader-facing page: [`docs/agent/brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md).** Five links from arriving
 in Pewter to standing on Route 3 with the Boulder Badge, plus a repair link before them.
 **Certified at the chain's own gate — 3,000 attempts a link, in order, each entering from the
 previous link's exit pool, 3,000 distinct trajectories every time:** 15 train **3000/3000**,
@@ -10648,7 +10681,7 @@ polygon, the drawing primitives, the AXI helpers and **the camera**; `swarm_film
   gate goes red immediately, which is the point of having it.
 ## Past the badge, towards Misty — Route 3, Route 4 and Mt Moon (`scenarios/pewter/18b-22`)
 
-**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md).** Four new links east of
+**Reader-facing page: [`docs/agent/cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md).** Four new links east of
 Pewter, one shop, and two repairs to shared code that every earlier link now runs on. Certified at
 the chain's own gate — 3,000 attempts a link, in order, each entering from the previous one's exit
 pool, `--idle-spread 3001`, every attempt a distinct trajectory:
@@ -10880,7 +10913,7 @@ and paired on the seed: `cross-route-3` (20, one subject per starter line, 20 at
 
 ## A BLACKOUT IS A LEGAL DETOUR, NOT A LOSS — and that is what certified links 20 and 21
 
-**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md) §0-§2.** The section
+**Reader-facing page: [`docs/agent/cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) §0-§2.** The section
 above records links 20 and 21 as "accepted, not certified" for poison. **Every link from 18b to 25
 is certified 3000/3000 now**, and what closed the two was not the antidote — it was the captain's
 correction that *the party fainting and waking at a Pokémon Center is how the game works*.
@@ -10950,7 +10983,7 @@ attempts — but §2 above is the cure, not this.**
 
 ## Mt Moon: one ladder of three, a fossil in the doorway, and the chain reaches Cerulean
 
-**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md) §3-§5.** Three new links —
+**Reader-facing page: [`docs/agent/cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) §3-§5.** Three new links —
 `23-down-to-mt-moon-b2f`, `24-cross-mt-moon-b2f`, `25-east-to-cerulean`.
 
 - **THE CHAIN WAS TAKING A DEAD-END LADDER AND ITS OWN GOAL COULD NOT SEE IT.** B1F is four pockets
@@ -10984,7 +11017,7 @@ attempts — but §2 above is the cure, not this.**
 
 ## The chain throws a Poké Ball — and Gen 1's only answer to confusion is a bench
 
-**Reader-facing page: [`docs/agent/cerulean.md`](docs/agent/cerulean.md) §6.**
+**Reader-facing page: [`docs/agent/cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) §6.**
 `plugins/agent/src/catch.rs` had been built, measured against the cartridge and **never once wired
 into a run**. It is now, on link 23.
 

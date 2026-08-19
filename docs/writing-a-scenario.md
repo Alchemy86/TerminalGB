@@ -10,7 +10,7 @@ prints.
 Every command below is one to run, in the order given. Steps 0 to 5 need **no
 cartridge and cost nothing** — that is most of the authoring loop. Everything
 from step 6 on needs a Game Boy ROM, and this repository ships none. It ends by
-handing the finished scenario to [the test rig](agent/test-rig.md), which is
+handing the finished scenario to [the test rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md), which is
 what turns one run into a measurement.
 
 The finished article is [`scenarios/tutorial/town-map.json`](../scenarios/tutorial/town-map.json)
@@ -584,7 +584,7 @@ Three rules for a route, and they are not specific to Pallet Town:
 ## 10. One run is an anecdote — measure it
 
 A scenario that reaches its goal once has been *demonstrated*, not measured. The
-next step is [the test rig](agent/test-rig.md): the same scenario, from a pool of
+next step is [the test rig](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md): the same scenario, from a pool of
 starting states, at the same seeds, with two or more players, and the paired gap
 between them. It takes the scenario you just wrote:
 
@@ -623,8 +623,8 @@ fresh:
 
 - **A test is a committed `gbtestrig/1` file, not a shell command**, for the same
   reason a scenario is a file: a number nobody can re-run is a number nobody can
-  check. See [§3 of the rig page](agent/test-rig.md#3-setting-a-test-up).
-- **[§7, what it cannot tell you](agent/test-rig.md#7-what-it-cannot-tell-you)**,
+  check. See [§3 of the rig page](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md#3-setting-a-test-up).
+- **[§7, what it cannot tell you](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md#7-what-it-cannot-tell-you)**,
   is the section to read before quoting anything it prints.
 
 ---
@@ -633,7 +633,7 @@ fresh:
 
 - [`docs/scenarios.md`](scenarios.md) — the reference: every rule, the condition
   grammar, what a recording contains, and what has *not* been done.
-- [`docs/agent/pewter-chain.md`](agent/pewter-chain.md) — fourteen scenarios
+- [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — fourteen scenarios
   chained from a cold cartridge to Pewter City, each one's goal read out of the
   cartridge, and the link that scored 100% on the wrong task.
 - [`docs/gen1/memory-map.md`](gen1/memory-map.md) and the
@@ -643,8 +643,8 @@ fresh:
   what a driver is handed and what it may send back.
 - [`docs/claude-plays.md`](claude-plays.md) — putting a real model behind
   `--driver command`, and the budget and breaker that stop it running away.
-- [`docs/agent/test-rig.md`](agent/test-rig.md) and
-  [its first result](agent/test-rig-results.md) — turning a scenario into a
+- [`docs/agent/test-rig.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md) and
+  [its first result](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig-results.md) — turning a scenario into a
   measurement, and what 2,700 attempts at the rival battle actually said.
 - [`docs/gen1/level-up-drill.md`](gen1/level-up-drill.md) — a worked example of
   the other kind of question: not "did it get there" but "did it answer the

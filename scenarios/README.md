@@ -14,7 +14,7 @@ cargo run --release --example scenario -- check scenarios/leave-the-pokemon-cent
 must achieve, a plan (`gbtestrig/1`) says which scenario to run, from which
 starting states, how many times, and *who plays*. Checked in for the same reason
 — a test is a specification — and described in
-[`docs/agent/test-rig.md`](../docs/agent/test-rig.md).
+[`docs/agent/test-rig.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/test-rig.md).
 
 ```sh
 cargo run --release --features scenario --example pewter_chain -- \
@@ -42,8 +42,8 @@ works scripted works with a model behind it, and costs nothing to iterate on.
 `pewter/` — **the chain**, nineteen links from a cold cartridge to Route 3 with
 the Boulder Badge. `chain_files` reads this directory and nothing else, so a
 file dropped here joins the chain. Links 01-14 are
-[`docs/agent/pewter-chain.md`](../docs/agent/pewter-chain.md); 15-19 are
-[`docs/agent/brock.md`](../docs/agent/brock.md).
+[`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md); 15-19 are
+[`docs/agent/brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md).
 
 `experiments/` — scenarios that are **not links** and must never become them.
 They exist so that a claim about *where* to do something is a measurement

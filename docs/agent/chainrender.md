@@ -26,7 +26,7 @@ again* — and recorded consolidating as deferred, not cancelled.
 **The cost was that a fix landed on one video and not the others.** The camera
 smoothing existed only inside `swarm_film.main()`, two hundred lines that
 nothing else could reach, so every film the other three made juddered by
-construction. Landing [rule 7](pewter-chain.md#rule-7-smooth-the-box-because-a-bimodal-swarm-has-no-midpoint)
+construction. Landing [rule 7](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md#rule-7-smooth-the-box-because-a-bimodal-swarm-has-no-midpoint)
 on that camera would have had exactly the same reach.
 
 ## The rule
@@ -113,6 +113,6 @@ picture to no end.
 
 - [the path-arrow map](path-arrows.md) — the movement map, and the two arrow
   encodings `palette.py` holds.
-- [the Pewter chain](pewter-chain.md) — §11 on the films, and rule 7.
+- [the Pewter chain](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — §11 on the films, and rule 7.
 - [the swarm view](../swarm-view.md) — the Rust compositor, and what it has
   that the Python side does not.

@@ -60,6 +60,17 @@ EXEMPT = {
     # Retired brand studies. Its own first line is "do not ship anything in
     # this directory" - indexing it would invite exactly that.
     "docs/brand/exploration/README.md": "retired design studies, explicitly not shipped",
+    # Pointer stubs left behind by the 2026-08-19 repatriation. Each is three
+    # paragraphs saying "this moved to AgentGB" and a table of what stayed here;
+    # they exist so old links - including this repository's own source comments
+    # - still resolve, and they are deliberately not content. The index carries
+    # one row for the whole set, and docs/where-things-live.md is the rule.
+    "docs/agent/pewter-chain.md": "pointer stub; the page lives in AgentGB",
+    "docs/agent/brock.md": "pointer stub; the page lives in AgentGB",
+    "docs/agent/cerulean.md": "pointer stub; the page lives in AgentGB",
+    "docs/agent/test-rig.md": "pointer stub; the page lives in AgentGB",
+    "docs/agent/test-rig-results.md": "pointer stub; the page lives in AgentGB",
+    "docs/agent/move-learning-result.md": "pointer stub; the page lives in AgentGB",
 }
 
 # A markdown link whose target is a .md file, with the link text captured.

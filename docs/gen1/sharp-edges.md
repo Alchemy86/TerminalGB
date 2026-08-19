@@ -115,7 +115,7 @@ the floor beside it is `$20` — and `CAVERN, $20, $05` is the table's very firs
 built from the collision list alone routes straight through it, and the solver pressed `left`
 eight times into a wall on 53 of 60 attempts. The table is at file offset `0xC7E` in this
 cartridge, found by that first record's own bytes, which occur exactly once.
-[`docs/agent/cerulean.md`](../agent/cerulean.md) §6.
+[`docs/agent/cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) §6.
 
 **Oak stops a new game at the north exit of Pallet Town.** `PalletTownDefaultScript` opens
 `CheckEvent EVENT_FOLLOWED_OAK_INTO_LAB / ret nz`, so setting that one bit — byte 0, bit 0 of
