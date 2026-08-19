@@ -31,7 +31,7 @@ This is the other lever: **catch something, put it in front, and train it.**
   [`26b-lead-with-the-paras.json`](../../scenarios/pewter/26b-lead-with-the-paras.json).
 - **Solver**: [`examples/pewter_chain.rs`](../../examples/pewter_chain.rs) —
   `catch_wants`, `hunting`, `lead_with`, `ChainDriver::reorder_party`,
-  `MT_MOON_B2F_TO_HUNT`.
+  `ChainDriver::weakening_move`, `MT_MOON_B2F_TO_HUNT`.
 - **Chooser**: [`tools/gen1-tables/duel.py`](../../tools/gen1-tables/duel.py).
 
 ---
