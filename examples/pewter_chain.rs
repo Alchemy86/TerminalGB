@@ -1351,6 +1351,47 @@ fn recover_route(scenario: &str) -> HashMap<u8, MapPlan> {
         // one, the Gym for the other. That is deliberate: the walk back and
         // the walk out cross the same city and there is nothing in the city
         // to tell them apart.
+        // **A blackout here costs the whole mountain, and that is the
+        // cartridge's price rather than the solver's.** This link runs BEFORE
+        // the nurse in Cerulean has been spoken to, so `wLastBlackoutMap` is
+        // still Route 4 — the Mt Moon Pokémon Center — and its door cannot be
+        // walked to from the mountain's eastern mouth. Measured on the frozen
+        // link-25 pool: 4 of 500 entry states arrive in Cerulean **poisoned,
+        // with 2-8 HP and an empty bag** (Route 3 and Mt Moon spend every
+        // antidote and potion link 18b bought), and the 21-step walk to the
+        // counter kills them one tile short of the door. They wake whole on
+        // Route 4 at (11,6) and need the crossing again — 19 of 3,000 attempts
+        // before this table existed, every one of them bouncing in and out of
+        // the Mt Moon Centre's door until the calls ran out.
+        //
+        // It is link 25's own walk back, plus the leg east that link 25 does
+        // as its route: ROUTE_4 carries two stages, and a map's program
+        // counter survives leaving it, so the mountain is entered by the first
+        // and left by the second.
+        "26-heal-in-cerulean" => {
+            r.insert(
+                ROUTE_4,
+                vec![
+                    stage(ROUTE_4_TO_MT_MOON, Finish::Arrive),
+                    stage(ROUTE_4_TO_CERULEAN, Finish::Step("right")),
+                ],
+            );
+            r.insert(MT_MOON_1F, vec![stage(MT_MOON_1F_TO_B1F, Finish::Arrive)]);
+            r.insert(
+                MT_MOON_B1F,
+                vec![
+                    stage(MT_MOON_B1F_TO_B2F, Finish::Arrive),
+                    stage(MT_MOON_B1F_TO_ROUTE_4, Finish::Arrive),
+                ],
+            );
+            r.insert(
+                MT_MOON_B2F,
+                vec![
+                    stage(MT_MOON_B2F_TO_FOSSIL, Finish::Talk("up")),
+                    stage(MT_MOON_B2F_TO_EXIT, Finish::Arrive),
+                ],
+            );
+        }
         "27-train-for-misty" | "x-train-for-misty-30" => {
             r.insert(
                 CERULEAN_CITY,

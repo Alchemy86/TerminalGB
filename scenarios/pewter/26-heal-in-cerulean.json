@@ -14,8 +14,8 @@
     "battle flee",
     "require party>=1",
     "require badges>=1",
-    "max_calls 400",
-    "max_wall_seconds 900"
+    "max_calls 2000",
+    "max_wall_seconds 2400"
   ],
   "watch": [
     {
@@ -29,12 +29,13 @@
     "guidance"
   ],
   "guidance": "guidance/26-heal-in-cerulean.json",
-  "timeout_frames": 200000,
+  "timeout_frames": 800000,
   "evidence": [
     "watch:last_blackout_map=0x03 - wLastBlackoutMap $D719, which the atlas records as 'where blacking out returns you - the last Pokemon Center you healed at'. It holds the TOWN and not the Center's interior map, which link 16 measured for Pewter: entering the building leaves the byte alone and talking to the nurse flips it. CERULEAN_CITY is const index 3. The same three conditions link 16 uses, for the same reasons: the flip proves the conversation began, party_missing_hp=0 proves it finished, and map=0x40 stops the goal firing anywhere but inside the building.",
     "THIS LINK IS FIRST IN THE ARC BECAUSE OF WHERE A BLACKOUT PUTS YOU, not for tidiness. Until the nurse here has been spoken to the anchor is the Mt Moon Pokemon Center, whose door is on Route 4 at (11,5) - and Route 4's three doors are all on row 5 with x=19-23 solid on that row and x=20-23 solid on rows 6, 7 and 8, so the mountain's eastern mouth cannot be walked to from its western one. A blackout while training east of the mountain would therefore cost the whole crossing again. One conversation moves the anchor to this side of it.",
     "map=0x40 is Cerulean's Pokemon Center: warp[2] of map 0x03 at (19,17) names it, and its own layout is the same building as Viridian's, Pewter's and Mt Moon's - 14x8, nurse at (3,1), doors at (3,7) and (4,7) - which is why one route table serves all four.",
     "THE WALK IS ON ROW 19 AND NOT ROW 18, because the city's object list puts a walking NPC (movement $FE) at (15,18) and a Gen 1 sprite is solid. Row 19 runs clear from x=0 to x=22 with no object on it at all; twenty-one steps, breadth-first over the cartridge's own walkability grid.",
-    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, so party_hp=0 is not on the failure list - the same model links 20 to 25 carry. Here it costs nothing at all: the walk is one map."
+    "A BLACKOUT IS A LEGAL DETOUR AND NOT A FAILURE, so party_hp=0 is not on the failure list - the same model links 20 to 25 carry. Here it costs nothing at all: the walk is one map.",
+    "A BLACKOUT HERE COSTS THE WHOLE MOUNTAIN, which is why the call budget is 2000 and not 400. This link runs before the nurse has been spoken to, so wLastBlackoutMap is still 0x0F - the Mt Moon Pokemon Center, whose door is on Route 4's western half and cannot be walked to from the mountain's eastern mouth. Measured on the frozen link-25 pool: 4 of 500 entry states arrive in Cerulean poisoned with 2-8 HP and an empty bag - Route 3 and Mt Moon spend every antidote and potion link 18b bought - and the 21-step walk to the counter kills them one tile short of the door. Without a walk back that was 19 of 3000 attempts, every one bouncing in and out of the Mt Moon Centre's door until the calls ran out. The solver's recover_route is link 25's own walk back plus the leg east."
   ]
 }
