@@ -11766,6 +11766,35 @@ sight range from 3 to 8**.
   and is not, so it gets fewer and the report says which. `$SPEC` on
   `build_pool.sh` is that decision made explicit rather than in a comment.
 
+### The bench costs SEVEN times the training leg, not twice — and the control is free
+
+**`23-down-to-mt-moon-b2f`'s exits are a pool with no bench in them**, because
+that leg stopped catching so the hunt's goal could be exact. Running the rest of
+the arc from there is the same chain, same upstream pool, same binary, played
+without a second Pokémon — **a control that needs no stub and no code change**.
+Measured at 240 attempts a leg:
+
+- **The control reproduces `misty.md` on a pool it never saw**: 176/240 =
+  73.3 % against its published 73.7 %, per line BULBASAUR 88/88, SQUIRTLE 88/89,
+  **CHARMANDER 0 of 63**. Two independent measurements agreeing is the check.
+- **It settles link 24's residual too**: 240/240 without a bench against
+  988/1000 with one, on the same entry pool.
+- **Link 27: 754,313 frames with a bench against 102,540 without — 7.4x, where
+  the experience arithmetic predicts 2.1x.** On the medium-fast curve a starter
+  needs 5,824 and a PARAS caught on B2F needs ~12,500. The missing factor of
+  three and a half is that **a low-level lead cannot collect experience
+  efficiently** — it declines more fights, flees more of the ones it takes, and
+  walks to the nurse more. *The arithmetic prices the experience; it does not
+  price being weak.* Budget for that whenever a trainee starts far below the
+  ground it is training on.
+- **THE FIRST CONTROL WAS INVALID AND THE REASON IS WORTH KNOWING**: it ran
+  link 27 from **26**'s exits, where the party already holds the bench — and
+  `lead_with` names the species on link 27 as well as 26b, so that arm promoted
+  and trained the bench exactly like the certified one. 240/240, medians within
+  0.5 %. It measured the same thing twice. What it does prove is the
+  belt-and-braces: **a run whose promotion never happened still gets one on the
+  leg that needs it.**
+
 ### The certification found two defects that nothing smaller would have
 
 Both were invisible at the scale everything else was tested at — three seeds,

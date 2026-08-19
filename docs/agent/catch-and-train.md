@@ -166,7 +166,63 @@ Charmander line, against nothing at all.
 
 ## 3. What it costs
 
-<!-- COST -->
+### The paired arm, and why it is a control rather than a comparison
+
+`23-down-to-mt-moon-b2f` stopped catching so the hunt's goal could be exact, so
+**its exits are a pool with no bench in them at all** — and running the rest of
+the arc from there is the same chain, from the same upstream pool and the same
+binary, played without a second Pokémon. Nothing is stubbed and no code is
+changed, which is what makes it a control. 240 attempts a leg.
+
+| leg | with a bench | **without one** |
+|---|---:|---:|
+| 24-cross-mt-moon-b2f | 988/1000 = 98.8 % | **240/240 = 100.0 %** |
+| 25-east-to-cerulean | 1000/1000 | 240/240 |
+| 26-heal-in-cerulean | 1000/1000 | 240/240 |
+| 27-train-for-misty | 500/500, **754,313 frames** | 240/240, **102,540 frames** |
+| 28-heal-before-misty | 500/500 | 240/240 |
+| **29-fight-through-cerulean-gym** | **2996/3000 = 99.9 %** | **176/240 = 73.3 %** |
+
+**The control reproduces [`misty.md`](misty.md) on a pool it never saw** —
+73.3 % against its published 73.7 %, and per line BULBASAUR 88/88, SQUIRTLE
+88/89, **CHARMANDER 0 of 63**. Two independent measurements agreeing is the
+check; this is what makes the bench column a comparison rather than an
+assertion.
+
+**And it settles link 24's residual**: 240/240 without a bench against
+988/1000 with one, on the same entry pool. Its 1.2 % is the hunt's hand-over
+position and nothing else, which is what §4's reproduction already showed one
+seed at a time.
+
+### The bench costs seven times the training leg, not twice
+
+| | frames (median) | decisions (median) |
+|---|---:|---:|
+| starter, level ~20 → 24 | 102,540 | 942 |
+| **PARAS, level 10-12 → 24** | **754,313** | **6,816** |
+
+**7.4× the frames, and the experience arithmetic predicts 2.1×.** On the
+medium-fast curve a starter needs 13,824 − 8,000 = 5,824 and a PARAS caught on
+B2F needs 13,824 − 1,331 ≈ 12,500. The missing factor of three and a half is
+that **a low-level lead cannot collect experience efficiently**: it declines
+more fights (`battle::decide`'s "too hurt to pick a fight" is threat-relative),
+flees more of the ones it takes, and walks to the nurse more often. The
+arithmetic prices the experience; it does not price being weak.
+
+In wall-clock terms that is about **650,000 extra emulated frames**, roughly
+three emulated hours, added to a leg that was already the longest in the arc.
+It is the whole price of the capability — every other leg is within noise.
+
+### One thing the invalid first control did prove
+
+The first attempt ran link 27 from **26**'s exits rather than 23's, meaning the
+party already held a PARAS on the bench — and `lead_with` names the species on
+link 27 as well as 26b, so that arm promoted and trained the bench exactly like
+the certified one. It measured the same thing twice: 240/240, medians within
+0.5 % (757,716 frames against 754,313).
+
+Which is worth keeping, because it is the belt-and-braces working: **a run
+whose promotion never happened still gets one on the leg that needs it.**
 
 ## 4. Findings
 
