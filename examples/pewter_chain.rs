@@ -2892,6 +2892,14 @@ impl ChainDriver {
                 }
             }
             Learn::Which => {
+                // **Slot 1 is the fallback and it is not arbitrary.** The
+                // prompt fires inside the battle that earned the level, so the
+                // view is filled and `worst_held` answers; if it ever did not,
+                // slot 1 is where the base-stats moves put a *status* move for
+                // every line this chain can be carrying — WARTORTLE's TAIL
+                // WHIP, IVYSAUR's GROWL, CHARMELEON's GROWL — which is the one
+                // thing clause 2 of the criterion is willing to give up
+                // sight-unseen.
                 let want = s
                     .arena
                     .as_ref()
