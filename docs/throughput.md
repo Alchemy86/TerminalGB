@@ -1155,12 +1155,15 @@ every side optimised:
 
 | | ms/frame | × real time | cycle-accurate? |
 |---|---:|---:|---|
-| SameBoy (`-O3 -ffast-math` + LTO), render off | 0.5925 | 28× | yes |
-| **TerminalGB**, pixels off | **0.0692** | **242×** | yes |
-| PyBoy 2.7.0 (Cython), render off, sound off | 0.0298 | 562× | no |
+| SameBoy (`-O3 -ffast-math` + LTO), render off | 0.3854 | 43× | yes |
+| **TerminalGB**, pixels off | **0.0405** | **414×** | yes |
+| PyBoy 2.7.0 (Cython), render off, sound off | 0.0193 | 869× | no |
+
+(Best of three interleaved on a quiet box; the same set at load 16 read 28×, 249× and 562×,
+which is the same ordering with every row depressed together.)
 
 **The "1,000-10,000× for a fast interpreter" figure is not what a cycle-accurate emulator does
-on this hardware — the reference implementation reaches 28× and we are 8.6× past it.** PyBoy's
+on this hardware — the reference implementation reaches 43× and we are 9.5× past it.** PyBoy's
 real 2.3× lead is bought by not being cycle-accurate, and its technique is in its own source
 comment: every peripheral publishes a `_cycles_to_interrupt` horizon and is advanced only when
 one is reached. That is our idle batch, applied always rather than only while the CPU is halted.
@@ -1172,8 +1175,8 @@ whole difference is the core**, and specifically that we do peripheral bookkeepi
 we keep on purpose — is only **+13.6 %** of that.
 
 **So the next structural item is named: make the timer and the PPU lazy the way the APU already
-is.** `Sound::catch_up` is the proof the pattern costs no accuracy. It is a project, not a pass,
-and it is the only remaining item on this page big enough to matter.
+is.** `Sound::catch_up` is the proof the pattern costs no accuracy. **§16 does the PPU half**;
+the timer is what is left.
 
 ---
 
@@ -1234,3 +1237,21 @@ current.
 **Nothing for `identical`**, by construction: the per-dot engine is the accuracy engine and is
 stepped per bus access. And nothing for a machine with the LCD off. The gain is the batched
 renderer's, which is the default and the one a collector runs.
+
+### 16.5 The session, end to end
+
+Cold boot, collector configuration, interleaved against the commit this session started from,
+one P-core, thread CPU clock, **quiet box (load 1.3)**:
+
+| | ms/frame | × real time |
+|---|---:|---:|
+| session start | 0.0592 | 283× |
+| **after §15 and §16** | **0.0454** | **369×** |
+
+**+30.4 %**, with every frame hash and every WRAM hash byte-identical at each step and every
+gate green throughout. With no APU installed at all — PyBoy's configuration — the same build is
+**0.0405 ms/frame, 414×**.
+
+**What is left, in order of what it is worth.** The timer is the other half of §16's idea and is
+priced at 13.0 % by `--breakdown`. The per-access tick is 13.6 % and is accuracy we keep. After
+those the profile has nothing above 6 % and the next thing would be the interpreter itself.

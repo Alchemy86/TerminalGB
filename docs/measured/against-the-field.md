@@ -37,17 +37,17 @@ Reproduce it: [`tools/perf/sameboy-bench.c`](../../tools/perf/sameboy-bench.c),
 
 | emulator | ms/frame | × real time | cycle-accurate? |
 |---|---:|---:|---|
-| **SameBoy** (Expat, `-O3 -ffast-math` + LTO), rendering off | 0.5925 | **28×** | yes |
-| SameBoy, rendering on | 0.6400 | 26× | yes |
-| **TerminalGB**, pixels off, no APU | **0.0672** | **249×** | yes |
-| TerminalGB, pixels off, APU installed and silent | 0.0706 | 237× | yes |
-| TerminalGB, pixels on | 0.1106 | 151× | yes |
-| **PyBoy 2.7.0** (LGPL-3.0, Cython), rendering and sound off | **0.0298** | **562×** | **no** |
+| **SameBoy** (Expat, `-O3 -ffast-math` + LTO), rendering off | 0.3854 | **43×** | yes |
+| **TerminalGB**, pixels off, no APU | **0.0405** | **414×** | yes |
+| **PyBoy 2.7.0** (LGPL-3.0, Cython), rendering and sound off | **0.0193** | **869×** | **no** |
 
-**We are 8.6× faster than SameBoy and 2.3× slower than PyBoy.** The PyBoy row is the mean of
-four runs interleaved with ours on the same core in the same minute (562, 559, 563, 562 against
-our 242, 242, 242, 237) — a single-shot reading of either drifts by 30 % as the box's other
-occupant comes and goes.
+**We are 9.5× faster than SameBoy and 2.1× slower than PyBoy.**
+
+All three rows are the best of three runs **interleaved with each other on the same core in the
+same minute**, on a quiet box (load 1.3). A single-shot reading of any of them drifts by 30 % as
+the box's other occupant comes and goes — an earlier set taken at load 16 read 28×, 249× and
+562×, i.e. the same ordering and the same ratios with every row depressed together. **Quote the
+load average or do not quote the number.**
 
 ### And where PyBoy's 2.3× is, which is the useful half
 
@@ -66,7 +66,7 @@ silent, which is the configuration a collector runs in. The entire gap is the co
 
 The figure in circulation is that a fast Game Boy interpreter reaches **1,000–10,000× real
 time**. On this hardware, with this method, **the reference cycle-accurate emulator reaches
-28×.** SameBoy is not a slow implementation — it is the accuracy oracle this repository already
+43×.** SameBoy is not a slow implementation — it is the accuracy oracle this repository already
 uses to settle disputes ([`tools/sameboy-oracle`](../../tools/sameboy-oracle/README.md)), it is
 written in C, and it is compiled with `-ffast-math` and LTO.
 
@@ -121,8 +121,8 @@ need sub-instruction resolution, and it is lossless.
 ### And what we did not
 
 Dropping the per-access tick entirely — the thing PyBoy does not pay — is priced by
-`core_bench --breakdown` at **+13.6 %** of a collector's frame. It would take us from 242× to
-about 275×, and it would cost `mem_timing`. It is available under the two-budget rule as a
+`core_bench --breakdown` at **+13.6 %** of a collector's frame. It would take us from 414× to
+about 470×, and it would cost `mem_timing`. It is available under the two-budget rule as a
 *performance-mode* liberty, and it is written down here rather than taken quietly.
 
 **It is also nowhere near the 2.3×, and that is the finding.** The rest is that we do peripheral
@@ -142,8 +142,8 @@ enough to matter.
 "As fast as possible, lossless in ways that matter" is the right framing, and it is better
 served by a real ceiling than by a borrowed number:
 
-* Against the accuracy reference we are **8.8× ahead**, and that lead is the design.
-* Against the fastest thing measured here we are **2.3× behind**, and 21 points of that is
+* Against the accuracy reference we are **9.5× ahead**, and that lead is the design.
+* Against the fastest thing measured here we are **2.1× behind**, and 13.6 points of that is
   accuracy we are choosing to keep.
 * **Aggregate throughput** — which is what a certification run actually experiences — is
   already **1242× real time** on a contended box (see

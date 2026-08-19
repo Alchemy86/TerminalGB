@@ -19,24 +19,23 @@ The DMG's own frame is 16.7427 ms, so 1× real time is 59.7275 frames a second.
 
 | configuration | ms/frame | × real time | load |
 |---|---:|---:|---:|
-| **collector** — pixels off, APU installed, samples off | **0.0772** | **217×** | 16 |
-| the same, on a **quiet** box | 0.0491 | **341×** | 0.3 |
+| **collector** — pixels off, APU installed, samples off | **0.0454** | **369×** | 1.3 |
+| the same, no APU installed at all | 0.0405 | **414×** | 1.3 |
+| the same, at load 16 | 0.0772 | 217× | 16 |
 | player — picture on, APU silent | 0.1582 | 106× | 16 |
 | `identical` picture mode, picture on | 0.4962 | 34× | 16 |
 
-The two collector rows are the same binary; the difference is entirely the box's other
-occupant, through frequency scaling. **The quiet row is the measured quiet figure of the
-session's starting commit (0.0581 ms/frame, 288×) scaled by the interleaved improvement below,
-and is labelled as such rather than presented as an independent measurement** — the box has not
-been quiet since.
+The first and third rows are the same binary; the difference is entirely the box's other
+occupant, through frequency scaling. **Report the load average with any number from this box.**
 
-Measured against the commit this session started from, interleaved on one core in one minute:
-**0.0913 → 0.0772 ms/frame, +18.3 %** — see [`docs/throughput.md`](../throughput.md) §15 for
-what each part of that was worth, and [against the field](against-the-field.md) for what the
-number means beside two other emulators built and timed here.
+Measured against the commit this session started from, interleaved on one core in one minute on
+a quiet box: **0.0592 → 0.0454 ms/frame, 283× → 369×, +30.4 %** — see
+[`docs/throughput.md`](../throughput.md) §15 and §16 for what each part of that was worth, and
+[against the field](against-the-field.md) for what the number means beside two other emulators
+built and timed here.
 
-**Aggregate, 20 workers, collector configuration: 58,777–74,155 emulated frames a second =
-984–1242× real time** — both readings taken while another crew held most of the box, which is
+**Aggregate, 20 workers, collector configuration: 55,917–74,155 emulated frames a second =
+936–1242× real time** — both readings taken while another crew held most of the box, which is
 what a fan-out figure's spread looks like when it is wall clock by definition. On a quiet box
 [`docs/throughput.md`](../throughput.md) §6 measures 232,746 frames a second, which is
 **3,896×**.
