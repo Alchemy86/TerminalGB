@@ -214,11 +214,16 @@ already does for the shop counter link 18b's goal leaves open.
   slots, base catch rate 255) arrives holding **VINE WHIP** — a real GRASS
   attack — and is the one candidate that looks better than PARAS on paper at
   the level it is caught. It is out on **geography and on its own evolution**.
-  Route 24's grass is a 2×14 band at `x` 4-5, `y` 18-31, west of Nugget Bridge
-  and free of every trainer cone; but the entry from Cerulean at (10,35) opens
-  onto a neck the bridge trainers cover, and a cone-avoiding search from there
-  reaches **8 tiles and no grass at any sight range**. Nugget Bridge's seven
-  trainers are unavoidable. And BELLSPROUT evolves into WEEPINBELL at 21, whose
+  Route 24's grass is a 2×14 band at `x` 4-5, `y` 18-31 and no trainer's sight
+  cone touches it — but you cannot get to it. Rows 32-35, which are the whole
+  of the corridor up from Cerulean, are walkable only at `x` 10-11 and 13-14;
+  the grass column does not exist below row 31, and at row 31 `x` 6-9 is solid.
+  So the only way in is north up the bridge and back down, and the bridge is
+  the trainers. A breadth-first search from all four southern entry tiles that
+  avoids every trainer body and every sight cone reaches **73 tiles and not one
+  square of grass, at every sight range from 3 to 8**. Nugget Bridge's seven
+  trainers are unavoidable, which is what `CLAUDE.md` already recorded from the
+  other direction. And BELLSPROUT evolves into WEEPINBELL at 21, whose
   own learnset replaces VINE WHIP's slot: at 24 its best move is WRAP, and it
   loses.
 * **VOLTORB** and **MAGNEMITE** are ELECTRIC, so they carry Pikachu's defensive

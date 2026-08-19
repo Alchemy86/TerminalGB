@@ -2227,6 +2227,105 @@ pub struct ChainDriver {
     calls: u32,
 }
 
+#[cfg(test)]
+mod hunt_tests {
+    use terminalgb_plugin_agent::battle::{Move, Side, View};
+
+    /// A damaging move, at the damage a hunt has to reason about.
+    fn mv(slot: usize, name: &str, min: u16, max: u16) -> Move {
+        Move {
+            slot,
+            name: name.to_string(),
+            power: 40,
+            accuracy: 100,
+            pp: 10,
+            effect_pct: 100,
+            min,
+            max,
+            ..Move::default()
+        }
+    }
+
+    fn against(hp: u16, moves: Vec<Move>) -> View {
+        View {
+            theirs: Side {
+                hp,
+                max_hp: hp,
+                ..Side::default()
+            },
+            moves,
+            ..View::default()
+        }
+    }
+
+    /// **The measured case, and the one the Charmander line failed on.** A
+    /// level 20 CHARMELEON against a level 11 PARAS holds a SCRATCH that does
+    /// 17 and an EMBER that does 112, because FIRE is 2x twice over on
+    /// BUG/GRASS. The policy's own answer is the EMBER; a hunt's has to be the
+    /// SCRATCH, or the encounter it has paced 128 steps for is gone.
+    #[test]
+    fn a_hunt_chips_rather_than_knocking_out() {
+        let v = against(30, vec![mv(0, "SCRATCH", 14, 17), mv(2, "EMBER", 96, 112)]);
+        assert_eq!(super::ChainDriver::weakening_move(&v), Some(0));
+    }
+
+    /// **It takes the hardest hit that is still safe, not the softest one.**
+    /// Chipping is a turn the lead spends being hit back, so a rule that
+    /// always picked the gentlest move would pace a hunt to death.
+    #[test]
+    fn it_takes_the_hardest_move_that_still_leaves_it_standing() {
+        let v = against(
+            30,
+            vec![
+                mv(0, "SCRATCH", 4, 6),
+                mv(1, "BITE", 20, 29),
+                mv(2, "EMBER", 96, 112),
+            ],
+        );
+        assert_eq!(super::ChainDriver::weakening_move(&v), Some(1));
+    }
+
+    /// **A move whose BEST roll kills is refused even though its worst does
+    /// not.** `max`, not `expected`: a knockout is not a tail risk to be
+    /// traded off, it is the encounter gone.
+    #[test]
+    fn the_best_roll_is_what_has_to_be_survivable() {
+        let v = against(30, vec![mv(0, "SCRATCH", 6, 8), mv(1, "BITE", 25, 31)]);
+        assert_eq!(super::ChainDriver::weakening_move(&v), Some(0));
+    }
+
+    /// When everything can knock it out, take the gentlest and accept the
+    /// risk — standing there doing nothing invites Gen 1's own escape check.
+    #[test]
+    fn with_nothing_safe_it_takes_the_gentlest() {
+        let v = against(10, vec![mv(0, "EMBER", 96, 112), mv(1, "SCRATCH", 14, 17)]);
+        assert_eq!(super::ChainDriver::weakening_move(&v), Some(1));
+    }
+
+    /// A move with no PP, or one DISABLE has taken away, is not a move —
+    /// the same rule `battle::decide` applies through `Move::usable`.
+    #[test]
+    fn an_unusable_move_is_not_chosen() {
+        let mut spent = mv(0, "SCRATCH", 14, 17);
+        spent.pp = 0;
+        let mut off = mv(1, "BITE", 20, 25);
+        off.disabled = true;
+        let v = against(30, vec![spent, off, mv(2, "EMBER", 96, 112)]);
+        // Only the EMBER is usable, and it kills — so the gentlest usable one
+        // is the EMBER, which is the honest answer rather than a refusal.
+        assert_eq!(super::ChainDriver::weakening_move(&v), Some(2));
+    }
+
+    /// A status move does no damage, so it can never chip anything down.
+    #[test]
+    fn a_party_with_only_status_moves_has_nothing_to_chip_with() {
+        let mut growl = mv(0, "GROWL", 0, 0);
+        growl.power = 0;
+        let v = against(30, vec![growl]);
+        assert_eq!(super::ChainDriver::weakening_move(&v), None);
+    }
+}
+
 /// A cure or a drink, held across the eight or so decisions the bag costs.
 ///
 /// **Every Gen 1 item is used through the same five screens** — the start
