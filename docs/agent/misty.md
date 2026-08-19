@@ -424,6 +424,46 @@ Neither heal link can prove a *repeat* heal, and both say so: `$D719` is already
 strongest claim the cartridge supports. It forces anyone who is hurt through the
 nurse and cannot be satisfied at a door.
 
+## 8b. The test rig, on all five links
+
+Every new link handed to [the rig](test-rig.md) beside the expert, from its own
+certified entry pool, paired on the seed, `--idle-spread 3001`:
+
+| plan | link | teacher | `mash-a` | `random` | gap [goal] |
+|---|---|---:|---:|---:|---|
+| [`heal-in-cerulean`](../../scenarios/testrig/heal-in-cerulean.json) | 26 | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]** |
+| [`train-for-misty`](../../scenarios/testrig/train-for-misty.json) | 27 | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]** |
+| [`heal-before-misty`](../../scenarios/testrig/heal-before-misty.json) | 28 | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]** |
+| [`fight-through-cerulean-gym`](../../scenarios/testrig/fight-through-cerulean-gym.json) | 29 | see below | 0/60 | 0/60 | see below |
+| [`heal-after-misty`](../../scenarios/testrig/heal-after-misty.json) | 30 | **12/12** | 0/12 | 0/12 | **+100.0 [+43.4, +156.6]** |
+
+**How a zero was reached is worth more than the zero**, and here the four
+floors are not all the same shape. `mash-a` is *stuck* on link 26 — it never
+leaves the tile it starts on — and runs out of calls everywhere else. `random`
+is the interesting one: on link 28 it ends **`violated` on all twelve**, because
+that leg's rule is `battle flee` and random fighting wins battles; and on link
+26 it wins two violations and flees 88 % of the seventeen battles it starts.
+
+### And on the gym, the rig says the quiet part out loud
+
+The gym plan carries one subject per starter line, twenty attempts each:
+
+| subject | teacher | `mash-a` | `random` | gap [goal] teacher − random |
+|---|---:|---:|---:|---|
+| **WARTORTLE** | **20/20 = 100 %** | 0/20 | 0/20 | **+100.0 [+56.2, +143.8]** |
+| **IVYSAUR** | **20/20 = 100 %** | 0/20 | 0/20 | **+100.0 [+56.2, +143.8]** |
+| **CHARMELEON** | **0/20 = 0 %** | 0/20 | 0/20 | **+0.0 [+0.0, +0.0]** |
+
+**On the Charmander line the expert's gap over a program that mashes A is
+nothing at all** — and it is not that the expert plays badly there: it wins all
+**39** of the trainer battles it fights on the way in, at 62.6 % HP left, and
+loses to Misty every time. That is the strongest form the finding takes.
+Expertise is worth a hundred points on the two lines that hold an answer and
+zero on the line that does not.
+
+**There is still no trained player in this repository**, so every split is
+`n/a` and these are a ceiling and a floor rather than a distillation result.
+
 ## 9. Running it
 
 ```sh
