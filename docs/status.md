@@ -28,14 +28,14 @@ yourself proves nothing.
 | [SameSuite](measured/scoreboard.md) | **73** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **3** / 79 | **26** / 79 | mid-scanline picture timing — pixel-exact rows |
-| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3173** / 5225 | **3550** / 5225 | the largest suite there is — mostly PPU, per console |
+| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3173** / 5225 | **3613** / 5225 | the largest suite there is — mostly PPU, per console |
 | [GBMicrotest](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **251** / 513 | **338** / 513 | low-level timing probes, each writing its own verdict byte |
 | [AGE test roms](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3** / 59 | **8** / 59 | timing, per console revision |
 | Mooneye GB — wilbertpol fork | **62** / 117 | **82** / 117 | the 2016 suite, a different population from Gekkio's |
-| cgb-acid2 + cgb-acid-hell | **1** / 2 | **0** / 2 | the Color siblings of dmg-acid2, judged in colour |
+| cgb-acid2 + cgb-acid-hell | **1** / 2 | **1** / 2 | the Color siblings of dmg-acid2, judged in colour |
 | Bully / Scribbltests / Strikethrough / TurtleTests / little-things-gb / MBC3 Tester / rtc3test | **18** / 24 | **18** / 24 | screenshot-judged odds and ends, plus the cartridge clock |
 
-**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **75/75** on Mooneye `acceptance` and **26/79** on Mealybug for about **8.8x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` wins overwhelmingly on the PPU suites but does **not** dominate everywhere: it loses `cgb-acid2` and part of Gambatte's `sprites`/`window` groups ([which rows, and why that blocks a default flip](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-mostly-dominates)).
+**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline dot by dot, scoring **75/75** on Mooneye `acceptance` and **26/79** on Mealybug for about **8.8x** the CPU. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks). `identical` wins overwhelmingly on the PPU suites and no longer loses `cgb-acid2`; four small Gambatte groups are still net-negative by eight rows between them, against 891 gains ([which rows, and how each moved](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-mostly-dominates)).
 <!-- suite-scores:end -->
 
 These scores are re-derived from the checked-in baselines under

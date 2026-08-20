@@ -237,9 +237,10 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
         f" dot by dot, scoring **{pa}/{ta}** on Mooneye `acceptance` and **{pm}/{tm}** on Mealybug"
         " for about **8.8x** the CPU. `same` above means the suite has one baseline because the"
         " mode does not reach what it measures (audio, DMA, mappers, cartridge clocks)."
-        " `identical` wins overwhelmingly on the PPU suites but does **not** dominate everywhere:"
-        " it loses `cgb-acid2` and part of Gambatte's `sprites`/`window` groups"
-        " ([which rows, and why that blocks a default flip]"
+        " `identical` wins overwhelmingly on the PPU suites and no longer loses `cgb-acid2`;"
+        " four small Gambatte groups are still net-negative by eight rows between them,"
+        " against 891 gains"
+        " ([which rows, and how each moved]"
         "(measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-mostly-dominates)).",
         END,
     ]

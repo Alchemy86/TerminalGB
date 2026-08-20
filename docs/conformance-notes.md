@@ -23,6 +23,77 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-20 — the window pixel-insertion glitch needs the window on Color silicon
+
+`cgb-acid2` was the one row the `identical` engine lost to the default and the
+one loss the default flip carried into the shootout's own 264. It is closed by a
+single condition, and 63 Gambatte rows came with it.
+
+**Symptom.** On a Color console, everything from column `WX - 7` rightwards comes
+out **one pixel to the right** on every scanline of a frame where `WY == LY` has
+latched — including scanlines where the window is *disabled*. It is silent
+wherever the picture is uniform, which is most of `cgb-acid2`: only rows 133-139
+carry non-uniform content there, and all 158 wrong pixels are in them. A game
+that never re-enables its window after the Y condition latches would still be
+drawn one pixel narrow for the rest of the frame.
+
+**Why it hid.** `dmg-acid2` and `cgb-acid2` set the *same* `WX = 95`, `WY = 40`,
+and `dmg-acid2` is pixel-exact on both engines. The difference is `SCX`:
+`dmg-acid2` leaves `SCX & 7 == 3`, so the fetcher's pushes land on `lx ≡ 5 (mod
+8)` and never on column 88, while `cgb-acid2` has `SCX == 0` and a push lands on
+88 exactly. **A glitch keyed on a push landing on one column is invisible to any
+ROM whose fine scroll moves that column off the push grid** — worth remembering
+before concluding a mid-scanline rule is right because one acid test passes.
+
+**Caught by.** `csp/cgb-acid2` (the author's own reference image, in colour) and
+61 rows of Gambatte's `window` group, all `@cgb04c`. Nothing in Mealybug catches
+it, because every Mealybug ROM is a DMG cartridge and the DMG behaviour was
+already right.
+
+**Hardware behaviour.** The glitch is DMG-unconditional and CGB-conditional.
+docboy, `src/docboy/docboy/ppu/ppu.cpp`,
+`handle_pixel_slice_fetcher_push`:
+
+```c
+if (w.active_for_frame && lx == wx && !w.just_activated
+#ifdef ENABLE_CGB
+    && w.active
+#endif
+) { bg_fifo.push_back(BgPixel {0}); return; }
+```
+
+with the comment *"Verified: this happens also on CGB, although the conditions
+that make this happen are slightly different. In particular, on CGB the glitch
+seems to happen only if we are fetching a window tile right now."* Read there,
+reimplemented here as one clause on the existing condition
+(`Gpu::bg_fetch_dot`, `src/gpu/fifo.rs`); no code was taken. **`is_dmg()` is the
+console, not the cartridge** — a Color machine running a DMG cartridge
+(`ColorAsClassic`) takes the gated path, the same predicate the fetcher's
+read-phase already uses two hundred lines away.
+
+**Measured, `make test-external-accurate` before and after.** `cgb-acid2`
+**FAIL diff=158 → PASS**; Gambatte **3550 → 3613 of 5225**, and every one of the
+63 rows that moved is a gain — 61 `window`, 1 `sprites`, 1 `enable_display`, all
+of them `@cgb04c`, **zero regressions**. Mealybug is byte-identical per row
+(26/79, DMG 8/24, CGB-C 9/31, CGB-D 9/24), Mooneye 103/103, and the **whole
+`standard` engine is untouched** — `make test-external` is green against all
+eighteen of its baselines with no re-bless, which is what says the change is
+confined to `fifo.rs`.
+
+The Gambatte `window` group flips from the worst net-negative group in the
+aggregation to a net gain: **108 losses / 137 gains, net +29**, where it was
+130/98 before. Four small groups are still net-negative on `identical` —
+`sprites` −3, `lyc153int_m2irq` −2, `lycint_lycflag` −2, `m2int_m0stat` −1,
+**eight rows between them against 891 gains.**
+
+**Carries into the tool.** *A mid-scanline rule that fires on one column is
+invisible to a ROM whose fine scroll moves that column off the push grid.* A
+conformance check for this behaviour has to sweep `SCX & 7`, not trust one
+frame — which is exactly what Gambatte's `window/m2int_wx07_scx{3,5}_*` family
+does and why it is the population that moved.
+
+---
+
 ## 2026-08-18 — where the whole aggregation stood, before and after the day
 
 Written down because every later claim is judged against it, and because the

@@ -437,7 +437,7 @@ enable_display/enable_display_ly0_sprites_m0stat_2_dmg08_cgb04c_out0@cgb04c = PA
 enable_display/enable_display_ly0_wemaster_1_dmg08_cgb04c_out3@dmg08 = PASS
 enable_display/enable_display_ly0_wemaster_1_dmg08_cgb04c_out3@cgb04c = PASS
 enable_display/enable_display_ly0_wemaster_2_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-enable_display/enable_display_ly0_wemaster_2_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+enable_display/enable_display_ly0_wemaster_2_dmg08_cgb04c_out3@cgb04c = PASS
 enable_display/frame0_ly_count_1_dmg08_cgb04c_out99@dmg08 = FAIL out=99 not drawn
 enable_display/frame0_ly_count_1_dmg08_cgb04c_out99@cgb04c = FAIL out=99 not drawn
 enable_display/frame0_ly_count_2_dmg08_cgb04c_out9A@dmg08 = PASS
@@ -4334,7 +4334,7 @@ sprites/space/10spritesPrLine_wx5_m3stat_ds_2_cgb04c_out0@cgb04c = FAIL out=0 no
 sprites/space/10spritesPrLine_wx6_m3stat_ds_1_cgb04c_out3@cgb04c = PASS
 sprites/space/10spritesPrLine_wx6_m3stat_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 sprites/space/10spritesPrLine_wx7_m3stat_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
-sprites/space/10spritesPrLine_wx7_m3stat_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+sprites/space/10spritesPrLine_wx7_m3stat_ds_2_cgb04c_out0@cgb04c = PASS
 sprites/space/1pos8_8pos9_wx08_m3stat_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 sprites/space/1pos8_8pos9_wx08_m3stat_ds_2_cgb04c_out0@cgb04c = PASS
 sprites/space/2overlap1_m3stat_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
@@ -4864,7 +4864,7 @@ vramw_m3end/vramw_m3end_scx5_ds_4_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 vramw_m3end/vramw_m3end_scx5_ds_5_cgb04c_out5@cgb04c = PASS
 vramw_m3end/vramw_m3end_scx5_ds_6_cgb04c_out5@cgb04c = PASS
 window/arg/late_enable_afterVblank_3_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/arg/late_enable_afterVblank_3_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/arg/late_enable_afterVblank_3_dmg08_cgb04c_out3@cgb04c = PASS
 window/arg/late_enable_afterVblank_4_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/arg/late_enable_afterVblank_4_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/arg/late_enable_afterVblank_5_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
@@ -4888,15 +4888,15 @@ window/arg/late_wx_late_wy_FFto2_ly2_2_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not
 window/arg/late_wy_10to0_ly1_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_10to0_ly1_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_10to0_ly1_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_10to0_ly1_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_10to0_ly1_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_10to0_ly1_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_10to0_ly1_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_10to0_ly1_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_10to1_ly1_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_10to1_ly1_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_10to1_ly1_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_10to1_ly1_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_10to1_ly1_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_10to1_ly1_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_10to1_ly1_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_10to1_ly1_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_1_dmg08_cgb04c_out0@dmg08 = PASS
 window/arg/late_wy_1_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_1toFF_1_dmg08_cgb04c_out0@dmg08 = PASS
@@ -4922,51 +4922,51 @@ window/arg/late_wy_2toFF_3_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto0_ly0_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto0_ly0_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto0_ly0_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto0_ly0_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto0_ly0_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto0_ly0_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto0_ly0_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto0_ly0_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto0_ly2_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto0_ly2_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto0_ly2_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto0_ly2_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto0_ly2_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto0_ly2_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto0_ly2_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto0_ly2_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto0_ly2_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
-window/arg/late_wy_FFto0_ly2_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto0_ly2_ds_2_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto1_ly2_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto1_ly2_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto1_ly2_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto1_ly2_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto1_ly2_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto1_ly2_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto1_ly2_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto1_ly2_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto2_ly2_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto2_ly2_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
-window/arg/late_wy_FFto2_ly2_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_ds_2_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx2_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_scx2_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_scx2_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto2_ly2_scx2_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx2_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx2_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto2_ly2_scx2_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx2_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx3_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_scx3_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_scx3_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto2_ly2_scx3_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx3_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx3_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto2_ly2_scx3_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx3_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx5_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_scx5_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_scx5_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/arg/late_wy_FFto2_ly2_scx5_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx5_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx5_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/arg/late_wy_FFto2_ly2_scx5_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx5_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_scx5_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
-window/arg/late_wy_FFto2_ly2_scx5_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/arg/late_wy_FFto2_ly2_scx5_ds_2_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_wx00_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_wx00_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/arg/late_wy_FFto2_ly2_wx00_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
@@ -4980,13 +4980,13 @@ window/arg/late_wy_FFto2_ly2_wx0f_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/arg/late_wy_FFto2_ly2_wx0f_3_dmg08_cgb04c_out0@dmg08 = PASS
 window/arg/late_wy_FFto2_ly2_wx0f_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_disable_0_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/late_disable_0_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_disable_0_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_disable_1_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/late_disable_1_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_2_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_disable_2_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_disable_2_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_disable_ds_1_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_disable_ds_2_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_disable_ds_2_cgb04c_out3@cgb04c = PASS
 window/late_disable_early_scx00_wx0f_ds_1_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_early_scx00_wx0f_ds_2_cgb04c_out3@cgb04c = PASS
 window/late_disable_early_scx00_wx10_ds_1_cgb04c_out0@cgb04c = FAIL out=0 not drawn
@@ -5044,21 +5044,21 @@ window/late_disable_scx2_0_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_scx2_1_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/late_disable_scx2_1_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_scx2_2_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_disable_scx2_2_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_disable_scx2_2_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_disable_scx3_0_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
 window/late_disable_scx3_0_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_scx3_1_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/late_disable_scx3_1_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_scx3_2_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_disable_scx3_2_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_disable_scx3_2_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_disable_scx5_0_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
 window/late_disable_scx5_0_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_scx5_1_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/late_disable_scx5_1_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_scx5_2_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_disable_scx5_2_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_disable_scx5_2_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_disable_scx5_ds_1_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_disable_scx5_ds_2_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_disable_scx5_ds_2_cgb04c_out3@cgb04c = PASS
 window/late_disable_spx10_wx0f_1_dmg08_cgb04c_out0@dmg08 = PASS
 window/late_disable_spx10_wx0f_1_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_disable_spx10_wx0f_2_dmg08_cgb04c_out3@dmg08 = PASS
@@ -5070,44 +5070,44 @@ window/late_disable_wx0f_1_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_disable_wx0f_2_dmg08_cgb04c_out3@dmg08 = PASS
 window/late_disable_wx0f_2_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_enable_afterVblank_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_enable_afterVblank_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_enable_afterVblank_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_enable_afterVblank_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/late_enable_afterVblank_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_enable_afterVblank_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
 window/late_enable_afterVblank_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_enable_afterVblank_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_enable_afterVblank_ds_1_cgb04c_out3@cgb04c = PASS
 window/late_enable_afterVblank_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_enable_afterVblank_ds_lcdoffset1_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_enable_afterVblank_ds_lcdoffset1_1_cgb04c_out3@cgb04c = PASS
 window/late_enable_afterVblank_ds_lcdoffset1_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_enable_afterVblank_lcdoffset1_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_enable_afterVblank_lcdoffset1_1_cgb04c_out3@cgb04c = PASS
 window/late_enable_afterVblank_lcdoffset1_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_enable_ly0_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
-window/late_enable_ly0_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_enable_ly0_ds_1_cgb04c_out3@cgb04c = PASS
+window/late_enable_ly0_ds_2_cgb04c_out0@cgb04c = PASS
 window/late_reenable_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_reenable_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_reenable_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_reenable_2_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/late_reenable_2_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_reenable_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_reenable_2_dmg08_cgb04c_out0@cgb04c = PASS
+window/late_reenable_ds_1_cgb04c_out3@cgb04c = PASS
 window/late_reenable_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_reenable_scx2_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_reenable_scx2_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_reenable_scx2_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_reenable_scx2_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/late_reenable_scx2_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_reenable_scx2_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/late_reenable_scx2_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/late_reenable_scx2_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_reenable_scx2_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_reenable_scx3_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_reenable_scx3_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_reenable_scx3_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_reenable_scx3_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
 window/late_reenable_scx3_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_reenable_scx3_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/late_reenable_scx3_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_reenable_scx3_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_reenable_scx5_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_reenable_scx5_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_reenable_scx5_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_reenable_scx5_2_dmg08_out3_cgb04c_out0@dmg08 = FAIL out=3 not drawn
-window/late_reenable_scx5_2_dmg08_out3_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_reenable_scx5_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/late_reenable_scx5_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/late_reenable_scx5_3_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/late_reenable_scx5_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_reenable_scx5_3_dmg08_cgb04c_out0@cgb04c = PASS
+window/late_reenable_scx5_ds_1_cgb04c_out3@cgb04c = PASS
 window/late_reenable_scx5_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/late_reenable_wx0f_1_dmg08_cgb04c_out3@dmg08 = PASS
 window/late_reenable_wx0f_1_dmg08_cgb04c_out3@cgb04c = PASS
@@ -5126,9 +5126,9 @@ window/late_wx_2_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_wx_ds_1_cgb04c_out0@cgb04c = PASS
 window/late_wx_ds_2_cgb04c_out3@cgb04c = FAIL out=3 not drawn
 window/late_wx_ff_07_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/late_wx_ff_07_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/late_wx_ff_07_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_wx_ff_07_2_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/late_wx_ff_07_2_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_wx_ff_07_2_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_wx_ff_0f_1_dmg08_cgb04c_out3@dmg08 = PASS
 window/late_wx_ff_0f_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_wx_ff_0f_2_dmg08_cgb04c_out0@dmg08 = PASS
@@ -5192,25 +5192,25 @@ window/m2int_wx03_scx5_m3stat_2_dmg08_cgb04c_out0@cgb04c = PASS
 window/m2int_wx03_scx5_m3stat_ds_1_cgb04c_out3@cgb04c = PASS
 window/m2int_wx03_scx5_m3stat_ds_2_cgb04c_out0@cgb04c = PASS
 window/m2int_wx07_m3stat_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/m2int_wx07_m3stat_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/m2int_wx07_m3stat_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/m2int_wx07_m3stat_2_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/m2int_wx07_m3stat_2_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/m2int_wx07_m3stat_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/m2int_wx07_m3stat_2_dmg08_cgb04c_out0@cgb04c = PASS
+window/m2int_wx07_m3stat_ds_1_cgb04c_out3@cgb04c = PASS
 window/m2int_wx07_m3stat_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/m2int_wx07_scx2_m3stat_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/m2int_wx07_scx2_m3stat_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/m2int_wx07_scx2_m3stat_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/m2int_wx07_scx2_m3stat_2_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/m2int_wx07_scx2_m3stat_2_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/m2int_wx07_scx2_m3stat_2_dmg08_cgb04c_out0@cgb04c = PASS
 window/m2int_wx07_scx3_m3stat_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/m2int_wx07_scx3_m3stat_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/m2int_wx07_scx3_m3stat_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/m2int_wx07_scx3_m3stat_2_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/m2int_wx07_scx3_m3stat_2_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/m2int_wx07_scx3_m3stat_2_dmg08_cgb04c_out0@cgb04c = PASS
 window/m2int_wx07_scx5_m3stat_1_dmg08_cgb04c_out3@dmg08 = FAIL out=3 not drawn
-window/m2int_wx07_scx5_m3stat_1_dmg08_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/m2int_wx07_scx5_m3stat_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/m2int_wx07_scx5_m3stat_2_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
-window/m2int_wx07_scx5_m3stat_2_dmg08_cgb04c_out0@cgb04c = FAIL out=0 not drawn
-window/m2int_wx07_scx5_m3stat_ds_1_cgb04c_out3@cgb04c = FAIL out=3 not drawn
-window/m2int_wx07_scx5_m3stat_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/m2int_wx07_scx5_m3stat_2_dmg08_cgb04c_out0@cgb04c = PASS
+window/m2int_wx07_scx5_m3stat_ds_1_cgb04c_out3@cgb04c = PASS
+window/m2int_wx07_scx5_m3stat_ds_2_cgb04c_out0@cgb04c = PASS
 window/m2int_wx0C_m3stat_ds_1_cgb04c_out3@cgb04c = PASS
 window/m2int_wx0C_m3stat_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
 window/m2int_wx17_wxA5_m3stat_1_dmg08_cgb04c_out3@dmg08 = PASS
@@ -5340,5 +5340,5 @@ window/on_screen/wxA6_wy01_wxA7_ly02@cgb04c-png = PASS
 window/on_screen/wxA6_wy01_wxA7_ly02@dmg08-png = FAIL diff=160
 window/on_screen/wxA6_wy8F@cgb04c-png = PASS
 window/on_screen/wxA6_wy8F@dmg08-png = FAIL diff=160
-window/reenable_ds_cgb04c_out3@cgb04c = FAIL out=3 not drawn
+window/reenable_ds_cgb04c_out3@cgb04c = PASS
 wram_dumper@none = SKIP no expectation (disabled upstream, or a state dumper)

@@ -148,13 +148,25 @@ a ratio is two numbers, and this one has only ever moved because the *default* e
 
 > **Correction, 2026-08-15: rows DO go the other way, on gates this table did not have.**
 > The thirteen [c-sp suites](#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time)
-> wired up that day found three places where `identical` scores *worse* than the default:
+> wired up that day found three places where `identical` scored *worse* than the default:
 > `cgb-acid2` (pixel-exact on `standard`, 158 pixels wrong on `identical`), and Gambatte's
-> `sprites` (245 → 241) and `window` (259 → 227) groups. `identical` still wins overwhelmingly
+> `sprites` (245 → 241) and `window` (259 → 227) groups. `identical` still won overwhelmingly
 > — Gambatte 2,682 → 3,059 and GBMicrotest 251 → 338 — but "loses no row anywhere" was a claim
-> about the six gates that existed when it was written, and it is not true of the twenty that
-> exist now. **The accuracy precondition for a default flip is therefore not met**; it is a
-> PPU finding, not a cost decision.
+> about the six gates that existed when it was written, and it was not true of the twenty that
+> exist now.
+>
+> **Update, 2026-08-20: two of those three are closed, and the cause was one condition.** The
+> window pixel-insertion glitch needs the window to be *drawing* on Color silicon and does not
+> on a DMG — docboy's `handle_pixel_slice_fetcher_push` gates it `#ifdef ENABLE_CGB && w.active`
+> with the comment "on CGB the glitch seems to happen only if we are fetching a window tile
+> right now". Ungated, a Color console inserted a pixel at `WX - 7` on every line where the
+> window's Y condition had latched and the window was *off*: `cgb-acid2` has `WX = 95` and
+> `SCX & 7 == 0`, so a push landed exactly on column 88 and the whole of every line came out
+> one pixel to the right — 158 pixels, all of them in rows 133-139 where the picture is not
+> uniform. `cgb-acid2` is **pixel-exact on both engines** now and Gambatte's `window` group
+> goes 108 losses / 137 gains, **net +29**. Four small groups are still net-negative —
+> `sprites` −3, `lyc153int_m2irq` −2, `lycint_lycflag` −2, `m2int_m0stat` −1, **eight rows
+> between them against 891 gains.**
 
 > This table is where the drift happened. Its Mealybug figure read **12** for as long as it
 > took somebody to notice, five rows after `identical` reached
@@ -288,7 +300,7 @@ picture modes, by [`examples/csp_suite.rs`](../../examples/csp_suite.rs).
 
 | Suite | `standard` | `identical` | Judged by |
 |---|---:|---:|---|
-| Gambatte | **<!--score:csp_gambatte:pass-->3173<!--/score-->** / <!--score:csp_gambatte:total-->5225<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3550<!--/score-->** / <!--score:csp_gambatte_accurate:total-->5225<!--/score--> | a hexadecimal digit drawn in the top-left corner, its audio, or the author's screenshot |
+| Gambatte | **<!--score:csp_gambatte:pass-->3173<!--/score-->** / <!--score:csp_gambatte:total-->5225<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3613<!--/score-->** / <!--score:csp_gambatte_accurate:total-->5225<!--/score--> | a hexadecimal digit drawn in the top-left corner, its audio, or the author's screenshot |
 | GBMicrotest | **<!--score:csp_gbmicrotest:pass-->251<!--/score-->** / <!--score:csp_gbmicrotest:total-->513<!--/score--> | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / <!--score:csp_gbmicrotest_accurate:total-->513<!--/score--> | the verdict byte the ROM writes to `$FF82` |
 | Mooneye GB (wilbertpol fork) | **<!--score:csp_mooneye-wilbertpol:pass-->62<!--/score-->** / <!--score:csp_mooneye-wilbertpol:total-->117<!--/score--> | **<!--score:csp_mooneye-wilbertpol_accurate:pass-->82<!--/score-->** / <!--score:csp_mooneye-wilbertpol_accurate:total-->117<!--/score--> | `$ED` then the Fibonacci registers |
 | AGE test roms | **<!--score:csp_age:pass-->3<!--/score-->** / <!--score:csp_age:total-->59<!--/score--> | **<!--score:csp_age_accurate:pass-->8<!--/score-->** / <!--score:csp_age_accurate:total-->59<!--/score--> | `LD B,B` then the Fibonacci registers, or the author's screenshot |
@@ -343,11 +355,11 @@ re-ranks every pixel.
   changed**: sweeping it scores 237/513 at dot 69900, 251 at line 0 (today), 262 at 70168 and
   250 at 70184, a jagged profile with no clean optimum — the signature of a constant absorbing
   an error somewhere else, which this repository has been careful about before.
-* **A `cgb-acid2` row the `identical` engine loses.** The per-dot pixel FIFO renders it 158
-  pixels wrong where the default engine is pixel-exact, and it loses rows in Gambatte's
-  `sprites` and `window` groups too (245→241 and 259→227). That is the first counter-example to
-  ["`identical` loses no row to the default on any gate"](#the-identical-picture-mode-scores-differently--and-mostly-dominates),
-  and it is a PPU finding, not a runner one.
+* ~~**A `cgb-acid2` row the `identical` engine loses.**~~ **Closed, 2026-08-20** — the window
+  pixel-insertion glitch is Color-gated now and the row is pixel-exact on both engines; see the
+  update in ["the `identical` picture mode scores differently"](#the-identical-picture-mode-scores-differently--and-mostly-dominates)
+  above. It was a real counter-example while it stood, and it was a PPU finding rather than a
+  runner one, which is why one condition closed it and 63 Gambatte rows came with it.
 * **`cgb-acid-hell` is two pixels away.** `(80, 68)` and `(80, 69)` are swapped: the reference
   wants yellow above black and we draw black above yellow, one row of one column of the devil's
   face. Everything else in the picture is exact.

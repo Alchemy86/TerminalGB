@@ -775,8 +775,23 @@ impl Gpu {
         // `mealybug/m3_wx_4_change@DMG` is 229 pixels of exactly this: one
         // inserted pixel at column `WX - 7` on every line whose mid-mode-3 `WX`
         // write lands there.
+        // **On Color silicon the glitch needs the window to be DRAWING.**
+        // docboy, same function: `if (w.active_for_frame && lx == wx &&
+        // !w.just_activated #ifdef ENABLE_CGB && w.active #endif)`, with the
+        // comment "Verified: this happens also on CGB, although the conditions
+        // that make this happen are slightly different. In particular, on CGB
+        // the glitch seems to happen only if we are fetching a window tile
+        // right now." Ungated, a Color console inserts a pixel at `WX - 7` on
+        // every line where the Y condition has latched and the window is
+        // *disabled* — which is what `cgb-acid2` measures: with `SCX & 7 == 0`
+        // a push lands exactly on column 88 (`WX = 95`) and the whole of the
+        // rest of every line comes out one pixel to the right, 158 pixels of
+        // it. `is_dmg()` is the console, not the cartridge, so a Color machine
+        // running a DMG cartridge (`ColorAsClassic`) takes the gated path —
+        // the same predicate `bg_fetch_dot` uses for the fetcher's read phase.
         if self.wy_trigger
             && !self.pipe.win_fresh
+            && (self.gbmode.is_dmg() || self.pipe.window)
             && self.pipe.lx as i16 == self.winx as i16 - 7
         {
             self.pipe.bg[self.pipe.bg_head as usize & 7] = Pixel::default();
@@ -1828,6 +1843,69 @@ mod head_of_line {
             "a transparent pixel should have been inserted at WX - 7"
         );
         assert_eq!(row(9), solid, "and only one of them");
+    }
+
+    /// **…and on Color silicon it does not fire unless the window is drawing.**
+    ///
+    /// The same program on a Color console, which is the `cgb-acid2` case:
+    /// `LCDC.5` is off, the Y condition has latched, and a push lands exactly
+    /// on `WX - 7`. docboy gates the glitch `#ifdef ENABLE_CGB && w.active`
+    /// (`handle_pixel_slice_fetcher_push`, "on CGB the glitch seems to happen
+    /// only if we are fetching a window tile right now"), so the line must come
+    /// out whole. Ungated it inserts a pixel here and every column right of 8
+    /// is one to the right — 158 pixels of `cgb-acid2`, and 61 rows of
+    /// Gambatte's `window` group.
+    ///
+    /// **A Color machine ignores `BGP`,** so the palette has to be written
+    /// through `BCPS`/`BCPD` or colour 0 and colour 3 come out of an all-zero
+    /// CGB palette as the same colour and the hole is invisible — which is how
+    /// the first version of this test passed with the gate removed.
+    ///
+    /// Teeth: drop the `is_dmg() || pipe.window` clause and this fails at
+    /// column 8 while the DMG case above keeps passing.
+    #[test]
+    fn a_colour_console_needs_the_window_drawing_for_that_glitch() {
+        const LINE: u8 = 3;
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.gbmode = crate::mode::GbMode::Color;
+        gpu.wb(0xFF40, 0x91);
+        gpu.do_cycle(super::super::LINE_DOTS);
+        for b in 0..16u16 {
+            gpu.wb(0x8010 + b, 0xFF);
+        }
+        for t in 0..32u16 {
+            gpu.wb(0x9800 + t, 1);
+        }
+        // Background palette 0: colour 0 black, colour 3 white.
+        gpu.wb(0xFF68, 0x80); // BCPS: index 0, auto-increment
+        for c in 0..4u16 {
+            let v: u16 = if c == 3 { 0x7FFF } else { 0x0000 };
+            gpu.wb(0xFF69, (v & 0xFF) as u8);
+            gpu.wb(0xFF69, (v >> 8) as u8);
+        }
+        gpu.wb(0xFF4A, LINE);
+        gpu.wb(0xFF4B, 8 + 7);
+        gpu.wb(0xFF40, 0x91); // window still off
+        let mut seen = 0;
+        while seen < 2 {
+            let before = gpu.line;
+            gpu.do_cycle(1);
+            if before == 143 && gpu.line == 144 {
+                seen += 1;
+            }
+        }
+        let row = |x: usize| gpu.data[(LINE as usize * super::super::WIDTH + x) * 4];
+        let solid = row(0);
+        assert_ne!(
+            solid, 0,
+            "the fixture must draw a non-black line to measure"
+        );
+        let hole = (0..super::super::WIDTH).find(|&x| row(x) != solid);
+        assert_eq!(
+            hole, None,
+            "a Color console must not insert a pixel while the window is off"
+        );
     }
 
     /// **The window's tile grid is anchored at `WX - 7`, even when that is off
