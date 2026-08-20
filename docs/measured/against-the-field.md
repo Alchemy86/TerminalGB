@@ -31,7 +31,15 @@ the same clock**. Nobody's marketing number appears.
 
 Reproduce it: [`tools/perf/sameboy-bench.c`](../../tools/perf/sameboy-bench.c),
 [`tools/perf/pyboy-bench.py`](../../tools/perf/pyboy-bench.py), and
-`core_bench --rom blue.gb --frames 7168 --no-pixels`.
+**`GB_PPU=standard`** `core_bench --rom blue.gb --frames 7168 --no-pixels`.
+
+> **`GB_PPU=standard` is required now and was not when this was measured.** These
+> rows predate 2026-08-20, when `identical` became the default picture engine
+> ([`picture-modes.md`](../picture-modes.md)) — a bare `core_bench` runs the
+> per-dot engine and reads about four times slower, which would look like a
+> catastrophic regression and is a different measurement. `standard` is the fair
+> comparator here: it is what a throughput campaign runs, and both of the other
+> emulators in the table are being run with their rendering off.
 
 ## 2. The result
 

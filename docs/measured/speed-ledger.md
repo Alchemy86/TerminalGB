@@ -28,6 +28,12 @@ say otherwise was taken this way:
   more rounds. Never two runs an hour apart.
 - **Long rounds** — 9,000 to 25,000 frames. At 2,000 frames the frequency
   governor reorders the variants between runs, twice.
+- **The `standard` picture engine**, which was the default when every figure
+  here was taken and is not one now
+  ([`picture-modes.md`](../picture-modes.md), 2026-08-20). Put
+  `GB_PPU=standard` in front of any command on this page — a bare `core_bench`
+  runs the per-dot engine and reads about four times slower, and speed mode is
+  refused there anyway, so every row below would be measuring nothing.
 - **The load average is stated** whenever it is not near zero.
 - **Frame hash and WRAM hash compared** either side of every change. A frame
   hash proves the picture; the WRAM hash proves the cartridge's own memory,

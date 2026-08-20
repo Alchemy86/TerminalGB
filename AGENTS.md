@@ -3193,6 +3193,13 @@ Nothing here changed an emulated byte: all 18 external baselines, the 15 accurat
 baselines, `testroms`, both picture engines and all four architectures are byte-identical
 across every configuration measured.
 
+- **EVERY FIGURE IN THIS SECTION IS THE `standard` PICTURE ENGINE, WHICH IS NO LONGER THE
+  DEFAULT.** It was when they were taken; `identical` became the default on 2026-08-20. A bare
+  `core_bench` now runs the per-dot engine and reads about four times slower, so **export
+  `GB_PPU=standard` before reproducing anything here** — the scripts deliberately do not set it,
+  because doing so would change what a run already in flight is measuring. Interleaved A/B
+  comparisons survive either way; absolute figures do not.
+
 - **`[profile.release]` said `opt-level = "s"` from 2022 to 2026 and nobody here ever chose it.**
   Upstream `raphamorim/gameboy` set `z`, then `s`, before this fork or any of the constrained
   targets existed. It is `3` + **fat LTO** now, worth **+24 %** on a real cartridge. **The one

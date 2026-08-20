@@ -20,6 +20,15 @@
 #
 # Report the load average with any number this prints. `uptime` is echoed for
 # exactly that reason.
+#
+# **Set `GB_PPU=standard`.** Every figure in `docs/throughput.md` and
+# `docs/measured/speed-ledger.md` was measured on the whole-scanline engine,
+# which was the default until 2026-08-20 and is not one now
+# (`docs/picture-modes.md`). This script does not set it, deliberately — it
+# would change what a run already in flight is measuring — so export it
+# yourself, or the numbers are the per-dot engine's and about four times
+# larger. A/B comparisons stay valid either way; absolute figures do not.
+
 set -euo pipefail
 
 ROM=${1:?usage: swarm.sh <rom.gb> [scenario.json] [out-dir]}

@@ -14,6 +14,13 @@ emulator "optimisation" that changes behaviour is a bug, not an optimisation.
 - **Scripts:** [`tools/perf/`](../tools/perf/) — `build-variants.sh`, `measure.sh`, `pgo.sh`,
   `build-times.sh`, `swarm.sh`
 - **Where the frame goes:** `core_bench --breakdown` (needs `--features profile`)
+- **Picture engine: `standard`.** Every figure on this page was measured before
+  2026-08-20, when `standard` was the default and a bare `core_bench` therefore
+  ran it. It is not the default any more
+  ([`picture-modes.md`](picture-modes.md)), so **put `GB_PPU=standard` in front
+  of every command here** or the same invocation measures the per-dot engine and
+  reads about four times slower. That is the right comparator for this page:
+  throughput work runs the cheap engine, and so does everything §8-§10 measures.
 
 **§1–§7 measure one emulator; §8–§10 measure the swarm**, which is what actually runs and is a
 different workload. Short version of the second half: the fan-out was spending **46 % of its wall

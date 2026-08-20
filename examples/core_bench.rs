@@ -507,6 +507,21 @@ fn apply_speed(gb: &mut terminalgb::gameboy::Gameboy, spec: &str) {
         eprintln!("unknown speed flag {token:?} — ignored");
     }
     gb.set_speed_flags(flags);
+    // `identical` is the default picture mode since 2026-08-20 and refuses
+    // every shortcut, so a bare `core_bench --speed-mode` measures the accurate
+    // machine. Every figure in docs/throughput.md is `standard`; say so rather
+    // than letting the run look four times slower for no stated reason. Once,
+    // not once per machine — this is called per worker and per breakdown row.
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if flags.any()
+        && !gb.speed_flags().any()
+        && !SAID.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        eprintln!(
+            "speed flags refused: the picture mode is `identical`, which takes \
+             no shortcuts. Re-run with GB_PPU=standard (docs/modes.md)."
+        );
+    }
 }
 
 fn main() {

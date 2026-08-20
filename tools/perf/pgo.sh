@@ -24,6 +24,15 @@
 # so the PGO build uses **thin** LTO and is scored against `o3` (opt 3, thin,
 # one codegen unit), which is the only fair comparison. Do not "fix" it by
 # setting fat here.
+#
+# **Set `GB_PPU=standard`.** Every figure in `docs/throughput.md` and
+# `docs/measured/speed-ledger.md` was measured on the whole-scanline engine,
+# which was the default until 2026-08-20 and is not one now
+# (`docs/picture-modes.md`). This script does not set it, deliberately — it
+# would change what a run already in flight is measuring — so export it
+# yourself, or the numbers are the per-dot engine's and about four times
+# larger. A/B comparisons stay valid either way; absolute figures do not.
+
 set -eu
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)

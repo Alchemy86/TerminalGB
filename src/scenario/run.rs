@@ -560,6 +560,19 @@ impl ScenarioRun {
         }
         if flags.any() {
             self.gb.set_speed_flags(flags);
+            // **A refusal has to be audible.** `identical` has been the default
+            // picture mode since 2026-08-20 and it takes no shortcuts, so a
+            // collector that exported `GB_SPEED=speed` and changed nothing else
+            // now gets the accurate machine and no warning — which is the
+            // "active and invisible" failure this repository keeps writing
+            // down. Say so once, and name the fix.
+            if !self.gb.speed_flags().any() {
+                eprintln!(
+                    "terminalgb: speed flags were asked for and refused — the \
+                     picture mode is `identical`, which takes no shortcuts. Add \
+                     GB_PPU=standard to use them (docs/modes.md)."
+                );
+            }
         }
         let t = Instant::now();
         let start_hash = fnv1a(&self.start);

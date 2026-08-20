@@ -1726,6 +1726,10 @@ mod tests {
         only_batch.horizon_batch = true;
 
         let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        // Speed flags are a `standard`-only thing — `identical`, the default
+        // since 2026-08-20, refuses every one of them — so the machine has to
+        // be put on the cheap engine for there to be anything to assert.
+        gb.set_render_mode(crate::ppu::RenderMode::Fast);
         gb.set_speed_flags(only_batch);
         assert!(
             !gb.cpu.memory.per_access_bus_for_test(),
