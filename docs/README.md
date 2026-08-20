@@ -66,6 +66,7 @@ and that had quietly happened to more than half of this directory.
 | [the link port](measured/serial.md) | the half no ROM-driven suite can reach |
 | [the Super Game Boy](measured/sgb.md) | a joypad port that is also a command channel |
 | [against the field](measured/against-the-field.md) | other emulators built and timed here on the same core, ROM and clock — one claim held, one did not, and where the difference comes from |
+| [speed ledger](measured/speed-ledger.md) | every optimisation attempted — what each was worth, the eleven measured negatives with their numbers, the field built and timed here, and what is queued |
 | [headless throughput](measured/throughput-baseline.md) | how fast the core runs with nothing attached, the method that reproduces it, and which of the two 1000× targets each number belongs to |
 | [the host boundary](measured/host.md) | defects that leave the framebuffer perfect — the pacing clock, the build, the audio device, the terminal |
 | [symptoms](measured/symptoms.md) | "my emulator does X" → what it actually is |
@@ -102,6 +103,7 @@ and that had quietly happened to more than half of this directory.
 | [how the picture reaches you](picture.md) | **start here for anything visual** — framebuffer to terminal, the four published protocols we implement, why it is sharp, and the two screenshot keys |
 | [getting a frame into a terminal](rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, and how it is negotiated |
 | [terminal render performance](terminal-render.md) | why a big window used to cost frames, and what caps the cost now |
+| [the three modes](modes.md) | `identical`, `standard` and **speed mode**: what each guarantees, what each is for, and what speed mode must never be used to judge |
 | [picture modes](picture-modes.md) | `standard` vs `identical`: what each draws, what each scores, what the exact one costs |
 | [display scaling](display.md) | how each frontend enlarges 160×144, and how to make it crisp rather than blurred |
 | [pixel-art upscaling](upscaling.md) | the four algorithms, their measured costs, and the licensing constraint that shaped the set |

@@ -529,6 +529,23 @@ pub struct MemoryManagementUnit<'a> {
     // frame rendering is byte-for-byte unchanged. `bus_tick_enabled` is true
     // only while a CPU instruction is executing (not during OAM DMA or setup).
     bus_tick_enabled: bool,
+    /// Which shortcuts this machine is taking — see [`crate::speed::SpeedFlags`].
+    /// Machine configuration, not machine state, so deliberately not
+    /// serialised: a state saved by a fast run loads into an accurate machine
+    /// and vice versa.
+    speed: crate::speed::SpeedFlags,
+    /// Whether the peripherals really do advance once per *access* — false when
+    /// `instruction-bus` is on, where they advance once per instruction.
+    ///
+    /// This is the one liberty a certification run may take that identical mode
+    /// may not. The totals are unchanged (the ticks skipped here are applied at
+    /// the instruction's end, because `bus_ticked` stays zero), so `DIV`,
+    /// `TIMA`, the serial clock and the APU all still run at exactly the right
+    /// rate; what is lost is *which sub-instruction M-cycle* an access lands
+    /// on, which is what Blargg `mem_timing` measures. Machine configuration,
+    /// not machine state — deliberately not serialised, so a state saved by a
+    /// speed-mode run loads into an accurate machine and vice versa.
+    per_access_bus: bool,
     bus_ticked: u32,
     /// PPU dots already spent inside this instruction's memory accesses, so
     /// [`Self::do_cycle`] applies only the instruction's remainder. Counted
@@ -631,6 +648,8 @@ impl<'a> MemoryManagementUnit<'a> {
             boot: None,
             boot_active: false,
             bus_tick_enabled: false,
+            speed: crate::speed::SpeedFlags::NONE,
+            per_access_bus: true,
             bus_ticked: 0,
             gpu_bus_ticked: 0,
             gpu_defer: 0,
@@ -934,6 +953,17 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     fn bus_tick(&mut self) {
         if self.bus_tick_enabled {
+            // Speed mode: the peripherals advance once per instruction instead
+            // of once per access. Leaving `bus_ticked` at zero is the whole
+            // mechanism — `do_cycle` then applies the instruction's full tick
+            // count at its end, so nothing runs at the wrong *rate*. The PPU
+            // block below still runs: for the per-dot engine the per-access
+            // step *is* the timing, and for the batched one it is the five
+            // M-cycles of interrupt dispatch, which decide their own vector.
+            if !self.per_access_bus {
+                self.bus_tick_ppu();
+                return;
+            }
             // Measurement only, compiled out of every shipping build. Returning
             // here leaves `bus_ticked` at zero, so `do_cycle` applies the whole
             // instruction's ticks at its end — the totals are unchanged and
@@ -1004,31 +1034,38 @@ impl<'a> MemoryManagementUnit<'a> {
             // in cache, whereas `Gpu::render_mode` is a load from another
             // structure that the whole-scanline engine otherwise never touches
             // here. Same answer either way — both sides are plain reads.
-            if self.ppu_ticks_with_the_bus
-                || self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
-            {
-                // This hands the PPU dots directly, so anything the batched
-                // engine is still owed has to go in first or the two arrive out
-                // of order — 210 Gambatte rows say so.
-                self.flush_gpu();
-                let step = match self.gbspeed {
-                    GbSpeed::Single => 4,
-                    GbSpeed::Double => 2,
-                };
-                // A PPU-bound write commits partway through its own M-cycle,
-                // not at the end of it — see `wb` and [`ppu_write_commit`].
-                // `gpu_defer` arrives here as the *request* (how many of this
-                // M-cycle's dots belong after the write) and leaves as the
-                // *pending remainder* `wb` will apply once the write has
-                // landed. Zero on every read and on every non-PPU write.
-                let defer = self.gpu_defer.min(step);
-                self.gpu.do_cycle(step - defer);
-                self.intf |= self.gpu.interrupt;
-                self.gpu.interrupt = 0;
-                self.gpu_bus_ticked += step - defer;
-                self.gpu_defer = defer;
-            }
+            self.bus_tick_ppu();
             self.bus_ticked += 4;
+        }
+    }
+
+    /// The per-access half of the PPU's clock, split out of [`Self::bus_tick`]
+    /// so speed mode can skip the peripherals without skipping this.
+    #[inline]
+    fn bus_tick_ppu(&mut self) {
+        if self.ppu_ticks_with_the_bus
+            || self.gpu.render_mode() == crate::gpu::RenderMode::Accurate
+        {
+            // This hands the PPU dots directly, so anything the batched
+            // engine is still owed has to go in first or the two arrive out
+            // of order — 210 Gambatte rows say so.
+            self.flush_gpu();
+            let step = match self.gbspeed {
+                GbSpeed::Single => 4,
+                GbSpeed::Double => 2,
+            };
+            // A PPU-bound write commits partway through its own M-cycle,
+            // not at the end of it — see `wb` and [`ppu_write_commit`].
+            // `gpu_defer` arrives here as the *request* (how many of this
+            // M-cycle's dots belong after the write) and leaves as the
+            // *pending remainder* `wb` will apply once the write has
+            // landed. Zero on every read and on every non-PPU write.
+            let defer = self.gpu_defer.min(step);
+            self.gpu.do_cycle(step - defer);
+            self.intf |= self.gpu.interrupt;
+            self.gpu.interrupt = 0;
+            self.gpu_bus_ticked += step - defer;
+            self.gpu_defer = defer;
         }
     }
 
@@ -1347,7 +1384,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// directly rather than through `rb`/`wb`.
     #[inline]
     fn oam_bug(&mut self, kind: OamBug, dots: u32) {
-        if self.bus_tick_enabled {
+        if self.bus_tick_enabled && !self.speed.no_oam_bug {
             // `dots` is measured from the top of the instruction, which is
             // where the *batched* PPU still stands. The accurate engine has
             // already been walked forward to this very access, so predicting
@@ -1397,6 +1434,20 @@ impl<'a> MemoryManagementUnit<'a> {
     /// Enable per-access timer stepping for the duration of one CPU
     /// instruction. Returns the previous value so it can be restored (OAM DMA
     /// re-uses `rb`/`wb` internally and must not be double-counted).
+    /// Apply a set of speed flags. See [`crate::speed::SpeedFlags`].
+    pub fn set_speed_flags(&mut self, flags: crate::speed::SpeedFlags) {
+        self.speed = flags;
+        self.per_access_bus = !flags.instruction_bus;
+        if let Some(s) = self.sound.as_mut() {
+            s.set_state_frozen(flags.no_apu_state);
+        }
+    }
+
+    /// Which shortcuts are in effect.
+    pub fn speed_flags(&self) -> crate::speed::SpeedFlags {
+        self.speed
+    }
+
     pub fn set_bus_ticking(&mut self, on: bool) -> bool {
         let prev = self.bus_tick_enabled;
         self.bus_tick_enabled = on;
@@ -2393,7 +2444,11 @@ impl<'a> MemoryManagementUnit<'a> {
             self.sound = Some(crate::sound::Sound::new());
             self.apu_budget = 0;
         }
+        let frozen = self.speed.no_apu_state;
         let sound = self.sound.as_mut().unwrap();
+        // A chip installed *after* the flags were set must still honour them —
+        // otherwise `no-apu-state` silently depends on call order.
+        sound.set_state_frozen(frozen);
         // DMG carts get DMG APU semantics (length counters survive power-off
         // etc. — what Blargg's dmg_sound asserts); CGB carts get CGB rules.
         sound.set_mode(self.gbmode != GbMode::Color);

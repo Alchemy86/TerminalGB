@@ -938,7 +938,15 @@ impl Gameboy {
         // The per-dot engine is stepped per bus access and never deferred, so
         // hand the batched one what it is owed before the switch.
         self.cpu.memory.flush_for_observer();
-        self.cpu.memory.gpu.set_render_mode(mode)
+        self.cpu.memory.gpu.set_render_mode(mode);
+        // The refusal in `set_speed_mode` must not be bypassable by ordering:
+        // asking for speed mode and *then* for identical mode has to leave the
+        // machine identical, not fast.
+        if mode == crate::gpu::RenderMode::Accurate {
+            self.cpu
+                .memory
+                .set_speed_flags(crate::speed::SpeedFlags::NONE);
+        }
     }
 
     /// Declare whether this caller will read the framebuffer.
@@ -981,6 +989,62 @@ impl Gameboy {
         if let Some(s) = self.cpu.memory.sound.as_mut() {
             s.set_render_audio(on);
         }
+    }
+
+    /// Apply a set of **speed flags** — the accuracy/speed trade as named
+    /// switches. [`SpeedFlags::PRESET`] is "speed mode".
+    ///
+    /// The peripherals advance once per CPU *instruction* instead of once per
+    /// bus access. Their totals are unchanged, so `DIV`, `TIMA`, the serial
+    /// shift clock and the APU frame sequencer all still run at exactly the
+    /// right rate; what is lost is *which sub-instruction M-cycle* an access
+    /// lands on — precisely what Blargg `mem_timing` measures, and it fails
+    /// here on purpose.
+    ///
+    /// **It is for driving the machine, never for judging it.** Certification
+    /// runs, swarm films, scenario work, corpus collection. Anything that
+    /// scores a picture, a sound or a test ROM's verdict must leave it off; see
+    /// [`docs/modes.md`](https://github.com/Alchemy86/TerminalGB/tree/main/docs/modes.md)
+    /// for what each mode does and does not promise.
+    ///
+    /// Refused outright under [`RenderMode::Accurate`]: identical mode's whole
+    /// claim is that nothing is skipped, so the two are contradictory rather
+    /// than merely unwise. Ask there and every flag stays off — read
+    /// [`Gameboy::speed_flags`] for what actually happened rather than assuming
+    /// it was what you asked for.
+    ///
+    /// [`SpeedFlags::PRESET`]: crate::speed::SpeedFlags::PRESET
+    /// [`RenderMode::Accurate`]: crate::ppu::RenderMode::Accurate
+    pub fn set_speed_flags(&mut self, flags: crate::speed::SpeedFlags) {
+        let accurate =
+            self.cpu.memory.gpu.render_mode() == crate::gpu::RenderMode::Accurate;
+        let flags = if accurate {
+            crate::speed::SpeedFlags::NONE
+        } else {
+            flags
+        };
+        self.cpu.memory.set_speed_flags(flags);
+    }
+
+    /// Which shortcuts are *in effect* — not always what was asked for, since
+    /// identical mode refuses them all. See [`Gameboy::set_speed_flags`].
+    pub fn speed_flags(&self) -> crate::speed::SpeedFlags {
+        self.cpu.memory.speed_flags()
+    }
+
+    /// Turn the whole preset on or off in one call — "speed mode".
+    /// Equivalent to `set_speed_flags(SpeedFlags::PRESET)`.
+    pub fn set_speed_mode(&mut self, on: bool) {
+        self.set_speed_flags(if on {
+            crate::speed::SpeedFlags::PRESET
+        } else {
+            crate::speed::SpeedFlags::NONE
+        });
+    }
+
+    /// Whether *any* shortcut is in effect.
+    pub fn speed_mode(&self) -> bool {
+        self.speed_flags().any()
     }
 
     /// Whether the APU is producing samples — see
@@ -1547,6 +1611,58 @@ mod tests {
     /// return early instead of calling `Sound::run` — the obvious next
     /// "optimisation", and the wrong one, since that is where the channel state
     /// machines advance — and the state comparison goes.
+    /// Identical mode's whole claim is that nothing is skipped, so it refuses
+    /// every speed flag — and the refusal must not be bypassable by ordering,
+    /// which is the half that is easy to get wrong. Asking for speed and *then*
+    /// for identical has to leave the machine identical, not fast.
+    #[test]
+    fn identical_mode_refuses_every_speed_flag_whichever_order_they_arrive() {
+        use crate::ppu::RenderMode;
+        use crate::speed::SpeedFlags;
+
+        // Asked for after the mode: refused on the spot.
+        let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        gb.set_render_mode(RenderMode::Accurate);
+        gb.set_speed_flags(SpeedFlags::PRESET);
+        assert_eq!(gb.speed_flags(), SpeedFlags::NONE);
+        assert!(!gb.speed_mode());
+
+        // Asked for before the mode: cleared when the mode arrives.
+        let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        gb.set_speed_flags(SpeedFlags::PRESET);
+        assert!(gb.speed_mode(), "it applies under the default engine");
+        gb.set_render_mode(RenderMode::Accurate);
+        assert_eq!(
+            gb.speed_flags(),
+            SpeedFlags::NONE,
+            "switching to identical mode must turn the shortcuts off"
+        );
+    }
+
+    /// A machine built with the flags on must still honour them once a sound
+    /// chip is installed afterwards — otherwise `no-apu-state` silently
+    /// depends on call order, which is exactly the bug the previous test
+    /// guards against one level up.
+    #[test]
+    fn a_sound_chip_installed_later_honours_the_flags_already_set() {
+        use crate::speed::SpeedFlags;
+        let mut flags = SpeedFlags::NONE;
+        flags.no_apu_state = true;
+
+        let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        gb.set_speed_flags(flags);
+        let n = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        gb.enable_audio(Box::new(CountingPlayer(n.clone())));
+        for _ in 0..8 {
+            gb.frame();
+        }
+        assert_eq!(
+            n.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "a frozen chip installed after the flag were set must still be frozen"
+        );
+    }
+
     #[test]
     fn skipping_samples_changes_nothing_the_cartridge_can_see() {
         use std::sync::atomic::Ordering::Relaxed;

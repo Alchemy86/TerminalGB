@@ -353,6 +353,9 @@ pub struct ScenarioRun {
     video: Option<crate::video::VideoOut>,
     /// Nobody is watching — see [`ScenarioRun::collecting`].
     collecting: bool,
+    /// See [`ScenarioRun::speed_mode`]. `None` means "whatever `$GB_SPEED`
+    /// says", which is normally nothing at all.
+    speed_flags: Option<crate::speed::SpeedFlags>,
     /// A downscaled screen every N frames — see [`ScenarioRun::screens`].
     screens: Option<ScreenTrack>,
 }
@@ -416,6 +419,7 @@ impl ScenarioRun {
             track: true,
             video: None,
             collecting: false,
+            speed_flags: None,
             screens: None,
         })
     }
@@ -485,6 +489,22 @@ impl ScenarioRun {
         self
     }
 
+    /// Ask for **speed mode**: the peripherals advance once per instruction
+    /// rather than once per bus access, which on a real certification workload
+    /// is worth about 9 % and changes nothing the cartridge reads back. See
+    /// [`Gameboy::set_speed_mode`] for the trade and `docs/modes.md` for what
+    /// it may and may not be used to judge. `$GB_SPEED=speed` does the same.
+    pub fn speed_mode(mut self, on: bool) -> Self {
+        self.speed_flags = on.then_some(crate::speed::SpeedFlags::PRESET);
+        self
+    }
+
+    /// Ask for a specific set of shortcuts, overriding `$GB_SPEED`.
+    pub fn speed_flags(mut self, flags: crate::speed::SpeedFlags) -> Self {
+        self.speed_flags = Some(flags);
+        self
+    }
+
     pub fn quiet(mut self) -> Self {
         self.verbose = false;
         self
@@ -524,6 +544,22 @@ impl ScenarioRun {
             self.gb
                 .set_render_pixels(self.video.is_some() || self.screens.is_some());
             self.gb.set_render_audio(false);
+        }
+        // **Speed mode**, opt-in and off by default — see
+        // [`Gameboy::set_speed_mode`] and `docs/modes.md`. A run driving the
+        // machine may take it; a run judging pixels may not, and identical mode
+        // refuses it outright. Read here rather than in the core because the
+        // core's host surface is deliberately one environment variable
+        // (`$GB_MODEL`) and this is a harness decision.
+        let (mut flags, bad) = crate::speed::SpeedFlags::from_env();
+        if let Some(asked) = self.speed_flags {
+            flags = asked;
+        }
+        for token in &bad {
+            eprintln!("terminalgb: unknown speed flag {token:?} — ignored");
+        }
+        if flags.any() {
+            self.gb.set_speed_flags(flags);
         }
         let t = Instant::now();
         let start_hash = fnv1a(&self.start);

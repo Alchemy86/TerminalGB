@@ -122,6 +122,7 @@ struct Args {
     workers: usize,
     repeat: u32,
     no_pixels: bool,
+    speed: String,
     audio: bool,
     audio_out: bool,
     reset_every: u32,
@@ -139,6 +140,7 @@ impl Default for Args {
             workers: 1,
             repeat: 3,
             no_pixels: false,
+            speed: String::new(),
             audio: false,
             audio_out: true,
             reset_every: 0,
@@ -191,6 +193,11 @@ fn parse() -> Args {
                 i += 1;
             }
             "--no-pixels" => a.no_pixels = true,
+            "--speed-mode" => a.speed = "speed".into(),
+            "--speed" => {
+                a.speed = next(i).to_string();
+                i += 1;
+            }
             "--audio" => a.audio = true,
             "--no-audio-out" => a.audio_out = false,
             "--json" => a.json = true,
@@ -199,6 +206,7 @@ fn parse() -> Args {
                 println!(
                     "core_bench --rom PATH [--state PATH] [--frames N] [--warmup N]\n\
                                 [--workers N] [--repeat N] [--no-pixels] [--audio]\n\
+                                [--speed-mode] [--speed SPEC]\n\
                                 [--no-audio-out] [--reset-every N] [--json]\n\
                                 [--breakdown]   (needs --features profile)"
                 );
@@ -244,6 +252,7 @@ fn one_worker(rom: &[u8], state: Option<&[u8]>, a: &Args, start: &Barrier) -> Ru
         gb.load_state(bytes).expect("save state did not load");
     }
     gb.set_render_pixels(!a.no_pixels);
+    apply_speed(&mut gb, &a.speed);
 
     for _ in 0..a.warmup {
         gb.frame();
@@ -405,6 +414,7 @@ fn breakdown(rom: &[u8], state: Option<&[u8]>, a: &Args) {
                 gb.load_state(bytes).expect("save state did not load");
             }
             gb.set_render_pixels(!a.no_pixels);
+            apply_speed(&mut gb, &a.speed);
             profile::set_switches(base);
             for _ in 0..a.warmup {
                 gb.frame();
@@ -487,6 +497,18 @@ fn breakdown(_rom: &[u8], _state: Option<&[u8]>, _a: &Args) {
     std::process::exit(2);
 }
 
+/// Apply a `$GB_SPEED`-style spec, warning about anything not understood.
+fn apply_speed(gb: &mut terminalgb::gameboy::Gameboy, spec: &str) {
+    if spec.is_empty() {
+        return;
+    }
+    let (flags, bad) = terminalgb::speed::SpeedFlags::parse(spec);
+    for token in &bad {
+        eprintln!("unknown speed flag {token:?} — ignored");
+    }
+    gb.set_speed_flags(flags);
+}
+
 fn main() {
     let a = parse();
     let Some(rom_path) = a.rom.clone() else {
@@ -545,6 +567,7 @@ fn main() {
                 workers: 1,
                 repeat: 1,
                 no_pixels: a.no_pixels,
+                speed: a.speed.clone(),
                 audio: a.audio,
                 audio_out: a.audio_out,
                 reset_every: a.reset_every,

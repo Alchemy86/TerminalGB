@@ -54,6 +54,29 @@ what a fan-out figure's spread looks like when it is wall clock by definition. O
 [`docs/throughput.md`](../throughput.md) §6 measures 232,746 frames a second, which is
 **3,896×**.
 
+## 1a. And with the speed flags on
+
+Everything above is the **accurate machine** — every peripheral on its exact
+cycle, `mem_timing` passing. A run that is *driving* the machine rather than
+judging it can take documented shortcuts, each a named switch:
+
+One P-core, load 0.84, three interleaved rounds, Pokémon Blue from the Pewter
+chain's link-06 exit (a Route 1 overworld state), pixels off and an APU
+installed with samples off — a collector's machine:
+
+| | ms/frame | × real time | over accurate |
+|---|---:|---:|---:|
+| accurate | 0.0555–0.0557 | 300× | — |
+| `GB_SPEED=speed` | 0.0510–0.0511 | **328×** | **+9.2 %** |
+| `GB_SPEED=speed,no-apu-state` | 0.0395–0.0397 | **423×** | **+40.8 %** |
+
+Read these as *ratios against the accurate row measured in the same session*,
+not against §1's figures: those are a different state, and this page's own
+method section is the reason to distrust any cross-session comparison. **The whole Pewter chain certifies
+under all three** — see [`../modes.md`](../modes.md) for the flag table, what
+each one affects, and the per-link evidence. Speed mode is off by default and no
+gate can reach it.
+
 ## 2. So: which 1000×?
 
 They are not the same goal and they are not the same work.
@@ -133,6 +156,9 @@ box. At the aggregate figure above that is minutes, not hours — and
 the finding that **46 % of a swarm run was once the filesystem** rather than the emulator.
 
 ## See also
+
+- [speed ledger](speed-ledger.md) — every optimisation attempted, and the eleven measured negatives
+- [the three modes](../modes.md) — `identical`, `standard` and the speed flags
 
 * [`docs/throughput.md`](../throughput.md) — the full engineering record, every negative result
   with the command that produced it

@@ -3968,3 +3968,79 @@ suites ship `foo.gb` beside `foo-nocgb.gb`, and a shortest-match rule scores the
 as a wrong emulator), and **a runner must open the reference names upstream opens and no
 others** (Gambatte ships bare `<stem>.png` and `<stem>_gba.png` files its own `testrunner.cpp`
 never looks at).
+
+---
+
+## 2026-08-20 — speed as a first-class measurement, and three checks the tool should run
+
+Not an accuracy fix, so it has no *symptom*: it is the observation that a
+conformance tool which reports accuracy alone lets anybody quote one number and
+hide the other. That is precisely the problem this project hit reading other
+emulators' published claims, and it is now measured rather than argued —
+`docs/measured/against-the-field.md` builds SameBoy and PyBoy on this box and
+times them core to core. SameBoy reaches 43× real time and scores 15 of
+Mealybug's 24 published rows; PyBoy reaches 869× and scores **0**. Either figure
+alone is a fair-looking advertisement for a different machine.
+
+**Carries into the tool — three kinds of check, in the order they are worth
+building.**
+
+**(1) Detect the shortcut, do not trust the flag.** An emulator that advances
+its peripherals once per instruction instead of once per bus access runs every
+clock at exactly the right rate, so nothing measured over a *run* of
+instructions can see it. What gives it away is two reads of the same register
+from the same phase by instructions of different lengths. With the timer at its
+fastest tap, `ldh a,[rTIMA]` reads on its own third cycle and `ld a,[$FF05]` on
+its fourth, so from a counter reset they must differ by exactly one tick;
+advance per instruction and both read their instruction's *start*, and the
+difference collapses to zero.
+
+This is written and shipping as **GBSelfTest `GB-CYC-07`**, and it is
+demonstrated rather than asserted: pointed at this emulator it reports `ok`, and
+pointed at the same emulator with `GB_SPEED=instruction-bus` it reports `FAIL`.
+The conformance adapter reads `$GB_SPEED` for exactly that reason — a check that
+claims to detect a shortcut should be shown detecting one.
+
+The same shape generalises to any shortcut that preserves totals: find the
+observation that depends on *phase within an instruction* rather than on a rate.
+
+**(2) Mode equivalence — the most valuable thing the tool could do for us.**
+Run one ROM twice, under the exact machine and under the fast one, and report
+**where they diverge**: first differing frame, first differing byte of work RAM,
+first differing register read. That turns "is this shortcut safe for this
+workload" from an argument into a measurement, for anybody's ROM rather than
+only for ours.
+
+We have the crude version already and it is worth stating what it does and does
+not prove: `core_bench` prints a frame hash and a WRAM hash, so a run can be
+declared equivalent *end to end*. It cannot say **when** two runs parted, which
+is the thing you need to fix one. A first-divergence report is the missing half.
+
+Note the trap the existing instrument fell into: `--breakdown`'s `no_bus_tick`
+row reports `wram MOVED` on Pokémon Blue, and the narrower shortcut that ships
+as `instruction-bus` leaves the WRAM hash **byte-identical** on the same state.
+Two shortcuts one branch apart, opposite verdicts. **A mode-equivalence check
+must name the exact configuration it compared**, not the mode's marketing name.
+
+**(3) Report throughput beside accuracy, as one number each.** The method is
+established (`docs/measured/throughput-baseline.md` §3) and is not obvious:
+thread CPU time rather than wall clock, pinned to one core of known class,
+interleaved, long rounds, load average stated. Ours came from a one-off bench
+and belongs in the tool, so that any emulator it is pointed at gets both figures
+and the trade is **visible**.
+
+Two further checks landed in the cartridge from this week's accuracy fixes,
+both with known-wrong observable outputs, which is the ideal shape:
+**`GB-DMA-04`** (the transfer shares the cartridge bus — three reads of one
+fixed address during a transfer must differ, which needs no cycle counting;
+teeth proven against a build with the conflict removed) and **`GB-MEM-06`**
+(`$FEA0-$FEFF` answers, and answers per console). A fifth, **`GB-DMA-05`**,
+*reports* rather than judges where a work-RAM write lands during a transfer —
+the behaviour this project deliberately did not fit to a test, and exactly the
+question a cartridge can answer where a wiki cannot. GBSelfTest is 87 → **91**
+checks.
+
+**The standing rule from here: every accuracy fix gets a GBSelfTest check as
+part of the work, the same as it gets a documentation entry.** Five days of
+emulator work produced four ready-made reproductions and not one check, which is
+how a cartridge goes stale beside the thing it is meant to test.

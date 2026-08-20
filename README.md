@@ -968,6 +968,30 @@ stops matching what the engines actually cost.
 
 📖 **[The whole story → docs/picture-modes.md](docs/picture-modes.md)**
 
+### And a third mode, for driving rather than judging
+
+Anywhere the emulator is being *driven* — certification runs, swarm films,
+scenario work, corpus collection — it can take documented shortcuts. **Speed
+mode** is a preset over a set of individually named flags, off by default, and
+worth **+9.3 %** of a headless frame as it ships:
+
+```bash
+GB_SPEED=speed                     # the preset
+GB_SPEED=speed,-instruction-bus    # the preset, minus one shortcut
+GB_SPEED=no-oam-bug                # one shortcut, no preset
+```
+
+Each flag says exactly what it affects and what it does not, and each earns its
+place in the preset by **evidence**: the certified Pewter-chain links are re-run
+under it. The whole chain to Cerulean certifies 93/93 with it on, and four
+battle-heavy links score 799 of 800 against the accurate machine's 800.
+
+It must never be used to *judge* anything — no test-ROM verdict, no picture
+comparison, no audio hash, no published score — and `identical` refuses it
+outright. None of the gates can reach it.
+
+📖 **[All three modes, and what speed mode is not safe for → docs/modes.md](docs/modes.md)**
+
 ### Bring your own boot ROM (optional)
 
 Ten of those Mealybug ROMs draw with a tile that only a real boot ROM leaves in video RAM. That
@@ -1180,6 +1204,7 @@ Nothing below is repeated here — these are pointers, those are the sources.
 | [how a frame gets into a terminal](docs/rendering.md) | the transport ladder from shared memory (81 bytes/frame) through indexed PNG, how it is negotiated, which terminals support what |
 | [the link cable](docs/link-cable.md) | **two consoles, one wire**: start a second copy of the emulator and they find each other and link automatically. The hardware, the lockstep argument, the Gen 1 ↔ Gen 2 Time Capsule rules, and an honest design note on playing over the internet |
 | [terminal render performance](docs/terminal-render.md) | why a large terminal window used to cost frames, and what caps the cost now |
+| [**the three modes**](docs/modes.md) | `identical`, `standard` and **speed mode** — what each guarantees, which is the default, how to select one, and what speed mode is **not** safe for. Start here. |
 | [picture modes](docs/picture-modes.md) | `standard` vs `identical`: what each draws, what each scores, what the exact one costs, and how to switch |
 | [Mealybug Tearoom, measured](docs/mealybug.md) | what the PPU actually scores, how hard calibration is, and §7 on the pixel-FIFO engine |
 | [display scaling](docs/display.md) | how each frontend enlarges 160×144, and how to make it crisp, smooth or vector-like |

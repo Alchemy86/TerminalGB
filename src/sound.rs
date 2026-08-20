@@ -1480,6 +1480,9 @@ pub struct Sound {
     /// [`Sound::set_render_audio`]. Host configuration like `cgb_revision`
     /// and `agb`, and **not** serialised for the same reason.
     render_audio: bool,
+    /// See [`Sound::set_state_frozen`]. Machine configuration, not state:
+    /// never serialised.
+    state_frozen: bool,
 }
 
 impl Default for Sound {
@@ -1505,6 +1508,7 @@ impl Sound {
         Sound {
             on: false,
             render_audio: true,
+            state_frozen: false,
             channel1: SquareChannel::new(ch1_blip),
             channel2: SquareChannel::new(ch2_blip),
             channel3: WaveChannel::new(ch3_blip),
@@ -1564,6 +1568,15 @@ impl Sound {
         self.channel2.render = on;
         self.channel3.render = on;
         self.channel4.render = on;
+    }
+
+    /// Freeze the chip's state machines as well as its output — the
+    /// `no-apu-state` speed flag. **Guest-visible and not in the speed preset**:
+    /// `NR52`, the length counters, the sweep and envelope units and
+    /// `PCM12`/`PCM34` all stop, so a game that waits on any of them hangs.
+    /// See [`crate::speed::SpeedFlags::no_apu_state`].
+    pub fn set_state_frozen(&mut self, on: bool) {
+        self.state_frozen = on;
     }
 
     /// Whether the APU is producing samples — see [`Sound::set_render_audio`].
@@ -1834,7 +1847,7 @@ impl Sound {
     }
 
     pub fn do_cycle(&mut self, cycles: u32) {
-        if self.player.is_none() {
+        if self.player.is_none() || self.state_frozen {
             return;
         }
         let cycles = if self.double_speed {

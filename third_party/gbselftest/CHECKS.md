@@ -175,6 +175,12 @@ an instruction took a different number of machine cycles from the published opco
 
 an instruction took a different number of machine cycles from the published opcode table.
 
+### GB-CYC-07
+
+**an access lands on its own cycle**
+
+advancing the clocks once per instruction keeps every rate right and still fails this.
+
 ## TIM: the divider and the timer
 
 ### GB-TIM-01
@@ -319,6 +325,12 @@ the whole of $8000 to $9FFF must hold what is written with the LCD off.
 
 the block above $FE9F is not more object memory.
 
+### GB-MEM-06
+
+**$FEA0-$FEFF answers, per console**
+
+the bytes above object memory are not open bus once the screen is off.
+
 ## PPU: timing and the rendering fingerprint
 
 ### GB-PPU-01
@@ -454,6 +466,18 @@ the object attribute memory does not hold what was sent to it.
 **$FF46 reads back the page written**
 
 the transfer register must read back the last value written to it.
+
+### GB-DMA-04
+
+**the transfer shares the cartridge bus**
+
+the transfer has no bus of its own, so a read on the bus it uses sees its byte.
+
+### GB-DMA-05
+
+**where a work-RAM write lands during a transfer**
+
+reported rather than judged: no published reference documents this.
 
 ## APU: registers and the length counter
 

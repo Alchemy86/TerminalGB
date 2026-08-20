@@ -4,6 +4,12 @@
 
 TerminalGB carries **two complete picture engines**, and which one runs is a mode you choose.
 
+> **There is a third mode, and it is not a picture engine.** *Speed mode* trades
+> sub-instruction timing for throughput and is for driving the machine, never for
+> judging it. It lives with the other two on **[docs/modes.md](modes.md)**, which
+> is the page to read if you are choosing between all three.
+
+
 | | **`standard`** | **`identical`** |
 |---|---|---|
 | The default | **yes** | no — opt in |
@@ -167,6 +173,8 @@ kept consistent by tests rather than by care:
 
 ## 6. Further reading
 
+- [`docs/modes.md`](modes.md) — all three modes together, including the speed
+  flags and what they must never be used to judge.
 - [`docs/mealybug.md`](mealybug.md) — what the per-dot engine still gets wrong, row by row, and what
   closing each would take. Read it before touching `src/gpu/fifo.rs`.
 - [`docs/components/ppu.md`](components/ppu.md) — the component page: registers, modes, the

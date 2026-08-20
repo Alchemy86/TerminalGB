@@ -12156,3 +12156,117 @@ already dealt with, and a *count* settles each in a minute where an argument wou
   help only a *player*. The whole renderer is 0.0434 ms of a player's 0.1106 ms frame and **a
   collector does not run it at all**, so an optimistic third of the renderer is ~9 % of a
   player's frame and **0 % of a certification run's**.
+
+## THE THIRD MODE — speed flags, a preset, and evidence per flag (`src/speed.rs`, `docs/modes.md`)
+
+**Reader-facing page: [`docs/modes.md`](docs/modes.md)** — the one door to
+`identical`, `standard` and the speed flags, with the table of what each flag
+affects. Consolidated performance record:
+[`docs/measured/speed-ledger.md`](docs/measured/speed-ledger.md).
+
+- **EVERY SHORTCUT IS ITS OWN NAMED FLAG AND SPEED MODE IS A PRESET, NOT A CODE
+  PATH.** `SpeedFlags` is a struct of named bools; `SpeedFlags::PRESET` is the
+  whole of "speed mode" and its contents are pinned by a test so it cannot
+  quietly grow. There is no second implementation to fall out of step with the
+  accurate one. `GB_SPEED=speed,-instruction-bus` is the preset minus a
+  shortcut; `GB_SPEED=no-oam-bug` is one shortcut with no preset. **Last wins**,
+  an unknown token is reported and ignored, and `SpeedFlags::spec()` prints what
+  is *actually* on — log that, never what was asked for.
+- **A FLAG EARNS THE PRESET BY CERTIFICATION, NOT BY ARGUMENT.** We have a
+  harness that plays the real cartridge, so "is this shortcut acceptable" is a
+  measurement: re-run the certified links under it. **The whole chain to
+  Cerulean is 93/93 with the preset on, and four battle-heavy links (05, 17,
+  27, 29 — the two gyms, the rival fight and the Misty grind) score 799/800
+  against the accurate machine's 800/800.** That is a far stronger statement
+  than any reasoning about what a cartridge can observe, and it generalises to
+  any scenario.
+- **THE BAR IS SAFE *AND* WORTH HAVING, WHICH IS WHY `no-oam-bug` IS NOT IN THE
+  PRESET.** It is provably safe for our workload and buys **0.0 %** — the
+  OAM-bug hook only fires when a 16-bit register points into `$FE00-$FEFF`,
+  which Pokémon never does. Trading real accuracy for zero is not a trade. It
+  ships as a flag because a DMG game that *does* hammer OAM might make it worth
+  something.
+- **AND `no-apu-state` IS NOT IN THE PRESET DESPITE BEING THE BIGGEST GAIN
+  (+25.9 %) AND PASSING CERTIFICATION.** It freezes a whole peripheral, so any
+  sound driver that spins on a length counter or on `NR52` hangs outright —
+  that reaches far wider than the one game we can test. The evidence says it is
+  safe *for Pokémon Blue on the Pewter chain*, and that is exactly what its
+  documentation says. Prefer `Gameboy::set_render_audio(false)`, which skips the
+  resample and leaves every register exact.
+- **TWO SHORTCUTS ONE BRANCH APART CAN HAVE OPPOSITE VERDICTS — do not conflate
+  them.** `profile::Switches::no_bus_tick` returns from `bus_tick` immediately
+  and reports **`wram MOVED`** on Pokémon Blue, which is why the bus tick was
+  refused for both picture modes. The shipping `instruction-bus` keeps the PPU
+  stepping through interrupt dispatch (a frozen PPU cannot redirect a dispatch,
+  and `mealybug/m2_win_en_toggle` photographs the difference) and leaves the
+  **WRAM hash byte-identical** on the same state. Different shortcut, different
+  answer.
+- **`--breakdown` IS FOR RANKING COMPONENTS, NOT FOR QUOTING FIGURES.** It
+  prices the bus tick at 17.7 %; the shipping flag is worth **9.3 %**. The row
+  is measured with the `profile` feature on, whose counters are a `static mut`.
+- **`bus_tick_enabled` IS NOT THE SWITCH AND MUST NOT BECOME ONE.** It is the
+  "a CPU instruction is running" predicate and also gates VRAM/OAM access
+  blocking, the OAM-corruption bug and OAM DMA bus conflicts. The flag is a
+  separate `per_access_bus`, and the PPU's per-access step
+  (`bus_tick_ppu`) is deliberately outside it.
+- **`identical` REFUSES EVERY FLAG, AND THE REFUSAL IS NOT ORDER-DEPENDENT.**
+  `set_speed_flags` under `RenderMode::Accurate` stores `NONE`, *and*
+  `set_render_mode(Accurate)` clears them — so asking for speed and then for
+  identical leaves the machine identical. Read `Gameboy::speed_flags()` for
+  what happened rather than assuming.
+- **Trajectories diverge under `instruction-bus` and that is expected, not a
+  fault.** Gen 1's `Random_` mixes `rDIV` in on every call, so moving where
+  inside an instruction that register is read changes the value — the same way
+  a different seed does. The claim is that the links still certify, never that
+  the runs are the same runs.
+- **Nothing in any gate can reach it.** Off by default, no baseline runner sets
+  it, `make test-external` / `test-external-accurate` / `cargo test` never see
+  it, and it is deliberately not on a frontend key: a person playing a game
+  gains nothing (the frontend is paced to 59.7275 Hz either way) and a mode that
+  fails `mem_timing` should not be one keystroke from someone judging a picture.
+
+## GBSELFTEST GREW WITH THE WORK — 87 → 91 checks, and the standing rule
+
+**Every accuracy fix gets a GBSelfTest check as part of the work, the same as it
+gets a documentation entry.** Five days of emulator work produced four
+ready-made reproductions and not one check; that is how a cartridge goes stale
+beside the thing it is meant to test. The cartridge is its own repo
+(`Alchemy86/GBSelfTest`), vendored here with a lock — change it upstream, then
+`GBSELFTEST_LOCAL=<checkout> tools/fetch-gbselftest.sh` to re-pin.
+
+- **`GB-CYC-07` DETECTS A SHORTCUT RATHER THAN TRUSTING A FLAG, and that is the
+  reusable idea.** An emulator advancing its peripherals once per instruction
+  runs every clock at the right rate, so nothing measured over a *run* of
+  instructions can see it. What gives it away is **two reads of the same
+  register from the same phase by instructions of different lengths**: with the
+  timer at its fastest tap, `ldh a,[rTIMA]` reads on its own third cycle and
+  `ld a,[$FF05]` on its fourth, so from a counter reset they must differ by
+  exactly one tick — and per-instruction ticking makes both read their
+  instruction's *start*, collapsing it to zero. Demonstrated, not asserted:
+  `ok` on this emulator, `FAIL` under `GB_SPEED=instruction-bus`.
+  **The conformance adapter reads `$GB_SPEED` for exactly this.**
+- **`GB-DMA-04` needs no cycle counting, which is what makes it robust.** Three
+  reads of **one fixed** cartridge address while a transfer runs out of the
+  cartridge: that address's byte never changes and the transfer's byte changes
+  every M-cycle, so three different answers is the whole proof. Teeth proven
+  against a build with `dma_conflict` removed.
+- **`GB-MEM-06` asserts where documented and REPORTS where not.** `$00` on
+  DMG/MGB, the doubled high nibble on an Advance, and a *skip* carrying the
+  observed bytes on a Colour console — which cannot tell its own revision from
+  inside and would be inventing a fact if it guessed.
+- **`GB-DMA-05` reports rather than judges** where a work-RAM write lands during
+  a transfer — the CGB address-bus behaviour this project deliberately did not
+  fit to a test. On our CGB it reports `$D000` holding the byte written to
+  `$C000`, i.e. address line 12 came from the transfer. **That is the thing a
+  cartridge can do that a wiki cannot.**
+- **A "reported, not judged" check whose observation does not print is useless**
+  — `ReportSkip` now prints the observed pair, which it did not before.
+- **THREE ASSEMBLY TRAPS, each of which cost a build.** A check appended to the
+  end of a `checks_*.asm` file lands in **whatever section is last in that
+  file**, which for `checks_mem.asm` is `BANK[1]` while the MEM area banks in 2
+  — the dispatcher then calls an address holding something else entirely, and
+  the symptom is a check failing with *another* check's explanation. ROM0 is
+  **full**: the registry's `Nm*`/`Ex*` strings live there, and four long ones
+  overflow it (fragmentation, so "519 bytes free" still fails) — match the
+  house length, ~60-90 characters. And `SetNums16` takes `DE` = got and `HL` =
+  want, so build both in the *same* byte order or the report reads backwards.

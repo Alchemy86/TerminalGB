@@ -103,6 +103,15 @@ fn main() {
     cpu.memory
         .enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
+    // `$GB_SPEED` lets the runner point a *deliberately* shortcut machine at
+    // the suite — which is how a check that claims to detect a shortcut is
+    // shown to detect it, rather than merely asserted to. Off unless asked.
+    let (speed, bad) = terminalgb::speed::SpeedFlags::from_env();
+    for token in &bad {
+        eprintln!("conformance_adapter: unknown speed flag {token:?} — ignored");
+    }
+    cpu.memory.set_speed_flags(speed);
+
     // Serial capture. The contract asks for the raw bytes the ROM sends to the
     // link port — no framing, no interpretation. Whoever reads them decides
     // what they mean.

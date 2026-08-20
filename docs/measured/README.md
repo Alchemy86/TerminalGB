@@ -70,6 +70,7 @@ to measure:
 | Guide | Measured here |
 |---|---|
 | [The Timing of LYC/STAT Handlers](https://gbdev.io/guides/lyc_timing.html) | [ppu.md § the STAT line](ppu.md#the-stat-interrupt-is-one-line-not-four-triggers) |
+| [speed ledger](speed-ledger.md) | every optimisation attempted — what each was worth, the eleven measured negatives with their numbers, the field built and timed here, and what is queued |
 | [Interrupts tutorial](https://evie.gbdev.io/blog/interrupts.html) | [timing.md § interrupt dispatch](timing.md#interrupt-dispatch-is-five-m-cycles-and-picks-its-vector-halfway-through) |
 | [DMA Hijacking](https://gbdev.io/guides/dma_hijacking.html) | [timing.md § OAM DMA](timing.md#oam-dma-is-a-timed-160-m-cycle-transfer) |
 | [Adding a custom SGB border](https://gbdev.io/guides/sgb_border.html) | Deliberately **not** implemented — [`docs/components/sgb.md`](../components/sgb.md) argues why |

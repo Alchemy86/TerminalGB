@@ -95,6 +95,8 @@ pub mod music;
 /// crate**.
 #[cfg(all(feature = "scenario", not(target_arch = "wasm32")))]
 pub mod scenario;
+/// The accuracy/speed trade, as named switches — see [`speed::SpeedFlags`].
+pub mod speed;
 /// The PPU's public surface: which of the two rendering engines runs.
 ///
 /// The `gpu` module itself stays private — its internals are not an API — but
