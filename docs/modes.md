@@ -87,9 +87,17 @@ argument about what a cartridge can observe. **Run the certified links under it 
 they still certify.**
 
 <!--speedmode:begin-->
-**The whole chain, cold cartridge to Cerulean City, 31 links × 3 seeds:
-93 of 93 goals with every shortcut off, and 93 of 93 with speed mode on.**
-Zero failures either way.
+**The chain from a cold cartridge to Mt Moon B2F, 24 links × 3 seeds: 72 of 72
+goals with every shortcut off, and 72 of 72 with speed mode on.** Zero failures
+either way.
+
+> **Why 24 links and not the whole 33.** The bench work added
+> `23b-hunt-a-paras`, and a PARAS is about one step in 128 — so three attempts
+> is not enough to hunt one and `chain --seeds 3` stops there **in both modes
+> alike**. That is a property of the link, not of the shortcut; the link is
+> certified upstream from a pool with a real attempt budget. It is A/B'd
+> separately below, at 60 attempts a side, because a randomness-driven hunt is
+> exactly where moving `rDIV`'s read phase would show if it showed anywhere.
 
 **Per link, 200 attempts each from the same entry state and the same seeds,**
 on the three links where a shortcut is most likely to show — two gym battles and
