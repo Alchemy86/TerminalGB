@@ -1224,9 +1224,37 @@ per-tile calibration §8.9 already scopes.
   digit, 646,989 either way**, and these four pixels do not move. So the exception is
   unobservable in this engine and the write-side model is equivalent; the four pixels are a
   different cause and the change was reverted rather than carried for nothing.
+
+  > **Re-measured 2026-08-20, three more ways, all negative — do not spend a fourth hour on
+  > this row.** The write-side stage was swept rather than reasoned about:
+  >
+  > | `LCDC.0` settles… | `m3_lcdc_bg_en_change@DMG` | other rows |
+  > |---|---:|---|
+  > | one dot after commit (**shipped**) | **4** | — |
+  > | two dots after commit (a second stage value) | 403 | `m3_lcdc_win_en_change_multiple` 0 → 522 |
+  > | at the cycle's close, on the window enable's schedule | 855 | none |
+  > | one dot after commit **except at `lx == 0`** (docboy's exception, write-side) | **6** | none |
+  >
+  > The direction is now settled too, and it is the opposite of what the pixel says at first
+  > glance. The ROM starts with the background **off** and the mid-line write turns it **on**;
+  > the left column is a staircase that grows one pixel per band as the write lands later. Our
+  > extra pixel means we turn the background on *one dot late* in the third band and exactly
+  > right in every band after it — so any uniform shift is wrong by construction, which is what
+  > the first three rows of that table say. It is a conditional rule and the obvious condition
+  > (the head of the line) is the fourth row, which makes it worse. Come back with a model.
 * **`m3_lcdc_obj_size_change_scx@DMG`, 298 pixels — not attempted.** Its two CGB columns sit at
   22,154, which is the shade-rank artefact zone, so the row cannot go green without the DMG
   column and both CGB columns moving together.
+
+  > **Update, 2026-08-20: the CGB columns came out of the artefact zone and the row is now the
+  > second-cheapest thing in the suite.** It reads **30 / 0 / 0** — both Color columns are
+  > pixel-exact and only the DMG one is left, thirty pixels in columns 27-31 of lines 2-7 and
+  > 130-135. Those columns are the **second** sprite block, `X = $20` and attribute `$40`
+  > (Y-flipped), from the ROM's own `sprite_data`; the handler writes `LCDC` four times in
+  > eight cycles, alternating `$83` (8x8) and `$87` (8x16), so what is being measured is which
+  > dot of an object fetch reads `LCDC.2`. Its sibling `m3_lcdc_obj_size_change` is **51 / 10 /
+  > 10** — the same question on all three machines. Closing them is **two shootout rows** and
+  > they are group F of §11.4.
 
 
 ## 11. The denominator: 45 of the failing rows cannot be won by PPU work (15 Aug 2026)
@@ -1334,7 +1362,12 @@ Measured on the `identical` engine at the head of this campaign.
 | **D** window / `WX` | `m3_wx_5_change@DMG` 13,660 · `m3_wx_6_change@DMG` 4,792 · `m3_lcdc_win_en_change_multiple_wx@DMG` 1,273 | `check_window_start`, `check_window_stop`, `prologue_pos` | `LCDC.5` toggled and `WX` moved *after* the window has started |
 | **E** `SCY` / bitplane mix | `m3_scy_change` 257 / 560 / 116 | `fetch_tile_number`, `lo_hi`, the `$FF42`/`$FF43` arms of `ppu_write_commit` | **tile 1 only**, and it renders the previous scanline's `SCY` |
 | **F** the object fetch | `m3_lcdc_obj_size_change` 51 / 10 / 10 · `m3_lcdc_obj_size_change_scx@DMG` 30 | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
-| **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records the dead end |
+| **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records **four** measured dead ends |
+
+**Start with group F.** Both its rows are two-figure pixel counts, both CGB columns of
+`m3_lcdc_obj_size_change_scx` are already pixel-exact, and between them they are **two shootout
+rows** — the same as group D's three rows for a fraction of the distance. Group G is four pixels
+and has now refused four different models; leave it until something else in the fetcher moves.
 
 These are four disjoint regions of `src/gpu/fifo.rs`, so they can be worked in parallel. **The
 coupling is not the code, it is the baseline**: `testharness/mealybug_accurate_baseline.txt`

@@ -56,13 +56,13 @@ By suite:
 | `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` needs mid-scanline writes; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
 | `ashiepaws` | 0 / 3 | 0 / 3 | |
-| `mealybug-tearoom-tests` | **8 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 16 still red, **13 cannot be won by PPU work at all** — see §1b |
+| `mealybug-tearoom-tests` | **8 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 16 still red, **9 cannot be won by PPU work at all** — see §1b |
 | **total** | **238 / 264** | 223 / 264 | |
 
-**Every one of the 26 failures is a documented open area, and 13 of them are not
-ours to win.** Mealybug 16 (13 blocked — §1b), Mooneye 0, `cgb-acid-hell`,
-`daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`, `ashiepaws` 3,
-SameSuite 2. There is no surprise in the list.
+**Every one of the 26 failures is a documented open area, and 9 of them are not
+ours to win.** Mealybug 16 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
+`cgb-acid-hell`, `daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
+`ashiepaws` 3, SameSuite 2. There is no surprise in the list.
 
 ### 1a. The fifteen rows the default flip moved
 
@@ -82,16 +82,30 @@ and the row passes on both engines.
 sorts every Mealybug failure by what it would take to close. Against the
 shootout's DMG-only 24-row population that gives:
 
-* **9 rows** need the boot ROM's `®` glyph in VRAM at hand-off (block A). The
-  emulator supports a user-supplied boot ROM and the gated score deliberately
-  never uses one; shipping the glyph is a licence call, not a PPU one.
-* **4 rows** are genuine mid-scanline error and are the ones to chase:
-  `m3_lcdc_win_en_change_multiple_wx`, `m3_wx_5_change`, `m3_wx_6_change`
-  (the window/`WX` group) and `m3_scy_change`.
+* **9 rows** need the boot ROM's `®` glyph in VRAM at hand-off (block A) —
+  `m3_bgp_change_sprites`, `m3_lcdc_bg_map_change`, `m3_lcdc_obj_en_change`,
+  `m3_lcdc_obj_en_change_variant`, `m3_lcdc_tile_sel_change`,
+  `m3_lcdc_tile_sel_win_change`, `m3_lcdc_win_map_change`, `m3_obp0_change`,
+  `m3_scx_low_3_bits`. The emulator supports a user-supplied boot ROM and the
+  gated score deliberately never uses one; shipping the glyph is a licence call,
+  not a PPU one.
+* **7 rows** are genuine mid-scanline error and are the ones to chase, with the
+  pixel distance each currently sits at on the default engine:
+
+  | row | pixels wrong | group ([`mealybug.md` §11.4](mealybug.md#114-the-twelve-winnable-rows-grouped-by-the-code-they-live-in)) |
+  |---|---:|---|
+  | `m3_lcdc_bg_en_change` | **4** | G — one pixel at `x = 0` on four lines |
+  | `m3_lcdc_obj_size_change_scx` | 30 | F — the object fetch |
+  | `m3_lcdc_obj_size_change` | 51 | F |
+  | `m3_scy_change` | 257 | E — tile 1 renders the previous line's `SCY` |
+  | `m3_lcdc_win_en_change_multiple_wx` | 1,273 | D — window / `WX` |
+  | `m3_wx_6_change` | 4,792 | D |
+  | `m3_wx_5_change` | 13,660 | D |
 
 So the reachable ceiling on this suite's shootout population is **15 of 24**,
-not 24, and the four winnable rows are worth **242 / 264** if all of them land.
-Anybody planning work against this row block should plan against four.
+not 24, and those seven rows are worth **245 / 264** if all of them land — which
+would be fourth place. Anybody planning work against this row block should plan
+against seven, and start at the top of that table.
 
 #### The shootout's Mooneye population is not ours — 97 rows, not 103
 

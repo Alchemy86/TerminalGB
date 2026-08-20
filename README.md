@@ -1810,7 +1810,7 @@ ROMs, **its** reference images and **its** pass criterion:
 fifteen gains, zero losses, and the one row the per-dot engine used to lose (`cgb-acid2`) is
 pixel-exact on both now. It was 223/264 before.
 
-All 26 failures are documented open areas, and **13 of them are Mealybug rows nobody can win by
+All 26 failures are documented open areas, and **9 of them are Mealybug rows nobody can win by
 PPU work** (they need the boot ROM's `®` glyph in VRAM, which is a licence decision this project
 has deliberately not taken). Re-derive the number in under a minute — no Windows, no display:
 
