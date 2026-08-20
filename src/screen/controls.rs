@@ -601,15 +601,16 @@ pub const CONTROLS: &[Control] = &[
     },
     Control {
         note: Some(
-            "**this one is not cosmetic**: `identical` draws the picture dot by \
-             dot as the hardware does, for about twice the CPU. Most games look \
-             the same either way",
+            "**this one is not cosmetic**: `identical` is the default and draws \
+             the picture dot by dot as the hardware does; `standard` draws a \
+             whole scanline at a time for about an eighth of the PPU cost. Most \
+             games look the same either way",
         ),
-        help: Some("P         picture: standard"),
+        help: Some("P         picture: identical / standard"),
         ..c(
             "P",
             Group::Picture,
-            "picture mode: `standard` ⇄ `identical`",
+            "picture mode: `identical` ⇄ `standard`",
             Some(("Picture modes", "picture-modes.md")),
             Slot::Half("P picture mode"),
             None,

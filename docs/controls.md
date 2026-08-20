@@ -91,7 +91,7 @@ Everything here is cosmetic except `P`, which changes how the hardware is emulat
 | <kbd>[</kbd> | cycle the palette | [Palettes and scaling](display.md) |
 | <kbd>]</kbd> | cycle the pixel-art upscaler | [The upscalers](upscaling.md) |
 | <kbd>}</kbd> | cycle the upscale factor — each algorithm allows its own factors, so this clamps | [The upscalers](upscaling.md) |
-| <kbd>P</kbd> | picture mode: `standard` ⇄ `identical` — **this one is not cosmetic**: `identical` draws the picture dot by dot as the hardware does, for about twice the CPU. Most games look the same either way | [Picture modes](picture-modes.md) |
+| <kbd>P</kbd> | picture mode: `identical` ⇄ `standard` — **this one is not cosmetic**: `identical` is the default and draws the picture dot by dot as the hardware does; `standard` draws a whole scanline at a time for about an eighth of the PPU cost. Most games look the same either way | [Picture modes](picture-modes.md) |
 
 ### Capturing it
 

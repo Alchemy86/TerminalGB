@@ -5787,15 +5787,16 @@ impl App {
             Line::from("  f/esc     fullscreen on / off      [   palette"),
             Line::from("  ]         upscaler    }       upscale factor"),
             Line::from(format!(
-                "  P         picture: standard ⇄ identical    (now: {})",
+                "  P         picture: identical / standard    (now: {})",
                 self.ppu_mode().name()
             )),
             Line::from(Span::styled(
                 format!(
-                    "  identical draws the picture dot by dot as the hardware \
-                     does, so a mid-scanline effect lands exactly right — for \
-                     ~{:.1}x the CPU. Most games look the same either way \
-                     (`ppu =` in config.toml)",
+                    "  identical is the default and draws the picture dot by dot \
+                     as the hardware does, so a mid-scanline effect lands exactly \
+                     right; standard draws a whole scanline for ~1/{:.0} of the \
+                     PPU. Most games look the same either way (`ppu =` in \
+                     config.toml)",
                     crate::gpu::RenderMode::IDENTICAL_COST
                 ),
                 Style::default().fg(Color::DarkGray),

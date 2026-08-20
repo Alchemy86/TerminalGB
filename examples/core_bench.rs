@@ -512,7 +512,8 @@ fn apply_speed(gb: &mut terminalgb::gameboy::Gameboy, spec: &str) {
     // machine. Every figure in docs/throughput.md is `standard`; say so rather
     // than letting the run look four times slower for no stated reason. Once,
     // not once per machine — this is called per worker and per breakdown row.
-    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static SAID: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
     if flags.any()
         && !gb.speed_flags().any()
         && !SAID.swap(true, std::sync::atomic::Ordering::Relaxed)
