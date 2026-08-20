@@ -391,13 +391,13 @@ judgement, never a hash of our output; **any** change is red, in either directio
 that starts passing is a baseline change too); re-blessing is deliberate
 (`UPDATE_EXTERNAL_BASELINE=1 make test-external`) and the diff is what the reviewer reads.
 
-| group | file | rows | measured 2026-08-14 |
-|---|---|---:|---|
-| Mooneye `acceptance` + `emulator-only` | `testharness/mooneye_baseline.txt` | 103 | **95 pass** — acceptance **67/75**, `emulator-only` **28/28** |
-| Mooneye `misc` (`GB_MODEL=cgb`) | `testharness/mooneye_cgb_baseline.txt` | 8 | **8 pass** |
-| SameSuite | `testharness/samesuite_baseline.txt` | 76 | **72 pass** |
-| Mealybug Tearoom | `testharness/mealybug_baseline.txt` | 79 | **3 pixel-exact** (DMG 1/24, CGB-C 1/31, CGB-D 1/24) |
-| shootout `cpp` | `testharness/cpp_baseline.txt` | 4 | **4 pixel-exact** |
+| group | file | rows | `identical` (the default) | `standard` |
+|---|---|---:|---|---|
+| Mooneye `acceptance` + `emulator-only` | `mooneye[_accurate]_baseline.txt` | 103 | **103 pass** — acceptance **75/75** | 95 — acceptance 67/75 |
+| Mooneye `misc` (`GB_MODEL=cgb`) | `mooneye_cgb_baseline.txt` | 8 | **8 pass** | one file, scored in both modes |
+| SameSuite | `samesuite_baseline.txt` | 76 | **73 pass** | one file, scored in both modes |
+| Mealybug Tearoom | `mealybug[_accurate]_baseline.txt` | 79 | **26 pixel-exact** (DMG 8/24) | 3 (DMG 1/24) |
+| shootout `cpp` | `cpp_baseline.txt` | 4 | **4 pixel-exact** | one file, scored in both modes |
 
 Notes worth having before you read a red build:
 
@@ -416,7 +416,7 @@ Notes worth having before you read a red build:
   nine are the named-machine variants; all nine pass now, so quote **67/75** rather than the
   community figure — the smaller denominator exists because most emulators model one or two
   consoles, not because the ROMs are unfair.
-* **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At 3/79 the count is
+* **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At 26/79 the count is
   the only number that can show a PPU rewrite making progress instead of a flat wall of red —
   so an intermediate PPU change *will* turn that file red. Read the diff, then re-bless with
   the new counts in the same commit as the change that caused them.
@@ -616,10 +616,10 @@ Three traps, all of which produced convincing-but-wrong results before they were
 | Component | Primary suites | The approximations they will catch |
 |---|---|---|
 | [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (**pass**); Mooneye `acceptance/interrupts`, `instr` (gated) | — |
-| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2; Mooneye `acceptance/ppu` (**4/12**, gated); Mealybug Tearoom (**3/79**, gated) | Fixed mode-3 length, whole-line render, STAT IRQ blocking (structural — needs a cycle-stepped PPU) |
-| [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug@dmg` (**pass**); Mooneye `acceptance/oam_dma` (**3/3**), `bits` (**3/3**), SameSuite `dma` (**4/4**) — all gated | No VRAM/OAM mode-blocking (structural) |
+| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2 (**pass**); Mooneye `acceptance/ppu` (**12/12** on the default engine, gated); Mealybug Tearoom (**26/79**, gated) | Mid-scanline calibration — 45 of Mealybug's 79 rows cannot be won by PPU work at all ([mealybug.md §11](mealybug.md)) |
+| [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug@dmg` (**pass**); Mooneye `acceptance/oam_dma` (**3/3**), `bits` (**3/3**), SameSuite `dma` (**4/4**) — all gated | VRAM/OAM mode-blocking is **on** in the default `identical` engine and deliberately off in `standard`, where a fixed 172-dot mode 3 would drop writes a game placed legally in HBlank |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1`; **`testharness/battery.rs`** (**pass**, battery-save durability + `.sav` interop) | Banking bit maths; the MBC3-for-everything web/FFI bug |
-| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**, `audiocapture`), `cgb_sound` (**12/12 pass**, wired into `testroms` 2026-08-14); SameSuite APU (**63/69**, gated) | 6 SameSuite APU rows still red |
+| [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**, `audiocapture`), `cgb_sound` (**12/12 pass**, wired into `testroms` 2026-08-14); SameSuite APU (**66/69**, gated) | 3 SameSuite APU rows still red, each on measured evidence |
 | [Timer](components/timer.md) | Mooneye `acceptance/timer` (**13/13**, gated); Blargg `interrupt_time` (**pass**) | — one 16-bit system counter with falling-edge detection, since 2026-08-14 |
 | [Serial](components/serial.md) | Blargg (as its reporting channel); Mooneye `acceptance/serial` (**1/1**, gated) | Instantaneous transfer; `boot_sclk_align` needs the boot ROM's own clock phase |
 | [Joypad](components/input.md) | Mooneye joypad (limited) | Mostly proven by games booting |
