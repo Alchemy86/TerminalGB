@@ -341,7 +341,7 @@ The recognised keys:
 | `upscale` | `nearest` / `scale2x` / `mmpx` / `lcd` | Pixel-art upscaler run each frame. Default `nearest` (a no-op at factor 1). |
 | `upscale_factor` | an integer | Scale factor, clamped to what the algorithm supports. |
 | `cell_scale` | `auto` / a number ≥ 1.0 | HiDPI device-pixel-per-cell correction (see above). Default `1.0`. |
-| `ppu` | `standard` / `identical` (aliases: `fast` / `accurate`) | Which **[picture mode](docs/picture-modes.md)** the emulated hardware runs. `standard` (default) draws a whole scanline at a time; `identical` runs the real per-dot pixel pipeline, so a mid-scanline register write lands exactly where a Game Boy puts it — for about **6.3x** the CPU. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way. **`P` toggles it live**; the Status panel's `PPU` row says which is on and what it costs. `$GB_PPU` overrides this for one run. |
+| `ppu` | `standard` / `identical` (aliases: `fast` / `accurate`) | Which **[picture mode](docs/picture-modes.md)** the emulated hardware runs. `identical` (the default) runs the real per-dot pixel pipeline, so a mid-scanline register write lands exactly where a Game Boy puts it; `standard` draws a whole scanline at a time for about an eighth of the PPU cost. Nothing to do with `palette`/`upscale`, which sit above the PPU and are identical either way. **`P` toggles it live**; the Status panel's `PPU` row says which is on and what it costs. `$GB_PPU` overrides this for one run. |
 | `volume` | `0`–`100` (a `%` is allowed), or `off` | **Playback volume**, the level a session starts at. Default **`50`** (−12 dB) — deliberately quieter than full scale. `,` / `.` change it in game and `m` mutes; whatever you last set is remembered across sessions, and editing this key overrides that. Attenuation is applied to the audio the *host device* is handed, never to the emulated machine — see below. |
 | `shiny_alert` | `on` / `quiet` / `off` | How loudly a wild Pokémon's shiny-if-traded verdict is announced. `on` (default) = banner + toast + terminal bell; `quiet` drops the bell; `off` drops the row. |
 | `key_a` / `key_b` / `key_start` / `key_select` | a single character | Rebind the Game Boy buttons (movement is always the arrow keys). |
@@ -467,12 +467,13 @@ attached:
 
 | build | emulated frame cost | budget |
 |---|---:|---:|
-| `--no-default-features`, `standard` picture mode | **0.221 ms** | 16.743 ms |
-| `--features audio`, real device | **0.267 ms** | 16.743 ms |
-| `--no-default-features`, `GB_PPU=identical` | **0.461 ms** | 16.743 ms |
+| `--no-default-features`, `GB_PPU=standard` | **0.221 ms** | 16.743 ms |
+| `--features audio`, real device, `GB_PPU=standard` | **0.267 ms** | 16.743 ms |
+| `--no-default-features`, `identical` (**the default** since 2026-08-20) | **0.461 ms** | 16.743 ms |
 
-So **audio is nearly free and the picture mode is the real lever** (~6.3×, and still 34× real
-time). Reproduce these with `cargo test --release --test ppuengines` and
+So **audio is nearly free and the picture mode is the real lever** — and since the flip the
+default is the expensive one, deliberately: 0.461 ms is 2.8 % of the budget and 34× real time,
+which is the price of the fifteen shootout rows it wins. Reproduce these with `cargo test --release --test ppuengines` and
 `cargo run --release --features audio,libc --example audio_frame_cost -- <rom>`; CI holds the
 audio number under 4 ms/frame on every push (`make test-audio-perf`).
 
