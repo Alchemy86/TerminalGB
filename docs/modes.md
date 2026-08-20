@@ -95,9 +95,10 @@ either way.
 > `23b-hunt-a-paras`, and a PARAS is about one step in 128 — so three attempts
 > is not enough to hunt one and `chain --seeds 3` stops there **in both modes
 > alike**. That is a property of the link, not of the shortcut; the link is
-> certified upstream from a pool with a real attempt budget. It is A/B'd
-> separately below, at 60 attempts a side, because a randomness-driven hunt is
-> exactly where moving `rDIV`'s read phase would show if it showed anywhere.
+> certified upstream from a pool with a real attempt budget. **The hunt link
+> has NOT yet been A/B'd on its own** — that run is the first thing queued, at
+> 60 attempts a side, because a randomness-driven hunt is exactly where moving
+> `rDIV`'s read phase would show if it showed anywhere.
 
 **Per link, 200 attempts each from the same entry state and the same seeds,**
 on the three links where a shortcut is most likely to show — two gym battles and
