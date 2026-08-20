@@ -7,10 +7,9 @@ party and her gym's map.
 
 **The rates our solver achieved with a bench are not here** — under
 [`../where-things-live.md`](../where-things-live.md)'s rule those belong in
-[AgentGB](https://github.com/Alchemy86/AgentGB), beside `misty.md` and
-`brock.md`. They are at [`../agent/catch-and-train.md`](../agent/catch-and-train.md)
-in this repository only because the worktree that measured them cannot write to
-that one, and that page says so at the top.
+[AgentGB](https://github.com/Alchemy86/AgentGB), and that is where they are:
+[`docs/agent/catch-and-train.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/catch-and-train.md). A pointer stub stands at the old path
+in this repository so existing links still resolve.
 
 The instrument for everything below is
 [`tools/gen1-tables/duel.py`](../../tools/gen1-tables/duel.py), which reads the
@@ -285,5 +284,6 @@ is a different species and the same three capabilities.
   map, and the trainer that sees through a wall.
 * [`learning-moves.md`](learning-moves.md) — the level-up prompt a trained
   bench will meet, enumerated.
-* [`../agent/catch-and-train.md`](../agent/catch-and-train.md) — what our
-  solver did with all of this, and the rates it reached.
+* [AgentGB's `catch-and-train.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/catch-and-train.md) — what our solver did with all of
+  this: the certified rates, and the starter line that goes from 0 of 775 to
+  794 of 795.

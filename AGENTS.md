@@ -11578,9 +11578,9 @@ Two reports on the gym cut, and they are one root cause plus one missing shot.
 ## A BENCH — catching, promoting and training a second Pokémon (`scenarios/pewter/23b`, `26b`)
 
 **Reader-facing pages: [`docs/gen1/catch-and-train.md`](docs/gen1/catch-and-train.md)
-(the cartridge half — which species beats which gym and why) and
-[`docs/agent/catch-and-train.md`](docs/agent/catch-and-train.md) (the rates, and
-AgentGB's by the standing rule).** Chooser
+is the cartridge half and lives here; the rates live in AgentGB at
+[`docs/agent/catch-and-train.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/catch-and-train.md), with a pointer stub at the old path
+under `EXEMPT` in `docs/tools/docs_index.py`.** Chooser
 [`tools/gen1-tables/duel.py`](tools/gen1-tables/duel.py); solver
 `catch_wants` / `hunting` / `lead_with` / `ChainDriver::reorder_party` /
 `ChainDriver::weakening_move` in `examples/pewter_chain.rs`.

@@ -71,6 +71,7 @@ EXEMPT = {
     "docs/agent/test-rig.md": "pointer stub; the page lives in AgentGB",
     "docs/agent/test-rig-results.md": "pointer stub; the page lives in AgentGB",
     "docs/agent/move-learning-result.md": "pointer stub; the page lives in AgentGB",
+    "docs/agent/catch-and-train.md": "pointer stub; the page lives in AgentGB",
 }
 
 # A markdown link whose target is a .md file, with the link text captured.

@@ -400,9 +400,9 @@ python3 tools/gen1-tables/gen1_tables.py --rom <blue.gb> --plan misty
 
 ## 8. See also
 
-* [`catch-and-train.md`](catch-and-train.md) — **the other lever**: catching
-  a bench, putting it in front and training it, which is what the
-  Charmander line's 0 of 775 in §0 is a reply to.
+* [AgentGB's `catch-and-train.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/catch-and-train.md) — **the other lever**: catching a
+  bench, putting it in front and training it. It is what the Charmander line's
+  0 of 775 in §0 is a reply to, and it takes that line to **794 of 795**.
 * [`cerulean.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/cerulean.md) — the road here, and the blackout model this arc rests on.
 * [`brock.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/brock.md) — the first gym, and the starter that cannot pass it.
 * [`pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) — the chain, the gate, and the repair loop.
