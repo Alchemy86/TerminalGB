@@ -103,16 +103,19 @@ different:
 <!-- picture:frame-path -->
 | Step | Where | Cost |
 |---|---|---:|
-| Emulate one frame | [`Gameboy::frame`](../src/gameboy.rs) | 0.079 ms |
-| Map 4 shades → RGBA | [`screen::frame`](../src/screen/frame.rs) | 0.070 ms |
+| Emulate one frame | [`Gameboy::frame`](../src/gameboy.rs) | 0.335 ms |
+| Map 4 shades → RGBA | [`screen::frame`](../src/screen/frame.rs) | 0.026 ms |
 | Upscale | [`upscale`](../src/upscale/mod.rs) | 0.000 ms |
-| Encode + place | [`termimage`](../src/termimage.rs) | 0.183 ms |
+| Encode + place | [`termimage`](../src/termimage.rs) | 0.134 ms |
 | Write to the terminal | the frontend, after `ratatui` flushes | 0.000 ms |
-| **Whole displayed frame** | | **0.333 ms** |
+| **Whole displayed frame** | | **0.496 ms** |
 <!-- /picture:frame-path -->
 
-A Game Boy frame is 16.743 ms, so that is about **2 % of the budget**. (`upscale` reads 0.000
-because the default is `nearest`, which §5's table shows is free by construction.)
+A Game Boy frame is 16.743 ms, so that is about **3 % of the budget**, two-thirds of it the
+emulator itself. (That row moved from 0.079 ms when `identical` became the default picture
+engine on 2026-08-20 — [why](picture-modes.md); the parts of this page that are about the
+*transport* did not move, which is the point of §1.) `upscale` reads 0.000 because the default
+is `nearest`, which §5's table shows is free by construction.
 
 ### The picture's size, not the window's
 
@@ -122,11 +125,11 @@ This is the load-bearing decision, and it is easy to check: grow the window and 
 | Terminal window | Display area | **Sized by the picture** | | **Sized by the window** | |
 |---|---|---:|---:|---:|---:|
 | cells | pixels | on the wire | per frame | on the wire | per frame |
-| 80x24 | 392x352 | **1.4 KB** | **0.34 ms** | 743.9 KB | 2.32 ms |
-| 120x40 | 672x608 | **1.4 KB** | **0.34 ms** | 2.2 MB | 5.90 ms |
-| 160x50 | 856x768 | **1.4 KB** | **0.34 ms** | 3.5 MB | 11.39 ms |
-| 213x55 | 944x848 | **1.4 KB** | **0.33 ms** | 4.3 MB | 11.46 ms |
-| 297x80 | 1384x1248 | **1.4 KB** | **0.33 ms** | 9.3 MB | 30.84 ms |
+| 80x24 | 392x352 | **1.4 KB** | **0.49 ms** | 743.9 KB | 2.15 ms |
+| 120x40 | 672x608 | **1.4 KB** | **0.49 ms** | 2.2 MB | 4.97 ms |
+| 160x50 | 856x768 | **1.4 KB** | **0.49 ms** | 3.5 MB | 9.82 ms |
+| 213x55 | 944x848 | **1.4 KB** | **0.48 ms** | 4.3 MB | 12.00 ms |
+| 297x80 | 1384x1248 | **1.4 KB** | **0.48 ms** | 9.3 MB | 26.70 ms |
 <!-- /picture:window-independence -->
 
 The display area grows **12×** across those rows. The bytes we send do not move, and neither
@@ -413,17 +416,17 @@ on the wire; in the product, `transmit_scale = auto` sends `nearest` at ×1 — 
 <!-- picture:upscale-cost -->
 | Setting | Transmitted | Upscale | Encode | On the wire |
 |---|---:|---:|---:|---:|
-| `nearest` ×1 | 160x144 | 0.000 ms | 0.181 ms | 1.4 KB/frame |
-| `nearest` ×4 | 640x576 | 0.773 ms | 2.444 ms | 4.6 KB/frame |
-| `scale2x` ×2 | 320x288 | 0.241 ms | 0.737 ms | 3.1 KB/frame |
-| `scale2x` ×3 | 480x432 | 0.598 ms | 1.502 ms | 5.1 KB/frame |
-| `mmpx` ×2 | 320x288 | 0.305 ms | 0.721 ms | 2.8 KB/frame |
-| `mmpx` ×4 | 640x576 | 1.238 ms | 2.558 ms | 6.7 KB/frame |
-| `lcd` ×4 | 640x576 | 1.547 ms | 2.799 ms | 5.7 KB/frame |
-| `lcd` ×6 | 960x864 | 3.481 ms | 5.981 ms | 8.5 KB/frame |
+| `nearest` ×1 | 160x144 | 0.000 ms | 0.133 ms | 1.4 KB/frame |
+| `nearest` ×4 | 640x576 | 0.255 ms | 1.563 ms | 4.6 KB/frame |
+| `scale2x` ×2 | 320x288 | 0.088 ms | 0.500 ms | 3.1 KB/frame |
+| `scale2x` ×3 | 480x432 | 0.180 ms | 1.013 ms | 5.1 KB/frame |
+| `mmpx` ×2 | 320x288 | 0.182 ms | 0.471 ms | 2.8 KB/frame |
+| `mmpx` ×4 | 640x576 | 0.750 ms | 1.686 ms | 6.7 KB/frame |
+| `lcd` ×4 | 640x576 | 0.715 ms | 1.945 ms | 5.7 KB/frame |
+| `lcd` ×6 | 960x864 | 1.604 ms | 3.988 ms | 8.5 KB/frame |
 <!-- /picture:upscale-cost -->
 
-The worst case here is about a third of a 16.743 ms frame, so any of them is affordable. But
+The worst case here is about a quarter of a 16.743 ms frame, so any of them is affordable. But
 note what the table also shows: **the upscaler is the only thing on this page that puts more
 pixels back into the transport's cost.** A real filter is a visual effect, so it has to be
 applied before transmission and the terminal receives the bigger picture. What it is *not* is

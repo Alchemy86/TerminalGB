@@ -1837,7 +1837,16 @@ mod tests {
     #[test]
     fn running_from_oam_is_not_a_fault() {
         // JP $FE00, with a `JR -2` spin planted there first.
+        //
+        // **The LCD goes off first, and that is the machine, not the test.**
+        // Under the default `identical` engine the PPU owns OAM during modes 2
+        // and 3, so a fetch from `$FE00` there reads `$FF` — `RST $38` — and the
+        // CPU leaves OAM before it can prove anything about the fault window.
+        // Mooneye's three ROMs that genuinely execute from OAM
+        // (`add_sp_e_timing`, `ld_hl_sp_e_timing`, `oam_dma_start`) all do it
+        // where OAM is reachable, and so does this.
         let mut cpu = Cpu::new(rom_running(&[0xC3, 0x00, 0xFE]), None);
+        cpu.memory.wb(0xFF40, 0x00);
         cpu.memory.wb(0xFE00, 0x18);
         cpu.memory.wb(0xFE01, 0xFE);
         for _ in 0..16 {

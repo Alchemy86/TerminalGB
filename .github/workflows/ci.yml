@@ -247,17 +247,19 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
       - name: Fetch the suites (pinned; never vendored)
         run: make fetch-test-suites
-      - name: Score every external suite against its baseline
+      # BOTH targets name their engine on every line. Since `identical` became
+      # the default (2026-08-20) a target that named none would rewrite the
+      # other engine's baselines the first time anybody re-blessed it, so
+      # `test-external` sets GB_PPU=standard and this one is the CHEAP engine's
+      # gate now, not the default's.
+      - name: Score every external suite in `standard` against its baseline
         run: make test-external
-      # …and the PPU-bearing suites again in the OTHER picture mode.
-      # `test-external` scores whichever mode is the default, so without this
-      # the per-dot `identical` mode — whose whole purpose is these suites — is
-      # gated by nobody, and both its progress and its regressions would be
-      # invisible. Its baselines carry their own pixel counts, so a change to
-      # the pipeline shows up whether or not it moves a row. The Gambatte suite
-      # is where the two engines disagree most (hundreds of rows), so it is
-      # scored twice like the rest.
-      - name: Score the `identical` picture mode against its own baseline
+      # …and the same suites in `identical`, which IS the default. Its baselines
+      # carry their own pixel counts, so a change to the pipeline shows up
+      # whether or not it moves a row. The Gambatte suite is where the two
+      # engines disagree most (hundreds of rows), so it is scored twice like
+      # the rest.
+      - name: Score the default `identical` picture mode against its baseline
         run: make test-external-accurate
       # Mealybug writes the frame it produced for every ROM; on a red build
       # those are what tells you *how* the PPU changed.

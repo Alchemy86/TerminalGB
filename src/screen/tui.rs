@@ -12687,10 +12687,25 @@ mod tests {
             ));
         };
         let live = |app: &App| app.session.as_ref().unwrap().gb.render_mode();
-        assert_eq!(live(&app), RenderMode::Fast, "the default must not move");
+        assert_eq!(
+            live(&app),
+            RenderMode::Accurate,
+            "the default must not move"
+        );
 
         press(&mut app);
-        assert_eq!(live(&app), RenderMode::Accurate);
+        assert_eq!(live(&app), RenderMode::Fast);
+        // The toast has to name the mode AND its price — this is where the
+        // choice is made, so this is where the cost is stated.
+        let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
+        assert!(toast.contains("standard"), "{toast:?}");
+
+        press(&mut app);
+        assert_eq!(
+            live(&app),
+            RenderMode::Accurate,
+            "two taps return to default"
+        );
         // The toast has to name the mode AND its price — this is where the
         // choice is made, so this is where the cost is stated.
         let toast = app.toast.clone().map(|t| t.0).unwrap_or_default();
@@ -12700,12 +12715,9 @@ mod tests {
             "{toast:?}"
         );
 
-        press(&mut app);
-        assert_eq!(live(&app), RenderMode::Fast, "two taps return to default");
-
         // `p` (unshifted) is pause and must not have become a mode switch.
         app.handle_key(KeyEvent::new(KeyCode::Char('p'), event::KeyModifiers::NONE));
-        assert_eq!(live(&app), RenderMode::Fast);
+        assert_eq!(live(&app), RenderMode::Accurate);
         assert!(app.session.as_ref().unwrap().paused);
 
         // **The choice follows the player across an in-app ROM switch**, the way
@@ -12714,12 +12726,12 @@ mod tests {
         // working. Restarting the same ROM is the cheapest way to drive the real
         // `start_game` path.
         press(&mut app);
-        assert_eq!(live(&app), RenderMode::Accurate);
+        assert_eq!(live(&app), RenderMode::Fast);
         let rom = app.session.as_ref().unwrap().entry.path.clone();
         app.start_game(&rom);
         assert_eq!(
             live(&app),
-            RenderMode::Accurate,
+            RenderMode::Fast,
             "a new cartridge must keep the mode the player chose"
         );
     }
@@ -12746,20 +12758,20 @@ mod tests {
                 .map(|c| c.symbol())
                 .collect()
         };
+        let text = screen(&mut app);
+        assert!(text.contains("identical"), "the default is named:\n{text}");
         assert!(
-            screen(&mut app).contains("standard"),
-            "the default is named"
+            text.contains(&format!("{:.1}x", RenderMode::IDENTICAL_COST)),
+            "the price rides with the name:\n{text}"
         );
         app.session
             .as_mut()
             .unwrap()
             .gb
-            .set_render_mode(RenderMode::Accurate);
-        let text = screen(&mut app);
-        assert!(text.contains("identical"), "{text}");
+            .set_render_mode(RenderMode::Fast);
         assert!(
-            text.contains(&format!("{:.1}x", RenderMode::IDENTICAL_COST)),
-            "the price rides with the name:\n{text}"
+            screen(&mut app).contains("standard"),
+            "and so is the other one"
         );
         // The Controls list has to name the key, and the `?` overlay has to
         // explain the choice. The overlay does not scroll, so a section added

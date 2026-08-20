@@ -69,8 +69,21 @@ pub fn take_baseline_arg(args: Vec<String>) -> (Option<PathBuf>, Vec<String>) {
 /// `make` targets and every script written before the rename say `fast` and
 /// `accurate`, which still parse — a reader who meets one has to be able to
 /// join it up with the other.
-fn engine_note() -> String {
+fn engine_note(path: &Path) -> String {
     let mode = terminalgb::ppu::RenderMode::from_env();
+    // A file with no `_accurate_` in its name that is being written by the
+    // accurate target is one of the three suites the picture mode does not
+    // reach — SameSuite, Mooneye `misc`, the CasualPokePlayer rows. Since
+    // `identical` became the default those are gated in *both* modes against
+    // this one file, which is only safe because they were measured row-for-row
+    // identical under each. Say so, or the header claims a mode that is only
+    // half the story.
+    let both = mode == terminalgb::ppu::RenderMode::Accurate
+        && !path.to_string_lossy().contains("_accurate_");
+    if both {
+        return "# SCORED IN BOTH PICTURE MODES — this suite measures nothing the\n# picture mode reaches (verified: every row is identical under `standard`\n# and `identical`), so it has one baseline and both gates read it.\n# Re-bless with: UPDATE_EXTERNAL_BASELINE=1 make test-external\n#\n"
+            .to_string();
+    }
     let target = match mode {
         terminalgb::ppu::RenderMode::Accurate => "make test-external-accurate",
         terminalgb::ppu::RenderMode::Fast => "make test-external",
@@ -107,7 +120,7 @@ fn load(path: &Path) -> BTreeMap<String, String> {
 /// a checked-in expectation file cannot otherwise recover.
 pub fn gate(suite: &str, path: &Path, header: &str, rows: &[Row]) -> bool {
     if std::env::var("UPDATE_EXTERNAL_BASELINE").is_ok() {
-        let mut s = engine_note();
+        let mut s = engine_note(path);
         s.push_str(header);
         for r in rows {
             s.push_str(&format!("{} = {}\n", r.key, r.value));

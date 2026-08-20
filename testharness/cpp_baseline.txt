@@ -1,8 +1,7 @@
-# SCORED WITH THE `standard` PICTURE MODE (GB_PPU=standard, alias `fast`).
+# SCORED IN BOTH PICTURE MODES — this suite measures nothing the
+# picture mode reaches (verified: every row is identical under `standard`
+# and `identical`), so it has one baseline and both gates read it.
 # Re-bless with: UPDATE_EXTERNAL_BASELINE=1 make test-external
-# The other mode produces different numbers for the same ROMs — see
-# docs/mealybug.md §7 — so re-blessing with the wrong target rewrites this
-# file with the wrong machine's results.
 #
 # `cpp` baseline — the EXPECTED verdict of each of CasualPokePlayer's four
 # shootout ROMs, judged against **his** reference screenshot by shade rank.

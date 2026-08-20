@@ -14,11 +14,16 @@ carries the project's name.
 ## 1. Where we would land
 
 Measured against the shootout's own ROMs, its own reference screenshots and its
-own pass criterion, on `main` at **`1b3e3e7`** (the commit this branch sits on):
+own pass criterion, re-scored from a fresh clone of the shootout on
+**2026-08-20**, the day `identical` became the default picture engine:
 
-> ### **223 / 264 — 84.5 %**
+> ### **238 / 264 — 90.2 %**
+>
+> (**223 / 264 — 84.5 %** on `standard`, which is where this page stood until
+> that day. The flip is **fifteen gains and zero losses** row for row; the
+> fifteen are named in §1a.)
 
-That is **5th of 19** by pass count and 6th by percentage:
+That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
 
 | | emulator | score | % |
 |---|---|---:|---:|
@@ -26,7 +31,7 @@ That is **5th of 19** by pass count and 6th by percentage:
 | 2 | Emulicious | 254/261 | 97.3 |
 | 3 | SameBoy | 253/264 | 95.8 |
 | 4 | Beaten Dying Moon | 247/264 | 93.6 |
-| **5** | **this emulator** | **223/264** | **84.5** |
+| **5** | **this emulator** | **238/264** | **90.2** |
 | 6 | GSE | 218/264 | 82.6 |
 | 7 | bgb | 205/264 | 77.7 |
 | 8 | GambatteSpeedrun | 169/207 | 81.6 |
@@ -41,23 +46,52 @@ gameroy is DMG-only, GambatteSpeedrun/binjgb/VBA-M declare no `PCM`.</sup>
 
 By suite:
 
-| suite | ours | notes |
-|---|---:|---|
-| `blargg` | **51 / 51** | including `oam_bug` 7/7 and `interrupt_time` |
-| `mooneye` | 89 / 97 | acceptance 58/66 · emulator-only 28/28 · misc 2/2 · manual-only 1/1. **Every one of the 8 reds is PPU** mode-3 / LCD-on timing; nothing else in Mooneye fails |
-| `samesuite` | 66 / 68 | `channel_1_sweep_restart`, `channel_4_freq_change` — both red on measured evidence, see `docs/measured/apu.md` § "Three rows left red, all on evidence" |
-| `cpp` | 4 / 4 | MBC3/RTC + `sgb-ext-test` |
-| `ax6` | 3 / 3 | `rtc3test` |
-| `acid` | 4 / 5 | `cgb-acid-hell` needs mid-scanline writes |
-| `daid` | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
-| `ashiepaws` | 0 / 3 | |
-| `mealybug-tearoom-tests` | 1 / 24 | the pixel FIFO is live but not yet the default; see [`docs/mealybug.md`](mealybug.md) |
-| **total** | **223 / 264** | |
+| suite | ours | `standard` was | notes |
+|---|---:|---:|---|
+| `blargg` | **51 / 51** | 51 / 51 | including `oam_bug` 7/7 and `interrupt_time` |
+| `mooneye` | **97 / 97** | 89 / 97 | acceptance **66/66** · emulator-only 28/28 · misc 2/2 · manual-only 1/1. **Every red here was a PPU mode-3 / LCD-on row, and the per-dot engine takes all eight** |
+| `samesuite` | 66 / 68 | 66 / 68 | `channel_1_sweep_restart`, `channel_4_freq_change` — both red on measured evidence, see `docs/measured/apu.md` § "Three rows left red, all on evidence" |
+| `cpp` | 4 / 4 | 4 / 4 | MBC3/RTC + `sgb-ext-test` |
+| `ax6` | 3 / 3 | 3 / 3 | `rtc3test` |
+| `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` needs mid-scanline writes; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
+| `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
+| `ashiepaws` | 0 / 3 | 0 / 3 | |
+| `mealybug-tearoom-tests` | **8 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 16 still red, **13 cannot be won by PPU work at all** — see §1b |
+| **total** | **238 / 264** | 223 / 264 | |
 
-**Every one of the 41 failures is a documented open area.** 36 of them are the
-PPU (Mealybug 23, Mooneye PPU 8, `cgb-acid-hell`, `daid/ppu_scanline_bgp` ×2,
-`daid/speed_switch_timing_{ly,stat}`), which is exactly the campaign already
-under way. There is no surprise in the list.
+**Every one of the 26 failures is a documented open area, and 13 of them are not
+ours to win.** Mealybug 16 (13 blocked — §1b), Mooneye 0, `cgb-acid-hell`,
+`daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`, `ashiepaws` 3,
+SameSuite 2. There is no surprise in the list.
+
+### 1a. The fifteen rows the default flip moved
+
+Scored through the same manifest, same build, `GB_PPU` the only difference:
+
+| | rows |
+|---|---|
+| **gained** | `mooneye/acceptance/ppu/` **hblank_ly_scx_timing-GS, intr_2_0_timing, intr_2_mode0_timing, intr_2_mode0_timing_sprites, intr_2_mode3_timing, intr_2_oam_ok_timing, lcdon_timing-GS, lcdon_write_timing-GS** · `mealybug/ppu/` **m3_bgp_change, m3_lcdc_win_en_change_multiple, m3_scx_high_5_bits, m3_window_timing, m3_window_timing_wx_0, m3_wx_4_change, m3_wx_4_change_sprites** (all DMG) |
+| **lost** | none |
+
+`acid/cgb-acid2` was the one loss while it stood, at 158 pixels; it is closed
+and the row passes on both engines.
+
+### 1b. Thirteen of the sixteen remaining Mealybug rows are not winnable here
+
+[`docs/mealybug.md` §11](mealybug.md#11-the-denominator-45-of-the-failing-rows-cannot-be-won-by-ppu-work-15-aug-2026)
+sorts every Mealybug failure by what it would take to close. Against the
+shootout's DMG-only 24-row population that gives:
+
+* **9 rows** need the boot ROM's `®` glyph in VRAM at hand-off (block A). The
+  emulator supports a user-supplied boot ROM and the gated score deliberately
+  never uses one; shipping the glyph is a licence call, not a PPU one.
+* **4 rows** are genuine mid-scanline error and are the ones to chase:
+  `m3_lcdc_win_en_change_multiple_wx`, `m3_wx_5_change`, `m3_wx_6_change`
+  (the window/`WX` group) and `m3_scy_change`.
+
+So the reachable ceiling on this suite's shootout population is **15 of 24**,
+not 24, and the four winnable rows are worth **242 / 264** if all of them land.
+Anybody planning work against this row block should plan against four.
 
 #### The shootout's Mooneye population is not ours — 97 rows, not 103
 
@@ -281,12 +315,16 @@ Two things stay `gameboy` on purpose, and both are load-bearing:
 An earlier scouting report recommended waiting, on the grounds that publishing
 92/264 beside SameBoy's 253 would read worse than we are. That reason is gone.
 
-* We are at **223/264**, which is 5th of 19 and ahead of GSE, bgb, mGBA and
-  binjgb. Nobody reading that table would think we were padding it.
+* We are at **238/264**, which is 5th of 19 and ahead of GSE, bgb, mGBA and
+  binjgb, ten rows behind fourth. Nobody reading that table would think we were
+  padding it.
 * The board is a snapshot with a date on it, and each emulator has its own
   `workflow_dispatch` CI job — **re-scoring is one button, not a new PR**. So
   the Mealybug campaign's gains land on the board whenever we ask for them, and
-  waiting for it buys nothing except the wait.
+  waiting for it buys nothing except the wait. That prediction has now been
+  tested once: the default picture-mode flip moved this number by fifteen rows
+  and needed no change to anything the shootout runs, because the flag it
+  changed is an ordinary one a person can type.
 * Merges are slow. Starting the clock now means the Mealybug work is likely to
   land *before* the PR is merged, not after.
 * Every remaining failure is a documented open area we can name, which is a

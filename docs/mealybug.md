@@ -470,7 +470,11 @@ target that re-blesses it, because the two engines score the same ROMs
 differently and the obvious command would otherwise rewrite a file with the
 other machine's numbers.
 
-### 7.5 Recommendation
+### 7.5 Recommendation — **carried out, 2026-08-20**
+
+> **The default is `identical` now.** This section's order was: close §7.4, flip the default,
+> run the conformance suite against the accurate engine, then delete `renderscan`. The first
+> three are done; the fourth is **not**, and deliberately — see the update at the end.
 
 **Keep both engines for now; ship one later.** The captain's condition for deleting the fast
 path was that the accurate one be fast enough on ordinary hardware, and on cost it plainly is —
@@ -480,6 +484,35 @@ two rows in §7.4: until the accurate engine strictly dominates, a default flip 
 published score worse, and `testharness/baseline.txt` must never be re-blessed to hide that.
 The order is: close §7.4, flip the default, run the conformance suite against the accurate
 engine, then delete `renderscan`.
+
+#### What actually happened
+
+§7.4's two rows closed (§9.1), and a third counter-example turned up in between that this
+section did not know about: the c-sp aggregation, wired up after §7 was written, found
+`cgb-acid2` 158 pixels wrong on the per-dot engine where the batched one is pixel-exact. That
+closed too — the window pixel-insertion glitch needs the window to be *drawing* on Color
+silicon (`docs/conformance-notes.md`, 2026-08-20) — and with it went 63 Gambatte rows.
+
+Measured through the GB Emulator Shootout's own 264-row manifest, same build, `GB_PPU` the only
+difference: **`standard` 223, `identical` 238 — fifteen gains, zero losses.** Eight Mooneye
+`acceptance/ppu` rows and seven Mealybug DMG rows. The flip re-blessed **no baseline**: both
+`make` targets name their engine now, so each file set stayed with the engine that produced it.
+
+**`renderscan` was NOT deleted, and the reason is not caution.** `standard` stopped being "the
+default" and became "the cheap engine", which is a job it is the only thing that can do:
+
+* the PSP frontend pins it, because that console spends 9.4-9.9 ms of a 16.743 ms frame already
+  and four times the PPU there is unplayable rather than 2 %;
+* a headless collector's `set_render_pixels(false)` is a `standard`-only saving — under
+  `identical` the fetcher *is* the timing — and it is worth **6.7x** on a real cartridge
+  (0.057 against 0.382 ms/frame, Pokémon Blue, one P-core);
+* speed mode refuses to run under `identical` at all, so every shortcut in `src/speed.rs` needs
+  it;
+* and it is the second opinion the `ppuengines` gate is built on: 600 frames of dmg-acid2 and
+  of `cpu_instrs` through both engines, required byte-identical, every `cargo test --release`.
+
+Deleting it would cost all four to save a file nobody is paying for. If it is ever revisited,
+revisit it as *"can the per-dot engine be made cheap enough for a PSP"*, not as tidying.
 
 ---
 
@@ -862,8 +895,16 @@ pixels to 22; the line-0 fix took those last 22 to zero.
 
 ### 9.5 Is the accurate engine ready to be the default?
 
-**On accuracy, yes — it now loses no row to the default on any gate.** Measured engine-for-
-engine on the same build:
+**On accuracy, yes — it lost no row to the default on any gate this table had.** Measured
+engine-for-engine on the same build:
+
+> **Correction, 2026-08-20.** "Any gate" meant the six below. The c-sp aggregation, wired up
+> the day after, found three places `identical` scored *worse* — `cgb-acid2` and Gambatte's
+> `sprites` and `window` groups. `cgb-acid2` and `window` are closed; `sprites` and three
+> smaller groups are still net-negative by **eight rows between them, against 891 gains**, and
+> that is stated on [`docs/picture-modes.md` §3](picture-modes.md#3-what-each-mode-scores)
+> rather than rounded away. The flip went ahead on the evidence that matters for a published
+> score: through the shootout's own manifest, fifteen gains and no losses.
 
 | gate | `fast` | `accurate` |
 |---|---:|---:|
@@ -890,6 +931,21 @@ plainly, and it has **not** been taken here:
 Worth roughly **+5 rows on the GB Emulator Shootout's published 264** if taken: its Mealybug
 population is DMG-only (our DMG column goes 1/24 → 4/24) and `hblank_ly_scx_timing-GS` and
 `intr_2_mode0_timing` are both inside its 66-row Mooneye population.
+
+> **Taken on 2026-08-20, and both bullets came out differently — which is why they are left
+> standing rather than edited.**
+>
+> * The estimate of **+5** shootout rows was low by a factor of three: it is **+15**, because
+>   the DMG Mealybug column went 1/24 → **8/24** rather than 4/24 and *all eight* of the
+>   shootout's red Mooneye `acceptance/ppu` rows flipped, not two.
+> * **The two baseline sets did not swap and nothing was re-blessed.** Making both `make`
+>   targets name their engine (`GB_PPU=standard` / `GB_PPU=accurate` on every line) leaves each
+>   file with the engine that produced it and gates both engines as before. Swapping the
+>   contents would have left a file called `_accurate_` holding the other machine's numbers.
+> * The cost is worth re-quoting from a real cartridge rather than from dmg-acid2, because it
+>   is what a player actually pays: Pokémon Blue on one P-core, **0.094 → 0.373 ms/frame**,
+>   which is 2.2 % of a 16.743 ms frame. Headless with no pixels wanted it is 0.057 → 0.382,
+>   i.e. **6.7x**, and that is the case `standard` now exists for.
 
 ### 9.6 What is left, and where
 

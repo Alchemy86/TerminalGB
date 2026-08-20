@@ -60,7 +60,8 @@ above, they use only test ROMs the repository is free to show.</em></p>
 > ⚠️ **Status: playable, work in progress.** Many commercial games boot and play. The whole
 > Blargg suite passes on both consoles (46 of 47 ROM/console rows), dmg-acid2 is pixel-exact,
 > and the community timing suites are scored in CI on every push — honestly, including the
-> reds. Today: **Mooneye 95/103, SameSuite 72/76, `cpp` 4/4, Mealybug 3/79.** See
+> reds. Today, on the default `identical` picture engine: **Mooneye 103/103, SameSuite 73/76,
+> `cpp` 4/4, Mealybug 26/79.** See
 > **[Status & accuracy](#status--accuracy)** for the measured table, the
 > [test scoreboard](testharness/README.md), and the honest per-component notes. This project
 > is a study of emulation, not a piracy tool: it ships no ROMs and no BIOS.
@@ -922,15 +923,16 @@ appearance choice: palette, upscaler and every other visual enhancement live abo
 
 Very few emulators offer a per-dot renderer at all. Here it is one keypress.
 
-| | **`standard`** (default) | **`identical`** |
+| | **`identical`** (default) | **`standard`** |
 |---|---|---|
-| **What it is** | draws a whole scanline in one go at the mode 3 → 0 transition; mode 3 has a fixed 172-dot length | the real pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard, and a mode 3 length that falls out of the machine |
-| **A mid-scanline register write** | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read | takes effect exactly where hardware puts it |
-| **Cost** | **0.221 ms/frame** (76× real time) | **0.461 ms/frame** (36× real time) — about **2.1×** |
-| **dmg-acid2 vs the author's reference** | 0 / 23,040 pixels differ | **0 / 23,040** |
-| **Mooneye `acceptance`** | 67 / 75 | **69 / 75** |
-| **Mealybug Tearoom rows** | 3 / 79 | **12 / 79** |
-| **Mealybug pixel distance** | 1,212,282 | **646,838** |
+| **What it is** | the real pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard, and a mode 3 length that falls out of the machine | draws a whole scanline in one go at the mode 3 → 0 transition; mode 3 has a fixed 172-dot length |
+| **A mid-scanline register write** | takes effect exactly where hardware puts it | invisible — only the final value of `BGP`/`SCX`/`LCDC`/`WX` is ever read |
+| **Cost, Pokémon Blue on one P-core** | **0.373 ms/frame** (45× real time) — 2.2 % of a frame | **0.094 ms/frame** (178× real time) |
+| **…headless, with no pixels wanted** | 0.382 ms/frame — the skip does not apply | **0.057 ms/frame**, 6.7× cheaper |
+| **dmg-acid2 vs the author's reference** | **0 / 23,040** | 0 / 23,040 pixels differ |
+| **Mooneye `acceptance`** | **75 / 75** | 67 / 75 |
+| **Mealybug Tearoom rows** | **26 / 79** | 3 / 79 |
+| **GB Emulator Shootout, its own manifest** | **238 / 264** | 223 / 264 |
 | **Well-behaved games** | identical output, proved frame-for-frame | identical output |
 
 <p align="center">
@@ -941,30 +943,33 @@ Very few emulators offer a per-dot renderer at all. Here it is one keypress.
 costs. A run-time choice nobody can see is one nobody can debug.</em></p>
 
 ```bash
-GB_PPU=identical cargo run --release --example terminal -- game.gb   # per-dot, hardware-exact
-GB_PPU=standard  cargo run --release --example terminal -- game.gb   # the default
+GB_PPU=identical cargo run --release --example terminal -- game.gb   # per-dot, the default
+GB_PPU=standard  cargo run --release --example terminal -- game.gb   # the cheap engine
 ```
 
-…or press **`P`** in the game, or `ppu = identical` in `config.toml` (the environment variable
+…or press **`P`** in the game, or `ppu = standard` in `config.toml` (the environment variable
 wins for one run), or `Gpu::set_render_mode` if you are embedding. **The old spellings `fast` and
 `accurate` still parse everywhere**, so nothing written against them breaks.
 
-**`standard` is the default deliberately.** For every game that does not write PPU registers
-mid-scanline — which is almost all of them — the two produce byte-identical frames, and `standard`
-does it at half the cost. Reach for `identical` when a game has a mid-scanline effect (a split
-status bar, a wobble, a parallax band) that looks wrong, or when you are working on the PPU.
+**`identical` became the default on 2026-08-20**, when the last row it lost to the cheap engine
+closed. Through the shootout's own manifest the two are 238 and 223 — **fifteen gains and zero
+losses** — and for somebody playing a game it costs 2.2 % of a frame. Reach past it for
+`standard` on small hardware (the PSP frontend pins it), on a headless collector where the
+pixel skip is worth 6.7×, or when you want [speed mode](docs/modes.md), which `identical`
+refuses.
 
 **And the honest part:** `identical` is *structurally* right and *part-way* calibrated. It is
-pixel-exact on twelve Mealybug rows against hardware references and within a few hundred pixels on
-several more (`m3_scx_high_5_bits` is **12**), and it **no longer loses a single row to
-`standard` on any gate** — the two it used to lose, `ppu/intr_1_2_timing-GS` and Blargg `oam_bug`
-sub-test 7, are both closed. What keeps it opt-in is the 2.1× cost, nothing else. For calibration,
-quote the **pixel distance**, not the row count: it is a *rank* distance, so a frame with one extra
-distinct shade reports ~23,040 whatever else is right, and a four-pixel error can move the total by
-60,000. Both modes have **their own baselines** and both are scored in CI on every push, so
-neither can drift unnoticed — and the 2.1× figure itself is re-measured by
-`cargo test --release --test ppuengines`, which fails the build if the number printed to users
-stops matching what the engines actually cost.
+pixel-exact on twenty-six Mealybug rows against the test author's own reference frames and within a
+few hundred pixels on several more (`m3_scx_high_5_bits` is **12**). It does not lose a row to
+`standard` anywhere the shootout looks, but it is **not strictly dominant across all 6,210 gated
+rows**: four small Gambatte groups are net-negative on it (`sprites` −3, `lyc153int_m2irq` −2,
+`lycint_lycflag` −2, `m2int_m0stat` −1), **eight rows between them against 891 gains**. Named
+rather than rounded away. For calibration, quote the **pixel distance**, not the row count: it is a
+*rank* distance, so a frame with one extra distinct shade reports ~23,040 whatever else is right,
+and a four-pixel error can move the total by 60,000. Both modes have **their own baselines** and
+both are scored in CI on every push, so neither can drift unnoticed — and the cost figure itself is
+re-measured by `cargo test --release --test ppuengines`, which fails the build if the number
+printed to users stops matching what the engines actually cost.
 
 📖 **[The whole story → docs/picture-modes.md](docs/picture-modes.md)**
 
@@ -1259,7 +1264,7 @@ Nothing below is repeated here — these are pointers, those are the sources.
 
 | page | what it answers |
 |---|---|
-| [the GB Emulator Shootout submission](docs/shootout.md) | what we would score on the public board (223/264), what their runner requires, and the prepared entry |
+| [the GB Emulator Shootout submission](docs/shootout.md) | what we would score on the public board (238/264), what their runner requires, and the prepared entry |
 | [the GitHub Action](docs/conformance-action.md) | scoring *someone else's* emulator: the contract, badges, licensing, honest gaps |
 | [the standalone-tool design](docs/conformance.md) | where this is going and why |
 | [per-fix conformance notes](docs/conformance-notes.md) | every accuracy bug we fixed, with symptom, catching test and hardware citation |
@@ -1765,23 +1770,31 @@ that is red on any change *in either direction* — a test that starts passing i
 change too. The ROMs are never vendored; they are fetched at run time from the commits pinned
 in [`tools/fetch-test-suites.sh`](tools/fetch-test-suites.sh).
 
-| Suite | Score | What it measures |
-|---|---:|---|
-| **Mooneye GB** `acceptance` | **67 / 75** | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing, boot state |
-| **Mooneye GB** `emulator-only` | **28 / 28** | MBC1/2/5 banking behaviour |
-| **Mooneye GB** `misc` (CGB) | **8 / 8** | Color-specific boot and timing |
-| **SameSuite** | **72 / 76** | APU 65/69 · DMA 4/4 · PPU 1/1 · **SGB 2/2** |
-| **CasualPokePlayer** (`cpp`) | **4 / 4** | MBC3 RTC edge cases, and [`sgb-ext-test`](#what-the-super-game-boy-support-actually-scores) |
-| **Mealybug Tearoom** | **3 / 79** | mid-scanline PPU effects, photographed off real hardware |
+Both picture engines are scored, each against its own baselines. `identical` is the default
+since 2026-08-20 ([why](docs/picture-modes.md)); `standard` is the cheap engine and is still
+gated beside it.
+
+| Suite | `identical` (default) | `standard` | What it measures |
+|---|---:|---:|---|
+| **Mooneye GB** `acceptance` | **75 / 75** | 67 / 75 | instruction and interrupt timing, the timer circuit, OAM DMA, PPU mode timing, boot state |
+| **Mooneye GB** `emulator-only` | **28 / 28** | 28 / 28 | MBC1/2/5 banking behaviour |
+| **Mooneye GB** `misc` (CGB) | **8 / 8** | 8 / 8 | Color-specific boot and timing |
+| **SameSuite** | **73 / 76** | 73 / 76 | APU 66/69 · DMA 4/4 · PPU 1/1 · **SGB 2/2** |
+| **CasualPokePlayer** (`cpp`) | **4 / 4** | 4 / 4 | MBC3 RTC edge cases, and [`sgb-ext-test`](#what-the-super-game-boy-support-actually-scores) |
+| **Mealybug Tearoom** | **26 / 79** | 3 / 79 | mid-scanline PPU effects, against the test author's own reference frames |
 
 ```bash
-make fetch-test-suites && make test-external            # the default (fast) engine
-make test-external-accurate                             # the same suites, `identical` mode
+make fetch-test-suites && make test-external-accurate   # `identical`, the default engine
+make test-external                                      # the same suites, `standard`
 ```
 
-That Mealybug 3/79 is the real remaining gap and it is **not hidden by a pass/fail column**:
+That Mealybug 26/79 is the real remaining gap and it is **not hidden by a pass/fail column**:
 the baseline records *how many of the 23,040 pixels differ* on every row, so progress shows up
-even when no row flips.
+even when no row flips. **45 of the 79 rows cannot be won by PPU work at all** — 27 need the
+boot ROM's `®` glyph, 8 compare our greyscale against a colour reference and 7 are a
+ROM/reference mismatch in the suite itself — so the honest denominator is 34 and
+[`docs/mealybug.md` §11](docs/mealybug.md#11-the-denominator-45-of-the-failing-rows-cannot-be-won-by-ppu-work-15-aug-2026)
+does the arithmetic.
 
 ### What we would score on the GB Emulator Shootout
 
@@ -1789,12 +1802,17 @@ The [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/) is the communit
 board: 264 ROMs, 18 emulators, every verdict a screenshot comparison. Scored against **its**
 ROMs, **its** reference images and **its** pass criterion:
 
-> **223 / 264 — 84.5 %**, which is 5th of 19 by pass count: behind docboy (258), Emulicious
+> **238 / 264 — 90.2 %**, which is 5th of 19 by pass count: behind docboy (258), Emulicious
 > (254), SameBoy (253) and Beaten Dying Moon (247), ahead of GSE (218), bgb (205),
 > GambatteSpeedrun (169), mGBA (150) and everything below.
 
-All 41 failures are documented open areas, and 36 of them are the PPU. Re-derive the number in
-under a minute — no Windows, no display:
+**Fifteen of those came from making `identical` the default picture engine on 2026-08-20** —
+fifteen gains, zero losses, and the one row the per-dot engine used to lose (`cgb-acid2`) is
+pixel-exact on both now. It was 223/264 before.
+
+All 26 failures are documented open areas, and **13 of them are Mealybug rows nobody can win by
+PPU work** (they need the boot ROM's `®` glyph in VRAM, which is a licence decision this project
+has deliberately not taken). Re-derive the number in under a minute — no Windows, no display:
 
 ```bash
 git clone https://github.com/gbdev/GBEmulatorShootout
@@ -1958,16 +1976,17 @@ account of what is *not* covered: [`docs/conformance-action.md`](docs/conformanc
 
 Near-term, in priority order:
 
-- **Calibrate the `identical` picture mode.** The pixel FIFO exists, is structurally right and is
-  already the better scorer on every gate ([`GB_PPU=identical`](#two-picture-modes--standard-and-identical));
+- **Calibrate the `identical` picture mode.** It is the default now, and structurally right;
   what is left is the sprite penalty, the window's WX penalty, and the exact dot on which a CPU
   write becomes visible to the fetcher. There is no single constant left to find — there are many,
-  and they constrain each other. Mealybug 12/79 is the number that moves when this lands, and
-  closing the gap is also what would let `identical` become the default.
-  See [`docs/mealybug.md`](docs/mealybug.md) §7.
-- **Every remaining Mooneye red is a mid-scanline PPU row** and belongs with the pixel FIFO
-  above. The named-machine rows that used to sit here — SGB, MGB, DMG0, CGB0, AGB boot state —
-  are all green: see [Platforms](#platforms).
+  and they constrain each other. Mealybug 26/79 is the number that moves when this lands — but
+  **plan against eleven rows, not fifty-three**: 45 of the 79 cannot be won by picture work at
+  all. See [`docs/mealybug.md` §11](docs/mealybug.md#11-the-denominator-45-of-the-failing-rows-cannot-be-won-by-ppu-work-15-aug-2026)
+  for the denominator and [§7.5](docs/mealybug.md) for what the default flip did and did not do.
+- ~~**Every remaining Mooneye red is a mid-scanline PPU row**~~ — **Mooneye `acceptance` is
+  75/75 on the default engine.** All eight were mid-scanline PPU rows and all eight flipped when
+  `identical` became the default. The named-machine rows that used to sit here — SGB, MGB, DMG0,
+  CGB0, AGB boot state — are green too: see [Platforms](#platforms).
 - ~~**Web audio** and correct **web/FFI MBC detection**~~ — **both done.** The mapper has
   come from cartridge header byte `$0147` on every path since persistence and mapper choice
   were separated (`mbc::get_mbc` takes the save path *only* to decide whether to write a

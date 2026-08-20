@@ -246,29 +246,37 @@ CSP_SUITES = age bully cgb-acid-hell cgb-acid2 gambatte gbmicrotest \
 fetch-test-suites:
 	./tools/fetch-test-suites.sh $(SUITES)
 
-# Score every external suite and fail on ANY change from the checked-in
-# expectations, in either direction — a test that starts passing is a baseline
-# change too. Whole thing runs in about a second once the ROMs are on disk.
+# Score every external suite in the `standard` picture mode and fail on ANY
+# change from the checked-in expectations, in either direction — a test that
+# starts passing is a baseline change too. Whole thing runs in about a second
+# once the ROMs are on disk.
+#
+# **`GB_PPU=standard` is spelled out on every line, and that is not decoration.**
+# Until 2026-08-20 this target ran the default and the default was `standard`,
+# so it could be silent about which engine it meant. `identical` is the default
+# now (docs/picture-modes.md), so a target that named no engine would rewrite
+# these eighteen files with the other machine's numbers the moment anybody
+# re-blessed it. Both gates name their engine; neither file set changed hands.
 # Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external`.
 test-external: fetch-test-suites
 	cargo build --release --example mooneye_scout --example samesuite \
 	    --example mealybug --example cpp_suite --example csp_suite
 	@for s in $(CSP_SUITES); do \
-	    ./target/release/examples/csp_suite --quiet --suite $$s \
+	    GB_PPU=standard ./target/release/examples/csp_suite --quiet --suite $$s \
 	        --dir $(SUITES)/csp \
 	        --baseline testharness/csp_$${s}_baseline.txt || exit 1; \
 	done
-	./target/release/examples/mooneye_scout \
+	GB_PPU=standard ./target/release/examples/mooneye_scout \
 	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
 	    --baseline testharness/mooneye_baseline.txt
-	GB_MODEL=cgb ./target/release/examples/mooneye_scout \
+	GB_PPU=standard GB_MODEL=cgb ./target/release/examples/mooneye_scout \
 	    $(SUITES)/mooneye/misc \
 	    --baseline testharness/mooneye_cgb_baseline.txt
-	./target/release/examples/samesuite $(SUITES)/samesuite \
+	GB_PPU=standard ./target/release/examples/samesuite $(SUITES)/samesuite \
 	    --baseline testharness/samesuite_baseline.txt
-	./target/release/examples/mealybug --dir $(SUITES)/mealybug \
+	GB_PPU=standard ./target/release/examples/mealybug --dir $(SUITES)/mealybug \
 	    --baseline testharness/mealybug_baseline.txt
-	./target/release/examples/cpp_suite $(SUITES)/cpp \
+	GB_PPU=standard ./target/release/examples/cpp_suite $(SUITES)/cpp \
 	    --baseline testharness/cpp_baseline.txt
 
 # GBSelfTest: the cartridge that tests the machine from the inside and prints a
@@ -286,28 +294,39 @@ gbselftest:
 	cargo build --release --example conformance_adapter
 	python3 tools/gbselftest-gate.py
 
-# The same suites again, in the OTHER picture mode — `identical`, the per-dot
-# pixel FIFO in src/gpu/fifo.rs (docs/picture-modes.md). The baselines above are
-# scored in whichever mode is the default (`standard`), so the per-dot one — the
-# whole point of which is these very suites — would otherwise be scored by
-# nobody. `GB_PPU=accurate` below is the pre-rename spelling of `identical`; it
-# still parses, and leaving it here keeps the alias exercised in CI.
+# The same suites again in `identical`, the per-dot pixel FIFO in
+# src/gpu/fifo.rs (docs/picture-modes.md) — **and since 2026-08-20 this is the
+# gate on the DEFAULT engine**, which is why the three suites with only one
+# baseline are scored here as well as above. `GB_PPU=accurate` is the pre-rename
+# spelling of `identical`; it still parses, and leaving it here keeps the alias
+# exercised in CI. The target keeps its name because it is quoted in
+# docs/testing.md, docs/picture-modes.md, every baseline header and CI, and a
+# rename buys nothing a comment cannot say.
+#
 # Its own baselines carry its own pixel counts, so the next change to the
 # pipeline shows up as a diff whether it moves a row or only moves the distance
-# to one. SameSuite is APU/DMA and does not distinguish the modes, so it is
-# scored once; everything else is scored twice.
+# to one. SameSuite, Mooneye `misc` and the CasualPokePlayer rows do not
+# distinguish the modes — measured, all three are row-for-row identical under
+# both — so they have one baseline each and it is scored twice rather than
+# copied.
 #
 # The c-sp suites are re-scored here too, and they are where the two engines
 # disagree most: the Gambatte suite alone moves by hundreds of rows and
-# GBMicrotest by ~90, because both are largely mid-scanline PPU probes. Scoring
-# them once would leave the per-dot engine's biggest population ungated.
+# GBMicrotest by ~90, because both are largely mid-scanline PPU probes.
 # Re-bless deliberately: `UPDATE_EXTERNAL_BASELINE=1 make test-external-accurate`.
 test-external-accurate: fetch-test-suites
 	cargo build --release --example mooneye_scout --example mealybug \
-	    --example csp_suite
+	    --example csp_suite --example samesuite --example cpp_suite
 	GB_PPU=accurate ./target/release/examples/mooneye_scout \
 	    $(SUITES)/mooneye/acceptance $(SUITES)/mooneye/emulator-only \
 	    --baseline testharness/mooneye_accurate_baseline.txt
+	GB_PPU=accurate GB_MODEL=cgb ./target/release/examples/mooneye_scout \
+	    $(SUITES)/mooneye/misc \
+	    --baseline testharness/mooneye_cgb_baseline.txt
+	GB_PPU=accurate ./target/release/examples/samesuite $(SUITES)/samesuite \
+	    --baseline testharness/samesuite_baseline.txt
+	GB_PPU=accurate ./target/release/examples/cpp_suite $(SUITES)/cpp \
+	    --baseline testharness/cpp_baseline.txt
 	GB_PPU=accurate ./target/release/examples/mealybug --dir $(SUITES)/mealybug \
 	    --baseline testharness/mealybug_accurate_baseline.txt
 	@for s in $(CSP_SUITES); do \

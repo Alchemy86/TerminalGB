@@ -53,7 +53,8 @@ for f in ['baseline', 'mooneye', 'mooneye_cgb', 'samesuite', 'mealybug', 'cpp']:
     print(f'{f:14s} {sum(v.strip().startswith("PASS") for _, v in rows):4d} / {len(rows)}')
 ```
 
-Run them for real with `make test-external` (all four external suites, ~1.5 s) and
+Run them for real with `make test-external-accurate` (the default engine) or
+`make test-external` (the cheap one) and
 `cargo test --release --test testroms` (~3.6 s). Mechanics — how each suite publishes a
 verdict and how the harness reads it — are in [`docs/testing.md`](../testing.md); this page is
 only the result.
@@ -119,10 +120,18 @@ M-cycle apart. Modelling that difference satisfies both suites with the strobe u
 a halted CPU late").
 
 `intr_1_2_timing-GS` used to be the one row `identical` lost, and it was the last thing
-blocking a default flip. It is fixed — see
+blocking a default flip *in Mooneye*. It is fixed — see
 [mealybug.md §9](../mealybug.md#9-the-line-0-stat-phase-679--1279-and-the-last-blocking-row).
 The mode is gated separately (`make test-external-accurate`, against
 `testharness/mooneye_accurate_baseline.txt`) so progress *and* regression are both visible.
+
+> **`identical` IS the default, since 2026-08-20.** Through the GB Emulator Shootout's own
+> 264-row manifest the two engines are **223 and 238 — fifteen gains, zero losses** — and
+> across every checked-in baseline, `SKIP` rows in neither column, **3691 / 6210** against
+> **4274 / 6210**. `make test-external` is the *cheap* engine's gate now, and both targets
+> name their engine on every line so no baseline changed hands. Full record:
+> [`conformance-notes.md`](../conformance-notes.md) (2026-08-20) and
+> [`picture-modes.md`](../picture-modes.md).
 
 **Measured mode-for-mode, every gate, same build** — every figure in this paragraph is gated:
 
@@ -265,14 +274,21 @@ they belong to the Shootout's 24-row Mealybug population, not our
 
 | Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
-| `standard` (default) | <!--score:mealybug-->3 / 79<!--/score--> | <!--score:mealybug:px-->1,212,282<!--/score--> |
-| `identical` (`GB_PPU=identical`) | **<!--score:mealybug_accurate-->26 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->498,206<!--/score-->** |
+| `identical` (the default) | **<!--score:mealybug_accurate-->26 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->498,206<!--/score-->** |
+| `standard` (`GB_PPU=standard`) | <!--score:mealybug-->3 / 79<!--/score--> | <!--score:mealybug:px-->1,212,282<!--/score--> |
 
 The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at
 <!--score:mealybug-->3/79<!--/score--> a
 pass/fail file is a flat wall that cannot show a rewrite getting closer. Consequence to expect:
 **any PPU change turns that file red.** Read the diff, re-bless with the new counts in the same
 commit — that is the point.
+
+**And plan against eleven rows, not fifty-three.**
+[`docs/mealybug.md` §11](../mealybug.md#11-the-denominator-45-of-the-failing-rows-cannot-be-won-by-ppu-work-15-aug-2026)
+sorts every failure by what closing it would take: 27 need the boot ROM's `®` glyph, 8 compare
+our greyscale against a colour photograph and 7 are a ROM/reference mismatch in the suite
+itself. **45 of the 79 cannot be won by PPU work at all**, which puts the reachable ceiling at
+34 and the rows genuinely in play at eleven.
 
 > **A pixel count is a rank distance and it is wildly non-linear.** Shades are ranked per
 > frame, so one extra distinct shade re-ranks everything and reports ~23,040 of 23,040.
@@ -401,8 +417,8 @@ whether it is decidable from inside a cartridge at all).
 ### Re-running them
 
 ```sh
-make test-external              # every suite, default picture mode  (~20 s)
-make test-external-accurate     # the same, GB_PPU=identical         (~45 s)
+make test-external-accurate     # every suite, GB_PPU=identical — the DEFAULT (~45 s)
+make test-external              # the same, GB_PPU=standard — the cheap engine (~20 s)
 
 # one suite, with the per-row detail and the frames written out:
 cargo run --release --example csp_suite -- \

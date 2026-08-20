@@ -350,21 +350,27 @@ rows could have lost them again silently, and a cycle-stepped-PPU rewrite would 
 way to show either its progress or its regressions.
 
 ```text
-make test-external           # fetches the suites if needed, then gates all five groups
-make test-external-accurate  # the two PPU suites again, in the `identical` picture mode
+make test-external-accurate  # `identical`, the DEFAULT engine since 2026-08-20
+make test-external           # the same suites in `standard`, the cheap engine
 make fetch-test-suites       # just the download (~20 s, cached in target/test-suites)
 ```
 
-**Both [picture modes](picture-modes.md) are scored.** `test-external` runs whichever mode is
-the default (`standard`, `RenderMode::Fast`); `test-external-accurate` re-scores Mooneye and
-Mealybug in the per-dot `identical` mode (`GB_PPU=identical`, or the older spelling
-`GB_PPU=accurate`, which the Makefile still uses) against `mooneye_accurate_baseline.txt` and
-`mealybug_accurate_baseline.txt`. Without the second pass the mode whose entire purpose is
-these two suites would be gated by nobody. SameSuite is not re-scored — it is APU and DMA and
-does not distinguish the modes. Every baseline file **opens with the mode that produced it
-and the target that re-blesses it**: the same ROMs score differently on the two, so the obvious
-command would otherwise rewrite a file with the other machine's numbers. Where `identical`
-stands is [`mealybug.md`](mealybug.md) §7.
+**Both [picture modes](picture-modes.md) are scored, and since 2026-08-20 BOTH TARGETS NAME
+THEIR ENGINE ON EVERY LINE.** `test-external` sets `GB_PPU=standard` and reads the unsuffixed
+baselines; `test-external-accurate` sets `GB_PPU=accurate` (the older spelling of `identical`,
+kept so the alias stays exercised) and reads the `*_accurate_baseline.txt` files. Until the
+default flipped, the first target could be silent about which engine it meant, because the
+default *was* `standard`. It cannot now: a target that named no engine would rewrite eighteen
+files with the other machine's numbers the first time anybody re-blessed it. **The flip
+therefore re-blessed nothing** — each file stayed with the engine that produced it.
+
+Three suites have **one** baseline and are scored by **both** targets against it: SameSuite,
+Mooneye `misc` and the CasualPokePlayer rows measure the APU, DMA and the mappers, and every
+row of each was measured identical under the two engines. Their headers say
+`SCORED IN BOTH PICTURE MODES` rather than naming one. Every other baseline file **opens with
+the mode that produced it and the target that re-blesses it**: the same ROMs score differently
+on the two, so the obvious command would otherwise rewrite a file with the other machine's
+numbers. Where `identical` stands is [`mealybug.md`](mealybug.md) §7.
 
 **The ROMs are fetched, never vendored.** They are other people's work under other people's
 licences — the same reason [`conformance.yml`](../.github/workflows/conformance.yml)

@@ -23,6 +23,136 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-20 — `identical` is the default picture engine
+
+Not a fix — a decision, recorded here because it moves every score this file
+quotes and because the *measurements* behind it are the material.
+
+**The order this followed is `docs/mealybug.md` §7.5's, written a week earlier:
+close §7.4, flip the default, run the conformance suite against the accurate
+engine, then delete `renderscan`.** The first three are done. The fourth was
+declined, with reasons, and §7.5 now says why.
+
+### The precondition, verified by measurement rather than by reading the prose
+
+`docs/mealybug.md` §7.4 records two rows the per-dot engine lost. Both were
+re-measured rather than taken on trust — that page carries the trap in its own
+words ("check the baseline, not a prose note, before starting on a named gap"):
+
+* **Blargg `oam_bug` sub-test 7.** `GB_PPU=accurate cargo test --release --test
+  testroms` prints `oam_bug 01:ok 02:ok 03:ok 04:ok 05:ok 06:ok 07:ok 08:ok
+  Passed` — 8/8 — and the whole 47-row harness matches `testharness/baseline.txt`
+  **including every verdict text**. §7.4 was already stale when it was written.
+* **Mooneye `ppu/intr_1_2_timing-GS`** reads PASS in both baseline files.
+
+A third counter-example had appeared since §7.4 and is not in it: `cgb-acid2`,
+158 pixels, which the c-sp aggregation found. That closed the same day (the
+entry below).
+
+### What the flip is worth, and what it costs
+
+Scored through the GB Emulator Shootout's own 264-row manifest, one build,
+`GB_PPU` the only difference:
+
+| | rows |
+|---|---:|
+| `standard` | 223 / 264 (84.5 %) |
+| **`identical`** | **238 / 264 (90.2 %)** |
+| gains | 15 — eight Mooneye `acceptance/ppu` and seven Mealybug DMG |
+| losses | **0** |
+
+Across every checked-in baseline, `SKIP` rows in neither column, the two engines
+are **3691 / 6210** and **4274 / 6210** — the same accounting the 2026-08-18
+entry below uses. GBSelfTest, our own cartridge, is 83/91 and 89/91.
+
+Cost, Pokémon Blue from reset, 6,000 frames, pinned to one P-core, load 2.5:
+
+| | `standard` | `identical` |
+|---|---:|---:|
+| player (pixels + audio) | 0.094 ms/frame (178x) | **0.373** (45x) |
+| collector (`--no-pixels --no-audio-out`) | 0.057 ms/frame (295x) | **0.382** (44x) |
+
+0.373 ms is **2.2 % of a 16.743 ms frame**, which is the captain's stated
+condition. 6.7x on a collector is not, which is why `standard` survives.
+
+### THE CARTRIDGE CAN TELL THE TWO ENGINES APART, AND THAT IS THE BLAST RADIUS
+
+The same 6,000 frames give **WRAM hash `0x5042287b86903f2a` on `standard` and
+`0x21c97cf3b52433a7` on `identical`**. That is not a defect — the per-dot engine
+has correct STAT timing and real VRAM/OAM access blocking, and Pokémon Blue
+reads both — but it means **every recorded agent trajectory, every certified
+Pewter-chain corpus and every save-state digest in `docs/agent/` was produced on
+`standard` and replays only there.** Nothing in the repository gates on one (no
+`.gbss` is committed and no harness reproduces a trajectory), so nothing went
+red; a crew re-running a corpus must pass `GB_PPU=standard` or expect different
+runs. `docs/picture-modes.md` §2 says so where somebody will look.
+
+### Four things the flip broke, and each is a finding rather than a chore
+
+Every one is the accurate engine enforcing something the batched one does not,
+and every fix made the *fixture* behave like a real cartridge:
+
+1. **`cpu::core::tests::running_from_oam_is_not_a_fault`** planted a spin loop in
+   OAM and jumped to it with the LCD on. Under `identical` the PPU owns OAM in
+   modes 2 and 3, so the fetch read `$FF` — `RST $38` — and the CPU left OAM
+   before it could prove anything. The test turns the LCD off first now, which is
+   what Mooneye's three genuinely-execute-from-OAM ROMs do.
+2. **`testharness/agent.rs`'s fake Gen 1 cartridge** wrote its tilemap straight
+   into `$9800` from a running program. VRAM is blocked through mode 3, so it
+   drew nothing and four screen-reading checks went blank. It brackets its VRAM
+   writes with the LCD off now, exactly as `pokered`'s `DisableLCD`/`EnableLCD`
+   pair does.
+3. **`testharness/audio_baseline.txt`'s `dmg_sound` hash moved**, and the
+   evidence for re-blessing it is in the file: 1,625,088 samples, RMS 0.0265,
+   peak 0.283, 96.8 % silent, dominant 480 Hz and the ROM's own `01:ok .. 12:ok
+   Passed` **all identical**, with 9,788 of 3,250,176 samples differing (0.30 %)
+   and every one of them after 80.8 % of the capture. One late sub-test
+   retriggering a few cycles earlier because mode 3 is no longer a fixed 172
+   dots. The header now records that the file is picture-mode dependent and what
+   `standard` reads.
+4. **`a_source_going_high_behind_another_raises_nothing` counts one STAT raise on
+   the batched engine and two on the per-dot one** over the same window, from the
+   same phase (probed: both at line 4, mode 2, dot 4). That is the mode-0
+   *interrupt* strobe being modelled separately from the mode bits `STAT`
+   reports — `Gpu::hblank_strobe`, which is what `acceptance/ppu/intr_2_0_timing`
+   and `intr_2_mode0_timing` measure and why they pass only there. The `lcd_on`
+   helper in `src/gpu/mod.rs`'s test module pins `standard` now and says why; the
+   per-dot engine's STAT line is gated by Mooneye 75/75 and three Gambatte
+   groups, which is far harder than any fixture here.
+
+### NO BASELINE SWAPPED HANDS, AND THAT IS THE PART TO COPY
+
+§9.5 predicted that `testharness/{baseline,mealybug_baseline,…}.txt` would
+become the accurate engine's numbers and the `*_accurate_*` files the fast one's
+— "the two sets swap, in one commit". They did not, and they should not have.
+**Both `make` targets name their engine on every line now** (`GB_PPU=standard`
+and `GB_PPU=accurate`), so each file stays with the engine that produced it and
+each is still gated. Swapping the contents would have left a file called
+`_accurate_` holding the other machine's numbers, which is the exact failure
+those headers were written to prevent.
+
+The three suites with only one baseline — SameSuite, Mooneye `misc`, the
+CasualPokePlayer rows — were **measured row-for-row identical under both
+engines** and are now scored by *both* targets against that one file, so the
+default is fully gated. Their headers say so.
+
+The only re-blessed file is `testharness/audio_baseline.txt` (above), and it was
+hand-edited so nothing else could move silently.
+
+### `renderscan` was NOT deleted
+
+§7.5's fourth step. `standard` stopped being "the default" and became "the cheap
+engine", which is a job only it can do: the PSP frontend pins it (that console
+spends 9.4-9.9 ms of a 16.743 ms frame already, so 4x the PPU there is
+unplayable rather than 2 %); `set_render_pixels(false)` is a `standard`-only
+saving worth 6.7x; **speed mode refuses to run under `identical` at all**, so
+every flag in `src/speed.rs` needs it; and it is the second opinion
+`testharness/ppuengines.rs` holds the per-dot engine against on every
+`cargo test --release`. Deleting it would cost four things to save a file nobody
+is paying for.
+
+---
+
 ## 2026-08-20 — the window pixel-insertion glitch needs the window on Color silicon
 
 `cgb-acid2` was the one row the `identical` engine lost to the default and the

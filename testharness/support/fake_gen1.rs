@@ -295,6 +295,16 @@ pub fn build_fake_gen1_with(extra_rows: &[(u16, &str)]) -> Vec<u8> {
     a.ld_a(WARP_TO);
     a.st(W_WARPS + 8);
 
+    // **The LCD goes off before any of this reaches VRAM, and that is the
+    // machine, not the fixture being fussy.** Since `identical` became the
+    // default picture mode the PPU owns VRAM through mode 3, so a store to
+    // `$9800` from a running program is dropped exactly as it is on hardware —
+    // the fixture drew nothing and four checks that read the screen went blank.
+    // `pokered` brackets its own tilemap writes the same way (`DisableLCD` /
+    // `EnableLCD`), and so does every ROM in every suite here.
+    a.xor_a();
+    a.ldh_st(0x40);
+
     // Text into the background tilemap. Gen 1 loads its font so a tile id *is*
     // a character code, which is what makes the screen readable as text; the
     // fixture reproduces that by writing character codes straight in.
@@ -320,6 +330,11 @@ pub fn build_fake_gen1_with(extra_rows: &[(u16, &str)]) -> Vec<u8> {
             a.st_hli();
         }
     }
+
+    // LCD back on: background enabled, tile data at $8000 — the post-boot value
+    // the fixture ran with before it started bracketing its VRAM writes.
+    a.ld_a(0x91);
+    a.ldh_st(0x40);
 
     a.xor_a();
     a.raw(&[0x47]); // LD B,A — previous direction bits

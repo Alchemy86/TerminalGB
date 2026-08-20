@@ -55,11 +55,15 @@ emulated machine, so loading somebody else's state must not switch their rendere
 `RenderMode::IDENTICAL_COST` — the figure printed to users on the Status row, in the `P` toast
 and in the `?` overlay — stops matching what the two modes actually cost.**
 
-**Cost is now the only reason `standard` is still the default.** That was not always true:
-`identical` used to lose `ppu/intr_1_2_timing-GS` and Blargg `oam_bug` sub-test 7, and while it
-did, flipping the default would have made a published score worse. Both are closed, so
-`identical` loses no row on any gate. Whichever way the default eventually goes, never re-bless
-[`testharness/baseline.txt`](../../testharness/baseline.txt) to hide a regression.
+**`identical` became the default on 2026-08-20.** That was not always available: it used to
+lose `ppu/intr_1_2_timing-GS`, Blargg `oam_bug` sub-test 7 and — once the c-sp aggregation was
+wired up — `cgb-acid2`, and while any of those stood, flipping the default would have made a
+published score worse. All three are closed, and through the GB Emulator Shootout's own
+264-row manifest the two engines are **223 and 238: fifteen gains, no losses**. `standard` is
+now the *cheap* engine — small hardware, headless collectors, speed mode — and both are still
+gated, each against its own baselines by a `make` target that names its engine. **Never
+re-bless [`testharness/baseline.txt`](../../testharness/baseline.txt) to hide a regression**;
+that rule did not move and never will.
 
 ### The trap that cost the most: `change_mode(0)` runs `renderscan()`
 

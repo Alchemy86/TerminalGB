@@ -190,19 +190,20 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
     """The generated section of docs/status.md, markers included."""
 
     def row(name: str, key: str, judged: str) -> str:
+        # `identical` is the default since 2026-08-20, so it leads. A suite with
+        # no `_accurate_` baseline is one the picture mode does not reach — it
+        # has one file, scored in both modes, and reads `same`.
         p, t = n[key]
         acc = ACCURATE_OF.get(key)
         if acc is None:
-            other = "same"
-        else:
-            pa, ta = n[acc]
-            assert ta == t, f"{key}: the two modes must score the same ROMs"
-            other = f"**{pa}** / {ta}"
-        return f"| {name} | **{p}** / {t} | {other} | {judged} |"
+            return f"| {name} | **{p}** / {t} | same | {judged} |"
+        pa, ta = n[acc]
+        assert ta == t, f"{key}: the two modes must score the same ROMs"
+        return f"| {name} | **{pa}** / {ta} | {p} / {t} | {judged} |"
 
     lines = [
         BEGIN,
-        "| Suite | `standard` (default) | `identical` | What it measures |",
+        "| Suite | `identical` (default) | `standard` | What it measures |",
         "|---|---:|---:|---|",
         row("In-repo harness — Blargg + dmg-acid2", "harness",
             "CPU instructions, memory/interrupt timing, sound hardware, a reference picture"),
@@ -232,14 +233,15 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
     pm, tm = n["mealybug_accurate"]
     lines += [
         "",
-        "**Two [picture modes](picture-modes.md), both gated in CI.** `standard` is the default"
-        " and draws a whole scanline at a time; `identical` runs the real hardware pixel pipeline"
-        f" dot by dot, scoring **{pa}/{ta}** on Mooneye `acceptance` and **{pm}/{tm}** on Mealybug"
-        " for about **8.8x** the CPU. `same` above means the suite has one baseline because the"
-        " mode does not reach what it measures (audio, DMA, mappers, cartridge clocks)."
-        " `identical` wins overwhelmingly on the PPU suites and no longer loses `cgb-acid2`;"
-        " four small Gambatte groups are still net-negative by eight rows between them,"
-        " against 891 gains"
+        "**Two [picture modes](picture-modes.md), both gated in CI.** `identical` is the"
+        " default since 2026-08-20 and runs the real hardware pixel pipeline dot by dot,"
+        f" scoring **{pa}/{ta}** on Mooneye `acceptance` and **{pm}/{tm}** on Mealybug;"
+        " `standard` draws a whole scanline at a time for about an eighth of the PPU cost and"
+        " is what small hardware and headless collectors should run. `same` above means the"
+        " suite has one baseline because the mode does not reach what it measures (audio, DMA,"
+        " mappers, cartridge clocks) — those three are gated in both modes against that one"
+        " file. `identical` wins overwhelmingly and no longer loses `cgb-acid2`; four small"
+        " Gambatte groups are still net-negative by eight rows between them, against 891 gains"
         " ([which rows, and how each moved]"
         "(measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-mostly-dominates)).",
         END,
@@ -249,14 +251,18 @@ def md_block(n: dict[str, tuple[int, int]]) -> str:
 
 # HTML row-name prefix -> suite key. The Shootout row carries no key: not
 # baseline-derived, left alone (and its bar/score are hand-measured).
+# **The default engine's numbers**, since 2026-08-20 — the HTML page's headline
+# table is "where we stand", and where we stand is what a person gets when they
+# run the emulator. The per-mode comparison lower down the page still carries
+# both columns.
 HTML_ROWS = {
     "In-repo harness": "harness",
-    "Mooneye GB &mdash; acceptance": "mooneye_acceptance",
+    "Mooneye GB &mdash; acceptance": "mooneye_acceptance_accurate",
     "Mooneye GB &mdash; emulator-only": "mooneye_emulator_only",
     "Mooneye GB &mdash; CGB misc": "mooneye_cgb",
     "SameSuite": "samesuite",
     "CasualPokePlayer": "cpp",
-    "Mealybug Tearoom": "mealybug",
+    "Mealybug Tearoom": "mealybug_accurate",
 }
 
 ROW_RE = re.compile(
@@ -280,7 +286,7 @@ def rewrite_html(text: str, n: dict[str, tuple[int, int]]) -> str:
 
 
 def modes_block(n: dict[str, tuple[int, int]]) -> str:
-    """The HTML page's `standard` vs `identical` comparison, markers included."""
+    """The HTML page's `identical` vs `standard` comparison, markers included."""
     ma, ta = n["mooneye_acceptance"]
     mi, _ = n["mooneye_acceptance_accurate"]
     ba, tb = n["mealybug"]
@@ -291,17 +297,17 @@ def modes_block(n: dict[str, tuple[int, int]]) -> str:
         MODES_BEGIN,
         '    <div class="scroll">',
         "      <table>",
-        '        <thead><tr><th>Gated suite</th><th class="num">standard '
-        '(default)</th><th class="num">identical</th></tr></thead>',
+        '        <thead><tr><th>Gated suite</th><th class="num">identical '
+        '(default)</th><th class="num">standard</th></tr></thead>',
         "        <tbody>",
-        f'          <tr><td>Mooneye GB &mdash; acceptance</td><td class="num">{ma} / {ta}'
-        f'</td><td class="num">{mi} / {ta}</td></tr>',
+        f'          <tr><td>Mooneye GB &mdash; acceptance</td><td class="num">{mi} / {ta}'
+        f'</td><td class="num">{ma} / {ta}</td></tr>',
         f'          <tr><td>Mealybug Tearoom &mdash; pixel-exact rows</td>'
-        f'<td class="num">{ba} / {tb}</td><td class="num">{bi} / {tb}</td></tr>',
+        f'<td class="num">{bi} / {tb}</td><td class="num">{ba} / {tb}</td></tr>',
         f'          <tr><td>Mealybug Tearoom &mdash; pixels wrong (lower is better)</td>'
-        f'<td class="num">{px_a:,}</td><td class="num">{px_i:,}</td></tr>',
-        '          <tr><td>Cost per frame, dmg-acid2</td><td class="num">1.0&times;'
-        '</td><td class="num">~8.8&times;</td></tr>',
+        f'<td class="num">{px_i:,}</td><td class="num">{px_a:,}</td></tr>',
+        '          <tr><td>Cost per frame, dmg-acid2</td><td class="num">~8.8&times;'
+        '</td><td class="num">1.0&times;</td></tr>',
         "        </tbody>",
         "      </table>",
         "    </div>",

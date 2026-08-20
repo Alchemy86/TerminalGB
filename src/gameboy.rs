@@ -1511,6 +1511,13 @@ mod tests {
             Gameboy::new_with_model(scrolling_picture_cart(), None, Model::Dmg);
         let mut skipping =
             Gameboy::new_with_model(scrolling_picture_cart(), None, Model::Dmg);
+        // The skip only exists under `standard`; `identical`'s fetcher *is* the
+        // timing, so it draws whatever the declaration says. Pin both machines
+        // so this compares the skip and not the engines —
+        // `gpu::tests::the_per_dot_engine_always_produces_pixels` covers the
+        // other half.
+        drawing.set_render_mode(crate::ppu::RenderMode::Fast);
+        skipping.set_render_mode(crate::ppu::RenderMode::Fast);
         skipping.set_render_pixels(false);
         assert!(drawing.render_pixels() && !skipping.render_pixels());
 
@@ -1748,10 +1755,13 @@ mod tests {
         assert_eq!(gb.speed_flags(), SpeedFlags::NONE);
         assert!(!gb.speed_mode());
 
-        // Asked for before the mode: cleared when the mode arrives.
+        // Asked for before the mode: cleared when the mode arrives. `identical`
+        // is the default now, so the machine has to be put on `standard` first
+        // for there to be anything to clear.
         let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        gb.set_render_mode(RenderMode::Fast);
         gb.set_speed_flags(SpeedFlags::PRESET);
-        assert!(gb.speed_mode(), "it applies under the default engine");
+        assert!(gb.speed_mode(), "it applies under `standard`");
         gb.set_render_mode(RenderMode::Accurate);
         assert_eq!(
             gb.speed_flags(),
@@ -1771,6 +1781,8 @@ mod tests {
         flags.no_apu_state = true;
 
         let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        // Speed flags are a `standard`-only thing; `identical` refuses them all.
+        gb.set_render_mode(crate::ppu::RenderMode::Fast);
         gb.set_speed_flags(flags);
         let n = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         gb.enable_audio(Box::new(CountingPlayer(n.clone())));

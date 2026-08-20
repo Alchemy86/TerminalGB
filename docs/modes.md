@@ -1,9 +1,10 @@
 # The three modes — `identical`, `standard` and speed mode
 
-> **Short version.** `standard` is the default and is what you should be running.
-> `identical` is slower and exact to the dot — turn it on to *judge* something.
-> **Speed mode** is faster and takes one liberty — turn it on to *drive* the machine,
-> never to judge it.
+> **Short version.** `identical` is the default: exact to the dot, and 2.2 % of a
+> frame for somebody playing a game. `standard` is the cheap engine — reach for it on
+> small hardware, on a headless collector, or when you want speed mode, which
+> `identical` refuses. **Speed mode** is faster still and takes one liberty — turn it
+> on to *drive* the machine, never to judge it.
 
 TerminalGB has two picture engines and one machine-timing liberty. They are separate axes and
 this page is the one door to all three; [`picture-modes.md`](picture-modes.md) is the deep page
@@ -11,12 +12,14 @@ on the two engines.
 
 | | **`identical`** | **`standard`** | **speed mode** |
 |---|---|---|---|
-| Default | no — opt in | **yes** | no — opt in |
+| Default | **yes, since 2026-08-20** | no — opt in | no — opt in |
 | What it is | the hardware pixel pipeline, dot by dot | a whole scanline drawn at the mode 3 → 0 transition | `standard`, with the peripherals advanced once per **instruction** instead of once per bus **access** |
-| Cost, same ROM and box | 0.326 ms/frame (51× real time) | 0.038 ms/frame (444× real time) | **+27 % (cold boot) to +39 % (an overworld state) over `standard`**, and each shortcut is a separate switch — see 4a |
+| Cost, dmg-acid2, same box | 0.326 ms/frame (51× real time) | 0.038 ms/frame (444× real time) | **+27 % (cold boot) to +39 % (an overworld state) over `standard`**, and each shortcut is a separate switch — see 4a |
+| Cost, Pokémon Blue, one P-core | 0.373 ms/frame (45× real time) | 0.094 ms/frame (178×) | — |
+| …headless, no pixels wanted | 0.382 ms/frame (44×) — the skip does not apply | 0.057 ms/frame (295×) | — |
 | Blargg `mem_timing` | pass | pass | **fails, on purpose** |
 | Mid-scanline register writes | exact | not modelled | not modelled |
-| Select it with | `P`, `ppu = identical`, `$GB_PPU=identical` | the default | `$GB_SPEED=speed`, `--speed-mode`, `Gameboy::set_speed_mode` |
+| Select it with | the default | `P`, `ppu = standard`, `$GB_PPU=standard` | `$GB_SPEED=speed`, `--speed-mode`, `Gameboy::set_speed_mode` (needs `standard`) |
 | Use it to **judge** | ✅ anything | ✅ anything but mid-scanline timing | ❌ **never** |
 | Use it to **drive** | ✅ (slow) | ✅ | ✅ |
 
@@ -26,7 +29,10 @@ on the two engines.
 
 **`identical`** guarantees the picture and the bus are what the hardware produces, to the dot.
 It is what the accurate baselines are scored on and the only mode that can win Mealybug's
-mid-scanline rows. Everything else is a departure from it, measured.
+mid-scanline rows. Everything else is a departure from it, measured. **It became the default on
+2026-08-20**, when the last row it lost to `standard` (`cgb-acid2`) closed: through the GB
+Emulator Shootout's own 264-row manifest the two engines are 238 and 223, fifteen gains and no
+losses. See [`picture-modes.md` §3](picture-modes.md#3-what-each-mode-scores).
 
 **`standard`** guarantees every peripheral is on its exact cycle and the picture is right for
 any program that does not rewrite a PPU register part-way along a scanline. It passes the whole
@@ -42,6 +48,13 @@ M-cycle phase, which is exactly what Blargg `mem_timing` measures, and it fails 
 ---
 
 ## 2. What speed mode is NOT safe for
+
+> **Since `identical` became the default, `GB_SPEED=speed` does nothing until you also ask
+> for `standard`.** Identical mode refuses every flag (§2's last paragraph), in either order,
+> so a collector that wants the shortcuts now has to say
+> `GB_PPU=standard GB_SPEED=speed`. Read
+> [`Gameboy::speed_flags`](../src/gameboy.rs) for what is *in effect* rather than assuming it
+> is what you asked for — that accessor exists for exactly this.
 
 **Do not use it to judge anything.** Concretely, never turn it on for:
 

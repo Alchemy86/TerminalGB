@@ -6916,7 +6916,8 @@ it. That is now a real, CI-enforced build; it did not compile before.
   every register and the framebuffer, and the accurate one rebuilds its pipeline at the head of
   the next scanline.
 - **THE COST IS QUOTED FROM A CONSTANT THAT IS CHECKED AGAINST A MEASUREMENT.**
-  `RenderMode::IDENTICAL_COST` = **2.1**, printed on the Status row (`identical ~2.1x`), in the
+  `RenderMode::IDENTICAL_COST` (**7.6** today; the 2.1 below is the figure of the day this
+  entry was written and the paragraph explains why it moved), printed on the Status row, in the
   `P` toast and in the `?` overlay — and `testharness/ppuengines.rs` times both engines over 400
   frames of dmg-acid2 on every `cargo test --release` and **fails the build if the constant
   disagrees with what it measured** (teeth proven: setting it to 4.5 turns the harness red).
@@ -6924,16 +6925,12 @@ it. That is now a real, CI-enforced build; it did not compile before.
   frame" outlived its fix by months); a figure shown to users has to be a measurement.
   Measured here four runs running: 0.221 → 0.461 ms/frame, ratio **2.07-2.09x**. Older notes
   saying 2.13x or 2.17x are other ROMs/boxes, not wrong — hence the `~`.
-- **`standard` is still the default and every unsuffixed baseline is measured on it — but the
-  accuracy argument for that is GONE.** `identical` used to be behind on two rows; both are
-  closed (see "The line-0 STAT phase" below) and it now **loses no row to the default on any
-  gate**: in-repo harness 46/47 both with *identical verdicts row for row*, Mooneye
-  `acceptance`+`emulator-only` 95 vs **97**/103, `misc` 8/8 both, SameSuite 72/76 both, `cpp`
-  4/4 both, Mealybug 3 vs **12**/79. What stands between it and the default is **cost alone**,
-  plus the fact that flipping it swaps
-  `testharness/{baseline,mealybug_baseline,mooneye_baseline,mooneye_cgb_baseline}.txt`
-  with the `*_accurate_baseline.txt` files in one commit. That is a captain-facing product
-  decision, not a crew one. **Never re-bless `testharness/baseline.txt` to hide a regression.**
+- **`identical` IS THE DEFAULT SINCE 2026-08-20, AND `standard` IS NOW THE CHEAP ENGINE.**
+  Through the GB Emulator Shootout's own 264-row manifest the two are **223 and 238 — fifteen
+  gains, zero losses**; across every checked-in baseline, 3691/6210 and 4274/6210; GBSelfTest
+  83/91 and 89/91. See "The default picture-mode flip" below for the whole record.
+  **Never re-bless `testharness/baseline.txt` to hide a regression** — that rule is unchanged
+  and permanent.
 - **The mode is deliberately NOT in the save state** — it is a property of this session's host,
   not of the emulated machine, so loading someone else's state must not switch their renderer.
   `Gameboy::set_render_mode` takes `terminalgb::ppu::RenderMode`; the `gpu` module itself stays
@@ -6949,6 +6946,55 @@ it. That is now a real, CI-enforced build; it did not compile before.
   "GAME PICTURE ONLY" line off the bottom and turned
   `the_help_says_the_feed_is_game_only_and_where_to_go_instead` red. Keep additions to two lines
   and re-run that test.
+### The default picture-mode flip — `identical`, 2026-08-20 (shootout 223 → 238)
+
+Full record with every measurement: `docs/conformance-notes.md` (2026-08-20,
+"`identical` is the default picture engine"); the decision and its consequences for a
+reader are `docs/picture-modes.md` §2-§3 and `docs/mealybug.md` §7.5.
+
+- **VERIFY A NAMED BLOCKER BY MEASUREMENT, NOT BY READING THE PROSE THAT NAMES IT.**
+  `docs/mealybug.md` §7.4 listed two rows the per-dot engine lost. One (`oam_bug` sub-test 7)
+  had been fixed by §8's phase work and the note was never amended — the page's own standing
+  trap, hit again. `GB_PPU=accurate cargo test --release --test testroms` settles it in one
+  command: 8/8, and the whole 47-row harness matches `testharness/baseline.txt` including every
+  verdict *text*.
+- **NO BASELINE SWAPPED HANDS AND NONE NEEDED TO — this is the part to copy.** §9.5 predicted
+  the two file sets would trade contents "in one commit". Instead **both `make` targets name
+  their engine on every line** (`GB_PPU=standard` in `test-external`, `GB_PPU=accurate` in
+  `test-external-accurate`), so each file stays with the engine that produced it. Swapping
+  would have left a file called `_accurate_` holding the other machine's numbers, which is the
+  exact failure those headers exist to prevent. The three suites with one baseline — SameSuite,
+  Mooneye `misc`, `cpp` — were **measured row-for-row identical under both** and are scored by
+  *both* targets against that one file, so the default is fully gated; `engine_note()` in
+  `examples/support/suite_baseline.rs` stamps them "SCORED IN BOTH PICTURE MODES".
+- **THE CARTRIDGE CAN TELL THE TWO ENGINES APART.** 6,000 frames of Pokémon Blue from reset:
+  WRAM hash `0x5042287b86903f2a` on `standard`, `0x21c97cf3b52433a7` on `identical`. Correct —
+  the per-dot engine has real STAT timing and VRAM/OAM blocking and Blue reads both — but it
+  means **every recorded agent trajectory, certified Pewter-chain corpus and save-state digest
+  in `docs/agent/` was produced on `standard` and replays only there.** Nothing in the repo
+  gates on one, so nothing went red; pass `GB_PPU=standard` to reproduce one.
+- **`GB_SPEED=speed` IS A NO-OP UNTIL YOU ALSO ASK FOR `standard`.** `Gameboy::set_speed_flags`
+  refuses every flag under `RenderMode::Accurate`, in either order, and that is deliberate.
+  A collector wanting the shortcuts now says `GB_PPU=standard GB_SPEED=speed`. Read
+  `Gameboy::speed_flags()` for what is in effect rather than assuming.
+- **A CONSTRAINED FRONTEND DECLARES ITS OWN ENGINE.** `platform/psp/src/main.rs` pins
+  `RenderMode::Fast` — that console already spends 9.4-9.9 ms of a 16.743 ms frame, so 4x the
+  PPU there is unplayable rather than the 2.2 % it is on a desktop. Same call
+  `tools/psp-build.sh` makes when it overrides `opt-level` for that target and nowhere else.
+- **Cost, Pokémon Blue, one P-core, `core_bench`:** player 0.094 → **0.373 ms/frame** (178x →
+  45x), collector `--no-pixels --no-audio-out` 0.057 → **0.382** (295x → 44x, i.e. **6.7x** —
+  the pixel skip is a `standard`-only saving because under `identical` the fetcher *is* the
+  timing).
+- **FOUR THINGS BROKE AND EVERY ONE WAS A FIXTURE BEHAVING UNLIKE A CARTRIDGE.** A test that
+  planted code in OAM with the LCD on (blocked in modes 2/3 — it turns the LCD off now, as
+  Mooneye's three execute-from-OAM ROMs do); `testharness/support/fake_gen1.rs` writing its
+  tilemap to `$9800` from a running program (blocked through mode 3 — it brackets the writes
+  with the LCD off now, as `pokered`'s `DisableLCD`/`EnableLCD` pair does); the `dmg_sound`
+  audio hash (re-blessed on the properties, every one of which is identical — see the file's
+  own header); and one STAT unit test whose fixture is the *batched* engine's, now pinned.
+- **`renderscan` was NOT deleted**, which is §7.5's fourth step declined with reasons: the PSP,
+  the collector skip, speed mode and `testharness/ppuengines.rs`'s second opinion all need it.
+
 ### The line-0 STAT phase — the OAM strobe must ask `LY`, not `mode` (accurate 6/79 → 12/79)
 
 **Full write-up: [`docs/mealybug.md`](docs/mealybug.md) §9.** Mealybug on the accurate engine

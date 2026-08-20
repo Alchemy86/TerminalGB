@@ -103,7 +103,8 @@ Status panel's `PPU` row. The pre-rename spellings `fast`/`accurate` still parse
 The two are **not** an appearance choice — palettes and upscaling live in `src/screen/`, above
 the PPU, and are identical either way. The axis is exactness against speed: measured 0.221 vs
 0.461 ms/frame on dmg-acid2, and both are pixel-exact against its reference image. `identical`
-now **loses no row to `standard` on any gate**; what keeps it opt-in is the ~8.8x cost. Where it
+is **the default since 2026-08-20**; `standard` stays for small hardware, headless collectors
+and speed mode, at about an eighth of the PPU cost. Where it
 stands against the suite that motivates it is [`docs/mealybug.md`](../mealybug.md) §7. Both modes
 are held against each other in CI by
 [`testharness/ppuengines.rs`](../../testharness/ppuengines.rs).

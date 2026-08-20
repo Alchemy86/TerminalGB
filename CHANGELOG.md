@@ -13,6 +13,30 @@ history. See [Credits & lineage](README.md#credits--lineage).
 
 ## [Unreleased]
 
+### Changed
+- **`identical` is now the default picture engine.** The per-dot pixel FIFO — the real hardware
+  pipeline, drawn dot by dot — is what every frontend, harness and embedder gets unless it asks
+  otherwise. Scored through the [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s
+  own 264-row manifest, the two engines are **223 and 238 — fifteen gains and zero losses**;
+  Mooneye `acceptance` goes 67/75 → **75/75**, Mealybug 3/79 → **26/79**, Gambatte
+  3,173 → **3,613**, and our own GBSelfTest cartridge 83/91 → **89/91**. It costs **2.2 % of a
+  16.743 ms frame** on a real cartridge (Pokémon Blue, 0.094 → 0.373 ms/frame on one P-core).
+  - **`standard` is not going anywhere** — it is the cheap engine now, and the only one that
+    can do three jobs: constrained hardware (the PSP frontend pins it, because that console
+    already spends 9.4-9.9 ms of its frame), a headless collector where `set_render_pixels(false)`
+    is worth **6.7×**, and [speed mode](docs/modes.md), which `identical` refuses outright.
+  - **No baseline changed hands.** Both `make` targets name their engine on every line now, so
+    each file stayed with the engine that produced it; only `testharness/audio_baseline.txt`'s
+    `dmg_sound` hash was re-blessed, on evidence that every measured property of the capture —
+    sample count, RMS, peak, silence, pitch and the ROM's own 12/12 verdict — is identical.
+  - **The two engines are not the same machine to a cartridge**: 6,000 frames of Pokémon Blue
+    give different WRAM hashes. Every recorded agent trajectory and certified corpus in
+    `docs/agent/` was produced on `standard` and replays only under `GB_PPU=standard`.
+- **`cgb-acid2` is pixel-exact on both engines.** The window pixel-insertion glitch needs the
+  window to be *drawing* on Color silicon; ungated, a Color console inserted a pixel at `WX - 7`
+  on every line where the Y condition had latched and the window was off. Worth 63 further
+  Gambatte rows, all gains.
+
 ### Added
 - **Picture modes — `standard` and `identical`** ([`docs/picture-modes.md`](docs/picture-modes.md)).
   The two PPU engines are now a named, discoverable, user-facing mode instead of an internal
@@ -26,7 +50,8 @@ history. See [Credits & lineage](README.md#credits--lineage).
   users stops being true. Both modes stay gated in CI against their own baselines, and the
   status page reports **both scores side by side**. Framing corrected while renaming:
   `identical` no longer loses a row to `standard` on any gate — the two it used to lose are
-  closed — so the default stands on cost alone.
+  closed — so the default stands on cost alone. *(Superseded within this same release:
+  `identical` became the default. See **Changed**, above.)*
 - **The final TerminalGB logo** (`docs/brand/terminalgb-logo.svg` + `terminalgb-icon.svg`),
   now at the top of the README: the heavy hand-authored wordmark with a solid DMG-green
   terminal **block cursor replacing the I** and a green **full stop** closing the word, over

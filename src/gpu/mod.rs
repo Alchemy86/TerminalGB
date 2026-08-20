@@ -13,18 +13,29 @@ use std::cmp::Ordering;
 /// every other visual enhancement live in `src/screen/`, above the PPU, and are
 /// identical either way. The only axis is *exactness against speed*:
 ///
-/// * **`standard`** ([`RenderMode::Fast`], the default) draws a whole scanline
-///   in one go at the mode 3 → 0 transition and gives mode 3 a fixed 172-dot
-///   length. A register written part-way along a line is invisible: only its
-///   final value is ever read. Every well-behaved game looks identical under
-///   it, and it is cheap.
-/// * **`identical`** ([`RenderMode::Accurate`]) runs the real pixel pipeline
-///   dot by dot — BG fetcher, pixel FIFO, sprite fetches, window restart,
-///   `SCX & 7` discard — so a mid-mode-3 write to `BGP`/`SCX`/`LCDC`/`WX` takes
-///   effect exactly where hardware puts it, and mode 3 gets its true variable
-///   length. This is what the Mealybug Tearoom suite and Mooneye's
-///   mid-scanline `acceptance/ppu` tests photograph. It costs about
-///   [`RenderMode::IDENTICAL_COST`] times as much CPU.
+/// * **`identical`** ([`RenderMode::Accurate`], **the default since
+///   2026-08-20**) runs the real pixel pipeline dot by dot — BG fetcher, pixel
+///   FIFO, sprite fetches, window restart, `SCX & 7` discard — so a mid-mode-3
+///   write to `BGP`/`SCX`/`LCDC`/`WX` takes effect exactly where hardware puts
+///   it, and mode 3 gets its true variable length. This is what the Mealybug
+///   Tearoom suite and Mooneye's mid-scanline `acceptance/ppu` tests
+///   photograph. It costs about [`RenderMode::IDENTICAL_COST`] times as much
+///   *PPU*, which on a real cartridge is 0.37 ms of a 16.74 ms frame — 45x real
+///   time on one core of this box.
+/// * **`standard`** ([`RenderMode::Fast`]) draws a whole scanline in one go at
+///   the mode 3 → 0 transition and gives mode 3 a fixed 172-dot length. A
+///   register written part-way along a line is invisible: only its final value
+///   is ever read. Every well-behaved game looks identical under it, and it is
+///   **6.7x cheaper on a headless collector** — which is what it is now for:
+///   throughput work, constrained hardware (the PSP frontend pins it), and
+///   [speed mode](crate::speed::SpeedFlags), which `identical` refuses.
+///
+/// **The default flipped because the accurate engine stopped losing rows.** It
+/// used to be behind on Blargg `oam_bug` sub-test 7 and Mooneye
+/// `ppu/intr_1_2_timing-GS`; both closed, and the last counter-example
+/// (`cgb-acid2`) closed with the Color gate on the window pixel-insertion
+/// glitch. Scored through the GB Emulator Shootout's own 264-row manifest the
+/// two engines are 223 and 238 — **15 gains, zero losses.**
 ///
 /// The Rust identifiers stay `Fast`/`Accurate` because that is what the two
 /// engines *are*; `standard`/`identical` is what a person types and sees.
@@ -34,10 +45,12 @@ use std::cmp::Ordering;
 /// switch it live with [`Gpu::set_render_mode`] (the TUI's `P` key).
 #[derive(PartialEq, Eq, Debug, Copy, Clone, Default)]
 pub enum RenderMode {
-    /// `standard` — whole-scanline renderer, fixed-length mode 3. The default.
-    #[default]
+    /// `standard` — whole-scanline renderer, fixed-length mode 3. Cheap, and
+    /// the only mode [speed flags](crate::speed::SpeedFlags) apply to.
     Fast,
     /// `identical` — per-dot pixel FIFO, hardware-exact mid-scanline timing.
+    /// **The default.**
+    #[default]
     Accurate,
 }
 
@@ -93,7 +106,7 @@ impl RenderMode {
 
     /// Every mode, in the order the TUI's `P` key cycles them: the default
     /// first, so a player who taps `P` twice is back where they started.
-    pub const ALL: [RenderMode; 2] = [RenderMode::Fast, RenderMode::Accurate];
+    pub const ALL: [RenderMode; 2] = [RenderMode::Accurate, RenderMode::Fast];
 
     /// Parse a user-supplied mode name, case-insensitively.
     ///
@@ -142,11 +155,12 @@ impl RenderMode {
     pub fn describe(self) -> String {
         match self {
             RenderMode::Fast => {
-                "standard — whole-scanline picture, full speed (the default)".to_string()
+                "standard — whole-scanline picture, cheaper; mid-line writes are invisible"
+                    .to_string()
             }
             RenderMode::Accurate => format!(
-                "identical — hardware-exact picture, drawn dot by dot; about \
-                 {:.1}x the CPU",
+                "identical — hardware-exact picture, drawn dot by dot (the default); \
+                 about {:.1}x the PPU",
                 Self::IDENTICAL_COST
             ),
         }
@@ -2269,8 +2283,25 @@ mod tests {
     }
 
     /// A PPU with the LCD on, sitting at the start of line 0.
+    /// **A PPU pinned to `standard`** — this module is the *batched* renderer's
+    /// test suite (see `the_batched_renderer_keeps_the_plain_mode_rules`, whose
+    /// name says so), and it has been explicit about that since `identical`
+    /// became the default. The per-dot engine has its own tests in
+    /// [`super::fifo`], and its STAT line is gated far harder than any fixture
+    /// here can manage: Mooneye `acceptance` 75/75 including every `intr_*` and
+    /// `stat_*` row, plus Gambatte's `miscmstatirq`, `lycEnable` and `m0enable`
+    /// groups.
+    ///
+    /// **The two engines' STAT lines do differ, and the difference is
+    /// deliberate.** `a_source_going_high_behind_another_raises_nothing` counts
+    /// one raise here and two on the per-dot engine over the same window,
+    /// because that engine models the mode-0 *interrupt* strobe separately from
+    /// the mode bits `STAT` reports (`Gpu::hblank_strobe`) — which is what
+    /// `acceptance/ppu/intr_2_0_timing` and `intr_2_mode0_timing` measure, and
+    /// they pass only there.
     fn lcd_on(stat: u8, wy: u8) -> Gpu {
         let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Fast);
         gpu.wb(0xFF41, stat);
         gpu.wb(0xFF4A, wy);
         gpu.wb(0xFF40, 0x80); // LCD on; enters mode 2 on line 0
@@ -2753,7 +2784,7 @@ mod tests {
     /// baselines are the ones that must not move.
     #[test]
     fn the_batched_renderer_keeps_the_plain_mode_rules() {
-        let mut gpu = lcd_on(0x00, 0xFF); // RenderMode::Fast by default
+        let mut gpu = lcd_on(0x00, 0xFF); // `lcd_on` pins RenderMode::Fast
         assert_eq!(gpu.render_mode(), RenderMode::Fast);
         advance_lines(&mut gpu, 3);
         for _ in 0..DOTS_PER_LINE {
@@ -2847,6 +2878,12 @@ mod tests {
     fn skipping_pixels_changes_nothing_the_cartridge_can_see() {
         let mut drawn = Gpu::new();
         let mut skipped = Gpu::new();
+        // The skip is a `standard`-only saving: under `identical` the fetcher
+        // *is* the timing, so `pixels_effective()` stays true whatever is
+        // declared (the test below pins that). Both machines are pinned here so
+        // the comparison is of the skip, not of the engines.
+        drawn.set_render_mode(RenderMode::Fast);
+        skipped.set_render_mode(RenderMode::Fast);
         skipped.set_render_pixels(false);
         assert!(drawn.render_pixels() && !skipped.render_pixels());
 
@@ -2914,6 +2951,7 @@ mod tests {
     #[test]
     fn the_per_dot_engine_always_produces_pixels() {
         let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Fast);
         gpu.set_render_pixels(false);
         assert!(!gpu.pixels_effective());
         gpu.set_render_mode(RenderMode::Accurate);

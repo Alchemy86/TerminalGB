@@ -459,7 +459,14 @@ fn main() {
          # and a different boot state shifts the sample stream. `GB_MODEL=cgb`\n\
          # reproduces the pre-DMG-mode numbers. The ROM verdicts pinned per\n\
          # fixture below are what actually asserts accuracy; the hash only pins\n\
-         # \"the samples did not change\".\n\n",
+         # \"the samples did not change\".\n\
+         #\n\
+         # They are PICTURE-MODE dependent too, for the same reason: the mode\n\
+         # decides which cycle the cartridge reaches its APU writes on. This\n\
+         # file is scored in whichever mode is the DEFAULT, which since\n\
+         # 2026-08-20 is `identical` — see docs/picture-modes.md. `dmg_sound`\n\
+         # reads HASH:fcb42a26ad26c1a5 under `GB_PPU=standard`, which is the\n\
+         # value that stood before the flip.\n\n",
     );
 
     println!(

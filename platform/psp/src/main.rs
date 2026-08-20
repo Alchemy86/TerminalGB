@@ -608,6 +608,17 @@ fn psp_main() {
     };
     psp::dprintln!("{} ({})", gb.rom_title(), name);
 
+    // **The PSP pins `standard`, and the reason is arithmetic.** `identical`
+    // became the emulator's default on 2026-08-20 because it costs about
+    // 0.37 ms of a 16.743 ms frame on a desktop — 2 % — and wins fifteen rows
+    // of the GB Emulator Shootout. This machine is a 333 MHz MIPS with 9.4-9.9
+    // ms of that budget already spent (docs/portability.md §3.7); four times
+    // the PPU is not 2 % here, it is unplayable. Same call
+    // `tools/psp-build.sh` already makes when it overrides `opt-level` to 3
+    // for this target and nowhere else: a constrained frontend declares its own
+    // engine rather than inheriting one chosen for a desktop.
+    gb.set_render_mode(terminalgb::ppu::RenderMode::Fast);
+
     // A save state beside the cartridge is loaded at boot. That is how a
     // handheld with no keyboard gets dropped into the middle of a game, and it
     // is what makes a benchmark reproducible: the overworld and a battle are

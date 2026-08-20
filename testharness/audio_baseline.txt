@@ -11,6 +11,13 @@
 # reproduces the pre-DMG-mode numbers. The ROM verdicts pinned per
 # fixture below are what actually asserts accuracy; the hash only pins
 # "the samples did not change".
+#
+# They are PICTURE-MODE dependent too, for the same reason: the mode
+# decides which cycle the cartridge reaches its APU writes on. This
+# file is scored in whichever mode is the DEFAULT, which since
+# 2026-08-20 is `identical` — see docs/picture-modes.md. `dmg_sound`
+# reads HASH:fcb42a26ad26c1a5 under `GB_PPU=standard`, which is the
+# value that stood before the flip.
 
 # `tone440` moved once, deliberately, when the post-boot machine state landed
 # (Mooneye `boot_hwio`): the boot ROM leaves channel 1's enable flip-flop SET,
@@ -21,8 +28,19 @@
 # displaced by the same −0.047 samples (≈ one M-cycle). Same tone, same level,
 # one M-cycle earlier. The reported "dominant" moved 440.0 → 438.0 Hz because
 # the estimator counts crossings in a fixed 0.5 s window and the shift drops one
-# — the pitch itself did not move. `dmg_sound` is unaffected: both its hashes
-# are unchanged and its verdict is still 12/12.
+# — the pitch itself did not move. It has not moved since, the default picture
+# mode flip included.
+
+# `blargg/dmg_sound` moved once, on 2026-08-20, when `identical` became the
+# default picture mode. Judged the same way — by the properties, not the hash —
+# and every one of them is byte-identical either side: 1,625,088 samples, RMS
+# 0.0265, peak 0.283, 96.8 % silent, max step 0.3333, dominant 480 Hz, and the
+# ROM's own verdict still `01:ok .. 12:ok  Passed`. At sample level **9,788 of
+# 3,250,176 samples differ (0.30 %), every one of them after 80.8 % of the
+# capture**, peak identical at 9284 and RMS 867.916 → 867.932 on the raw 16-bit
+# stream. That is one late sub-test's channel retriggering a few cycles earlier
+# because mode 3 is no longer a fixed 172 dots — not a synthesis change, which
+# would move the level, the pitch or the whole stream.
 tone440 = HASH:2bbe9746f7e333e9 SAMPLES:221184
 blargg/dmg_sound-01-registers = HASH:8cbc50be13896325 SAMPLES:222208
-blargg/dmg_sound = HASH:fcb42a26ad26c1a5 SAMPLES:1625088
+blargg/dmg_sound = HASH:8f983751d12c0c11 SAMPLES:1625088

@@ -10,13 +10,15 @@ TerminalGB carries **two complete picture engines**, and which one runs is a mod
 > is the page to read if you are choosing between all three.
 
 
-| | **`standard`** | **`identical`** |
+| | **`identical`** | **`standard`** |
 |---|---|---|
-| The default | **yes** | no — opt in |
-| How it draws | a whole scanline at once, at the mode 3 → 0 transition, from whatever the registers hold at that instant | the real hardware pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard |
-| Mode 3 length | fixed at 172 dots | variable, as it falls out of the machine (172–289 on hardware) |
-| A register written mid-scanline | invisible — only its final value is read | lands exactly where a Game Boy puts it |
-| Cost per frame (dmg-acid2) | **0.221 ms** (76× real time) | **0.461 ms** (36× real time) — about **2.1×** |
+| The default | **yes, since 2026-08-20** | no — opt in |
+| How it draws | the real hardware pixel pipeline, dot by dot: BG fetcher, 8-pixel FIFO, sprite fetches, window restart, `SCX & 7` discard | a whole scanline at once, at the mode 3 → 0 transition, from whatever the registers hold at that instant |
+| Mode 3 length | variable, as it falls out of the machine (172–289 on hardware) | fixed at 172 dots |
+| A register written mid-scanline | lands exactly where a Game Boy puts it | invisible — only its final value is read |
+| Cost per frame (Pokémon Blue, one P-core) | **0.373 ms** (45× real time) — 2.2 % of a frame | **0.094 ms** (178× real time) |
+| Cost per frame, headless with no pixels wanted | 0.382 ms (44×) — the skip does not apply | **0.057 ms** (295×), **6.7× cheaper** |
+| [Speed flags](modes.md) | refused — nothing may be skipped | the only mode they apply to |
 | Almost every game | identical output, proved frame-for-frame | identical output |
 
 They are **not** a quality or appearance choice. Palette, upscaler, transport and every other
@@ -43,14 +45,14 @@ for `identical`, what it costs:
 Or set it before launch, in `${XDG_CONFIG_HOME:-~/.config}/terminalgb/config.toml`:
 
 ```toml
-ppu = identical      # or: standard (the default), accurate, fast
+ppu = standard       # or: identical (the default), accurate, fast
 ```
 
 Or for one run:
 
 ```sh
-GB_PPU=identical  cargo run --release --example terminal -- game.gb
-GB_PPU=standard   cargo run --release --example terminal -- game.gb   # the default
+GB_PPU=standard   cargo run --release --example terminal -- game.gb
+GB_PPU=identical  cargo run --release --example terminal -- game.gb   # the default
 ```
 
 `$GB_PPU` wins over the config key, so a one-off override is not silently undone by a config file.
@@ -67,19 +69,31 @@ call as the console revision and the CGB APU revision.
 
 ---
 
-## 2. When `identical` is worth it
+## 2. When `standard` is worth reaching for
 
-Reach for it when:
+`identical` is the default because it is what a Game Boy does and, for somebody *playing a game*,
+it costs 2.2 % of a frame. Reach past it when:
 
-- **a game has a mid-scanline effect that looks wrong** — a split status bar, a screen wobble, a
-  parallax band, a shrinking window. These are made by writing `BGP`, `SCX`, `SCY`, `LCDC` or `WX`
-  part-way along a line, which `standard` cannot see;
-- **you are working on the PPU**, or scoring the picture suites;
-- **you have CPU to spare.** At 36× real time on an ordinary desktop, `identical` still has an
-  order of magnitude of headroom over the 59.7275 Hz a Game Boy runs at.
+- **the machine is small.** The PSP frontend pins `standard`, and the arithmetic is why: that
+  console already spends 9.4–9.9 ms of a 16.743 ms frame, so four times the PPU is not 2 % there,
+  it is unplayable. Any frontend with that little headroom should say so in its own source, the
+  way [`platform/psp/src/main.rs`](../platform/psp/src/main.rs) does.
+- **nothing is looking at the picture.** A collector — an agent corpus, a certification run, a
+  swarm — declares `set_render_pixels(false)`, and that skip is a `standard`-only saving:
+  under `identical` the fetcher *is* the timing, so the pixels are not optional and the engine
+  says so through `Gpu::pixels_effective`. Measured on Pokémon Blue, one P-core: **0.057 against
+  0.382 ms/frame, 6.7×.**
+- **you want [speed mode](modes.md).** `identical` refuses every speed flag — its whole claim is
+  that nothing is skipped — so `GB_SPEED=speed` is a no-op until the machine is on `standard`.
+  Read [`Gameboy::speed_flags`](../src/gameboy.rs) for what is actually in effect rather than
+  assuming it is what you asked for.
+- **you are reproducing a figure or a corpus measured before 2026-08-20.** The two engines are
+  *not* the same machine to the cartridge: 6,000 frames of Pokémon Blue from reset give WRAM
+  hashes `0x5042287b86903f2a` on `standard` and `0x21c97cf3b52433a7` on `identical`. Every
+  recorded agent trajectory, every certified chain corpus and every save-state digest in
+  [`docs/agent/`](agent/) was produced on `standard` and replays only there.
 
-Stay on `standard` when you want the cheapest correct picture — which, for the overwhelming
-majority of cartridges, is the *same* picture. That is not an assumption:
+For an ordinary game the two produce the *same* picture, and that is not an assumption:
 [`testharness/ppuengines.rs`](../testharness/ppuengines.rs) renders 600 frames of dmg-acid2 and of
 Blargg's `cpu_instrs` through both engines every `cargo test --release` and requires the
 framebuffers to be **byte-identical**.
@@ -89,23 +103,37 @@ framebuffers to be **byte-identical**.
 ## 3. What each mode scores
 
 Both modes are gated in CI, each against **its own baselines**, so neither can drift unnoticed:
-`make test-external` scores `standard`, `make test-external-accurate` scores `identical`.
+`make test-external-accurate` scores `identical` (the default) and `make test-external` scores
+`standard`. **Both targets name their engine on every line**; until the flip the `standard` one
+could be silent about it, and a target that named no engine would now re-bless eighteen files
+with the other machine's numbers.
 
 | Gated suite | `standard` | `identical` |
 |---|---:|---:|
-| Mooneye GB `acceptance` | 67 / 75 | **69 / 75** |
-| Mealybug Tearoom — pixel-exact rows | 3 / 79 | **17 / 79** |
-| Mealybug Tearoom — pixels wrong (lower is better) | 1,212,282 | **630,266** |
+| Mooneye GB `acceptance` | 67 / 75 | **75 / 75** |
+| Mealybug Tearoom — pixel-exact rows | <!--score:mealybug:pass-->3<!--/score--> / 79 | **<!--score:mealybug_accurate:pass-->26<!--/score-->** / 79 |
+| Gambatte (5,225 scored rows) | <!--score:csp_gambatte:pass-->3173<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3613<!--/score-->** |
+| GBMicrotest | <!--score:csp_gbmicrotest:pass-->251<!--/score--> / 513 | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / 513 |
+| GBSelfTest (our own cartridge) | 83 / 91 | **89 / 91** |
 | dmg-acid2 against its author's reference | 0 / 23,040 differ | 0 / 23,040 differ |
+| **GB Emulator Shootout, its own 264-row manifest** | 223 | **238** |
 
 Everything else — the in-repo Blargg harness (46/47), Mooneye `emulator-only` (28/28) and `misc`
-(8/8), SameSuite (72/76), CasualPokePlayer (4/4) — measures the CPU, the APU, DMA or the cartridge
-mappers, which the picture mode does not reach. Those suites have one baseline each, and the
-[status page](status.md) says `same` for them rather than repeating a number nobody re-measured.
+(8/8), SameSuite (73/76), CasualPokePlayer (4/4) — measures the CPU, the APU, DMA or the cartridge
+mappers, which the picture mode does not reach. Those suites have one baseline each; the three
+external ones are gated in **both** modes against that one file, which is only safe because every
+row of each was measured identical under both.
 
-**`identical` now loses no row to the default on any gate.** It used to be behind on two
-(`ppu/intr_1_2_timing-GS` and Blargg `oam_bug` sub-test 7); both are closed. What stands between it
-and being the default is only its cost.
+**The flip happened because `identical` stopped losing rows.** It used to be behind on two
+(`ppu/intr_1_2_timing-GS` and Blargg `oam_bug` sub-test 7); both closed, and the last
+counter-example — `cgb-acid2`, 158 pixels — closed with the Color gate on the window
+pixel-insertion glitch. Through the shootout's own manifest the two engines are **15 gains and
+zero losses**.
+
+It is still not *strictly* dominant across every one of the 6,210 gated rows: four small Gambatte
+groups are net-negative on `identical` (`sprites` −3, `lyc153int_m2irq` −2, `lycint_lycflag` −2,
+`m2int_m0stat` −1) — **eight rows between them, against 891 gains.** Named rather than rounded
+away; they are the next thing for a PPU crew to look at.
 
 **Read the Mealybug pixel distance, not just the row count.** It is a *shade-rank* distance, so a
 frame with one extra distinct shade reports ~23,040 whatever else is right, and a four-pixel error
