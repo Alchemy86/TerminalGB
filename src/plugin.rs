@@ -77,6 +77,11 @@ impl MachineAccess for MemoryManagementUnit<'_> {
         } else {
             self.keypad.keyup(key);
         }
+        // A press can raise the joypad interrupt, which is one of the terms a
+        // horizon batch is bounded by — and a plugin presses buttons *inside* a
+        // frame, unlike a frontend. See
+        // `MemoryManagementUnit::renegotiate_horizon`.
+        self.renegotiate_horizon();
     }
 
     fn queue_press(&mut self, key: crate::input::KeypadKey, hold: u16, gap: u16) {

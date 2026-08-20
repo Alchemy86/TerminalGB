@@ -49,7 +49,7 @@ Pokémon Blue, one P-core, quiet box, collector configuration unless stated.
 | `identical` | 0.5755 | **0.3320** | 29× → **50×** (+73 %) |
 | aggregate, 20 workers | — | — | **3,735×** real time |
 | aggregate, 4 workers | — | — | 1,066× — past 1000× on four cores |
-| certification run, `GB_SPEED=speed` | — | — | **+9.2 %** over the accurate machine, and the chain still certifies |
+| certification run, `GB_SPEED=speed` | — | — | **+27 %** cold boot and **+39 %** on an overworld state, over the accurate machine — and the chain runs identically |
 
 **Frame hash and WRAM hash are unchanged across every one of these.** The
 emulated machine did not move; only what it costs to run it did.
@@ -74,6 +74,7 @@ measured 281,879.
 | **Word-at-a-time monochrome tile blit** | +32.8 % of the renderer | checked against the pixel loop over **all 65,536** tile-data pairs. |
 | Cached `oam_dma_busy`; packed STAT enable bit (`any_inte`) | ~1 % each | pure caching of a value already computed. |
 | `[profile.release]` `opt-level = 3` + fat LTO | **+24 %** | it had said `opt-level = "s"` since 2022 and nobody here ever chose it. |
+| **The horizon batch** (`SpeedFlags::horizon_batch`) — the peripherals advanced once per *horizon* rather than once per instruction | **+13 %** cold boot and **+21 %** on an overworld state, on top of the preset it joins | **it is a flag, not a default**, because unlike the row above it is not lossless. What makes it safe enough to certify is the flush list, not the horizon: every `$FE00-$FF7F` access, every interrupt dispatch, every halt, every save state and every frame boundary empties the batch first, so a program's own reads are exact. Byte-identical to `instruction-bus` over 92 Pokémon save states and over the 26-link chain — see [`../modes.md`](../modes.md) §4b. |
 
 ---
 
@@ -95,6 +96,58 @@ recommendation that does not hold on this codebase, with the number that says so
 | **Bounds-check elision** via masked bank indices | **neutral to 0.4 % slower** | only 591 work-RAM reads a frame and the branch predicts perfectly. |
 | **An allocator swap** (`tcmalloc` by `LD_PRELOAD`) | **no effect** | ranges overlap completely, and the profile predicted it: `_int_malloc` + `_int_free_chunk` are 0.3 % of samples. Tested without adding a dependency, which is the fair test to run before proposing a crate. |
 | **`codegen-units = 16`** | not measurably slower, halves the cold build | left at 1 anyway, on caution not a number: after fat LTO the partitioning is an LLVM heuristic. |
+| **Giving `MemoryManagementUnit::do_cycle`'s body a second caller** | **5-7 % slower**, three ways | see §3a — the finding that shaped the horizon batch, and the reason its flush path is a *different function* rather than a second call of the same one. |
+
+### 3a. The one-call-site rule — a negative that turned into a design constraint
+
+**The per-instruction body must have exactly one call site, or it stops being
+inlined into `Gameboy::frame` and the accurate machine loses 5 %.**
+
+`MemoryManagementUnit::do_cycle`'s body is ~4 KiB of machine code and in the
+shipping build it is inlined into `Gameboy::frame`, which is the emulator. Every
+attempt to reach it from a second place cost the same 5-7 %, and the shape of
+the attempt did not matter:
+
+| what was tried | accurate frame | what `nm` said |
+|---|---:|---|
+| body split out, `#[inline]`, called from `do_cycle` **and** the flush | **5 % slower** | `do_cycle_now` appears as its own 4,242-byte symbol; `Gameboy::frame` **shrinks** by 554 bytes |
+| the same, with the branch that chooses between them compiled out | **6.7 % slower** | unchanged — so it is not the branch |
+| body `#[inline(always)]`, second caller `#[inline(never)]` and cold | **6.6 % slower** | `frame` grows; a second 3.6 KiB copy exists |
+| body reached through `do_cycle(0)` so there is one *body* but two callers of `do_cycle` | **9 % slower** | the wrapper is outlined instead |
+| **body left with one call site; the flush given its own smaller function** | **0 %** (0.0407 against 0.0407) | `frame` unchanged |
+
+Measured on one P-core, Pokémon Blue, 7,168 frames from reset, interleaved
+against a binary built from the parent commit, three rounds each.
+
+**The corollary bit twice more in one afternoon and is the useful half:** the
+same is true of anything the body calls. Adding a second caller for
+`Timer::do_cycle` took *it* out of `Gameboy::frame` too — it has no symbol in
+the shipping build and gains one — and cost 3 % until it was marked
+`#[inline(always)]`. **Check `nm --size-sort -S` for a symbol that was not there
+before**; it is a two-second test and it explains a whole class of "why did that
+get slower?".
+
+### 3b. What the flag costs the machine that does not use it
+
+**About 2 %, and it is the flush test in every memory-accessing opcode.**
+
+`Gameboy::frame` is the emulator — the interpreter, `read_at` and `wb` are all
+inlined into it — so the two `$FE00-$FF7F` tests that empty the batch are not
+one branch, they are a branch at every one of the dozens of sites `read_at` and
+`wb` are inlined at. `frame` grows from 32,168 bytes to 35,199.
+
+Measured best-of-8 over 25,000-frame rounds, one P-core, thread CPU clock,
+interleaved against a binary built from the parent commit, load average 4.3-6.9:
+**−2.3 % on a cold boot and −1.6 % on an overworld state.** Two shapes of the
+test were tried (`pending_ticks != 0 && range` and `horizon_batch && range`) and
+a `#[cold]` horizon; they are all within noise of each other.
+
+**It is stated rather than hidden**, because this page's own rule is that a
+difference under 2 % is code layout and this one straddles that line. The
+version that would cost nothing is to move the flush into `read_at`'s twenty
+individual I/O match arms instead of testing the range in front of them —
+cheaper on the hot path and one missed arm away from a silent correctness bug,
+which is why it was not taken for a 2 %.
 
 Agreed and **not attempted**: computed goto (Rust has no labels-as-values, and
 the opcode `match` is already a jump table — four of rustc's, verified in
@@ -143,6 +196,7 @@ reset, thread CPU clock, every side optimised, interleaved in one session.
 |---|---:|---:|---|---:|
 | SameBoy, `CONF=release`, render off | 0.5925 | **43×** | yes | 15 |
 | **TerminalGB**, pixels off | 0.0692 | **414×** | yes | **26** |
+| **TerminalGB**, pixels off, `GB_SPEED=speed` | — | **+27 % over the row above** | **no — that is what the flag is** | unchanged (`identical` refuses every flag) |
 | PyBoy 2.7.0 (Cython), render + sound off | 0.0298 | **869×** | **no** | **0** |
 
 So we are **~9.6× SameBoy at equal accuracy** and **~2.1× behind PyBoy, which
@@ -187,9 +241,12 @@ interpreter *is*.
 
 Queued, in the order the profile ranks them:
 
-1. **Make the timer and the PPU lazy the way the APU already is** — the largest
-   remaining structural item. `Sound::catch_up` is the proof the pattern costs
-   nothing in accuracy: `dmg_sound` is 12/12 with it. A project, not a pass.
+1. ~~**Make the timer and the PPU lazy the way the APU already is**~~ —
+   **closed.** The PPU half landed in `docs/throughput.md` §16 (+17.5 %, in the
+   default and lossless); the timer half is §3 above at 8.5 % slower; and §18
+   took the *whole per-instruction pipeline* to a horizon as
+   `SpeedFlags::horizon_batch`, which is +13 % to +22 % and is a **flag**
+   because it is not lossless. There is no lazy-peripheral item left.
 2. **A different execution model** — block compilation or threaded code. Sizing
    from the published GBA figures a JIT is about 6× over a good interpreter, and
    worth stating: a JIT for a *cycle-accurate* emulator is materially harder,
@@ -201,7 +258,9 @@ Queued, in the order the profile ranks them:
    flags*, and the honest note is that the obvious ones are taken: the two that
    exist beyond the preset buy 0.0 % and +25.9 % respectively, and the second
    is out because it freezes a whole peripheral. The next real one comes from
-   §6.1, not from looking harder at what is already there.
+   §6.1, not from looking harder at what is already there. **§18's
+   `horizon-batch` is what that sentence predicted** — it came from the profile
+   and from reading somebody else's source, not from the flag list.
 
 Not queued, and deliberately: anything that buys a player frames it does not
 need. The frontend is paced to 59.7275 Hz and has been comfortably inside its

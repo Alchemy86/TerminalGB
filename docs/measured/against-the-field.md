@@ -41,7 +41,9 @@ Reproduce it: [`tools/perf/sameboy-bench.c`](../../tools/perf/sameboy-bench.c),
 | **TerminalGB**, pixels off, no APU | **0.0405** | **414×** | yes |
 | **PyBoy 2.7.0** (LGPL-3.0, Cython), rendering and sound off | **0.0193** | **869×** | **no** |
 
-**We are 9.5× faster than SameBoy and 2.1× slower than PyBoy.**
+**We are 9.5× faster than SameBoy and 2.1× slower than PyBoy** — and 1.7×
+slower with `GB_SPEED=speed`, which is the horizon batch taking PyBoy's own
+technique as a named, opt-in liberty (§4).
 
 All three rows are the best of three runs **interleaved with each other on the same core in the
 same minute**, on a quiet box (load 1.3). A single-shot reading of any of them drifts by 30 % as
@@ -117,6 +119,38 @@ stepped once per instruction and walks its mode machine every time (9.1 % of a h
 profile's leaf samples, plus about 3 % for `refresh_stat_line`), when what a CPU can observe of
 it changes only at a handful of dots a line. That is the same trick applied where we do not
 need sub-instruction resolution, and it is lossless.
+
+### And then what we did take, as a flag
+
+`docs/throughput.md` §18. The whole per-instruction pipeline is batched to a
+horizon under [`SpeedFlags::horizon_batch`](../modes.md), which is in the
+`speed` preset and off by default — worth **+13 %** on a cold boot and **+21 %**
+on an overworld state on top of the preset it joins, and **+27 % / +39 % over
+the accurate machine**.
+
+It is a flag and not a default because, unlike the PPU half above, it is **not
+lossless**. What keeps it usable is the flush list rather than the horizon:
+every `$FE00-$FF7F` access, every interrupt dispatch, every halt, every save
+state and every frame boundary empties the batch, so a program's own reads are
+exact. Measured, it changes **nothing that `instruction-bus` had not already
+changed** — byte-identical over 92 Pokémon save states, identical run-for-run
+over the 26-link Pewter chain, and the same rows lost on GBSelfTest and on the
+conformance action.
+
+Measured on a quiet box (load 1.5), the same 7,168 frames from reset, the same
+core, interleaved in one session:
+
+| | ms/frame | × real time | vs PyBoy |
+|---|---:|---:|---:|
+| PyBoy 2.7.0 | 0.0189 | 886× | — |
+| **TerminalGB**, pixels off | 0.0413 | 405× | 2.19× behind |
+| **TerminalGB**, `GB_SPEED=speed` | **0.0317** | **528×** | **1.68× behind** |
+
+**It narrows the gap and does not close it, and it should not be read as
+closing it**: PyBoy gives up cycle accuracy *always* and scores 0 on Mealybug's
+24 published rows, where this emulator scores 26 in the mode this flag cannot
+touch. What is left of the 1.68× is the per-access tick the flag *keeps*
+wherever a program can observe it, and the interpreter itself.
 
 ### And what we did not
 

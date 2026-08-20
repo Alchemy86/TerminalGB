@@ -1106,10 +1106,14 @@ impl Gameboy {
 
     pub fn keydown(&mut self, key: KeypadKey) {
         self.cpu.memory.keypad.keydown(key);
+        // The joypad interrupt is one of the terms a horizon batch is bounded
+        // by — see `MemoryManagementUnit::compute_run_horizon`.
+        self.cpu.memory.renegotiate_horizon();
     }
 
     pub fn keyup(&mut self, key: KeypadKey) {
         self.cpu.memory.keypad.keyup(key);
+        self.cpu.memory.renegotiate_horizon();
     }
 
     /// Schedule a button press in **emulated frames** — hold `key` down for
@@ -1611,6 +1615,123 @@ mod tests {
     /// return early instead of calling `Sound::run` — the obvious next
     /// "optimisation", and the wrong one, since that is where the channel state
     /// machines advance — and the state comparison goes.
+    /// A cartridge that spends its time doing exactly what the horizon batch
+    /// is most likely to be caught by: reading the peripherals back.
+    ///
+    /// It samples `DIV`, `LY` and `STAT` and stores each one into work RAM,
+    /// round and round, so a machine whose peripherals are behind at the
+    /// moment of a read writes a different byte and its work RAM diverges. Gen
+    /// 1's `Random_` reads `rDIV` the same way, which is why this is the shape
+    /// that matters.
+    #[cfg(test)]
+    fn peripheral_reader_cart() -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x100..0x104].copy_from_slice(&[0x00, 0xC3, 0x50, 0x01]); // NOP; JP $0150
+        rom[0x134..0x13F].copy_from_slice(b"PERIPHREAD ");
+        rom[0x147] = 0x00; // ROM only
+        let prog: &[u8] = &[
+            0x21, 0x00, 0xC0, // ld hl,$C000
+            // loop:
+            0xF0, 0x04, // ldh a,[$FF04]   DIV
+            0x22, // ld [hl+],a
+            0xF0, 0x44, // ldh a,[$FF44]   LY
+            0x22, // ld [hl+],a
+            0xF0, 0x41, // ldh a,[$FF41]   STAT
+            0x22, // ld [hl+],a
+            0x7C, // ld a,h
+            0xFE, 0xCF, // cp $CF
+            0x20, 0xF2, // jr nz, loop
+            0x21, 0x00, 0xC0, // ld hl,$C000   wrap and keep going
+            0x18, 0xED, // jr loop
+        ];
+        rom[0x150..0x150 + prog.len()].copy_from_slice(prog);
+        rom
+    }
+
+    /// **The horizon batch is invisible to the cartridge**, and this is the
+    /// claim in the strongest form a unit test can make it: two machines, the
+    /// same program, one advancing its peripherals once per instruction and
+    /// one once per horizon, and **byte-identical save states** afterwards — a
+    /// save state being every serialised field there is.
+    ///
+    /// The cartridge reads `DIV`, `LY` and `STAT` and writes each into work
+    /// RAM, so a peripheral that was behind at the instant of a read shows up
+    /// as a different byte. Teeth proven by removing the flush from
+    /// `MemoryManagementUnit::read_at`: the states diverge.
+    ///
+    /// It is deliberately compared against `instruction-bus` and not against
+    /// the accurate machine, because that is the honest claim — the batch
+    /// **includes** that liberty and adds nothing to it. `docs/modes.md` §4b
+    /// carries the same comparison over 92 real Pokémon save states.
+    #[test]
+    fn the_horizon_batch_is_invisible_to_a_cartridge_that_reads_its_peripherals() {
+        use crate::speed::SpeedFlags;
+
+        let mut per_instruction = SpeedFlags::NONE;
+        per_instruction.instruction_bus = true;
+        let mut per_horizon = SpeedFlags::NONE;
+        per_horizon.horizon_batch = true;
+
+        let run = |flags| {
+            let mut gb =
+                Gameboy::new_with_model(peripheral_reader_cart(), None, Model::Dmg);
+            gb.set_speed_flags(flags);
+            for _ in 0..12 {
+                gb.frame();
+            }
+            gb.save_state()
+        };
+
+        let a = run(per_instruction);
+        let b = run(per_horizon);
+        assert_eq!(a.len(), b.len());
+        assert!(
+            a == b,
+            "a horizon batch changed something the cartridge can see"
+        );
+        // And it really did read the peripherals — otherwise the comparison
+        // above is two machines agreeing about nothing.
+        let mut plain =
+            Gameboy::new_with_model(peripheral_reader_cart(), None, Model::Dmg);
+        for _ in 0..12 {
+            plain.frame();
+        }
+        let mut seen = std::collections::HashSet::new();
+        for a in 0xC000u16..0xC100 {
+            seen.insert(plain.peek(a));
+        }
+        assert!(
+            seen.len() > 8,
+            "the fixture must actually sample changing peripherals, saw {} \
+             distinct bytes",
+            seen.len()
+        );
+    }
+
+    /// Asking for the horizon batch turns the per-access bus off as well,
+    /// whether or not `instruction-bus` was named: a horizon computed at the
+    /// last flush is only valid while nothing advances a peripheral behind its
+    /// back, and the per-access tick does exactly that.
+    #[test]
+    fn the_horizon_batch_takes_the_instruction_bus_liberty_too() {
+        use crate::speed::SpeedFlags;
+        let mut only_batch = SpeedFlags::NONE;
+        only_batch.horizon_batch = true;
+
+        let mut gb = Gameboy::new_with_model(noisy_cart(), None, Model::Dmg);
+        gb.set_speed_flags(only_batch);
+        assert!(
+            !gb.cpu.memory.per_access_bus_for_test(),
+            "horizon-batch must imply the instruction-bus liberty"
+        );
+
+        gb.set_speed_flags(SpeedFlags::NONE);
+        assert!(
+            gb.cpu.memory.per_access_bus_for_test(),
+            "and turning it off must give the per-access bus back"
+        );
+    }
+
     /// Identical mode's whole claim is that nothing is skipped, so it refuses
     /// every speed flag — and the refusal must not be bypassable by ordering,
     /// which is the half that is easy to get wrong. Asking for speed and *then*

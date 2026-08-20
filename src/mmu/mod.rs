@@ -546,6 +546,25 @@ pub struct MemoryManagementUnit<'a> {
     /// not machine state — deliberately not serialised, so a state saved by a
     /// speed-mode run loads into an accurate machine and vice versa.
     per_access_bus: bool,
+    /// Whether the peripherals are advanced once per **horizon** rather than
+    /// once per instruction — see [`crate::speed::SpeedFlags::horizon_batch`].
+    /// Implies `!per_access_bus`: a horizon computed at the last flush is only
+    /// valid while nothing advances a peripheral behind its back.
+    horizon_batch: bool,
+    /// CPU T-cycles executed but not yet handed to the peripherals. Zero
+    /// unless [`Self::horizon_batch`] is on, and emptied by
+    /// [`Self::flush_pending`] before anything — a register read, an interrupt
+    /// dispatch, a save state — can observe that they are behind.
+    pending_ticks: u32,
+    /// PPU ticks [`Self::do_cycle`] owes its caller from a flush that happened
+    /// part-way through an instruction, so `Gameboy::frame`'s cycle accounting
+    /// is unchanged by where a flush landed.
+    pending_out: u32,
+    /// CPU T-cycles that may be batched before **anything** the CPU can see
+    /// could change. `0` means "do not batch", which is also what it holds
+    /// whenever the flag is off — so the same comparison drives both machines
+    /// and there is no second code path. See [`Self::compute_run_horizon`].
+    run_horizon: u32,
     bus_ticked: u32,
     /// PPU dots already spent inside this instruction's memory accesses, so
     /// [`Self::do_cycle`] applies only the instruction's remainder. Counted
@@ -650,6 +669,10 @@ impl<'a> MemoryManagementUnit<'a> {
             bus_tick_enabled: false,
             speed: crate::speed::SpeedFlags::NONE,
             per_access_bus: true,
+            horizon_batch: false,
+            pending_ticks: 0,
+            pending_out: 0,
+            run_horizon: 0,
             bus_ticked: 0,
             gpu_bus_ticked: 0,
             gpu_defer: 0,
@@ -1364,6 +1387,16 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     fn oam_dma_cycles(&mut self, ticks: u32) {
         if self.oam_dma.idle() {
+            // Keep the cache honest. [`Self::oam_dma_busy`] is a *cache* of
+            // `!oam_dma.idle()`, and the per-access path clears it in
+            // [`Self::oam_dma_tick`]; this path is the only one a machine with
+            // `instruction-bus` on ever takes, and without this the flag
+            // latches true for the rest of the session after the game's first
+            // transfer. Free for the default machine, which never reaches this
+            // arm — `bus_tick` has already cleared the flag by the time it
+            // would.
+            self.dma_bus = DmaBus::None;
+            self.oam_dma_busy = false;
             return;
         }
         for _ in 0..ticks / 4 {
@@ -1415,6 +1448,9 @@ impl<'a> MemoryManagementUnit<'a> {
     #[inline]
     pub(crate) fn idu_tick(&mut self, value: u16) {
         if is_oam_page(value) {
+            // The corruption is predicted from the PPU's own dot counter, so
+            // both the batch and the PPU have to be current.
+            self.flush_pending();
             self.flush_gpu();
             self.oam_bug(OamBug::Write, self.bus_ticked + 4);
         }
@@ -1437,10 +1473,24 @@ impl<'a> MemoryManagementUnit<'a> {
     /// Apply a set of speed flags. See [`crate::speed::SpeedFlags`].
     pub fn set_speed_flags(&mut self, flags: crate::speed::SpeedFlags) {
         self.speed = flags;
-        self.per_access_bus = !flags.instruction_bus;
+        // `horizon_batch` **includes** the instruction-bus liberty by
+        // construction: a horizon computed at the last flush is only valid
+        // while nothing advances a peripheral behind its back, and the
+        // per-access tick does exactly that. Asking for one gets both.
+        self.flush_pending();
+        self.per_access_bus = !(flags.instruction_bus || flags.horizon_batch);
+        self.horizon_batch = flags.horizon_batch;
+        self.run_horizon = 0;
         if let Some(s) = self.sound.as_mut() {
             s.set_state_frozen(flags.no_apu_state);
         }
+    }
+
+    /// Whether the peripherals really are advanced once per bus access — the
+    /// machine's answer rather than the flags', which is what a test wants.
+    #[cfg(test)]
+    pub(crate) fn per_access_bus_for_test(&self) -> bool {
+        self.per_access_bus
     }
 
     /// Which shortcuts are in effect.
@@ -1485,6 +1535,7 @@ impl<'a> MemoryManagementUnit<'a> {
     /// The PPU must be current: [`Self::flush_gpu`] defers it between
     /// observations and a save state is an observation.
     pub(crate) fn flush_for_observer(&mut self) {
+        self.flush_pending();
         self.flush_gpu();
     }
 
@@ -1584,6 +1635,12 @@ impl<'a> MemoryManagementUnit<'a> {
         self.oam_dma_busy = !self.oam_dma.idle();
         self.gpu_owed = 0;
         self.gpu_horizon = 0;
+        // The horizon batch is machine *position*, never machine state: a
+        // state is always saved with it empty (`flush_for_observer`), so a
+        // load starts one afresh rather than restoring one.
+        self.pending_ticks = 0;
+        self.pending_out = 0;
+        self.run_horizon = 0;
         self.keypad.load_state(r)?;
         // SGB block. Only parsed when this machine is a Super Game Boy; the
         // length prefix means a DMG build skips it whole.
@@ -1708,7 +1765,184 @@ impl<'a> MemoryManagementUnit<'a> {
         n.clamp(1, IDLE_BATCH_MAX)
     }
 
+    /// Empty the horizon batch **now**, so that whatever is about to look at a
+    /// peripheral sees where it really is.
+    ///
+    /// Called by every observation there is: any access in `$FE00-$FF7F`, an
+    /// interrupt dispatch, a halted CPU about to compute its own horizon, the
+    /// OAM-corruption hook, a speed switch, a save state and the frame
+    /// boundary. **That list is the whole of why the flag leaves a game's own
+    /// arithmetic — and therefore its work RAM — byte-identical**: Gen 1's
+    /// `Random_` reads `rDIV`, and it reads it through `read_at`.
+    ///
+    /// One always-false test when the flag is off, because `pending_ticks` is
+    /// then never written.
+    #[inline]
+    pub(crate) fn flush_pending(&mut self) {
+        if self.pending_ticks != 0 {
+            self.run_pending();
+        }
+    }
+
+    /// The flush itself, kept out of line so the per-access path is one
+    /// predicted branch and nothing else.
+    #[cold]
+    #[inline(never)]
+    fn run_pending(&mut self) {
+        let n = std::mem::take(&mut self.pending_ticks);
+        self.pending_out += self.flush_peripherals(n);
+        self.run_horizon = self.compute_run_horizon();
+    }
+
+    /// Advance the peripherals by `cputicks` from inside a batch.
+    ///
+    /// **This is [`Self::do_cycle`]'s body minus the two things a batch
+    /// refuses to run through**, and it is a separate function rather than a
+    /// second call of that body for a measured reason: the per-instruction
+    /// body is ~4 KiB, and giving it a second caller — or a second inlined
+    /// copy — costs **5-7 % of the accurate frame** because LLVM then stops
+    /// inlining it into `Gameboy::frame`. Measured four ways; see
+    /// `docs/measured/speed-ledger.md`.
+    ///
+    /// The two omissions are safe by construction, not by hope:
+    /// [`Self::compute_run_horizon`] returns `0` — "do not batch" — while a
+    /// VRAM DMA or an OAM DMA is in flight, so `perform_vramdma` and
+    /// `oam_dma_cycles` can have nothing to do at a point this is reached.
+    /// Everything else is the same work in the same order.
+    #[cold]
+    #[inline(never)]
+    fn flush_peripherals(&mut self, cputicks: u32) -> u32 {
+        let cpudivider = match self.gbspeed {
+            GbSpeed::Single => 1,
+            GbSpeed::Double => 2,
+        };
+        let gputicks = cputicks / cpudivider;
+        self.gpu.clear_hblank_latch();
+        let timerticks = cputicks.saturating_sub(self.bus_ticked);
+        self.bus_ticked = 0;
+        self.timer.do_cycle_cold(timerticks);
+        if self.timer.interrupt != 0 {
+            self.intf |= self.timer.interrupt;
+            self.timer.interrupt = 0;
+        }
+        if self.timer.serial_edge_pending() {
+            self.serial_shift();
+        }
+        if self.keypad.interrupt != 0 {
+            self.intf |= self.keypad.interrupt;
+            self.keypad.interrupt = 0;
+        }
+        self.gpu_owed += gputicks.saturating_sub(self.gpu_bus_ticked);
+        self.gpu_bus_ticked = 0;
+        if self.gpu_owed >= self.gpu_horizon {
+            self.flush_gpu();
+        }
+        if self.gpu.interrupt != 0 {
+            self.intf |= self.gpu.interrupt;
+            self.gpu.interrupt = 0;
+        }
+        self.apu_pending += timerticks;
+        if self.apu_pending >= self.apu_budget {
+            self.flush_apu();
+        }
+        if self.serial.interrupt != 0 {
+            self.intf |= self.serial.interrupt;
+            self.serial.interrupt = 0;
+        }
+        if self.cart_rtc {
+            self.mbc.rtc_tick(gputicks);
+        }
+        gputicks
+    }
+
+    /// How many CPU T-cycles may be run before **anything** the CPU can see
+    /// could change — the minimum of every peripheral's own horizon, and `0`
+    /// where there is no safe bound at all.
+    ///
+    /// This is [`Self::idle_mcycles`]'s question asked of a *running* CPU, and
+    /// it is PyBoy's `min(timer._cycles_to_interrupt, lcd._cycles_to_interrupt,
+    /// …)` in this emulator's terms (`docs/measured/against-the-field.md` §4).
+    /// The refusals are `idle_mcycles`'s, for its reasons: a VRAM or OAM DMA
+    /// has to move a byte per M-cycle, a link transfer finishes on the timer's
+    /// own shift edges, and an interrupt already waiting to be folded has to
+    /// reach `IF` before the next instruction boundary looks at it.
+    ///
+    /// **It does not have to bound a register read**, because every one of
+    /// those flushes first — see [`Self::flush_pending`].
+    #[cold]
+    fn compute_run_horizon(&self) -> u32 {
+        if !self.horizon_batch
+            || self.hdma_status != DMAType::NoDma
+            || self.oam_dma_busy
+            || self.serial.transfer_in_flight()
+            || self.keypad.interrupt != 0
+            || self.timer.interrupt != 0
+            || self.gpu.interrupt != 0
+            || self.serial.interrupt != 0
+        {
+            return 0;
+        }
+        // The PPU runs at half the CPU's rate in double speed, so a dot
+        // horizon buys twice as many T-cycles there.
+        let ticks_per_dot = match self.gbspeed {
+            GbSpeed::Single => 1,
+            GbSpeed::Double => 2,
+        };
+        // Measured from where the PPU *is*, not where it is owed to be — the
+        // same subtraction `idle_mcycles` makes, and for the same 38 Gambatte
+        // rows.
+        let dots = self.gpu_horizon.saturating_sub(self.gpu_owed);
+        if dots == 0 {
+            // No PPU horizon to work from: the LCD is off, or this is the
+            // per-dot engine, which is stepped per bus access by design.
+            return 0;
+        }
+        let ppu = dots.saturating_mul(ticks_per_dot);
+        let timer = self.timer.idle_mcycles().saturating_mul(4);
+        // The APU raises no interrupt, but it does have to produce its samples
+        // on the cycle `do_output` would have — see [`Self::flush_apu`].
+        let apu = self.apu_budget.saturating_sub(self.apu_pending);
+        ppu.min(timer).min(apu)
+    }
+
+    /// Land the batch and throw away the horizon, so the next instruction
+    /// takes a fresh one.
+    ///
+    /// **The flush is not optional here even where the caller has just done
+    /// one.** [`Self::do_cycle`]'s prologue keys on `run_horizon != 0`, so a
+    /// horizon zeroed while ticks were still accumulated would strand them:
+    /// nothing would take `pending_ticks` again until the next `$FE00-$FF7F`
+    /// access. One test when there is nothing to flush, which is the common
+    /// case at every one of these call sites.
+    #[inline]
+    pub(crate) fn renegotiate_horizon(&mut self) {
+        self.flush_pending();
+        self.run_horizon = 0;
+    }
+
+    /// Advance the machine by one CPU instruction's worth of cycles — or, with
+    /// [`Self::horizon_batch`] on, accumulate them and advance once per
+    /// horizon.
+    ///
+    /// **There is one body and one call site of it**, which is why the batch
+    /// costs the accurate machine nothing: `run_horizon` is zero whenever the
+    /// flag is off, so the deferral test is never taken and what remains is
+    /// the original body behind two perfectly-predicted branches.
     pub fn do_cycle(&mut self, ticks: u32) -> u32 {
+        let mut ticks = ticks;
+        let mut carry = 0;
+        // `run_horizon` is the whole test: it is zero whenever the flag is off
+        // **and** whenever the flag is on but a DMA or a pending interrupt has
+        // refused the batch, and both mean "run the body with this
+        // instruction's own ticks". One load, one predicted branch.
+        if self.run_horizon != 0 {
+            self.pending_ticks += ticks;
+            if self.pending_ticks < self.run_horizon {
+                return std::mem::take(&mut self.pending_out);
+            }
+            ticks = std::mem::take(&mut self.pending_ticks);
+            carry = std::mem::take(&mut self.pending_out);
+        }
         let cpudivider = match self.gbspeed {
             GbSpeed::Single => 1,
             GbSpeed::Double => 2,
@@ -1803,7 +2037,10 @@ impl<'a> MemoryManagementUnit<'a> {
             self.mbc.rtc_tick(gputicks);
         }
 
-        gputicks
+        if self.horizon_batch {
+            self.run_horizon = self.compute_run_horizon();
+        }
+        carry + gputicks
     }
 
     /// Side-effect-free bus read — Tier 1 of the debug surface
@@ -1874,6 +2111,15 @@ impl<'a> MemoryManagementUnit<'a> {
 
     /// [`Self::rb`] without the M-cycle — the dispatch itself.
     fn read_at(&mut self, address: u16) -> u8 {
+        // **The batch's read half.** Everything from OAM to the end of the I/O
+        // block reports a peripheral's live position, so the batch has to land
+        // before the answer is composed — that is what keeps `DIV`, `TIMA`,
+        // `LY`, `STAT` and `NR52` exact at the instant a program looks at
+        // them. HRAM and `IE` are above this window and hold nothing a
+        // peripheral writes.
+        if self.pending_ticks != 0 && (0xFE00..=0xFF7F).contains(&address) {
+            self.run_pending();
+        }
         // `bus_tick_enabled` is the "a CPU instruction is running" test, and it
         // guards the flag as well as the corruption: a debug peek of OAM must
         // neither corrupt it nor eat a pending `share_idu`.
@@ -2102,9 +2348,20 @@ impl<'a> MemoryManagementUnit<'a> {
     /// driving the game.
     pub fn advance_input(&mut self) {
         self.input_queue.advance(&mut self.keypad);
+        // A button press can raise the joypad interrupt, which is one of the
+        // terms a horizon is built from.
+        self.renegotiate_horizon();
     }
 
     pub fn wb(&mut self, address: u16, value: u8) {
+        // The batch's write half — same window as [`Self::read_at`], plus the
+        // reason a read does not need: a write to `DIV`, `TAC`, `LCDC`, `LYC`,
+        // `STAT`, `$FF46`, `$FF55` or an `NRxx` register **moves the horizon
+        // itself**, so the one in hand is thrown away and the next instruction
+        // takes a fresh one.
+        if self.horizon_batch && (0xFE00..=0xFF7F).contains(&address) {
+            self.renegotiate_horizon();
+        }
         // A write commits partway through its own M-cycle, not at the end of
         // it — see [`ppu_write_commit`]. `bus_tick` advances the per-dot PPU
         // one whole M-cycle before every access, which put every mid-scanline
@@ -2307,6 +2564,8 @@ impl<'a> MemoryManagementUnit<'a> {
 
     pub fn switch_speed(&mut self) {
         if self.speed_switch_req {
+            // The batch was accumulated at the old clock; land it first.
+            self.renegotiate_horizon();
             if self.gbspeed == GbSpeed::Double {
                 self.gbspeed = GbSpeed::Single;
             } else {

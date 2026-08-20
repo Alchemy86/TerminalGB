@@ -1434,3 +1434,102 @@ hoist at 0.7 % for a correctness hazard.
 opcode dispatch and the fetch. That is what a tight interpreter looks like from the inside, and
 it is the honest signal that the next real step is a different execution model rather than
 another pass.
+
+---
+
+## 18. Round six: the horizon batch — PyBoy's shape, as a named flag
+
+§15 measured PyBoy 2.1× ahead of us and read its source for why: every
+peripheral publishes a horizon and is advanced only when one is reached. §16
+took that idea for the PPU (+17.5 %) and §16.6 refused it for the timer
+(8.5 % slower). This round takes it for the **whole per-instruction pipeline**
+— which is where PyBoy actually applies it — and ships it as
+[`SpeedFlags::horizon_batch`](../src/speed.rs), because unlike the PPU half it
+is **not** lossless and this project does not put a liberty in the default.
+
+Measured on one P-core, thread CPU clock, interleaved against a binary built
+from the parent commit, Pokémon Blue.
+
+### 18.1 What it does
+
+`MemoryManagementUnit::do_cycle` accumulates its ticks instead of applying
+them, and the peripherals are advanced once per **run horizon** — the minimum
+over the PPU's next observable dot, the timer's next `TIMA` overflow and the
+APU's next output, with a flat refusal while a VRAM DMA, an OAM DMA or a link
+transfer is in flight. That is `MemoryManagementUnit::idle_mcycles` — the idle
+batch this page has had since §12 — asked of a *running* CPU rather than a
+halted one, and it is PyBoy's `min(timer._cycles_to_interrupt,
+lcd._cycles_to_interrupt, …)` in this emulator's terms.
+
+**What makes it safe is not the horizon, it is the flush list.** Every
+observation empties the batch first: any access in `$FE00-$FF7F`, an interrupt
+dispatch, a halted CPU about to compute its own horizon, the OAM-corruption
+hook, a speed switch, a save state and the frame boundary. So `DIV`, `TIMA`,
+`LY`, `STAT` and `NR52` are exact *at the instant a program reads them*, which
+is the only instant that matters to a cartridge — Gen 1's `Random_` reads
+`rDIV`, and it reads it through `read_at`.
+
+Measured: **583 flushes a frame against 8,753 per-instruction calls**, an
+average batch of 124 T-cycles (31 M-cycles), on an overworld save state.
+
+### 18.2 The counter that unblocked it, and the latch it found
+
+The first working build batched **nothing**: `refuse-oamdma` fired on all 8,753
+flushes a frame. `oam_dma_busy` is a *cache* of `!oam_dma.idle()`, and
+`oam_dma_cycles` — the only path a machine with `instruction-bus` on ever takes
+— returned early when the transfer finished **without clearing it**. So the flag
+latched true for the rest of the session after the game's first OAM DMA. It
+cost the default machine nothing (`bus_tick` clears it there), it cost
+`instruction-bus` a wasted call per instruction, and it made the horizon
+unreachable. **Print the counter first**, again.
+
+### 18.3 The one-call-site rule
+
+The 5 % that took longest to find is written up in
+[the ledger §3a](measured/speed-ledger.md). Short version: **the
+per-instruction body must have exactly one call site.** It is ~4 KiB of machine
+code inlined into `Gameboy::frame`, and every way of reaching it from a second
+place — outlined, `#[inline(always)]`-duplicated, or reached through a
+zero-length call of its own wrapper — cost 5-9 % of the accurate frame. The
+flush path is therefore its **own smaller function**
+(`flush_peripherals`), which omits exactly the two things a batch refuses to
+run through. The same rule bit `Timer::do_cycle` one level down: giving it a
+second caller took it out of `Gameboy::frame` too, and it is
+`#[inline(always)]` now.
+
+`nm -C --size-sort -S` before and after is the two-second test that finds this:
+a symbol that was not there before is a function that used to be inlined.
+
+### 18.4 What it is worth, and what it costs
+
+Best of eight 25,000-frame rounds, one P-core, thread CPU clock, interleaved
+against a binary built from the parent commit, load average 4.3-6.9:
+
+| | accurate | `GB_SPEED=speed` |
+|---|---:|---:|
+| cold boot, 25,000 frames | 0.0421 → **0.0431** (−2.3 %) | 0.0375 → **0.0331** (+13.3 %) |
+| an overworld state | 0.1152 → **0.1171** (−1.6 %) | 0.1005 → **0.0830** (+21.1 %) |
+
+**The preset against the accurate machine is +27 % cold and +39 % on the
+overworld state.** The −2 % in the left column is what having the flag costs a
+machine that does not use it, and it is [§3b of the
+ledger](measured/speed-ledger.md).
+
+Certification is in [`docs/modes.md`](modes.md) §4b. The two claims worth
+repeating here:
+
+* **It changes nothing that `instruction-bus` had not already changed.** Over
+  92 real Pokémon Blue save states, frame hash and work-RAM hash are
+  byte-identical between the two; the 26-link Pewter chain runs identically at
+  three seeds; the 91-check GBSelfTest cartridge and the 18-check conformance
+  action lose exactly the same rows and no others.
+* **It is in the preset** because it is *as safe as* the flag already there and
+  worth about a fifth of the frame on top of it.
+
+### 18.5 And what is still true
+
+The default is not allowed to pay for a flag it does not use, so the residual
+cost on the accurate machine is measured and stated rather than assumed —
+see [the ledger](measured/speed-ledger.md) §1. Against PyBoy the gap narrows
+and does not close: PyBoy is not cycle-accurate *at all*, and the flag is a
+liberty this emulator takes only when asked.

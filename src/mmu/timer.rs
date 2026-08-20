@@ -387,7 +387,28 @@ impl Timer {
         true
     }
 
+    /// Advance the timer by `ticks` T-cycles.
+    ///
+    /// **One call site, from `MemoryManagementUnit::do_cycle`**, so that this
+    /// stays inlined into `Gameboy::frame` where it has always been. The
+    /// horizon batch's flush path calls [`Timer::do_cycle_cold`] instead;
+    /// giving this one a second caller takes it out of `frame` and costs 3 %
+    /// of the accurate frame, measured — the one-call-site rule in
+    /// `docs/measured/speed-ledger.md` §3a, one level down.
+    #[inline]
     pub fn do_cycle(&mut self, ticks: u32) {
+        self.do_cycle_inner(ticks);
+    }
+
+    /// [`Timer::do_cycle`] behind a call, for the horizon batch's flush.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn do_cycle_cold(&mut self, ticks: u32) {
+        self.do_cycle_inner(ticks);
+    }
+
+    #[inline(always)]
+    fn do_cycle_inner(&mut self, ticks: u32) {
         // Measurement only, compiled out of every shipping build.
         #[cfg(feature = "profile")]
         if crate::profile::timer_skipped() {

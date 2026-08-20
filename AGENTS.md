@@ -3525,6 +3525,68 @@ comment and its attribute, so the `#[cfg]` landed on the wrong item. Exactly the
 already records for `load_session`'s `#[cfg_attr]`. Fixed by deleting the orphan. **When you insert
 an item in `tui.rs`, check what attribute is immediately above it.**
 
+### THE PER-INSTRUCTION BODY MUST HAVE EXACTLY ONE CALL SITE (`MemoryManagementUnit::do_cycle`)
+
+**Full record with the four measurements: [`docs/measured/speed-ledger.md`](docs/measured/speed-ledger.md) §3a.**
+
+`MemoryManagementUnit::do_cycle`'s body is ~4 KiB of machine code and in the
+shipping build it is **inlined into `Gameboy::frame`**, which is the emulator.
+Reach it from a second place and LLVM stops doing that, and the accurate frame
+loses 5-7 % — measured four ways, and **the shape of the second caller does not
+matter**: outlined `#[inline]`, duplicated `#[inline(always)]`, a cold wrapper,
+or a zero-length call of its own wrapper all cost the same. Only "one call
+site, and give the second caller its own smaller function" measured 0 %.
+
+**The corollary bit twice more in one afternoon and is the half worth
+remembering: the same is true of anything the body calls.** `Timer::do_cycle`
+has no symbol in the shipping build because it is inlined into `frame`; adding
+a second caller gave it one and cost 3 %. It has a `do_cycle_cold` entry point
+now for exactly that reason.
+
+**The two-second test is `nm -C --size-sort -S <binary> | grep terminalgb`
+before and after.** A symbol that was not there before is a function that used
+to be inlined, and that is where your missing per cent went. Build with
+`cargo build --release --config 'profile.release.debug=1' --config
+'profile.release.strip=false'` to get the names.
+
+**And a `cargo build … | grep … | head` pipeline can SIGPIPE cargo and leave you
+running a stale binary.** Two measurements were read off one before it was
+noticed — all zeros from a counter that was demonstrably being incremented.
+Redirect to a file and `tail` it.
+
+### The horizon batch — PyBoy's shape as a named flag (`SpeedFlags::horizon_batch`)
+
+**Reader-facing: [`docs/modes.md`](docs/modes.md) §4a/§4b (what it trades and
+the certification), [`docs/throughput.md`](docs/throughput.md) §18 (how it was
+built).** The peripherals advance once per **horizon** — the distance to the
+next point at which any of them could do something the CPU can see — instead of
+once per instruction. That is `MemoryManagementUnit::idle_mcycles`, which this
+emulator has had for a halted CPU since 2026, asked of a *running* one.
+
+- **What makes it safe is the flush list, not the horizon.** Every observation
+  empties the batch first: any access in `$FE00-$FF7F`, an interrupt dispatch, a
+  halted CPU about to compute its own horizon, the OAM-corruption hook, a speed
+  switch, a save state and the frame boundary. **Add a new reader of a
+  peripheral and you must add its flush** — the failure is silent and looks like
+  a game's RNG drifting, because Gen 1's `Random_` reads `rDIV` through
+  `read_at`.
+- **A write in `$FE00-$FF7F` also throws the horizon away**, because a write to
+  `DIV`, `TAC`, `LCDC`, `LYC`, `STAT`, `$FF46` or `$FF55` moves the horizon
+  itself. Reads do not need it; writes do.
+- **It includes the `instruction-bus` liberty by construction** and
+  `set_speed_flags` enforces that: a horizon computed at the last flush is only
+  valid while nothing advances a peripheral behind its back, and the per-access
+  tick does exactly that.
+- **`oam_dma_busy` was a latch and nobody had noticed**, because it only
+  mattered under `instruction-bus`: `oam_dma_cycles` returned early when the
+  transfer finished without clearing the cache, so the flag stayed true for the
+  rest of the session after the game's first OAM DMA. It made the horizon
+  unreachable — `refuse-oamdma` fired on 8,753 of 8,753 flushes a frame — and
+  **a counter is what found it**, not reading the code.
+- **`pending_ticks`/`run_horizon` are machine *position*, never machine state.**
+  Not serialised: a state is always saved with the batch empty
+  (`flush_for_observer`), and a load starts a fresh one.
+
 ## Portability: the core RUNS on other architectures, and on a PSP (`docs/portability.md`)
 
 **Full measured report, with the honest gaps: [`docs/portability.md`](docs/portability.md).**

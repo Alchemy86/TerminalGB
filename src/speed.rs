@@ -55,6 +55,39 @@ pub struct SpeedFlags {
     /// touch the OAM page with the increment/decrement unit.
     pub no_oam_bug: bool,
 
+    /// Advance the peripherals once per **horizon** — the distance to the next
+    /// point at which any of them could do something the CPU can see — instead
+    /// of once per CPU instruction.
+    ///
+    /// This is the shape PyBoy uses and is where its lead comes from
+    /// (`docs/measured/against-the-field.md` §4): each peripheral publishes a
+    /// horizon, the CPU is run to the nearest one, and everything is caught up
+    /// together. Our idle batch already does it for a *halted* CPU
+    /// (`MemoryManagementUnit::idle_mcycles`); this does it for a running one.
+    ///
+    /// **It includes the [`Self::instruction_bus`] liberty by construction**, so
+    /// asking for it alone still turns the per-access bus off: a horizon
+    /// computed at the last flush is only valid while nothing advances the
+    /// timer behind its back, and the per-access tick does exactly that.
+    ///
+    /// *Affects:* every observation that is *not* routed through one of the
+    /// flush points below, which in practice means anything measuring a
+    /// peripheral against a **bus event this emulator does not model as an
+    /// observation**. Concretely, on top of what `instruction-bus` already
+    /// costs: an OAM-DMA bus conflict raised mid-batch, a VRAM/OAM access
+    /// timed against a mode boundary finer than the PPU's own horizon, and any
+    /// ROM whose verdict depends on peripheral state being current at a cycle
+    /// no register read or write lands on. Conformance rows **will** move under
+    /// it — `docs/modes.md` names which.
+    ///
+    /// *Does not affect:* anything read back through a register. Every
+    /// `$FE00-$FF7F` access, every interrupt dispatch, every halt, every save
+    /// state and every frame boundary flushes the batch first, so `DIV`,
+    /// `TIMA`, `LY`, `STAT`, `NR52` and the rest are **exact at the instant a
+    /// program reads them** — which is what keeps a game's own arithmetic, and
+    /// therefore its work RAM, byte-identical.
+    pub horizon_batch: bool,
+
     /// Freeze the APU's state machines as well as its output.
     ///
     /// *Affects:* everything a program can read back from the sound chip —
@@ -77,6 +110,7 @@ impl SpeedFlags {
     /// The accurate machine: every shortcut off. Also [`Default`].
     pub const NONE: Self = Self {
         instruction_bus: false,
+        horizon_batch: false,
         no_oam_bug: false,
         no_apu_state: false,
     };
@@ -88,6 +122,10 @@ impl SpeedFlags {
     /// certified. `no_apu_state` is deliberately absent — it fails that test.
     pub const PRESET: Self = Self {
         instruction_bus: true,
+        // Earned by certification: see `docs/modes.md`. It subsumes
+        // `instruction_bus`, which is left `true` above so the preset still
+        // reads as the set of liberties it takes rather than as one name.
+        horizon_batch: true,
         // Measured at **0.0 %** on Pokémon Blue: the OAM-bug hook only fires
         // when a 16-bit register points into `$FE00-$FEFF`, which this
         // workload never does, so the preset would be trading real accuracy
@@ -104,12 +142,17 @@ impl SpeedFlags {
     }
 
     /// Every flag's name, in table order.
-    pub const NAMES: &'static [&'static str] =
-        &["instruction-bus", "no-oam-bug", "no-apu-state"];
+    pub const NAMES: &'static [&'static str] = &[
+        "instruction-bus",
+        "horizon-batch",
+        "no-oam-bug",
+        "no-apu-state",
+    ];
 
     fn set_by_name(&mut self, name: &str, on: bool) -> bool {
         match name {
             "instruction-bus" => self.instruction_bus = on,
+            "horizon-batch" => self.horizon_batch = on,
             "no-oam-bug" => self.no_oam_bug = on,
             "no-apu-state" => self.no_apu_state = on,
             _ => return false,
@@ -163,6 +206,7 @@ impl SpeedFlags {
             .copied()
             .filter(|n| match *n {
                 "instruction-bus" => self.instruction_bus,
+                "horizon-batch" => self.horizon_batch,
                 "no-oam-bug" => self.no_oam_bug,
                 "no-apu-state" => self.no_apu_state,
                 _ => false,
@@ -195,7 +239,7 @@ mod tests {
         assert_eq!(SpeedFlags::parse("speed").0, SpeedFlags::PRESET);
         assert_eq!(
             SpeedFlags::PRESET.spec(),
-            "instruction-bus",
+            "instruction-bus,horizon-batch",
             "the preset must not quietly grow a flag"
         );
         // Through `parse` rather than the constant, so these read as tests
@@ -227,6 +271,20 @@ mod tests {
         let (on, _) = SpeedFlags::parse("no-apu-state");
         assert!(on.no_apu_state);
         assert!(!on.instruction_bus, "one flag is not the preset");
+    }
+
+    #[test]
+    fn the_horizon_batch_subsumes_the_instruction_bus_liberty() {
+        // Not enforced in `SpeedFlags` — `last wins` has to keep working, so
+        // `horizon-batch,-instruction-bus` must still parse to exactly that —
+        // but the machine takes both, because a horizon computed at the last
+        // flush is only valid while nothing advances a peripheral behind its
+        // back. `MemoryManagementUnit::set_speed_flags` is where that lives;
+        // this pins the parse half so the two cannot drift.
+        let (f, bad) = SpeedFlags::parse("horizon-batch,-instruction-bus");
+        assert!(bad.is_empty());
+        assert!(f.horizon_batch && !f.instruction_bus);
+        assert_eq!(f.spec(), "horizon-batch");
     }
 
     #[test]

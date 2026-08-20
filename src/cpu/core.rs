@@ -421,6 +421,10 @@ impl Cpu<'_> {
             return 0;
         }
         self.ime = false;
+        // A dispatch steps the PPU with the bus and pushes `PC` through `wb`,
+        // so anything a horizon batch is still holding has to land first —
+        // see `MemoryManagementUnit::flush_pending`.
+        self.memory.flush_pending();
 
         // Dispatch is **5 M-cycles**, and where the two PC pushes fall inside
         // them is observable: Mooneye `acceptance/intr_timing` states "serving
@@ -538,6 +542,9 @@ impl Cpu<'_> {
             // one becoming possible — often a whole mode-3 span. Exactly
             // equivalent, and the difference between 42 fps and full speed on a
             // handheld: see `MemoryManagementUnit::idle_mcycles`.
+            // The halt horizon is measured from where the peripherals *are*,
+            // so land the batch before asking for it.
+            self.memory.flush_pending();
             let mut idle = self.memory.idle_mcycles();
             // The HALT a CGB speed switch runs through ends by itself after
             // `SPEED_SWITCH_HALT_TICKS`, with no interrupt involved — so the
