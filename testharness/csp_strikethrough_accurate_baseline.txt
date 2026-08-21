@@ -22,5 +22,5 @@
 #
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 
-strikethrough@cgb = FAIL diff=7
-strikethrough@dmg = FAIL diff=7
+strikethrough@cgb = PASS
+strikethrough@dmg = PASS

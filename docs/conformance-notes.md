@@ -23,6 +23,89 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-21 — the OAM DMA drives the address bus the PPU reads OAM on
+
+**Shootout 238 → 239 / 264** (`ashiepaws/strikethrough.gb`, the first row that
+suite has ever scored); Gambatte `oamdma/late_sp*` **23 → 27 of 46** and the
+whole suite **3613 → 3617 of 5225, zero losses**; the in-repo `strikethrough`
+rows **FAIL diff=7 → PASS on both consoles**. Everything else byte-identical in
+both picture modes: Mooneye 103/103 + 8/8, Mealybug 79 rows per-row, SameSuite
+76, `cpp` 4/4, the other twelve c-sp suites, `testroms`, `audiocapture`
+including every hash, `savestate`, `battery`, `ppuengines`, 892 lib tests.
+
+**Symptom** — a program that starts an OAM DMA and lets it run across the next
+line's object scan gets the wrong objects on that line: the emulator finds
+whatever the transfer has written so far, hardware finds something else
+entirely. Visible as a missing sprite (`strikethrough.gb` draws a line through
+its own text and we drew nothing), and as the wrong mode-3 length wherever the
+count of objects on a line differs.
+
+**Caught by** — `ashiepaws/strikethrough.gb` (7 pixels on one scanline, so it
+needs a screenshot compare, not a serial verdict) and Gambatte's 46
+`oamdma/late_sp*` rows, which report `STAT & 3` instead and are the ones with
+the resolution. **Nothing in the in-repo harness catches it**, which is why the
+new check went into the GBSelfTest cartridge (`GB-DMA-06`).
+
+**Hardware behaviour, in three parts.**
+
+1. **The DMA controller has no address bus of its own.** While it runs it drives
+   the OAM address lines, so a PPU read on the same wires gets the byte at the
+   address the *transfer* is driving, not the one the PPU asked for. Only the
+   low bit is the PPU's — the OAM data path fetches a Y/X (or tile/flags) pair
+   at a time, so the pair comes from the DMA and the half from the PPU:
+   `oam[(dest & ~1) | (addr & 1)]`. This is the **address** half of the rule
+   this file already recorded for the **data** half of CPU accesses on
+   2026-08-18 ("the DMA controller has no bus of its own"), and of the work-RAM
+   `A12` finding beside it. Modelled after SameBoy's `oam_read`
+   (`Core/display.c`), reimplemented here as `Gpu::oam_read`.
+
+2. **The OAM scan therefore does not read OAM at all while a transfer runs — the
+   Y/X latch keeps whatever it held**, which is the last entry of the *previous*
+   line's scan, or the last tile number a mode-3 object fetch put there (one bus,
+   reused). Every one of the forty slots is then judged against that single stale
+   pair. That is the whole of `strikethrough.gb`: it starts a transfer in the
+   HBlank before a line whose forty objects all sit on it, so the latch is left
+   holding object 39's `Y`/`X` and the next line finds ten phantom objects
+   stacked at that one `X`, each taking its tile number off the transfer's
+   address bus. SameBoy calls the latch `mode2_y_bus`/`mode2_x_bus`.
+
+3. **The controller takes the bus two dots after the write to `$FF46`, not when
+   the first byte lands two M-cycles later.** *Derived from eight ROMs, not
+   chosen.* Gambatte's `late_sp{00,01,02,39}x_{1,2}` each place the write one
+   M-cycle either side of one scan slot and report whether the object was found.
+   Writing `B(t)` for the dot the bus is taken at DMA phase `t`, `sp00x_2` finds
+   object 0 (`B > -4` against our own edge at `-4`) and `sp01x_1` misses object 1
+   (`B <= -2`); the other six agree, and `sp02x_1`/`sp39x_1` — which have the
+   same DMA phase as their siblings but a different scan slot — are what rules
+   out every uniform shift. Sweeping the constant over the whole 811-row
+   `oamdma/` group gives 742 at 0, **744 at 1 and 2**, 738 at 3 and 4: the scan
+   reads on even dots, so 1 and 2 are the same machine and 2 is the shipped
+   value.
+
+**One further correction fell out of it.** The object's tile number and flags
+are read **one dot into the fetch**, not on its first dot (`obj_fetch_dot`,
+`obj_t == 2`). Nothing measures the difference unless a transfer is running
+underneath — the read then comes off its address bus, and one dot moves it by a
+whole source byte. `strikethrough.gb`'s DMG column is the only row in any suite
+that can see it: it is the difference between 1 wrong pixel and 0. Measured
+free everywhere else — Mealybug's 79 per-row pixel counts and Gambatte's 5,225
+rows are identical at `obj_t` 1, 2 and 3. SameBoy reads them in the same place.
+
+**Not serialised, deliberately.** `dma_owns_oam`, `dma_arm` and `dma_dest` are
+republished by `MemoryManagementUnit::oam_dma_tick` every M-cycle a transfer
+runs, and `OamDma`'s own state — which *is* serialised — is what a load restores
+them from. `Gpu::oam_bus_y`/`oam_bus_x` are the opposite: they survive from one
+scanline into the next by design, so they are live machine state and
+`savestate::FORMAT_VERSION` is **23**.
+
+**Carries into the tool** — `GB-DMA-06` in the GBSelfTest cartridge: with ten
+objects sitting on the measured line and a transfer covering that line's scan,
+mode 3 must stay at its no-objects length, because the scan never sees them. It
+needs no screenshot and no reference image, which the two public ROMs that
+measure this both do.
+
+---
+
 ## 2026-08-20 — `identical` is the default picture engine
 
 Not a fix — a decision, recorded here because it moves every score this file

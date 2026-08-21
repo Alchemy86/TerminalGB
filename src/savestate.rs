@@ -125,7 +125,7 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// eighteen dots of a scanline.
 /// v22: and whether the window has pushed its first tile yet, which is what
 /// exempts that one tile from the window pixel-insertion glitch.
-pub const FORMAT_VERSION: u16 = 22;
+pub const FORMAT_VERSION: u16 = 23;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

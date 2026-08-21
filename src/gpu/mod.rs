@@ -269,6 +269,22 @@ enum PrioType {
     Normal,
 }
 
+/// How long after the write to `$FF46` the DMA controller takes the OAM
+/// address lines away from the PPU, in dots.
+///
+/// **Derived, not chosen.** Gambatte's eight `oamdma/late_sp{00,01,02,39}x_{1,2}`
+/// ROMs each place the write one M-cycle either side of one OAM-scan slot and
+/// report whether the object was found; writing `B(t)` for the dot the bus is
+/// taken at DMA phase `t`, they give `B > -4` (`sp00x_2` finds object 0) and
+/// `B <= -2` (`sp01x_1` misses object 1) against our own edge at `-4`, and the
+/// other six agree. So the bus is taken **two dots after the write**, which is
+/// the only value in that band the scan can resolve (it reads on even dots, so
+/// 1 and 2 are the same machine).
+const DMA_OAM_ARM_DOTS: u8 = 2;
+
+/// [`Gpu::dma_arm`] when nothing is armed.
+const NO_DMA_ARM: u8 = u8::MAX;
+
 #[derive(Debug)]
 pub struct Gpu {
     mode: u8,
@@ -336,6 +352,33 @@ pub struct Gpu {
     /// the comparison clock stops, so the flag keeps whatever it held and a
     /// new `LYC` cannot move it. See [`Gpu::refresh_lyc_match`].
     lyc_match: bool,
+    /// Dots left before an armed transfer takes the OAM address lines;
+    /// [`NO_DMA_ARM`] when nothing is armed. See [`DMA_OAM_ARM_DOTS`].
+    dma_arm: u8,
+    /// A transfer has been requested or is running — the window in which the
+    /// DMA controller owns the OAM address lines. It opens on the write to
+    /// `$FF46`, **two M-cycles before the first byte lands**, and that is not
+    /// a detail: Gambatte's `oamdma/late_sp*` family is 46 rows of exactly
+    /// where this edge is.
+    dma_owns_oam: bool,
+    /// How far the transfer has got: `0` before the first byte, otherwise the
+    /// number of bytes written (1..=`0xA0`). Published by
+    /// `MemoryManagementUnit::oam_dma_tick`, which flushes the PPU first, so
+    /// it is always current for the dots that follow.
+    ///
+    /// **The DMA drives the OAM address bus, and the PPU is on the other end
+    /// of it** — see [`Gpu::oam_read`]. Neither field is serialised: both are
+    /// republished every M-cycle a transfer runs, and `OamDma`'s own state
+    /// (which is serialised) is what a load restores them from.
+    dma_dest: u8,
+    /// The OAM data bus as the PPU last latched it — the Y byte during the
+    /// scan and the **tile number** during a mode-3 object fetch, because
+    /// hardware has one bus and reuses it. Live machine state: it survives
+    /// from one scanline into the next, and that is the whole of
+    /// `strikethrough.gb`.
+    oam_bus_y: u8,
+    /// The X half of the same latch. Written only by the OAM scan.
+    oam_bus_x: u8,
     /// Set when `LCDC` bit 7 goes 0→1: the scanline the PPU restarts on has
     /// **no OAM scan**. `STAT` reads mode 0 where every other line reads
     /// mode 2, and the mode-2 STAT source does not strobe. Cleared as soon as
@@ -423,6 +466,11 @@ impl Gpu {
             stat_line: false,
             stat_irq_mid_mcycle: false,
             lyc_match: false,
+            dma_arm: NO_DMA_ARM,
+            dma_owns_oam: false,
+            dma_dest: 0,
+            oam_bus_y: 0,
+            oam_bus_x: 0,
             skip_first_oam: false,
             stop_fill: None,
             render_mode: RenderMode::from_env(),
@@ -610,6 +658,67 @@ impl Gpu {
         self.mode < 2 || (self.mode == 2 && self.modeclock >= OAM_DOTS)
     }
 
+    /// A write to `$FF46`: the controller takes the OAM address lines
+    /// [`DMA_OAM_ARM_DOTS`] dots later. See [`Gpu::dma_owns_oam`].
+    #[inline]
+    pub(crate) fn arm_oam_dma(&mut self) {
+        self.dma_arm = DMA_OAM_ARM_DOTS;
+    }
+
+    /// Publish how far the transfer has got — see [`Gpu::dma_dest`].
+    #[inline]
+    pub(crate) fn set_oam_dma_dest(&mut self, dest: u8) {
+        self.dma_dest = dest;
+    }
+
+    /// The transfer is over: the CPU has its OAM back.
+    #[inline]
+    pub(crate) fn clear_oam_dma(&mut self) {
+        self.dma_owns_oam = false;
+        self.dma_arm = NO_DMA_ARM;
+        self.dma_dest = 0;
+    }
+
+    /// Spend `dots` of the arming delay, taking the bus when it runs out.
+    #[inline]
+    pub(super) fn tick_dma_arm(&mut self, dots: u32) {
+        if self.dma_arm == NO_DMA_ARM {
+            return;
+        }
+        if (self.dma_arm as u32) <= dots {
+            self.dma_arm = NO_DMA_ARM;
+            self.dma_owns_oam = true;
+        } else {
+            self.dma_arm -= dots as u8;
+        }
+    }
+
+    /// One OAM byte as **the PPU** sees it.
+    ///
+    /// The DMA controller has no address bus of its own: while a transfer
+    /// runs it drives the OAM address lines, and a PPU read on the same wires
+    /// gets whatever byte sits at the address the transfer is driving — not
+    /// the one the PPU asked for. Only the low bit survives, because the OAM
+    /// data path is 16 bits wide and fetches a Y/X (or tile/flags) pair at a
+    /// time; the *pair* comes from the DMA and the half from the PPU.
+    ///
+    /// The first and last M-cycles of a transfer read normally. That is
+    /// SameBoy's reading too (`Core/display.c`, `oam_read`, whose own comment
+    /// records the two ends as unverified), and nothing in the suites
+    /// distinguishes them.
+    ///
+    /// This is the address-bus half of the rule
+    /// `MemoryManagementUnit::dma_conflict` already applies to the data bus
+    /// for CPU accesses (`docs/conformance-notes.md`, 2026-08-18).
+    #[inline]
+    fn oam_read(&self, addr: usize) -> u8 {
+        let d = self.dma_dest as usize;
+        if d > 0 && d < 0xA0 {
+            return self.voam[(d & !1) | (addr & 1)];
+        }
+        self.voam[addr]
+    }
+
     /// Take away (or give back) the PPU's VRAM access for the duration of
     /// STOP mode — see the [`Gpu::stop_fill`] field. `None` restores normal
     /// rendering.
@@ -690,6 +799,8 @@ impl Gpu {
         w.bool(self.stat_irq_mid_mcycle);
         w.bool(self.lyc_match);
         w.bool(self.skip_first_oam);
+        w.u8(self.oam_bus_y);
+        w.u8(self.oam_bus_x);
         // STOP mode can be live at a frame boundary (the CPU sits there until
         // a button is pressed), so the blanked display has to survive a state.
         w.bool(self.stop_fill.is_some());
@@ -772,6 +883,8 @@ impl Gpu {
         self.stat_irq_mid_mcycle = r.bool()?;
         self.lyc_match = r.bool()?;
         self.skip_first_oam = r.bool()?;
+        self.oam_bus_y = r.u8()?;
+        self.oam_bus_x = r.u8()?;
         let stopped = r.bool()?;
         let fill = r.u8()?;
         self.stop_fill = if stopped { Some(fill) } else { None };

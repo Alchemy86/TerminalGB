@@ -1114,6 +1114,7 @@ impl<'a> MemoryManagementUnit<'a> {
         if self.oam_dma.idle() {
             self.dma_bus = DmaBus::None;
             self.oam_dma_busy = false;
+            self.gpu.clear_oam_dma();
             return;
         }
         if let Some((page, i)) = self.oam_dma.step() {
@@ -1131,8 +1132,14 @@ impl<'a> MemoryManagementUnit<'a> {
             // Straight to the PPU: `wb` would refuse it, since OAM belongs to
             // the DMA while it runs.
             self.gpu.wb(0xFE00 + i as u16, b);
+            // The PPU is on the other end of the OAM address bus the transfer
+            // is driving — see [`crate::gpu::Gpu::oam_read`]. Published after
+            // the write, so `dest` counts the bytes that have landed.
+            self.gpu.set_oam_dma_dest(i + 1);
         } else {
             self.dma_bus = DmaBus::None;
+            // Requested but not yet copying.
+            self.gpu.set_oam_dma_dest(0);
         }
     }
 
@@ -2492,6 +2499,10 @@ impl<'a> MemoryManagementUnit<'a> {
             0xFF46 => {
                 self.oam_dma.request(value);
                 self.oam_dma_busy = !self.oam_dma.idle();
+                // The controller takes the OAM address lines a couple of dots
+                // from now, not when the first byte lands two M-cycles later —
+                // see [`crate::gpu::Gpu::dma_owns_oam`].
+                self.gpu.arm_oam_dma();
             }
             // Writing bit 0 unmaps the boot ROM, for good: there is no way back
             // short of a reset, which is why the boot ROM's last instruction is

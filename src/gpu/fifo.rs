@@ -369,6 +369,7 @@ impl Gpu {
                 let step = left.min(to_eol);
                 self.modeclock += step;
                 left -= step;
+                self.tick_dma_arm(step);
                 if self.modeclock >= LINE_DOTS {
                     self.next_line();
                 }
@@ -383,6 +384,7 @@ impl Gpu {
                 continue;
             }
             self.accurate_dot();
+            self.tick_dma_arm(1);
             left -= 1;
         }
     }
@@ -472,11 +474,17 @@ impl Gpu {
             // Dots 0..79 -> entries 0..39, one per two dots: the even ones.
             let mut dot = from + (from & 1);
             while dot < to {
+                // The span may straddle the dot an armed OAM DMA takes the
+                // address bus on, and the scan is the one thing in mode 2 that
+                // can tell: `oamdma/late_sp*` is 46 rows of exactly that edge.
+                self.tick_dma_arm(dot - self.modeclock);
+                self.modeclock = dot;
                 self.oam_scan_entry((dot / 2) as usize);
                 dot += 2;
             }
         }
 
+        self.tick_dma_arm(to - self.modeclock);
         self.modeclock = to;
         if to == OAM_DOTS {
             // Mode 3 begins on the next dot; set the pipeline up now so its
@@ -508,19 +516,35 @@ impl Gpu {
     /// them fill the 80-dot mode; `LCDC.2` is read live, which is what
     /// `m3_lcdc_obj_size_change` changes underneath it.
     fn oam_scan_entry(&mut self, index: usize) {
+        // **The scan reads the OAM bus, and while an OAM DMA runs it does not
+        // get to.** The DMA owns the address lines, so the Y/X latch keeps
+        // whatever it held — which is the last entry of the *previous* line's
+        // scan, or the last tile number a mode-3 object fetch put there. Every
+        // slot the scan then walks is judged against that one stale pair.
+        //
+        // That is the whole of `strikethrough.gb`: it starts a transfer in the
+        // HBlank before a line whose forty objects all sit on it, so the latch
+        // is left holding object 39's `Y`/`X` and the next line finds ten
+        // phantom objects stacked at that single `X`.
+        //
+        // Modelled after SameBoy's `mode2_y_bus`/`mode2_x_bus`
+        // (`Core/display.c`, `add_object_from_index`); reimplemented here.
+        if !self.dma_owns_oam {
+            self.oam_bus_y = self.oam_read(index * 4);
+            self.oam_bus_x = self.oam_read(index * 4 + 1);
+        }
         if index >= 40 || self.pipe.nscan >= 10 {
             return;
         }
-        let base = index * 4;
-        let y = self.voam[base] as i32 - 16;
+        let y = self.oam_bus_y as i32 - 16;
         let line = self.line as i32;
         if line < y || line >= y + self.sprite_size as i32 {
             return;
         }
         let n = self.pipe.nscan as usize;
         self.pipe.scan[n] = ScanSprite {
-            y: self.voam[base],
-            x: self.voam[base + 1],
+            y: self.oam_bus_y,
+            x: self.oam_bus_x,
             oam: index as u8,
         };
         self.pipe.nscan += 1;
@@ -944,13 +968,16 @@ impl Gpu {
         self.pipe.fetched |= 1 << i;
         self.pipe.obj_wait = penalty;
         self.pipe.obj_t = 1;
-        self.read_obj_attributes();
     }
 
     fn read_obj_attributes(&mut self) {
         let oam = self.pipe.scan[self.pipe.obj_i as usize].oam as usize * 4;
-        self.pipe.obj_tile = self.voam[oam + 2];
-        self.pipe.obj_flags = self.voam[oam + 3];
+        // Through [`Gpu::oam_read`], because a transfer running underneath the
+        // fetch drives the address the PPU gets — and one bus, so the tile
+        // number lands in the same latch the scan's `Y` came out of.
+        self.oam_bus_y = self.oam_read(oam + 2);
+        self.pipe.obj_tile = self.oam_bus_y;
+        self.pipe.obj_flags = self.oam_read(oam + 3);
     }
 
     /// One dot of a sprite fetch. Six dots, the same three reads as a
@@ -963,6 +990,14 @@ impl Gpu {
         }
         self.pipe.obj_t += 1;
         match self.pipe.obj_t {
+            // **The attributes are read one dot into the fetch, not on its
+            // first dot.** Nothing measures the difference unless an OAM DMA
+            // is running underneath — the read then comes off the transfer's
+            // address bus, and one dot moves it by a whole source byte.
+            // `strikethrough.gb` is that one dot, and its DMG column is the
+            // only row in any suite that can see it; SameBoy reads them in the
+            // same place (`Core/display.c`, after its `GB_SLEEP(display, 41, 1)`).
+            2 => self.read_obj_attributes(),
             3 => self.obj_plane(false),
             5 => self.obj_plane(true),
             _ => {}

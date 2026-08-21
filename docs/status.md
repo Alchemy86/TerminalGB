@@ -29,12 +29,12 @@ yourself proves nothing.
 | [SameSuite](measured/scoreboard.md) | **73** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **26** / 79 | 3 / 79 | mid-scanline picture timing — pixel-exact rows |
-| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3613** / 5225 | 3173 / 5225 | the largest suite there is — mostly PPU, per console |
+| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3617** / 5225 | 3173 / 5225 | the largest suite there is — mostly PPU, per console |
 | [GBMicrotest](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **338** / 513 | 251 / 513 | low-level timing probes, each writing its own verdict byte |
 | [AGE test roms](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **8** / 59 | 3 / 59 | timing, per console revision |
 | Mooneye GB — wilbertpol fork | **82** / 117 | 62 / 117 | the 2016 suite, a different population from Gekkio's |
 | cgb-acid2 + cgb-acid-hell | **1** / 2 | 1 / 2 | the Color siblings of dmg-acid2, judged in colour |
-| Bully / Scribbltests / Strikethrough / TurtleTests / little-things-gb / MBC3 Tester / rtc3test | **18** / 24 | 18 / 24 | screenshot-judged odds and ends, plus the cartridge clock |
+| Bully / Scribbltests / Strikethrough / TurtleTests / little-things-gb / MBC3 Tester / rtc3test | **20** / 24 | 18 / 24 | screenshot-judged odds and ends, plus the cartridge clock |
 
 **Two [picture modes](picture-modes.md), both gated in CI.** `identical` is the default since 2026-08-20 and runs the real hardware pixel pipeline dot by dot, scoring **75/75** on Mooneye `acceptance` and **26/79** on Mealybug; `standard` draws a whole scanline at a time for about an eighth of the PPU cost and is what small hardware and headless collectors should run. `same` above means the suite has one baseline because the mode does not reach what it measures (audio, DMA, mappers, cartridge clocks) — those three are gated in both modes against that one file. `identical` wins overwhelmingly and no longer loses `cgb-acid2`; four small Gambatte groups are still net-negative by eight rows between them, against 891 gains ([which rows, and how each moved](measured/scoreboard.md#the-identical-picture-mode-scores-differently--and-mostly-dominates)).
 <!-- suite-scores:end -->

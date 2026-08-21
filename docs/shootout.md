@@ -17,7 +17,7 @@ Measured against the shootout's own ROMs, its own reference screenshots and its
 own pass criterion, re-scored from a fresh clone of the shootout on
 **2026-08-20**, the day `identical` became the default picture engine:
 
-> ### **238 / 264 — 90.2 %**
+> ### **239 / 264 — 90.5 %**
 >
 > (**223 / 264 — 84.5 %** on `standard`, which is where this page stood until
 > that day. The flip is **fifteen gains and zero losses** row for row; the
@@ -31,7 +31,7 @@ That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
 | 2 | Emulicious | 254/261 | 97.3 |
 | 3 | SameBoy | 253/264 | 95.8 |
 | 4 | Beaten Dying Moon | 247/264 | 93.6 |
-| **5** | **this emulator** | **238/264** | **90.2** |
+| **5** | **this emulator** | **239/264** | **90.5** |
 | 6 | GSE | 218/264 | 82.6 |
 | 7 | bgb | 205/264 | 77.7 |
 | 8 | GambatteSpeedrun | 169/207 | 81.6 |
@@ -55,14 +55,20 @@ By suite:
 | `ax6` | 3 / 3 | 3 / 3 | `rtc3test` |
 | `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` needs mid-scanline writes; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
-| `ashiepaws` | 0 / 3 | 0 / 3 | |
+| `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
 | `mealybug-tearoom-tests` | **8 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 16 still red, **9 cannot be won by PPU work at all** — see §1b |
-| **total** | **238 / 264** | 223 / 264 | |
+| **total** | **239 / 264** | 223 / 264 | |
 
-**Every one of the 26 failures is a documented open area, and 9 of them are not
+**Every one of the 25 failures is a documented open area, and 9 of them are not
 ours to win.** Mealybug 16 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
 `cgb-acid-hell`, `daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
-`ashiepaws` 3, SameSuite 2. There is no surprise in the list.
+`ashiepaws` 2, SameSuite 2. There is no surprise in the list.
+
+<sup>`ashiepaws/strikethrough.gb` was the 26th until 2026-08-21, when the OAM
+DMA was given the address bus it drives — the row is 7 pixels on one scanline
+and the whole of it is that a DMA running under an object scan stops the PPU
+reading OAM. It also moved four Gambatte `oamdma/late_sp*` rows, which are the
+same behaviour measured with resolution instead of pixels.</sup>
 
 ### 1a. The fifteen rows the default flip moved
 
