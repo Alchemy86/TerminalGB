@@ -391,6 +391,13 @@ pub struct Gpu {
     /// keeps the access it already holds and carries on drawing normally.
     /// See [`Gpu::set_stop_fill`].
     stop_fill: Option<u8>,
+    /// **One dot of `TILE_SEL` glitch**: set by a `$FF40` write that takes
+    /// `LCDC.4` from 1 to 0 on Color silicon, consumed by a bitplane fetch on
+    /// that same dot ([`PpuRevision::tile_sel_glitch_reads_tile_index`]), and
+    /// cleared by the dot itself. Not serialised — like `idu_share` and the
+    /// OAM DMA's bus fields it is published and consumed inside one M-cycle,
+    /// so it is never live at a frame boundary.
+    pub(super) tile_sel_glitch: bool,
     /// Which rendering engine is running — see [`RenderMode`]. Read once per
     /// `do_cycle`, never per pixel.
     render_mode: RenderMode,
@@ -473,6 +480,7 @@ impl Gpu {
             oam_bus_x: 0,
             skip_first_oam: false,
             stop_fill: None,
+            tile_sel_glitch: false,
             render_mode: RenderMode::from_env(),
             render_pixels: true,
             pipe: Pipeline::default(),
@@ -1607,6 +1615,10 @@ impl Gpu {
                 self.lcd_on = v & 0x80 == 0x80;
                 self.win_tilemap = if v & 0x40 == 0x40 { 0x9C00 } else { 0x9800 };
                 self.win_on = v & 0x20 == 0x20;
+                // A Color `TILE_SEL` reset glitches whichever bitplane fetch
+                // shares this dot — see [`Gpu::tile_sel_glitch`].
+                self.tile_sel_glitch =
+                    !self.gbmode.is_dmg() && self.tilebase == 0x8000 && v & 0x10 == 0;
                 self.tilebase = if v & 0x10 == 0x10 { 0x8000 } else { 0x8800 };
                 self.bg_tilemap = if v & 0x08 == 0x08 { 0x9C00 } else { 0x9800 };
                 self.sprite_size = if v & 0x04 == 0x04 { 16 } else { 8 };

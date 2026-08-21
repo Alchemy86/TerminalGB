@@ -23,6 +23,64 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-21 — resetting `TILE_SEL` on a bitplane read makes the tile index the data
+
+**Shootout 240 → 241 / 264**, and the `acid` group is **5 / 5**:
+`cgb-acid-hell.gbc` is pixel-exact, closing the two-pixel row
+[`docs/shootout.md` §1c](shootout.md#1c-the-remaining-25-measured-rather-than-assumed-21-aug-2026)
+named the cheapest on the board. AGE's `m3-bg-lcdc` and `m3-bg-lcdc-nocgb` go
+green with it (`csp_age_accurate` 8 → 10 of 59) and `m3-bg-lcdc-ds` improves
+3,072 → 2,304 px; Mealybug's two CPU CGB C `tile_sel` rows improve 820 → 782 and
+809 → 771. Nothing anywhere got worse. Full working:
+[`docs/mealybug.md` §13](mealybug.md#13-tile_sel-reset-on-a-bitplane-read-the-tile-index-is-the-data-21-aug-2026).
+
+- **Symptom** — a Color game that clears `LCDC.4` inside mode 3 draws a
+  background tile whose bitplane is the tile *number* rather than the tile's
+  pixels. On screen that is a few wrong pixels in one column; nothing else can
+  see it, and both of this emulator's renderers produced the same wrong answer,
+  which is what said from the start that the fault was in neither fetcher.
+- **Caught by** — `acid/cgb-acid-hell`, AGE's `m3-bg-lcdc` group, and Mealybug's
+  `m3_lcdc_tile_sel_change` family. **Nothing in the in-repo harness, and nothing
+  on a DMG.**
+- **Hardware behaviour** — *"On all CGB revisions, excluding CPU CGB D,
+  resetting `TILE_SEL` on the same T-cycle as a bitplane data read will cause the
+  **tile index** to be instead used as the data for that bitplane."* Matt Currie,
+  *The Comprehensive Game Boy PPU Documentation*, `LCDC` § `TILE_SEL` (bit 4) —
+  which ships **inside the Mealybug repository this project already fetches**, so
+  the rule and the reference photographs have the same author. SameBoy models the
+  same split and cites the same page (`Core/display.c`,
+  `data_for_tile_sel_glitch`).
+- **The finding, and it is a lesson about reading your own notes** — the previous
+  pass measured this row down to the byte, wrote down that hardware's high
+  bitplane is `$55` on line 68 and `$49` on line 69, and in the same paragraph
+  wrote down that the tilemap holds `$98A0 = $55` and `$98C0 = $49` on those two
+  lines. **The bytes were the tile numbers, in the note, unrecognised.** What sent
+  the search elsewhere was a correct negative — the commit schedule was swept and
+  the row did not move — and this pass swept the *other* half (the Color
+  fetcher's three read dots, all eight combinations) and it did not move either.
+  Two exhaustive negatives on *timing* are what should have said the answer was
+  not a byte in the tile at all.
+- **`mode::PpuRevision` gained `CgbE` and it is the default.** The boundary here
+  is D against everything else, where the two rules already on that type are
+  C against D-and-later — so `CgbD` could no longer mean "D and later".
+  `CgbE` behaves as `CgbD` did on both older predicates, so **nothing that
+  existed before this change moved**, and `examples/mealybug` still scores the
+  CPU CGB D photographs on a `CgbD`. The split is corroborated by a second
+  author: AGE ships its reference as `m3-bg-lcdc-cgbBCE.png` — B, C and E, and by
+  omission not D — and we pass it now.
+- **CPU CGB D's own rule is left unmodelled on measurement, not on omission.**
+  *"read the bitplane data from the address for bitplane 0"* has two readings and
+  **both were implemented and both measure worse** against the suite's own CPU
+  CGB D photographs (`m3_lcdc_tile_sel_change@CGB-D` 802 → 1,186 px). So does
+  nothing about the **set** direction, whose documented answer is three
+  alternatives with a revision-dependent choice between them that no row here can
+  separate.
+- **Carries into the tool** — three baselines move, every line in the same
+  direction: `csp_cgb-acid-hell_accurate` FAIL → PASS, `csp_age_accurate` two
+  FAIL → PASS and one distance halved, `mealybug_accurate` two distances down.
+  `Gpu::tile_sel_glitch` is not serialised (published and consumed inside one
+  M-cycle, the `idu_share` argument), so `savestate::FORMAT_VERSION` did not move.
+
 ## 2026-08-21 — an object's high bitplane samples `LCDC.2` a dot after its low one
 
 **Shootout 239 → 240 / 264** (`mealybug/m3_lcdc_obj_size_change_scx`, whose DMG

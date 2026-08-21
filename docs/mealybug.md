@@ -1544,3 +1544,96 @@ The obvious repair — charge no tile penalty to an object that is off the left 
 mode 3's length, moves every write against every fetch, and takes the row to **21,836** pixels
 and the suite to 7 / 7 / 7. Come back with a model of the head-of-line object fetch, not a
 constant.
+
+
+## 13. `TILE_SEL` reset on a bitplane read: the tile index is the data (21 Aug 2026)
+
+**`acid/cgb-acid-hell.gbc` is pixel-exact** — the two-pixel row [`docs/shootout.md`
+§1c](shootout.md#1c-the-remaining-25-measured-rather-than-assumed-21-aug-2026) called the
+cheapest on the board, open since 2026-08-18 and measured down to the byte by the crew before
+this one. Shootout **240 → 241 of 264**, and the `acid` group is 5/5. AGE's `m3-bg-lcdc` and
+`m3-bg-lcdc-nocgb` go green with it and `m3-bg-lcdc-ds` improves 3,072 → 2,304 px; Mealybug's
+two CPU CGB C `tile_sel` rows improve 820 → 782 and 809 → 771. Nothing anywhere got worse.
+
+### 13.1 The rule, and it is the Mealybug author's own
+
+> *On all CGB revisions, excluding CPU CGB D, resetting `TILE_SEL` on the same T-cycle as a
+> bitplane data read will cause the **tile index** to be instead used as the data for that
+> bitplane.*
+>
+> — Matt Currie, *The Comprehensive Game Boy PPU Documentation*, `LCDC` § `TILE_SEL` (bit 4).
+> It ships **inside the Mealybug repository this project already fetches**
+> (`the-comprehensive-game-boy-ppu-documentation.md`), so the same person wrote the rule and
+> photographed the references we score against. SameBoy models the same split and cites the
+> same page (`Core/display.c`, `data_for_tile_sel_glitch`).
+
+That is `Gpu::tile_sel_glitch`: a `$FF40` write taking `LCDC.4` from 1 to 0 on Color silicon
+arms one dot, and a bitplane fetch on that dot takes `Pipeline::tile_num` as its byte instead
+of reading VRAM. SameBoy's extra clause is kept — an index with **bit 7 set** falls through to
+the ordinary read.
+
+### 13.2 The two pixels, and why they were unreachable from the fetcher
+
+The previous pass proved the row was *not* a scheduling question: it swept the Color `LCDC`
+commit over all eight of its configurations and the row stayed at two pixels in every one, and
+concluded — correctly — that the fetch resolves to the same address whatever the schedule and
+that the byte at that address is not the byte the reference device had. **This pass added the
+other half of that sweep and it says the same thing**: the Color fetcher's three read dots
+(tile number, low, high) were swept over all eight combinations of 1/2 × 3/4 × 5/6 and the row
+is **two pixels in every one**. Neither *when the write lands* nor *when the read happens* can
+reach it, because the byte hardware used is not in the tile at all.
+
+What it is instead is written in the earlier note without being recognised: hardware's high
+bitplane is `$55` on line 68 and `$49` on line 69, and the same paragraph records the tilemap
+holding **`$98A0 = $55`** and **`$98C0 = $49`** on those two lines. The bytes were the tile
+numbers all along.
+
+### 13.3 `PpuRevision` gained `CgbE`, and this is the only thing that splits it from `CgbD`
+
+The boundary here is **D against everything else** — 0, B, C *and E* substitute the index; D
+alone does something different. That is a third boundary, so `CgbD` could no longer mean "D and
+later":
+
+| predicate | `CgbC` | `CgbD` | `CgbE` (default) |
+|---|:-:|:-:|:-:|
+| `caches_fetcher_y` — `SCY + LY` latched at the tile-number fetch | ✗ | ✓ | ✓ |
+| `late_palette_commit` — a palette write seen a dot later | ✗ | ✓ | ✓ |
+| `tile_sel_glitch_reads_tile_index` | ✓ | **✗** | ✓ |
+
+`CgbE` is the default because CGB-E is the stepping this emulator targets everywhere else, and
+because it behaves as `CgbD` did on the first two rows **nothing that existed before this change
+moved**. `examples/mealybug` still runs its two Color columns as `CgbC` and `CgbD` explicitly,
+so the CPU CGB D photographs are still scored on a CPU CGB D. `cgbDE` resolves to `CgbE`.
+
+The gate on the split is a second suite that names the revisions in its own file names:
+**AGE ships `m3-bg-lcdc-cgbBCE.png`** — B, C and E, and by omission not D — and we pass it now.
+Two independent references, one from each author, agreeing on where the boundary falls.
+
+### 13.4 CPU CGB D's own rule is NOT modelled, and both readings were measured
+
+> *On CPU CGB D, resetting `TILE_SEL` on the same T-cycle as the bitplane 1 data read will cause
+> the PPU to instead read the bitplane data from the address for bitplane 0.*
+
+"The address for bitplane 0" has two readings — the same row in the `$8000` block
+(`addr & !0x1000`) or the low plane's own address (SameBoy's `(addr & !0x1000) - 1`). **Both
+were implemented and both give the identical, worse answer** against the suite's own CPU CGB D
+photographs: `m3_lcdc_tile_sel_change@CGB-D` 802 → 1,186 px and
+`m3_lcdc_tile_sel_win_change@CGB-D` 1,366 → 1,424. So `CgbD` falls through to the ordinary read
+and the rule is left open. Both those rows are block A — they need the boot ROM's `®` glyph
+before their absolute distance means anything — so this is a direction, not a verdict, and a
+third reading is what it wants.
+
+Also unmodelled, deliberately: the **set** direction (`TILE_SEL` 0 → 1 on a read dot), whose
+documented answer is "bitplane 1 data from the most recently drawn sprite, or from the most
+recently drawn tile, or from the read in progress at pixel 159/160 of the previous row" — three
+alternatives with a revision-dependent choice between them, and no row here measures it; and
+SameBoy's separate **double-speed** variant, which glitches on *either* direction over two
+cycles and is what AGE's `m3-bg-lcdc-ds` still measures at 2,304 px.
+
+### 13.5 Cost and blast radius
+
+`Gpu::tile_sel_glitch` is one `bool`, set by a `$FF40` write and cleared by the dot that
+consumes it. **Not serialised** — published and consumed inside one M-cycle, the same argument
+`idu_share` and the OAM DMA's bus fields already make — so `savestate::FORMAT_VERSION` did not
+move. `lo_hi` gains one test on a flag that is false on every dot but the handful a Color game
+resets `LCDC.4` on, and a DMG never sets it at all.

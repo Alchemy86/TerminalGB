@@ -17,7 +17,7 @@ Measured against the shootout's own ROMs, its own reference screenshots and its
 own pass criterion, re-scored from a fresh clone of the shootout on
 **2026-08-21**:
 
-> ### **240 / 264 — 90.9 %**
+> ### **241 / 264 — 91.3 %**
 >
 > (**223 / 264 — 84.5 %** on `standard`, which is where this page stood until
 > that day. The flip is **fifteen gains and zero losses** row for row; the
@@ -31,7 +31,7 @@ That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
 | 2 | Emulicious | 254/261 | 97.3 |
 | 3 | SameBoy | 253/264 | 95.8 |
 | 4 | Beaten Dying Moon | 247/264 | 93.6 |
-| **5** | **this emulator** | **240/264** | **90.9** |
+| **5** | **this emulator** | **241/264** | **91.3** |
 | 6 | GSE | 218/264 | 82.6 |
 | 7 | bgb | 205/264 | 77.7 |
 | 8 | GambatteSpeedrun | 169/207 | 81.6 |
@@ -53,15 +53,15 @@ By suite:
 | `samesuite` | 66 / 68 | 66 / 68 | `channel_1_sweep_restart`, `channel_4_freq_change` — both red on measured evidence, see `docs/measured/apu.md` § "Three rows left red, all on evidence" |
 | `cpp` | 4 / 4 | 4 / 4 | MBC3/RTC + `sgb-ext-test` |
 | `ax6` | 3 / 3 | 3 / 3 | `rtc3test` |
-| `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` is **two pixels** and the cheapest row on the board — §1c; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
+| `acid` | **5 / 5** | 4 / 5 | `cgb-acid-hell` closed on 2026-08-21 — the Color `TILE_SEL` glitch, [`mealybug.md` §13](mealybug.md#13-tile_sel-reset-on-a-bitplane-read-the-tile-index-is-the-data-21-aug-2026); `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
 | `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
 | `mealybug-tearoom-tests` | **9 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 15 still red, **9 cannot be won by PPU work at all** — see §1b |
-| **total** | **240 / 264** | 223 / 264 | |
+| **total** | **241 / 264** | 223 / 264 | |
 
-**Every one of the 24 failures is a documented open area, and 9 of them are not
+**Every one of the 23 failures is a documented open area, and 9 of them are not
 ours to win.** Mealybug 15 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
-`cgb-acid-hell`, `daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
+`daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
 `ashiepaws` 2, SameSuite 2. There is no surprise in the list, and §1c measures
 every one of them so the next crew can start at the cheapest.
 
@@ -109,7 +109,7 @@ shootout's DMG-only 24-row population that gives:
   | `m3_wx_5_change` | 13,660 | D |
 
 So the reachable ceiling on this suite's shootout population is **15 of 24**,
-not 24, and those six rows are worth **246 / 264** if all of them land — which
+not 24, and those six rows are worth **247 / 264** if all of them land — which
 would be fourth place. Anybody planning work against this row block should plan
 against six, and start at the top of that table.
 
@@ -122,7 +122,6 @@ falls straight out of it.
 
 | row(s) | distance today | what it actually needs |
 |---|---:|---|
-| `acid/cgb-acid-hell.gbc` | **2 px** | one background column — see below. **The cheapest row on the board.** |
 | `mealybug/m3_lcdc_obj_size_change` | 81 px | group F — and **not** the fix that closed its sibling; [`mealybug.md` §12.3](mealybug.md#123-why-m3_lcdc_obj_size_change-cannot-follow-with-the-arithmetic) shows no `LCDC` visibility dot can satisfy it |
 | `mealybug/m3_scy_change` | 257 px | group E |
 | `mealybug` × 3 (window / `WX`) | 1,273 · 4,792 · 13,660 px | group D |
@@ -132,65 +131,20 @@ falls straight out of it.
 | `ashiepaws/bully.gb` ×2 | whole screen | the CGB-mode boot counter — a captain-level decision, not a PPU one |
 | `samesuite` ×2 | — | red on measured evidence, [`measured/apu.md`](measured/apu.md) |
 
-**`cgb-acid-hell` does NOT need mid-scanline writes, and the sentence above that
-said so is withdrawn.** The default per-dot engine has them, and the row is two
-pixels — `(80, 68)` and `(80, 69)`, one column, and the two lines hold *each
-other's* value. **The whole-scanline engine gives the identical two pixels**,
-which is the finding: whatever is wrong is something both renderers consult
-rather than anything either of them does with a fetcher. Traced, it is
-**background**, not an object: no sprite writes that column on those lines, the
-window is inactive (`WY` puts `winy = -1`), and the ROM is running a per-line
-`SCY` raster — 232 on line 68 and 240 on line 69, so the two lines read
-different tiles (`$98A0 = $55` row 4, `$98C0 = $49` row 5).
-
-**And the `SCY` raster is not the fault — that was the first guess and it is
-measured wrong.** The ROM walks a table of per-line `SCY` values behind an
-`rLYC`/`halt` per scanline; the table holds `$E8` at index 68 and `$F0` at 69,
-which is exactly what we read on those lines. Tracing the per-dot fetcher one
-level further — one `eprintln!` in `lo_hi` printing `fetch_x`, `lx`, the tile
-number, its attribute, the row, `tilebase` and the byte — says what the picture
-is actually made of, and it is not what the name suggests: **the tile data is
-uniform**. Every fetch on line 68 returns `7F`/`5D` and every fetch on line 69
-returns `7F`/`41`, whatever tile number or `tilebase` it used, so the face is
-drawn entirely by the **per-tile Color attribute**, one tile in each row
-carrying palette 0 where its neighbours carry palette 1. Underneath that the ROM
-hammers `LCDC` sixteen times a line (`$80`/`$E1`/`$E3`/`$F3`, so `LCDC.4` flips
-between fetches) and moves `SCY` again inside mode 3.
-
-**Tracing the paint as well identifies the two pixels exactly, and they are
-`LCDC.4`.** With `SCX & 7 = 4` the tile covering `x = 76..83` renders positions
-`p = x - 76`, and the painted colours say what each side's high bitplane was:
-ours is `$5D` on line 68 where hardware's is `$55`, and `$41` on line 69 where
-hardware's is `$49` — **one bit each, bit 3, which is `p = 4`, which is
-`x = 80`**, and the two lines have that bit the other way round. Our own fetch
-log says why the byte can move at all: for that tile the *two bitplanes come
-from different blocks*, `lo` from `$8558` under `tilebase = $8000` and `hi` from
-`$9559` under `$8800`, because the ROM flipped `LCDC.4` between the two reads.
-So this row is **the dot at which a bitplane fetch samples `LCDC.4`** — the same
-question as Mealybug's `m3_lcdc_tile_sel_change` group, which is 802 px there
-and unusable as a signal because it sits in block A behind the boot-ROM glyph.
-`cgb-acid-hell` measures it in two pixels and needs no glyph.
-
-**But the commit schedule is NOT the cause, and that is measured, not argued.**
-Tracing the `$FF40` writes beside the fetches shows the high-plane read of the
-tile at `fetch_x = 10` colliding with an `LCDC` write on the *same dot*, on both
-lines — which looks exactly like a one-dot ordering question. It is not:
-sweeping the Color `LCDC` arm of `ppu_write_commit` over **every** value it can
-take — `early` 0, 1, 2 and 3, each with the stage mask holding bit 3 alone and
-bits 3 and 4 together — leaves the row at **2 px in all eight configurations**.
-So the fetch resolves to the same VRAM address whatever the schedule, and the
-byte at that address differs from the one the reference device had. That makes
-these two pixels a **memory-behaviour** question rather than a PPU one, which
-is also what the two engines agreeing said from the start, and it is where the
-next person should start rather than in the fetcher.
-
-<sup>Not the `$FEA0-$FEFF` revision choice, which is the other thing this row is
-famous for here. The ROM gates its own setup on `$FEA0` reading back the `$55`
-it just wrote (`Call_000_1ab6`); we answer `$AA` under the CGB-E nibble rule,
-take the early return, and so does the device the reference was photographed on
-— implemented as plain RAM instead the row is 176 px, not 2. That decision is
-recorded in `conformance-notes.md` (2026-08-18) and is unrelated to these two
-pixels.</sup>
+**`cgb-acid-hell` is CLOSED — 21 Aug 2026 — and the whole trace that closed it is
+[`docs/mealybug.md` §13](mealybug.md#13-tile_sel-reset-on-a-bitplane-read-the-tile-index-is-the-data-21-aug-2026).**
+The two pixels were `(80, 68)` and `(80, 69)`, both engines gave the same wrong
+answer, and the earlier analysis in this section was right about everything
+except the conclusion: it recorded that hardware's high bitplane is `$55` on
+line 68 and `$49` on line 69, and in the same breath that the tilemap holds
+`$98A0 = $55` and `$98C0 = $49` there. The ROM clears `LCDC.4` on the very dot of
+the bitplane read, and every Color stepping but CPU CGB D then **uses the tile
+index as the bitplane data** (Matt Currie, *The Comprehensive Game Boy PPU
+Documentation*, `TILE_SEL`). The two exhaustive negatives that pointed away from
+it — the commit schedule swept over all eight configurations, and (added when it
+was closed) the Color fetcher's three read dots swept over all eight — were both
+correct and both about *timing*, which is what should have said the byte was not
+in the tile at all.
 
 **`daid/ppu_scanline_bgp` is a long way off and should not be planned as a
 near miss.** It writes `BGP` ten times across mode 3 of every line to draw a

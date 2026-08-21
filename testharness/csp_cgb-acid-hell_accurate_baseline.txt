@@ -22,4 +22,4 @@
 #
 #   UPDATE_EXTERNAL_BASELINE=1 make test-external
 
-cgb-acid-hell@cgb = FAIL diff=2
+cgb-acid-hell@cgb = PASS

@@ -375,6 +375,7 @@ impl Gpu {
                     self.next_line();
                 }
                 self.refresh_stat_line();
+                self.tile_sel_glitch = false;
                 continue;
             }
             // Mode 2 has nothing a dot can distinguish — take the whole run.
@@ -433,6 +434,8 @@ impl Gpu {
             self.next_line();
         }
         self.refresh_stat_line();
+        // One dot only — see [`Gpu::tile_sel_glitch`].
+        self.tile_sel_glitch = false;
     }
 
     /// The whole run of **mode-2 dots** the caller's budget reaches, at once.
@@ -886,6 +889,35 @@ impl Gpu {
             (self.pipe.tile_num as i8 as i16 + 128) as u16
         };
         let addr = base + index * 16 + row * 2 + u16::from(high);
+        // **`LCDC.4` reset on this very dot.** Matt Currie's `TILE_SEL` section
+        // (see [`PpuRevision::tile_sel_glitch_reads_tile_index`]): every Color
+        // stepping but CPU CGB D substitutes the **tile index** for the byte,
+        // and D reads from the bitplane-0 address instead. `cgb-acid-hell` is
+        // two pixels of the first rule and the whole of that row — its two
+        // scanlines want `$55` and `$49`, which are the tile numbers the map
+        // holds there. SameBoy's extra clause is kept: an index with bit 7 set
+        // falls through to the ordinary read (`data_for_tile_sel_glitch`).
+        // **CPU CGB D is the exception and is deliberately left unmodelled** —
+        // its rule is "read the bitplane data from the address for bitplane 0",
+        // and both readings of that were implemented and measured against the
+        // suite's own CPU CGB D photographs. `addr & !0x1000` and SameBoy's
+        // `(addr & !0x1000) - 1` give the identical, *worse* answer:
+        // `m3_lcdc_tile_sel_change@CGB-D` 802 → 1,186 and
+        // `m3_lcdc_tile_sel_win_change@CGB-D` 1,366 → 1,424. So D falls through
+        // to the ordinary read until somebody has a third reading; see
+        // `docs/mealybug.md` §13.
+        if self.tile_sel_glitch
+            && !self.gbmode.is_dmg()
+            && self.cgb_ppu_revision().tile_sel_glitch_reads_tile_index()
+            && self.pipe.tile_num & 0x80 == 0
+        {
+            if high {
+                self.pipe.hi = self.pipe.tile_num;
+            } else {
+                self.pipe.lo = self.pipe.tile_num;
+            }
+            return;
+        }
         let bank1 = self.gbmode == GbMode::Color && self.pipe.tile_attr & 0x08 != 0;
         let byte = if bank1 {
             self.rbvram1(addr)
@@ -1655,11 +1687,29 @@ mod fetcher_details {
         for tag in ["cgb0", "cgbB", "cgbC", "cgb0BC", "C"] {
             assert_eq!(PpuRevision::from_tag(tag), Some(PpuRevision::CgbC), "{tag}");
         }
-        for tag in ["cgbD", "cgbDE", "cgbE", "D"] {
+        for tag in ["cgbD", "D"] {
             assert_eq!(PpuRevision::from_tag(tag), Some(PpuRevision::CgbD), "{tag}");
         }
+        // `cgbDE` means "D and E agree", and for everything this type decides
+        // except the `TILE_SEL` glitch they do. It resolves to the machine this
+        // emulator claims to be.
+        for tag in ["cgbDE", "cgbE", "e"] {
+            assert_eq!(PpuRevision::from_tag(tag), Some(PpuRevision::CgbE), "{tag}");
+        }
         assert_eq!(PpuRevision::from_tag("agb"), None);
-        assert_eq!(PpuRevision::default(), PpuRevision::CgbD);
+        assert_eq!(PpuRevision::default(), PpuRevision::CgbE);
+        // The three predicates and where each boundary falls: `CgbD` and
+        // `CgbE` are one machine everywhere but the glitch, which is the whole
+        // reason they are separate values.
+        for r in [PpuRevision::CgbD, PpuRevision::CgbE] {
+            assert!(r.caches_fetcher_y(), "{r:?}");
+            assert!(r.late_palette_commit(), "{r:?}");
+        }
+        assert!(!PpuRevision::CgbC.caches_fetcher_y());
+        assert!(!PpuRevision::CgbC.late_palette_commit());
+        assert!(PpuRevision::CgbC.tile_sel_glitch_reads_tile_index());
+        assert!(PpuRevision::CgbE.tile_sel_glitch_reads_tile_index());
+        assert!(!PpuRevision::CgbD.tile_sel_glitch_reads_tile_index());
     }
 }
 

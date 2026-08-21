@@ -126,7 +126,7 @@ fn ppu_write_commit(
         // two CGB reference sets, which differ by exactly that one dot on
         // every row a mid-line palette write reaches (`docs/mealybug.md` §10).
         0xFF47..=0xFF49 => WriteCommit {
-            early: if rev == PpuRevision::CgbD { 3 } else { 2 },
+            early: if rev.late_palette_commit() { 3 } else { 2 },
             stage: None,
             dispatch: None,
             finalize: None,

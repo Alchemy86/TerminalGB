@@ -518,10 +518,16 @@ pub enum PpuRevision {
     /// mid-fetch write desyncs the two bitplanes, as on a DMG), and a palette
     /// write is seen one dot later than on a CGB D.
     CgbC,
-    /// CPU CGB D and later — including E, the stepping this emulator targets
-    /// elsewhere (see `sound::CgbRevision`). The default.
-    #[default]
+    /// CPU CGB D, and **only** D. It latches `SCY + LY` at the tile-number
+    /// fetch like every later stepping, and it is alone in how it answers a
+    /// `TILE_SEL` reset landing on a bitplane read — see
+    /// [`PpuRevision::tile_sel_glitch_reads_tile_index`].
     CgbD,
+    /// CPU CGB E, the stepping this emulator targets elsewhere (see
+    /// `sound::CgbRevision`). The default. Identical to `CgbD` except for the
+    /// `TILE_SEL` glitch, where it behaves as every revision but D does.
+    #[default]
+    CgbE,
 }
 
 impl PpuRevision {
@@ -534,7 +540,8 @@ impl PpuRevision {
             "cgb0" | "0" | "cgb0b" | "cgbb" | "b" | "cgbc" | "c" | "cgb0bc" => {
                 Some(PpuRevision::CgbC)
             }
-            "cgbd" | "d" | "cgbde" | "cgbe" | "e" => Some(PpuRevision::CgbD),
+            "cgbd" | "d" => Some(PpuRevision::CgbD),
+            "cgbde" | "cgbe" | "e" => Some(PpuRevision::CgbE),
             _ => None,
         }
     }
@@ -555,6 +562,28 @@ impl PpuRevision {
     /// reuses it for both bitplanes, so a mid-fetch `SCY` write cannot mix two
     /// rows into one drawn tile.
     pub fn caches_fetcher_y(self) -> bool {
-        self == PpuRevision::CgbD
+        self != PpuRevision::CgbC
+    }
+
+    /// A palette write is seen one dot later on a CPU CGB D and later than on a
+    /// CPU CGB C — measured against the suite's own two Color reference sets,
+    /// which differ by exactly that one dot on every row a mid-line palette
+    /// write reaches (`docs/mealybug.md` §10).
+    pub fn late_palette_commit(self) -> bool {
+        self != PpuRevision::CgbC
+    }
+
+    /// **Resetting `LCDC.4` on the same dot as a bitplane read makes the PPU
+    /// read the tile *index* as that bitplane's data — on every Color stepping
+    /// except CPU CGB D**, which instead reads from the bitplane-0 address.
+    /// Matt Currie, *The Comprehensive Game Boy PPU Documentation*, `TILE_SEL`
+    /// (bit 4) — he wrote both the rule and the reference photographs this
+    /// project scores against. SameBoy models the same split
+    /// (`Core/display.c`, `data_for_tile_sel_glitch`, citing the same page).
+    ///
+    /// This is the one place `CgbD` and `CgbE` differ, and it is why the two
+    /// are separate values at all.
+    pub fn tile_sel_glitch_reads_tile_index(self) -> bool {
+        self != PpuRevision::CgbD
     }
 }

@@ -38,9 +38,9 @@ ly/ly-ncmE@ncmE = FAIL b=00 c=6B d=14 e=19 h=98 l=10
 m3-bg-bgp/m3-bg-bgp@dmgC = FAIL diff=2
 m3-bg-bgp/m3-bg-bgp@ncmBC = PASS
 m3-bg-bgp/m3-bg-bgp@ncmE = PASS
-m3-bg-lcdc/m3-bg-lcdc-ds@cgbBCE = FAIL diff=3072
-m3-bg-lcdc/m3-bg-lcdc-nocgb@ncmBCE = FAIL diff=256
-m3-bg-lcdc/m3-bg-lcdc@cgbBCE = FAIL diff=256
+m3-bg-lcdc/m3-bg-lcdc-ds@cgbBCE = FAIL diff=2304
+m3-bg-lcdc/m3-bg-lcdc-nocgb@ncmBCE = PASS
+m3-bg-lcdc/m3-bg-lcdc@cgbBCE = PASS
 m3-bg-lcdc/m3-bg-lcdc@dmgC = PASS
 m3-bg-scx/m3-bg-scx-ds@cgbBCE = FAIL diff=140
 m3-bg-scx/m3-bg-scx-nocgb@ncmBCE = FAIL diff=140

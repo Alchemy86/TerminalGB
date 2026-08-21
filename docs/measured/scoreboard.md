@@ -144,7 +144,7 @@ The mode is gated separately (`make test-external-accurate`, against
 | SameSuite | <!--score:samesuite-->73/76<!--/score--> | <!--score:samesuite-->73/76<!--/score--> |
 | `cpp` | <!--score:cpp-->4/4<!--/score--> | <!--score:cpp-->4/4<!--/score--> |
 | Mealybug — rows pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->27/79<!--/score-->** |
-| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->498,226<!--/score-->** |
+| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->498,150<!--/score-->** |
 
 (Rows with one baseline are scored once: the picture mode does not reach what they measure, so
 the same figure stands in both columns.)
@@ -274,7 +274,7 @@ they belong to the Shootout's 24-row Mealybug population, not our
 
 | Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
-| `identical` (the default) | **<!--score:mealybug_accurate-->27 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->498,226<!--/score-->** |
+| `identical` (the default) | **<!--score:mealybug_accurate-->27 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->498,150<!--/score-->** |
 | `standard` (`GB_PPU=standard`) | <!--score:mealybug-->3 / 79<!--/score--> | <!--score:mealybug:px-->1,212,282<!--/score--> |
 
 The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at
@@ -319,7 +319,7 @@ picture modes, by [`examples/csp_suite.rs`](../../examples/csp_suite.rs).
 | Gambatte | **<!--score:csp_gambatte:pass-->3173<!--/score-->** / <!--score:csp_gambatte:total-->5225<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3617<!--/score-->** / <!--score:csp_gambatte_accurate:total-->5225<!--/score--> | a hexadecimal digit drawn in the top-left corner, its audio, or the author's screenshot |
 | GBMicrotest | **<!--score:csp_gbmicrotest:pass-->251<!--/score-->** / <!--score:csp_gbmicrotest:total-->513<!--/score--> | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / <!--score:csp_gbmicrotest_accurate:total-->513<!--/score--> | the verdict byte the ROM writes to `$FF82` |
 | Mooneye GB (wilbertpol fork) | **<!--score:csp_mooneye-wilbertpol:pass-->62<!--/score-->** / <!--score:csp_mooneye-wilbertpol:total-->117<!--/score--> | **<!--score:csp_mooneye-wilbertpol_accurate:pass-->82<!--/score-->** / <!--score:csp_mooneye-wilbertpol_accurate:total-->117<!--/score--> | `$ED` then the Fibonacci registers |
-| AGE test roms | **<!--score:csp_age:pass-->3<!--/score-->** / <!--score:csp_age:total-->59<!--/score--> | **<!--score:csp_age_accurate:pass-->8<!--/score-->** / <!--score:csp_age_accurate:total-->59<!--/score--> | `LD B,B` then the Fibonacci registers, or the author's screenshot |
+| AGE test roms | **<!--score:csp_age:pass-->3<!--/score-->** / <!--score:csp_age:total-->59<!--/score--> | **<!--score:csp_age_accurate:pass-->10<!--/score-->** / <!--score:csp_age_accurate:total-->59<!--/score--> | `LD B,B` then the Fibonacci registers, or the author's screenshot |
 | cgb-acid2 | **<!--score:csp_cgb-acid2:pass-->1<!--/score-->** / <!--score:csp_cgb-acid2:total-->1<!--/score--> | **<!--score:csp_cgb-acid2_accurate:pass-->0<!--/score-->** / <!--score:csp_cgb-acid2_accurate:total-->1<!--/score--> | the author's reference image, in colour |
 | cgb-acid-hell | **<!--score:csp_cgb-acid-hell:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell:total-->1<!--/score--> | **<!--score:csp_cgb-acid-hell_accurate:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell_accurate:total-->1<!--/score--> | as above |
 | rtc3test | **<!--score:csp_rtc3test:pass-->6<!--/score-->** / <!--score:csp_rtc3test:total-->6<!--/score--> | **<!--score:csp_rtc3test_accurate:pass-->6<!--/score-->** / <!--score:csp_rtc3test_accurate:total-->6<!--/score--> | the author's screenshots, one per sub-test |
