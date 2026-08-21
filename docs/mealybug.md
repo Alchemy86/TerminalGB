@@ -1360,10 +1360,14 @@ Measured on the `identical` engine at the head of this campaign.
 | group | rows | code | signature |
 |---|---|---|---|
 | **D** window / `WX` | `m3_wx_5_change@DMG` 13,660 · `m3_wx_6_change@DMG` 4,792 · `m3_lcdc_win_en_change_multiple_wx@DMG` 1,273 | `check_window_start`, `check_window_stop`, `prologue_pos` | `LCDC.5` toggled and `WX` moved *after* the window has started |
-| **E** `SCY` / bitplane mix | `m3_scy_change` 257 / 560 / 116 | `fetch_tile_number`, `lo_hi`, the `$FF42`/`$FF43` arms of `ppu_write_commit` | **tile 1 only**, and it renders the previous scanline's `SCY` |
-| **F** the object fetch | `m3_lcdc_obj_size_change` 51 / 10 / 10 · `m3_lcdc_obj_size_change_scx@DMG` 30 | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
+| **E** `SCY` / bitplane mix | `m3_scy_change` 257 / 560 / 116 | **not `SCY` at all — see §14**, it is `pipeline_dot`'s object-overlap dot | **tile 1 only**, and it renders the previous scanline's `SCY` |
+| **F** the object fetch | `m3_lcdc_obj_size_change` 81 / 20 / 20 (`_scx` closed 21 Aug, §12) | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
 | **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records **four** measured dead ends |
 
+> **`acid/cgb-acid-hell` was the cheapest measurement of the `tile_sel` question
+> there is, and it is CLOSED — §13.** The note below is kept for its negative
+> result, which is still true and still worth not repeating.
+>
 > **And `acid/cgb-acid-hell` is now the cheapest measurement of the `tile_sel`
 > question there is.** `m3_lcdc_tile_sel_change` sits at 802/802/822 px and is
 > in block A, so its number says nothing about the behaviour — it is dominated
@@ -1401,10 +1405,10 @@ Measured on the `identical` engine at the head of this campaign.
 > extension of the `Y = $10` row and are where the mix belongs; columns 0-8 are
 > the second half of group F's signature, the objects at `X < 8`.
 
-**Start with group F.** Both its rows are two-figure pixel counts, both CGB columns of
-`m3_lcdc_obj_size_change_scx` are already pixel-exact, and between them they are **two shootout
-rows** — the same as group D's three rows for a fraction of the distance. Group G is four pixels
-and has now refused four different models; leave it until something else in the fetcher moves.
+**Start with group F — and note that group E is now part of it** (§14: `m3_scy_change`'s DMG
+error is an object stall, not a `SCY` one, so the two rows share a cause and are **two shootout
+rows** between them). Group G is four pixels and has now refused four different models; leave it
+until something else in the fetcher moves.
 
 These are four disjoint regions of `src/gpu/fifo.rs`, so they can be worked in parallel. **The
 coupling is not the code, it is the baseline**: `testharness/mealybug_accurate_baseline.txt`
@@ -1637,3 +1641,48 @@ consumes it. **Not serialised** — published and consumed inside one M-cycle, t
 `idu_share` and the OAM DMA's bus fields already make — so `savestate::FORMAT_VERSION` did not
 move. `lo_hi` gains one test on a flag that is false on every dot but the handful a Color game
 resets `LCDC.4` on, and a DMG never sets it at all.
+
+
+## 14. `m3_scy_change`'s DMG error is an OBJECT stall, not a `SCY` one (21 Aug 2026)
+
+Traced but **not fixed** — recorded because it moves the row out of group E and into group F,
+and because the obvious repair was measured and costs more than it buys.
+
+§11.4 files `m3_scy_change@DMG` (257 px) under "`SCY` / bitplane mix" and points at
+`fetch_tile_number`, `lo_hi` and the `$FF42`/`$FF43` arms of `ppu_write_commit`. **None of those
+is the fault.** The DMG `SCY` commit was swept over all four values it can take and the shipped
+`early: 3` is the best of them, monotonically: 6,313 / 5,128 / 965 / **257** px for `early`
+0 / 1 / 2 / 3.
+
+What the fetch trace says instead, on line 5 of the final frame:
+
+```
+BGN dot= 92 fx=1 scy=1 map=9801 tile=42     <- our tile-number read
+SCY dot= 93 v=2
+SCY dot=101 v=3
+BG  dot=104 t=3 fx=1 scy=3 row=0 addr=8420  <- our bitplanes, ten dots later
+BG  dot=106 t=5 fx=1 scy=3 row=0 addr=8421
+```
+
+Hardware's eight pixels at `x = 8` decode to `$7E`/`$7E`, which is **tile `$43` row 0**
+(`$8430`), where we draw tile `$42` (`$8420` = `$FE`/`$FE`). The ROM fills each tilemap row with
+`ABC…` from a different letter, so `$43` is `$9821` — **map row 1** — and `$42` is `$9801`, map
+row 0. Map row is `((SCY + LY) >> 3) & 31`, so hardware read the tile number with `SCY >= 3`,
+i.e. **at dot 101 or later**. We read it at dot 92.
+
+The ten dots between them are **an object fetch**. `m3_scy_change` is not an object test but it
+places eighteen of them (`sprite_data`, `X = 0 … 17`), and the one at `X = 0` is due at the head
+of every line it covers; Pan Docs' penalty charges it `5 - (0 & 7) = 5`, so its fetch spans
+eleven dots. `pipeline_dot` starts it on the dot *after* the previous tile's push and hands the
+background fetcher that same dot — which is the dot the tile number is read on. Hardware's tile
+number lands *after* the stall, so the stall belongs **before** the tile-number read, not
+between it and the bitplanes.
+
+**The narrow repair was measured and rejected.** Withholding the overlap dot from the background
+fetcher when it is at `fetch_t == 0` (about to start a tile) does move this row the right way —
+`m3_scy_change` 257 / 560 / 116 → **215 / 510 / 66** and the DMG suite total 93,169 → 92,435 px
+— and it **costs `m3_scx_high_5_bits`, which is pixel-exact on all three machines today and goes
+to 12 / 12 / 12**. Net one row lost. That is the same trade `bg_fetch_dot`'s own comment already
+records from the other side, and it says the overlap dot is real; what is wrong is *where the
+object fetch begins* relative to the push, which is the per-tile calibration §8.9 scopes. Come
+back with a model of that, not with a condition on `fetch_t`.
