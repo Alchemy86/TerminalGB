@@ -53,7 +53,7 @@ By suite:
 | `samesuite` | 66 / 68 | 66 / 68 | `channel_1_sweep_restart`, `channel_4_freq_change` — both red on measured evidence, see `docs/measured/apu.md` § "Three rows left red, all on evidence" |
 | `cpp` | 4 / 4 | 4 / 4 | MBC3/RTC + `sgb-ext-test` |
 | `ax6` | 3 / 3 | 3 / 3 | `rtc3test` |
-| `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` needs mid-scanline writes; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
+| `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` is **two pixels** and the cheapest row on the board — §1c; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
 | `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
 | `mealybug-tearoom-tests` | **8 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 16 still red, **9 cannot be won by PPU work at all** — see §1b |
@@ -62,7 +62,8 @@ By suite:
 **Every one of the 25 failures is a documented open area, and 9 of them are not
 ours to win.** Mealybug 16 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
 `cgb-acid-hell`, `daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
-`ashiepaws` 2, SameSuite 2. There is no surprise in the list.
+`ashiepaws` 2, SameSuite 2. There is no surprise in the list, and §1c measures
+every one of them so the next crew can start at the cheapest.
 
 <sup>`ashiepaws/strikethrough.gb` was the 26th until 2026-08-21, when the OAM
 DMA was given the address bus it drives — the row is 7 pixels on one scanline
@@ -112,6 +113,59 @@ So the reachable ceiling on this suite's shootout population is **15 of 24**,
 not 24, and those seven rows are worth **245 / 264** if all of them land — which
 would be fourth place. Anybody planning work against this row block should plan
 against seven, and start at the top of that table.
+
+### 1c. The remaining 25, measured rather than assumed (21 Aug 2026)
+
+**Two of the entries above were stale and this section is the correction.** Every
+row here was re-measured on the day, against the shootout's own ROMs and its own
+50-luma tolerance, and the cheapest-per-row order the next crew should work in
+falls straight out of it.
+
+| row(s) | distance today | what it actually needs |
+|---|---:|---|
+| `acid/cgb-acid-hell.gbc` | **2 px** | one background column — see below. **The cheapest row on the board.** |
+| `mealybug/m3_lcdc_obj_size_change` | 51 px | group F, [`mealybug.md` §11.4](mealybug.md#114-the-twelve-winnable-rows-grouped-by-the-code-they-live-in) |
+| `mealybug/m3_lcdc_obj_size_change_scx` | 30 px | group F, same code |
+| `mealybug/m3_scy_change` | 257 px | group E |
+| `mealybug` × 3 (window / `WX`) | 1,273 · 4,792 · 13,660 px | group D |
+| `mealybug` × 9 | whole-screen | the boot ROM's `®` glyph — §1b, a licence call |
+| `daid/ppu_scanline_bgp` ×2 | **2,204-3,309 px** | not a near miss — see below |
+| `daid/speed_switch_timing_{ly,stat}` | — | the PPU-vs-counter phase error `CLAUDE.md` records under `STOP` |
+| `ashiepaws/bully.gb` ×2 | whole screen | the CGB-mode boot counter — a captain-level decision, not a PPU one |
+| `samesuite` ×2 | — | red on measured evidence, [`measured/apu.md`](measured/apu.md) |
+
+**`cgb-acid-hell` does NOT need mid-scanline writes, and the sentence above that
+said so is withdrawn.** The default per-dot engine has them, and the row is two
+pixels — `(80, 68)` and `(80, 69)`, one column, and the two lines hold *each
+other's* value. **The whole-scanline engine gives the identical two pixels**,
+which is the finding: whatever is wrong is something both renderers consult
+rather than anything either of them does with a fetcher. Traced, it is
+**background**, not an object: no sprite writes that column on those lines, the
+window is inactive (`WY` puts `winy = -1`), and the ROM is running a per-line
+`SCY` raster — 232 on line 68 and 240 on line 69, so the two lines read
+different tiles (`$98A0 = $55` row 4, `$98C0 = $49` row 5) and a one-line error
+in which `SCY` belongs to which line would swap exactly this. Both engines
+agreeing means the write lands in HBlank; the open question is which scanline
+owns it.
+
+<sup>Not the `$FEA0-$FEFF` revision choice, which is the other thing this row is
+famous for here. The ROM gates its own setup on `$FEA0` reading back the `$55`
+it just wrote (`Call_000_1ab6`); we answer `$AA` under the CGB-E nibble rule,
+take the early return, and so does the device the reference was photographed on
+— implemented as plain RAM instead the row is 176 px, not 2. That decision is
+recorded in `conformance-notes.md` (2026-08-18) and is unrelated to these two
+pixels.</sup>
+
+**`daid/ppu_scanline_bgp` is a long way off and should not be planned as a
+near miss.** It writes `BGP` ten times across mode 3 of every line to draw a
+picture, and ours has **the right structure** — the band boundaries and the
+one-line anomaly at `LY = 47` line up exactly — but **2,755 to 3,309 pixels over
+tolerance across 129 of the 144 lines**, against all three of its DMG
+references. Sliding our frame horizontally to look for a pure phase error gets
+the best match at **+4 pixels and still 2,204 px**, so it is a phase error *and*
+a palette-content error, not one or the other. The suite ships three DMG
+references because the ROM's own timing drifts frame to frame; matching any one
+of them passes.
 
 #### The shootout's Mooneye population is not ours — 97 rows, not 103
 

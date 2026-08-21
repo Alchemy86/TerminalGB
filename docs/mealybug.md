@@ -1364,6 +1364,32 @@ Measured on the `identical` engine at the head of this campaign.
 | **F** the object fetch | `m3_lcdc_obj_size_change` 51 / 10 / 10 · `m3_lcdc_obj_size_change_scx@DMG` 30 | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
 | **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records **four** measured dead ends |
 
+> **Group F, the trace and its two traps (21 Aug 2026).** The instrument is one
+> `eprintln!` in `obj_plane` printing `(line, modeclock, oam, x, y, plane,
+> sprite_size)` and one in `Gpu::wb`'s `$FF40` arm printing the dot the write
+> lands on, both gated on an env var and on `line` — that is enough to read the
+> race straight off. Measured on the final frame of `m3_lcdc_obj_size_change`,
+> line 8: the four `LCDC` writes land at dots ~97 / ~121 / ~133 / ~145, and the
+> three objects that line finds are fetched at 99+101 (`X = 0`), 118+120
+> (`X = $10`) and 145+147 (`X = $20`). The middle object is the one that must
+> mix its bitplanes on hardware and does not here, so the question is a couple
+> of dots between the `$FF40` commit and the plane reads — not the plane
+> spacing, which already matches SameBoy at +3 and +5.
+>
+> **Trap one: `examples/mealybug` runs every ROM on three machines**, so a trace
+> keyed only on the line prints three interleaved runs and the dots differ by a
+> dot or two between them. Stage the one ROM into its own directory
+> (`build/<rom>.gb` plus a copy of `expected/`) and point `--dir` at that.
+> **Trap two: the screenshot is frame 10**, taken at the ROM's own `ld b,b`
+> breakpoint, and the handler's return through the `nop_slide` drifts the write
+> dots between frames — read the *last* group in the trace, not the first.
+>
+> Only sprites whose `Y` matches the line are fetched, and the ROM's 27 objects
+> walk `Y` from `$10` to `$90` in each of its three groups, so a given line has
+> exactly **three** objects: one per `X` group. Lines 8-13 are the tall
+> extension of the `Y = $10` row and are where the mix belongs; columns 0-8 are
+> the second half of group F's signature, the objects at `X < 8`.
+
 **Start with group F.** Both its rows are two-figure pixel counts, both CGB columns of
 `m3_lcdc_obj_size_change_scx` are already pixel-exact, and between them they are **two shootout
 rows** — the same as group D's three rows for a fraction of the distance. Group G is four pixels
