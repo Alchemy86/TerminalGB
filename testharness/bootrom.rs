@@ -16,6 +16,13 @@
 //! actually experiences: no boot ROM, a wrong-sized one, or one belonging to
 //! the other console must all give exactly the machine a fresh clone gets.
 //!
+//! Section 6 covers the OTHER half of the boot-VRAM contract:
+//! `MemoryManagementUnit::set_boot_logo_tiles` decompresses the cartridge's
+//! own header logo (`$0104`-`$0133`, present in every bootable ROM) under
+//! HLE, and must get entirely out of the way the instant a real boot ROM is
+//! supplied — that ROM is the one running for real, and duplicating its work
+//! would risk clashing with whatever it actually wrote.
+//!
 //! See [`src/boot.rs`](../src/boot.rs) and `docs/mealybug.md` §8.6.
 
 use terminalgb::boot::{BootRom, BootRomError, CGB_LEN, DMG_LEN};
@@ -78,6 +85,19 @@ fn cartridge() -> Vec<u8> {
 
 fn gb(boot: Option<BootRom>) -> Gameboy {
     Gameboy::new_with_boot_rom(cartridge(), None, Model::Dmg, boot)
+}
+
+/// [`cartridge`] with a caller-chosen 48-byte header-logo region — a
+/// synthetic, non-Nintendo pattern, since this is a test of the *mechanism*
+/// (decompress whatever the header holds), not of any specific bitmap.
+fn cartridge_with_header(header: [u8; 48]) -> Vec<u8> {
+    let mut rom = cartridge();
+    rom[0x0104..0x0134].copy_from_slice(&header);
+    rom
+}
+
+fn gb_with_header(header: [u8; 48], boot: Option<BootRom>) -> Gameboy {
+    Gameboy::new_with_boot_rom(cartridge_with_header(header), None, Model::Dmg, boot)
 }
 
 /// Step until `PC` reaches the cartridge's entry point, or give up.
@@ -226,6 +246,46 @@ fn main() {
         "and loads into a machine that has one",
         accepted && into_booted.boot_rom_mapped(),
         format!("mapped={}", into_booted.boot_rom_mapped()),
+    );
+
+    // ------------------------------------------- 6. the header logo, licence-
+    //                                              clean and only under HLE
+    // Header bytes 0-1 ($0104-$0105) become tile $01 at $8010: nibble $F
+    // (rows 0-1) doubles to $FF on the low bitplane, the rest of the tile
+    // stays blank. Every input byte is the cartridge's own header — see
+    // `MemoryManagementUnit::set_boot_logo_tiles`.
+    let mut header = [0u8; 48];
+    header[0] = 0xF0;
+    let mut hle_logo = gb_with_header(header, None);
+    check(
+        "with no boot ROM, the header's own logo is decompressed into $8010",
+        hle_logo.peek(0x8010) == 0xFF && hle_logo.peek(0x8011) == 0x00,
+        format!(
+            "[$8010]={:02X} [$8011]={:02X}",
+            hle_logo.peek(0x8010),
+            hle_logo.peek(0x8011)
+        ),
+    );
+    check(
+        "and the ® glyph's own slot is left alone -- nothing derives it",
+        hle_logo.peek(0x8190) == 0x00,
+        format!("[$8190]={:02X}", hle_logo.peek(0x8190)),
+    );
+
+    // With a real boot ROM supplied, that ROM is the one running for real —
+    // our derivation must not also run and clash with whatever it wrote (the
+    // synthetic image here never touches $8010, so it must read back exactly
+    // as VRAM starts: zero).
+    let mut booted_logo =
+        gb_with_header(header, Some(BootRom::new(synthetic_dmg_boot()).unwrap()));
+    run_to_cartridge(&mut booted_logo);
+    check(
+        "with one supplied, the licence-clean derivation does not also run",
+        booted_logo.peek(0x8010) == 0x00,
+        format!(
+            "[$8010]={:02X}, wanted $00 (untouched)",
+            booted_logo.peek(0x8010)
+        ),
     );
 
     println!();

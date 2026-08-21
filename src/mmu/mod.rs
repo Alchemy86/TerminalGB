@@ -359,6 +359,21 @@ enum DmaWrite {
     Zero,
 }
 
+/// Horizontally double a 4-bit value into an 8-bit one: bit 3 (the leftmost
+/// of the nibble's 4 source pixels) becomes output bits 7 and 6, bit 2
+/// becomes bits 5 and 4, and so on. This is the "chunky pixel" doubling the
+/// monochrome boot ROMs apply to the header logo — see
+/// [`MemoryManagementUnit::set_boot_logo_tiles`].
+fn double_nibble(n: u8) -> u8 {
+    let mut out = 0u8;
+    for bit in 0..4u8 {
+        let v = (n >> (3 - bit)) & 1;
+        out |= v << (7 - bit * 2);
+        out |= v << (6 - bit * 2);
+    }
+    out
+}
+
 fn boot_ppu_dot(console: crate::mode::Model) -> Option<u32> {
     match console {
         crate::mode::Model::Dmg0 => Some(DMG0_BOOT_PPU_DOT),
@@ -872,6 +887,7 @@ impl<'a> MemoryManagementUnit<'a> {
         self.wb(0xFF07, 0);
         // Before the LCD comes on, so the write cannot land in a blocked mode.
         if self.gbmode.is_dmg() {
+            self.set_boot_logo_tiles();
             self.set_boot_logo_tilemap();
         }
         self.wb(0xFF40, 0x91);
@@ -921,6 +937,61 @@ impl<'a> MemoryManagementUnit<'a> {
         }
     }
 
+    /// Decompress the cartridge header's Nintendo-logo bitmap
+    /// (`$0104`-`$0133`, 48 bytes) into the 24 tiles the monochrome boot ROMs
+    /// place at `$8010`-`$818F` (tile ids `$01`-`$18`), before
+    /// [`Self::set_boot_logo_tilemap`] places them on screen.
+    ///
+    /// **This is licence-clean by construction: every input byte is the
+    /// cartridge's own header, present in every bootable ROM (including this
+    /// project's own vendored `third_party/dmg-acid2/dmg-acid2.gb`) because
+    /// real hardware refuses to boot a ROM whose header logo does not match —
+    /// Pan Docs, [*The Cartridge Header*
+    /// §0104-0133](https://gbdev.io/pandocs/The_Cartridge_Header.html#0104-0133--nintendo-logo).**
+    /// No boot-ROM byte is read, embedded, or reproduced anywhere in this
+    /// function; it is a public, documented unpack algorithm applied to data
+    /// the cartridge already supplies, the same standing as the MMPX port or
+    /// the hand-rolled PNG encoder.
+    ///
+    /// The algorithm, verified against Pan Docs' own description and, for the
+    /// bitplane detail Pan Docs does not spell out, against the mechanism in
+    /// the public disassembly [ISSOtm/gb-bootroms `src/dmg.asm`
+    /// `Logo:`](https://codeberg.org/ISSOtm/gb-bootroms) (read to confirm the
+    /// mechanism, exactly as this project already does for SameBoy and
+    /// docboy elsewhere; no bytes reproduced): each **pair** of header bytes
+    /// (`$0104`/`$0105`, `$0106`/`$0107`, …) is one output tile — 24 pairs,
+    /// 24 tiles — and splits into four nibbles, one per *pre-scale* row of
+    /// that tile's 4×4 source block (MSB = leftmost of the 4 source pixels).
+    /// Each nibble is horizontally doubled into an 8-bit row and written
+    /// **twice** (vertical doubling) to produce the final 8×8 tile. Crucially,
+    /// only the tile's **low bitplane** is written — the boot ROM's own
+    /// routine skips the high-plane byte on every row — so a lit pixel is
+    /// colour index 1, not 3; both read as black under the `BGP = $FC` this
+    /// project already hands over, so the difference is invisible on screen
+    /// and would only show up in an exact VRAM byte comparison, which is
+    /// exactly what [`GB-BOOT-07`](../../docs/mealybug.md) checks.
+    ///
+    /// The `®` glyph at tile `$19` (`$8190`-`$819F`) is deliberately **not**
+    /// part of this: it is drawn by a separate, hardcoded routine inside the
+    /// boot ROM with no cartridge-header input at all, so there is nothing
+    /// here to derive it from — see `docs/mealybug.md` §8.6 for why that tile
+    /// is never invented.
+    fn set_boot_logo_tiles(&mut self) {
+        const BASE_ADDR: u16 = 0x0104;
+        const TILE_BASE: u16 = 0x8010;
+        for tile in 0..24u16 {
+            let b0 = self.mbc.readrom(BASE_ADDR + tile * 2);
+            let b1 = self.mbc.readrom(BASE_ADDR + tile * 2 + 1);
+            let nibbles = [b0 >> 4, b0 & 0xF, b1 >> 4, b1 & 0xF];
+            let tile_addr = TILE_BASE + tile * 16;
+            for row in 0..8u16 {
+                let low = double_nibble(nibbles[(row / 2) as usize]);
+                self.wb(tile_addr + row * 2, low);
+                self.wb(tile_addr + row * 2 + 1, 0);
+            }
+        }
+    }
+
     /// The DMG boot ROM's last act before `PC=$0100` is to scroll the Nintendo
     /// logo into place, and it leaves the **tilemap** entries behind: `$01`-`$0C`
     /// across `$9904`-`$990F`, `$0D`-`$18` across `$9924`-`$992F`, and `$19`
@@ -935,10 +1006,9 @@ impl<'a> MemoryManagementUnit<'a> {
     /// with a blank tilemap they are empty — a whole-screen difference that has
     /// nothing to do with what the test measures.
     ///
-    /// The tile *pixels* are not written. On hardware they are the logo the
-    /// boot ROM decompressed out of the cartridge header, and every ROM that
-    /// reaches this state has already replaced them by the time anything looks;
-    /// the map entries are the part that survives.
+    /// The tile *pixels* for `$01`-`$18` are written by
+    /// [`Self::set_boot_logo_tiles`], called just before this. Tile `$19`'s
+    /// pixels are not, and never will be — see that function's doc comment.
     fn set_boot_logo_tilemap(&mut self) {
         for (i, addr) in (0x9904u16..=0x990F).enumerate() {
             self.wb(addr, 0x01 + i as u8);
@@ -3260,6 +3330,85 @@ mod boot_state_tests {
         // claim about it; it is left as it was.
         let mut cgb = machine(crate::mode::Model::Cgb);
         assert_eq!(cgb.rb(0x9904), 0x00);
+    }
+
+    fn machine_with_header(
+        model: crate::mode::Model,
+        header: [u8; 48],
+    ) -> MemoryManagementUnit<'static> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0104..0x0134].copy_from_slice(&header);
+        let mut mem = MemoryManagementUnit::new_with_model(rom, None, model).unwrap();
+        mem.enable_audio(Box::new(NullPlayer));
+        mem
+    }
+
+    /// `double_nibble` is the "chunky pixel" horizontal doubling the boot
+    /// ROMs apply to the header logo: bit 3 (leftmost of the source nibble's
+    /// 4 pixels) becomes output bits 7 and 6, and so on down to bit 0 →
+    /// bits 1 and 0.
+    #[test]
+    fn nibbles_double_into_bytes_leftmost_bit_first() {
+        assert_eq!(double_nibble(0x0), 0x00);
+        assert_eq!(double_nibble(0xF), 0xFF);
+        assert_eq!(double_nibble(0x8), 0xC0, "leftmost bit alone -> bits 7,6");
+        assert_eq!(double_nibble(0x1), 0x03, "rightmost bit alone -> bits 1,0");
+        assert_eq!(double_nibble(0xA), 0xCC, "0b1010 -> 0b11001100");
+    }
+
+    /// `set_boot_logo_tiles` derives every byte from the cartridge's own
+    /// header — verified here with a synthetic, non-Nintendo pattern, because
+    /// the algorithm is what is under test, not any specific bitmap. See its
+    /// doc comment for the licence argument and the citations.
+    #[test]
+    fn the_boot_rom_decompresses_the_headers_own_logo_tiles() {
+        let mut header = [0u8; 48];
+        // Tile $01 (the first tile of the top half) comes from header bytes
+        // 0-1 ($0104-$0105).
+        header[0] = 0xF0;
+        header[1] = 0x00;
+        // Tile $0D (the first tile of the *bottom* half) comes from header
+        // bytes 24-25 ($011C-$011D) -- Pan Docs' own split point.
+        header[24] = 0x00;
+        header[25] = 0x0F;
+        let mut mem = machine_with_header(crate::mode::Model::Dmg, header);
+
+        // Nibble $F (rows 0-1 of tile $01's source block) doubles to $FF on
+        // the low plane; the high plane is never written. The other three
+        // source nibbles are zero, so the rest of the tile is blank.
+        let want_01 = [
+            0xFF, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+        for (i, want) in want_01.into_iter().enumerate() {
+            assert_eq!(mem.rb(0x8010 + i as u16), want, "tile $01 byte {i}");
+        }
+
+        // Nibble $F is the *last* of tile $0D's four source nibbles, so it
+        // lands on the tile's rows 6-7 instead.
+        let want_0d = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF,
+            0x00, 0xFF, 0x00,
+        ];
+        for (i, want) in want_0d.into_iter().enumerate() {
+            assert_eq!(
+                mem.rb(0x8010 + 12 * 16 + i as u16),
+                want,
+                "tile $0D byte {i}"
+            );
+        }
+
+        // Tile $19 -- the ® glyph's own slot -- is never written by this
+        // function, whatever the header holds: there is nothing in the
+        // cartridge to derive it from.
+        for addr in 0x8190u16..=0x819F {
+            assert_eq!(mem.rb(addr), 0x00, "${addr:04X} untouched");
+        }
+
+        // A Color console running in DMG-compatibility mode does not take
+        // this path at all -- see the module doc on `set_boot_logo_tilemap`.
+        let mut cgb = machine_with_header(crate::mode::Model::Cgb, header);
+        assert_eq!(cgb.rb(0x8010), 0x00);
     }
 
     /// A Super Game Boy answers `$FF00` with a player index once a game has
