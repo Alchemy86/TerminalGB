@@ -1448,6 +1448,18 @@ reference emulators carry a signed one (SameBoy's `position_in_line` runs from �
 `WX = 0` extra dot and this all fall out of one rule instead of three. That is the refactor this
 group wants; it is not a special case away.
 
+> **Confirmed independently, 21 Aug 2026: `check_window_stop`'s resume is the same bug from the
+> stop side, and it is NOT a one-line fix either.** `m3_lcdc_win_en_change_multiple_wx@DMG` sets
+> `WX = LY` and toggles `LCDC.5` off around pixel 3; hardware's background resumes at 9, 10, 3,
+> 4, 5, 6, 7, 8 for `WX = 0..7` — exactly the smallest `(WX - 7) + 8n` at or after pixel 3. Ours
+> (`resume = lx / 8 + 1`) resumes on the **screen's** tile grid, not the **window's** — it throws
+> away the phase the window's own `fetch_x` was counting in. Patching the formula alone does not
+> close it: `(WX - 7)` is not generally a multiple of 8, so converting a window-grid boundary
+> back into a background `fetch_x` needs a fractional carry-over — exactly the discard mechanism
+> `win_skip` already gives the *start* side, not yet given to the *stop* side. That is the same
+> unification the signed-position note above is asking for, from the opposite end of the line;
+> do not attempt this half separately from that refactor.
+
 
 ## 12. The object's high bitplane reads `LCDC.2` a dot later (21 Aug 2026)
 
