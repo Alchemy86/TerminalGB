@@ -477,6 +477,12 @@ the PPU owns object memory through modes 2 and 3, which is why every game moves 
 
 the increment unit drives the address bus with no access behind it, and the original silicon lets that reach the object scan.
 
+### GB-PPU-23
+
+**tile id $19 is unsigned-addressed to $8190**
+
+unsigned tile addressing is $8000 + 16*id; a wrong base or stride is invisible until a tile is identified by number, which every OAM entry and every unsigned BG tilemap byte does.
+
 ## DMA: the object transfer
 
 ### GB-DMA-01
@@ -628,6 +634,12 @@ IF reads $E1 at hand-over: the boot ROM waits for the screen before letting go.
 **the divider is not zero at hand-over**
 
 the counter behind $FF04 has been running since power-on, and games seed their randomness from what it holds.
+
+### GB-BOOT-07
+
+**the cartridge's own header logo decompresses into $8010-$818F**
+
+the monochrome boot ROMs unpack the header's Nintendo-logo bitmap into 24 tiles by a documented algorithm; this recomputes it from the cartridge's own header and checks it against what was actually left in VRAM.
 
 ## SER: the link port
 
