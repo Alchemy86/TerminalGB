@@ -49,6 +49,8 @@ FETCHER_PENALTIES = {
     "GB-PPU-18": "an object off the left edge: same",
     "GB-PPU-10": "VRAM blocking is deliberately off with a fixed mode 3",
     "GB-PPU-11": "OAM blocking, for the same reason",
+    "GB-PPU-20": "a mode-3 VRAM write is not dropped either — the write side of GB-PPU-10",
+    "GB-PPU-21": "a scan-time OAM write is not dropped either — the write side of GB-PPU-11",
 }
 
 # A gap this project had already written down and had never been able to

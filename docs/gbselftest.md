@@ -48,11 +48,12 @@ Measured with `tools/conformance/gbconform.py`, both picture modes:
 
 | machine | result |
 |---|---:|
-| this emulator, `identical` (per-dot) | **86 / 87** |
-| this emulator, `standard` (whole-scanline) | **80 / 87** |
-| SameBoy, DMG and MGB | 87 / 87 |
-| SameBoy, CGB-E and AGB | 84 / 87, 3 skipped |
-| Peanut-GB | 64 / 87 |
+| this emulator, `identical` (per-dot) | **96 / 98**, 1 skipped |
+| this emulator, `standard` (whole-scanline) | **87 / 98**, 2 skipped |
+| SameBoy, DMG and MGB | 97 / 98, 1 skipped |
+| SameBoy, CPU CGB C and CGB E | 93 / 98, 5 skipped |
+| SameBoy, AGB | 94 / 98, 4 skipped |
+| Peanut-GB | 67 / 98, 2 skipped |
 
 Every row we lose is a gap this project had **already written down**, and that
 is the point of running it:
@@ -60,11 +61,11 @@ is the point of running it:
 | row | what it is |
 |---|---|
 | `GB-PPU-07` `GB-PPU-08` `GB-PPU-09` `GB-PPU-18` | the mode-3 fetcher penalties — fine scroll, objects, the window taking over, an object off the left edge. A renderer that draws a whole line at once and charges a fixed 172 cycles cannot show any of them ([`docs/picture-modes.md`](picture-modes.md)) |
-| `GB-PPU-10` `GB-PPU-11` | mode-based VRAM and OAM blocking, deliberately off in the default mode because with a fixed mode 3 it would drop writes a game placed legally in HBlank |
+| `GB-PPU-10` `GB-PPU-11` `GB-PPU-20` `GB-PPU-21` | mode-based VRAM and OAM blocking — reads on the first pair, writes on the second — deliberately off in the default mode because with a fixed mode 3 it would drop writes a game placed legally in HBlank |
 | `GB-PPU-16` | the DMG spurious STAT-write interrupt, which [`docs/components/ppu.md`](components/ppu.md) records as not modelled |
 
-The first six are the **whole-scanline renderer's documented trade-off** and the
-per-dot engine passes them. `GB-PPU-16` is lost by both, and it is the
+The first eight are the **whole-scanline renderer's documented trade-off** and
+the per-dot engine passes them. `GB-PPU-16` is lost by both, and it is the
 interesting one: it was a sentence in a component page that **nothing in this
 project could measure**. It is a check with a code on it now, and the gate will
 say so the day somebody implements it.
@@ -258,6 +259,12 @@ an instruction took a different number of machine cycles from the published opco
 
 advancing the clocks once per instruction keeps every rate right and still fails this.
 
+### GB-CYC-08
+
+**an interrupt lands on the cycle it was raised**
+
+running a batch of instructions and delivering at the end of it keeps every rate right and still fails this.
+
 ## TIM: the divider and the timer
 
 ### GB-TIM-01
@@ -369,6 +376,12 @@ IF is a register a program can write, and clearing a bit before the interrupt is
 **clearing IE prevents dispatch and keeps the flag**
 
 IE is consulted at the moment of dispatch, and only dispatch clears a flag.
+
+### GB-INT-12
+
+**a run of EI instructions still enables**
+
+EI arms a latch; an EI that restarts a countdown already running means the enable is never reached at all.
 
 ## MEM: the memory map
 
@@ -524,6 +537,24 @@ the scan finds it and its row is fetched; only the drawing is thrown away.
 
 only SCX discards fetched pixels; SCY just picks which row of the tile is read.
 
+### GB-PPU-20
+
+**a VRAM write during mode 3 is dropped**
+
+the fetcher owns that bus while it draws, so the write never reaches the memory and the picture never shows it.
+
+### GB-PPU-21
+
+**an OAM write during the scan is dropped**
+
+the PPU owns object memory through modes 2 and 3, which is why every game moves its objects in the blank.
+
+### GB-PPU-22
+
+**object memory corrupts, or does not, per console**
+
+the increment unit drives the address bus with no access behind it, and the original silicon lets that reach the object scan.
+
 ## DMA: the object transfer
 
 ### GB-DMA-01
@@ -555,6 +586,12 @@ the transfer has no bus of its own, so a read on the bus it uses sees its byte.
 **where a work-RAM write lands during a transfer**
 
 reported rather than judged: no published reference documents this.
+
+### GB-DMA-06
+
+**a transfer stops the scan reading objects**
+
+the controller drives the object address lines, so the scan reads none.
 
 ## APU: registers and the length counter
 
@@ -663,6 +700,12 @@ an address with no register behind it must read $FF, not $00.
 **the boot ROM leaves its vertical blank pending**
 
 IF reads $E1 at hand-over: the boot ROM waits for the screen before letting go.
+
+### GB-BOOT-06
+
+**the divider is not zero at hand-over**
+
+the counter behind $FF04 has been running since power-on, and games seed their randomness from what it holds.
 
 ## SER: the link port
 

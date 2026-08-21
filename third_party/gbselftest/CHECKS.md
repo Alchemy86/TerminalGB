@@ -181,6 +181,12 @@ an instruction took a different number of machine cycles from the published opco
 
 advancing the clocks once per instruction keeps every rate right and still fails this.
 
+### GB-CYC-08
+
+**an interrupt lands on the cycle it was raised**
+
+running a batch of instructions and delivering at the end of it keeps every rate right and still fails this.
+
 ## TIM: the divider and the timer
 
 ### GB-TIM-01
@@ -292,6 +298,12 @@ IF is a register a program can write, and clearing a bit before the interrupt is
 **clearing IE prevents dispatch and keeps the flag**
 
 IE is consulted at the moment of dispatch, and only dispatch clears a flag.
+
+### GB-INT-12
+
+**a run of EI instructions still enables**
+
+EI arms a latch; an EI that restarts a countdown already running means the enable is never reached at all.
 
 ## MEM: the memory map
 
@@ -447,6 +459,24 @@ the scan finds it and its row is fetched; only the drawing is thrown away.
 
 only SCX discards fetched pixels; SCY just picks which row of the tile is read.
 
+### GB-PPU-20
+
+**a VRAM write during mode 3 is dropped**
+
+the fetcher owns that bus while it draws, so the write never reaches the memory and the picture never shows it.
+
+### GB-PPU-21
+
+**an OAM write during the scan is dropped**
+
+the PPU owns object memory through modes 2 and 3, which is why every game moves its objects in the blank.
+
+### GB-PPU-22
+
+**object memory corrupts, or does not, per console**
+
+the increment unit drives the address bus with no access behind it, and the original silicon lets that reach the object scan.
+
 ## DMA: the object transfer
 
 ### GB-DMA-01
@@ -478,6 +508,12 @@ the transfer has no bus of its own, so a read on the bus it uses sees its byte.
 **where a work-RAM write lands during a transfer**
 
 reported rather than judged: no published reference documents this.
+
+### GB-DMA-06
+
+**a transfer stops the scan reading objects**
+
+the controller drives the object address lines, so the scan reads none.
 
 ## APU: registers and the length counter
 
@@ -586,6 +622,12 @@ an address with no register behind it must read $FF, not $00.
 **the boot ROM leaves its vertical blank pending**
 
 IF reads $E1 at hand-over: the boot ROM waits for the screen before letting go.
+
+### GB-BOOT-06
+
+**the divider is not zero at hand-over**
+
+the counter behind $FF04 has been running since power-on, and games seed their randomness from what it holds.
 
 ## SER: the link port
 
