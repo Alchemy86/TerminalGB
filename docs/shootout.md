@@ -143,10 +143,48 @@ rather than anything either of them does with a fetcher. Traced, it is
 **background**, not an object: no sprite writes that column on those lines, the
 window is inactive (`WY` puts `winy = -1`), and the ROM is running a per-line
 `SCY` raster — 232 on line 68 and 240 on line 69, so the two lines read
-different tiles (`$98A0 = $55` row 4, `$98C0 = $49` row 5) and a one-line error
-in which `SCY` belongs to which line would swap exactly this. Both engines
-agreeing means the write lands in HBlank; the open question is which scanline
-owns it.
+different tiles (`$98A0 = $55` row 4, `$98C0 = $49` row 5).
+
+**And the `SCY` raster is not the fault — that was the first guess and it is
+measured wrong.** The ROM walks a table of per-line `SCY` values behind an
+`rLYC`/`halt` per scanline; the table holds `$E8` at index 68 and `$F0` at 69,
+which is exactly what we read on those lines. Tracing the per-dot fetcher one
+level further — one `eprintln!` in `lo_hi` printing `fetch_x`, `lx`, the tile
+number, its attribute, the row, `tilebase` and the byte — says what the picture
+is actually made of, and it is not what the name suggests: **the tile data is
+uniform**. Every fetch on line 68 returns `7F`/`5D` and every fetch on line 69
+returns `7F`/`41`, whatever tile number or `tilebase` it used, so the face is
+drawn entirely by the **per-tile Color attribute**, one tile in each row
+carrying palette 0 where its neighbours carry palette 1. Underneath that the ROM
+hammers `LCDC` sixteen times a line (`$80`/`$E1`/`$E3`/`$F3`, so `LCDC.4` flips
+between fetches) and moves `SCY` again inside mode 3.
+
+**Tracing the paint as well identifies the two pixels exactly, and they are
+`LCDC.4`.** With `SCX & 7 = 4` the tile covering `x = 76..83` renders positions
+`p = x - 76`, and the painted colours say what each side's high bitplane was:
+ours is `$5D` on line 68 where hardware's is `$55`, and `$41` on line 69 where
+hardware's is `$49` — **one bit each, bit 3, which is `p = 4`, which is
+`x = 80`**, and the two lines have that bit the other way round. Our own fetch
+log says why the byte can move at all: for that tile the *two bitplanes come
+from different blocks*, `lo` from `$8558` under `tilebase = $8000` and `hi` from
+`$9559` under `$8800`, because the ROM flipped `LCDC.4` between the two reads.
+So this row is **the dot at which a bitplane fetch samples `LCDC.4`** — the same
+question as Mealybug's `m3_lcdc_tile_sel_change` group, which is 802 px there
+and unusable as a signal because it sits in block A behind the boot-ROM glyph.
+`cgb-acid-hell` measures it in two pixels and needs no glyph.
+
+**But the commit schedule is NOT the cause, and that is measured, not argued.**
+Tracing the `$FF40` writes beside the fetches shows the high-plane read of the
+tile at `fetch_x = 10` colliding with an `LCDC` write on the *same dot*, on both
+lines — which looks exactly like a one-dot ordering question. It is not:
+sweeping the Color `LCDC` arm of `ppu_write_commit` over **every** value it can
+take — `early` 0, 1, 2 and 3, each with the stage mask holding bit 3 alone and
+bits 3 and 4 together — leaves the row at **2 px in all eight configurations**.
+So the fetch resolves to the same VRAM address whatever the schedule, and the
+byte at that address differs from the one the reference device had. That makes
+these two pixels a **memory-behaviour** question rather than a PPU one, which
+is also what the two engines agreeing said from the start, and it is where the
+next person should start rather than in the fetcher.
 
 <sup>Not the `$FEA0-$FEFF` revision choice, which is the other thing this row is
 famous for here. The ROM gates its own setup on `$FEA0` reading back the `$55`

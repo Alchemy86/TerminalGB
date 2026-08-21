@@ -1364,6 +1364,17 @@ Measured on the `identical` engine at the head of this campaign.
 | **F** the object fetch | `m3_lcdc_obj_size_change` 51 / 10 / 10 · `m3_lcdc_obj_size_change_scx@DMG` 30 | `due_sprite`, `start_obj_fetch`, `obj_fetch_dot`, `obj_plane`, `merge_sprite` | the tall extension, and objects at `X < 8` |
 | **G** | `m3_lcdc_bg_en_change@DMG` 4 | `paint`, `LCDC_DMG_STAGE_BITS` | one pixel at `x = 0`; §10.6 records **four** measured dead ends |
 
+> **And `acid/cgb-acid-hell` is now the cheapest measurement of the `tile_sel`
+> question there is.** `m3_lcdc_tile_sel_change` sits at 802/802/822 px and is
+> in block A, so its number says nothing about the behaviour — it is dominated
+> by the missing boot-ROM glyph. `cgb-acid-hell` measures the same thing,
+> `LCDC.4` flipping between a tile's two bitplane fetches, in **two pixels** and
+> with no glyph anywhere near it: [`shootout.md` §1c](shootout.md#1c-the-remaining-25-measured-rather-than-assumed-21-aug-2026)
+> has the byte-level derivation — **and the negative result that goes with it**,
+> which is that sweeping the Color `LCDC` arm of `ppu_write_commit` over all
+> eight of its reachable configurations leaves that row at 2 px. Whatever it is,
+> it is not the commit schedule, so do not spend a fifth sweep there.
+
 > **Group F, the trace and its two traps (21 Aug 2026).** The instrument is one
 > `eprintln!` in `obj_plane` printing `(line, modeclock, oam, x, y, plane,
 > sprite_size)` and one in `Gpu::wb`'s `$FF40` arm printing the dot the write
