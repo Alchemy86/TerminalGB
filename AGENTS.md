@@ -7476,6 +7476,62 @@ both engines.
   (a count, not a countdown — same width, same place, so nothing about the layout moved), v21
   for `Pipeline::win_skip`, v22 for `Pipeline::win_fresh`.
 
+## Two more Mealybug fixes, and a pixel-count trade that is DELIBERATE, not incomplete
+
+**Shootout 239 → 241/264** across two commits (`9e7269e`, `d8751b4`), full record
+[`docs/mealybug.md`](docs/mealybug.md) §12–§13. `m3_lcdc_obj_size_change_scx` goes
+pixel-exact on all three machines (30/0/0 → **0/0/0**, its DMG column FAIL→PASS) by
+reading an object's **high** bitplane on the fetch's sixth dot instead of its fifth
+(docboy's own phase, its comment naming both `obj_size_change` ROMs as "bitplane
+desync"). Separately, `cgb-acid-hell` goes pixel-exact (2 px → **0**) because a
+`TILE_SEL` reset on the same T-cycle as a bitplane read makes the **tile index**
+itself the bitplane data — the Mealybug author's own documented rule, shipped inside
+the suite this project already fetches.
+
+- **THIS WAS A HELD-BACK BRANCH BECAUSE ONE FAMILY'S PIXEL COUNTS GOT MEASURABLY
+  WORSE, AND THAT IS RESOLVED HERE: it is a genuine, arithmetically-proven trade, not
+  unfinished work.** Moving the high-plane read from dot 5 to dot 6 fixes `_scx`'s DMG
+  column but makes `_scx`'s sibling `m3_lcdc_obj_size_change` (which never passes
+  under *any* tested dot pair) numerically worse: 51/10/10 → **81/20/20**. `docs/
+  mealybug.md` §12.2 ships the full 3×4 sweep and §12.3 the arithmetic proof that no
+  commit schedule and no plane-dot pair can satisfy both ROMs at once — one needs the
+  `LCDC.2` visibility dot above 100, the other needs it at or below 99, for the *same*
+  register on the *same* line. **Re-verified independently in this session**, not
+  just read off the docs: rebuilding at both dot pairs reproduces the sweep's own
+  numbers to the pixel, and the shipped `3/6` is the row-count optimum (9/9/9 PASSing
+  rows across the DMG/CGB-C/CGB-D columns of the two ROMs together, against 8/9/9 at
+  `3/5`). **No PASS is lost anywhere by taking `3/6`.**
+- **This exact combination (`3/6`) had been swept and REJECTED once already**, in the
+  earlier `identical 17/79 → 26/79` round above ("the object fetch's two plane-read
+  dots were swept over six pairs; `3/6` buys a third row and was not taken, because
+  low-on-the-first-dot and high-on-the-second is an asymmetry no source justifies").
+  What changed is not the number, it is the **evidence**: at the time it looked like a
+  per-test fudge; docboy's independent phase (an unrelated implementation, MIT,
+  reimplemented per `CONTRIBUTING.md`) turns it from an unjustified constant into a
+  measured hardware behaviour with a second author agreeing. **The same numeric
+  change can be right the second time for a reason it was wrong the first.**
+- **Re-verified whole: both external gates (`make test-external`,
+  `make test-external-accurate` — mooneye ×2, samesuite, mealybug ×2, cpp, all
+  thirteen c-sp suites including Gambatte's 5,320 rows), the in-repo `testroms`
+  (46/47, `oam_bug@cgb` the one permanent red), 892 lib tests, `savestate`,
+  `battery`, `bootrom`, `ppuengines` and `gbselftest` (98 checks, both picture
+  modes) all match their checked-in baselines exactly** — every FAIL that was a
+  FAIL still is, every PASS that was a PASS still is, and the two rows this section
+  is about show precisely the pixel counts quoted here and in `docs/mealybug.md`
+  §12.2's table. Nothing was re-blessed to hide anything.
+- `mode::PpuRevision` gains `CgbE` (default), splitting from `CgbD` on exactly the
+  `tile_sel_glitch_reads_tile_index` predicate — `CgbD` alone does not substitute the
+  tile index on a `TILE_SEL` reset, every other revision (0/B/C/E) does. Neither
+  `tile_sel_glitch` nor the OAM DMA's bus fields are serialised (published by one
+  access, consumed by the dot that shares it), so no `savestate::FORMAT_VERSION` bump.
+- **GBSelfTest re-pinned 91 → 98 checks in the same batch** (`third_party/gbselftest/`,
+  commit `3da06dc`) — seven checks this project's own findings had already earned
+  upstream were not being scored here. `identical` 96/98, `standard` 87/98, every red
+  row a documented trade-off (the whole-scanline renderer's fixed-length mode 3, and
+  now `GB-PPU-16`, the DMG spurious STAT-write interrupt, unmodelled on both engines).
+  Cross-checked against SameBoy (97/98 DMG/MGB, 93/98 CGB, zero *failures*, only
+  console-inapplicable skips) before any of the seven new checks were trusted.
+
 ## Optional user-supplied boot ROM (`src/boot.rs`) — the answer to Blocker C
 
 **Captain's decision, 2026-08-14: do NOT embed the boot ROM's `®` glyph; support an optional
