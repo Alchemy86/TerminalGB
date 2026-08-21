@@ -125,7 +125,12 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// eighteen dots of a scanline.
 /// v22: and whether the window has pushed its first tile yet, which is what
 /// exempts that one tile from the window pixel-insertion glitch.
-pub const FORMAT_VERSION: u16 = 23;
+/// v24: the per-dot PPU's window/background fetchers now carry separate tile
+/// counters (`Pipeline::win_fetch_x` beside the existing `fetch_x`, which is
+/// now the background's alone) and an explicit "has this line pushed a tile
+/// yet" flag that replaces an inference from `bg_len == 0` (ambiguous the
+/// instant a push drains the FIFO to empty). Both are live mid-mode-3.
+pub const FORMAT_VERSION: u16 = 24;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

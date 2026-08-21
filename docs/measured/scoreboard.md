@@ -144,7 +144,7 @@ The mode is gated separately (`make test-external-accurate`, against
 | SameSuite | <!--score:samesuite-->73/76<!--/score--> | <!--score:samesuite-->73/76<!--/score--> |
 | `cpp` | <!--score:cpp-->4/4<!--/score--> | <!--score:cpp-->4/4<!--/score--> |
 | Mealybug — rows pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->27/79<!--/score-->** |
-| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->498,150<!--/score-->** |
+| Mealybug — pixels wrong *(lower is better)* | <!--score:mealybug:px-->1,212,282<!--/score--> | **<!--score:mealybug_accurate:px-->497,312<!--/score-->** |
 
 (Rows with one baseline are scored once: the picture mode does not reach what they measure, so
 the same figure stands in both columns.)
@@ -274,7 +274,7 @@ they belong to the Shootout's 24-row Mealybug population, not our
 
 | Picture mode | Rows pixel-exact | Total pixel distance |
 |---|---:|---:|
-| `identical` (the default) | **<!--score:mealybug_accurate-->27 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->498,150<!--/score-->** |
+| `identical` (the default) | **<!--score:mealybug_accurate-->27 / 79<!--/score-->** | **<!--score:mealybug_accurate:px-->497,312<!--/score-->** |
 | `standard` (`GB_PPU=standard`) | <!--score:mealybug-->3 / 79<!--/score--> | <!--score:mealybug:px-->1,212,282<!--/score--> |
 
 The baseline pins the **pixel count per row**, not just PASS/FAIL, precisely because at

@@ -1725,3 +1725,78 @@ to 12 / 12 / 12**. Net one row lost. That is the same trade `bg_fetch_dot`'s own
 records from the other side, and it says the overlap dot is real; what is wrong is *where the
 object fetch begins* relative to the push, which is the per-tile calibration §8.9 scopes. Come
 back with a model of that, not with a condition on `fetch_t`.
+
+## 15. The signed-position refactor: `check_window_start`/`check_window_stop` share one grid (21 Aug 2026)
+
+`m3_lcdc_win_en_change_multiple_wx@DMG` **1,273 → 437** px; its CGB-C/CGB-D columns (colour
+photographs, dominated by the boot-logo blocker in §11.3) move 22,813 → 22,812, noise. Zero rows
+lost anywhere: full record of the verification is in `AGENTS.md` under "The window fetcher's
+addressing and its visible flag are two different questions" — Mooneye acceptance/emulator-only/
+misc, SameSuite, `cpp`, all thirteen c-sp suites (Gambatte's 5,320 rows included), the in-repo
+`testroms`, dmg-acid2, `savestate`/`battery`/`bootrom`/`ppuengines`/`gbselftest` and every library
+test match their checked-in baselines exactly under both picture modes, and the three moved rows
+are the only diff `UPDATE_EXTERNAL_BASELINE=1` produced.
+
+**`m3_wx_5_change`/`m3_wx_6_change` are UNCHANGED (13,660 / 4,792, identical to the digit).**
+§11.4's own table already separated them from this row: they need the window to *re-trigger*
+while already active on the same line, which `check_window_start`'s guard still refuses
+unconditionally. That is a second mechanism, not exercised by the fix here, and is not attempted
+in this pass — do not read their unmoved counts as this row's fix falling short.
+
+### 15.1 The fix, in one sentence
+
+`check_window_start` still checks `pipe.window || !win_on || !wy_trigger`, unchanged, and still
+sets `wy_pos`/`win_skip`/`win_fresh` exactly as before. What changed is *when the fetcher itself
+is allowed to re-address the background mid-tile* versus *when the externally-visible "window is
+still on screen" flag comes down* — the two are no longer the same read of the same field, which
+was the bug §11.5 named ("Ours resumes on the **screen's** tile grid, not the **window's**").
+
+### 15.2 Three fields where there was one
+
+`Pipeline::window` used to serve three purposes at once: the fetcher's own addressing branch
+(`fetch_tile_number`, `lo_hi`), the guard against re-triggering, and the externally-observed "is
+window content still showing" flag `the_window_tile_grid_is_anchored_at_wx_minus_7` reads
+directly. Splitting it is what closes the row:
+
+- **`window`** keeps its name and its *deferred* role: true from activation, false only once the
+  FIFO reaches a natural tile boundary with nothing window-addressed still queued — i.e. only
+  reachable past the `bg_len > 0` early return in `bg_fetch_dot`, exactly where the deleted
+  `check_window_stop` used to run. This is what `check_window_start`'s guard and the test both
+  read, and it is why the background always resumes on a whole tile with no arithmetic: the FIFO
+  is never interrupted mid-tile, only redirected for the *next* one.
+- **`win_active`** is the *immediate* fetcher-addressing flag docboy's per-stage checks model
+  (`src/docboy/docboy/ppu/ppu.cpp`, cited already in `bg_fetch_dot`'s doc comment): it flips the
+  instant `LCDC.5` reads low, mid-fetch or not, and `fetch_tile_number` addresses off it, not
+  `window`. The existing restart-on-early-abort logic (`fetch_t < 4 + late`) is unchanged; it now
+  resets in response to `win_active`, not `window`.
+- **`tile_is_window`** is `win_active`'s value frozen once, at `fetch_tile_number`'s own call —
+  read back by `lo_hi` (the row) and by the push-time `fetch_x` guard, because a *late* abort
+  (caught after the tile number was already read, too late to restart) must not let those two
+  stages disagree about which side the tile they are completing was fetched as.
+
+### 15.3 The reset that cost the first attempt an afternoon
+
+The first version of the split passed every `fifo` unit test, including
+`the_window_tile_grid_is_anchored_at_wx_minus_7`, and then made this exact ROM's own score
+*worse* than the pre-refactor baseline (1,973 px, not an improvement). Traced on line 48 (of
+`WX = LY`): `win_active` read **true** at the very first dot of the line's mode 3, before
+`check_window_start` had fired at all for that line — carried over from the *previous* scanline,
+whose window was still active near its own end (`WX = 47`). `start_mode3` already reset `window`
+to `false` per line; the new `win_active`/`tile_is_window` fields needed the identical per-line
+reset and did not have it. One line each in `start_mode3` closed it. The lesson worth keeping:
+splitting one field into several means finding *every* place the old one was reset, not only
+where it was read.
+
+### 15.4 How it was found: the tests measure `lx`, not the arithmetic
+
+`the_window_tile_grid_is_anchored_at_wx_minus_7` and `check_window_stop`'s deleted resume formula
+both talk about a *position*, which invites reasoning about it in the abstract. The test itself
+does nothing of the sort — it drives the real per-dot engine (`gpu.wb(0xFF40, …)` directly, no
+`ppu_write_commit` staging) and reads `gpu.pipe.lx` at the exact dot `gpu.pipe.window` next reads
+false. Comparing that trace against the *same* test run on an unmodified pre-refactor checkout
+(`git checkout <parent> -- src/gpu/fifo.rs`, add one `eprintln!`, run, revert) is what found that
+old code's `check_window_stop` was gated behind the identical `bg_len > 0` early return that
+blocks ordinary fetching — so it only ever fires at a natural tile boundary, which is *why* the
+resume position was always on-grid without any grid arithmetic in the old formula at all. That
+gating is the one property worth preserving exactly, and `window`'s new deferred role above is a
+direct port of it.

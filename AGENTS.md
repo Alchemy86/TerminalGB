@@ -12579,3 +12579,54 @@ beside the thing it is meant to test. The cartridge is its own repo
   overflow it (fragmentation, so "519 bytes free" still fails) — match the
   house length, ~60-90 characters. And `SetNums16` takes `DE` = got and `HL` =
   want, so build both in the *same* byte order or the report reads backwards.
+
+## The window fetcher's addressing and its visible flag are two different questions (`src/gpu/fifo.rs`)
+
+**Mealybug `identical` engine: `m3_lcdc_win_en_change_multiple_wx@DMG` 1,273 → 437 px.** Full
+record with the ground-truth arithmetic, the reasoning trail and the "what still needs a second
+mechanism" caveat: [`docs/mealybug.md`](docs/mealybug.md) §15. Zero rows moved anywhere else —
+Mooneye acceptance/emulator-only (103/103 both modes) and `misc` (8/8), SameSuite (73/76 both
+modes), `cpp` (4/4), all thirteen c-sp suites including Gambatte's full 5,320 rows (both modes),
+in-repo `testroms` (46/47), dmg-acid2 (0/23,040), `savestate`/`battery`/`bootrom`/`ppuengines`/
+`gbselftest` and all 892 library tests all match their checked-in baselines exactly.
+`UPDATE_EXTERNAL_BASELINE=1`'s own diff on `testharness/mealybug_accurate_baseline.txt` is the
+three rows above and nothing else.
+
+- **`Pipeline::window` used to answer three questions at once, and only one of them wants to
+  flip the instant `LCDC.5` reads low.** `check_window_start`'s guard against re-triggering, the
+  fetcher's own addressing branch in `fetch_tile_number`/`lo_hi`, and the *externally-visible*
+  "is window content still on screen" flag `the_window_tile_grid_is_anchored_at_wx_minus_7`
+  reads directly were all the same field. §11.5 named the bug from the stop side
+  ("`check_window_stop`'s resume is on the **screen's** tile grid, not the **window's**") and it
+  is exactly this conflation: a docboy-style per-stage abort (checked every dot, flips addressing
+  mid-fetch) is *right* for the fetcher and *wrong* for the visible flag, which must stay true
+  until the FIFO drains whatever it already queued as window, or the background resumes wherever
+  the abort happened to catch it instead of on the window's own `WX - 7 + 8n` grid.
+- **Three fields now, not one.** `window` keeps the *deferred* role — false only once a
+  completed fetch is about to push with the FIFO already empty (the same position the deleted
+  `check_window_stop` ran from, gated behind the same `bg_len > 0` early return that blocks
+  ordinary fetching, which is *why* a resume is always on a whole tile with no arithmetic
+  needed). `win_active` is the *immediate* fetcher-addressing flag `fetch_tile_number` reads,
+  flipping mid-fetch exactly as docboy's per-stage checks do. `tile_is_window` freezes
+  `win_active`'s value once, at the tile-number read, for `lo_hi` and the push-time `fetch_x`
+  guard to agree with — a late abort (caught after the tile number was already read, too late to
+  restart) must not let the row and the map address disagree about which side a tile was.
+- **A field split this way needs the SAME per-scanline reset as the field it replaced, and
+  missing it is silent.** `start_mode3` already zeroed `window` every line; the new
+  `win_active`/`tile_is_window` did not get the same treatment in the first pass, so a window
+  still active near the end of one scanline left `win_active = true` carrying into the very
+  first dot of the next — before that line's own `check_window_start` had even run — and
+  `fetch_tile_number` addressed window immediately with stale `win_fetch_x`. It scored *worse*
+  than the pre-refactor baseline (1,973 px) despite every unit test passing, because none of them
+  cross a scanline boundary with the window active at the end of one. Found by tracing the exact
+  line the score regressed on, not by reasoning about the fields in the abstract.
+- **Verify a "the old code already got this right" claim by running the old code, not by
+  reasoning about it.** `the_window_tile_grid_is_anchored_at_wx_minus_7` passes on `main` (before
+  this fix) and its resume values (9, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5 for `WX = 0..12`) were
+  read off a temporary `eprintln!` in a scratch checkout of the parent commit's `fifo.rs`, not
+  derived. That is what showed `check_window_stop`'s gating — not its formula — was the part
+  worth keeping, and it is the property `window`'s new deferred role reproduces exactly.
+- **`m3_wx_5_change`/`m3_wx_6_change@DMG` are unmoved (13,660 / 4,792, unchanged to the digit) —
+  this was scoped, not missed.** Both need the window to *re-trigger* while still active on the
+  same line, which `check_window_start`'s `if self.pipe.window { return false; }` guard still
+  refuses unconditionally, same as before this fix. A second mechanism, not attempted here.

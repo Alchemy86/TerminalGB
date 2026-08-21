@@ -149,8 +149,33 @@ pub(super) struct Pipeline {
     /// reaches `SCX & 7`, which is re-read on every one of those dots — see
     /// [`Gpu::output_dot`].
     discard: u8,
-    /// The fetcher is drawing the window rather than the background.
+    /// **Whether window content is still being displayed** — set true the
+    /// instant the window takes over and cleared only once the background has
+    /// genuinely resumed: at the next natural tile boundary (a completed fetch
+    /// about to push, with the FIFO already drained) found with `win_active`
+    /// already false. That gating — not a per-dot check — is what keeps this
+    /// flag's stop always landing on a whole tile, so the pixel it stops on is
+    /// always on the window's own `WX - 7 + 8n` grid with no arithmetic needed;
+    /// see `the_window_tile_grid_is_anchored_at_wx_minus_7`. `check_window_start`
+    /// reads this (not `win_active`) to refuse a re-trigger, so a re-enable
+    /// mid-drain waits for the same boundary rather than interrupting it.
     window: bool,
+    /// **Whether the FETCHER should address window tiles right now** — flips
+    /// the instant `LCDC.5` is read low, mid-fetch or not, unlike `window`
+    /// above. `fetch_tile_number` reads this (immediate) rather than `window`
+    /// (deferred): a mid-fetch abort must redirect the very next tile-number
+    /// read to the background, not wait for the window's already-queued
+    /// content to drain first. docboy's per-stage `!lcdc.win_enable` checks
+    /// are this flag's model (`src/docboy/docboy/ppu/ppu.cpp`).
+    win_active: bool,
+    /// **Which side the CURRENTLY IN-FLIGHT (or just-completed) fetch was
+    /// addressed as**, captured once at `fetch_tile_number` and left alone for
+    /// the rest of that tile's fetch — `win_active` can flip again before the
+    /// tile pushes (an abort caught after the tile number was already read),
+    /// and `lo_hi`'s row and the push-time `fetch_x` guard must still agree
+    /// with what the tile number itself was read against, or the row and the
+    /// map read come from different sides of one tile.
+    tile_is_window: bool,
     /// The window was drawn somewhere on this line — which is what advances the
     /// window's internal line counter.
     win_drawn: bool,
@@ -160,9 +185,35 @@ pub(super) struct Pipeline {
     /// shifted out and dropped a dot each, exactly like the `SCX & 7` discards
     /// that follow them. See [`Gpu::check_window_start`].
     win_skip: u8,
-    /// Set by the window's takeover and cleared by its first push. The window
-    /// pixel-insertion glitch skips that one tile — see [`Gpu::bg_fetch_dot`].
+    /// Set by the window's takeover and cleared by its first push. Exempts
+    /// that one tile from the window pixel-insertion glitch (below) **and**
+    /// from advancing `fetch_x` (see `Gpu::fetch_tile_number` /
+    /// `Gpu::bg_fetch_dot`'s push) — docboy's `w.just_activated`, whose own
+    /// comment on the shared tile-counter advance says a fetch the window
+    /// aborts mid-cycle still counts, but the window's first tile after
+    /// activation never does.
     win_fresh: bool,
+    /// The window's OWN tile counter, separate from `fetch_x` — reset to 0 on
+    /// every activation and read (then advanced) at the window's tile-number
+    /// fetch. Splitting it out is what lets the background's counter carry on
+    /// underneath a window that is currently drawing, instead of losing its
+    /// place every time the window takes over: `fetch_x` now advances on
+    /// every completed tile fetch regardless of which one addressed it,
+    /// exactly as it would have if the background had kept fetching all
+    /// along, so a window that stops mid-line resumes the background exactly
+    /// where it would already be. Modelled on docboy's `wf.tilemap_x` beside
+    /// `bwf.lx` (`src/docboy/docboy/ppu/ppu.cpp`), read and reimplemented per
+    /// `CONTRIBUTING.md`.
+    win_fetch_x: u8,
+    /// Whether any tile has been pushed yet on this scanline. `prologue_pos`
+    /// used to infer "still in the head-of-line prologue" from `bg_len == 0`,
+    /// which is also briefly true the instant a push drains the FIFO to empty
+    /// — a state the window's own take-over check must never mistake for the
+    /// prologue again. This flag makes the distinction explicit instead of
+    /// inferred, which is what keeps a mid-line window stop (or a sprite
+    /// fetch delaying the next push) from being read as the very start of
+    /// the line.
+    line_started: bool,
 }
 
 impl Default for Pipeline {
@@ -194,9 +245,13 @@ impl Default for Pipeline {
             lx: 0,
             discard: 0,
             window: false,
+            win_active: false,
+            tile_is_window: false,
             win_drawn: false,
             win_skip: 0,
             win_fresh: false,
+            win_fetch_x: 0,
+            line_started: false,
         }
     }
 }
@@ -263,9 +318,13 @@ impl Pipeline {
         w.u8(self.lx);
         w.u8(self.discard);
         w.bool(self.window);
+        w.bool(self.win_active);
+        w.bool(self.tile_is_window);
         w.bool(self.win_drawn);
         w.u8(self.win_skip);
         w.bool(self.win_fresh);
+        w.u8(self.win_fetch_x);
+        w.bool(self.line_started);
     }
 
     fn save_fifo(w: &mut crate::savestate::Writer, f: &[Pixel; 8]) {
@@ -324,9 +383,13 @@ impl Pipeline {
         self.lx = r.u8()?;
         self.discard = r.u8()?;
         self.window = r.bool()?;
+        self.win_active = r.bool()?;
+        self.tile_is_window = r.bool()?;
         self.win_drawn = r.bool()?;
         self.win_skip = r.u8()?;
         self.win_fresh = r.bool()?;
+        self.win_fetch_x = r.u8()?;
+        self.line_started = r.bool()?;
         Ok(())
     }
 }
@@ -569,9 +632,13 @@ impl Gpu {
         p.obj_tile_paid = NO_TILE;
         p.lx = 0;
         p.window = false;
+        p.win_active = false;
+        p.tile_is_window = false;
         p.win_drawn = false;
         p.win_skip = 0;
         p.win_fresh = false;
+        p.win_fetch_x = 0;
+        p.line_started = false;
         p.fetched = 0;
         // Nothing about `SCX` is latched here. Its low three bits decide how
         // many pixels the head of the line throws away, and that comparison is
@@ -597,6 +664,29 @@ impl Gpu {
     /// fetcher then gets its dot. That ordering is what makes the first pixel
     /// appear on dot 12 and mode 3 come out at 172 dots for `SCX & 7 == 0`.
     fn pipeline_dot(&mut self) {
+        #[cfg(test)]
+        if std::env::var_os("SCRATCH_DOT_TRACE").is_some()
+            && self.line
+                == std::env::var("SCRATCH_LINE")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(8)
+        {
+            eprintln!(
+                "PREdot={:4} win={} win_on={} fetch_x={:3} fetch_t={} \
+                 win_skip={} lx={:3} discard={} bg_len={} winx={}",
+                self.modeclock,
+                self.pipe.window,
+                self.win_on,
+                self.pipe.fetch_x,
+                self.pipe.fetch_t,
+                self.pipe.win_skip,
+                self.pipe.lx,
+                self.pipe.discard,
+                self.pipe.bg_len,
+                self.winx,
+            );
+        }
         if self.check_window_start() {
             // A `WX = 0` takeover on a line with fractional scrolling spends
             // this dot and nothing else. See [`Gpu::check_window_start`].
@@ -643,7 +733,17 @@ impl Gpu {
     /// `WX = n` for `n <= 7` starts at pixel `n - 7`, i.e. at position `n`
     /// here.
     fn prologue_pos(&self) -> Option<i16> {
-        if self.pipe.bg_len > 0 {
+        // `line_started` (not `bg_len == 0`) is what says whether this is
+        // genuinely the head-of-line prologue. The two used to coincide, but
+        // only because the window's own stop used to force `bg_len` back to
+        // zero for several dots to force a resync (`bg_clear`, now gone) —
+        // and while that was going on, `bg_len == 0` read as "still in the
+        // prologue" and let the window's take-over equality fire again
+        // mid-line, whenever `WX` happened to match the fetcher's phase
+        // during the gap. `line_started` is the fact itself rather than an
+        // inference that only happened to hold for as long as nothing else
+        // ever put the FIFO through a multi-dot empty spell.
+        if self.pipe.line_started {
             return None;
         }
         if self.pipe.first_fetch {
@@ -724,8 +824,13 @@ impl Gpu {
         let skip = 7u8.saturating_sub(self.winx);
         let p = &mut self.pipe;
         p.window = true;
+        p.win_active = true;
         p.win_drawn = true;
-        p.fetch_x = 0;
+        // The window's OWN counter resets on every activation; `fetch_x` —
+        // the background's — is deliberately left untouched, so a background
+        // that the window interrupts resumes exactly where it would already
+        // be. See `Pipeline::win_fetch_x`.
+        p.win_fetch_x = 0;
         p.fetch_t = 0;
         // A takeover inside the prologue truncates the discarded first fetch —
         // the window's own fetch is what runs from here.
@@ -736,25 +841,54 @@ impl Gpu {
         stall
     }
 
-    /// Turning `LCDC.5` off mid-line does not take effect until the window tile
-    /// being drawn has finished; the background then resumes **on a tile
-    /// boundary**, with the low three bits of `SCX` having no further effect
-    /// (mealybug's own PPU notes, `WIN_EN`).
-    fn check_window_stop(&mut self) {
-        if !self.pipe.window || self.win_on {
-            return;
-        }
-        let resume = (self.pipe.lx / 8) + 1;
-        let p = &mut self.pipe;
-        p.window = false;
-        p.fetch_x = resume;
-        p.fetch_t = 0;
-        p.bg_clear();
-    }
-
     /// Advance the background/window fetcher one dot, reading each register at
     /// the stage hardware reads it at.
+    ///
+    /// **Turning `LCDC.5` off is checked here, every dot, not only once a tile
+    /// finishes.** docboy checks `!lcdc.win_enable` at the top of every one of
+    /// its window fetcher stages (`win_prefetcher_get_tile_0`/`_1`,
+    /// `win_pixel_slice_fetcher_get_tile_data_{low,high}_{0,1}` —
+    /// `src/docboy/docboy/ppu/ppu.cpp`) and falls through to the matching
+    /// background stage the instant it is false, so a tile whose fetch is
+    /// already in flight when the write commits finishes as background from
+    /// whichever stage comes next — it does **not** wait for the tile that is
+    /// already fully fetched-as-window to be thrown away and refetched. A tile
+    /// whose fetch had *already completed* as window before the write commits
+    /// is unaffected: nothing left to abort. Doing this as a flag flip rather
+    /// than redirecting per stage is equivalent here, because `fetch_tile_number`
+    /// and `lo_hi` already branch on `self.pipe.win_active` (and its frozen
+    /// per-tile copy, `self.pipe.tile_is_window`) themselves — flipping
+    /// `win_active` before whichever of those runs next is all "fall through
+    /// to the background stage" amounts to. `self.pipe.window` is a separate,
+    /// deferred question — see its own doc comment — and is resolved later in
+    /// this same function, only once the FIFO reaches a natural boundary.
     fn bg_fetch_dot(&mut self) {
+        // This is the FETCHER's own abort, checked every dot regardless of
+        // how much already-fetched window content is still queued in the
+        // FIFO — `win_active` is the immediate flag `fetch_tile_number`
+        // addresses off, and it must flip the instant `LCDC.5` reads low,
+        // mid-fetch or not. `window` (the externally-visible flag) is a
+        // different, deferred question and is resolved separately, below,
+        // once the FIFO reaches a natural tile boundary.
+        if self.pipe.win_active && !self.win_on {
+            self.pipe.win_active = false;
+            // Once the high bitplane has been read there is nothing left for
+            // an abort to change — the tile is fully read, whichever side it
+            // was read as, and it pushes as that. Before that, restart the
+            // cycle: the tile number is read once, at the *start* of a fetch,
+            // and every later stage reuses it regardless of which register it
+            // otherwise branches on, so an abort caught earlier would
+            // otherwise finish the tile with the window's tile number and the
+            // background's row — a tile neither side ever draws. Restarting
+            // costs nothing extra here (the next dot was already going to
+            // read a register), and is what keeps the background clean
+            // whenever it has to take over mid-fetch rather than only at a
+            // tile boundary.
+            let late = u8::from(!self.gbmode.is_dmg());
+            if self.pipe.fetch_t > 0 && self.pipe.fetch_t < 4 + late {
+                self.pipe.fetch_t = 0;
+            }
+        }
         if self.pipe.fetch_t < FETCH_DOTS {
             self.pipe.fetch_t += 1;
             // Each 2-dot stage does its VRAM read on the stage's FIRST dot on
@@ -789,6 +923,9 @@ impl Gpu {
         if self.pipe.bg_len > 0 {
             return; // no room yet — this is the fetcher's idle
         }
+        // Every tile that reaches a push, on any scanline, has to have run
+        // through here at least once. See `Pipeline::line_started`.
+        self.pipe.line_started = true;
         // **The window pixel-insertion glitch.** Once `WY == LY` has latched for
         // the frame, a push landing on the pixel the window starts at supplies a
         // single colour-0 pixel instead of the tile, and the real push is
@@ -819,28 +956,60 @@ impl Gpu {
         // the same predicate `bg_fetch_dot` uses for the fetcher's read phase.
         if self.wy_trigger
             && !self.pipe.win_fresh
-            && (self.gbmode.is_dmg() || self.pipe.window)
+            && (self.gbmode.is_dmg() || self.pipe.tile_is_window)
             && self.pipe.lx as i16 == self.winx as i16 - 7
         {
             self.pipe.bg[self.pipe.bg_head as usize & 7] = Pixel::default();
             self.pipe.bg_len = 1;
             return;
         }
+        // `fetch_x` is the BACKGROUND's own counter now, addressed only from
+        // the background branch of `fetch_tile_number`; a window tile reads
+        // and advances `win_fetch_x` instead. So while the tile about to push
+        // was fetched AS a window tile, `fetch_x` must not move at all — not
+        // just on the window's first tile since activation, on every one of
+        // them, or the background's resume position is polluted by the time
+        // the window stops and `fetch_x` is consulted again. `tile_is_window`
+        // (not the live `win_active`) is what a late abort needs here: it was
+        // frozen at this tile's own tile-number read and survives an abort
+        // that catches it too late to restart. `win_fresh` still gates the
+        // pixel-insertion glitch above; it plays no part in this decision.
         self.pipe.win_fresh = false;
         self.push_bg_tile();
-        self.pipe.fetch_x = self.pipe.fetch_x.wrapping_add(1);
+        if !self.pipe.tile_is_window {
+            self.pipe.fetch_x = self.pipe.fetch_x.wrapping_add(1);
+        }
         self.pipe.fetch_t = 0;
-        self.check_window_stop();
+        // **Where `window` (the deferred, externally-visible flag) actually
+        // resolves to false.** This point is unreachable while `bg_len > 0`
+        // (the early return above), so it only ever runs at a natural tile
+        // boundary — a fetch has just completed and pushed with the FIFO
+        // already empty beforehand. That gating, not a per-dot check, is what
+        // makes the background always resume on a whole tile: any
+        // already-queued window content keeps draining normally (through
+        // ordinary pops in `Gpu::output_dot`) for as long as it takes, and
+        // `window` only comes down once there is truly nothing "window" left
+        // to account for. Modelled on the old `check_window_stop`'s own
+        // gating (called from this exact spot before this refactor), kept
+        // because it is what already made
+        // `the_window_tile_grid_is_anchored_at_wx_minus_7` pass — the
+        // grid-anchoring fix changes where the window *starts* and how a
+        // mid-fetch abort avoids mixing a tile's two halves, not this.
+        if self.pipe.window && !self.pipe.win_active {
+            self.pipe.window = false;
+        }
     }
 
     fn fetch_tile_number(&mut self) {
-        let (map, tx, ty) = if self.pipe.window {
+        // Frozen here, once per tile, for `lo_hi` and the push-time `fetch_x`
+        // guard to read back — seeing `win_active`'s value now rather than
+        // whatever it happens to be when they run, dots later.
+        self.pipe.tile_is_window = self.pipe.win_active;
+        let (map, tx, ty) = if self.pipe.win_active {
             let wy = self.wy_pos.max(0) as u16;
-            (
-                self.win_tilemap,
-                self.pipe.fetch_x as u16 & 31,
-                (wy >> 3) & 31,
-            )
+            let tx = self.pipe.win_fetch_x as u16 & 31;
+            self.pipe.win_fetch_x = self.pipe.win_fetch_x.wrapping_add(1);
+            (self.win_tilemap, tx, (wy >> 3) & 31)
         } else {
             let bgy = self.scy.wrapping_add(self.line) as u16;
             (
@@ -873,7 +1042,7 @@ impl Gpu {
         // available there at all; see [`PpuRevision`], which cites SameBoy and
         // docboy for the boundary.
         let cached = !self.gbmode.is_dmg() && self.cgb_ppu_revision().caches_fetcher_y();
-        let row = if self.pipe.window {
+        let row = if self.pipe.tile_is_window {
             (self.wy_pos.max(0) as u16) & 7
         } else if cached {
             self.pipe.fetch_y as u16 & 7
@@ -2190,10 +2359,11 @@ mod tracing {
             if before == 143 && g.line == 144 {
                 frames += 1;
             }
-            if frames >= 8 && g.line == want && logged < 90 {
+            if frames >= 8 && g.line == want && logged < 120 {
                 println!(
                     "dot={:4} mode={} lx={:3} scx={:3} scy={:3} wx={:3} \
-                     lcdc0={} win={} bgp={:?}",
+                     lcdc0={} win={} winact={} tilewin={} win_on={} fetch_x={:3} \
+                     win_fetch_x={:3} fetch_t={} win_skip={} bgp={:?}",
                     g.modeclock,
                     g.mode(),
                     g.pipe.lx,
@@ -2202,6 +2372,13 @@ mod tracing {
                     g.winx,
                     g.lcdc0,
                     g.pipe.window,
+                    g.pipe.win_active,
+                    g.pipe.tile_is_window,
+                    g.win_on,
+                    g.pipe.fetch_x,
+                    g.pipe.win_fetch_x,
+                    g.pipe.fetch_t,
+                    g.pipe.win_skip,
                     g.palb,
                 );
                 logged += 1;
