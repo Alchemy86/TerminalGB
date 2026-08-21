@@ -98,6 +98,21 @@ them from. `Gpu::oam_bus_y`/`oam_bus_x` are the opposite: they survive from one
 scanline into the next by design, so they are live machine state and
 `savestate::FORMAT_VERSION` is **23**.
 
+**And the check found a bug the moment it existed.** `Gpu::dma_owns_oam` is
+cleared by `MemoryManagementUnit::oam_dma_tick`'s idle arm, and the comment
+above that arm said the default machine never reaches it. It does: the
+transfer's last M-cycle leaves `OamDma::pos` at `LEN` inside `bus_tick` without
+the busy flag moving, so the *instruction's remainder* arrives at
+`oam_dma_cycles` and that is where the transfer is noticed to be over — an arm
+which cleared the MMU's flag and not the PPU's. The latch then stayed on for
+the rest of the session and **the object scan never read OAM again**. Measured
+on the cartridge: 192 of 550 frames scanned with a frozen bus. Nothing in the
+suites caught it — every c-sp, Mooneye, Mealybug and SameSuite row was
+byte-identical either way, because they run one short ROM each and the games
+that would suffer are the ones that DMA every frame *and* keep drawing. The
+cartridge caught it because it runs a hundred checks back to back in one
+session, which is a shape no test ROM has.
+
 **Carries into the tool** — `GB-DMA-06` in the GBSelfTest cartridge: with ten
 objects sitting on the measured line and a transfer covering that line's scan,
 mode 3 must stay at its no-objects length, because the scan never sees them. It

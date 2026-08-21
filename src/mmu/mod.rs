@@ -1399,11 +1399,20 @@ impl<'a> MemoryManagementUnit<'a> {
             // [`Self::oam_dma_tick`]; this path is the only one a machine with
             // `instruction-bus` on ever takes, and without this the flag
             // latches true for the rest of the session after the game's first
-            // transfer. Free for the default machine, which never reaches this
-            // arm — `bus_tick` has already cleared the flag by the time it
-            // would.
+            // transfer.
+            //
+            // **The PPU's copy has to be cleared here too, and this arm is NOT
+            // unreachable on the default machine.** The transfer's last
+            // M-cycle leaves `OamDma::pos` at `LEN` inside `bus_tick` without
+            // the flag moving, so the instruction's remainder arrives here and
+            // *this* is where the transfer is noticed to be over. Clear only
+            // the MMU's half and `Gpu::dma_owns_oam` latches on for the rest of
+            // the session — the object scan then never reads OAM again.
+            // Measured: 192 of 550 frames of the GBSelfTest cartridge, whose
+            // `GB-DMA-06` is what found it.
             self.dma_bus = DmaBus::None;
             self.oam_dma_busy = false;
+            self.gpu.clear_oam_dma();
             return;
         }
         for _ in 0..ticks / 4 {
@@ -1640,6 +1649,13 @@ impl<'a> MemoryManagementUnit<'a> {
         self.timer.load_state(r)?;
         self.oam_dma.load_state(r)?;
         self.oam_dma_busy = !self.oam_dma.idle();
+        // The PPU's view of a transfer is republished every M-cycle one runs,
+        // so it is not in the state; a load that lands with nothing running
+        // has to start from "the CPU owns OAM" rather than from whatever the
+        // machine being loaded into was doing.
+        if !self.oam_dma_busy {
+            self.gpu.clear_oam_dma();
+        }
         self.gpu_owed = 0;
         self.gpu_horizon = 0;
         // The horizon batch is machine *position*, never machine state: a
