@@ -12682,3 +12682,63 @@ reliable signal of how much room is needed; only shrinking and re-linking
 tells you. Keep a bank-3 check's failure prose within the same ~100-150
 character range the shortest existing ones already use, or plan to trim
 something else first.
+
+## `m3_wx_5_change`/`m3_wx_6_change`: not a re-trigger bug, a stale register read (21 Aug 2026)
+
+**Mealybug `identical` engine: `m3_wx_5_change@DMG` 13,660 → 0/23,040 px, `m3_wx_6_change@DMG`
+4,792 → 0/23,040 px — both now pixel-exact.** Full record with the dot-by-dot trace and the
+arithmetic: [`docs/mealybug.md` §16](docs/mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026).
+Zero rows lost anywhere: `make test-external` (all thirteen c-sp suites including Gambatte's
+5,320 rows, Mooneye, SameSuite, `cpp`, Mealybug's 79 `standard` rows) is byte-identical;
+`make test-external-accurate` reproduces every baseline except these six lines (the two closed
+DMG rows and their four CGB-C/CGB-D columns, which move by single-digit pixel counts — noise
+inside a colour photograph already dominated by the missing boot-ROM glyph, §11.3); the in-repo
+`testroms` (46/47), `savestate`/`battery`/`bootrom`/`ppuengines`/`gbselftest`, and all 894 library
+tests match exactly.
+
+- **§15's own framing of this job was the wrong diagnosis, and tracing the dots (not reasoning
+  about the guard in the abstract) is what found that out.** `check_window_start`'s
+  `if self.pipe.window { … }` guard was never actually reached by either ROM: both activate
+  **exactly once per line**, and the guard never refuses a second attempt because there never is
+  one — by the time the SECOND write's own trigger position arrives, the FIRST pulse's trigger
+  position has already been passed with no match. The bug was **which value the one-and-only
+  check saw**, not a missing re-trigger feature.
+- **The fix is docboy's own citation, already half-quoted in `mmu::ppu_write_commit`'s `0xFF4B`
+  arm, taken to its second half.** `src/docboy/docboy/ppu/ppu.cpp` (MIT, read for mechanism,
+  reimplemented per `CONTRIBUTING.md`) commits `wx` immediately on DMG and reads it live
+  everywhere **except one place**: `check_window_activation`'s own equality test, which compares
+  against `last_wx` — a SEPARATE copy snapshotted once per dot, one whole dot staler than `wx`
+  itself (`last_wx = wx;`, run at the end of `tick()`, after that dot's own fetcher work). Our
+  `early: 2` already models the first delay (the register's own commit); `Gpu::winx_prev` is the
+  second, read only inside `check_window_start` (its `> 166` guard, the `reached` equality, and
+  the small-`WX` `stall`/`skip` computation) and nowhere else — the pixel-insertion glitch in
+  `bg_fetch_dot` still reads the live `self.winx`, exactly matching docboy's own DMG-glitch code
+  reading live `wx`.
+- **Both ROMs land a mid-line `WX = LY` write on the SAME absolute dot every line** (identical
+  instruction counts throughout their handlers), which is what makes the effect total: for
+  `m3_wx_5_change` the initial pulse's own trigger position (`5`) is due on the **exact** dot the
+  write lands, so reading the live register misses it on every single line and the window
+  activates via the wrong (`LY`) value instead — 13,660 px of wrong picture. Reading
+  `winx_prev` instead still sees `5` at that dot, so the correct early activation fires on every
+  line. `m3_wx_6_change`'s own trigger position (`6`) is due one dot **after** the write, so even
+  the delayed snapshot already sees the new value there — that ROM's residual was never a race at
+  all; it was reading the *already-changed* live value for `stall`/`skip` once the (correctly
+  timed) `LY` activation matched, fixed by routing the whole function through one snapshot.
+- **Verified empirically, not merely reasoned, that this is a pure content bug and not a timing
+  one**: temporarily reverted to the pre-fix code (`git checkout HEAD -- src/gpu/{fifo,mod}.rs
+  src/savestate.rs`, no `git stash`) and traced `m3_wx_5_change`'s line 50 with `mid_line_trace`
+  both ways — the dot at which mode 3 ends (256→260) is **identical** before and after, while
+  `fetch_x`/`win_fetch_x` differ, confirming the window and background fetch paths cost the
+  fetcher the same number of dots regardless of which one wins. That is also why **no GBSelfTest
+  check follows from this fix**: the cartridge can see mode-3 *length* (the STAT-binary-search
+  technique behind every `GB-PPU-0*` check) but not *which column* the window starts on, and this
+  bug only ever moves the latter. Say so rather than forcing a check that cannot discriminate it.
+- `savestate::FORMAT_VERSION` **24 → 25** (`Gpu::winx_prev`, live only inside mode 3, reset at
+  every `start_mode3`).
+- **Moves `docs/shootout.md`'s own accounting**, by the page's existing population table
+  (§1b already listed both ROMs among its six genuine mid-scanline rows), from 241/264 towards
+  243/264 — **flagged there with a dagger as not yet confirmed by a live `shootout_scout` run**,
+  because that number is explicitly re-measured against the real board's own screenshot judging
+  and must never be hand-edited from a baseline. While touching that page, also corrected
+  `m3_lcdc_win_en_change_multiple_wx`'s own figure there, which had gone stale in the hours
+  between §15 landing and the page being written (1,273 → 437).

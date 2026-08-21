@@ -77,15 +77,15 @@ anything: 60 A presses on CANCEL with the link state pinned, the exchange nybble
 ## Most of a suite's remaining rows can be unwinnable
 
 **Symptom.** A picture-judged suite sits at a low score and refuses to move however correct
-the emulator gets. Today: <!--score:mealybug_accurate-->27 / 79<!--/score--> on the per-dot
+the emulator gets. Today: <!--score:mealybug_accurate-->29 / 79<!--/score--> on the per-dot
 engine.
 
 **What it looks like.** *Everything that is not passing* is work remaining, and an emulator
 that is a long way from correct. Subtracting one score from the other is the trap.
 
 **Root cause.** A characterisation of every failing row — by the crew that owns
-[`docs/mealybug.md`](../mealybug.md) — found that **42 of the 53 still failing cannot be made
-pixel-exact by any PPU work at all**, for three unrelated reasons:
+[`docs/mealybug.md`](../mealybug.md) — found that **42 of the (then) 53 still failing cannot be
+made pixel-exact by any PPU work at all**, for three unrelated reasons:
 
 | group | rows | why not |
 |---|---:|---|
@@ -94,8 +94,11 @@ pixel-exact by any PPU work at all**, for three unrelated reasons:
 | `*2` ROMs | 7 | the shipped ROM and its reference are **different machines** |
 
 So the reachable ceiling in CI is 79 − 42 = **37**, and at
-<!--score:mealybug_accurate:pass-->27<!--/score--> passing the rows actually in play are
-**eleven**. The ceiling is the number that does not move.
+<!--score:mealybug_accurate:pass-->29<!--/score--> passing the rows actually in play are
+**eight**, not the eleven this paragraph quoted while the passing count still read 26 — a
+worked example of its own point: **re-derive `ceiling − passing` from the wrapped score every
+time you read this**, never keep the subtraction's *result* as prose, or it goes stale exactly
+like this did. The ceiling itself is the number that does not move.
 
 **And the first cut of that table was itself half a row-group wrong**, which is worth knowing
 before trusting any such classification: `grep -l '$19'` finds **ten** ROMs and only nine are

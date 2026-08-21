@@ -56,8 +56,8 @@ By suite:
 | `acid` | **5 / 5** | 4 / 5 | `cgb-acid-hell` closed on 2026-08-21 — the Color `TILE_SEL` glitch, [`mealybug.md` §13](mealybug.md#13-tile_sel-reset-on-a-bitplane-read-the-tile-index-is-the-data-21-aug-2026); `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
 | `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
-| `mealybug-tearoom-tests` | **9 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 15 still red, **9 cannot be won by PPU work at all** — see §1b |
-| **total** | **241 / 264** | 223 / 264 | |
+| `mealybug-tearoom-tests` | **9 / 24**<sup>†</sup> | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 15 still red, **9 cannot be won by PPU work at all** — see §1b |
+| **total** | **241 / 264**<sup>†</sup> | 223 / 264 | |
 
 **Every one of the 23 failures is a documented open area, and 9 of them are not
 ours to win.** Mealybug 15 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
@@ -70,6 +70,16 @@ DMA was given the address bus it drives — the row is 7 pixels on one scanline
 and the whole of it is that a DMA running under an object scan stops the PPU
 reading OAM. It also moved four Gambatte `oamdma/late_sp*` rows, which are the
 same behaviour measured with resolution instead of pixels.</sup>
+
+<sup>† `m3_wx_5_change` and `m3_wx_6_change` — two of §1b's six genuine
+mid-scanline rows — went pixel-exact on 2026-08-21
+([`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026)),
+which by this table's own arithmetic moves `mealybug-tearoom-tests` to 11/24
+and the total to 243/264. **Not yet confirmed by a live `shootout_scout` run**
+against the real board's screenshot/50-luma judging — the 9/24 and 241/264
+above are the last figures actually re-scored that way. Whoever next runs the
+live scout should expect 243 and update this table (removing the daggers)
+rather than treating 241 as still current.</sup>
 
 ### 1a. The fifteen rows the default flip moved
 
@@ -96,22 +106,27 @@ shootout's DMG-only 24-row population that gives:
   `m3_scx_low_3_bits`. The emulator supports a user-supplied boot ROM and the
   gated score deliberately never uses one; shipping the glyph is a licence call,
   not a PPU one.
-* **6 rows** are genuine mid-scanline error and are the ones to chase, with the
-  pixel distance each currently sits at on the default engine:
+* **6 rows** were genuine mid-scanline error and were the ones to chase; **two
+  are now closed**, and this table is corrected for §15's own same-day fix to
+  a third (`m3_lcdc_win_en_change_multiple_wx`, whose figure had gone stale in
+  the hours between that fix landing and this page being written):
 
   | row | pixels wrong | group ([`mealybug.md` §11.4](mealybug.md#114-the-twelve-winnable-rows-grouped-by-the-code-they-live-in)) |
   |---|---:|---|
   | `m3_lcdc_bg_en_change` | **4** | G — one pixel at `x = 0` on four lines |
   | `m3_lcdc_obj_size_change` | 81 | F — the object fetch. Its sibling `m3_lcdc_obj_size_change_scx` was closed on 2026-08-21 ([§12](mealybug.md#12-the-objects-high-bitplane-reads-lcdc2-a-dot-later-21-aug-2026)); **this one cannot follow by the same route, and §12.3 proves it** — the fault is the head-of-line OBJ penalty, not the register |
   | `m3_scy_change` | 257 | E — tile 1 renders the previous line's `SCY` |
-  | `m3_lcdc_win_en_change_multiple_wx` | 1,273 | D — window / `WX` |
-  | `m3_wx_6_change` | 4,792 | D |
-  | `m3_wx_5_change` | 13,660 | D |
+  | `m3_lcdc_win_en_change_multiple_wx` | 437 | D — window / `WX`, closed *partway* on 2026-08-21 ([§15](mealybug.md#15-the-signed-position-refactor-check_window_startcheck_window_stop-share-one-grid-21-aug-2026)) — the LCDC.5-toggle sibling of the fix below, still needing `check_window_stop`'s own resume unified with the same grid |
+  | ~~`m3_wx_6_change`~~ | **0** — closed 2026-08-21 | D — [§16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026): the activation check was reading `WX` a dot too soon, not refusing to re-trigger |
+  | ~~`m3_wx_5_change`~~ | **0** — closed 2026-08-21 | D — same fix as above |
 
-So the reachable ceiling on this suite's shootout population is **15 of 24**,
-not 24, and those six rows are worth **247 / 264** if all of them land — which
-would be fourth place. Anybody planning work against this row block should plan
-against six, and start at the top of that table.
+The reachable ceiling on this suite's shootout population is still **15 of
+24** and the published total's ceiling is still **247 / 264** if the block
+lands in full — two of the original six rows are now part of the 15 rather
+than still owed, which is what moves the *current* total from 241 towards 243
+(§16, footnoted above), not the ceiling. Anybody planning work against this
+row block should plan against the remaining four, and start at the top of
+that table.
 
 ### 1c. The remaining 25, measured rather than assumed (21 Aug 2026)
 

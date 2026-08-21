@@ -499,6 +499,12 @@ impl Gpu {
         self.refresh_stat_line();
         // One dot only — see [`Gpu::tile_sel_glitch`].
         self.tile_sel_glitch = false;
+        // Snapshot `WX` for the NEXT dot's [`Gpu::check_window_start`] to
+        // compare against — one dot after whatever this dot's own commit
+        // landed. Unconditional, every accurate dot, matching docboy's own
+        // `last_wx = wx;` placement at the end of its per-dot `tick()`. See
+        // `winx_prev`'s doc comment.
+        self.winx_prev = self.winx;
     }
 
     /// The whole run of **mode-2 dots** the caller's budget reaches, at once.
@@ -654,6 +660,12 @@ impl Gpu {
             let n = self.pipe.nscan as usize;
             self.pipe.scan[..n].sort_by_key(|s| (s.x, s.oam));
         }
+        // `winx_prev` is not tracked through HBlank/VBlank (this engine skips
+        // those in long batches, never calling the per-dot tick that would
+        // otherwise keep it current) — settle it to the live register here so
+        // a write made outside mode 3 is never artificially stale by the time
+        // `check_window_start` can first run this line. See its doc comment.
+        self.winx_prev = self.winx;
     }
 
     /// One dot of the pixel pipeline.
@@ -777,6 +789,20 @@ impl Gpu {
         if self.pipe.window || !self.win_on || !self.wy_trigger {
             return false;
         }
+        // **Read the one-dot-stale snapshot, not the live register, for
+        // everything below.** `winx_prev` is `WX` as of the end of the
+        // previous dot — see its doc comment for the full citation. This is
+        // what `m3_wx_5_change`/`m3_wx_6_change` are built to distinguish: a
+        // mid-line `WX = LY` write is timed to land on the **exact** dot an
+        // earlier `WX = 5` (or `6`) pulse's own trigger position is due, so
+        // whichever value this check sees decides the whole picture. Using
+        // the live, already-committed `winx` here made every line's early
+        // pulse lose the race against the write that immediately overwrote
+        // it, so the window activated on the wrong side of the screen for
+        // the whole rest of the line — `m3_wx_5_change@DMG` was
+        // 13,660/23,040 px, since almost every line hits this exact race
+        // (the two ROMs' handlers use identical cycle counts throughout).
+        let winx = self.winx_prev;
         // The comparison is made **at the output**, against the pixel about to
         // be shifted out — so it cannot happen before there is one. Checking it
         // during the head-of-line fetch, where `lx` is already 0 and the FIFO is
@@ -786,7 +812,7 @@ impl Gpu {
         // window that started before the palette write and one that started
         // after, which is exactly the six dots of the window's own startup
         // fetch. Without this the boundary sat at the same pixel for every `WX`.
-        if self.winx > 166 {
+        if winx > 166 {
             return false;
         }
         // Where the output has got to, counting the eight positions left of
@@ -797,8 +823,8 @@ impl Gpu {
         // which is the only way its tile grid can be anchored at `WX - 7` and
         // its first pixel still land on the dot it does.
         let reached = match self.prologue_pos() {
-            Some(p) => p == self.winx as i16,
-            None => self.pipe.lx as i16 == self.winx as i16 - 7,
+            Some(p) => p == winx as i16,
+            None => self.pipe.lx as i16 == winx as i16 - 7,
         };
         if !reached {
             return false;
@@ -820,8 +846,8 @@ impl Gpu {
         // equality still has to fire: those are the positions
         // `m3_window_timing_wx_0` walks.
         self.wy_pos += 1;
-        let stall = self.winx == 0 && self.scx & 7 != 0;
-        let skip = 7u8.saturating_sub(self.winx);
+        let stall = winx == 0 && self.scx & 7 != 0;
+        let skip = 7u8.saturating_sub(winx);
         let p = &mut self.pipe;
         p.window = true;
         p.win_active = true;

@@ -130,7 +130,9 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// now the background's alone) and an explicit "has this line pushed a tile
 /// yet" flag that replaces an inference from `bg_len == 0` (ambiguous the
 /// instant a push drains the FIFO to empty). Both are live mid-mode-3.
-pub const FORMAT_VERSION: u16 = 24;
+/// v25: `Gpu::winx_prev` — `WX` as of the end of the previous per-dot tick,
+/// one dot staler than the live register. Live only inside mode 3.
+pub const FORMAT_VERSION: u16 = 25;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

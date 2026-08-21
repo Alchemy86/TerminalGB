@@ -311,6 +311,27 @@ pub struct Gpu {
     scx: u8,
     winy: u8,
     winx: u8,
+    /// `winx` as of the END of the previous per-dot pixel-pipeline tick — one
+    /// dot staler than `winx` itself. [`Gpu::check_window_start`] compares
+    /// against this, not the live register, which is the second half of the
+    /// docboy citation already in [`crate::mmu::ppu_write_commit`]'s `0xFF4B`
+    /// arm: that `early: 2` schedules when a WX write commits to `winx`
+    /// generally (matching docboy's plain `wx`, immediate on DMG once the
+    /// write itself lands), and docboy's own source stores a SECOND,
+    /// separately-delayed copy (`last_wx = wx;`, run once per dot after the
+    /// fetcher tick, `src/docboy/docboy/ppu/ppu.cpp`) used **only** by its
+    /// window-activation equality test — every other reader of `wx` there
+    /// (the CGB-only glitches) reads the live value. `m3_wx_5_change` and
+    /// `m3_wx_6_change` are built to land a mid-line `WX = LY` write on the
+    /// **exact** dot an earlier small `WX` value's own trigger position is
+    /// due, so which of the two values the check sees decides the whole
+    /// picture; using the live (already-committed) `winx` there is what left
+    /// `m3_wx_5_change@DMG` at 13,660/23,040 px. Reset to `winx` at
+    /// [`Gpu::start_mode3`] (not tracked through HBlank/VBlank, which this
+    /// engine skips in long batches) so a write made outside mode 3 is never
+    /// artificially stale by the time the window's own equality check can
+    /// first run.
+    winx_prev: u8,
     wy_trigger: bool,
     wy_pos: i32,
     palbr: u8,
@@ -446,6 +467,7 @@ impl Gpu {
             scx: 0,
             winy: 0,
             winx: 0,
+            winx_prev: 0,
             wy_trigger: false,
             wy_pos: -1,
             palbr: 0,
@@ -781,6 +803,7 @@ impl Gpu {
         w.u8(self.scx);
         w.u8(self.winy);
         w.u8(self.winx);
+        w.u8(self.winx_prev);
         w.bool(self.wy_trigger);
         w.i32(self.wy_pos);
         w.u8(self.palbr);
@@ -865,6 +888,7 @@ impl Gpu {
         self.scx = r.u8()?;
         self.winy = r.u8()?;
         self.winx = r.u8()?;
+        self.winx_prev = r.u8()?;
         self.wy_trigger = r.bool()?;
         self.wy_pos = r.i32()?;
         self.palbr = r.u8()?;
