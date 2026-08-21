@@ -83,6 +83,7 @@ const FETCH_DOTS: u8 = 6;
 /// A sprite fetch is the same three reads and costs the same six dots — but it
 /// suspends the output rather than running beside it.
 const OBJ_FETCH_DOTS: u8 = 6;
+
 /// `Pipeline::obj_tile_paid` when no background tile has paid its per-object
 /// penalty yet. A real tile index is `(X + SCX) / 8`, at most 52.
 const NO_TILE: u8 = 0xFF;
@@ -999,7 +1000,15 @@ impl Gpu {
             // same place (`Core/display.c`, after its `GB_SLEEP(display, 41, 1)`).
             2 => self.read_obj_attributes(),
             3 => self.obj_plane(false),
-            5 => self.obj_plane(true),
+            // **And the HIGH bitplane on the fetch's sixth dot, not its
+            // fifth** — the same phase docboy reads it on
+            // (`obj_pixel_slice_fetcher_get_tile_data_high_1_and_merge_with_obj_fifo`,
+            // whose own comment names both `m3_lcdc_obj_size_change` ROMs).
+            // Invisible unless `LCDC.2` moves between the two plane reads,
+            // where one dot is a whole tile row: `m3_lcdc_obj_size_change_scx`
+            // is 30 pixels at five and **pixel-exact at six**, on all three
+            // machines. See `docs/mealybug.md` §12.
+            OBJ_FETCH_DOTS => self.obj_plane(true),
             _ => {}
         }
         if self.pipe.obj_t >= OBJ_FETCH_DOTS {

@@ -1443,3 +1443,104 @@ reference emulators carry a signed one (SameBoy's `position_in_line` runs from �
 `LX` from 0 with the screen at 8), and adopting one would also let the `SCX & 7` discard, the
 `WX = 0` extra dot and this all fall out of one rule instead of three. That is the refactor this
 group wants; it is not a special case away.
+
+
+## 12. The object's high bitplane reads `LCDC.2` a dot later (21 Aug 2026)
+
+`m3_lcdc_obj_size_change_scx` is **pixel-exact on all three machines** — 30 / 0 / 0 → **0 / 0 /
+0** — which is the DMG column, one Mealybug row and **one shootout row** (239 → 240 of 264).
+Group F of [§11.4](#114-the-twelve-winnable-rows-grouped-by-the-code-they-live-in) is half
+closed; its sibling `m3_lcdc_obj_size_change` is still red and §12.3 says why, with the
+arithmetic, so nobody repeats the search.
+
+The whole change is one line of `Gpu::obj_fetch_dot`: the high bitplane is read on the object
+fetch's **sixth** dot, not its fifth.
+
+### 12.1 What the two ROMs measure, read off the reference photographs
+
+Both toggle `LCDC.2` (object size) four times inside mode 3, from a `nop` slide entered on the
+mode-2 STAT interrupt, over 8×16 objects whose two halves hold different tile rows. So a plane
+read landing either side of a write picks a **different tile row**, and the picture says which.
+
+The reference frames were solved back to the bytes they were drawn from. Every object is tile
+`$4C`, and with `OBP0 = $E4` and `BGP = $00` each pixel's colour gives one bit of each plane, so
+eight pixels give both bytes exactly. Against the tile in VRAM:
+
+| ROM | band | our low | our high | **hardware** low | **hardware** high |
+|---|---|---|---|---|---|
+| `m3_lcdc_obj_size_change` | LY 8-13, object at screen `x = 8` | 8×8 | 8×8 | 8×8 | **8×16** |
+| `m3_lcdc_obj_size_change_scx` | LY 2-7 and 130-135, object at `x = 24` | 8×16 | 8×16 | 8×16 | **8×8** |
+
+The two disagree in opposite directions and say the same thing: **hardware's high-plane read
+sits later on the `LCDC` timeline than ours.** One crosses a `$83 → $87` write, the other a
+`$87 → $83` one, and in both cases hardware has crossed it and we have not.
+
+Worked example, `m3_lcdc_obj_size_change@DMG` line 9. Our fetch log reads the low plane at dot
+118 and the high at dot 120; the `$87` write commits at dot 121. We produce `lo = $F0`
+(`$84C2`, the 8×8 row) and `hi = $90` (`$84C3`). The photograph's eight pixels decode to
+`lo = $F0` — the same byte — and `hi = $9D`, which is **`$84D3`, the 8×16 row's high byte**. The
+low plane agrees to the bit and only the high plane moved, so the fetch is right about
+everything except *when* it looked at `LCDC.2`.
+
+### 12.2 Six is docboy's own phase, and the low read is left alone on measurement
+
+docboy runs the object fetch as six phases and computes the address **"just before access it
+from VRAM"** in `obj_pixel_slice_fetcher_get_tile_data_low_1` (its fourth) and
+`obj_pixel_slice_fetcher_get_tile_data_high_1_and_merge_with_obj_fifo` (its **sixth**) — and its
+comment there names both of these ROMs and calls the effect *"bitplane desync"*
+([Docheinstein/docboy](https://github.com/Docheinstein/docboy), `src/docboy/docboy/ppu/ppu.cpp`;
+MIT, read and reimplemented per `CONTRIBUTING.md`). SameBoy has the same two-address structure
+and marks the timing *"Todo: Which T-cycle actually reads this?"* / *"TODO: timing not
+verified"* (`Core/display.c`), so it is not an oracle for this row.
+
+So our high read moves to six and matches docboy. **Our low read stays at three, and that is a
+measurement rather than an omission** — docboy's low read is its fourth, and taking it costs
+more than it buys. The whole 3 × 4 sweep, every cell the full 79-row suite:
+
+| low / high dot | `obj_size_change` DMG/C/D | `obj_size_change_scx` DMG/C/D | rows DMG/C/D |
+|---|---|---|---|
+| 3 / 5 (was) | 51 / 10 / 10 | 30 / 0 / 0 | 8 / 9 / 9 |
+| **3 / 6 (shipped)** | 81 / 20 / 20 | **0 / 0 / 0** | **9 / 9 / 9** |
+| 4 / 6 (docboy) | 85 / 20 / 20 | 0 / **15 / 15** | 9 / 8 / 8 |
+| 3 / 4 | 21,844 / 21,839 / 21,839 | 30 / 45 / 45 | 8 / 8 / 8 |
+| 2 / anything | ≥ 838 everywhere | ≥ 21,898 everywhere | 7-8 / 7-8 / 7-8 |
+
+`4 / 6` loses the row's own two Color columns. It was also swept against the Color `LCDC`
+commit (`ppu_write_commit`'s `early`, 0-3) in case the two were compensating: at `early = 0` the
+scx row is green on all three **and `m3_lcdc_bg_en_change`'s Color columns go 0 → 452**, which
+is two rows for one. The DMG `LCDC` commit was swept the same way with the shipped 3 / 6 and its
+present value of 3 is the best of the four (`scx` DMG 150 / 90 / 75 / **0** for `early`
+0 / 1 / 2 / 3). **Do not re-run either sweep.**
+
+`OBJ_FETCH_DOTS` is unchanged at six, so mode 3's length does not move — which is why nothing
+outside these two rows changed. Verified: `make test-external` green on all 6,222 `standard`
+rows (Mealybug's 79 among them, byte-identical), and on `identical` Mooneye 103/103 + 8/8,
+SameSuite 76, `cpp` 4/4 and **all thirteen c-sp suites including Gambatte's 5,320 rows and
+`strikethrough`** — the last of which measures object-fetch dots against a running OAM DMA and
+so is the row most likely to have noticed. In-repo `testroms` 46/47 with the same verdict text,
+dmg-acid2 0/23,040, 892 library tests.
+
+### 12.3 Why `m3_lcdc_obj_size_change` cannot follow, with the arithmetic
+
+Its remaining 81 pixels are **not** the same question, and the constraint it imposes is
+contradictory under Pan Docs' OBJ penalty — so no commit schedule and no plane-dot pair can
+close it. That is worth writing down, because both are the obvious next thing to try.
+
+Its first sprite block sits at `X = 1 … 8`, one object per 16-line band, all due at `lx = 0`.
+Pan Docs' `max(0, 5 - ((X + SCX) mod 8))` therefore fetches them at dots `94 + (5 - X)`: 98, 97,
+96, 95, 94, 94, 94 for `X = 1 … 7`, and **99** for `X = 8`, which lands on the next background
+tile and pays the full five. Solved out of the photographs, hardware wants:
+
+* `X = 1 … 7` — **both** planes 8×16, so both reads are before the `$83` write becomes visible;
+* `X = 8` — **both** planes 8×8, so both reads are after it.
+
+Let `A` be the dot from which a read sees `$83`. The first line needs `A > 100` (`X = 1`'s high
+read) and the second needs `A ≤ 99` (`X = 8`'s low read). **There is no such `A`**, at any plane
+spacing, because `X = 8` is fetched *earlier* than `X = 1`'s high read and must nevertheless see
+the later value. So what is wrong is the head-of-line fetch order itself, not the register.
+
+The obvious repair — charge no tile penalty to an object that is off the left edge, so all of
+`X ≤ 7` fetch together and `X = 8` five dots later — was implemented and measured: it changes
+mode 3's length, moves every write against every fetch, and takes the row to **21,836** pixels
+and the suite to 7 / 7 / 7. Come back with a model of the head-of-line object fetch, not a
+constant.

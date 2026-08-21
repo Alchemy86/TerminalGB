@@ -41,12 +41,12 @@ emulated machine, so loading somebody else's state must not switch their rendere
 | Mid-scanline register writes | not reflected within the line | reflected at the pixel |
 <<<<<<< HEAD
 | Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** |
-| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->26/79<!--/score-->** |
-| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->498,206<!--/score--> px** |
+| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->27/79<!--/score-->** |
+| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->498,226<!--/score--> px** |
 =======
 | Mooneye `acceptance` | <!--score:mooneye_acceptance-->67/75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75/75<!--/score-->** |
-| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->26/79<!--/score-->** |
-| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->498,206<!--/score--> px** |
+| Mealybug pixel-exact | <!--score:mealybug-->3/79<!--/score--> | **<!--score:mealybug_accurate-->27/79<!--/score-->** |
+| Mealybug total distance | <!--score:mealybug:px-->1,212,282<!--/score--> px | **<!--score:mealybug_accurate:px-->498,226<!--/score--> px** |
 >>>>>>> 7b3b9b3 (fix(ppu): an object's row index wraps inside the tile, it does not clamp)
 | Cost (dmg-acid2) | **0.221 ms/frame** | 0.461 ms/frame |
 

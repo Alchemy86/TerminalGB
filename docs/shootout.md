@@ -15,9 +15,9 @@ carries the project's name.
 
 Measured against the shootout's own ROMs, its own reference screenshots and its
 own pass criterion, re-scored from a fresh clone of the shootout on
-**2026-08-20**, the day `identical` became the default picture engine:
+**2026-08-21**:
 
-> ### **239 / 264 — 90.5 %**
+> ### **240 / 264 — 90.9 %**
 >
 > (**223 / 264 — 84.5 %** on `standard`, which is where this page stood until
 > that day. The flip is **fifteen gains and zero losses** row for row; the
@@ -31,7 +31,7 @@ That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
 | 2 | Emulicious | 254/261 | 97.3 |
 | 3 | SameBoy | 253/264 | 95.8 |
 | 4 | Beaten Dying Moon | 247/264 | 93.6 |
-| **5** | **this emulator** | **239/264** | **90.5** |
+| **5** | **this emulator** | **240/264** | **90.9** |
 | 6 | GSE | 218/264 | 82.6 |
 | 7 | bgb | 205/264 | 77.7 |
 | 8 | GambatteSpeedrun | 169/207 | 81.6 |
@@ -56,11 +56,11 @@ By suite:
 | `acid` | 4 / 5 | 4 / 5 | `cgb-acid-hell` is **two pixels** and the cheapest row on the board — §1c; `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
 | `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
-| `mealybug-tearoom-tests` | **8 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 16 still red, **9 cannot be won by PPU work at all** — see §1b |
-| **total** | **239 / 264** | 223 / 264 | |
+| `mealybug-tearoom-tests` | **9 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 15 still red, **9 cannot be won by PPU work at all** — see §1b |
+| **total** | **240 / 264** | 223 / 264 | |
 
-**Every one of the 25 failures is a documented open area, and 9 of them are not
-ours to win.** Mealybug 16 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
+**Every one of the 24 failures is a documented open area, and 9 of them are not
+ours to win.** Mealybug 15 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
 `cgb-acid-hell`, `daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
 `ashiepaws` 2, SameSuite 2. There is no surprise in the list, and §1c measures
 every one of them so the next crew can start at the cheapest.
@@ -96,23 +96,22 @@ shootout's DMG-only 24-row population that gives:
   `m3_scx_low_3_bits`. The emulator supports a user-supplied boot ROM and the
   gated score deliberately never uses one; shipping the glyph is a licence call,
   not a PPU one.
-* **7 rows** are genuine mid-scanline error and are the ones to chase, with the
+* **6 rows** are genuine mid-scanline error and are the ones to chase, with the
   pixel distance each currently sits at on the default engine:
 
   | row | pixels wrong | group ([`mealybug.md` §11.4](mealybug.md#114-the-twelve-winnable-rows-grouped-by-the-code-they-live-in)) |
   |---|---:|---|
   | `m3_lcdc_bg_en_change` | **4** | G — one pixel at `x = 0` on four lines |
-  | `m3_lcdc_obj_size_change_scx` | 30 | F — the object fetch |
-  | `m3_lcdc_obj_size_change` | 51 | F |
+  | `m3_lcdc_obj_size_change` | 81 | F — the object fetch. Its sibling `m3_lcdc_obj_size_change_scx` was closed on 2026-08-21 ([§12](mealybug.md#12-the-objects-high-bitplane-reads-lcdc2-a-dot-later-21-aug-2026)); **this one cannot follow by the same route, and §12.3 proves it** — the fault is the head-of-line OBJ penalty, not the register |
   | `m3_scy_change` | 257 | E — tile 1 renders the previous line's `SCY` |
   | `m3_lcdc_win_en_change_multiple_wx` | 1,273 | D — window / `WX` |
   | `m3_wx_6_change` | 4,792 | D |
   | `m3_wx_5_change` | 13,660 | D |
 
 So the reachable ceiling on this suite's shootout population is **15 of 24**,
-not 24, and those seven rows are worth **245 / 264** if all of them land — which
+not 24, and those six rows are worth **246 / 264** if all of them land — which
 would be fourth place. Anybody planning work against this row block should plan
-against seven, and start at the top of that table.
+against six, and start at the top of that table.
 
 ### 1c. The remaining 25, measured rather than assumed (21 Aug 2026)
 
@@ -124,8 +123,7 @@ falls straight out of it.
 | row(s) | distance today | what it actually needs |
 |---|---:|---|
 | `acid/cgb-acid-hell.gbc` | **2 px** | one background column — see below. **The cheapest row on the board.** |
-| `mealybug/m3_lcdc_obj_size_change` | 51 px | group F, [`mealybug.md` §11.4](mealybug.md#114-the-twelve-winnable-rows-grouped-by-the-code-they-live-in) |
-| `mealybug/m3_lcdc_obj_size_change_scx` | 30 px | group F, same code |
+| `mealybug/m3_lcdc_obj_size_change` | 81 px | group F — and **not** the fix that closed its sibling; [`mealybug.md` §12.3](mealybug.md#123-why-m3_lcdc_obj_size_change-cannot-follow-with-the-arithmetic) shows no `LCDC` visibility dot can satisfy it |
 | `mealybug/m3_scy_change` | 257 px | group E |
 | `mealybug` × 3 (window / `WX`) | 1,273 · 4,792 · 13,660 px | group D |
 | `mealybug` × 9 | whole-screen | the boot ROM's `®` glyph — §1b, a licence call |

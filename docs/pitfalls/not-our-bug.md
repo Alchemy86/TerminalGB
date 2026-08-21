@@ -77,7 +77,7 @@ anything: 60 A presses on CANCEL with the link state pinned, the exchange nybble
 ## Most of a suite's remaining rows can be unwinnable
 
 **Symptom.** A picture-judged suite sits at a low score and refuses to move however correct
-the emulator gets. Today: <!--score:mealybug_accurate-->26 / 79<!--/score--> on the per-dot
+the emulator gets. Today: <!--score:mealybug_accurate-->27 / 79<!--/score--> on the per-dot
 engine.
 
 **What it looks like.** *Everything that is not passing* is work remaining, and an emulator
@@ -94,7 +94,7 @@ pixel-exact by any PPU work at all**, for three unrelated reasons:
 | `*2` ROMs | 7 | the shipped ROM and its reference are **different machines** |
 
 So the reachable ceiling in CI is 79 − 42 = **37**, and at
-<!--score:mealybug_accurate:pass-->26<!--/score--> passing the rows actually in play are
+<!--score:mealybug_accurate:pass-->27<!--/score--> passing the rows actually in play are
 **eleven**. The ceiling is the number that does not move.
 
 **And the first cut of that table was itself half a row-group wrong**, which is worth knowing

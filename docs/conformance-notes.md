@@ -23,6 +23,60 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-21 — an object's high bitplane samples `LCDC.2` a dot after its low one
+
+**Shootout 239 → 240 / 264** (`mealybug/m3_lcdc_obj_size_change_scx`, whose DMG
+column goes 30 pixels → **0**); Mealybug `identical` **17 → 18 of 79**, and its
+two Color columns were already exact so the row is now pixel-perfect on all
+three machines. One line of `Gpu::obj_fetch_dot`. Full working, the solved
+bytes, the 3 × 4 sweep and the arithmetic that rules out its sibling:
+[`docs/mealybug.md` §12](mealybug.md#12-the-objects-high-bitplane-reads-lcdc2-a-dot-later-21-aug-2026).
+
+- **Symptom** — a game that changes object size *inside* mode 3 draws an object
+  whose two bitplanes come from the same tile row when hardware takes them from
+  two different ones. On screen that is a sprite drawn in the wrong colours over
+  part of its width; there is no timing consequence at all, so nothing but a
+  picture can see it.
+- **Caught by** — `mealybug/m3_lcdc_obj_size_change_scx` and
+  `m3_lcdc_obj_size_change`, and **nothing else in any suite**. Verified rather
+  than assumed: with the change in place, all 6,222 rows of `make test-external`
+  and every `identical` baseline are byte-identical except those two ROMs —
+  including Gambatte's 5,320 rows, GBMicrotest's 513 and `strikethrough`, which
+  measures object-fetch dots against a running OAM DMA and is the closest thing
+  the ecosystem has to a second opinion on this fetch.
+- **Hardware behaviour** — the object fetch computes its tile-data address
+  **immediately before each VRAM access**, once for each bitplane, so `LCDC.2`
+  is read twice and the two reads can disagree. docboy does exactly that in its
+  fourth and **sixth** fetch phases and its own comment names these two ROMs and
+  the effect (*"bitplane desync … read the low byte from a tile and the high
+  byte from a different one"*,
+  [Docheinstein/docboy](https://github.com/Docheinstein/docboy)
+  `src/docboy/docboy/ppu/ppu.cpp`, MIT — read for the behaviour and
+  reimplemented here). SameBoy has the same shape and marks the timing
+  *"TODO: timing not verified"* (`Core/display.c`), so it is not an oracle for
+  this row; the reference photographs are.
+- **How the expectation was derived, which is the reusable part** — the ROM
+  draws with `OBP0 = $E4` and `BGP = $00`, so each on-screen pixel gives one bit
+  of each bitplane and eight pixels give **both bytes exactly**. Decoding the
+  hardware photograph back into `(lo, hi)` and matching them against the tile in
+  VRAM says which row each plane came from — `lo = $F0` from `$84C2` (the 8×8
+  row) and `hi = $9D` from `$84D3` (the 8×16 row) on line 9 of
+  `m3_lcdc_obj_size_change`. *Solve a picture back into the bytes it was drawn
+  from before theorising about the fetcher.*
+- **Not diagnosable from inside a cartridge, and deliberately not a GBSelfTest
+  check.** The behaviour has no observable except the picture: mode 3's length
+  does not move (`OBJ_FETCH_DOTS` is unchanged), no register reports it, and a
+  program cannot read back what the PPU drew. That puts it with the other
+  mid-mode-3 register writes in
+  [`docs/pitfalls/codes.md`](pitfalls/codes.md) — evidence is the photograph, so
+  the row belongs to Mealybug and to this record.
+- **Carries into the tool** — `testharness/mealybug_accurate_baseline.txt` moves
+  four lines: one FAIL → PASS and three pixel counts on
+  `m3_lcdc_obj_size_change`, which stays red for a reason §12.3 proves rather
+  than asserts (its head-of-line objects impose two constraints on the `LCDC`
+  visibility dot that no single value satisfies, so the fault is the OBJ penalty
+  model and not the register).
+
 ## 2026-08-21 — the OAM DMA drives the address bus the PPU reads OAM on
 
 **Shootout 238 → 239 / 264** (`ashiepaws/strikethrough.gb`, the first row that
