@@ -511,15 +511,21 @@ the transfer has no bus of its own, so a read on the bus it uses sees its byte.
 
 ### GB-DMA-05
 
-**where a work-RAM write lands during a transfer**
+**an OAM DMA transfer overrides address bit 12 of a work-RAM access**
 
-reported rather than judged: no published reference documents this.
+on a Color console, $C000 and $D000 can trade places while the transfer's source has that bit set.
 
 ### GB-DMA-06
 
 **a transfer stops the scan reading objects**
 
 the controller drives the object address lines, so the scan reads none.
+
+### GB-DMA-07
+
+**a write into the transfer's own source page does not land**
+
+a work-RAM-sourced transfer's own bus answers with its own byte, not the processor's, on any console.
 
 ## APU: registers and the length counter
 

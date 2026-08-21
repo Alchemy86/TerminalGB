@@ -149,15 +149,17 @@ group <!--score:samesuite_apu-->66 / 69<!--/score-->, and Mealybug Tearoom
 <!--score:mealybug-->3 / 79<!--/score--> in the default picture mode
 (<!--score:mealybug_accurate-->27 / 79<!--/score--> with the per-dot pipeline). Against the
 [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/)'s own 264-row manifest we score
-**223** — see [`docs/shootout.md`](shootout.md); that figure is measured through their runner
-and their screenshot comparison, so it is deliberately *not* derived from our baselines and
+**241 (91.3%)** on the `identical` picture mode, **223 (84.5%)** on `standard` — see
+[`docs/shootout.md`](shootout.md), re-measured through their own runner and screenshot
+comparison on 2026-08-21; that figure is deliberately *not* derived from our baselines and
 must be re-measured rather than edited. A tool that only reports the suites its author passes
 is marketing; publish the denominator that hurts.
 
 > Every score above except the Shootout row is rewritten from the checked-in baselines by
 > `make status` and verified by `make docs-check`. That is not decoration: the figures this
-> paragraph used to carry (32/35, and a Shootout score of 92) were stale by a wide margin,
-> which is precisely the failure mode this page is arguing against.
+> paragraph used to carry (32/35, a Shootout score of 92, and — until this correction — a
+> stale 223 quoted after the page it cites had already moved to 241) were stale by a wide
+> margin, which is precisely the failure mode this page is arguing against.
 
 If any of those regressed and we hid it, the tool would be checking behaviour we don't ourselves
 meet — which is exactly the failure mode that makes a benchmark worthless. So the same

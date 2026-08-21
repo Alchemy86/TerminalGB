@@ -12630,3 +12630,55 @@ three rows above and nothing else.
   this was scoped, not missed.** Both need the window to *re-trigger* while still active on the
   same line, which `check_window_start`'s `if self.pipe.window { return false; }` guard still
   refuses unconditionally, same as before this fix. A second mechanism, not attempted here.
+
+## GBSelfTest, 100 → 101 checks: `GB-DMA-05` upgraded, `GB-DMA-07` added
+
+**`GB-DMA-05` (the address-bus bit-12 override, GB-DMA-05 in the section above)
+was upgraded from "reported, not judged" to a real pass/fail check**, now that
+`docs/measured/oam-dma-work-ram.md`'s rule is established and cross-verified
+against SameBoy: on a Color console, while an OAM DMA runs out of a page on
+the *external* bus, a $C000-$DFFF access has address bit 12 replaced by the
+transfer's. **`GB-DMA-07` is new**: a transfer sourced from work RAM shares
+that bus with its own source, so a conflicting write does not land, on any
+console — the write-side sibling GB-DMA-04's read-only cartridge-bus proof
+never had. Verified against SameBoy on every console model it runs (DMG, MGB,
+SGB, CGB 0/B/C/D/E, AGB — the two skip cleanly on the monochrome ones) and
+against Peanut-GB, which does not model the conflict and fails GB-DMA-07 as
+the intended discriminator.
+
+**A narrower claim already written down in this file's "THE ADDRESS BUS IS
+SHARED TOO" section did NOT survive a self-test cartridge's loose timing, and
+the correction matters if you build on it.** That section states the DMG
+work-RAM-source conflict as a bitwise AND of the primed and written bytes
+($65 & $55 = $45), from Gambatte's `oamdma_srcC000_busypushC001`. A cartridge
+check that primes a known byte, starts a work-RAM-sourced transfer, and writes
+a plain store into that page **some time during the transfer's 640 T-cycle
+window** (not aligned to the exact M-cycle Gambatte's `push` at a chosen `SP`
+lands on) gets the byte **dropped** (the primed byte survives untouched) —
+confirmed identically on SameBoy (every model) *and* on our own current
+`identical`/`standard` engines. The AND is real (Gambatte's ROM measures it and
+this project's `dma_conflict` models it), but it needs cycle-exact alignment
+with the transfer's own counter that a loosely-timed check cannot produce, so
+GB-DMA-07 tests the alignment-independent half only (**the write never lands**)
+and says so in its own comment rather than asserting the narrower claim on
+weak evidence. **Do not read this as GB-DMA-04 or `dma_conflict` being wrong —
+they were checked against the same two oracles and agree.**
+
+**`tools/run-terminalgb.sh` in the GBSelfTest repo pins a TerminalGB commit
+(`2467c65`) that PREDATES the OAM-DMA-bus-sharing work** (`6b1c568`/`6a9e368`
+are not its ancestors), so GBSelfTest's own scoreboard shows "TerminalGB" (both
+picture modes) scoring several rows below SameBoy on the very checks this
+section describes — not a regression, a stale pin, already true before this
+work and now covering two more rows. Re-pinning it is a deliberate GBSelfTest
+maintenance action with its own blast radius (every row in its scoreboard gets
+re-measured against a newer commit) and was left to whoever owns that decision
+next, flagged rather than silently fixed.
+
+**GBSelfTest's bank 3 (PPU + DMA + APU + BOOT + SER) is as tight as ROM0.**
+Adding one moderate check there overflowed the bank on the first two attempts
+— not from the executable code, almost entirely from the `FailNote` string
+text — and which *later* section rgblink reports as not fitting is not a
+reliable signal of how much room is needed; only shrinking and re-linking
+tells you. Keep a bank-3 check's failure prose within the same ~100-150
+character range the shortest existing ones already use, or plan to trim
+something else first.
