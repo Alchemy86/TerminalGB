@@ -193,6 +193,30 @@ rewrite fails for a reason inside the rewrite.
 
 ### 3.3 Blocker C — we do not reproduce post-boot VRAM
 
+> **Corrected, 2026-08-21 — this section's "18 of the 31" undercounted the correction it needed
+> by half.** §11.1/§11.3 below (15 Aug 2026) already fixed the arithmetic properly and this
+> section was never brought in line with it; a third, independent pass re-derived the same split
+> from the pinned test ROMs' own `.asm` source and confirms it exactly. Of the 18 ROMs named
+> below, only **9 are genuinely blocked by the missing `®` glyph**: `m3_obp0_change`,
+> `m3_lcdc_obj_en_change`, `m3_lcdc_obj_en_change_variant`, `m3_scx_low_3_bits`,
+> `m3_lcdc_bg_map_change`, `m3_lcdc_tile_sel_change`, `m3_lcdc_tile_sel_win_change`,
+> `m3_lcdc_win_map_change`, `m3_bgp_change_sprites`. Of the other 9: **7** (the `*2` suffix
+> ROMs) fail for the unrelated ROM/reference mismatch §11.3 diagnoses and never reference `$19`
+> at all; **1** (`m3_wx_4_change_sprites`) places sprites at `$19` and then overwrites the whole
+> of `$8000`-`$8FFF` with `$FF` before the LCD ever turns on, so the glyph is gone before it can
+> be seen and the row is pixel-exact already; and **1** (`m3_bgp_change`) never touches OAM or a
+> BG tile at all — its `$8800` signed addressing puts its whole picture at an address neither the
+> boot ROM nor anything else here ever writes, and it too is pixel-exact already. **Zero of the
+> 18 need only the licence-clean logo tiles (`$01`-`$18`)** — every row that needs anything from
+> post-boot VRAM needs the `®` glyph specifically, which is why decompressing the logo tiles
+> (now done, licence-clean, see `AGENTS.md` "The captain's decision confirmed") moves none of
+> them. **The captain's decision is now settled policy, not an open question**: skip the
+> Nintendo boot text entirely (`docs/mealybug.md` §8.6, confirmed 2026-08-21) — these 9 rows
+> stay red under the default configuration, permanently, by deliberate choice, and licence-clean
+> regression coverage of the *mechanism* they exercise lives in GBSelfTest (`GB-BOOT-07`,
+> `GB-PPU-23`) instead. Do not re-litigate this count; the paragraphs below are kept for the
+> reasoning trail that led here, not as the current figure.
+
 We start with VRAM zeroed. Real hardware hands the cartridge a VRAM that still contains the boot
 ROM's decompressed Nintendo logo tiles (`$01`–`$18`) and the `®` glyph at tile `$19`, plus the
 tile-map entries that place them. **18 of the 31 ROMs depend on that state:**
@@ -209,8 +233,11 @@ tile-map entries that place them. **18 of the 31 ROMs depend on that state:**
 
 Our screens for these are blank or missing a column of glyphs *before* any timing question arises.
 The logo tile data is derivable from the cartridge's own header bytes `$0104`–`$0133`, but the `®`
-glyph is boot-ROM data. **That is a licensing/policy call for the captain, not a PPU decision** —
-see the licence-boundary section of [`CLAUDE.md`](../CLAUDE.md). Flagged, not done.
+glyph is boot-ROM data. **That was a licensing/policy call for the captain, not a PPU decision** —
+see the licence-boundary section of [`AGENTS.md`](../AGENTS.md). **Both halves are now settled: the
+logo tiles are decompressed (licence-clean, §8.6's "captain's decision confirmed" entry) and the
+glyph stays undone, permanently, by deliberate choice — not one row of this section moved either
+way, because (per the correction above) none of the 18 needed the logo tiles at all.**
 
 ### 3.4 Which rows each level of accuracy would actually buy
 

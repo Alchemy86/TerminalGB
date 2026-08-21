@@ -7587,6 +7587,92 @@ public, MPL-2.0, and has a standing requirement to be freely distributable.
   the handoff to `$0100`, both fail-soft paths and the save-state refusal. Teeth proven by
   making `read_rom` ignore the latch — five of the thirteen checks go red.
 
+### The captain's decision confirmed, and the licence-clean HALF of Blocker C shipped (2026-08-21)
+
+**Captain's instruction, verbatim: "skip the nintendo boot text and instead create our own and
+do the tests to prove it in gbselftest."** This *confirms* the 2026-08-14 decision two sections
+up rather than changing it — never embed the `®` glyph, optional user-supplied boot ROM only —
+and separately settles the one piece of Blocker C that decision left undone: the **licence-clean**
+half, decompressing the header's own logo tiles (`$01`-`$18`) into VRAM, which needs no Nintendo
+boot-ROM byte at all.
+
+- **`MemoryManagementUnit::set_boot_logo_tiles`** does the decompression, called from
+  `set_initial` right before `set_boot_logo_tilemap` (same `is_dmg()` gate, same "before the LCD
+  comes on" window). Every input byte is the cartridge's own header `$0104`-`$0133` — present in
+  every bootable ROM, including this project's own vendored `third_party/dmg-acid2/dmg-acid2.gb`
+  (checked: byte-identical to the documented value) — because hardware refuses to boot a ROM
+  whose copy does not match. The algorithm is Pan Docs' own ("0104-0133 — Nintendo logo"): each
+  **pair** of header bytes is one tile, split into four nibbles (MSB = leftmost of that nibble's
+  four source pixels), each nibble horizontally doubled (`double_nibble`, a generic 4→8 bit
+  lookup, not Nintendo-specific) and written **twice** — vertical doubling — into the tile's
+  **low bitplane only**. That last detail is not in Pan Docs' prose; it was confirmed by reading
+  (not reproducing) the mechanism in the public disassembly
+  [ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms) `src/dmg.asm`'s `Logo:` routine
+  (`ld [hli],a / inc hl ; skip second plane / ld [hli],a ; double vertically`), the same
+  read-for-mechanism move this project already makes for SameBoy and docboy elsewhere. **Verified
+  by rendering it**: fed the (already-vendored, licence-clean) dmg-acid2 header through the
+  algorithm and rendered the result to a scratch PNG (never committed) — a legible "Nintendo"
+  wordmark came out on the first try, confirming the nibble order, the row split and the 2×
+  scale-up all at once.
+- **Tile `$19` (the `®` glyph) is untouched, deliberately, and stays that way.** `set_boot_logo_tiles`
+  writes exactly tiles `$01`-`$18` (`$8010`-`$818F`); `$8190` is never referenced by it. There is
+  nothing in a cartridge to derive that content from — it is drawn by a separate, hardcoded
+  routine inside the boot ROM with no header input at all.
+- **Measured: zero effect on any gated suite, in either picture mode.** `make test-external` and
+  `make test-external-accurate` both reproduce every one of their baselines exactly — all
+  thirteen c-sp suites, Mooneye ×2, SameSuite, Mealybug (all 79 rows, both engines), `cpp`,
+  `testroms` 46/47, dmg-acid2 0/23,040, `savestate`/`battery`/`ppuengines`, `docs-check`. This
+  matches the standing measurement that the header-logo tiles are never what a Mealybug row
+  actually needs (see §11.1/§8.6 above and the corrected §3.3 below) — this is a genuine
+  accuracy fix with no suite payoff, which is exactly why it had never been done.
+- **`testharness/bootrom.rs` §6** proves the OTHER edge: with no boot ROM supplied, a synthetic
+  header decompresses into VRAM exactly as GB-BOOT-07 (below) checks; with a real (synthetic,
+  non-Nintendo) boot ROM supplied via `--boot-rom`, `set_boot_logo_tiles` does **not** also run
+  (it lives inside `set_initial`, which a supplied boot ROM skips entirely), so it can never
+  clash with whatever that ROM actually wrote.
+- **GBSelfTest grew two checks for this, 98 → 100** (`third_party/gbselftest/`, re-pinned;
+  `docs/gbselftest.md` re-spliced): **GB-BOOT-07** recomputes the same decompression a second,
+  independent way, in Z80, from the check-writing cartridge's *own* header, and compares it
+  byte-for-byte against a VRAM snapshot taken at the top of `Start` (before `LoadFont`/
+  `ClearScreen` can touch it) — skipping, by name, on a Color console, whose differently-shaped
+  boot sequence this project has no documented description of. **GB-PPU-23** proves the
+  addressing arithmetic every one of the nine `®`-blocked Mealybug rows depends on — unsigned
+  tile addressing is `$8000 + 16×id`, so `$19` is `$8190`, sixteen bytes past `$18` and sixteen
+  before `$1A` — using a pattern the cartridge draws itself, asserting nothing about what content
+  a real console leaves there. **Cross-validated against SameBoy's own, unrelated, non-Nintendo
+  boot-ROM reimplementation**, across every console it models: GB-BOOT-07 passes on DMG, MGB and
+  SGB and skips, correctly, on every CGB revision and the AGB; GB-PPU-23 passes unconditionally,
+  everywhere. Two implementations sharing no code agreeing on a fact about a bitmap neither was
+  handed is about as strong a confirmation as this gets. `make gbselftest` — both picture modes —
+  is unchanged apart from the two new codes: `identical` still loses only `GB-PPU-16`, `standard`
+  still loses only its nine documented mode-3-fetcher rows.
+- **A vertical-doubling bug in the FIRST version of GB-BOOT-07 is the reason to build the check
+  before trusting it.** The Z80 comparison advanced its VRAM pointer by one row per nibble
+  instead of two, silently skipping the duplicate row the boot ROM's own vertical doubling
+  writes, and failed with `got $00F0 want $00FC` against TerminalGB's own (correct) Rust
+  decompression the first time it ran. Fixed by checking and advancing across **both** rows a
+  nibble produces (`DoubleAndCheckRowPair`). Caught immediately by testing against a second,
+  independent implementation — exactly the discipline this whole page is built on.
+- **The CGB-compat boot-logo TILEMAP gap is real, narrower than it first reads, and NOT worth
+  closing the way it first looked closeable.** Pan Docs states plainly that the DMG logo
+  tilemap write during CGB-compat boot is **conditional**: "If the ID is either `$43` or `$58`,
+  then the Nintendo logo's tilemap is written to VRAM" — where that ID is a **compatibility
+  palette ID**, computed from the cartridge's *old licensee code* and, for Nintendo-licensed
+  titles only, a checksum of the *title* bytes, looked up in a table that ships **inside the CGB
+  boot ROM's own data**. `set_boot_logo_tilemap` staying gated to `is_dmg()` (never running for
+  `GbMode::ColorAsClassic`) is therefore **not a gap to close by calling it unconditionally** —
+  that would be *less* accurate, not more, for the overwhelming majority of cartridges (anything
+  homebrew or non-Nintendo-licensed, where the ID is always `$00`). Checked directly: all three
+  Mealybug ROMs (`/tmp/mbtest/mealybug/build/*.gb`) carry old licensee code `$00` and an
+  all-zero title, so on real CGB-compat hardware their palette ID is `$00`, not `$43`/`$58`, and
+  the tilemap is correctly **never** written for them — matching this emulator's current
+  behaviour exactly. Implementing the *conditional* case correctly for genuinely Nintendo-licensed
+  titles would need the boot ROM's own checksum→ID lookup table, which is boot-ROM-originated
+  data under the same prohibition as the `®` glyph itself, not merely a different kind of asset.
+  **No code change made; the existing gate stays exactly as documented.** Re-measured to be sure:
+  `make test-external`/`test-external-accurate` both still match every baseline with this
+  section's changes in, so nothing here shifted a single row either way.
+
 ## MCP server (`src/mcp/`, `terminalgb-mcp` binary, `mcp` cargo feature)
 
 - **Full contract, install steps for Claude Desktop and Claude Code, every flag, the measured
