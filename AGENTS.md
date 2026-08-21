@@ -804,6 +804,58 @@ it requires `DIV` to read **`$1F`** a fixed distance after hand-off, and we read
   `sgb_boot_system_counter` was derived, **together with** an independent fix on the PPU's
   hand-off position. Two crews' work, not one.
 
+## The OAM DMA drives the ADDRESS bus too, and the PPU is on the other end
+
+**Full record: [`docs/conformance-notes.md`](docs/conformance-notes.md)
+(2026-08-21); the ceiling analysis it came out of is
+[`docs/shootout.md`](docs/shootout.md) §1c.** Shootout **238 → 239/264** —
+`ashiepaws/strikethrough.gb`, the first row that suite has ever scored — and
+Gambatte 3613 → 3617 of 5225 with zero losses. Everything else byte-identical
+in both picture modes.
+
+- **The section below is the DATA half of one physical rule; this is the ADDRESS
+  half.** While a transfer runs the controller drives the OAM address lines, so
+  a **PPU** read on them gets the byte at the address the *transfer* is driving:
+  `oam[(dest & ~1) | (addr & 1)]`. Only the low bit is the PPU's — the OAM data
+  path fetches a Y/X (or tile/flags) pair at a time, so the pair comes from the
+  DMA and the half from the PPU. `Gpu::oam_read`.
+- **So the object scan cannot read OAM at all, and its Y/X latch keeps whatever
+  it held** — the previous line's last entry, or the last tile number a mode-3
+  object fetch put there, because it is **one bus** and the tile read lands in
+  the same latch. Every one of the forty slots is then judged against that one
+  stale pair. That is the whole of `strikethrough.gb`.
+- **THE CONTROLLER TAKES THE BUS TWO DOTS AFTER THE WRITE TO `$FF46`, not when
+  the first byte lands two M-cycles later.** `DMA_OAM_ARM_DOTS`, and it is
+  **derived from eight ROMs, not chosen**: Gambatte's
+  `late_sp{00,01,02,39}x_{1,2}` each put the write one M-cycle either side of one
+  scan slot, `sp00x_2` finds object 0 and `sp01x_1` misses object 1, and
+  `sp02x_1`/`sp39x_1` — same DMA phase, different slot — rule out every uniform
+  shift. Swept over the whole 811-row `oamdma/` group: 742 at 0, **744 at 1 and
+  2**, 738 at 3 and 4. The scan reads on even dots, so 1 and 2 are the same
+  machine.
+- **An object's tile and flags are read ONE DOT INTO THE FETCH** (`obj_t == 2`),
+  not on its first dot. Invisible unless a transfer is running underneath, where
+  one dot moves the read by a whole source byte; `strikethrough.gb`'s DMG column
+  is the only row in any suite that can see it, and it is the difference between
+  1 wrong pixel and 0. Free everywhere else — Mealybug's 79 per-row counts and
+  Gambatte's 5,225 rows are identical at `obj_t` 1, 2 and 3.
+- **`Gpu::oam_bus_y`/`oam_bus_x` ARE machine state** — they survive from one
+  scanline into the next by design — so `savestate::FORMAT_VERSION` is **23**.
+  `dma_owns_oam`/`dma_arm`/`dma_dest` are not: they are republished every
+  M-cycle a transfer runs.
+- **AND THE FIRST THING THE NEW GBSelfTest CHECK DID WAS FIND A SECOND BUG.**
+  `oam_dma_cycles`'s idle arm — whose comment said the default machine never
+  reaches it — cleared the MMU's busy flag and not the PPU's. It does reach it:
+  the transfer's last M-cycle leaves `OamDma::pos` at `LEN` inside `bus_tick`
+  without the flag moving, so the *instruction's remainder* is where the
+  transfer is noticed to be over. `Gpu::dma_owns_oam` then latched on for the
+  rest of the session and **the object scan never read OAM again** — 192 of 550
+  frames of the cartridge. **Nothing in the suites catches it**: every c-sp,
+  Mooneye, Mealybug and SameSuite row is byte-identical either way, because they
+  run one short ROM each. A cartridge that runs a hundred checks back to back in
+  one session is a shape no test ROM has, and that is the argument for the
+  cartridge in one sentence.
+
 ## OAM DMA has a bus, and the CPU has to share it (`src/mmu/mod.rs::dma_conflict`)
 
 **Full record with the seven rows that pin each clause, the cost table and what is still red:
