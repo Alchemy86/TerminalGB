@@ -730,6 +730,43 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   absent from the default engine; console revisions we do not model; `firstwhite` printing an
   error on a DMG and not on a Color console (unexplained); and **`bully` drawing an entirely
   black screen**, which is a failure to *start* and is the first thing to look at.
+- **Gambatte's 1608 `identical`-mode failures, RE-CATEGORIZED by ROM-name prefix (22 Aug
+  2026), and the safety verdict for each group — read this before spending another session's
+  worth of hand-tracing on any of them.** Counted directly from
+  `testharness/csp_gambatte_accurate_baseline.txt`:
+  `sprites` 234, `window` 188, `dma` 117, `scx_during_m3` 111, `speedchange` 82, `sound` 73,
+  `enable_display` 71, `oamdma` 67, `m2enable` 63, `m1` 61, `miscmstatirq` 53, `ly0` 48,
+  `serial` 39, `lcd_offset` 34, `halt` 32, `tima` 29, `cgbpal_m3` 28, `m0enable` 22,
+  `m2int_m0irq` 21, `irq_precedence` 16, `vram_m3`/`lycm2int` 14 each, `scy` 13,
+  `oam_access` 12, `dmgpalette_during_m3`/`display_startstate` 10 each, and a long tail under
+  10. **The overwhelming majority — `sprites`, `window`, `dma`'s `*_scx` rows,
+  `scx_during_m3`, `m2enable`, `m1`, `miscmstatirq`, `ly0`, `lcd_offset`, `cgbpal_m3`,
+  `m0enable`, `vram_m3`, `lycm2int`, `scy`, `oam_access`, `dmgpalette_during_m3`,
+  `display_startstate`** — are the same mid-scanline PPU wall named above, confirmed by
+  reading representative `.asm` sources from
+  [`pokemon-speedrunning/gambatte-core`](https://github.com/pokemon-speedrunning/gambatte-core)
+  (the `sinamas/gambatte` mirror has gone private) rather than assumed from the name.
+  **Two categories that looked genuinely separate were traced by hand and turned out to be
+  deep, already-finely-calibrated CPU/timer/serial corners, not clean isolated bugs**:
+  `halt/ifandie_ei_halt_sra` (an `EI; HALT` sequence with a pending interrupt, testing the
+  exact interaction between the HALT-bug PC-rewind and the delayed `EI` enable — hand-traced
+  three plausible outcomes, none matched the expected `out0A`, meaning the real mechanic is
+  something this session did not find) and `serial/nopx1_start_wait_read_if_1` (a
+  second-transfer-while-first-still-shifting probe — traced with a scratch probe example,
+  interrupt dispatch confirmed exactly 20 T-cycles/5 M-cycles as documented, but the shift
+  clock's fixed-phase design means the expected duration is itself data-dependent, so a
+  measured "256 T-cycles early" is not evidence of a bug on its own). **Do not attempt either
+  without a full model derivation and testing against `boot_sclk_align` (Mooneye, currently
+  passing and famously one-M-cycle-delicate) and the Blargg `halt_bug` ROM (also passing) —
+  both are exactly the kind of hard-won pass a blind serial/HALT tweak would put at risk.**
+  `speedchange` (82) is very likely the same `daid/speed_switch_timing_{ly,stat}`
+  PPU-vs-counter phase error already recorded as needing "two crews' work, not one." `sound`
+  (73) is APU work already shown near-exhausted by the SameSuite campaign (3 rows red on
+  measured evidence). The DMG STAT-write bug (`miscmstatirq` and neighbours) was attempted
+  and reverted — see the dated entry in `docs/conformance-notes.md` and
+  `docs/components/ppu.md`'s "NOT modelled" bullet. **Net: of 1608, an estimated ~1400+ are
+  the PPU wall, ~200 are deep CPU-timing corners requiring a full model before any attempt,
+  and none surveyed this session are a clean, low-risk, isolated fix.**
 
 ### A SUITE IS AN INPUT, NOT A SCOREBOARD — and `docs/pitfalls/codes.md` is the third output
 
