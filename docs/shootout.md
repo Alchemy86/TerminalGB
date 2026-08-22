@@ -15,13 +15,17 @@ carries the project's name.
 
 Measured against the shootout's own ROMs, its own reference screenshots and its
 own pass criterion, re-scored from a fresh clone of the shootout on
-**2026-08-21**:
+**2026-08-21** and reconfirmed with a live `shootout_scout` run on
+**2026-08-22** (the `m3_wx_5_change`/`m3_wx_6_change` fix below had only been
+reasoned about arithmetically until this run — see the former dagger note,
+now resolved):
 
-> ### **241 / 264 — 91.3 %**
+> ### **243 / 264 — 92.0 %**
 >
 > (**223 / 264 — 84.5 %** on `standard`, which is where this page stood until
-> that day. The flip is **fifteen gains and zero losses** row for row; the
-> fifteen are named in §1a.)
+> 2026-08-21. The `standard`/`identical` flip that day was **fifteen gains and
+> zero losses** row for row, the fifteen named in §1a; the further +2 to 243
+> is `identical`-only — [`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026).)
 
 That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
 
@@ -31,7 +35,7 @@ That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
 | 2 | Emulicious | 254/261 | 97.3 |
 | 3 | SameBoy | 253/264 | 95.8 |
 | 4 | Beaten Dying Moon | 247/264 | 93.6 |
-| **5** | **this emulator** | **241/264** | **91.3** |
+| **5** | **this emulator** | **243/264** | **92.0** |
 | 6 | GSE | 218/264 | 82.6 |
 | 7 | bgb | 205/264 | 77.7 |
 | 8 | GambatteSpeedrun | 169/207 | 81.6 |
@@ -56,11 +60,11 @@ By suite:
 | `acid` | **5 / 5** | 4 / 5 | `cgb-acid-hell` closed on 2026-08-21 — the Color `TILE_SEL` glitch, [`mealybug.md` §13](mealybug.md#13-tile_sel-reset-on-a-bitplane-read-the-tile-index-is-the-data-21-aug-2026); `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
 | `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
-| `mealybug-tearoom-tests` | **9 / 24**<sup>†</sup> | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 15 still red, **9 cannot be won by PPU work at all** — see §1b |
-| **total** | **241 / 264**<sup>†</sup> | 223 / 264 | |
+| `mealybug-tearoom-tests` | **11 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 13 still red, **9 cannot be won by PPU work at all** — see §1b |
+| **total** | **243 / 264** | 223 / 264 | |
 
-**Every one of the 23 failures is a documented open area, and 9 of them are not
-ours to win.** Mealybug 15 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
+**Every one of the 21 failures is a documented open area, and 9 of them are not
+ours to win.** Mealybug 13 (9 blocked on the boot-ROM glyph — §1b), Mooneye 0,
 `daid/ppu_scanline_bgp` ×2, `daid/speed_switch_timing_{ly,stat}`,
 `ashiepaws` 2, SameSuite 2. There is no surprise in the list, and §1c measures
 every one of them so the next crew can start at the cheapest.
@@ -71,15 +75,14 @@ and the whole of it is that a DMA running under an object scan stops the PPU
 reading OAM. It also moved four Gambatte `oamdma/late_sp*` rows, which are the
 same behaviour measured with resolution instead of pixels.</sup>
 
-<sup>† `m3_wx_5_change` and `m3_wx_6_change` — two of §1b's six genuine
+<sup>`m3_wx_5_change` and `m3_wx_6_change` — two of §1b's six genuine
 mid-scanline rows — went pixel-exact on 2026-08-21
-([`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026)),
-which by this table's own arithmetic moves `mealybug-tearoom-tests` to 11/24
-and the total to 243/264. **Not yet confirmed by a live `shootout_scout` run**
-against the real board's screenshot/50-luma judging — the 9/24 and 241/264
-above are the last figures actually re-scored that way. Whoever next runs the
-live scout should expect 243 and update this table (removing the daggers)
-rather than treating 241 as still current.</sup>
+([`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026)).
+This table used to carry that as a same-day arithmetic prediction with a
+dagger, unconfirmed by the real screenshot judging; **confirmed by a live
+`shootout_scout` run on 2026-08-22** — 243/264, `mealybug-tearoom-tests`
+11/24, no other row moved. The dagger is gone because there is nothing left
+to confirm.</sup>
 
 ### 1a. The fifteen rows the default flip moved
 
@@ -122,9 +125,9 @@ shootout's DMG-only 24-row population that gives:
 
 The reachable ceiling on this suite's shootout population is still **15 of
 24** and the published total's ceiling is still **247 / 264** if the block
-lands in full — two of the original six rows are now part of the 15 rather
-than still owed, which is what moves the *current* total from 241 towards 243
-(§16, footnoted above), not the ceiling. Anybody planning work against this
+lands in full — two of the original six rows are now part of the confirmed
+11/24 (§1, §16) rather than still owed, which is why the ceiling itself did
+not move even though the current total did. Anybody planning work against this
 row block should plan against the remaining four, and start at the top of
 that table.
 
