@@ -7424,6 +7424,18 @@ fn probed_caps() -> termcaps::TermCaps {
     }
 }
 
+/// Whether this process is running inside a tmux pane, by the same test
+/// `ratatui-image` itself uses to decide whether to risk an env-var protocol
+/// guess (`picker.rs::detect_tmux_and_outer_protocol_from_env`).
+///
+/// Shared by [`probe_graphics`] (which needs it to wrap the capability query
+/// in tmux's passthrough envelope) and [`build_picker`] (which needs it to
+/// know when an *unconfirmed* protocol guess is not evidence — see there).
+fn running_inside_tmux() -> bool {
+    env::var("TERM").is_ok_and(|t| t.starts_with("tmux"))
+        || env::var("TERM_PROGRAM").as_deref() == Ok("tmux")
+}
+
 /// Ask the terminal which graphics protocol it speaks, and how big a cell is.
 ///
 /// Writes one query and reads up to the cursor-position fence it ends with, so
@@ -7433,8 +7445,7 @@ fn probed_caps() -> termcaps::TermCaps {
 #[cfg(all(unix, feature = "libc"))]
 fn probe_graphics(tty: &mut std::fs::File) {
     use std::io::Write as _;
-    let is_tmux = env::var("TERM").is_ok_and(|t| t.starts_with("tmux"))
-        || env::var("TERM_PROGRAM").as_deref() == Ok("tmux");
+    let is_tmux = running_inside_tmux();
     let q = termcaps::query(is_tmux);
     if tty
         .write_all(q.as_bytes())
@@ -7767,6 +7778,42 @@ const DEFAULT_CELL: (u16, u16) = (10, 20);
 /// It also queries stdout/stdin, which `crossterm` owns; our probe uses
 /// `/dev/tty`, drains stale input and knocks first, for the reasons documented
 /// on [`probe_terminal`].
+///
+/// # Nothing answered, and we are inside tmux: do not gamble
+///
+/// Our own compatibility table (`docs/rendering.md` §6) puts every image
+/// protocol — Kitty, Sixel, iTerm2 — behind a `✗` for tmux/screen:
+/// *"Multiplexers swallow graphics sequences."* That is a measured finding,
+/// not a guess, and `caps.answered == false` inside tmux is exactly its
+/// signature: the query went out, tmux ate it, nothing came back.
+///
+/// `Picker::from_query_stdio()`'s own fallback query hits the identical
+/// silence and, per its own doc comment, then falls back to *guessing* a
+/// protocol from environment variables it did nothing to verify
+/// (`KITTY_WINDOW_ID` → Kitty, `ITERM_SESSION_ID`/`WEZTERM_EXECUTABLE` →
+/// iTerm2) — its own words: **"Produces false positives, for example xterm
+/// started from kitty inherits `KITTY_WINDOW_ID`."** Any shell that was
+/// itself started inside WezTerm/iTerm2/kitty carries the matching variable
+/// whether or not *this* tmux pane can forward an image to it.
+///
+/// Measured: a tmux session whose outer terminal is WezTerm inherits
+/// `WEZTERM_EXECUTABLE`, the guess resolves to `ProtocolType::Iterm2`, and
+/// the frontend then transmits an iTerm2 escape sequence tmux cannot deliver
+/// — `Sent 160x144 0B`, a blank rectangle where the game picture belongs, and
+/// (identically) a blank rectangle under music mode's cover panel while its
+/// own header still reads `cover 1/1`. Nothing errors and nothing falls back,
+/// because every one of those code paths trusts "the protocol is not
+/// `Halfblocks`" as proof a picture was drawn.
+///
+/// So this one case is carved out before the fallback query runs: no real
+/// answer, and we already know (independently of that query) that we are
+/// somewhere the table says cannot answer honestly either way. Half-blocks
+/// is plain text, so it is the one thing every row of that table can do,
+/// which is the property [`crate::screen::halfblocks`] exists for. A tmux
+/// session that genuinely negotiates a protocol (`allow-passthrough` plus a
+/// capable outer terminal that actually replies) never reaches this branch —
+/// it is caught by `caps.best()` or `caps.answered` above, both backed by a
+/// real reply on `/dev/tty`, and is untouched by this.
 pub(crate) fn build_picker() -> Picker {
     let caps = probed_caps();
     // `from_fontsize` seeds the tmux flag and the iTerm2-from-env guess for us —
@@ -7789,7 +7836,15 @@ pub(crate) fn build_picker() -> Picker {
         return picker;
     }
 
-    // Nobody answered: either the probe could not run (no `/dev/tty`, no `libc`
+    // Nobody answered at all. Inside tmux that is not "no evidence" — see the
+    // doc section above — so declare half-blocks rather than let a fallback
+    // query gamble on an unconfirmed env guess it cannot actually verify.
+    if running_inside_tmux() {
+        picker.set_protocol_type(ProtocolType::Halfblocks);
+        return picker;
+    }
+
+    // Outside tmux: the probe could not run (no `/dev/tty`, no `libc`
     // feature, not unix) or the terminal never replied. Fall back to the
     // library's own query rather than declaring half-blocks on no evidence.
     match Picker::from_query_stdio() {
@@ -9727,6 +9782,91 @@ mod tests {
         assert_eq!(protocol_from_str("ITERM"), Some(ProtocolType::Iterm2));
         assert_eq!(protocol_from_str("nonsense"), None);
         assert_eq!(protocol_name(ProtocolType::Sixel), "sixel");
+    }
+
+    /// `running_inside_tmux` is the one thing standing between "nobody
+    /// answered" and trusting `ratatui-image`'s env-var protocol guess (see
+    /// `build_picker`'s doc comment). Mutating real process env vars races
+    /// with any other test reading `TERM`/`TERM_PROGRAM` — nothing else in
+    /// this module does, per the grep this was checked against — so the
+    /// serial-ish set/remove pattern already used for `GB_LINK_DIR` and
+    /// `XDG_STATE_HOME` elsewhere in this file is safe to repeat here.
+    #[test]
+    fn running_inside_tmux_reads_term_and_term_program() {
+        // Save whatever the real environment happens to hold so this test
+        // cannot leak a value into anything that runs after it.
+        let saved_term = env::var("TERM").ok();
+        let saved_term_program = env::var("TERM_PROGRAM").ok();
+
+        env::remove_var("TERM");
+        env::remove_var("TERM_PROGRAM");
+        assert!(!running_inside_tmux(), "neither var set");
+
+        env::set_var("TERM", "xterm-256color");
+        assert!(!running_inside_tmux(), "a plain TERM is not tmux");
+
+        env::set_var("TERM", "tmux-256color");
+        assert!(running_inside_tmux(), "TERM starting with tmux");
+
+        env::remove_var("TERM");
+        env::set_var("TERM_PROGRAM", "tmux");
+        assert!(running_inside_tmux(), "TERM_PROGRAM=tmux, whatever TERM is");
+
+        env::set_var("TERM_PROGRAM", "WezTerm");
+        assert!(!running_inside_tmux(), "a real WezTerm session is not tmux");
+
+        env::remove_var("TERM");
+        env::remove_var("TERM_PROGRAM");
+        match saved_term {
+            Some(v) => env::set_var("TERM", v),
+            None => env::remove_var("TERM"),
+        }
+        match saved_term_program {
+            Some(v) => env::set_var("TERM_PROGRAM", v),
+            None => env::remove_var("TERM_PROGRAM"),
+        }
+    }
+
+    /// **The regression this whole branch exists for.** Reproduced live in a
+    /// real tmux pane whose outer terminal is WezTerm (`WEZTERM_EXECUTABLE`
+    /// inherited into the pane's environment): our own `/dev/tty` probe gets
+    /// no reply at all (tmux swallows the query — `docs/rendering.md` §6),
+    /// so `build_picker` used to fall through to `Picker::from_query_stdio()`,
+    /// which guessed `ProtocolType::Iterm2` from that one env var with zero
+    /// confirmation — and tmux cannot deliver an iTerm2 image, so both the
+    /// game picture and music mode's cover rendered nothing while every panel
+    /// kept claiming a picture was there. `build_picker` itself talks to
+    /// `/dev/tty` and cannot be called from a unit test, so this pins the
+    /// piece that can be pinned without one: the exact env shape that used to
+    /// produce the bad guess must be recognised as "inside tmux" before any
+    /// fallback ever gets a chance to guess from it.
+    #[test]
+    fn a_tmux_pane_inheriting_an_outer_terminals_env_var_is_still_tmux() {
+        let saved_term = env::var("TERM").ok();
+        let saved_term_program = env::var("TERM_PROGRAM").ok();
+        let saved_wezterm = env::var("WEZTERM_EXECUTABLE").ok();
+
+        env::set_var("TERM", "tmux-256color");
+        env::set_var("TERM_PROGRAM", "tmux");
+        env::set_var("WEZTERM_EXECUTABLE", "/usr/bin/wezterm-gui");
+        assert!(
+            running_inside_tmux(),
+            "TERM_PROGRAM=tmux with an inherited WEZTERM_EXECUTABLE is exactly \
+             the shape that produced the false-positive iTerm2 guess"
+        );
+
+        match saved_term {
+            Some(v) => env::set_var("TERM", v),
+            None => env::remove_var("TERM"),
+        }
+        match saved_term_program {
+            Some(v) => env::set_var("TERM_PROGRAM", v),
+            None => env::remove_var("TERM_PROGRAM"),
+        }
+        match saved_wezterm {
+            Some(v) => env::set_var("WEZTERM_EXECUTABLE", v),
+            None => env::remove_var("WEZTERM_EXECUTABLE"),
+        }
     }
 
     /// The config validates `protocol` without being able to see the frontend's

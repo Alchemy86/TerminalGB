@@ -2628,6 +2628,31 @@ wezterm is looking good, we have corrected that before"*.
 - **Sixel output can be verified without a sixel terminal**: decode the DCS bytes the binary
   actually wrote (sixel is deterministic) and look at the PNG. Done for dmg-acid2 — 738×660,
   12.8 KB of sixel, text crisply legible where half-blocks smears it.
+- **INSIDE TMUX, AN UNANSWERED PROBE MUST NOT FALL THROUGH TO `Picker::from_query_stdio()`'S
+  ENV-VAR GUESS — `build_picker` now refuses that gamble outright.** Our own compatibility
+  table (`docs/rendering.md` §6) already says every image protocol is `✗` under tmux/screen
+  ("Multiplexers swallow graphics sequences"), and `caps.answered == false` while
+  `running_inside_tmux()` is exactly that swallowing's signature — our own `/dev/tty` query
+  went out and nothing came back. `Picker::from_query_stdio()`'s fallback query hits the
+  identical silence and, per its **own** doc comment, then guesses a protocol from
+  `KITTY_WINDOW_ID` / `ITERM_SESSION_ID` / `WEZTERM_EXECUTABLE` with **zero verification**
+  ("Produces false positives, for example xterm started from kitty inherits
+  `KITTY_WINDOW_ID`") — and any shell started inside WezTerm/iTerm2/kitty carries the matching
+  var into every tmux pane it opens, whether or not *that pane* can forward an image to it.
+  **Reproduced live**: a tmux session (`TERM_PROGRAM=tmux`) whose outer terminal is WezTerm
+  inherits `WEZTERM_EXECUTABLE`; the old code resolved `protocol=iterm2`, transmitted an
+  iTerm2 escape sequence tmux cannot deliver (`Sent 160x144 0B`), and **both the game picture
+  and music mode's cover rendered nothing while the status line and the "cover 1/1" panel
+  header both kept claiming a picture was there** — a silent failure, not a refusal.
+  `running_inside_tmux()` (shared by `probe_graphics` and `build_picker`) is checked
+  immediately after the "terminal answered and advertised neither" branch, so a *confirmed*
+  positive (a real `CSI 16 t`/kitty/sixel reply that genuinely round-tripped through tmux
+  passthrough) is untouched — this only removes the unconfirmed-guess branch. Verified by
+  capturing a real tmux pane both ways (`tmux capture-pane -p`): before, a blank rectangle
+  under a panel that says `cover 1/1`; after, the actual half-block picture. No emulation code
+  touched — `cargo test --release` (896/896), `testroms` (46/47, unchanged baseline),
+  `savestate`/`battery`/`bootrom`/`ppuengines`/`gbselftest` and `make docs-check` all
+  unaffected, as expected for a picker-selection-only change.
 
 ## Frame transport — how a frame reaches the terminal (`src/termimage.rs`, `src/shmframe.rs`, `src/deflate.rs`)
 
