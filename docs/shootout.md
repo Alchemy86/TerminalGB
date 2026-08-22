@@ -144,7 +144,8 @@ falls straight out of it.
 | `mealybug/m3_scy_change` | 257 px | group E |
 | `mealybug` × 3 (window / `WX`) | 1,273 · 4,792 · 13,660 px | group D |
 | `mealybug` × 9 | whole-screen | the boot ROM's `®` glyph — §1b, a licence call |
-| `daid/ppu_scanline_bgp` ×2 | **2,204-3,309 px** | not a near miss — see below |
+| `daid/ppu_scanline_bgp` (DMG) | **crashes, not a pixel diff** | needs a real boot ROM — see below |
+| `daid/ppu_scanline_bgp` (GBC) | **2,204-3,309 px** | not a near miss — see below |
 | `daid/speed_switch_timing_{ly,stat}` | — | the PPU-vs-counter phase error `CLAUDE.md` records under `STOP` |
 | `ashiepaws/bully.gb` ×2 | whole screen | the CGB-mode boot counter — a captain-level decision, not a PPU one |
 | `samesuite` ×2 | — | red on measured evidence, [`measured/apu.md`](measured/apu.md) |
@@ -164,16 +165,48 @@ was closed) the Color fetcher's three read dots swept over all eight — were bo
 correct and both about *timing*, which is what should have said the byte was not
 in the tile at all.
 
-**`daid/ppu_scanline_bgp` is a long way off and should not be planned as a
-near miss.** It writes `BGP` ten times across mode 3 of every line to draw a
-picture, and ours has **the right structure** — the band boundaries and the
-one-line anomaly at `LY = 47` line up exactly — but **2,755 to 3,309 pixels over
-tolerance across 129 of the 144 lines**, against all three of its DMG
-references. Sliding our frame horizontally to look for a pure phase error gets
-the best match at **+4 pixels and still 2,204 px**, so it is a phase error *and*
-a palette-content error, not one or the other. The suite ships three DMG
-references because the ROM's own timing drifts frame to frame; matching any one
-of them passes.
+**`daid/ppu_scanline_bgp` is not a near miss on either console, and the DMG row
+is not even a pixel comparison any more — measured 22 Aug 2026, re-checked
+against a live `shootout_scout` run and not merely reasoned about.** The DMG row
+now **faults**: `terminalgb: FAULT — the CPU executed undefined opcode 0xfc at
+0x80cc`. That address is tile `$0C`'s 13th byte inside VRAM's `$8000`-block
+(`$8000 + 16×12 + 12`), i.e. inside the **boot-logo tile region**
+`set_boot_logo_tiles` decompresses the cartridge's own header bytes into (the
+Blocker-C fix, §8.6 of `mealybug.md`) — and the ROM's own, fixed, ROM-resident
+`$0040` VBlank vector is `JP $80C3`: it jumps **straight into that VRAM tile
+data as code**, three bytes into tile `$0C`, within the first ~6,200
+instructions of boot. Traced instruction by instruction: the eight bytes from
+`$80C3` to `$80CB` are the correctly-decompressed logo's own zero rows (`NOP`
+×8, present from the very first instruction, never written by the game), and
+`$80CC` is `$FC` — the first non-zero nibble the standard Nintendo logo
+decompresses to at that offset. **Independently re-derived by hand from the
+documented algorithm against this ROM's own (confirmed-standard) header
+bytes, byte for byte**, so the decompression is not the defect — `$FC` is
+exactly what the documented, licence-clean algorithm computes there, and it is
+what a real boot ROM's decompression would produce too. The technique itself
+is boot-ROM-dependent: it relies on VRAM holding *exactly* what a real DMG
+boot ROM leaves behind at the moment it hands off, which is precisely the
+gap `set_boot_logo_tiles` documents that it cannot close (`mealybug.md` §8.6)
+without embedding real Nintendo boot-ROM bytes — explicitly out of scope. The
+policy-correct answer already exists and is deliberately not wired into this
+scout: a user-supplied `$GB_BOOT_ROM` (`src/boot.rs`), which every published
+score in this repository — this one included — is measured *without*, on the
+same "gated suites must never pick one up automatically" rule §8.6 states for
+`examples/mealybug --boot-rom`. No fix is appropriate here; this row stays red
+for a reason outside the emulator's control. **The GBC row does not crash**
+(`set_boot_logo_tiles` is gated to `is_dmg()` machines only, so Color VRAM at
+that address is genuinely zero, and the vector reads eight `NOP`s and one more
+byte harmlessly) and keeps its older pixel-diff character: it writes `BGP` ten
+times across mode 3 of every line to draw a picture, and ours has **the right
+structure** — the band boundaries and the one-line anomaly at `LY = 47` line up
+exactly — but **2,755 to 3,309 pixels over tolerance across 129 of the 144
+lines**, against all three of its DMG-shaped references. Sliding our frame
+horizontally to look for a pure phase error gets the best match at **+4 pixels
+and still 2,204 px**, so it is a phase error *and* a palette-content error, not
+one or the other. The suite ships three references because the ROM's own
+timing drifts frame to frame; matching any one of them passes. Neither
+finding moves the `daid` 5/9 total — both rows were already counted as
+failing before this measurement, on both engines; only *why* was stale.
 
 #### The shootout's Mooneye population is not ours — 97 rows, not 103
 
