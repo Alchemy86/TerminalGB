@@ -213,15 +213,42 @@ colour-correction curve ([`mod.rs:585`](https://github.com/Alchemy86/TerminalGB/
   `gpu::tests::a_source_going_high_behind_another_raises_nothing` and by Mooneye
   `acceptance/ppu/stat_irq_blocking` (FAIL→PASS). (Pan Docs — [STAT](https://gbdev.io/pandocs/STAT.html);
   AntonioND's TCAGBD §8.7.)
-- **The DMG STAT write bug — NOT modelled.** On DMG, writing *any* value to `STAT`
-  (even `0x00`) during OAM scan / HBlank / VBlank / LY=LYC can spuriously fire the STAT
-  interrupt, as if `0xFF` were written for one M-cycle. Two commercial games depend on it.
-  **Measured now, on both picture modes, by `GB-PPU-16`** of the GBSelfTest cartridge
+- **The DMG STAT write bug — NOT modelled, and TWO NAIVE MODELS WERE TRIED AND REJECTED
+  (22 Aug 2026).** On DMG, writing *any* value to `STAT` (even `0x00`) during OAM scan /
+  HBlank / VBlank / LY=LYC can spuriously fire the STAT interrupt, as if `0xFF` were written
+  for one M-cycle. Two commercial games depend on it. **Measured now, on both picture
+  modes, by `GB-PPU-16`** of the GBSelfTest cartridge
   ([`docs/gbselftest.md`](../gbselftest.md#gb-ppu-16)) — until that landed this was a
   sentence nothing in the project could check, because Mooneye, SameSuite and Mealybug
   between them never write `STAT` in a mode where it fires. It is listed as a known gap in
   `tools/gbselftest-gate.py`, so implementing it will turn that gate red until the list is
   updated, which is the intended way to find out it has been done.
+  - **Model A — every write momentarily acts as if all four sources were selected**
+    (`stat_signal()` with every `_inte` forced true, for one write). Gated `is_dmg()`,
+    same silicon-only predicate the OAM-corruption bug uses. Measured: `GB-PPU-16` PASSES
+    on both engines, GBMicrotest's `stat_write_glitch_l*` moves 5/15 → **8/15** — real
+    gains — but Gambatte's `miscmstatirq` and neighbouring groups net **20 gains / 45
+    losses** (`lycEnable` alone 6/20, several sub-groups pure losses with zero gains).
+    A net regression this size cannot be landed; reverted rather than committed.
+  - **Model B — the effective mask is the OLD register's bits OR the NEW value's bits**,
+    the same shape as the DMG `BGP` write glitch (`mmu::ppu_write_commit`'s `old | value`
+    stage) applied to STAT's four select bits. Measured **worse on every controlled
+    check**: `GB-PPU-16` regresses back to FAIL on both engines, GBMicrotest falls back to
+    the pre-fix 5/15. Not swept against Gambatte at all — no point, given it loses to
+    Model A on the tests Model A already wins.
+  - **What would settle it:** Gambatte's own hwtests
+    (`test/hwtests/miscmstatirq/*.asm` in `pokemon-speedrunning/gambatte-core` — **not**
+    `sinamas/gambatte`, whose public mirror has gone private; not in the c-sp bundle,
+    which ships built ROMs only) name the exact rule as `*statwirq_trigger_<old>_<new>_*`
+    pairs, e.g. `lycstatwirq_trigger_00_40_dmg08_out2_cgb04c_out2.asm`: each writes `$00`
+    to `STAT`, clears `IF`, writes the *second* named byte, then reads `IF` back — so the
+    corpus is a genuine parametrised sweep over old/new byte pairs and is capable of
+    pinning the real rule exactly, the way `docs/conformance-notes.md`'s OAM-DMA-bus work
+    used Gambatte's own `oamdma/*.asm` the same way. Neither Model A nor B was checked
+    against the corpus row by row before being tried whole; that per-row check, not a
+    third guessed model, is the next step. Full trace of one file's hand-worked timing
+    (why it looked like it should support Model B and did not) is in
+    `docs/conformance-notes.md`'s 22 Aug 2026 entry.
 - **Mid-scanline `SCX`/`SCY`/`WX`/`WY`/palette writes** are a legitimate technique
   (parallax, status bars). With whole-line rendering (§4) these land at line granularity,
   not pixel granularity. This is what the **Mealybug Tearoom** suite measures, and

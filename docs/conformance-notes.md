@@ -4455,3 +4455,83 @@ checks.
 part of the work, the same as it gets a documentation entry.** Five days of
 emulator work produced four ready-made reproductions and not one check, which is
 how a cartridge goes stale beside the thing it is meant to test.
+
+---
+
+## 2026-08-22 — The DMG STAT write bug: two models tried, both rejected, and why
+
+**Symptom in user terms.** A game that writes `STAT` while a source's underlying condition
+already holds (mid-OAM-scan, mid-HBlank, mid-VBlank, or `LY == LYC`) can see a spurious STAT
+interrupt fire on real DMG/MGB/SGB hardware, regardless of which bits the write actually sets
+— documented in `docs/components/ppu.md` as "as if `0xFF` were written for one M-cycle", and
+two commercial games are reported to depend on it.
+
+**Caught by.** `GB-PPU-16` of the GBSelfTest cartridge (a controlled, single-scenario check
+against real hardware); GBMicrotest's `stat_write_glitch_l0/l1/l143/l154` (15 rows, parametrised
+by which line the write lands on and which sub-condition is probed); wilbertpol's
+`acceptance/gpu/stat_write_if-C`/`-GS` (2 rows); and — found only once the fix was attempted —
+Gambatte's `miscmstatirq` group and several neighbours (`lycEnable`, `lycint_ly`,
+`lycint_lycflag`, `lycint_lycirq`, `m0enable`, `m1`, `m2enable`), which between them turn out
+to be the largest and most precisely parametrised source of ground truth for this exact
+behaviour, at ~65 rows once you count every group a wrong model perturbs.
+
+**Two models were implemented, built, and measured — not just reasoned about:**
+
+- **Model A: every `STAT` write momentarily acts as though all four `_inte` bits were set**,
+  gated on `is_dmg()` (the same DMG/MGB/SGB-only, `ColorAsClassic`-excluded predicate the
+  OAM-corruption bug already uses). Implementation was ~15 lines in the `0xFF41` write arm of
+  `src/gpu/mod.rs`: before applying the write's own bits, evaluate `stat_signal()`'s expression
+  with every source unconditionally selected, and if that pulse is high while the line was
+  low, raise `IF.1` and latch the line exactly as `refresh_stat_line` would, so the write's own
+  (real) evaluation immediately afterward cannot double-fire.
+  - `GB-PPU-16`: FAIL on both engines → **PASS on both engines**. Clean, controlled win.
+  - GBMicrotest `stat_write_glitch_l*`: 5/15 → **8/15**. Real, partial win.
+  - wilbertpol `gpu/stat_write_if-C`/`-GS`: unchanged, 0/2 — both boot `Model::Cgb`/resolve to
+    a model this predicate should have applied to, but the fix does not move either. Not
+    explained; the wilbertpol ROM's exact scenario was not traced.
+  - Gambatte, measured via `make test-external` (full sweep, `standard`): **65 rows change**,
+    **20 gain, 45 lose**. Breakdown by group (gain/loss): `enable_display` 0/1,
+    `lycEnable` 6/20, `lycint_ly` 0/1, `lycint_lycflag` 0/2, `lycint_lycirq` 0/1,
+    `m0enable` 0/1, `m1` 2/5, `m2enable` 5/2, `miscmstatirq` 7/12. Several groups are pure
+    losses with zero offsetting gains. **Net regression — reverted, not committed.**
+
+- **Model B: the effective mask for the write's one M-cycle is the OLD register's bits OR the
+  NEW value's bits**, per source — the same shape as the already-shipped DMG `BGP` write
+  glitch (`mmu::ppu_write_commit`'s `old | value` stage, cited in `mmu::rb`/`mmu::wb`'s own
+  doc comments). Motivated by finding Gambatte's own hwtests source
+  (`pokemon-speedrunning/gambatte-core`, since `sinamas/gambatte`'s public mirror has gone
+  private — `git clone --depth 1 https://github.com/pokemon-speedrunning/gambatte-core`) and
+  reading `test/hwtests/miscmstatirq/lycstatwirq_trigger_00_40_dmg08_out2_cgb04c_out2.asm`,
+  whose name literally encodes an (old, new) byte pair.
+  - Measured **strictly worse on every controlled check**: `GB-PPU-16` regresses to FAIL on
+    both engines; GBMicrotest falls back to 5/15 (the pre-fix baseline). Not measured against
+    Gambatte at all, since there is no reason to sweep a model that already loses to Model A
+    on the tests Model A wins.
+
+**Why the hand trace that motivated Model B did not predict this.** Working through
+`lycstatwirq_trigger_00_40`'s assembly by hand: `lbegin` arms `STAT = $40` (LYC-select only),
+sets `LYC = 5` right after `LY` was waited to `3`, then falls through toward the interrupt. The
+STAT vector at `$0049` (not `$0048` — this ROM's linker packs a byte before user code) runs
+`inc a; ldff($45),a` — bumping whatever `LYC` was toward a new value — before `jp lstatint`,
+which writes `$00` to `STAT`, clears `IF`, writes `$00` to `STAT` *again* (apparently genuine
+redundancy, not a trace artefact — the two writes are ~104 bytes apart in the listing with no
+jump between them, so it reads as deliberate padding/fall-through), clears `IF` again, writes
+`$40`, then reads `IF` back masked against `$03`. Whether `LY == LYC` holds at the moment of
+the final `$40` write depends on how many M-cycles the preceding writes and interrupt dispatch
+consumed against a 456-T-cycle line — genuinely a question of counting real cycles through a
+real ISR, not a comment or citation, and it was not resolved by hand. **This is exactly the
+class of question the corpus itself can answer and a human trace cannot reliably**, which is
+why the settling method below is "read the corpus row by row," not "trace harder."
+
+**What is NOT yet done, and is the honest next step:** score both models against Gambatte's
+`miscmstatirq` group **row by row against the ROM's own `<old>_<new>` filename encoding**,
+rather than the whole-suite pass/fail count — the file names are themselves the specification,
+the way `docs/conformance-notes.md`'s OAM-DMA-bus entries already used `oamdma/*.asm`'s names
+the same way. A third model (candidates: the glitch pulse only applying to the *bits the new
+write actually sets*, or a timing-dependent variant keyed on which T-cycle of the write
+M-cycle the pulse samples) should be checked against that row-by-row table **before** being
+built, not after.
+
+**New test:** none landed — both attempts were reverted. `GB-PPU-16` remains a real,
+already-existing, correctly-red check waiting for whichever model closes it; do not remove it
+from `tools/gbselftest-gate.py`'s known-gap list without also closing the row.
