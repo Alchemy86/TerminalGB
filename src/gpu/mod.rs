@@ -412,6 +412,26 @@ pub struct Gpu {
     /// keeps the access it already holds and carries on drawing normally.
     /// See [`Gpu::set_stop_fill`].
     stop_fill: Option<u8>,
+    /// **The first frame after `LCDC` bit 7 goes 0 -> 1 is forced blank.**
+    /// Real hardware needs roughly a frame to settle after the LCD is
+    /// switched back on, and shows the same white the physical panel shows
+    /// with the LCD off rather than whatever the tile map already holds —
+    /// [pinobatch's `firstwhite`](https://github.com/pinobatch/little-things-gb)
+    /// names this and cites a real symptom: *"probably shows 1-frame
+    /// glitches in Pokémon Pinball"*. `Some(255)` from the write that turns
+    /// the LCD on, cleared at that frame's own VBlank
+    /// ([`Gpu::change_mode`]'s `mode == 1` arm) — one rule everywhere,
+    /// mirroring [`Gpu::stop_fill`]'s shape exactly. Not modelled for the
+    /// Super Game Boy: its own boot ROM leaves the LCD already on and the
+    /// suite's own reference confirms an SGB does **not** show this (a
+    /// "rolling screen" instead), matching
+    /// [SameBoy's](https://github.com/LIJI32/SameBoy) `Core/memory.c`
+    /// (`GB_IO_LCDC`, skips `GB_FRAMESKIP_LCD_TURNED_ON` when
+    /// `GB_is_sgb`) and `Core/display.c` (`GB_FRAMESKIP_LCD_TURNED_ON` ->
+    /// forced white until the next `current_line == LINES`, ->
+    /// `GB_FRAMESKIP_FIRST_FRAME_RENDERED`), read for mechanism and
+    /// reimplemented in this codebase's own idiom, never copied.
+    poweron_fill: Option<u8>,
     /// **One dot of `TILE_SEL` glitch**: set by a `$FF40` write that takes
     /// `LCDC.4` from 1 to 0 on Color silicon, consumed by a bitplane fetch on
     /// that same dot ([`PpuRevision::tile_sel_glitch_reads_tile_index`]), and
@@ -502,6 +522,7 @@ impl Gpu {
             oam_bus_x: 0,
             skip_first_oam: false,
             stop_fill: None,
+            poweron_fill: None,
             tile_sel_glitch: false,
             render_mode: RenderMode::from_env(),
             render_pixels: true,
@@ -836,6 +857,11 @@ impl Gpu {
         // a button is pressed), so the blanked display has to survive a state.
         w.bool(self.stop_fill.is_some());
         w.u8(self.stop_fill.unwrap_or(0));
+        // Same reasoning: a state saved mid-way through the blanked first
+        // frame has to keep showing it after loading, not resume the tile
+        // map a frame early.
+        w.bool(self.poweron_fill.is_some());
+        w.u8(self.poweron_fill.unwrap_or(0));
         // The pixel pipeline *is* machine state: a state saved part-way through
         // mode 3 has to resume the same scanline, mid-tile-fetch and all.
         // Written unconditionally so a state moves between the two engines —
@@ -920,6 +946,9 @@ impl Gpu {
         let stopped = r.bool()?;
         let fill = r.u8()?;
         self.stop_fill = if stopped { Some(fill) } else { None };
+        let poweron = r.bool()?;
+        let poweron_shade = r.u8()?;
+        self.poweron_fill = if poweron { Some(poweron_shade) } else { None };
         self.pipe.load_state(r)?;
         Ok(())
     }
@@ -1513,6 +1542,9 @@ impl Gpu {
                 self.wy_trigger = false;
                 self.interrupt |= 0x01;
                 self.updated = true;
+                // The blanked first frame ends at its own VBlank — see
+                // `poweron_fill`. A no-op whenever it was already `None`.
+                self.poweron_fill = None;
             }
             2 => {
                 // The window's "Y condition" (Pan Docs, "Window mid-frame
@@ -1678,6 +1710,15 @@ impl Gpu {
                     self.mode = 0;
                     self.skip_first_oam = true;
                     self.modeclock = 4;
+                    // `firstwhite` — see `poweron_fill`. Not an SGB: its own
+                    // reference is the one console the suite ships that does
+                    // NOT show this, and SameBoy's source excludes it the
+                    // same way (`GB_is_sgb` goes straight to
+                    // `GB_FRAMESKIP_FIRST_FRAME_RENDERED`, skipping the
+                    // forced-white state entirely).
+                    if !matches!(self.gbmode, GbMode::Super | GbMode::Super2) {
+                        self.poweron_fill = Some(255);
+                    }
                 }
                 self.refresh_stat_line();
             }
@@ -1817,7 +1858,7 @@ impl Gpu {
         // shade rather than the tile map — see `stop_fill`. It advances no
         // window line, so the skip below sits *after* it and the two paths
         // agree on that too.
-        if let Some(shade) = self.stop_fill {
+        if let Some(shade) = self.stop_fill.or(self.poweron_fill) {
             if !skip {
                 for x in 0..WIDTH {
                     self.setcolor(x, shade);

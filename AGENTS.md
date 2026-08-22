@@ -12847,3 +12847,65 @@ tests match exactly.
   and must never be hand-edited from a baseline. While touching that page, also corrected
   `m3_lcdc_win_en_change_multiple_wx`'s own figure there, which had gone stale in the hours
   between §15 landing and the page being written (1,273 → 437).
+
+## The first frame after `LCDC` bit 7 turns back on is forced blank (`Gpu::poweron_fill`)
+
+**`c-sp/little-things-gb`'s `firstwhite@dmg` FAIL → PASS on both picture modes, `csp_small`
+18/24 → 19/24 (`_accurate` 22/24 → 23/24), zero rows moved anywhere else in the whole external
+gate** (`make test-external` / `test-external-accurate`, Gambatte's 5,320 rows included,
+Mooneye/SameSuite/Mealybug/cpp all byte-for-byte against baseline). Found while auditing the
+c-sp suites for anything genuinely new after the Gambatte/AGE/wilbertpol sweep came back
+converging on the two already-documented walls — this one did not.
+
+- **Symptom in user terms:** turning the LCD off then back on shows one frame of whatever was
+  left in the tile map (stale content, or a half-drawn frame the game is still setting up)
+  instead of the panel's own "just switched on" white, so a game that relies on this to hide a
+  frame of setup shows a visible glitch for that one frame. Named directly by the ROM's own
+  readme: *"If you get text, your emulator needs to be fixed and probably shows 1-frame glitches
+  in Pokémon Pinball."*
+- **Caught by:** `little-things-gb/firstwhite` (pinobatch, vendored via c-sp — see
+  `target/test-suites/csp/little-things-gb/firstwhite-readme.md`), judged by the shootout's own
+  screenshot convention. It reports success by rendering **nothing** — a plain white frame — and
+  failure by printing "Incorrect behavior: Emulator does not blank first frame after enabling
+  LCDC" onto the very screen being judged, so the failing frame names its own cause. **No
+  suite already gated here gains a row from this** — Mooneye, SameSuite, Mealybug, dmg-acid2 and
+  the rest of c-sp are all unaffected, confirmed by the full external gate above; this behaviour
+  had no other test pointed at it.
+- **The hardware behaviour, with a citation, and it needed a second implementation to pin down
+  because the readme states the *effect* and not the *mechanism*:** traced with a probe that
+  steps `firstwhite.gb` instruction-by-instruction to the exact write that sets `LCDC` bit 7,
+  then samples the framebuffer frame by frame — our OWN frame 0 already came out blank (a
+  race-condition accident of when the ROM's drawing code happens to run relative to a frame
+  boundary, not a deliberate rule), and the ROM's error text was already fully drawn into VRAM by
+  frame 1, meaning the miss was never about *what* the ROM draws. Reading
+  [SameBoy](https://github.com/LIJI32/SameBoy)'s source settled it: `Core/memory.c`'s `GB_IO_LCDC`
+  write handler sets `frame_skip_state = GB_FRAMESKIP_LCD_TURNED_ON` on the exact instruction that
+  takes bit 7 from 0 to 1 (skipped for the SGB, which goes straight to
+  `GB_FRAMESKIP_FIRST_FRAME_RENDERED`), and `Core/display.c` forces the **whole screen** to a flat
+  white for as long as that state holds, clearing it at that frame's own `current_line == LINES`
+  (VBlank). One frame, always, on every console but the SGB — which is exactly why the suite's own
+  SGB/SGB2 result is the one documented failure ("Error message on rolling screen"): real SGB
+  hardware does not have this quirk either. Read for mechanism, reimplemented in this codebase's
+  own idiom, cited at the field.
+- **New test:** `Gpu::poweron_fill: Option<u8>`, set to `Some(255)` by the `$FF40` write that
+  takes `LCDC` bit 7 low-to-high (mirroring `Gpu::stop_fill`'s exact shape — same field pattern,
+  same two render-path hooks in `mod.rs`'s `renderscan` and `fifo.rs`'s per-dot output, checked
+  with `.or(self.stop_fill)`), cleared in `Gpu::change_mode`'s `mode == 1` (VBlank) arm — the one
+  hook both engines already share for "this frame just ended". Not modelled for
+  `GbMode::Super`/`Super2`, matching SameBoy's own `GB_is_sgb` exclusion. `savestate::
+  FORMAT_VERSION` bumped to **26** (the field is live across potentially many scanlines and must
+  survive a save taken mid-blank, same reasoning as `stop_fill`).
+- **A genuine tooling bug found on the way, fixed in the same commit:** `docs/tools/
+  status_numbers.py`'s `INLINE_RE`'s suite-key character class was `[a-z0-9_]+` — no hyphen —
+  so any inline score marker naming a hyphenated c-sp suite (`csp_little-things-gb`,
+  `csp_cgb-acid2`, `csp_cgb-acid-hell`, `csp_mooneye-wilbertpol`) silently failed to match at
+  all: not rewritten by `make status`, not verified by `make docs-check`, not reported as
+  unknown — just inert text that looked gated and was not. Caught because `little-things-gb`'s
+  own row in `docs/measured/scoreboard.md` stayed frozen at the pre-fix `1/2` through a `make
+  status` run that had genuinely changed the underlying baseline to `2/2`. Fixing the class
+  (adding `-` to the character class) surfaced a **second**, unrelated stale figure the same
+  bug had been hiding: `cgb-acid-hell`'s `_accurate` column read `0/1` where the baseline (and
+  the live gate) has said `1/1` since `d8751b4` closed it on 2026-08-21 — over a day of drift
+  invisible to `make docs-check`, which reported "OK" throughout because it never looked. Inline
+  score count in prose verified by `docs-check` moved 138 → 162 with the fix, entirely previously
+  ungated hyphenated markers.

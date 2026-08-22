@@ -1370,9 +1370,10 @@ impl Gpu {
         if x >= WIDTH || self.line as usize >= HEIGHT {
             return;
         }
-        // STOP mode: the PPU has lost its VRAM access, so every pixel is the
-        // same flat shade. See `Gpu::set_stop_fill`.
-        if let Some(shade) = self.stop_fill {
+        // STOP mode, or the blanked first frame after LCDC turns the LCD on:
+        // every pixel is the same flat shade either way. See
+        // `Gpu::set_stop_fill` and `Gpu::poweron_fill`.
+        if let Some(shade) = self.stop_fill.or(self.poweron_fill) {
             self.setcolor(x, shade);
             return;
         }

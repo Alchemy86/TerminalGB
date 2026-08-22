@@ -132,7 +132,7 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// instant a push drains the FIFO to empty). Both are live mid-mode-3.
 /// v25: `Gpu::winx_prev` — `WX` as of the end of the previous per-dot tick,
 /// one dot staler than the live register. Live only inside mode 3.
-pub const FORMAT_VERSION: u16 = 25;
+pub const FORMAT_VERSION: u16 = 26;
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]

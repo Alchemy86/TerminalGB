@@ -385,7 +385,16 @@ INLINE_PIXELS = {
 }
 
 INLINE_RE = re.compile(
-    r"<!--score:(?P<key>[a-z0-9_]+)(?::(?P<kind>pass|total|px))?-->"
+    # Suite keys can carry a hyphen (`csp_little-things-gb`, `csp_cgb-acid2`,
+    # `csp_mooneye-wilbertpol`) because that is the c-sp suite's own directory
+    # name — see INLINE_SUITES. A key class of `[a-z0-9_]+` alone silently
+    # fails to match any of those, so the marker sits in the page looking
+    # gated while `rewrite_inline`/`check_inline` never see it at all: no
+    # rewrite, no "unknown suite" complaint, nothing — found when
+    # `docs/measured/scoreboard.md`'s `little-things-gb` row stayed frozen at
+    # a stale `1/2` through a `make status` run that changed the underlying
+    # baseline to 2/2.
+    r"<!--score:(?P<key>[a-z0-9_-]+)(?::(?P<kind>pass|total|px))?-->"
     r"(?P<body>.*?)"
     r"<!--/score-->",
     re.S,

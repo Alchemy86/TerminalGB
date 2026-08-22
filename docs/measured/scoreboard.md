@@ -320,15 +320,15 @@ picture modes, by [`examples/csp_suite.rs`](../../examples/csp_suite.rs).
 | GBMicrotest | **<!--score:csp_gbmicrotest:pass-->251<!--/score-->** / <!--score:csp_gbmicrotest:total-->513<!--/score--> | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / <!--score:csp_gbmicrotest_accurate:total-->513<!--/score--> | the verdict byte the ROM writes to `$FF82` |
 | Mooneye GB (wilbertpol fork) | **<!--score:csp_mooneye-wilbertpol:pass-->62<!--/score-->** / <!--score:csp_mooneye-wilbertpol:total-->117<!--/score--> | **<!--score:csp_mooneye-wilbertpol_accurate:pass-->82<!--/score-->** / <!--score:csp_mooneye-wilbertpol_accurate:total-->117<!--/score--> | `$ED` then the Fibonacci registers |
 | AGE test roms | **<!--score:csp_age:pass-->3<!--/score-->** / <!--score:csp_age:total-->59<!--/score--> | **<!--score:csp_age_accurate:pass-->10<!--/score-->** / <!--score:csp_age_accurate:total-->59<!--/score--> | `LD B,B` then the Fibonacci registers, or the author's screenshot |
-| cgb-acid2 | **<!--score:csp_cgb-acid2:pass-->1<!--/score-->** / <!--score:csp_cgb-acid2:total-->1<!--/score--> | **<!--score:csp_cgb-acid2_accurate:pass-->0<!--/score-->** / <!--score:csp_cgb-acid2_accurate:total-->1<!--/score--> | the author's reference image, in colour |
-| cgb-acid-hell | **<!--score:csp_cgb-acid-hell:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell:total-->1<!--/score--> | **<!--score:csp_cgb-acid-hell_accurate:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell_accurate:total-->1<!--/score--> | as above |
+| cgb-acid2 | **<!--score:csp_cgb-acid2:pass-->1<!--/score-->** / <!--score:csp_cgb-acid2:total-->1<!--/score--> | **<!--score:csp_cgb-acid2_accurate:pass-->1<!--/score-->** / <!--score:csp_cgb-acid2_accurate:total-->1<!--/score--> | the author's reference image, in colour |
+| cgb-acid-hell | **<!--score:csp_cgb-acid-hell:pass-->0<!--/score-->** / <!--score:csp_cgb-acid-hell:total-->1<!--/score--> | **<!--score:csp_cgb-acid-hell_accurate:pass-->1<!--/score-->** / <!--score:csp_cgb-acid-hell_accurate:total-->1<!--/score--> | as above |
 | rtc3test | **<!--score:csp_rtc3test:pass-->6<!--/score-->** / <!--score:csp_rtc3test:total-->6<!--/score--> | **<!--score:csp_rtc3test_accurate:pass-->6<!--/score-->** / <!--score:csp_rtc3test_accurate:total-->6<!--/score--> | the author's screenshots, one per sub-test |
 | MBC3 Tester | **<!--score:csp_mbc3-tester:pass-->2<!--/score-->** / <!--score:csp_mbc3-tester:total-->2<!--/score--> | **<!--score:csp_mbc3-tester_accurate:pass-->2<!--/score-->** / <!--score:csp_mbc3-tester_accurate:total-->2<!--/score--> | the author's screenshots |
 | Scribbltests | **<!--score:csp_scribbltests:pass-->7<!--/score-->** / <!--score:csp_scribbltests:total-->9<!--/score--> | **<!--score:csp_scribbltests_accurate:pass-->9<!--/score-->** / <!--score:csp_scribbltests_accurate:total-->9<!--/score--> | the author's screenshots |
 | TurtleTests | **<!--score:csp_turtle-tests:pass-->2<!--/score-->** / <!--score:csp_turtle-tests:total-->2<!--/score--> | **<!--score:csp_turtle-tests_accurate:pass-->2<!--/score-->** / <!--score:csp_turtle-tests_accurate:total-->2<!--/score--> | the author's screenshots |
 | Strikethrough | **<!--score:csp_strikethrough:pass-->0<!--/score-->** / <!--score:csp_strikethrough:total-->2<!--/score--> | **<!--score:csp_strikethrough_accurate:pass-->2<!--/score-->** / <!--score:csp_strikethrough_accurate:total-->2<!--/score--> | the author's screenshots |
 | Bully | **<!--score:csp_bully:pass-->0<!--/score-->** / <!--score:csp_bully:total-->1<!--/score--> | **<!--score:csp_bully_accurate:pass-->0<!--/score-->** / <!--score:csp_bully_accurate:total-->1<!--/score--> | the author's screenshot |
-| little-things-gb | **<!--score:csp_little-things-gb:pass-->1<!--/score-->** / <!--score:csp_little-things-gb:total-->2<!--/score--> | **<!--score:csp_little-things-gb_accurate:pass-->1<!--/score-->** / <!--score:csp_little-things-gb_accurate:total-->2<!--/score--> | the author's screenshot |
+| little-things-gb | **<!--score:csp_little-things-gb:pass-->2<!--/score-->** / <!--score:csp_little-things-gb:total-->2<!--/score--> | **<!--score:csp_little-things-gb_accurate:pass-->2<!--/score-->** / <!--score:csp_little-things-gb_accurate:total-->2<!--/score--> | the author's screenshot |
 
 Rows marked `SKIP` in a baseline count in **neither** column and each says why. There are 96 of
 them: 95 Gambatte ROMs that upstream itself disables (a `_xout0` name makes its own
@@ -405,11 +405,21 @@ whether it is decidable from inside a cartridge at all).
 * **Console revisions we do not model.** AGE names the CPU revision in every file name
   (`-cgbBC` versus `-cgbE`), and where a name lists several (`-cgbBCE`) no single machine can
   satisfy all of them. The runner forces a stepping only when the name gives exactly one.
-* **`firstwhite` prints an error on a DMG and not on a Color console** — it draws its message
-  at about frame 21 and holds it, on both picture modes. Unexplained; the ROM is
-  [pinobatch/little-things-gb](https://github.com/pinobatch/little-things-gb)'s and its readme
-  says an emulator that shows text there "probably shows 1-frame glitches in *Pokémon
-  Pinball*".
+* ~~**`firstwhite` prints an error on a DMG and not on a Color console**~~ — **closed.** The
+  ROM is [pinobatch/little-things-gb](https://github.com/pinobatch/little-things-gb)'s, and its
+  readme names the real cause: real hardware needs roughly a frame to settle after `LCDC` bit 7
+  is switched back on and shows the panel's own "screen off" white for that frame rather than
+  the tile map, whatever the tile map already holds — an emulator that shows text there
+  "probably shows 1-frame glitches in *Pokémon Pinball*". Confirmed against
+  [SameBoy](https://github.com/LIJI32/SameBoy)'s source (`Core/memory.c`'s `GB_IO_LCDC` write
+  handler and `Core/display.c`'s `GB_FRAMESKIP_LCD_TURNED_ON` state, read for mechanism and
+  reimplemented in this codebase's own idiom): the whole screen is forced to a flat white from
+  the write that turns the LCD on until that frame's own VBlank, on every console but the SGB
+  (whose own reference in this suite is the one that does **not** pass — matching
+  `GB_is_sgb` skipping the forced-white state entirely in SameBoy's source too).
+  `Gpu::poweron_fill`, mirroring `Gpu::stop_fill`'s shape exactly. `little-things-gb` **2/2** on
+  both picture modes, zero rows moved anywhere else across the whole external gate (`make
+  test-external` / `test-external-accurate`, Gambatte's 5,320 rows included).
 * **`bully` draws nothing at all** — our frame is entirely black where the reference is a page
   of text. That is a failure to *start*, not a failure of a check, and it is the first thing to
   look at in this group.
