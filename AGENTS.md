@@ -768,6 +768,49 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   the PPU wall, ~200 are deep CPU-timing corners requiring a full model before any attempt,
   and none surveyed this session are a clean, low-risk, isolated fix.**
 
+## GBSelfTest and SameSuite re-confirmed clean; AGE's 49 reds traced to the same two walls
+
+Continuing the same audit one suite further, in the same session. **GBSelfTest and SameSuite
+both re-run exactly as documented — no drift, no new gaps, nothing to fix.** `tools/
+gbselftest-gate.py` on both picture modes reports precisely the known-failure set
+(`GB-PPU-16` alone on `identical`; that plus the eight fetcher-penalty rows on `standard`) and
+nothing else; a direct `samesuite` run on both modes gives the same three documented reds
+(`channel_1_freq_change_timing-cgb0BC`, `channel_1_sweep_restart`, `channel_4_freq_change`),
+all three already exhaustively investigated and correctly left alone by earlier work.
+
+- **AGE's ~49 register-based reds (`halt/`, `oam/`, `vram/`, `stat-mode*/`, `speed-switch/`,
+  `ly/`, `lcd-align-ly/`) all print the SAME two register signatures**
+  (`b=00 c=6B d=14 e=06 h=98 l=10` or the `e=19` variant), regardless of which of those wildly
+  different hardware areas the ROM is named for. That is consistent with — not new evidence
+  against — the standing conclusion that this is AGE's own shared failure epilogue (draw a
+  report screen in AGE's custom Cellphone Font, stamp a generic marker in the registers, then
+  `LD B,B`), not a harness bug: the `$40` breakpoint still fires exactly once per ROM. **Going
+  further than that needs AGE's own font decoded** — its glyphs are not ASCII-ordered the way
+  Blargg's or Mooneye's are, so `screen_text()`'s tile-id-is-ASCII trick (`mooneye_scout.rs`)
+  does not apply, and nothing here reads them. That is a genuine, tractable-in-principle
+  reverse-engineering task (glyph-matching, the same technique `tools/conformance/
+  screentext.py` uses for Blargg's font) — **and it is a multi-hour project on its own, not
+  attempted this session**, flagged for whoever picks it up rather than guessed at.
+- **AGE's one near-miss pixel row is now CONFIRMED to be the already-documented fetcher wall,
+  not a fresh gap.** `age-test-roms/m3-bg-bgp` (DMG) is 2 of 23,040 pixels wrong — both at
+  screen column 0, twelve lines apart (`(0,9)` and `(0,21)`), both should be white and render
+  black. Its two CGB-compat references (`ncmBC`, `ncmE`) are pixel-exact; only the DMG column
+  misses. This exercises exactly `ppu_write_commit`'s `0xFF47..=0xFF49 if dmg` arm — the DMG
+  `BGP` `old | new` glitch, `early: 3` — which is already pinned at its Mealybug-measured
+  optimum (`m3_bgp_change`/`m3_scy_change`'s own sweep tables, `AGENTS.md`'s PPU section). A
+  residual this small surviving the already-optimal commit-phase constant is exactly the
+  signature this project has repeatedly measured for the *fetcher itself* being one dot short
+  at the head of a line, not the commit timing — the same open gap `m3_scx_high_5_bits`
+  (12 px, all three columns) is recorded against, budgeted in `docs/mealybug.md` §8.9 as
+  needing per-tile calibration on the order of weeks. **Do not re-sweep `early` for this** —
+  it is already at the value that wins every other measured row; a value that also closed
+  these two AGE pixels would very likely be the one still-open per-tile fetcher project, not
+  a one-line tweak.
+- **Net for this pass: zero code changes, two findings added to the corpus** (AGE's font-decode
+  gap, now named and scoped rather than left as an unexplained "20 identical dumps"; and a
+  second, independent suite's evidence that the fetcher-timing wall is real and already
+  correctly left alone). Nothing here regresses, nothing here needs reverting.
+
 ### A SUITE IS AN INPUT, NOT A SCOREBOARD — and `docs/pitfalls/codes.md` is the third output
 
 The captain's framing, and it changes what "triage" means here: every failure ends as **(1)** a
