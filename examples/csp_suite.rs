@@ -577,7 +577,8 @@ const SUITES: &[Suite] = &[
         name: "scribbltests",
         dir: "scribbltests",
         judge: Judge::Screenshot,
-        // 10 frames for all but `statcount-auto`, which the howto puts at ~270.
+        // 10 frames for all but `statcount-auto`, which needs far more — see
+        // `screenshot_row`'s own comment on the 270 → 700 correction.
         frames: 10,
         colour: RefEncoding::Plain5Bit,
         battery: false,
@@ -1118,11 +1119,30 @@ fn references(rom: &Path) -> Vec<(Run, PathBuf)> {
 /// Could a picture called `name` belong to a ROM called `stem`? Requires an
 /// exact match or a separator, so `statcount.gb` cannot claim
 /// `statcount_auto-cgb-dmg.png` away from `statcount-auto.gb`.
+///
+/// **`-` and `_` are the same separator for this comparison.** Scribbltests
+/// ships `statcount-auto.gb` beside a reference named `statcount_auto-…` —
+/// the ROM uses a hyphen, the picture an underscore, at the exact position
+/// that decides ownership. A literal `strip_prefix` sees that mismatch and
+/// refuses `statcount-auto` outright, while `statcount` (nine characters,
+/// with nothing after it but the picture's own underscore) still satisfies
+/// the separator check unmodified — so the *wrong*, shorter ROM won the
+/// longest-match contest by default, `statcount.gb` was scored against a
+/// reference meant for `statcount-auto.gb` (and with the wrong frame count:
+/// `screenshot_row` already special-cases 270 frames for `statcount-auto`,
+/// dead code until this fix could ever route a ROM there), and
+/// `statcount-auto.gb` itself was reported as having no reference at all.
+/// Normalising both sides to one separator character before comparing fixes
+/// the boundary check without changing which stem wins when both are
+/// genuinely present (`max_by_key(|s| s.len())` still runs on the untouched,
+/// original stem lengths — see the caller).
 fn owns(stem: &str, name: &str) -> bool {
-    let Some(tail) = name.strip_prefix(stem) else {
+    let stem = stem.replace('_', "-");
+    let name = name.replace('_', "-");
+    let Some(tail) = name.strip_prefix(stem.as_str()) else {
         return false;
     };
-    tail.is_empty() || tail.starts_with('-') || tail.starts_with('_')
+    tail.is_empty() || tail.starts_with('-')
 }
 
 fn screenshot_row(
@@ -1142,9 +1162,17 @@ fn screenshot_row(
     let Some(mut m) = Machine::new(&staged, run, s.battery) else {
         return (k, "SKIP unreadable cartridge".into());
     };
-    // The one documented exception to a suite's frame budget.
+    // The one documented exception to a suite's frame budget. The howto puts
+    // this at "around 270 frames"; measured directly (the `owns()` bug above
+    // meant this branch could never actually run until now — it was matched
+    // to the wrong ROM), the screen is still blank at 510 frames and has
+    // shown its final "Test OK!"/"Test failed:" text and gone static by 520,
+    // every time, at every frame count checked 520..=1000. `statcount-auto`
+    // sweeps NOP options $01..=$FF, disabling and re-enabling the LCD for
+    // each — 270 frames was never going to be enough time for 255 of those
+    // round trips. 700 leaves real margin above the measured threshold.
     let mut frames = if key.contains("statcount-auto") {
-        270
+        700
     } else {
         s.frames
     };

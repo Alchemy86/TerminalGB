@@ -31,7 +31,7 @@ palettely/palettely@cgb = PASS
 palettely/palettely@dmg = PASS
 scxly/scxly@cgb = SKIP reference is neither a DMG nor a compatibility palette
 scxly/scxly@dmg = PASS
-statcount/statcount-auto@none = SKIP the suite ships no reference screenshot
-statcount/statcount@cgb = FAIL diff=609
-statcount/statcount@dmg = FAIL diff=609
+statcount/statcount-auto@cgb = FAIL diff=534
+statcount/statcount-auto@dmg = FAIL diff=534
+statcount/statcount@none = SKIP the suite ships no reference screenshot
 winpos/winpos@none = SKIP the suite ships no reference screenshot
