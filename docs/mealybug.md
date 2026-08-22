@@ -1929,3 +1929,70 @@ confirm rather than assumed: mode 3's total length on every affected line is ide
 the race is won or lost, both before and after this fix. So there is no STAT-binary-search
 construction (the technique behind every existing `GB-PPU-0*` check) that could tell the two
 apart from inside a cartridge with no framebuffer, and none is added here.
+
+## 17. `m3_lcdc_win_en_change_multiple_wx`'s residual: traced to a knife-edge race, not fixed (22 Aug 2026)
+
+`m3_lcdc_win_en_change_multiple_wx@DMG` is still 437 px after §15/§16. Traced dot by dot with
+`SCRATCH_DOT_TRACE=1 SCRATCH_ROM=target/mealybug/m3_lcdc_win_en_change_multiple_wx.gb
+SCRATCH_LINE=16 GB_PPU=identical cargo test --release --lib -- --ignored --nocapture
+mid_line_trace` (the built-in per-instruction trace samples too coarsely for this — one CPU
+instruction spans several dots and can hide the whole race; `SCRATCH_DOT_TRACE` samples every
+dot and needed no code change, it already existed and already reads `SCRATCH_LINE`). Recorded
+because the diagnosis is real and complete even though the fix is not — the next attempt should
+start from this, not re-derive it.
+
+### 17.1 The rank-distance conversion this took to even see the right pixels
+
+`magick <ours>.png -depth 8 rgba:` against the reference gives a literal RGB diff of ~15,700
+pixels on this row set — nowhere near the tool's own reported 437 — because our shades
+(`000000/606060/c0c0c0/ffffff`) and the reference's (`000000/555555/aaaaaa/ffffff`) are
+different absolute greyscale values with the same *rank* order. Re-deriving each image's own
+palette by luminance and comparing ranks (not RGB) reproduces 437 exactly and narrows it to
+**six lines**: 16, 17, 18, 44, 45, 46 — and on every one of them our pixel is the LIGHT-GREY
+background shade where the reference wants the BLACK window shade. The ROM's own tile setup
+(`main`, `fill_vram_9800`/`fill_vram_9c00`) makes this literal: background = light grey,
+window = black. So on these six lines **the window fails to draw where hardware draws it**,
+never the other way around.
+
+### 17.2 The trace: our trigger dot lands inside the OFF pulse, hardware's apparently doesn't
+
+Line 16: `WX = LY = 16` (the handler's `ldh a,[rLY] / ldh [rWX],a`), so the window's trigger
+column is `WX - 7 = 9`. The trace shows `win_on` (LCDC.5, DMG-delayed per `LCDC_DMG_END_BITS`)
+going false at `lx = 4` (the handler's first `ld [hl],c`) and not becoming true again until
+`lx = 12` (the restoring `ld [hl],b`), an 8-pixel-wide OFF window. `Gpu::check_window_start`
+reaches its equality test (`lx == winx_prev - 7`, i.e. `lx == 9`) **exactly inside that OFF
+window** — `win_on` is false at the one dot the position matches, the check is refused, and
+because it is a one-shot equality (Pan Docs: a re-enable only takes if `WX` now points at a
+column not yet drawn) the window then never gets a second chance for the rest of the line: `win`
+stays `false` through `lx = 159`, matching what the rendered frame shows (background the whole
+row past that point). Yet the reference photograph has the window drawing at `x = 10..33` on
+this exact line — hardware's real answer disagrees with the "refused, one-shot, done" outcome
+ours computes.
+
+### 17.3 Why this was not attempted blind
+
+`LCDC_DMG_END_BITS` (the window-enable bit's own commit delay, `src/mmu/mod.rs`) is already
+calibrated **against this exact ROM's sibling**: its own comment records "with it on the stage
+schedule `m3_lcdc_win_en_change_multiple` is 521 pixels out; at end-of-cycle it is pixel-exact"
+— that sibling (fixed `WX = 7`, no per-line `LY` write) is 0/0/0 today, so the constant is
+already fitted to the *same* toggle-timing this ROM depends on, just without the extra
+`WX = LY` dimension. Nudging the commit dot to try to slide the trigger dot out of the OFF
+window risks exactly the sibling test whose 0/0/0 the constant was fitted from, and §14's
+`m3_scy_change` entry already shows a "measured and rejected" example of a narrow repair in
+this same file trading one row for another. Not swept here for that reason — it needs the
+sibling re-checked at every candidate value, the way §14 did, before any change is considered
+safe to land.
+
+### 17.4 What would settle it
+
+Two live hypotheses, neither tried: (1) the ROM's `nop` between the `WX = LY` write and the
+first `ld [hl],c` is fixed at one dot in the disassembly (`asm`, `main`/`lcdc_handler`), so if
+hardware's LCDC.5 commit is delayed by a *different* amount than `LCDC_DMG_END_BITS` currently
+models specifically when the write follows a `WX` write within the same few T-cycles, that
+would shift the OFF window relative to the trigger dot without touching the constant used
+elsewhere; (2) `winx_prev` (§16) is read by `check_window_start`'s equality check but `win_on`
+is read live — if hardware also delays *its* read of the enable bit by the same one dot
+`winx_prev` delays `WX`, the trigger check could see the *pre-toggle* `win_on = true` at the
+critical dot instead of the live post-toggle value, which would flip this specific outcome
+without touching `LCDC_DMG_END_BITS` at all. Neither is swept here; both are concrete enough to
+try without another multi-hour trace.
