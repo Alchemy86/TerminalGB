@@ -1,5 +1,8 @@
 roms
 target
+# `SUITES=.test-suites make test-external` — the external ROMs kept out of
+# `target/`, which is what CI does so the compiler cache does not swallow them.
+.test-suites
 node_modules
 Cargo.lock
 
