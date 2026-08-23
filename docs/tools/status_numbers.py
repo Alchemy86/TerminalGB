@@ -344,6 +344,14 @@ INLINE_PAGES = [
     # unwrapped and must NOT track the baselines.
     *[os.path.join("docs", "pitfalls", f)
       for f in ("README.md", "accuracy.md", "tests.md", "not-our-bug.md")],
+    # docs/picture-modes.md's whole argument is a side-by-side score table, so a
+    # drifted figure there does not merely age -- it misreports which engine is
+    # ahead, which is the one thing the page exists to say. It carried wrapped
+    # markers for a long time while NOT being on this list, so `make status`
+    # never rewrote them and `make docs-check` never verified them: syntax that
+    # looks gated and is not, the same class as the hyphenated-key hole in
+    # INLINE_RE below.
+    os.path.join("docs", "picture-modes.md"),
 ]
 
 # Suite key -> (baseline file, group or None). Group totals are included

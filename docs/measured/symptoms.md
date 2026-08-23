@@ -74,7 +74,7 @@ Full page: [sgb.md](sgb.md).
 
 | Symptom | Cause | Caught by |
 |---|---|---|
-| A game's "random" encounters are identical every launch | the system counter starting at zero rather than the boot ROM's leftover (`$ABCC` DMG / `$2678` CGB) | `acceptance/boot_div-*` — which pins the counter's **low bits**, not just `DIV`'s top byte |
+| A game's "random" encounters are identical every launch | the system counter starting at zero rather than the boot ROM's leftover (`$ABCC` DMG / `$2678` CGB with a DMG cartridge / `$1EA0` CGB with a CGB-flagged one) | `acceptance/boot_div-*` — which pins the counter's **low bits**, not just `DIV`'s top byte |
 | A game enables VBlank, `EI`s at start-up, and waits a whole frame for an interrupt hardware already had pending | `IF` initialised to `$E0` instead of `$E1` | `acceptance/boot_hwio-dmgABCmgb`, `misc/boot_hwio-C`. **Nothing in the in-repo harness, and nothing would**: Blargg and acid2 write every register they depend on |
 | A boot-register test prints `HL: 007C` where a DMG shows `014D`, though every assertion inside it passed | a Color machine booted for a DMG cartridge. **Nothing a player sees; everything a conformance run sees** | 9 Mooneye rows, FAIL→PASS with a DMG boot, zero regressions |
 | A cartridge cannot tell an MGB from a DMG, or an AGB from a CGB | `A = $FF` (MGB) and `B` bit 0 (AGB) not modelled — one `inc b` at the end of the AGB boot ROM explains both `B` and its `F` | `boot_regs-mgb`, `boot_regs-A` |

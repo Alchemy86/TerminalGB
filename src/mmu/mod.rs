@@ -270,11 +270,28 @@ const DMG0_BOOT_SYSTEM_COUNTER: u16 = 0x1830;
 /// `boot_hwio-dmg0`'s `LY = $01` and `boot_hwio-dmgABCmgb`'s `LY = $0A`.
 const DMG0_BOOT_PPU_DOT: u32 = 145 * 456 + 180;
 
-/// The first CGB revision, from `misc/boot_div-cgb0`.
+/// The first CGB revision, from `misc/boot_div-cgb0`. See
+/// [`AGB_BOOT_SYSTEM_COUNTER`] for the compatibility-path caveat both this and
+/// it carry.
 const CGB0_BOOT_SYSTEM_COUNTER: u16 = 0x2884;
 
-/// A Game Boy Advance, from `misc/boot_div-A`. Four T-cycles longer than a
-/// CGB's — the same `inc b` that shows up in `misc/boot_regs-A`'s `B` and `F`.
+/// A Game Boy Advance, from `misc/boot_div-A`. Four T-cycles longer than
+/// [`CGB_COMPAT_BOOT_SYSTEM_COUNTER`] — the same `inc b` that shows up in
+/// `misc/boot_regs-A`'s `B` and `F`.
+///
+/// **A documented approximation, for this constant and for
+/// [`CGB0_BOOT_SYSTEM_COUNTER`]: both are compatibility-path measurements used
+/// on the genuine path too.** `misc/boot_div-A` and `misc/boot_div-cgb0` have
+/// **DMG** cartridge headers, exactly like `misc/boot_div-cgbABCDE`, so what
+/// they pin is the route a DMG cartridge takes through those consoles' boot
+/// ROMs. `set_initial` matches on `Model` before it reaches the `GbMode`
+/// guards, so a genuine CGB-flagged cartridge on a CGB 0 or an AGB still gets
+/// these values — the same conflation [`CGB_BOOT_SYSTEM_COUNTER`] was split out
+/// of, left in place here because **nothing measures either console on the
+/// genuine path**: the CGB split had gambatte's `div/start_inc_{1,2}_cgb04c` to
+/// derive from and these have no equivalent, so correcting them would be
+/// fitting a number rather than measuring one. Out of scope until a ROM exists
+/// that pins it.
 const AGB_BOOT_SYSTEM_COUNTER: u16 = 0x267C;
 
 /// The Super Game Boy's boot ROM does not take a fixed time: it hands the
@@ -877,6 +894,11 @@ impl<'a> MemoryManagementUnit<'a> {
         // per `GbMode`: a genuine CGB cartridge and a DMG one take different
         // routes through the same boot ROM (see `CGB_BOOT_SYSTEM_COUNTER` and
         // `CGB_COMPAT_BOOT_SYSTEM_COUNTER`).
+        //
+        // `Cgb0` and `Agb` match ahead of those `GbMode` guards on purpose:
+        // both keep one compatibility-path value for either cartridge, because
+        // no ROM measures those two consoles on the genuine path. Documented at
+        // `AGB_BOOT_SYSTEM_COUNTER`, not an oversight.
         let counter = match self.console {
             Model::Dmg0 => DMG0_BOOT_SYSTEM_COUNTER,
             Model::Cgb0 => CGB0_BOOT_SYSTEM_COUNTER,

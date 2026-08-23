@@ -577,8 +577,9 @@ mod tests {
     /// Each ROM is `jp; jp; NOP × N; LDH A,($04)` from `$0100`; N = 13 wants
     /// `DIV = $1E`, N = 14 wants `$1F`. Counted in real bus accesses (each
     /// `NOP` is one M-cycle, matching [`Timer::do_mcycle_now`] one for one)
-    /// the read lands on M-cycle 24 for N = 13 and 25 for N = 14 — the fixed
-    /// `jp`/`jp`/`LDH` preamble costs 11 M-cycles before the first `NOP`.
+    /// the read lands on M-cycle 24 for N = 13 and 25 for N = 14: the two
+    /// `jp`s cost 4 M-cycles each *before* the first `NOP`, and the `LDH`
+    /// costs 3 more *after* the last one — 8 + N + 3.
     /// See the constant's own doc comment for the derivation and the
     /// independent BullyGB corroboration.
     #[test]
