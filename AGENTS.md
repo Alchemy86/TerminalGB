@@ -776,6 +776,24 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   3617 → **3620**/5225 (`identical`), 3173 → **3176**/5225 (`standard`), zero rows lost in
   either mode across the full external gate. Full record:
   [`docs/conformance-notes.md`](docs/conformance-notes.md) (2026-08-23).
+- **The rest of the un-named tail was re-audited the same session and converges on the same
+  two walls, with one narrow exception left explicitly open.** `oamdma`'s remaining failures
+  are its documented `late_sp*` sprite-fetch-vs-transfer rows (PPU wall, already named
+  elsewhere in this file). `irq_precedence`'s CPU-only rows (`if_and_ie_0_*`,
+  `late_if_via_sp_*`) all **pass** already; every failure left there is `late_m0irq_*_scx*`
+  — SCX-dependent mode-3 length, the wall again. **`enable_display`'s `frame0_ly_count_1` is
+  the one genuine puzzle, and it was deliberately left alone.** It polls `LY` once a scanline
+  for a whole frame after an LCD off/on pair and expects the poll to land exactly on the
+  boundary for 153 (not 154) lines before the wraparound trips it; the sibling subtest
+  (`_2`, one extra padding byte before the poll loop, expects 154) **already passes here**.
+  So whatever separates the two is a single-instruction-wide window this engine is on the
+  right side of for one variant and the wrong side of for the other — exactly the shape of a
+  fix that could as easily flip the passing row as fix the failing one. **SameBoy does not
+  corroborate either direction**: peeked with `tools/sameboy-oracle` (`peek`, `$9800 $9801`)
+  it prints `$00` on all three consoles, meaning it fails at the very *first* poll — a much
+  larger disagreement with gambatte's own hardware measurement than anything here, so it
+  cannot anchor a model. Left open; do not touch without independent evidence, per the
+  standing rule this file already states for the STAT-write bug.
 
 ## GBSelfTest and SameSuite re-confirmed clean; AGE's 49 reds traced to the same two walls
 
