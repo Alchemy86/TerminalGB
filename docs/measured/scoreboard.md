@@ -316,7 +316,7 @@ picture modes, by [`examples/csp_suite.rs`](../../examples/csp_suite.rs).
 
 | Suite | `standard` | `identical` | Judged by |
 |---|---:|---:|---|
-| Gambatte | **<!--score:csp_gambatte:pass-->3173<!--/score-->** / <!--score:csp_gambatte:total-->5225<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3617<!--/score-->** / <!--score:csp_gambatte_accurate:total-->5225<!--/score--> | a hexadecimal digit drawn in the top-left corner, its audio, or the author's screenshot |
+| Gambatte | **<!--score:csp_gambatte:pass-->3176<!--/score-->** / <!--score:csp_gambatte:total-->5225<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3620<!--/score-->** / <!--score:csp_gambatte_accurate:total-->5225<!--/score--> | a hexadecimal digit drawn in the top-left corner, its audio, or the author's screenshot |
 | GBMicrotest | **<!--score:csp_gbmicrotest:pass-->251<!--/score-->** / <!--score:csp_gbmicrotest:total-->513<!--/score--> | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / <!--score:csp_gbmicrotest_accurate:total-->513<!--/score--> | the verdict byte the ROM writes to `$FF82` |
 | Mooneye GB (wilbertpol fork) | **<!--score:csp_mooneye-wilbertpol:pass-->62<!--/score-->** / <!--score:csp_mooneye-wilbertpol:total-->117<!--/score--> | **<!--score:csp_mooneye-wilbertpol_accurate:pass-->82<!--/score-->** / <!--score:csp_mooneye-wilbertpol_accurate:total-->117<!--/score--> | `$ED` then the Fibonacci registers |
 | AGE test roms | **<!--score:csp_age:pass-->3<!--/score-->** / <!--score:csp_age:total-->59<!--/score--> | **<!--score:csp_age_accurate:pass-->10<!--/score-->** / <!--score:csp_age_accurate:total-->59<!--/score--> | `LD B,B` then the Fibonacci registers, or the author's screenshot |
@@ -376,6 +376,17 @@ re-ranks every pixel.
   update in ["the `identical` picture mode scores differently"](#the-identical-picture-mode-scores-differently--and-mostly-dominates)
   above. It was a real counter-example while it stood, and it was a PPU finding rather than a
   runner one, which is why one condition closed it and 63 Gambatte rows came with it.
+* **The Color boot counter a DMG-header ROM cannot measure.** Every `*_BOOT_SYSTEM_COUNTER`
+  here came from Mooneye, and `misc/boot_div-cgbABCDE`'s own cartridge header is **DMG** — so
+  the value it pins is the *compatibility* path through the CGB boot ROM, and a genuine
+  CGB-flagged cartridge was reusing it as a documented approximation. Gambatte's
+  `div/start_inc_{1,2}_cgb04c` are `$0143 = $C0` and are `jp; jp; NOP × N; LDH A,($04)` with
+  `N` = 13 and 14, so they pin the counter's value *and* the M-cycle its low byte wraps on,
+  with no `LY` wait to confound it. The constant was split — `$1EA0` for `GbMode::Color`,
+  Mooneye's `$2678` kept as `CGB_COMPAT_BOOT_SYSTEM_COUNTER` for `ColorAsClassic` — and those
+  two rows plus `tima/tc00_start_2_cgb04c` went **FAIL → PASS in both picture modes**, zero
+  rows lost anywhere. `CGB 0` and `AGB` are still unsplit, because nothing measures them on the
+  genuine path. See [boot.md](boot.md#the-system-counter-does-not-start-at-zero).
 * **`cgb-acid-hell` is two pixels away.** `(80, 68)` and `(80, 69)` are swapped: the reference
   wants yellow above black and we draw black above yellow, one row of one column of the devil's
   face. Everything else in the picture is exact.
@@ -421,8 +432,15 @@ whether it is decidable from inside a cartridge at all).
   both picture modes, zero rows moved anywhere else across the whole external gate (`make
   test-external` / `test-external-accurate`, Gambatte's 5,320 rows included).
 * **`bully` draws nothing at all** — our frame is entirely black where the reference is a page
-  of text. That is a failure to *start*, not a failure of a check, and it is the first thing to
-  look at in this group.
+  of text. That is **one failing check**, not a failure to start: BullyGB runs its first test,
+  fails it, prints a message and parks, with the LCD on and the palette black. The check is
+  `Invalid initial DIV`. **It is no longer the CGB-mode boot counter**: that was split and
+  corrected on 2026-08-23 (`$2678` for a DMG-header cartridge, `$1EA0` for a CGB-flagged one)
+  and this row is **byte-identical either side of it**, which is itself the evidence that the
+  residual is the other half of what the check measures — where the boot ROM leaves the **PPU**
+  for a CGB cartridge, which no suite ROM pins (`misc/boot_hwio-C` skips
+  `$FF40`/`$FF41`/`$FF44`). See [`conformance-notes.md`](../conformance-notes.md), 2026-08-23,
+  and [`TGB-BOOT-001`](../pitfalls/codes.md).
 
 ### Re-running them
 

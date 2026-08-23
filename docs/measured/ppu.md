@@ -190,7 +190,7 @@ whether they wanted different phases; they do not, and the split was reverted.
 
 ## The Color console's PPU shipped in revisions too
 
-`PpuRevision` ([`src/mode.rs:516`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mode.rs#L516)) — `CgbC` / `CgbD`, default `CgbD`.
+`PpuRevision` ([`src/mode.rs:520`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mode.rs#L520)) — `CgbC` / `CgbD`, default `CgbD`.
 Pan Docs describes *a* Game Boy Color; the fetcher changed between steppings, and Mealybug is
 the suite that can tell.
 

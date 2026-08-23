@@ -1,6 +1,27 @@
 name: CI
 
-on: [push, pull_request]
+# Every branch push that also has a pull request open used to run this whole
+# workflow TWICE — once for `push`, once for `pull_request` — so a PR branch
+# billed double the Actions minutes for two byte-identical results. That is
+# what exhausted the account's spending limit, and GitHub then refuses to start
+# *any* job: every check on the PR reports "The job was not started because
+# recent account payments have failed or your spending limit needs to be
+# increased", which reads as a repository-wide test failure and is not one.
+#
+# `push` is therefore limited to `main` (the branch nothing opens a PR against,
+# so it would otherwise get no coverage at all) and everything else is covered
+# exactly once by `pull_request`. The `concurrency` group is the other half:
+# pushing a fix to a branch cancels the superseded run instead of paying for
+# both. `main` is deliberately never cancelled — its runs are the published
+# record.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   lint:
@@ -241,10 +262,26 @@ jobs:
     env:
       RUST_BACKTRACE: full
       CARGO_TERM_COLOR: always
+      # Deliberately OUTSIDE `target/`, which `Swatinem/rust-cache` owns: left
+      # at the default `target/test-suites` these ~200 MB of ROMs would be
+      # swept into the compiler cache on every save. `SUITES` exists for
+      # exactly this (Makefile, `SUITES ?=`), so nothing else has to change.
+      SUITES: .test-suites
     steps:
       - uses: actions/checkout@v3       # no submodules: none of these live here
       - uses: Swatinem/rust-cache@v2
       - run: rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-gnu
+      # Every pin lives in `tools/fetch-test-suites.sh` and nowhere else — the
+      # script's own header says so — which makes its hash exactly the right
+      # cache key: bump a pin and the cache misses and re-fetches, touch
+      # anything else and it hits. The fetch below is idempotent ("already
+      # present suites are left alone"), so on a hit it is a no-op rather than
+      # a second download of the same bytes.
+      - name: Cache the fetched suites
+        uses: actions/cache@v4
+        with:
+          path: .test-suites
+          key: test-suites-${{ hashFiles('tools/fetch-test-suites.sh') }}
       - name: Fetch the suites (pinned; never vendored)
         run: make fetch-test-suites
       # BOTH targets name their engine on every line. Since `identical` became

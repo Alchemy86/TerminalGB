@@ -24,7 +24,7 @@ and they were verified by their author on real DMG, MGB and CGB units.
 Mooneye ships a `boot_regs` / `boot_div` / `boot_hwio` ROM **per console**, and no two consoles
 hand the cartridge the same state — so passing one is failing the others.
 
-`Model` ([`src/mode.rs:71`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mode.rs#L71)) now carries nine values:
+`Model` ([`src/mode.rs:75`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mode.rs#L75)) now carries nine values:
 
 ```
 auto / dmg / dmg0 / mgb / cgb / cgb0 / agb / sgb / sgb2
@@ -48,12 +48,23 @@ zeroed counter the seed is the same every launch, and it is a value hardware nev
 |---|---|
 | DMG / MGB | `$ABCC` |
 | DMG 0 | `$1830` |
-| CGB / CGB E | `$2678` |
+| CGB / CGB E, DMG-header cartridge | `$2678` |
+| CGB / CGB E, CGB-flagged cartridge | `$1EA0` |
 | CGB 0 | `$2884` |
 | AGB | `$267C` |
 | SGB / SGB 2 | `$D174` **+ 4 × (zero bits in the cartridge header)** — see below |
 
-Constants at [`src/mmu/mod.rs:56`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L56) onwards.
+Constants at [`src/mmu/mod.rs:207`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L207) onwards.
+
+**The CGB row is split because a Color console runs two different boot programs.** A
+DMG-header cartridge takes the compatibility path (`$2678`, Mooneye `misc/boot_div-cgbABCDE`,
+whose own header is DMG); a CGB-flagged one does not (`$1EA0`, derived from gambatte's
+`div/start_inc_{1,2}_cgb04c`, which are `$0143 = $C0` and pin the wrap M-cycle as well as the
+value). **`CGB 0` and `AGB` are NOT split, and that is a known gap rather than a measurement:**
+their figures come from `misc/boot_div-cgb0` and `misc/boot_div-A`, whose cartridge headers are
+DMG, so both are compatibility-path numbers being used for genuine Color cartridges too. No
+suite ROM measures either console on the genuine path, so there is nothing to derive a
+corrected value from — unlike the CGB case, where gambatte's hwtests supplied exactly that.
 
 **`boot_div` is much stronger than "`DIV` reads `$AB`".** It reads `DIV` six times at
 instruction offsets chosen to fall either side of an increment, so the counter's **low bits**
@@ -221,7 +232,8 @@ never committed, and cross-checked against injecting the same state directly, to
 
 | Symptom | Cause |
 |---|---|
-| A game's "random" encounters are identical every launch | the system counter starting at zero instead of `$ABCC` / `$2678` |
+| A game's "random" encounters are identical every launch | the system counter starting at zero instead of `$ABCC` / `$2678` / `$1EA0` |
+| A **CGB-flagged** game's first frames read a `DIV` no real cartridge of it ever saw — its RNG stream, its APU phase and every timer-relative event shifted by a constant | one Color boot counter for both cartridge headers. The compatibility path's `$2678` is `$7D8` T-cycles away from the genuine path's `$1EA0`, and a DMG-header test ROM cannot see the difference |
 | A game enables the VBlank interrupt, `EI`s at start-up, and waits a whole frame for an interrupt hardware already had pending | `IF` initialised to `$E0` instead of `$E1` |
 | A game reads `P1` before writing it and mis-detects the console | `P1 = $FF` on a DMG instead of `$CF` |
 | A boot-register test ROM prints `HL: 007C` where a DMG shows `014D`, though every assertion inside it passed | a Color machine booted for a DMG cartridge — invisible to a player, fatal to a screenshot-judged suite |

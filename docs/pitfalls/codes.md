@@ -90,7 +90,7 @@ the line the CPU writes them on, at a dot the fetcher decides.
 |---|---|
 | Already covered? | **well, and by the hardest suite there is** — Mealybug Tearoom (79 rows) plus Gambatte `scx_during_m3` (141), `cgbpal_m3` (44), `dmgpalette_during_m3` (17), `vram_m3` (50) |
 | From inside a cartridge? | **no** — the evidence is the picture. A cartridge can time mode 3, which is `TGB-PPU-001`, but not see which pixel changed |
-| Our state | the per-dot engine reaches 26/79 Mealybug; the default engine 3/79. **This is the campaign, not a check to add** |
+| Our state | the per-dot engine reaches <!--score:mealybug_accurate-->29/79<!--/score--> Mealybug; the default engine <!--score:mealybug:pass-->3<!--/score-->/79. **This is the campaign, not a check to add** |
 | Read next | [mealybug.md](../mealybug.md), [picture-modes.md](../picture-modes.md) |
 
 ### `TGB-PPU-004` — the CPU cannot see OAM or VRAM while the PPU holds them

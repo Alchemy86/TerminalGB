@@ -100,7 +100,7 @@ buying that with.
 **PyBoy is not cycle-accurate**, and this repository's own scoreboard already records the
 consequence: on the GB Emulator Shootout's 24 published Mealybug rows, **SameBoy scores 15, bgb
 scores 2, PyBoy scores 0** ([`docs/mealybug.md`](../mealybug.md)), where the per-dot engine here
-scores <!--score:mealybug_accurate-->26 / 79<!--/score-->.
+scores <!--score:mealybug_accurate-->29 / 79<!--/score-->.
 
 Its technique is stated in its own source comment, in `pyboy/core/mb.py`'s `tick()`:
 

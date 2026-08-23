@@ -179,16 +179,24 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
   skipped. That state is **per console** and larger than the handful of values usually
   quoted: the I/O page (`P1=$CF` on a DMG but `$FF` on a Color console *and on an SGB*,
   `IF=$E1`, `LCDC=$91`, `BGP=$FC`, …), the 16-bit system counter's exact value *and phase*
-  (`$ABCC`/`$2678` — see [Timer](timer.md)), where the PPU sits in its frame
+  (`$ABCC` DMG / `$2678` Color-with-a-DMG-cartridge / `$1EA0` Color with a genuine
+  CGB-flagged one — see [Timer](timer.md)), where the PPU sits in its frame
   (`Gpu::set_boot_position` — see [PPU](ppu.md)), and, in compatibility mode, the
   palette-index registers the CGB boot ROM leaves pointing past the compatibility palettes
   (`BCPS=$C8`, `OCPS=$D0`). Mooneye's four `boot_hwio` ROMs walk the whole page byte by byte
   and all four pass.
-  - **"Per console" means per *revision*, not per `GbMode`.** A boot ROM is part of the
-    silicon, so a DMG 0, a DMG ABC and an MGB are three machines that present identical
-    hardware from `PC=$0100` and arrive there differently; `MemoryManagementUnit::console`
-    keeps the resolved [`Model`](../../src/mode.rs) for exactly this and is deliberately not
-    serialised. See AGENTS.md, "Console revisions".
+  - **"Per console" means per *revision* — and, on a Color console, also per `GbMode`.** A
+    boot ROM is part of the silicon, so a DMG 0, a DMG ABC and an MGB are three machines that
+    present identical hardware from `PC=$0100` and arrive there differently;
+    `MemoryManagementUnit::console` keeps the resolved [`Model`](../../src/mode.rs) for exactly
+    this and is deliberately not serialised. See AGENTS.md, "Console revisions". The one thing
+    the *cartridge* also decides is the **system counter on a Color console**: a CGB-flagged
+    header and a DMG one take different routes through the same boot ROM, so `set_initial`
+    matches on `GbMode::ColorAsClassic` before its wildcard and hands over `$2678` or `$1EA0`
+    accordingly (`CGB_COMPAT_BOOT_SYSTEM_COUNTER` / `CGB_BOOT_SYSTEM_COUNTER`). `Cgb0` and
+    `Agb` match *ahead* of that guard and keep one compatibility-path value for either
+    cartridge — a documented gap, because no suite ROM measures those two consoles on the
+    genuine path.
   - **A Super Game Boy's boot ROM does not take a fixed time.** It clocks the cartridge
     header to the SNES bit by bit through an unbalanced loop, so a zero bit costs one
     M-cycle more than a one bit and the counter the cartridge inherits is a function of the
@@ -258,6 +266,13 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
     *(Covered: `mmu::boot_state_tests::an_sgb_boot_takes_longer_for_a_header_full_of_zero_bits`,
     and `acceptance/boot_div-S` + `boot_div2-S`, which cannot both be passed by a
     hard-coded duration.)*
+18. **A Color console's boot program follows the cartridge header.** Two cartridges differing
+    only in `$0143` must hand over with *different* system counters — `$2678` for a DMG header
+    (the compatibility path) and `$1EA0` for a CGB-flagged one.
+    *(Covered: `mmu::boot_state_tests::a_color_console_boots_div_from_the_cartridge_header`
+    for the routing and `mmu::timer::tests::a_genuine_cgb_cartridge_boots_div_where_gambatte_measures_it`
+    for the value, plus Mooneye `misc/boot_div-cgbABCDE` and gambatte
+    `div/start_inc_{1,2}_cgb04c` — all pass.)*
 12. **OAM corruption bug.** A qualifying mode-2 OAM bus cycle corrupts OAM per the
     documented pattern, on a DMG only. *(Covered: Blargg `oam_bug` passes 8/8 on `@dmg`
     and is pinned PASS in `baseline.txt`; the patterns themselves by `gpu::oambug::tests`.)*

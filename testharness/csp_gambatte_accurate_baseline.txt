@@ -160,9 +160,9 @@ display_startstate/stat_scx3_1_cgb04c_out87@cgb04c = FAIL out=87 not drawn
 display_startstate/stat_scx3_2_cgb04c_out84@cgb04c = FAIL out=84 not drawn
 display_startstate/stat_scx5_1_cgb04c_out87@cgb04c = FAIL out=87 not drawn
 display_startstate/stat_scx5_2_cgb04c_out84@cgb04c = FAIL out=84 not drawn
-div/start_inc_1_cgb04c_out1E@cgb04c = FAIL out=1E not drawn
+div/start_inc_1_cgb04c_out1E@cgb04c = PASS
 div/start_inc_1_dmg08_outAB@dmg08 = PASS
-div/start_inc_2_cgb04c_out1F@cgb04c = FAIL out=1F not drawn
+div/start_inc_2_cgb04c_out1F@cgb04c = PASS
 div/start_inc_2_dmg08_outAC@dmg08 = PASS
 div/start_stop1_inc_1_cgb04c_out00@cgb04c = PASS
 div/start_stop1_inc_2_cgb04c_out01@cgb04c = PASS
@@ -4631,7 +4631,7 @@ tima/tc00_nop_div_write_start_1_dmg08_cgb04c_outF0@cgb04c = PASS
 tima/tc00_nop_div_write_start_2_dmg08_cgb04c_outF1@dmg08 = PASS
 tima/tc00_nop_div_write_start_2_dmg08_cgb04c_outF1@cgb04c = PASS
 tima/tc00_start_1_cgb04c_outF0@cgb04c = PASS
-tima/tc00_start_2_cgb04c_outF1@cgb04c = FAIL out=F1 not drawn
+tima/tc00_start_2_cgb04c_outF1@cgb04c = PASS
 tima/tc00_start_3_dmg08_outF0@dmg08 = PASS
 tima/tc00_start_4_dmg08_outF1@dmg08 = PASS
 tima/tc00_tc01_ff_tma_1_dmg08_cgb04c_outFF@dmg08 = PASS

@@ -44,16 +44,31 @@ checks were wrong and were found that way rather than by reasoning.
 
 ## What it scores us
 
-Measured with `tools/conformance/gbconform.py`, both picture modes:
+**Our own two rows** are measured with `tools/gbselftest-gate.py` (`make gbselftest`), whose
+denominator is every check the ROM prints and whose skips count in it, in both picture modes.
+**The three SameBoy rows below them are not, and `make gbselftest` will not reproduce them**:
+that script drives one adapter with `GBCONFORM_MODEL` fixed to `dmg`, so it cannot score another
+emulator per console. Those come from the GBSelfTest repository's own SameBoy runner. **The
+Peanut-GB row is ours and is reproducible here** — the adapter is
+[`tools/conformance/adapters/peanut-gb.c`](../tools/conformance/adapters/peanut-gb.c) (see
+[`docs/conformance-action.md`](conformance-action.md)), Peanut-GB is DMG-only so the fixed `dmg`
+model is the right one for it, and `tools/gbselftest-gate.py --adapter <built peanut-gb binary>`
+scores it.
 
 | machine | result |
 |---|---:|
-| this emulator, `identical` (per-dot) | **96 / 98**, 1 skipped |
-| this emulator, `standard` (whole-scanline) | **87 / 98**, 2 skipped |
+| this emulator, `identical` (per-dot) | **99 / 101**, 1 skipped |
+| this emulator, `standard` (whole-scanline) | **90 / 101**, 2 skipped |
 | SameBoy, DMG and MGB | 97 / 98, 1 skipped |
 | SameBoy, CPU CGB C and CGB E | 93 / 98, 5 skipped |
 | SameBoy, AGB | 94 / 98, 4 skipped |
 | Peanut-GB | 67 / 98, 2 skipped |
+
+**The two denominators are a cartridge vintage, not two instruments.** Our own rows are
+re-measured against the currently pinned 101-check cartridge; the foreign rows below them were
+measured before it grew from 98 and have not been re-run, so they are left at the denominator
+they were taken at rather than rescaled. Their fail-and-skip counts are what to compare, not
+the fractions.
 
 Every row we lose is a gap this project had **already written down**, and that
 is the point of running it:

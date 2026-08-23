@@ -22,9 +22,28 @@ name: Conformance (self)
 #       --roms-dir tests --no-fetch --out target/conformance
 #   cp target/conformance/badge.json docs/conformance-badge.json
 
+# Every branch push that also has a pull request open used to run this whole
+# workflow TWICE — once for `push`, once for `pull_request` — so a PR branch
+# billed double the Actions minutes for two byte-identical results. That is
+# what exhausted the account's spending limit, and GitHub then refuses to start
+# *any* job: every check on the PR reports "The job was not started because
+# recent account payments have failed or your spending limit needs to be
+# increased", which reads as a repository-wide test failure and is not one.
+#
+# `push` is therefore limited to `main` (the branch nothing opens a PR against,
+# so it would otherwise get no coverage at all) and everything else is covered
+# exactly once by `pull_request`. The `concurrency` group is the other half:
+# pushing a fix to a branch cancels the superseded run instead of paying for
+# both. `main` is deliberately never cancelled — its runs are the published
+# record.
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   self:

@@ -767,6 +767,44 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   `docs/components/ppu.md`'s "NOT modelled" bullet. **Net: of 1608, an estimated ~1400+ are
   the PPU wall, ~200 are deep CPU-timing corners requiring a full model before any attempt,
   and none surveyed this session are a clean, low-risk, isolated fix.**
+- **One exception surfaced in a later pass: `div/start_inc_{1,2}_cgb04c` (2 rows) and
+  `tima/tc00_start_2_cgb04c` (1 row, a side effect) were genuinely un-audited — neither the
+  PPU wall nor the STAT-write-bug family the paragraph above converges on, and not named in
+  the categorisation list. Fixed by splitting `CGB_BOOT_SYSTEM_COUNTER` for a genuine
+  `GbMode::Color` boot from the Mooneye-verified `GbMode::ColorAsClassic` value, derived from
+  gambatte's own hwtests and corroborated by BullyGB's independent sweep. Gambatte
+  3617 → **3620**/5225 (`identical`), 3173 → **3176**/5225 (`standard`), zero rows lost in
+  either mode across the full external gate. Full record:
+  [`docs/conformance-notes.md`](docs/conformance-notes.md) (2026-08-23).
+- **The rest of the un-named tail was re-audited the same session; PART of it converges on the
+  known walls and the rest is honestly uncharacterized, with one narrow exception left
+  explicitly open.** Counted from `testharness/csp_gambatte_accurate_baseline.txt`,
+  `oamdma/` has **67** failing rows: **20** are the documented `late_sp*`
+  sprite-fetch-vs-transfer rows (PPU wall, already named elsewhere in this file), **26** are
+  `busypush{FEA1,FF01}` variants, and the remaining **21** are other named sub-patterns
+  (`oamdma_late_halt_stat`, `oamdma_src*_busyread`/`busyint`/`busyinc`,
+  `oamdmasrc80_halt_{lyc,m2}irq_read8000`, `oamdmasrc*_hdmasrc`/`speedchange`) that were
+  **not** individually traced — do not read them as `late_sp*` or as any other single named
+  cause. `irq_precedence/` has **16** failing rows: **9** are `late_m0irq_*_scx*`
+  (SCX-dependent mode-3 length, the wall again — its CPU-only `if_and_ie_0_*` and
+  `late_if_via_sp_*` rows all **pass** already), and the other **7** are
+  `hdma_vs_m0_scx*` / `late_hdma_vs_{ei,ie,tima}_scx*` — VRAM-DMA-versus-interrupt precedence
+  timing, a distinct sub-question whose `.asm` sources were opened but not resolved. **So the
+  `late_sp*` and `late_m0irq*` portions are the wall; the other 47 `oamdma` rows and 7
+  `irq_precedence` rows are uncharacterized and left for a future pass.**
+  **`enable_display`'s `frame0_ly_count_1` is
+  the one genuine puzzle, and it was deliberately left alone.** It polls `LY` once a scanline
+  for a whole frame after an LCD off/on pair and expects the poll to land exactly on the
+  boundary for 153 (not 154) lines before the wraparound trips it; the sibling subtest
+  (`_2`, one extra padding byte before the poll loop, expects 154) **already passes here**.
+  So whatever separates the two is a single-instruction-wide window this engine is on the
+  right side of for one variant and the wrong side of for the other — exactly the shape of a
+  fix that could as easily flip the passing row as fix the failing one. **SameBoy does not
+  corroborate either direction**: peeked with `tools/sameboy-oracle` (`peek`, `$9800 $9801`)
+  it prints `$00` on all three consoles, meaning it fails at the very *first* poll — a much
+  larger disagreement with gambatte's own hardware measurement than anything here, so it
+  cannot anchor a model. Left open; do not touch without independent evidence, per the
+  standing rule this file already states for the STAT-write bug.
 
 ## GBSelfTest and SameSuite re-confirmed clean; AGE's 49 reds traced to the same two walls
 
@@ -853,33 +891,55 @@ emulator points a stranger straight at our page. Nothing else in the ecosystem d
   audio verdict** — a band-limited resample really can turn a high square wave into a flat line,
   it just was not what happened here.
 
-## BullyGB's black screen is ONE failing check, and it is the CGB-mode boot counter
+## BullyGB's black screen was ONE failing check — the CGB-mode boot counter, since changed
 
-**`csp/bully` draws nothing here and it is not a rendering fault.** Traced: the ROM runs its
+**`csp/bully` drew nothing here and it was not a rendering fault.** Traced: the ROM runs its
 first test, fails, prints a message and parks on `jr -2` at `$01DC` with the LCD on and the
 palette black. The failing test is the first entry in its own table at `$0ED7` — `$02C7`, four
 instructions long — and it is **`Invalid initial DIV`**: on a device id ≥ 4 (a CGB or an AGB)
 it requires `DIV` to read **`$1F`** a fixed distance after hand-off, and we read `$27`.
 
+**SUPERSEDED, 2026-08-23 — the counter WAS changed, and the bullets below record why it had
+not been until then.** `CGB_BOOT_SYSTEM_COUNTER` is `$1EA0` now and applies to `GbMode::Color`
+only; the Mooneye-verified `$2678` lives on as `CGB_COMPAT_BOOT_SYSTEM_COUNTER` for
+`GbMode::ColorAsClassic`. What changed is not the reasoning here but the *evidence*: gambatte's
+own `div/start_inc_{1,2}_cgb04c` hwtests (`$0143 = $C0`, so the genuine CGB path) pin both
+`DIV`'s value **and** the exact M-cycle its low byte wraps on, at a fixed 13/14-`NOP` distance
+with no `LY` wait — so they measure the counter alone, which is precisely the confound the
+"one unknown absorbing another" objection below is about. **A second, independent source is
+what the objection asked for and did not have.** See the `div/start_inc` bullet in the
+Gambatte section above and `docs/conformance-notes.md` (2026-08-23) for the derivation.
+**`csp/bully` IS gated (it is in the Makefile's `CSP_SUITES`) and it was re-run: its row is
+byte-identical in both picture modes**, still `FAIL diff=22893`. So the counter change alone
+does not flip its check — that check still also depends on the PPU's hand-off phase, which
+nothing in that change touched, so the last bullet's "two crews' work" still stands for the
+PPU half.
+
 - **`CGB_BOOT_SYSTEM_COUNTER`'s own doc comment already predicted this.** `$2678` is measured
   by Mooneye `misc/boot_div-cgbABCDE`, whose cartridge header is **DMG** (`$0143 = $00`), so it
   pins the *compatibility* path through the CGB boot ROM. BullyGB's header is `$80`, so it
   takes the CGB path — **it is the suite ROM the comment said did not exist.**
-- **IT WAS NOT CHANGED, AND THE REASON IS NOT TIMIDITY.** BullyGB waits for `LY >= $90` before
-  reading `DIV`, so what it pins is the **phase between the system counter and the PPU** at
-  hand-off, not the counter alone — and no ROM measures where a CGB boot ROM leaves the PPU for
-  a CGB cartridge (`misc/boot_hwio-C` skips `$FF40`, `$FF41` and `$FF44` in its own mask).
-  Sweeping the counter, anything around `$1DC0` satisfies bully *given our PPU convention*, but
-  fitting one unknown to absorb another would move every CGB-flagged cartridge's `DIV`, and so
-  its APU phase and its RNG, on the evidence of a single row. One row is not worth that.
+- **IT WAS NOT CHANGED ON THIS EVIDENCE, AND THE REASON WAS NOT TIMIDITY.** BullyGB waits for
+  `LY >= $90` before reading `DIV`, so what it pins is the **phase between the system counter
+  and the PPU** at hand-off, not the counter alone — and no ROM measures where a CGB boot ROM
+  leaves the PPU for a CGB cartridge (`misc/boot_hwio-C` skips `$FF40`, `$FF41` and `$FF44` in
+  its own mask). Sweeping the counter, anything around `$1DC0` satisfies bully *given our PPU
+  convention*, but fitting one unknown to absorb another would move every CGB-flagged
+  cartridge's `DIV`, and so its APU phase and its RNG, on the evidence of a single row. One row
+  is not worth that. *(That `$1DC0` is within `$E0` of the `$1EA0` later derived from
+  gambatte's fixed-distance ROMs is the corroboration, not the derivation — and the `$E0` is
+  **not** the extra time bully's `LY` wait spends: both figures are values of the same
+  constant, so that wait is inside the emulation either way, and it is tens of thousands of
+  T-cycles rather than 224. Bully's sweep is confounded by the PPU hand-off phase above, which
+  is why plugging in `$1EA0` leaves its row byte-identical.)*
 - **AND SAMEBOY CANNOT SETTLE IT.** It ships reimplemented boot ROMs: its DMG hands over
   `DIV = $BD` where Mooneye's hardware-verified `boot_div-dmgABCmgb` (which we pass) pins
   `$AB`, and it fails bully's check on **all nine** of its consoles including the ones bully's
   author verified on hardware. See `docs/pitfalls/tests.md` and
   `tools/sameboy-oracle/README.md`. The oracle grew a `peek` mode chasing this, which is worth
   keeping: it is how you ask a foreign implementation what it left at an address.
-- **What would settle it** is a real boot ROM (which this project deliberately neither ships
-  nor downloads — `src/boot.rs`), or deriving the CGB path's duration from
+- **What would settle the PPU half** is a real boot ROM (which this project deliberately
+  neither ships nor downloads — `src/boot.rs`), or deriving the CGB path's duration from
   [ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms) `src/cgb.asm` the way
   `sgb_boot_system_counter` was derived, **together with** an independent fix on the PPU's
   hand-off position. Two crews' work, not one.
@@ -1134,7 +1194,10 @@ FAIL → PASS. Full write-up with citations: `docs/conformance-notes.md`.
   ringing at hand-off, but its envelope volume is not readable from any register, so how far
   it has decayed cannot be derived — and we never played it. The channel-enable flip-flop is
   set (as hardware has it); the envelope is left at zero.
-- **The system counter does not start at zero.** `$ABCC` (DMG) / `$2678` (Color), as a read
+- **The system counter does not start at zero.** `$ABCC` (DMG) / `$2678` (a Color console
+  running a **DMG-header** cartridge, i.e. `GbMode::ColorAsClassic` — a genuine CGB-flagged
+  one takes a different route through the same boot ROM and gets `$1EA0`, see the
+  `div/start_inc` bullet in the Gambatte section), as a read
   observes it on the first M-cycle. `boot_div` is much stronger than "`DIV` reads `$AB`": it
   reads `DIV` six times at offsets chosen to fall either side of an increment, so the
   counter's **low bits** are pinned too. `Timer::set_boot_counter` stores the value 4 T lower

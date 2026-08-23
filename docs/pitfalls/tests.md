@@ -433,10 +433,16 @@ hardware's.
 **Measured, 2026-08-18.** A ten-instruction probe cartridge that stores `DIV`, `LY`, `STAT` and
 `LCDC` at `$0100` and then spins:
 
-| | our DMG | SameBoy `dmg` | our CGB | SameBoy `cgbE`, DMG cartridge | SameBoy `cgbE`, CGB cartridge |
-|---|---|---|---|---|---|
-| `DIV` | `$AB` | `$BD` | `$26` | `$C0` | `$AC` |
-| `LY` | `$00` | `$90` | `$00` | `$93` | `$92` |
+| | our DMG | SameBoy `dmg` | our CGB, DMG cartridge | our CGB, CGB cartridge | SameBoy `cgbE`, DMG cartridge | SameBoy `cgbE`, CGB cartridge |
+|---|---|---|---|---|---|---|
+| `DIV` | `$AB` | `$BD` | `$26` | `$1E` | `$C0` | `$AC` |
+| `LY` | `$00` | `$90` | `$00` | `$00` | `$93` | `$92` |
+
+**Our two CGB columns were one column when this was first measured**, and the split is the
+finding rather than a detail: until 2026-08-23 a CGB-flagged cartridge got the *compatibility*
+path's `$2678` too, so it also read `$26`. It boots `$1EA0` now — derived from gambatte's
+`div/start_inc_{1,2}_cgb04c`, which have a CGB header — so a genuine Color cartridge reads
+`$1E`. SameBoy has always distinguished the two headers, which is why its own columns do.
 
 Our DMG value is the one Mooneye's `acceptance/boot_div-dmgABCmgb` pins — six `DIV` reads at
 chosen offsets, verified by Gekkio on real DMG and MGB units — and we pass that ROM. SameBoy is
@@ -447,7 +453,9 @@ author verified pass on his own hardware.
 **Resolution.** Use the oracle for what it is good at — a ROM's *own* verdict on a machine you
 do not own — and never for the boot hand-off. For that, the authorities are Mooneye's
 `boot_div`/`boot_hwio`/`boot_regs` family and a real boot ROM, which this project deliberately
-neither ships nor downloads (`src/boot.rs`).
+neither ships nor downloads (`src/boot.rs`) — plus gambatte's `div/start_inc_{1,2}_cgb04c` for
+the one hand-off Mooneye's family cannot reach, a Color console booting a CGB-flagged
+cartridge (see the closing note below).
 
 **Side effects and blast radius.** None to the emulator; the cost is entirely in time. The
 `peek` mode added to the oracle while chasing this is worth keeping anyway — it is how you ask
@@ -455,8 +463,15 @@ a foreign implementation what it leaves at an address, which is the one question
 oracle cannot answer.
 
 **How we found it.** BullyGB draws a black screen here, and its single failing check turns out
-to be the initial `DIV`. `CGB_BOOT_SYSTEM_COUNTER`'s own doc comment already says what is wrong
-— the value is measured by `misc/boot_div-cgbABCDE`, whose cartridge has a **DMG** header, so
-it pins the compatibility path and *"a CGB cartridge takes a different route through the boot
-ROM and no suite ROM pins where it ends up"*. BullyGB, whose header is `$80`, is that ROM. The
-detour was trying to settle the CGB-mode value with the oracle.
+to be the initial `DIV`. `CGB_BOOT_SYSTEM_COUNTER`'s doc comment already said what was wrong —
+the value came from `misc/boot_div-cgbABCDE`, whose cartridge has a **DMG** header, so it pins
+the compatibility path, and the genuine Color path was reusing it as a documented
+approximation. The detour was trying to settle the CGB-mode value with the oracle.
+
+**Superseded on the "no ROM pins it" half, 2026-08-23.** That comment also claimed no suite ROM
+measured the genuine path. Gambatte's `div/start_inc_{1,2}_cgb04c` do: `$0143 = $C0`, a fixed
+13/14-`NOP` distance from hand-off and no `LY` wait, so they pin the counter alone rather than
+its phase against the PPU — which is what makes them usable where BullyGB's own check is not.
+The constant was split on that evidence (`docs/measured/boot.md`). The *oracle* half of this
+entry is untouched: SameBoy is still the wrong authority for a boot hand-off, and it still
+fails BullyGB's check on all nine of its consoles.

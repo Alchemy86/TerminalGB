@@ -115,7 +115,9 @@ What remains approximate:
   No wired test covers it.
 - **The counter is seeded one M-cycle behind the documented hardware value.**
   `Timer::set_boot_counter` takes the value a CPU read observes on the machine's *first*
-  M-cycle (`$ABCC` on a DMG, `$2678` on a Color console) and stores it four T-cycles lower,
+  M-cycle (`$ABCC` on a DMG; on a Color console `$2678` for a DMG-header cartridge and
+  `$1EA0` for a genuine CGB-flagged one, which take different routes through the same boot
+  ROM) and stores it four T-cycles lower,
   because `bus_tick` advances the counter before the access that observes it. That keeps
   every *read* exact, which is what Mooneye `boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE`
   measure. It does leave the timer's tap edges one M-cycle out of phase against those reads
@@ -142,8 +144,9 @@ What remains approximate:
   what Mooneye `acceptance/serial/boot_sclk_align-dmgABCmgb` proves: a transfer's edges
   align to the counter's reset, not to the `SC` write.
 - **The counter does not start at zero.** It is free-running from power-on, so the boot ROM
-  hands over with it part-way through a cycle — `DIV` reads `$AB` on a DMG, `$26` on a
-  Color console. Games seed RNGs from it.
+  hands over with it part-way through a cycle — `DIV` reads `$AB` on a DMG, and on a Color
+  console `$26` for a DMG-header cartridge or `$1E` for a genuine CGB-flagged one, which
+  take different routes through the same boot ROM. Games seed RNGs from it.
 
 ## 6. Expected behaviours as tests
 
@@ -176,9 +179,12 @@ What remains approximate:
     `enabling_on_the_taps_own_falling_edge_still_increments`, Mooneye
     `timer/rapid_toggle`.)*
 11. **The counter's post-boot value and phase.** At `PC=$0100` a read must see `$ABCC`
-    (DMG) / `$2678` (Color), low bits included. *(Covered:
-    `mmu::boot_state_tests::the_system_counter_boots_with_the_right_phase`, Mooneye
-    `acceptance/boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE` — both pass.)*
+    (DMG) / `$2678` (Color running a DMG-header cartridge) / `$1EA0` (Color running a
+    genuine CGB-flagged one), low bits included. *(Covered:
+    `mmu::boot_state_tests::the_system_counter_boots_with_the_right_phase` and
+    `mmu::timer::tests::a_genuine_cgb_cartridge_boots_div_where_gambatte_measures_it`,
+    Mooneye `acceptance/boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE` and gambatte
+    `div/start_inc_{1,2}_cgb04c` — all pass.)*
 
 ## 7. Test ROMs that exercise it
 
@@ -187,7 +193,8 @@ What remains approximate:
 | **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite. **13/13 pass.** Not a vendored submodule — run it with `examples/mooneye_scout.rs` against a local checkout of [mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite). |
 | **Blargg `instr_timing`** | Indirectly leans on timer/interrupt timing | A gross cycle-count error. |
 | **Blargg `interrupt_time`** | Timing of the timer/serial interrupts relative to instructions | Would catch dispatch-timing gaps. |
-| **Mooneye `acceptance/boot_div-dmgABCmgb`, `misc/boot_div-cgbABCDE`** | The counter's exact value *and phase* at `PC=$0100` — six `DIV` reads at known offsets | **Both pass.** A failure means the post-boot seed in `src/mmu/mod.rs` is wrong, or the per-access tick has moved relative to the access. |
+| **Mooneye `acceptance/boot_div-dmgABCmgb`, `misc/boot_div-cgbABCDE`** | The counter's exact value *and phase* at `PC=$0100` — six `DIV` reads at known offsets | **Both pass.** A failure means the post-boot seed in `src/mmu/mod.rs` is wrong, or the per-access tick has moved relative to the access. Note both cartridges have **DMG** headers, so neither can see the Color console's *other* boot program. |
+| **gambatte `div/start_inc_{1,2}_cgb04c`** (via the c-sp aggregation) | The same thing for a **CGB-flagged** cartridge: `jp; jp; NOP × N; LDH A,($04)` with `N` = 13 and 14, so the pair pins the value *and* the M-cycle the low byte wraps on | **Both pass.** The only ROMs that measure a Color console on the genuine path; they are what `CGB_BOOT_SYSTEM_COUNTER = $1EA0` is derived from. |
 
 The `retrio/gb-test-roms` submodule (Blargg) is initialised and wired; the decisive timer
 tests are in Mooneye, which is not. Wiring Mooneye is the single largest coverage win

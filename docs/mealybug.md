@@ -1347,6 +1347,10 @@ still an excellent oracle and nothing about the campaign changes because of it. 
 different claim from "this is what the silicon did", it is the claim the baselines should carry,
 and §11.3 only makes sense once you know it.
 
+(`photos/` is **not** in the checkout `tools/fetch-test-suites.sh` makes — it is the bulk of
+that repository and nothing here reads it, so the fetch is sparse. Clone the suite yourself if
+you want to look at them.)
+
 ### 11.3 Block C — the seven `*2` rows are a ROM/reference mismatch in the suite
 
 `m3_lcdc_bg_en_change2`, `m3_lcdc_bg_map_change2`, `m3_lcdc_tile_sel_change2`,

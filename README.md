@@ -61,7 +61,7 @@ above, they use only test ROMs the repository is free to show.</em></p>
 > Blargg suite passes on both consoles (46 of 47 ROM/console rows), dmg-acid2 is pixel-exact,
 > and the community timing suites are scored in CI on every push — honestly, including the
 > reds. Today, on the default `identical` picture engine: **Mooneye 103/103, SameSuite 73/76,
-> `cpp` 4/4, Mealybug 26/79.** See
+> `cpp` 4/4, Mealybug <!--score:mealybug_accurate-->29/79<!--/score-->.** See
 > **[Status & accuracy](#status--accuracy)** for the measured table, the
 > [test scoreboard](testharness/README.md), and the honest per-component notes. This project
 > is a study of emulation, not a piracy tool: it ships no ROMs and no BIOS.
@@ -932,8 +932,8 @@ Very few emulators offer a per-dot renderer at all. Here it is one keypress.
 | **…headless, with no pixels wanted** | 0.382 ms/frame — the skip does not apply | **0.057 ms/frame**, 6.7× cheaper |
 | **dmg-acid2 vs the author's reference** | **0 / 23,040** | 0 / 23,040 pixels differ |
 | **Mooneye `acceptance`** | **75 / 75** | 67 / 75 |
-| **Mealybug Tearoom rows** | **26 / 79** | 3 / 79 |
-| **GB Emulator Shootout, its own manifest** | **238 / 264** | 223 / 264 |
+| **Mealybug Tearoom rows** | **<!--score:mealybug_accurate-->29 / 79<!--/score-->** | <!--score:mealybug-->3 / 79<!--/score--> |
+| **GB Emulator Shootout, its own manifest** | **243 / 264** | 223 / 264 |
 | **Well-behaved games** | identical output, proved frame-for-frame | identical output |
 
 <p align="center">
@@ -953,14 +953,15 @@ wins for one run), or `Gpu::set_render_mode` if you are embedding. **The old spe
 `accurate` still parse everywhere**, so nothing written against them breaks.
 
 **`identical` became the default on 2026-08-20**, when the last row it lost to the cheap engine
-closed. Through the shootout's own manifest the two are 238 and 223 — **fifteen gains and zero
-losses** — and for somebody playing a game it costs 2.2 % of a frame. Reach past it for
-`standard` on small hardware (the PSP frontend pins it), on a headless collector where the
-pixel skip is worth 6.7×, or when you want [speed mode](docs/modes.md), which `identical`
-refuses.
+closed. That flip alone took the shootout's own manifest from 223 to 238 — **fifteen gains and
+zero losses**; later `identical`-only picture work has since carried it to **243**, so the two
+engines stand at 243 and 223 today. For somebody playing a game it costs 2.2 % of a frame.
+Reach past it for `standard` on small hardware (the PSP frontend pins it), on a headless
+collector where the pixel skip is worth 6.7×, or when you want [speed mode](docs/modes.md),
+which `identical` refuses.
 
 **And the honest part:** `identical` is *structurally* right and *part-way* calibrated. It is
-pixel-exact on twenty-six Mealybug rows against the test author's own reference frames and within a
+pixel-exact on twenty-nine Mealybug rows against the test author's own reference frames and within a
 few hundred pixels on several more (`m3_scx_high_5_bits` is **12**). It does not lose a row to
 `standard` anywhere the shootout looks, but it is **not strictly dominant across all 6,210 gated
 rows**: four small Gambatte groups are net-negative on it (`sprites` −3, `lyc153int_m2irq` −2,
@@ -1265,7 +1266,7 @@ Nothing below is repeated here — these are pointers, those are the sources.
 
 | page | what it answers |
 |---|---|
-| [the GB Emulator Shootout submission](docs/shootout.md) | what we would score on the public board (238/264), what their runner requires, and the prepared entry |
+| [the GB Emulator Shootout submission](docs/shootout.md) | what we would score on the public board (243/264), what their runner requires, and the prepared entry |
 | [the GitHub Action](docs/conformance-action.md) | scoring *someone else's* emulator: the contract, badges, licensing, honest gaps |
 | [the standalone-tool design](docs/conformance.md) | where this is going and why |
 | [per-fix conformance notes](docs/conformance-notes.md) | every accuracy bug we fixed, with symptom, catching test and hardware citation |
@@ -1782,14 +1783,14 @@ gated beside it.
 | **Mooneye GB** `misc` (CGB) | **8 / 8** | 8 / 8 | Color-specific boot and timing |
 | **SameSuite** | **73 / 76** | 73 / 76 | APU 66/69 · DMA 4/4 · PPU 1/1 · **SGB 2/2** |
 | **CasualPokePlayer** (`cpp`) | **4 / 4** | 4 / 4 | MBC3 RTC edge cases, and [`sgb-ext-test`](#what-the-super-game-boy-support-actually-scores) |
-| **Mealybug Tearoom** | **26 / 79** | 3 / 79 | mid-scanline PPU effects, against the test author's own reference frames |
+| **Mealybug Tearoom** | **<!--score:mealybug_accurate-->29 / 79<!--/score-->** | <!--score:mealybug-->3 / 79<!--/score--> | mid-scanline PPU effects, against the test author's own reference frames |
 
 ```bash
 make fetch-test-suites && make test-external-accurate   # `identical`, the default engine
 make test-external                                      # the same suites, `standard`
 ```
 
-That Mealybug 26/79 is the real remaining gap and it is **not hidden by a pass/fail column**:
+That Mealybug <!--score:mealybug_accurate-->29/79<!--/score--> is the real remaining gap and it is **not hidden by a pass/fail column**:
 the baseline records *how many of the 23,040 pixels differ* on every row, so progress shows up
 even when no row flips. **45 of the 79 rows cannot be won by PPU work at all** — 27 need the
 boot ROM's `®` glyph, 8 compare our greyscale against a colour reference and 7 are a
@@ -1803,15 +1804,16 @@ The [GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/) is the communit
 board: 264 ROMs, 18 emulators, every verdict a screenshot comparison. Scored against **its**
 ROMs, **its** reference images and **its** pass criterion:
 
-> **238 / 264 — 90.2 %**, which is 5th of 19 by pass count: behind docboy (258), Emulicious
+> **243 / 264 — 92.0 %**, which is 5th of 19 by pass count: behind docboy (258), Emulicious
 > (254), SameBoy (253) and Beaten Dying Moon (247), ahead of GSE (218), bgb (205),
 > GambatteSpeedrun (169), mGBA (150) and everything below.
 
 **Fifteen of those came from making `identical` the default picture engine on 2026-08-20** —
 fifteen gains, zero losses, and the one row the per-dot engine used to lose (`cgb-acid2`) is
-pixel-exact on both now. It was 223/264 before.
+pixel-exact on both now. It was 223/264 before that flip and 238/264 after it; the five rows
+since are later `identical`-only picture work, not the flip.
 
-All 26 failures are documented open areas, and **9 of them are Mealybug rows nobody can win by
+All 21 failures are documented open areas, and **9 of them are Mealybug rows nobody can win by
 PPU work** (they need the boot ROM's `®` glyph in VRAM, which is a licence decision this project
 has deliberately not taken). Re-derive the number in under a minute — no Windows, no display:
 
@@ -1852,8 +1854,11 @@ read the table above, which is measured, not remembered.
 
 **Known limitations** (each is documented honestly on the relevant component page)
 - No boot ROM / logo scroll; the post-boot state is written directly, per console *revision*
-  — Mooneye ships a `boot_div` / `boot_hwio` / `boot_regs` ROM for each machine and all
-  eleven now pass. What is still not reproduced is the logo animation itself, the
+  — and, for the system counter on a Color console, per *cartridge header* as well, since the
+  CGB boot ROM runs a different program for a CGB-flagged cartridge than for a DMG one.
+  Mooneye ships a `boot_div` / `boot_hwio` / `boot_regs` ROM for each machine and all
+  eleven now pass; gambatte's `div/start_inc_{1,2}_cgb04c` are what pin the Color console's
+  other path, and they pass too. What is still not reproduced is the logo animation itself, the
   header-checksum lock-up, and the boot ROM's beep (its envelope volume is not readable from
   any register, so how far it has decayed cannot be derived).
 - The DMG OAM-corruption bug **is** modelled, as is the HALT bug. In the `standard` picture mode the PPU
@@ -1980,7 +1985,7 @@ Near-term, in priority order:
 - **Calibrate the `identical` picture mode.** It is the default now, and structurally right;
   what is left is the sprite penalty, the window's WX penalty, and the exact dot on which a CPU
   write becomes visible to the fetcher. There is no single constant left to find — there are many,
-  and they constrain each other. Mealybug 26/79 is the number that moves when this lands — but
+  and they constrain each other. Mealybug <!--score:mealybug_accurate-->29/79<!--/score--> is the number that moves when this lands — but
   **plan against eleven rows, not fifty-three**: 45 of the 79 cannot be won by picture work at
   all. See [`docs/mealybug.md` §11](docs/mealybug.md#11-the-denominator-45-of-the-failing-rows-cannot-be-won-by-ppu-work-15-aug-2026)
   for the denominator and [§7.5](docs/mealybug.md) for what the default flip did and did not do.

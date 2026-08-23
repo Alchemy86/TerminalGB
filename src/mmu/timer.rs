@@ -568,6 +568,32 @@ mod tests {
         assert_eq!(t.rb(0xFF05), 1);
     }
 
+    /// Pins `crate::mmu::CGB_BOOT_SYSTEM_COUNTER` — the boot-time system
+    /// counter for a **genuine** CGB-flagged cartridge (`GbMode::Color`,
+    /// as distinct from a DMG cartridge's compatibility path) — against the
+    /// exact M-cycle count gambatte's own `div/start_inc_{1,2}_cgb04c.asm`
+    /// measures it at.
+    ///
+    /// Each ROM is `jp; jp; NOP × N; LDH A,($04)` from `$0100`; N = 13 wants
+    /// `DIV = $1E`, N = 14 wants `$1F`. Counted in real bus accesses (each
+    /// `NOP` is one M-cycle, matching [`Timer::do_mcycle_now`] one for one)
+    /// the read lands on M-cycle 24 for N = 13 and 25 for N = 14: the two
+    /// `jp`s cost 4 M-cycles each *before* the first `NOP`, and the `LDH`
+    /// costs 3 more *after* the last one — 8 + N + 3.
+    /// See the constant's own doc comment for the derivation and the
+    /// independent BullyGB corroboration.
+    #[test]
+    fn a_genuine_cgb_cartridge_boots_div_where_gambatte_measures_it() {
+        let mut t = Timer::default();
+        t.set_boot_counter(crate::mmu::CGB_BOOT_SYSTEM_COUNTER);
+        for _ in 0..24 {
+            t.do_mcycle_now();
+        }
+        assert_eq!(t.rb(0xFF04), 0x1E, "13 NOPs (M-cycle 24)");
+        t.do_mcycle_now();
+        assert_eq!(t.rb(0xFF04), 0x1F, "14 NOPs (M-cycle 25)");
+    }
+
     /// Everything the closed-form batch claims, checked against the loop it
     /// replaces — the loop stays the definition.
     ///

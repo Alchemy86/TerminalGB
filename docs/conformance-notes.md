@@ -4535,3 +4535,90 @@ built, not after.
 **New test:** none landed — both attempts were reverted. `GB-PPU-16` remains a real,
 already-existing, correctly-red check waiting for whichever model closes it; do not remove it
 from `tools/gbselftest-gate.py`'s known-gap list without also closing the row.
+
+---
+
+## 2026-08-23 — A genuine CGB cartridge boots a different DIV phase than a DMG one running compatibly, and the shared constant was wrong for it
+
+**Symptom in user terms.** A game with a real Color-only or Color-and-DMG (`$0143` bit 7 set)
+header boots with the system counter (`DIV`) at the wrong phase — off by `0x7D8` T-cycles from
+real hardware. Anything that reads `DIV` in its first frames, or seeds an RNG from it (Game Boy
+titles routinely do, since there is no other entropy source at boot), starts from a value no
+real cartridge of that game ever saw. The APU's frame sequencer and every timer-relative event
+are shifted by the same amount, since they are all derived from the one shared counter.
+
+**Caught by.** gambatte's own `div/start_inc_{1,2}_cgb04c.asm` (2 rows, `$0143 = $C0`,
+Priority-2 audit territory per the standing Gambatte sweep — neither the *very* deep CPU-timing
+corners nor the mid-scanline PPU wall the rest of the 1608-row categorisation converges on).
+Incidentally also `tima/tc00_start_2_cgb04c_outF1` (1 row): a TAC-enable-timing test whose
+expected `TIMA` value at capture is itself downstream of the same boot phase, so it moved as a
+side effect with no code of its own touched. **Corroborating, and itself gated but unmoved**:
+BullyGB's own `Invalid initial DIV` self-check, which this repo has carried as a documented,
+un-fixed black screen since `csp/bully` was first scored. `bully` is in the Makefile's
+`CSP_SUITES`, so both gates score it against
+`testharness/csp_bully_{,accurate_}baseline.txt`, and it was re-run here: its row is
+**byte-identical in both picture modes** (`bully@cgb = FAIL diff=22893`). It corroborates the
+*value*; the row it draws needs the PPU half as well — see the closing paragraph of this entry
+and `CGB_BOOT_SYSTEM_COUNTER`'s own history in `src/mmu/mod.rs`.
+
+**The hardware fact, with a citation.** There is no Pan Docs entry for this — like every other
+`*_BOOT_SYSTEM_COUNTER` constant in this file, it is boot-ROM-*timing*, not a documented
+register behaviour, so the test ROM itself is the citation. gambatte's two subtests are
+`jp; jp; NOP × N; LDH A,($04)` from `$0100`, with `N = 13` wanting `DIV = $1E` and `N = 14`
+wanting `$1F` — pinning both the counter's top byte *and* the exact M-cycle its low byte wraps
+on, the same style of measurement `DMG_BOOT_SYSTEM_COUNTER`'s own doc comment already uses.
+Solved in closed form (counted in real bus-access M-cycles, not T-cycles or instructions: the
+fixed 2×`jp` + `LDH` preamble puts the read on M-cycle 24 for `N=13` and 25 for `N=14`) and
+confirmed by running both ROMs end to end against the emulator: `0x1EA0` reads back `$1E` and
+`$1F` exactly, on the nose, no rounding.
+
+**Why this constant had stood unsplit until now, and what changed.** `CGB_BOOT_SYSTEM_COUNTER`
+was Mooneye-verified (`misc/boot_div-cgbABCDE`) for `GbMode::ColorAsClassic` — a **DMG**-header
+cartridge running on Color hardware — and the doc comment openly called reusing it for
+`GbMode::Color` (a genuine CGB cartridge) "a documented approximation", explicitly declining to
+fix it on BullyGB's evidence alone: *"Fitting one unknown to absorb another would move every
+CGB-flagged cartridge's DIV… on no better evidence than one row."* That objection is answered
+now, not overridden: gambatte's `div/start_inc` is a **second, independent** measurement of the
+exact same quantity, and it lands within `0xE0` of BullyGB's own blind-swept `$1DC0`-ish
+figure. **The `$E0` between them is not the extra time BullyGB's `LY >= $90` wait costs** —
+both are candidate values of the *same* constant, so that wait is inside the emulation for
+either, and it runs to tens of thousands of T-cycles rather than 224. BullyGB's sweep is a
+confounded measurement: it was fitted to satisfy BullyGB's check as a whole, which also depends
+on where the boot ROM leaves the PPU (a separate, unverified constant), so it was never going to
+land exactly on a counter-only derivation. Two sources this close corroborate the
+neighbourhood — that is what makes a fix defensible where one row was not — and the residual is
+the PPU-phase confound, which is why plugging in `0x1EA0` leaves BullyGB's own row
+byte-identical.
+
+**The fix.** `CGB_BOOT_SYSTEM_COUNTER` (`src/mmu/mod.rs`) is now `0x1EA0`, for `GbMode::Color`
+only. The Mooneye-verified value moved to a new constant, `CGB_COMPAT_BOOT_SYSTEM_COUNTER =
+0x2678`, used for `GbMode::ColorAsClassic` exactly as before — the two paths through the CGB
+boot ROM are genuinely different programs, so they earned separate names rather than one shared
+approximation. `set_initial`'s match arm now tests `self.gbmode == GbMode::ColorAsClassic`
+explicitly rather than falling through a single wildcard.
+
+**Measured before/after, both picture modes, the full external gate** (`make test-external` /
+`make test-external-accurate`): Gambatte **3173 → 3176 of 5225** on `standard` and
+**3617 → 3620 of 5225** on `identical` — the same three rows above, gained in both modes — with
+zero rows lost in either. Mooneye `acceptance`/`emulator-only` (103/103), Mooneye
+`misc` — the CGB gate that exercises `ColorAsClassic`, unaffected as expected (8/8, both modes,
+`boot_div-cgbABCDE` still green) — SameSuite (73/76), `cpp` (4/4), Mealybug (all 79 rows
+byte-identical) and the other twelve c-sp suites (age, bully, cgb-acid-hell, cgb-acid2,
+gbmicrotest, little-things-gb, mbc3-tester, mooneye-wilbertpol, rtc3test, scribbltests,
+strikethrough, turtle-tests) all match their checked-in baselines exactly, in both modes. The
+in-repo harness (`cargo test --release --test testroms`, 46/47 including all twelve `cgb_sound`
+rows), `savestate`, `bootrom`, `battery` and the full `cargo test --release --lib` (897 passing)
+are all unaffected.
+
+**New test:** `mmu::timer::tests::a_genuine_cgb_cartridge_boots_div_where_gambatte_measures_it`
+— pins the constant against the exact M-cycle count derived above, with no ROM needed. Teeth
+proven: reverting the constant to its old shared value fails it (`left: 38 [0x26], right: 30
+[0x1E]`).
+
+**BullyGB is gated and was re-run — it is UNAFFECTED, not unverified.** `bully` is in the
+Makefile's `CSP_SUITES`, so both gates above scored it, and its row is **byte-identical in both
+picture modes** (`bully@cgb = FAIL diff=22893`, unchanged). So this fix alone does not flip its
+own `Invalid initial DIV` check: that check also depends on the PPU's boot-restart phase for a
+CGB cartridge, which this does not touch (`misc/boot_hwio-C` skips `$FF40`/`$FF41`/`$FF44`, so
+no suite ROM pins it either). BullyGB corroborates the *value*; the row it draws needs the PPU
+half as well.
