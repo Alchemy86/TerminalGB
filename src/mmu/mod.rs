@@ -887,7 +887,12 @@ impl<'a> MemoryManagementUnit<'a> {
     /// usually quoted — `acceptance/boot_hwio-dmgABCmgb` walks `$FF00-$FF7F`
     /// plus `IE` byte by byte, and `acceptance/boot_div-dmgABCmgb` /
     /// `misc/boot_div-cgbABCDE` pin the 16-bit system counter's exact value and
-    /// phase. They disagree with each other, so the values are per console.
+    /// phase. They disagree with each other, so the values are per console —
+    /// **and, for the counter on a Color console, per cartridge header too**:
+    /// every Mooneye `boot_div` cartridge has a DMG header, so none of them
+    /// measures the genuine CGB path. gambatte's `div/start_inc_{1,2}_cgb04c`
+    /// do, and that is where [`CGB_BOOT_SYSTEM_COUNTER`] comes from while
+    /// [`CGB_COMPAT_BOOT_SYSTEM_COUNTER`] keeps Mooneye's value.
     ///
     /// The APU's share of it is **not** here: the sound chip is installed later
     /// by [`Self::enable_audio`] (headless machines have none), so its post-boot

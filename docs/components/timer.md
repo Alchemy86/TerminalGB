@@ -193,7 +193,8 @@ What remains approximate:
 | **Mooneye `acceptance/timer/`** (`div_write`, `tim00`–`tim11`, `tima_reload`, `tima_write_reloading`, `tma_write_reloading`, `rapid_toggle`) | The full timer edge-case matrix | The single best timer suite. **13/13 pass.** Not a vendored submodule — run it with `examples/mooneye_scout.rs` against a local checkout of [mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite). |
 | **Blargg `instr_timing`** | Indirectly leans on timer/interrupt timing | A gross cycle-count error. |
 | **Blargg `interrupt_time`** | Timing of the timer/serial interrupts relative to instructions | Would catch dispatch-timing gaps. |
-| **Mooneye `acceptance/boot_div-dmgABCmgb`, `misc/boot_div-cgbABCDE`** | The counter's exact value *and phase* at `PC=$0100` — six `DIV` reads at known offsets | **Both pass.** A failure means the post-boot seed in `src/mmu/mod.rs` is wrong, or the per-access tick has moved relative to the access. |
+| **Mooneye `acceptance/boot_div-dmgABCmgb`, `misc/boot_div-cgbABCDE`** | The counter's exact value *and phase* at `PC=$0100` — six `DIV` reads at known offsets | **Both pass.** A failure means the post-boot seed in `src/mmu/mod.rs` is wrong, or the per-access tick has moved relative to the access. Note both cartridges have **DMG** headers, so neither can see the Color console's *other* boot program. |
+| **gambatte `div/start_inc_{1,2}_cgb04c`** (via the c-sp aggregation) | The same thing for a **CGB-flagged** cartridge: `jp; jp; NOP × N; LDH A,($04)` with `N` = 13 and 14, so the pair pins the value *and* the M-cycle the low byte wraps on | **Both pass.** The only ROMs that measure a Color console on the genuine path; they are what `CGB_BOOT_SYSTEM_COUNTER = $1EA0` is derived from. |
 
 The `retrio/gb-test-roms` submodule (Blargg) is initialised and wired; the decisive timer
 tests are in Mooneye, which is not. Wiring Mooneye is the single largest coverage win

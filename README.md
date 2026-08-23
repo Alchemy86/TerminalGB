@@ -1854,8 +1854,11 @@ read the table above, which is measured, not remembered.
 
 **Known limitations** (each is documented honestly on the relevant component page)
 - No boot ROM / logo scroll; the post-boot state is written directly, per console *revision*
-  — Mooneye ships a `boot_div` / `boot_hwio` / `boot_regs` ROM for each machine and all
-  eleven now pass. What is still not reproduced is the logo animation itself, the
+  — and, for the system counter on a Color console, per *cartridge header* as well, since the
+  CGB boot ROM runs a different program for a CGB-flagged cartridge than for a DMG one.
+  Mooneye ships a `boot_div` / `boot_hwio` / `boot_regs` ROM for each machine and all
+  eleven now pass; gambatte's `div/start_inc_{1,2}_cgb04c` are what pin the Color console's
+  other path, and they pass too. What is still not reproduced is the logo animation itself, the
   header-checksum lock-up, and the boot ROM's beep (its envelope volume is not readable from
   any register, so how far it has decayed cannot be derived).
 - The DMG OAM-corruption bug **is** modelled, as is the HALT bug. In the `standard` picture mode the PPU
