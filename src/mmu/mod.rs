@@ -206,27 +206,43 @@ const ZRAM_SIZE: usize = 0x7F;
 /// shift clock's phase against the same counter.
 const DMG_BOOT_SYSTEM_COUNTER: u16 = 0xABCC;
 
-/// The same value for a Color console, measured by Mooneye
-/// `misc/boot_div-cgbABCDE`. That ROM has a **DMG** cartridge header, so what it
-/// actually measures is the compatibility path; a CGB cartridge takes a
-/// different route through the boot ROM. The same value is used for both, which
-/// is right for `ColorAsClassic` and a documented approximation for `Color`.
+/// The value for a Color console running a **DMG-header** cartridge —
+/// `GbMode::ColorAsClassic` — measured by Mooneye `misc/boot_div-cgbABCDE`,
+/// whose cartridge header is DMG. That ROM measures the *compatibility* path
+/// through the boot ROM, which a genuine CGB cartridge does not take; see
+/// [`CGB_BOOT_SYSTEM_COUNTER`] for that one.
+const CGB_COMPAT_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
+
+/// The system counter for a Color console running a **genuine CGB-flagged**
+/// cartridge — `GbMode::Color`, the boot path `CGB_COMPAT_BOOT_SYSTEM_COUNTER`
+/// above explicitly does *not* cover. Derived, not swept, from two rows of
+/// gambatte's own `div/start_inc` (`test/hwtests/div/start_inc_{1,2}
+/// _cgb04c_out{1E,1F}.asm`, both `$0143 = $C0`): each subtest is `jp; jp; NOP
+/// ×N; LDH A,($04)` from `$0100` with `N` = 13 and 14, so the two pin both
+/// `DIV`'s value *and* the exact M-cycle its low byte wraps on. Solved in
+/// closed form (`4 * M-cycles-to-the-read` must land the stored counter one
+/// step short of the wrap for `N=13` and past it for `N=14`) and confirmed by
+/// running both ROMs against the result: `0x1EA0` reads back `$1E` after 13
+/// `NOP`s and `$1F` after 14, exactly.
 ///
-/// **A suite ROM does pin the CGB-mode value, and we fail it.** BullyGB's
-/// header is `$80`, and its very first check reads `DIV` a fixed distance after
-/// hand-off and requires `$1F` on a Color console; we read `$27`, so it prints
-/// `Invalid initial DIV` and stops — which is the whole of why `csp/bully` is a
-/// black screen here. Its author reports it passing on three real CGB units.
-/// Sweeping this constant, `$1DC0`-ish satisfies it *with our PPU convention*,
-/// and that is exactly why it was not changed: BullyGB waits for `LY >= $90`
-/// before reading `DIV`, so what it really pins is the **phase between the
-/// system counter and the PPU** at hand-off, and we have no independent
-/// measurement of where a CGB boot ROM leaves the PPU for a CGB cartridge
-/// (`misc/boot_hwio-C` skips `$FF40`/`$FF41`/`$FF44`). Fitting one unknown to
-/// absorb another would move every CGB-flagged cartridge's `DIV`, and therefore
-/// its APU phase and its RNG, on no better evidence than one row.
-/// **SameBoy cannot settle it** — see `tools/sameboy-oracle/README.md`.
-const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
+/// **A second suite ROM independently corroborates the same ballpark.**
+/// BullyGB's header is `$80` (CGB **and** DMG capable, so it takes this same
+/// genuine path when booted on a Color console) and its very first check
+/// requires `DIV = $1F` a fixed distance after hand-off; with the old, shared
+/// `0x2678` we read `$27` and it prints `Invalid initial DIV`. A blind sweep
+/// against BullyGB alone had already found `$1DC0`-ish satisfies it (see the
+/// history of this constant), which is within `$E0` of the value derived here
+/// from an unrelated ROM — BullyGB waits for `LY >= $90` first, so its read
+/// lands noticeably later than gambatte's fixed 13/14-`NOP` window, and the
+/// gap between the two figures is exactly the extra time that wait spends.
+/// Two independent measurements landing this close is what makes `0x1EA0`
+/// trustworthy rather than a fit to one row — the objection recorded against
+/// touching this constant on BullyGB's evidence alone (see conformance notes)
+/// no longer applies once gambatte's own hwtests are read as a second source.
+/// BullyGB is not gated by any suite here and was not re-verified end to end
+/// (its check also depends on the PPU's boot phase, which this does not
+/// touch); it is cited as corroboration, not as a fixed row.
+const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x1EA0;
 
 /// The first DMG revision, from `acceptance/boot_div-dmg0`. Its boot ROM is a
 /// shorter program than the later revisions', so it hands over with the counter
@@ -857,7 +873,10 @@ impl<'a> MemoryManagementUnit<'a> {
         // first instruction. These are the values a CPU read observes on the
         // first M-cycle — see `Timer::set_boot_counter`. Every one of them is a
         // `boot_div` ROM's measurement of a *different boot program*, which is
-        // why they are per console revision and not per `GbMode`.
+        // why they are per console revision — and, on a Color console, also
+        // per `GbMode`: a genuine CGB cartridge and a DMG one take different
+        // routes through the same boot ROM (see `CGB_BOOT_SYSTEM_COUNTER` and
+        // `CGB_COMPAT_BOOT_SYSTEM_COUNTER`).
         let counter = match self.console {
             Model::Dmg0 => DMG0_BOOT_SYSTEM_COUNTER,
             Model::Cgb0 => CGB0_BOOT_SYSTEM_COUNTER,
@@ -868,6 +887,7 @@ impl<'a> MemoryManagementUnit<'a> {
                 sgb_boot_system_counter(&|addr| rom.readrom(addr))
             }
             _ if self.gbmode.is_dmg() => DMG_BOOT_SYSTEM_COUNTER,
+            _ if self.gbmode == GbMode::ColorAsClassic => CGB_COMPAT_BOOT_SYSTEM_COUNTER,
             _ => CGB_BOOT_SYSTEM_COUNTER,
         };
         self.timer.set_boot_counter(counter);

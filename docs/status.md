@@ -29,7 +29,7 @@ yourself proves nothing.
 | [SameSuite](measured/scoreboard.md) | **73** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **29** / 79 | 3 / 79 | mid-scanline picture timing — pixel-exact rows |
-| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3617** / 5225 | 3173 / 5225 | the largest suite there is — mostly PPU, per console |
+| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3620** / 5225 | 3176 / 5225 | the largest suite there is — mostly PPU, per console |
 | [GBMicrotest](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **338** / 513 | 251 / 513 | low-level timing probes, each writing its own verdict byte |
 | [AGE test roms](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **10** / 59 | 3 / 59 | timing, per console revision |
 | Mooneye GB — wilbertpol fork | **82** / 117 | 62 / 117 | the 2016 suite, a different population from Gekkio's |
