@@ -259,7 +259,7 @@ lyc2_int_halt_b@dmg = PASS
 lyc_int_halt_a@dmg = FAIL got=05 want=04
 lyc_int_halt_b@dmg = PASS
 mbc1_ram_banks@dmg = PASS
-mbc1_rom_banks@dmg = FAIL got=FF want=FF
+mbc1_rom_banks@dmg = PASS
 minimal@dmg = FAIL no verdict (ff82=00)
 mode2_stat_int_to_oam_unlock@dmg = FAIL no verdict (ff82=00)
 oam_int_halt_a@dmg = FAIL got=00 want=01

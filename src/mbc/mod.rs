@@ -240,7 +240,8 @@ fn ram_banks(v: u8) -> usize {
 }
 
 /// Number of 16 KiB ROM banks, from header byte `0x148` with the ROM itself as
-/// the fallback.
+/// the fallback — and as a **floor** underneath a declared value that would
+/// otherwise truncate real, addressable content.
 ///
 /// The header byte is not trustworthy: the unofficial codes `0x52`/`0x53`/`0x54`
 /// (1.1/1.2/1.5 MiB) appear in real cartridges, and bootleg or corrupt headers
@@ -252,13 +253,29 @@ fn ram_banks(v: u8) -> usize {
 /// ROM in memory, so its length is the better fallback. Never below 2 — a
 /// one-bank cartridge does not exist and would still divide by zero at `% 1`
 /// giving bank 0. Pan Docs: <https://gbdev.io/pandocs/The_Cartridge_Header.html>
+///
+/// **The declared value can also under-report — `.max()` against the file's
+/// own bank count, never the reverse.** A real cartridge's addressable range
+/// is a hardware fact (however many address lines the mapper has wired to the
+/// ROM chip), not a byte the game's own header self-reports; `mbc1.rs`'s
+/// MBC1M path already makes exactly this correction (`.max(0x40)`, "a header
+/// that under-declares the size would otherwise clip BANK2 away"). Found on
+/// GBMicrotest's `mbc1_rom_banks.gb`: a genuine 2 MiB (128-bank) build whose
+/// `$148` byte reads `$00` (32 KiB / 2 banks) — a defect in that ROM's own
+/// assembler output, not a licensing/type ambiguity like MBC30's — which
+/// silently clipped bank switches above bank 1 to a `% 2` wraparound and
+/// failed the ROM's own check. Cross-checked against SameBoy: it derives its
+/// addressable range from the file's length exclusively (rounded to a power
+/// of two, `gb.c`'s `rounded_rom_size`) and never consults `$148` for masking
+/// at all, and it passes this ROM. This fix stays narrower than that — it
+/// only ever *raises* the floor a possibly-wrong header sets, never
+/// discards the header outright — so a correctly-declared cartridge (every
+/// real dump this project has been measured against) is unaffected: `declared
+/// == rom_len / 0x4000` for all of them, and `max` is a no-op.
 fn rom_banks(v: u8, rom_len: usize) -> usize {
     let declared = if v <= 8 { 2usize << v } else { 0 };
-    if declared > 0 {
-        declared
-    } else {
-        (rom_len / 0x4000).max(2)
-    }
+    let from_size = rom_len / 0x4000;
+    declared.max(from_size).max(2)
 }
 
 #[allow(dead_code)]
