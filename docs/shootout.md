@@ -24,8 +24,9 @@ now resolved):
 >
 > (**223 / 264 — 84.5 %** on `standard`, which is where this page stood until
 > 2026-08-21. The `standard`/`identical` flip that day was **fifteen gains and
-> zero losses** row for row, the fifteen named in §1a; the further +2 to 243
-> is `identical`-only — [`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026).)
+> zero losses** row for row, the fifteen named in §1a, taking it from 223 to 238;
+> the further five rows to 243 are later `identical`-only picture work, two of
+> them [`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026).)
 
 That is **5th of 19** by pass count and by percentage, four rows behind fourth:
 
@@ -59,7 +60,7 @@ By suite:
 | `ax6` | 3 / 3 | 3 / 3 | `rtc3test` |
 | `acid` | **5 / 5** | 4 / 5 | `cgb-acid-hell` closed on 2026-08-21 — the Color `TILE_SEL` glitch, [`mealybug.md` §13](mealybug.md#13-tile_sel-reset-on-a-bitplane-read-the-tile-index-is-the-data-21-aug-2026); `cgb-acid2` is pixel-exact on **both** engines since the Color gate on the window pixel-insertion glitch |
 | `daid` | 5 / 9 | 5 / 9 | `ppu_scanline_bgp` ×2, `speed_switch_timing_{ly,stat}` — a PPU-vs-counter phase error |
-| `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are a boot-counter decision, not a PPU one |
+| `ashiepaws` | **1 / 3** | 0 / 3 | `strikethrough.gb` — see the 2026-08-21 entry of [`conformance-notes.md`](conformance-notes.md); `bully.gb` ×2 stay red and are **not** the CGB-mode boot counter — that was changed to `$1EA0` and their rows are byte-identical either side of it; the residual is the PPU's hand-off phase (see §2) |
 | `mealybug-tearoom-tests` | **11 / 24** | 1 / 24 | the DMG column of [`docs/mealybug.md`](mealybug.md); of the 13 still red, **9 cannot be won by PPU work at all** — see §1b |
 | **total** | **243 / 264** | 223 / 264 | |
 
