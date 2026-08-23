@@ -4576,11 +4576,15 @@ fix it on BullyGB's evidence alone: *"Fitting one unknown to absorb another woul
 CGB-flagged cartridge's DIV… on no better evidence than one row."* That objection is answered
 now, not overridden: gambatte's `div/start_inc` is a **second, independent** measurement of the
 exact same quantity, and it lands within `0xE0` of BullyGB's own blind-swept `$1DC0`-ish
-figure — the two consoles' respective read points differ (gambatte's is a fixed 13/14-`NOP`
-window from `$0100`; BullyGB's own first check waits for `LY >= $90` before reading, so its read
-lands correspondingly later), and the gap between the two answers is exactly the extra time that
-wait costs. Two sources converging this closely is what makes a fix defensible where one row
-was not.
+figure. **The `$E0` between them is not the extra time BullyGB's `LY >= $90` wait costs** —
+both are candidate values of the *same* constant, so that wait is inside the emulation for
+either, and it runs to tens of thousands of T-cycles rather than 224. BullyGB's sweep is a
+confounded measurement: it was fitted to satisfy BullyGB's check as a whole, which also depends
+on where the boot ROM leaves the PPU (a separate, unverified constant), so it was never going to
+land exactly on a counter-only derivation. Two sources this close corroborate the
+neighbourhood — that is what makes a fix defensible where one row was not — and the residual is
+the PPU-phase confound, which is why plugging in `0x1EA0` leaves BullyGB's own row
+byte-identical.
 
 **The fix.** `CGB_BOOT_SYSTEM_COUNTER` (`src/mmu/mod.rs`) is now `0x1EA0`, for `GbMode::Color`
 only. The Mooneye-verified value moved to a new constant, `CGB_COMPAT_BOOT_SYSTEM_COUNTER =

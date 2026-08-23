@@ -3,7 +3,7 @@
 **Field report · 20 August 2026.** A Game Boy that lives in your terminal: where it stands
 against every public accuracy suite, what it can do, and what is coming next.
 
-> **[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/): 238 / 264 (90.2 %) — 5th of 19
+> **[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/): 243 / 264 (92.0 %) — 5th of 19
 > published emulators.** Measured through their manifest and their screenshot comparison, on
 > `main`; the recipe is in [`docs/shootout.md`](shootout.md). It was 223 until `identical`
 > became the default picture engine on 20 August 2026 — fifteen gains, zero losses.

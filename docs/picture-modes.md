@@ -116,14 +116,14 @@ with the other machine's numbers.
 | GBMicrotest | <!--score:csp_gbmicrotest:pass-->251<!--/score--> / 513 | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / 513 |
 | GBSelfTest (our own cartridge) † | 90 / 101 | **99 / 101** |
 | dmg-acid2 against its author's reference | 0 / 23,040 differ | 0 / 23,040 differ |
-| **GB Emulator Shootout, its own 264-row manifest** | 223 | **238** |
+| **GB Emulator Shootout, its own 264-row manifest** | 223 | **243** |
 
 † The GBSelfTest figures come from **`tools/gbselftest-gate.py`** (`make gbselftest`), the full
-cartridge gate, whose denominator is every check the ROM prints and whose skips count in it.
-[`docs/gbselftest.md`](gbselftest.md) quotes a **different** instrument —
-`tools/conformance/gbconform.py` against its own `checks-gbselftest.json` manifest, a separately
-scoped subset — so the two pages carry different denominators on purpose and are not in
-disagreement. Neither is baseline-derived, so neither is rewritten by `make status`.
+cartridge gate, whose denominator is every check the ROM prints and whose skips count in it —
+the same instrument [`docs/gbselftest.md`](gbselftest.md) quotes. That page read `96 / 98` and
+`87 / 98` until now: the same measurement taken before the cartridge was re-pinned from 98
+checks to 101, i.e. stale by one vintage rather than a different tool, and it is corrected to
+match. Not baseline-derived, so not rewritten by `make status`.
 
 Everything else — the in-repo Blargg harness (<!--score:harness-->46/47<!--/score-->), Mooneye
 `emulator-only` (<!--score:mooneye_emulator_only-->28/28<!--/score-->) and `misc`
