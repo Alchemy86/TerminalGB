@@ -12909,3 +12909,32 @@ converging on the two already-documented walls — this one did not.
   invisible to `make docs-check`, which reported "OK" throughout because it never looked. Inline
   score count in prose verified by `docs-check` moved 138 → 162 with the fix, entirely previously
   ungated hyphenated markers.
+
+## GBMicrotest's ~31 "no verdict" rows are not ours — SameBoy agrees, inconclusively
+
+Checked while looking for another `firstwhite`-shaped win after the `poweron_fill` fix above.
+GBMicrotest's `$FF82` verdict byte is documented (its own howto, vendored at
+`target/test-suites/csp/gbmicrotest/game-boy-test-roms-howto.md`) as `$01` pass / `$FF` fail,
+readable "after a few hundred cycles" for most tests and within ~380 ms (≈23 frames) for the one
+named exception. Our harness gives 25 frames and still reads `$00` (never written) on ~31 rows —
+`minimal`, `poweron`, `cpu_bus_1`, `audio_testbench`, `flood_vram`, the `NNN-*` numbered group and
+several PPU-named ones already inside the documented mid-scanline wall.
+
+- **`minimal.gb` and `cpu_bus_1.gb` were traced against SameBoy through `tools/sameboy-oracle`'s
+  `peek` mode, at 2 through 40,000 frames each.** Neither ROM ever settles `$FF82` at `$01` or
+  `$FF` **on SameBoy either** — `minimal.gb` reads `$00`/`$74`/`$8A` across the sweep with no
+  convergence by 40,000 frames (≈11 minutes emulated); `cpu_bus_1.gb` sits at `$80` throughout,
+  with `$FF80` still changing between frame 60 and 120, i.e. genuinely still iterating rather
+  than stuck. **A trusted independent implementation shows the identical shape** (no clean
+  verdict, progressing rather than parked), which is the opposite of what a real emulation gap on
+  our side would look like — that would show SameBoy converging cleanly while we hang.
+- **Not concluded as fixed, not concluded as a harness bug either — genuinely inconclusive.**
+  Two live possibilities neither confirmed nor ruled out: the harness's blanket "25 frames /
+  `$01`-or-`$FF`" reading is wrong for these specific ROMs (a different, undocumented convention,
+  or a genuine need for far more time than the suite's own howto implies for its one named
+  exception), or these ROMs need something neither emulator supplies (a link partner, specific
+  input timing). Settling it needs GBMicrotest's own source
+  ([aappleby/GBMicrotest](https://github.com/aappleby/GBMicrotest)), not fetchable from this
+  session. **Do not spend further time guessing at a fix here without it** — the SameBoy
+  corroboration is exactly the kind of evidence this project trusts, and it points away from an
+  emulation bug, not towards one.
