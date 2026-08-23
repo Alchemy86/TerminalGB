@@ -15,8 +15,25 @@ name: Container
 # a retention policy and a name behind it; this job only proves the definition
 # still works.
 
+# The same double-billing this repository's other two workflows were just
+# fixed for, left behind here — and this is the expensive one: a branch push
+# that touches `Cargo.lock` built the whole Rust toolchain image TWICE, once
+# for `push` and once for `pull_request`, for byte-identical results, each
+# pushing a `mode=max` layer cache. Exhausting the Actions spending limit does
+# not merely slow a run down: GitHub then refuses to START any job, and every
+# check on every open pull request reports "The job was not started because
+# recent account payments have failed or your spending limit needs to be
+# increased" with the same red tick as a real failure.
+#
+# So `push` is limited to `main` (the branch nothing opens a pull request
+# against, which would otherwise lose coverage entirely) and everything else is
+# covered exactly once by `pull_request`. The `concurrency` group is the other
+# half: pushing a fix to a branch cancels the superseded image build instead of
+# paying for both. `main` is never cancelled — its runs are the published
+# record. Coverage is unchanged; what is dropped is the duplicate.
 on:
   push:
+    branches: [main]
     paths:
       - 'Dockerfile'
       - '.dockerignore'
@@ -35,6 +52,10 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   image:

@@ -296,14 +296,25 @@ the test-ROM harness, `make test-external` and `make test-external-accurate` in 
 modes, `make gbselftest`, and the conformance runner on both the submodule and the fetched-ROM
 path. Nothing in the tree was wrong.
 
-**The repository's own contribution to it, which is the part worth fixing.** Both workflows
-were declared `on: [push, pull_request]`. For a branch in this repository with a pull request
-open, that fires **both** events for the same commit, so every push billed two identical runs
-of everything — and "everything" here is not cheap: the external-suites job alone fetches a few
-hundred megabytes of ROMs and scores several thousand rows, and the embedding job runs the core
-under qemu on three further architectures. Confirmed rather than assumed, from the run list:
-one commit, two `CI` runs and two `Conformance (self)` runs, distinguished only by
-`event=push` against `event=pull_request`.
+**The repository's own contribution to it, which is the part worth fixing.** Every workflow
+that runs on a branch was declared `on: [push, pull_request]`. For a branch in this repository
+with a pull request open, that fires **both** events for the same commit, so every push billed
+two identical runs of everything — and "everything" here is not cheap: the external-suites job
+alone fetches a few hundred megabytes of ROMs and scores several thousand rows, and the
+embedding job runs the core under qemu on three further architectures. Confirmed rather than
+assumed, from the run list: one commit, two `CI` runs and two `Conformance (self)` runs,
+distinguished only by `event=push` against `event=pull_request`.
+
+**Fix it across every workflow file, not just the ones whose checks are red — the expensive
+one hid.** `ci.yml` and `conformance-self.yml` are the two that appear on the pull-request page,
+so they are the two a reviewer sees and the two that get fixed. `container.yml` is
+**`paths:`-filtered**: it runs only when `Dockerfile`, `.devcontainer/**`, `tools/oneclick/**`
+or `Cargo.{toml,lock}` change, so it is absent from most pull requests and easy to miss
+entirely — and it is the costliest job in the repository when it does fire, building the whole
+Rust toolchain image twice over and pushing a `mode=max` layer cache each time. It carried the
+same duplicate for a whole round after the other two were fixed. **`grep -l 'pull_request'
+.github/workflows/*.yml` is the sweep**; a workflow that never runs on a branch (`workflow_call`,
+a tag, `workflow_dispatch`) is the only one that can be left alone.
 
 **Resolution.** Limit `push` to `main` (nothing opens a pull request against it, so it would
 otherwise lose coverage entirely) and let `pull_request` cover everything else exactly once;
@@ -313,11 +324,13 @@ because its runs are the published record. The explanation lives in the workflow
 themselves, which is where somebody wondering why a branch push produced no run will look.
 
 **Side effects and blast radius.** Coverage is unchanged: every commit that reaches `main`
-still runs both workflows, and every pull request still runs both workflows. What is lost is
-the second, identical run of a branch push, and any run already superseded by a newer push to
-the same branch. A branch pushed with **no** pull request open now gets no run at all — that is
-the deliberate part of the trade, and it is the right way round for a project that develops on
-local branches and opens a pull request when it wants the gates.
+still runs every workflow, and every pull request still runs every workflow it is eligible for
+(`container.yml` keeps its path filter on both events, so it stays absent from a pull request
+that touches none of those files). What is lost is the second, identical run of a branch push,
+and any run already superseded by a newer push to the same branch. A branch pushed with **no**
+pull request open now gets no run at all — that is the deliberate part of the trade, and it is
+the right way round for a project that develops on local branches and opens a pull request when
+it wants the gates.
 
 **How we found it.** By reading the run list rather than the check names:
 `gh api "repos/<owner>/<repo>/actions/runs" --jq '.workflow_runs[] | "\(.id) \(.name)
