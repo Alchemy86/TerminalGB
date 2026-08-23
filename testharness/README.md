@@ -118,6 +118,15 @@ ROM's own verdict, red on any change in either direction, deliberate re-blessing
 (`UPDATE_EXTERNAL_BASELINE=1`). See
 [docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp).
 
+**The thirteen c-sp suites are gated the same way**, one `csp_<suite>_baseline.txt` per suite
+here plus a `_accurate_` twin for the per-dot picture engine — AGE, Bully, cgb-acid2,
+cgb-acid-hell, Gambatte, GBMicrotest, little-things-gb, MBC3 Tester, the wilbertpol Mooneye
+fork, rtc3test, Scribbltests, Strikethrough and TurtleTests. `csp_gambatte_baseline.txt` alone
+is 5,225 scored rows, so **expect any PPU or boot-state change to produce a large but readable
+diff there**: that is the point, and the same trade the Mealybug baselines make with their
+pixel counts. Current scores per suite, both engines:
+[docs/measured/scoreboard.md](../docs/measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time).
+
 ## Documented non-goals (pinned red on purpose)
 
 These stay red in `baseline.txt` by intent, so a *change* still trips CI, but they are not

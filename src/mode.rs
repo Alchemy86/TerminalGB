@@ -11,7 +11,11 @@
 ///   `Classic`: the boot registers differ (`A=0x11`, `HL=0x007C`) and the
 ///   undocumented CGB registers `FF72`/`FF73`/`FF75`-`FF77` still respond.
 ///   Mooneye's `acceptance/bits/reg_f` and friends print those boot registers
-///   and so distinguish the two.
+///   and so distinguish the two. It is not the same machine as `Color` either,
+///   and not only in the registers: the CGB boot ROM runs a **different
+///   program** for a DMG header, so it hands the cartridge a different system
+///   counter (`$2678` against `Color`'s `$1EA0` — see
+///   `crate::mmu::CGB_COMPAT_BOOT_SYSTEM_COUNTER`).
 /// * `Super` / `Super2` — a **Super Game Boy** (or the later SGB2). The Game
 ///   Boy side is DMG hardware, so the PPU, APU and I/O map behave as a DMG's;
 ///   what differs is the boot registers and the ICD2 chip listening on the

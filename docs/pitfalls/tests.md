@@ -453,7 +453,9 @@ author verified pass on his own hardware.
 **Resolution.** Use the oracle for what it is good at — a ROM's *own* verdict on a machine you
 do not own — and never for the boot hand-off. For that, the authorities are Mooneye's
 `boot_div`/`boot_hwio`/`boot_regs` family and a real boot ROM, which this project deliberately
-neither ships nor downloads (`src/boot.rs`).
+neither ships nor downloads (`src/boot.rs`) — plus gambatte's `div/start_inc_{1,2}_cgb04c` for
+the one hand-off Mooneye's family cannot reach, a Color console booting a CGB-flagged
+cartridge (see the closing note below).
 
 **Side effects and blast radius.** None to the emulator; the cost is entirely in time. The
 `peek` mode added to the oracle while chasing this is worth keeping anyway — it is how you ask

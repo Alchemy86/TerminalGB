@@ -59,7 +59,10 @@ SameBoy's DMG hands the cartridge `DIV = $BD` where Mooneye's hardware-verified
 `acceptance/boot_div-dmgABCmgb` — which this emulator passes — pins `$AB`. It also **fails
 BullyGB's `Invalid initial DIV` check on all nine of its consoles**, including the ones
 BullyGB's author verified on his own hardware. Use `boot_div`/`boot_hwio`/`boot_regs` for that
-question, not this. Written up in
+question, not this — **except for the one case they cannot answer**: every Mooneye `boot_div`
+cartridge has a **DMG** header, so none of them measures a Color console booting a
+*CGB-flagged* cartridge. gambatte's `div/start_inc_{1,2}_cgb04c` (`$0143 = $C0`) do, and are
+what `CGB_BOOT_SYSTEM_COUNTER` is derived from. Written up in
 [`docs/pitfalls/tests.md`](../../docs/pitfalls/tests.md#a-reference-emulators-boot-rom-is-not-the-consoles-boot-rom).
 
 ## House rules
