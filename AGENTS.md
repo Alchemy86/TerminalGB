@@ -13052,3 +13052,195 @@ several PPU-named ones already inside the documented mid-scanline wall.
   session. **Do not spend further time guessing at a fix here without it** — the SameBoy
   corroboration is exactly the kind of evidence this project trusts, and it points away from an
   emulation bug, not towards one.
+
+## GBMicrotest's source IS fetchable — and it names the real cause of most of its own reds
+
+**Correction to the note directly above this one**: `aappleby/GBMicrotest` clones fine
+(`git clone --depth 1 https://github.com/aappleby/GBMicrotest`) and ships every test's `.s`
+source under `tests/`. The earlier session's "not fetchable from this session" was a
+statement about that session's own tooling, not about the repository. Read the source before
+guessing at a mechanism again.
+
+- **THE BIG CLUSTER, MEASURED AND NAMED: gbmicrotest's `got=`/`want=` failures are
+  overwhelmingly ONE root cause, and it is the already-documented `boot_ppu_dot` gap —
+  confirmed by reading the source, not inferred from names.** Of the 513 rows, 31 are the
+  already-corroborated-inconclusive "no verdict" cluster (SameBoy agrees, see above); of the
+  rest, the huge majority — every `hblank_int_*`, `int_hblank_*`, `int_lyc_*`, `int_timer_*`,
+  `lcdon_to_*`, `line_144_*`, `line_153_*`, `line_65_ly`, `lyc*_int_*`, `oam_int_*`,
+  `poweron_*`, `stat_write_glitch_*`, `vblank*_int_*` — are a `nops N` sled from reset followed
+  by a register/interrupt check at a *precise* T-cycle offset from cartridge start. Read
+  `tests/hblank_int_scx0_if_a.s`: it arms the HBlank STAT source, waits a fixed 34 `nop`s, and
+  demands the interrupt has **not yet fired** — a claim that is only meaningful if the emulator
+  and real hardware agree on exactly where the PPU is, in dots, at the instant `$0100` starts
+  executing. `docs/mmu.rs`'s own `DMG0_BOOT_PPU_DOT` doc comment already names this mechanism
+  and already measured the DMG (not DMG0) discrepancy precisely: **hardware needs 120 M-cycles
+  from `$0100` for `LY` to first read 1, ours needs 114** — a 24 T-cycle gap — and a naive sweep
+  across the frame gives "237/513 at 69900, 251 at line 0 (today), 262 at 70168, 250 at
+  70184 — a jagged profile with no clean optimum", which the same comment reads correctly as
+  "a constant absorbing an error somewhere else rather than a value being found."
+- **TRIED TO DERIVE THE REAL VALUE FROM FIRST PRINCIPLES THIS SESSION, AND DELIBERATELY STOPPED
+  SHORT — record the reasoning so nobody re-treads it blind.** `DMG_BOOT_SYSTEM_COUNTER =
+  0xABCC` (43,980 T-cycles from power-on to `$0100`, already measured/trusted via
+  `boot_div-dmgABCmgb`, which we pass) is one half of a real derivation: if the T-cycle offset
+  τ at which the boot ROM's `ldh [rLCDC],a` (`LCDCF_ON`) actually executes were known, the PPU's
+  boot dot would be `(43980 − τ) mod 70224`, no sweep required — the same technique
+  `sgb_boot_system_counter` already uses successfully elsewhere in this file. Reading
+  [ISSOtm/gb-bootroms](https://codeberg.org/ISSOtm/gb-bootroms) `src/dmg.asm` (the non-`dmg0`
+  path) confirms the LCDC-enable instruction is real and locatable (`ScrollLogo:`, after the
+  VRAM clear, the APU init and the logo decompression/tilemap write) — **but getting τ requires
+  hand-cycle-counting a loop whose branch timing is DATA-DEPENDENT on the Nintendo logo's own
+  nibble pattern** (`DecompressFirstNibble`/`DecompressSecondNibble`, called once per logo byte,
+  each presumably branching on the nibble's bit pattern). Doing that by hand risks two things at
+  once: (1) getting a security-relevant hardware-timing fact wrong under time pressure and
+  shipping a plausible-looking-but-incorrect constant that changes **every DMG game's boot
+  phase, and with it every DIV-seeded RNG roll from frame one** — this constant has the largest
+  blast radius of anything touched this session, and (2) it requires reconstructing the logo's
+  own nibble sequence closely enough to count branches, which sits close enough to "reproducing
+  Nintendo boot/logo content" that it was not attempted under this session's explicit
+  hard-rule boundary, even though the logo technically lives in the *cartridge* header rather
+  than the boot ROM. **Left exactly where the prior session left it — untouched — and flagged as
+  the single highest-value, highest-risk item on the board**: a correct derivation would very
+  plausibly unlock 80-100+ gbmicrotest rows across both picture modes, PLUS `bully` (whose own
+  20-year "two crews' work" note is the CGB side of the identical mechanism) and possibly
+  shave pixels off several `csp_age` rows. **The right next step is what the DMG0 constant's own
+  comment models**: derive it from a *published, cited* cycle count (a hardware reference or a
+  careful, checked disassembly walk that treats the logo bytes as opaque data whose *presence*
+  can be counted without transcribing their *values*), then calibrate the result against the
+  `poweron_ly_*`/`poweron_stat_*` family's own multi-point sweep — not a single test, all of
+  them at once, which is what would turn a "jagged, no optimum" sweep into a real confirmation.
+- **`halt_bug`/`halt_op_dupe_delay` (gbmicrotest) are genuinely independent of the above** —
+  `tests/macros.inc`'s `cycle_init`/`cycle_count` measure elapsed time via `TAC`/`TIMA` (four
+  staggered reads of `$FF05` for sub-tick resolution), never touching `LY`/`STAT`, so these two
+  rows cannot be explained by the boot-dot gap. `halt_bug@dmg` is `got=$18 want=$14` — a 4
+  T-cycle (one M-cycle) excess — and `halt_op_dupe_delay@dmg` (which explicitly turns the LCD
+  off then back on itself, sidestepping the boot-dot question entirely) is `got=$01 want=$55`,
+  a much larger gap. Traced our own `Cpu::exec`'s `0x76` (HALT) handler and the `halt_bug` PC
+  rewind (`src/cpu/core.rs`): both look correct against Pan Docs' description (HALT costs its
+  normal 1 M-cycle whether or not the bug fires; the bug rewinds `PC` by one after the *next*
+  fetch, so the following byte executes twice). **Not chased further, deliberately**: this
+  project's own HALT bug is independently proven via Blargg's `halt_bug.gb` (passes, is in the
+  46/47 in-repo baseline) and multiple passing Mooneye HALT/interrupt-precedence rows, so the
+  risk of a speculative one-M-cycle nudge regressing one of those to chase two gbmicrotest rows
+  is asymmetric and was not taken. A genuine fix here needs an instruction-by-instruction trace
+  of the HALT+bug sequence against `cycle_init`/`cycle_count`'s own read spacing, not a guess.
+- **Cross-checked `mooneye-wilbertpol`'s boot_hwio/GPU-family failures against the runner's own
+  model-selection logic (`examples/csp_suite.rs::mooneye_run`) — the mapping is correct**
+  (`"G" => Model::Dmg`, `"S" => Model::Sgb`, matching Gekkio's own compatibility-letter
+  convention this repo already uses elsewhere), so these are not a runner bug. Most of that
+  suite's ~35 failures share a register signature (`b=48 c=BE … h=FF l=40`) that reads like a
+  generic assertion-epilogue print routine's own working registers rather than per-test
+  diagnostic data (the same shape AGE's font-decode dead end has), and the PPU-named ones are
+  almost certainly the same boot-dot family measured through a 2016-era harness. Not
+  independently traced beyond that; no wilbertpol-specific source is vendored or fetched here.
+- **`samesuite`'s `apu/channel_1/channel_1_sweep_restart`, `channel_1_freq_change_timing-cgb0BC`
+  and `apu/channel_4/channel_4_freq_change`** (3 rows, unchanged both modes) were re-checked
+  against this file's own extensive prior derivations (the "structural 2 T offset", the
+  `-cgb0BC` vs `-cgbDE` contradiction, and the "61 of 64 cells" CH4 search) rather than
+  re-attempted — nothing new to add; the prior sessions' conclusions stand.
+- **`gambatte`'s `irq_precedence/late_m0irq_vs_tima*`/`late_hdma_vs_*` rows (16, explicitly
+  flagged in this file as "not individually traced") were read from source**
+  (`pokemon-speedrunning/gambatte-core`, `test/hwtests/irq_precedence/*.asm`, fetched this
+  session — MIT-compatible reuse per this project's own convention for gambatte-core sources
+  elsewhere in this file). `late_m0irq_vs_tima_scx2_1_dmg08_cgb04c_out4.asm` decoded: it waits
+  for `LY=$91`, arms Timer (`TAC=$04`, 1024 T-cycle period) with `TIMA=TMA=$FE` (one tick from
+  overflow), turns the LCD off, `ei`s, and waits for the resulting Timer interrupt; that handler
+  (shared with the STAT vector via one `jp lint`) checks whether `LCDC` bit 7 is set to tell
+  "am I the first (Timer, LCD still off) or second (STAT, LCD now on) interrupt through here" —
+  on the first pass it turns the LCD back on with `SCX=2` and arms the mode-0 STAT source, so
+  the SECOND time through (now via the STAT vector, once HBlank is reached) it reads `IF` and
+  compares. **What decides `out4` vs `out2` is the exact race between the LCD-on-to-first-HBlank
+  interval (SCX-dependent mode-3 length) and `TIMA`'s own next-overflow timing** — genuinely a
+  new question this file had not answered, not a restatement of the SCX/fetcher wall, since it
+  is failing under `identical` (the per-dot, SCX-aware engine) as well as `standard`. **Scoped,
+  not attempted**: resolving it needs a cycle-exact trace of both the timer reload path and the
+  LCD-on PPU reset relative to the M-cycle the `LCDC`-enable write itself lands on, which is a
+  comparable depth of investigation to the boot-dot item above with a much smaller (16-row)
+  ceiling; left for whoever picks up interrupt-precedence work next, with the source already
+  identified so nobody has to re-find it.
+
+## MBC1's bank-select register must never be handed a bank count smaller than the ROM itself
+
+**GBMicrotest `mbc1_rom_banks@dmg` FAIL → PASS, both picture modes** (`csp_gbmicrotest`
+251/513 → 252/513 standard, 338/513 → 339/513 identical). Zero rows moved anywhere else on the
+whole external board, measured with `make test-external`/`make test-external-accurate` before
+and after — every one of the 6,315 rows across all 18 c-sp suites, Mooneye ×2, SameSuite,
+Mealybug, `cpp` matches exactly but for this one; the in-repo `testroms` harness stays 46/47
+(`oam_bug@cgb` the one documented permanent red), `savestate`/`battery` green, `no-plugins`
+green, `gbselftest` matches its documented per-mode gap list exactly (`identical` loses only
+`GB-PPU-16`, `standard` loses only its nine documented mode-3-fetcher rows).
+
+- **Symptom in user terms**: a real 2 MiB (128-bank) MBC1 cartridge whose header nonetheless
+  under-declares its size — `mbc1_rom_banks.gb`'s `$148` reads `$00` (32 KiB / 2 banks), a
+  defect in the ROM's own build rather than a licensing ambiguity — has every bank switch above
+  bank 1 silently wrap `% 2`, so a game reading through bank $20 or higher gets whichever of
+  bank 0/1's content the wraparound landed on instead of the byte it asked for. On a real
+  cartridge or a spec-following mapper implementation this cannot happen (the physical ROM's
+  addressable range is a hardware fact, not something the header can misreport downward); on an
+  emulator that trusts the header literally, it can, and did.
+- **Caught by**: GBMicrotest's own `mbc1_rom_banks.gb`, which switches through all 128 banks of
+  a hand-built 2 MiB image (each bank's first/last byte holding its own bank number) and checks
+  every read back. Cross-checked against **SameBoy** via `tools/sameboy-oracle` (`peek` mode,
+  `$FF80-$FF82`): it passes this exact ROM. Reading `Core/gb.c`/`memory.c` (Expat licence,
+  read for mechanism per `CONTRIBUTING.md`) shows why — SameBoy derives its addressable ROM
+  range *purely* from the file's own length, rounded up to a power of two
+  (`rounded_rom_size`), and masks every ROM read against `rom_size − 1`; it never consults
+  `$148` for addressing at all.
+- **The hardware behaviour being violated, with a citation**: Pan Docs, "The Cartridge
+  Header" — `$148` is the cartridge's own self-report of its size, read by games that want to
+  know it, not a register the MBC's bank-select circuit consults. A real MBC1's addressable
+  range is fixed by how many of its chip's address lines are physically wired to the ROM —
+  a hardware fact, invariant under whatever byte a mis-built header happens to declare.
+- **The fix, and its scope**: `mbc::rom_banks(v, rom_len)` (`src/mbc/mod.rs`, shared by MBC1,
+  MBC2, MBC3, MBC5) now returns `declared.max(rom_len / 0x4000).max(2)` instead of `declared`
+  alone — the header can still *raise* the bank count above what the file naively implies (the
+  existing `v > 8` / undeclared-header fallback path is unchanged), but can no longer *truncate*
+  real, addressable ROM content below the file's own size. This is the exact principle MBC1's
+  own multicart path already applies one line away (`.max(0x40)`, "a header that under-declares
+  the size would otherwise clip BANK2 away and strand three quarters of the games") and the
+  same reasoning the function's own pre-existing doc comment gave for its `v > 8` fallback
+  ("real dumping tools never size a cartridge from this byte either... its length is the better
+  fallback") — this closes the one case that reasoning had not yet reached: a *well-formed*
+  but wrong declared value on a real, oversized file. Every existing MBC unit test already has
+  `declared == rom_len / 0x4000` (checked directly: `src/mbc/mod.rs`'s shared `cart()` helper
+  always builds `rom[0x148]=5` against exactly 64 banks; `mbc3.rs`'s own helper derives `$148`
+  *from* its bank count), so the change is a no-op for every deliberately-consistent test
+  fixture and for every correctly-dumped real cartridge — it only ever *grows* the addressable
+  range, never invents banks a file does not have (`rom_len / 0x4000` still floors).
+- **New test**: none added beyond the existing 42 `mbc::` unit tests (all pass unchanged,
+  confirming the fix is a no-op on every fixture that was already internally consistent) — the
+  regression coverage for the *broken-header* case is `csp_gbmicrotest`'s own
+  `mbc1_rom_banks@dmg` row, now pinned PASS in both baselines.
+
+## The board, measured fresh at this session's start and again at its end
+
+Every figure below was run, not copied from a prior entry — the task's own standing instruction
+("start from measured ground, not from docs"). `make test-external` / `make test-external-accurate`
+against `target/test-suites` (already fetched, `tools/fetch-test-suites.sh` re-run to confirm
+completeness: 115 Mooneye, 31 Mealybug, 76 SameSuite, 4 `cpp`, 4,510 c-sp ROMs in 18 suites).
+
+**Before this session (identical to `main` @ `3a51931`), non-skip pass/total across every
+baseline file, both picture modes:**
+
+| | standard | identical |
+|---|---:|---:|
+| mooneye acceptance+emulator-only | 95/103 | 103/103 |
+| mooneye misc (cgb) | 8/8 | 8/8 |
+| samesuite | 73/76 | 73/76 |
+| mealybug | 3/79 | 29/79 |
+| cpp | 4/4 | 4/4 |
+| c-sp (13 suites, non-skip) | 3,512/5,940 | 4,075/5,940 |
+| **total (non-skip)** | **3,695/6,210** | **4,292/6,210** |
+
+**After this session's one fix**, gbmicrotest (part of the c-sp row above) moved
+251/513 → 252/513 standard and 338/513 → 339/513 identical; every other suite, every other row,
+unchanged:
+
+| | standard | identical |
+|---|---:|---:|
+| **total (non-skip)** | **3,696/6,210** | **4,293/6,210** |
+
+- **Confirms this file's own AGENTS.md claim of "roughly 3176/5225 standard and 3620/5225
+  identical" for Gambatte specifically** — measured fresh: **3,176/5,225 standard,
+  3,620/5,225 identical**, exact match, no drift since `3a51931`.
+- **Internal library tests: 906/906**, matching the stated baseline exactly (plus 1 pre-existing
+  `#[ignore]`d test, unrelated to this session).

@@ -113,7 +113,7 @@ with the other machine's numbers.
 | Mooneye GB `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->** |
 | Mealybug Tearoom — pixel-exact rows | <!--score:mealybug:pass-->3<!--/score--> / 79 | **<!--score:mealybug_accurate:pass-->29<!--/score-->** / 79 |
 | Gambatte (5,225 scored rows) | <!--score:csp_gambatte:pass-->3176<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3620<!--/score-->** |
-| GBMicrotest | <!--score:csp_gbmicrotest:pass-->251<!--/score--> / 513 | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / 513 |
+| GBMicrotest | <!--score:csp_gbmicrotest:pass-->252<!--/score--> / 513 | **<!--score:csp_gbmicrotest_accurate:pass-->339<!--/score-->** / 513 |
 | GBSelfTest (our own cartridge) † | 90 / 101 | **99 / 101** |
 | dmg-acid2 against its author's reference | 0 / 23,040 differ | 0 / 23,040 differ |
 | **GB Emulator Shootout, its own 264-row manifest** | 223 | **243** |
