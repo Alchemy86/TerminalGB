@@ -2205,9 +2205,58 @@ capability must cost only that capability** — the same principle as the adapte
   path). BESS was rejected for now because it can't represent this core's internal counters
   (PPU `modeclock`/mode, timer `internaldiv`/`internalcnt`, HDMA bookkeeping, APU
   frame-seq phase) without desync — proposed as an additive follow-up (`bess.rs`).
-- **Bump `savestate::FORMAT_VERSION` on ANY layout change** — loads reject a version mismatch
-  rather than corrupting. The ROM is never stored; states carry the title + global checksum
+- **Bump `savestate::FORMAT_VERSION` on ANY layout change** — a version outside
+  `savestate::MIN_SUPPORTED_VERSION..=FORMAT_VERSION` is still rejected rather than
+  corrupting. The ROM is never stored; states carry the title + global checksum
   and refuse a mismatched cartridge (`StateError::RomMismatch`).
+- **A version INSIDE that window is UPGRADED, not refused — `Cpu::load_state`
+  reads old states now, not just the current one.** Every `FORMAT_VERSION` bump
+  used to orphan every state written before it outright, and that bit a real
+  consumer: AgentGB's whole `.gbss` certification corpus went from loadable to
+  refused across four PPU bumps (v22→v26) in a few days, with no way forward but
+  regenerating everything or freezing a build — and migrating a corpus is the
+  wrong shape anyway, since the next bump orphans it again. `version` (parsed
+  once, in `Cpu::load_state`) now threads down through
+  `MemoryManagementUnit::load_state` → `Gpu::load_state` → `Pipeline::load_state`,
+  each with `if version >= N { r.u8()? } else { <documented default> } ` at
+  exactly the field a later bump added — `winx_prev` (v25), `oam_bus_y`/
+  `oam_bus_x` (v23), `poweron_fill` (v26), and `Pipeline`'s `win_active`/
+  `tile_is_window`/`win_fetch_x`/`line_started` (v24, split from the single
+  `window` flag those fields replaced — each defaults to exactly what the
+  pre-split code did with `window`/`fetch_x`/`bg_len` alone, not a guess).
+  **The rule this does NOT weaken: reject-on-mismatch is still absolute outside
+  the named window** — `MIN_SUPPORTED_VERSION`'s own doc comment is the
+  contract, and it is explicit that a *non-additive* bump (a field removed,
+  reordered, or reinterpreted under the same layout) must raise that floor in
+  the same commit, never quietly leave an unreviewed old layout reachable.
+  **The writer never changed** — `save_state` still writes exactly one, current
+  layout, unconditionally; only the reader gained version awareness, which is
+  what keeps this a read-side fix and not a redefinition of what a "current"
+  state is. `Gpu::oam_bus_y`/`oam_bus_x` are the one field pair worth a
+  second look before trusting the default: this file's "The OAM DMA drives the
+  ADDRESS bus too" section above already records them as machine state that
+  survives **between** scanlines, not merely within one — so defaulting them
+  to zero can misjudge the very first OAM scan after an old load, still
+  bounded to one wrong scanline and never corruption, but the nearest thing
+  to a real cost this path has. **Tested at three levels**, all `#[cfg(test)]`-only and none vendoring a
+  binary fixture: `gpu::fifo::savestate_compat` and `gpu::savestate_compat`
+  build genuinely *shorter* old-format byte streams via a
+  `save_state_as_of(version)` mirror of each real writer (never by stamping
+  current bytes with an old version number) and assert both the defaults and
+  that the reader consumes **exactly** that blob's own length (a trailing
+  marker byte proves it); `cpu::core::savestate_compat` does the same at the
+  whole-machine level by splicing a genuinely old-shaped GPU block into an
+  otherwise real `Cpu::save_state()` snapshot (found by searching for the real
+  GPU bytes as a subsequence — reliable because that segment carries the whole
+  VRAM and framebuffer, which makes it enormous and unique — so nothing else in
+  the format needs to be re-derived); `testharness/savestate.rs`'s
+  `negative_checks` proves both edges of the window
+  (`MIN_SUPPORTED_VERSION - 1` and `FORMAT_VERSION + 1`) still refuse. **Manually
+  verified against real bytes, not just hand-rolled ones**: a v22 state built
+  from the actual last commit at that version (`dd584e1`) and loaded into the
+  current build ran on for 300 more frames with no panic, on both dmg-acid2
+  and Blargg `cpu_instrs`. Full contract: `docs/savestates.md`'s "Backward
+  compatibility" section.
 - **Sharp edges:** (1) The GPU framebuffer `data` IS saved (so the visible frame is right on
   load) but `bgprio` is NOT (it is rebuilt at the top of every `renderscan`). (2) The APU
   section is written **length-prefixed and present-flagged** so it is skippable — that is what
@@ -2218,9 +2267,11 @@ capability must cost only that capability** — the same principle as the adapte
 - **Round-trip proof:** `testharness/savestate.rs` (`cargo test --release --test savestate`,
   `harness = false`). Runs N frames → save → run reference forward, load into a fresh machine,
   and asserts **byte-identical framebuffers AND byte-identical full-state snapshots every
-  frame**, plus negative checks (magic/version/truncation/wrong-game). Uses the vendored
-  dmg-acid2 always, and Blargg cpu_instrs (scrolling screen ⇒ non-trivial frame variation)
-  when the submodule is present.
+  frame**, plus negative checks (magic / a version outside
+  `MIN_SUPPORTED_VERSION..=FORMAT_VERSION`, both edges / truncation / wrong-game). Uses the
+  vendored dmg-acid2 always, and Blargg cpu_instrs (scrolling screen ⇒ non-trivial frame
+  variation) when the submodule is present. **Loading a genuinely old version and upgrading
+  it is proven separately, in-crate** — see the backward-compatibility bullet above for where.
 
 ## Terminal frontend: stats / speed / save-slots (`src/screen/tui.rs`)
 

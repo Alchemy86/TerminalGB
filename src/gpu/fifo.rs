@@ -349,9 +349,16 @@ impl Pipeline {
         Ok(())
     }
 
+    /// `version` is the state's own format version — see
+    /// [`crate::savestate::MIN_SUPPORTED_VERSION`]. v24 split one field
+    /// (`window`) into the four read here conditionally; on an older state
+    /// each defaults to what the pre-split code actually did with `window`
+    /// alone, so a v22/v23 load reconstructs the same behaviour that version
+    /// of this engine had, not a new approximation of it.
     pub(super) fn load_state(
         &mut self,
         r: &mut crate::savestate::Reader,
+        version: u16,
     ) -> Result<(), crate::savestate::StateError> {
         for s in self.scan.iter_mut() {
             s.y = r.u8()?;
@@ -383,14 +390,105 @@ impl Pipeline {
         self.lx = r.u8()?;
         self.discard = r.u8()?;
         self.window = r.bool()?;
-        self.win_active = r.bool()?;
-        self.tile_is_window = r.bool()?;
+        // v24 split the fetcher's immediate addressing (`win_active`) and its
+        // per-tile freeze (`tile_is_window`) out of `window`, which before
+        // that split was what `fetch_tile_number`/`lo_hi` read directly for
+        // the same decision — so on an older state, mirroring the `window`
+        // value just read above is not a guess, it is exactly what those
+        // functions would have used. The only way this can differ from a true
+        // v24+ machine at the same instant is the one case the split exists
+        // for: a mid-fetch abort caught after the tile number was already
+        // read but before `window` itself has settled — a single in-flight
+        // tile fetched against the wrong side, never more.
+        self.win_active = if version >= 24 {
+            r.bool()?
+        } else {
+            self.window
+        };
+        self.tile_is_window = if version >= 24 {
+            r.bool()?
+        } else {
+            self.window
+        };
         self.win_drawn = r.bool()?;
         self.win_skip = r.u8()?;
         self.win_fresh = r.bool()?;
-        self.win_fetch_x = r.u8()?;
-        self.line_started = r.bool()?;
+        // v24's other two fields, same commit, same reasoning: before the
+        // split there was one tile counter (`fetch_x`) shared by both
+        // fetchers, so defaulting `win_fetch_x` to the just-loaded `fetch_x`
+        // reproduces that shared-counter behaviour exactly rather than
+        // inventing a fresh window counter mid-line. `line_started` replaced
+        // an *inference* from `bg_len == 0` — recomputing that same inference
+        // here (`bg_len` was already loaded above) reproduces the identical
+        // ambiguity the pre-v24 code always had, including its one known
+        // false positive right after a push drains the FIFO to empty; that is
+        // the honest default, not a corrected one.
+        self.win_fetch_x = if version >= 24 { r.u8()? } else { self.fetch_x };
+        self.line_started = if version >= 24 {
+            r.bool()?
+        } else {
+            self.bg_len > 0
+        };
         Ok(())
+    }
+
+    /// Test-only mirror of [`Pipeline::save_state`] that writes exactly what
+    /// a real writer at `version` produced — the four v24 fields omitted
+    /// below `version >= 24`, everything else unconditional, matching
+    /// [`Pipeline::load_state`]'s gates field for field. This exists so the
+    /// savestate-compatibility tests can construct genuinely SHORTER
+    /// old-format byte streams (not merely bytes stamped with an old version
+    /// number) without vendoring a binary fixture. **Never compiled outside
+    /// `cfg(test)`** — production `save_state` stays unconditional; only the
+    /// reader carries backward compatibility, per
+    /// [`crate::savestate::MIN_SUPPORTED_VERSION`]'s doc comment.
+    #[cfg(test)]
+    pub(super) fn save_state_as_of(
+        &self,
+        w: &mut crate::savestate::Writer,
+        version: u16,
+    ) {
+        for s in &self.scan {
+            w.u8(s.y);
+            w.u8(s.x);
+            w.u8(s.oam);
+        }
+        w.u8(self.nscan);
+        w.u8(self.fetch_t);
+        w.u8(self.fetch_x);
+        w.u8(self.tile_num);
+        w.u8(self.tile_attr);
+        w.u8(self.fetch_y);
+        w.u8(self.lo);
+        w.u8(self.hi);
+        w.bool(self.first_fetch);
+        Self::save_fifo(w, &self.bg);
+        w.u8(self.bg_head);
+        w.u8(self.bg_len);
+        Self::save_fifo(w, &self.obj);
+        w.u8(self.obj_t);
+        w.u8(self.obj_wait);
+        w.u8(self.obj_tile_paid);
+        w.u8(self.obj_i);
+        w.u8(self.obj_tile);
+        w.u8(self.obj_flags);
+        w.u8(self.obj_lo);
+        w.u8(self.obj_hi);
+        w.u16(self.fetched);
+        w.u8(self.lx);
+        w.u8(self.discard);
+        w.bool(self.window);
+        if version >= 24 {
+            w.bool(self.win_active);
+            w.bool(self.tile_is_window);
+        }
+        w.bool(self.win_drawn);
+        w.u8(self.win_skip);
+        w.bool(self.win_fresh);
+        if version >= 24 {
+            w.u8(self.win_fetch_x);
+            w.bool(self.line_started);
+        }
     }
 }
 
@@ -2414,5 +2512,123 @@ mod tracing {
                 break;
             }
         }
+    }
+}
+
+/// Proves the version-gated defaults in [`Pipeline::load_state`] against
+/// genuinely shorter old-format byte streams — built with
+/// [`Pipeline::save_state_as_of`], not by stamping current bytes with an old
+/// version number, so these exercise real byte-count handling and not just
+/// the `if` conditions in isolation. See `crate::savestate::
+/// MIN_SUPPORTED_VERSION` for the whole compatibility contract this task
+/// implements, and `AGENTS.md`'s save-state section for how the field-level
+/// defaults were chosen.
+#[cfg(test)]
+mod savestate_compat {
+    use super::Pipeline;
+    use crate::savestate::{Reader, Writer};
+
+    /// A pre-v24 blob upgrades so that `win_active`/`tile_is_window` mirror
+    /// the just-loaded `window` (what `fetch_tile_number`/`lo_hi` read
+    /// directly before the split), `win_fetch_x` mirrors `fetch_x` (the one
+    /// shared counter both fetchers used before the split), and
+    /// `line_started` reconstructs the exact `bg_len > 0` inference the flag
+    /// replaced. A trailing marker byte proves the reader consumes precisely
+    /// this blob's own length and nothing of whatever follows it in a real
+    /// save state.
+    #[test]
+    fn a_pre_v24_pipeline_upgrades_and_consumes_exactly_its_own_bytes() {
+        // Distinguishing, non-default values: a defaulted field reading back
+        // as its own zero-value default could otherwise hide a bug where the
+        // gate never ran at all.
+        let p = Pipeline {
+            window: true,
+            fetch_x: 5,
+            bg_len: 3,
+            ..Pipeline::default()
+        };
+
+        for version in [22u16, 23] {
+            let mut w = Writer::new();
+            p.save_state_as_of(&mut w, version);
+            const MARKER: u8 = 0xA5;
+            w.u8(MARKER);
+
+            let mut r = Reader::new(&w.buf);
+            let mut loaded = Pipeline::default();
+            loaded
+                .load_state(&mut r, version)
+                .unwrap_or_else(|e| panic!("v{version} pipeline state should load: {e}"));
+
+            assert!(loaded.window, "v{version}");
+            assert_eq!(loaded.fetch_x, 5, "v{version}");
+            assert_eq!(loaded.bg_len, 3, "v{version}");
+            assert!(loaded.win_active, "v{version}: defaults to `window`");
+            assert!(loaded.tile_is_window, "v{version}: defaults to `window`");
+            assert_eq!(loaded.win_fetch_x, 5, "v{version}: defaults to `fetch_x`");
+            assert!(loaded.line_started, "v{version}: bg_len > 0");
+
+            assert_eq!(
+                r.u8().unwrap(),
+                MARKER,
+                "v{version}: load_state did not consume exactly this blob's own length"
+            );
+        }
+    }
+
+    /// The other direction: `window` false and an empty FIFO must default
+    /// `win_active`/`tile_is_window`/`line_started` to false too, not to
+    /// whatever `Pipeline::default()` happened to leave lying around (which
+    /// would pass by coincidence if the gate defaulted blindly to `false`
+    /// rather than actually reading `window`/`bg_len`).
+    #[test]
+    fn a_pre_v24_pipeline_with_no_window_and_an_empty_fifo_defaults_the_other_way() {
+        let p = Pipeline::default();
+        let mut w = Writer::new();
+        p.save_state_as_of(&mut w, 23);
+
+        let mut r = Reader::new(&w.buf);
+        let mut loaded = Pipeline::default();
+        loaded
+            .load_state(&mut r, 23)
+            .expect("v23 pipeline state should load");
+
+        assert!(!loaded.win_active);
+        assert!(!loaded.tile_is_window);
+        assert_eq!(loaded.win_fetch_x, 0);
+        assert!(!loaded.line_started, "bg_len == 0 -> not yet pushed");
+    }
+
+    /// v24 and later already carry the real fields — `save_state_as_of`
+    /// writing the same bytes as the production writer at that version is
+    /// what makes it a faithful stand-in for one, not a shortcut.
+    #[test]
+    fn a_v24_pipeline_round_trips_its_real_fields_unchanged() {
+        let p = Pipeline {
+            win_active: true,
+            tile_is_window: false,
+            win_fetch_x: 9,
+            line_started: true,
+            ..Pipeline::default()
+        };
+
+        let mut w = Writer::new();
+        p.save_state_as_of(&mut w, 24);
+        let mut w_prod = Writer::new();
+        p.save_state(&mut w_prod);
+        assert_eq!(
+            w.buf, w_prod.buf,
+            "save_state_as_of(.., 24) must match the real production writer"
+        );
+
+        let mut r = Reader::new(&w.buf);
+        let mut loaded = Pipeline::default();
+        loaded
+            .load_state(&mut r, 24)
+            .expect("v24 pipeline state should load");
+        assert!(loaded.win_active);
+        assert!(!loaded.tile_is_window);
+        assert_eq!(loaded.win_fetch_x, 9);
+        assert!(loaded.line_started);
     }
 }

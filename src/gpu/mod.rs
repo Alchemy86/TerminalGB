@@ -889,9 +889,15 @@ impl Gpu {
         Ok(())
     }
 
+    /// `version` is the state's own format version — see
+    /// [`crate::savestate::MIN_SUPPORTED_VERSION`] for the compatibility
+    /// contract this reads against. Every `if version >= N` below reads a
+    /// field a bump at `N` added; on an older state it defaults instead, and
+    /// the comment beside it says what that costs.
     pub(crate) fn load_state(
         &mut self,
         r: &mut crate::savestate::Reader,
+        version: u16,
     ) -> Result<(), crate::savestate::StateError> {
         self.mode = r.u8()?;
         self.modeclock = r.u32()?;
@@ -914,7 +920,14 @@ impl Gpu {
         self.scx = r.u8()?;
         self.winy = r.u8()?;
         self.winx = r.u8()?;
-        self.winx_prev = r.u8()?;
+        // v25 (`winx_prev`): one dot staler than `winx`, read only by the
+        // window-activation equality test. Defaulting it to the just-read
+        // live `winx` is the same settling `start_mode3` already does for a
+        // write made outside mode 3 — at worst the very next window-start
+        // check on this line sees a dot-early value instead of a dot-stale
+        // one, which can only mis-time which side of the screen the window
+        // takes over on for that one scanline.
+        self.winx_prev = if version >= 25 { r.u8()? } else { self.winx };
         self.wy_trigger = r.bool()?;
         self.wy_pos = r.i32()?;
         self.palbr = r.u8()?;
@@ -941,16 +954,128 @@ impl Gpu {
         self.stat_irq_mid_mcycle = r.bool()?;
         self.lyc_match = r.bool()?;
         self.skip_first_oam = r.bool()?;
-        self.oam_bus_y = r.u8()?;
-        self.oam_bus_x = r.u8()?;
+        // v23 (`oam_bus_y`/`oam_bus_x`): the OAM data bus as the PPU last
+        // latched it. Unlike every other field defaulted on this path,
+        // AGENTS.md records this one as machine state that survives *between*
+        // scanlines, not merely within one — so a default here is not free
+        // the way the others are. Defaulting to zero means the very first OAM
+        // scan this loaded machine performs judges its forty slots against a
+        // latch a real console would have carried over from whatever it was
+        // last doing (the previous line's last sprite, or a mode-3 object
+        // fetch's tile number); every scan after that first one relatches
+        // normally. Still bounded — one scanline can render with the wrong
+        // stale pair, never corruption — but it is the one default in this
+        // function worth its own sentence.
+        if version >= 23 {
+            self.oam_bus_y = r.u8()?;
+            self.oam_bus_x = r.u8()?;
+        } else {
+            self.oam_bus_y = 0;
+            self.oam_bus_x = 0;
+        }
         let stopped = r.bool()?;
         let fill = r.u8()?;
         self.stop_fill = if stopped { Some(fill) } else { None };
-        let poweron = r.bool()?;
-        let poweron_shade = r.u8()?;
-        self.poweron_fill = if poweron { Some(poweron_shade) } else { None };
-        self.pipe.load_state(r)?;
+        // v26 (`poweron_fill`): whether the LCD is inside its forced-blank
+        // first frame after `LCDC` bit 7 went 0→1. `None` on an older state
+        // is the safe default in both directions it can be wrong: a state
+        // saved outside that window loads exactly as it always did, and one
+        // saved *inside* it (a rare few-hundred-cycle target) resumes drawing
+        // the tile map a frame early instead of staying forced white — one
+        // wrong frame at most, not a hang or a corrupt one.
+        self.poweron_fill = if version >= 26 {
+            let poweron = r.bool()?;
+            let poweron_shade = r.u8()?;
+            if poweron {
+                Some(poweron_shade)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        self.pipe.load_state(r, version)?;
         Ok(())
+    }
+
+    /// Test-only mirror of [`Gpu::save_state`] that writes exactly what a
+    /// real writer at `version` produced — `winx_prev` omitted below v25,
+    /// `oam_bus_y`/`oam_bus_x` below v23, `poweron_fill` below v26, and the
+    /// pipeline block delegated to its own [`Pipeline::save_state_as_of`].
+    /// Matches [`Gpu::load_state`]'s gates field for field, so it constructs
+    /// genuinely shorter old-format byte streams for the compatibility tests
+    /// without vendoring a binary fixture. **Never compiled outside
+    /// `cfg(test)`** — see [`crate::savestate::MIN_SUPPORTED_VERSION`].
+    /// `pub(crate)` (not just visible to this module's own tests) so the
+    /// whole-`Cpu` compat test in `cpu::core` can splice a genuinely old GPU
+    /// block into an otherwise-real state — see
+    /// `cpu::core::savestate_compat`.
+    #[cfg(test)]
+    pub(crate) fn save_state_as_of(
+        &self,
+        w: &mut crate::savestate::Writer,
+        version: u16,
+    ) {
+        w.u8(self.mode);
+        w.u32(self.modeclock);
+        w.u8(self.line);
+        w.u8(self.lyc);
+        w.bool(self.lcd_on);
+        w.u16(self.win_tilemap);
+        w.bool(self.win_on);
+        w.u16(self.tilebase);
+        w.u16(self.bg_tilemap);
+        w.u32(self.sprite_size);
+        w.bool(self.sprite_on);
+        w.bool(self.lcdc0);
+        w.bool(self.lyc_inte);
+        w.bool(self.m0_inte);
+        w.bool(self.m1_inte);
+        w.bool(self.m2_inte);
+        w.u8(self.scy);
+        w.u8(self.scx);
+        w.u8(self.winy);
+        w.u8(self.winx);
+        if version >= 25 {
+            w.u8(self.winx_prev);
+        }
+        w.bool(self.wy_trigger);
+        w.i32(self.wy_pos);
+        w.u8(self.palbr);
+        w.u8(self.pal0r);
+        w.u8(self.pal1r);
+        w.bytes(&self.palb);
+        w.bytes(&self.pal0);
+        w.bytes(&self.pal1);
+        w.bytes(&self.vram);
+        w.bytes(&self.voam);
+        w.bool(self.cbgpal_inc);
+        w.u8(self.cbgpal_ind);
+        Self::save_cpal(w, &self.cbgpal);
+        w.bool(self.csprit_inc);
+        w.u8(self.csprit_ind);
+        Self::save_cpal(w, &self.csprit);
+        w.usize(self.vrambank);
+        w.bytes(&self.data[..]);
+        w.bool(self.updated);
+        w.u8(self.interrupt);
+        w.u8(self.gbmode.to_u8());
+        w.bool(self.hblanking);
+        w.bool(self.stat_line);
+        w.bool(self.stat_irq_mid_mcycle);
+        w.bool(self.lyc_match);
+        w.bool(self.skip_first_oam);
+        if version >= 23 {
+            w.u8(self.oam_bus_y);
+            w.u8(self.oam_bus_x);
+        }
+        w.bool(self.stop_fill.is_some());
+        w.u8(self.stop_fill.unwrap_or(0));
+        if version >= 26 {
+            w.bool(self.poweron_fill.is_some());
+            w.u8(self.poweron_fill.unwrap_or(0));
+        }
+        self.pipe.save_state_as_of(w, version);
     }
 
     /// The OAM row the PPU will be scanning `dots` dots from where it stands
@@ -3151,5 +3276,116 @@ mod tests {
         );
         gpu.set_render_pixels(true);
         assert!(gpu.pixels_effective());
+    }
+}
+
+/// Proves the version-gated defaults in [`Gpu::load_state`] against
+/// genuinely shorter old-format byte streams — built with
+/// [`Gpu::save_state_as_of`], not by stamping current bytes with an old
+/// version number, so these exercise real byte-count handling and not just
+/// the `if` conditions in isolation. See `crate::savestate::
+/// MIN_SUPPORTED_VERSION` for the whole compatibility contract this task
+/// implements, and `AGENTS.md`'s save-state section for how the field-level
+/// defaults were chosen. [`fifo::savestate_compat`] covers the equivalent
+/// gates one level down, in [`Pipeline::load_state`].
+#[cfg(test)]
+mod savestate_compat {
+    use super::{Gpu, RenderMode};
+    use crate::savestate::{Reader, Writer, FORMAT_VERSION};
+
+    /// A blob below every field's introducing version (v22) upgrades: the
+    /// window-fetcher fields it lacks default the way [`fifo::
+    /// savestate_compat`] proves; `winx_prev` defaults to the just-loaded
+    /// `winx`; `oam_bus_y`/`oam_bus_x` default to zero; `poweron_fill`
+    /// defaults to `None`. A trailing marker byte proves the reader consumes
+    /// precisely this blob's own length, which is the property that matters
+    /// most at the top of a real save state: get it wrong here and every
+    /// byte written after the GPU block (the APU and MBC blocks) misaligns.
+    #[test]
+    fn a_v22_state_upgrades_and_consumes_exactly_its_own_bytes() {
+        let mut gpu = Gpu::new();
+        gpu.set_render_mode(RenderMode::Accurate);
+        gpu.winx = 42;
+        gpu.skip_first_oam = true;
+        gpu.stop_fill = Some(200);
+
+        let mut w = Writer::new();
+        gpu.save_state_as_of(&mut w, 22);
+        const MARKER: u8 = 0x5A;
+        w.u8(MARKER);
+
+        let mut r = Reader::new(&w.buf);
+        let mut loaded = Gpu::new();
+        loaded
+            .load_state(&mut r, 22)
+            .expect("v22 gpu state should load");
+
+        assert_eq!(loaded.winx, 42);
+        assert!(loaded.skip_first_oam);
+        assert_eq!(loaded.stop_fill, Some(200));
+        assert_eq!(
+            loaded.winx_prev, 42,
+            "documented default: the just-read live winx"
+        );
+        assert_eq!(loaded.oam_bus_y, 0, "documented default: zero");
+        assert_eq!(loaded.oam_bus_x, 0, "documented default: zero");
+        assert_eq!(loaded.poweron_fill, None, "documented default: None");
+
+        assert_eq!(
+            r.u8().unwrap(),
+            MARKER,
+            "load_state did not consume exactly a v22 blob's own length"
+        );
+    }
+
+    /// A v24 blob (window-fetcher fields present, `winx_prev` and
+    /// `poweron_fill` still absent — v24 < 25 and v24 < 26) upgrades the
+    /// same way, at a different point in the version range, and still
+    /// consumes exactly its own length.
+    #[test]
+    fn a_v24_state_upgrades_and_consumes_exactly_its_own_bytes() {
+        let mut gpu = Gpu::new();
+        gpu.winx = 7;
+        gpu.oam_bus_y = 88;
+        gpu.oam_bus_x = 99;
+
+        let mut w = Writer::new();
+        gpu.save_state_as_of(&mut w, 24);
+        const MARKER: u8 = 0x7E;
+        w.u8(MARKER);
+
+        let mut r = Reader::new(&w.buf);
+        let mut loaded = Gpu::new();
+        loaded
+            .load_state(&mut r, 24)
+            .expect("v24 gpu state should load");
+
+        assert_eq!(loaded.oam_bus_y, 88, "v24 already carries this field");
+        assert_eq!(loaded.oam_bus_x, 99);
+        assert_eq!(loaded.winx_prev, 7, "still defaulted below v25");
+        assert_eq!(loaded.poweron_fill, None, "still defaulted below v26");
+        assert_eq!(
+            r.u8().unwrap(),
+            MARKER,
+            "load_state did not consume exactly a v24 blob's own length"
+        );
+    }
+
+    /// `save_state_as_of(.., FORMAT_VERSION)` must be indistinguishable from
+    /// the real production writer — otherwise the "as of" helper would be
+    /// testing a fiction of its own rather than standing in for genuine old
+    /// bytes at the versions below it.
+    #[test]
+    fn save_state_as_of_the_current_version_matches_the_real_writer() {
+        let mut gpu = Gpu::new();
+        gpu.winx = 3;
+        gpu.oam_bus_y = 4;
+        gpu.poweron_fill = Some(255);
+
+        let mut w = Writer::new();
+        gpu.save_state_as_of(&mut w, FORMAT_VERSION);
+        let mut w_prod = Writer::new();
+        gpu.save_state(&mut w_prod);
+        assert_eq!(w.buf, w_prod.buf);
     }
 }

@@ -22,9 +22,14 @@
 //! See `docs/savestates.md` for the full verdict and the block layout.
 //!
 //! ## Safety rails
-//! * A 4-byte magic and a `u16` version are checked first; a version mismatch
-//!   fails loudly ([`StateError::UnsupportedVersion`]) rather than loading
-//!   garbage.
+//! * A 4-byte magic and a `u16` version are checked first. A version outside
+//!   `MIN_SUPPORTED_VERSION..=FORMAT_VERSION` fails loudly
+//!   ([`StateError::UnsupportedVersion`]) rather than loading garbage; a
+//!   version inside that window but older than [`FORMAT_VERSION`] is
+//!   **upgraded** as it is read, one explicit `if version >= N` per field a
+//!   later bump added — see [`MIN_SUPPORTED_VERSION`]'s own doc comment for
+//!   what that promises and what it costs. Nothing is ever guessed: a version
+//!   this constant does not name is refused exactly as before.
 //! * The ROM is **never** stored. We store the cartridge title and its global
 //!   checksum and refuse to load a state against a different game
 //!   ([`StateError::RomMismatch`]).
@@ -125,14 +130,58 @@ pub const MAGIC: [u8; 4] = *b"GBSS";
 /// eighteen dots of a scanline.
 /// v22: and whether the window has pushed its first tile yet, which is what
 /// exempts that one tile from the window pixel-insertion glitch.
+/// v23: `Gpu::oam_bus_y`/`oam_bus_x` — the OAM data bus as the PPU last
+/// latched it (the Y byte during the scan, the tile number during a mode-3
+/// object fetch), which survives from one scanline into the next and is the
+/// whole of `strikethrough.gb`.
 /// v24: the per-dot PPU's window/background fetchers now carry separate tile
 /// counters (`Pipeline::win_fetch_x` beside the existing `fetch_x`, which is
-/// now the background's alone) and an explicit "has this line pushed a tile
+/// now the background's alone), an explicit "has this line pushed a tile
 /// yet" flag that replaces an inference from `bg_len == 0` (ambiguous the
-/// instant a push drains the FIFO to empty). Both are live mid-mode-3.
+/// instant a push drains the FIFO to empty), and the fetcher's addressing
+/// split from its externally-visible flag (`Pipeline::win_active`,
+/// `tile_is_window`, beside the pre-existing `window`). All four are live
+/// mid-mode-3.
 /// v25: `Gpu::winx_prev` — `WX` as of the end of the previous per-dot tick,
 /// one dot staler than the live register. Live only inside mode 3.
+/// v26: `Gpu::poweron_fill` — the forced-blank first frame after `LCDC` bit 7
+/// goes 0→1, mirroring `Gpu::stop_fill`'s shape. Live from that write to the
+/// frame's own VBlank.
 pub const FORMAT_VERSION: u16 = 26;
+
+/// The oldest state version [`crate::cpu::core::Cpu::load_state`] will still
+/// accept, upgrading as it reads rather than refusing outright. Every bump
+/// from this constant up to [`FORMAT_VERSION`] has been checked against its
+/// commit to be **additive only** — a new field, defaulted where an older
+/// state does not carry it, never one removed, reordered, or reinterpreted
+/// under the same layout. That is what keeps this compatible with the rule
+/// this format exists to enforce (see the module docs' "Safety rails"):
+/// loads still reject anything the reader cannot account for, they just
+/// account for more than one prior layout now.
+///
+/// **Raising `FORMAT_VERSION` for a *non-additive* change must raise this
+/// constant to match, in the same commit.** A version below it is refused
+/// with [`StateError::UnsupportedVersion`] exactly as a version above
+/// [`FORMAT_VERSION`] is — an unreviewed old layout must never be handed to a
+/// reader that no longer matches what it wrote.
+///
+/// Every field defaulted on the way up from v22 is transient per-dot PPU
+/// state — see the `if version >= N` comments at each read site
+/// (`Gpu::load_state`, `Pipeline::load_state`) for the specific default and
+/// its cost. `Gpu::oam_bus_y`/`oam_bus_x` (v23) are the one exception worth
+/// calling out on their own: AGENTS.md records them as machine state that
+/// survives *between* scanlines, not just within one, so defaulting them on
+/// an old load can misjudge the very first OAM scan after the state loads —
+/// still no worse than a wrong scanline, never corruption, but the nearest
+/// thing to a real cost this upgrade path has.
+pub const MIN_SUPPORTED_VERSION: u16 = 22;
+
+// Pins the two constants' own relationship at compile time, so an edit that
+// quietly inverted them (raised `MIN_SUPPORTED_VERSION` past `FORMAT_VERSION`,
+// or dropped it below this task's own floor) fails the build rather than
+// silently widening or narrowing what `Cpu::load_state` accepts.
+const _: () = assert!(MIN_SUPPORTED_VERSION <= FORMAT_VERSION);
+const _: () = assert!(MIN_SUPPORTED_VERSION >= 22, "this task's own floor");
 
 /// Everything that can go wrong loading a state. Loads fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,7 +204,8 @@ impl fmt::Display for StateError {
             StateError::BadMagic => write!(f, "not a GBSS save state (bad magic)"),
             StateError::UnsupportedVersion(v) => write!(
                 f,
-                "unsupported save-state version {v} (this build writes v{FORMAT_VERSION})"
+                "unsupported save-state version {v} (this build writes v{FORMAT_VERSION} \
+                 and reads v{MIN_SUPPORTED_VERSION}..=v{FORMAT_VERSION})"
             ),
             StateError::RomMismatch { expected, found } => write!(
                 f,

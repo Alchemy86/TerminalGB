@@ -15,7 +15,9 @@
 
 use std::path::PathBuf;
 use terminalgb::gameboy::Gameboy;
-use terminalgb::savestate::{fnv1a64, StateError, FORMAT_VERSION, MAGIC};
+use terminalgb::savestate::{
+    fnv1a64, StateError, FORMAT_VERSION, MAGIC, MIN_SUPPORTED_VERSION,
+};
 
 // The vendored dmg-acid2 ROM is always present (unlike the gb-test-roms
 // submodule), so this test always has something real to run. It is a full PPU
@@ -260,6 +262,31 @@ fn negative_checks() {
         other => panic!("expected UnsupportedVersion, got {other:?}"),
     }
 
+    // The two edges of the range `load_state` now upgrades rather than
+    // refusing outright — `MIN_SUPPORTED_VERSION..=FORMAT_VERSION`. One below
+    // the floor, and one above the ceiling (the ceiling is what this build's
+    // own `save_state` just wrote, so `FORMAT_VERSION + 1` is the tightest
+    // "too new" boundary available, tighter than the 0xFFFF check above).
+    // Both must still refuse outright, exactly as before this task — only the
+    // versions *inside* the window changed behaviour.
+    let stamp_version = |bytes: &[u8], v: u16| -> Vec<u8> {
+        let mut b = bytes.to_vec();
+        b[4..6].copy_from_slice(&v.to_le_bytes());
+        b
+    };
+    let too_old = stamp_version(&good, MIN_SUPPORTED_VERSION - 1);
+    match gb.load_state(&too_old) {
+        Err(StateError::UnsupportedVersion(v)) => {
+            assert_eq!(v, MIN_SUPPORTED_VERSION - 1)
+        }
+        other => panic!("expected UnsupportedVersion below the floor, got {other:?}"),
+    }
+    let too_new = stamp_version(&good, FORMAT_VERSION + 1);
+    match gb.load_state(&too_new) {
+        Err(StateError::UnsupportedVersion(v)) => assert_eq!(v, FORMAT_VERSION + 1),
+        other => panic!("expected UnsupportedVersion above the ceiling, got {other:?}"),
+    }
+
     // Truncated blob.
     match gb.load_state(&good[..good.len() / 2]) {
         Err(StateError::Truncated) => {}
@@ -280,7 +307,10 @@ fn negative_checks() {
     // Sanity: the good state still loads.
     gb.load_state(&good).expect("good state should still load");
 
-    println!("  negative checks passed (magic / version / truncation / wrong-game all rejected)");
+    println!(
+        "  negative checks passed (magic / version incl. the {MIN_SUPPORTED_VERSION}..=\
+         {FORMAT_VERSION} boundary / truncation / wrong-game all rejected)"
+    );
 }
 
 fn main() {

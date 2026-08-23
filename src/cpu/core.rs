@@ -161,17 +161,29 @@ impl Cpu<'_> {
     }
 
     /// Restore a machine from bytes written by [`Cpu::save_state`]. Fails loudly
-    /// on a bad magic, an unknown version, or a different cartridge, rather than
-    /// loading a subtly corrupt state. The ROM currently loaded is kept.
+    /// on a bad magic, a version outside
+    /// `MIN_SUPPORTED_VERSION..=FORMAT_VERSION` (see
+    /// [`crate::savestate::MIN_SUPPORTED_VERSION`]), or a different
+    /// cartridge, rather than loading a subtly corrupt state. The ROM
+    /// currently loaded is kept.
+    ///
+    /// A version older than [`FORMAT_VERSION`] but at or above
+    /// [`crate::savestate::MIN_SUPPORTED_VERSION`] is **upgraded**, not
+    /// refused: `version` is threaded down to every reader that has grown a
+    /// field since that version, and each one defaults what an older writer
+    /// did not carry — see [`crate::savestate::MIN_SUPPORTED_VERSION`]'s doc
+    /// comment for what that promises.
     pub fn load_state(
         &mut self,
         bytes: &[u8],
     ) -> Result<(), crate::savestate::StateError> {
-        use crate::savestate::{Reader, StateError, FORMAT_VERSION};
+        use crate::savestate::{
+            Reader, StateError, FORMAT_VERSION, MIN_SUPPORTED_VERSION,
+        };
         let mut r = Reader::new(bytes);
         r.expect_magic()?;
         let version = r.u16()?;
-        if version != FORMAT_VERSION {
+        if !(MIN_SUPPORTED_VERSION..=FORMAT_VERSION).contains(&version) {
             return Err(StateError::UnsupportedVersion(version));
         }
 
@@ -194,7 +206,7 @@ impl Cpu<'_> {
         self.stop = r.u32()?;
         self.speed_switch_halt = r.u32()?;
 
-        self.memory.load_state(&mut r)?;
+        self.memory.load_state(&mut r, version)?;
         Ok(())
     }
 
@@ -2151,5 +2163,97 @@ mod stop_tests {
             None,
             "a mode-3 STOP must leave the picture alone"
         );
+    }
+}
+
+/// Proves the whole-`Cpu` upgrade path — `version` reaching
+/// [`crate::gpu::Gpu::load_state`] through [`Cpu::load_state`] and
+/// [`crate::mmu::MemoryManagementUnit::load_state`] — against a state whose
+/// GPU block is genuinely old-shaped, spliced into an otherwise completely
+/// real machine snapshot (registers, MMU, serial, timer, OAM DMA, keypad,
+/// SGB/APU/MBC blocks all real, untouched bytes). This is the automated
+/// counterpart to loading an actual save file written by the last commit at
+/// `FORMAT_VERSION` 22 (`dd584e1`) — see `AGENTS.md`'s save-state section for
+/// that manual demonstration and the exact command.
+#[cfg(test)]
+mod savestate_compat {
+    use super::Cpu;
+    use crate::savestate::{Writer, MIN_SUPPORTED_VERSION};
+
+    /// Splice a genuinely `version`-shaped GPU block into `cpu`'s own real
+    /// `save_state()` bytes. Everything outside the GPU block — registers,
+    /// every MMU field, the serial/timer/OAM-DMA/keypad blocks, the
+    /// SGB/APU/MBC blobs — is `cpu.save_state()`'s own real, unmodified
+    /// output; only the GPU segment is downgraded, via
+    /// [`crate::gpu::Gpu::save_state_as_of`]. Locating that segment needs no
+    /// knowledge of any other field's width: the real (current-format) GPU
+    /// bytes are themselves computed and searched for as a contiguous
+    /// subsequence of the full blob — reliable because that segment carries
+    /// the whole VRAM and framebuffer, which makes it enormous and unique.
+    fn downgrade(cpu: &Cpu, version: u16) -> Vec<u8> {
+        let full = cpu.save_state();
+
+        let mut gpu_current = Writer::new();
+        cpu.memory.gpu.save_state(&mut gpu_current);
+        let needle = gpu_current.buf.as_slice();
+        let pos = full
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("the GPU block must appear verbatim inside the full state");
+
+        let mut gpu_old = Writer::new();
+        cpu.memory.gpu.save_state_as_of(&mut gpu_old, version);
+
+        let mut out = Vec::with_capacity(full.len() - needle.len() + gpu_old.buf.len());
+        out.extend_from_slice(&full[..pos]);
+        out.extend_from_slice(&gpu_old.buf);
+        out.extend_from_slice(&full[pos + needle.len()..]);
+        // Stamp the older version over the real one — everything up to this
+        // point copied the real header bytes, version word included.
+        out[4..6].copy_from_slice(&version.to_le_bytes());
+        out
+    }
+
+    /// A genuinely v22-shaped state — the oldest this build still
+    /// accepts — loads into the current build and the machine keeps running.
+    /// `MIN_SUPPORTED_VERSION` itself is the version under test, so a future
+    /// change that raises the floor exercises exactly the new floor here too.
+    #[test]
+    fn a_v22_shaped_state_loads_and_the_machine_keeps_running() {
+        let rom = vec![0u8; 0x8000]; // ROM-only cartridge, entry point all zero (NOP)
+        let mut source = Cpu::new(rom.clone(), None);
+        for _ in 0..200 {
+            source.do_cycle();
+        }
+        let old = downgrade(&source, MIN_SUPPORTED_VERSION);
+
+        let mut loaded = Cpu::new(rom, None);
+        loaded.load_state(&old).unwrap_or_else(|e| {
+            panic!("v{MIN_SUPPORTED_VERSION} state should load: {e}")
+        });
+
+        // The machine is not merely "not rejected" — it runs on.
+        for _ in 0..1000 {
+            loaded.do_cycle();
+        }
+    }
+
+    /// A version below [`MIN_SUPPORTED_VERSION`] is refused exactly as before
+    /// this task — the reject-on-mismatch rule stays absolute outside the
+    /// named, reviewed window.
+    #[test]
+    fn a_version_below_the_supported_floor_is_still_refused() {
+        let rom = vec![0u8; 0x8000];
+        let mut cpu = Cpu::new(rom, None);
+        for _ in 0..10 {
+            cpu.do_cycle();
+        }
+        let too_old = downgrade(&cpu, MIN_SUPPORTED_VERSION - 1);
+        match cpu.load_state(&too_old) {
+            Err(crate::savestate::StateError::UnsupportedVersion(v)) => {
+                assert_eq!(v, MIN_SUPPORTED_VERSION - 1)
+            }
+            other => panic!("expected UnsupportedVersion, got {other:?}"),
+        }
     }
 }

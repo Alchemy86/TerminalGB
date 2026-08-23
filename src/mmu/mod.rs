@@ -1688,9 +1688,15 @@ impl<'a> MemoryManagementUnit<'a> {
         w.blob(&mbc.buf);
     }
 
+    /// `version` is the state's own format version, already checked by
+    /// [`crate::cpu::core::Cpu::load_state`] to be within
+    /// `MIN_SUPPORTED_VERSION..=FORMAT_VERSION` (see
+    /// [`crate::savestate::MIN_SUPPORTED_VERSION`]) — threaded down only as
+    /// far as the readers that need it (today, [`Gpu::load_state`]).
     pub(crate) fn load_state(
         &mut self,
         r: &mut crate::savestate::Reader,
+        version: u16,
     ) -> Result<(), crate::savestate::StateError> {
         r.fill(&mut self.wram)?;
         r.fill(&mut self.zram)?;
@@ -1744,7 +1750,7 @@ impl<'a> MemoryManagementUnit<'a> {
                 icd.load_state(&mut sr)?;
             }
         }
-        self.gpu.load_state(r)?;
+        self.gpu.load_state(r, version)?;
 
         // APU block. Parse only if this build has a Sound instance to restore
         // into; otherwise the whole block is skipped (its length was consumed).
