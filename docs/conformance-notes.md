@@ -4552,10 +4552,14 @@ Priority-2 audit territory per the standing Gambatte sweep — neither the *very
 corners nor the mid-scanline PPU wall the rest of the 1608-row categorisation converges on).
 Incidentally also `tima/tc00_start_2_cgb04c_outF1` (1 row): a TAC-enable-timing test whose
 expected `TIMA` value at capture is itself downstream of the same boot phase, so it moved as a
-side effect with no code of its own touched. **Not gated by any suite here, but corroborating**:
+side effect with no code of its own touched. **Corroborating, and itself gated but unmoved**:
 BullyGB's own `Invalid initial DIV` self-check, which this repo has carried as a documented,
-un-fixed black screen since `csp/bully` was first scored — see `CGB_BOOT_SYSTEM_COUNTER`'s own
-history in `src/mmu/mod.rs`.
+un-fixed black screen since `csp/bully` was first scored. `bully` is in the Makefile's
+`CSP_SUITES`, so both gates score it against
+`testharness/csp_bully_{,accurate_}baseline.txt`, and it was re-run here: its row is
+**byte-identical in both picture modes** (`bully@cgb = FAIL diff=22893`). It corroborates the
+*value*; the row it draws needs the PPU half as well — see the closing paragraph of this entry
+and `CGB_BOOT_SYSTEM_COUNTER`'s own history in `src/mmu/mod.rs`.
 
 **The hardware fact, with a citation.** There is no Pan Docs entry for this — like every other
 `*_BOOT_SYSTEM_COUNTER` constant in this file, it is boot-ROM-*timing*, not a documented

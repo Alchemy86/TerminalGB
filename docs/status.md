@@ -6,7 +6,8 @@ against every public accuracy suite, what it can do, and what is coming next.
 > **[GB Emulator Shootout](https://gbdev.io/GBEmulatorShootout/): 243 / 264 (92.0 %) — 5th of 19
 > published emulators.** Measured through their manifest and their screenshot comparison, on
 > `main`; the recipe is in [`docs/shootout.md`](shootout.md). It was 223 until `identical`
-> became the default picture engine on 20 August 2026 — fifteen gains, zero losses.
+> became the default picture engine on 20 August 2026 — fifteen gains, zero losses, taking it to
+> 238; the five rows since are later `identical`-only PPU work, not that flip.
 
 *(A styled version of this page, ready for GitHub Pages, is preserved at
 [`docs/status/index.html`](status/index.html) — enabling Pages on this repository publishes it.)*
@@ -144,7 +145,7 @@ does the arithmetic.
 ### Landed (14 August 2026)
 
 - [x] Core timing accuracy pass — *Mooneye acceptance to 67/75, mappers to a clean sweep*
-- [x] Shootout submission — *238/264 measured and packaged*
+- [x] Shootout submission — *243/264 measured and packaged*
 - [x] Two-console link cable and the network protocol — *the foundation for remote trading*
 - [x] Portal v1 — sign in, friends, trades — *built, security-reviewed, 47/47 on its own suite*
 - [x] [Measured documentation section](measured/README.md) — *pages built from our own numbers*

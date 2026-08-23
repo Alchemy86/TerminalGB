@@ -44,8 +44,12 @@ checks were wrong and were found that way rather than by reasoning.
 
 ## What it scores us
 
-Measured with `tools/gbselftest-gate.py` (`make gbselftest`), whose denominator is every
-check the ROM prints and whose skips count in it, both picture modes:
+**Our own two rows** are measured with `tools/gbselftest-gate.py` (`make gbselftest`), whose
+denominator is every check the ROM prints and whose skips count in it, in both picture modes.
+**The four rows below them are not, and `make gbselftest` will not reproduce them**: that script
+drives one adapter with `GBCONFORM_MODEL` fixed to `dmg` and defaults to this repository's own
+`conformance_adapter`, so it cannot score another emulator per console. Those come from the
+GBSelfTest repository's own SameBoy runner and its Peanut-GB adapter.
 
 | machine | result |
 |---|---:|
