@@ -416,7 +416,7 @@ Notes worth having before you read a red build:
   nine are the named-machine variants; all nine pass now, so quote **67/75** rather than the
   community figure — the smaller denominator exists because most emulators model one or two
   consoles, not because the ROMs are unfair.
-* **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At 26/79 the count is
+* **The Mealybug baseline pins the pixel count, not just PASS/FAIL.** At <!--score:mealybug_accurate-->29/79<!--/score--> the count is
   the only number that can show a PPU rewrite making progress instead of a flat wall of red —
   so an intermediate PPU change *will* turn that file red. Read the diff, then re-bless with
   the new counts in the same commit as the change that caused them.
@@ -616,7 +616,7 @@ Three traps, all of which produced convincing-but-wrong results before they were
 | Component | Primary suites | The approximations they will catch |
 |---|---|---|
 | [CPU](components/cpu.md) | Blargg `cpu_instrs`, `instr_timing`, `mem_timing` (**pass**), `halt_bug` (**pass**), `interrupt_time` (**pass**); Mooneye `acceptance/interrupts`, `instr` (gated) | — |
-| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2 (**pass**); Mooneye `acceptance/ppu` (**12/12** on the default engine, gated); Mealybug Tearoom (**26/79**, gated) | Mid-scanline calibration — 45 of Mealybug's 79 rows cannot be won by PPU work at all ([mealybug.md §11](mealybug.md)) |
+| [PPU](components/ppu.md) | dmg-acid2 (**pass, pixel-verified**), cgb-acid2 (**pass**); Mooneye `acceptance/ppu` (**12/12** on the default engine, gated); Mealybug Tearoom (**<!--score:mealybug_accurate-->29/79<!--/score-->**, gated) | Mid-scanline calibration — 45 of Mealybug's 79 rows cannot be won by PPU work at all ([mealybug.md §11](mealybug.md)) |
 | [MMU](components/mmu.md) | Blargg `mem_timing` (**pass**), `oam_bug@dmg` (**pass**); Mooneye `acceptance/oam_dma` (**3/3**), `bits` (**3/3**), SameSuite `dma` (**4/4**) — all gated | VRAM/OAM mode-blocking is **on** in the default `identical` engine and deliberately off in `standard`, where a fixed 172-dot mode 3 would drop writes a game placed legally in HBlank |
 | [MBC](components/mbc.md) | Mooneye `emulator-only/mbc1/2/5`; Blargg `bits-bank1`; **`testharness/battery.rs`** (**pass**, battery-save durability + `.sav` interop) | Banking bit maths; the MBC3-for-everything web/FFI bug |
 | [APU](components/apu.md) | Blargg `dmg_sound` (**12/12 pass**, `audiocapture`), `cgb_sound` (**12/12 pass**, wired into `testroms` 2026-08-14); SameSuite APU (**66/69**, gated) | 3 SameSuite APU rows still red, each on measured evidence |
