@@ -46,7 +46,7 @@ runs it on a real cartridge, and requires the result to equal this machine's **e
 ```
 == host x86_64: building the reference
    frame hash 0x01acf78fe505f31c
-   state bytes 142090
+   state bytes 142102
 
 == aarch64-unknown-linux-musl
    PASS: identical to the host

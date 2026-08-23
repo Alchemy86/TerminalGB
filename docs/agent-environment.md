@@ -163,7 +163,7 @@ while writing this page:
 ```
 == host x86_64: building the reference
    frame hash 0x01acf78fe505f31c
-   state bytes 142093
+   state bytes 142102
 
 == aarch64-unknown-linux-musl     PASS: identical to the host
 == armv7-unknown-linux-musleabihf PASS: identical to the host
@@ -239,8 +239,8 @@ by playing there once and snapshotting.
 
 | | |
 |---|---|
-| size | **142,093 bytes** for a cartridge with no RAM; 174,879 for Pokémon Blue's 32 KiB of battery-backed RAM. It moves when the format does — the Mealybug PPU campaign added two bytes while these pages were being written, and the gate below caught it |
-| format | `GBSS`, versioned (**v22** today), hand-rolled, no dependency |
+| size | **142,102 bytes** for a cartridge with no RAM; 174,888 for Pokémon Blue's 32 KiB of battery-backed RAM. It moves when the format does — the Mealybug PPU campaign added two bytes while these pages were being written, and the gate below caught it |
+| format | `GBSS`, versioned (**v26** today), hand-rolled, no dependency |
 | refuses | a different cartridge (title + global checksum), a bad magic, a version mismatch, a truncated file |
 | does **not** carry | the ROM (states are small and never redistribute a game), plugin state, the server's `frame` counter |
 | where | a numbered slot under `--state-dir`, or an exact `path` you choose |
