@@ -898,9 +898,11 @@ with no `LY` wait — so they measure the counter alone, which is precisely the 
 "one unknown absorbing another" objection below is about. **A second, independent source is
 what the objection asked for and did not have.** See the `div/start_inc` bullet in the
 Gambatte section above and `docs/conformance-notes.md` (2026-08-23) for the derivation.
-**Whether `csp/bully` now passes is deliberately UNVERIFIED**: it is in no gate here, and its
-check still also depends on the PPU's hand-off phase, which nothing in that change touched —
-so the last bullet's "two crews' work" still stands for the PPU half.
+**`csp/bully` IS gated (it is in the Makefile's `CSP_SUITES`) and it was re-run: its row is
+byte-identical in both picture modes**, still `FAIL diff=22893`. So the counter change alone
+does not flip its check — that check still also depends on the PPU's hand-off phase, which
+nothing in that change touched, so the last bullet's "two crews' work" still stands for the
+PPU half.
 
 - **`CGB_BOOT_SYSTEM_COUNTER`'s own doc comment already predicted this.** `$2678` is measured
   by Mooneye `misc/boot_div-cgbABCDE`, whose cartridge header is **DMG** (`$0143 = $00`), so it

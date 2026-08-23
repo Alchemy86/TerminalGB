@@ -114,9 +114,16 @@ with the other machine's numbers.
 | Mealybug Tearoom — pixel-exact rows | <!--score:mealybug:pass-->3<!--/score--> / 79 | **<!--score:mealybug_accurate:pass-->29<!--/score-->** / 79 |
 | Gambatte (5,225 scored rows) | <!--score:csp_gambatte:pass-->3176<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3620<!--/score-->** |
 | GBMicrotest | <!--score:csp_gbmicrotest:pass-->251<!--/score--> / 513 | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / 513 |
-| GBSelfTest (our own cartridge) | 90 / 101 | **99 / 101** |
+| GBSelfTest (our own cartridge) † | 90 / 101 | **99 / 101** |
 | dmg-acid2 against its author's reference | 0 / 23,040 differ | 0 / 23,040 differ |
 | **GB Emulator Shootout, its own 264-row manifest** | 223 | **238** |
+
+† The GBSelfTest figures come from **`tools/gbselftest-gate.py`** (`make gbselftest`), the full
+cartridge gate, whose denominator is every check the ROM prints and whose skips count in it.
+[`docs/gbselftest.md`](gbselftest.md) quotes a **different** instrument —
+`tools/conformance/gbconform.py` against its own `checks-gbselftest.json` manifest, a separately
+scoped subset — so the two pages carry different denominators on purpose and are not in
+disagreement. Neither is baseline-derived, so neither is rewritten by `make status`.
 
 Everything else — the in-repo Blargg harness (<!--score:harness-->46/47<!--/score-->), Mooneye
 `emulator-only` (<!--score:mooneye_emulator_only-->28/28<!--/score-->) and `misc`
