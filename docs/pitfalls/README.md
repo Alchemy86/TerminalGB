@@ -96,6 +96,7 @@ Search this page for the error text you have. Strings are quoted verbatim.
 | references that disagree with each other for the same ROM | [more than one reference means more than one machine](not-our-bug.md#more-than-one-reference-image-means-more-than-one-machine) |
 | closing rows in one suite makes another suite's distance jump | [two suites disagreeing name two machines](not-our-bug.md#two-suites-disagreeing-about-one-address-is-a-statement-about-two-machines) |
 | a red row somebody keeps trying to fix | [a row that must stay red](not-our-bug.md#an-honest-suite-has-deliberate-reds) |
+| every check red at once, each reporting `The job was not started because recent account payments have failed` | [a check that never ran](not-our-bug.md#a-red-check-that-never-ran-is-a-billing-failure-not-a-test-failure) |
 
 ---
 

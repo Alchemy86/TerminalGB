@@ -269,3 +269,58 @@ will ever ask why.
 **How we found it.** It was designed rather than found — but the design is the product of the
 [self-judging harness](tests.md#a-harness-whose-expected-output-is-its-own-output) that
 preceded it.
+
+---
+
+## A red check that never ran is a billing failure, not a test failure
+
+**Symptom, verbatim.** Every check on a pull request is red, and each one reports the same
+sentence instead of a log:
+
+```
+The job was not started because recent account payments have failed or your
+spending limit needs to be increased. Please check the 'Billing & plans'
+section in your settings
+```
+
+**What it looks like.** A repository-wide breakage. Seven checks failing at once across two
+unrelated workflows — the lint job, the embedding build, the test-ROM harness, the external
+suites, both conformance scores and the self-test cartridge — reads as "the branch broke
+something fundamental", and the fundamental thing every one of those jobs has in common is the
+core building at all. The wrong conclusion is that the core does not compile.
+
+**Root cause: no job ran.** GitHub reports a refusal to *start* through the same red tick it
+uses for a failure, and the check name is all a reviewer sees on the pull-request page. Every
+one of those gates was green on the same commit locally: `make lint`, `cargo test --release`,
+the test-ROM harness, `make test-external` and `make test-external-accurate` in both picture
+modes, `make gbselftest`, and the conformance runner on both the submodule and the fetched-ROM
+path. Nothing in the tree was wrong.
+
+**The repository's own contribution to it, which is the part worth fixing.** Both workflows
+were declared `on: [push, pull_request]`. For a branch in this repository with a pull request
+open, that fires **both** events for the same commit, so every push billed two identical runs
+of everything — and "everything" here is not cheap: the external-suites job alone fetches a few
+hundred megabytes of ROMs and scores several thousand rows, and the embedding job runs the core
+under qemu on three further architectures. Confirmed rather than assumed, from the run list:
+one commit, two `CI` runs and two `Conformance (self)` runs, distinguished only by
+`event=push` against `event=pull_request`.
+
+**Resolution.** Limit `push` to `main` (nothing opens a pull request against it, so it would
+otherwise lose coverage entirely) and let `pull_request` cover everything else exactly once;
+then add a `concurrency` group keyed on the workflow and the ref so pushing a fix to a branch
+cancels the superseded run instead of paying for both. `main` is excluded from the cancelling,
+because its runs are the published record. The explanation lives in the workflow files
+themselves, which is where somebody wondering why a branch push produced no run will look.
+
+**Side effects and blast radius.** Coverage is unchanged: every commit that reaches `main`
+still runs both workflows, and every pull request still runs both workflows. What is lost is
+the second, identical run of a branch push, and any run already superseded by a newer push to
+the same branch. A branch pushed with **no** pull request open now gets no run at all — that is
+the deliberate part of the trade, and it is the right way round for a project that develops on
+local branches and opens a pull request when it wants the gates.
+
+**How we found it.** By reading the run list rather than the check names:
+`gh api "repos/<owner>/<repo>/actions/runs" --jq '.workflow_runs[] | "\(.id) \(.name)
+event=\(.event) sha=\(.head_sha[0:7])"'` prints the event beside the commit, and the duplicate
+pairs are then obvious. **Do this before debugging a wall of red checks**: if the runs have no
+logs, there is nothing in the code to find.

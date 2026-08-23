@@ -82,13 +82,27 @@ if [ "$(cat "$DEST/mooneye/.build-id" 2>/dev/null || true)" != "$MTS_BUILD" ]; t
 fi
 
 # --- Mealybug --------------------------------------------------------------
+# Blobless + sparse, the same shape as the shootout checkout below, and for a
+# bigger reason: the repository ships `photos/`, ~62 MB of blurry hardware
+# photographs the author cross-checked his own `expected/` screenshots against.
+# Nothing here reads them — `examples/mealybug` scores against `expected/`, and
+# the two places `photos/` is named in this tree are both prose. A plain
+# depth-1 clone pulled them anyway, and their blobs again into `.git`: 125 MB
+# for a suite whose ROMs and expectations are under 1.5 MB, on every CI run.
+# `src/` and `inc/` are kept because the ROM sources say what each row
+# measures and are worth reading; root files (the prebuilt zip) come with cone
+# mode for free.
 if [ ! -d "$DEST/mealybug/expected" ]; then
     echo "fetching mealybug $MEALYBUG_COMMIT"
     rm -rf "$DEST/mealybug"
     git init -q "$DEST/mealybug"
     git -C "$DEST/mealybug" remote add origin \
         https://github.com/mattcurrie/mealybug-tearoom-tests.git
-    git -C "$DEST/mealybug" fetch -q --depth 1 origin "$MEALYBUG_COMMIT"
+    git -C "$DEST/mealybug" config core.sparseCheckout true
+    git -C "$DEST/mealybug" sparse-checkout init --cone
+    git -C "$DEST/mealybug" sparse-checkout set expected src inc
+    git -C "$DEST/mealybug" fetch -q --depth 1 --filter=blob:none \
+        origin "$MEALYBUG_COMMIT"
     git -C "$DEST/mealybug" checkout -q FETCH_HEAD
     # The repository ships sources AND a prebuilt zip; use the author's build.
     unzip -q -o "$DEST/mealybug/mealybug-tearoom-tests.zip" \
