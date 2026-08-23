@@ -767,6 +767,15 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   `docs/components/ppu.md`'s "NOT modelled" bullet. **Net: of 1608, an estimated ~1400+ are
   the PPU wall, ~200 are deep CPU-timing corners requiring a full model before any attempt,
   and none surveyed this session are a clean, low-risk, isolated fix.**
+- **One exception surfaced in a later pass: `div/start_inc_{1,2}_cgb04c` (2 rows) and
+  `tima/tc00_start_2_cgb04c` (1 row, a side effect) were genuinely un-audited — neither the
+  PPU wall nor the STAT-write-bug family the paragraph above converges on, and not named in
+  the categorisation list. Fixed by splitting `CGB_BOOT_SYSTEM_COUNTER` for a genuine
+  `GbMode::Color` boot from the Mooneye-verified `GbMode::ColorAsClassic` value, derived from
+  gambatte's own hwtests and corroborated by BullyGB's independent sweep. Gambatte
+  3617 → **3620**/5225 (`identical`), 3173 → **3176**/5225 (`standard`), zero rows lost in
+  either mode across the full external gate. Full record:
+  [`docs/conformance-notes.md`](docs/conformance-notes.md) (2026-08-23).
 
 ## GBSelfTest and SameSuite re-confirmed clean; AGE's 49 reds traced to the same two walls
 
