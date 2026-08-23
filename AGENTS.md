@@ -776,12 +776,23 @@ Full record with citations: [`docs/conformance-notes.md`](docs/conformance-notes
   3617 → **3620**/5225 (`identical`), 3173 → **3176**/5225 (`standard`), zero rows lost in
   either mode across the full external gate. Full record:
   [`docs/conformance-notes.md`](docs/conformance-notes.md) (2026-08-23).
-- **The rest of the un-named tail was re-audited the same session and converges on the same
-  two walls, with one narrow exception left explicitly open.** `oamdma`'s remaining failures
-  are its documented `late_sp*` sprite-fetch-vs-transfer rows (PPU wall, already named
-  elsewhere in this file). `irq_precedence`'s CPU-only rows (`if_and_ie_0_*`,
-  `late_if_via_sp_*`) all **pass** already; every failure left there is `late_m0irq_*_scx*`
-  — SCX-dependent mode-3 length, the wall again. **`enable_display`'s `frame0_ly_count_1` is
+- **The rest of the un-named tail was re-audited the same session; PART of it converges on the
+  known walls and the rest is honestly uncharacterized, with one narrow exception left
+  explicitly open.** Counted from `testharness/csp_gambatte_accurate_baseline.txt`,
+  `oamdma/` has **67** failing rows: **20** are the documented `late_sp*`
+  sprite-fetch-vs-transfer rows (PPU wall, already named elsewhere in this file), **26** are
+  `busypush{FEA1,FF01}` variants, and the remaining **21** are other named sub-patterns
+  (`oamdma_late_halt_stat`, `oamdma_src*_busyread`/`busyint`/`busyinc`,
+  `oamdmasrc80_halt_{lyc,m2}irq_read8000`, `oamdmasrc*_hdmasrc`/`speedchange`) that were
+  **not** individually traced — do not read them as `late_sp*` or as any other single named
+  cause. `irq_precedence/` has **16** failing rows: **9** are `late_m0irq_*_scx*`
+  (SCX-dependent mode-3 length, the wall again — its CPU-only `if_and_ie_0_*` and
+  `late_if_via_sp_*` rows all **pass** already), and the other **7** are
+  `hdma_vs_m0_scx*` / `late_hdma_vs_{ei,ie,tima}_scx*` — VRAM-DMA-versus-interrupt precedence
+  timing, a distinct sub-question whose `.asm` sources were opened but not resolved. **So the
+  `late_sp*` and `late_m0irq*` portions are the wall; the other 47 `oamdma` rows and 7
+  `irq_precedence` rows are uncharacterized and left for a future pass.**
+  **`enable_display`'s `frame0_ly_count_1` is
   the one genuine puzzle, and it was deliberately left alone.** It polls `LY` once a scanline
   for a whole frame after an LCD off/on pair and expects the poll to land exactly on the
   boundary for 153 (not 154) lines before the wraparound trips it; the sibling subtest
@@ -916,8 +927,11 @@ PPU half.
   convention*, but fitting one unknown to absorb another would move every CGB-flagged
   cartridge's `DIV`, and so its APU phase and its RNG, on the evidence of a single row. One row
   is not worth that. *(That `$1DC0` is within `$E0` of the `$1EA0` later derived from
-  gambatte's fixed-distance ROMs — the gap being the extra time bully's `LY` wait spends — is
-  the corroboration, not the derivation.)*
+  gambatte's fixed-distance ROMs is the corroboration, not the derivation — and the `$E0` is
+  **not** the extra time bully's `LY` wait spends: both figures are values of the same
+  constant, so that wait is inside the emulation either way, and it is tens of thousands of
+  T-cycles rather than 224. Bully's sweep is confounded by the PPU hand-off phase above, which
+  is why plugging in `$1EA0` leaves its row byte-identical.)*
 - **AND SAMEBOY CANNOT SETTLE IT.** It ships reimplemented boot ROMs: its DMG hands over
   `DIV = $BD` where Mooneye's hardware-verified `boot_div-dmgABCmgb` (which we pass) pins
   `$AB`, and it fails bully's check on **all nine** of its consoles including the ones bully's

@@ -44,16 +44,23 @@ checks were wrong and were found that way rather than by reasoning.
 
 ## What it scores us
 
-Measured with `tools/conformance/gbconform.py`, both picture modes:
+Measured with `tools/gbselftest-gate.py` (`make gbselftest`), whose denominator is every
+check the ROM prints and whose skips count in it, both picture modes:
 
 | machine | result |
 |---|---:|
-| this emulator, `identical` (per-dot) | **96 / 98**, 1 skipped |
-| this emulator, `standard` (whole-scanline) | **87 / 98**, 2 skipped |
+| this emulator, `identical` (per-dot) | **99 / 101**, 1 skipped |
+| this emulator, `standard` (whole-scanline) | **90 / 101**, 2 skipped |
 | SameBoy, DMG and MGB | 97 / 98, 1 skipped |
 | SameBoy, CPU CGB C and CGB E | 93 / 98, 5 skipped |
 | SameBoy, AGB | 94 / 98, 4 skipped |
 | Peanut-GB | 67 / 98, 2 skipped |
+
+**The two denominators are a cartridge vintage, not two instruments.** Our own rows are
+re-measured against the currently pinned 101-check cartridge; the foreign rows below them were
+measured before it grew from 98 and have not been re-run, so they are left at the denominator
+they were taken at rather than rescaled. Their fail-and-skip counts are what to compare, not
+the fractions.
 
 Every row we lose is a gap this project had **already written down**, and that
 is the point of running it:

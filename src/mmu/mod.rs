@@ -225,28 +225,33 @@ const CGB_COMPAT_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
 /// running both ROMs against the result: `0x1EA0` reads back `$1E` after 13
 /// `NOP`s and `$1F` after 14, exactly.
 ///
-/// **A second suite ROM independently corroborates the same ballpark.**
-/// BullyGB's header is `$80` (CGB **and** DMG capable, so it takes this same
-/// genuine path when booted on a Color console) and its very first check
-/// requires `DIV = $1F` a fixed distance after hand-off; with the old, shared
-/// `0x2678` we read `$27` and it prints `Invalid initial DIV`. A blind sweep
-/// against BullyGB alone had already found `$1DC0`-ish satisfies it (see the
-/// history of this constant), which is within `$E0` of the value derived here
-/// from an unrelated ROM — BullyGB waits for `LY >= $90` first, so its read
-/// lands noticeably later than gambatte's fixed 13/14-`NOP` window, and the
-/// gap between the two figures is exactly the extra time that wait spends.
-/// Two independent measurements landing this close is what makes `0x1EA0`
-/// trustworthy rather than a fit to one row — the objection recorded against
-/// touching this constant on BullyGB's evidence alone (see conformance notes)
-/// no longer applies once gambatte's own hwtests are read as a second source.
+/// **A second suite ROM lands in the same ballpark, and the residual gap is a
+/// known confound rather than an explained quantity.** BullyGB's header is
+/// `$80` (CGB **and** DMG capable, so it takes this same genuine path when
+/// booted on a Color console) and its very first check requires `DIV = $1F` a
+/// fixed distance after hand-off; with the old, shared `0x2678` we read `$27`
+/// and it prints `Invalid initial DIV`. A blind sweep against BullyGB alone
+/// had already found `$1DC0`-ish satisfies it (see the history of this
+/// constant) — within `$E0` of the value derived here from an unrelated ROM.
+/// **That `$E0` is NOT the extra time BullyGB's `LY >= $90` wait spends.**
+/// Both figures are candidate values of *this one constant*, so the wait is
+/// already inside the emulation for either of them; and the wait itself is
+/// tens of thousands of T-cycles, nowhere near `$E0` = 224. BullyGB's sweep is
+/// a **confounded** measurement: it was fitted to satisfy BullyGB's check as a
+/// whole, which per the paragraph above also depends on where the boot ROM
+/// leaves the **PPU** — a separate, unverified constant — so an exact match to
+/// a counter-only derivation was never expected. Two figures this close
+/// corroborate that the true value is in this neighbourhood; they do not
+/// resolve to the same number, and the residual is the PPU-phase confound.
 /// BullyGB **is** gated here (`bully` is in the Makefile's `CSP_SUITES`, scored
 /// by `make test-external` / `test-external-accurate` against
 /// `testharness/csp_bully_{,accurate_}baseline.txt`) and it was re-run with
 /// this change: its row is **byte-identical in both picture modes**, still
-/// `FAIL diff=22893`. So this fix alone does **not** flip BullyGB's own
-/// `Invalid initial DIV` check — consistent with the reasoning above, since
-/// that check also depends on the PPU's boot-restart phase, which this does not
-/// touch. It is cited as corroboration for the value, not as a row this moves.
+/// `FAIL diff=22893`. So plugging in `0x1EA0` does **not** flip BullyGB's own
+/// `Invalid initial DIV` check — which is itself the evidence that the residual
+/// gap is that PPU-phase confound, since a pure counter offset of `$E0` in the
+/// right direction would have moved the row. It is cited as corroboration for
+/// the value's neighbourhood, not as a row this moves.
 const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x1EA0;
 
 /// The first DMG revision, from `acceptance/boot_div-dmg0`. Its boot ROM is a
