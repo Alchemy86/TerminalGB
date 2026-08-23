@@ -110,16 +110,18 @@ with the other machine's numbers.
 
 | Gated suite | `standard` | `identical` |
 |---|---:|---:|
-| Mooneye GB `acceptance` | 67 / 75 | **75 / 75** |
-| Mealybug Tearoom — pixel-exact rows | <!--score:mealybug:pass-->3<!--/score--> / 79 | **<!--score:mealybug_accurate:pass-->26<!--/score-->** / 79 |
-| Gambatte (5,225 scored rows) | <!--score:csp_gambatte:pass-->3173<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3613<!--/score-->** |
+| Mooneye GB `acceptance` | <!--score:mooneye_acceptance-->67 / 75<!--/score--> | **<!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->** |
+| Mealybug Tearoom — pixel-exact rows | <!--score:mealybug:pass-->3<!--/score--> / 79 | **<!--score:mealybug_accurate:pass-->29<!--/score-->** / 79 |
+| Gambatte (5,225 scored rows) | <!--score:csp_gambatte:pass-->3176<!--/score--> | **<!--score:csp_gambatte_accurate:pass-->3620<!--/score-->** |
 | GBMicrotest | <!--score:csp_gbmicrotest:pass-->251<!--/score--> / 513 | **<!--score:csp_gbmicrotest_accurate:pass-->338<!--/score-->** / 513 |
-| GBSelfTest (our own cartridge) | 83 / 91 | **89 / 91** |
+| GBSelfTest (our own cartridge) | 90 / 101 | **99 / 101** |
 | dmg-acid2 against its author's reference | 0 / 23,040 differ | 0 / 23,040 differ |
 | **GB Emulator Shootout, its own 264-row manifest** | 223 | **238** |
 
-Everything else — the in-repo Blargg harness (46/47), Mooneye `emulator-only` (28/28) and `misc`
-(8/8), SameSuite (73/76), CasualPokePlayer (4/4) — measures the CPU, the APU, DMA or the cartridge
+Everything else — the in-repo Blargg harness (<!--score:harness-->46/47<!--/score-->), Mooneye
+`emulator-only` (<!--score:mooneye_emulator_only-->28/28<!--/score-->) and `misc`
+(<!--score:mooneye_cgb-->8/8<!--/score-->), SameSuite (<!--score:samesuite-->73/76<!--/score-->),
+CasualPokePlayer (<!--score:cpp-->4/4<!--/score-->) — measures the CPU, the APU, DMA or the cartridge
 mappers, which the picture mode does not reach. Those suites have one baseline each; the three
 external ones are gated in **both** modes against that one file, which is only safe because every
 row of each was measured identical under both.

@@ -179,7 +179,8 @@ HBlank transfer cancels it *and* writes the length register, so `$FF55` then rea
   skipped. That state is **per console** and larger than the handful of values usually
   quoted: the I/O page (`P1=$CF` on a DMG but `$FF` on a Color console *and on an SGB*,
   `IF=$E1`, `LCDC=$91`, `BGP=$FC`, …), the 16-bit system counter's exact value *and phase*
-  (`$ABCC`/`$2678` — see [Timer](timer.md)), where the PPU sits in its frame
+  (`$ABCC` DMG / `$2678` Color-with-a-DMG-cartridge / `$1EA0` Color with a genuine
+  CGB-flagged one — see [Timer](timer.md)), where the PPU sits in its frame
   (`Gpu::set_boot_position` — see [PPU](ppu.md)), and, in compatibility mode, the
   palette-index registers the CGB boot ROM leaves pointing past the compatibility palettes
   (`BCPS=$C8`, `OCPS=$D0`). Mooneye's four `boot_hwio` ROMs walk the whole page byte by byte

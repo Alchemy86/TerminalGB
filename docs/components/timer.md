@@ -115,7 +115,9 @@ What remains approximate:
   No wired test covers it.
 - **The counter is seeded one M-cycle behind the documented hardware value.**
   `Timer::set_boot_counter` takes the value a CPU read observes on the machine's *first*
-  M-cycle (`$ABCC` on a DMG, `$2678` on a Color console) and stores it four T-cycles lower,
+  M-cycle (`$ABCC` on a DMG; on a Color console `$2678` for a DMG-header cartridge and
+  `$1EA0` for a genuine CGB-flagged one, which take different routes through the same boot
+  ROM) and stores it four T-cycles lower,
   because `bus_tick` advances the counter before the access that observes it. That keeps
   every *read* exact, which is what Mooneye `boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE`
   measure. It does leave the timer's tap edges one M-cycle out of phase against those reads
@@ -176,9 +178,12 @@ What remains approximate:
     `enabling_on_the_taps_own_falling_edge_still_increments`, Mooneye
     `timer/rapid_toggle`.)*
 11. **The counter's post-boot value and phase.** At `PC=$0100` a read must see `$ABCC`
-    (DMG) / `$2678` (Color), low bits included. *(Covered:
-    `mmu::boot_state_tests::the_system_counter_boots_with_the_right_phase`, Mooneye
-    `acceptance/boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE` — both pass.)*
+    (DMG) / `$2678` (Color running a DMG-header cartridge) / `$1EA0` (Color running a
+    genuine CGB-flagged one), low bits included. *(Covered:
+    `mmu::boot_state_tests::the_system_counter_boots_with_the_right_phase` and
+    `mmu::timer::tests::a_genuine_cgb_cartridge_boots_div_where_gambatte_measures_it`,
+    Mooneye `acceptance/boot_div-dmgABCmgb` and `misc/boot_div-cgbABCDE` and gambatte
+    `div/start_inc_{1,2}_cgb04c` — all pass.)*
 
 ## 7. Test ROMs that exercise it
 
