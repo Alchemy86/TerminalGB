@@ -239,9 +239,14 @@ const CGB_COMPAT_BOOT_SYSTEM_COUNTER: u16 = 0x2678;
 /// trustworthy rather than a fit to one row — the objection recorded against
 /// touching this constant on BullyGB's evidence alone (see conformance notes)
 /// no longer applies once gambatte's own hwtests are read as a second source.
-/// BullyGB is not gated by any suite here and was not re-verified end to end
-/// (its check also depends on the PPU's boot phase, which this does not
-/// touch); it is cited as corroboration, not as a fixed row.
+/// BullyGB **is** gated here (`bully` is in the Makefile's `CSP_SUITES`, scored
+/// by `make test-external` / `test-external-accurate` against
+/// `testharness/csp_bully_{,accurate_}baseline.txt`) and it was re-run with
+/// this change: its row is **byte-identical in both picture modes**, still
+/// `FAIL diff=22893`. So this fix alone does **not** flip BullyGB's own
+/// `Invalid initial DIV` check — consistent with the reasoning above, since
+/// that check also depends on the PPU's boot-restart phase, which this does not
+/// touch. It is cited as corroboration for the value, not as a row this moves.
 const CGB_BOOT_SYSTEM_COUNTER: u16 = 0x1EA0;
 
 /// The first DMG revision, from `acceptance/boot_div-dmg0`. Its boot ROM is a

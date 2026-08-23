@@ -4606,8 +4606,10 @@ are all unaffected.
 proven: reverting the constant to its old shared value fails it (`left: 38 [0x26], right: 30
 [0x1E]`).
 
-**Not attempted, and flagged rather than guessed at:** BullyGB itself was not re-run end to end
-— its own check also depends on the PPU's boot-restart phase for a CGB cartridge, which this
-fix does not touch (`misc/boot_hwio-C` skips `$FF40`/`$FF41`/`$FF44`, so no suite ROM pins it
-either), so whether `csp/bully` now passes is a genuinely separate question this entry does not
-answer.
+**BullyGB is gated and was re-run — it is UNAFFECTED, not unverified.** `bully` is in the
+Makefile's `CSP_SUITES`, so both gates above scored it, and its row is **byte-identical in both
+picture modes** (`bully@cgb = FAIL diff=22893`, unchanged). So this fix alone does not flip its
+own `Invalid initial DIV` check: that check also depends on the PPU's boot-restart phase for a
+CGB cartridge, which this does not touch (`misc/boot_hwio-C` skips `$FF40`/`$FF41`/`$FF44`, so
+no suite ROM pins it either). BullyGB corroborates the *value*; the row it draws needs the PPU
+half as well.
