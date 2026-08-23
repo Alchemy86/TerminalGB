@@ -327,7 +327,7 @@ INLINE_PAGES = [
     *[os.path.join("docs", "measured", f)
       for f in ("README.md", "scoreboard.md", "ppu.md", "apu.md", "timing.md",
                 "boot.md", "cartridges.md", "symptoms.md", "serial.md", "sgb.md",
-                "host.md")],
+                "host.md", "against-the-field.md")],
     # docs/emulation/ is the conceptual layer (what an emulator is, chip by chip).
     # It quotes suite scores to make a point — "the suite that asks questions
     # inside a scanline is the one we are furthest from" — so it is opted in for
@@ -343,7 +343,8 @@ INLINE_PAGES = [
     # scored, a denominator another project uses — are deliberately left
     # unwrapped and must NOT track the baselines.
     *[os.path.join("docs", "pitfalls", f)
-      for f in ("README.md", "accuracy.md", "tests.md", "not-our-bug.md")],
+      for f in ("README.md", "accuracy.md", "tests.md", "not-our-bug.md",
+                "codes.md")],
     # docs/picture-modes.md's whole argument is a side-by-side score table, so a
     # drifted figure there does not merely age -- it misreports which engine is
     # ahead, which is the one thing the page exists to say. It carried wrapped
@@ -352,6 +353,13 @@ INLINE_PAGES = [
     # looks gated and is not, the same class as the hyphenated-key hole in
     # INLINE_RE below.
     os.path.join("docs", "picture-modes.md"),
+    # docs/testing.md quotes the live Mealybug figure twice as "where we stand",
+    # and README.md is the most-read surface in the repository -- it carried a
+    # score table that disagreed with docs/picture-modes.md's for as long as it
+    # took a human to notice. Both are opted in for the same reason as above:
+    # an ungated live score is one nothing rewrites and nothing verifies.
+    os.path.join("docs", "testing.md"),
+    "README.md",
 ]
 
 # Suite key -> (baseline file, group or None). Group totals are included

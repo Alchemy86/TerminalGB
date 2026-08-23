@@ -4598,8 +4598,9 @@ approximation. `set_initial`'s match arm now tests `self.gbmode == GbMode::Color
 explicitly rather than falling through a single wildcard.
 
 **Measured before/after, both picture modes, the full external gate** (`make test-external` /
-`make test-external-accurate`): Gambatte **3617 → 3620 of 5225** in each mode (the three rows
-above, gain in both), zero rows lost. Mooneye `acceptance`/`emulator-only` (103/103), Mooneye
+`make test-external-accurate`): Gambatte **3173 → 3176 of 5225** on `standard` and
+**3617 → 3620 of 5225** on `identical` — the same three rows above, gained in both modes — with
+zero rows lost in either. Mooneye `acceptance`/`emulator-only` (103/103), Mooneye
 `misc` — the CGB gate that exercises `ColorAsClassic`, unaffected as expected (8/8, both modes,
 `boot_div-cgbABCDE` still green) — SameSuite (73/76), `cpp` (4/4), Mealybug (all 79 rows
 byte-identical) and the other twelve c-sp suites (age, bully, cgb-acid-hell, cgb-acid2,
