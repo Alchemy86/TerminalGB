@@ -54,7 +54,7 @@ zeroed counter the seed is the same every launch, and it is a value hardware nev
 | AGB | `$267C` |
 | SGB / SGB 2 | `$D174` **+ 4 × (zero bits in the cartridge header)** — see below |
 
-Constants at [`src/mmu/mod.rs:56`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L56) onwards.
+Constants at [`src/mmu/mod.rs:207`](https://github.com/Alchemy86/TerminalGB/blob/main/src/mmu/mod.rs#L207) onwards.
 
 **The CGB row is split because a Color console runs two different boot programs.** A
 DMG-header cartridge takes the compatibility path (`$2678`, Mooneye `misc/boot_div-cgbABCDE`,

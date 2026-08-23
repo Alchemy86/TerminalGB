@@ -3265,7 +3265,15 @@ mod boot_state_tests {
     }
 
     fn machine(model: crate::mode::Model) -> MemoryManagementUnit<'static> {
-        let rom = vec![0u8; 0x8000];
+        machine_with_cgb_flag(model, 0x00)
+    }
+
+    fn machine_with_cgb_flag(
+        model: crate::mode::Model,
+        cgb_flag: u8,
+    ) -> MemoryManagementUnit<'static> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0143] = cgb_flag;
         let mut mem = MemoryManagementUnit::new_with_model(rom, None, model).unwrap();
         mem.enable_audio(Box::new(NullPlayer));
         mem
@@ -3513,6 +3521,34 @@ mod boot_state_tests {
         }
         assert_eq!(mem.rb(0xFF04), 0xAC, "DIV has just incremented to $AC");
         mem.set_bus_ticking(false);
+    }
+
+    /// A Color console runs two different boot programs and which one a
+    /// cartridge gets is decided by header byte `$0143` alone — so the claim
+    /// under test is `set_initial`'s own routing, not either constant.
+    ///
+    /// `Timer::set_boot_counter` stores the value four T-cycles low (see its
+    /// own doc comment), so the high byte a read observes before any bus tick
+    /// is `DIV` as `boot_div` / `div/start_inc` measure it. Teeth: swap the two
+    /// `GbMode` arms in `set_initial`, or drop the `ColorAsClassic` guard, and
+    /// this goes red without needing an external suite.
+    #[test]
+    fn a_color_console_boots_div_from_the_cartridge_header() {
+        let mut compat = machine_with_cgb_flag(crate::mode::Model::Cgb, 0x00);
+        assert_eq!(compat.gbmode, GbMode::ColorAsClassic);
+        assert_eq!(
+            compat.rb(0xFF04),
+            0x26,
+            "a DMG-header cartridge takes the compatibility path"
+        );
+
+        let mut genuine = machine_with_cgb_flag(crate::mode::Model::Cgb, 0xC0);
+        assert_eq!(genuine.gbmode, GbMode::Color);
+        assert_eq!(genuine.rb(0xFF04), 0x1E, "a CGB-flagged cartridge does not");
+
+        // A DMG has one path whatever the header says.
+        let mut dmg = machine_with_cgb_flag(crate::mode::Model::Dmg, 0xC0);
+        assert_eq!(dmg.rb(0xFF04), 0xAB);
     }
 
     /// An internally clocked transfer is not instantaneous, and with nothing
