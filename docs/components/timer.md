@@ -144,8 +144,9 @@ What remains approximate:
   what Mooneye `acceptance/serial/boot_sclk_align-dmgABCmgb` proves: a transfer's edges
   align to the counter's reset, not to the `SC` write.
 - **The counter does not start at zero.** It is free-running from power-on, so the boot ROM
-  hands over with it part-way through a cycle — `DIV` reads `$AB` on a DMG, `$26` on a
-  Color console. Games seed RNGs from it.
+  hands over with it part-way through a cycle — `DIV` reads `$AB` on a DMG, and on a Color
+  console `$26` for a DMG-header cartridge or `$1E` for a genuine CGB-flagged one, which
+  take different routes through the same boot ROM. Games seed RNGs from it.
 
 ## 6. Expected behaviours as tests
 

@@ -27,7 +27,7 @@ now resolved):
 > zero losses** row for row, the fifteen named in §1a; the further +2 to 243
 > is `identical`-only — [`mealybug.md` §16](mealybug.md#16-m3_wx_5_changem3_wx_6_change-it-was-never-a-re-trigger-it-was-a-stale-register-read-21-aug-2026).)
 
-That is **5th of 19** by pass count and by percentage, ten rows behind fourth:
+That is **5th of 19** by pass count and by percentage, four rows behind fourth:
 
 | | emulator | score | % |
 |---|---|---:|---:|
@@ -147,7 +147,7 @@ falls straight out of it.
 | `daid/ppu_scanline_bgp` (DMG) | **crashes, not a pixel diff** | needs a real boot ROM — see below |
 | `daid/ppu_scanline_bgp` (GBC) | **2,204-3,309 px** | not a near miss — see below |
 | `daid/speed_switch_timing_{ly,stat}` | — | the PPU-vs-counter phase error `CLAUDE.md` records under `STOP` |
-| `ashiepaws/bully.gb` ×2 | whole screen | the CGB-mode boot counter — a captain-level decision, not a PPU one |
+| `ashiepaws/bully.gb` ×2 | whole screen | **not** the CGB-mode boot counter any more — that was changed to `$1EA0` and this row is byte-identical either side of it; the residual is the PPU's hand-off phase, which no ROM pins ([`conformance-notes.md`](conformance-notes.md), 2026-08-23) |
 | `samesuite` ×2 | — | red on measured evidence, [`measured/apu.md`](measured/apu.md) |
 
 **`cgb-acid-hell` is CLOSED — 21 Aug 2026 — and the whole trace that closed it is
@@ -430,8 +430,8 @@ Two things stay `gameboy` on purpose, and both are load-bearing:
 An earlier scouting report recommended waiting, on the grounds that publishing
 92/264 beside SameBoy's 253 would read worse than we are. That reason is gone.
 
-* We are at **238/264**, which is 5th of 19 and ahead of GSE, bgb, mGBA and
-  binjgb, ten rows behind fourth. Nobody reading that table would think we were
+* We are at **243/264**, which is 5th of 19 and ahead of GSE, bgb, mGBA and
+  binjgb, four rows behind fourth. Nobody reading that table would think we were
   padding it.
 * The board is a snapshot with a date on it, and each emulator has its own
   `workflow_dispatch` CI job — **re-scoring is one button, not a new PR**. So
