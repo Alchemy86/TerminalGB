@@ -961,7 +961,7 @@ collector where the pixel skip is worth 6.7×, or when you want [speed mode](doc
 which `identical` refuses.
 
 **And the honest part:** `identical` is *structurally* right and *part-way* calibrated. It is
-pixel-exact on twenty-six Mealybug rows against the test author's own reference frames and within a
+pixel-exact on twenty-nine Mealybug rows against the test author's own reference frames and within a
 few hundred pixels on several more (`m3_scx_high_5_bits` is **12**). It does not lose a row to
 `standard` anywhere the shootout looks, but it is **not strictly dominant across all 6,210 gated
 rows**: four small Gambatte groups are net-negative on it (`sprites` −3, `lyc153int_m2irq` −2,
