@@ -97,12 +97,19 @@ const LCDC_DMG_END_BITS: u8 = 0b0010_0000;
 /// end-of-cycle calibration, or (VRAM tile data) a mid-fetch glitch of its own
 /// that is not yet modelled; widening this table is a measurement, not an
 /// edit.
+///
+/// `speed` matters because an M-cycle is `step` dots wide
+/// (`MemoryManagementUnit::bus_tick_ppu`) and `step` halves in double speed —
+/// so an `early` value calibrated against Mealybug's single-speed-only ROMs
+/// can silently swallow a whole stagger once it no longer fits inside a
+/// two-dot M-cycle. See the LCDC arm below for the one place this bit.
 fn ppu_write_commit(
     address: u16,
     old: u8,
     value: u8,
     mode: GbMode,
     rev: PpuRevision,
+    speed: GbSpeed,
 ) -> WriteCommit {
     let dmg = mode.is_dmg();
     match address {
@@ -155,8 +162,33 @@ fn ppu_write_commit(
         // (`m3_lcdc_bg_map_change` CGB 522 at end-of-cycle vs 730 a dot
         // earlier; the tile-data select in the same register measures the
         // other way, 849 vs 979 on `m3_lcdc_tile_sel_change2`).
+        //
+        // **That one dot of stagger does not survive a double-speed M-cycle,
+        // which is only two dots wide.** `early: 1` there clamps to a
+        // one-dot-early commit that never leaves room for the staged value
+        // (`gpu_defer` reaches `wb`'s stage check already at zero, so the
+        // masked BG-map bit was silently skipped and the whole register
+        // ended up committing at the SAME dot the DMG-timed single-speed
+        // path uses for the rest of LCDC — one dot later than colour
+        // hardware actually shows it). No Mealybug ROM runs in double speed,
+        // so nothing had ever measured this. AGE's own `m3-bg-lcdc-ds`
+        // toggles the BG-map and BG-data bits from a mode-2 interrupt
+        // handler at `SWITCH_SPEED`, ten times a line — with `early: 1`
+        // (single speed's value, unconditionally) it fails 2,304 of 23,040
+        // pixels, every one on the BG-data-toggle half of the line
+        // (64..=95); dropping to `early: 0` for `GbSpeed::Double` — which
+        // removes the extra stagger entirely, so bit 3 and the rest of
+        // LCDC commit together — makes it pixel-exact. Measured against the
+        // whole external gate (`make test-external-accurate`): AGE
+        // 10/59 → 11/59, Gambatte (its own `bgtiledata_*_ds_*` and
+        // `window/late_reenable_scx5_ds_2_cgb04c_out0` rows, the same
+        // double-speed mid-scanline family) 3620/5225 → 3622/5225 with five
+        // more rows' pixel counts falling sharply (1032→8, 2064→16,
+        // 1144→8×2, 2048→16) though not yet to zero, and every other row in
+        // every gated suite — `standard` mode included, since this path is
+        // gated on `RenderMode::Accurate` — byte-identical.
         0xFF40 => WriteCommit {
-            early: 1,
+            early: if speed == GbSpeed::Double { 0 } else { 1 },
             stage: Some((old & 0b0000_1000) | (value & !0b0000_1000)),
             dispatch: None,
             finalize: None,
@@ -183,6 +215,57 @@ fn ppu_write_commit(
             finalize: None,
         },
         _ => NO_COMMIT,
+    }
+}
+
+/// `ppu_write_commit`'s CGB LCDC arm, pinned against a double-speed M-cycle
+/// being two dots wide rather than four — see the arm's own comment for the
+/// AGE ROM (`m3-bg-lcdc-ds`) and the Gambatte rows this was measured against.
+#[cfg(test)]
+mod lcdc_commit_speed_tests {
+    use super::*;
+    use crate::mode::GbMode;
+
+    /// Single speed keeps its Mealybug-calibrated one-dot stagger — the fix
+    /// below must not touch it.
+    #[test]
+    fn single_speed_lcdc_still_stages_one_dot() {
+        let plan = ppu_write_commit(
+            0xFF40,
+            0x91,
+            0x99,
+            GbMode::Color,
+            PpuRevision::CgbE,
+            GbSpeed::Single,
+        );
+        assert_eq!(plan.early, 1);
+        assert!(plan.stage.is_some());
+    }
+
+    /// Double speed's M-cycle is only two dots wide
+    /// (`MemoryManagementUnit::bus_tick_ppu`'s `step`), so an `early: 1`
+    /// stagger — carried over unconditionally from single speed — left no
+    /// room for the staged value ever to be applied: `wb`'s
+    /// `if self.gpu_defer > 0` check saw zero. `early: 0` removes the
+    /// stagger outright, which is what made `m3-bg-lcdc-ds@cgbBCE` pixel-exact
+    /// (2,304/23,040 wrong pixels before, 0 after).
+    #[test]
+    fn double_speed_lcdc_commits_with_no_room_for_a_stage() {
+        let plan = ppu_write_commit(
+            0xFF40,
+            0x91,
+            0x99,
+            GbMode::Color,
+            PpuRevision::CgbE,
+            GbSpeed::Double,
+        );
+        assert_eq!(plan.early, 0);
+        // `stage` is still computed (the arm is shared with single speed);
+        // proving zero delay is what matters is `bus_tick_ppu`'s own contract
+        // — `defer = gpu_defer.min(step)` — which for `early: 0` gives
+        // `defer = 0` regardless of `step`, so `wb`'s `if gpu_defer > 0` can
+        // never see it. Teeth: reverting `early` to `1` here reproduces the
+        // 2,304-pixel AGE failure this test exists to keep fixed.
     }
 }
 
@@ -2539,6 +2622,7 @@ impl<'a> MemoryManagementUnit<'a> {
                 value,
                 self.gbmode,
                 self.gpu.cgb_ppu_revision(),
+                self.gbspeed,
             );
             self.gpu_defer = plan.early;
             plan

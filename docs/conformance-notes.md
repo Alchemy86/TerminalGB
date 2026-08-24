@@ -4622,3 +4622,74 @@ own `Invalid initial DIV` check: that check also depends on the PPU's boot-resta
 CGB cartridge, which this does not touch (`misc/boot_hwio-C` skips `$FF40`/`$FF41`/`$FF44`, so
 no suite ROM pins it either). BullyGB corroborates the *value*; the row it draws needs the PPU
 half as well.
+
+## 2026-08-24 — the CGB LCDC write-commit stagger does not fit inside a double-speed M-cycle
+
+**Symptom in user terms.** A CGB game that toggles `LCDC` bits mid-scanline while running in
+double speed — the BG tile-data-select bit, in particular — draws the wrong tile source for one
+dot too many, so a scene built out of several such toggles on one line comes out with a visibly
+wrong stripe pattern rather than the intended picture. Nothing in this repository's own test
+suites ever exercised the combination (Mealybug's whole PPU corpus is single-speed only), so it
+went unmeasured until a c-sp suite ROM built specifically to probe it was checked.
+
+**Caught by.** `csp/age-test-roms`' `m3-bg-lcdc/m3-bg-lcdc-ds@cgbBCE` (a mode-2-interrupt-driven
+rapid toggle of the BG tile-map and BG tile-data-select bits, ten repetitions a line, the whole
+thing run after `SWITCH_SPEED`): FAIL, 2,304 of 23,040 pixels wrong, every one of them on the
+tile-data-select half of the test (screen rows 64-95; the earlier tile-map half, rows 31-62,
+already passed). Its single-speed sibling `m3-bg-lcdc@cgbBCE` — same ROM logic, same reference
+picture, no `SWITCH_SPEED` — was already pixel-exact, which is what pointed at the speed switch
+rather than at the toggle logic itself. Corroborated independently by
+`csp/gambatte`'s own double-speed `bgtiledata/bgtiledata_spx0{8,9}_ds_*` and
+`window/late_reenable_scx5_ds_2_cgb04c_out0` rows — a different author's ROMs, the same
+double-speed-mid-scanline-LCDC family, previously wrong by up to 2,064 of 23,040 pixels.
+
+**The hardware behaviour being violated, with a citation.** `ppu_write_commit`'s CGB `0xFF40`
+arm (`src/mmu/mod.rs`) already models colour hardware's LCDC visibility as one dot later than the
+rest of the register commits (docboy, `"CGB is not affected — it sees LCDC delayed by 2
+T-Cycles by default"`), via a one-dot `early` stagger. That stagger was calibrated exclusively
+against Mealybug's single-speed ROMs — nothing in this project had ever run the same write
+through a double-speed M-cycle. `MemoryManagementUnit::bus_tick_ppu`'s own `step` is 4 dots in
+single speed and **2 dots in double speed** (the PPU's dot clock is fixed; only the CPU's own
+clock doubles), so a one-dot stagger that fits comfortably inside a 4-dot M-cycle consumes the
+entirety of a 2-dot one — the deferred "stage" value that is meant to hold the BG-map bit back a
+dot longer than the rest of the register never gets applied (`wb`'s `if self.gpu_defer > 0` check
+sees zero by the time it runs), and the write silently commits at the *same* time the DMG's own
+(unstaged) bits do, which is wrong for colour hardware.
+
+**The fix.** `ppu_write_commit` now takes the running `GbSpeed`, and the CGB LCDC arm sets
+`early: 0` for `GbSpeed::Double` (`early: 1`, unchanged, for `GbSpeed::Single`) — removing the
+stagger outright rather than leaving it silently truncated. `early: 0` means the whole register
+commits together after `step` (two) dots, with no partial staging: this is not a scaled-down
+version of the single-speed model, it is the simplest model that fits inside the M-cycle it is
+being asked to model.
+
+**Measured before/after, both picture modes, the full external gate** (`make test-external` /
+`make test-external-accurate`): AGE **10 → 11 of 59**
+(`m3-bg-lcdc-ds@cgbBCE` FAIL→PASS); Gambatte `identical` **3620 → 3622 of 5225**
+(`bgtiledata_spx09_ds_2@cgb04c-png` and `window/late_reenable_scx5_ds_2_cgb04c_out0@cgb04c` both
+FAIL→PASS), plus five more rows' pixel counts falling sharply though not yet to zero
+(`bgtiledata_spx08_ds_3` 1032→8, `_ds_4` 2064→16, `bgtiledata_spx09_ds_1` 1144→8, `_ds_3` 1144→8,
+`_ds_4` 2048→16 — recorded honestly rather than re-blessed away, per the standing rule). `standard`
+mode is untouched in every suite (this path is gated on `RenderMode::Accurate`), confirmed by a
+full `make test-external` re-run. Mooneye `acceptance`/`emulator-only` (103/103), Mooneye `misc`
+(8/8), SameSuite (73/76), `cpp` (4/4), Mealybug (all 79 rows byte-identical — the suite never runs
+double speed) and the remaining eleven c-sp suites (bully, cgb-acid-hell, cgb-acid2, gbmicrotest,
+little-things-gb, mbc3-tester, mooneye-wilbertpol, rtc3test, scribbltests, strikethrough,
+turtle-tests) all match their checked-in baselines exactly in both modes. The in-repo harness
+(`cargo test --release --test testroms`, 46/47, `oam_bug@cgb` the one permanent red),
+`savestate`, `bootrom`, `battery`, `ppuengines` and the full `cargo test --release --lib`
+(908 passing) are all unaffected. GBSelfTest (`tools/gbselftest-gate.py`) still matches its
+documented per-mode gap list exactly on both engines.
+
+**New test:** `mmu::lcdc_commit_speed_tests::{single_speed_lcdc_still_stages_one_dot,
+double_speed_lcdc_commits_with_no_room_for_a_stage}` — pins `ppu_write_commit`'s CGB LCDC arm
+against both speeds directly, no ROM needed. Teeth proven: reverting `early` to `1`
+unconditionally reproduces the 2,304-pixel `m3-bg-lcdc-ds@cgbBCE` failure this fix closes.
+
+**What is NOT yet done.** The five improved-but-still-failing `bgtiledata_*_ds_*` rows above are
+close (8-16 pixels out of 23,040) but not zero, and `bgtiledata_spx09_ds_2`'s exact pass while
+its `_1`/`_3`/`_4` siblings remain a handful of pixels short suggests a small residual timing
+question distinct from the stagger fixed here — most likely the same "fetcher is one dot short
+at the head of a line" class this project's own Mealybug work already names as a multi-week
+per-tile-calibration project (`docs/mealybug.md` §8.9), now showing up in double speed as well.
+Not attempted here; flagged for whoever picks up that project next.

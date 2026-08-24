@@ -34,18 +34,18 @@ bgtiledata/bgtiledata_spx08_4@cgb04c-png = PASS
 bgtiledata/bgtiledata_spx08_4@dmg08-png = PASS
 bgtiledata/bgtiledata_spx08_ds_1@none = SKIP no expectation (disabled upstream, or a state dumper)
 bgtiledata/bgtiledata_spx08_ds_2@none = SKIP no expectation (disabled upstream, or a state dumper)
-bgtiledata/bgtiledata_spx08_ds_3@cgb04c-png = FAIL diff=1032
-bgtiledata/bgtiledata_spx08_ds_4@cgb04c-png = FAIL diff=2064
+bgtiledata/bgtiledata_spx08_ds_3@cgb04c-png = FAIL diff=8
+bgtiledata/bgtiledata_spx08_ds_4@cgb04c-png = FAIL diff=16
 bgtiledata/bgtiledata_spx09_1@cgb04c-png = PASS
 bgtiledata/bgtiledata_spx09_1@dmg08-png = PASS
 bgtiledata/bgtiledata_spx09_2@dmg08-png = PASS
 bgtiledata/bgtiledata_spx09_3@cgb04c-png = PASS
 bgtiledata/bgtiledata_spx09_3@dmg08-png = PASS
 bgtiledata/bgtiledata_spx09_4@dmg08-png = PASS
-bgtiledata/bgtiledata_spx09_ds_1@cgb04c-png = FAIL diff=1144
-bgtiledata/bgtiledata_spx09_ds_2@cgb04c-png = FAIL diff=240
-bgtiledata/bgtiledata_spx09_ds_3@cgb04c-png = FAIL diff=1144
-bgtiledata/bgtiledata_spx09_ds_4@cgb04c-png = FAIL diff=2048
+bgtiledata/bgtiledata_spx09_ds_1@cgb04c-png = FAIL diff=8
+bgtiledata/bgtiledata_spx09_ds_2@cgb04c-png = PASS
+bgtiledata/bgtiledata_spx09_ds_3@cgb04c-png = FAIL diff=8
+bgtiledata/bgtiledata_spx09_ds_4@cgb04c-png = FAIL diff=16
 bgtiledata/bgtiledata_spx0A_1@cgb04c-png = PASS
 bgtiledata/bgtiledata_spx0A_1@dmg08-png = PASS
 bgtiledata/bgtiledata_spx0A_2@cgb04c-png = PASS
@@ -5108,7 +5108,7 @@ window/late_reenable_scx5_2_dmg08_out3_cgb04c_out0@cgb04c = PASS
 window/late_reenable_scx5_3_dmg08_cgb04c_out0@dmg08 = FAIL out=0 not drawn
 window/late_reenable_scx5_3_dmg08_cgb04c_out0@cgb04c = PASS
 window/late_reenable_scx5_ds_1_cgb04c_out3@cgb04c = PASS
-window/late_reenable_scx5_ds_2_cgb04c_out0@cgb04c = FAIL out=0 not drawn
+window/late_reenable_scx5_ds_2_cgb04c_out0@cgb04c = PASS
 window/late_reenable_wx0f_1_dmg08_cgb04c_out3@dmg08 = PASS
 window/late_reenable_wx0f_1_dmg08_cgb04c_out3@cgb04c = PASS
 window/late_reenable_wx0f_2_dmg08_cgb04c_out0@dmg08 = PASS

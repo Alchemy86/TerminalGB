@@ -30,9 +30,9 @@ yourself proves nothing.
 | [SameSuite](measured/scoreboard.md) | **73** / 76 | same | audio hardware, DMA, Super Game Boy |
 | CasualPokePlayer (`cpp`) | **4** / 4 | same | MBC3 real-time clock + SGB |
 | [Mealybug Tearoom](measured/scoreboard.md) | **29** / 79 | 3 / 79 | mid-scanline picture timing — pixel-exact rows |
-| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3620** / 5225 | 3176 / 5225 | the largest suite there is — mostly PPU, per console |
+| [Gambatte](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **3622** / 5225 | 3176 / 5225 | the largest suite there is — mostly PPU, per console |
 | [GBMicrotest](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **339** / 513 | 252 / 513 | low-level timing probes, each writing its own verdict byte |
-| [AGE test roms](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **10** / 59 | 3 / 59 | timing, per console revision |
+| [AGE test roms](measured/scoreboard.md#the-c-sp-aggregation--thirteen-suites-measured-for-the-first-time) | **11** / 59 | 3 / 59 | timing, per console revision |
 | Mooneye GB — wilbertpol fork | **82** / 117 | 62 / 117 | the 2016 suite, a different population from Gekkio's |
 | cgb-acid2 + cgb-acid-hell | **2** / 2 | 1 / 2 | the Color siblings of dmg-acid2, judged in colour |
 | Bully / Scribbltests / Strikethrough / TurtleTests / little-things-gb / MBC3 Tester / rtc3test | **23** / 24 | 19 / 24 | screenshot-judged odds and ends, plus the cartridge clock |

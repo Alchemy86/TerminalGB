@@ -13244,3 +13244,47 @@ unchanged:
   3,620/5,225 identical**, exact match, no drift since `3a51931`.
 - **Internal library tests: 906/906**, matching the stated baseline exactly (plus 1 pre-existing
   `#[ignore]`d test, unrelated to this session).
+
+## The CGB LCDC write-commit stagger did not fit inside a double-speed M-cycle
+
+**A one-fix session, `identical` only** (`standard` is untouched — `ppu_write_commit`, the
+function this touches, is gated on `RenderMode::Accurate`). Full write-up with the mechanism, the
+hardware citation and every measured number: [`docs/conformance-notes.md`](docs/conformance-notes.md)
+(2026-08-24).
+
+- **`ppu_write_commit`'s CGB `$FF40` arm was calibrated ONLY against Mealybug, and Mealybug never
+  runs double speed.** Its one-dot stagger (holding the BG-map bit back a dot longer than the
+  rest of LCDC) fits inside a single-speed M-cycle (4 dots) but consumes the *entirety* of a
+  double-speed one (2 dots — the PPU's dot clock is fixed, only the CPU's own clock doubles), so
+  the deferred stage value was silently never applied: the write committed at the same dot the
+  DMG's unstaged bits do, one dot too early for colour hardware. **`early` is now `0` for
+  `GbSpeed::Double`** (`1`, unchanged, for `GbSpeed::Single`) — not a scaled-down stagger, the
+  simplest model that actually fits inside the M-cycle it commits within.
+- **Caught by `csp/age-test-roms`' `m3-bg-lcdc-ds@cgbBCE`** (a mode-2-interrupt-driven LCDC
+  toggle loop run after `SWITCH_SPEED`) and independently corroborated by `csp/gambatte`'s own
+  double-speed `bgtiledata_*_ds_*` / `window/late_reenable_scx5_ds_2_cgb04c_out0` rows — two
+  different authors' ROMs, the same double-speed-mid-scanline-LCDC family.
+- **Measured, full external gate, both directions:** AGE **10 → 11/59**; Gambatte `identical`
+  **3620 → 3622/5225** plus five more rows' pixel counts falling sharply (1032→8, 2064→16,
+  1144→8×2, 2048→16) without reaching zero — recorded honestly in the baseline, not re-blessed
+  away. `standard` mode, Mooneye (both), SameSuite, `cpp`, Mealybug (all 79 rows — no double-speed
+  ROM in the suite) and the other eleven c-sp suites all byte-identical. In-repo `testroms`
+  46/47, `savestate`/`bootrom`/`battery`/`ppuengines` unaffected, `cargo test --release --lib`
+  908/908 (906 before + the 2 new tests), GBSelfTest still matches its documented per-mode gap
+  list on both engines.
+- **New test:** `mmu::lcdc_commit_speed_tests::{single_speed_lcdc_still_stages_one_dot,
+  double_speed_lcdc_commits_with_no_room_for_a_stage}`, device-free.
+- **What is not yet closed:** the five improved-but-still-failing `bgtiledata_*_ds_*` rows (8-16
+  of 23,040 px) look like the already-named "fetcher is one dot short at the head of a line"
+  class (`docs/mealybug.md` §8.9), now showing up in double speed too — not attempted here.
+- **General lesson for this class of bug:** a commit-timing constant calibrated against a suite
+  that only ever exercises ONE speed mode is untested in the other. Before trusting any
+  `ppu_write_commit` arm's behaviour in double speed, check whether anything in the gated suites
+  actually runs one — Mealybug does not, and c-sp's `age`/`gambatte` double-speed rows are the
+  only suites here that do.
+
+**Re-measured the whole external gate at this session's end, `identical` mode, non-skip
+pass/total:** previous session's own closing figure was **4,293/6,210**; this session's one fix
+adds AGE +1 and Gambatte +2, giving **4,296/6,210**. `standard` mode is unchanged at
+**3,696/6,210**. `cargo test --release --lib`: **908/908** (906 + the 2 new tests), plus the same
+1 pre-existing `#[ignore]`d test.
