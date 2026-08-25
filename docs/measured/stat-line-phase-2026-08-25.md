@@ -104,8 +104,9 @@ gbmicrotest  accurate LOSES  13
 The losses fall in the *same groups* as the wins (`window` 107 lost / 137 won, `lycEnable`
 34 / 49, `m1` 33 / 54, `m0enable` 16 / 46) — a phase difference, not a missing feature.
 
-The gbmicrotest thirteen are the sharpest evidence in the whole set, because they are
-off-by-one and one engine is right:
+The gbmicrotest thirteen are off-by-one with one engine right — but **§6 shows they are
+resolving `DIV`, not the interrupt line, so read them as a separate question rather than
+as corroboration of §2**:
 
 | row | `standard` | `identical` |
 |---|---|---|
@@ -120,7 +121,8 @@ off-by-one and one engine is right:
 
 `oam_int_if_edge_a` and `_c` are a **mirror pair** — one wants the flag set and gets it
 clear, the other the exact reverse — which is what a boundary one position off looks like
-and what a missing behaviour never does. The four `poweron_*` rows are a different axis:
+and what a missing behaviour never does. (Those two read `IF` rather than `DIV`, so unlike
+their `lyc*_int_*` neighbours they are not caught by §6's retraction.) The four `poweron_*` rows are a different axis:
 `standard` passes them by not modelling VRAM/OAM blocking at all, and they belong with
 `boot_ppu_dot`.
 
@@ -147,6 +149,63 @@ predates several PPU fixes and might have gone stale. It has not, and the trade 
 than recorded: gbmicrotest **339/513 → 339/513 (no gain at all)**, Mooneye still 103/103
 (the halt-late compensation carries it), and Mealybug **29 → 10 pixel-exact rows**. Keep
 the lead at 4.
+
+## 6. A third and fourth model, and the sharpest result in the set
+
+**`LYC_STROBE_LEAD` — a lead on the LYC *interrupt* term only.** The code already
+separates an interrupt source from the register that reports it (`hblank_strobe` versus
+the `STAT` mode bits), so the minimal expression of §3's model is to lead the LYC term in
+`stat_signal` while leaving `lyc_signal` — which `STAT` bit 2 reads — where it is.
+Implemented and measured at both distinguishable values (the CPU samples on M-cycle
+boundaries, so leads 1-4 are one machine and 5-8 another):
+
+| | ladder | Mooneye | Mealybug | gbmicrotest | Gambatte |
+|---|---|---|---|---|---|
+| lead 0 (shipping) | flips 6→7 | 103/103 | 29 | 339 | 3622 |
+| **lead 4** | **9/9 exact** | 103/103 | 29 | 337 | 3631 |
+| lead 8 | flips 9→✗ | 103/103 | 29 | 337 | 3529 |
+
+**Mooneye and Mealybug do not move by a single row at either value** — which is §3's
+prediction confirmed, and it is the most useful thing here: those two suites genuinely
+cannot see this axis, so their being green is not evidence that it is right.
+
+**Lead 4 makes the ladder hardware-exact and is still rejected.** Gambatte gains 448 and
+loses 439, in the *same groups on both sides* (`sprites` 202 gained against 203 lost). That
+is a boundary being dragged across a population, not a defect being fixed —
+`AGENTS.md`'s own rule: *a knob that trades tests one-for-one is not modelling anything*.
+The +9 net is noise on a 900-row swap.
+
+### The gbmicrotest rows are DIV-quantised, and that RETRACTS part of §4
+
+The trade there is the clean signal: lead 4 gains `lyc1_int_halt_a`, `lyc1_int_nops_a`,
+`lyc2_int_halt_a`, `lyc_int_halt_a` and loses `lyc1_int_halt_b`, `lyc1_int_nops_b`,
+`lyc2_int_halt_b`, `lyc_int_halt_b`. Reading the sources, `_a` and `_b` are **one `nop`
+apart** and every one of them finishes with `ldh a, (DIV)`:
+
+```
+lyc1_int_nops_a.s:  nops 25   test_finish_div 1
+lyc1_int_nops_b.s:  nops 26   test_finish_div 2
+```
+
+So they do not measure the interrupt's phase — they measure **elapsed `DIV`**, and they
+resolve it to 4 T-cycles. Hardware's `DIV` boundary falls *inside* the pair; ours falls
+outside it on one side at lead 0 (both read 2) and outside on the other at lead 4 (both
+read 1). Solving that: our residual is **δ ∈ (0, 4) T-cycles — strictly sub-M-cycle**.
+
+**A sub-M-cycle residual cannot be an interrupt-dispatch phase error at all**, because the
+CPU only ever acts on the interrupt line at an M-cycle boundary; moving the strobe within
+an M-cycle changes nothing it can observe. It has to be the phase of **`DIV` itself
+relative to the PPU**. So these thirteen rows are a *separate question* from §2's ladder,
+and §4's reading of them as corroboration is withdrawn: they move when the LYC strobe
+moves, but what they are actually resolving is a different clock.
+
+The ladder is the clean instrument — pure `IF`, no `DIV` anywhere in it.
+
+**And the obvious follow-up is also a measured negative.** If the residual is the LCD-on
+restart phase (`Gpu::modeclock = 4` in the `LCDC` bit 7 0→1 arm, which every one of these
+tests goes through), a value one to three dots higher would shorten that first line and
+pull the interrupt earlier. Swept: gbmicrotest **339 → 312 (5), 311 (6), 287 (7)**. The
+shipping 4 is right and this is not where the residual lives.
 
 ## Reproducing
 

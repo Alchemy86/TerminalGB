@@ -13244,17 +13244,18 @@ being built, not after") plus a model to replace the sweep it forbade.
 - **459 ROWS WHERE THE *DEFAULT* ENGINE LOSES TO THE CHEAPER ONE — nobody had enumerated
   them.** gambatte: `identical` loses **446** and wins 892; gbmicrotest: loses **13**. The
   losses sit in the *same groups* as the wins (`window` 107/137, `lycEnable` 34/49,
-  `m1` 33/54), which is a phase difference and not a missing feature. The gbmicrotest
-  thirteen are the sharpest evidence anywhere in the set — off by exactly one M-cycle, with
-  `oam_int_if_edge_a`/`_c` a **mirror pair** (one wants the flag set and gets it clear, the
-  other the exact reverse), which is what a boundary one position off looks like and what a
-  missing behaviour never does.
+  `m1` 33/54), which is a phase difference and not a missing feature. Of the gbmicrotest
+  thirteen, `oam_int_if_edge_a`/`_c` are a **mirror pair** (one wants the flag set and gets
+  it clear, the other the exact reverse) — what a boundary one position off looks like and
+  what a missing behaviour never does. **But the `lyc*_int_*` majority of them read `DIV`,
+  not `IF`, so they resolve a different clock — see the retraction below; do not quote them
+  as corroboration of the ladder.**
 - **THE METHOD WORTH REUSING: when the two engines disagree and one matches hardware, that
   is a bisect, not a guess.** Diffing the engines localises a defect with no hardware
   speculation at all. This repository has had that tool since the per-dot engine landed and
   had never used it this way.
 
-### Two models tested and REJECTED, with numbers — do not repeat them
+### FOUR models tested and REJECTED, with numbers — do not repeat them
 
 - **Scaling the strobe leads with the CPU clock.** `OAM_STROBE_LEAD`/`VBLANK_STROBE_LEAD`
   are 4 *dots* and the former's doc comment says its whole content is "asserted inside an
@@ -13269,6 +13270,26 @@ being built, not after") plus a model to replace the sweep it forbade.
   file predates several PPU fixes. It has not gone stale and the trade is **worse** than
   recorded: gbmicrotest **339/513 → 339/513 (no gain at all)**, Mooneye still 103/103 (the
   halt-late compensation carries it), Mealybug **29 → 10** pixel-exact. Keep it at 4.
+- **A LEAD ON THE LYC *INTERRUPT* TERM ONLY — the minimal expression of the model above,
+  and it MAKES THE LADDER HARDWARE-EXACT AND IS STILL WRONG.** At lead 4 the ladder goes
+  9/9, Mooneye and Mealybug do not move by a single row (the prediction, confirmed) — and
+  Gambatte **gains 448 while losing 439, in the same groups on both sides** (`sprites` 202
+  gained against 203 lost). A boundary dragged across a population, not a defect fixed; the
+  +9 net is noise on a 900-row swap. Lead 8 overshoots to `standard`'s late behaviour
+  (3529). **This file's own rule applies: a knob that trades tests one-for-one is not
+  modelling anything.**
+- **THE `lyc*_int_*` GBMICROTEST ROWS MEASURE `DIV`, NOT THE INTERRUPT — and that retracts
+  reading them as corroboration.** `_a`/`_b` are **one `nop` apart** and both end
+  `ldh a, (DIV)` (`lyc1_int_nops_a.s`: `nops 25` / `test_finish_div 1`; `_b`: 26 / 2), so
+  they resolve elapsed **`DIV`** to 4 T-cycles. Hardware's `DIV` boundary falls *inside*
+  the pair and ours falls outside it either way, which solves to a residual of
+  **δ ∈ (0,4) T — strictly sub-M-cycle**. A sub-M-cycle residual **cannot** be an
+  interrupt-dispatch phase error, because the CPU only acts on the line at an M-cycle
+  boundary: it is the phase of **`DIV` relative to the PPU**, a different question.
+- **The LCD-on restart phase is not where that residual lives either.** Every one of those
+  tests goes through the `LCDC` bit 7 0→1 arm, so a `Gpu::modeclock` one to three dots
+  higher would shorten the first line and pull the interrupt earlier. Swept: gbmicrotest
+  **339 → 312 (5), 311 (6), 287 (7)**. The shipping `4` is right.
 
 ### `not drawn` WAS MISLEADING ON 99 % OF ITS OWN ROWS, AND THE GATE WAS BLIND TO A WHOLE CLASS OF REGRESSION
 
