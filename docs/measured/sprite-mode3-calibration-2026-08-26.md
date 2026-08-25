@@ -1,5 +1,14 @@
 # The sprite half of the mid-scanline wall, calibrated to the dot
 
+> **PARTLY SUPERSEDED, 2026-08-27.** §3 and §5's "parity split" — stems needing `+2` and
+> `+4`, and a constant three dots no integer shift could express — was an artefact of the
+> probe used here, which could find the mode 3 → 0 boundary on a *different line* from the
+> one the ROM measures. Scored by the ROMs' own verdicts instead, the structure is a single
+> sharp optimum at a three-dot mode-3 tail (104 of 113 pairs fixed, none made worse), and it
+> is rejected for a different and stronger reason. See
+> [`mode3-phase-2026-08-27.md`](mode3-phase-2026-08-27.md) §0. Everything else on this page
+> — the instrument, the OBJ penalty's exoneration, the model table — stands.
+
 Measured 2026-08-26 on `e4edb9a`. **No emulator change is landed here** — `src/` is
 byte-identical to the branch point, and both picture engines cost exactly what they cost
 before. What *is* landed is the calibration this wall had never had, and it changes the

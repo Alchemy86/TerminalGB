@@ -13377,6 +13377,49 @@ and the fetcher's arithmetic turns out to be **correct**.
   read happens on. ROMs that write `LCDC` with the LCD already on (`sprites/space`) do not
   restart and are safe; ones that do `xor a; ldff(40),a` first are not.
 
+## THREE SUITES, THREE ANCHORS, AND NO CONSTANT THAT SATISFIES ALL THREE
+
+**Full record: [`docs/measured/mode3-phase-2026-08-27.md`](docs/measured/mode3-phase-2026-08-27.md).**
+A second honest negative on the same wall, and it **corrects the previous entry**.
+
+- **THE "PARITY SPLIT" IN THE PREVIOUS ENTRY WAS A PROBE ARTEFACT — do not build on it.**
+  That probe searched for the mode 3 → 0 boundary from the moment OBJ was enabled and could
+  find it on an **earlier line** than the one the ROM measures. Worse, it sampled at CPU
+  instruction boundaries, and the ISR's instructions are not uniform (`ldff a,(c)` 2
+  M-cycles, `and` 1, `jp` 4), so after the read the grid is irregular. **The right
+  instrument needs no probe at all: count the pairs whose BOTH variants pass.** Baseline is
+  0 of 113 (105 `v2`-only, 8 `v1`-only).
+- **SCORED THAT WAY THERE IS A SHARP OPTIMUM AT THREE DOTS, AND IT IS ONE-DIRECTIONAL.**
+  A mode-3 tail of 0/2/3/4 dots gives **0 / 33 / 104 / 71** both-pass pairs of 113, with the
+  `v1`-only column pinned at 8 throughout and nothing ever landing in `neither` — Gambatte
+  3622 → **3798**, Mealybug untouched at 29.
+- **AND IT IS STILL WRONG, FOR A STRONGER REASON THAN "IT TRADES ROWS".** Mooneye's
+  `intr_2_mode0_timing_sprites` measures mode 3's **length** with sprites, as a
+  one-M-cycle straddle, and our formula already matches all 39 arrangements (1 sprite at
+  X=8 → 11 dots; 10 at X=0 → 65; 10 across ten tiles → 110). **A three-dot tail makes the
+  first case 14 where hardware says 11** — it contradicts a direct hardware measurement of
+  the exact quantity it changes. A visibility threshold on the tail only moves *which*
+  Mooneye row fails (`TEST #00` → `TEST #11`); tuning it further is fitting a constant to a
+  suite.
+- **THE WHOLE-CYCLE LAG IS REJECTED HARDER, BY BOTH CONTROLS.** Moving mode 2, mode 3, the
+  fetcher and the mode-2 strobe together: lag 2 → Gambatte 3533, Mooneye **98**, Mealybug
+  **11**; lag 3 → 3671 / 98 / 11. **Why it cannot work:** Mealybug arms on the mode-2
+  *interrupt* and the CPU only acts on one at an M-cycle boundary, so the fetcher moves
+  exactly three dots while the ISR that writes into it moves zero or four.
+- **A STROBE-WINDOW BUG WORTH NOT REPEATING:** shifting mode 2 by `LAG` tempts
+  `modeclock >= LINE_DOTS - (LEAD - LAG)`, which **narrows** the four-dot window to two
+  instead of moving it. It must keep its width and straddle the boundary —
+  `modeclock + LEAD >= LINE_DOTS + LAG`, plus `modeclock < LAG` for the line's head.
+- **THE STATE OF PLAY, AND THE NEXT STEP IS NOT ANOTHER CONSTANT.** Mooneye is anchored on
+  **mode 2** and says our mode-3 *length* is right; Gambatte is anchored on the **LYC
+  interrupt** and says our mode 0 is three dots early; Mealybug is anchored on the **mode-2
+  interrupt** and says our *fetcher* is right. Any two are satisfiable; all three are not,
+  under any placement tried across two rounds (mode-3 tail, whole-cycle lag, `LY` lead,
+  LYC-interrupt lead, per-object penalty). **One of the three anchors is modelled wrongly.**
+  The sharpest lead: the two suites that reject every fix both reach their anchor through an
+  **interrupt**, where the CPU's M-cycle sampling quantises a sub-M-cycle placement, while
+  Gambatte's lands on a direct register read that does not. Model *that*, not the PPU.
+
 ## The board, measured fresh at this session's start and again at its end
 
 Every figure below was run, not copied from a prior entry — the task's own standing instruction
