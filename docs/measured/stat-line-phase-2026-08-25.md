@@ -207,6 +207,42 @@ tests goes through), a value one to three dots higher would shorten that first l
 pull the interrupt earlier. Swept: gbmicrotest **339 → 312 (5), 311 (6), 287 (7)**. The
 shipping 4 is right and this is not where the residual lives.
 
+## 7. What of this belongs in the GBSelfTest cartridge — and what does not
+
+The standing rule is that every fix ends as a fix, a check in the cartridge, and/or a
+documented behaviour carrying a stable code. Judged honestly, item by item:
+
+- **The Gambatte diagnostic** (the one thing landed) is **not checkable from a cartridge**
+  and never could be. It is a property of *our runner* — which glyph it reports and what
+  the expectation file records — and nothing a program running on the console can observe.
+
+- **The `2 ↔ 0` STAT phase itself is checkable in principle, and is deliberately not added
+  yet.** A cartridge could measure it with the nop-sled binary search `GB-PPU-07`/`-08`
+  already use: take an `LY == LYC` interrupt, switch `STAT` to mode-0 select, clear `IF`,
+  run *N* `nop`s, read `IF`. That is exactly the ladder, self-contained. **What is missing
+  is a validated expectation.** Hardware's answer is known only *in the frame of Gambatte's
+  own instruction sequence*; a new cartridge check is a different program, so the expected
+  M-cycle count would have to be re-derived — and the derivation is the very thing §2-§6
+  could not settle. Asserting a number picked to match our own output would be inventing
+  ground truth, which is the one thing a conformance cartridge must never do. The precedent
+  is `GB-DMA-05`, which shipped as *reported, not judged* until the rule behind it was
+  established, and was only promoted to a real check once it was.
+
+  It also could not be validated the usual way. `tools/sameboy-oracle` reads a verdict byte
+  or cartridge RAM; these ROMs report by **drawing to the framebuffer**, which the oracle
+  cannot reach — checked, `peek $9800` returns a constant across all nine ladder variants.
+  So the second-implementation cross-check that every GBSelfTest addition gets was not
+  available here either.
+
+- **`GB-PPU-16` already covers the neighbouring behaviour and is correctly red.** It should
+  stay on `tools/gbselftest-gate.py`'s known-gap list. §1 narrows what it is waiting for:
+  the DMG STAT-write glitch is **not** the cause of the large `2 ↔ 0` cluster, so closing
+  `GB-PPU-16` and closing those 226 rows are two jobs, not one.
+
+**Net: no check added, and the reason is that the finding is a measured discrepancy rather
+than a settled behaviour.** The moment §3's model is confirmed by an independent source,
+the check is ~40 lines in the idiom `GB-PPU-16` already uses.
+
 ## Reproducing
 
 ```
