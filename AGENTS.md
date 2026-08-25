@@ -13211,6 +13211,93 @@ green, `gbselftest` matches its documented per-mode gap list exactly (`identical
   regression coverage for the *broken-header* case is `csp_gbmicrotest`'s own
   `mbc1_rom_banks@dmg` row, now pinned PASS in both baselines.
 
+## THE TWO PICTURE ENGINES BRACKET HARDWARE ON THE STAT LINE, AND THAT IS A BISECT
+
+**Full record with every table: [`docs/measured/stat-line-phase-2026-08-25.md`](docs/measured/stat-line-phase-2026-08-25.md);
+the run it came out of: [`docs/measured/accuracy-baseline-2026-08-25.md`](docs/measured/accuracy-baseline-2026-08-25.md).**
+No emulator fix landed — what landed is the measurement the 2026-08-22 STAT-glitch note
+asked for ("row by row against the ROM's own `<old>_<new>` filename encoding … before
+being built, not after") plus a model to replace the sweep it forbade.
+
+- **`gambatte/miscmstatirq/lycstatwirq_trigger_m0_early_ly44_lyc44_08_40_<1..9>` IS A
+  ONE-M-CYCLE CALIBRATION LADDER — nine builds of one program differing by a single byte
+  of padding (`.text@102c` vs `@102d`).** It sweeps a `STAT` write across the mode 3 → 0
+  transition. **Hardware flips between 8 and 9; `identical` flips between 6 and 7 (two
+  M-cycles early); `standard` never flips inside the ladder at all (at least one M-cycle
+  late).** The two engines bracket the truth — neither is right, and the older reading
+  "standard is right here" is wrong.
+- **THE DMG STAT-WRITE GLITCH IS RULED OUT AS THE CAUSE, which the previous attempt could
+  not do.** The `<old>_<new>` 4×4 table's DMG column depends only on `old` (fires iff bit 6
+  is clear) — ordinary edge detection. The rows that fail **on both consoles**
+  (`bf_40`, `bf_ff` DMG+CGB, `00_bf` CGB) cannot be DMG-only silicon; they are us reporting
+  the wrong PPU **mode** at the write. `old = $bf` firing at all proves hardware is in
+  **mode 3** there.
+- **NO PASSING MOONEYE ROW CONTRADICTS THIS, AND THE REASON IS THE USEFUL PART.**
+  `intr_2_0_timing` / `intr_2_mode0_timing` are anchored on the **mode-2 interrupt** and
+  measure an *interval*; shift the PPU's whole mode cycle relative to `LY` and both ends
+  move together. **Only an `LY`-anchored probe can see it, and Mooneye has none.** The
+  model everything is consistent with: **`LY` increments ~8 dots before the mode-2 window
+  begins, not simultaneously with it.** Deliberately not implemented — it restructures
+  where a scanline starts and would move hundreds of rows both ways. It is very likely the
+  second offset that makes `mmu::boot_ppu_dot`'s sweep "a jagged profile with no clean
+  optimum": **one constant cannot fit two independent offsets.**
+- **459 ROWS WHERE THE *DEFAULT* ENGINE LOSES TO THE CHEAPER ONE — nobody had enumerated
+  them.** gambatte: `identical` loses **446** and wins 892; gbmicrotest: loses **13**. The
+  losses sit in the *same groups* as the wins (`window` 107/137, `lycEnable` 34/49,
+  `m1` 33/54), which is a phase difference and not a missing feature. The gbmicrotest
+  thirteen are the sharpest evidence anywhere in the set — off by exactly one M-cycle, with
+  `oam_int_if_edge_a`/`_c` a **mirror pair** (one wants the flag set and gets it clear, the
+  other the exact reverse), which is what a boundary one position off looks like and what a
+  missing behaviour never does.
+- **THE METHOD WORTH REUSING: when the two engines disagree and one matches hardware, that
+  is a bisect, not a guess.** Diffing the engines localises a defect with no hardware
+  speculation at all. This repository has had that tool since the per-dot engine landed and
+  had never used it this way.
+
+### Two models tested and REJECTED, with numbers — do not repeat them
+
+- **Scaling the strobe leads with the CPU clock.** `OAM_STROBE_LEAD`/`VBLANK_STROBE_LEAD`
+  are 4 *dots* and the former's doc comment says its whole content is "asserted inside an
+  M-cycle" — but a double-speed M-cycle is **2 dots**, so a 4-dot lead spans two of them.
+  Same shape as the `c575bb4` LCDC stagger, and `_ds` rows do fail at **45 % against 30 %
+  overall**. Implemented (`Gpu::set_double_speed` beside the APU's identical call,
+  republished on `load_state`), verified live on the PPU — and it moved **zero rows**.
+  Reverted, and the reasoning inverts on reflection: **the PPU asserts at a fixed dot in
+  its own clock, which never changes, so a CPU sampling twice as often legitimately sees it
+  a CPU-M-cycle earlier.** That is correct behaviour. The constant is right as it stands.
+- **`OAM_STROBE_LEAD = 0`.** Re-measured rather than quoted, because the figure in this
+  file predates several PPU fixes. It has not gone stale and the trade is **worse** than
+  recorded: gbmicrotest **339/513 → 339/513 (no gain at all)**, Mooneye still 103/103 (the
+  halt-late compensation carries it), Mealybug **29 → 10** pixel-exact. Keep it at 4.
+
+### `not drawn` WAS MISLEADING ON 99 % OF ITS OWN ROWS, AND THE GATE WAS BLIND TO A WHOLE CLASS OF REGRESSION
+
+`examples/csp_suite.rs` scored every failing Gambatte digit row as `FAIL out=X not drawn`.
+Probed: of the 1,369 `identical`-mode rows, **11 were blank** — 1,289 drew a **clean, valid
+hex digit that simply disagreed with hardware** and 69 drew a partial glyph. Worse than the
+wrong word: **a row that changed from drawing `0` to drawing `1` moved no line in the
+baseline**, so the gate could not see it. The verdict now carries what was drawn
+(`FAIL out=X got=Y`, `blank`, or `?<ink count>` for a shape the font has not), which puts
+this suite under the rule Mealybug's pixel counts already follow — **the expectation file
+carries *how* wrong we are, so a change in either direction is a visible diff.**
+Re-blessed both Gambatte baselines: **5,320 rows each, verdict flips = 0**, text-only
+changes 1,656 (`standard`) and 1,369 (`identical`).
+
+**Reading the failures is now possible, and two families dominate and are unrelated:**
+`3 ↔ 0` (408 rows, `sprites` 226 + `window` 98) is the documented mid-scanline fetcher
+wall; `2 ↔ 0` (226 rows, near-perfectly symmetric at 113/113) is **entirely STAT-interrupt
+groups** and is the section above.
+
+### Mealybug's near-miss list is mostly the boot-glyph wall — check before chasing one
+
+`reset_vram` (the suite's own `inc/utils.asm`) clears `$9800-$9BFF`, the **tilemap**, and
+never touches tile data — so the boot ROM's `®` at tile `$19` survives into all ten ROMs
+that reference it. `m3_bgp_change_sprites` at **972 px on all three consoles** looks like a
+tempting sprite-timing near-miss and is not: it is that glyph missing from nineteen sprites
+and an eighteen-tile background column. `grep -l '\$19' src/ppu/*.asm` in the suite is the
+one-command check, and it is a *first pass* — `m3_wx_4_change_sprites` references the glyph
+and then fills every tile with `$FF`, so it never reaches the screen.
+
 ## The board, measured fresh at this session's start and again at its end
 
 Every figure below was run, not copied from a prior entry — the task's own standing instruction

@@ -68,6 +68,9 @@ and that had quietly happened to more than half of this directory.
 | [against the field](measured/against-the-field.md) | other emulators built and timed here on the same core, ROM and clock — one claim held, one did not, and where the difference comes from |
 | [speed ledger](measured/speed-ledger.md) | every optimisation attempted — what each was worth, the eleven measured negatives with their numbers, the field built and timed here, and what is queued |
 | [headless throughput](measured/throughput-baseline.md) | how fast the core runs with nothing attached, the method that reproduces it, and which of the two 1000× targets each number belongs to |
+| [the accuracy baseline, 2026-08-25](measured/accuracy-baseline-2026-08-25.md) | every suite re-run and totalled on `c575bb4`, with the submodule check done explicitly and the failures classified by what the frame really contained |
+| [the STAT line's phase](measured/stat-line-phase-2026-08-25.md) | the two picture engines bracket hardware by two M-cycles — the calibration ladder that measures it, the model it points to, and two models tested and rejected with numbers |
+| [the pool sweep, 2026-08-25](measured/pool-sweep-2026-08-25.md) | every pooled worktree and branch checked against the real `main`: why the ancestry counts are meaningless after the history rewrite, and why nothing is stranded |
 | [the host boundary](measured/host.md) | defects that leave the framebuffer perfect — the pacing clock, the build, the audio device, the terminal |
 | [symptoms](measured/symptoms.md) | "my emulator does X" → what it actually is |
 | [Mealybug Tearoom](mealybug.md) | what the mid-scanline suite measures, where we stand, and what the rest would cost |
