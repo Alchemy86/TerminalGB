@@ -13319,6 +13319,64 @@ and an eighteen-tile background column. `grep -l '\$19' src/ppu/*.asm` in the su
 one-command check, and it is a *first pass* — `m3_wx_4_change_sprites` references the glyph
 and then fills every tile with `$FF`, so it never reaches the screen.
 
+## THE SPRITE HALF OF THE MID-SCANLINE WALL IS A THREE-DOT `LY` OFFSET, NOT THE OBJ PENALTY
+
+**Full record with every table: [`docs/measured/sprite-mode3-calibration-2026-08-26.md`](docs/measured/sprite-mode3-calibration-2026-08-26.md).**
+No emulator change landed — `src/` untouched, both engines cost what they did before. What
+landed is the calibration, and it retires a guess: this wall was recorded as "the fetcher",
+and the fetcher's arithmetic turns out to be **correct**.
+
+- **`gambatte/sprites/space/` IS AN INSTRUMENT, NOT A PILE OF ROWS: 226 ROMs are 113 pairs
+  one byte of padding apart**, each bracketing the mode 3 → 0 boundary to **one M-cycle —
+  two dots, because every ROM in that directory is double speed.** `nr10spaceN` sweeps the
+  tenth sprite's `X`, `scxN` sweeps `SCX`, `NoverlapM` sweeps overlap. Baseline: **105 of
+  113 pairs fail their FIRST variant** — one-sided, so our mode 3 ends early in almost every
+  configuration.
+- **OUR OBJ PENALTY FORMULA IS RIGHT, CONFIRMED THREE WAYS — stop suspecting it.**
+  Mooneye's `intr_2_mode0_timing_sprites` matches `6 + max(0, 5 - ((X + SCX) mod 8))` on all
+  **39** arrangements including the 10-distinct-tile ones (X0=0 → 110 dots → 27 ✓, X0=2 → 90
+  → 22 ✓, one tile → 65 → 16 ✓, two tiles → 70 → 17 ✓); Gambatte's own `nr10space` sweep
+  reproduces the same shape; and adding one dot per object moves a ten-sprite line by **ten**
+  dots, which is what a per-object error looks like and is not what we have.
+- **THE DEFECT IS A CONSTANT THREE DOTS BETWEEN THE MODE CYCLE AND `LY`.** Solving the
+  measured windows gives our base 106 and hardware's 109 against the *same* penalty `p`, for
+  all eight `X mod 8` cases. The shortfall reads as alternating 2/4 only because the
+  measurement resolves two dots and three is odd.
+- **MOONEYE AND MEALYBUG PROVABLY CANNOT SEE THIS AXIS, AND THEIR BEING GREEN IS NOT
+  EVIDENCE.** Mooneye's sprite test waits for **mode 2** and measures an interval; Mealybug
+  arms on the **mode-2** STAT source. Shift the whole cycle against `LY` and both ends move
+  together. Measured across all seven models below: **Mooneye stayed 103/103 and Mealybug
+  stayed 29 pixel-exact, to the row and to the pixel, every time.** Same axis as
+  `docs/measured/stat-line-phase-2026-08-25.md`, reached from an independent family.
+- **SEVEN MODELS MEASURED, ALL TRADE — do not repeat them.** `+1 dot per object` (+10 on a
+  ten-sprite line, wrong axis); `+3 at the first object` (Gambatte +188/−95 **and −8
+  Mealybug** — it delays the background fetcher for the rest of the line); `+3 held at the
+  END of mode 3` (**fits all 96 stems exactly**, Mealybug untouched, but lengthens mode 3 and
+  Mooneye's `TEST #00` forbids it); `LY` leading by 2 dots (**3854**, controls invariant, 141
+  genuine regressions + SameSuite `dma/hdma_mode0`); the same with VBlank kept on the mode
+  cycle (**3864**, the best score of any model, still 145 losses); a 2-dot lead on the LYC
+  interrupt term alone (3739, 82 losses); double-speed-only variants (3733 and 3674, 81 and
+  14 losses).
+- **AND THE THREE DOTS ARE NOT REACHABLE, WHICH IS ARITHMETIC AND NOT DEFEATISM.** A lead of
+  `L` dots moves the boundary by **`2L`** (checked per stem: `nr10space11` 2→6 under `L=2`
+  while `nr10space10` 4→**8**, overshooting and breaking a passing variant). The 113 stems
+  split into groups needing **+2** and **+4**, exactly by the parity of the OBJ penalty. No
+  even shift satisfies both, and the odd shift they jointly imply is not expressible as an
+  integer lead. The one model that fits all 96 stems does it by lengthening mode 3, which
+  Mooneye forbids. **This is the per-tile fetcher calibration `docs/mealybug.md` §8.9 budgets
+  in weeks — and that estimate now has a number attached to it.**
+
+### Two probe traps that produce confident wrong answers here
+
+- **`bus_tick` advances the PPU one M-cycle BEFORE each access**, so the value a ROM's
+  `ldff a,(c)` latches is the PPU at `read_dot + 4`, not at `read_dot`. Getting this wrong
+  inverts which side of the boundary you think you are on.
+- **A probe that takes the first mode 3 → 0 after OBJ is enabled can land on the LCD-restart
+  line**, which has no OAM scan at all (`skip_first_oam`) and therefore no sprites — it reads
+  as a 176-dot mode 3 and is not the line the ROM measures. Gate on the line the ROM's own
+  read happens on. ROMs that write `LCDC` with the LCD already on (`sprites/space`) do not
+  restart and are safe; ones that do `xor a; ldff(40),a` first are not.
+
 ## The board, measured fresh at this session's start and again at its end
 
 Every figure below was run, not copied from a prior entry — the task's own standing instruction
