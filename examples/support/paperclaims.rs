@@ -472,7 +472,8 @@ pub struct DurationClaim {
     /// Read only the low nibble; Disable packs the slot into the high one.
     pub low_nibble: bool,
     /// The roll range measured on the retail cartridge. A value outside it is a
-    /// finding, not noise — see `docs/gen1/paper-claims.md`.
+    /// finding, not noise — see
+    /// <https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/paper-claims.md>.
     pub rolls: (u8, u8),
 }
 

@@ -1,7 +1,7 @@
 {
   "schema": "gbscenario/1",
   "name": "04-take-a-starter",
-  "objective": "Take a starter Pokemon from one of the three Poke Balls on the table in Oak's laboratory. They sit at (6,3), (7,3) and (8,3); stand below one on row 4, face up, press A and answer YES. Oak's speech has to finish first. Stay on rows 3 and 4 until you have one: row 6 makes Oak call you back, and standing in rows 5-6 during this scene can lock the game up for good (docs/gen1/sharp-edges.md).",
+  "objective": "Take a starter Pokemon from one of the three Poke Balls on the table in Oak's laboratory. They sit at (6,3), (7,3) and (8,3); stand below one on row 4, face up, press A and answer YES. Oak's speech has to finish first. Stay on rows 3 and 4 until you have one: row 6 makes Oak call you back, and standing in rows 5-6 during this scene can lock the game up for good (https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#the-oaks-lab-soft-lock).",
   "start_state": "states/03.gbss",
   "goal": [
     "watch:got_starter!=0",

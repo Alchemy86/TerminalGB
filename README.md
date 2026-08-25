@@ -892,14 +892,17 @@ the [memory map](docs/gen1/memory-map.md) with a `pret/pokered` symbol name and 
 every address, [starting battles on demand](docs/gen1/battle-control.md),
 [reading dialogue back as text](docs/gen1/reading-the-screen.md) (Gen 1 tile ids *are*
 characters), [driving the link cable](docs/gen1/link-from-outside.md), and the
-[sharp edges](docs/gen1/sharp-edges.md) that cost us hours.
+[sharp edges](docs/gen1/sharp-edges.md) that cost us hours driving this emulator (the ones that
+are facts about the cartridge itself moved to [AtlasGB](https://github.com/Alchemy86/AtlasGB)).
 
 **And a [discovery record](docs/gen1/discoveries.md)** — every fault and quirk found by driving a
 retail cartridge for thousands of runs, with the reasoning that found it. A thirty-year-old
 soft-lock in Pokémon Blue's own sprite handling that bricks the game if you stand in the wrong two
 rows; one battle in the game the cartridge refuses to let you lose; a critical hit that is the
 *worst* case rather than the best roll. And the entries where the wrong belief was ours, which are
-there for the same reason the others are.
+there for the same reason the others are. **It is its own project now — [AtlasGB](https://github.com/Alchemy86/AtlasGB)
+— and this emulator is what produces that evidence**, the same as the memory atlas below it; a
+pointer stub stands at the old path.
 
 It is written to teach the mechanism rather than the recipe, because each of these techniques
 came from understanding a piece of the engine and asking what else touches it.
@@ -1243,7 +1246,7 @@ Nothing below is repeated here — these are pointers, those are the sources.
 | page | what it answers |
 |---|---|
 | [the index](docs/gen1/README.md) | memory map, reading the screen as text, driving the link cable, and the sharp edges |
-| [discoveries](docs/gen1/discoveries.md) | what this campaign found out about Pokémon Blue, with the reasoning trail for each: a soft-lock in the cartridge's own OAM handling, a battle the game refuses to let you lose, mechanics quoted one way and stored another — and the ones where the wrong belief was ours |
+| [discoveries](docs/gen1/discoveries.md) | what this campaign found out about Pokémon Blue, with the reasoning trail for each: a soft-lock in the cartridge's own OAM handling, a battle the game refuses to let you lose, mechanics quoted one way and stored another — and the ones where the wrong belief was ours. It is its own project now — [AtlasGB](https://github.com/Alchemy86/AtlasGB) — and this page is a pointer |
 | [the memory atlas](docs/gen1/atlas/README.md) | every address in the game, walked region by region, with the evidence that we watched the cartridge use it. It is its own project now — [AtlasGB](https://github.com/Alchemy86/AtlasGB) — and this emulator is what produces that evidence |
 | [the link trade](docs/link-trade.md) · [the link battle](docs/link-battle.md) | the whole journey, with screenshots, and what to do if it hangs |
 | [starting battles on demand](docs/gen1/battle-control.md) | the one byte the engine reads, and how to script what follows |

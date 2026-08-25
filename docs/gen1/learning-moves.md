@@ -508,5 +508,5 @@ battle menu for ever.
   question, and where the sampling-window method comes from.
 * [The battle policy](../agent/battle-policy.md) — what to do on a turn, and the
   measured justification for rule 2 above.
-* [Discoveries](discoveries.md) — the reasoning trails, including the wrong
+* [Discoveries](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md) — the reasoning trails, including the wrong
   turns.

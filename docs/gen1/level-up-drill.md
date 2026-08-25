@@ -1,6 +1,7 @@
 # The level-up move drill
 
-[← Gen 1 area](README.md) · [battling](battling.md) · [learning moves](learning-moves.md) · [discoveries](discoveries.md)
+[← Gen 1 area](README.md) · [battling](battling.md) · [learning moves](learning-moves.md) ·
+[discoveries](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md)
 
 **[Learning moves](learning-moves.md) counted the questions the game can ask and stated a rule for
 answering them. This is that rule played out on the cartridge, one level-up at a time, and
@@ -83,7 +84,7 @@ Grinding to level 65 is not a test of anything. Each event is reached in one bat
 **The opponent is a MAGIKARP and not the CHANSEY the trace scenarios use, and that is arithmetic
 rather than taste.** CHANSEY is worth 182, which at low level crosses two level boundaries at
 once and loses the move belonging to the one it skipped — the
-[crossing two levels](discoveries.md#crossing-two-levels-loses-the-move-in-between) trap. With the
+[crossing two levels](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#crossing-two-levels-loses-the-move-in-between) trap. With the
 experience written directly, 5 points cannot cross a boundary at any level in the game, so the
 same arithmetic works for an event at level 9 and an event at level 65 instead of being tuned per
 event.
@@ -204,7 +205,7 @@ four left-aligned move names it cuts `HORN ATTACK` down to `HORN`, because `TAIL
 begins where `ATTACK` does. Six lines failed with *"never found TAIL WHIP in the move list after
 8 step(s)"*. **Identify a menu row by its index, not by its text**; the text is a cross-check that
 must tolerate exactly that truncation and nothing else. The
-[discovery](discoveries.md#a-menu-row-can-be-truncated-by-the-row-below-it).
+[discovery](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#a-menu-row-can-be-truncated-by-the-row-below-it).
 
 **And the two move lists disagree about where their index starts.** The battle move list's
 `wCurrentMenuItem` is 1-based — `MoveSelectionMenu` opens `ld a, [wPlayerMoveListIndex] / inc a`
@@ -339,7 +340,7 @@ Consequences worth knowing:
   [learning moves](learning-moves.md) — 55 machines against any compatible species at any level
   is a different and much larger problem.
 - **Refusing an evolution.** The lines are walked with every evolution taken, because
-  [nothing is ever lost by evolving](discoveries.md#cancelling-an-evolution-costs-one-level-and-nothing-else)
+  [nothing is ever lost by evolving](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#cancelling-an-evolution-costs-one-level-and-nothing-else)
   and a line that refuses them is a line no player walks. The `cancel` subcommand still measures
   what a refusal does.
 - **MEW.** It cannot be planned — `BaseStats` holds 150 records
@@ -402,4 +403,4 @@ first because the MBC writes its `.sav` next to whatever path it is handed.
   restore that §4 runs into.
 - the A/B test rig (`docs/agent/test-rig.md`, landing separately) — what measures a student
   trained on this; its `command` arm speaks the same protocol these rows are written in.
-- [discoveries](discoveries.md) — the two-level trap and the evolution measurements this rests on.
+- [discoveries](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md) — the two-level trap and the evolution measurements this rests on.

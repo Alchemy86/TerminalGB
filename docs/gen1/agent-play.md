@@ -155,7 +155,7 @@ two levels on it.
 
 Each of these is now in the agent's prompt or in a host note, and each was found by watching a
 real run waste decisions on it. They belong beside the ones in
-[sharp edges](sharp-edges.md#driving-the-game).
+[AtlasGB's sharp edges](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/sharp-edges.md#the-engine).
 
 * **The naming screen is the one place mashing A does not work.** `YOUR NAME?` / `RIVAL NAME?`
   over a grid of letters is the on-screen keyboard: A types another letter, for ever. **START
@@ -186,7 +186,8 @@ real run waste decisions on it. They belong beside the ones in
   from power-on into Oak's Lab in 9,034 emulated frames, party still 0, nothing at the tiles the
   balls sit on. The game gates the starter behind trying to **leave town to the north**, which
   fires `PalletTownDefaultScript` and has Oak escort you back; that is the same event
-  [sharp edges](sharp-edges.md#driving-the-game) notes can be skipped outright by setting
+  [AtlasGB's sharp edges](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/sharp-edges.md#the-engine)
+  notes can be skipped outright by setting
   `EVENT_FOLLOWED_OAK_INTO_LAB`. An agent given the objective *"choose a starter"* found the
   north route by itself; it is worth knowing that the direct one is a dead end before concluding
   the navigation is broken.

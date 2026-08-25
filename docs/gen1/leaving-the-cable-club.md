@@ -225,7 +225,8 @@ refuses anything else.
 
 Related pages: [Driving the link cable](link-from-outside.md) ·
 [Two consoles, one wire](../link-cable.md) · [The Time Capsule](../gen2/time-capsule.md) ·
-[Sharp edges](sharp-edges.md)
+[Sharp edges](sharp-edges.md) ·
+[AtlasGB: link](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/link.md)
 
 [cable_club]: https://github.com/pret/pokered/tree/master/engine/link/cable_club.asm
 [start_menu]: https://github.com/pret/pokered/tree/master/engine/menus/start_sub_menus.asm

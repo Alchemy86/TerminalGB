@@ -15,6 +15,21 @@ themselves. Both are named as extensions everywhere, never assumed.
 > door is how this repository consumes it, and carries the links into it. Start here for
 > *why*; go there for *where*.
 
+> **Every game fact below is now also stated, independently and with more citation, on
+> AtlasGB's own chapter pages** — the party and battle struct layouts on
+> [`party.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/party.md)
+> and [`battle.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/battle.md),
+> the RNG algorithm on
+> [`rng.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/rng.md), the
+> map-header save trap on
+> [`overworld.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/overworld.md),
+> the save-file boundary on
+> [`save.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/save.md),
+> and the story flags on
+> [`events.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/events.md).
+> This page's job now is which of those bytes **this project's own plugins** touch, and why —
+> not the definitive record of the byte itself, which AtlasGB owns.
+
 Each entry carries its `pret/pokered` **symbol name** and how the address was established —
 see the three grades in the [area standards](README.md#standards-for-this-area). The short
 version: *symbol file* means the disassembly was built and its ROMs matched `roms.sha1`;

@@ -130,8 +130,10 @@ matter of trust.
 > **Status: derived from the disassembly, not yet confirmed against our own wire trace.** A
 > scout is investigating why a link *battle* started against a trade-only virtual partner. This
 > section is what `pret/pokered` says should happen; the finding belongs here, and if it turns
-> out to be a timing fact rather than a protocol one it also earns a line in
-> [sharp edges](sharp-edges.md).
+> out to be a timing fact rather than a protocol one it is a fact about the cartridge and earns a
+> line on
+> [AtlasGB's sharp edges](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/sharp-edges.md)
+> instead.
 
 **The disassembly's answer is that the choice is not on the wire at all — it is the map.**
 `CableClubLeftGameboy` (`engine/pokemon/bills_pc.asm`) reads:

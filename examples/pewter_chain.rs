@@ -1780,7 +1780,9 @@ fn lead_with(scenario: &str) -> Option<u8> {
 /// **The quantities are what the three things that need a bag ask for**, and
 /// every one is measured elsewhere: five POKé BALLs because `catch::decide`
 /// answers `Unavailable` with none and a Poké Ball is the best chance per ¥ at
-/// every catch rate and every HP (`docs/gen1/catching.md` §5); five ANTIDOTEs
+/// every catch rate and every HP
+/// (<https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md>);
+/// five ANTIDOTEs
 /// because poison — not a battle — is what kills this chain on Route 3 and
 /// Route 4, and an antidote *cures* it where a potion buys twenty HP of the
 /// same problem; and five POTIONs for the lead that is simply worn down.
@@ -3664,7 +3666,8 @@ impl ChainDriver {
     /// the catching one pays one slice comparison and never builds a
     /// situation. The verdict is the shared
     /// [`terminalgb_plugin_agent::catch`] policy's — the same one
-    /// `docs/gen1/catching.md` measured against the cartridge at 251 throws —
+    /// [AtlasGB's `catching.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md)
+    /// measured against the cartridge at 251 throws —
     /// and the driver only turns `Throw` into keypresses.
     fn wild_wants(
         &mut self,

@@ -10,11 +10,12 @@
 > [`docs/tools/docs_index.py`](../tools/docs_index.py) with its reason, exactly
 > as the others are.
 >
-> **The cartridge half has already been split out and stays here**:
-> [`docs/gen1/cerulean-gym.md`](../gen1/cerulean-gym.md) holds Misty's party and
-> movesets, the gym's map and its three trainers, the trainer that sees through
-> a wall, the badge bits, the nurse restoring PP, and the grass tables — all of
-> which would be true with no agent in the world.
+> **The cartridge half has already been split out, and now lives at AtlasGB**:
+> [Cerulean Gym, worked](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/cerulean-gym.md)
+> holds Misty's party and movesets, the gym's map and its three trainers, the trainer that sees
+> through a wall, the badge bits, the nurse restoring PP, and the grass tables — all of which
+> would be true with no agent in the world. A pointer stub stands at
+> [`docs/gen1/cerulean-gym.md`](../gen1/cerulean-gym.md), the old path.
 
 Five links from arriving in Cerulean City to standing in its Pokémon Center with
 the second badge, cut to the shape the Brock arc has. Read

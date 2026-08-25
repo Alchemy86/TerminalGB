@@ -289,8 +289,10 @@ impl Volatile {
     /// value. Measured on the retail cartridge, driving a real voluntary switch:
     /// `wPlayerBattleStatus3` reads `$04` with Reflect up and `$00` the moment
     /// the reserve is out. See
-    /// [`docs/gen1/paper-claims.md`](../../../docs/gen1/paper-claims.md) §5.1
-    /// for the measurement and §6 for how the wrong note survived so long.
+    /// [AtlasGB's claim 3](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/paper-claims.md#3-reflect-and-light-screen-are-per-pokémon-volatiles)
+    /// for the measurement and
+    /// [`docs/gen1/paper-claims.md`](../../../docs/gen1/paper-claims.md) §6 for how the wrong
+    /// note survived so long.
     pub fn on_switch_out(&mut self) {
         *self = Volatile::default();
     }

@@ -35,6 +35,32 @@ certification, a battle outcome — is **agent memory about work whose
 reader-facing page now lives in AgentGB**. It is kept because it is how this
 repository's tooling came to be, but the published record is over there.
 
+## Standing rule: AtlasGB documents the game, this emulator produces the evidence
+
+**A second, parallel split happened, on the memory-atlas half rather than the agent half.** The
+Gen 1 memory atlas moved to [AtlasGB](https://github.com/Alchemy86/AtlasGB) first
+([`docs/gen1/atlas/README.md`](docs/gen1/atlas/README.md)); this repository's own Gen 1/Gen 2
+**game-fact prose** followed it in a second move — `discoveries.md`, `battling.md` and
+`cerulean-gym.md` fully (pointer stubs stand at the old paths), and `sharp-edges.md`,
+`paper-claims.md`, `catching.md`, `catch-and-train.md`, and the Gen 2 `sharp-edges.md` /
+`the-save-file.md` / `reading-the-screen.md` / `time-capsule.md` pages trimmed to what is
+genuinely this repository's own tooling, with the game-fact halves now on the matching AtlasGB
+chapter page. `docs/gen1/memory-map.md` and `docs/gen2/memory-map.md` were **not** trimmed —
+every game fact on them is now *also* independently stated on AtlasGB, deliberately duplicated
+rather than removed, because the pages' own job (which bytes this project's plugins touch) needs
+the table to stay whole.
+
+**The same test as the AgentGB split above, aimed the other way**: *a fact about the Game Boy or
+Pokémon Red/Blue/Gold as a cartridge is AtlasGB's now; a fact about this repository's own tooling
+— a harness, a bot, a discriminator, a route-planning script — is still ours.* A new Gen 1
+cartridge fault or corrected belief goes on
+[AtlasGB's `discoveries.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md)
+directly, not in this repository at all (`docs/gen1/README.md`'s own "Where a new finding
+belongs" section states this). One exception, deliberately not migrated: **"a cartridge can
+tell there is no sound chip" is an emulator fact** (`Gameboy::new` leaving the APU `None`), not
+a cartridge one, and it lives in this file's audio section instead — see "A THIRD, INDEPENDENT
+REDISCOVERY" under the GBSelfTest conformance-adapter notes.
+
 ## Standing convention: every emulation fix feeds the conformance tool
 
 **When you fix an emulation bug, capture it as a conformance-tool test case *at the moment of
@@ -4980,8 +5006,11 @@ that holds it to the retail cartridge, agents that play it, and an evaluation pr
 
 ## Checking somebody else's Gen 1 claims — and the corner of our own model it exposed
 
-**Full page: [`docs/gen1/paper-claims.md`](docs/gen1/paper-claims.md)** (the table, the
-provenance, the sample sizes); conformance record in `docs/conformance-notes.md`
+**The checked claims themselves are now on
+[AtlasGB's `paper-claims.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/paper-claims.md)**
+(the table). **This repository's own [`docs/gen1/paper-claims.md`](docs/gen1/paper-claims.md)**
+keeps the harness (the provenance, the sample sizes) and the one bug the exercise found in our
+own battle engine; conformance record in `docs/conformance-notes.md`
 (2026-08-16). Instrument: `examples/gen1_paper_claims.rs` + its `.preset`; gate:
 `testharness/paperclaims.rs` (`POKE_ROM=… cargo test --release --features
 plugin-battle-control,plugin-trainer --test paperclaims`, skips exit 0 without a cartridge,
@@ -5259,8 +5288,8 @@ observation `scenario::run::{Battles, BattleSummary}`.
 ### THE MEASURED EVENT FOR MOVE LEARNING IS A PROMPT, AND THE CORPUS CONTRACT IS TWO FILES
 
 **The rig's subject is level-up move learning, not battles.** A level-up prompt
-is a *closed* problem — `docs/gen1/learning-moves.md` enumerates 840 distinct
-decisions across 151 species — so it has one right answer per case, which is
+is a *closed* problem — [AtlasGB's `party.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/party.md)
+enumerates 840 distinct decisions across 151 species — so it has one right answer per case, which is
 exactly what a distillation can be scored on. The unit is a **prompt**: what was
 held, what was offered, what each player did, and whether they agree.
 
@@ -5778,7 +5807,10 @@ AgentGB's `docs/agent/rig-stills/` and the mp4s deliberately not.
 
 ## Catching — the gate, the discriminator, and the ball (`plugins/agent/src/catch.rs`)
 
-**Full page with every measurement and the commands: [`docs/gen1/catching.md`](docs/gen1/catching.md).**
+**The capture odds and the two-doors measurement are now on
+[AtlasGB's `catching.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md).
+This repository's own [`docs/gen1/catching.md`](docs/gen1/catching.md)** keeps the
+wild-versus-trainer discriminator and the route-planning tables.
 Instrument: `examples/gen1_catch_drill.rs` + its `.preset`. Modules:
 `plugins/agent/src/catch.rs` (the policy), `plugins/agent/src/battlekind.rs` (wild-vs-trainer
 from the screen), `plugins/trainer/src/capture.rs` (the odds, extended with `ball_for_item`).
@@ -5872,9 +5904,12 @@ commercial cartridge, the `tools/sameboy-oracle/` rule; the 18 unit tests across
 
 ## Learning moves is a CLOSED TABLE, and so is evolving (`tools/gen1-tables/learn_table.py`)
 
-**Full pages: [`docs/gen1/learning-moves.md`](docs/gen1/learning-moves.md) (the enumeration, the
-rule, the prompts) and [`docs/gen1/battling.md`](docs/gen1/battling.md) (the map of the subject,
-and what a battle screen shows).** Instruments: `learn_table.py` and
+**Full pages: [`docs/gen1/learning-moves.md`](docs/gen1/learning-moves.md) (the move-value
+heuristic; the closed-table mechanic and its figures are now also on
+[AtlasGB's `party.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/party.md))
+and [AtlasGB's `battle.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/battle.md)
+(the map of the subject, and what a battle screen shows — `docs/gen1/battling.md` is now a
+pointer stub to it).** Instruments: `learn_table.py` and
 `examples/gen1_learn_drill.rs`. **Not in CI** — both need the player's own cartridge, the
 `tools/sameboy-oracle/` rule. The drill starts a NEW GAME and needs no save.
 
@@ -6157,6 +6192,14 @@ ROM's own `Passed`/`Failed #N`.
   (which spins on `NR52`) never left its title screen — the exact trap `testharness/testroms.rs`
   already records as "never build a test machine without an APU". `sound::SilentPlayer` is the fix.
   Both defects were invisible for as long as the suite avoided the ROMs that expose them.
+- **A THIRD, INDEPENDENT REDISCOVERY: a Gen 1 driving harness with no APU installed hangs on the
+  Pokémon Center's nurse.** `Gameboy::new` with no player leaves the machine with no sound chip
+  at all, not a quiet one, and Pokémon Blue's healing sequence spins on `NR52` reading it back
+  powered off — measured as 700 decisions parked at `(3,3)`, indistinguishable from a routing
+  bug until the cause is known. `sound::SilentPlayer` again. **A rule written down in one harness
+  does not reach the next one** — this is the third time this exact class of bug has been found
+  independently in this repository; check for an installed player before building any new machine
+  that drives a real cartridge.
 - **`.github/actions/conformance` is the primary product**; the reusable workflow
   (`.github/workflows/conformance.yml`) is a wrapper. A called workflow gets a bare runner and
   must `actions/checkout` the caller itself; the composite action instead gets this whole repo
@@ -9791,31 +9834,41 @@ two front ends drivable, and they are cheap:
   model as *the floor* is the point — "our agent reached Viridian City" says very little until
   somebody has measured that undirected walking never does.
 
-## The discovery record — `docs/gen1/discoveries.md`, and its slugs are a CONTRACT
+## The discovery record moved to AtlasGB, and its slugs are still a CONTRACT
 
 **Every fault, quirk and corrected belief this campaign found in Pokémon Blue, with the reasoning
-trail for each.** It is the one door for *"what has this project discovered about the game"*; the
-findings used to be scattered across `docs/gen1/sharp-edges.md`, `docs/agent/pewter-chain.md`,
-`docs/agent/battle-policy.md`, `docs/conformance-notes.md` and commit messages.
+trail for each, is at
+[AtlasGB's `discoveries.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md)
+now** — a fault about the game is a fact AtlasGB owns, and this repository's own
+`docs/gen1/discoveries.md` is a pointer stub. It is still the one door for *"what has this
+project discovered about the game"*; the findings used to be scattered across
+`docs/gen1/sharp-edges.md`, `docs/agent/pewter-chain.md`, `docs/agent/battle-policy.md`,
+`docs/conformance-notes.md` and commit messages before this project gathered them, and AtlasGB is
+where they gathered permanently.
 
 - **A HEADING'S SLUG IS PERMANENT ONCE PUBLISHED**, exactly like a `TGB-` code in
-  `docs/pitfalls/codes.md`: **[AtlasGB](https://github.com/Alchemy86/AtlasGB) links back to
-  `discoveries.md#<slug>` from the addresses these findings involve**, so a reworded heading
-  breaks somebody else's index. Adding is free; renaming is forbidden. If an entry turns out to be
-  wrong, correct its *body* and say so in it.
+  `docs/pitfalls/codes.md`: **this repository (and anyone else's) links IN to
+  `discoveries.md#<slug>` from the addresses and code these findings involve** — the direction is
+  now the reverse of what it was when the page lived here, since AtlasGB is upstream of us for
+  this content. Adding a heading is free; renaming is forbidden, because the slug is what a
+  citation from outside AtlasGB depends on.
 - **Write headings with no em dash and no ` / `.** GitHub's slug rule replaces each space with a
   hyphen *without collapsing runs*, so ` — ` leaves a **double** hyphen and the slug stops being
-  guessable. Backticks, quotes and apostrophes are dropped in place and are safe.
-- **`discoveries.md` and `sharp-edges.md` are deliberately two documents.** One is how it was
-  found — the messy symptom, the wrong turns, the citation, the evidence; the other is the
-  one-line warning, grouped by what you were doing when it bit. A finding earns a place on both.
+  guessable. Backticks, quotes and apostrophes are dropped in place and are safe. (This applies
+  when *writing* an entry upstream, not when citing one from here.)
+- **`discoveries.md` and `sharp-edges.md` are deliberately two documents, and both now live at
+  AtlasGB for anything that is a fact about the cartridge.** One is how it was found — the messy
+  symptom, the wrong turns, the citation, the evidence; the other is the one-line warning, grouped
+  by what you were doing when it bit. A finding earns a place on both. This repository's own
+  `docs/gen1/sharp-edges.md` keeps only the traps specific to driving *this emulator*.
 - **An entry that corrects one of OUR beliefs is as valuable as one about the cartridge, and the
-  page says which it is.** Eight of the twenty-one are ours, and two of them were found *while
-  writing the page* by re-running a measurement instead of copying the number: the TACKLE accuracy
-  byte, and the ledge row in link 08's own source comment.
+  page says which it is.** Eight of the twenty-one it had when it moved were ours, and two of
+  those were found *while writing the page* by re-running a measurement instead of copying the
+  number: the TACKLE accuracy byte, and the ledge row in link 08's own source comment.
 - Link into the atlas by **symbol** (`…/by-name.md#s-<symbol>`, `#a-<ADDR>` for an address), and
-  use the `/tree/main/` URL form — `codemap_links.py --check` rejects a `/blob/` link into a repo
-  that is not ours.
+  use the `/tree/main/` URL form for anything under AtlasGB — `codemap_links.py
+  --check` rejects a `/blob/` link into a repo that is not ours, so any cross-repo link
+  written here needs the `/tree/main/` form instead.
 
 ## The Pewter chain — fourteen scenarios from a cold cartridge (`scenarios/pewter/`)
 
@@ -9966,7 +10019,8 @@ button does anything ever again. Measured: 53 of 600 link-04 attempts, every one
 at `(5,5)`. It is the cartridge's own `PrepareOAMData` overflowing a 40-entry buffer whose end
 **is** `wTileMap`, and the collision check then reads the stamped `$A0` as a wall in every
 direction. Full mechanism with the pokered citations:
-[`docs/gen1/sharp-edges.md`](docs/gen1/sharp-edges.md); the route repair and the numbers:
+[AtlasGB's discoveries: the Oak's Lab soft-lock](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#the-oaks-lab-soft-lock);
+the route repair and the numbers:
 [`docs/agent/pewter-chain.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/pewter-chain.md) §8.10.
 
 - **The recipe for telling the two kinds of hang apart, because it took hours the first time.**
@@ -11405,9 +11459,9 @@ whatever is left" was already there and had never been asked.
 
 ### The shop, and four things a Gen 1 counter teaches
 
-`18b-shop-in-pewter` is the door [`docs/gen1/catching.md`](docs/gen1/catching.md) §1 asked the
-chain crew for: five POKé BALLs and five POTIONs for ¥2,500 of the ¥4,651 the chain carries out of
-the gym. **Pewter rather than Viridian** — catching.md proposed Viridian's mart, which the chain
+`18b-shop-in-pewter` is the door [AtlasGB's `catching.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md)
+asked the chain crew for: five POKé BALLs and five POTIONs for ¥2,500 of the ¥4,651 the chain
+carries out of the gym. **Pewter rather than Viridian** — catching.md proposed Viridian's mart, which the chain
 already enters at link 07, but inserting a link there re-certifies everything from 07 onwards;
 Pewter's carries POKé BALLs too and costs three links. **`18b` is an insertion, not a
 renumbering**: link 19's certification is a published measurement tied to that name, and the chain
@@ -11664,8 +11718,9 @@ what closed these links. Recorded so nobody runs it again.
 
 ## The Cascade Badge — Cerulean, and the move-learn prompt nothing had answered (`scenarios/pewter/26-30`)
 
-> **WHERE THIS IS WRITTEN UP, AND WHERE IT SHOULD BE.** The cartridge half is
-> [`docs/gen1/cerulean-gym.md`](docs/gen1/cerulean-gym.md) and stays here.
+> **WHERE THIS IS WRITTEN UP, AND WHERE IT SHOULD BE.** The cartridge half is at
+> [AtlasGB's `cerulean-gym.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/cerulean-gym.md)
+> now, with a pointer stub at the old `docs/gen1/cerulean-gym.md` path.
 > **The results half — the certified rates, the per-line split, the level
 > sweep, the rig — belongs in [AgentGB](https://github.com/Alchemy86/AgentGB)
 > under `docs/where-things-live.md`'s rule**, beside `pewter-chain.md`,
@@ -12105,8 +12160,10 @@ Two reports on the gym cut, and they are one root cause plus one missing shot.
   task, which does survive) and checked by their artefacts, not by a log.
 ## A BENCH — catching, promoting and training a second Pokémon (`scenarios/pewter/23b`, `26b`)
 
-**Reader-facing pages: [`docs/gen1/catch-and-train.md`](docs/gen1/catch-and-train.md)
-is the cartridge half and lives here; the rates live in AgentGB at
+**Reader-facing pages: the headline worked example (why a WATER gym wants a bench that resists
+water) is now on [AtlasGB's `catching.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md#a-worked-example-choosing-a-target);
+[`docs/gen1/catch-and-train.md`](docs/gen1/catch-and-train.md) keeps this repository's own
+comparative sweep and BFS route-planning; the rates live in AgentGB at
 [`docs/agent/catch-and-train.md`](https://github.com/Alchemy86/AgentGB/tree/main/docs/agent/catch-and-train.md), with a pointer stub at the old path
 under `EXEMPT` in `docs/tools/docs_index.py`.** Chooser
 [`tools/gen1-tables/duel.py`](tools/gen1-tables/duel.py); solver

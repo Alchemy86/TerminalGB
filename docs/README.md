@@ -184,24 +184,24 @@ and that had quietly happened to more than half of this directory.
 | page | what it is |
 |---|---|
 | [the Gen 1 index](gen1/README.md) | the section's entry point, and the standards every page in it is held to |
-| [the memory map](gen1/memory-map.md) | where Red and Blue keep everything, and how each address was graded |
+| [the memory map](gen1/memory-map.md) | which of Red and Blue's addresses this project's own plugins touch, and why — every game fact is now also on [AtlasGB](https://github.com/Alchemy86/AtlasGB)'s chapter pages |
 | [the memory atlas](gen1/atlas/README.md) | every address with the evidence we watched the cartridge use it — its own project now ([AtlasGB](https://github.com/Alchemy86/AtlasGB)); this emulator produces the evidence |
 | [reading the screen as text](gen1/reading-the-screen.md) | the tilemap trick that lets a headless bot navigate menus |
 | [starting a battle from outside](gen1/battle-control.md) | the one byte the engine polls, and how to script what follows |
 | [the battle engine](gen1/battle-engine.md) | a model of the battle rules held to the retail cartridge as an oracle, and agents that play it |
-| [battling](gen1/battling.md) | the map of the subject, and the one thing that had no home: what a battle screen shows, what it withholds, and for how long |
-| [learning moves, and evolving](gen1/learning-moves.md) | every move-learning decision the game can ever ask, counted — 728 learn entries, 840 distinct decisions — with a stated rule for each, and why a student should never cancel an evolution |
+| [battling](gen1/battling.md) | the map of the subject, and the one thing that had no home: what a battle screen shows, what it withholds, and for how long — its own project now ([AtlasGB](https://github.com/Alchemy86/AtlasGB)); this page is a pointer |
+| [learning moves, and evolving](gen1/learning-moves.md) | this project's own move-value heuristic — the closed-table mechanic, the 728/840/581 figures and the worked table are now also on [AtlasGB](https://github.com/Alchemy86/AtlasGB)'s `party.md` |
 | [the level-up move drill](gen1/level-up-drill.md) | that rule played out on the cartridge: every level-up on the Charmander and Bulbasaur lines triggered directly, the prompt answered or declined, the party read back as the verdict, and the whole thing recorded as training data |
-| [catching](gen1/catching.md) | whether an encounter is worth a ball — the capability's gate measured on the chain's own states, a wild-versus-trainer discriminator established twice, and the catch rate against the odds we predict |
-| [choosing a bench](gen1/catch-and-train.md) | which catchable Pokemon actually beats a gym and at what level, put through the cartridge's own damage formula — why a water gym wants a GRASS bench and not an ELECTRIC one, why PIKACHU loses to Misty at every reachable level, and the three cartridge facts a catch-and-train capability rests on |
-| [a paper's Gen 1 claims, checked](gen1/paper-claims.md) | eleven asserted mechanics measured on the cartridge — what held, what did not, and the one our own engine had backwards |
-| [Cerulean Gym, and Misty](gen1/cerulean-gym.md) | the second gym as the cartridge holds it — Misty's party and her movesets, the gym map and its three trainers, a Gen 1 trainer seeing through a wall, the three bytes the badge writes, the nurse restoring PP, and the grass tables |
+| [catching](gen1/catching.md) | this repository's own wild-versus-trainer discriminator and route-planning tables — the capture odds and catch mechanics moved to [AtlasGB](https://github.com/Alchemy86/AtlasGB)'s `catching.md` |
+| [choosing a bench](gen1/catch-and-train.md) | the full comparative sweep and BFS route-planning tooling — the headline worked example (why a water gym wants a GRASS bench, not an ELECTRIC one) moved to AtlasGB's `catching.md` |
+| [a paper's Gen 1 claims, checked](gen1/paper-claims.md) | this repository's own harness and its own bug — the fifteen checked claims themselves moved to [AtlasGB](https://github.com/Alchemy86/AtlasGB)'s `paper-claims.md` |
+| [Cerulean Gym, and Misty](gen1/cerulean-gym.md) | the second gym as the cartridge holds it — Misty's party and her movesets, the gym map and its three trainers, a Gen 1 trainer seeing through a wall, the three bytes the badge writes, the nurse restoring PP, and the grass tables — its own project now ([AtlasGB](https://github.com/Alchemy86/AtlasGB)); this page is a pointer |
 | [driving the link cable from outside](gen1/link-from-outside.md) | impersonating the far end of the wire, and what the protocol actually carries |
 | [leaving the Cable Club](gen1/leaving-the-cable-club.md) | the report that was not our bug, measured against the cartridge |
-| [authoring an area](gen1/authoring-an-area.md) | a new destination reached through the cartridge's own unedited door |
+| [authoring an area](gen1/authoring-an-area.md) | the WRAM-room-build recipe for a new destination reached through the cartridge's own unedited door — the room-format facts are now also on AtlasGB's `overworld.md` |
 | [agent play](gen1/agent-play.md) | reading state and pressing buttons — the Gen 1 facts an agent needs |
-| [discoveries](gen1/discoveries.md) | every fault and quirk this campaign found in Pokémon Blue, with the reasoning that found it — a thirty-year-old soft-lock, mechanics the community states one way and the cartridge another, and the corrections of our own beliefs |
-| [sharp edges](gen1/sharp-edges.md) | the Gen 1 traps that produce plausible-but-wrong data |
+| [discoveries](gen1/discoveries.md) | every fault and quirk this campaign found in Pokémon Blue, with the reasoning that found it — a thirty-year-old soft-lock, mechanics the community states one way and the cartridge another, and the corrections of our own beliefs — its own project now ([AtlasGB](https://github.com/Alchemy86/AtlasGB)); this page is a pointer |
+| [sharp edges](gen1/sharp-edges.md) | what stayed here: this repository's own tooling traps — every trap that is a fact about the cartridge moved to [AtlasGB](https://github.com/Alchemy86/AtlasGB)'s `sharp-edges.md` |
 
 ## Pokémon Generation 2
 

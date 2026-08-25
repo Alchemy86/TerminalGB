@@ -1,8 +1,13 @@
 # Choosing a bench: what beats a gym, where it is caught, and what it costs
 
-Everything on this page is a fact about **Pokémon Red and Blue**, read out of
-the cartridge, and would be true with no agent in the world. It is the
-companion to [`cerulean-gym.md`](cerulean-gym.md), which holds Misty's own
+> **The headline worked examples on this page — why a WATER gym wants a bench that resists
+> water, and why PARAS beats it where PIKACHU cannot — moved to
+> [AtlasGB's catching page](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md#a-worked-example-choosing-a-target)**,
+> adapted and cited alongside the capture mechanics they sit beside. Everything below is the
+> fuller comparative sweep this repository's own `duel.py` produces, and the BFS route-planning
+> and menu-driving tooling that AtlasGB does not carry.
+
+It is the companion to [`cerulean-gym.md`](cerulean-gym.md), which holds Misty's own
 party and her gym's map.
 
 **The rates our solver achieved with a bench are not here** — under
@@ -22,28 +27,6 @@ python3 tools/gen1-tables/duel.py --rom <blue.gb> --against misty --levels 24
 ```
 
 ---
-
-## 1. A bench that beats a WATER gym has to RESIST water, and that is the half everybody skips
-
-`gen1_tables.py --plan misty` answers *"what type beats this?"* and it is not
-enough, twice over.
-
-**A species can carry the right type and hold no move of it.** PARAS is
-BUG/GRASS and its level-up learnset — `EvosMovesPointerTable`, read at
-`0x03B05C` on this cartridge — is `STUN SPORE` 13, `LEECH LIFE` 20, `SPORE` 27,
-`SLASH` 34, `GROWTH` 41. **It never learns a damaging GRASS move at all.** Its
-answer to a water gym is a 20-power BUG move, and by type alone you would never
-know.
-
-**And a species can hit for double and still lose.** What decides a Gen 1 gym
-is as much what comes back. Misty's STARMIE lands a same-type WATER GUN;
-`TypeEffects` gives WATER × GRASS = 0.5 and WATER × ELECTRIC = 1.0, so a grass
-bench takes **half** what an electric one takes from the same attack. That one
-multiplication is the difference between a bench that takes the badge and one
-that faints.
-
-Both halves together are why the starter that beats Misty is IVYSAUR, which is
-GRASS/POISON — it hits for 2× *and* is hit for 0.5×.
 
 ## 2. Every candidate, at the level the chain trains to
 
@@ -93,90 +76,13 @@ two are different Pokémon on paper and conflating them flatters the higher
 levels.** The verdicts above are unchanged either way; §7's BELLSPROUT is not,
 and that is the one place it matters.
 
-## 3. PIKACHU, evaluated properly — and it loses
+## 5. What a hunt costs
 
-Pikachu is the obvious early catch and the case for it is a good one: it is in
-Viridian Forest at levels 3-5 in 2 of 10 slots, which is *before* Brock, so it
-levels through every fight on the road between the two gyms; it arrives already
-holding **THUNDERSHOCK** (`BaseStats` offset 15, the four moves a species is
-generated with), which is ELECTRIC and therefore 2× on both of Misty's; it has
-base Speed 90; and it learns THUNDER WAVE at 9, which quarters an opponent's
-speed. Nothing about that is wrong.
-
-**It still loses, and the reason is defensive.** Sweeping the level:
-
-| level | best move | turns to kill | turns to die |
-|---:|---|---:|---:|
-| 14 | THUNDERSHOCK | 6 | 2 |
-| 18 | THUNDERSHOCK | 6 | 2 |
-| 21 | THUNDERSHOCK | 4 | 3 |
-| **24** | THUNDERSHOCK | **4** | **3** |
-| 27 | SWIFT | 6 | 4 |
-| 30 | SWIFT | 4 | 5 |
-
-Two cartridge facts make that table what it is.
-
-* **ELECTRIC does not resist WATER.** `TypeEffects` has no ELECTRIC row for a
-  water attack, so Pikachu takes a full same-type WATER GUN from a STARMIE with
-  base Special 100 — onto a Pokémon whose base HP is 35 and base Defence 30. It
-  dies in two or three turns at every level up to 30.
-* **Its offence does not scale, because its base Special is 50.** Doubling a
-  40-power move against a base-85-Defence STARMIE is still four turns.
-
-The level 27 and 30 rows carry a third fact worth knowing on its own:
-`WriteMonMoves` gives a *caught* Pokémon the **last four moves its species has
-learned by that level**, so a Pikachu caught at 27 has already pushed
-THUNDERSHOCK out of its own move list in favour of SWIFT. A Pikachu *trained*
-from level 5 keeps it, because the level-up prompt's criterion drops GROWL
-first.
-
-**So the sweep was run again the fair way, and the verdict does not move.**
-`duel.py --against misty --caught-at 5 --candidates pikachu --levels 21,24,27`
-keeps THUNDERSHOCK throughout and gives 4 turns to kill against 3 to die at 21
-and again at 24, and 3 against 4 at 27 — a one-turn margin, at a level three
-above the one the chain trains to and reached only by roughly half as much
-grinding again. **Pikachu's problem is not its move list, it is that ELECTRIC
-does not resist WATER**, and no moveset model changes that.
-
-**So the honest answer to "is Pikachu a good early catch?" is: yes for the road
-and no for this gym.** It is the best thing in Viridian Forest, it fights well
-between Brock and Misty, and it cannot take the Cascade Badge at any level the
-chain can reach.
-
-## 4. PARAS, and why the answer is a level rather than a species
-
-PARAS at level 21 loses (6 turns to kill, 5 to die). At 24 it wins by a mile.
-Nothing about the species changed:
-
-> `EvosMovesPointerTable` gives PARAS **`EVOLVE_LEVEL 24 → PARASECT`**.
-
-PARASECT's base stats are 60/95/80/30/80 against PARAS' 35/70/55/25/55 — and
-`MISTY_TRAIN_TO` was already 24, because that is where the Squirtle line learns
-BITE. **The bench and the starter want the same threshold**, which is luck
-rather than design, and it is why one training leg serves both.
-
-The typing does the rest: BUG/GRASS takes `WATER × BUG = 1.0` then
-`WATER × GRASS = 0.5`, so a STARMIE's best attack is halved; and LEECH LIFE is
-BUG, which is 2× on STARMIE's PSYCHIC half. Thirteen turns to die against four
-to kill is the widest margin any catchable Pokémon on this road has.
-
-**What it does not have is a good move.** LEECH LIFE is 20 power. PARASECT wins
-on defence and on base Attack 95, not on its moveset, and it would win by more
-with MEGA DRAIN (TM21) — which is on no map the chain walks.
-
-## 5. Where they are, and what a hunt costs
-
-`gen1_tables.py --encounters`, which reads `WildDataPointers`:
-
-| map | rate | PARAS slots | level |
-|---|---:|---:|---:|
-| Mt Moon 1F `0x3B` | 10/256 | 1/10 | 8 |
-| Mt Moon B1F `0x3C` | 10/256 | 1/10 | 10 |
-| **Mt Moon B2F `0x3D`** | 10/256 | **2/10** | **10-12** |
-
-So on B2F a PARAS is `(10/256) × (2/10)` per step — **about one step in 128** —
-and every other floor is half that. B2F is also the floor the chain already
-ends a link standing on.
+PARAS is 10/256 encounter rate at 1/10 or 2/10 slots across Mt Moon's three floors
+(`gen1_tables.py --encounters`, which reads `WildDataPointers`) — Mt Moon B2F `0x3D` carries
+2/10 of its slots, twice either floor above it, at levels 10-12. So on B2F a PARAS is
+`(10/256) × (2/10)` per step — **about one step in 128** — and B2F is also the floor the chain
+already ends a link standing on.
 
 **The pacing ground is `x` 20-28, `y` 12-14, and it is trainer-free.** B2F
 declares five trainers: (12,8) facing right, (11,16) and (15,22) facing down,
@@ -195,23 +101,14 @@ everything else. The threshold is the cartridge's own: through
 `plugins/trainer/src/capture.rs`, a full-health PARAS at base catch rate 190 is
 a 25 % Poké Ball and one at half health is 50 %.
 
-## 6. The three cartridge facts a catch-and-train capability rests on
+## 6. Driving the party menu — two screens that look alike
 
-1. **`wPartySpecies` at `$D164` is seven bytes** — one **internal** species
-   index per slot, then `$FF` (AtlasGB `pokemon-rb`, `wPartySpecies`, len 7).
-   Slot two is `$D165`. PARAS' internal index is **109** and its Pokédex number
-   is 46; mixing the two is the classic Gen 1 mistake, and `gen1_tables.py`
-   reads both out of the cartridge so neither has to be remembered.
-2. **Experience goes to what was sent out, and Gen 1 sends out the first party
-   member with any HP.** A caught Pokémon on the bench therefore cannot be
-   trained at all — it has to lead first, and the cartridge's own way to say so
-   is `SwitchPartyMon` (`engine/menus/party_menu.asm`), reached from START →
-   POKéMON → A → `SWITCH`. Driving that menu writes nothing: every byte it
-   touches it would have touched for a player.
-3. **A caught Pokémon's moves are a function of its species and its level and
-   of nothing else** (`WriteMonMoves`: the last four its species has learned by
-   that level). So what a level 10 PARAS can do is knowable before a ball is
-   thrown — it is a 40-power SCRATCH, and that is the whole of it.
+The three cartridge facts a catch-and-train capability rests on (`wPartySpecies`'s seven-byte
+layout, experience going to whatever was sent out, and a caught Pokémon's moves being a function
+of species and level alone) are already stated, with citation, on
+[AtlasGB's party page](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/party.md)
+— they were redundant with it from the moment that page existed. What is left here is specific
+to *driving* the party menu from outside, which AtlasGB has no reason to know about.
 
 ### The party menu has two screens that cannot be told apart
 
@@ -277,9 +174,11 @@ is a different species and the same three capabilities.
 
 ## See also
 
-* [`catching.md`](catching.md) — the capture odds, disassembled out of
-  `ItemUsePokeBall`, and how the wild/trainer discriminator is read off the
-  screen.
+* [AtlasGB: catching](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/catching.md#a-worked-example-choosing-a-target) —
+  the capture odds disassembled out of `ItemUsePokeBall`, and the PARAS/PIKACHU worked example
+  this page's own headline used to carry.
+* [`catching.md`](catching.md) — this repository's own discriminator tooling and the
+  wild/trainer sampling-rate analysis.
 * [`cerulean-gym.md`](cerulean-gym.md) — Misty's party, her movesets, her gym's
   map, and the trainer that sees through a wall.
 * [`learning-moves.md`](learning-moves.md) — the level-up prompt a trained

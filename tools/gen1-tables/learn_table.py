@@ -290,8 +290,9 @@ def drill_plan(rom, em, mv, names, dex_of, stats, stats_at, start,
     """Every level-up on one line that offers a move, with the answer.
 
     Walks from level 1 taking every evolution — the measured rule is that
-    **nothing is ever lost by evolving** (`docs/gen1/discoveries.md`), so
-    refusing one would be drilling a line no player walks.
+    **nothing is ever lost by evolving**
+    (https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#cancelling-an-evolution-costs-one-level-and-nothing-else),
+    so refusing one would be drilling a line no player walks.
 
     Each entry carries what the emulator needs to *reach* that level-up
     directly rather than grinding to it: the species and level to arm, and the

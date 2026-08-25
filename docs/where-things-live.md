@@ -84,10 +84,11 @@ links — including this repository's own source comments — do not die:
 
 ### Three consequences worth knowing before you write anything
 
-1. **Three stills in `docs/gen1/discoveries.md` are now absolute links into
-   AgentGB's raw content**, because the pictures are of agent runs and the
-   findings are about the cartridge. If you move them back, move the findings
-   with them.
+1. **Three stills in what is now [AtlasGB's `discoveries.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md)
+   are absolute links into AgentGB's raw content**, because the pictures are of agent runs and
+   the findings are about the cartridge. That page moved out of this repository in a later round
+   than the AgentGB split this document records; the same rule carried over — if the stills move
+   back, move the findings with them.
 2. **The stubs cannot preserve anchors.** Source comments and `AGENTS.md`
    entries that say "`docs/agent/pewter-chain.md` §8.10" still reach the stub,
    which names the new home; the section number is only resolvable at the far

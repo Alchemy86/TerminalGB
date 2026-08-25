@@ -106,7 +106,7 @@ driver waits for the pad to go quiet before reading state, rather than counting 
 One measured caution from the battle-control crew, worth honouring in anything that navigates a
 menu: **Gen 1's `HandleMenuInput` delays several frames after accepting a press**, so two presses
 eight frames apart look from outside exactly like the emulator dropping input. Space menu presses
-by around half a second — see [gen1/sharp-edges.md](gen1/sharp-edges.md#driving-the-game).
+by around half a second — see [AtlasGB's sharp edges](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/sharp-edges.md#the-engine).
 
 `Machine` checks the calling plugin's declared set and refuses — `peek` returns `None`, `poke`
 returns `false` — rather than believing the plugin. A plugin that never declares `WRITE_MEMORY`

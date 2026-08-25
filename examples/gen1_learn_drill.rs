@@ -819,7 +819,8 @@ mod drill {
     /// **A level 2 MAGIKARP, not the CHANSEY the trace scenarios use.** CHANSEY
     /// is worth 182 experience, which crosses two level boundaries at low level
     /// and loses the move belonging to the one it skipped
-    /// (`docs/gen1/discoveries.md`). MAGIKARP at level 2 is worth 5, knows
+    /// (<https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#crossing-two-levels-loses-the-move-in-between>).
+    /// MAGIKARP at level 2 is worth 5, knows
     /// nothing but SPLASH, and cannot cross a boundary at any level in the
     /// game — so the arithmetic is the same for every event instead of being
     /// tuned per event.
@@ -1167,7 +1168,7 @@ mod drill {
             // **0** — the two move lists disagree, and only this one is the one
             // `MoveSelectionMenu` builds. Getting it wrong is silent: the index
             // already equals the target and A fires on the wrong move
-            // (`docs/gen1/discoveries.md`).
+            // (<https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#the-battle-move-menu-cursor-is-1-based>).
             let at = (self.gb.peek(tr::CURRENT_MENU_ITEM) as usize).saturating_sub(1);
             Some(match at.cmp(&slot) {
                 std::cmp::Ordering::Less => KeypadKey::Down,

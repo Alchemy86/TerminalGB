@@ -1,6 +1,15 @@
 # Where Pokémon Gold keeps what we have looked at
 
-[← Gen 2 area](README.md)
+[← Gen 2 area](README.md) ·
+[AtlasGB: memory map](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-gs/docs/memory-map.md)
+
+> **Every game fact below is now also stated, independently, on
+> [AtlasGB's own Gen 2 memory map](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-gs/docs/memory-map.md)**
+> — the same move the Gen 1 area's memory map made first. The evidence-grade vocabulary here
+> (*symbol file* / *walked* / *measured*) is restated in AtlasGB's own looser prose rather than
+> copied verbatim, since there is no `apply-evidence.py` run behind that atlas yet. This page's
+> job is now which of these bytes **this project's own tooling** (`examples/gen2_timecapsule.rs`)
+> touches, and why.
 
 Every address on this page is for **English Pokémon Gold**, and is graded — see
 [the four grades](README.md#the-grades-with-one-added-and-one-missing). The short version:
@@ -34,7 +43,7 @@ Every constant below is transcribed in
 **The walk for `wPlayerID` is two bytes and it has a landing check.** It is not in the
 transcribed constant list; the code reaches it as `wPlayerName − 2`, which is also exactly the
 first byte of `wPlayerData`, the start of the first saved run
-([the save file](the-save-file.md#1-three-runs-not-one-base-plus-an-offset)). So the walk lands
+([AtlasGB's save file](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-gs/docs/the-save-file.md#three-runs-not-one-base-plus-an-offset)). So the walk lands
 on a boundary that is independently established by the save map — which is the check, and it is
 the only reason a two-byte walk is worth writing down instead of just doing.
 
@@ -90,13 +99,13 @@ four are visible above:
 3. **Happiness exists** at 27, another Gen 2 concept.
 4. **Level is at 31, not 33.** This is the classic way to produce a nonsense Pokémon when
    porting code between generations, and it is the same class of mistake as confusing Gen 1's
-   `party_struct` with its `battle_struct` ([Gen 1 sharp edges](../gen1/sharp-edges.md#reading-state)).
+   `party_struct` with its `battle_struct` ([Gen 1 sharp edges](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/sharp-edges.md#reading-state)).
 
 **Multi-byte fields are big-endian**, exactly as in Gen 1, on a little-endian console.
 
 The **DV pair at 21** is the field the whole Time Capsule chain exists to follow: it crosses the
 wire unchanged, and it is what Gen 2's own `CheckShininess` reads. See
-[the Time Capsule](time-capsule.md#6-the-shiny-rule-read-out-of-the-cartridge-not-inferred).
+[AtlasGB's Time Capsule](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-gs/docs/time-capsule.md#the-shiny-rule).
 
 ---
 
@@ -124,7 +133,7 @@ onto the warp tile. Measured, and the reason it is done that way is written into
 
 This is the Gen 2 answer to the Gen 1 trick of redirecting `wWarpEntries`, and it exists for the
 same reason: **move the world's pointers, not the player.** Why editing the save instead does
-not work is [the save file](the-save-file.md#3-you-cannot-teleport-the-player-by-editing-the-save).
+not work is [AtlasGB's save file](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-gs/docs/the-save-file.md#you-cannot-teleport-the-player-by-editing-the-save).
 
 ### Map ids and coordinates that have actually been used
 
@@ -166,7 +175,7 @@ Both values come from `rgbasm`, not from counting the `const` chain. `ENGINE_TIM
 mapped into `wDailyFlags1` by `data/events/engine_flags.asm`; what makes it *daily* is that
 `CheckDailyResetTimer` (`engine/overworld/time.asm`) zeroes `wDailyFlags1` once a day has
 elapsed on the cartridge clock. Both flags are read the "wrong way round" from what you would
-guess — see [the Time Capsule](time-capsule.md#3-the-in-game-prerequisites-in-order).
+guess — see [AtlasGB's Time Capsule](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-gs/docs/time-capsule.md#the-in-game-prerequisites).
 
 ---
 

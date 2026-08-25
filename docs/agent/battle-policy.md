@@ -425,7 +425,7 @@ has always reported 95 — only the prose was. Re-read off the retail cartridge 
 `Moves` `0E:4000`, six bytes a move, with POUND, SCRATCH, VINE WHIP, HYPER BEAM
 and HYDRO PUMP checked in the same pass so the offset and stride are not in
 doubt. Full working:
-[discoveries](../gen1/discoveries.md#tackle-is-95-per-cent-and-we-said-94).
+[discoveries](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md#tackle-is-95-per-cent-and-we-said-94).
 
 > **When you write down a number the cartridge holds, write down the command that
 > reads it.** A confident, cited-sounding sentence with no command behind it is a
@@ -442,9 +442,9 @@ doubt. Full working:
 - [the Gen 1 battle engine](../gen1/battle-engine.md) — a model of the rules,
   held to the cartridge by a differential harness. The policy here reads a live
   battle; that one simulates hypothetical ones.
-- [sharp edges](../gen1/sharp-edges.md) — including the soft-lock next door to
+- [AtlasGB: sharp edges](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/sharp-edges.md) — including the soft-lock next door to
   where this fight happens.
-- [discoveries](../gen1/discoveries.md) — every battle finding on this page, and
+- [AtlasGB: discoveries](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/discoveries.md) — every battle finding on this page, and
   the rest of the campaign's, written as *how it was found* with the wrong turns
   kept: the critical hit, the accuracy scaling, the 1-based cursor, the escape
   that is not free, and the two numbers of ours that turned out to be wrong.

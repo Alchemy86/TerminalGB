@@ -930,7 +930,8 @@ required-features = ["plugin-battle-control", "plugin-trainer"]
 # The CATCHING drill: the mechanics of throwing a ball, measured en masse from
 # synthesised battles, plus the two facts a catch policy is not allowed to
 # guess — which battles will accept a ball, and whether the bag holds one.
-# See docs/gen1/catching.md.
+# The ball mechanics are on AtlasGB's catching.md; the discriminator is
+# docs/gen1/catching.md.
 [[example]]
 name = "gen1_catch_drill"
 path = "examples/gen1_catch_drill.rs"
@@ -939,7 +940,7 @@ required-features = ["plugin-battle-control", "plugin-trainer", "plugin-agent"]
 # The LEARNING drill: what the game puts on screen when a Pokemon learns a move
 # or evolves, traced frame by frame, and whether the two modal interruptions can
 # be told apart. The same treatment catching.md gave the wild/trainer pair.
-# See docs/gen1/battling.md.
+# See AtlasGB's battle.md (docs/gen1/battling.md is now a pointer to it).
 [[example]]
 name = "gen1_learn_drill"
 path = "examples/gen1_learn_drill.rs"

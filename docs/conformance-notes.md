@@ -651,7 +651,9 @@ The captain's order was to challenge the figures in Appendix G of *The PokéAgen
 Challenge* ([arXiv 2603.15563v2](https://arxiv.org/abs/2603.15563)) rather than
 take them on trust, since this repository has a cartridge-driven Gen 1 battle
 harness and can settle them. Eleven statements were measured on retail Pokémon
-Blue; the full table, method and provenance are
+Blue; the full table is now on
+[AtlasGB's `paper-claims.md`](https://github.com/Alchemy86/AtlasGB/tree/main/atlases/pokemon-rb/docs/paper-claims.md),
+and the method and provenance are on this repository's own
 [`docs/gen1/paper-claims.md`](gen1/paper-claims.md). **Most of them hold.** Two
 findings belong in this corpus.
 
