@@ -1011,6 +1011,52 @@ fn digits_match(frame: &[u8], want: &str) -> bool {
     true
 }
 
+/// The glyph actually drawn in cell `i`, named the way `digits_match` would
+/// have wanted to see it.
+///
+/// **Why the failing verdict carries this and not just "not drawn".** Of the
+/// 1,369 `identical`-mode rows this suite failed when the diagnostic was added,
+/// only **11 were blank**: 1,289 drew a clean, valid hex digit that simply
+/// disagreed with hardware, and 69 drew a partial glyph. So "not drawn" named
+/// the wrong thing on 99 % of its own rows — and, worse, it made the baseline
+/// blind to a whole class of regression, because a row that changed from
+/// drawing `0` to drawing `1` moved no line in the file. Recording the glyph
+/// puts this suite under the same rule the Mealybug baseline already follows
+/// with its pixel counts: the expectation file carries *how* wrong we are, so
+/// a change in either direction is a visible diff.
+fn digit_drawn(frame: &[u8], i: usize) -> String {
+    let mut got: u64 = 0;
+    for y in 0..8 {
+        for x in 0..8 {
+            let p = ((y * W) + i * 8 + x) * 4;
+            let black = (u32::from(frame[p]) << 16
+                | u32::from(frame[p + 1]) << 8
+                | u32::from(frame[p + 2]))
+                & 0xF8F8F8
+                == 0;
+            if black {
+                got |= 1 << (63 - (y * 8 + x));
+            }
+        }
+    }
+    if got == 0 {
+        return "blank".into();
+    }
+    match OUT_TILES.iter().position(|t| *t == got) {
+        Some(n) => format!("{n:x}"),
+        // Not one of Gambatte's sixteen glyphs. The ink count is enough to
+        // tell a near-miss from a screenful of noise without inventing a name
+        // for a shape the font does not have.
+        None => format!("?{}", got.count_ones()),
+    }
+}
+
+/// What the frame draws where `want` expects its hex string.
+fn digits_drawn(frame: &[u8], want: &str) -> String {
+    let n = want.chars().take_while(|c| c.is_ascii_hexdigit()).count();
+    (0..n.min(W / 8)).map(|i| digit_drawn(frame, i)).collect()
+}
+
 fn score_gambatte(s: &Suite, rom: &Path, key: &str, out: Option<&Path>) -> Rows {
     let stem = rom.file_stem().unwrap().to_string_lossy().to_string();
     let mut rows = Rows::new();
@@ -1029,7 +1075,7 @@ fn score_gambatte(s: &Suite, rom: &Path, key: &str, out: Option<&Path>) -> Rows 
             "audio1" => "FAIL silent, expected audio".to_string(),
             "" => "SKIP no expectation in the file name".to_string(),
             hex if digits_match(m.frame(), hex) => "PASS".to_string(),
-            hex => format!("FAIL out={hex} not drawn"),
+            hex => format!("FAIL out={hex} got={}", digits_drawn(m.frame(), hex)),
         };
         rows.push((k, v));
     }
