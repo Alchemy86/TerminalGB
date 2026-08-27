@@ -123,6 +123,87 @@ was configured.**
 
 ---
 
+## ...and so is a host that never listens
+
+The section above is about a build. This one is about the same missing peripheral reached a
+different way, five years and four rediscoveries later: **`terminalgb-mcp` — this repository's
+own agent interface — installed a sound chip only when given `--audio` *and* handed a real
+output device.** Headless, which is how every agent runs it, the machine had none. So did every
+example here that drove a real cartridge.
+
+*Symptom* — **losing a battle ends the run, permanently.** Gen 1 does not end a run when your
+last Pokémon faints: `HandleBlackOut` (`home/overworld.asm`) fades the screen out, halves your
+money, heals the party and warps you to `wLastBlackoutMap`, which before Viridian is Pallet
+Town. What was observed instead was an entirely black screen, `wIsInBattle` stuck at `$FF`,
+`wCurMap` unchanged, and the CPU still executing — for **3,670-3,900 decisions**, about
+thirty-four minutes of game time, under nine different input arms **including pressing nothing
+at all**.
+
+*The mechanism, and it is one instruction deep.* `HandleBlackOut`'s second instruction is
+`call StopMusic`, and `StopMusic` ends in a spin on `wAudioFadeOutControl` that only the audio
+engine can release. `FadeOutAudio` (`home/fade_audio.asm`) releases it by walking the master
+volume down to zero — and it walks it down by **reading `rAUDVOL` (`$FF24`, NR50) back**,
+decrementing both nibbles and writing it again, stopping only when the read-back is exactly
+zero:
+
+```
+.counterReachedZero
+	ld a, [wAudioFadeOutCounterReloadValue]
+	ld [wAudioFadeOutCounter], a
+	ldh a, [rAUDVOL]
+	and a ; has the volume reached 0?
+	jr z, .fadeOutComplete
+```
+
+A machine with no APU answers `$FF` to every read in `$FF10-$FF3F` and drops every write, so
+the volume never falls, the flag is never cleared, and `StopMusic` spins behind an
+already-faded-out screen for as long as anyone is willing to watch. The reported "only the
+sound engine's RAM is moving" was not a symptom beside the bug — **it was the bug**: a wait
+loop servicing audio and nothing else.
+
+*Measured, three ways, one byte-identical save state.* `examples/blackout_probe.rs` loses a wild
+battle with a party of one from a brand-new game and then presses nothing:
+
+| | `wCurMap` | `wIsInBattle` | screen | party | `wAudioFadeOutControl` | `rAUDVOL` | frames |
+|---|---|---|---|---|---|---|---|
+| **no sound chip** | 38, unchanged | `$FF` | 1 shade, never came back | 0/20 | `$FF` — spinning | `$FF` | never, 3000+ |
+| **with a sound chip** | **0 — Pallet Town** | `$00` | 4 shades, back at 114 | **20/20, healed** | `$00` | `$77` | 235 |
+| **mGBA** | **0 — Pallet Town** | `$00` | back | — | `$00` | — | 203 |
+
+The mGBA column is [`tools/blackout/`](../../tools/blackout/README.md): the same cartridge, the
+same party bytes, the same opponent poked into `wCurOpponent`, on somebody else's emulator, so
+the expected answer is not one this project supplied. **All four steps of the whiteout — the
+fade, the map change, the party heal, the respawn — complete with a sound chip and none of them
+complete without one.**
+
+*Caught by* — **nothing, and nothing ROM-driven could.** The emulator is entirely correct
+throughout: every register, every cycle, every pixel. What was wrong is the *machine the
+cartridge was handed*, which is a property of the host and invisible to a framebuffer compare or
+a serial verdict. It is the same blind spot as everything else on this page.
+
+*What it did and did not cost.* `examples/pewter_chain.rs` installed a sound chip at all three of
+its machine-construction sites and always had, so **the certified chain was never affected** —
+its 213 blackouts at link 24 recovered correctly, which is why "a blackout is a legal detour" was
+measurable at all. What was affected is everything that did not: `terminalgb-mcp`, and
+`scenario.rs`, `longplay.rs`, `claude_plays.rs`, `shiny_hunt.rs` and eighteen more. Any death in
+a run driven through one of those was unrecoverable when the cartridge says it should not have
+been, and a "failure" recorded there may be this and not the agent.
+
+> **A Game Boy has a sound chip, and `MMU.sound` being an `Option` is a performance affordance,
+> not a model of a machine that exists.** Measured on Pokémon Blue, one P-core, interleaved:
+> the chip costs **+0.3 %** of a frame on the `identical` picture engine and **+4.6 %** on
+> `standard` with pixels off. That is what four rediscoveries have been buying.
+>
+> Changing `Gameboy::new` to install one by default would end the class outright and is a
+> deliberate decision nobody has taken: it moves a documented core contract, every figure in
+> [throughput.md](../throughput.md), and `examples/headless.rs`'s frame hash and state length.
+> Until it is taken, the enforcement is check 1 of `testharness/blackout.rs` — a named list of
+> every host that drives a real cartridge, each of which must install one. It is the only one of
+> the three checks there that can catch a *new* harness falling in, which is what has happened
+> four times.
+
+---
+
 ## Audio scheduling: three constants, all wrong on the first try
 
 Native and browser audio are the same problem with a different consumer, and the numbers do

@@ -276,10 +276,19 @@ ffplay -f rawvideo -pix_fmt rgba -s 160x144 -framerate 59.7275 -i /tmp/gb.raw
 `--features mcp,libc` (or just `--features mcp,tui`, which includes it) if you want that.
 A plain file destination works in every build. See [`docs/video-out.md`](video-out.md).
 
-**Sound.** `--audio` only makes sense with `--speed realtime` or slower. The APU emits
-samples at a fixed rate against *emulated* time, so at 70x real time the audio queue is
-overrun and the oldest samples are discarded — the documented fast-forward policy, but not
-something anyone wants to listen to.
+**Sound.** The machine always has a sound chip; `--audio` decides only whether its samples
+reach a speaker. **That is not a detail.** A machine with `MMU.sound == None` is not a quiet
+Game Boy, it is one with the chip pulled out: every read in `$FF10-$FF3F` answers `$FF` and
+every write is dropped, and Gen 1's blackout sequence then never finishes — the screen stays
+black, the party is never healed and the player is never returned to their last Pokémon Centre.
+This server shipped such a machine by default until 2026-08-27. See
+[`docs/measured/host.md`](measured/host.md#and-so-is-a-host-that-never-listens) and
+`examples/blackout_probe.rs`.
+
+`--audio` itself only makes sense with `--speed realtime` or slower. The APU emits samples at
+a fixed rate against *emulated* time, so at 70x real time the audio queue is overrun and the
+oldest samples are discarded — the documented fast-forward policy, but not something anyone
+wants to listen to.
 
 ```sh
 terminalgb-mcp --rom game.gb --speed realtime --audio
@@ -346,8 +355,9 @@ than the emulator is the bottleneck: [`docs/agent-environment.md`](agent-environ
 against ~0.29 without. That figure is **stale**. It predates the audio crew's fix for a
 player that *blocked* inside `Cpu::do_cycle` (`docs/audio.md` §4c); with the current
 non-blocking hand-off the measured cost here is 0.264 vs 0.238 ms — about 11%, not 27x.
-Audio is still off by default, but the honest reason is that nobody is listening at 70x
-speed, not that it is ruinous.
+Host *playback* is still off by default, but the honest reason is that nobody is listening at
+70x speed, not that it is ruinous. The **chip** is always installed — see "Sound" above for
+what it cost when it was not.
 
 ---
 

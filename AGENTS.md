@@ -13554,3 +13554,88 @@ pass/total:** previous session's own closing figure was **4,293/6,210**; this se
 adds AGE +1 and Gambatte +2, giving **4,296/6,210**. `standard` mode is unchanged at
 **3,696/6,210**. `cargo test --release --lib`: **908/908** (906 + the 2 new tests), plus the same
 1 pre-existing `#[ignore]`d test.
+
+## A GAME BOY HAS A SOUND CHIP — and Gen 1's whiteout is what proves it
+
+**Full record: [`docs/measured/host.md`](docs/measured/host.md#and-so-is-a-host-that-never-listens)
+and `docs/conformance-notes.md` (2026-08-27). Reproduction:
+`examples/blackout_probe.rs`. Gate: `testharness/blackout.rs`. Reference:
+[`tools/blackout/`](tools/blackout/README.md).** No emulation changed — every gated baseline is
+byte-identical and the in-repo harness is still 46/47.
+
+- **`MMU.sound == None` IS NOT A QUIET GAME BOY, AND THIS IS THE FOURTH TIME THAT HAS COST
+  SOMETHING.** Every read in `$FF10-$FF3F` answers `$FF` and every write is dropped. This file
+  already recorded three rediscoveries (the `dmg_sound`/`interrupt_time` harness, the
+  conformance adapter, the Pokémon Center nurse) and `docs/measured/host.md` a fourth (the
+  `wasm32` build). **Reported as an emulator bug and it is not one**: the emulator is right
+  throughout; the *machine the host handed the cartridge* was not.
+- **THE MECHANISM IS ONE INSTRUCTION DEEP AND WORTH KNOWING BY HEART.** `HandleBlackOut`
+  (`home/overworld.asm`) calls `StopMusic`, which spins on `wAudioFadeOutControl` (`$CFC7`)
+  until the audio engine clears it. `FadeOutAudio` (`home/fade_audio.asm`) clears it only after
+  walking the master volume to zero, and it walks it down by **reading `rAUDVOL` (`$FF24`, NR50)
+  back**, decrementing both nibbles and writing it again, stopping only when the read-back is
+  exactly zero. `$FF` forever means the loop never ends. **The one-line detector for the whole
+  class: write `$77` to `$FF24` and read it back.**
+- **Measured, one byte-identical save state, two arms plus mGBA:** no chip → `wCurMap` 38
+  unchanged, `wIsInBattle` `$FF`, one distinct shade in all 23,040 pixels, party 0/20, never
+  recovers in 3,000 frames. With a chip → **`wCurMap` 0 (Pallet Town)** in 235 frames, party
+  **healed to 20/20**. **mGBA `c65e8a3` → Pallet Town in 203 frames.** All four steps of the
+  whiteout — fade, map change, party heal, respawn — need the chip and none of them completes
+  without it.
+- **`examples/pewter_chain.rs` ALWAYS HAD ONE, so the certified chain was never affected** — its
+  213 blackouts at link 24 recovered correctly, which is why "a blackout is a legal detour" was
+  measurable at all. What was affected: **`terminalgb-mcp`** (the documented agent interface,
+  and what the report came from), `scenario.rs`, `longplay.rs`, `claude_plays.rs`,
+  `shiny_hunt.rs` and twenty-one more. A death in a run driven through one of those was
+  unrecoverable when the cartridge says it should not have been — so a "failure" recorded there
+  may be this and not the agent.
+- **`terminalgb-mcp` INSTALLS THE CHIP UNCONDITIONALLY NOW; `--audio` decides only whether
+  samples reach a speaker.** And `Session::reset` reinstalls it, because a rebuilt machine
+  starts at `None` — the same trap as the `set_render_pixels` line already beside it.
+- **THE GATE IS A NAMED LIST, BECAUSE A NOTE HAS FAILED FOUR TIMES.**
+  `testharness/blackout.rs` check 1 scans `CARTRIDGE_HOSTS` and requires `.enable_audio(` in
+  each — a call, not a mention, so a comment explaining the trap cannot satisfy it. Needs no
+  cartridge, so it always runs, and it is the only one of the three checks that can catch a
+  **new** harness. Same shape and reasoning as `testharness/gen1atlas.rs`'s anti-drift gate.
+  **Adding a host that drives a real cartridge means adding it to that list.** Deliberately
+  absent: `headless.rs` (the minimal embedding proof), `mealybug.rs` / `cpp_suite.rs` (gated
+  conformance runners), the rendering benches, and `shiny_hunt.rs:622` (loads a state and dumps
+  the framebuffer without running a frame).
+- **NOT DONE, AND THE MEASUREMENT IS HERE SO IT CAN BE DECIDED:** making `Gameboy::new` install
+  one by default would end the class outright. Interleaved on one P-core, Pokémon Blue: the chip
+  costs **+0.3 %** of a frame on the `identical` picture engine and **+4.6 %** on `standard`
+  with pixels off (0.0439 → 0.0459 ms/frame, 3/3 consistent). It moves a documented core
+  contract, every figure in `docs/throughput.md`, and `examples/headless.rs`'s frame hash and
+  state length — a captain-level call, not a bug-fix one.
+- **The reproduction is shared, not duplicated.** `examples/support/blackout.rs` is
+  `#[path]`-included by both the probe and the harness, the way
+  `examples/support/paperclaims.rs` already is — so what is measured and what is gated cannot
+  drift apart.
+
+### Driving mGBA as a reference — three traps, two of which segfault rather than fail to build
+
+Recorded because each cost a run. Full detail: [`tools/blackout/README.md`](tools/blackout/README.md).
+
+- **`mgba/flags.h` is NOT included by mGBA's own translation units** — it is generated for
+  downstream users of an *installed* mGBA. Force-including it adds defines the library never saw
+  (`USE_JSON_C`, `USE_LUA`), and `struct mCore` has members behind `#ifdef`s, so your TU and the
+  library disagree about where `init` lives and `core->init(core)` jumps to address zero.
+- **`ENABLE_DIRECTORIES` is on the library's command line and is not in `flags.h`**, and it
+  guards a by-value `struct mDirectorySet` near the top of `struct mCore`. Take the defines from
+  `build/CMakeFiles/mgba.dir/flags.make` — **and pass them as separate words: this shell is zsh,
+  which does not word-split an unquoted `$VAR`**, so `cc $DEFS` hands the compiler one enormous
+  argument and applies none of them. That trap is already recorded elsewhere in this file and it
+  bit again here, presenting as a struct-layout mismatch.
+- **Call `mCoreInitConfig(core, NULL)` before the first `core->reset(core)`** — mGBA's cores read
+  their options out of a config table on reset, and without it `_GBCoreReset` dereferences an
+  uninitialised hash table.
+- `tools/blackout/fetch-and-build.sh` does all of it, pinned to mGBA `c65e8a3`; there is no
+  cmake on this box but `python3 -m pip install --user cmake` supplies one. Not in CI, the same
+  rule `tools/sameboy-oracle/` and `tools/bgb-interop/` follow.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

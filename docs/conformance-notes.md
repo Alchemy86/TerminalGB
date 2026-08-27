@@ -23,6 +23,96 @@ Entries are newest-first.
 
 ---
 
+## 2026-08-27 — Gen 1's whiteout cannot complete on a machine with no sound chip
+
+**No emulation changed.** Every gated baseline is byte-identical and the in-repo
+harness is still 46/47 — the emulator was right throughout. What was wrong is
+the *machine this repository's own hosts handed the cartridge*:
+`terminalgb-mcp` installed a sound chip only when given `--audio` **and** handed
+a real output device, and twenty-five examples that drive real cartridges never
+installed one at all. Reported as "the emulator blacks out on death and never
+comes back".
+
+**Symptom** — **losing a battle ends the run, permanently.** Gen 1 does not end
+a run when your last Pokémon faints: `HandleBlackOut` (`home/overworld.asm`)
+fades the screen out, halves your money, heals the party and warps you to
+`wLastBlackoutMap` — before Viridian that is Pallet Town, so you wake up outside
+your own front door. What happens instead is an entirely black screen (one
+distinct shade in all 23,040 pixels), `wIsInBattle` stuck at `$FF`, `wCurMap`
+unchanged, and the CPU still executing with **only the sound engine's work RAM
+moving** — for as long as anyone watches. Reproduced under nine input arms
+including pressing nothing at all, so no policy is involved.
+
+**Caught by** — **nothing, and nothing ROM-driven could.** Every register, every
+cycle and every pixel is correct; what is wrong is a host configuration, which is
+the same blind spot as the render defects and the frontend refusal already in
+this file. `examples/blackout_probe.rs` is the reproduction and
+`testharness/blackout.rs` is the gate.
+
+**Hardware behaviour** — not violated. This is the *cartridge* depending on a
+peripheral that a real Game Boy always has. `HandleBlackOut`'s second
+instruction is `call StopMusic`, and `StopMusic` ends in
+`.wait: ld a, [wAudioFadeOutControl] / and a / jr nz, .wait`. Only the audio
+engine clears that flag, in `FadeOutAudio` (`home/fade_audio.asm`), and it does
+so by walking the master volume down to zero — **reading `rAUDVOL` (`$FF24`,
+NR50) back, decrementing both nibbles and writing it again**, finishing only
+when the read-back is exactly zero. NR50 is fully readable and writable (Pan
+Docs, *Sound Control Registers*; `NR_READBACK_MASKS`'s entry for it is `0x00`,
+which is why our APU-present arm is right). A machine with no APU answers `$FF`
+to every read in `$FF10-$FF3F` and drops every write
+(`MemoryManagementUnit::rb`/`wb`), so the volume never falls. The Pokémon Centre
+nurse hangs the same way on `NR52` — recorded three times already in this
+repository, which makes this the fourth rediscovery of one class.
+
+**Measured** — one preparation, one byte-identical save state, two arms, and a
+third emulator:
+
+| | `wCurMap` | `wIsInBattle` | screen | party | `wAudioFadeOutControl` | `rAUDVOL` | frames |
+|---|---|---|---|---|---|---|---|
+| no sound chip | 38, unchanged | `$FF` | 1 shade, never back | 0/20 | `$FF` — spinning | `$FF` | never, 3000+ |
+| with a sound chip | **0 — Pallet Town** | `$00` | 4 shades, back at 114 | **20/20, healed** | `$00` | `$77` | 235 |
+| **mGBA** `c65e8a3` | **0 — Pallet Town** | `$00` | back | — | `$00` | — | 203 |
+
+mGBA is [`tools/blackout/`](../tools/blackout/README.md) — the same cartridge,
+the same 404-byte party block, the same opponent poked into `wCurOpponent`, on an
+emulator this project did not write, so the expected answer is not one it
+supplied. It runs the cartridge as an SGB where the probe's `Model::Auto` gives a
+DMG, which is why its shade count and frame count differ; **where the player ends
+up does not.**
+
+**Blast radius, stated precisely.** `examples/pewter_chain.rs` installed a sound
+chip at all three of its construction sites and always had, so **the certified
+Pewter chain was never affected** — its 213 blackouts at link 24 recovered
+correctly, which is why "a blackout is a legal detour" was measurable at all.
+Affected: `terminalgb-mcp` (the documented agent interface, and what the
+investigation that reported this was driving), `scenario.rs`, `longplay.rs`,
+`claude_plays.rs`, `shiny_hunt.rs` and twenty-one more. A death in a run driven
+through one of those was unrecoverable when the cartridge says it should not have
+been.
+
+**Carries into the tool** — three checks, and the first is the one that matters:
+
+1. `testharness/blackout.rs` check 1, an audit over a named list of every host
+   that builds a machine for a real cartridge, requiring each to install one. It
+   needs no cartridge, so it always runs, and it is the only check here that can
+   catch a *new* harness falling into the same trap. Text-scan gate, the same
+   shape and the same reasoning as `testharness/gen1atlas.rs`'s anti-drift gate.
+2. `mmu::audio_presence_tests` — the mechanism at unit speed with no cartridge:
+   `FadeOutAudio`'s own arithmetic transcribed, terminating in seven steps with a
+   chip and never without one. **A one-line detector for the whole class:** write
+   `$77` to `$FF24` and read it back.
+3. `testharness/blackout.rs` checks 2 and 3 — the whiteout end to end on the real
+   cartridge, with the no-chip arm as the teeth. Skips exit 0 without `POKE_ROM`.
+
+> **A Game Boy has a sound chip.** `MMU.sound` being an `Option` is a performance
+> affordance — measured on Pokémon Blue, one P-core, interleaved: **+0.3 %** of a
+> frame on the `identical` picture engine, **+4.6 %** on `standard` with pixels
+> off — and not a model of a machine that exists. Making `Gameboy::new` install
+> one by default would end the class outright; it moves a documented core
+> contract, every figure in [`docs/throughput.md`](throughput.md) and
+> `examples/headless.rs`'s frame hash, so it is a deliberate decision and is left
+> to be taken rather than taken here.
+
 ## 2026-08-21 — resetting `TILE_SEL` on a bitplane read makes the tile index the data
 
 **Shootout 240 → 241 / 264**, and the `acid` group is **5 / 5**:
