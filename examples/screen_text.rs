@@ -183,6 +183,9 @@ fn main() {
     let staged = stage(&rom, save.as_deref());
     let data = std::fs::read(&staged).expect("read rom");
     let mut gb = Gameboy::new(data, Some(staged.clone()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
     match mode.as_str() {
         "tour" => {

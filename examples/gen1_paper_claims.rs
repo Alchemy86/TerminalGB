@@ -172,6 +172,9 @@ fn main() {
     let started = Instant::now();
     let state = {
         let mut gb = Gameboy::new(rom.clone(), Some(staged.clone()));
+        // A machine with no APU is not a quiet Game Boy, it is one with the sound
+        // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         if let Err(e) = new_game(&mut gb) {
             eprintln!("{e}");
             std::process::exit(2);

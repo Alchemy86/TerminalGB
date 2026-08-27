@@ -68,8 +68,13 @@ fn main() {
     let b = stage("b", &rom, save.as_deref(), &scratch);
     let mut gb_a =
         Gameboy::new(std::fs::read(&a.rom).expect("rom a"), Some(a.rom.clone()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb_a.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut gb_b =
         Gameboy::new(std::fs::read(&b.rom).expect("rom b"), Some(b.rom.clone()));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb_b.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
     // Two cores stepped by one loop never drift, so their link handshakes never
     // interleave — `docs/link-cable.md` §"Phase".

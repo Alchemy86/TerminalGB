@@ -114,6 +114,9 @@ fn main() {
         frame: 0,
         outdir: outdir.clone(),
     };
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    d.gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
     for line in script.lines() {
         let line = line.split('#').next().unwrap().trim();

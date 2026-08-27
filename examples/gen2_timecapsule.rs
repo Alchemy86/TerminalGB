@@ -195,6 +195,9 @@ fn main() {
 
 fn run_probe(rom: &Path, frames: u32) {
     let mut gb = Gameboy::new(std::fs::read(rom).expect("rom"), Some(rom.to_path_buf()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     println!("title: {}", gb.rom_title());
     let mut bot = IntroBot::default();
     let mut last = String::new();
@@ -292,6 +295,8 @@ fn make_save(rom: &Path, sav: &Path, out: Option<&Path>, frames: u32, verbose: b
     {
         let mut gb =
             Gameboy::new(std::fs::read(rom).expect("rom"), Some(rom.to_path_buf()));
+        // Same rule as above: a machine with no APU is not a quiet Game Boy.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         let mut bot = SaveBot::default();
         let mut ok = false;
         for f in 0..frames {
@@ -655,6 +660,8 @@ fn indent(s: &str) -> String {
 
 fn run_verify(rom: &Path, frames: u32, verbose: bool) {
     let mut gb = Gameboy::new(std::fs::read(rom).expect("rom"), Some(rom.to_path_buf()));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut bot = VerifyBot::default();
     let mut last = String::new();
     let mut verdict = None;
@@ -1123,6 +1130,8 @@ fn run_link_trade(rom: &Path, frames: u32, verbose: bool) {
     use terminalgb::link::peer::LinkPeer;
 
     let mut gb = Gameboy::new(std::fs::read(rom).expect("rom"), Some(rom.to_path_buf()));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let sav = rom.with_extension("sav");
     let mut peer = LinkPeer::discover(&gb.rom_title(), Some(&sav));
     let mut bot = VerifyBot::default();
@@ -1762,10 +1771,14 @@ fn run_capsule_trade(
         std::fs::read(gold_rom).expect("gold rom"),
         Some(gold_rom.to_path_buf()),
     );
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gold.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut blue = Gameboy::new(
         std::fs::read(&bwork).expect("blue rom"),
         Some(bwork.clone()),
     );
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    blue.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     println!(
         "[capsule] gold: {} | blue: {}",
         gold.rom_title(),

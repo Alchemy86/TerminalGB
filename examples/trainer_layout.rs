@@ -227,6 +227,9 @@ fn live(rom: &str, state: Option<&str>, frames: u64, w: usize, keys: &str) {
     let path = std::path::PathBuf::from(rom);
     let data = std::fs::read(&path).expect("read the ROM");
     let mut gb = terminalgb::gameboy::Gameboy::new(data.clone(), Some(path));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut plugin = terminalgb_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin))
@@ -315,6 +318,8 @@ fn to_battle(rom: &str, want_trainer: bool, states: Option<&str>, seed0: u64) {
         let _ = std::fs::remove_file(path.with_extension(ext));
     }
     let mut gb = terminalgb::gameboy::Gameboy::new(data.clone(), Some(path));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut plugin = terminalgb_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin)).expect("attach");
@@ -614,6 +619,8 @@ fn to_wild(rom: &str, seed0: u64) {
     }
     let tables = terminalgb_plugin_trainer::rom::RomTables::new(data.clone());
     let mut gb = terminalgb::gameboy::Gameboy::new(data.clone(), Some(path));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut plugin = terminalgb_plugin_trainer::TrainerPlugin::new(data);
     plugin.set_active(true);
     gb.add_plugin(Box::new(plugin)).expect("attach");

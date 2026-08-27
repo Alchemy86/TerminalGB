@@ -74,6 +74,9 @@ fn main() {
 
     let rom = std::fs::read(&staged.rom).expect("read ROM");
     let mut gb = Gameboy::new(rom.clone(), Some(staged.rom.clone()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut trainer = TrainerPlugin::new(rom);
     trainer.set_active(false);
     gb.add_plugin(Box::new(trainer)).expect("attach trainer");

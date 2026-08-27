@@ -307,6 +307,9 @@ fn run(args: &[String]) -> Result<i32, String> {
                 terminalgb::mode::Model::Auto,
             )
             .map_err(|e| e.to_string())?;
+            // A machine with no APU is not a quiet Game Boy, it is one with the sound
+            // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+            gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
             gb.add_plugin(Box::new(ShinyHunt::new(target.clone()).watching(watch)))
                 .map_err(|e| e.to_string())?;
             Ok(gb)
@@ -1073,6 +1076,8 @@ fn make_state(
     let mut gb =
         Gameboy::try_new_with_model(rom.to_vec(), None, terminalgb::mode::Model::Auto)
             .map_err(|e| e.to_string())?;
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     if terminalgb_plugin_trainer::Game::detect(&gb.rom_title(), gb.global_checksum())
         .is_none()
     {

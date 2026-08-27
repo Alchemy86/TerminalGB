@@ -173,6 +173,9 @@ fn play_trade(
 ) -> bool {
     let rom_bytes = std::fs::read(&staged.rom).expect("staged rom");
     let mut gb = Gameboy::new(rom_bytes, Some(staged.rom.clone()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     gb.add_plugin(Box::new(partner)).expect("attach partner");
 
     let before = cable_club::read_party(&mut gb);

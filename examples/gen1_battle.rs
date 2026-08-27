@@ -378,6 +378,9 @@ fn play(
     capture: bool,
 ) -> Result<Run, String> {
     let mut gb = Gameboy::new(rom.to_vec(), Some(staged.to_path_buf()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let plugin = BattlePlugin::new(rom.to_vec(), presets.clone())
         .map_err(|e| format!("plugin: {e}"))?;
     gb.add_plugin(Box::new(plugin))

@@ -217,6 +217,9 @@ fn main() {
         }
     };
     let mut gb = Gameboy::new(data.clone(), Some(staged.clone()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     if let Some(p) = &a.state_in {
         match std::fs::read(p).map(|b| gb.load_state(&b)) {
             Ok(Ok(())) => println!("loaded save state {}", p.display()),

@@ -148,8 +148,13 @@ fn main() {
 
     let mut gb_a =
         Gameboy::new(std::fs::read(&a.rom).expect("rom a"), Some(a.rom.clone()));
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb_a.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let mut gb_b =
         Gameboy::new(std::fs::read(&b.rom).expect("rom b"), Some(b.rom.clone()));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb_b.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     println!("console A: {}", gb_a.rom_title());
     println!("console B: {}", gb_b.rom_title());
 

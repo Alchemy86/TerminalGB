@@ -220,6 +220,9 @@ impl Arena {
         jitter: u32,
     ) -> Result<Arena, String> {
         let mut gb = Gameboy::new(rom.to_vec(), Some(staged.to_path_buf()));
+        // A machine with no APU is not a quiet Game Boy, it is one with the sound
+        // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         let plugin = BattlePlugin::new(rom.to_vec(), presets.clone())
             .map_err(|e| format!("plugin: {e}"))?;
         gb.add_plugin(Box::new(plugin))
@@ -457,6 +460,8 @@ fn cmd_bag(rom: &Path, states: &[PathBuf]) -> Result<(), String> {
     for s in states {
         let st = std::fs::read(s).map_err(|e| format!("{}: {e}", s.display()))?;
         let mut gb = Gameboy::new(bytes.clone(), Some(staged.clone()));
+        // Same rule as above: a machine with no APU is not a quiet Game Boy.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         gb.load_state(&st).map_err(|e| format!("state: {e:?}"))?;
         let bag = Bag::read(&mut gb);
         let money = terminalgb_plugin_trainer::text::bcd3([
@@ -514,6 +519,8 @@ fn cmd_gift(rom: &Path, state: &Path, frames: u32) -> Result<(), String> {
     let bytes = std::fs::read(&staged).map_err(|e| e.to_string())?;
     let st = std::fs::read(state).map_err(|e| format!("{}: {e}", state.display()))?;
     let mut gb = Gameboy::new(bytes, Some(staged.clone()));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     gb.load_state(&st).map_err(|e| format!("state: {e:?}"))?;
     let before = Bag::read(&mut gb);
     println!(

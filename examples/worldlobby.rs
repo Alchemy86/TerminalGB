@@ -348,6 +348,9 @@ fn play(o: PlayOpts) {
         std::fs::read(&staged.rom).expect("rom"),
         Some(staged.rom.clone()),
     );
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     let title = gb.rom_title();
     let sav = staged.rom.with_extension("sav");
 

@@ -201,6 +201,9 @@ fn build_fixture(rom_path: &Path, scratch: &Path, out: &Path, verbose: bool) {
     let rom = std::fs::read(&work).expect("read rom");
     {
         let mut gb = Gameboy::new(rom.clone(), Some(work.clone()));
+        // A machine with no APU is not a quiet Game Boy, it is one with the sound
+        // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         let mut bot = IntroBot::default();
         let mut ok = false;
         for frame in 0..60 * 60 * 12 {
@@ -467,6 +470,8 @@ fn run_trade(
 
     let rom = std::fs::read(&work).expect("read rom");
     let mut gb = Gameboy::new(rom.clone(), Some(work.clone()));
+    // Same rule as above: a machine with no APU is not a quiet Game Boy.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
 
     let source = match trade {
         Some(p) => TradeSpec::load(p).unwrap_or_else(|e| {

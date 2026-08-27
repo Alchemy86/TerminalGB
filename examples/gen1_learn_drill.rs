@@ -262,6 +262,9 @@ struct Arena {
 impl Arena {
     fn boot(staged: &Path, rom: &[u8], presets: &PresetFile) -> Result<Arena, String> {
         let mut gb = Gameboy::new(rom.to_vec(), Some(staged.to_path_buf()));
+        // A machine with no APU is not a quiet Game Boy, it is one with the sound
+        // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         let plugin = BattlePlugin::new(rom.to_vec(), presets.clone())
             .map_err(|e| format!("plugin: {e}"))?;
         gb.add_plugin(Box::new(plugin))
@@ -933,6 +936,8 @@ mod drill {
     impl Arena {
         fn boot(staged: &Path, rom: &[u8], presets: &str) -> Result<Arena, String> {
             let mut gb = Gameboy::new(rom.to_vec(), Some(staged.to_path_buf()));
+            // Same rule as above: a machine with no APU is not a quiet Game Boy.
+            gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
             let ps = PresetFile::parse(presets, "gen1-learn-plan")
                 .map_err(|e| format!("the generated presets do not parse: {e}"))?;
             let plugin = BattlePlugin::new(rom.to_vec(), ps)

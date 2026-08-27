@@ -209,6 +209,9 @@ fn run(rom_path: &Path, latch: bool, shots: Option<&Path>) -> Result<(), String>
         terminalgb::mode::Model::Auto,
     )
     .map_err(|e| e.to_string())?;
+    // A machine with no APU is not a quiet Game Boy, it is one with the sound
+    // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+    gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
     println!(
         "cartridge: {} (checksum ${:04X})",
         gb.rom_title().trim(),

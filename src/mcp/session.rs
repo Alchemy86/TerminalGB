@@ -323,24 +323,37 @@ impl Session {
         self.video = video;
     }
 
+    /// Install a sound chip, and only then decide whether anybody listens.
+    ///
+    /// **A machine with no APU is not a quiet Game Boy, it is a Game Boy with
+    /// the sound chip pulled out, and a cartridge can tell.** With
+    /// `MMU.sound == None` every read in `$FF10-$FF3F` answers `$FF` and every
+    /// write is dropped, so Gen 1's blackout sequence — `HandleBlackOut` ->
+    /// `StopMusic`, which spins until `FadeOutAudio` walks `rAUDVOL` down to
+    /// zero by reading it back — never finishes: the screen stays black, the
+    /// party is never healed and the player is never returned to their last
+    /// Pokémon Centre. The same shape hangs the Pokémon Centre nurse, who
+    /// spins on `NR52`.
+    ///
+    /// So the chip goes in unconditionally and `--audio` decides only whether
+    /// its samples reach a speaker. See [`crate::sound::SilentPlayer`] and
+    /// `examples/blackout_probe.rs`.
     #[cfg(feature = "audio")]
     fn open_audio(&mut self, o: &Options) {
-        if !o.audio {
-            return;
-        }
-        use crate::sound::AudioPlayer as _;
-        crate::sound::host_status::reset();
-        match crate::sound::cpal_audio::CpalPlayer::new() {
-            Some((player, stream)) => {
+        if o.audio {
+            use crate::sound::AudioPlayer as _;
+            crate::sound::host_status::reset();
+            if let Some((player, stream)) = crate::sound::cpal_audio::CpalPlayer::new() {
                 let rate = player.samples_rate();
                 self.gb.enable_audio(Box::new(player));
                 self._audio = Some(stream);
                 self.notes.push(format!("audio: playing at {rate} Hz"));
+                return;
             }
-            None => self
-                .notes
-                .push("audio: no output device — running silent".to_string()),
+            self.notes
+                .push("audio: no output device — running silent".to_string());
         }
+        self.gb.enable_audio(Box::new(crate::sound::SilentPlayer));
     }
 
     #[cfg(not(feature = "audio"))]
@@ -352,6 +365,8 @@ impl Session {
                     .to_string(),
             );
         }
+        // The chip goes in either way — see the `audio` build's own comment.
+        self.gb.enable_audio(Box::new(crate::sound::SilentPlayer));
     }
 
     pub fn title(&self) -> &str {
@@ -421,6 +436,9 @@ impl Session {
         self.frame = 0;
         self.notes.clear();
         self.attach_plugins(o, &data);
+        // ...and the sound chip with it. A rebuilt machine starts with
+        // `MMU.sound == None`, which is not a Game Boy — see `open_audio`.
+        self.open_audio(o);
         Ok(())
     }
 

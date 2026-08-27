@@ -1247,6 +1247,9 @@ fn cmd_run(args: &[String], replay: bool) {
         let staged = stage(&rom, &out);
         let data = std::fs::read(&staged).expect("read staged cartridge");
         let mut gb = Gameboy::new(data, Some(staged));
+        // A machine with no APU is not a quiet Game Boy, it is one with the sound
+        // chip pulled out, and a cartridge can tell — see `examples/blackout_probe.rs`.
+        gb.enable_audio(Box::new(terminalgb::sound::SilentPlayer));
         let driver = build_driver(&a, recorded.as_ref().map(|r| r.replies()));
         let cfg = Config {
             budget: Budget {
