@@ -634,6 +634,14 @@ name = "gen1_battle"
 path = "examples/gen1_battle.rs"
 required-features = ["image", "plugin-battle-control"]
 
+# The blackout reproduction: lose a wild battle with a party of one and see
+# whether Gen 1's whiteout completes. Runs the same cartridge twice and changes
+# exactly one thing between the two — whether the machine has a sound chip.
+[[example]]
+name = "blackout_probe"
+path = "examples/blackout_probe.rs"
+required-features = ["image", "plugin-battle-control", "plugin-trainer"]
+
 # Music mode, headless: what the shelf would show, as text. The evidence tool
 # for a feature whose output is a picture and a sound.
 [[example]]
@@ -809,6 +817,15 @@ required-features = ["tui", "plugin-trainer"]
 name = "colosseum"
 path = "testharness/colosseum.rs"
 required-features = ["plugin-gen1-link"]
+harness = false
+
+# Gen 1's whiteout must complete, and every host that runs a real cartridge must
+# hand it a machine that can complete one. The audit needs nothing and always
+# runs; the two end-to-end checks skip with exit 0 without a cartridge.
+[[test]]
+name = "blackout"
+path = "testharness/blackout.rs"
+required-features = ["plugin-battle-control", "plugin-trainer"]
 harness = false
 
 # The GATE for docs/gen1/paper-claims.md: re-asks the cartridge the questions

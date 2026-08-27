@@ -3795,6 +3795,127 @@ mod boot_state_tests {
     }
 }
 
+/// A machine with no sound chip is not a quiet Game Boy, and Gen 1 can tell.
+///
+/// `MMU.sound` is an `Option` so a host that will never listen can skip the
+/// APU's cost, and the cost is real (measured on Pokémon Blue, one P-core,
+/// interleaved: +0.3 % of a frame on the `identical` picture engine, +4.6 % on
+/// `standard` with pixels off). What it buys is a machine the cartridge can
+/// distinguish from hardware: every read in `$FF10-$FF3F` answers `$FF` and
+/// every write is dropped.
+///
+/// **That is enough to hang Pokémon Red/Blue for ever.** `HandleBlackOut`
+/// (`home/overworld.asm`) calls `StopMusic`, which spins until the audio engine
+/// clears `wAudioFadeOutControl`; `FadeOutAudio` (`home/fade_audio.asm`) clears
+/// it only after walking the master volume down to zero, and it walks it down
+/// by **reading `rAUDVOL` back**, decrementing both nibbles and writing it
+/// again. A read-back that is always `$FF` never reaches zero, so the screen
+/// stays black, the party is never healed and the player is never returned to
+/// their last Pokémon Centre. The Pokémon Centre nurse hangs the same way on
+/// `NR52`.
+///
+/// The end-to-end reproduction is `examples/blackout_probe.rs` and
+/// `testharness/blackout.rs`; this is the mechanism underneath them, at unit
+/// speed and with no cartridge.
+#[cfg(test)]
+mod audio_presence_tests {
+    use super::*;
+
+    fn machine() -> MemoryManagementUnit<'static> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0147] = 0x00;
+        let mut mem = MemoryManagementUnit::new(rom, None).unwrap();
+        mem.bus_tick_enabled = true;
+        mem
+    }
+
+    /// `FadeOutAudio`'s own arithmetic, transcribed:
+    ///
+    /// ```text
+    ///     ldh a, [rAUDVOL]
+    ///     and a          ; has the volume reached 0?
+    ///     jr z, .fadeOutComplete
+    ///     ld b, a
+    ///     and $f
+    ///     dec a
+    ///     ld c, a
+    ///     ld a, b
+    ///     and $f0
+    ///     swap a
+    ///     dec a
+    ///     swap a
+    ///     or c
+    ///     ldh [rAUDVOL], a
+    /// ```
+    ///
+    /// Returns how many steps it took to read back zero, or `None` if it never
+    /// did. The boot ROM leaves `$77`, so a real machine takes seven.
+    fn steps_to_silence(mem: &mut MemoryManagementUnit) -> Option<u32> {
+        mem.wb(0xFF24, 0x77);
+        for step in 0..64 {
+            let v = mem.rb(0xFF24);
+            if v == 0 {
+                return Some(step);
+            }
+            let lo = (v & 0x0F).wrapping_sub(1) & 0x0F;
+            let hi = ((v >> 4).wrapping_sub(1) & 0x0F) << 4;
+            mem.wb(0xFF24, hi | lo);
+        }
+        None
+    }
+
+    #[test]
+    fn a_machine_with_no_sound_chip_answers_ff_and_drops_the_write() {
+        let mut mem = machine();
+        assert!(mem.sound.is_none(), "a bare MMU has no sound chip");
+        mem.wb(0xFF24, 0x77);
+        assert_eq!(
+            mem.rb(0xFF24),
+            0xFF,
+            "with no APU every read in $FF10-$FF3F is $FF, so the write is lost"
+        );
+    }
+
+    /// NR50 is fully readable and writable (Pan Docs, "Sound Control
+    /// Registers" — `NR_READBACK_MASKS`'s entry for it is `0x00`), which is
+    /// exactly what the fade-out depends on.
+    #[test]
+    fn a_machine_with_a_sound_chip_reads_nr50_back_exactly() {
+        let mut mem = machine();
+        mem.enable_audio(Box::new(crate::sound::SilentPlayer));
+        for v in [0x77u8, 0x66, 0x11, 0x00, 0xFF] {
+            mem.wb(0xFF24, v);
+            assert_eq!(
+                mem.rb(0xFF24),
+                v,
+                "NR50 reads back exactly what was written"
+            );
+        }
+    }
+
+    /// The whole bug in one assertion: the cartridge's own fade-out terminates
+    /// on a machine that has a sound chip and cannot terminate on one that does
+    /// not. Teeth: remove the `enable_audio` call and the first case joins the
+    /// second.
+    #[test]
+    fn the_gen1_fade_out_only_terminates_with_a_sound_chip() {
+        let mut with = machine();
+        with.enable_audio(Box::new(crate::sound::SilentPlayer));
+        assert_eq!(
+            steps_to_silence(&mut with),
+            Some(7),
+            "$77 walks down to $00 in seven steps"
+        );
+
+        let mut without = machine();
+        assert_eq!(
+            steps_to_silence(&mut without),
+            None,
+            "with no sound chip the read-back is always $FF, so StopMusic spins for ever"
+        );
+    }
+}
+
 /// OAM DMA's bus conflict — `TGB-DMA-001`, and the largest single named cause
 /// in the c-sp aggregation.
 ///
