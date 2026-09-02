@@ -2433,7 +2433,12 @@ capability must cost only that capability** — the same principle as the adapte
     it in that paragraph renders **literally** — `**243 / 264**` reaches the reader with its
     asterisks on, and the paragraph is split into three. `make docs-check` cannot see it:
     `status_numbers.py` still finds the marker, substitutes the digits and reports the score
-    verified, because the rewrite is textual and knows nothing about how the page renders. Found
+    verified, because the rewrite is textual and knows nothing about how the page renders.
+    **It bites a WRAPPED LIST ITEM just as hard, and that shape is the easy one to walk into**:
+    a bullet long enough to wrap can land a marker at the head of a continuation line, which is
+    the start of a line as far as CommonMark is concerned. Re-wrap so text always precedes the
+    marker; the whole-file check is one expression — strip any list/blockquote/indent prefix and
+    assert the remainder does not begin `<!--score:`. Found
     on the README rewrite of 2026-09-02, by pushing the file through GitHub's own `/markdown`
     API and grepping the result for surviving `**…**`. Keep the marker mid-line, and **render the
     page before believing it** — the recipe is in the README-verification section below.
@@ -4332,6 +4337,13 @@ work were unpushed, so both sides had touched the same file. Things worth knowin
   broken-image sweep of relative paths will both pass while saying nothing about it — fetch the
   URL and *look* at it. `curl` it and read the PNG `tEXt` chunks: these carry
   `Software: gnome-screenshot` and a creation time, which is how the provenance was settled.
+  **AND ONE OF THEM HAS NOW DIED: the trainer-panel picture the pre-trim README carried
+  (`user-attachments/assets/d7af5464-…`) is a 404**, checked three ways on 2026-09-02, so it
+  cannot be recovered from git history however carefully you find it. That is the hazard in this
+  bullet arriving: a hot-link is not an asset the repository owns, and it can go without any
+  commit recording that it went. **Prefer a committed picture whenever one exists** —
+  `docs/trainer-panel/` and `docs/shots/` are already in the tree and are what `docs/trainer.md`
+  itself uses.
 - **The provenance question is not the same one as for `resources/`.** These are the captain's
   own captures of *our* frontend, so the [licence
   boundary](#licence-boundary-format-knowledge-is-ours-game-assets-are-not) rule applies as
