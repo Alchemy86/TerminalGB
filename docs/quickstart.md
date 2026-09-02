@@ -283,8 +283,7 @@ That feature set is what the image uses, and it is chosen for a container rather
 from `default`: `tui` for the one frontend that works over `docker run -it`, `mcp` for the
 protocol server, `image` for the PNG encoder the agent's screenshot channel needs. `desktop` is
 left out (a container has no window) and so is `audio` (no sound card, and it would pull ALSA
-in). [README §"Build modes"](../README.md#build-modes)
-covers every other combination.
+in). [Build modes and every cargo feature](build-modes.md) covers every other combination.
 
 ---
 

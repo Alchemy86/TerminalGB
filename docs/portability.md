@@ -24,6 +24,8 @@ Everything below was measured on 2026-08-15. Reproduce the Linux rows with
 | `i686-unknown-linux-musl` | **runs**, frame-identical | `make test-cross`, natively |
 | `mipsel-sony-psp` (**PlayStation Portable**) | **runs Pokémon Blue at 59.7275 fps** | §3, under PPSSPP |
 | `wasm32-unknown-unknown` | **runs** in a browser, with audio | `docs/web-audio.md` |
+| `riscv32imafc-esp-espidf` (**32-bit RISC-V**) | **builds clean** at `--no-default-features` with no source changes, and under QEMU produced the same frame hash as x86-64 on **both** picture engines | a one-off run, *not* covered by `make test-cross` — see the note below |
+| **C / Go static library** (`ffi` feature) | **builds** — `libterminalgb.a` + `terminalgb.h` | `make ffi-build`; `docs/components/frontends.md` |
 | `x86_64-pc-windows-msvc` | **builds and smoke-tests** on a real Windows runner | `.github/workflows/release.yml` |
 | `x86_64-apple-darwin`, `aarch64-apple-darwin` | **type-checks only** | `cargo check`; nobody has linked or run it |
 | `armv7-sony-vita-newlibeabihf` (**PS Vita**) | not attempted — *the cheapest console left*, §5 | — |
@@ -77,6 +79,13 @@ GB_QEMU_DIR=$PWD/usr/bin make test-cross
 `0x0000_0100_0000_01b3usize as u64` — a bug that is invisible on the host and wrong on any
 32-bit machine — turns armv7 and i686 red and the script exits 1. The host build does not
 notice.
+
+**The RISC-V row is a one-off measurement, not a gate.** `riscv32imafc-esp-espidf` is a
+microcontroller target and needs the ESP fork of the toolchain, so it is not in
+`tools/run-cross.sh` and CI does not re-run it: nothing here would notice if it stopped
+building. It is on the board because it *was* run and the frame hash *did* match — but read
+it as "this happened once" rather than as "this is checked", which is the same standard the
+macOS row is held to.
 
 *Not in the list, deliberately:* `riscv64gc-unknown-linux-musl`. The emulator compiles for
 it, but this package declares `crate-type = ["cdylib", "rlib", "staticlib"]` for the FFI
@@ -485,6 +494,94 @@ Not a flag away, and here is the list:
 `alloc`-only would need the battery layer restructured behind a storage trait the host
 implements, and the FFI shim's `static Mutex` replaced. That is a real piece of design work
 with a clear shape; it has not been done and should not be described as close.
+
+---
+
+## 7a. Embedding the core
+
+Take the emulator and leave every frontend behind:
+
+```toml
+[dependencies]
+terminalgb = { git = "https://github.com/Alchemy86/TerminalGB", default-features = false }
+```
+
+That is the **whole** dependency tree at that feature set:
+
+```console
+$ cargo tree --no-default-features --edges normal
+terminalgb v0.2.0
+├── blip_buf v0.1.5
+└── terminalgb-plugin-api v0.1.0 (crates/terminalgb-plugin-api)
+```
+
+One third-party crate — `blip_buf`, the APU's band-limited resampler — against 170 for the
+default build. `terminalgb-plugin-api` is first-party, lives in this repository, has no
+dependencies of its own, and exists so plugin crates depend on a contract instead of on the
+emulator. CI enforces the whole paragraph.
+
+### The API is small enough to fit here
+
+```rust
+use terminalgb::gameboy::Gameboy;
+use terminalgb::{mode::Model, KeypadKey};
+
+// You read the ROM. `None` for the path keeps cartridge RAM in memory and the
+// emulator never touches the filesystem; `Some(p)` opts into `<rom>.sav`.
+let mut gb = Gameboy::new_with_model(std::fs::read("game.gb")?, None, Model::Dmg);
+
+loop {
+    gb.frame();                     // one 59.7275 Hz frame
+    let rgba: &[u8] = gb.image();   // 160 × 144 × 4, top-left first
+    gb.keydown(KeypadKey::A);
+    gb.keyup(KeypadKey::A);
+}
+```
+
+Also there without any feature: `save_state()` / `load_state()`, `flush_battery()`,
+`rom_title()`, the debug reads (`peek`, `peek_range`, `debug_pc`, `step_instruction`), the
+[plugin API](plugins.md), the [pixel-art upscaler](upscaling.md), and
+`enable_audio(Box<dyn AudioPlayer>)` — implement that one trait and the APU's samples are yours,
+with no `cpal` anywhere in the build.
+
+### Prove it rather than believing it
+
+`make embed` runs the example below with `HOME`, `DISPLAY` and `WAYLAND_DISPLAY` unset:
+
+```console
+$ cargo run --release --no-default-features --example headless -- third_party/dmg-acid2/dmg-acid2.gb 240
+rom            DMG-ACID2
+checksum       0xa934
+frames         240
+frame hash     0x01acf78fe505f31c
+state bytes    142102          # moves with savestate::FORMAT_VERSION
+state re-run   identical after 60 more frames
+
+                ########
+            ####........####
+          ##................##
+        ##..-+++++....+++++-..##
+        ##..--++++....++++--..##
+      ##........................##
+      ##..........-##-..........##
+      ##..........-##-..........##
+      ##........................##
+        ##..##............##..##
+        ##....############....##
+          ##................##
+            ####........####
+                ########
+```
+
+That frame hash is the same one `make test-cross` requires on aarch64, armv7 and i686 — and the
+same one the core produced on 32-bit RISC-V.
+
+### What the core still asks of a host
+
+It needs `std` (§7), reads exactly one environment variable (`GB_MODEL`, and only when the
+console is `Model::Auto` — `new_with_model` bypasses it), and reads a wall clock in one place:
+writing or reading an **MBC3 clock cartridge's** battery file, to cover the time the console was
+switched off. With no save path nothing here reads a host clock at all.
 
 ---
 

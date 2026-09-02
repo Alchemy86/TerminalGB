@@ -222,6 +222,21 @@ GNOME Console and Ptyxis are VTE, which does not implement it, so they get the b
 The emulator never refuses to start over this. It detects, adapts and says so once, to the
 scrollback — a missing optional capability may cost only that capability.
 
+**The picture degrades on its own ladder, and it is asked for separately.** Which graphics
+protocol you get is a different question from which keyboard mode you get — a terminal can be
+excellent at one and have nothing at all of the other. The generated
+[ladder table in the picture path](picture.md#2-the-four-transports--whose-they-are-and-which-one-you-got)
+is the authority on which terminals answer which probe; the status panel's **`Proto`** row says
+what *you* got. Between them: kitty, Ghostty and foot tend to be best at both; WezTerm needs one
+config line for the keyboard half and is excellent at the picture half either way; VTE terminals
+(GNOME Terminal, GNOME Console, Ptyxis) get half-blocks and basic input, and still play.
+
+**There is exactly one case where the frontend refuses to start**, and it is not a capability
+question: *neither stdout nor stdin is a terminal*, so there is nothing to draw on **and** no keys
+to read. Either half alone still runs. That is deliberate — an earlier build refused whenever the
+kitty keyboard protocol was absent, which meant it printed one line and exited on a very common
+default terminal, having drawn nothing.
+
 ---
 
 ## The other two frontends
@@ -287,4 +302,4 @@ missing again without the build going red.
 | [The trade portal](portal.md) | signing in, offering, receiving |
 | [Music mode](music-mode.md) | cartridges as albums |
 | [Plugins](plugins.md) | what exists and how to arm it |
-| [The config file](../README.md#configuration) | every key that is not a keystroke |
+| [The config file](configuration.md) | every key that is not a keystroke |

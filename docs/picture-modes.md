@@ -144,6 +144,27 @@ groups are net-negative on `identical` (`sprites` −3, `lyc153int_m2irq` −2, 
 `m2int_m0stat` −1) — **eight rows between them, against 891 gains.** Named rather than rounded
 away; they are the next thing for a PPU crew to look at.
 
+**Counted row by row across every paired baseline, the whole picture is +600.** Taking each
+`testharness/<suite>_baseline.txt` beside its `_accurate_` twin and comparing verdicts on the
+6,227 rows that appear in both:
+
+| suite | rows | `identical` wins | `identical` loses |
+|---|---:|---:|---:|
+| Gambatte | 5,320 | 892 | 446 |
+| GBMicrotest | 513 | 100 | 13 |
+| Mealybug Tearoom | 79 | 26 | 0 |
+| Mooneye `acceptance` + `emulator-only` | 103 | 8 | 0 |
+| wilbertpol's Mooneye fork | 122 | 20 | 0 |
+| AGE | 59 | 8 | 0 |
+| Scribbltests · Strikethrough · cgb-acid-hell | 16 | 5 | 0 |
+| **total** | **6,227** | **1,059** | **459** |
+
+So `identical` is ahead by **600 rows net** and behind on 459 of them — and the losses sit in the
+same groups as the wins, which is the signature of a *phase* difference rather than a missing
+behaviour. It does not lose a row anywhere the shootout looks, which is why it is the default;
+"always better" would still be the wrong claim.
+
+
 **Read the Mealybug pixel distance, not just the row count.** It is a *shade-rank* distance, so a
 frame with one extra distinct shade reports ~23,040 whatever else is right, and a four-pixel error
 can move the total by tens of thousands. The row count is a wall at this range; the distance is the

@@ -620,7 +620,7 @@ same stream, which is the whole argument for producing frames rather than buildi
 
 ## 10. Conformance record
 
-Per the [standing convention](../CLAUDE.md#standing-convention-every-emulation-fix-feeds-the-conformance-tool).
+Per the [standing convention](../AGENTS.md#standing-convention-every-emulation-fix-feeds-the-conformance-tool).
 This is an output feature, not an emulation fix, but two properties belong in the tool:
 
 1. **The stream's rate is the emulator's, not the display's.**

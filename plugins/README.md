@@ -17,6 +17,7 @@ someone to find.
 | [`battle-control/`](battle-control/README.md) | `gen1-battle` | `plugin-battle-control` | start any Gen 1 battle from a preset, and script it | observe + read + write + input |
 | [`agent/`](agent/README.md) | `agent` | `plugin-agent` | an AI that plays the game, under a budget — [full reference](../docs/agent-reference.md), [as an AI environment](../docs/agent-environment.md) | observe + read + input |
 | [`gen1-shinyhunt/`](gen1-shinyhunt/README.md) | `gen1-shinyhunt` | `plugin-gen1-shinyhunt` | hunt a Gen 1 DV spread across many headless emulators at once | observe + read |
+| [`gen1-lobby/`](gen1-lobby/) | `gen1-lobby` | `plugin-gen1-lobby` | a shared Cable Club room several emulators walk around in together — [the World Trade Centre](../docs/worldlobby.md) | observe + read + write |
 
 Note the middle column: **`battle-control` is the crate, `gen1-battle` is the name you put in
 `plugins = …`.** The crate is named for what it does to any game; the plugin is named for the

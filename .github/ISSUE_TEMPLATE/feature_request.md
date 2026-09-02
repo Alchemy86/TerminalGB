@@ -21,4 +21,4 @@ game or test ROM that exposes the gap.
 ## Notes
 
 Any references (Pan Docs section, test-ROM readme, prior art) or context. Check the
-[Roadmap](../../README.md#roadmap--goals) first — some of this may already be planned.
+[Roadmap](../../docs/status.md#roadmap) first — some of this may already be planned.

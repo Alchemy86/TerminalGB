@@ -4213,27 +4213,47 @@ attic, not ours.
   cannot bite; check any new lockup on white, black **and** at 16 px before committing — a
   mark that fails as a favicon has failed.
 
-### The README is the shop window; `docs/accuracy.md` is the accuracy chapter
+### The README is the shop window, and NOTHING WITH ITS OWN PAGE GETS A WALKTHROUGH ON IT
 
-Reworked on 2026-09-02 from 2,083 lines and 38 sections to a showcase front page. **The testing
-and accuracy material moved to [`docs/accuracy.md`](docs/accuracy.md)** — the suite table, the
-nine consoles, the SGB and CGB-revision knobs, MBC1M, the known limitations, saves, the gates
-table, and the conformance Action — and that page is **in `INLINE_PAGES`**, which is not optional:
-the material arrived there by being moved off a page that was already gated, so leaving it off
-would have silently un-gated scores that had been verified on every `make docs-check` for months.
-**Add a new page that quotes a suite score to that list in the same commit.**
+**2,083 lines (2026-09-02) → 856 → 250 (2026-09-02, second cut).** The first rework moved the
+accuracy chapter out and then *demonstrated* each capability on the front page with real commands
+and real output; the captain's verdict on the result was *"Dude it's still massive. Massive."*
+**The standing rule is the reverse of that instinct: name each capability, sell it in a line or
+two, link to its page.** If a section is longer than a short paragraph and the subject has a page,
+the section is a bug.
 
-The front page keeps a two-line summary of each capability with a real command and real output,
-then links out. Three things it must not lose, because each existed nowhere else when it was
-checked: the **per-feature table** (what each cargo feature pulls in and needs at run time), the
-**two Linux startup messages that are not ours**, and the **terminal config-file table** — all
-three are `<details>` folds now, and `docs/controls.md` links the last of them at
-`README.md#configuration`.
+**Everything cut is a MOVE, never a cull**, and the three genuinely-unique blocks each got a home
+rather than being deleted:
+
+| what was on the front page | where it lives now |
+|---|---|
+| the `config.toml` key table + the pre-rename `~/.config/gameboy/` fallback | **[`docs/configuration.md`](docs/configuration.md)** (new) |
+| the "I want…/Command" table, the ~18-row cargo-feature table, `GB_MODEL`'s value list | **[`docs/build-modes.md`](docs/build-modes.md)** (new) |
+| the `cargo tree` output, the Rust API example, the `make embed` console block | `docs/portability.md` §7a |
+| the two Linux start-up messages that are not ours (`xkbcommon`, the Wayland queue) | `docs/pitfalls/not-our-bug.md` |
+| 32-bit RISC-V and the C/Go static library | rows on `docs/portability.md`'s board |
+| `gen1-lobby` | a row in `plugins/README.md`'s table |
+
+**`docs/accuracy.md` is in `INLINE_PAGES` and that is not optional** — the material arrived there
+by being moved off a page that was already gated, so leaving it off would silently un-gate scores
+verified on every `make docs-check` for months. **Add a new page that quotes a suite score to that
+list in the same commit.** (`docs/configuration.md` and `docs/build-modes.md` quote none, so they
+are deliberately not on it.)
+
+**THE FRONT PAGE'S CLAIMS ARE VERIFIABLE — verify them rather than carrying them forward.** Two
+were checked on the second cut and one was wrong. *"Wins 1,059 rows and loses 459"* reproduces
+**exactly** by comparing each `testharness/<suite>_baseline.txt` against its `_accurate_` twin
+(the derivation is now a table in `docs/picture-modes.md` §3). The desktop frontend's *"`U`/`I`
+cycle the upscaler"* is **false** — `src/screen/desktop.rs`'s handler binds A, B, Z, X and the
+four arrows and every other key hits `_ => return`; the upscaler there is a `--upscale` flag, as
+`docs/controls.md` already said. It was cut rather than moved.
 
 **`make docs-check` does not verify anchors, so a README restructure silently breaks inbound
-links.** Two broke on that rework (`docs/controls.md` and `docs/quickstart.md`). Sweep every
-`](../README.md#…)` in the tree after moving a heading; the ~20-line slug checker is the same one
-the docs-index section below describes.
+links.** Only four things in the tree target a root-README anchor: `CHANGELOG.md`
+(`#credits--lineage` — keep that heading), `docs/controls.md`, `docs/quickstart.md` and
+`.github/ISSUE_TEMPLATE/feature_request.md`. Sweep every `](../README.md#…)` after moving a
+heading — the ~25-line slug checker is in the docs-index section below, and running it repo-wide
+found three *pre-existing* breakages nothing else had noticed.
 
 ### The README's first code block is a PROMISE, and nothing in CI checks it
 

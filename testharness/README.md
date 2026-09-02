@@ -44,7 +44,7 @@ PPU acid2       █████████████████████�
 > Mooneye acceptance **67/75** (the community's 66-row denominator drops the nine
 > named-machine ROMs; all nine pass here, so quote 67/75), Mooneye `emulator-only` **28/28**,
 > Mooneye `misc` **8/8**, SameSuite **72/76**, Mealybug **3/79**. See
-> [docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp).
+> [docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp-and-the-thirteen-in-c-sp).
 
 ## Compatibility matrix
 
@@ -116,7 +116,7 @@ ROMs are not ours to vendor, so they are fetched at run time and gated separatel
 `samesuite_baseline.txt` and `mealybug_baseline.txt` in this directory. Same rules: the
 ROM's own verdict, red on any change in either direction, deliberate re-blessing
 (`UPDATE_EXTERNAL_BASELINE=1`). See
-[docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp).
+[docs/testing.md](../docs/testing.md#gating-the-external-suites--mooneye-gb-samesuite-mealybug-tearoom-cpp-and-the-thirteen-in-c-sp).
 
 **The thirteen c-sp suites are gated the same way**, one `csp_<suite>_baseline.txt` per suite
 here plus a `_accurate_` twin for the per-dot picture engine — AGE, Bully, cgb-acid2,

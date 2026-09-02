@@ -3,7 +3,8 @@
 ← [Pitfalls index](README.md)
 
 The most expensive class of all, because you can spend weeks correctly fixing a thing that was
-never wrong. Three sources: the cartridge, the suite's denominator, and the reference.
+never wrong. Four sources: the cartridge, the suite's denominator, the reference — and the
+machine you are running on, which is the one that shouts at you in your own terminal.
 
 ---
 
@@ -71,6 +72,33 @@ anything: 60 A presses on CANCEL with the link state pinned, the exchange nybble
 > sends the next person hunting a defect that does not exist.** This repository's own notes
 > asserted the opposite of point 3 for months, unmeasured. Check the claim against the
 > cartridge before building on it.
+
+---
+
+## Two Linux start-up messages the desktop frontend does not emit
+
+**Symptom.** Launching `cargo run --example desktop` prints one or both of these before or after
+the window appears:
+
+```
+xkbcommon: ERROR: failed to compile keymap … dead_hamza …
+queue … destroyed while proxies still attached
+```
+
+**What it looks like.** A broken build, or an input bug about to bite. It is neither, and
+**neither has a fix on our side** — nothing here is between them and you, and neither affects
+emulation, audio or input.
+
+| Message | Where it comes from |
+|---|---|
+| `xkbcommon: ERROR: … dead_hamza …` and similar keysym errors | The **system X11 compose/keymap files** (`/usr/share/X11/locale/…`), parsed by `libxkbcommon` when the window is created. A complaint about your distribution's compose table. |
+| `queue … destroyed while proxies still attached` (Wayland) | **`winit`/`glutin`** tearing down their Wayland event queue at exit — upstream cleanup ordering, inside the windowing crates. |
+
+**Why it belongs on this page.** Both are emitted *before or after* anything this repository
+controls: the first while the windowing crate is asking the system for a keymap, the second while
+it is shutting down. The terminal frontend never sees either, which is a useful discriminator — if
+a symptom disappears under `--example terminal`, it is in the windowing stack and not in the
+emulator.
 
 ---
 

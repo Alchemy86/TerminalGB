@@ -22,6 +22,8 @@ and that had quietly happened to more than half of this directory.
 | [code map](codemap.md) | one orientation page — a frame through the system, a memory access CPU → MMU → device, where the frontends attach |
 | [where it stands](status.md) | the scoreboard: every suite, the abilities, the honest gaps, the roadmap |
 | [every control](controls.md) | the full written key list, each row linking to the page that explains that key — generated from the same table the in-app panel renders |
+| [configuration](configuration.md) | every `config.toml` key that is not a keystroke — the picker directory, the graphics protocol, the palette, the plugins, the link cable, the caps on an agent |
+| [build modes and cargo features](build-modes.md) | what each build contains and what it needs at run time, plus the two run-time switches (`GB_PPU`, `GB_MODEL`) read once at start-up |
 | [pitfalls & gotchas](pitfalls/README.md) | symptom-first index of the traps that cost us hours, written for someone who just arrived from a search |
 
 ## Understanding the machine
