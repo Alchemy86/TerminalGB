@@ -9,23 +9,22 @@
   <a href="rust-toolchain"><img src="https://img.shields.io/badge/rust-1.83%2B-orange.svg" alt="Rust 1.83+"></a>
 </p>
 
-**A cycle-accurate Game Boy and Game Boy Color emulator in Rust, with real pixels in your
-terminal.** It plays games. It also takes Mooneye's `acceptance` suite <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->, scores **243 / 264** on
-the [GB Emulator Shootout](docs/shootout.md)'s own board, compiles down to **one third-party
-crate**, runs byte-identically on a PlayStation Portable and on 32-bit RISC-V, and hands the
-running machine to [plugins](docs/plugins.md), any [MCP client](docs/mcp.md), or
-[your own program](docs/portability.md#7a-embedding-the-core). Every score here comes out of a
-baseline file that fails CI in **either** direction — a row that starts *passing* is a change
-too — and nothing is judged against a hash of our own output.
-
-### → **[Run it](#run-it)** · **[what it can do](#what-it-can-do)** · **[what it scores](docs/accuracy.md)** · **[where it stands](docs/status.md)** · **[every page](docs/README.md)**
+**A cycle-accurate Game Boy and Game Boy Color emulator in Rust that draws real pixels in your
+terminal.** It plays games. It also takes Mooneye's `acceptance` suite <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->, scores **243 / 264** on the
+[GB Emulator Shootout](docs/shootout.md)'s own board, compiles down to **one third-party crate**,
+and hands the running machine to [plugins](docs/plugins.md), any [MCP client](docs/mcp.md), or
+[your own program](docs/portability.md#7a-embedding-the-core).
 
 <p align="center">
-  <img src="docs/shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2: the 160x144 picture scaled to fill the pane, with a Status panel reporting ROM, transport, input mode, palette, PPU engine, speed, video, audio and volume, and a Controls panel beside it" width="900" />
+  <img src="docs/trainer-panel/5-composition-wide.png" alt="The terminal frontend running Pokemon Blue mid-battle - the message box reads Wild ONIX appeared - with the live trainer panel beside it: trainer name, ID and money, eight badge markers, the opponent's types, HP, stats, DVs, catch odds and full move table, and the six-Pokemon party each with its own decompressed sprite" width="900" />
 </p>
 
-<p align="center"><em>A real image in a real terminal — not text art.
-<a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> is the ROM the command below runs, and 0 of its 23,040 pixels differ from its author's reference.</em></p>
+<p align="center"><em>A Pokémon battle in a terminal, with the read-only
+<a href="docs/trainer.md">live trainer view</a> beside it reading the running cartridge: the
+opponent's hidden DVs and catch odds, and a star on the party member that would be shiny if
+traded to Gen 2.</em></p>
+
+### → **[Run it](#run-it)** · **[features](#features)** · **[what it scores](docs/accuracy.md)** · **[where it stands](docs/status.md)** · **[every page](docs/README.md)**
 
 ---
 
@@ -57,63 +56,62 @@ ALSA headers, and the Status panel says so rather than leaving you suspecting yo
 
 ---
 
-## What it can do
+## Features
 
-**🎮 [Terminal, desktop and browser](docs/quickstart.md).** One core, three frontends. The terminal
-one runs in *any* terminal and gets better in a capable one — it asks the terminal what it can do
-rather than guessing from `$TERM`, and degrades instead of refusing ([how](docs/picture.md)). Four
-[upscalers](docs/upscaling.md), three palettes, three [save-state](docs/savestates.md) slots, a
-speed ladder and a stats overlay, all live on a [keypress](docs/controls.md).
-
-**🤖 [MCP support](docs/mcp.md).** Any [Model Context Protocol](https://modelcontextprotocol.io)
-client can play the game: eleven tools covering structured game state, screenshots, memory reads,
-frame-accurate button presses, whole intentions like `goto` and `advance_text`, save and load. It
-adds no third-party crate, and it cannot write memory unless you say so — in which case the tool
-is not merely refused, it is not *listed*.
-[As an agent environment →](docs/agent-environment.md) · [every field →](docs/agent-reference.md)
-
-**📦 [An embeddable core](docs/portability.md#7a-embedding-the-core).** `default-features = false`
-gives you `Gameboy::new(rom) → frame() → image()`, save states, battery flush and debug reads
-against **one third-party crate** where the default build has 170 — a count CI enforces and
-`make embed` proves by running a cartridge with `HOME` and `DISPLAY` unset.
-
-**📊 [Full data output](docs/telemetry.md).** Opt-in NDJSON: displayed *and* emulated fps, the
-per-stage millisecond breakdown, bytes on the wire, dropped frames, audio queue depth. Every
-number the overlay shows a human is also a machine-readable line, so a change is verifiable with
-nobody watching the screen.
-
-**🔌 [Plugins](docs/plugins.md).** Seven ship in [`plugins/`](plugins/README.md), and the emulator
-builds and runs with all of them deleted. A plugin declares `OBSERVE`, `READ_MEMORY`,
-`WRITE_MEMORY`, `CONTROL_INPUT` or `SERIAL_LINK` and the **host refuses the rest** — the trainer
-view's read-only guarantee is that refusal, not a borrow-checker accident. Nothing loads
-implicitly. [Zero to a working plugin →](docs/writing-a-plugin.md)
-
-**🎬 [Agents that play unattended](docs/claude-plays.md).** An agent that plays and narrates, built
-to be streamed; [scenarios](docs/scenarios.md) with rules the host *enforces* rather than asks
-for; [episodes](docs/longplay.md) that make a long run measurable. The emulator never waits on a
-driver.
-
-**🔗 [Be the console on the other end of the cable](docs/link-cable.md).** Start a second emulator
-and the cable is *already connected* — no flag, no arming. Or trade with a partner that does not
-exist: not a memory poke, the game runs its real link protocol and inserts the Pokémon itself, and
-[the proof is a number we never sent](docs/link-trade.md). `link_net` puts the port on a TCP
-socket speaking [BGB's protocol](docs/bgb-link.md), so the far end can be another emulator
-anywhere, or a bridge with real hardware behind it. [The Colosseum →](docs/link-battle.md)
-
-**🔴 [A live trainer view](docs/trainer.md), and things the cartridge never offered.** Press `T` in
-Pokémon Red or Blue for your party, badges and the opponent's hidden stats, sprite decompressed
-out of your own cartridge — plus a banner saying whether a wild Pokémon **would be shiny if traded
-to Gen 2** before you spend a Ball. Red and Blue also start a battle by reading one byte, so one
-becomes something you can [stage and script](docs/gen1/battle-control.md), or
-[hunt a DV spread](docs/shiny-hunt.md) across a dozen headless emulators, or
-[watch two dozen](docs/swarm-view.md) walk the world at once. [Gen 1 →](docs/gen1/README.md)
-
-**💿 Other things it turned out to be.** [Music mode](docs/music-mode.md) — every cartridge in your
-ROM directory becomes an album, cover art lifted from its own title screen. [A virtual
-webcam](docs/video-out.md) — press `v` and pick the Game Boy as your camera in Chrome, Meet,
-Discord or OBS. [A chiptune renderer](docs/chiptune.md) — a score or a `.vgm` in, real Game Boy
-audio out, because it is this repository's emulated APU rather than a synthesiser imitating one
-(<!--score:samesuite_apu-->66 / 69<!--/score--> on SameSuite's APU group).
+- **[Terminal, desktop and browser](docs/quickstart.md)** frontends, over one core.
+- **[A real picture in any terminal](docs/picture.md)** — kitty, sixel, iTerm2 or half-blocks,
+  picked by asking the terminal what it can do rather than guessing from `$TERM`. It degrades
+  instead of refusing.
+- **[Four upscalers](docs/upscaling.md)**, three palettes, a speed ladder and a stats overlay, all
+  live on a [keypress](docs/controls.md).
+- **[Three save-state slots](docs/savestates.md)**, plus battery saves written beside the ROM in
+  the ordinary `.sav` format.
+- **[Two complete picture engines](docs/picture-modes.md)** — a per-dot renderer that draws the
+  real pipeline, and a fast whole-scanline one. A run-time mode on the `P` key, not a build.
+- **[Cycle-accurate, scored against everybody else's suites](docs/accuracy.md)** — it takes
+  Mooneye's `acceptance` suite <!--score:mooneye_acceptance_accurate-->75 / 75<!--/score-->, scores Mealybug <!--score:mealybug_accurate-->29 / 79<!--/score-->,
+  and reaches **243 / 264** on the [GB Emulator Shootout](docs/shootout.md)'s own board.
+- **[Runs almost anywhere](docs/portability.md)** — WebAssembly, aarch64, armv7, i686, 32-bit
+  RISC-V, and a PlayStation Portable at the DMG's own 59.7275 fps.
+- **[An embeddable core](docs/portability.md#7a-embedding-the-core)** — `default-features = false`
+  gives you the running machine against **one third-party crate**, where the default build has
+  170. CI enforces the count.
+- **[MCP support](docs/mcp.md)** — any [Model Context Protocol](https://modelcontextprotocol.io)
+  client can play the game: eleven tools covering structured game state, screenshots, memory
+  reads, frame-accurate button presses, whole intentions like `goto` and `advance_text`, save and
+  load. It adds no third-party crate, and it cannot write memory unless you say so — and then the
+  tool is not merely refused, it is not *listed*.
+  [As an agent environment](docs/agent-environment.md) · [every field](docs/agent-reference.md)
+- **[Full data output](docs/telemetry.md)** — opt-in NDJSON: displayed *and* emulated fps, the
+  per-stage millisecond breakdown, bytes on the wire, dropped frames, audio queue depth. Every
+  number the overlay shows a human is also a machine-readable line.
+- **[Plugins](docs/plugins.md)** — [seven ship in the tree](plugins/README.md) and the emulator
+  builds and runs with all of them deleted. Each declares what it may touch and the host refuses
+  the rest; nothing loads implicitly. [Zero to a working plugin](docs/writing-a-plugin.md)
+- **[Agents that play unattended](docs/claude-plays.md)** — with [scenarios](docs/scenarios.md)
+  whose rules the host *enforces* rather than asks for, and [episodes](docs/longplay.md) that make
+  a long run measurable. The emulator never waits on a driver.
+- **[Be the console on the other end of the cable](docs/link-cable.md)** — start a second emulator
+  and the cable is already connected, no flag and no arming. Or
+  [trade with a partner that does not exist](docs/link-trade.md): not a memory poke, the game runs
+  its real link protocol and inserts the Pokémon itself.
+- **[The link port over TCP](docs/bgb-link.md)** — `link_net` speaks BGB's protocol, so the far end
+  can be another emulator anywhere, or a bridge with real hardware behind it.
+  [The Colosseum](docs/link-battle.md)
+- **[A live trainer view](docs/trainer.md)** — press `T` in Pokémon Red or Blue for your party,
+  badges and the opponent's hidden stats, sprites decompressed out of your own cartridge, and a
+  verdict on whether a wild Pokémon **would be shiny if traded to Gen 2** before you spend a Ball.
+- **[Stage and script a Gen 1 battle](docs/gen1/battle-control.md)** — Red and Blue start one by
+  reading a single byte, so you can [hunt a DV spread](docs/shiny-hunt.md) across a dozen headless
+  emulators, or [watch two dozen agents](docs/swarm-view.md) walk the world at once.
+  [Gen 1](docs/gen1/README.md)
+- **[Music mode](docs/music-mode.md)** — every cartridge in your ROM directory becomes an album,
+  cover art lifted from its own title screen.
+- **[A virtual webcam](docs/video-out.md)** — press `v` and pick the Game Boy as your camera in
+  Chrome, Meet, Discord or OBS.
+- **[A chiptune renderer](docs/chiptune.md)** — a score or a `.vgm` in, real Game Boy audio out,
+  because it is this repository's emulated APU rather than a synthesiser imitating one
+  (<!--score:samesuite_apu-->66 / 69<!--/score--> on SameSuite's APU group).
 
 ---
 
@@ -127,6 +125,14 @@ only axis is exactness against speed. `identical` draws the real pipeline dot by
 out of the machine — so a mid-scanline register write lands exactly where hardware puts it.
 `standard` draws a whole scanline at the mode 3 → 0 transition and never sees one.
 
+<p align="center">
+  <img src="docs/shots/tui-acid2.png" alt="The terminal frontend running dmg-acid2: the 160x144 picture scaled to fill the pane, with a Status panel reporting ROM, transport, input mode, palette, PPU engine, speed, video, audio and volume, and a Controls panel beside it" width="900" />
+</p>
+
+<p align="center"><em>The same <a href="https://github.com/mattcurrie/dmg-acid2">dmg-acid2</a> the
+<a href="#run-it">Run it</a> command starts — a real image in a real terminal, not text art, and
+0 of its 23,040 pixels differ from its author's reference.</em></p>
+
 | Suite | **`identical`** (default) | **`standard`** |
 |---|---:|---:|
 | **In-repo harness** — Blargg + dmg-acid2, both consoles | <!--score:harness-->46 / 47<!--/score--> | <!--score:harness-->46 / 47<!--/score--> |
@@ -136,6 +142,9 @@ out of the machine — so a mid-scanline register write lands exactly where hard
 | **Mealybug Tearoom** | **<!--score:mealybug_accurate-->29 / 79<!--/score-->** | <!--score:mealybug-->3 / 79<!--/score--> |
 | **GB Emulator Shootout**, its own manifest | **243 / 264** — 5th of 19 | 223 / 264 |
 | **Cost** (dmg-acid2, picture on) | 0.37 ms/frame · 45× | 0.040 ms/frame · 420× |
+
+Every score here comes out of a baseline file that fails CI in **either** direction — a row that
+starts *passing* is a change too — and nothing is judged against a hash of our own output.
 
 Very few emulators have a per-dot renderer at all; here it is the default, and it costs a player
 **2.2 % of a 16.743 ms frame** — a figure `cargo test --release --test ppuengines` re-measures on
