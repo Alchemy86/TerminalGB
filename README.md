@@ -24,7 +24,9 @@ and hands the running machine to [plugins](docs/plugins.md), any [MCP client](do
 opponent's hidden DVs and catch odds, and a star on the party member that would be shiny if
 traded to Gen 2.</em></p>
 
-### → **[Run it](#run-it)** · **[features](#features)** · **[what it scores](docs/accuracy.md)** · **[where it stands](docs/status.md)** · **[every page](docs/README.md)**
+### → **[Run it](#run-it)** · **[picture mode](#picture-mode-and-pacing--set-these-on-purpose)** ·
+**[features](#features)** · **[what it scores](docs/accuracy.md)** ·
+**[where it stands](docs/status.md)** · **[every page](docs/README.md)**
 
 ---
 
@@ -53,6 +55,50 @@ ALSA headers, and the Status panel says so rather than leaving you suspecting yo
 
 📖 **[The whole quick start](docs/quickstart.md)** · [every key](docs/controls.md) ·
 [the config file](docs/configuration.md) · [build modes and cargo features](docs/build-modes.md)
+
+---
+
+## Picture mode and pacing — set these on purpose
+
+Two things about *this run* are chosen at start-up, not baked into the build, and worth
+choosing deliberately: get either wrong and you can time, score, or simply watch a different
+machine than you think you are.
+
+**Picture mode: `identical` (the default) or `standard`.** `src/gpu/` carries two complete
+renderers, not a quality setting. `identical` draws the real hardware pixel pipeline dot by
+dot, so a register written mid-scanline lands exactly where a Game Boy puts it — every
+accuracy score on this page is measured under it. `standard` draws one shot per scanline at
+the mode-3→0 transition and misses anything written mid-line, for a fraction of the cost:
+
+| | `identical` (**default**) | `standard` |
+|---|---|---|
+| a register written mid-scanline | lands exactly where hardware puts it | invisible — only the final value is read |
+| cost, one P-core, Pokémon Blue, playing | 0.373 ms/frame — 45× real time | 0.094 ms/frame — 178× real time |
+| cost, headless, no picture wanted | 0.382 ms/frame — 44× | 0.057 ms/frame — 295×, 6.7× cheaper |
+
+```bash
+GB_PPU=identical cargo run --release --example terminal -- game.gb   # the default; hardware-exact
+GB_PPU=standard  cargo run --release --example terminal -- game.gb   # cheaper; mid-line writes lost
+```
+
+Same choice as `ppu = standard` in `config.toml`, `Gpu::set_render_mode` when embedding, or
+press **`P`** to flip it live in the terminal frontend — the Status panel's `PPU` row says
+which one is actually running. A misspelling of either warns on stderr and falls back to the
+default rather than failing silently. Full comparison, and when `standard` is worth reaching
+for: **[docs/picture-modes.md](docs/picture-modes.md)**.
+
+**Pacing.** Playing in the terminal or desktop frontend, both default to the real Game Boy's
+59.7275 Hz: the terminal's **`+`/`-`** step a ladder (`0.5x` → `1x` → `2x` → `4x` → `MAX`); the
+desktop frontend takes **`--speed <N>`** (default `1` = real time, e.g. `--speed 15`).
+**Driving it from a program** through the [MCP server](docs/mcp.md) defaults the *other* way:
+`--speed uncapped` (as fast as the host manages) unless you ask for `--speed realtime`
+(59.7275 Hz, for a human watching over `--video-out`) or a fixed `--speed 2x`.
+
+**Which binary you get.** `cargo build --release` builds the terminal frontend (the
+`terminalgb` binary) with default features on. The desktop window and the MCP server are
+separate targets: `cargo run --release --example desktop -- game.gb`, and `cargo build
+--release --features mcp` for `terminalgb-mcp`. Every feature, what it pulls in, and what it
+needs at run time: **[docs/build-modes.md](docs/build-modes.md)**.
 
 ---
 
