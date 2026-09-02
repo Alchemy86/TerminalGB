@@ -287,4 +287,4 @@ missing again without the build going red.
 | [The trade portal](portal.md) | signing in, offering, receiving |
 | [Music mode](music-mode.md) | cartridges as albums |
 | [Plugins](plugins.md) | what exists and how to arm it |
-| [The config file](../README.md#terminal-config-file) | every key that is not a keystroke |
+| [The config file](../README.md#configuration) | every key that is not a keystroke |

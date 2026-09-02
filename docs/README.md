@@ -3,10 +3,9 @@
 Every page in this directory, grouped, with one line on what it is for.
 
 **This is the index; the [top-level README](../README.md) is the shop window.**
-Its *"Every page, and what it is for"* section is a curated selection with long
-descriptions, aimed at a visitor deciding whether to read anything at all. This
-one is complete and terse, for someone already inside who needs to find a
-specific thing. They are allowed to describe a page differently. They are not
+Its *"Documentation"* section is a short curated selection, aimed at a visitor
+deciding whether to read anything at all. This one is complete and terse, for
+someone already inside who needs to find a specific thing. They are allowed to describe a page differently. They are not
 allowed to disagree about which pages exist —
 [`docs/tools/docs_index.py`](tools/docs_index.py) checks that on every
 `make docs-check`, because **a page in no index is a page nobody reads again**,
@@ -81,6 +80,7 @@ and that had quietly happened to more than half of this directory.
 
 | page | what it is |
 |---|---|
+| [accuracy — what it scores, and how you can check](accuracy.md) | **start here**: every suite score with the gate behind it, the consoles modelled, the known limitations, and how to score your own emulator |
 | [the accuracy yardstick](testing.md) | which suites exist, how each is judged, and how our harness detects a verdict |
 | [per-fix conformance notes](conformance-notes.md) | every accuracy bug we fixed, with symptom, catching test and hardware citation — the raw corpus |
 | [the GitHub Action](conformance-action.md) | scoring *someone else's* emulator from CI: the adapter contract, badges, licensing, honest gaps |

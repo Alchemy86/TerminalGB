@@ -57,7 +57,7 @@ twenty-four rows the Shootout publishes:
 | Emulator | Rows passed | Note |
 |---|---:|---|
 | SameBoy | 15 | the reference implementation |
-| **TerminalGB** | **3** | **pixel-exact, all three hardware sets** |
+| **TerminalGB** | **11** | on the default `identical` engine; the cheap `standard` engine scores 1 |
 | bgb | 2 | long-standing, widely used |
 | PyBoy | 0 | — |
 

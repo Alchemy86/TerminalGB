@@ -324,6 +324,13 @@ def modes_block(n: dict[str, tuple[int, int]]) -> str:
 INLINE_PAGES = [
     os.path.join("docs", "status.md"),
     os.path.join("docs", "conformance.md"),
+    # docs/accuracy.md is the reader-facing accuracy chapter the top-level
+    # README points at. Its whole subject is the suite table, so an ungated
+    # figure there is the same hazard as one on the README itself -- and the
+    # material arrived here BY BEING MOVED off a page that was already gated,
+    # so leaving it off this list would silently un-gate scores that had been
+    # verified on every `make docs-check` for months.
+    os.path.join("docs", "accuracy.md"),
     *[os.path.join("docs", "measured", f)
       for f in ("README.md", "scoreboard.md", "ppu.md", "apu.md", "timing.md",
                 "boot.md", "cartridges.md", "symptoms.md", "serial.md", "sgb.md",

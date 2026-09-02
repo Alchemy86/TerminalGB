@@ -2428,6 +2428,15 @@ capability must cost only that capability** — the same principle as the adapte
   - **NEVER put a marker inside a heading** — a heading is a link target, and burying an HTML
     comment in one produces an anchor nobody can guess. Two links broke exactly that way;
     `headings_with_scores` now fails the build instead. Put the score on the line below.
+  - **AND NEVER START A LINE WITH ONE.** An HTML comment at the start of a line opens a
+    CommonMark **HTML block** that runs to the next blank line, so every piece of markdown after
+    it in that paragraph renders **literally** — `**243 / 264**` reaches the reader with its
+    asterisks on, and the paragraph is split into three. `make docs-check` cannot see it:
+    `status_numbers.py` still finds the marker, substitutes the digits and reports the score
+    verified, because the rewrite is textual and knows nothing about how the page renders. Found
+    on the README rewrite of 2026-09-02, by pushing the file through GitHub's own `/markdown`
+    API and grepping the result for surviving `**…**`. Keep the marker mid-line, and **render the
+    page before believing it** — the recipe is in the README-verification section below.
   - **Deliberately ungated, and the page says so at the top:** the Shootout figure (not
     baseline-derivable), other emulators' published scores, historical attribution figures
     (`13/66 → 52/66`) and measured counterfactuals ("moving that constant costs 56/76"). Those
@@ -4203,6 +4212,28 @@ attic, not ours.
   paints its own dark panel + faint border, so the theme-in-`<img>` trap recorded above
   cannot bite; check any new lockup on white, black **and** at 16 px before committing — a
   mark that fails as a favicon has failed.
+
+### The README is the shop window; `docs/accuracy.md` is the accuracy chapter
+
+Reworked on 2026-09-02 from 2,083 lines and 38 sections to a showcase front page. **The testing
+and accuracy material moved to [`docs/accuracy.md`](docs/accuracy.md)** — the suite table, the
+nine consoles, the SGB and CGB-revision knobs, MBC1M, the known limitations, saves, the gates
+table, and the conformance Action — and that page is **in `INLINE_PAGES`**, which is not optional:
+the material arrived there by being moved off a page that was already gated, so leaving it off
+would have silently un-gated scores that had been verified on every `make docs-check` for months.
+**Add a new page that quotes a suite score to that list in the same commit.**
+
+The front page keeps a two-line summary of each capability with a real command and real output,
+then links out. Three things it must not lose, because each existed nowhere else when it was
+checked: the **per-feature table** (what each cargo feature pulls in and needs at run time), the
+**two Linux startup messages that are not ours**, and the **terminal config-file table** — all
+three are `<details>` folds now, and `docs/controls.md` links the last of them at
+`README.md#configuration`.
+
+**`make docs-check` does not verify anchors, so a README restructure silently breaks inbound
+links.** Two broke on that rework (`docs/controls.md` and `docs/quickstart.md`). Sweep every
+`](../README.md#…)` in the tree after moving a heading; the ~20-line slug checker is the same one
+the docs-index section below describes.
 
 ### The README's first code block is a PROMISE, and nothing in CI checks it
 
