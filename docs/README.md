@@ -125,6 +125,7 @@ and that had quietly happened to more than half of this directory.
 | [web audio](web-audio.md) | the browser's half — why the wasm build had no sound *chip*, and the three constants a real Chrome run decided |
 | [the chiptune renderer](chiptune.md) | sound-chip instructions in, real Game Boy audio out: the score/`.vgm`/register formats and the accuracy evidence |
 | [music mode](music-mode.md) | cartridges as a record shelf — cover art picked by scene, and why track selection has no general solution |
+| [opening theme](opening-theme/README.md) | three `loom-synth` sketches for a short — what was borrowed from the fanfare/chiptune era versus written fresh, and the honesty account for a public upload |
 
 ## Running it, and looking inside
 
