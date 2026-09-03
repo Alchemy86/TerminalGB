@@ -8323,6 +8323,22 @@ and the ShowReel integration path: [`crates/loom-synth/README.md`](crates/loom-s
   compared with `loom-synth compare ref.wav mine.wav`. Neither this file nor `loom-synth` itself
   vendors or commits that reference WAV — ShowReel's own CLI produces it on demand, and nothing
   about this crate depends on having done so.
+- **A composed piece (not a preset) lives at
+  [`crates/loom-synth/examples/opening_theme.rs`](crates/loom-synth/examples/opening_theme.rs)** —
+  three original ~30s TerminalGB-short opener sketches, rendered WAVs+MP3s committed at
+  [`docs/opening-theme/`](docs/opening-theme/README.md) (that page is also the honesty account of
+  what was and wasn't borrowed from the reference era, for anyone who needs the same discipline
+  for a future public-facing composition). **The sharp edge worth generalising:
+  `sequence::Pattern::gated`'s `tone_index` array is read by ABSOLUTE STEP POSITION
+  (`tone_index[step]`), not by which active hit number a step is** — a `[0, 1, 2, ..]` array sized
+  to the count of active `'x'`s reads out-of-range on every step past its own length and silently
+  defaults to `0` (a valid chord-tone index), so the failure is "the wrong, plausible-looking note
+  plays," never a panic. `opening_theme.rs`'s `place_at_steps` is the fix (spread N values across
+  a gate string's own active positions) — reuse it, don't rediscover the bug. Relatedly: a `Bar`'s
+  `tones: Vec<i32>` is one flat vector, so a single bar can carry BOTH a chord (indices `0..3`, for
+  a comping part) and an independent melody phrase (indices `3..`, for the lead) at once — the
+  general technique for writing a real composed tune rather than a chord-locked arpeggio through
+  this engine, since `presets.rs`'s own two pieces never needed it.
 
 ## The GB Emulator Shootout entry (`docs/shootout.md`, `examples/shootout_scout.rs`)
 
