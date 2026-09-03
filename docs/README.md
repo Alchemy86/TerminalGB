@@ -126,6 +126,7 @@ and that had quietly happened to more than half of this directory.
 | [the chiptune renderer](chiptune.md) | sound-chip instructions in, real Game Boy audio out: the score/`.vgm`/register formats and the accuracy evidence |
 | [music mode](music-mode.md) | cartridges as a record shelf — cover art picked by scene, and why track selection has no general solution |
 | [opening theme](opening-theme/README.md) | three `loom-synth` sketches for a short — what was borrowed from the fanfare/chiptune era versus written fresh, and the honesty account for a public upload |
+| [Ember cover](ember-cover/README.md) | a DMG four-channel mimic of Kubbi's "Ember" opening — the licence finding, the measured tempo/key/structure, and the arrangement decisions collapsing a modern mix onto four real channels |
 
 ## Running it, and looking inside
 
