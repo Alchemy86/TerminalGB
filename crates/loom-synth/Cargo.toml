@@ -1,0 +1,23 @@
+[package]
+name = "loom-synth"
+version = "0.1.0"
+description = "A small subtractive/wavetable synthesis engine — oscillators, ADSR, a resonant filter, a step sequencer — for generating original music from a hand-writable spec. No dependencies."
+authors = ["TerminalGB contributors"]
+repository = "https://github.com/Alchemy86/TerminalGB"
+license = "MPL-2.0"
+edition = "2021"
+rust-version = "1.83"
+
+# Deliberately empty. The engine is meant to be portable: a consumer (this
+# workspace, or a differently-licensed project such as ShowReel) links it as
+# ordinary Rust, not as a service with its own dependency tree to audit. Every
+# primitive here — a band-limited oscillator, an ADSR envelope, a biquad
+# filter, a hand-rolled WAV writer — is small and well understood enough to
+# write directly; see the module docs for which published formula each one
+# implements. Reaching for a DSP crate here would trade five citable functions
+# for a dependency the whole point was to avoid.
+[dependencies]
+
+[[bin]]
+name = "loom-synth"
+path = "src/bin/loom-synth.rs"

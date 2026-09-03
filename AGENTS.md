@@ -8263,6 +8263,67 @@ than a synthesiser. `cargo run --release --bin terminalgb-chiptune -- <file> -o 
   is not so confined as a finding. Nothing in `testharness/chiptune.rs` pins a hash of our
   own audio, which is why an accuracy fix does not turn it red.
 
+## `loom-synth` — a general synthesis engine, deliberately NOT tied to the Game Boy (`crates/loom-synth/`)
+
+**A second, independent audio crate lives in this workspace, and it is not a rename or a
+replacement of `terminalgb-chiptune` above — the two answer different questions.**
+`terminalgb-chiptune` renders through *this emulator's own APU emulation*, so its sound is
+authoritative Game Boy hardware output; `loom-synth` is a from-scratch subtractive/wavetable
+synth (oscillators, ADSR, a resonant biquad filter, a step sequencer) with **no dependency on
+the Game Boy, the emulator, or this crate's `sound` module at all** — it exists to give a
+*different* project (ShowReel, a sibling repo at `firstmate/projects/showreel`, whose
+`src/music.rs` generates exactly one fixed NES/SID-chiptune idiom and says in its own docs "it
+is not a general instrument system and does not want to become one") a general set of
+synthesis primitives to build other moods on. Full design, the citations for every primitive,
+and the ShowReel integration path: [`crates/loom-synth/README.md`](crates/loom-synth/README.md).
+- **It is a standalone workspace member, not a `terminalgb` dependency** — `crates/*` is
+  already a workspace-member glob (root `Cargo.toml`), so it needed no registration beyond its
+  own directory. `cargo tree --no-default-features --edges normal` (the `make embed` contract:
+  `blip_buf` + first-party `terminalgb-plugin-api`) is **unaffected** — verified, not assumed.
+  Zero dependencies of its own, matching `terminalgb-chiptune`'s and `terminalgb-plugin-api`'s
+  ethos exactly, and for the stated reason: it is meant to be portable enough that a
+  differently-licensed project can add it as an ordinary dependency later with nothing to audit.
+- **One preset's musical content is ShowReel's, borrowed deliberately as evidence, not a Game
+  Boy fact.** `presets::chiptune_funk` reproduces ShowReel's `Voicing::of(Mood::Funk)` (its own
+  original Am-F-C-G progression and step patterns) through this engine's general
+  oscillator/ADSR/filter primitives instead of that file's four bespoke functions. It is
+  **not** a byte-for-byte port — band-limited oscillators
+  where the reference's are naive, a real ADSR where the reference has a fixed millisecond
+  ramp — and it is checked against a WAV rendered by ShowReel's own, completely unmodified
+  `showreel music --mood funk` CLI (built and run as a subprocess; nothing in that repo was
+  read-write touched) via `src/compare.rs`'s windowed loudness/brightness correlation:
+  **0.98 envelope correlation, 0.96 brightness correlation** on a matched 15-second render.
+  `presets::analog_pad` is an original piece in a texture the old system structurally cannot
+  reach at all — no Game Boy channel has a filter.
+- **A real bug the test suite caught, worth remembering for any future modulated-filter
+  code: rebuilding `Biquad::lowpass` every sample to sweep its cutoff silently resets its `x`/`y`
+  history each time**, which is not a filter sweep at all — it is closer to noise gated on and
+  off. `Biquad::set_lowpass` (recomputes coefficients, leaves history alone) is the fix;
+  `filter.rs`'s own tests (`set_lowpass_changes_coefficients_but_keeps_history`,
+  `a_swept_cutoff_via_set_lowpass_has_no_reset_clicks`) pin it. A second bug in the same pass:
+  a filter's own envelope may have a shorter release than the voice's amplitude envelope, so
+  indexing the filter-envelope buffer at every sample of the (longer) amplitude buffer can run
+  past its end — `voice.rs`'s `render_note` treats "past the filter envelope's own buffer" as
+  "fully released" (`fenv.get(i).unwrap_or(0.0)`) rather than panicking.
+- **PolyBLEP is the antialiasing technique, cited by name and paper** (Välimäki & Huovilainen,
+  IEEE SPM 24(2), 2007) — `osc.rs`'s own module docs carry the formula and the reasoning for
+  which waveforms need it (square, saw) and which do not (triangle, whose harmonics already
+  roll off fast enough that aliasing is inaudible at ordinary pitches). The filter is Robert
+  Bristow-Johnson's Audio EQ Cookbook biquad low-pass, same citation discipline.
+- **Wiring this into ShowReel is explicitly NOT done, and should not be attempted from a
+  `gameboy`/TerminalGB worktree.** ShowReel is a separate project with its own repository and
+  its own PolyForm-Noncommercial-1.0.0 licence; a task scoped to this repo has no authorization
+  to write into it. `README.md`'s "Where this goes next" section names the four-step mechanical
+  change (a path dependency, a new `Mood`/instrument variant, a branch in
+  `Music::render_samples`, done) for whoever picks that up in ShowReel's own tree. MPL-2.0 (this
+  crate's own licence, matching its siblings) is file-level copyleft and does not restrict what
+  licence a work *using* it carries, so there is no licensing conflict in that follow-up.
+- **The reference render used for validation is reproducible by anyone**: `showreel music
+  --mood funk --duration 15 --seed 3111 -o ref.wav` against an unmodified ShowReel checkout,
+  compared with `loom-synth compare ref.wav mine.wav`. Neither this file nor `loom-synth` itself
+  vendors or commits that reference WAV — ShowReel's own CLI produces it on demand, and nothing
+  about this crate depends on having done so.
+
 ## The GB Emulator Shootout entry (`docs/shootout.md`, `examples/shootout_scout.rs`)
 
 - **We score 223/264 = 84.5 %, which is 5th of 19 on the published board** (measured on
